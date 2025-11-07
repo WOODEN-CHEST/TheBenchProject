@@ -1,0 +1,1 @@
+gcc ../source/*c ../source/libs/*c  -I"../include" -I"../include/libs" -O0 -std=c2x -Werror -Wall -Wextra -o "out/TheBenchProject" -L"../lib" -l:libraylib.a -lGL -lm -lpthread -ldl -lrt -lX11
