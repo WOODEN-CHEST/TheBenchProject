@@ -1,0 +1,54 @@
+This file just shows how the asset definition JSON files should be structured, that's all.
+
+All assets start with a root compound { }
+All assets have a name property, the key of the property is "name". The name can be any utf8 string.
+All asset paths are relative to the asset root directory, they also do not contain the file extensions.
+
+Colors can be specified in 3 ways:
+1. String:
+    Contains the HEX number of the color.
+    Can be either an RGB color or RGBA (red most significant).
+    Can optionally contain the hashtag '#' character before the hex number.
+    No spaces allowed.
+2. Array:
+    Array of 3 or 4 ints (RGB or RGBA) (byte value) or decimals (normalized value).
+    Ints and decimals can be mixed.
+3. Compound:
+    Compound with the "r", "g", "b" and "a" values being set to either an int (byte value) or decimal (normalized value).
+    Any of the values can be omitted, the default value is 255 (or 1.0).
+    Ints and decimals can be mixed.
+
+
+Animation:
+{
+    "name": "...",
+
+    // Frames value can be 3 different ways.
+    // 1. is just a constant frame (1 frame animation)
+    "frames": "path"
+
+    // 2. is is a list of asset paths
+    "frames": ["path1", "path2" ... ]
+
+    // 3. is is a list of asset paths with type specifiers.
+    // They specify whether the path is meant to be a file path or stream path. The type can be omitted to indicate a file path.
+    "frames": [
+        {
+            "path": "path1" // Assumed file path
+        },
+        {
+            "path": "path2" 
+            "type": "file" // File path
+        }
+        {
+            "path": "path3" 
+            "type": "memory" // Stream (in-memory) path
+        }
+    ],
+
+    "fps": number // Default animation FPS. May be negative for reversed animations. [optional, defaults to 60.0]
+    "frame_step": int // Default frame step. May ne negative for reversed animation. [optional, defaults to 1.0]
+    "is_looped": bool // Default looped state. [optional, defaults to false]
+    "is_animated": bool // Default is animated. [optional, defaults to true]
+    "tint": Color // The color tint. [optional, defaults to white].
+}
