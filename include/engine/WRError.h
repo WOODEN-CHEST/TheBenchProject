@@ -73,6 +73,8 @@ Error Error_Construct3(ErrorMessagePool* pool, ErrorCode code, const unsigned ch
 
 Error Error_Construct4(ErrorMessagePool* pool, ErrorCode code, char* format, ...);
 
+Error Error_Construct5(ErrorCode code);
+
 void ErrorMessagePool_Construct1(ErrorMessagePool* self);
 
 void ErrorMessagePool_Deconstruct1(ErrorMessagePool* self);

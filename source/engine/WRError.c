@@ -95,6 +95,12 @@ Error Error_Construct4(ErrorMessagePool* pool, ErrorCode code, char* format, ...
     };
 }
 
+Error Error_Construct5(ErrorCode code)
+{
+    return (Error){ .Code = code, .Message = NULL };
+}
+
+
 void ErrorMessagePool_Construct1(ErrorMessagePool* self)
 {
     Memory_Zero(self, sizeof(*self));

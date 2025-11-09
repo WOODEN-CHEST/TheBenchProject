@@ -2,6 +2,29 @@
 #include <stddef.h>
 #include <stdint.h>
 
+
+// Types.
+typedef struct GenericBufferStruct GenericBuffer;
+
+typedef bool (*GenericBufferAllocateCallback)(GenericBuffer* destination);
+
+struct GenericBufferStruct
+{
+    void* _buffer;
+    size_t _bufferSize;
+    void* _userData;
+    GenericBufferAllocateCallback _requestMoreSpaceCallback;
+};
+
+
+// Functions.
+GenericBuffer GenericBuffer_CreatVariable(void* destination,
+    size_t size,
+    void* userData,
+    GenericBuffer callback);
+
+GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t size);
+
 void* Memory_Allocate(size_t size);
 
 void* Memory_Reallocate(void* ptr, size_t size);
