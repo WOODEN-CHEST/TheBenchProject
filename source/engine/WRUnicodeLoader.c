@@ -7,6 +7,7 @@
 #include "raylib.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <math.h>
 
 
 // Types.
@@ -23,6 +24,8 @@ typedef struct UnicodeParserStruct
     size_t DataCount;
 
     ErrorMessagePool* ErrorPool;
+
+    CodePoint MaxCodePoint;
 } UnicodeParser;
 
 typedef Error (*LineParseCallback)(UnicodeParser* parser);
@@ -51,6 +54,7 @@ static const size_t UNICODE_DATA_CAPACITY_DEFAULT = 2 << 15; // If the unicode d
 static const size_t UNICODE_DATA_CAPACITY_GROWTH = 2;
 static const char SEPARATOR = ';';
 static const char NEWLINE = '\n';
+static const char DIVIDER = '/';
 static const int32_t NUMBER_BASE = 16;
 
 static const size_t SECTION_COUNT = 15;
@@ -73,6 +77,8 @@ static LineParseAction PARSE_ACTIONS[] =
     { false, &ParseLowercaseMapping, },
     { true, NULL, },
 };
+
+static const CodePoint MAX_CODEPOINTS = 1 << 21; // Let's be reasonable with the size.
 
 
 // Static functions.
@@ -130,9 +136,15 @@ static Error InitParser(ErrorMessagePool* errorPool, const unsigned char* dataBa
     parser->ErrorPool = errorPool;
     parser->FilePath = dataBaseFilePath;
     parser->LineIndex = 0;
+    parser->MaxCodePoint = CODEPOINT_NONE;
     EnsureUnicodeDataCapacity(parser, UNICODE_DATA_CAPACITY_DEFAULT);
 
     return Error_CreateSuccess();
+}
+
+static void DeinitParser(UnicodeParser* parser)
+{
+    Memory_Free(parser->Data);
 }
 
 static void MarkSectionEnd(UnicodeParser* parser, bool* isFileEnd, bool* isLineEnd, size_t* sectionLength)
@@ -239,6 +251,12 @@ static Error ParseSingleLine(UnicodeParser* parser, bool* isFileEnd)
                 parser->TextIndex++;
             }
         }
+    }
+
+    CodePoint ThisCodepoint = parser->Data[parser->DataCount]._codepoint;
+    if (ThisCodepoint > parser->MaxCodePoint)
+    {
+        parser->MaxCodePoint = ThisCodepoint;
     }
 
     *isFileEnd = GetParserChar(parser) == '\0';
@@ -408,12 +426,12 @@ static Error StringToCodePoint(UnicodeParser* parser,
     bool isInvalidAllowed)
 {
     unsigned char* End;
-    int32_t Value = strtol((const char*)str, (char**)&End, NUMBER_BASE);
+    *codepoint = CODEPOINT_NONE;
+    CodePoint Value = (CodePoint)strtol((const char*)str, (char**)&End, NUMBER_BASE);
     if (End == str)
     {
         if (isInvalidAllowed)
         {
-            *codepoint = CODEPOINT_NONE;
             return Error_CreateSuccess();
         }
 
@@ -429,9 +447,88 @@ static Error StringToCodePoint(UnicodeParser* parser,
     return Error_CreateSuccess();
 }
 
+static Error StringToFloat(UnicodeParser* parser,
+    const unsigned char* str,
+    float* value,
+    const unsigned char* context)
+{
+    *value = NAN;
+    unsigned char* End;
+    float Value = strtof((const char*)str, (char**)&End);
+    printf("%s\n", str);
+    if (End == str)
+    {
+        return Error_Construct3(parser->ErrorPool,
+            ErrorCode_InvalidUnicodeData,
+            u8"Malformed Unicode source file \"%s\", expected decimal number at line %zu, got \"%s\" (%s).",
+            parser->FilePath,
+            parser->LineIndex + 1,
+            str,
+            context);
+    }
+    *value = Value;
+    return Error_CreateSuccess();
+}
+
+static size_t ReadNumberIntoBuffer(const unsigned char* source, size_t startIndex, unsigned char* buffer, size_t bufferSize)
+{
+    size_t MaxBufferIndex = bufferSize - 1;
+    size_t LocalIndex = startIndex;
+
+    for (size_t i = 0; i < MaxBufferIndex && !IsCharSectionEnd(source[LocalIndex]) && (source[LocalIndex] != DIVIDER); i++, LocalIndex++)
+    {
+        buffer[i] = source[LocalIndex];
+    }
+
+    return LocalIndex - startIndex;
+}
+
 static Error ParseNumericValue(UnicodeParser* parser)
 {
-    parser->Data[parser->DataCount]._numericValue = 0.0f;
+    float* Value = &parser->Data[parser->DataCount]._numericValue;
+    if (IsCharSectionEnd(GetParserChar(parser)))
+    {
+        *Value = NAN;
+        return Error_CreateSuccess();
+    }
+
+    unsigned char Buffer[64];
+    size_t LocalIndex = parser->TextIndex;
+
+    LocalIndex += ReadNumberIntoBuffer(parser->Text, LocalIndex, Buffer, sizeof(Buffer));
+    float NumberA;
+    Error Result = StringToFloat(parser, Buffer, &NumberA, u8"First or only number value.");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    if (IsCharSectionEnd(parser->Text[LocalIndex]))
+    {
+        *Value = NumberA;
+        return Error_CreateSuccess();
+    }
+    else if (parser->Text[LocalIndex] != DIVIDER)
+    {
+        return Error_Construct3(parser->ErrorPool,
+            ErrorCode_InvalidUnicodeData,
+            u8"Invalid Unicode file \"%s\" on line %zu, expected either a constant numeric value or " 
+            u8"division without spaces, got \"%s\".",
+            parser->FilePath,
+            parser->LineIndex,
+            parser->Text + parser->TextIndex);
+    }
+
+    LocalIndex++;
+    ReadNumberIntoBuffer(parser->Text, LocalIndex, Buffer, sizeof(Buffer));
+    float NumberB;
+    Result = StringToFloat(parser, Buffer, &NumberB, u8"Second number value (denominator).");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    *Value = (NumberB == 0.0f) ? NAN : (NumberA / NumberB);
+
     return Error_CreateSuccess();
 }
 
@@ -462,6 +559,42 @@ static Error ParseCodePoint(UnicodeParser* parser)
         false);
 }
 
+static void LoadParsedUnicodeIntoTable(UnicodeParser* parser, UnicodeData* data)
+{
+    if (parser->MaxCodePoint < 0)
+    {
+        data->_characters = NULL;
+        data->_characterCount = 0;
+        return;
+    }
+
+    size_t CodepointCount =parser->MaxCodePoint;
+    if (CodepointCount > MAX_CODEPOINTS)
+    {
+        CodepointCount = MAX_CODEPOINTS;
+    }
+
+    data->_characters = Memory_Allocate(CodepointCount * sizeof(UnicodeCharacter));
+    for (size_t i = 0; i < CodepointCount; i++)
+    {
+        Memory_Zero(&data->_characters[i], sizeof(data->_characters[i]));
+        data->_characters[i]._codepoint = CODEPOINT_NONE;
+    }
+
+    for (size_t i = 0; i < parser->DataCount; i++)
+    {
+        CodePoint TargetCodePoint = parser->Data[i]._codepoint;
+        if ((TargetCodePoint < 0) || ((size_t)TargetCodePoint > CodepointCount))
+        {
+            continue;
+        }
+
+        data->_characters[(size_t)TargetCodePoint] = parser->Data[i];
+    }
+
+    data->_characterCount = CodepointCount;\
+}
+
 
 // Functions.
 Error UnicodeData_Load(ErrorMessagePool* errorPool, const unsigned char* dataBaseFilePath, UnicodeData* data)
@@ -479,8 +612,8 @@ Error UnicodeData_Load(ErrorMessagePool* errorPool, const unsigned char* dataBas
         return Result;
     }
 
-    data->_characters = Parser.Data;
-    data->_characterCount = Parser.DataCount;
+    LoadParsedUnicodeIntoTable(&Parser, data);
+    DeinitParser(&Parser);
 
     return Error_CreateSuccess();
 }
