@@ -53,7 +53,7 @@ static const char SEPARATOR = ';';
 static const char NEWLINE = '\n';
 static const int32_t NUMBER_BASE = 16;
 
-static const size_t SECTION_COUNT = 14;
+static const size_t SECTION_COUNT = 15;
 
 static LineParseAction PARSE_ACTIONS[] = 
 {
@@ -135,7 +135,7 @@ static Error InitParser(ErrorMessagePool* errorPool, const unsigned char* dataBa
     return Error_CreateSuccess();
 }
 
-static void MarkSectionEnd(UnicodeParser* parser, bool* isFileEnd, bool* isLineEnd)
+static void MarkSectionEnd(UnicodeParser* parser, bool* isFileEnd, bool* isLineEnd, size_t* sectionLength)
 {
     size_t LocalIndex = parser->TextIndex;
     unsigned char* Text = parser->Text;
@@ -147,6 +147,7 @@ static void MarkSectionEnd(UnicodeParser* parser, bool* isFileEnd, bool* isLineE
 
     *isFileEnd = parser->Text[LocalIndex] == '\0';
     *isLineEnd = parser->Text[LocalIndex] == '\n';
+    *sectionLength = LocalIndex - parser->TextIndex;
     parser->Text[LocalIndex] = '\0';
 }
 
@@ -200,45 +201,44 @@ static bool SkipUntilNonWhitespace(UnicodeParser* parser)
 
 static Error ParseSingleLine(UnicodeParser* parser, bool* isFileEnd)
 {
-    SkipUntilNonWhitespace(parser);
-    if (GetParserChar(parser) == '\0')
+    if (!SkipUntilNonWhitespace(parser))
     {
+        *isFileEnd = true;
         return Error_CreateSuccess();
     }
 
-    size_t SectionIndex = 0;
     for (size_t i = 0; i < SECTION_COUNT; i++)
     {
         LineParseAction Action = PARSE_ACTIONS[i];
         if (Action.IsSkipped || !Action.ParseCallback)
         {
-            bool WasSkipValid = SkipSection(parser, SectionIndex);
+            bool WasSkipValid = SkipSection(parser, i);
             if (!WasSkipValid)
             {
                 *isFileEnd = GetParserChar(parser) == '\0';
-                return CreateIncompleteLineError(parser, SectionIndex);
+                return CreateIncompleteLineError(parser, i);
             }
         }
         else
         {
             bool IsLineEnd;
-            MarkSectionEnd(parser, isFileEnd, &IsLineEnd);
-            if ((IsLineEnd || *isFileEnd) && !IsLastSection(SectionIndex))
+            size_t SectionLength;
+            MarkSectionEnd(parser, isFileEnd, &IsLineEnd, &SectionLength);
+            if ((IsLineEnd || *isFileEnd) && !IsLastSection(i))
             {
-                return CreateIncompleteLineError(parser, SectionIndex);
+                return CreateIncompleteLineError(parser, i);
             }
             Error Result = (*Action.ParseCallback)(parser);
             if (Result.Code != ErrorCode_Success)
             {
                 return Result;
             }
-
+            parser->TextIndex += SectionLength;
             if (!*isFileEnd)
             {
                 parser->TextIndex++;
             }
         }
-        SectionIndex++;
     }
 
     *isFileEnd = GetParserChar(parser) == '\0';
