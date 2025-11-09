@@ -19,21 +19,21 @@ typedef enum ErrorCodeEnum
     ErrorCode_InvalidOperation,
     ErrorCode_InvalidState,
 
-    ErrorCode_InitializationError,
-    ErrorCode_DeinitializationError,
+    ErrorCode_Initialization,
+    ErrorCode_Deinitialization,
 
-    ErrorCode_ConstructError,
-    ErrorCode_DeconstructError,
+    ErrorCode_Construct,
+    ErrorCode_Deconstruct,
 
     ErrorCode_IndexOutOfBounds,
 
-    ErrorCode_IOError,
+    ErrorCode_IO,
     ErrorCode_FileNotFound,
     ErrorCode_DirectoryNotFound,
     ErrorCode_InvalidPath,
 
-    ErrorCode_SerializeError,
-    ErrorCode_DeserializeError,
+    ErrorCode_Serialize,
+    ErrorCode_Deserialize,
     ErrorCode_EncodeError,
     ErrorCode_DecodeError,
 
@@ -41,6 +41,8 @@ typedef enum ErrorCodeEnum
 
     ErrorCode_InvalidAssetDefinition,
     ErrorCode_InvalidAssetData,
+
+    ErrorCode_InvalidUnicodeData,
 
     ErrorCode_Unknown
     
