@@ -609,6 +609,7 @@ Error UnicodeData_Load(ErrorMessagePool* errorPool, const unsigned char* dataBas
     Result = ParseUnicodeData(&Parser);
     if (Result.Code != ErrorCode_Success)
     {
+        DeinitParser(&Parser);
         return Result;
     }
 
