@@ -11,6 +11,8 @@ typedef int32_t CodePoint;
 
 typedef enum CodePointCategoryEnum
 {
+    CodePointCategory_None,
+
     CodePointCategory_UppercaseLetter,
     CodePointCategory_LowercaseLetter,
     CodePointCategory_TitlecaseLetter,
@@ -92,12 +94,6 @@ bool Unicode_IsWhitespace(UnicodeData* data, CodePoint codepoint);
 
 bool Unicode_IsPunctuation(UnicodeData* data, CodePoint codepoint);
 
-bool Unicode_IsSurrogate(UnicodeData* data, CodePoint codepoint);
-
-bool Unicode_IsHighSurrogate(UnicodeData* data, CodePoint codepoint);
-
-bool Unicode_IsLowSurrogate(UnicodeData* data, CodePoint codepoint);
-
 bool Unicode_IsUpper(UnicodeData* data, CodePoint codepoint);
 
 bool Unicode_IsLower(UnicodeData* data, CodePoint codepoint);
@@ -109,8 +105,6 @@ bool Unicode_IsASCII(UnicodeData* data, CodePoint codepoint);
 bool Unicode_IsASCIILetter(UnicodeData* data, CodePoint codepoint);
 
 bool Unicode_IsASCIIDigit(UnicodeData* data, CodePoint codepoint);
-
-bool Unicode_IsWhitespace(UnicodeData* data, CodePoint codepoint);
 
 bool Unicode_IsControl(UnicodeData* data, CodePoint codepoint);
 

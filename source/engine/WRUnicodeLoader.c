@@ -577,8 +577,13 @@ static void LoadParsedUnicodeIntoTable(UnicodeParser* parser, UnicodeData* data)
     data->_characters = Memory_Allocate(CodepointCount * sizeof(UnicodeCharacter));
     for (size_t i = 0; i < CodepointCount; i++)
     {
-        Memory_Zero(&data->_characters[i], sizeof(data->_characters[i]));
-        data->_characters[i]._codepoint = CODEPOINT_NONE;
+        UnicodeCharacter* Character = &data->_characters[i];
+        Memory_Zero(Character, sizeof(*Character));
+        Character->_codepoint = CODEPOINT_NONE;
+        Character->_category = CodePointCategory_None;
+        Character->_lowerMapping = CODEPOINT_NONE;
+        Character->_upperMapping= CODEPOINT_NONE;
+        Character->_numericValue = NAN;
     }
 
     for (size_t i = 0; i < parser->DataCount; i++)
