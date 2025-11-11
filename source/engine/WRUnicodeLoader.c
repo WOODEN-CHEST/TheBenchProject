@@ -144,7 +144,7 @@ static Error InitParser(ErrorMessagePool* errorPool, const unsigned char* dataBa
 
 static void DeinitParser(UnicodeParser* parser)
 {
-    Memory_Free(parser->Data);
+    UnloadFileText((char*)parser->Text);
 }
 
 static void MarkSectionEnd(UnicodeParser* parser, bool* isFileEnd, bool* isLineEnd, size_t* sectionLength)

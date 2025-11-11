@@ -3,6 +3,7 @@
 #include "WRUnicode.h"
 #include "WRUnicodeLoader.h"
 #include "WRChar.h"
+#include "WRNumber.h"
 
 // Functions.
 int main()
