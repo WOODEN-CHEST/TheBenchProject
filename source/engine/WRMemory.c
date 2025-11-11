@@ -46,3 +46,28 @@ void Memory_Copy(void* source, void* destination, size_t size)
 {
     memcpy(destination, source, size);
 }
+
+GenericBuffer GenericBuffer_CreatVariable(void* destination,
+    size_t size,
+    void* userData,
+    GenericBufferAllocateCallback callback)
+{
+    return (GenericBuffer)
+    {
+        ._buffer = destination,
+        ._bufferSize = size,
+        ._requestMoreSpaceCallback = callback,
+        ._userData = userData
+    };
+}
+
+GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t size)
+{
+    return (GenericBuffer)
+    {
+        ._buffer = destination,
+        ._bufferSize = size,
+        ._requestMoreSpaceCallback = NULL,
+        ._userData = NULL
+    };
+}

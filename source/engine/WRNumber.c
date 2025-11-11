@@ -8,8 +8,8 @@
 
 
 // Fields.
-static const char MINUS = '-';
-static const char PLUS = '+';
+static const unsigned char MINUS = '-';
+static const unsigned char PLUS = '+';
 
 const int32_t NUMBER_BASE_MAX = 16;
 const int32_t NUMBER_BASE_MIN = 2;
@@ -34,18 +34,6 @@ const int32_t DIGIT_VALUE_MAX_BASE_16 = 15;
 const size_t BITS_PER_BYTE = 8;
 const uint64_t BIT_TO_SHIFT = 1;
 const uint64_t MAX_BIT_COUNT = sizeof(uint64_t) * BITS_PER_BYTE;
-
-typedef union StandardIntegersUnion
-{
-    int8_t Int8;
-    uint8_t UInt8;
-    int16_t Int16;
-    uint16_t UInt16;
-    int32_t Int32;
-    uint32_t UInt32;
-    int64_t Int64;
-    uint64_t UInt64;
-} StandardIntegers;
 
 
 // Static functions.
@@ -347,6 +335,104 @@ static Error ParseInteger(ErrorMessagePool* errorPool,
     return UInt64ToTargetInt(errorPool, str, Value, IsNegative, targetByteSize, isTargetSigned, result);
 }
 
+static bool WriteCharToGenericBuffer(GenericBuffer* buffer, size_t writtenCharCount, unsigned char character)
+{
+    if (buffer->_bufferSize <= writtenCharCount)
+    {
+        bool WasMemoryAllocated = buffer->_requestMoreSpaceCallback && (*buffer->_requestMoreSpaceCallback)(buffer);
+        if (!WasMemoryAllocated || (buffer->_bufferSize <= writtenCharCount))
+        {
+            return false;
+        }
+    }
+
+    unsigned char* CharBuffer = buffer->_buffer;
+    CharBuffer[writtenCharCount] = character;
+    return true;
+}
+
+static Error ValidateBaseForWriting(ErrorMessagePool* errorPool, int32_t base)
+{
+    if ((base < NUMBER_BASE_MIN) || (base > NUMBER_BASE_MAX))
+    {
+        ErrorCode Code = ErrorCode_IllegalArgument;
+        if (errorPool)
+        {
+            return Error_Construct3(errorPool,
+                Code,
+                u8"Invalid base %d for writing an integer to a string conversion. Minimum base is %d and maximum base is %d.",
+                base, NUMBER_BASE_MIN, NUMBER_BASE_MAX);
+        }
+        return Error_Construct5(Code);
+    }
+    return Error_CreateSuccess();
+}
+
+static unsigned char DigitValueToChar(uint64_t digitValue)
+{
+    if (digitValue <= DIGIT_VALUE_MAX_BASE_10)
+    {
+        return '0' + digitValue;
+    }
+    return 'a' + (digitValue - 10);
+}
+
+static void ReverseDigits(unsigned char* str, size_t charCount, size_t digitCount)
+{
+    size_t Offset = charCount - digitCount;
+    for (size_t i = 0; i < (digitCount / 2); i++)
+    {
+        size_t IndexA = i + Offset;
+        size_t IndexB = digitCount + Offset - i - 1;
+        unsigned char DigitA = str[IndexA];
+        unsigned char DigitB = str[IndexB];
+        str[IndexA] = DigitB;
+        str[IndexB] = DigitA;
+    }
+}
+
+static Error WriteIntString(ErrorMessagePool* errorPool, uint64_t bits, bool isSigned, size_t numberSize, int32_t base, GenericBuffer* buffer)
+{
+    Error ErrorResult = ValidateBaseForWriting(errorPool, base);
+    if (ErrorResult.Code != ErrorCode_Success)
+    {
+        return ErrorResult;
+    }
+
+    size_t WrittenCharCount = 0;
+    size_t BitCount = numberSize * BITS_PER_BYTE;
+    uint64_t SignBit = (BIT_TO_SHIFT << (BitCount - 1));
+    uint64_t Mask = (UINT64_MAX >> (MAX_BIT_COUNT - BitCount));
+
+    uint64_t BitsWithoutSign;
+    bool HasMinusSign = isSigned && (bits & SignBit);
+    if (HasMinusSign)
+    {
+        if (!WriteCharToGenericBuffer(buffer, WrittenCharCount, MINUS))
+        {
+            return Error_CreateSuccess();
+        }
+        WrittenCharCount++;
+        BitsWithoutSign = ((~bits) & Mask) + 1;
+    }
+    else
+    {
+        BitsWithoutSign = bits;
+    }
+
+    for (size_t i = 0; (i == 0) || (BitsWithoutSign != 0); BitsWithoutSign /= (uint64_t)base, i++)
+    {
+        uint64_t DigitValue = BitsWithoutSign % (uint64_t)base;
+        if (!WriteCharToGenericBuffer(buffer, WrittenCharCount, DigitValueToChar(DigitValue)))
+        {
+            return Error_CreateSuccess();
+        }
+        WrittenCharCount++;
+    }
+
+    ReverseDigits(buffer->_buffer, WrittenCharCount, WrittenCharCount - (HasMinusSign ? 1 : 0));
+    return Error_CreateSuccess();
+}
 
 
 // Functions.
@@ -355,7 +441,15 @@ Error Number_Int8FromString(ErrorMessagePool* errorPool, const unsigned char* st
     return ParseInteger(errorPool, str, base, true, sizeof(int8_t), value);
 }
 
-void Number_Int8ToString(int8_t value, int32_t base, GenericBuffer buffer);
+Error Number_Int8ToString(ErrorMessagePool* errorPool, int8_t value, int32_t base, GenericBuffer buffer)
+{
+    return WriteIntString(errorPool,
+        (StandardIntegers){ .Int8 = value }.UInt64,
+        true,
+        sizeof(int8_t),
+        base,
+        &buffer);
+}
 
 
 Error Number_UInt8FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, uint8_t* value)
@@ -363,7 +457,15 @@ Error Number_UInt8FromString(ErrorMessagePool* errorPool, const unsigned char* s
     return ParseInteger(errorPool, str, base, false, sizeof(uint8_t), value);
 }
 
-void Number_UInt8ToString(uint8_t value, int32_t base, GenericBuffer buffer);
+Error Number_UInt8ToString(ErrorMessagePool* errorPool, uint8_t value, int32_t base, GenericBuffer buffer)
+{
+    return WriteIntString(errorPool,
+        (StandardIntegers){ .UInt8 = value }.UInt64,
+        false,
+        sizeof(uint8_t),
+        base,
+        &buffer);
+}
 
 
 Error Number_Int16FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int16_t* value)
@@ -371,7 +473,15 @@ Error Number_Int16FromString(ErrorMessagePool* errorPool, const unsigned char* s
     return ParseInteger(errorPool, str, base, true, sizeof(int16_t), value);
 }
 
-void Number_Int16ToString(int16_t value, int32_t base, GenericBuffer buffer);
+Error Number_Int16ToString(ErrorMessagePool* errorPool, int16_t value, int32_t base, GenericBuffer buffer)
+{
+    return WriteIntString(errorPool,
+        (StandardIntegers){ .Int16 = value }.UInt64,
+        true,
+        sizeof(int16_t),
+        base,
+        &buffer);
+}
 
 
 Error Number_UInt16FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, uint16_t* value)
@@ -379,7 +489,15 @@ Error Number_UInt16FromString(ErrorMessagePool* errorPool, const unsigned char* 
     return ParseInteger(errorPool, str, base, false, sizeof(uint16_t), value);
 }
 
-void Number_UInt16ToString(uint16_t value, int32_t base, GenericBuffer buffer);
+Error Number_UInt16ToString(ErrorMessagePool* errorPool, uint16_t value, int32_t base, GenericBuffer buffer)
+{
+    return WriteIntString(errorPool,
+        (StandardIntegers){ .UInt16 = value }.UInt64,
+        false,
+        sizeof(uint16_t),
+        base,
+        &buffer);
+}
 
 
 Error Number_Int32FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int32_t* value)
@@ -387,7 +505,15 @@ Error Number_Int32FromString(ErrorMessagePool* errorPool, const unsigned char* s
     return ParseInteger(errorPool, str, base, true, sizeof(int32_t), value);
 }
 
-void Number_Int32ToString(int32_t value, int32_t base, GenericBuffer buffer);
+Error Number_Int32ToString(ErrorMessagePool* errorPool, int32_t value, int32_t base, GenericBuffer buffer)
+{
+    return WriteIntString(errorPool,
+        (StandardIntegers){ .Int32 = value }.UInt64,
+        true,
+        sizeof(int32_t),
+        base,
+        &buffer);
+}
 
 
 Error Number_UInt32FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, uint32_t* value)
@@ -395,7 +521,15 @@ Error Number_UInt32FromString(ErrorMessagePool* errorPool, const unsigned char* 
     return ParseInteger(errorPool, str, base, false, sizeof(uint32_t), value);
 }
 
-void Number_UInt32ToString(uint32_t value, int32_t base, GenericBuffer buffer);
+Error Number_UInt32ToString(ErrorMessagePool* errorPool, uint32_t value, int32_t base, GenericBuffer buffer)
+{
+    return WriteIntString(errorPool,
+        (StandardIntegers){ .UInt32 = value }.UInt64,
+        false,
+        sizeof(uint32_t),
+        base,
+        &buffer);
+}
 
 
 Error Number_Int64FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int64_t* value)
@@ -403,7 +537,15 @@ Error Number_Int64FromString(ErrorMessagePool* errorPool, const unsigned char* s
     return ParseInteger(errorPool, str, base, true, sizeof(int64_t), value);
 }
 
-void Number_Int64ToString(int64_t value, int32_t base, GenericBuffer buffer);
+Error Number_Int64ToString(ErrorMessagePool* errorPool, int64_t value, int32_t base, GenericBuffer buffer)
+{
+    return WriteIntString(errorPool,
+        (StandardIntegers){ .Int64 = value }.UInt64,
+        true,
+        sizeof(int64_t),
+        base,
+        &buffer);
+}
 
 
 Error Number_UInt64FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, uint64_t* value)
@@ -411,7 +553,15 @@ Error Number_UInt64FromString(ErrorMessagePool* errorPool, const unsigned char* 
     return ParseInteger(errorPool, str, base, false, sizeof(uint64_t), value);
 }
 
-void Number_UInt64ToString(uint64_t value, int32_t base, GenericBuffer buffer);
+Error Number_UInt64ToString(ErrorMessagePool* errorPool, uint64_t value, int32_t base, GenericBuffer buffer)
+{
+    return WriteIntString(errorPool,
+        value,
+        false,
+        sizeof(uint64_t),
+        base,
+        &buffer);
+}
 
 
 Error Number_FloatFromString(ErrorMessagePool* errorPool,

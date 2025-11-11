@@ -21,7 +21,7 @@ struct GenericBufferStruct
 GenericBuffer GenericBuffer_CreatVariable(void* destination,
     size_t size,
     void* userData,
-    GenericBuffer callback);
+    GenericBufferAllocateCallback callback);
 
 GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t size);
 
