@@ -4,29 +4,43 @@
 #include "WRUnicodeLoader.h"
 #include "WRChar.h"
 #include "WRNumber.h"
+#include "raylib.h"
+#include "raymath.h"
 
 // Functions.
 int main()
 {
-    ErrorMessagePool Pool;
-    ErrorMessagePool_Construct1(&Pool);
+    DisableEventWaiting();
+    InitWindow(1280, 720, "test");
 
-    unsigned char ConstBuffer[128];
-    GenericBuffer Buffer = GenericBuffer_CreateConstant(ConstBuffer, sizeof(ConstBuffer));
+    Vector3 Pos = (Vector3){ 1.0f, 1.0f, 1.0f };
 
+    Camera3D Camera;
+    Camera.fovy = 70.0f,
+    Camera.projection = CAMERA_PERSPECTIVE;
+    Camera.target = (Vector3){ 0.0f, 0.0f, 0.0f };
+    Camera.up = (Vector3){ 0.0f, 1.0f, 0.0f };
+    Camera.position = Pos;
 
-    Error Result = Number_Int32ToString(&Pool, 15, 17, Buffer);
-    if (Result.Code != ErrorCode_Success)
+    
+
+    while (!WindowShouldClose())
     {
-        printf("%s\n", Result.Message);
-        ErrorMessagePool_Clear(&Pool);
-    }
-    else
-    {
-        printf("%s\n", (char*)ConstBuffer);
-    }
+        PollInputEvents();
 
-    ErrorMessagePool_Deconstruct1(&Pool);
+
+
+        BeginDrawing();
+        ClearBackground(BLANK);
+
+        BeginMode3D(Camera);
+
+        DrawSphereEx((Vector3) { 0, 0, 0}, 0.25f, 12, 24, WHITE);
+
+        EndMode3D();
+
+        EndDrawing();
+    }
 
     return 0;
 }
