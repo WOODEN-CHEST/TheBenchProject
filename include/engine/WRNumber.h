@@ -24,6 +24,15 @@ typedef union StandardIntegersUnion
     uint64_t UInt64;
 } StandardIntegers;
 
+typedef struct DecimaFormatOptionsStruct
+{
+    DecimalSeparator _separator;
+    int32_t _digitCountAfterSeparator;
+    bool _isUpperCase;
+    bool _isScientificNotation;
+} DecimalFormatOptions;
+
+
 
 // Fields.
 extern const int32_t NUMBER_BASE_MAX;
@@ -32,6 +41,9 @@ extern const int32_t NUMBER_BASE_AUTO_DETECT;
 extern const int32_t NUMBER_BASE_10;
 extern const int32_t NUMBER_BASE_2;
 extern const int32_t NUMBER_BASE_16;
+
+extern const int32_t DIGIT_COUNT_AFTER_SEPARATOR_SHORTEST;
+extern const int32_t DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED;
 
 
 // Functions.
@@ -81,9 +93,8 @@ Error Number_FloatFromString(ErrorMessagePool* errorPool,
 
 Error Number_FloatToString(ErrorMessagePool* errorPool,
     float value,
-    DecimalSeparator separator,
     GenericBuffer buffer,
-    const unsigned char* pattern);
+    DecimalFormatOptions options);
 
 
 Error Number_DoubleFromString(ErrorMessagePool* errorPool,
@@ -93,6 +104,5 @@ Error Number_DoubleFromString(ErrorMessagePool* errorPool,
 
 Error Number_DoubleToString(ErrorMessagePool* errorPool,
     double value,
-    DecimalSeparator separator,
     GenericBuffer buffer,
-    const unsigned char* pattern);
+    DecimalFormatOptions options);

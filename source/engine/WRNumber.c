@@ -10,15 +10,15 @@
 
 
 // Fields.
-static const unsigned char MINUS = '-';
-static const unsigned char PLUS = '+';
-
 const int32_t NUMBER_BASE_MAX = 16;
 const int32_t NUMBER_BASE_MIN = 2;
 const int32_t NUMBER_BASE_AUTO_DETECT = 0;
 const int32_t NUMBER_BASE_10 = 10;
 const int32_t NUMBER_BASE_2 = 2;
 const int32_t NUMBER_BASE_16 = 16;
+
+static const unsigned char MINUS = '-';
+static const unsigned char PLUS = '+';
 
 const int32_t DIGIT_INVALID_VALUE = -1;
 
@@ -43,6 +43,7 @@ static const unsigned char* STRING_INF_NEG = u8"-infinity";
 static const unsigned char SEPARATOR_PERIOD = '.';
 static const unsigned char SEPARATOR_COMMA = ',';
 static const unsigned char EXPONEND_INDICATOR = 'e';
+
 
 // Static functions.
 static unsigned char GetCharToLower(unsigned char value)
@@ -830,13 +831,23 @@ Error Number_UInt64ToString(ErrorMessagePool* errorPool, uint64_t value, int32_t
 Error Number_FloatFromString(ErrorMessagePool* errorPool,
     const unsigned char* str,
     float* value,
-    DecimalSeparator separator);
+    DecimalSeparator separator)
+{
+    double DoubleValue;
+    Error ErrorResult = Number_DoubleFromString(errorPool, str, &DoubleValue, separator);
+    if (ErrorResult.Code != ErrorCode_Success)
+    {
+        return ErrorResult;
+    }
+
+    *value = (float)DoubleValue;
+    return Error_CreateSuccess();
+}
 
 Error Number_FloatToString(ErrorMessagePool* errorPool,
     float value,
-    DecimalSeparator separator,
     GenericBuffer buffer,
-    const unsigned char* pattern);
+    DecimalFormatOptions options);
 
 
 Error Number_DoubleFromString(ErrorMessagePool* errorPool,
@@ -853,6 +864,5 @@ Error Number_DoubleFromString(ErrorMessagePool* errorPool,
 
 Error Number_DoubleToString(ErrorMessagePool* errorPool,
     double value,
-    DecimalSeparator separator,
     GenericBuffer buffer,
-    const unsigned char* pattern);
+    DecimalFormatOptions options);

@@ -47,27 +47,25 @@ void Memory_Copy(void* source, void* destination, size_t size)
     memcpy(destination, source, size);
 }
 
-GenericBuffer GenericBuffer_CreatVariable(void* destination,
-    size_t size,
+GenericBuffer GenericBuffer_CreateVariable(void* destination,
+    size_t bufferSize,
+    size_t elementSize,
+    size_t elementCount,
     void* userData,
     GenericBufferAllocateCallback callback)
 {
     return (GenericBuffer)
     {
         ._buffer = destination,
-        ._bufferSize = size,
+        ._bufferSize = bufferSize,
+        ._elementSize = elementSize,
+        ._elementCount = elementCount,
         ._requestMoreSpaceCallback = callback,
         ._userData = userData
     };
 }
 
-GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t size)
+GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t bufferSize, size_t elementSize, size_t elementCount)
 {
-    return (GenericBuffer)
-    {
-        ._buffer = destination,
-        ._bufferSize = size,
-        ._requestMoreSpaceCallback = NULL,
-        ._userData = NULL
-    };
+    return GenericBuffer_CreateVariable(destination, bufferSize, elementSize, elementCount, NULL, NULL);
 }
