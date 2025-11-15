@@ -106,3 +106,11 @@ Error Number_DoubleToString(ErrorMessagePool* errorPool,
     double value,
     GenericBuffer buffer,
     DecimalFormatOptions options);
+
+DecimalFormatOptions DecimalFormatOptions_CreateScientific(DecimalSeparator separator, bool isUpperCase);
+
+DecimalFormatOptions DecimalFormatOptions_CreateFixed(DecimalSeparator separator, int32_t digitCountAfterDecimal, bool isUpperCase);
+
+DecimalFormatOptions DecimalFormatOptions_CreateShortest(DecimalSeparator separator, bool isUpperCase);
+
+DecimalFormatOptions DecimalFormatOptions_CreateFull(DecimalSeparator separator, bool isUpperCase);

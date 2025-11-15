@@ -17,10 +17,13 @@ const int32_t NUMBER_BASE_10 = 10;
 const int32_t NUMBER_BASE_2 = 2;
 const int32_t NUMBER_BASE_16 = 16;
 
+const int32_t DIGIT_COUNT_AFTER_SEPARATOR_SHORTEST = -1;
+const int32_t DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED = -2;
+
 static const unsigned char MINUS = '-';
 static const unsigned char PLUS = '+';
 
-const int32_t DIGIT_INVALID_VALUE = -1;
+static const int32_t DIGIT_INVALID_VALUE = -1;
 
 static const unsigned char PREFIX_BASE_16_A = 'x';
 static const unsigned char PREFIX_BASE_16_B = 'X';
@@ -387,22 +390,6 @@ static Error ParseInteger(ErrorMessagePool* errorPool,
     return UInt64ToTargetInt(errorPool, str, Value, IsNegative, targetByteSize, isTargetSigned, result);
 }
 
-static bool WriteCharToGenericBuffer(GenericBuffer* buffer, size_t writtenCharCount, unsigned char character)
-{
-    if (buffer->_bufferSize <= writtenCharCount)
-    {
-        bool WasMemoryAllocated = buffer->_requestMoreSpaceCallback && (*buffer->_requestMoreSpaceCallback)(buffer);
-        if (!WasMemoryAllocated || (buffer->_bufferSize <= writtenCharCount))
-        {
-            return false;
-        }
-    }
-
-    unsigned char* CharBuffer = buffer->_buffer;
-    CharBuffer[writtenCharCount] = character;
-    return true;
-}
-
 static Error ValidateBaseForWriting(ErrorMessagePool* errorPool, int32_t base)
 {
     if ((base < NUMBER_BASE_MIN) || (base > NUMBER_BASE_MAX))
@@ -451,7 +438,6 @@ static Error WriteIntString(ErrorMessagePool* errorPool, uint64_t bits, bool isS
         return ErrorResult;
     }
 
-    size_t WrittenCharCount = 0;
     size_t BitCount = numberSize * BITS_PER_BYTE;
     uint64_t SignBit = (BIT_TO_SHIFT << (BitCount - 1));
     uint64_t Mask = (UINT64_MAX >> (MAX_BIT_COUNT - BitCount));
@@ -460,11 +446,10 @@ static Error WriteIntString(ErrorMessagePool* errorPool, uint64_t bits, bool isS
     bool HasMinusSign = isSigned && (bits & SignBit);
     if (HasMinusSign)
     {
-        if (!WriteCharToGenericBuffer(buffer, WrittenCharCount, MINUS))
+        if (!GenericBuffer_WriteUChar(buffer, MINUS))
         {
             return Error_CreateSuccess();
         }
-        WrittenCharCount++;
         BitsWithoutSign = ((~bits) & Mask) + 1;
     }
     else
@@ -475,14 +460,14 @@ static Error WriteIntString(ErrorMessagePool* errorPool, uint64_t bits, bool isS
     for (size_t i = 0; (i == 0) || (BitsWithoutSign != 0); BitsWithoutSign /= (uint64_t)base, i++)
     {
         uint64_t DigitValue = BitsWithoutSign % (uint64_t)base;
-        if (!WriteCharToGenericBuffer(buffer, WrittenCharCount, DigitValueToChar(DigitValue)))
+        if (!GenericBuffer_WriteUChar(buffer, DigitValueToChar(DigitValue)))
         {
-            return Error_CreateSuccess();
+            break;
         }
-        WrittenCharCount++;
     }
 
-    ReverseDigits(buffer->_buffer, WrittenCharCount, WrittenCharCount - (HasMinusSign ? 1 : 0));
+    ReverseDigits(buffer->_buffer, buffer->_elementCount, buffer->_elementCount - (HasMinusSign ? 1 : 0));
+    GenericBuffer_WriteUChar(buffer, '\0');
     return Error_CreateSuccess();
 }
 
@@ -698,6 +683,100 @@ static Error ParseDecimalNormal(ErrorMessagePool* errorPool,
     return Error_CreateSuccess();
 }
 
+static bool TryWriteNanOrInfString(double value, GenericBuffer* buffer)
+{
+    if (isinf(value))
+    {
+        GenericBuffer_WriteString(buffer, (value > 0.0f) ? STRING_INF_POS : STRING_INF_NEG);
+    }
+    else if (isnan(value))
+    {
+        GenericBuffer_WriteString(buffer, STRING_NAN);
+    }
+    else
+    {
+        return false;
+    }
+    return true;
+}
+
+static void CreateSpecifierFormat(DecimalFormatOptions formatOptions, unsigned char* specifier, size_t specifierSize)
+{
+    if (specifierSize == 0)
+    {
+        return;
+    }
+
+    if (formatOptions._digitCountAfterSeparator == DIGIT_COUNT_AFTER_SEPARATOR_SHORTEST)
+    {
+        specifier[0] = formatOptions._isUpperCase ? 'G' : 'g';
+        return;
+    }
+
+    char SpecifierLetter = formatOptions._isUpperCase ? 'F' : 'f';
+    if (formatOptions._digitCountAfterSeparator == DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED)
+    {
+        specifier[0] = SpecifierLetter;
+    }
+    else
+    {
+        snprintf((char*)specifier, specifierSize, ".%d%c", formatOptions._digitCountAfterSeparator, SpecifierLetter);
+    }
+}
+
+static void CreateDecimalPrintfFormat(DecimalFormatOptions formatOptions, unsigned char* format, size_t formatSize)
+{
+    if (formatSize <= 1)
+    {
+        return;
+    }
+
+    // https://cplusplus.com/reference/cstdio/printf/
+    Memory_Set(format, 0, formatSize);
+    format[0] = '%';
+    if (formatOptions._isScientificNotation)
+    {
+        format[1] = formatOptions._isUpperCase ? 'E' : 'e';
+    }
+    else
+    {
+        CreateSpecifierFormat(formatOptions, format + 1, formatSize);
+    }
+}
+
+static void EnsureDecimalSepratorInString(unsigned char* str, DecimalSeparator separator)
+{
+    for (size_t i = 0; str[i] != '\0'; i++)
+    {
+        if (!IsCharSeparator(str[i], DecimalSeparator_Any))
+        {
+            continue;
+        }
+
+        if ((separator == DecimalSeparator_Any) || (separator == DecimalSeparator_Period))
+        {
+            str[i] = SEPARATOR_PERIOD;
+        }
+        else
+        {
+            str[i] = SEPARATOR_COMMA;
+        }
+    }
+}
+
+static Error CreateInternalPrintfFromatError(ErrorMessagePool* errorPool, double number, int code, const unsigned char* format)
+{
+    ErrorCode Code = ErrorCode_IllegalArgument;
+    if (errorPool)
+    {
+        return Error_Construct3(errorPool,
+            Code,
+            u8"Intenral error converting a decimal number to a string. (number '%f', code '%d', format '%d').",
+            number, code, format);
+    }
+    return Error_Construct5(Code);
+}
+
 
 // Functions.
 Error Number_Int8FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int8_t* value)
@@ -847,7 +926,10 @@ Error Number_FloatFromString(ErrorMessagePool* errorPool,
 Error Number_FloatToString(ErrorMessagePool* errorPool,
     float value,
     GenericBuffer buffer,
-    DecimalFormatOptions options);
+    DecimalFormatOptions options)
+{
+    return Number_DoubleToString(errorPool, value, buffer, options);
+}
 
 
 Error Number_DoubleFromString(ErrorMessagePool* errorPool,
@@ -865,4 +947,89 @@ Error Number_DoubleFromString(ErrorMessagePool* errorPool,
 Error Number_DoubleToString(ErrorMessagePool* errorPool,
     double value,
     GenericBuffer buffer,
-    DecimalFormatOptions options);
+    DecimalFormatOptions options)
+{
+    if (TryWriteNanOrInfString(value, &buffer))
+    {
+        return Error_CreateSuccess();
+    }
+
+    bool IsFullyWritten = false;
+    unsigned char Format[64];
+    CreateDecimalPrintfFormat(options, Format, sizeof(Format));
+    size_t AttemptCount = 0;
+    const size_t MAX_ATTEMPT_COUNT = 2;
+    do
+    {
+        AttemptCount++;
+
+        int PrintResult = snprintf(buffer._buffer, buffer._bufferSize, (char*)Format, value);
+        if (PrintResult < 0)
+        {
+            return CreateInternalPrintfFromatError(errorPool, value, PrintResult, Format);
+        }
+
+        size_t RequiredCharCount = (size_t)PrintResult + 1;
+        if ((AttemptCount < MAX_ATTEMPT_COUNT)
+            && (RequiredCharCount >= buffer._bufferSize)
+            && !GenericBuffer_EnsureCapacity(&buffer, RequiredCharCount))
+        {
+            return Error_CreateSuccess();
+        }
+        else
+        {
+            IsFullyWritten = true;
+        }
+    } while (!IsFullyWritten && (AttemptCount < MAX_ATTEMPT_COUNT));
+
+    EnsureDecimalSepratorInString(buffer._buffer, options._separator);
+    return Error_CreateSuccess();
+}
+
+DecimalFormatOptions DecimalFormatOptions_CreateScientific(DecimalSeparator separator, bool isUpperCase)
+{
+    return (DecimalFormatOptions)
+    {
+        ._isUpperCase = isUpperCase,
+        ._separator = separator,
+        ._isScientificNotation = true,
+        ._digitCountAfterSeparator = DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED
+    };
+}
+
+DecimalFormatOptions DecimalFormatOptions_CreateFixed(DecimalSeparator separator, int32_t digitCountAfterDecimal, bool isUpperCase)
+{
+    int32_t ClampedDigitCount = (digitCountAfterDecimal < 0) ? 0 : digitCountAfterDecimal;
+
+    return (DecimalFormatOptions)
+    {
+        ._isUpperCase = isUpperCase,
+        ._separator = separator,
+        ._isScientificNotation = false,
+        ._digitCountAfterSeparator = ClampedDigitCount
+    };
+}
+
+
+DecimalFormatOptions DecimalFormatOptions_CreateShortest(DecimalSeparator separator, bool isUpperCase)
+{
+    return (DecimalFormatOptions)
+    {
+        ._isUpperCase = isUpperCase,
+        ._separator = separator,
+        ._isScientificNotation = false,
+        ._digitCountAfterSeparator = DIGIT_COUNT_AFTER_SEPARATOR_SHORTEST
+    };
+}
+
+
+DecimalFormatOptions DecimalFormatOptions_CreateFull(DecimalSeparator separator, bool isUpperCase)
+{
+    return (DecimalFormatOptions)
+    {
+        ._isUpperCase = isUpperCase,
+        ._separator = separator,
+        ._isScientificNotation = false,
+        ._digitCountAfterSeparator = DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED
+    };
+}
