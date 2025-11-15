@@ -17,7 +17,7 @@ typedef enum StringSplitTypeEnum
 {
     StringSplitType_None = 0,
     StringSplitType_SkipEmpty = (1 << 0),
-    StringSplitType_None = (1 << 1)
+    StringSplitType_Trim = (1 << 1)
 } StringSplitType;
 
 typedef struct StringSplitOptionsStruct
@@ -57,11 +57,11 @@ bool StringUTF8_IsNullOrEmpty(const unsigned char* str);
 
 bool StringUTF8_IsNullOrWhitespace(const unsigned char* str, UnicodeData* unicode);
 
-void StringUTF8_ToLower(const unsigned char* str, UnicodeData* unicode, GenericBuffer destination);
+void StringUTF8_ToLower(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination);
 
-void StringUTF8_ToUpper(const unsigned char* str, UnicodeData* unicode, GenericBuffer destination);
+void StringUTF8_ToUpper(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination);
 
-void StringUTF8_InvertCase(const unsigned char* str, UnicodeData* unicode, GenericBuffer destination);
+void StringUTF8_InvertCase(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination);
 
 size_t StringUTF8_GetByteLength(const unsigned char* str);
 
@@ -69,7 +69,7 @@ size_t StringUTF8_GetCodePointLength(const unsigned char* str);
 
 bool StringUTF8_Equals(const unsigned char* a, const unsigned char* b, StringCaseRule caseRule);
 
-void StringUTF8_CopyTo(const unsigned char* source, GenericBuffer destination);
+void StringUTF8_CopyTo(const unsigned char* source, GenericBuffer* destination);
 
 StringSplitOptions String_CreateSplitOptionsNormal();
 
@@ -80,7 +80,7 @@ StringSplitOptions String_CreateSplitOptionsAll(StringSplitType type, size_t max
 void StringUTF8_Split(unsigned char* str,
     unsigned char* delimeter,
     StringSplitOptions splitOptions,
-    GenericBuffer* resultPointers);
+    GenericBuffer** resultPointers);
 
 StringIndexOfOptions String_CreateIndexOptionsNormal();
 
@@ -93,7 +93,7 @@ StringIndexOfOptions String_CreateIndexOptions(StringCaseRule caseRule,
 
 bool StringUTF8_IndexOf(const unsigned char* str, const unsigned char* target, StringIndexOfOptions options);
 
-void StringUTF8_Concat(const unsigned char* strA, const unsigned char* strB, GenericBuffer destination);
+void StringUTF8_Concat(const unsigned char* strA, const unsigned char* strB, GenericBuffer* destination);
 
 bool StringUTF8_Contains(const unsigned char* str, const unsigned char* target, StringCaseRule caseRule);
 
@@ -103,30 +103,30 @@ bool StringUTF8_EndsWith(const unsigned char* str, const unsigned char* target, 
 
 bool StringUTF8_StartsWith(const unsigned char* str, const unsigned char* target, StringCaseRule caseRule);
 
-void StringUTF8_Format(const unsigned char* str, GenericBuffer destination, ...);
+void StringUTF8_Format(const unsigned char* str, GenericBuffer* destination, ...);
 
 void StringUTF8_Join(const unsigned char* separator,
     const unsigned char** sources,
     size_t sourcesSize,
-    GenericBuffer destination);
+    GenericBuffer* destination);
 
 void StringUTF8_Replace(const unsigned char* str,
     const unsigned char* searchTarget,
     const unsigned char* replaceValue,
-    GenericBuffer destination);
+    GenericBuffer* destination);
 
 void StringUTF8_Substring(const unsigned char* str,
     size_t startIndex,
     size_t endIndex,
-    GenericBuffer destination);
+    GenericBuffer* destination);
 
 void StringUTF8_Trim(const unsigned char* str,
     bool isStartTrimmed,
     bool isEndTrimmed,
-    GenericBuffer destination);
+    GenericBuffer* destination);
 
 ComparisonResult StringUTF8_Compare(const unsigned char* strA, const unsigned char* strB);
 
-void StringUTF8_Remove(const unsigned char* str, const unsigned char* target, StringCaseRule caseRule, GenericBuffer destination);
+void StringUTF8_Remove(const unsigned char* str, const unsigned char* target, StringCaseRule caseRule, GenericBuffer* destination);
 
-void StringUTF8_Insert(const unsigned char* str, size_t index, const unsigned char* substring, GenericBuffer destination);
+void StringUTF8_Insert(const unsigned char* str, size_t index, const unsigned char* substring, GenericBuffer* destination);
