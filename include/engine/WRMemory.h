@@ -6,14 +6,14 @@
 // Types.
 typedef struct GenericBufferStruct GenericBuffer;
 
-typedef bool (*GenericBufferAllocateCallback)(GenericBuffer* destination);
+typedef bool (*GenericBufferAllocateCallback)(GenericBuffer* destination, size_t requestedCapacity);
 
 struct GenericBufferStruct
 {
-    void* _buffer;
-    size_t _bufferSize;
+    void* _data;
+    size_t _capacity;
+    size_t _count;
     size_t _elementSize;
-    size_t _elementCount;
     void* _userData;
     GenericBufferAllocateCallback _requestMoreSpaceCallback;
 };
@@ -36,6 +36,10 @@ bool GenericBuffer_Write(GenericBuffer* buffer, void* itemToWrite);
 bool GenericBuffer_WriteUChar(GenericBuffer* buffer, unsigned char character);
 
 bool GenericBuffer_WriteString(GenericBuffer* buffer, const unsigned char* str);
+
+bool GenericBuffer_TryNullTerminate(GenericBuffer* buffer);
+
+bool GenericBuffer_WriteVoidPtr(GenericBuffer* buffer, void* ptr);
 
 void GenericBuffer_TrackWrittenItems(GenericBuffer* buffer, size_t itemCount);
 

@@ -49,6 +49,19 @@ static const unsigned char EXPONEND_INDICATOR = 'e';
 
 
 // Static functions.
+static Error CreateBufferOutOfSpaceError(ErrorMessagePool* errorPool, GenericBuffer* buffer)
+{
+    ErrorCode Code = ErrorCode_BufferTooSmall;
+    if (errorPool)
+    {
+        return Error_Construct3(errorPool,
+            Code,
+            u8"Passed in generic buffer with size of %zu is too small to fit the number converter to a string.",
+            buffer->_capacity * buffer->_elementSize);
+    }
+    return Error_Construct5(Code);
+}
+
 static unsigned char GetCharToLower(unsigned char value)
 {
     if (('A' <= value) && (value <= 'Z'))
@@ -466,8 +479,8 @@ static Error WriteIntString(ErrorMessagePool* errorPool, uint64_t bits, bool isS
         }
     }
 
-    ReverseDigits(buffer->_buffer, buffer->_elementCount, buffer->_elementCount - (HasMinusSign ? 1 : 0));
-    GenericBuffer_WriteUChar(buffer, '\0');
+    ReverseDigits(buffer->_data, buffer->_count, buffer->_count - (HasMinusSign ? 1 : 0));
+    GenericBuffer_TryNullTerminate(buffer);
     return Error_CreateSuccess();
 }
 
@@ -784,14 +797,14 @@ Error Number_Int8FromString(ErrorMessagePool* errorPool, const unsigned char* st
     return ParseInteger(errorPool, str, base, true, sizeof(int8_t), value);
 }
 
-Error Number_Int8ToString(ErrorMessagePool* errorPool, int8_t value, int32_t base, GenericBuffer buffer)
+Error Number_Int8ToString(ErrorMessagePool* errorPool, int8_t value, int32_t base, GenericBuffer* buffer)
 {
     return WriteIntString(errorPool,
         (StandardIntegers){ .Int8 = value }.UInt64,
         true,
         sizeof(int8_t),
         base,
-        &buffer);
+        buffer);
 }
 
 
@@ -800,14 +813,14 @@ Error Number_UInt8FromString(ErrorMessagePool* errorPool, const unsigned char* s
     return ParseInteger(errorPool, str, base, false, sizeof(uint8_t), value);
 }
 
-Error Number_UInt8ToString(ErrorMessagePool* errorPool, uint8_t value, int32_t base, GenericBuffer buffer)
+Error Number_UInt8ToString(ErrorMessagePool* errorPool, uint8_t value, int32_t base, GenericBuffer* buffer)
 {
     return WriteIntString(errorPool,
         (StandardIntegers){ .UInt8 = value }.UInt64,
         false,
         sizeof(uint8_t),
         base,
-        &buffer);
+        buffer);
 }
 
 
@@ -816,14 +829,14 @@ Error Number_Int16FromString(ErrorMessagePool* errorPool, const unsigned char* s
     return ParseInteger(errorPool, str, base, true, sizeof(int16_t), value);
 }
 
-Error Number_Int16ToString(ErrorMessagePool* errorPool, int16_t value, int32_t base, GenericBuffer buffer)
+Error Number_Int16ToString(ErrorMessagePool* errorPool, int16_t value, int32_t base, GenericBuffer* buffer)
 {
     return WriteIntString(errorPool,
         (StandardIntegers){ .Int16 = value }.UInt64,
         true,
         sizeof(int16_t),
         base,
-        &buffer);
+        buffer);
 }
 
 
@@ -832,14 +845,14 @@ Error Number_UInt16FromString(ErrorMessagePool* errorPool, const unsigned char* 
     return ParseInteger(errorPool, str, base, false, sizeof(uint16_t), value);
 }
 
-Error Number_UInt16ToString(ErrorMessagePool* errorPool, uint16_t value, int32_t base, GenericBuffer buffer)
+Error Number_UInt16ToString(ErrorMessagePool* errorPool, uint16_t value, int32_t base, GenericBuffer* buffer)
 {
     return WriteIntString(errorPool,
         (StandardIntegers){ .UInt16 = value }.UInt64,
         false,
         sizeof(uint16_t),
         base,
-        &buffer);
+        buffer);
 }
 
 
@@ -848,14 +861,14 @@ Error Number_Int32FromString(ErrorMessagePool* errorPool, const unsigned char* s
     return ParseInteger(errorPool, str, base, true, sizeof(int32_t), value);
 }
 
-Error Number_Int32ToString(ErrorMessagePool* errorPool, int32_t value, int32_t base, GenericBuffer buffer)
+Error Number_Int32ToString(ErrorMessagePool* errorPool, int32_t value, int32_t base, GenericBuffer* buffer)
 {
     return WriteIntString(errorPool,
         (StandardIntegers){ .Int32 = value }.UInt64,
         true,
         sizeof(int32_t),
         base,
-        &buffer);
+        buffer);
 }
 
 
@@ -864,14 +877,14 @@ Error Number_UInt32FromString(ErrorMessagePool* errorPool, const unsigned char* 
     return ParseInteger(errorPool, str, base, false, sizeof(uint32_t), value);
 }
 
-Error Number_UInt32ToString(ErrorMessagePool* errorPool, uint32_t value, int32_t base, GenericBuffer buffer)
+Error Number_UInt32ToString(ErrorMessagePool* errorPool, uint32_t value, int32_t base, GenericBuffer* buffer)
 {
     return WriteIntString(errorPool,
         (StandardIntegers){ .UInt32 = value }.UInt64,
         false,
         sizeof(uint32_t),
         base,
-        &buffer);
+        buffer);
 }
 
 
@@ -880,14 +893,14 @@ Error Number_Int64FromString(ErrorMessagePool* errorPool, const unsigned char* s
     return ParseInteger(errorPool, str, base, true, sizeof(int64_t), value);
 }
 
-Error Number_Int64ToString(ErrorMessagePool* errorPool, int64_t value, int32_t base, GenericBuffer buffer)
+Error Number_Int64ToString(ErrorMessagePool* errorPool, int64_t value, int32_t base, GenericBuffer* buffer)
 {
     return WriteIntString(errorPool,
         (StandardIntegers){ .Int64 = value }.UInt64,
         true,
         sizeof(int64_t),
         base,
-        &buffer);
+        buffer);
 }
 
 
@@ -896,14 +909,14 @@ Error Number_UInt64FromString(ErrorMessagePool* errorPool, const unsigned char* 
     return ParseInteger(errorPool, str, base, false, sizeof(uint64_t), value);
 }
 
-Error Number_UInt64ToString(ErrorMessagePool* errorPool, uint64_t value, int32_t base, GenericBuffer buffer)
+Error Number_UInt64ToString(ErrorMessagePool* errorPool, uint64_t value, int32_t base, GenericBuffer* buffer)
 {
     return WriteIntString(errorPool,
         value,
         false,
         sizeof(uint64_t),
         base,
-        &buffer);
+        buffer);
 }
 
 
@@ -925,7 +938,7 @@ Error Number_FloatFromString(ErrorMessagePool* errorPool,
 
 Error Number_FloatToString(ErrorMessagePool* errorPool,
     float value,
-    GenericBuffer buffer,
+    GenericBuffer* buffer,
     DecimalFormatOptions options)
 {
     return Number_DoubleToString(errorPool, value, buffer, options);
@@ -946,10 +959,10 @@ Error Number_DoubleFromString(ErrorMessagePool* errorPool,
 
 Error Number_DoubleToString(ErrorMessagePool* errorPool,
     double value,
-    GenericBuffer buffer,
+    GenericBuffer* buffer,
     DecimalFormatOptions options)
 {
-    if (TryWriteNanOrInfString(value, &buffer))
+    if (TryWriteNanOrInfString(value, buffer))
     {
         return Error_CreateSuccess();
     }
@@ -963,26 +976,24 @@ Error Number_DoubleToString(ErrorMessagePool* errorPool,
     {
         AttemptCount++;
 
-        int PrintResult = snprintf(buffer._buffer, buffer._bufferSize, (char*)Format, value);
+        int PrintResult = snprintf(buffer->_data, buffer->_capacity, (char*)Format, value);
         if (PrintResult < 0)
         {
             return CreateInternalPrintfFromatError(errorPool, value, PrintResult, Format);
         }
 
-        size_t RequiredCharCount = (size_t)PrintResult + 1;
-        if ((AttemptCount < MAX_ATTEMPT_COUNT)
-            && (RequiredCharCount >= buffer._bufferSize)
-            && !GenericBuffer_EnsureCapacity(&buffer, RequiredCharCount))
-        {
-            return Error_CreateSuccess();
-        }
-        else
+        size_t RequiredBufferSize = (size_t)PrintResult + 1;
+        if (RequiredBufferSize <= buffer->_capacity)
         {
             IsFullyWritten = true;
         }
+        else if ((AttemptCount < MAX_ATTEMPT_COUNT) && !GenericBuffer_EnsureCapacity(buffer, RequiredBufferSize))
+        {
+            return CreateBufferOutOfSpaceError(errorPool, buffer);
+        }
     } while (!IsFullyWritten && (AttemptCount < MAX_ATTEMPT_COUNT));
 
-    EnsureDecimalSepratorInString(buffer._buffer, options._separator);
+    EnsureDecimalSepratorInString(buffer->_data, options._separator);
     return Error_CreateSuccess();
 }
 

@@ -44,6 +44,8 @@ typedef enum ErrorCodeEnum
 
     ErrorCode_InvalidUnicodeData,
 
+    ErrorCode_BufferTooSmall,
+
     ErrorCode_Unknown
     
 } ErrorCode;

@@ -49,41 +49,41 @@ extern const int32_t DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED;
 // Functions.
 Error Number_Int8FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int8_t* value);
 
-Error Number_Int8ToString(ErrorMessagePool* errorPool, int8_t value, int32_t base, GenericBuffer buffer);
+Error Number_Int8ToString(ErrorMessagePool* errorPool, int8_t value, int32_t base, GenericBuffer* buffer);
 
 
 Error Number_UInt8FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, uint8_t* value);
 
-Error Number_UInt8ToString(ErrorMessagePool* errorPool, uint8_t value, int32_t base, GenericBuffer buffer);
+Error Number_UInt8ToString(ErrorMessagePool* errorPool, uint8_t value, int32_t base, GenericBuffer* buffer);
 
 
 Error Number_Int16FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int16_t* value);
 
-Error Number_Int16ToString(ErrorMessagePool* errorPool, int16_t value, int32_t base, GenericBuffer buffer);
+Error Number_Int16ToString(ErrorMessagePool* errorPool, int16_t value, int32_t base, GenericBuffer* buffer);
 
 
 Error Number_UInt16FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, uint16_t* value);
 
-Error Number_UInt16ToString(ErrorMessagePool* errorPool, uint16_t value, int32_t base, GenericBuffer buffer);
+Error Number_UInt16ToString(ErrorMessagePool* errorPool, uint16_t value, int32_t base, GenericBuffer* buffer);
 
 
 Error Number_Int32FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int32_t* value);
 
-Error Number_Int32ToString(ErrorMessagePool* errorPool, int32_t value, int32_t base, GenericBuffer buffer);
+Error Number_Int32ToString(ErrorMessagePool* errorPool, int32_t value, int32_t base, GenericBuffer* buffer);
 
 
 Error Number_UInt32FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, uint32_t* value);
 
-Error Number_UInt32ToString(ErrorMessagePool* errorPool, uint32_t value, int32_t base, GenericBuffer buffer);
+Error Number_UInt32ToString(ErrorMessagePool* errorPool, uint32_t value, int32_t base, GenericBuffer* buffer);
 
 Error Number_Int64FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int64_t* value);
 
-Error Number_Int64ToString(ErrorMessagePool* errorPool, int64_t value, int32_t base, GenericBuffer buffer);
+Error Number_Int64ToString(ErrorMessagePool* errorPool, int64_t value, int32_t base, GenericBuffer* buffer);
 
 
 Error Number_UInt64FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, uint64_t* value);
 
-Error Number_UInt64ToString(ErrorMessagePool* errorPool, uint64_t value, int32_t base, GenericBuffer buffer);
+Error Number_UInt64ToString(ErrorMessagePool* errorPool, uint64_t value, int32_t base, GenericBuffer* buffer);
 
 
 Error Number_FloatFromString(ErrorMessagePool* errorPool,
@@ -93,7 +93,7 @@ Error Number_FloatFromString(ErrorMessagePool* errorPool,
 
 Error Number_FloatToString(ErrorMessagePool* errorPool,
     float value,
-    GenericBuffer buffer,
+    GenericBuffer* buffer,
     DecimalFormatOptions options);
 
 
@@ -104,7 +104,7 @@ Error Number_DoubleFromString(ErrorMessagePool* errorPool,
 
 Error Number_DoubleToString(ErrorMessagePool* errorPool,
     double value,
-    GenericBuffer buffer,
+    GenericBuffer* buffer,
     DecimalFormatOptions options);
 
 DecimalFormatOptions DecimalFormatOptions_CreateScientific(DecimalSeparator separator, bool isUpperCase);
