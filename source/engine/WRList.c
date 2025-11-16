@@ -4,6 +4,8 @@
 #include "WRError.h"
 #include "WRMemory.h"
 #include "WRComparasionResult.h"
+#include "math.h"
+#include "limits.h"
 
 
 // Fields.
@@ -39,6 +41,19 @@ static Error CreateIndexOutOfRangeError(WRList* self, size_t index, const unsign
     return Error_Construct5(Code);
 }
 
+static Error CreateEmptyListError(WRList* self, const unsigned char* operationName)
+{
+    ErrorCode Code = ErrorCode_InvalidOperation;
+    if (self->ErrorPool)
+    {
+        return Error_Construct3(self->ErrorPool,
+            Code,
+            u8"At least 1 list element is required to perform the operation \"%s\".",
+            operationName);
+    }
+    return Error_Construct5(Code);
+}
+
 static bool AllocateCallback(GenericBuffer* buffer, size_t requestedCapacity)
 {
     WRList* Self = (WRList*)buffer->_userData;
@@ -48,6 +63,11 @@ static bool AllocateCallback(GenericBuffer* buffer, size_t requestedCapacity)
         return true;
     }
     return false;
+}
+
+static inline void* GetUncheckedElementPtr(WRList* self, size_t index)
+{
+    return self->_data + (index * self->_elementSize);
 }
 
 
@@ -320,8 +340,7 @@ bool WRList_LastIndexOf(WRList* self, WRListPredicate predicate, void* userData,
     for (size_t i = self->_count; i > 0; i++)
     {
         size_t RealIndex = i - 1;
-        void* ElementPtr = self->_data + (RealIndex * self->_elementSize);
-        if ((*predicate)(self, ElementPtr, userData))
+        if ((*predicate)(self, GetUncheckedElementPtr(self, RealIndex), userData))
         {
             *outIndex = RealIndex;
             return true;
@@ -342,21 +361,161 @@ void WRList_Map(WRList* self, WRList* destination, WRListMapper mapper, void* de
 
 void WRList_MapToSelf(WRList* self, WRListMapper mapper, void* destElementBuffer, void* userData);
 
-int64_t WRList_SumInt(WRList* self, WRListIntExtractor extractor);
+Error WRList_SumInt(WRList* self, WRListIntExtractor extractor, int64_t* outValue, void* userData)
+{
+    *outValue = 0;
+    if (self->_count == 0)
+    {
+        return CreateEmptyListError(self, u8"sum int");
+    }
 
-double WRList_SumDouble(WRList* self, WRListDoubleExtractor extractor);
+    int64_t Sum = 0;
+    for (size_t i = 0; i < self->_count; i++)
+    {
+        Sum += (*extractor)(self, GetUncheckedElementPtr(self, i), userData);
+    }
 
-int64_t WRList_MaxInt(WRList* self, WRListIntExtractor extractor);
+    *outValue = Sum;
+    return Error_CreateSuccess();
+}
 
-double WRList_MaxDouble(WRList* self, WRListDoubleExtractor extractor);
+Error WRList_SumDouble(WRList* self, WRListDoubleExtractor extractor, double* outValue, void* userData)
+{
+    *outValue = 0.0;
+    if (self->_count == 0)
+    {
+        return CreateEmptyListError(self, u8"sum double");
+    }
 
-int64_t WRList_MinInt(WRList* self, WRListIntExtractor extractor);
+    double Sum = 0.0;
+    for (size_t i = 0; i < self->_count; i++)
+    {
+        Sum += (*extractor)(self, GetUncheckedElementPtr(self, i), userData);
+    }
 
-double WRList_MinDouble(WRList* self, WRListDoubleExtractor extractor);
+    *outValue = Sum;
+    return Error_CreateSuccess();
+}
 
-size_t WRList_CountWhere(WRList* self, WRListPredicate* predicate);
+Error WRList_MaxInt(WRList* self, WRListIntExtractor extractor, int64_t* outValue, void* userData)
+{
+    *outValue = 0;
+    if (self->_count == 0)
+    {
+        return CreateEmptyListError(self, u8"max int");
+    }
 
-void WRList_Reverse(WRList* self);
+    int64_t MaxValue = INT64_MIN;
+    for (size_t i = 0; i < self->_count; i++)
+    {
+        int64_t Value = (*extractor)(self, GetUncheckedElementPtr(self, i), userData);
+        if (Value > MaxValue)
+        {
+            MaxValue = Value;
+        }
+    }
+
+    *outValue = MaxValue;
+    return Error_CreateSuccess();
+}
+
+Error WRList_MaxDouble(WRList* self, WRListDoubleExtractor extractor, double* outValue, void* userData)
+{
+    *outValue = 0.0;
+    if (self->_count == 0)
+    {
+        return CreateEmptyListError(self, u8"max double");
+    }
+
+    double MaxValue = -INFINITY;
+    for (size_t i = 0; i < self->_count; i++)
+    {
+        double Value = (*extractor)(self, GetUncheckedElementPtr(self, i), userData);
+        if (Value > MaxValue)
+        {
+            MaxValue = Value;
+        }
+    }
+
+    *outValue = MaxValue;
+    return Error_CreateSuccess();
+}
+
+Error WRList_MinInt(WRList* self, WRListIntExtractor extractor, int64_t* outValue, void* userData)
+{
+    *outValue = 0;
+    if (self->_count == 0)
+    {
+        return CreateEmptyListError(self, u8"min int");
+    }
+
+    int64_t MinValue = INT64_MAX;
+    for (size_t i = 0; i < self->_count; i++)
+    {
+        int64_t Value = (*extractor)(self, GetUncheckedElementPtr(self, i), userData);
+        if (Value < MinValue)
+        {
+            MinValue = Value;
+        }
+    }
+
+    *outValue = MinValue;
+    return Error_CreateSuccess();
+}
+
+Error WRList_MinDouble(WRList* self, WRListDoubleExtractor extractor, double* outValue, void* userData)
+{
+    *outValue = 0.0;
+    if (self->_count == 0)
+    {
+        return CreateEmptyListError(self, u8"min double");
+    }
+
+    double MinValue = INFINITY;
+    for (size_t i = 0; i < self->_count; i++)
+    {
+        double Value = (*extractor)(self, GetUncheckedElementPtr(self, i), userData);
+        if (Value < MinValue)
+        {
+            MinValue = Value;
+        }
+    }
+
+    *outValue = MinValue;
+    return Error_CreateSuccess();
+}
+
+size_t WRList_CountWhere(WRList* self, WRListPredicate* predicate, void* userData)
+{
+    size_t PassCount = 0;
+    for (size_t i = 0; i < self->_count; i++)
+    {
+        if ((*predicate)(self, GetUncheckedElementPtr(self, i), userData))
+        {
+            PassCount++;
+        }
+    }
+    return PassCount;
+}
+
+void WRList_Reverse(WRList* self)
+{
+    for (size_t ElIndex = 0; ElIndex < self->_count / 2; ElIndex++)
+    {
+        size_t IndexA = ElIndex;
+        size_t IndexB = self->_count - 1 - ElIndex;
+        uint8_t* PtrA = self->_data + (IndexA * self->_elementSize);
+        uint8_t* PtrB = self->_data + (IndexB * self->_elementSize);
+
+        for (size_t ByteIndex = 0; ByteIndex < self->_elementSize; ByteIndex++)
+        {
+            uint8_t ByteA = PtrA[ByteIndex];
+            uint8_t ByteB = PtrB[ByteIndex];
+            PtrA[ByteIndex] = ByteB;
+            PtrB[ByteIndex] = ByteA;
+        }
+    }
+}
 
 
 /* Technical. */

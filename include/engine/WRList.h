@@ -34,9 +34,9 @@ typedef bool (*WRListPredicate)(WRList* self, void* element, void* userData);
 
 typedef void (*WRListMapper)(WRList* self, WRListElementData sourceEl, void* destElement, void* userData);
 
-typedef int64_t (*WRListIntExtractor)(WRList* self, WRListElementData* sourceEl);
+typedef int64_t (*WRListIntExtractor)(WRList* self, WRListElementData* sourceEl, void* userData);
 
-typedef double (*WRListDoubleExtractor)(WRList* self, WRListElementData* sourceEl);
+typedef double (*WRListDoubleExtractor)(WRList* self, WRListElementData* sourceEl, void* userData);
 
 
 // Functions.
@@ -111,19 +111,19 @@ void WRList_Map(WRList* self, WRList* destination, WRListMapper mapper, void* de
 
 void WRList_MapToSelf(WRList* self, WRListMapper mapper, void* destElementBuffer, void* userData);
 
-int64_t WRList_SumInt(WRList* self, WRListIntExtractor extractor);
+Error WRList_SumInt(WRList* self, WRListIntExtractor extractor, int64_t* outValue, void* userData);
 
-double WRList_SumDouble(WRList* self, WRListDoubleExtractor extractor);
+Error WRList_SumDouble(WRList* self, WRListDoubleExtractor extractor, double* outValue, void* userData);
 
-int64_t WRList_MaxInt(WRList* self, WRListIntExtractor extractor);
+Error WRList_MaxInt(WRList* self, WRListIntExtractor extractor, int64_t* outValue, void* userData);
 
-double WRList_MaxDouble(WRList* self, WRListDoubleExtractor extractor);
+Error WRList_MaxDouble(WRList* self, WRListDoubleExtractor extractor, double* outValue, void* userData);
 
-int64_t WRList_MinInt(WRList* self, WRListIntExtractor extractor);
+Error WRList_MinInt(WRList* self, WRListIntExtractor extractor, int64_t* outValue, void* userData);
 
-double WRList_MinDouble(WRList* self, WRListDoubleExtractor extractor);
+Error WRList_MinDouble(WRList* self, WRListDoubleExtractor extractor, double* outValue, void* userData);
 
-size_t WRList_CountWhere(WRList* self, WRListPredicate* predicate);
+size_t WRList_CountWhere(WRList* self, WRListPredicate* predicate, void* userData);
 
 void WRList_Reverse(WRList* self);
 
