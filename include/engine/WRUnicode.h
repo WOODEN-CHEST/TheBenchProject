@@ -113,3 +113,5 @@ bool Unicode_IsOtherCategory(UnicodeData* data, CodePoint codepoint);
 bool Unicode_EqualsCaseIgnore(UnicodeData* data, CodePoint codepoint1, CodePoint codepoint2);
 
 CodePointCategory Unicode_GetCategory(UnicodeData* data, CodePoint codepoint);
+
+bool Unicode_IsDefined(UnicodeData* data, CodePoint codepoint);

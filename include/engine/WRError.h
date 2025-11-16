@@ -43,8 +43,10 @@ typedef enum ErrorCodeEnum
     ErrorCode_InvalidAssetData,
 
     ErrorCode_InvalidUnicodeData,
+    ErrorCode_InvalidCodePoint,
 
     ErrorCode_BufferTooSmall,
+    ErrorCode_BufferTooLarge,
 
     ErrorCode_Unknown
     

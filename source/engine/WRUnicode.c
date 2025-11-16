@@ -302,3 +302,8 @@ CodePointCategory Unicode_GetCategory(UnicodeData* data, CodePoint codepoint)
     }
     return CodePointCategory_None;
 }
+
+bool Unicode_IsDefined(UnicodeData* data, CodePoint codepoint)
+{
+    return IsCodepointInDataBounds(data, codepoint);
+}

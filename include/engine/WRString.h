@@ -57,19 +57,21 @@ bool StringUTF8_IsNullOrEmpty(const unsigned char* str);
 
 bool StringUTF8_IsNullOrWhitespace(const unsigned char* str, UnicodeData* unicode);
 
-void StringUTF8_ToLower(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination);
+Error StringUTF8_ToLower(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination, ErrorMessagePool* errorPool);
 
-void StringUTF8_ToUpper(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination);
+Error StringUTF8_ToUpper(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination, ErrorMessagePool* errorPool);
 
-void StringUTF8_InvertCase(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination);
+Error StringUTF8_InvertCase(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination, ErrorMessagePool* errorPool);
 
 size_t StringUTF8_GetByteLength(const unsigned char* str);
 
 size_t StringUTF8_GetCodePointLength(const unsigned char* str);
 
-bool StringUTF8_Equals(const unsigned char* a, const unsigned char* b, StringCaseRule caseRule);
+bool StringUTF8_Equals(const unsigned char* a, const unsigned char* b, StringCaseRule caseRule, UnicodeData* unicode);
 
-void StringUTF8_CopyTo(const unsigned char* source, GenericBuffer* destination);
+Error StringUTF8_CopyTo(const unsigned char* source, GenericBuffer* destination, ErrorMessagePool* errorPool);
+
+Error StringUTF8_CopyToBySize(const unsigned char* source, size_t size, GenericBuffer* destination, ErrorMessagePool* errorPool);
 
 StringSplitOptions String_CreateSplitOptionsNormal();
 
@@ -130,3 +132,5 @@ ComparisonResult StringUTF8_Compare(const unsigned char* strA, const unsigned ch
 void StringUTF8_Remove(const unsigned char* str, const unsigned char* target, StringCaseRule caseRule, GenericBuffer* destination);
 
 void StringUTF8_Insert(const unsigned char* str, size_t index, const unsigned char* substring, GenericBuffer* destination);
+
+bool StringUTF8_WriteCodePointToBuffer(GenericBuffer* buffer, CodePoint* codePoint);

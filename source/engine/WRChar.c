@@ -6,7 +6,7 @@
 // https://en.wikipedia.org/wiki/UTF-8
 
 
-// Static fields.
+// Fields.
 static const unsigned char UTF8_1B_FIRST_BYTE_VALUE_MASK = 0b10000000;
 static const unsigned char UTF8_1B_FIRST_BYTE_VALUE = 0b00000000;
 static const CodePoint UTF8_1B_MAX_CODEPOINT = 127;

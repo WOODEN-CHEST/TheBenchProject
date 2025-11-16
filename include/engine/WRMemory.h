@@ -37,6 +37,8 @@ bool GenericBuffer_WriteUChar(GenericBuffer* buffer, unsigned char character);
 
 bool GenericBuffer_WriteString(GenericBuffer* buffer, const unsigned char* str);
 
+bool GenericBuffer_WriteStringBySize(GenericBuffer* buffer, const unsigned char* str, size_t stringSize);
+
 bool GenericBuffer_TryNullTerminate(GenericBuffer* buffer);
 
 bool GenericBuffer_WriteVoidPtr(GenericBuffer* buffer, void* ptr);

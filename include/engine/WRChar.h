@@ -4,6 +4,9 @@
 #include "WRUnicode.h"
 
 
+// Macros.
+#define CODEPOINT_BYTE_COUNT_MAX 4
+
 
 // Functions.
 bool CharUTF8_IsCharValid(const unsigned char* character);
