@@ -30,13 +30,13 @@ typedef struct WRListElementDataStruct
 
 typedef ComparisonResult (*WRListComparator)(WRList* self, WRListElementData a, WRListElementData b, void* userData);
 
-typedef bool (*WRListPredicate)(WRList* self, void* element, void* userData);
+typedef bool (*WRListPredicate)(WRList* self, WRListElementData element, void* userData);
 
 typedef void (*WRListMapper)(WRList* self, WRListElementData sourceEl, void* destElement, void* userData);
 
-typedef int64_t (*WRListIntExtractor)(WRList* self, WRListElementData* sourceEl, void* userData);
+typedef int64_t (*WRListIntExtractor)(WRList* self, WRListElementData sourceEl, void* userData);
 
-typedef double (*WRListDoubleExtractor)(WRList* self, WRListElementData* sourceEl, void* userData);
+typedef double (*WRListDoubleExtractor)(WRList* self, WRListElementData sourceEl, void* userData);
 
 
 // Functions.
@@ -45,7 +45,7 @@ Error WRList_Construct1(WRList* self, size_t elementSize, ErrorMessagePool* erro
 
 Error WRList_Construct2(WRList* self, size_t elementSize, size_t initialCapacity, ErrorMessagePool* errorPool);
 
-void WRList_WrapConstantBuffer(WRList* self, void* buffer, size_t count, size_t capacity, size_t elementSize, ErrorMessagePool* errorPool);
+Error WRList_WrapConstantBuffer(WRList* self, void* buffer, size_t count, size_t capacity, size_t elementSize, ErrorMessagePool* errorPool);
 
 void WRList_Deconstruct1(WRList* self);
 
@@ -79,6 +79,8 @@ Error WRList_PopLast(WRList* self, void* out);
 
 Error WRList_PopAt(WRList* self, size_t index, void* out);
 
+Error WRList_Swap(WRList* self, size_t indexA, size_t indexB);
+
 
 /* Info retrieval. */
 Error WRList_GetFirst(WRList* self, void* out);
@@ -107,9 +109,9 @@ void WRList_SortDescending(WRList* self, WRListComparator comparator, void* user
 
 void WRList_Filter(WRList* self, WRListPredicate predicate, void* userData);
 
-void WRList_Map(WRList* self, WRList* destination, WRListMapper mapper, void* destElementBuffer, void* userData);
+Error WRList_Map(WRList* self, WRList* destination, WRListMapper mapper, void* destElementBuffer, void* userData);
 
-void WRList_MapToSelf(WRList* self, WRListMapper mapper, void* destElementBuffer, void* userData);
+Error WRList_MapToSelf(WRList* self, WRListMapper mapper, void* destElementBuffer, void* userData);
 
 Error WRList_SumInt(WRList* self, WRListIntExtractor extractor, int64_t* outValue, void* userData);
 

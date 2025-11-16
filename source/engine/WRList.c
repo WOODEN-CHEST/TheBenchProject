@@ -70,6 +70,84 @@ static inline void* GetUncheckedElementPtr(WRList* self, size_t index)
     return self->_data + (index * self->_elementSize);
 }
 
+static inline WRListElementData GetListElementData(WRList* self, size_t index)
+{
+    return (WRListElementData) { ._element = GetUncheckedElementPtr(self, index), ._elementIndex = index };
+}
+
+static ComparisonResult FormatComparisonResult(ComparisonResult result, int step)
+{
+    if ((step > 0) || (result == ComparisonResult_AEqualsB))
+    {
+        return result;
+    }
+
+    if (result == ComparisonResult_AGreaterThanB)
+    {
+        return ComparisonResult_ALessThanB;
+    }
+    return ComparisonResult_AGreaterThanB;
+}
+
+static void SortList(WRList* self,
+    int32_t order,
+    WRListComparator comparator,
+    void* userData,
+    int64_t minIndex,
+    int64_t maxIndex)
+{
+    if (minIndex >= maxIndex)
+    {
+        return;
+    }
+
+    int64_t LeftIndex = minIndex + 1;
+    int64_t RightIndex = maxIndex;
+    int64_t PivotIndex = minIndex;
+
+    while (LeftIndex <= RightIndex)
+    {
+        WRListElementData LeftEl = GetListElementData(self, LeftIndex);
+        WRListElementData RightEl = GetListElementData(self, RightIndex);
+        WRListElementData PivotEl = GetListElementData(self, PivotIndex);
+
+        ComparisonResult CompResult = FormatComparisonResult((*comparator)(self, LeftEl, PivotEl, userData), order);
+        if (CompResult == ComparisonResult_ALessThanB)
+        {
+            LeftIndex++;
+            continue;
+        }
+        
+        CompResult = FormatComparisonResult((*comparator)(self, RightEl, PivotEl, userData), order);
+        if (CompResult == ComparisonResult_AGreaterThanB)
+        {
+            RightIndex--;
+            continue;
+        }
+
+        WRList_Swap(self, LeftIndex, RightIndex);
+        LeftIndex++;
+        RightIndex--;
+    }
+
+    WRList_Swap(self, RightIndex, PivotIndex);
+
+    SortList(self, order, comparator, userData, minIndex, RightIndex - 1);
+    SortList(self, order, comparator, userData, RightIndex + 1, maxIndex);
+}
+
+static Error CreateInvalidElementSizeError(ErrorMessagePool* errorPool)
+{
+    ErrorCode Code = ErrorCode_IllegalArgument;
+    if (errorPool)
+    {
+        return Error_Construct3(errorPool,
+            Code,
+            u8"An element size of at least 1 is required to construct a list.");
+    }
+    return Error_Construct5(Code);
+}
+
 
 
 // Functions.
@@ -77,21 +155,40 @@ static inline void* GetUncheckedElementPtr(WRList* self, size_t index)
 /* Constructors. */
 Error WRList_Construct1(WRList* self, size_t elementSize, ErrorMessagePool* errorPool)
 {
+    if (elementSize == 0)
+    {
+        return CreateInvalidElementSizeError(errorPool);
+    }
+
     Memory_Zero(self, sizeof(*self));
     self->_elementSize = elementSize;
     self->ErrorPool = errorPool;
+
+    return Error_CreateSuccess();
 }
 
 Error WRList_Construct2(WRList* self, size_t elementSize, size_t initialCapacity, ErrorMessagePool* errorPool)
 {
+    if (elementSize == 0)
+    {
+        return CreateInvalidElementSizeError(errorPool);
+    }
+
     Memory_Zero(self, sizeof(*self));
     self->_elementSize = elementSize;
     self->ErrorPool = errorPool;
     WRList_EnsureCapacity(self, initialCapacity);
+
+    return Error_CreateSuccess();
 }
 
-void WRList_WrapConstantBuffer(WRList* self, void* buffer, size_t count, size_t capacity, size_t elementSize, ErrorMessagePool* errorPool)
+Error WRList_WrapConstantBuffer(WRList* self, void* buffer, size_t count, size_t capacity, size_t elementSize, ErrorMessagePool* errorPool)
 {
+    if (elementSize == 0)
+    {
+        return CreateInvalidElementSizeError(errorPool);
+    }
+
     Memory_Zero(self, sizeof(*self));
     self->_data = buffer;
     self->_count = count;
@@ -99,6 +196,8 @@ void WRList_WrapConstantBuffer(WRList* self, void* buffer, size_t count, size_t 
     self->_elementSize = elementSize;
     self->_flags = WRListFlags_IsBufferWrapper;
     self->ErrorPool = errorPool;
+
+    return Error_CreateSuccess();
 }
 
 void WRList_Deconstruct1(WRList* self)
@@ -254,6 +353,36 @@ Error WRList_PopAt(WRList* self, size_t index, void* out)
     return WRList_RemoveAt(self, index);
 }
 
+Error WRList_Swap(WRList* self, size_t indexA, size_t indexB)
+{
+    const unsigned char* OperationName = u8"swap";
+    if (self->_count == 0)
+    {
+        return CreateIndexOutOfRangeError(self, 0, OperationName);
+    }
+    if (indexA >= self->_count)
+    {
+        return CreateIndexOutOfRangeError(self, indexA, OperationName);
+    }
+    if (indexB >= self->_count)
+    {
+        return CreateIndexOutOfRangeError(self, indexA, OperationName);
+    }
+
+    uint8_t* PtrA = GetUncheckedElementPtr(self, indexA);
+    uint8_t* PtrB = GetUncheckedElementPtr(self, indexB);
+
+    for (size_t ByteIndex = 0; ByteIndex < self->_elementSize; ByteIndex++)
+    {
+        uint8_t ByteA = PtrA[ByteIndex];
+        uint8_t ByteB = PtrB[ByteIndex];
+        PtrA[ByteIndex] = ByteB;
+        PtrB[ByteIndex] = ByteA;
+    }
+
+    return Error_CreateSuccess();
+}
+
 
 /* Info retrieval. */
 Error WRList_GetFirst(WRList* self, void* out)
@@ -310,8 +439,7 @@ bool WRList_Contains(WRList* self, WRListPredicate* predicate, void* userData)
 {
     for (size_t i = 0; i < self->_count; i++)
     {
-        void* ElementPtr = self->_data + (i * self->_elementSize);
-        if ((*predicate)(self, ElementPtr, userData))
+        if ((*predicate)(self, GetListElementData(self, i), userData))
         {
             return true;
         }
@@ -324,8 +452,7 @@ bool WRList_FirstIndexOf(WRList* self, WRListPredicate predicate, void* userData
     *outIndex = 0;
     for (size_t i = 0; i < self->_count; i++)
     {
-        void* ElementPtr = self->_data + (i * self->_elementSize);
-        if ((*predicate)(self, ElementPtr, userData))
+        if ((*predicate)(self, GetListElementData(self, i), userData))
         {
             *outIndex = i;
             return true;
@@ -340,7 +467,7 @@ bool WRList_LastIndexOf(WRList* self, WRListPredicate predicate, void* userData,
     for (size_t i = self->_count; i > 0; i++)
     {
         size_t RealIndex = i - 1;
-        if ((*predicate)(self, GetUncheckedElementPtr(self, RealIndex), userData))
+        if ((*predicate)(self, GetListElementData(self, RealIndex), userData))
         {
             *outIndex = RealIndex;
             return true;
@@ -351,15 +478,82 @@ bool WRList_LastIndexOf(WRList* self, WRListPredicate predicate, void* userData,
 
 
 /* Full list manipulation. */
-void WRList_SortAscending(WRList* self, WRListComparator comparator, void* userData);
+void WRList_SortAscending(WRList* self, WRListComparator comparator, void* userData)
+{
+    if (self->_count == 0)
+    {
+        return;
+    }
+    SortList(self, 1, comparator, userData, 0, (int64_t)self->_count - 1);
+}
 
-void WRList_SortDescending(WRList* self, WRListComparator comparator, void* userData);
+void WRList_SortDescending(WRList* self, WRListComparator comparator, void* userData)
+{
+    if (self->_count == 0)
+    {
+        return;
+    }
+    SortList(self, -1, comparator, userData, 0, (int64_t)self->_count - 1);
+}
 
-void WRList_Filter(WRList* self, WRListPredicate predicate, void* userData);
+void WRList_Filter(WRList* self, WRListPredicate predicate, void* userData)
+{
+    size_t RemovedElementCount = 0;
+    for (size_t i = 0; i < self->_count; i++)
+    {
+        if ((*predicate)(self, GetListElementData(self, i), userData))
+        {
+            RemovedElementCount++;
+            continue;
+        }
+        if (RemovedElementCount == 0)
+        {
+            continue;
+        }
 
-void WRList_Map(WRList* self, WRList* destination, WRListMapper mapper, void* destElementBuffer, void* userData);
+        void* MoveSource = GetUncheckedElementPtr(self, i);
+        void* MoveDestination = GetUncheckedElementPtr(self, i - RemovedElementCount);
+        Memory_Copy(MoveSource, MoveDestination, self->_elementSize);
+    }
+    self->_count -= RemovedElementCount;
+}
 
-void WRList_MapToSelf(WRList* self, WRListMapper mapper, void* destElementBuffer, void* userData);
+Error WRList_Map(WRList* self, WRList* destination, WRListMapper mapper, void* destElementBuffer, void* userData)
+{
+    if (!WRList_EnsureCapacity(destination, self->_count))
+    {
+        return CreateOutOfCapacityError(destination, u8"map");
+    }
+
+    WRList_Clear(destination);
+
+    for (size_t i = 0; i < self->_count; i++)
+    {
+        (*mapper)(self, GetListElementData(self, i), destElementBuffer, userData);
+        Error InsertResult = WRList_Insert(destination, destElementBuffer, i);
+        if (InsertResult.Code != ErrorCode_Success)
+        {
+            return InsertResult;
+        }
+    }
+
+    return Error_CreateSuccess();
+}
+
+Error WRList_MapToSelf(WRList* self, WRListMapper mapper, void* destElementBuffer, void* userData)
+{
+    for (size_t i = 0; i < self->_count; i++)
+    {
+        (*mapper)(self, GetListElementData(self, i), destElementBuffer, userData);
+        Error ReplaceResult = WRList_Replace(self, destElementBuffer, i);
+        if (ReplaceResult.Code != ErrorCode_Success)
+        {
+            return ReplaceResult;
+        }
+    }
+
+    return Error_CreateSuccess();
+}
 
 Error WRList_SumInt(WRList* self, WRListIntExtractor extractor, int64_t* outValue, void* userData)
 {
@@ -372,7 +566,7 @@ Error WRList_SumInt(WRList* self, WRListIntExtractor extractor, int64_t* outValu
     int64_t Sum = 0;
     for (size_t i = 0; i < self->_count; i++)
     {
-        Sum += (*extractor)(self, GetUncheckedElementPtr(self, i), userData);
+        Sum += (*extractor)(self, GetListElementData(self, i), userData);
     }
 
     *outValue = Sum;
@@ -390,7 +584,7 @@ Error WRList_SumDouble(WRList* self, WRListDoubleExtractor extractor, double* ou
     double Sum = 0.0;
     for (size_t i = 0; i < self->_count; i++)
     {
-        Sum += (*extractor)(self, GetUncheckedElementPtr(self, i), userData);
+        Sum += (*extractor)(self, GetListElementData(self, i), userData);
     }
 
     *outValue = Sum;
@@ -408,7 +602,7 @@ Error WRList_MaxInt(WRList* self, WRListIntExtractor extractor, int64_t* outValu
     int64_t MaxValue = INT64_MIN;
     for (size_t i = 0; i < self->_count; i++)
     {
-        int64_t Value = (*extractor)(self, GetUncheckedElementPtr(self, i), userData);
+        int64_t Value = (*extractor)(self, GetListElementData(self, i), userData);
         if (Value > MaxValue)
         {
             MaxValue = Value;
@@ -430,7 +624,7 @@ Error WRList_MaxDouble(WRList* self, WRListDoubleExtractor extractor, double* ou
     double MaxValue = -INFINITY;
     for (size_t i = 0; i < self->_count; i++)
     {
-        double Value = (*extractor)(self, GetUncheckedElementPtr(self, i), userData);
+        double Value = (*extractor)(self, GetListElementData(self, i), userData);
         if (Value > MaxValue)
         {
             MaxValue = Value;
@@ -452,7 +646,7 @@ Error WRList_MinInt(WRList* self, WRListIntExtractor extractor, int64_t* outValu
     int64_t MinValue = INT64_MAX;
     for (size_t i = 0; i < self->_count; i++)
     {
-        int64_t Value = (*extractor)(self, GetUncheckedElementPtr(self, i), userData);
+        int64_t Value = (*extractor)(self, GetListElementData(self, i), userData);
         if (Value < MinValue)
         {
             MinValue = Value;
@@ -474,7 +668,7 @@ Error WRList_MinDouble(WRList* self, WRListDoubleExtractor extractor, double* ou
     double MinValue = INFINITY;
     for (size_t i = 0; i < self->_count; i++)
     {
-        double Value = (*extractor)(self, GetUncheckedElementPtr(self, i), userData);
+        double Value = (*extractor)(self, GetListElementData(self, i), userData);
         if (Value < MinValue)
         {
             MinValue = Value;
@@ -490,7 +684,7 @@ size_t WRList_CountWhere(WRList* self, WRListPredicate* predicate, void* userDat
     size_t PassCount = 0;
     for (size_t i = 0; i < self->_count; i++)
     {
-        if ((*predicate)(self, GetUncheckedElementPtr(self, i), userData))
+        if ((*predicate)(self, GetListElementData(self, i), userData))
         {
             PassCount++;
         }
@@ -504,16 +698,7 @@ void WRList_Reverse(WRList* self)
     {
         size_t IndexA = ElIndex;
         size_t IndexB = self->_count - 1 - ElIndex;
-        uint8_t* PtrA = self->_data + (IndexA * self->_elementSize);
-        uint8_t* PtrB = self->_data + (IndexB * self->_elementSize);
-
-        for (size_t ByteIndex = 0; ByteIndex < self->_elementSize; ByteIndex++)
-        {
-            uint8_t ByteA = PtrA[ByteIndex];
-            uint8_t ByteB = PtrB[ByteIndex];
-            PtrA[ByteIndex] = ByteB;
-            PtrB[ByteIndex] = ByteA;
-        }
+        WRList_Swap(self, IndexA, IndexB);
     }
 }
 
