@@ -6,6 +6,7 @@
 #include "WRNumber.h"
 #include "time.h"
 #include "WRList.h"
+#include <stdint.h>
 
 
 // Functions.
@@ -15,11 +16,6 @@ int main()
     ErrorMessagePool ErrorPool;
     ErrorMessagePool_Construct1(&ErrorPool);
 
-
-
-
     ErrorMessagePool_Deconstruct1(&ErrorPool);
-
-
     return 0;
 }
