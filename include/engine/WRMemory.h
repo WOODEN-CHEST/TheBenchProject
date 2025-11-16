@@ -56,3 +56,5 @@ void Memory_Zero(void* ptr, size_t size);
 bool Memory_IsEqual(void* regionA, void* regionB, size_t size);
 
 void Memory_Copy(void* source, void* destination, size_t size);
+
+void Memory_Move(void* source, void* destination, size_t size);

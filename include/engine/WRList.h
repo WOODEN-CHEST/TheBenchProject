@@ -18,6 +18,7 @@ typedef struct WRListStruct
     size_t _count;
     size_t _capacity;
     size_t _elementSize;
+    ErrorMessagePool* ErrorPool;
     WRListFlags _flags;
 } WRList;
 
@@ -29,7 +30,7 @@ typedef struct WRListElementDataStruct
 
 typedef ComparisonResult (*WRListComparator)(WRList* self, WRListElementData a, WRListElementData b, void* userData);
 
-typedef bool (*WRListPredicate)(WRList* self, void* elementA, void* elementB, void* userData);
+typedef bool (*WRListPredicate)(WRList* self, void* element, void* userData);
 
 typedef void (*WRListMapper)(WRList* self, WRListElementData sourceEl, void* destElement, void* userData);
 
@@ -40,23 +41,23 @@ typedef double (*WRListDoubleExtractor)(WRList* self, WRListElementData* sourceE
 
 // Functions.
 /* Constructors. */
-Error WRList_Construct1(WRList* self, size_t elementSize);
+Error WRList_Construct1(WRList* self, size_t elementSize, ErrorMessagePool* errorPool);
 
-Error WRList_Construct2(WRList* self, size_t elementSize, size_t initialCapacity);
+Error WRList_Construct2(WRList* self, size_t elementSize, size_t initialCapacity, ErrorMessagePool* errorPool);
 
-void WRList_WrapConstantBuffer(WRList* self, void* buffer, size_t count, size_t elementSize);
+void WRList_WrapConstantBuffer(WRList* self, void* buffer, size_t count, size_t capacity, size_t elementSize, ErrorMessagePool* errorPool);
 
 void WRList_Deconstruct1(WRList* self);
 
 
 /* Basic element manipulation. */
-void WRList_AddFirst(WRList* self, void* item);
+Error WRList_AddFirst(WRList* self, void* item);
 
-void WRList_AddLast(WRList* self, void* item);
+Error WRList_AddLast(WRList* self, void* item);
 
 Error WRList_Insert(WRList* self, void* item, size_t index);
 
-void WRList_AddRange(WRList* self, void** items, size_t itemCount);
+Error WRList_AddRange(WRList* self, void** items, size_t itemCount);
 
 Error WRList_InsertRange(WRList* self, void** items, size_t itemCount, size_t startIndex);
 
@@ -92,11 +93,11 @@ Error WRList_GetPointerToLast(WRList* self, void** out);
 
 Error WRList_GetPointerToElement(WRList* self, size_t index, void** out);
 
-bool WRList_Contains(WRList* self, WRListPredicate* predicate);
+bool WRList_Contains(WRList* self, WRListPredicate* predicate, void* userData);
 
-bool WRList_FirstIndexOf(WRList* self, WRListPredicate predicate, size_t* outIndex);
+bool WRList_FirstIndexOf(WRList* self, WRListPredicate predicate, void* userData, size_t* outIndex);
 
-bool WRList_LastIndexOf(WRList* self, WRListPredicate predicate, size_t* outIndex);
+bool WRList_LastIndexOf(WRList* self, WRListPredicate predicate, void* userData, size_t* outIndex);
 
 
 /* Full list manipulation. */
@@ -128,7 +129,15 @@ void WRList_Reverse(WRList* self);
 
 
 /* Technical. */
-void WRList_EnsureCapacity(WRList* self, size_t capacity);
+bool WRList_EnsureCapacity(WRList* self, size_t capacity);
+
+bool WRList_ReserveSpace(WRList* self, size_t extraElementCount);
+
+bool WRList_IsFixedCapacity(WRList* self);
+
+bool WRList_IsWrapperBuffer(WRList* self);
+
+size_t WRList_GetCapacityRemaining(WRList* self);
 
 
 /* Buffers. */

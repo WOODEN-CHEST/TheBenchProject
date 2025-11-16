@@ -1,6 +1,7 @@
 #include "WRMemory.h"
 #include <stdlib.h>
 #include <memory.h>
+#include <string.h>
 
 void* Memory_Allocate(size_t size)
 {
@@ -45,6 +46,11 @@ bool Memory_IsEqual(void* regionA, void* regionB, size_t size)
 void Memory_Copy(void* source, void* destination, size_t size)
 {
     memcpy(destination, source, size);
+}
+
+void Memory_Move(void* source, void* destination, size_t size)
+{
+    memmove(destination, source, size);
 }
 
 GenericBuffer GenericBuffer_CreateVariable(void* destination,
