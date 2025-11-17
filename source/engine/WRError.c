@@ -41,7 +41,7 @@ Error Error_Construct(ErrorMessagePool* pool, ErrorCode code, const unsigned cha
     Error CreatedError;
     CreatedError.Code = code;
 
-    if (message)
+    if (message && pool)
     {
         unsigned char* MessageBuffer = ErrorMessagePool_GetNextMessage(pool);
         size_t Index;
@@ -67,32 +67,38 @@ Error Error_Construct2(ErrorMessagePool* pool, ErrorCode code, char* message)
 
 Error Error_Construct3(ErrorMessagePool* pool, ErrorCode code, const unsigned char* format, ...)
 {
-    unsigned char* Message = ErrorMessagePool_GetNextMessage(pool);
-    va_list Args;
-    va_start(Args, format);
-    vsnprintf((char*)Message, MAX_ERROR_MESSAGE_BUFFER_LENGTH, (const char*)format, Args);
-    va_end(Args);
+    Error CreatedError;
+    CreatedError.Code = code;
 
-    return (Error)
+    if (pool)
     {
-        .Code = code,
-        .Message = Message
-    };
+        unsigned char* Message = ErrorMessagePool_GetNextMessage(pool);
+        va_list Args;
+        va_start(Args, format);
+        vsnprintf((char*)Message, MAX_ERROR_MESSAGE_BUFFER_LENGTH, (const char*)format, Args);
+        va_end(Args);
+        CreatedError.Message = Message;
+    }
+
+    return CreatedError;
 }
 
 Error Error_Construct4(ErrorMessagePool* pool, ErrorCode code, char* format, ...)
 {
-    unsigned char* Message = ErrorMessagePool_GetNextMessage(pool);
-    va_list Args;
-    va_start(Args, format);
-    vsnprintf((char*)Message, MAX_ERROR_MESSAGE_BUFFER_LENGTH, format, Args);
-    va_end(Args);
+    Error CreatedError;
+    CreatedError.Code = code;
 
-    return (Error)
+    if (pool)
     {
-        .Code = code,
-        .Message = Message
-    };
+        unsigned char* Message = ErrorMessagePool_GetNextMessage(pool);
+        va_list Args;
+        va_start(Args, format);
+        vsnprintf((char*)Message, MAX_ERROR_MESSAGE_BUFFER_LENGTH, format, Args);
+        va_end(Args);
+        CreatedError.Message = Message;
+    }
+
+    return CreatedError;
 }
 
 Error Error_Construct5(ErrorCode code)

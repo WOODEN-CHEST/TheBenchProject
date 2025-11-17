@@ -21,13 +21,13 @@ struct GenericBufferStruct
 
 // Functions.
 GenericBuffer GenericBuffer_CreateVariable(void* destination,
-    size_t size,
+    size_t bufferCapacity,
     size_t elementSize,
     size_t elementCount,
     void* userData,
     GenericBufferAllocateCallback callback);
 
-GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t bufferSize, size_t elementSize, size_t elementCount);
+GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t bufferCapacity, size_t elementSize, size_t elementCount);
 
 bool GenericBuffer_EnsureCapacity(GenericBuffer* buffer, size_t requiredSize);
 
@@ -45,6 +45,8 @@ bool GenericBuffer_WriteVoidPtr(GenericBuffer* buffer, void* ptr);
 
 void GenericBuffer_TrackWrittenItems(GenericBuffer* buffer, size_t itemCount);
 
+void GenericBuffer_Clear(GenericBuffer* buffer);
+
 void* Memory_Allocate(size_t size);
 
 void* Memory_Reallocate(void* ptr, size_t size);
@@ -55,8 +57,8 @@ void Memory_Set(void* ptr, int8_t value, size_t size);
 
 void Memory_Zero(void* ptr, size_t size);
 
-bool Memory_IsEqual(void* regionA, void* regionB, size_t size);
+bool Memory_IsEqual(const void* regionA, const void* regionB, size_t size);
 
-void Memory_Copy(void* source, void* destination, size_t size);
+void Memory_Copy(const void* source, void* destination, size_t size);
 
 void Memory_Move(void* source, void* destination, size_t size);

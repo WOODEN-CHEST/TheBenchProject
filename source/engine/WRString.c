@@ -4,50 +4,57 @@
 #include "WRChar.h"
 #include "WRUnicode.h"
 #include "string.h"
+#include "limits.h"
 
 
 // Types.
-typedef CodePoint (*CaseTransformer)(UnicodeData* unicode, CodePoint* codePoint);
+typedef CodePoint (*CaseTransformer)(UnicodeData* unicode, CodePoint codePoint);
 
 
 // Static functions.
 static Error CreateBufferTooSmallError(ErrorMessagePool* errorPool, GenericBuffer* buffer)
 {
-    ErrorCode Code = ErrorCode_BufferTooSmall;
-    if (errorPool)
-    {
-        return Error_Construct3(errorPool,
-            Code,
-            u8"The destination buffer of size %zu is too small to fit the resulting string.",
-            buffer->_capacity * buffer->_elementSize);
-    }
-    return Error_Construct5(Code);
+    return Error_Construct3(errorPool,
+        ErrorCode_BufferTooSmall,
+        u8"The destination buffer of size %zu is too small to fit the resulting string.",
+        buffer->_capacity * buffer->_elementSize);
+}
+
+static Error CreateBufferTooSmallForPointersError(ErrorMessagePool* errorPool, GenericBuffer* buffer)
+{
+    return Error_Construct3(errorPool,
+        ErrorCode_BufferTooSmall,
+        u8"The destination buffer of size %zu (capacity %zu) is too small to fit the resulting pointers.",
+        buffer->_capacity * buffer->_elementSize, buffer->_capacity);
 }
 
 static Error CreateCodePointNotDefinedError(ErrorMessagePool* errorPool, CodePoint codePoint)
 {
-    ErrorCode Code = ErrorCode_InvalidCodePoint;
-    if (errorPool)
-    {
-        return Error_Construct3(errorPool,
-            Code,
-            u8"Undefined codepoint '%d'.",
-            codePoint);
-    }
-    return Error_Construct5(Code);
+    return Error_Construct3(errorPool,
+        ErrorCode_InvalidCodePoint,
+        u8"Codepoint '%d' in the string is not defined in the given Unicode database.",
+        codePoint);
 }
 
-static CodePoint TransformCaseToUpper(UnicodeData* unicode, CodePoint* codePoint)
+static Error CreateCodePointInvalidError(ErrorMessagePool* errorPool, CodePoint codePoint)
+{
+    return Error_Construct3(errorPool,
+        ErrorCode_InvalidCodePoint,
+        u8"Invalid codepoint '%d' in the string (possibly defined, but not legal in a string in any context).",
+        codePoint);
+}
+
+static CodePoint TransformCaseToUpper(UnicodeData* unicode, CodePoint codePoint)
 {
     return Unicode_ToUpper(unicode, codePoint);
 }
 
-static CodePoint TransformCaseToLower(UnicodeData* unicode, CodePoint* codePoint)
+static CodePoint TransformCaseToLower(UnicodeData* unicode, CodePoint codePoint)
 {
     return Unicode_ToLower(unicode, codePoint);
 }
 
-static CodePoint TransformCaseToInverted(UnicodeData* unicode, CodePoint* codePoint)
+static CodePoint TransformCaseToInverted(UnicodeData* unicode, CodePoint codePoint)
 {
     return Unicode_IsLower(unicode, codePoint) ? Unicode_ToUpper(unicode, codePoint) : Unicode_ToLower(unicode, codePoint);
 }
@@ -64,7 +71,7 @@ static Error TransformCase(const unsigned char* str,
         CodePoint TransformedChar = (*transformer)(unicode, SourceChar);
         if (SourceChar == CODEPOINT_NONE)
         {
-            return CreateCodePointNotDefinedError(errorPool, SourceChar);
+            return CreateCodePointInvalidError(errorPool, SourceChar);
         }
 
         if (!StringUTF8_WriteCodePointToBuffer(destination, TransformedChar))
@@ -78,6 +85,154 @@ static Error TransformCase(const unsigned char* str,
         return CreateBufferTooSmallError(errorPool, destination);
     }
 
+    return Error_CreateSuccess();
+}
+
+static Error AddSplitString(unsigned char* fullStr,
+    unsigned char* partStart,
+    size_t delimeterStartIndex,
+    StringSplitOptions splitOptions,
+    GenericBuffer* resultPointers,
+    ErrorMessagePool* errorPool,
+    bool shouldBeTerminated,
+    UnicodeData* unicode)
+{
+    if (shouldBeTerminated)
+    {
+        fullStr[delimeterStartIndex] = '\0';
+    }
+
+    unsigned char* TrimmedPartStart = partStart;
+    if (splitOptions._splitType & StringSplitType_Trim)
+    {
+        size_t StartIndex, EndIndex;
+        StringUTF8_GetTrimIndices(partStart, true, true, &StartIndex, &EndIndex, unicode);
+        TrimmedPartStart[EndIndex] = '\0';
+        TrimmedPartStart = TrimmedPartStart + StartIndex;
+    }
+
+    if ((splitOptions._splitType & StringSplitType_SkipEmpty) && (TrimmedPartStart[0] == '\0'))
+    {
+        return Error_CreateSuccess();
+    }
+
+    if (!GenericBuffer_WriteVoidPtr(resultPointers, partStart))
+    {
+        return CreateBufferTooSmallForPointersError(errorPool, resultPointers);
+    }
+
+    return Error_CreateSuccess();
+}
+
+static Error CreateIndexOutOfRangeError(ErrorMessagePool* errorPool, size_t index, size_t strSize)
+{
+    return Error_Construct3(errorPool,
+        ErrorCode_IndexOutOfBounds,
+        u8"Index %zu out of range for a string of byte length %zu.",
+        index, strSize);
+}
+
+static Error GetIndexOfStartIndex(const unsigned char* str,
+    StringIndexOfOptions options,
+    ErrorMessagePool* errorPool,
+    size_t* outIndex)
+{
+    *outIndex = 0;
+
+    size_t StringByteLength = StringUTF8_GetByteLength(str);
+    if (options._startIndex >= StringByteLength)
+    {
+        return CreateIndexOutOfRangeError(errorPool, options._startIndex, StringByteLength);
+    }
+    
+    if (!options._isStartIndexFromEnd)
+    {
+        *outIndex = options._startIndex;
+    }
+    else
+    {
+        *outIndex = StringByteLength - 1 - options._startIndex;
+    }
+
+    return Error_CreateSuccess();
+}
+
+static Error StringEqualsCaseSensitive(const unsigned char* a,
+    const unsigned char* b,
+    UnicodeData* unicode,
+    bool* outValue,
+    ErrorMessagePool* errorPool)
+{
+    *outValue = false;
+    size_t Index = 0;
+    while (a[Index] != '\0')
+    {
+        CodePoint CodePointA = CharUTF8_GetCodePoint(a + Index);
+        CodePoint CodePointB = CharUTF8_GetCodePoint(b + Index);
+        if ((CodePointA == CODEPOINT_NONE) || (CodePointB == CODEPOINT_NONE))
+        {
+            return CreateCodePointInvalidError(errorPool, CodePointA == CODEPOINT_NONE ? CodePointA : CodePointB);
+        }
+
+        if (CodePointA != CodePointB)
+        {
+            return Error_CreateSuccess();
+        }
+
+        size_t CodePointSize = CharUTF8_GetByteCountCodepoint(CodePointA);
+        if (CodePointSize == 0)
+        {
+            return CreateCodePointInvalidError(errorPool, CodePointA);
+        }
+        Index += CodePointSize;
+    }
+
+    *outValue = (a[Index] == '\0') && (b[Index] == '\0');
+    return Error_CreateSuccess();
+}
+
+static Error StringEqualsCaseInsensitive(const unsigned char* a,
+    const unsigned char* b,
+    UnicodeData* unicode,
+    bool* outValue,
+    ErrorMessagePool* errorPool)
+{
+    *outValue = false;
+    size_t IndexA = 0;
+    size_t IndexB = 0;
+
+    while ((a[IndexA] != '\0') && (b[IndexB] != '\0'))
+    {
+        CodePoint CodePointA = CharUTF8_GetCodePoint(a + IndexA);
+        CodePoint CodePointB = CharUTF8_GetCodePoint(b + IndexB);
+        if ((CodePointA == CODEPOINT_NONE) || (CodePointB == CODEPOINT_NONE))
+        {
+            return CreateCodePointInvalidError(errorPool, CodePointA == CODEPOINT_NONE ? CodePointA : CodePointB);
+        }
+
+        CodePoint LowerA = Unicode_ToLower(unicode, CodePointA);
+        CodePoint LowerB = Unicode_ToLower(unicode, CodePointB);
+
+        if ((LowerA == CODEPOINT_NONE) || (LowerB == CODEPOINT_NONE))
+        {
+            return CreateCodePointNotDefinedError(errorPool, LowerA == CODEPOINT_NONE ? LowerA : LowerB);
+        }
+        if (LowerA != LowerB)
+        {
+            return Error_CreateSuccess();
+        }
+
+        size_t SizeA = CharUTF8_GetByteCountCodepoint(CodePointA);
+        size_t SizeB = CharUTF8_GetByteCountCodepoint(CodePointB);
+        if ((SizeA == 0) || (SizeB == 0))
+        {
+            return CreateCodePointInvalidError(errorPool, SizeA == 0 ? CodePointA : CodePointB);
+        }
+        IndexA += SizeA;
+        IndexB += SizeB;
+    }
+
+    *outValue = (a[IndexA] == '\0') && (b[IndexB] == '\0');
     return Error_CreateSuccess();
 }
 
@@ -158,24 +313,36 @@ bool StringUTF8_IsNullOrEmpty(const unsigned char* str)
     return !str || (str[0] == '\0');
 }
 
-bool StringUTF8_IsNullOrWhitespace(const unsigned char* str, UnicodeData* unicode)
+Error StringUTF8_IsNullOrWhitespace(const unsigned char* str, UnicodeData* unicode, ErrorMessagePool* errorPool, bool* outValue)
 {
+    *outValue = true;
     if (!str)
     {
-        return true;
+        return Error_CreateSuccess();
     }
 
     size_t Index = 0;
     while (str[Index] != '\0')
     {
         CodePoint TargetCodePoint = CharUTF8_GetCodePoint(str + Index);
+        if (TargetCodePoint == CODEPOINT_NONE)
+        {
+            return CreateCodePointInvalidError(errorPool, TargetCodePoint);
+        }
         if (!Unicode_IsWhitespace(unicode, TargetCodePoint))
         {
-            return false;
+            *outValue = false;
+            break;
         }
-        Index += CharUTF8_GetByteCountCodepoint(TargetCodePoint);
+        size_t ByteCountCodePoint = CharUTF8_GetByteCountCodepoint(TargetCodePoint);
+        if (ByteCountCodePoint == 0)
+        {
+            return CreateCodePointInvalidError(errorPool, TargetCodePoint);
+        }
+        Index += ByteCountCodePoint;
     }
-    return true;
+
+    return Error_CreateSuccess();
 }
 
 Error StringUTF8_ToLower(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination, ErrorMessagePool* errorPool)
@@ -193,7 +360,7 @@ Error StringUTF8_InvertCase(const unsigned char* str, UnicodeData* unicode, Gene
     return TransformCase(str, unicode, destination, errorPool, &TransformCaseToInverted);
 }
 
-bool WriteCodePointToBuffer(GenericBuffer* buffer, CodePoint* codePoint)
+bool StringUTF8_WriteCodePointToBuffer(GenericBuffer* buffer, CodePoint codePoint)
 {
     unsigned char ConvertedChar[CODEPOINT_BYTE_COUNT_MAX];
     size_t ByteCount = CharUTF8_WriteCodePoint(ConvertedChar, codePoint);
@@ -206,7 +373,7 @@ bool WriteCodePointToBuffer(GenericBuffer* buffer, CodePoint* codePoint)
 
 size_t StringUTF8_GetByteLength(const unsigned char* str)
 {
-    return strlen(str);
+    return strlen((char*)str);
 }
 
 size_t StringUTF8_GetCodePointLength(const unsigned char* str)
@@ -221,38 +388,23 @@ size_t StringUTF8_GetCodePointLength(const unsigned char* str)
     return Length;
 }
 
-bool StringUTF8_Equals(const unsigned char* a, const unsigned char* b, StringCaseRule caseRule, UnicodeData* unicode)
+Error StringUTF8_Equals(const unsigned char* a,
+    const unsigned char* b,
+    StringCaseRule caseRule,
+    UnicodeData* unicode,
+    ErrorMessagePool* errorPool,
+    bool* outValue)
 {
     if (caseRule == StringCaseRule_MatchCase)
     {
-        return !strcmp(a, b);
+        return StringEqualsCaseSensitive(a, b, unicode, outValue, errorPool);
     }
-
-    size_t IndexA = 0;
-    size_t IndexB = 0;
-
-    while ((a[IndexA] != '\0') && (b[IndexB] != '\0'))
-    {
-        CodePoint CodePointA = CharUTF8_GetCodePoint(a + IndexA);
-        CodePoint CodePointB = CharUTF8_GetCodePoint(b + IndexB);
-
-        CodePoint LowerA = Unicode_ToLower(unicode, CodePointA);
-        CodePoint LowerB = Unicode_ToLower(unicode, CodePointB);
-        if (LowerA != LowerB)
-        {
-            return false;
-        }
-
-        IndexA += CharUTF8_GetByteCountCodepoint(CodePointA);
-        IndexB += CharUTF8_GetByteCountCodepoint(CodePointB);
-    }
-
-    return (a[IndexA] == '\0') && (b[IndexB] == '\0');
+    return StringEqualsCaseInsensitive(a, b, unicode, outValue, errorPool);
 }
 
 Error StringUTF8_CopyTo(const unsigned char* source, GenericBuffer* destination, ErrorMessagePool* errorPool)
 {
-    if (!GenericBuffer_WriteString(destination, source) || GenericBuffer_TryNullTerminate(destination))
+    if (!GenericBuffer_WriteString(destination, source) || !GenericBuffer_TryNullTerminate(destination))
     {
         return CreateBufferTooSmallError(errorPool, destination);
     }
@@ -261,9 +413,140 @@ Error StringUTF8_CopyTo(const unsigned char* source, GenericBuffer* destination,
 
 Error StringUTF8_CopyToBySize(const unsigned char* source, size_t size, GenericBuffer* destination, ErrorMessagePool* errorPool)
 {
-    if (!GenericBuffer_WriteStringBySize(destination, source, size) || GenericBuffer_TryNullTerminate(destination))
+    if (!GenericBuffer_WriteStringBySize(destination, source, size) || !GenericBuffer_TryNullTerminate(destination))
     {
         return CreateBufferTooSmallError(errorPool, destination);
     }
+    return Error_CreateSuccess();
+}
+
+StringSplitOptions String_CreateSplitOptionsNormal()
+{
+    return String_CreateSplitOptionsAll(StringSplitType_None, SIZE_MAX);
+}
+
+StringSplitOptions String_CreateSplitOptionsTyped(StringSplitType type)
+{
+    return String_CreateSplitOptionsAll(type, SIZE_MAX);
+}
+
+StringSplitOptions String_CreateSplitOptionsAll(StringSplitType type, size_t maxSplits)
+{
+    return (StringSplitOptions) { ._splitType = type, ._stringCountLimit = maxSplits };
+}
+
+Error StringUTF8_Split(unsigned char* str,
+    const unsigned char* delimeter,
+    StringSplitOptions splitOptions,
+    GenericBuffer* resultPointers,
+    ErrorMessagePool* errorPool,
+    UnicodeData* unicode)
+{
+    if ((delimeter[0] == '\0') || (splitOptions._stringCountLimit <= 1))
+    {
+        if ((splitOptions._stringCountLimit == 1) && !GenericBuffer_WriteVoidPtr(resultPointers, str))
+        {
+            return CreateBufferTooSmallForPointersError(errorPool, resultPointers);
+        }
+        return Error_CreateSuccess();
+    }
+
+    unsigned char* PartStart = str;
+    size_t DelimeterIndex = 0;
+    size_t DelimeterStartIndex = 0;
+    size_t Index = 0;
+    while (str[Index] != '\0')
+    {
+        if (delimeter[DelimeterIndex] == '\0')
+        {
+            Error Result = AddSplitString(str, PartStart, DelimeterStartIndex,
+                splitOptions, resultPointers, errorPool, true, unicode);
+            if (Result.Code != ErrorCode_Success)
+            {
+                return Result;
+            }
+            str[DelimeterStartIndex] = '\0';
+            PartStart = str + Index + 1;
+            continue;
+        }
+
+        CodePoint SourceCodePoint = CharUTF8_GetCodePoint(str + Index);
+        CodePoint DelimeterCodePoint = CharUTF8_GetCodePoint(delimeter + DelimeterIndex);
+        if ((SourceCodePoint == CODEPOINT_NONE) || (DelimeterCodePoint == CODEPOINT_NONE))
+        {
+            return CreateCodePointInvalidError(errorPool, SourceCodePoint == CODEPOINT_NONE ? SourceCodePoint : DelimeterCodePoint);
+        }
+
+        size_t SourceCodePointSize = CharUTF8_GetByteCountCodepoint(SourceCodePoint);
+        if (SourceCodePointSize == 0)
+        {
+            return CreateCodePointInvalidError(errorPool, SourceCodePoint);
+        }
+
+        if (SourceCodePoint != DelimeterCodePoint)
+        {
+            DelimeterIndex = 0;
+        }
+        else
+        {
+            DelimeterStartIndex = (DelimeterIndex == 0) ? i : DelimeterStartIndex;
+            DelimeterIndex += SourceCodePointSize;
+        }
+        Index += SourceCodePointSize;
+    }
+
+    return AddSplitString(str, PartStart, DelimeterStartIndex,
+        splitOptions, resultPointers, errorPool, false, unicode);
+}
+
+StringIndexOfOptions String_CreateIndexOptionsNormal()
+{
+    return String_CreateIndexOptions(StringCaseRule_MatchCase, StringMoveDirection_Forwards, 0, false);
+}
+
+StringIndexOfOptions String_CreateIndexOptionsFromEnd()
+{
+    return String_CreateIndexOptions(StringCaseRule_MatchCase, StringMoveDirection_Backwards, 0, true);
+}
+
+StringIndexOfOptions String_CreateIndexOptions(StringCaseRule caseRule,
+    StringMoveDirection direction,
+    size_t startIndex,
+    bool isStartIndexFromEnd)
+{
+    return (StringIndexOfOptions)
+    {
+        ._caseRule = caseRule,
+        ._direction = direction,
+        ._isStartIndexFromEnd = isStartIndexFromEnd,
+        ._startIndex = startIndex
+    };
+}
+
+Error StringUTF8_IndexOf(const unsigned char* str,
+    const unsigned char* target,
+    StringIndexOfOptions options,
+    ErrorMessagePool* errorPool,
+    UnicodeData* unicode,
+    size_t* outIndex)
+{
+    *outIndex = 0;
+    if (target[0] == '\0')
+    {
+        *outIndex = INDEX_INVALID;
+        return Error_CreateSuccess();
+    }
+
+    size_t TargetStartIndex = 0;
+    size_t StrStartIndex;
+    Error ErrorResult = GetIndexOfStartIndex(str, options, errorPool, &StrStartIndex);
+    if (ErrorResult.Code != ErrorCode_Success)
+    {
+        return ErrorResult;
+    }
+    
+
+
+
     return Error_CreateSuccess();
 }

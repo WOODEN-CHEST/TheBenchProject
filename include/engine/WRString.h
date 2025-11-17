@@ -6,6 +6,11 @@
 #include "WRMemory.h"
 
 
+
+// Fields.
+extern const size_t INDEX_INVALID = 0xFFFFFFFFFFFFFFFF;
+
+
 // Types.
 typedef enum StringCaseRuleEnum
 {
@@ -28,8 +33,8 @@ typedef struct StringSplitOptionsStruct
 
 typedef enum StringMoveDirectionEnum
 {
-    StringMoveDirection_Forwards,
-    StringMoveDirection_Backwards,
+    StringMoveDirection_Backwards = -1,
+    StringMoveDirection_Forwards = 1,
 } StringMoveDirection;
 
 typedef struct StringIndexOfOptionsStruct
@@ -55,7 +60,7 @@ bool StringUTF8_IsValid(const unsigned char* str, UnicodeData* unicode);
 
 bool StringUTF8_IsNullOrEmpty(const unsigned char* str);
 
-bool StringUTF8_IsNullOrWhitespace(const unsigned char* str, UnicodeData* unicode);
+Error StringUTF8_IsNullOrWhitespace(const unsigned char* str, UnicodeData* unicode, ErrorMessagePool* errorPool, bool* outValue);
 
 Error StringUTF8_ToLower(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination, ErrorMessagePool* errorPool);
 
@@ -67,7 +72,12 @@ size_t StringUTF8_GetByteLength(const unsigned char* str);
 
 size_t StringUTF8_GetCodePointLength(const unsigned char* str);
 
-bool StringUTF8_Equals(const unsigned char* a, const unsigned char* b, StringCaseRule caseRule, UnicodeData* unicode);
+Error StringUTF8_Equals(const unsigned char* a,
+    const unsigned char* b,
+    StringCaseRule caseRule,
+    UnicodeData* unicode,
+    ErrorMessagePool* errorPool,
+    bool* outValue);
 
 Error StringUTF8_CopyTo(const unsigned char* source, GenericBuffer* destination, ErrorMessagePool* errorPool);
 
@@ -79,10 +89,12 @@ StringSplitOptions String_CreateSplitOptionsTyped(StringSplitType type);
 
 StringSplitOptions String_CreateSplitOptionsAll(StringSplitType type, size_t maxSplits);
 
-void StringUTF8_Split(unsigned char* str,
-    unsigned char* delimeter,
+Error StringUTF8_Split(unsigned char* str,
+    const unsigned char* delimeter,
     StringSplitOptions splitOptions,
-    GenericBuffer** resultPointers);
+    GenericBuffer* resultPointers,
+    ErrorMessagePool* errorPool,
+    UnicodeData* unicode);
 
 StringIndexOfOptions String_CreateIndexOptionsNormal();
 
@@ -93,44 +105,78 @@ StringIndexOfOptions String_CreateIndexOptions(StringCaseRule caseRule,
     size_t startIndex,
     bool isStartIndexFromEnd);
 
-bool StringUTF8_IndexOf(const unsigned char* str, const unsigned char* target, StringIndexOfOptions options);
+Error StringUTF8_IndexOf(const unsigned char* str,
+    const unsigned char* target,
+    StringIndexOfOptions options,
+    ErrorMessagePool* errorPool,
+    UnicodeData* unicode,
+    size_t* outIndex);
 
-void StringUTF8_Concat(const unsigned char* strA, const unsigned char* strB, GenericBuffer* destination);
+Error StringUTF8_Concat(const unsigned char* strA, const unsigned char* strB, GenericBuffer* destination, UnicodeData* unicode);
 
-bool StringUTF8_Contains(const unsigned char* str, const unsigned char* target, StringCaseRule caseRule);
+Error StringUTF8_Contains(const unsigned char* str,
+    const unsigned char* target,
+    size_t startIndex,
+    StringCaseRule caseRule,
+    UnicodeData* unicode,
+    bool* outValue);
 
-size_t StringUTF8_Count(const unsigned char* str, const unsigned char* target, StringCaseRule caseRule);
+size_t StringUTF8_Count(const unsigned char* str, const unsigned char* target, StringCaseRule caseRule, UnicodeData* unicode);
 
-bool StringUTF8_EndsWith(const unsigned char* str, const unsigned char* target, StringCaseRule caseRule);
+Error StringUTF8_EndsWith(const unsigned char* str,
+    const unsigned char* target,
+    StringCaseRule caseRule,
+    UnicodeData* unicode,
+    bool* outValue);
 
-bool StringUTF8_StartsWith(const unsigned char* str, const unsigned char* target, StringCaseRule caseRule);
+Error StringUTF8_StartsWith(const unsigned char* str,
+    const unsigned char* target,
+    StringCaseRule caseRule,
+    UnicodeData* unicode,
+    bool* outValue);
 
-void StringUTF8_Format(const unsigned char* str, GenericBuffer* destination, ...);
+Error StringUTF8_Format(const unsigned char* str, GenericBuffer* destination, UnicodeData* unicode, ...);
 
-void StringUTF8_Join(const unsigned char* separator,
+Error StringUTF8_Join(const unsigned char* separator,
     const unsigned char** sources,
     size_t sourcesSize,
     GenericBuffer* destination);
 
-void StringUTF8_Replace(const unsigned char* str,
+Error StringUTF8_Replace(const unsigned char* str,
     const unsigned char* searchTarget,
     const unsigned char* replaceValue,
     GenericBuffer* destination);
 
-void StringUTF8_Substring(const unsigned char* str,
+Error StringUTF8_Substring(const unsigned char* str,
     size_t startIndex,
     size_t endIndex,
     GenericBuffer* destination);
 
-void StringUTF8_Trim(const unsigned char* str,
+Error StringUTF8_Trim(const unsigned char* str,
     bool isStartTrimmed,
     bool isEndTrimmed,
-    GenericBuffer* destination);
+    GenericBuffer* destination,
+    UnicodeData* unicode);
+
+Error StringUTF8_GetTrimIndices(unsigned char* str,
+    bool isStartTrimmed,
+    bool isEndTrimmed,
+    size_t* startIndex,
+    size_t* endIndex,
+    UnicodeData* unicode);
 
 ComparisonResult StringUTF8_Compare(const unsigned char* strA, const unsigned char* strB);
 
-void StringUTF8_Remove(const unsigned char* str, const unsigned char* target, StringCaseRule caseRule, GenericBuffer* destination);
+Error StringUTF8_Remove(const unsigned char* str,
+    const unsigned char* target,
+    StringCaseRule caseRule,
+    UnicodeData* unicode,
+    GenericBuffer* destination);
 
-void StringUTF8_Insert(const unsigned char* str, size_t index, const unsigned char* substring, GenericBuffer* destination);
+Error StringUTF8_Insert(const unsigned char* str, size_t index, const unsigned char* substring, GenericBuffer* destination);
 
-bool StringUTF8_WriteCodePointToBuffer(GenericBuffer* buffer, CodePoint* codePoint);
+bool StringUTF8_WriteCodePointToBuffer(GenericBuffer* buffer, CodePoint codePoint);
+
+Error StringUTF8_Reverse(const unsigned char* str, GenericBuffer* destination, UnicodeData* unicode);
+
+Error StringUTF8_Repeat(const unsigned char* str, GenericBuffer* destination, size_t count);

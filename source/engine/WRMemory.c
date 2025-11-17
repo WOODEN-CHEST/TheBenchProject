@@ -38,12 +38,12 @@ void Memory_Zero(void* ptr, size_t size)
     memset(ptr, 0, size);
 }
 
-bool Memory_IsEqual(void* regionA, void* regionB, size_t size)
+bool Memory_IsEqual(const void* regionA, const void* regionB, size_t size)
 {
     return !memcmp(regionA, regionB, size);
 }
 
-void Memory_Copy(void* source, void* destination, size_t size)
+void Memory_Copy(const void* source, void* destination, size_t size)
 {
     memcpy(destination, source, size);
 }
@@ -54,7 +54,7 @@ void Memory_Move(void* source, void* destination, size_t size)
 }
 
 GenericBuffer GenericBuffer_CreateVariable(void* destination,
-    size_t bufferSize,
+    size_t bufferCapacity,
     size_t elementSize,
     size_t elementCount,
     void* userData,
@@ -63,7 +63,7 @@ GenericBuffer GenericBuffer_CreateVariable(void* destination,
     return (GenericBuffer)
     {
         ._data = destination,
-        ._capacity = bufferSize,
+        ._capacity = bufferCapacity,
         ._elementSize = elementSize,
         ._count = elementCount,
         ._requestMoreSpaceCallback = callback,
@@ -71,9 +71,9 @@ GenericBuffer GenericBuffer_CreateVariable(void* destination,
     };
 }
 
-GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t bufferSize, size_t elementSize, size_t elementCount)
+GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t bufferCapacity, size_t elementSize, size_t elementCount)
 {
-    return GenericBuffer_CreateVariable(destination, bufferSize, elementSize, elementCount, NULL, NULL);
+    return GenericBuffer_CreateVariable(destination, bufferCapacity, elementSize, elementCount, NULL, NULL);
 }
 
 bool GenericBuffer_EnsureCapacity(GenericBuffer* buffer, size_t capacity)
@@ -180,4 +180,9 @@ bool GenericBuffer_WriteVoidPtr(GenericBuffer* buffer, void* ptr)
 void GenericBuffer_TrackWrittenItems(GenericBuffer* buffer, size_t itemCount)
 {
     buffer->_count += itemCount;
+}
+
+void GenericBuffer_Clear(GenericBuffer* buffer)
+{
+    buffer->_count = 0;
 }
