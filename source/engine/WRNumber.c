@@ -987,7 +987,7 @@ Error Number_DoubleToString(ErrorMessagePool* errorPool,
         {
             IsFullyWritten = true;
         }
-        else if ((AttemptCount < MAX_ATTEMPT_COUNT) && !GenericBuffer_EnsureCapacity(buffer, RequiredBufferSize))
+        else if ((AttemptCount < MAX_ATTEMPT_COUNT) && !GenericBuffer_ReserveCapacity(buffer, RequiredBufferSize))
         {
             return CreateBufferOutOfSpaceError(errorPool, buffer);
         }

@@ -17,8 +17,12 @@ bool CharUTF8_IsCodePointValid(CodePoint codepoint);
 
 size_t CharUTF8_GetByteCountChar(const unsigned char* character);
 
+size_t CharUTF8_GetByteCountCharFromEnd(const unsigned char* characterLastByte, size_t remainingBytes);
+
 size_t CharUTF8_GetByteCountCodepoint(CodePoint codepoint);
 
 size_t CharUTF8_WriteCodePoint(unsigned char* character, CodePoint codepoint);
 
 CodePoint CharUTF8_GetCodePoint(const unsigned char* character);
+
+CodePoint CharUTF8_GetCodePointFromEnd(const unsigned char* characterLastByte, size_t remainingBytes);

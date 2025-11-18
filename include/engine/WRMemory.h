@@ -31,6 +31,8 @@ GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t bufferCapac
 
 bool GenericBuffer_EnsureCapacity(GenericBuffer* buffer, size_t requiredSize);
 
+bool GenericBuffer_ReserveCapacity(GenericBuffer* buffer, size_t requiredSize);
+
 bool GenericBuffer_Write(GenericBuffer* buffer, void* itemToWrite);
 
 bool GenericBuffer_WriteUChar(GenericBuffer* buffer, unsigned char character);
@@ -42,6 +44,8 @@ bool GenericBuffer_WriteStringBySize(GenericBuffer* buffer, const unsigned char*
 bool GenericBuffer_TryNullTerminate(GenericBuffer* buffer);
 
 bool GenericBuffer_WriteVoidPtr(GenericBuffer* buffer, void* ptr);
+
+bool GenericBuffer_WriteSizeT(GenericBuffer* buffer, size_t value);
 
 void GenericBuffer_TrackWrittenItems(GenericBuffer* buffer, size_t itemCount);
 

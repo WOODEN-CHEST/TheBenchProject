@@ -734,7 +734,7 @@ bool WRList_ReserveSpace(WRList* self, size_t extraElementCount)
 
 bool WRList_IsFixedCapacity(WRList* self)
 {
-    return self->_flags & WRListFlags_IsBufferWrapper;
+    return WRList_IsWrapperBuffer(self);
 }
 
 bool WRList_IsWrapperBuffer(WRList* self)

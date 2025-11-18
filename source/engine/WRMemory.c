@@ -89,13 +89,17 @@ bool GenericBuffer_EnsureCapacity(GenericBuffer* buffer, size_t capacity)
     return true;
 }
 
+bool GenericBuffer_ReserveCapacity(GenericBuffer* buffer, size_t requiredSize)
+{
+    return GenericBuffer_EnsureCapacity(buffer, buffer->_count + requiredSize);
+}
+
 bool GenericBuffer_Write(GenericBuffer* buffer, void* itemToWrite)
 {
-    if (!GenericBuffer_EnsureCapacity(buffer, buffer->_count + 1))
+    if (!GenericBuffer_ReserveCapacity(buffer, 1))
     {
         return false;
     }
-
 
     size_t WriteOffset = buffer->_count * buffer->_elementSize;
     void* WritePosition = (void*)((uintptr_t)buffer->_data + WriteOffset);
@@ -106,7 +110,7 @@ bool GenericBuffer_Write(GenericBuffer* buffer, void* itemToWrite)
 
 bool GenericBuffer_WriteUChar(GenericBuffer* buffer, unsigned char character)
 {
-    if (!GenericBuffer_EnsureCapacity(buffer, buffer->_count + 1))
+    if (!GenericBuffer_ReserveCapacity(buffer, 1))
     {
         return false;
     }
@@ -136,7 +140,7 @@ bool GenericBuffer_WriteStringBySize(GenericBuffer* buffer, const unsigned char*
     {
         return true;
     }
-    if (!GenericBuffer_EnsureCapacity(buffer, buffer->_count + stringSize))
+    if (!GenericBuffer_ReserveCapacity(buffer, stringSize))
     {
         return false;
     }
@@ -168,11 +172,28 @@ bool GenericBuffer_TryNullTerminate(GenericBuffer* buffer)
 
 bool GenericBuffer_WriteVoidPtr(GenericBuffer* buffer, void* ptr)
 {
-    GenericBuffer_EnsureCapacity(buffer, (buffer->_count + 1) * sizeof(ptr));
+    if (!GenericBuffer_ReserveCapacity(buffer, 1))
+    {
+        return false;
+    }
 
     size_t WriteOffset = buffer->_count * sizeof(ptr);
     void** WritePosition = (void**)((uintptr_t)buffer->_data + WriteOffset);
     *WritePosition = ptr;
+    buffer->_count++;
+    return true;
+}
+
+bool GenericBuffer_WriteSizeT(GenericBuffer* buffer, size_t value)
+{
+    if (!GenericBuffer_ReserveCapacity(buffer, 1))
+    {
+        return false;
+    }
+
+    size_t WriteOffset = buffer->_count * sizeof(value);
+    size_t* WritePosition = (size_t*)((uintptr_t)buffer->_data + WriteOffset);
+    *WritePosition = value;
     buffer->_count++;
     return true;
 }

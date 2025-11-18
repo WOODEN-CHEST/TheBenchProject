@@ -112,51 +112,71 @@ Error StringUTF8_IndexOf(const unsigned char* str,
     UnicodeData* unicode,
     size_t* outIndex);
 
-Error StringUTF8_Concat(const unsigned char* strA, const unsigned char* strB, GenericBuffer* destination, UnicodeData* unicode);
+Error StringUTF8_Concat(const unsigned char* strA,
+    const unsigned char* strB,
+    GenericBuffer* destination,
+    UnicodeData* unicode,
+    ErrorMessagePool* errorPool);
 
 Error StringUTF8_Contains(const unsigned char* str,
     const unsigned char* target,
     size_t startIndex,
     StringCaseRule caseRule,
     UnicodeData* unicode,
+    ErrorMessagePool* errorPool,
     bool* outValue);
 
-size_t StringUTF8_Count(const unsigned char* str, const unsigned char* target, StringCaseRule caseRule, UnicodeData* unicode);
+Error StringUTF8_Count(const unsigned char* str,
+    const unsigned char* target,
+    StringCaseRule caseRule,
+    UnicodeData* unicode,
+    ErrorMessagePool* errorPool,
+    size_t* count);
 
 Error StringUTF8_EndsWith(const unsigned char* str,
     const unsigned char* target,
     StringCaseRule caseRule,
     UnicodeData* unicode,
+    ErrorMessagePool* errorPool,
     bool* outValue);
 
 Error StringUTF8_StartsWith(const unsigned char* str,
     const unsigned char* target,
     StringCaseRule caseRule,
     UnicodeData* unicode,
+    ErrorMessagePool* errorPool,
     bool* outValue);
 
-Error StringUTF8_Format(const unsigned char* str, GenericBuffer* destination, UnicodeData* unicode, ...);
+Error StringUTF8_Format(const unsigned char* str,
+    GenericBuffer* destination,
+    UnicodeData* unicode,
+    ErrorMessagePool* errorPool,
+    ...);
 
 Error StringUTF8_Join(const unsigned char* separator,
     const unsigned char** sources,
     size_t sourcesSize,
-    GenericBuffer* destination);
+    GenericBuffer* destination,
+    ErrorMessagePool* errorPool);
 
 Error StringUTF8_Replace(const unsigned char* str,
     const unsigned char* searchTarget,
     const unsigned char* replaceValue,
-    GenericBuffer* destination);
+    GenericBuffer* destination,
+    ErrorMessagePool* errorPool);
 
 Error StringUTF8_Substring(const unsigned char* str,
     size_t startIndex,
     size_t endIndex,
-    GenericBuffer* destination);
+    GenericBuffer* destination,
+    ErrorMessagePool* errorPool);
 
 Error StringUTF8_Trim(const unsigned char* str,
     bool isStartTrimmed,
     bool isEndTrimmed,
     GenericBuffer* destination,
-    UnicodeData* unicode);
+    UnicodeData* unicode,
+    ErrorMessagePool* errorPool);
 
 Error StringUTF8_GetTrimIndices(unsigned char* str,
     bool isStartTrimmed,
@@ -165,7 +185,10 @@ Error StringUTF8_GetTrimIndices(unsigned char* str,
     size_t* endIndex,
     UnicodeData* unicode);
 
-ComparisonResult StringUTF8_Compare(const unsigned char* strA, const unsigned char* strB);
+Error StringUTF8_Compare(const unsigned char* strA,
+    const unsigned char* strB,
+    ErrorMessagePool* errorPool,
+    ComparisonResult* result);
 
 Error StringUTF8_Remove(const unsigned char* str,
     const unsigned char* target,
@@ -173,10 +196,16 @@ Error StringUTF8_Remove(const unsigned char* str,
     UnicodeData* unicode,
     GenericBuffer* destination);
 
-Error StringUTF8_Insert(const unsigned char* str, size_t index, const unsigned char* substring, GenericBuffer* destination);
+Error StringUTF8_Insert(const unsigned char* str,
+    size_t index,
+    const unsigned char* substring,
+    GenericBuffer* destination,
+    ErrorMessagePool* errorPool);
 
 bool StringUTF8_WriteCodePointToBuffer(GenericBuffer* buffer, CodePoint codePoint);
 
-Error StringUTF8_Reverse(const unsigned char* str, GenericBuffer* destination, UnicodeData* unicode);
+Error StringUTF8_Reverse(const unsigned char* str, GenericBuffer* destination, UnicodeData* unicode, ErrorMessagePool* errorPool);
 
-Error StringUTF8_Repeat(const unsigned char* str, GenericBuffer* destination, size_t count);
+Error StringUTF8_Repeat(const unsigned char* str, GenericBuffer* destination, size_t count, ErrorMessagePool* errorPool);
+
+Error StringUTF8_GetCharacterIndexArray(const unsigned char* str, GenericBuffer* indexArray, ErrorMessagePool* errorPool);

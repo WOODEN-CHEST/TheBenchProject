@@ -158,6 +158,35 @@ size_t CharUTF8_GetByteCountChar(const unsigned char* character)
     return 0;
 }
 
+size_t CharUTF8_GetByteCountCharFromEnd(const unsigned char* characterLastByte, size_t remainingBytes)
+{
+    const unsigned char* CharStart = characterLastByte;
+    if ((remainingBytes >= 1) && Is1ByteUTF8(CharStart))
+    {
+        return 1;
+    }
+
+    CharStart--;
+    if ((remainingBytes >= 2) && Is2ByteUTF8(CharStart))
+    {
+        return 2;
+    }
+
+    CharStart--;
+    if ((remainingBytes >= 3) && Is3ByteUTF8(CharStart))
+    {
+        return 3;
+    }
+
+    CharStart--;
+    if ((remainingBytes >= 4) && Is4ByteUTF8(CharStart))
+    {
+        return 4;
+    }
+
+    return 0;
+}
+
 size_t CharUTF8_GetByteCountCodepoint(CodePoint codepoint)
 {
     if (!IsInUnicodeRange(codepoint))
@@ -239,5 +268,34 @@ CodePoint CharUTF8_GetCodePoint(const unsigned char* character)
         | ((character[2] & (~UTF8_TRAIL_VALUE_MASK)) << UTF8_TRAIL_BIT_COUNT)
         | (character[3] & (~UTF8_TRAIL_VALUE_MASK)));
     }
+    return CODEPOINT_NONE;
+}
+
+CodePoint CharUTF8_GetCodePointFromEnd(const unsigned char* characterLastByte, size_t remainingBytes)
+{
+    const unsigned char* CharStart = characterLastByte;
+    if ((remainingBytes >= 1) && Is1ByteUTF8(CharStart))
+    {
+        return CharUTF8_GetCodePoint(CharStart);
+    }
+
+    CharStart--;
+    if ((remainingBytes >= 2) && Is2ByteUTF8(CharStart))
+    {
+        return CharUTF8_GetCodePoint(CharStart);
+    }
+
+    CharStart--;
+    if ((remainingBytes >= 3) && Is3ByteUTF8(CharStart))
+    {
+        return CharUTF8_GetCodePoint(CharStart);
+    }
+
+    CharStart--;
+    if ((remainingBytes >= 4) && Is4ByteUTF8(CharStart))
+    {
+        return CharUTF8_GetCodePoint(CharStart);
+    }
+
     return CODEPOINT_NONE;
 }
