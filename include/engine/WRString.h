@@ -8,7 +8,7 @@
 
 
 // Fields.
-extern const size_t INDEX_INVALID = 0xFFFFFFFFFFFFFFFF;
+const size_t INDEX_INVALID = 0xFFFFFFFFFFFFFFFF;
 
 
 // Types.
@@ -109,13 +109,11 @@ Error StringUTF8_IndexOf(const unsigned char* str,
     const unsigned char* target,
     StringIndexOfOptions options,
     ErrorMessagePool* errorPool,
-    UnicodeData* unicode,
     size_t* outIndex);
 
 Error StringUTF8_Concat(const unsigned char* strA,
     const unsigned char* strB,
     GenericBuffer* destination,
-    UnicodeData* unicode,
     ErrorMessagePool* errorPool);
 
 Error StringUTF8_Contains(const unsigned char* str,
@@ -183,7 +181,8 @@ Error StringUTF8_GetTrimIndices(unsigned char* str,
     bool isEndTrimmed,
     size_t* startIndex,
     size_t* endIndex,
-    UnicodeData* unicode);
+    UnicodeData* unicode,
+    ErrorMessagePool* errorPool);
 
 Error StringUTF8_Compare(const unsigned char* strA,
     const unsigned char* strB,
@@ -204,7 +203,7 @@ Error StringUTF8_Insert(const unsigned char* str,
 
 bool StringUTF8_WriteCodePointToBuffer(GenericBuffer* buffer, CodePoint codePoint);
 
-Error StringUTF8_Reverse(const unsigned char* str, GenericBuffer* destination, UnicodeData* unicode, ErrorMessagePool* errorPool);
+Error StringUTF8_Reverse(const unsigned char* str, GenericBuffer* destination, ErrorMessagePool* errorPool);
 
 Error StringUTF8_Repeat(const unsigned char* str, GenericBuffer* destination, size_t count, ErrorMessagePool* errorPool);
 

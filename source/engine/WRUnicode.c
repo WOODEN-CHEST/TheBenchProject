@@ -98,9 +98,10 @@ static const CodePoint WHITESPACE_CHARACTERS[] =
 // Static functions.
 static inline bool IsCodepointInDataBounds(UnicodeData* data, CodePoint codepoint)
 {
-    return (codepoint >= 0)
+    return (codepoint == 0) 
+        || ((codepoint >= 0)
         && ((size_t)codepoint < data->_characterCount)
-        && (data->_characters[codepoint]._codepoint != CODEPOINT_NONE);
+        && (data->_characters[codepoint]._codepoint != CODEPOINT_NONE));
 }
 
 static inline UnicodeCharacter* GetCharacter(UnicodeData* data, CodePoint codepoint)

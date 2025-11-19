@@ -161,25 +161,25 @@ size_t CharUTF8_GetByteCountChar(const unsigned char* character)
 size_t CharUTF8_GetByteCountCharFromEnd(const unsigned char* characterLastByte, size_t remainingBytes)
 {
     const unsigned char* CharStart = characterLastByte;
-    if ((remainingBytes >= 1) && Is1ByteUTF8(CharStart))
+    if ((remainingBytes >= 1) && Is1ByteUTF8(*CharStart))
     {
         return 1;
     }
 
     CharStart--;
-    if ((remainingBytes >= 2) && Is2ByteUTF8(CharStart))
+    if ((remainingBytes >= 2) && Is2ByteUTF8(*CharStart))
     {
         return 2;
     }
 
     CharStart--;
-    if ((remainingBytes >= 3) && Is3ByteUTF8(CharStart))
+    if ((remainingBytes >= 3) && Is3ByteUTF8(*CharStart))
     {
         return 3;
     }
 
     CharStart--;
-    if ((remainingBytes >= 4) && Is4ByteUTF8(CharStart))
+    if ((remainingBytes >= 4) && Is4ByteUTF8(*CharStart))
     {
         return 4;
     }
@@ -274,25 +274,25 @@ CodePoint CharUTF8_GetCodePoint(const unsigned char* character)
 CodePoint CharUTF8_GetCodePointFromEnd(const unsigned char* characterLastByte, size_t remainingBytes)
 {
     const unsigned char* CharStart = characterLastByte;
-    if ((remainingBytes >= 1) && Is1ByteUTF8(CharStart))
+    if ((remainingBytes >= 1) && Is1ByteUTF8(*CharStart))
     {
         return CharUTF8_GetCodePoint(CharStart);
     }
 
     CharStart--;
-    if ((remainingBytes >= 2) && Is2ByteUTF8(CharStart))
+    if ((remainingBytes >= 2) && Is2ByteUTF8(*CharStart))
     {
         return CharUTF8_GetCodePoint(CharStart);
     }
 
     CharStart--;
-    if ((remainingBytes >= 3) && Is3ByteUTF8(CharStart))
+    if ((remainingBytes >= 3) && Is3ByteUTF8(*CharStart))
     {
         return CharUTF8_GetCodePoint(CharStart);
     }
 
     CharStart--;
-    if ((remainingBytes >= 4) && Is4ByteUTF8(CharStart))
+    if ((remainingBytes >= 4) && Is4ByteUTF8(*CharStart))
     {
         return CharUTF8_GetCodePoint(CharStart);
     }
