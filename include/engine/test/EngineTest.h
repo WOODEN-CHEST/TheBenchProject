@@ -13,6 +13,6 @@ typedef bool (*TestFunc)(TestErrorMessage* errorMsg, void* userData);
 
 
 // Functions.
-void ExecuteEngineTest(void);
+void Test_ExecuteEngineTest(void);
 
-void FormatErrorMessage(TestErrorMessage* msg, const unsigned char* format, ...);
+void Test_FormatErrorMessage(TestErrorMessage* msg, const unsigned char* format, ...);

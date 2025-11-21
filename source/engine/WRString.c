@@ -745,8 +745,8 @@ Error StringUTF8_StartsWith(const unsigned char* str,
     size_t Index = 0;
     while (str[Index] != '\0')
     {
-        CodePoint SourceCodePoint = CharUTF8_GetCodePoint(str + i);
-        CodePoint TargetCodePoint = CharUTF8_GetCodePoint(target + i);
+        CodePoint SourceCodePoint = CharUTF8_GetCodePoint(str + Index);
+        CodePoint TargetCodePoint = CharUTF8_GetCodePoint(target + Index);
         if ((SourceCodePoint == CODEPOINT_NONE) || (TargetCodePoint == CODEPOINT_NONE))
         {
             return CreateCodePointInvalidError(errorPool, SourceCodePoint == CODEPOINT_NONE ? SourceCodePoint : TargetCodePoint);
@@ -767,17 +767,6 @@ Error StringUTF8_StartsWith(const unsigned char* str,
 
     return Error_CreateSuccess();
 }
-
-Error StringUTF8_EndsWith(const unsigned char* str,
-    const unsigned char* target,
-    StringCaseRule caseRule,
-    UnicodeData* unicode,
-    ErrorMessagePool* errorPool,
-    bool* outValue)
-{
-    
-}
-
 
 Error StringUTF8_Reverse(const unsigned char* str, GenericBuffer* destination, ErrorMessagePool* errorPool)
 {

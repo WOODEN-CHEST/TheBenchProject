@@ -36,7 +36,7 @@ Error Error_CreateSuccess()
     return (Error) { .Code = ErrorCode_Success, .Message = NULL };
 }
 
-Error Error_Construct(ErrorMessagePool* pool, ErrorCode code, const unsigned char* message)
+Error Error_Construct1(ErrorMessagePool* pool, ErrorCode code, const unsigned char* message)
 {
     Error CreatedError;
     CreatedError.Code = code;
@@ -62,7 +62,7 @@ Error Error_Construct(ErrorMessagePool* pool, ErrorCode code, const unsigned cha
 
 Error Error_Construct2(ErrorMessagePool* pool, ErrorCode code, char* message)
 {
-    return Error_Construct(pool, code, (const unsigned char*)message);
+    return Error_Construct1(pool, code, (const unsigned char*)message);
 }
 
 Error Error_Construct3(ErrorMessagePool* pool, ErrorCode code, const unsigned char* format, ...)
@@ -78,6 +78,10 @@ Error Error_Construct3(ErrorMessagePool* pool, ErrorCode code, const unsigned ch
         vsnprintf((char*)Message, MAX_ERROR_MESSAGE_BUFFER_LENGTH, (const char*)format, Args);
         va_end(Args);
         CreatedError.Message = Message;
+    }
+    else
+    {
+        CreatedError.Message = NULL;
     }
 
     return CreatedError;
@@ -96,6 +100,10 @@ Error Error_Construct4(ErrorMessagePool* pool, ErrorCode code, char* format, ...
         vsnprintf((char*)Message, MAX_ERROR_MESSAGE_BUFFER_LENGTH, format, Args);
         va_end(Args);
         CreatedError.Message = Message;
+    }
+    else
+    {
+        CreatedError.Message = NULL;
     }
 
     return CreatedError;
