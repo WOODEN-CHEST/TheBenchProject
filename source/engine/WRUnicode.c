@@ -65,6 +65,7 @@ static const CodePointCategory OTHER_CATEGORIES[] =
     CodePointCategory_Unassigned,
 };
 
+// https://en.wikipedia.org/wiki/Whitespace_character
 static const CodePoint WHITESPACE_CHARACTERS[] =
 {
     0x9,
