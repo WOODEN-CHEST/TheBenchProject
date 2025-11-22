@@ -53,6 +53,12 @@ typedef enum CodePointCategoryEnum
     CodePointCategory_Unassigned,
 } CodePointCategory;
 
+typedef enum CharacterFlagsEnum
+{
+    CharacterFlags_None = 0,
+    CharacterFlags_IsDigit = 1
+} CharacterFlags;
+
 
 /* Holds information about a single codepoint. */
 typedef struct UnicodeCharacterStruct
@@ -61,6 +67,7 @@ typedef struct UnicodeCharacterStruct
     CodePoint _lowerMapping;
     CodePoint _upperMapping;
     CodePointCategory _category;
+    CharacterFlags _flags;
     float _numericValue; /** The numeric value of this codepoint, set to NaN if the codepoint does not have a numeric value. */
 } UnicodeCharacter;
 
@@ -129,9 +136,10 @@ bool Unicode_IsNumber(UnicodeData* data, CodePoint codepoint);
 
 /**
  * Gets the numeric value of the given codepoint.
- * @param data The unicode database to use.
+ * @param [in] data The unicode database to use.
  * @param codepoint The codepoint to get the numeric value of.
- * @return The codepoint's numeric value if one is present, NaN otherwise.
+ * @param [out] value The numeric value of the codepoint, or NaN if it has no value.
+ * @return true if the codepoint has a numeric value, false otherwise.
  */
 bool Unicode_GetNumericValue(UnicodeData* data, CodePoint codepoint, float* value);
 
@@ -264,7 +272,7 @@ CodePointCategory Unicode_GetCategory(UnicodeData* data, CodePoint codepoint);
 /**
  * Determines whether the given codepoint is defined.
  * 
- * For a codepoint to be defined, it must >= 0, and i must be defined in the given unicode database.
+ * For a codepoint to be defined, it must >= 0, and it must be defined in the given unicode database.
  * @return true if the codepoint is defined, false otherwise.
  */
 bool Unicode_IsDefined(UnicodeData* data, CodePoint codepoint);

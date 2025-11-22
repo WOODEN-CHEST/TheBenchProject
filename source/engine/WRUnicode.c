@@ -163,7 +163,12 @@ bool Unicode_IsLetter(UnicodeData* data, CodePoint codepoint)
 
 bool Unicode_IsDigit(UnicodeData* data, CodePoint codepoint)
 {
-    return Unicode_IsASCIIDigit(data, codepoint);
+    UnicodeCharacter* Character = GetCharacter(data, codepoint);
+    if (Character)
+    {
+        return Character->_flags & CharacterFlags_IsDigit;
+    }
+    return false;
 }
 
 bool Unicode_IsNumber(UnicodeData* data, CodePoint codepoint)

@@ -60,3 +60,6 @@ compile/out/TheBenchProject*
 
 # Vscode.
 .vscode/
+
+# Test stuff.
+compile/out/unicode_data.txt

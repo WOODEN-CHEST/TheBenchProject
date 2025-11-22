@@ -422,7 +422,7 @@ static Error ValidateBaseForWriting(ErrorMessagePool* errorPool, int32_t base)
 
 static unsigned char DigitValueToChar(uint64_t digitValue)
 {
-    if (digitValue <= DIGIT_VALUE_MAX_BASE_10)
+    if (digitValue <= (uint64_t)DIGIT_VALUE_MAX_BASE_10)
     {
         return '0' + digitValue;
     }

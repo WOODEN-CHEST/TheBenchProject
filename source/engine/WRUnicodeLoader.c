@@ -48,6 +48,8 @@ static Error ParseLowercaseMapping(UnicodeParser* parser);
 
 static Error ParseCodePoint(UnicodeParser* parser);
 
+static Error ParseIsDigit(UnicodeParser* parser);
+
 
 // Fields.
 static const size_t UNICODE_DATA_CAPACITY_DEFAULT = 2 << 15; // If the unicode data file text doesn't change much, then this should be large enough.
@@ -59,6 +61,9 @@ static const int32_t NUMBER_BASE = 16;
 
 static const size_t SECTION_COUNT = 15;
 
+static const float DIGIT_VALUE_MIN = 0.0f;
+static const float DIGIT_VALUE_MAX = 9.0f;
+
 static LineParseAction PARSE_ACTIONS[] = 
 {
     { false, &ParseCodePoint, },
@@ -68,7 +73,7 @@ static LineParseAction PARSE_ACTIONS[] =
     { true, NULL, },
     { true, NULL, },
     { true, NULL, },
-    { true, NULL, },
+    { false, &ParseIsDigit, },
     { false, &ParseNumericValue, },
     { true, NULL, },
     { true, NULL, },
@@ -78,7 +83,7 @@ static LineParseAction PARSE_ACTIONS[] =
     { true, NULL, },
 };
 
-static const CodePoint MAX_CODEPOINTS = 1 << 21; // Let's be reasonable with the size.
+static const size_t MAX_CODEPOINTS = 1 << 21; // Let's be reasonable with the size.
 
 
 // Static functions.
@@ -117,7 +122,8 @@ static Error InitParser(ErrorMessagePool* errorPool, const unsigned char* dataBa
     {
         return Error_Construct3(errorPool, 
             ErrorCode_FileNotFound, 
-            u8"Unicode data file \"%s\" not found.");
+            u8"Unicode data file \"%s\" not found.",
+            dataBaseFilePath);
     }
 
     char* Text = LoadFileText(CharFilePath);
@@ -125,7 +131,8 @@ static Error InitParser(ErrorMessagePool* errorPool, const unsigned char* dataBa
     {
         return Error_Construct3(errorPool, 
             ErrorCode_IO, 
-            u8"Failed to read Unicode data file \"%s\" due to an unknown reason.");
+            u8"Failed to read Unicode data file \"%s\" due to an unknown reason.",
+            dataBaseFilePath);
     }
 
     parser->Text = (unsigned char*)Text;
@@ -273,8 +280,11 @@ static Error ParseUnicodeData(UnicodeParser* parser)
         {
             return Result;
         }
-        parser->LineIndex++;
-        parser->DataCount++;
+        if (!IsFileEnd)
+        {
+            parser->LineIndex++;
+            parser->DataCount++;
+        }
     } while (!IsFileEnd);
 
     return Error_CreateSuccess();
@@ -455,7 +465,6 @@ static Error StringToFloat(UnicodeParser* parser,
     *value = NAN;
     unsigned char* End;
     float Value = strtof((const char*)str, (char**)&End);
-    printf("%s\n", str);
     if (End == str)
     {
         return Error_Construct3(parser->ErrorPool,
@@ -569,6 +578,7 @@ static void LoadParsedUnicodeIntoTable(UnicodeParser* parser, UnicodeData* data)
     }
 
     size_t CodepointCount =parser->MaxCodePoint;
+    
     if (CodepointCount > MAX_CODEPOINTS)
     {
         CodepointCount = MAX_CODEPOINTS;
@@ -597,7 +607,32 @@ static void LoadParsedUnicodeIntoTable(UnicodeParser* parser, UnicodeData* data)
         data->_characters[(size_t)TargetCodePoint] = parser->Data[i];
     }
 
-    data->_characterCount = CodepointCount;\
+    data->_characterCount = CodepointCount;
+}
+
+static Error ParseIsDigit(UnicodeParser* parser)
+{
+    if (IsCharSectionEnd(GetParserChar(parser)))
+    {
+        return Error_CreateSuccess();
+    }
+
+    float DigitValue;
+    Error Result = StringToFloat(parser, parser->Text + parser->TextIndex, &DigitValue, u8"character digit value");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if ((DigitValue < DIGIT_VALUE_MIN) || (DigitValue > DIGIT_VALUE_MAX))
+    {
+        return Error_Construct3(parser->ErrorPool,
+            ErrorCode_InvalidUnicodeData,
+            u8"Invalid digit value %f, it must be in the bounds [%f,%f]",
+            DigitValue, DIGIT_VALUE_MIN, DIGIT_VALUE_MAX);
+    }
+
+    parser->Data[parser->DataCount]._flags |= CharacterFlags_IsDigit;
+    return Error_CreateSuccess();
 }
 
 
