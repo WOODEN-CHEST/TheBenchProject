@@ -568,23 +568,33 @@ static Error ParseCodePoint(UnicodeParser* parser)
         false);
 }
 
-static void LoadParsedUnicodeIntoTable(UnicodeParser* parser, UnicodeData* data)
+static void EnsureNullTerminatorInDatabase(UnicodeData* data)
 {
-    if (parser->MaxCodePoint < 0)
+    data->_characters[0] = (UnicodeCharacter)
     {
-        data->_characters = NULL;
-        data->_characterCount = 0;
-        return;
-    }
+        ._category = CodePointCategory_Control,
+        ._codepoint = 0,
+        ._flags = CharacterFlags_None,
+        ._numericValue = NAN,
+        ._lowerMapping = CODEPOINT_NONE,
+        ._upperMapping = CODEPOINT_NONE
+    };
+}
 
-    size_t CodepointCount =parser->MaxCodePoint;
-    
+static void LoadParsedUnicodeIntoTable(UnicodeCharacter* characters, size_t characterCount, size_t maxCodePoint, UnicodeData* data)
+{
+    size_t CodepointCount = (size_t)maxCodePoint;
+    if (CodepointCount == 0)
+    {
+        CodepointCount = 1;
+    }
     if (CodepointCount > MAX_CODEPOINTS)
     {
         CodepointCount = MAX_CODEPOINTS;
     }
 
     data->_characters = Memory_Allocate(CodepointCount * sizeof(UnicodeCharacter));
+    
     for (size_t i = 0; i < CodepointCount; i++)
     {
         UnicodeCharacter* Character = &data->_characters[i];
@@ -596,15 +606,17 @@ static void LoadParsedUnicodeIntoTable(UnicodeParser* parser, UnicodeData* data)
         Character->_numericValue = NAN;
     }
 
-    for (size_t i = 0; i < parser->DataCount; i++)
+    EnsureNullTerminatorInDatabase(data);
+
+    for (size_t i = 0; i < characterCount; i++)
     {
-        CodePoint TargetCodePoint = parser->Data[i]._codepoint;
+        CodePoint TargetCodePoint = characters[i]._codepoint;
         if ((TargetCodePoint < 0) || ((size_t)TargetCodePoint > CodepointCount))
         {
             continue;
         }
 
-        data->_characters[(size_t)TargetCodePoint] = parser->Data[i];
+        data->_characters[(size_t)TargetCodePoint] = characters[i];
     }
 
     data->_characterCount = CodepointCount;
@@ -653,9 +665,15 @@ Error UnicodeData_Load(ErrorMessagePool* errorPool, const unsigned char* dataBas
         return Result;
     }
 
-    LoadParsedUnicodeIntoTable(&Parser, data);
+    LoadParsedUnicodeIntoTable(Parser.Data, Parser.DataCount, Parser.MaxCodePoint, data);
     DeinitParser(&Parser);
 
+    return Error_CreateSuccess();
+}
+
+Error UnicodeData_CreateEmpty(UnicodeData* data)
+{
+    LoadParsedUnicodeIntoTable(NULL, 0, 0, data);
     return Error_CreateSuccess();
 }
 

@@ -5,4 +5,6 @@
 // Functions.
 Error UnicodeData_Load(ErrorMessagePool* errorPool, const unsigned char* dataBaseFilePath, UnicodeData* data);
 
+Error UnicodeData_CreateEmpty(UnicodeData* data);
+
 void UnicodeData_Deconstruct(UnicodeData* data);

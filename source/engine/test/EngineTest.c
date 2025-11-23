@@ -10,13 +10,23 @@
 #include "test/ErrorTest.h"
 #include "test/UnicodeTest.h"
 
+
+// Types.
+typedef struct SingleTestStruct
+{
+    const unsigned char* _name;
+    TestFunc _function;
+    void* _userData;
+} SingleTest;
+
+
 // Fields.
 static const size_t MAX_ERROR_MESSAGE_LENGTH = 2 << 14;
 static const unsigned char* UNICODE_DATA_FILE_NAME = u8"unicode_data.txt";
 
 
 // Static functions.
-static void ExecuteSingleTest(FILE* outStream,
+static bool ExecuteSingleTest(FILE* outStream,
     const unsigned char* testName,
     void* userData,
     TestErrorMessage* errorMsg,
@@ -34,6 +44,7 @@ static void ExecuteSingleTest(FILE* outStream,
     {
         fprintf(outStream, "Test \"%s\" passed.\n", (char*)testName);
     }
+    return Result;
 }
 
 static Error LoadUnicodeData(ErrorMessagePool* errorPool, UnicodeData* unicode)
@@ -73,6 +84,8 @@ static void FreeTestResources(TestErrorMessage* errorMsg,
 // Functions
 void Test_ExecuteEngineTest()
 {
+    SetTraceLogLevel(LOG_WARNING);
+
     FILE* OutStream = stdout;
 
     TestErrorMessage ErrorMsg;
@@ -84,10 +97,6 @@ void Test_ExecuteEngineTest()
         fprintf(OutStream, "Failed to allocate memory for an error message, aborting tests.");
         return;
     }
-
-    ExecuteSingleTest(OutStream, u8"Error Pool", NULL, &ErrorMsg, &Test_TestErrorPool);
-    ExecuteSingleTest(OutStream, u8"Error Codes Only", NULL, &ErrorMsg, &Test_TestErrorCodeOnly);
-    ExecuteSingleTest(OutStream, u8"Error Messages", NULL, &ErrorMsg, &Test_TestErrorMessages);
 
     ErrorMessagePool ErrorPool;
     ErrorMessagePool_Construct1(&ErrorPool);
@@ -102,10 +111,59 @@ void Test_ExecuteEngineTest()
     }
 
     UnicodeTestContext UnicodeTestUserData = (UnicodeTestContext) { ._unicode = &Unicode };
-    ExecuteSingleTest(OutStream, u8"Unicode Booleans", &UnicodeTestUserData, &ErrorMsg, &Test_TestUnicodeBooleans);
-    ExecuteSingleTest(OutStream, u8"Unicode Code Point Validation", &UnicodeTestUserData, &ErrorMsg, &Test_TestUnicodeCodePointValidation);
-    ExecuteSingleTest(OutStream, u8"Unicode Conversions", &UnicodeTestUserData, &ErrorMsg, &Test_TestUnicodeConversions);
-    ExecuteSingleTest(OutStream, u8"Unicode Numeric Values", &UnicodeTestUserData, &ErrorMsg, &Test_TestUnicodeNumericValues);
+
+    SingleTest Tests[] = 
+    {
+        {
+            ._function = &Test_TestErrorPool,
+            ._name = u8"Error Pool",
+            ._userData = NULL
+        },
+        {
+            ._function = &Test_TestErrorCodeOnly,
+            ._name = u8"Error Codes Only",
+            ._userData = NULL
+        },
+        {
+            ._function = &Test_TestErrorMessages,
+            ._name = u8"Error Messages",
+            ._userData = NULL
+        },
+
+        {
+            ._function = &Test_TestUnicodeBooleans,
+            ._name = u8"Unicode Booleans",
+            ._userData = &UnicodeTestUserData
+        },
+        {
+            ._function = &Test_TestUnicodeCodePointValidation,
+            ._name = u8"Unicode Code Point Validation",
+            ._userData = &UnicodeTestUserData
+        },        
+        {
+            ._function = &Test_TestUnicodeConversions,
+            ._name = u8"Unicode Conversions",
+            ._userData = &UnicodeTestUserData
+        },
+        {
+            ._function = &Test_TestUnicodeNumericValues,
+            ._name = u8"Unicode Numeric Values",
+            ._userData = &UnicodeTestUserData
+        },
+    };
+
+    size_t PassedTestCount = 0;
+    size_t TestCount = sizeof(Tests) / sizeof(Tests[0]);
+    for (size_t i = 0; i < TestCount; i++)
+    {
+        SingleTest* TargetTest = &Tests[i];
+        if (ExecuteSingleTest(OutStream, TargetTest->_name, TargetTest->_userData, &ErrorMsg, TargetTest->_function))
+        {
+            PassedTestCount++;
+        }
+    }
+
+    printf("%zu/%zu tests passed.\n", PassedTestCount, TestCount);
 
     FreeTestResources(&ErrorMsg, &Unicode, &ErrorPool);
 }
