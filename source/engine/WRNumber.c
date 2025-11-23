@@ -45,7 +45,7 @@ static const unsigned char* STRING_INF_NEG = u8"-infinity";
 
 static const unsigned char SEPARATOR_PERIOD = '.';
 static const unsigned char SEPARATOR_COMMA = ',';
-static const unsigned char EXPONEND_INDICATOR = 'e';
+static const unsigned char EXPONENT_INDICATOR = 'e';
 
 
 // Static functions.
@@ -608,7 +608,7 @@ static Error CreateExpectedExponentIndicator(ErrorMessagePool* errorPool, unsign
         return Error_Construct3(errorPool,
             Code,
             u8"Expected exponent indicator '%c' or end of decimal number mantissa, got '%c'.",
-            EXPONEND_INDICATOR, recievedChar);
+            EXPONENT_INDICATOR, recievedChar);
     }
     return Error_Construct5(Code);
 }
@@ -631,7 +631,7 @@ static Error TryParseExponent(ErrorMessagePool* errorPool,
     double* exponent)
 {
     *exponent = 0.0;
-    if (GetCharToLower(str[0]) != EXPONEND_INDICATOR)
+    if (GetCharToLower(str[0]) != EXPONENT_INDICATOR)
     {
         return CreateExpectedExponentIndicator(errorPool, str[0]);
     }

@@ -16,42 +16,27 @@ static const size_t LIST_CAPACITY_GROWTH = 2;
 // Static functions.
 static Error CreateOutOfCapacityError(WRList* self, const unsigned char* operationName)
 {
-    ErrorCode Code = ErrorCode_BufferTooSmall;
-    if (self->ErrorPool)
-    {
-        return Error_Construct3(self->ErrorPool,
-            Code,
-            u8"Internal element array (which is not resizable) has ran out of capacity. Capacity is %zu element(s) "
-            u8"(operation \"%s\").",
-            self->_capacity, operationName);
-    }
-    return Error_Construct5(Code);
+    return Error_Construct3(self->ErrorPool,
+        ErrorCode_BufferTooSmall,
+        u8"Internal element array (which is not resizable) has ran out of capacity. Capacity is %zu element(s) "
+        u8"(operation \"%s\").",
+        self->_capacity, operationName);
 }
 
 static Error CreateIndexOutOfRangeError(WRList* self, size_t index, const unsigned char* operationName)
 {
-    ErrorCode Code = ErrorCode_IndexOutOfBounds;
-    if (self->ErrorPool)
-    {
-        return Error_Construct3(self->ErrorPool,
-            Code,
-            u8"Index %zu is out of range for a list of size %zu (operation \"%s\").",
-            index, self->_count, operationName);
-    }
-    return Error_Construct5(Code);
+    return Error_Construct3(self->ErrorPool,
+        ErrorCode_IndexOutOfBounds,
+        u8"Index %zu is out of range for a list of size %zu (operation \"%s\").",
+        index, self->_count, operationName);
 }
 
 static Error CreateEmptyListError(WRList* self, const unsigned char* operationName)
 {
-    ErrorCode Code = ErrorCode_InvalidOperation;
-    if (self->ErrorPool)
-    {
-        return Error_Construct3(self->ErrorPool,
-            Code,
-            u8"At least 1 list element is required to perform the operation \"%s\".",
-            operationName);
-    }
-    return Error_Construct5(Code);
+    return Error_Construct3(self->ErrorPool,
+        ErrorCode_InvalidOperation,
+        u8"At least 1 list element is required to perform the operation \"%s\".",
+        operationName);
 }
 
 static bool AllocateCallback(GenericBuffer* buffer, size_t requestedCapacity)
@@ -244,12 +229,17 @@ Error WRList_Insert(WRList* self, void* item, size_t index)
     return Error_CreateSuccess();
 }
 
-Error WRList_AddRange(WRList* self, void** items, size_t itemCount)
+Error WRList_AppendRange(WRList* self, void* items, size_t itemCount)
 {
     return WRList_InsertRange(self, items, itemCount, self->_count);
 }
 
-Error WRList_InsertRange(WRList* self, void** items, size_t itemCount, size_t startIndex)
+Error WRList_PrependRange(WRList* self, void* items, size_t itemCount)
+{
+    return WRList_InsertRange(self, items, itemCount, 0);
+}
+
+Error WRList_InsertRange(WRList* self, void* items, size_t itemCount, size_t startIndex)
 {
     if (startIndex > self->_count)
     {
@@ -305,7 +295,37 @@ Error WRList_RemoveAt(WRList* self, size_t index)
     return Error_CreateSuccess();
 }
 
-Error WRList_RemoveRange(WRList* self, size_t startIndesInclusive, size_t endIndexExclusive);
+Error WRList_RemoveRange(WRList* self, size_t startIndexInclusive, size_t endIndexExclusive)
+{
+    const unsigned char* ErrorContext = u8"remove range";
+    if (startIndexInclusive >= self->_count)
+    {
+        return CreateIndexOutOfRangeError(self, startIndexInclusive, ErrorContext);
+    }
+    if (endIndexExclusive >= self->_count)
+    {
+        return CreateIndexOutOfRangeError(self, startIndexInclusive, ErrorContext);
+    }
+    if (startIndexInclusive > endIndexExclusive)
+    {
+        return Error_Construct3(self->ErrorPool,
+            ErrorCode_IllegalArgument,
+            u8"Min index %zu is greater than maxindex %zu",
+            startIndexInclusive, endIndexExclusive);
+    }
+    if (startIndexInclusive == endIndexExclusive)
+    {
+        return Error_CreateSuccess();
+    }
+
+    size_t ElementCount = endIndexExclusive - startIndexInclusive;
+    uint8_t Destination = GetUncheckedElementPtr(self, startIndexInclusive);
+    uint8_t MoveSource = GetUncheckedElementPtr(self, startIndexInclusive + ElementCount);
+
+    Memory_Move(MoveSource, Destination, ElementCount * self->_elementSize);
+    self->_count -= ElementCount;
+    return Error_CreateSuccess();
+}
 
 Error WRList_Replace(WRList* self, void* element, size_t index)
 {
@@ -435,7 +455,7 @@ Error WRList_GetPointerToElement(WRList* self, size_t index, void** out)
     return Error_CreateSuccess();
 }
 
-bool WRList_Contains(WRList* self, WRListPredicate* predicate, void* userData)
+bool WRList_Contains(WRList* self, WRListPredicate predicate, void* userData)
 {
     for (size_t i = 0; i < self->_count; i++)
     {
@@ -555,40 +575,26 @@ Error WRList_MapToSelf(WRList* self, WRListMapper mapper, void* destElementBuffe
     return Error_CreateSuccess();
 }
 
-Error WRList_SumInt(WRList* self, WRListIntExtractor extractor, int64_t* outValue, void* userData)
+int64_t WRList_SumInt(WRList* self, WRListIntExtractor extractor, void* userData)
 {
-    *outValue = 0;
-    if (self->_count == 0)
-    {
-        return CreateEmptyListError(self, u8"sum int");
-    }
-
     int64_t Sum = 0;
     for (size_t i = 0; i < self->_count; i++)
     {
         Sum += (*extractor)(self, GetListElementData(self, i), userData);
     }
 
-    *outValue = Sum;
-    return Error_CreateSuccess();
+    return Sum;
 }
 
-Error WRList_SumDouble(WRList* self, WRListDoubleExtractor extractor, double* outValue, void* userData)
+double WRList_SumDouble(WRList* self, WRListDoubleExtractor extractor, void* userData)
 {
-    *outValue = 0.0;
-    if (self->_count == 0)
-    {
-        return CreateEmptyListError(self, u8"sum double");
-    }
-
     double Sum = 0.0;
     for (size_t i = 0; i < self->_count; i++)
     {
         Sum += (*extractor)(self, GetListElementData(self, i), userData);
     }
 
-    *outValue = Sum;
-    return Error_CreateSuccess();
+    return Sum;
 }
 
 Error WRList_MaxInt(WRList* self, WRListIntExtractor extractor, int64_t* outValue, void* userData)
@@ -756,6 +762,11 @@ GenericBuffer WRList_ToConstantBuffer(WRList* self)
 
 GenericBuffer WRList_ToDynamicBuffer(WRList* self)
 {
+    if (WRList_IsFixedCapacity(self))
+    {
+        return WRList_ToConstantBuffer(self);
+    }
+
     return GenericBuffer_CreateVariable(self->_data,
         self->_capacity,
         self->_elementSize,

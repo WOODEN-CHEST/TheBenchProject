@@ -8,7 +8,7 @@
 
 
 // Fields.
-const size_t INDEX_INVALID = 0xFFFFFFFFFFFFFFFF;
+const size_t STRING_INDEX_INVALID = 0xFFFFFFFFFFFFFFFF;
 
 
 // Types.

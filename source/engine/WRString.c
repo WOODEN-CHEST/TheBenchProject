@@ -532,7 +532,7 @@ Error StringUTF8_IndexOf(const unsigned char* str,
     ErrorMessagePool* errorPool,
     size_t* outIndex)
 {
-    *outIndex = INDEX_INVALID;
+    *outIndex = STRING_INDEX_INVALID;
     if (target[0] == '\0')
     {
         return Error_CreateSuccess();
@@ -884,7 +884,7 @@ Error StringUTF8_GetTrimIndices(unsigned char* str,
 
         if (!Unicode_IsWhitespace(unicode, TargetCodePoint))
         {
-            if (PreTrimEndIndex == INDEX_INVALID)
+            if (PreTrimEndIndex == STRING_INDEX_INVALID)
             {
                 PreTrimEndIndex = Index;
             }
