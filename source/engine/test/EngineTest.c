@@ -161,6 +161,7 @@ void Test_ExecuteEngineTest()
         {
             PassedTestCount++;
         }
+        ErrorMessagePool_Clear(&ErrorPool);
     }
 
     printf("%zu/%zu tests passed.\n", PassedTestCount, TestCount);
