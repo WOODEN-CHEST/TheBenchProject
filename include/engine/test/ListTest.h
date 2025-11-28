@@ -17,6 +17,8 @@ bool Test_TestListBuffer(TestErrorMessage* errorMsg, void* userData);
 
 bool Test_TestListSimpleMutation(TestErrorMessage* errorMsg, void* userData);
 
+bool Test_TestListSpecialMutation(TestErrorMessage* errorMsg, void* userData);
+
 bool Test_TestListAccessors(TestErrorMessage* errorMsg, void* userData);
 
 bool Test_TestListTechnicalFunctions(TestErrorMessage* errorMsg, void* userData);

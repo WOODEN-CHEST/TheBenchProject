@@ -481,15 +481,17 @@ static Error StringToFloat(UnicodeParser* parser,
 
 static size_t ReadNumberIntoBuffer(const unsigned char* source, size_t startIndex, unsigned char* buffer, size_t bufferSize)
 {
-    size_t MaxBufferIndex = bufferSize - 1;
+    size_t MaxBufferIndex = bufferSize - 2;
     size_t LocalIndex = startIndex;
 
-    for (size_t i = 0; i < MaxBufferIndex && !IsCharSectionEnd(source[LocalIndex]) && (source[LocalIndex] != DIVIDER); i++, LocalIndex++)
+    for (size_t i = 0; (i < MaxBufferIndex) && !IsCharSectionEnd(source[LocalIndex]) && (source[LocalIndex] != DIVIDER); i++, LocalIndex++)
     {
         buffer[i] = source[LocalIndex];
     }
 
-    return LocalIndex - startIndex;
+    size_t ReadChars = LocalIndex - startIndex;
+    buffer[ReadChars] = '\0';
+    return ReadChars;
 }
 
 static Error ParseNumericValue(UnicodeParser* parser)

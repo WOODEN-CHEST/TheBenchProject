@@ -168,11 +168,16 @@ void Test_ExecuteEngineTest()
             ._name = u8"List Simple Mutation",
             ._userData = &ListTestUserData
         },
-        // {
-        //     ._function = &Test_TestListAccessors,
-        //     ._name = u8"List Accessors",
-        //     ._userData = &ListTestUserData
-        // },
+        {
+            ._function = &Test_TestListSpecialMutation,
+            ._name = u8"List Special Mutation",
+            ._userData = &ListTestUserData
+        },
+        {
+            ._function = &Test_TestListAccessors,
+            ._name = u8"List Accessors",
+            ._userData = &ListTestUserData
+        },
         // {
         //     ._function = &Test_TestListTechnicalFunctions,
         //     ._name = u8"List Technical Functions",

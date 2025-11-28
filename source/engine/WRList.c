@@ -485,7 +485,7 @@ bool WRList_FirstIndexOf(WRList* self, WRListPredicate predicate, void* userData
 bool WRList_LastIndexOf(WRList* self, WRListPredicate predicate, void* userData, size_t* outIndex)
 {
     *outIndex = 0;
-    for (size_t i = self->_count; i > 0; i++)
+    for (size_t i = self->_count; i > 0; i--)
     {
         size_t RealIndex = i - 1;
         if ((*predicate)(self, GetListElementData(self, RealIndex), userData))

@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #define SIMPLE_MUTATION_ELEMENT int32_t
+#define SPECIAL_MUTATION_ELEMENT int64_t
+#define ACCESSORS_ELEMENT int32_t
+#define TECHNICAL_TEST_ELEMENT int16_t
 
 
 // Types.
@@ -320,6 +323,214 @@ static bool TestSimpleMutation(TestErrorMessage* errorMsg, ErrorMessagePool* err
     return true;
 }
 
+static bool ComparseSingleElement(const void* element1,
+    const void* element2,
+    Error errorResult,
+    TestErrorMessage* errorMsg,
+    size_t elementSize)
+{
+    if (errorResult.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Error retrieving first element of list: %s",
+            ErrorMessageOrDefault(errorResult.Message));
+        return false;
+    }
+    if (!Memory_IsEqual(element1, element2, elementSize))
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Elements in single element compare don't match: %s",
+            ErrorMessageOrDefault(errorResult.Message));
+        return false;
+    }
+
+    return true;
+}
+
+static bool AccessorNumberPredicate(WRList* self, WRListElementData element, void* userData)
+{
+    UNUSED(self);
+    ACCESSORS_ELEMENT TargetElement = *((ACCESSORS_ELEMENT*)userData);
+    ACCESSORS_ELEMENT ElementValue = *((ACCESSORS_ELEMENT*)element._element);
+    return ElementValue == TargetElement;
+}
+
+
+static bool TestAccessors(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool, WRList* list)
+{
+    UNUSED(errorPool);
+
+    ACCESSORS_ELEMENT Arr1[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    Error Result = WRList_AppendRange(list, Arr1, sizeof(Arr1) / sizeof(Arr1[0]));
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Error appending range in accessors test: %s", ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+
+    ACCESSORS_ELEMENT OutElement;
+    Result = WRList_GetFirst(list, &OutElement);
+    if (!ComparseSingleElement(&OutElement, &Arr1[0], Result, errorMsg, sizeof(OutElement)))
+    {
+        return false;
+    }
+
+    Result = WRList_GetLast(list, &OutElement);
+    if (!ComparseSingleElement(&OutElement, &Arr1[9], Result, errorMsg, sizeof(OutElement)))
+    {
+        return false;
+    }
+
+    size_t TargetIndex = 5;
+    Result = WRList_GetAt(list, TargetIndex, &OutElement);
+    if (!ComparseSingleElement(&OutElement, &Arr1[TargetIndex], Result, errorMsg, sizeof(OutElement)))
+    {
+        return false;
+    }
+
+    void* OutElementPtr;
+    Result = WRList_GetPointerToFirst(list, &OutElementPtr);
+    if (!ComparseSingleElement(OutElementPtr, &Arr1[0], Result, errorMsg, sizeof(OutElement)))
+    {
+        return false;
+    }
+
+    Result = WRList_GetPointerToLast(list, &OutElementPtr);
+    if (!ComparseSingleElement(OutElementPtr, &Arr1[9], Result, errorMsg, sizeof(OutElement)))
+    {
+        return false;
+    }
+
+    Result = WRList_GetPointerToElement(list, TargetIndex, &OutElementPtr);
+    if (!ComparseSingleElement(OutElementPtr, &Arr1[TargetIndex], Result, errorMsg, sizeof(OutElement)))
+    {
+        return false;
+    }
+
+    ACCESSORS_ELEMENT TargetElement = 3;
+    if (!WRList_Contains(list, &AccessorNumberPredicate, &TargetElement))
+    {
+        Test_FormatErrorMessage(errorMsg, u8"List contains call returned false when it should've returned true.");
+        return false;
+    }
+
+    size_t OutIndex;
+    TargetIndex = 2;
+    if (!WRList_FirstIndexOf(list, &AccessorNumberPredicate, &TargetElement, &OutIndex))
+    {
+        Test_FormatErrorMessage(errorMsg, u8"List first index of call returned false when it should've returned true.");
+        return false;
+    }
+    if (OutIndex != TargetIndex)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"List first index of call returned wrong index of %zu, expected %zu.",
+            OutIndex, TargetIndex);
+        return false;
+    }
+
+    TargetElement = 6;
+    TargetIndex = 5;
+    if (!WRList_LastIndexOf(list, &AccessorNumberPredicate, &TargetElement, &OutIndex))
+    {
+        Test_FormatErrorMessage(errorMsg, u8"List last index of call returned false when it should've returned true.");
+        return false;
+    }
+    if (OutIndex != TargetIndex)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"List last index of call returned wrong index of %zu, expected %zu.",
+            OutIndex, TargetIndex);
+        return false;
+    }
+
+    return true;
+}
+
+static bool TestSpecialMutation(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool, WRList* list)
+{
+    UNUSED(errorPool);
+
+    SPECIAL_MUTATION_ELEMENT Arr1[] = { 1, 2, 3, 4, 5 };
+    Error Result = WRList_AppendRange(list, Arr1, sizeof(Arr1) / sizeof(Arr1[0]));
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Error appending range in special mutation test: %s", ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+
+    SPECIAL_MUTATION_ELEMENT Arr2[] = { 1, 2, 9, 4, 5 };
+    Result = WRList_Replace(list, &Arr2[2], 2);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Error replacing element: %s", ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+    if (!VerifyListSequence(errorMsg, list, Arr2, sizeof(Arr2) / sizeof(Arr2[0]), u8"Replacing element."))
+    {
+        return false;
+    }
+
+    SPECIAL_MUTATION_ELEMENT Arr3[] = { 5, 2, 9, 4, 1 };
+    Result = WRList_Swap(list, 0, 4);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Error swapping element: %s", ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+    if (!VerifyListSequence(errorMsg, list, Arr3, sizeof(Arr3) / sizeof(Arr3[0]), u8"Swapping element."))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+static bool TestTechnicalFunctions(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool, WRList* list)
+{
+    UNUSED(errorPool);
+
+    if (WRList_GetCapacityRemaining(list) != 0)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Expected capacity remaining to be 0 after construction, got %zu.",
+            WRList_GetCapacityRemaining(list));
+        return false;
+    }
+    if (WRList_IsFixedCapacity(list))
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Expected list to have non-fixed capacity.");
+        return false;
+    }
+    if (WRList_IsWrapperBuffer(list))
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Expected list to not be a buffer wrapper.");
+        return false;
+    }
+
+    size_t EnsuredCapacity = 10;
+    WRList_EnsureCapacity(list, EnsuredCapacity);
+    if (WRList_GetCapacityRemaining(list) < EnsuredCapacity)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"List only ensured capacity of %zu, expected at least %zu.",
+            WRList_GetCapacityRemaining(list), EnsuredCapacity);
+        return false;
+    }
+
+    size_t RequestedExtraCapacity = 16;
+    WRList_ReserveSpace(list, list->_capacity - EnsuredCapacity + RequestedExtraCapacity);
+    if (WRList_GetCapacityRemaining(list) - EnsuredCapacity < RequestedExtraCapacity)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"List only reserved capacity of %zu, expected at least %zu.",
+            WRList_GetCapacityRemaining(list), EnsuredCapacity + RequestedExtraCapacity);
+        return false;
+    }
+
+    return true;
+}
+
 
 // Functions.
 bool Test_TestListInitialization(TestErrorMessage* errorMsg, void* userData)
@@ -400,5 +611,23 @@ bool Test_TestListBuffer(TestErrorMessage* errorMsg, void* userData)
 bool Test_TestListSimpleMutation(TestErrorMessage* errorMsg, void* userData)
 {
     ListOperation Operations[] = { { ._elementSize = sizeof(SIMPLE_MUTATION_ELEMENT), ._operator = &TestSimpleMutation } };
+    return ExecuteOperations(Operations, sizeof(Operations), errorMsg, ((ListTestContext*)userData)->_errorPool);
+}
+
+bool Test_TestListAccessors(TestErrorMessage* errorMsg, void* userData)
+{
+    ListOperation Operations[] = { { ._elementSize = sizeof(ACCESSORS_ELEMENT), ._operator = &TestAccessors } };
+    return ExecuteOperations(Operations, sizeof(Operations), errorMsg, ((ListTestContext*)userData)->_errorPool);
+}
+
+bool Test_TestListSpecialMutation(TestErrorMessage* errorMsg, void* userData)
+{
+    ListOperation Operations[] = { { ._elementSize = sizeof(SPECIAL_MUTATION_ELEMENT), ._operator = &TestSpecialMutation } };
+    return ExecuteOperations(Operations, sizeof(Operations), errorMsg, ((ListTestContext*)userData)->_errorPool);
+}
+
+bool Test_TestListTechnicalFunctions(TestErrorMessage* errorMsg, void* userData)
+{
+    ListOperation Operations[] = { { ._elementSize = sizeof(TECHNICAL_TEST_ELEMENT), ._operator = &TestTechnicalFunctions } };
     return ExecuteOperations(Operations, sizeof(Operations), errorMsg, ((ListTestContext*)userData)->_errorPool);
 }
