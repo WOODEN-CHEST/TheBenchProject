@@ -507,6 +507,8 @@ WRLIST_COMPARE_FUNC(Double, double)
 
 static inline ComparisonResult WList_CompareString(WRList* self, WRListElementData a, WRListElementData b, void* userData)
 {
+    UNUSED(self);
+    UNUSED(userData);
     return Comparator_CompareString(a._element, b._element);
 }
 

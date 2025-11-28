@@ -1,0 +1,1 @@
+gcc ../source/*c ../source/libs/*c ../source/engine/*c ../source/engine/test/*c -I"../include" -I"../include/libs" -I"../include/engine" -std=c2x -Werror -Wall -Wextra -Wpedantic -O0 -g -o "out/TheBenchProject.exe" -L"../lib" -l:raylib.dll

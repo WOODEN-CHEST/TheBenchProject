@@ -9,6 +9,7 @@
 
 #include "test/ErrorTest.h"
 #include "test/UnicodeTest.h"
+#include "test/ListTest.h"
 
 
 // Types.
@@ -111,6 +112,7 @@ void Test_ExecuteEngineTest()
     }
 
     UnicodeTestContext UnicodeTestUserData = (UnicodeTestContext) { ._unicode = &Unicode };
+    ListTestContext ListTestUserData = (ListTestContext) { ._errorPool = &ErrorPool };
 
     SingleTest Tests[] = 
     {
@@ -150,6 +152,62 @@ void Test_ExecuteEngineTest()
             ._name = u8"Unicode Numeric Values",
             ._userData = &UnicodeTestUserData
         },
+
+        {
+            ._function = &Test_TestListInitialization,
+            ._name = u8"List Initialization",
+            ._userData = &ListTestUserData
+        },
+        {
+            ._function = &Test_TestListBuffer,
+            ._name = u8"List Buffer",
+            ._userData = &ListTestUserData
+        },
+        {
+            ._function = &Test_TestListSimpleMutation,
+            ._name = u8"List Simple Mutation",
+            ._userData = &ListTestUserData
+        },
+        // {
+        //     ._function = &Test_TestListAccessors,
+        //     ._name = u8"List Accessors",
+        //     ._userData = &ListTestUserData
+        // },
+        // {
+        //     ._function = &Test_TestListTechnicalFunctions,
+        //     ._name = u8"List Technical Functions",
+        //     ._userData = &ListTestUserData
+        // },
+        // {
+        //     ._function = &Test_TestListAlgorithms,
+        //     ._name = u8"List Algorithms",
+        //     ._userData = &ListTestUserData
+        // },
+        // {
+        //     ._function = &Test_TestListTransformations,
+        //     ._name = u8"List Transformations",
+        //     ._userData = &ListTestUserData
+        // },
+        // {
+        //     ._function = &Test_TestListFullManipulation,
+        //     ._name = u8"List Full Manipulation",
+        //     ._userData = &ListTestUserData
+        // },
+        // {
+        //     ._function = &Test_TestListNumberOperations,
+        //     ._name = u8"List Number Operations",
+        //     ._userData = &ListTestUserData
+        // },
+        // {
+        //     ._function = &Test_TestListPopOperations,
+        //     ._name = u8"List Pop Operations",
+        //     ._userData = &ListTestUserData
+        // },
+        // {
+        //     ._function = &Test_TestListBufferConversion,
+        //     ._name = u8"List Buffer Conversion",
+        //     ._userData = &ListTestUserData
+        // }
     };
 
     size_t PassedTestCount = 0;

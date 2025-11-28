@@ -217,11 +217,8 @@ Error WRList_Insert(WRList* self, void* item, size_t index)
     }
 
     uint8_t* ItemDestination = self->_data + (index * self->_elementSize);
-    if (index < self->_count)
-    {
-        uint8_t* MoveDestination = ItemDestination + self->_elementSize;
-        Memory_Move(ItemDestination, MoveDestination, self->_elementSize);
-    }
+    uint8_t* MoveDestination = ItemDestination + self->_elementSize;
+    Memory_Move(ItemDestination, MoveDestination, self->_elementSize * (self->_count - index));
     Memory_Copy(item, ItemDestination, self->_elementSize);
     
     self->_count++;
@@ -254,12 +251,11 @@ Error WRList_InsertRange(WRList* self, void* items, size_t itemCount, size_t sta
         return CreateOutOfCapacityError(self, u8"insert range");
     }
 
-    uint8_t* ItemDestination = self->_data + (self->_count * self->_elementSize);
-    if (startIndex < self->_count)
-    {
-        uint8_t* MoveDestination = ItemDestination + (itemCount * self->_elementSize);
-        Memory_Move(ItemDestination, MoveDestination, self->_elementSize * (self->_count - startIndex));
-    }
+    uint8_t* ItemDestination = self->_data + (startIndex * self->_elementSize);
+    size_t ShiftedItemCount = self->_count - startIndex;
+    size_t ShiftedByteCount = ShiftedItemCount * self->_elementSize;
+    uint8_t* MoveDestination = ItemDestination + (itemCount * self->_elementSize);
+    Memory_Move(ItemDestination, MoveDestination, ShiftedByteCount);
 
     Memory_Copy(items, ItemDestination, itemCount * self->_elementSize);
     self->_count += itemCount;
@@ -288,9 +284,11 @@ Error WRList_RemoveAt(WRList* self, size_t index)
         return CreateIndexOutOfRangeError(self, index, u8"remove at");
     }
 
-    uint8_t* MoveSource = self->_data + (index * self->_elementSize);
+    size_t StartIndex = index + 1;
+    uint8_t* MoveSource = self->_data + (StartIndex * self->_elementSize);
     uint8_t* MoveDest = MoveSource - self->_elementSize;
-    Memory_Move(MoveSource, MoveDest, self->_elementSize);
+    Memory_Move(MoveSource, MoveDest, (self->_count - index) * self->_elementSize);
+
     self->_count--;
     return Error_CreateSuccess();
 }
@@ -298,6 +296,13 @@ Error WRList_RemoveAt(WRList* self, size_t index)
 Error WRList_RemoveRange(WRList* self, size_t startIndexInclusive, size_t endIndexExclusive)
 {
     const unsigned char* ErrorContext = u8"remove range";
+    if (startIndexInclusive > endIndexExclusive)
+    {
+        return Error_Construct3(self->ErrorPool,
+            ErrorCode_IllegalArgument,
+            u8"Min index %zu is greater than max index %zu",
+            startIndexInclusive, endIndexExclusive);
+    }
     if (startIndexInclusive >= self->_count)
     {
         return CreateIndexOutOfRangeError(self, startIndexInclusive, ErrorContext);
@@ -306,24 +311,20 @@ Error WRList_RemoveRange(WRList* self, size_t startIndexInclusive, size_t endInd
     {
         return CreateIndexOutOfRangeError(self, startIndexInclusive, ErrorContext);
     }
-    if (startIndexInclusive > endIndexExclusive)
-    {
-        return Error_Construct3(self->ErrorPool,
-            ErrorCode_IllegalArgument,
-            u8"Min index %zu is greater than maxindex %zu",
-            startIndexInclusive, endIndexExclusive);
-    }
     if (startIndexInclusive == endIndexExclusive)
     {
         return Error_CreateSuccess();
     }
 
-    size_t ElementCount = endIndexExclusive - startIndexInclusive;
-    uint8_t Destination = GetUncheckedElementPtr(self, startIndexInclusive);
-    uint8_t MoveSource = GetUncheckedElementPtr(self, startIndexInclusive + ElementCount);
+    size_t RemovedElementCount = endIndexExclusive - startIndexInclusive;
+    size_t MovedElementCount = self->_count - endIndexExclusive;
+    size_t MovedByteCount = MovedElementCount * self->_elementSize;
+    uint8_t* Destination = GetUncheckedElementPtr(self, startIndexInclusive);
+    uint8_t* MoveSource = GetUncheckedElementPtr(self, endIndexExclusive);
 
-    Memory_Move(MoveSource, Destination, ElementCount * self->_elementSize);
-    self->_count -= ElementCount;
+    Memory_Move(MoveSource, Destination, MovedByteCount);
+
+    self->_count -= RemovedElementCount;
     return Error_CreateSuccess();
 }
 
