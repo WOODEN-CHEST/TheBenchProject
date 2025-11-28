@@ -178,21 +178,21 @@ void Test_ExecuteEngineTest()
             ._name = u8"List Accessors",
             ._userData = &ListTestUserData
         },
-        // {
-        //     ._function = &Test_TestListTechnicalFunctions,
-        //     ._name = u8"List Technical Functions",
-        //     ._userData = &ListTestUserData
-        // },
-        // {
-        //     ._function = &Test_TestListAlgorithms,
-        //     ._name = u8"List Algorithms",
-        //     ._userData = &ListTestUserData
-        // },
-        // {
-        //     ._function = &Test_TestListTransformations,
-        //     ._name = u8"List Transformations",
-        //     ._userData = &ListTestUserData
-        // },
+        {
+            ._function = &Test_TestListTechnicalFunctions,
+            ._name = u8"List Technical Functions",
+            ._userData = &ListTestUserData
+        },
+        {
+            ._function = &Test_TestListAlgorithms,
+            ._name = u8"List Algorithms",
+            ._userData = &ListTestUserData
+        },
+        {
+            ._function = &Test_TestListTransformations,
+            ._name = u8"List Transformations",
+            ._userData = &ListTestUserData
+        },
         // {
         //     ._function = &Test_TestListFullManipulation,
         //     ._name = u8"List Full Manipulation",

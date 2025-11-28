@@ -522,7 +522,7 @@ void WRList_Filter(WRList* self, WRListPredicate predicate, void* userData)
     size_t RemovedElementCount = 0;
     for (size_t i = 0; i < self->_count; i++)
     {
-        if ((*predicate)(self, GetListElementData(self, i), userData))
+        if (!(*predicate)(self, GetListElementData(self, i), userData))
         {
             RemovedElementCount++;
             continue;

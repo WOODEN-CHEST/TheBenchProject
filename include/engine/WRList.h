@@ -330,8 +330,7 @@ void WRList_Filter(WRList* self, WRListPredicate predicate, void* userData);
  * @param userData Optional user data supplied to the mapper, may be null.
  * @returns Success if the mapping completed;
  * buffer too small error if the destination list is of fixed size and is too small to fit all resulting elements;
- * index out of bounds error if there is an internal error with the mapping algorithm, should never happen but
- * should be checked anyway.
+ * index out of bounds error if there is an internal error with the mapping algorithm, should never happen.
  */
 Error WRList_Map(WRList* self, WRList* destination, WRListMapper mapper, void* destElementBuffer, void* userData);
 
@@ -343,7 +342,7 @@ Error WRList_Map(WRList* self, WRList* destination, WRListMapper mapper, void* d
  * (used mid-operation while converting the element).
  * @param userData Optional user data supplied to the mapper, may be null.
  * @returns Success if the mapping completed, index out of bounds error if there is an internal error
- * with the mapping algorithm, should never happen but should be checked anyway.
+ * with the mapping algorithm, should never happen.
  */
 Error WRList_MapToSelf(WRList* self, WRListMapper mapper, void* destElementBuffer, void* userData);
 

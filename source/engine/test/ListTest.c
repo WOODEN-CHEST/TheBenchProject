@@ -8,6 +8,9 @@
 #define SPECIAL_MUTATION_ELEMENT int64_t
 #define ACCESSORS_ELEMENT int32_t
 #define TECHNICAL_TEST_ELEMENT int16_t
+#define ALGORITHMS_ELEMENT double
+#define TRANSFORMATION_ELEMENT int32_t
+#define TRANSFORMATION_DEST_ELEMENT int64_t
 
 
 // Types.
@@ -531,6 +534,149 @@ static bool TestTechnicalFunctions(TestErrorMessage* errorMsg, ErrorMessagePool*
     return true;
 }
 
+static bool IsDoubleListSorted(TestErrorMessage* errorMsg, WRList* list, int32_t direction, const unsigned char* context)
+{
+    for (size_t i = 1; i < list->_count; i++)
+    {
+        double ElPrev, ElCurrent;
+        Error Result = WRList_GetAt(list, i - 1, &ElPrev);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Test_FormatErrorMessage(errorMsg, 
+                u8"Error retrieving previous element in list sort test (%s): %s",
+                context, ErrorMessageOrDefault(Result.Message));
+            return false;
+        }
+        Result = WRList_GetAt(list, i, &ElCurrent);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Test_FormatErrorMessage(errorMsg, 
+                u8"Error retrieving current element in list sort test (%s): %s",
+                context, ErrorMessageOrDefault(Result.Message));
+            return false;
+        }
+
+        if ((ElCurrent - ElPrev) * direction < 0.0)
+        {
+            Test_FormatErrorMessage(errorMsg, u8"List is not correctly sorted (%s).", context);
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool TestAlgorithms(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool, WRList* list)
+{
+    UNUSED(errorPool);
+
+    SPECIAL_MUTATION_ELEMENT Arr1[] = { 1.0, 3.0, 2.0, 5.0, 4.0, 7.0, 6.0 };
+    const size_t ElementCount = sizeof(Arr1) / sizeof(Arr1[0]);
+    Error Result = WRList_AppendRange(list, Arr1, ElementCount);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Error appending range in algorithm test: %s", ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+
+    WRList_SortAscending(list, &WRList_CompareDouble, NULL);
+    if (!IsDoubleListSorted(errorMsg, list, 1, u8"ascending"))
+    {
+        return false;
+    }
+
+    WRList_SortDescending(list, &WRList_CompareDouble, NULL);
+    if (!IsDoubleListSorted(errorMsg, list, -1, u8"descending"))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+static bool TransformationFilterPredicate(WRList* self, WRListElementData element, void* userData)
+{
+    UNUSED(self);
+    UNUSED(userData);
+    TRANSFORMATION_ELEMENT Value = *((TRANSFORMATION_ELEMENT*)element._element);
+    return Value % 2 == 0;
+}
+
+static void TransformationMapToSelfFunc(WRList* self, WRListElementData sourceEl, void* destElement, void* userData)
+{
+    UNUSED(self);
+    TRANSFORMATION_ELEMENT Multiplier = *((TRANSFORMATION_ELEMENT*)userData);
+    TRANSFORMATION_ELEMENT Value = *((TRANSFORMATION_ELEMENT*)sourceEl._element);
+    TRANSFORMATION_ELEMENT Result = Value * Multiplier;
+    Memory_Copy(&Result, destElement, sizeof(Result));
+}
+
+static void TransformationMapFunc(WRList* self, WRListElementData sourceEl, void* destElement, void* userData)
+{
+    UNUSED(self);
+    UNUSED(userData);
+    TRANSFORMATION_ELEMENT Value = *((TRANSFORMATION_ELEMENT*)sourceEl._element);
+    TRANSFORMATION_DEST_ELEMENT Result = (TRANSFORMATION_DEST_ELEMENT)Value;
+    Memory_Copy(&Result, destElement, sizeof(Result));
+}
+
+static bool TestTransformations(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool, WRList* list)
+{
+    TRANSFORMATION_ELEMENT Arr1[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    Error Result = WRList_AppendRange(list, Arr1,  sizeof(Arr1) / sizeof(Arr1[0]));
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Error appending range in transformation test: %s", ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+
+    TRANSFORMATION_ELEMENT Arr2[] = { 2, 4, 6, 8, 10 };
+    WRList_Filter(list, &TransformationFilterPredicate, NULL);
+    if (!VerifyListSequence(errorMsg, list, Arr2, sizeof(Arr2) / sizeof(Arr2[0]), u8"list filter"))
+    {
+        return false;
+    }
+
+    TRANSFORMATION_ELEMENT ElBuffer;
+    TRANSFORMATION_ELEMENT Multiplier = 2;
+    TRANSFORMATION_ELEMENT Arr3[] = { 4, 8, 12, 16, 20 };
+    Result = WRList_MapToSelf(list, &TransformationMapToSelfFunc, &ElBuffer, &Multiplier);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Error mapping list to self: %s", ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+    if (!VerifyListSequence(errorMsg, list, Arr3, sizeof(Arr3) / sizeof(Arr3[0]), u8"list map to self"))
+    {
+        return false;
+    }
+
+    WRList DestList;
+    Result = WRList_Construct1(&DestList, sizeof(TRANSFORMATION_DEST_ELEMENT), errorPool);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Error constricting mapping destination list: %s", ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+
+    TRANSFORMATION_DEST_ELEMENT ElBufferDest;
+    TRANSFORMATION_DEST_ELEMENT ArrDest[] = { 4, 8, 12, 16, 20 };
+    Result = WRList_Map(list, &DestList, &TransformationMapFunc, &ElBufferDest, NULL);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Error mapping list: %s", ErrorMessageOrDefault(Result.Message));
+        WRList_Deconstruct1(&DestList);
+        return false;
+    }
+    if (!VerifyListSequence(errorMsg, &DestList, ArrDest, sizeof(ArrDest) / sizeof(ArrDest[0]), u8"list map"))
+    {
+        WRList_Deconstruct1(&DestList);
+        return false;
+    }
+
+    WRList_Deconstruct1(&DestList);
+    return true;
+}
+
 
 // Functions.
 bool Test_TestListInitialization(TestErrorMessage* errorMsg, void* userData)
@@ -629,5 +775,17 @@ bool Test_TestListSpecialMutation(TestErrorMessage* errorMsg, void* userData)
 bool Test_TestListTechnicalFunctions(TestErrorMessage* errorMsg, void* userData)
 {
     ListOperation Operations[] = { { ._elementSize = sizeof(TECHNICAL_TEST_ELEMENT), ._operator = &TestTechnicalFunctions } };
+    return ExecuteOperations(Operations, sizeof(Operations), errorMsg, ((ListTestContext*)userData)->_errorPool);
+}
+
+bool Test_TestListAlgorithms(TestErrorMessage* errorMsg, void* userData)
+{
+    ListOperation Operations[] = { { ._elementSize = sizeof(ALGORITHMS_ELEMENT), ._operator = &TestAlgorithms } };
+    return ExecuteOperations(Operations, sizeof(Operations), errorMsg, ((ListTestContext*)userData)->_errorPool);
+}
+
+bool Test_TestListTransformations(TestErrorMessage* errorMsg, void* userData)
+{
+    ListOperation Operations[] = { { ._elementSize = sizeof(TRANSFORMATION_ELEMENT), ._operator = &TestTransformations } };
     return ExecuteOperations(Operations, sizeof(Operations), errorMsg, ((ListTestContext*)userData)->_errorPool);
 }
