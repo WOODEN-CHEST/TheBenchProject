@@ -410,7 +410,7 @@ Error WRList_MinDouble(WRList* self, WRListDoubleExtractor extractor, double* ou
  * @param userData optional user data supplied to the predicate, may be null.
  * @return The number of elements passing the predicate.
  */
-size_t WRList_CountWhere(WRList* self, WRListPredicate* predicate, void* userData);
+size_t WRList_CountWhere(WRList* self, WRListPredicate predicate, void* userData);
 
 /**
  * Reverses the elements of the list.

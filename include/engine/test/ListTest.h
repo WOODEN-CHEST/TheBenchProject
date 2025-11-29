@@ -32,7 +32,3 @@ bool Test_TestListFullManipulation(TestErrorMessage* errorMsg, void* userData);
 bool Test_TestListNumberOperations(TestErrorMessage* errorMsg, void* userData);
 
 bool Test_TestListPopOperations(TestErrorMessage* errorMsg, void* userData);
-
-bool Test_TestListBufferConversion(TestErrorMessage* errorMsg, void* userData);
-
-bool Test_TestListEdgeCases(TestErrorMessage* errorMsg, void* userData);

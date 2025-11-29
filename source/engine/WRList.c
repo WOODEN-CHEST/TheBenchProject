@@ -686,7 +686,7 @@ Error WRList_MinDouble(WRList* self, WRListDoubleExtractor extractor, double* ou
     return Error_CreateSuccess();
 }
 
-size_t WRList_CountWhere(WRList* self, WRListPredicate* predicate, void* userData)
+size_t WRList_CountWhere(WRList* self, WRListPredicate predicate, void* userData)
 {
     size_t PassCount = 0;
     for (size_t i = 0; i < self->_count; i++)

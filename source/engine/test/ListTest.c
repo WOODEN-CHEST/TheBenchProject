@@ -3,6 +3,7 @@
 #include "WRList.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <inttypes.h>
 
 #define SIMPLE_MUTATION_ELEMENT int32_t
 #define SPECIAL_MUTATION_ELEMENT int64_t
@@ -11,6 +12,7 @@
 #define ALGORITHMS_ELEMENT double
 #define TRANSFORMATION_ELEMENT int32_t
 #define TRANSFORMATION_DEST_ELEMENT int64_t
+#define FULL_MANIPULATION_ELEMENT uint64_t
 
 
 // Types.
@@ -677,6 +679,189 @@ static bool TestTransformations(TestErrorMessage* errorMsg, ErrorMessagePool* er
     return true;
 }
 
+static bool FullManipulationCountWherePredicate(WRList* self, WRListElementData element, void* userData)
+{
+    UNUSED(self);
+    FULL_MANIPULATION_ELEMENT TargetValue = *((FULL_MANIPULATION_ELEMENT*)userData);
+    FULL_MANIPULATION_ELEMENT Value = *((FULL_MANIPULATION_ELEMENT*)element._element);
+    return Value == TargetValue;
+}
+
+static bool TestFullManipulation(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool, WRList* list)
+{
+    UNUSED(errorPool);
+
+    FULL_MANIPULATION_ELEMENT Arr1[] = { 1, 2, 1, 4, 1, 6, 1, 8, 1, 10, 1};
+    Error Result = WRList_AppendRange(list, Arr1,  sizeof(Arr1) / sizeof(Arr1[0]));
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Error appending range in full manipulation test: %s",
+            ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+
+    FULL_MANIPULATION_ELEMENT TargetElement = 1;
+    size_t MatchingCount = WRList_CountWhere(list, &FullManipulationCountWherePredicate, &TargetElement);
+    if (MatchingCount != 6)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"List CountWhere call returned wrong count of %zu, expected 6.",
+            MatchingCount);
+        return false;
+    }
+
+    FULL_MANIPULATION_ELEMENT Arr2[] = { 1, 10, 1, 8, 1, 6, 1, 4, 1, 2, 1 };
+    WRList_Reverse(list);
+    if (!VerifyListSequence(errorMsg, list, Arr2, sizeof(Arr2) / sizeof(Arr2[0]), u8"list reverse"))
+    {
+        return false;
+    }
+    return true;
+}
+
+static bool TestIntegerNumberOperations(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool, WRList* list)
+{
+    UNUSED(errorPool);
+
+    int64_t Arr1[] = { -50, 100, 25, 15, 5, 3, 2 };
+    Error Result = WRList_AppendRange(list, Arr1,  sizeof(Arr1) / sizeof(Arr1[0]));
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Error appending range in number operations test test: %s",
+            ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+
+    const int64_t ExpectedSum = 100;
+    int64_t Sum = WRList_SumInt(list, &WRList_ExtractIntFromInt64, NULL);
+    if (Sum != ExpectedSum)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"List SumInt call returned wrong sum of %" PRId64 ", expected %" PRId64 ".",
+            Sum, ExpectedSum);
+        return false;
+    }
+
+    int64_t MinValue;
+    int64_t ExpectedMinValue = -50;
+    Result = WRList_MinInt(list, &WRList_ExtractIntFromInt64, &MinValue, NULL);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Error retrieving list minimum value: %s",
+            ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+    if (MinValue != ExpectedMinValue)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"List minimum value returned wrong value of %" PRId64 ", expected %" PRId64 ".",
+            MinValue, ExpectedMinValue);
+        return false;
+    }
+
+    int64_t MaxValue;
+    int64_t ExpectedMaxValue = 100;
+    Result = WRList_MaxInt(list, &WRList_ExtractIntFromInt64, &MaxValue, NULL);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Error retrieving list maximum value: %s",
+            ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+    if (MaxValue != ExpectedMaxValue)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"List maximum value returned wrong value of %" PRId64 ", expected %" PRId64 ".",
+            MaxValue, ExpectedMaxValue);
+        return false;
+    }
+
+    return true;
+}
+
+static double NumberOperationsAbsDouble(double value)
+{
+    if (value < 0.0)
+    {
+        return -value;
+    }
+    return value;
+}
+
+static bool NumberOperationEqualsDouble(double a, double b)
+{
+    const double MARGIN_OF_ERROR = 0.0001;
+    return NumberOperationsAbsDouble(a - b) <= MARGIN_OF_ERROR;
+}
+
+static bool TestDoubleNumberOperations(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool, WRList* list)
+{
+    UNUSED(errorPool);
+
+    double Arr1[] = { -50.0, 100.0, 25.0, 15.0, 5.0, 3.0, 2.0 };
+    Error Result = WRList_AppendRange(list, Arr1,  sizeof(Arr1) / sizeof(Arr1[0]));
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Error appending range in number operations test test: %s",
+            ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+
+    const double ExpectedSum = 100.0;
+    double Sum = WRList_SumDouble(list, &WRList_ExtractDoubleFromDouble, NULL);
+    if (!NumberOperationEqualsDouble(Sum, ExpectedSum))
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"List SumInt call returned wrong sum of %f, expected %f.",
+            Sum, ExpectedSum);
+        return false;
+    }
+
+    double MinValue;
+    double ExpectedMinValue = -50.0;
+    Result = WRList_MinDouble(list, &WRList_ExtractDoubleFromDouble, &MinValue, NULL);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Error retrieving list minimum value: %s",
+            ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+    if (!NumberOperationEqualsDouble(MinValue, ExpectedMinValue))
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"List minimum value returned wrong value of %f, expected %f.",
+            MinValue, ExpectedMinValue);
+        return false;
+    }
+
+    double MaxValue;
+    double ExpectedMaxValue = 100.0;
+    Result = WRList_MaxDouble(list, &WRList_ExtractDoubleFromDouble, &MaxValue, NULL);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Error retrieving list maximum value: %s",
+            ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+    if (!NumberOperationEqualsDouble(MaxValue, ExpectedMaxValue))
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"List maximum value returned wrong value of %f, expected %f.",
+            MaxValue, ExpectedMaxValue);
+        return false;
+    }
+
+    return true;
+}
+
+
 
 // Functions.
 bool Test_TestListInitialization(TestErrorMessage* errorMsg, void* userData)
@@ -787,5 +972,21 @@ bool Test_TestListAlgorithms(TestErrorMessage* errorMsg, void* userData)
 bool Test_TestListTransformations(TestErrorMessage* errorMsg, void* userData)
 {
     ListOperation Operations[] = { { ._elementSize = sizeof(TRANSFORMATION_ELEMENT), ._operator = &TestTransformations } };
+    return ExecuteOperations(Operations, sizeof(Operations), errorMsg, ((ListTestContext*)userData)->_errorPool);
+}
+
+bool Test_TestListFullManipulation(TestErrorMessage* errorMsg, void* userData)
+{
+    ListOperation Operations[] = { { ._elementSize = sizeof(FULL_MANIPULATION_ELEMENT), ._operator = &TestFullManipulation } };
+    return ExecuteOperations(Operations, sizeof(Operations), errorMsg, ((ListTestContext*)userData)->_errorPool);
+}
+
+bool Test_TestListNumberOperations(TestErrorMessage* errorMsg, void* userData)
+{
+    ListOperation Operations[] = 
+    {
+         { ._elementSize = sizeof(double), ._operator = &TestDoubleNumberOperations },
+         { ._elementSize = sizeof(int64_t), ._operator = &TestIntegerNumberOperations }
+    };
     return ExecuteOperations(Operations, sizeof(Operations), errorMsg, ((ListTestContext*)userData)->_errorPool);
 }

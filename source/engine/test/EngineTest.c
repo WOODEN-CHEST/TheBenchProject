@@ -193,26 +193,21 @@ void Test_ExecuteEngineTest()
             ._name = u8"List Transformations",
             ._userData = &ListTestUserData
         },
-        // {
-        //     ._function = &Test_TestListFullManipulation,
-        //     ._name = u8"List Full Manipulation",
-        //     ._userData = &ListTestUserData
-        // },
-        // {
-        //     ._function = &Test_TestListNumberOperations,
-        //     ._name = u8"List Number Operations",
-        //     ._userData = &ListTestUserData
-        // },
+        {
+            ._function = &Test_TestListFullManipulation,
+            ._name = u8"List Full Manipulation",
+            ._userData = &ListTestUserData
+        },
+        {
+            ._function = &Test_TestListNumberOperations,
+            ._name = u8"List Number Operations",
+            ._userData = &ListTestUserData
+        },
         // {
         //     ._function = &Test_TestListPopOperations,
         //     ._name = u8"List Pop Operations",
         //     ._userData = &ListTestUserData
         // },
-        // {
-        //     ._function = &Test_TestListBufferConversion,
-        //     ._name = u8"List Buffer Conversion",
-        //     ._userData = &ListTestUserData
-        // }
     };
 
     size_t PassedTestCount = 0;
