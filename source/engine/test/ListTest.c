@@ -13,6 +13,7 @@
 #define TRANSFORMATION_ELEMENT int32_t
 #define TRANSFORMATION_DEST_ELEMENT int64_t
 #define FULL_MANIPULATION_ELEMENT uint64_t
+#define POP_OPERATION_ELEMENT int32_t
 
 
 // Types.
@@ -729,7 +730,7 @@ static bool TestIntegerNumberOperations(TestErrorMessage* errorMsg, ErrorMessage
     if (Result.Code != ErrorCode_Success)
     {
         Test_FormatErrorMessage(errorMsg,
-            u8"Error appending range in number operations test test: %s",
+            u8"Error appending range in number operations test: %s",
             ErrorMessageOrDefault(Result.Message));
         return false;
     }
@@ -807,7 +808,7 @@ static bool TestDoubleNumberOperations(TestErrorMessage* errorMsg, ErrorMessageP
     if (Result.Code != ErrorCode_Success)
     {
         Test_FormatErrorMessage(errorMsg,
-            u8"Error appending range in number operations test test: %s",
+            u8"Error appending range in number operations test: %s",
             ErrorMessageOrDefault(Result.Message));
         return false;
     }
@@ -861,6 +862,91 @@ static bool TestDoubleNumberOperations(TestErrorMessage* errorMsg, ErrorMessageP
     return true;
 }
 
+static bool TestPopOperations(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool, WRList* list)
+{
+    POP_OPERATION_ELEMENT Arr1[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    Error Result = WRList_AppendRange(list, Arr1,  sizeof(Arr1) / sizeof(Arr1[0]));
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Error appending range in pop operations test: %s",
+            ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+
+    POP_OPERATION_ELEMENT ExpectedValue = Arr1[0];
+    POP_OPERATION_ELEMENT OutEl;
+    POP_OPERATION_ELEMENT Arr2[] = { 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    Result = WRList_PopFirst(list, &OutEl);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Error popping first element: %s", ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+    if (OutEl != ExpectedValue)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Popped first element returned wrong value of %d, expected %d.",
+            OutEl, ExpectedValue);
+        return false;
+    }
+    if (!VerifyListSequence(errorMsg, list, Arr2, sizeof(Arr2) / sizeof(Arr2[0]), u8"pop first element"))
+    {
+        return false;
+    }
+
+    POP_OPERATION_ELEMENT Arr3[] = { 2, 3, 4, 5, 6, 7, 8, 9 };
+    ExpectedValue = Arr1[9];
+    Result = WRList_PopLast(list, &OutEl);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Error popping last element: %s", ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+    if (OutEl != ExpectedValue)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Popped last element returned wrong value of %d, expected %d.",
+            OutEl, ExpectedValue);
+        return false;
+    }
+    if (!VerifyListSequence(errorMsg, list, Arr3, sizeof(Arr3) / sizeof(Arr3[0]), u8"pop last element"))
+    {
+        return false;
+    }
+
+    Result = WRList_PopAt(list, 99999, &OutEl);
+    if (Result.Code != ErrorCode_IndexOutOfBounds)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Popped out of bounds element returned success, expected failure. Code %d, %s",
+            Result.Code, ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+    ErrorMessagePool_Clear(errorPool);
+
+    POP_OPERATION_ELEMENT Arr4[] = { 2, 3, 4, 5, 7, 8, 9 };
+    ExpectedValue = Arr1[5];
+    Result = WRList_PopAt(list, 4, &OutEl);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg, u8"Error popping element at index: %s", ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+    if (OutEl != ExpectedValue)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Popped element at index returned wrong value of %d, expected %d.",
+            OutEl, ExpectedValue);
+        return false;
+    }
+    if (!VerifyListSequence(errorMsg, list, Arr4, sizeof(Arr4) / sizeof(Arr4[0]), u8"pop element at index"))
+    {
+        return false;
+    }
+
+    return true;
+}
 
 
 // Functions.
@@ -988,5 +1074,11 @@ bool Test_TestListNumberOperations(TestErrorMessage* errorMsg, void* userData)
          { ._elementSize = sizeof(double), ._operator = &TestDoubleNumberOperations },
          { ._elementSize = sizeof(int64_t), ._operator = &TestIntegerNumberOperations }
     };
+    return ExecuteOperations(Operations, sizeof(Operations), errorMsg, ((ListTestContext*)userData)->_errorPool);
+}
+
+bool Test_TestListPopOperations(TestErrorMessage* errorMsg, void* userData)
+{
+    ListOperation Operations[] = { { ._elementSize = sizeof(POP_OPERATION_ELEMENT), ._operator = &TestPopOperations } };
     return ExecuteOperations(Operations, sizeof(Operations), errorMsg, ((ListTestContext*)userData)->_errorPool);
 }
