@@ -51,15 +51,10 @@ static const unsigned char EXPONENT_INDICATOR = 'e';
 // Static functions.
 static Error CreateBufferOutOfSpaceError(ErrorMessagePool* errorPool, GenericBuffer* buffer)
 {
-    ErrorCode Code = ErrorCode_BufferTooSmall;
-    if (errorPool)
-    {
-        return Error_Construct3(errorPool,
-            Code,
-            u8"Passed in generic buffer with size of %zu is too small to fit the number converter to a string.",
-            buffer->_capacity * buffer->_elementSize);
-    }
-    return Error_Construct5(Code);
+    return Error_Construct3(errorPool,
+        ErrorCode_BufferTooSmall,
+        u8"Passed in generic buffer with size of %zu is too small to fit the number converter to a string.",
+        buffer->_capacity * buffer->_elementSize);
 }
 
 static unsigned char GetCharToLower(unsigned char value)
@@ -90,40 +85,25 @@ static bool StringEqualsIgnoreCase(const unsigned char* strA, const unsigned cha
 
 static Error CreateAtLeast1DigitRequiredError(ErrorMessagePool* errorPool)
 {
-    ErrorCode Code = ErrorCode_IllegalArgument;
-    if (errorPool)
-    {
-        return Error_Construct3(errorPool,
-            Code,
-            u8"At least 1 digit is required in a number.");
-    }
-    return Error_Construct5(Code);
+    return Error_Construct3(errorPool,
+        ErrorCode_IllegalArgument,
+        u8"At least 1 digit is required in a number.");
 }
 
 static Error CreateInvalidBaseError(ErrorMessagePool* errorPool, int32_t base)
 {
-    ErrorCode Code = ErrorCode_IllegalArgument;
-    if (errorPool)
-    {
-        return Error_Construct3(errorPool,
-            Code,
-            u8"Invalid number base %d. Min is %d, max is %d and base auto detect is %d.",
-            base, NUMBER_BASE_MIN, NUMBER_BASE_MAX, NUMBER_BASE_AUTO_DETECT);
-    }
-    return Error_Construct5(Code);
+    return Error_Construct3(errorPool,
+        ErrorCode_IllegalArgument,
+        u8"Invalid number base %d. Min is %d, max is %d and base auto detect is %d.",
+        base, NUMBER_BASE_MIN, NUMBER_BASE_MAX, NUMBER_BASE_AUTO_DETECT);
 }
 
 static Error CreateMultipleSignSymbolsError(ErrorMessagePool* errorPool, unsigned char symbol)
 {
-    ErrorCode Code = ErrorCode_IllegalArgument;
-    if (errorPool)
-    {
-        return Error_Construct3(errorPool,
-            Code,
-            u8"Numbers may only have 1 sign symbol (- or +, in this case the issue was caused by a '%c' symbol).",
-            symbol);
-    }
-    return Error_Construct5(Code);
+    return Error_Construct3(errorPool,
+        ErrorCode_IllegalArgument,
+        u8"Numbers may only have 1 sign symbol (- or +, in this case the issue was caused by a '%c' symbol).",
+        symbol);
 }
 
 static inline bool IsBaseDigit(int32_t digitValue, int32_t base)
@@ -163,12 +143,7 @@ static bool TryWriteBaseFromChar(unsigned char prefix, int32_t* base)
 
 static Error CreateNoNumberBaseError(ErrorMessagePool* errorPool)
 {
-    ErrorCode Code = ErrorCode_IllegalArgument;
-    if (errorPool)
-    {
-        return Error_Construct3(errorPool, Code, u8"Unable to detect the given number's base.");
-    }
-    return Error_Construct5(Code);
+    return Error_Construct3(errorPool, ErrorCode_IllegalArgument, u8"Unable to detect the given number's base.");
 }
 
 static Error IsIntNegative(ErrorMessagePool* errorPool, const unsigned char* str, size_t* skipAmount, bool* isNegative)
@@ -199,6 +174,21 @@ static Error IsIntNegative(ErrorMessagePool* errorPool, const unsigned char* str
     return Error_CreateSuccess();
 }
 
+static size_t GetBasePrefixSkipAmount(const unsigned char* str)
+{
+    if (str[0] != BASE_INDICATOR_START)
+    {
+        return 0;
+    }
+    unsigned char LowerPrefixChar = GetCharToLower(str[1]);
+
+    if ((LowerPrefixChar == PREFIX_BASE_16_A) || (LowerPrefixChar == PREFIX_BASE_2_A))
+    {
+        return 2;
+    }
+    return 0;
+}
+
 static Error GetBase(ErrorMessagePool* errorPool, const unsigned char* str, int32_t givenBase, int32_t* finalBase, size_t* prefixSkipAmount)
 {
     *prefixSkipAmount = 0;
@@ -211,6 +201,7 @@ static Error GetBase(ErrorMessagePool* errorPool, const unsigned char* str, int3
     if (givenBase != NUMBER_BASE_AUTO_DETECT)
     {
         *finalBase = givenBase;
+        *prefixSkipAmount = GetBasePrefixSkipAmount(str);
         return Error_CreateSuccess();
     }
 
@@ -257,27 +248,17 @@ static Error GetBase(ErrorMessagePool* errorPool, const unsigned char* str, int3
 
 static Error CreateInvalidCharacterError(ErrorMessagePool* errorPool, int32_t base, unsigned char character)
 {
-    ErrorCode Code = ErrorCode_IllegalArgument;
-    if (errorPool)
-    {
-        return Error_Construct3(errorPool,
-            Code,
-            u8"Invalid character '%c' for a base %d number.", character, base);
-    }
-    return Error_Construct5(Code);
+    return Error_Construct3(errorPool,
+        ErrorCode_IllegalArgument,
+        u8"Invalid character '%c' for a base %d number.", character, base);
 }
 
 static Error CreateNumberOverflowError(ErrorMessagePool* errorPool, const unsigned char* number, size_t byteSize)
 {
-    ErrorCode Code = ErrorCode_IllegalArgument;
-    if (errorPool)
-    {
-        return Error_Construct3(errorPool,
-            Code,
-            u8"Number %s is out of the valid range for a size of %zu bytes.",
-            number, byteSize);
-    }
-    return Error_Construct5(Code);
+    return Error_Construct3(errorPool,
+        ErrorCode_IllegalArgument,
+        u8"Number %s is out of the valid range for a size of %zu bytes.",
+        number, byteSize);
 }
 
 static bool WillOverflow(uint64_t sourceValue, int32_t base, int32_t digitValue)
@@ -443,7 +424,37 @@ static void ReverseDigits(unsigned char* str, size_t charCount, size_t digitCoun
     }
 }
 
-static Error WriteIntString(ErrorMessagePool* errorPool, uint64_t bits, bool isSigned, size_t numberSize, int32_t base, GenericBuffer* buffer)
+static Error TryWriteBasePrefix(ErrorMessagePool* errorPool, GenericBuffer* buffer, int32_t base)
+{
+    if ((base != NUMBER_BASE_16) && (base != NUMBER_BASE_2))
+    {
+        return Error_CreateSuccess();
+    }
+
+    if (!GenericBuffer_WriteUChar(buffer, BASE_INDICATOR_START))
+    {
+        return CreateBufferOutOfSpaceError(errorPool, buffer);
+    }
+
+    if ((base == NUMBER_BASE_16) && !GenericBuffer_WriteUChar(buffer, PREFIX_BASE_16_A))
+    {
+        return CreateBufferOutOfSpaceError(errorPool, buffer);
+    }
+    else if ((base == NUMBER_BASE_2) && !GenericBuffer_WriteUChar(buffer, PREFIX_BASE_2_A))
+    {
+        return CreateBufferOutOfSpaceError(errorPool, buffer);
+    }
+
+    return Error_CreateSuccess();
+}
+
+static Error WriteIntString(ErrorMessagePool* errorPool,
+    uint64_t bits,
+    bool isSigned,
+    size_t numberSize,
+    int32_t base,
+    bool includePrefix,
+    GenericBuffer* buffer)
 {
     Error ErrorResult = ValidateBaseForWriting(errorPool, base);
     if (ErrorResult.Code != ErrorCode_Success)
@@ -461,7 +472,7 @@ static Error WriteIntString(ErrorMessagePool* errorPool, uint64_t bits, bool isS
     {
         if (!GenericBuffer_WriteUChar(buffer, MINUS))
         {
-            return Error_CreateSuccess();
+            return CreateBufferOutOfSpaceError(errorPool, buffer);
         }
         BitsWithoutSign = ((~bits) & Mask) + 1;
     }
@@ -470,12 +481,21 @@ static Error WriteIntString(ErrorMessagePool* errorPool, uint64_t bits, bool isS
         BitsWithoutSign = bits;
     }
 
+    if (includePrefix)
+    {
+        ErrorResult = TryWriteBasePrefix(errorPool, buffer, base);
+        if (ErrorResult.Code != ErrorCode_Success)
+        {
+            return ErrorResult;
+        }
+    }
+
     for (size_t i = 0; (i == 0) || (BitsWithoutSign != 0); BitsWithoutSign /= (uint64_t)base, i++)
     {
         uint64_t DigitValue = BitsWithoutSign % (uint64_t)base;
         if (!GenericBuffer_WriteUChar(buffer, DigitValueToChar(DigitValue)))
         {
-            break;
+            return CreateBufferOutOfSpaceError(errorPool, buffer);
         }
     }
 
@@ -797,13 +817,18 @@ Error Number_Int8FromString(ErrorMessagePool* errorPool, const unsigned char* st
     return ParseInteger(errorPool, str, base, true, sizeof(int8_t), value);
 }
 
-Error Number_Int8ToString(ErrorMessagePool* errorPool, int8_t value, int32_t base, GenericBuffer* buffer)
+Error Number_Int8ToString(ErrorMessagePool* errorPool, int8_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
 {
+    StandardIntegers FullValue;
+    Memory_Zero(&FullValue, sizeof(FullValue));
+    FullValue.Int8 = value;
+
     return WriteIntString(errorPool,
-        (StandardIntegers){ .Int8 = value }.UInt64,
+        FullValue.UInt64,
         true,
         sizeof(int8_t),
         base,
+        includePrefix,
         buffer);
 }
 
@@ -813,13 +838,18 @@ Error Number_UInt8FromString(ErrorMessagePool* errorPool, const unsigned char* s
     return ParseInteger(errorPool, str, base, false, sizeof(uint8_t), value);
 }
 
-Error Number_UInt8ToString(ErrorMessagePool* errorPool, uint8_t value, int32_t base, GenericBuffer* buffer)
+Error Number_UInt8ToString(ErrorMessagePool* errorPool, uint8_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
 {
+    StandardIntegers FullValue;
+    Memory_Zero(&FullValue, sizeof(FullValue));
+    FullValue.UInt8 = value;
+
     return WriteIntString(errorPool,
-        (StandardIntegers){ .UInt8 = value }.UInt64,
+        FullValue.UInt64,
         false,
         sizeof(uint8_t),
         base,
+        includePrefix,
         buffer);
 }
 
@@ -829,13 +859,18 @@ Error Number_Int16FromString(ErrorMessagePool* errorPool, const unsigned char* s
     return ParseInteger(errorPool, str, base, true, sizeof(int16_t), value);
 }
 
-Error Number_Int16ToString(ErrorMessagePool* errorPool, int16_t value, int32_t base, GenericBuffer* buffer)
+Error Number_Int16ToString(ErrorMessagePool* errorPool, int16_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
 {
+    StandardIntegers FullValue;
+    Memory_Zero(&FullValue, sizeof(FullValue));
+    FullValue.Int16 = value;
+
     return WriteIntString(errorPool,
-        (StandardIntegers){ .Int16 = value }.UInt64,
+        FullValue.UInt64,
         true,
         sizeof(int16_t),
         base,
+        includePrefix,
         buffer);
 }
 
@@ -845,13 +880,18 @@ Error Number_UInt16FromString(ErrorMessagePool* errorPool, const unsigned char* 
     return ParseInteger(errorPool, str, base, false, sizeof(uint16_t), value);
 }
 
-Error Number_UInt16ToString(ErrorMessagePool* errorPool, uint16_t value, int32_t base, GenericBuffer* buffer)
+Error Number_UInt16ToString(ErrorMessagePool* errorPool, uint16_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
 {
+    StandardIntegers FullValue;
+    Memory_Zero(&FullValue, sizeof(FullValue));
+    FullValue.UInt16 = value;
+
     return WriteIntString(errorPool,
-        (StandardIntegers){ .UInt16 = value }.UInt64,
+        FullValue.UInt64,
         false,
         sizeof(uint16_t),
         base,
+        includePrefix,
         buffer);
 }
 
@@ -861,13 +901,18 @@ Error Number_Int32FromString(ErrorMessagePool* errorPool, const unsigned char* s
     return ParseInteger(errorPool, str, base, true, sizeof(int32_t), value);
 }
 
-Error Number_Int32ToString(ErrorMessagePool* errorPool, int32_t value, int32_t base, GenericBuffer* buffer)
+Error Number_Int32ToString(ErrorMessagePool* errorPool, int32_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
 {
+    StandardIntegers FullValue;
+    Memory_Zero(&FullValue, sizeof(FullValue));
+    FullValue.Int32 = value;
+
     return WriteIntString(errorPool,
-        (StandardIntegers){ .Int32 = value }.UInt64,
+        FullValue.UInt64,
         true,
         sizeof(int32_t),
         base,
+        includePrefix,
         buffer);
 }
 
@@ -877,13 +922,18 @@ Error Number_UInt32FromString(ErrorMessagePool* errorPool, const unsigned char* 
     return ParseInteger(errorPool, str, base, false, sizeof(uint32_t), value);
 }
 
-Error Number_UInt32ToString(ErrorMessagePool* errorPool, uint32_t value, int32_t base, GenericBuffer* buffer)
+Error Number_UInt32ToString(ErrorMessagePool* errorPool, uint32_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
 {
+    StandardIntegers FullValue;
+    Memory_Zero(&FullValue, sizeof(FullValue));
+    FullValue.UInt32 = value;
+
     return WriteIntString(errorPool,
-        (StandardIntegers){ .UInt32 = value }.UInt64,
+        FullValue.UInt64,
         false,
         sizeof(uint32_t),
         base,
+        includePrefix,
         buffer);
 }
 
@@ -893,13 +943,18 @@ Error Number_Int64FromString(ErrorMessagePool* errorPool, const unsigned char* s
     return ParseInteger(errorPool, str, base, true, sizeof(int64_t), value);
 }
 
-Error Number_Int64ToString(ErrorMessagePool* errorPool, int64_t value, int32_t base, GenericBuffer* buffer)
+Error Number_Int64ToString(ErrorMessagePool* errorPool, int64_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
 {
+    StandardIntegers FullValue;
+    Memory_Zero(&FullValue, sizeof(FullValue));
+    FullValue.Int64 = value;
+
     return WriteIntString(errorPool,
-        (StandardIntegers){ .Int64 = value }.UInt64,
+        FullValue.UInt64,
         true,
         sizeof(int64_t),
         base,
+        includePrefix,
         buffer);
 }
 
@@ -909,13 +964,14 @@ Error Number_UInt64FromString(ErrorMessagePool* errorPool, const unsigned char* 
     return ParseInteger(errorPool, str, base, false, sizeof(uint64_t), value);
 }
 
-Error Number_UInt64ToString(ErrorMessagePool* errorPool, uint64_t value, int32_t base, GenericBuffer* buffer)
+Error Number_UInt64ToString(ErrorMessagePool* errorPool, uint64_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
 {
     return WriteIntString(errorPool,
         value,
         false,
         sizeof(uint64_t),
         base,
+        includePrefix,
         buffer);
 }
 

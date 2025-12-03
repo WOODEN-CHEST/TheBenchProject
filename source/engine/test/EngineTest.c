@@ -10,6 +10,7 @@
 #include "test/ErrorTest.h"
 #include "test/UnicodeTest.h"
 #include "test/ListTest.h"
+#include "test/NumberTest.h"
 
 
 // Types.
@@ -113,6 +114,7 @@ void Test_ExecuteEngineTest()
 
     UnicodeTestContext UnicodeTestUserData = (UnicodeTestContext) { ._unicode = &Unicode };
     ListTestContext ListTestUserData = (ListTestContext) { ._errorPool = &ErrorPool };
+    NumberTestContext NumberTestUserData = (NumberTestContext) { ._errorPool = &ErrorPool };
 
     SingleTest Tests[] = 
     {
@@ -207,6 +209,12 @@ void Test_ExecuteEngineTest()
             ._function = &Test_TestListPopOperations,
             ._name = u8"List Pop Operations",
             ._userData = &ListTestUserData
+        },
+
+        {
+            ._function = &Test_TestIntegers,
+            ._name = u8"Integer To And From String Conversions",
+            ._userData = &NumberTestUserData
         },
     };
 
