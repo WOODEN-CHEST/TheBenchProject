@@ -1,1 +1,1 @@
-gcc ../source/*c ../source/libs/*c ../source/engine/*c ../source/engine/test/*c -I"../include" -I"../include/libs" -I"../include/engine" -std=c2x -Werror -Wall -Wextra -Wpedantic -O3 -o "out/TheBenchProject.exe" -L"../lib" -l:raylib.dll
+gcc ../source/*c ../source/engine/*c ../source/engine/test/*c -I"../include" -I"../include/libs" -I"../include/engine" -std=c2x -Werror -Wall -Wextra -Wpedantic -Wconversion -O3 -o "out/TheBenchProject.exe" -L"../lib" -l:raylib.dll

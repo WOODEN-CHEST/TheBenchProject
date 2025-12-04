@@ -6,7 +6,7 @@
 #include "WREnvironment.h"
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
+#include "WRMath.h"
 
 
 // Fields.
@@ -286,7 +286,7 @@ static bool IsRangeValid(uint64_t bits, bool isSignAdded, size_t targetByteSize,
     if (isTargetSigned)
     {
         uint64_t Max = (UINT64_MAX >> (MAX_BIT_COUNT - BitCount + 1));
-        int64_t Min =  -Max - 1;
+        int64_t Min = (int64_t)(-Max - 1);
         if (!isSignAdded)
         {
             return (Value.Int64 >= 0) && (Value.Int64 <= (int64_t)Max);
@@ -372,7 +372,7 @@ static Error ParseInteger(ErrorMessagePool* errorPool,
             return CreateNumberOverflowError(errorPool, str, targetByteSize);
         }
 
-        Value = (Value * (uint64_t)FinalBase) + DigitValue;
+        Value = (Value * (uint64_t)FinalBase) + (uint64_t)DigitValue;
         IsDigitFound = true;
     }
 
@@ -400,9 +400,9 @@ static unsigned char DigitValueToChar(uint64_t digitValue)
 {
     if (digitValue <= (uint64_t)DIGIT_VALUE_MAX_BASE_10)
     {
-        return '0' + digitValue;
+        return (unsigned char)('0' + digitValue);
     }
-    return 'a' + (digitValue - 10);
+    return (unsigned char)('a' + (digitValue - 10));
 }
 
 static void ReverseDigits(unsigned char* str, size_t charCount, size_t digitCount)
@@ -556,7 +556,7 @@ static Error GetDoubleMantissa(ErrorMessagePool* errorPool,
     *value = 0.0;
     double Mantissa = 0.0;
     double AfterDecimalDivider = 10.0;
-    bool IsSpearatorFound = false;
+    bool IsSeparatorFound = false;
     bool IsNegative = false;
     bool IsPositive = false;
     bool IsDigitFound = false;
@@ -568,11 +568,11 @@ static Error GetDoubleMantissa(ErrorMessagePool* errorPool,
         unsigned char Character = str[Index];
         if (IsCharSeparator(Character, separator))
         {
-            if (IsSpearatorFound)
+            if (IsSeparatorFound)
             {
                 return CreateTooManySeparatorsError(errorPool, Character);
             }
-            IsSpearatorFound = true;
+            IsSeparatorFound = true;
             continue;
         }
         if ((Character == MINUS) || (Character == PLUS))
@@ -587,12 +587,12 @@ static Error GetDoubleMantissa(ErrorMessagePool* errorPool,
         }
 
         int32_t DigitValue = DigitToValue(Character);
-        if (isinf(Mantissa) || (DigitValue == DIGIT_INVALID_VALUE) || (DigitValue > DIGIT_VALUE_MAX_BASE_10))
+        if (Math_IsInfinityDouble(Mantissa) || (DigitValue == DIGIT_INVALID_VALUE) || (DigitValue > DIGIT_VALUE_MAX_BASE_10))
         {
             break;
         }
 
-        if (IsSpearatorFound)
+        if (IsSeparatorFound)
         {
             Mantissa += (double)DigitValue / AfterDecimalDivider;
             AfterDecimalDivider *= 10.0;
@@ -672,7 +672,7 @@ static bool TryWriteDecimalEdgeCase(const unsigned char* str, double* outValue)
 {
     if (IsStringNan(str))
     {
-        *outValue = NAN;
+        *outValue = NAN_DOUBLE;
         return true;
     }
     else
@@ -680,7 +680,7 @@ static bool TryWriteDecimalEdgeCase(const unsigned char* str, double* outValue)
         bool IsNegative = false;
         if (IsStringInf(str, &IsNegative))
         {
-            *outValue = IsNegative ? (-INFINITY) : (INFINITY);
+            *outValue = IsNegative ? INFINITY_NEG_DOUBLE : INFINITY_POS_DOUBLE;
             return true;
         }
     }
@@ -708,7 +708,7 @@ static Error ParseDecimalNormal(ErrorMessagePool* errorPool,
         {
             return ErrorResult;
         }
-        FinalValue = FinalValue * pow(10.0, Exponent);
+        FinalValue = FinalValue * Math_PowDouble(10.0, Exponent);
     }
 
     *value = FinalValue;
@@ -717,11 +717,11 @@ static Error ParseDecimalNormal(ErrorMessagePool* errorPool,
 
 static bool TryWriteNanOrInfString(double value, GenericBuffer* buffer)
 {
-    if (isinf(value))
+    if (Math_IsInfinityDouble(value))
     {
         GenericBuffer_WriteString(buffer, (value > 0.0f) ? STRING_INF_POS : STRING_INF_NEG);
     }
-    else if (isnan(value))
+    else if (Math_IsNaNDouble(value))
     {
         GenericBuffer_WriteString(buffer, STRING_NAN);
     }
@@ -745,7 +745,7 @@ static void CreateSpecifierFormat(DecimalFormatOptions formatOptions, unsigned c
         return;
     }
 
-    char SpecifierLetter = 'f';
+    unsigned char SpecifierLetter = 'f';
     if (formatOptions._digitCountAfterSeparator == DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED)
     {
         specifier[0] = SpecifierLetter;

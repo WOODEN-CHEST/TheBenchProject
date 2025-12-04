@@ -33,6 +33,9 @@
  * (but after the sign) if the base is 16 or 2 respectively. Other bases will not have a prefix written.
  * If the given buffer is too small to hold the resulting string version of the number, the buffer will contain the
  * incomplete data and shouldn't be read a string.
+ * 
+ * The float / double parse functions all fail with the illegal argument exception if one of these conditions is met:
+ *  * The
  */
 
 

@@ -2,26 +2,31 @@
 #include <stdint.h>
 
 
-// Fields.
-extern const float NAN_FLOAT;
-extern const float INFINITY_POS_FLOAT;
-extern const float INFINITY_NEG_FLOAT;
-extern const float MAX_FLOAT;
-extern const float MIN_FLOAT;
-extern const float EPSILON_FLOAT;
-extern const float PI_FLOAT;
-extern const float TAU_FLOAT;
-extern const float E_FLOAT;
+#define NAN_FLOAT ((FloatBits) { .Int = 0x7F800001 }.Float)
+#define INFINITY_POS_FLOAT ((FloatBits) { .Int = 0x7F800000 }.Float)
+#define INFINITY_NEG_FLOAT ((FloatBits) { .Int = 0xFF800000 }.Float)
+#define MAX_FLOAT ((FloatBits) { .Int = 0x7F7FFFFF }.Float)
+#define MIN_FLOAT ((FloatBits) { .Int = 0xFF7FFFFF }.Float)
+#define PI_FLOAT 3.14159265358979323846f
+#define TAU_FLOAT (PI_FLOAT * 2.0f)
+#define E_FLOAT 2.71828182845904523536028f
 
-extern const double NAN_DOUBLE;
-extern const double INFINITY_POS_DOUBLE;
-extern const double INFINITY_NEG_DOUBLE;
-extern const double MAX_DOUBLE;
-extern const double MIN_DOUBLE;
-extern const double EPSILON_DOUBLE;
-extern const double PI_DOUBLE;
-extern const double TAU_DOUBLE;
-extern const double E_DOUBLE;
+#define NAN_DOUBLE ((DoubleBits) { .Int = 0x7FF0000000000001 }.Double)
+#define INFINITY_POS_DOUBLE ((DoubleBits) { .Int = 0x7FF0000000000000 }.Double)
+#define INFINITY_NEG_DOUBLE ((DoubleBits) { .Int = 0xFFF0000000000000 }.Double)
+#define MAX_DOUBLE ((DoubleBits) { .Int = 0x7FEFFFFFFFFFFFFF }.Double)
+#define MIN_DOUBLE ((DoubleBits) { .Int = 0xFFEFFFFFFFFFFFFF }.Double)
+#define PI_DOUBLE 3.14159265358979323846
+#define TAU_DOUBLE (PI_DOUBLE * 2.0)
+#define E_DOUBLE 2.71828182845904523536028
+
+#define FLOAT_BIT_MASK_SIGN 0x80000000
+#define FLOAT_BIT_MASK_EXPONENT 0x7F800000
+#define FLOAT_BIT_MASK_MANTISSA 0x007FFFFF
+
+#define DOUBLE_BIT_MASK_SIGN 0x8000000000000000
+#define DOUBLE_BIT_MASK_EXPONENT 0x7FF0000000000000
+#define DOUBLE_BIT_MASK_MANTISSA 0x000FFFFFFFFFFFFF
 
 
 // Types.
@@ -39,6 +44,19 @@ typedef struct RoundingOptionsStruct
     RoundingType _type;
     uint32_t _digitCountAfterDecimal;
 } RoundingOptions;
+
+typedef union FloatBitsUnion
+{
+    float Float;
+    uint32_t Int;
+} FloatBits;
+
+typedef union DoubleBitsUnion
+{
+    double Double;
+    uint64_t Int;
+} DoubleBits;
+
 
 
 // Functions.
@@ -104,13 +122,31 @@ float Math_RoundFloat(float value, RoundingOptions options);
 
 float Math_TruncateFloat(float value);
 
-bool Math_IsNaNFloat(float value);
+static inline bool Math_IsNaNFloat(float value)
+{
+    FloatBits Bits = (FloatBits) { .Float = value };
+    return ((Bits.Int & FLOAT_BIT_MASK_EXPONENT) == FLOAT_BIT_MASK_EXPONENT)
+        && ((Bits.Int & FLOAT_BIT_MASK_MANTISSA) != 0);
+}
 
-bool Math_IsInfinityFloat(float value);
+static inline bool Math_IsInfinityFloat(float value)
+{
+    FloatBits Bits = (FloatBits) { .Float = value };
+    return ((Bits.Int & FLOAT_BIT_MASK_EXPONENT) == FLOAT_BIT_MASK_EXPONENT)
+        && ((Bits.Int & FLOAT_BIT_MASK_MANTISSA) == 0);
+}
 
-bool Math_IsInfinityPosFloat(float value);
+static inline bool Math_IsInfinityPosFloat(float value)
+{
+    FloatBits Bits = (FloatBits) { .Float = value };
+    return Math_IsInfinityFloat(value) && ((Bits.Int & FLOAT_BIT_MASK_SIGN) == 0);
+}
 
-bool Math_IsInfinityNegFloat(float value);
+static inline bool Math_IsInfinityNegFloat(float value)
+{
+    FloatBits Bits = (FloatBits) { .Float = value };
+    return Math_IsInfinityFloat(value) && ((Bits.Int & FLOAT_BIT_MASK_SIGN) != 0);
+}
 
 static inline float Math_MinFloat(float a, float b)
 {
@@ -229,13 +265,31 @@ double Math_RoundDouble(double value, RoundingOptions options);
 
 double Math_TruncateDouble(double value);
 
-bool Math_IsNaNDouble(double value);
+static inline bool Math_IsNaNDouble(double value)
+{
+    DoubleBits Bits = (DoubleBits) { .Double = value };
+    return ((Bits.Int & DOUBLE_BIT_MASK_EXPONENT) == DOUBLE_BIT_MASK_EXPONENT)
+        && ((Bits.Int & DOUBLE_BIT_MASK_MANTISSA) != 0);
+}
 
-bool Math_IsInfinityDouble(double value);
+static inline bool Math_IsInfinityDouble(double value)
+{
+    DoubleBits Bits = (DoubleBits) { .Double = value };
+    return ((Bits.Int & DOUBLE_BIT_MASK_EXPONENT) == DOUBLE_BIT_MASK_EXPONENT)
+        && ((Bits.Int & DOUBLE_BIT_MASK_MANTISSA) == 0);
+}
 
-bool Math_IsInfinityPosDouble(double value);
+static inline bool Math_IsInfinityPosDouble(double value)
+{
+    DoubleBits Bits = (DoubleBits) { .Double = value };
+    return Math_IsInfinityDouble(value) && ((Bits.Int & DOUBLE_BIT_MASK_SIGN) == 0);
+}
 
-bool Math_IsInfinityNegDouble(double value);
+static inline bool Math_IsInfinityNegDouble(double value)
+{
+    DoubleBits Bits = (DoubleBits) { .Double = value };
+    return Math_IsInfinityDouble(value) && ((Bits.Int & DOUBLE_BIT_MASK_SIGN) != 0);
+}
 
 static inline double Math_MinDouble(double a, double b)
 {

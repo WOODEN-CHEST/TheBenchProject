@@ -538,7 +538,6 @@ Error StringUTF8_IndexOf(const unsigned char* str,
         return Error_CreateSuccess();
     }
 
-    int32_t Step = options._direction == StringMoveDirection_Forwards ? 1 : -1;
     int32_t Offset = options._direction == StringMoveDirection_Forwards ? 0 : -1;
 
     size_t StrStartIndex, StrEndIndex;
@@ -584,7 +583,7 @@ Error StringUTF8_IndexOf(const unsigned char* str,
             return CreateCodePointInvalidError(errorPool, SourceCharSize == 0 ? SourceCodePoint : TargetCodePoint);
         }
 
-        i += SourceCharSize * Step;
+        i = (options._direction == StringMoveDirection_Forwards) ? (i + SourceCharSize) : (i - SourceCharSize);
         if (SourceCodePoint != TargetCodePoint)
         {
             TargetStrIndex = TargetStartIndex;
@@ -595,7 +594,8 @@ Error StringUTF8_IndexOf(const unsigned char* str,
             {
                 FoundIndex = i;
             }
-            TargetStrIndex += TargetCharSize * Step;
+            TargetStrIndex = (options._direction == StringMoveDirection_Forwards) ? 
+                (TargetStrIndex + TargetCharSize) : (TargetStrIndex - TargetCharSize);
             if ((TargetStrIndex == TargetEndIndex))
             {
                 *outIndex = FoundIndex;

@@ -54,9 +54,9 @@ static Error ParseIsDigit(UnicodeParser* parser);
 // Fields.
 static const size_t UNICODE_DATA_CAPACITY_DEFAULT = 2 << 15; // If the unicode data file text doesn't change much, then this should be large enough.
 static const size_t UNICODE_DATA_CAPACITY_GROWTH = 2;
-static const char SEPARATOR = ';';
-static const char NEWLINE = '\n';
-static const char DIVIDER = '/';
+static const unsigned char SEPARATOR = ';';
+static const unsigned char NEWLINE = '\n';
+static const unsigned char DIVIDER = '/';
 static const int32_t NUMBER_BASE = 16;
 
 static const size_t SECTION_COUNT = 15;
@@ -87,12 +87,12 @@ static const size_t MAX_CODEPOINTS = 1 << 21; // Let's be reasonable with the si
 
 
 // Static functions.
-static inline char GetParserChar(UnicodeParser* parser)
+static inline unsigned char GetParserChar(UnicodeParser* parser)
 {
     return parser->Text[parser->TextIndex];
 }
 
-static inline bool IsCharSectionEnd(char character)
+static inline bool IsCharSectionEnd(unsigned char character)
 {
     return (character == SEPARATOR) || (character == NEWLINE) || (character == '\0');
 }
@@ -667,7 +667,7 @@ Error UnicodeData_Load(ErrorMessagePool* errorPool, const unsigned char* dataBas
         return Result;
     }
 
-    LoadParsedUnicodeIntoTable(Parser.Data, Parser.DataCount, Parser.MaxCodePoint, data);
+    LoadParsedUnicodeIntoTable(Parser.Data, Parser.DataCount, (size_t)Parser.MaxCodePoint, data);
     DeinitParser(&Parser);
 
     return Error_CreateSuccess();

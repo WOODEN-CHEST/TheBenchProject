@@ -92,9 +92,9 @@ static void SortList(WRList* self,
 
     while (LeftIndex <= RightIndex)
     {
-        WRListElementData LeftEl = GetListElementData(self, LeftIndex);
-        WRListElementData RightEl = GetListElementData(self, RightIndex);
-        WRListElementData PivotEl = GetListElementData(self, PivotIndex);
+        WRListElementData LeftEl = GetListElementData(self, (size_t)LeftIndex);
+        WRListElementData RightEl = GetListElementData(self, (size_t)RightIndex);
+        WRListElementData PivotEl = GetListElementData(self, (size_t)PivotIndex);
 
         ComparisonResult CompResult = FormatComparisonResult((*comparator)(self, LeftEl, PivotEl, userData), order);
         if (CompResult == ComparisonResult_ALessThanB)
@@ -110,12 +110,12 @@ static void SortList(WRList* self,
             continue;
         }
 
-        WRList_Swap(self, LeftIndex, RightIndex);
+        WRList_Swap(self, (size_t)LeftIndex, (size_t)RightIndex);
         LeftIndex++;
         RightIndex--;
     }
 
-    WRList_Swap(self, RightIndex, PivotIndex);
+    WRList_Swap(self, (size_t)RightIndex, (size_t)PivotIndex);
 
     SortList(self, order, comparator, userData, minIndex, RightIndex - 1);
     SortList(self, order, comparator, userData, RightIndex + 1, maxIndex);
