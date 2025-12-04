@@ -16,3 +16,8 @@ typedef bool (*TestFunc)(TestErrorMessage* errorMsg, void* userData);
 void Test_ExecuteEngineTest(void);
 
 void Test_FormatErrorMessage(TestErrorMessage* msg, const unsigned char* format, ...);
+
+static inline const unsigned char* ErrorMessageOrDefault(const unsigned char* msg)
+{
+    return msg ? msg : u8"No further information.";
+}

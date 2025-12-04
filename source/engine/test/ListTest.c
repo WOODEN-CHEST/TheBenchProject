@@ -1,3 +1,4 @@
+#include "test/EngineTest.h"
 #include "test/ListTest.h"
 #include "WRError.h"
 #include "WRList.h"
@@ -31,11 +32,6 @@ typedef struct ListOperationStruct
 // Static functions.
 
 /* Helpers. */
-static const unsigned char* ErrorMessageOrDefault(const unsigned char* msg)
-{
-    return msg ? msg : u8"No further information.";
-}
-
 static bool OperateOnNewList(TestErrorMessage* errorMsg,
     ErrorMessagePool* errorPool,
     ListOperator operator,

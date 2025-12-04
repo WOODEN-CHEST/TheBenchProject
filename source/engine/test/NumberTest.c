@@ -7,6 +7,8 @@
 #include <string.h>
 #include "WRCompile.h"
 #include <stdio.h>
+#include <WRMemory.h>
+#include <inttypes.h>
 
 
 
@@ -116,16 +118,22 @@ static bool VerifyReadIntegerValue(TestErrorMessage* errorMsg,
     Error errorResult,
     StandardIntegers value,
     StandardIntegers originalBits,
-    const unsigned char* testContext)
+    size_t numberByteSize,
+    const unsigned char* testContext,
+    const unsigned char* sourceStr)
 {
     if (errorResult.Code != ErrorCode_Success)
     {
-        Test_FormatErrorMessage(errorMsg, u8"Failed to read integer from string (%s): %s", testContext, errorResult.Message);
+        Test_FormatErrorMessage(errorMsg,
+            u8"Failed to read integer from string \"%s\" (%s): %s",
+            sourceStr, testContext, errorResult.Message);
         return false;
     }
-    if (value.UInt64 != originalBits.UInt64)
+    if (!Memory_IsEqual(&value, &originalBits, numberByteSize))
     {
-        Test_FormatErrorMessage(errorMsg, u8"Written int values do not match at test (%s): %s", testContext, errorResult.Message);
+        Test_FormatErrorMessage(errorMsg,
+            u8"Written int values do not match at test for str \"%s\" (%s). Written bits: %" PRIu64 ", original bits: %" PRIu64 ".",
+            sourceStr, testContext, value.UInt64, originalBits.UInt64);
         return false;
     }
     return true;
@@ -141,9 +149,7 @@ static bool TestIntegerRoundOperation(TestErrorMessage* errorMsg,
     unsigned char StrBuffer[128];
     GenericBuffer GenericStrBuffer = GenericBuffer_CreateConstant(StrBuffer, sizeof(StrBuffer), sizeof(StrBuffer[0]), 0);
     StandardIntegers ReadValue;
-
-    int8_t A = 3;
-    Number_Int8ToString(NULL, A, NUMBER_BASE_10, true, &GenericStrBuffer);
+    Memory_Zero(&ReadValue, sizeof(ReadValue));
 
     Error ErrorResult = (*test->_writerFunc)(errorPool, &test->_numberBits, writeBase, writeWithPrefix, &GenericStrBuffer);
     if (ErrorResult.Code != ErrorCode_Success)
@@ -153,7 +159,8 @@ static bool TestIntegerRoundOperation(TestErrorMessage* errorMsg,
     }
 
     ErrorResult = (*test->_readerFunc)(errorPool, StrBuffer, readBase, &ReadValue);
-    if (!VerifyReadIntegerValue(errorMsg, ErrorResult, ReadValue, test->_numberBits, test->_testContext))
+    if (!VerifyReadIntegerValue(errorMsg, ErrorResult, ReadValue, test->_numberBits,
+        test->_numberByteSize, test->_testContext, GenericStrBuffer._data))
     {
         return false;
     }
@@ -163,8 +170,6 @@ static bool TestIntegerRoundOperation(TestErrorMessage* errorMsg,
 static bool ExecuteSingleIntegerTest(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool, IntegerTest* test)
 {
     if (!TestIntegerRoundOperation(errorMsg, errorPool, test, false, NUMBER_BASE_10, NUMBER_BASE_AUTO_DETECT) ||
-        !TestIntegerRoundOperation(errorMsg, errorPool, test, false, NUMBER_BASE_16, NUMBER_BASE_AUTO_DETECT) ||
-        !TestIntegerRoundOperation(errorMsg, errorPool, test, false, NUMBER_BASE_2, NUMBER_BASE_AUTO_DETECT) ||
         !TestIntegerRoundOperation(errorMsg, errorPool, test, false, NUMBER_BASE_10, NUMBER_BASE_10) ||
         !TestIntegerRoundOperation(errorMsg, errorPool, test, false, NUMBER_BASE_16, NUMBER_BASE_16) ||
         !TestIntegerRoundOperation(errorMsg, errorPool, test, false, NUMBER_BASE_2, NUMBER_BASE_2) ||
@@ -276,7 +281,21 @@ static bool TestIntegerNormalCases(TestErrorMessage* errorMsg, ErrorMessagePool*
 {
     IntegerTest Tests[] =
     {
-        CreateIntegerTest((StandardIntegers) { .Int64 = 1 }, true, sizeof(int8_t), u8"int8")
+        CreateIntegerTest((StandardIntegers) { .Int8 = INT8_MAX }, true, sizeof(int8_t), u8"int8 max"),
+        CreateIntegerTest((StandardIntegers) { .Int8 = INT8_MIN }, true, sizeof(int8_t), u8"int8 min"),
+        CreateIntegerTest((StandardIntegers) { .UInt8 = UINT8_MAX }, false, sizeof(uint8_t), u8"uint8 max"),
+
+        CreateIntegerTest((StandardIntegers) { .Int16 = INT16_MAX }, true, sizeof(int16_t), u8"int16 max"),
+        CreateIntegerTest((StandardIntegers) { .Int16 = INT16_MIN }, true, sizeof(int16_t), u8"int16 min"),
+        CreateIntegerTest((StandardIntegers) { .UInt16 = UINT16_MAX }, false, sizeof(uint16_t), u8"uint16 max"),
+    
+        CreateIntegerTest((StandardIntegers) { .Int32 = INT32_MAX }, true, sizeof(int32_t), u8"int32 max"),
+        CreateIntegerTest((StandardIntegers) { .Int32 = INT32_MIN }, true, sizeof(int32_t), u8"int32 min"),
+        CreateIntegerTest((StandardIntegers) { .UInt32 = UINT32_MAX }, false, sizeof(uint32_t), u8"uint32 max"),
+    
+        CreateIntegerTest((StandardIntegers) { .Int64 = INT64_MAX }, true, sizeof(int64_t), u8"int64 max"),
+        CreateIntegerTest((StandardIntegers) { .Int64 = INT64_MIN }, true, sizeof(int64_t), u8"int64 min"),
+        CreateIntegerTest((StandardIntegers) { .UInt64 = UINT64_MAX }, false, sizeof(uint64_t), u8"uint64 max"),
     };
 
     size_t TestCount = sizeof(Tests) / sizeof(Tests[0]);
@@ -291,10 +310,96 @@ static bool TestIntegerNormalCases(TestErrorMessage* errorMsg, ErrorMessagePool*
     return true;
 }
 
+static bool VerifyErrorCodeFromIntegerParse(TestErrorMessage* errorMsg,
+    ErrorMessagePool* errorPool,
+    Error error,
+    ErrorCode targetCode,
+    const unsigned char* strToParse)
+{
+    if (error.Code != targetCode)
+    {
+        Test_FormatErrorMessage(errorMsg, 
+            u8"Expected error code %d parsing string \"%s\", got code %d: %s",
+            targetCode, strToParse, error.Code, ErrorMessageOrDefault(error.Message));
+        return false;
+    }
+    ErrorMessagePool_Clear(errorPool);
+    return true;
+}
+
+static bool VerifyThatIntParsingFails(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool, const unsigned char* str)
+{
+    StandardIntegers ParsedResult;
+
+    Memory_Zero(&ParsedResult, sizeof(ParsedResult));
+    Error Result = Number_Int64FromString(errorPool, str, NUMBER_BASE_AUTO_DETECT, &ParsedResult.Int64);
+    if (!VerifyErrorCodeFromIntegerParse(errorMsg, errorPool, Result, ErrorCode_IllegalArgument, str))
+    {
+        return false;
+    }
+    return true;
+}
+
 static bool TestIntegerSpecialCases(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool)
 {
-    UNUSED(errorMsg);
-    UNUSED(errorPool);
+    const unsigned char* FailCases[] = {    
+        u8"", u8" ", u8"\t", u8"\n", u8" 1", u8"1 ", u8"\t1", u8"1\t",
+        u8"k", u8"+", u8"-", u8"+-", u8"-+", u8"--", u8"1-", u8"1+2", u8"1-2",
+        u8"0x", u8"0b", u8"0x ", u8"0b ", u8"0xg", u8"0x1g3", u8"0ba", u8"0b102",
+        u8"0b0x1", u8"0x0x1", u8"0b0b1", u8"0x+1", u8"0b-1", u8"10x1",
+        u8"g", u8"1_2", u8"999999999999999999999999999999",
+        u8"-1u", u8"++", u8"-", u8"+1-", u8"1 2"
+    };
+
+    for (size_t i = 0; i < (sizeof(FailCases) / sizeof(FailCases[0])); i++)
+    {
+        if (!VerifyThatIntParsingFails(errorMsg, errorPool, FailCases[i]))
+        {
+            return false;
+        }
+    }
+
+    const int32_t InvalidBase = NUMBER_BASE_MAX + 1;
+    StandardIntegers ParsedResult;
+    Error Result = Number_Int64FromString(errorPool, u8"1", InvalidBase, &ParsedResult.Int64);
+    if (Result.Code != ErrorCode_IllegalArgument)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Expected illegal argument error after invalid base, got code %d: %s",
+            Result.Code, ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+    ErrorMessagePool_Clear(errorPool);
+
+    unsigned char StrBuffer[128];
+    GenericBuffer StrGenericBuffer = GenericBuffer_CreateConstant(StrBuffer, sizeof(StrBuffer), sizeof(StrBuffer[0]), 0);
+    Result = Number_Int64ToString(errorPool, 0, NUMBER_BASE_AUTO_DETECT, false, &StrGenericBuffer);
+    if (Result.Code != ErrorCode_IllegalArgument)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Expected illegal argument after passing base auto detect to a tostring function, got code %d: %s",
+            Result.Code, ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+
+    Result = Number_Int64ToString(errorPool, 0, InvalidBase, false, &StrGenericBuffer);
+    if (Result.Code != ErrorCode_IllegalArgument)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Expected illegal argument after passing invalid base to a tostring function, got code %d: %s",
+            Result.Code, ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+
+    Result = Number_Int64FromString(errorPool, u8"+1", NUMBER_BASE_AUTO_DETECT, &ParsedResult.Int64);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Test_FormatErrorMessage(errorMsg,
+            u8"Error parsing integer with '+' sign at the start: %s",
+            ErrorMessageOrDefault(Result.Message));
+        return false;
+    }
+
     return true;
 }
 

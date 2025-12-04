@@ -184,7 +184,7 @@ static size_t GetBasePrefixSkipAmount(const unsigned char* str)
 
     if ((LowerPrefixChar == PREFIX_BASE_16_A) || (LowerPrefixChar == PREFIX_BASE_2_A))
     {
-        return 2;
+        return BASE_SPECIFIED_LENGTH;
     }
     return 0;
 }
@@ -388,15 +388,10 @@ static Error ValidateBaseForWriting(ErrorMessagePool* errorPool, int32_t base)
 {
     if ((base < NUMBER_BASE_MIN) || (base > NUMBER_BASE_MAX))
     {
-        ErrorCode Code = ErrorCode_IllegalArgument;
-        if (errorPool)
-        {
-            return Error_Construct3(errorPool,
-                Code,
-                u8"Invalid base %d for writing an integer to a string conversion. Minimum base is %d and maximum base is %d.",
-                base, NUMBER_BASE_MIN, NUMBER_BASE_MAX);
-        }
-        return Error_Construct5(Code);
+        return Error_Construct3(errorPool,
+            ErrorCode_IllegalArgument,
+            u8"Invalid base %d for writing an integer to a string conversion. Minimum base is %d and maximum base is %d.",
+            base, NUMBER_BASE_MIN, NUMBER_BASE_MAX);
     }
     return Error_CreateSuccess();
 }
@@ -424,13 +419,15 @@ static void ReverseDigits(unsigned char* str, size_t charCount, size_t digitCoun
     }
 }
 
-static Error TryWriteBasePrefix(ErrorMessagePool* errorPool, GenericBuffer* buffer, int32_t base)
+static Error TryWriteBasePrefix(ErrorMessagePool* errorPool, GenericBuffer* buffer, int32_t base, bool* hasPrefix)
 {
     if ((base != NUMBER_BASE_16) && (base != NUMBER_BASE_2))
     {
+        *hasPrefix = false;
         return Error_CreateSuccess();
     }
 
+    *hasPrefix = true;
     if (!GenericBuffer_WriteUChar(buffer, BASE_INDICATOR_START))
     {
         return CreateBufferOutOfSpaceError(errorPool, buffer);
@@ -453,7 +450,7 @@ static Error WriteIntString(ErrorMessagePool* errorPool,
     bool isSigned,
     size_t numberSize,
     int32_t base,
-    bool includePrefix,
+    bool tryIncludePrefix,
     GenericBuffer* buffer)
 {
     Error ErrorResult = ValidateBaseForWriting(errorPool, base);
@@ -481,9 +478,10 @@ static Error WriteIntString(ErrorMessagePool* errorPool,
         BitsWithoutSign = bits;
     }
 
-    if (includePrefix)
+    bool HasPrefix = false;
+    if (tryIncludePrefix)
     {
-        ErrorResult = TryWriteBasePrefix(errorPool, buffer, base);
+        ErrorResult = TryWriteBasePrefix(errorPool, buffer, base, &HasPrefix);
         if (ErrorResult.Code != ErrorCode_Success)
         {
             return ErrorResult;
@@ -499,7 +497,8 @@ static Error WriteIntString(ErrorMessagePool* errorPool,
         }
     }
 
-    ReverseDigits(buffer->_data, buffer->_count, buffer->_count - (HasMinusSign ? 1 : 0));
+    size_t StartIndex = (HasMinusSign ? 1 : 0) + (HasPrefix ? BASE_SPECIFIED_LENGTH : 0);
+    ReverseDigits(buffer->_data, buffer->_count, buffer->_count - StartIndex);
     GenericBuffer_TryNullTerminate(buffer);
     return Error_CreateSuccess();
 }
@@ -746,7 +745,7 @@ static void CreateSpecifierFormat(DecimalFormatOptions formatOptions, unsigned c
         return;
     }
 
-    char SpecifierLetter = formatOptions._isUpperCase ? 'F' : 'f';
+    char SpecifierLetter = 'f';
     if (formatOptions._digitCountAfterSeparator == DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED)
     {
         specifier[0] = SpecifierLetter;
@@ -777,7 +776,7 @@ static void CreateDecimalPrintfFormat(DecimalFormatOptions formatOptions, unsign
     }
 }
 
-static void EnsureDecimalSepratorInString(unsigned char* str, DecimalSeparator separator)
+static void EnsureDecimalSeparatorInString(unsigned char* str, DecimalSeparator separator)
 {
     for (size_t i = 0; str[i] != '\0'; i++)
     {
@@ -1049,7 +1048,7 @@ Error Number_DoubleToString(ErrorMessagePool* errorPool,
         }
     } while (!IsFullyWritten && (AttemptCount < MAX_ATTEMPT_COUNT));
 
-    EnsureDecimalSepratorInString(buffer->_data, options._separator);
+    EnsureDecimalSeparatorInString(buffer->_data, options._separator);
     return Error_CreateSuccess();
 }
 
@@ -1064,13 +1063,13 @@ DecimalFormatOptions DecimalFormatOptions_CreateScientific(DecimalSeparator sepa
     };
 }
 
-DecimalFormatOptions DecimalFormatOptions_CreateFixed(DecimalSeparator separator, int32_t digitCountAfterDecimal, bool isUpperCase)
+DecimalFormatOptions DecimalFormatOptions_CreateFixed(DecimalSeparator separator, int32_t digitCountAfterDecimal)
 {
     int32_t ClampedDigitCount = (digitCountAfterDecimal < 0) ? 0 : digitCountAfterDecimal;
 
     return (DecimalFormatOptions)
     {
-        ._isUpperCase = isUpperCase,
+        ._isUpperCase = false,
         ._separator = separator,
         ._isScientificNotation = false,
         ._digitCountAfterSeparator = ClampedDigitCount
@@ -1078,11 +1077,11 @@ DecimalFormatOptions DecimalFormatOptions_CreateFixed(DecimalSeparator separator
 }
 
 
-DecimalFormatOptions DecimalFormatOptions_CreateShortest(DecimalSeparator separator, bool isUpperCase)
+DecimalFormatOptions DecimalFormatOptions_CreateShortest(DecimalSeparator separator)
 {
     return (DecimalFormatOptions)
     {
-        ._isUpperCase = isUpperCase,
+        ._isUpperCase = false,
         ._separator = separator,
         ._isScientificNotation = false,
         ._digitCountAfterSeparator = DIGIT_COUNT_AFTER_SEPARATOR_SHORTEST
@@ -1090,11 +1089,11 @@ DecimalFormatOptions DecimalFormatOptions_CreateShortest(DecimalSeparator separa
 }
 
 
-DecimalFormatOptions DecimalFormatOptions_CreateFull(DecimalSeparator separator, bool isUpperCase)
+DecimalFormatOptions DecimalFormatOptions_CreateFull(DecimalSeparator separator)
 {
     return (DecimalFormatOptions)
     {
-        ._isUpperCase = isUpperCase,
+        ._isUpperCase = false,
         ._separator = separator,
         ._isScientificNotation = false,
         ._digitCountAfterSeparator = DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED

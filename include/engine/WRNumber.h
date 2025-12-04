@@ -4,6 +4,38 @@
 #include "WRMemory.h"
 
 
+
+/**
+ * The WRNumber module provides functions for parsing and writing numbers, as well as other
+ * random stuff related to numbers, such as number unions.
+ * 
+ * The integer parse functions all fail with the illegal argument error if one if these conditions is met:
+ *  * The string is empty.
+ *  * The contains characters that are not valid digits in the specified base. 
+ *    This includes leading and trailing whitespace, so the strings containing the numbers must be trimmed.
+ *  * The string contains more than one sign ('+' or '-') or the sign is not at the beginning of the string.
+ *  * The passed in base is not between NUMBER_BASE_MIN and NUMBER_BASE_MAX, and not set to NUMBER_BASE_AUTO_DETECT.
+ *  * The number stored in the string is too large to fit in the specified type. This includes trying to parse a negative
+ *    number and store it in an unsigned number.
+ * When parsing a number with the base being set to be auto-detected, the base will first be set to base10.
+ * If the prefix 0x or 0X will be detected at the start of the string but after the (optionally present) sign, then the base will
+ * be set to base16. Same applies for the prefix 0b or 0B; then the base will be set to base 2. If none of said prefixes are present
+ * at the start of the string and a base 16 letter (a-f) is found in the string, the base is set to be base 16. Multiple base
+ * prefixes are not allowed, the maximum number of them is 1.
+ * If parsing a string fails, no output is written to the out integer value.
+ * 
+ * The integer ToString functions all fail if one of these conditions is met:
+ *  * The passed in base is not between NUMBER_BASE_MIN and NUMBER_BASE_MAX,
+ *    base NUMBER_BASE_AUTO_DETECT is invalid for writing a string (illegal argument error).
+ *  * The passed in buffer runs out of capacity before the entire string,
+ *    including the null terminator, could be written. (buffer too small error.)
+ * If the includePrefix value is set to true, the prefix 0x or 0b will be written before the number
+ * (but after the sign) if the base is 16 or 2 respectively. Other bases will not have a prefix written.
+ * If the given buffer is too small to hold the resulting string version of the number, the buffer will contain the
+ * incomplete data and shouldn't be read a string.
+ */
+
+
 // Types.
 typedef enum DecimalSeparatorEnum
 {
@@ -47,11 +79,6 @@ extern const int32_t DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED;
 
 
 // Functions.
-static inline StandardIntegers Number_EmptyStandardInt()
-{
-    return (StandardIntegers) { .UInt64 = 0 };
-}
-
 Error Number_Int8FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int8_t* value);
 
 Error Number_Int8ToString(ErrorMessagePool* errorPool, int8_t value, int32_t base, bool includePrefix, GenericBuffer* buffer);
@@ -113,10 +140,23 @@ Error Number_DoubleToString(ErrorMessagePool* errorPool,
     GenericBuffer* buffer,
     DecimalFormatOptions options);
 
+/**
+ * Creates decimal format options which can be used to write the number in scientific format.
+ */
 DecimalFormatOptions DecimalFormatOptions_CreateScientific(DecimalSeparator separator, bool isUpperCase);
 
-DecimalFormatOptions DecimalFormatOptions_CreateFixed(DecimalSeparator separator, int32_t digitCountAfterDecimal, bool isUpperCase);
+/**
+ * Creates decimal format options which can be used to write the number with a fixed number of digits after the decimal separator.
+ * @param digitCountAfterDecimal The number of digits after the decimal separator.
+ */
+DecimalFormatOptions DecimalFormatOptions_CreateFixed(DecimalSeparator separator, int32_t digitCountAfterDecimal);
 
-DecimalFormatOptions DecimalFormatOptions_CreateShortest(DecimalSeparator separator, bool isUpperCase);
+/**
+ * Creates decimal format options which can be used to write the number with the lower number of digits after the decimal separator.
+ */
+DecimalFormatOptions DecimalFormatOptions_CreateShortest(DecimalSeparator separator);
 
-DecimalFormatOptions DecimalFormatOptions_CreateFull(DecimalSeparator separator, bool isUpperCase);
+/**
+ * Creates decimal format options which can be used to write the full, non-trimmed number with all digits after the decimal separator.
+ */
+DecimalFormatOptions DecimalFormatOptions_CreateFull(DecimalSeparator separator);
