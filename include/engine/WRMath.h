@@ -122,6 +122,8 @@ float Math_RoundFloat(float value, RoundingOptions options);
 
 float Math_TruncateFloat(float value);
 
+float Math_SplitNumberFloat(float number, float* integralPart);
+
 static inline bool Math_IsNaNFloat(float value)
 {
     FloatBits Bits = (FloatBits) { .Float = value };
@@ -264,6 +266,8 @@ double Math_FloorDouble(double value);
 double Math_RoundDouble(double value, RoundingOptions options);
 
 double Math_TruncateDouble(double value);
+
+double Math_SplitNumberDouble(double number, double* integralPart);
 
 static inline bool Math_IsNaNDouble(double value)
 {
