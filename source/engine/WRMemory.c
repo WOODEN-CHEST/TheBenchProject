@@ -3,6 +3,28 @@
 #include <memory.h>
 #include <string.h>
 
+
+// Static functions.
+static inline GenericBuffer CreateGenericBuffer(void* destination,
+    size_t bufferCapacity,
+    size_t elementSize,
+    size_t elementCount,
+    void* userData,
+    GenericBufferAllocateCallback callback,
+    GenericBufferFlags flags)
+{
+    return (GenericBuffer)
+    {
+        ._data = destination,
+        ._capacity = bufferCapacity,
+        ._elementSize = elementSize,
+        ._count = elementCount,
+        ._requestMoreSpaceCallback = callback,
+        ._userData = userData,
+        ._flags = flags
+    };
+}
+// Functions.
 void* Memory_Allocate(size_t size)
 {
     void* Block = malloc(size);
@@ -60,25 +82,52 @@ GenericBuffer GenericBuffer_CreateVariable(void* destination,
     void* userData,
     GenericBufferAllocateCallback callback)
 {
-    return (GenericBuffer)
-    {
-        ._data = destination,
-        ._capacity = bufferCapacity,
-        ._elementSize = elementSize,
-        ._count = elementCount,
-        ._requestMoreSpaceCallback = callback,
-        ._userData = userData
-    };
+    return CreateGenericBuffer(destination,
+        bufferCapacity,
+        elementSize,
+        elementCount,
+        userData,
+        callback,
+        GenericBufferFlags_None);
 }
 
 GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t bufferCapacity, size_t elementSize, size_t elementCount)
 {
-    return GenericBuffer_CreateVariable(destination, bufferCapacity, elementSize, elementCount, NULL, NULL);
+    return CreateGenericBuffer(destination,
+        bufferCapacity,
+        elementSize,
+        elementCount,
+        NULL,
+        NULL,
+        GenericBufferFlags_FixedCapacity);
+}
+
+GenericBuffer GenericBuffer_CreateVariableIncomplete(void* destination, size_t bufferCapacity, size_t elementSize, size_t elementCount)
+{
+    return CreateGenericBuffer(destination,
+        bufferCapacity,
+        elementSize,
+        elementCount,
+        NULL,
+        NULL,
+        GenericBufferFlags_None);
+}
+
+void GenericBuffer_SetCallback(GenericBuffer* buffer, GenericBufferAllocateCallback callback, void* userData)
+{
+    buffer->_userData = userData;
+    buffer->_requestMoreSpaceCallback = callback;
+}
+
+void GenericBuffer_ClearCallback(GenericBuffer* buffer)
+{
+    buffer->_requestMoreSpaceCallback = NULL;
+    buffer->_userData = NULL;
 }
 
 bool GenericBuffer_EnsureCapacity(GenericBuffer* buffer, size_t capacity)
 {
-    if (buffer->_capacity < capacity)
+    if ((buffer->_capacity < capacity) || !buffer->_data)
     {
         bool WasMemoryAllocated = buffer->_requestMoreSpaceCallback && (*buffer->_requestMoreSpaceCallback)(buffer, capacity);
         if (!WasMemoryAllocated || (buffer->_capacity < capacity))
@@ -198,12 +247,12 @@ bool GenericBuffer_WriteSizeT(GenericBuffer* buffer, size_t value)
     return true;
 }
 
-void GenericBuffer_TrackWrittenItems(GenericBuffer* buffer, size_t itemCount)
-{
-    buffer->_count += itemCount;
-}
-
 void GenericBuffer_Clear(GenericBuffer* buffer)
 {
     buffer->_count = 0;
+}
+
+size_t GenericBuffer_GetCapacityRemaining(GenericBuffer* buffer)
+{
+    return buffer->_capacity - buffer->_count;
 }

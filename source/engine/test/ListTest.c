@@ -87,20 +87,20 @@ static bool VerifyListProperties(TestErrorMessage* errorMsg,
             ErrorMessageOrDefault(listCreationResult.Message));
         return false;
     }
-    bool IsAllocated = list->_data != NULL;
+    bool IsAllocated = list->_buffer != NULL;
     if (IsAllocated != shouldBeAllocated)
     {
         Test_FormatErrorMessage(errorMsg, u8"List's allocations status is %d, expected %d.", IsAllocated, shouldBeAllocated);
         return false;
     }
-    if (list->_count != expectedElementCount)
+    if (WRList_GetCount(list) != expectedElementCount)
     {
-        Test_FormatErrorMessage(errorMsg, u8"Element count in list is %zu, expected %zu.", list->_count, expectedElementCount);
+        Test_FormatErrorMessage(errorMsg, u8"Element count in list is %zu, expected %zu.", (WRList_GetCount(list), expectedElementCount));
         return false;
     }
-    if (list->_elementSize != elementSize)
+    if (WRList_GetElementSize(list) != elementSize)
     {
-        Test_FormatErrorMessage(errorMsg, u8"Element size in list is %zu, expected %zu.", list->_elementSize, elementSize);
+        Test_FormatErrorMessage(errorMsg, u8"Element size in list is %zu, expected %zu.", WRList_GetElementSize(list), elementSize);
         return false;
     }
     bool IsFixedCapacity = WRList_IsFixedCapacity(list);
@@ -119,9 +119,9 @@ static bool VerifyListProperties(TestErrorMessage* errorMsg,
             shouldBeWrapperList);
         return false;
     }
-    if (list->_capacity != expectedCapacity)
+    if (WRList_GetCapacity(list) != expectedCapacity)
     {
-        Test_FormatErrorMessage(errorMsg, u8"List capacity is %zu, expected %zu.", list->_capacity, expectedCapacity);
+        Test_FormatErrorMessage(errorMsg, u8"List capacity is %zu, expected %zu.", WRList_GetCapacity(list), expectedCapacity);
         return false;
     }
 
@@ -134,15 +134,15 @@ static bool VerifyListSequence(TestErrorMessage* errorMsg,
     size_t expectedCount,
     const unsigned char* context)
 {
-    if (list->_count != expectedCount)
+    if (WRList_GetCount(list) != expectedCount)
     {
         Test_FormatErrorMessage(errorMsg,
             u8"List count is %zu, expected %zu. (%s)",
-            list->_count, expectedCount, context);
+            WRList_GetCount(list), expectedCount, context);
         return false;
     }
 
-    if (!Memory_IsEqual(list->_data, expectedElements, expectedCount * list->_elementSize))
+    if (!Memory_IsEqual(list->_buffer, expectedElements, expectedCount * WRList_GetElementSize(list)))
     {
         Test_FormatErrorMessage(errorMsg, 
             u8"List's element array does not have the correct contents, but element count matches. (%s)",
@@ -314,11 +314,11 @@ static bool TestSimpleMutation(TestErrorMessage* errorMsg, ErrorMessagePool* err
     }
 
     WRList_Clear(list);
-    if (list->_count != 0)
+    if (WRList_GetCount(list) != 0)
     {
         Test_FormatErrorMessage(errorMsg,
             u8"Expected list to be empty after clearing it, instead got %zu elements.",
-            list->_count);
+            WRList_GetCount(list));
         return false;
     }
 
@@ -521,7 +521,7 @@ static bool TestTechnicalFunctions(TestErrorMessage* errorMsg, ErrorMessagePool*
     }
 
     size_t RequestedExtraCapacity = 16;
-    WRList_ReserveSpace(list, list->_capacity - EnsuredCapacity + RequestedExtraCapacity);
+    WRList_ReserveSpace(list, WRList_GetCapacity(list) - EnsuredCapacity + RequestedExtraCapacity);
     if (WRList_GetCapacityRemaining(list) - EnsuredCapacity < RequestedExtraCapacity)
     {
         Test_FormatErrorMessage(errorMsg,
@@ -535,7 +535,7 @@ static bool TestTechnicalFunctions(TestErrorMessage* errorMsg, ErrorMessagePool*
 
 static bool IsDoubleListSorted(TestErrorMessage* errorMsg, WRList* list, int32_t direction, const unsigned char* context)
 {
-    for (size_t i = 1; i < list->_count; i++)
+    for (size_t i = 1; i < WRList_GetCount(list); i++)
     {
         double ElPrev, ElCurrent;
         Error Result = WRList_GetAt(list, i - 1, &ElPrev);
@@ -972,12 +972,8 @@ bool Test_TestListInitialization(TestErrorMessage* errorMsg, void* userData)
     ElementSize = sizeof(ConstantBuffer[0]);
     size_t PresentElementCount = 2;
     size_t ConstantBufferCapacity = CONSTANT_BUFFER_ELEMENT_COUNT;
-    ErrorResult = WRList_WrapConstantBuffer(&List,
-        ConstantBuffer,
-        PresentElementCount,
-        ConstantBufferCapacity,
-        ElementSize,
-        ErrorPool);
+    GenericBuffer WrappedBuffer = GenericBuffer_CreateConstant(ConstantBuffer, ConstantBufferCapacity, ElementSize, PresentElementCount);
+    ErrorResult = WRList_WrapBuffer(&List, &WrappedBuffer, ErrorPool);
     if (!VerifyListProperties(errorMsg, ErrorResult, &List, ConstantBufferCapacity, PresentElementCount, true, ElementSize, true, true))
     {
         return false;
@@ -992,7 +988,8 @@ bool Test_TestListBuffer(TestErrorMessage* errorMsg, void* userData)
     const size_t BUFFER_ELEMENT_COUNT = 4;
     int32_t Buffer[BUFFER_ELEMENT_COUNT];
     WRList List;
-    Error ErrorResult = WRList_WrapConstantBuffer(&List, Buffer, 0, BUFFER_ELEMENT_COUNT, sizeof(Buffer[0]), ErrorPool);
+    GenericBuffer WrappedBuffer = GenericBuffer_CreateConstant(Buffer, BUFFER_ELEMENT_COUNT, sizeof(Buffer[0]), 0);
+    Error ErrorResult = WRList_WrapBuffer(&List, &WrappedBuffer, ErrorPool);
     if (ErrorResult.Code != ErrorCode_Success)
     {
         Test_FormatErrorMessage(errorMsg, u8"Error wrapping buffer with list: %s", ErrorMessageOrDefault(ErrorResult.Message));

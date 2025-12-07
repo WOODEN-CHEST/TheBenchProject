@@ -19,10 +19,8 @@ typedef enum WRListFlagsEnum
 /* A generic list of bytes. */
 typedef struct WRListStruct
 {
-    uint8_t* _data; /* The elements stored in this list, as an array of bytes, may be null if the list has a capacity of 0. */
-    size_t _count; /* The number of ELEMENTS in the list (not bytes!). */
-    size_t _capacity; /* The lists capacity, in ELEMENTS (not bytes!) */
-    size_t _elementSize; /* The size of a single element, in bytes. */
+    GenericBuffer _selfContainedData; /* The buffer used by the list if the list doesn't already wrap another buffer. */
+    GenericBuffer* _buffer; /* The data contained in this list. */
     ErrorMessagePool* ErrorPool; /* The error pool used when generating errors, may be modified at any time, may be null. */
     WRListFlags _flags; /* Various read-only flags which describe the list. */
 } WRList;
@@ -80,7 +78,7 @@ Error WRList_Construct2(WRList* self, size_t elementSize, size_t initialCapacity
  * @param errorPool The error pool to use for this list, may be null.
  * @return Success if the buffer was wrapped, Illegal argument error if the element size is 0.
  */
-Error WRList_WrapConstantBuffer(WRList* self, void* buffer, size_t count, size_t capacity, size_t elementSize, ErrorMessagePool* errorPool);
+Error WRList_WrapBuffer(WRList* self, GenericBuffer* buffer, ErrorMessagePool* errorPool);
 
 /**
  * Deconstructs the given list, freeing all memory associated with it.
@@ -271,6 +269,7 @@ Error WRList_GetPointerToElement(WRList* self, size_t index, void** out);
 
 /**
  * Determines whether the list contains an element which satisfied the given predicate.
+ * THE LIST MUST NOT BE MODIFIED DURING THIS FUNCTION CALL BY THE PREDICATE.
  * @param predicate The predicate to use for testing the elements.
  * @param userData Optional user data supplied to the predicate, may be null.
  * @return true if the list contains an element which satisfies the predicate, false otherwise.
@@ -453,22 +452,30 @@ bool WRList_IsWrapperBuffer(WRList* self);
  */
 size_t WRList_GetCapacityRemaining(WRList* self);
 
+/* Gets the size of a single element in the given list. */
+static inline size_t WRList_GetElementSize(WRList* self)
+{
+    return self->_buffer->_elementSize;
+}
+
+/* Gets the number of elements in the given list. */
+static inline size_t WRList_GetCount(WRList* self)
+{
+    return self->_buffer->_count;
+}
+
+/* Gets the list's capacity. */
+static inline size_t WRList_GetCapacity(WRList* self)
+{
+    return self->_buffer->_capacity;
+}
+
 
 /* Buffers. */
-
 /**
  * Creates a buffer which wraps the elements in this list.
- * The returned buffer is of constant capacity.
  */
-GenericBuffer WRList_ToConstantBuffer(WRList* self);
-
-/**
- * Creates a buffer which wraps the elements in this list.
- * The returned buffer is of dynamic size and can grow.
- * If the list is of constant-capacity, then this function will return
- * a constant capacity buffer, not a dynamic capacity one.
- */
-GenericBuffer WRList_ToDynamicBuffer(WRList* self);
+GenericBuffer* WRList_ToGenericBuffer(WRList* self);
 
 
 /* Comparators. */

@@ -95,8 +95,6 @@
     }
 
 
-// Fields.
-
 // Functions.
 DECIMAL_ROUND_IMPLEMENTATION(double, Double, SUFFIX_DOUBLE, 0.5, 0.0000000001)
 DECIMAL_ROUND_IMPLEMENTATION(float, Float, SUFFIX_FLOAT, 0.5f, 0.00001f)

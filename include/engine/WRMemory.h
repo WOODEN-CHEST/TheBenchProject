@@ -8,6 +8,12 @@ typedef struct GenericBufferStruct GenericBuffer;
 
 typedef bool (*GenericBufferAllocateCallback)(GenericBuffer* destination, size_t requestedCapacity);
 
+typedef enum GenericBufferFlagsEnum
+{
+    GenericBufferFlags_None = 0,
+    GenericBufferFlags_FixedCapacity = (1 << 0),
+} GenericBufferFlags;
+
 struct GenericBufferStruct
 {
     void* _data;
@@ -16,6 +22,7 @@ struct GenericBufferStruct
     size_t _elementSize;
     void* _userData;
     GenericBufferAllocateCallback _requestMoreSpaceCallback;
+    GenericBufferFlags _flags;
 };
 
 
@@ -28,6 +35,12 @@ GenericBuffer GenericBuffer_CreateVariable(void* destination,
     GenericBufferAllocateCallback callback);
 
 GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t bufferCapacity, size_t elementSize, size_t elementCount);
+
+GenericBuffer GenericBuffer_CreateVariableIncomplete(void* destination, size_t bufferCapacity, size_t elementSize, size_t elementCount);
+
+void GenericBuffer_SetCallback(GenericBuffer* buffer, GenericBufferAllocateCallback callback, void* userData);
+
+void GenericBuffer_ClearCallback(GenericBuffer* buffer);
 
 bool GenericBuffer_EnsureCapacity(GenericBuffer* buffer, size_t requiredSize);
 
@@ -47,9 +60,9 @@ bool GenericBuffer_WriteVoidPtr(GenericBuffer* buffer, void* ptr);
 
 bool GenericBuffer_WriteSizeT(GenericBuffer* buffer, size_t value);
 
-void GenericBuffer_TrackWrittenItems(GenericBuffer* buffer, size_t itemCount);
-
 void GenericBuffer_Clear(GenericBuffer* buffer);
+
+size_t GenericBuffer_GetCapacityRemaining(GenericBuffer* buffer);
 
 void* Memory_Allocate(size_t size);
 
