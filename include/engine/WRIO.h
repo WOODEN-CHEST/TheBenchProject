@@ -81,7 +81,7 @@ static inline bool IOStream_IsReadable(IOStream* stream)
     return (stream->_flags & IOStreamFlags_CanRead);
 }
 
-bool IOStream_IsEndOfStream(IOStream* stream)
+static inline bool IOStream_IsEndOfStream(IOStream* stream)
 {
     return (*stream->isEOF)(stream);
 }

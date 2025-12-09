@@ -153,14 +153,6 @@ static Error FileStreamFlush(IOStream* stream)
 
 static Error FileStreamWriteByte(IOStream* stream, unsigned char byte)
 {
-    if (!IOStream_IsWriteable(stream))
-    {
-        return Error_Construct3(stream->ErrorPool,
-            ErrorCode_InvalidOperation,
-            u8"Cannot write a byte to a %s stream because it is not writable.",
-            GetStreamTypeName(stream->_type));
-    }
-
     FILE* FileStream = stream->_data;
     int Result = fputc(byte, FileStream);
     if (Result)
@@ -175,14 +167,6 @@ static Error FileStreamWriteByte(IOStream* stream, unsigned char byte)
 
 static Error FileStreamWrite(IOStream* stream, const unsigned char* data, size_t dataSize)
 {
-    if (!IOStream_IsWriteable(stream))
-    {
-        return Error_Construct3(stream->ErrorPool,
-            ErrorCode_InvalidOperation,
-            u8"Cannot write to a %s stream because it is not writable.",
-            GetStreamTypeName(stream->_type));
-    }
-
     size_t ObjectsWritten = fwrite(data, 1, dataSize, stream->_data);
     if (ObjectsWritten < dataSize)
     {
@@ -196,14 +180,6 @@ static Error FileStreamWrite(IOStream* stream, const unsigned char* data, size_t
 
 static Error FileStreamReadByte(IOStream* stream, unsigned char* byte)
 {
-    if (!IOStream_IsReadable(stream))
-    {
-        return Error_Construct3(stream->ErrorPool,
-            ErrorCode_InvalidOperation,
-            u8"Cannot read a byte from a %s stream because it is not writable.",
-            GetStreamTypeName(stream->_type));
-    }
-
     FILE* FileStream = stream->_data;
     int ByteValue = fgetc(FileStream);
     if (ByteValue == EOF)
@@ -220,14 +196,6 @@ static Error FileStreamReadByte(IOStream* stream, unsigned char* byte)
 
 static Error FileStreamRead(IOStream* stream, size_t bytesToRead, GenericBuffer* outBuffer)
 {
-    if (!IOStream_IsReadable(stream))
-    {
-        return Error_Construct3(stream->ErrorPool,
-            ErrorCode_InvalidOperation,
-            u8"Cannot read a byte from a %s stream because it is not writable.",
-            GetStreamTypeName(stream->_type));
-    }
-
     FILE* FileStream = stream->_data;
     clearerr(FileStream);
 
@@ -261,7 +229,6 @@ static bool FIleStreamIsEOF(IOStream* stream)
 {
     return feof(stream->_data);
 }
-
 
 
 /* Memory stream. */
@@ -392,7 +359,7 @@ static Error MemoryStreamRead(ErrorMessagePool* errorPool, IOStream* stream, siz
 
     if (!GenericBuffer_ReserveCapacity(outBuffer, MaxBytesToRead))
     {
-        return Error_Construct3(stream->ErrorPool,
+        return Error_Construct3(errorPool,
             ErrorCode_BufferTooSmall,
             u8"Destination buffer into which to read the %s stream is too small to hold the requested %zu bytes.",
             GetStreamTypeName(stream->_type), MaxBytesToRead);
@@ -420,12 +387,35 @@ static bool MemoryStreamIsEOF(IOStream* stream)
 /* ALl stream types. */
 static Error ReadAllFromSeekable(IOStream* stream, GenericBuffer* outBuffer)
 {
+    size_t RemainingSize;
+    Error ErrorResult = IOStream_GetStreamSizeRemaining(stream, &RemainingSize);
+    if (ErrorResult.Code != ErrorCode_Success)
+    {
+        return ErrorResult;
+    }
 
+    return IOStream_Read(stream, RemainingSize, outBuffer);
 }
 
 static Error ReadAllFromNonSeekable(IOStream* stream, GenericBuffer* outBuffer)
 {
-
+    while (!IOStream_IsEndOfStream(stream))
+    {
+        unsigned char ReadByte;
+        Error ErrorResult = IOStream_ReadByte(stream, &ReadByte);
+        if (ErrorResult.Code != ErrorCode_Success)
+        {
+            return ErrorResult;
+        }
+        if (!GenericBuffer_WriteUChar(outBuffer, ReadByte))
+        {
+            return Error_Construct3(stream->ErrorPool,
+                ErrorCode_BufferTooSmall,
+                u8"Destination buffer into which to read the %s stream is too small to hold the next byte.",
+                GetStreamTypeName(stream->_type));
+        }
+    }
+    return Error_CreateSuccess();
 }
 
 // Functions.
