@@ -195,7 +195,7 @@ bool GenericBuffer_WriteStringBySize(GenericBuffer* buffer, const unsigned char*
     }
 
     size_t WriteOffset = buffer->_count;
-    unsigned char* WritePosition = (unsigned char*)((uintptr_t)buffer->_data + WriteOffset);
+    unsigned char* WritePosition = (unsigned char*)buffer->_data + WriteOffset;
     Memory_Copy(str, WritePosition, stringSize);
     buffer->_count += stringSize;
     return true;
@@ -217,6 +217,18 @@ bool GenericBuffer_TryNullTerminate(GenericBuffer* buffer)
         buffer->_count++; 
     }
     return true;
+}
+
+bool GenericBuffer_WriteBulk(GenericBuffer* buffer, void* data, size_t elementCount)
+{
+    if (elementCount == 0)
+    {
+        return true;
+    }
+    if (!GenericBuffer_ReserveCapacity(buffer, elementCount))
+    {
+        return false;
+    }
 }
 
 bool GenericBuffer_WriteVoidPtr(GenericBuffer* buffer, void* ptr)
