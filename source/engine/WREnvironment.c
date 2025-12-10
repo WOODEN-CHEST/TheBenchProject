@@ -3,11 +3,11 @@
 
 
 // Fields.
-#if defined __unix__
+#if defined __linux__
 const unsigned char* const ENVIRONMENT_NEWLINE_STRING = u8"\n";
 const unsigned char ENVIRONMENT_PATH_SEPARATOR_PRIMARY = '/';
 const unsigned char ENVIRONMENT_PATH_SEPARATOR_SECONDARY = '/';
-#elif defined __WIN32
+#elif defined _WIN32
 const unsigned char* const ENVIRONMENT_NEWLINE_STRING = u8"\r\n";
 const unsigned char ENVIRONMENT_PATH_SEPARATOR_PRIMARY = '\\';
 const unsigned char ENVIRONMENT_PATH_SEPARATOR_SECONDARY = '/';

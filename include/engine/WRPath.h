@@ -19,9 +19,9 @@ Error Path_ChangeExtension(ErrorMessagePool* errorPool, const unsigned char* pat
 
 Error Path_RemoveExtension(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result);
 
-bool Path_GetExtension(const unsigned char* path, const unsigned char** extension);
+Error Path_GetExtension(ErrorMessagePool* errorPool, const unsigned char* path, const unsigned char** extension);
 
-bool Path_HasExtension(const unsigned char* path);
+Error Path_HasExtension(ErrorMessagePool* errorPool, const unsigned char* path, bool* hasExtension);
 
 Error Path_Combine(ErrorMessagePool* errorPool, const unsigned char** paths, size_t pathCount, GenericBuffer* result);
 

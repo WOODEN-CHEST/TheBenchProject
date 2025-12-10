@@ -51,6 +51,7 @@ typedef enum ErrorCodeEnum
 
     ErrorCode_InvalidUnicodeData,
     ErrorCode_InvalidCodePoint,
+    ErrorCode_InvalidTextEncoding,
 
     ErrorCode_BufferTooSmall,
     ErrorCode_BufferTooLarge,

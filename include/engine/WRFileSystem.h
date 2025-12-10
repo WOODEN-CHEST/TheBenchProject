@@ -70,4 +70,10 @@ Error FileSystem_CreateLastDirectory(ErrorMessagePool* errorPool, const unsigned
 
 Error FileSystem_CreateAllDirectories(ErrorMessagePool* errorPool, const unsigned char* path);
 
-Error FileSystem_OpenStream(ErrorMessagePool* errorPool, const unsigned char* path, FileOpenMode mode, IOStream** stream);
+Error FileSystem_OpenFileStream(ErrorMessagePool* errorPool, const unsigned char* path, FileOpenMode mode, IOStream** stream);
+
+Error FileSystem_DeleteEntry(ErrorMessagePool* errorPool, const unsigned char* path);
+
+Error FileSystem_MoveEntry(ErrorMessagePool* errorPool, const unsigned char* oldPath, const unsigned char* newPath);
+
+Error FileSystem_RenameEntry(ErrorMessagePool* errorPool, const unsigned char* path, const unsigned char* newName);
