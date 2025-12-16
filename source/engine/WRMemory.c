@@ -185,19 +185,24 @@ bool GenericBuffer_WriteString(GenericBuffer* buffer, const unsigned char* str)
 
 bool GenericBuffer_WriteStringBySize(GenericBuffer* buffer, const unsigned char* str, size_t stringSize)
 {
-    if (stringSize == 0)
+    return GenericBuffer_WriteBytes(buffer, str, stringSize);
+}
+
+bool GenericBuffer_WriteBytes(GenericBuffer* buffer, const unsigned char* bytes, size_t size)
+{
+    if (size == 0)
     {
         return true;
     }
-    if (!GenericBuffer_ReserveCapacity(buffer, stringSize))
+    if (!GenericBuffer_ReserveCapacity(buffer, size))
     {
         return false;
     }
 
     size_t WriteOffset = buffer->_count;
     unsigned char* WritePosition = (unsigned char*)buffer->_data + WriteOffset;
-    Memory_Copy(str, WritePosition, stringSize);
-    buffer->_count += stringSize;
+    Memory_Copy(bytes, WritePosition, size);
+    buffer->_count += size;
     return true;
 }
 

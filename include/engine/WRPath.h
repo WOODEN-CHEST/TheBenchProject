@@ -47,6 +47,8 @@ bool Path_IsNormalized(const unsigned char* path, bool requirePrimarySeparator);
 
 bool Path_IsRooted(const unsigned char* path);
 
+bool Path_IsFullyQualified(const unsigned char* path);
+
 Error Path_GetRoot(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result);
 
 bool Path_IsSubPath(const unsigned char* parentPath, const unsigned char* childPath);

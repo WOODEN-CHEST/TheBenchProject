@@ -101,10 +101,15 @@ static Error GetLastSegment(ErrorMessagePool* errorPool, const unsigned char* pa
 
     do
     {
-        TraverseSegment(errorPool, &TraversalData);
+        Error ErrorResult = TraverseSegment(errorPool, &TraversalData);
+        if (ErrorResult.Code != ErrorCode_Success)
+        {
+            return ErrorResult;
+        }
     } while (!TraversalData._currentSegment._isFinalSegment);
 
     *lastSegment = TraversalData._currentSegment;
+    return Error_CreateSuccess();
 }
 
 static Error CreateDestBufferTooSmallError(ErrorMessagePool* errorPool)
@@ -112,6 +117,11 @@ static Error CreateDestBufferTooSmallError(ErrorMessagePool* errorPool)
     return Error_Construct3(errorPool,
         ErrorCode_BufferTooSmall,
         u8"Destination buffer is too small to hold the given path.");
+}
+
+static inline bool IsDriveLetter(unsigned char letter)
+{
+    return (('a' <= letter) && (letter <= 'z')) || (('A' <= letter) && (letter <= 'Z'));
 }
 
 
@@ -185,11 +195,112 @@ Error Path_HasExtension(ErrorMessagePool* errorPool, const unsigned char* path, 
     return ErrorResult;
 }
 
+Error Path_Combine(ErrorMessagePool* errorPool, const unsigned char** paths, size_t pathCount, GenericBuffer* result)
+{
+    bool EndsWithSeparatorPrevious = false;
+
+    for (size_t i = 0; i < pathCount; i++)
+    {
+        const unsigned char* TargetPath = paths[i];
+        size_t PathLength = StringUTF8_GetByteLength(TargetPath);
+        if (PathLength == 0)
+        {
+            continue;
+        }
+        bool StartWithSeparatorCurrent = IsSeparator(TargetPath[0]);
+
+        if (!StartWithSeparatorCurrent
+            && !EndsWithSeparatorPrevious
+            && !GenericBuffer_WriteUChar(result, ENVIRONMENT_PATH_SEPARATOR_PRIMARY))
+        {
+            return CreateDestBufferTooSmallError(errorPool);  
+        }
+
+        size_t PathStartIndex = (StartWithSeparatorCurrent && EndsWithSeparatorPrevious) ? 1 : 0;
+        if (!GenericBuffer_WriteStringBySize(result, TargetPath + PathStartIndex, PathLength - PathStartIndex))
+        {
+            return CreateDestBufferTooSmallError(errorPool);
+        }
+
+        EndsWithSeparatorPrevious = IsSeparator(TargetPath[PathLength - 1]);
+    }
+
+    return Error_CreateSuccess();
+}
+
+Error Path_Append(ErrorMessagePool* errorPool, const unsigned char* pathA, const unsigned char* pathB, GenericBuffer* result)
+{
+    const unsigned char* PathArray[] = { pathA, pathB };
+    return Path_Combine(errorPool, PathArray, sizeof(PathArray) / sizeof(PathArray[0]), result);
+}
+
+bool Path_EndsInDirectorySeparator(const unsigned char* path)
+{
+    size_t StrLength = StringUTF8_GetByteLength(path);
+    return (StrLength > 0) && IsSeparator(path[StrLength - 1]);
+}
+
+Error Path_GetParentPath(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result)
+{
+    PathSegment PreviousSegment;
+    Memory_Zero(&PreviousSegment, sizeof(PreviousSegment));
+
+    PathTraversalData TraversalData;
+    BeginPathTraversal(path, &TraversalData);
+    do
+    {
+        PreviousSegment = TraversalData._currentSegment;
+        TraverseSegment(errorPool, &TraversalData);
+    } while (!TraversalData._currentSegment._isFinalSegment);
+
+    size_t PathLength = PreviousSegment._startIndexInPath + PreviousSegment._sizeBytes;
+    StringUTF8_Substring(path, 0, PathLength, result, errorPool);
+    return Error_CreateSuccess();
+}
+
+
+/* Platform-specific. */
 
 #if defined __linux__
+bool Path_IsRooted(const unsigned char* path)
+{
+    return path[0] == ENVIRONMENT_PATH_SEPARATOR_PRIMARY;
+}
 
+
+bool Path_IsFullyQualified(const unsigned char* path)
+{
+    return Path_IsRooted(path);
+}
+
+Error Path_GetRoot(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result)
+{
+    if (!Path_IsRooted(path))
+    {
+        return Error_Construct3(errorPool,
+            ErrorCode_InvalidPath,
+            u8"Cannot get root of path because it is not rooted.");
+    }
+    return StringUTF8_Substring(path, 0, 1, result, errorPool);
+}
 
 #elif defined _WIN32
+#define MAX_ROOT_LENGTH_WINDOWS 3
+static Error GetRootInfo(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result)
+{
+    
+}
 
+bool Path_IsRooted(const unsigned char* path)
+{
+    return GetRootInfo(NULL, path, NULL).Code == ErrorCode_Success;
+}
+
+bool Path_IsFullyQualified(const unsigned char* path);
+
+Error Path_GetRoot(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result)
+{
+    return GetRootInfo(errorPool, path, result);
+}
 
 #endif
