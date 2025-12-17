@@ -612,7 +612,9 @@ Error StringUTF8_Concat(const unsigned char* strA,
     GenericBuffer* destination,
     ErrorMessagePool* errorPool)
 {
-    if (!GenericBuffer_WriteString(destination, strA) || !GenericBuffer_WriteString(destination, strB))
+    if (!GenericBuffer_WriteString(destination, strA)
+        || !GenericBuffer_WriteString(destination, strB)
+        || !GenericBuffer_TryNullTerminate(destination))
     {
         return CreateBufferTooSmallError(errorPool, destination);
     }

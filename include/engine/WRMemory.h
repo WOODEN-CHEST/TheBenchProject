@@ -81,3 +81,11 @@ bool Memory_IsEqual(const void* regionA, const void* regionB, size_t size);
 void Memory_Copy(const void* source, void* destination, size_t size);
 
 void Memory_Move(void* source, void* destination, size_t size);
+
+size_t Memory_GetTotalAllocationCount(void);
+
+size_t Memory_GetTotalRellocationCount(void);
+
+size_t Memory_GetTotalFreeCount(void);
+
+size_t Memory_GetCurrentAllocationCount(void);

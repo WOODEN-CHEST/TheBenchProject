@@ -13,6 +13,8 @@ typedef enum IOStreamTypeEnum
     IOStreamType_Unknown = 0,
     IOStreamType_File,
     IOStreamType_Memory,
+    IOStreamType_Socket,
+    IOStreamType_Custom,
 } IOStreamType;
 
 typedef enum IOStreamFlagsEnum
@@ -31,12 +33,8 @@ typedef enum IOStreamSeekOriginEnum
 
 typedef struct IOStreamStruct IOStream;
 
-struct IOStreamStruct
+typedef struct IOStreamVTableStruct
 {
-    IOStreamType _type;
-    IOStreamFlags _flags;
-    void* _data;
-    ErrorMessagePool* ErrorPool;
     Error (*_getPosition)(IOStream* stream, size_t* position);
     Error (*_setPosition)(IOStream* stream, size_t position);
     Error (*_setPositionSpecial)(IOStream* stream, IOStreamSeekOrigin origin);
@@ -47,23 +45,32 @@ struct IOStreamStruct
     Error (*_read)(IOStream* stream, GenericBuffer* dest, size_t readSize);
     Error (*_close)(IOStream* stream);
     bool (*isEOF)(IOStream* stream);
+} IOStreamVTable;
+
+struct IOStreamStruct
+{
+    IOStreamType _type;
+    IOStreamFlags _flags;
+    void* _data;
+    ErrorMessagePool* ErrorPool;
+    IOStreamVTable _vtable;
 };
 
 
 // Functions.
 static inline Error IOStream_GetPosition(IOStream* stream, size_t* position)
 {
-    return (*stream->_getPosition)(stream, position);
+    return (*stream->_vtable._getPosition)(stream, position);
 }
 
 static inline Error IOStream_Flush(IOStream* stream)
 {
-    return (*stream->_flush)(stream);
+    return (*stream->_vtable._flush)(stream);
 }
 
 static inline Error IOStream_Close(IOStream* stream)
 {
-    return (*stream->_close)(stream);
+    return (*stream->_vtable._close)(stream);
 }
 
 static inline bool IOStream_IsSeekable(IOStream* stream)
@@ -83,7 +90,7 @@ static inline bool IOStream_IsReadable(IOStream* stream)
 
 static inline bool IOStream_IsEndOfStream(IOStream* stream)
 {
-    return (*stream->isEOF)(stream);
+    return (*stream->_vtable.isEOF)(stream);
 }
 
 
@@ -106,11 +113,16 @@ Error IOStream_CreateMemoryStream(ErrorMessagePool* errorPool, IOStreamFlags fla
 
 Error IOStream_CreateMemoryStreamWrapped(ErrorMessagePool* errorPool, GenericBuffer* bufferToWrap, IOStreamFlags flags, IOStream* stream);
 
+Error IOStream_CreateSocket(ErrorMessagePool* errorPool, void* data, IOStreamFlags flags, IOStreamVTable* vtable, IOStream* stream);
+
+Error IOStream_CreateCustom(ErrorMessagePool* errorPool, void* data, IOStreamFlags flags, IOStreamVTable* vtable, IOStream* stream);
+
 void IOStream_CreateFromStandardInput(ErrorMessagePool* errorPool, IOStream* stream);
 
 void IOStream_CreateFromStandardOutput(ErrorMessagePool* errorPool, IOStream* stream);
 
 void IOStream_CreateFromStandardError(ErrorMessagePool* errorPool, IOStream* stream);
+
 
 Error IOStream_GetStreamSize(IOStream* stream, size_t* sizeBytes);
 

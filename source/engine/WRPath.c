@@ -8,6 +8,13 @@
 #include "WRString.h"
 
 
+#if defined __linux__
+#define LINUX_PATH_IMPL
+#elif defined _WIN32
+#define WINDOWS_PATH_IMPL
+#endif
+
+
 // Types.
 typedef struct PathSegmentStruct
 {
@@ -119,13 +126,6 @@ static Error CreateDestBufferTooSmallError(ErrorMessagePool* errorPool)
         u8"Destination buffer is too small to hold the given path.");
 }
 
-static inline bool IsDriveLetter(unsigned char letter)
-{
-    return (('a' <= letter) && (letter <= 'z')) || (('A' <= letter) && (letter <= 'Z'));
-}
-
-
-
 
 // Functions.
 Error Path_ChangeExtension(ErrorMessagePool* errorPool, const unsigned char* path, const unsigned char* newExtension, GenericBuffer* result)
@@ -198,6 +198,7 @@ Error Path_HasExtension(ErrorMessagePool* errorPool, const unsigned char* path, 
 Error Path_Combine(ErrorMessagePool* errorPool, const unsigned char** paths, size_t pathCount, GenericBuffer* result)
 {
     bool EndsWithSeparatorPrevious = false;
+    bool IsAnythingWritten = false;
 
     for (size_t i = 0; i < pathCount; i++)
     {
@@ -208,6 +209,14 @@ Error Path_Combine(ErrorMessagePool* errorPool, const unsigned char** paths, siz
             continue;
         }
         bool StartWithSeparatorCurrent = IsSeparator(TargetPath[0]);
+
+        if (IsAnythingWritten && Path_IsFullyQualified(TargetPath))
+        {
+            return Error_Construct3(errorPool,
+                ErrorCode_IllegalArgument,
+                u8"Cannot append path; found fully qualified path \"%s\" at index %zu, it should've been the first non-empty path.",
+                TargetPath, i);
+        }
 
         if (!StartWithSeparatorCurrent
             && !EndsWithSeparatorPrevious
@@ -223,6 +232,7 @@ Error Path_Combine(ErrorMessagePool* errorPool, const unsigned char** paths, siz
         }
 
         EndsWithSeparatorPrevious = IsSeparator(TargetPath[PathLength - 1]);
+        IsAnythingWritten = true;
     }
 
     return Error_CreateSuccess();
@@ -261,12 +271,11 @@ Error Path_GetParentPath(ErrorMessagePool* errorPool, const unsigned char* path,
 
 /* Platform-specific. */
 
-#if defined __linux__
+#if defined LINUX_PATH_IMPL
 bool Path_IsRooted(const unsigned char* path)
 {
     return path[0] == ENVIRONMENT_PATH_SEPARATOR_PRIMARY;
 }
-
 
 bool Path_IsFullyQualified(const unsigned char* path)
 {
@@ -284,23 +293,140 @@ Error Path_GetRoot(ErrorMessagePool* errorPool, const unsigned char* path, Gener
     return StringUTF8_Substring(path, 0, 1, result, errorPool);
 }
 
-#elif defined _WIN32
-#define MAX_ROOT_LENGTH_WINDOWS 3
-static Error GetRootInfo(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result)
+#elif defined WINDOWS_PATH_IMPL
+#define VOLUME_SEPARATOR ':'
+#define SHARE_DRIVE_SEPARATOR '$'
+
+static bool GetUNCPathLength(const unsigned char* path, size_t* length)
 {
-    
+    *length = 0;
+
+    size_t Index = 0;
+    if ((path[Index] != ENVIRONMENT_PATH_SEPARATOR_PRIMARY) || (path[Index + 1] != ENVIRONMENT_PATH_SEPARATOR_PRIMARY))
+    {
+        return false;
+    }
+    Index += 2;
+
+    size_t HostNameLength = 0;
+    while ((path[Index] != '\0') && (path[Index] != ENVIRONMENT_PATH_SEPARATOR_PRIMARY))
+    {
+        size_t CharSize = CharUTF8_GetByteCountChar(path + Index);
+        if (CharSize == 0)
+        {
+            return false;
+        }
+        Index += CharSize;
+        HostNameLength += CharSize;
+    }
+    if ((HostNameLength == 0) || (path[Index] == '\0'))
+    {
+        return false;
+    }
+    Index++;
+
+    size_t ShareNameLength = 0;
+    bool IsDriveName = false;
+    while ((path[Index] != '\0') && (path[Index] != ENVIRONMENT_PATH_SEPARATOR_PRIMARY))
+    {
+        if (IsDriveName && (!IsDriveLetter(path[Index]) || (ShareNameLength > 1)))
+        {
+            return false;
+        }
+        IsDriveName |= (path[Index] == SHARE_DRIVE_SEPARATOR);
+
+        size_t CharSize = CharUTF8_GetByteCountChar(path + Index);
+        if (CharSize == 0)
+        {
+            return false;
+        }
+        Index += CharSize;
+        ShareNameLength += CharSize;
+    }
+    if (ShareNameLength == 0)
+    {
+        return false;
+    }
+
+    if (path[Index] == ENVIRONMENT_PATH_SEPARATOR_PRIMARY)
+    {
+        Index++;
+    }
+    *length = Index;
+    return true;
+}
+
+static inline bool IsDriveLetter(unsigned char letter)
+{
+    return (('a' <= letter) && (letter <= 'z')) || (('A' <= letter) && (letter <= 'Z'));
+}
+
+static bool GetTradDOSPathLength(const unsigned char* path, size_t* length)
+{
+    *length = 0;
+    size_t Index = 0;
+    if (!IsDriveLetter(path[Index]))
+    {
+        return false;
+    }
+
+    Index++;
+    if (path[Index] != VOLUME_SEPARATOR)
+    {
+        return false;
+    }
+
+    Index++;
+    if (IsSeparator(path[Index]))
+    {
+        Index++;
+    }
+    *length = Index;
+    return true;
+}
+
+static bool GetAbsRootLength(const unsigned char* path, size_t* length)
+{
+    if (path[0] == ENVIRONMENT_PATH_SEPARATOR_PRIMARY)
+    {
+        return GetUNCPathLength(path, length);
+    }
+    return GetTradDOSPathLength(path, length);
 }
 
 bool Path_IsRooted(const unsigned char* path)
 {
-    return GetRootInfo(NULL, path, NULL).Code == ErrorCode_Success;
+    bool IsFullyQualified = Path_IsFullyQualified(path);
+    return IsFullyQualified || IsSeparator(path[0]);
 }
 
-bool Path_IsFullyQualified(const unsigned char* path);
+bool Path_IsFullyQualified(const unsigned char* path)
+{
+    size_t RootLength;
+    return GetAbsRootLength(path, &RootLength);
+}
 
 Error Path_GetRoot(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result)
 {
-    return GetRootInfo(errorPool, path, result);
+    size_t RootLength;
+    if (GetAbsRootLength(path, &RootLength))
+    {
+        return StringUTF8_Substring(path, 0, RootLength, result, errorPool);
+    }
+
+    if (!IsSeparator(path[0]))
+    {
+        return Error_Construct3(errorPool,
+            ErrorCode_IllegalArgument,
+            u8"The given path does not have a root.");
+    }
+
+    GenericBuffer_WriteUChar(result, path[0]);
+    if (!GenericBuffer_TryNullTerminate(result))
+    {
+        return CreateDestBufferTooSmallError(errorPool);
+    }
+    return Error_CreateSuccess();
 }
 
 #endif

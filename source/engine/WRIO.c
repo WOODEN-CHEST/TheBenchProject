@@ -68,17 +68,25 @@ static Error CreateInvalidSpecialPositionError(ErrorMessagePool* errorPool, IOSt
         origin);
 }
 
-static void InitMemStreamVTable(IOStream* stream)
+static void InitMemStreamVTable(IOStreamVTable* table)
 {
-    stream->_getPosition = &MemoryStreamGetPosition;
-    stream->_setPosition = &MemoryStreamSetPosition;
-    stream->_setPositionSpecial = &MemoryStreamSetPositionSpecial;
-    stream->_flush = &MemoryStreamFlush;
-    stream->_writeByte = &MemoryStreamWriteByte;
-    stream->_write = &MemoryStreamWrite;
-    stream->_readByte = &MemoryStreamReadByte;
-    stream->_read = &MemoryStreamRead;
-    stream->_close = &MemoryStreamClose;
+    table->_getPosition = &MemoryStreamGetPosition;
+    table->_setPosition = &MemoryStreamSetPosition;
+    table->_setPositionSpecial = &MemoryStreamSetPositionSpecial;
+    table->_flush = &MemoryStreamFlush;
+    table->_writeByte = &MemoryStreamWriteByte;
+    table->_write = &MemoryStreamWrite;
+    table->_readByte = &MemoryStreamReadByte;
+    table->_read = &MemoryStreamRead;
+    table->_close = &MemoryStreamClose;
+}
+
+static void AssignStreamFields(IOStream* stream, ErrorMessagePool* errorPool, IOStreamType* type, IOStreamFlags flags, void* data)
+{
+    stream->_data = data;
+    stream->ErrorPool = errorPool;
+    stream->_type = type;
+    stream->_flags = flags;
 }
 
 /* File stream. */
@@ -422,20 +430,18 @@ static Error ReadAllFromNonSeekable(IOStream* stream, GenericBuffer* outBuffer)
 Error IOStream_CreateFileStream(ErrorMessagePool* errorPool, void* fileData, IOStreamFlags flags, IOStream* stream)
 {
     Memory_Zero(stream, sizeof(*stream));
-    stream->_type = IOStreamType_File;
-    stream->_flags = flags;
-    stream->ErrorPool = errorPool;
-    stream->_data = fileData;
+    AssignStreamFields(stream, errorPool, IOStreamType_File, flags, fileData);
 
-    stream->_getPosition = &FileStreamGetPosition;
-    stream->_setPosition = &FileStreamSetPosition;
-    stream->_setPositionSpecial = &FileStreamSetPositionSpecial;
-    stream->_flush = &FileStreamFlush;
-    stream->_writeByte = &FileStreamWriteByte;
-    stream->_write = &FileStreamWrite;
-    stream->_readByte = &FileStreamReadByte;
-    stream->_read = &FileStreamRead;
-    stream->_close = &FileStreamClose;
+    IOStreamVTable* VTable = &stream->_vtable;
+    VTable->_getPosition = &FileStreamGetPosition;
+    VTable->_setPosition = &FileStreamSetPosition;
+    VTable->_setPositionSpecial = &FileStreamSetPositionSpecial;
+    VTable->_flush = &FileStreamFlush;
+    VTable->_writeByte = &FileStreamWriteByte;
+    VTable->_write = &FileStreamWrite;
+    VTable->_readByte = &FileStreamReadByte;
+    VTable->_read = &FileStreamRead;
+    VTable->_close = &FileStreamClose;
 }
 
 Error IOStream_CreateMemoryStream(ErrorMessagePool* errorPool, IOStreamFlags flags, IOStream* stream)
@@ -449,10 +455,7 @@ Error IOStream_CreateMemoryStream(ErrorMessagePool* errorPool, IOStreamFlags fla
     MemStreamData->_buffer = &MemStreamData->_selfContainedBuffer;
     MemStreamData->_position = 0;
 
-    stream->_type = IOStreamType_Memory;
-    stream->_flags = flags;
-    stream->ErrorPool = errorPool;
-    stream->_data = MemStreamData;
+    AssignStreamFields(stream, errorPool, IOStreamType_Memory, flags, MemStreamData);
     InitMemStreamVTable(stream);
 }
 
@@ -473,11 +476,22 @@ Error IOStream_CreateMemoryStreamWrapped(ErrorMessagePool* errorPool, GenericBuf
     MemStreamData->_buffer = bufferToWrap;
     MemStreamData->_position = 0;
 
-    stream->_type = IOStreamType_Memory;
-    stream->_flags = flags;
-    stream->ErrorPool = errorPool;
-    stream->_data = MemStreamData;
+    AssignStreamFields(stream, errorPool, IOStreamType_Memory, flags, MemStreamData);
     InitMemStreamVTable(stream);
+}
+
+Error IOStream_CreateSocket(ErrorMessagePool* errorPool, void* data, IOStreamFlags flags, IOStreamVTable* vtable, IOStream* stream)
+{
+    Memory_Zero(stream, sizeof(stream));
+    AssignStreamFields(stream, errorPool, IOStreamType_Socket, flags, data);
+    stream->_vtable = *vtable;
+}
+
+Error IOStream_CreateCustom(ErrorMessagePool* errorPool, void* data, IOStreamFlags flags, IOStreamVTable* vtable, IOStream* stream)
+{
+    Memory_Zero(stream, sizeof(stream));
+    AssignStreamFields(stream, errorPool, IOStreamType_Custom, flags, data);
+    stream->_vtable = *vtable;
 }
 
 void IOStream_CreateFromStandardInput(ErrorMessagePool* errorPool, IOStream* stream)
@@ -514,7 +528,7 @@ Error IOStream_SetPosition(IOStream* stream, size_t position)
             GetStreamTypeName(stream->_type));
     }
 
-    return (*stream->_setPosition)(stream, position);
+    return (*stream->_vtable._setPosition)(stream, position);
 }
 
 Error IOStream_SetPositionSpecial(IOStream* stream, IOStreamSeekOrigin origin)
@@ -527,7 +541,7 @@ Error IOStream_SetPositionSpecial(IOStream* stream, IOStreamSeekOrigin origin)
             GetStreamTypeName(stream->_type));
     }
 
-    return (*stream->_setPositionSpecial)(stream, origin);
+    return (*stream->_vtable._setPositionSpecial)(stream, origin);
 }
 
 Error IOStream_WriteByte(IOStream* stream, unsigned char byte)
@@ -540,7 +554,7 @@ Error IOStream_WriteByte(IOStream* stream, unsigned char byte)
             GetStreamTypeName(stream->_type));
     }
 
-    return (*stream->_writeByte)(stream, byte);
+    return (*stream->_vtable._writeByte)(stream, byte);
 }
 
 Error IOStream_Write(IOStream* stream, const unsigned char* data, size_t dataSize)
@@ -553,7 +567,7 @@ Error IOStream_Write(IOStream* stream, const unsigned char* data, size_t dataSiz
             GetStreamTypeName(stream->_type));
     }
 
-    return (*stream->_write)(stream, data, dataSize);
+    return (*stream->_vtable._write)(stream, data, dataSize);
 }
 
 Error IOStream_ReadByte(IOStream* stream, unsigned char* byte)
@@ -566,7 +580,7 @@ Error IOStream_ReadByte(IOStream* stream, unsigned char* byte)
             GetStreamTypeName(stream->_type));
     }
 
-    return (*stream->_readByte)(stream, byte);
+    return (*stream->_vtable._readByte)(stream, byte);
 }
 
 Error IOStream_Read(IOStream* stream, size_t bytesToRead, GenericBuffer* outBuffer)
@@ -579,7 +593,7 @@ Error IOStream_Read(IOStream* stream, size_t bytesToRead, GenericBuffer* outBuff
             GetStreamTypeName(stream->_type));
     }
 
-    return (*stream->_read)(stream, outBuffer, bytesToRead);
+    return (*stream->_vtable._read)(stream, outBuffer, bytesToRead);
 }
 
 Error IOStream_GetStreamSize(IOStream* stream, size_t* sizeBytes)

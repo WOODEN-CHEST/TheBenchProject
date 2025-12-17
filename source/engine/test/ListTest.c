@@ -87,7 +87,7 @@ static bool VerifyListProperties(TestErrorMessage* errorMsg,
             ErrorMessageOrDefault(listCreationResult.Message));
         return false;
     }
-    bool IsAllocated = list->_buffer != NULL;
+    bool IsAllocated = WRList_GetDataArray(list) != NULL;
     if (IsAllocated != shouldBeAllocated)
     {
         Test_FormatErrorMessage(errorMsg, u8"List's allocations status is %d, expected %d.", IsAllocated, shouldBeAllocated);
@@ -142,7 +142,7 @@ static bool VerifyListSequence(TestErrorMessage* errorMsg,
         return false;
     }
 
-    if (!Memory_IsEqual(list->_buffer, expectedElements, expectedCount * WRList_GetElementSize(list)))
+    if (!Memory_IsEqual(WRList_GetDataArray(list), expectedElements, expectedCount * WRList_GetElementSize(list)))
     {
         Test_FormatErrorMessage(errorMsg, 
             u8"List's element array does not have the correct contents, but element count matches. (%s)",

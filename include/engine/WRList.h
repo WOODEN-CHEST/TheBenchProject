@@ -470,6 +470,12 @@ static inline size_t WRList_GetCapacity(WRList* self)
     return self->_buffer->_capacity;
 }
 
+/* Gets the internal array which contains the list's data. */
+static inline void* WRList_GetDataArray(WRList* self)
+{
+    return self->_buffer->_data;
+}
+
 
 /* Buffers. */
 /**

@@ -2,6 +2,14 @@
 #include <stdlib.h>
 #include <memory.h>
 #include <string.h>
+#include <stdatomic.h>
+
+
+// Fields.
+static atomic_size_t TotalAllocations = 0;
+static atomic_size_t TotalReallocations = 0;
+static atomic_size_t TotalFrees = 0;
+static atomic_size_t CurrentAllocations = 0;
 
 
 // Static functions.
@@ -32,6 +40,9 @@ void* Memory_Allocate(size_t size)
     {
         abort(); // We give up LMAO.
     }
+
+    atomic_fetch_add_explicit(&TotalAllocations, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&CurrentAllocations, 1, memory_order_relaxed);
     return Block;
 }
 
@@ -42,12 +53,16 @@ void* Memory_Reallocate(void* ptr, size_t size)
     {
         abort(); // We give up here too.
     }
+    atomic_fetch_add_explicit(&TotalReallocations, 1, memory_order_relaxed);
     return Block;
 }
 
 void Memory_Free(void* ptr)
 {
     free(ptr);
+    atomic_fetch_add_explicit(&TotalFrees, 1, memory_order_relaxed);
+    atomic_fetch_sub_explicit(&TotalAllocations, 1, memory_order_relaxed);
+    atomic_fetch_sub_explicit(&CurrentAllocations, 1, memory_order_relaxed);
 }
 
 void Memory_Set(void* ptr, int8_t value, size_t size)
@@ -272,4 +287,24 @@ void GenericBuffer_Clear(GenericBuffer* buffer)
 size_t GenericBuffer_GetCapacityRemaining(GenericBuffer* buffer)
 {
     return buffer->_capacity - buffer->_count;
+}
+
+size_t Memory_GetTotalAllocationCount()
+{
+    return atomic_load(&TotalAllocations);
+}
+
+size_t Memory_GetTotalRellocationCount()
+{
+    return atomic_load(&TotalReallocations);
+}
+
+size_t Memory_GetTotalFreeCount()
+{
+    return atomic_load(&TotalFrees);
+}
+
+size_t Memory_GetCurrentAllocationCount()
+{
+    return atomic_load(&CurrentAllocations);
 }
