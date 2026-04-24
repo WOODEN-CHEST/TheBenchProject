@@ -1,112 +1,140 @@
 #include "WRError.h"
 #include "WRMemory.h"
-#include <string.h>
 #include <stdarg.h>
 #include <stdio.h>
 
 
-// Fields.
-static const size_t ERROR_POOL_CAPACITY_DEFAULT = 4;
-static const size_t ERROR_POOL_CAPACITY_GROWTH = 2;
-
-
 // Static functions.
-static void EnsureErrorPoolCapacity(ErrorMessagePool* self, size_t capacity)
+static size_t GetMessageByteLength(const unsigned char* message)
 {
-    if (self->_capacity >= capacity)
+    size_t Length = 0;
+
+    if (message == NULL)
     {
-        return;
+        return 0;
     }
 
-    size_t NewCapacity = self->_capacity == 0 ? ERROR_POOL_CAPACITY_DEFAULT : self->_capacity;
-    while (NewCapacity < capacity)
+    while (message[Length] != u8'\0')
     {
-        NewCapacity *= ERROR_POOL_CAPACITY_GROWTH;
+        Length++;
     }
 
-    size_t NewSize = NewCapacity * MAX_ERROR_MESSAGE_BUFFER_LENGTH;
-    self->_messages = self->_messages ? Memory_Reallocate(self->_messages, NewSize) : Memory_Allocate(NewSize);
-    self->_capacity = NewCapacity;
+    return Length;
+}
+
+static unsigned char* DuplicateMessage(const unsigned char* message)
+{
+    size_t MessageLength = GetMessageByteLength(message);
+    unsigned char* Copy = Memory_Allocate(MessageLength + 1);
+
+    for (size_t Index = 0; Index < MessageLength; Index++)
+    {
+        Copy[Index] = message[Index];
+    }
+
+    Copy[MessageLength] = u8'\0';
+    return Copy;
+}
+
+static unsigned char* FormatMessage(const char* format, va_list args)
+{
+    va_list ArgsCopy;
+    va_copy(ArgsCopy, args);
+    int RequiredByteCount = vsnprintf(NULL, 0, format, ArgsCopy);
+    va_end(ArgsCopy);
+
+    if (RequiredByteCount < 0)
+    {
+        return DuplicateMessage(u8"Failed to format the error message.");
+    }
+
+    size_t MessageLength = (size_t)RequiredByteCount;
+    unsigned char* Message = Memory_Allocate(MessageLength + 1);
+    int WriteResult = vsnprintf((char*)Message, MessageLength + 1, format, args);
+
+    if (WriteResult < 0)
+    {
+        Memory_Free(Message);
+        return DuplicateMessage(u8"Failed to format the error message.");
+    }
+
+    return Message;
 }
 
 
-// Functions.
+// Public functions.
 Error Error_CreateSuccess()
 {
-    return (Error) { .Code = ErrorCode_Success, .Message = NULL };
+    return (Error){ .Code = ErrorCode_Success, .Message = NULL };
 }
 
-Error Error_Construct1(ErrorMessagePool* pool, ErrorCode code, const unsigned char* message)
+Error Error_Construct1(ErrorCode code, const unsigned char* message)
 {
-    Error CreatedError;
-    CreatedError.Code = code;
-
-    if (message && pool)
+    if (message == NULL)
     {
-        unsigned char* MessageBuffer = ErrorMessagePool_GetNextMessage(pool);
-        size_t Index;
-        for (Index = 0; (message[Index] != '\0') && (Index < MAX_ERROR_MESSAGE_BUFFER_LENGTH - 1); Index++)
+        return (Error)
         {
-            MessageBuffer[Index] = message[Index];
-        }
-        MessageBuffer[Index] = '\0';
-        CreatedError.Message = MessageBuffer;
-    }
-    else
-    {
-        CreatedError.Message = NULL;
+            .Code = code,
+            .Message = NULL,
+        };
     }
 
-    return CreatedError;
+    return (Error)
+    {
+        .Code = code,
+        .Message = DuplicateMessage(message),
+    };
 }
 
-Error Error_Construct2(ErrorMessagePool* pool, ErrorCode code, char* message)
+Error Error_Construct2(ErrorCode code, const char* message)
 {
-    return Error_Construct1(pool, code, (const unsigned char*)message);
+    return Error_Construct1(code, (const unsigned char*)message);
 }
 
-Error Error_Construct3(ErrorMessagePool* pool, ErrorCode code, const unsigned char* format, ...)
+Error Error_Construct3(ErrorCode code, const unsigned char* format, ...)
 {
-    Error CreatedError;
-    CreatedError.Code = code;
-
-    if (pool)
+    if (format == NULL)
     {
-        unsigned char* Message = ErrorMessagePool_GetNextMessage(pool);
-        va_list Args;
-        va_start(Args, format);
-        vsnprintf((char*)Message, MAX_ERROR_MESSAGE_BUFFER_LENGTH, (const char*)format, Args);
-        va_end(Args);
-        CreatedError.Message = Message;
-    }
-    else
-    {
-        CreatedError.Message = NULL;
+        return (Error)
+        {
+            .Code = code,
+            .Message = NULL,
+        };
     }
 
-    return CreatedError;
+    va_list Args;
+    va_start(Args, format);
+    unsigned char* Message = FormatMessage((const char*)format, Args);
+    va_end(Args);
+
+    return (Error)
+    {
+        .Code = code,
+        .Message = Message,
+    };
 }
 
-Error Error_Construct4(ErrorMessagePool* pool, ErrorCode code, char* format, ...)
+Error Error_Construct4(ErrorCode code, const char* format, ...)
 {
-    Error CreatedError;
-    CreatedError.Code = code;
-
-    if (pool)
+    if (format == NULL)
     {
-        unsigned char* Message = ErrorMessagePool_GetNextMessage(pool);
-        va_list Args;
-        va_start(Args, format);
-        vsnprintf((char*)Message, MAX_ERROR_MESSAGE_BUFFER_LENGTH, format, Args);
-        va_end(Args);
-        CreatedError.Message = Message;
-    }
-    else
-    {
-        CreatedError.Message = NULL;
+        return (Error)
+        {
+            .Code = code,
+            .Message = NULL,
+        };
     }
 
-    return CreatedError;
+    va_list Args;
+    va_start(Args, format);
+    unsigned char* Message = FormatMessage(format, Args);
+    va_end(Args);
+
+    return (Error)
+    {
+        .Code = code,
+        .Message = Message,
+    };
 }
 
 Error Error_Construct5(ErrorCode code)
@@ -114,31 +142,18 @@ Error Error_Construct5(ErrorCode code)
     return (Error){ .Code = code, .Message = NULL };
 }
 
-
-void ErrorMessagePool_Construct1(ErrorMessagePool* self)
+void Error_Deconstruct(Error* self)
 {
-    Memory_Zero(self, sizeof(*self));
-    EnsureErrorPoolCapacity(self, ERROR_POOL_CAPACITY_DEFAULT);
-}
-
-void ErrorMessagePool_Deconstruct1(ErrorMessagePool* self)
-{
-    if (self->_messages)
+    if (self == NULL)
     {
-        Memory_Free(self->_messages);
+        return;
     }
-    Memory_Zero(self, sizeof(*self));
-}
 
-void ErrorMessagePool_Clear(ErrorMessagePool* self)
-{
-    self->_count = 0;
-}
+    if (self->Message != NULL)
+    {
+        Memory_Free((void*)self->Message);
+    }
 
-unsigned char* ErrorMessagePool_GetNextMessage(ErrorMessagePool* self)
-{
-    EnsureErrorPoolCapacity(self, self->_count + 1);
-    size_t Index = self->_count;
-    self->_count++;
-    return &self->_messages[Index];
+    self->Code = ErrorCode_Success;
+    self->Message = NULL;
 }

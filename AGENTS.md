@@ -303,11 +303,11 @@ void List_Append(List* self, int value);
 
 ## Error Handling
 
-The project will use a custom error handling system modelled after exceptions (similar to C# / Java).
-This module has not been implemented yet — details will be added here once it is. Until then, do not
-add any error handling infrastructure. Do not use `assert`, error codes, or out-parameters for errors
-unless explicitly instructed.
-
+- The project uses a custom error handling system modelled after exceptions (similar to C# / Java) in the WRError module.
+An error status is returned via a struct. The struct has an error code (an enum) which is like the type of the error,
+and an OPTIONAL error message. The error code can be the success code to indicate no error, at which point the message
+should also be null. If the error code is not success, there may be a pointer to an optional error message.
+- If you do not see a suitable error code for an error, you can add it.
 ---
 
 ## Raylib and Header Hygiene
@@ -351,6 +351,14 @@ All required data is passed to the functions where needed instead of held in glo
 - It is generally preferred to have fields as constants instead of macros, but sometimes that may cause more issues. If it does,
 a macro will be fine.
 - You should avoid magic numbers and magic constants where possible. Make them constants and use those.
+
+
+## Git
+- You are NOT allowed to run git functions which mutate files, read-only git functions are allowed.
+
+
+## Comments
+- Do not add useless comments everywhere, only comment the super non-obvious, weird or hacky stuff, which should be rare.
 
 
 ## Quick Reference Checklist (for agents before submitting)
