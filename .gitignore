@@ -61,5 +61,9 @@ compile/out/TheBenchProject*
 # Vscode.
 .vscode/
 
+
+# AI shit.
+.codex
+
 # Test stuff.
 compile/out/unicode_data.txt

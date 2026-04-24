@@ -1,10 +1,11 @@
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "WRComparator.h"
 
 
-#define GENERIC_BUFFER_INDEX_INVALID = ~((size_t)0);
+#define GENERIC_BUFFER_INDEX_INVALID (~((size_t)0))
 
 
 // Types.
@@ -182,7 +183,7 @@ void Memory_Move(void* source, void* destination, size_t size);
 
 size_t Memory_GetTotalAllocationCount(void);
 
-size_t Memory_GetTotalRellocationCount(void);
+size_t Memory_GetTotalReallocationCount(void);
 
 size_t Memory_GetTotalFreeCount(void);
 

@@ -281,6 +281,13 @@ void List_Append(List* self, int value);
 - The project uses a **custom memory module** instead of `malloc`/`free` directly. Once available, all
   allocations and deallocations must go through it. Until it is implemented, standard `malloc`/`free`
   may be used as a placeholder — mark any such usage with `// TODO: replace with memory module`.
+- `WRMemory` is now the active memory layer. Use `Memory_Allocate`, `Memory_Reallocate`, `Memory_Free`,
+  `Memory_Copy`, `Memory_Move`, `Memory_Set`, and `Memory_Zero` instead of calling the C standard library directly.
+- `GenericBuffer` capacity and count are measured in elements, not bytes. The byte/string helpers are only valid when
+  `buffer->_elementSize == sizeof(unsigned char)`, and they still must obey the same validation and capacity rules as
+  the generic operations. The generic buffer should be used in place of raw buffers where possible. Obviously the
+  generic buffer still requires a raw buffer to be passed into it to work, but after that, use the generic buffer.
+  The generic buffer should only ever be written to via its methods; reading from it directly is fine, however.
 - The custom module tracks allocation counts and provides additional utilities, but is otherwise
   semantically equivalent to `malloc`/`free`.
 - **Minimize heap fragmentation.** Prefer allocating larger contiguous blocks over many small individual
@@ -326,6 +333,25 @@ unless explicitly instructed.
 - Do not silently add files. State the new module name and a one-line rationale.
 
 ---
+
+## Strings
+
+- The project uses UTF-8 Unicode strings. To make it easier to work with them, all strings are unsigned char arrays instead
+of regular char arrays. Since this is Unicode and UTF-8 encoding of it, determining whether a character is something
+should be done by extracting its codepoint and testing that, and writing it same way (use codepoint write functions).
+- Remember to prefix strings and character literals with the 'u8' prefix.
+
+
+## Static state
+Avoid static state as much as possible (not illegal, just should be avoided). The C lib already has enough of it. 
+All required data is passed to the functions where needed instead of held in global variables.
+
+
+## Constants
+- It is generally preferred to have fields as constants instead of macros, but sometimes that may cause more issues. If it does,
+a macro will be fine.
+- You should avoid magic numbers and magic constants where possible. Make them constants and use those.
+
 
 ## Quick Reference Checklist (for agents before submitting)
 
