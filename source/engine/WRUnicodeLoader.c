@@ -23,8 +23,6 @@ typedef struct UnicodeParserStruct
     UnicodeCharacter* Data;
     size_t DataCount;
 
-    ErrorMessagePool* ErrorPool;
-
     CodePoint MaxCodePoint;
 } UnicodeParser;
 
@@ -72,8 +70,8 @@ static LineParseAction PARSE_ACTIONS[] =
     { true, NULL, },
     { true, NULL, },
     { true, NULL, },
-    { true, NULL, },
     { false, &ParseIsDigit, },
+    { true, NULL, },
     { false, &ParseNumericValue, },
     { true, NULL, },
     { true, NULL, },
@@ -115,12 +113,12 @@ static void EnsureUnicodeDataCapacity(UnicodeParser* parser, size_t capacity)
     parser->DataCapacity = NewCapacity;
 }
 
-static Error InitParser(ErrorMessagePool* errorPool, const unsigned char* dataBaseFilePath, UnicodeParser* parser)
+static Error InitParser(const unsigned char* dataBaseFilePath, UnicodeParser* parser)
 {
     const char* CharFilePath = (const char*)dataBaseFilePath;
     if (!FileExists(CharFilePath))
     {
-        return Error_Construct3(errorPool, 
+        return Error_Construct3(
             ErrorCode_FileNotFound, 
             u8"Unicode data file \"%s\" not found.",
             dataBaseFilePath);
@@ -129,7 +127,7 @@ static Error InitParser(ErrorMessagePool* errorPool, const unsigned char* dataBa
     char* Text = LoadFileText(CharFilePath);
     if (!Text)
     {
-        return Error_Construct3(errorPool, 
+        return Error_Construct3(
             ErrorCode_IO, 
             u8"Failed to read Unicode data file \"%s\" due to an unknown reason.",
             dataBaseFilePath);
@@ -140,7 +138,6 @@ static Error InitParser(ErrorMessagePool* errorPool, const unsigned char* dataBa
     parser->Data = NULL;
     parser->DataCapacity = 0;
     parser->DataCount = 0;
-    parser->ErrorPool = errorPool;
     parser->FilePath = dataBaseFilePath;
     parser->LineIndex = 0;
     parser->MaxCodePoint = CODEPOINT_NONE;
@@ -151,7 +148,14 @@ static Error InitParser(ErrorMessagePool* errorPool, const unsigned char* dataBa
 
 static void DeinitParser(UnicodeParser* parser)
 {
+    if (parser->Data != NULL)
+    {
+        Memory_Free(parser->Data);
+        parser->Data = NULL;
+    }
+
     UnloadFileText((char*)parser->Text);
+    parser->Text = NULL;
 }
 
 static void MarkSectionEnd(UnicodeParser* parser, bool* isFileEnd, bool* isLineEnd, size_t* sectionLength)
@@ -201,7 +205,7 @@ static bool SkipSection(UnicodeParser* parser, size_t sectionIndex)
 
 static Error CreateIncompleteLineError(UnicodeParser* parser, size_t sectionIndex)
 {
-    return Error_Construct3(parser->ErrorPool, ErrorCode_InvalidUnicodeData,
+    return Error_Construct3(ErrorCode_InvalidUnicodeData,
         u8"Malformed Unicode file \"%s\", expected %zu sections at line %zu, got %zu instead.",
         parser->FilePath, SECTION_COUNT, parser->LineIndex + 1, sectionIndex + 1);
 }
@@ -218,13 +222,26 @@ static bool SkipUntilNonWhitespace(UnicodeParser* parser)
     return GetParserChar(parser) != '\0';
 }
 
-static Error ParseSingleLine(UnicodeParser* parser, bool* isFileEnd)
+static Error ParseSingleLine(UnicodeParser* parser, bool* isFileEnd, bool* wasLineParsed)
 {
+    *wasLineParsed = false;
+
     if (!SkipUntilNonWhitespace(parser))
     {
         *isFileEnd = true;
         return Error_CreateSuccess();
     }
+
+    EnsureUnicodeDataCapacity(parser, parser->DataCount + 1);
+    parser->Data[parser->DataCount] = (UnicodeCharacter)
+    {
+        ._codepoint = CODEPOINT_NONE,
+        ._lowerMapping = CODEPOINT_NONE,
+        ._upperMapping = CODEPOINT_NONE,
+        ._category = CodePointCategory_None,
+        ._flags = CharacterFlags_None,
+        ._numericValue = NAN,
+    };
 
     for (size_t i = 0; i < SECTION_COUNT; i++)
     {
@@ -266,6 +283,8 @@ static Error ParseSingleLine(UnicodeParser* parser, bool* isFileEnd)
         parser->MaxCodePoint = ThisCodepoint;
     }
 
+    parser->DataCount++;
+    *wasLineParsed = true;
     *isFileEnd = GetParserChar(parser) == '\0';
     return Error_CreateSuccess();
 }
@@ -275,15 +294,15 @@ static Error ParseUnicodeData(UnicodeParser* parser)
     bool IsFileEnd;
     do
     {
-        Error Result = ParseSingleLine(parser, &IsFileEnd);
+        bool WasLineParsed;
+        Error Result = ParseSingleLine(parser, &IsFileEnd, &WasLineParsed);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
         }
-        if (!IsFileEnd)
+        if (WasLineParsed)
         {
             parser->LineIndex++;
-            parser->DataCount++;
         }
     } while (!IsFileEnd);
 
@@ -417,11 +436,11 @@ static Error ParseCategory(UnicodeParser* parser)
     }
     else
     {
-        return Error_Construct3(parser->ErrorPool, 
+        return Error_Construct3(
             ErrorCode_InvalidUnicodeData,
             u8"Invalid unicode category \"%s\" on line %zu.",
             SourceText,
-            parser->LineIndex);
+            parser->LineIndex + 1);
     }
 
     parser->Data[parser->DataCount]._category = Category;
@@ -445,9 +464,19 @@ static Error StringToCodePoint(UnicodeParser* parser,
             return Error_CreateSuccess();
         }
 
-        return Error_Construct3(parser->ErrorPool,
+        return Error_Construct3(
             ErrorCode_InvalidUnicodeData,
-            u8"Malformed Unicode source file \"%s\", expected number at line %zu, got \"%s\" (%s).",
+            u8"Malformed Unicode source file \"%s\", expected hexadecimal number at line %zu, got \"%s\" (%s).",
+            parser->FilePath,
+            parser->LineIndex + 1,
+            str,
+            context);
+    }
+    if (*End != '\0')
+    {
+        return Error_Construct3(
+            ErrorCode_InvalidUnicodeData,
+            u8"Malformed Unicode source file \"%s\", expected hexadecimal number at line %zu, got \"%s\" (%s).",
             parser->FilePath,
             parser->LineIndex + 1,
             str,
@@ -467,7 +496,17 @@ static Error StringToFloat(UnicodeParser* parser,
     float Value = strtof((const char*)str, (char**)&End);
     if (End == str)
     {
-        return Error_Construct3(parser->ErrorPool,
+        return Error_Construct3(
+            ErrorCode_InvalidUnicodeData,
+            u8"Malformed Unicode source file \"%s\", expected decimal number at line %zu, got \"%s\" (%s).",
+            parser->FilePath,
+            parser->LineIndex + 1,
+            str,
+            context);
+    }
+    if (*End != '\0')
+    {
+        return Error_Construct3(
             ErrorCode_InvalidUnicodeData,
             u8"Malformed Unicode source file \"%s\", expected decimal number at line %zu, got \"%s\" (%s).",
             parser->FilePath,
@@ -521,12 +560,12 @@ static Error ParseNumericValue(UnicodeParser* parser)
     }
     else if (parser->Text[LocalIndex] != DIVIDER)
     {
-        return Error_Construct3(parser->ErrorPool,
+        return Error_Construct3(
             ErrorCode_InvalidUnicodeData,
             u8"Invalid Unicode file \"%s\" on line %zu, expected either a constant numeric value or " 
             u8"division without spaces, got \"%s\".",
             parser->FilePath,
-            parser->LineIndex,
+            parser->LineIndex + 1,
             parser->Text + parser->TextIndex);
     }
 
@@ -583,12 +622,16 @@ static void EnsureNullTerminatorInDatabase(UnicodeData* data)
     };
 }
 
-static void LoadParsedUnicodeIntoTable(UnicodeCharacter* characters, size_t characterCount, size_t maxCodePoint, UnicodeData* data)
+static void LoadParsedUnicodeIntoTable(UnicodeCharacter* characters, size_t characterCount, CodePoint maxCodePoint, UnicodeData* data)
 {
-    size_t CodepointCount = (size_t)maxCodePoint;
-    if (CodepointCount == 0)
+    size_t CodepointCount;
+    if (maxCodePoint < 1)
     {
         CodepointCount = 1;
+    }
+    else
+    {
+        CodepointCount = (size_t)maxCodePoint + 1;
     }
     if (CodepointCount > MAX_CODEPOINTS)
     {
@@ -613,7 +656,7 @@ static void LoadParsedUnicodeIntoTable(UnicodeCharacter* characters, size_t char
     for (size_t i = 0; i < characterCount; i++)
     {
         CodePoint TargetCodePoint = characters[i]._codepoint;
-        if ((TargetCodePoint < 0) || ((size_t)TargetCodePoint > CodepointCount))
+        if ((TargetCodePoint < 0) || ((size_t)TargetCodePoint >= CodepointCount))
         {
             continue;
         }
@@ -639,7 +682,7 @@ static Error ParseIsDigit(UnicodeParser* parser)
     }
     if ((DigitValue < DIGIT_VALUE_MIN) || (DigitValue > DIGIT_VALUE_MAX))
     {
-        return Error_Construct3(parser->ErrorPool,
+        return Error_Construct3(
             ErrorCode_InvalidUnicodeData,
             u8"Invalid digit value %f, it must be in the bounds [%f,%f]",
             DigitValue, DIGIT_VALUE_MIN, DIGIT_VALUE_MAX);
@@ -651,10 +694,17 @@ static Error ParseIsDigit(UnicodeParser* parser)
 
 
 // Functions.
-Error UnicodeData_Load(ErrorMessagePool* errorPool, const unsigned char* dataBaseFilePath, UnicodeData* data)
+Error UnicodeData_Load(const unsigned char* dataBaseFilePath, UnicodeData* data)
 {
+    if ((dataBaseFilePath == NULL) || (data == NULL))
+    {
+        return Error_Construct3(
+            ErrorCode_IllegalArgument,
+            u8"UnicodeData_Load requires both a database file path and destination data.");
+    }
+
     UnicodeParser Parser;
-    Error Result = InitParser(errorPool, dataBaseFilePath, &Parser);
+    Error Result = InitParser(dataBaseFilePath, &Parser);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
@@ -667,7 +717,7 @@ Error UnicodeData_Load(ErrorMessagePool* errorPool, const unsigned char* dataBas
         return Result;
     }
 
-    LoadParsedUnicodeIntoTable(Parser.Data, Parser.DataCount, (size_t)Parser.MaxCodePoint, data);
+    LoadParsedUnicodeIntoTable(Parser.Data, Parser.DataCount, Parser.MaxCodePoint, data);
     DeinitParser(&Parser);
 
     return Error_CreateSuccess();
@@ -675,14 +725,29 @@ Error UnicodeData_Load(ErrorMessagePool* errorPool, const unsigned char* dataBas
 
 Error UnicodeData_CreateEmpty(UnicodeData* data)
 {
+    if (data == NULL)
+    {
+        return Error_Construct3(
+            ErrorCode_IllegalArgument,
+            u8"UnicodeData_CreateEmpty requires destination data.");
+    }
+
     LoadParsedUnicodeIntoTable(NULL, 0, 0, data);
     return Error_CreateSuccess();
 }
 
 void UnicodeData_Deconstruct(UnicodeData* data)
 {
+    if (data == NULL)
+    {
+        return;
+    }
+
     if (data->_characters)
     {
         Memory_Free(data->_characters);
     }
+
+    data->_characters = NULL;
+    data->_characterCount = 0;
 }

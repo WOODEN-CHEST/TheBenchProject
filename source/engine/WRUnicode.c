@@ -3,7 +3,7 @@
 #include "WRCompile.h"
 
 // Fields.
-#define CODEPOINT_NONE -1
+const CodePoint CODEPOINT_NONE = -1;
 
 
 static const CodePointCategory LETTER_CATEGORIES[] = 
@@ -99,7 +99,12 @@ static const CodePoint WHITESPACE_CHARACTERS[] =
 // Static functions.
 static inline bool IsCodepointInDataBounds(UnicodeData* data, CodePoint codepoint)
 {
-    return (codepoint == 0) 
+    if (data == NULL)
+    {
+        return false;
+    }
+
+    return (codepoint == 0)
         || ((codepoint >= 0)
         && ((size_t)codepoint < data->_characterCount)
         && (data->_characters[codepoint]._codepoint != CODEPOINT_NONE));
@@ -178,6 +183,11 @@ bool Unicode_IsNumber(UnicodeData* data, CodePoint codepoint)
 
 bool Unicode_GetNumericValue(UnicodeData* data, CodePoint codepoint, float* value)
 {
+    if (value == NULL)
+    {
+        return false;
+    }
+
     *value = NAN;
     UnicodeCharacter* Character = GetCharacter(data, codepoint);
     if (Character)
@@ -228,24 +238,12 @@ bool Unicode_IsPunctuation(UnicodeData* data, CodePoint codepoint)
 
 bool Unicode_IsUpper(UnicodeData* data, CodePoint codepoint)
 {
-    UnicodeCharacter* Character = GetCharacter(data, codepoint);
-    if (Character)
-    {
-        CodePoint LowerMapping = Character->_lowerMapping;
-        return IsCodepointInDataBounds(data, LowerMapping);
-    }
-    return false;
+    return Unicode_GetCategory(data, codepoint) == CodePointCategory_UppercaseLetter;
 }
 
 bool Unicode_IsLower(UnicodeData* data, CodePoint codepoint)
 {
-    UnicodeCharacter* Character = GetCharacter(data, codepoint);
-    if (Character)
-    {
-        CodePoint UpperMapping = Character->_upperMapping;
-        return IsCodepointInDataBounds(data, UpperMapping);
-    }
-    return false;
+    return Unicode_GetCategory(data, codepoint) == CodePointCategory_LowercaseLetter;
 }
 
 bool Unicode_IsCased(UnicodeData* data, CodePoint codepoint)
@@ -285,19 +283,18 @@ bool Unicode_IsOtherCategory(UnicodeData* data, CodePoint codepoint)
 
 bool Unicode_EqualsCaseIgnore(UnicodeData* data, CodePoint codepoint1, CodePoint codepoint2)
 {
-    UnicodeCharacter* Character1 = GetCharacter(data, codepoint1);
-    UnicodeCharacter* Character2 = GetCharacter(data, codepoint2);
-    if (!Character1 || !Character2)
+    if (!Unicode_IsDefined(data, codepoint1) || !Unicode_IsDefined(data, codepoint2))
     {
         return false;
     }
 
-    bool IsLowerToUpper = (Character1->_upperMapping == Character2->_codepoint)
-        && (Character2->_lowerMapping == Character1->_codepoint);
-    bool IsUpperToLower = (Character1->_lowerMapping == Character2->_codepoint)
-        && (Character2->_upperMapping == Character1->_codepoint);
+    if (codepoint1 == codepoint2)
+    {
+        return true;
+    }
 
-    return IsLowerToUpper || IsUpperToLower;
+    return (Unicode_ToLower(data, codepoint1) == Unicode_ToLower(data, codepoint2))
+        || (Unicode_ToUpper(data, codepoint1) == Unicode_ToUpper(data, codepoint2));
 }
 
 CodePointCategory Unicode_GetCategory(UnicodeData* data, CodePoint codepoint)

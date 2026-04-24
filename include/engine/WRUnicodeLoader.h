@@ -3,7 +3,7 @@
 
 
 // Functions.
-Error UnicodeData_Load(ErrorMessagePool* errorPool, const unsigned char* dataBaseFilePath, UnicodeData* data);
+Error UnicodeData_Load(const unsigned char* dataBaseFilePath, UnicodeData* data);
 
 Error UnicodeData_CreateEmpty(UnicodeData* data);
 
