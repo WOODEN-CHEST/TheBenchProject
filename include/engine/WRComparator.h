@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
 
 #define COMPARE_NUMBER(a, b) (a > b) ? ComparisonResult_AGreaterThanB : ((a == b) ? ComparisonResult_AEqualsB : ComparisonResult_ALessThanB)
 

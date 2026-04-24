@@ -70,7 +70,7 @@ Error StringUTF8_InvertCase(const unsigned char* str, UnicodeData* unicode, Gene
 
 size_t StringUTF8_GetByteLength(const unsigned char* str);
 
-size_t StringUTF8_GetCodePointLength(const unsigned char* str);
+Error StringUTF8_GetCodePointLength(const unsigned char* str, size_t* length, ErrorMessagePool* errorPool);
 
 Error StringUTF8_Equals(const unsigned char* a,
     const unsigned char* b,
@@ -96,9 +96,9 @@ Error StringUTF8_Split(unsigned char* str,
     ErrorMessagePool* errorPool,
     UnicodeData* unicode);
 
-StringIndexOfOptions String_CreateIndexOptionsNormal();
+StringIndexOfOptions String_CreateIndexOptionsNormal(void);
 
-StringIndexOfOptions String_CreateIndexOptionsFromEnd();
+StringIndexOfOptions String_CreateIndexOptionsFromEnd(void);
 
 StringIndexOfOptions String_CreateIndexOptions(StringCaseRule caseRule,
     StringMoveDirection direction,

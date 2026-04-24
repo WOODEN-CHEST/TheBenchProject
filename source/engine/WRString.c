@@ -380,16 +380,26 @@ size_t StringUTF8_GetByteLength(const unsigned char* str)
     return strlen((char*)str);
 }
 
-size_t StringUTF8_GetCodePointLength(const unsigned char* str)
+Error StringUTF8_GetCodePointLength(const unsigned char* str, size_t* length, ErrorMessagePool* errorPool)
 {
-    size_t Length = 0;
+    *length = 0;
+    size_t CodePointLength = 0;
     size_t Index = 0;
     while (str[Index] != '\0')
     {
-        Index += CharUTF8_GetByteCountChar(str + Index);
-        Length++;
+        size_t ByteCount = CharUTF8_GetByteCountChar(str + Index);
+        if (ByteCount == 0)
+        {
+            return Error_Construct3(errorPool,
+                ErrorCode_InvalidTextEncoding,
+                u8"Invalid utf-8 encoding at index %zu, found byte with value %d.",
+                Index, (int)str[Index]);
+        }
+        Index += ByteCount;
+        CodePointLength++;
     }
-    return Length;
+    *length = CodePointLength;
+    return Error_CreateSuccess();
 }
 
 Error StringUTF8_Equals(const unsigned char* a,
@@ -775,7 +785,7 @@ Error StringUTF8_Reverse(const unsigned char* str, GenericBuffer* destination, E
     GenericBuffer_Clear(destination);
 
     size_t StringLength = StringUTF8_GetByteLength(str);
-    if (!GenericBuffer_ReserveCapacity(destination, StringLength + 1))
+    if (!GenericBuffer_ReserveMoreCapacity(destination, StringLength + 1))
     {
         return CreateBufferTooSmallError(errorPool, destination);
     }

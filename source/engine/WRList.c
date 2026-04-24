@@ -763,9 +763,6 @@ size_t WRList_GetCapacityRemaining(WRList* self)
 
 
 /* Buffers. */
-/**
- * Creates a buffer which wraps the elements in this list.
- */
 GenericBuffer* WRList_ToGenericBuffer(WRList* self)
 {
     return self->_buffer;

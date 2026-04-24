@@ -1,0 +1,349 @@
+# Project Agent Guidelines
+
+## Tech Stack
+
+- **Language:** C23
+- **Renderer / Framework:** Raylib 6.0
+- **Compiler flags:** All warnings enabled and treated as errors, pedantic warnings on, conversion warnings on.
+  Write code that compiles cleanly under these flags. Never silence a warning with a cast or pragma unless
+  there is no other option, and leave a comment explaining why.
+
+---
+
+## Project Layout
+
+```
+project/
+  compile/      # Build scripts. Do not modify unless changing build configuration.
+  include/      # Public header files (.h), one per module.
+  source/       # Implementation files (.c), one per module (roughly).
+```
+
+Headers go under `include/`, source files go under `source/`. There is no nested directory structure below
+these two unless explicitly introduced later.
+
+---
+
+## Build Rules
+
+- The build script lives in the `compile/` directory.
+- **Do not run the build script mid-feature.** Building is only done between complete, self-contained features.
+- If you need to verify syntax or types during development, reason about it statically — do not invoke the compiler
+  as part of a work-in-progress step.
+
+---
+
+## Platform
+
+Linux and Windows. Platform-specific functionality is handled through a strict split between public
+headers and implementation files:
+
+- **Public headers** (`include/`) are always platform-agnostic. They define the API only — no
+  platform-specific types, macros, or includes.
+- **Implementation files** (`source/`) contain platform-specific code, gated with `#ifdef _WIN32` /
+  `#elif defined(__linux__)` etc. as needed.
+- When implementations diverge significantly, a module may have multiple implementation files (one per
+  platform) rather than one file full of ifdefs. Use whichever approach keeps the code cleaner.
+- Cross-platform utilities (file paths, OS interactions, etc.) will be provided by the project's own
+  framework modules. Use those — do not reimplement or reach for platform-specific equivalents directly.
+
+---
+
+## Code Style
+
+### General
+
+- **C# inspired style.** When in doubt, ask what a C# developer would do and translate that intent into C.
+- Braces always on their own line (Allman style).
+- Use parentheses to clarify operator precedence when mixing comparison and logical operators.
+  - Do: `((a > b) && c)`
+  - Don't need them for: `(a && c)` — no ambiguity there.
+- Prefer **early returns** to reduce nesting. Deeply nested if-chains should be refactored with guard clauses.
+
+### Naming
+
+| Thing | Convention | Example |
+|---|---|---|
+| Functions | PascalCase, namespaced | `List_Append`, `Shape_Draw` |
+| Types (struct/union/enum/typedef) | PascalCase | `IDrawable`, `EntityList` |
+| Union members | PascalCase | `.FloatValue`, `.IntValue` |
+| Constants (`#define`, `enum` values) | `UPPERCASE_SNAKE_CASE` (global) or `EnumName_ConstantName` | `MAX_ENTITIES`, `Color_Red` |
+| Public struct members | PascalCase | `.Width`, `.Health` |
+| Read-only (to outside modules) struct members | `_camelCase` | `._refCount`, `._capacity` |
+| Local variables (non-parameter) | PascalCase | `EntityCount`, `Temp` |
+| Function parameters | camelCase | `entityCount`, `self` |
+
+**"Public" means accessible to modules outside the one that owns the struct.** Read-only members use the `_camelCase`
+prefix as a signal — C has no enforcement, so this is a convention the agent must respect and not bypass.
+
+### `const` Qualification
+
+Use `const` on pointer/reference parameters wherever the pointee is not mutated, mirroring the convention
+used in the C standard library. This applies to function parameters and to pointers stored in structs where
+applicable:
+
+```c
+// self is mutated, name is not.
+void Entity_SetName(Entity* self, const char* name);
+```
+
+Do **not** apply `const` to struct members (i.e. `const` fields inside a struct body). This causes problems
+with late initialization and assignment, so it is banned for struct members.
+
+### Enum Constants
+
+Because C does not require qualifying enum constants with their type name, all enum constants are prefixed with the
+enum name to avoid collisions:
+
+```c
+typedef enum
+{
+    Direction_North,
+    Direction_South,
+    Direction_East,
+    Direction_West,
+} Direction;
+```
+
+### Typedefs
+
+All `struct`, `union`, and `enum` declarations must be accompanied by a `typedef`. Use the pattern:
+
+```c
+typedef struct MyStructStruct
+{
+    ...
+} MyStruct;
+```
+
+The inner tag name (`MyStructStruct`) is required so the type can be forward-declared in headers if needed.
+
+---
+
+## Module Structure
+
+Each module consists of:
+- One header (`include/ModuleName.h`) — public API and type definitions.
+- One source file (`source/ModuleName.c`) — implementation.
+
+A source file may contain more than one related "class" if they are tightly coupled. Do not put unrelated classes in
+the same file just to reduce file count.
+
+### Source File Member Order
+
+Within a `.c` file, sections appear in this order, each preceded by a comment label:
+
+1. `// Macros.`
+2. `// Types.`
+3. `// Fields.` (file-scope variables)
+4. `// Static functions.`
+5. `// Public functions.`
+
+C is order-dependent, so breaking this order is allowed when required (e.g., a static helper needed before a type
+that uses it). Do not contort the code to rigidly enforce the order — the order is a guide, not a law.
+
+---
+
+## OOP Conventions
+
+### Interfaces
+
+Interfaces are structs prefixed with `I`. They contain:
+1. A pointer to a **vtable struct** (defined separately, also prefixed with `I`, suffixed with `VTable`).
+2. A `void* self` pointer to the concrete object.
+
+Because an interface header has no knowledge of any concrete type, vtable function pointers must take
+`void*` for the self parameter. This is the one case where `void*` is unavoidable.
+
+The vtable struct holds only function pointers. The interface struct itself is what gets passed around.
+
+```c
+typedef struct IDrawableVTableStruct
+{
+    void (*Draw)(void* self);
+    void (*Destroy)(void* self);
+} IDrawableVTable;
+
+typedef struct IDrawableStruct
+{
+    const IDrawableVTable* VTable;
+    void* Self;
+} IDrawable;
+```
+
+**Wrapper functions** (static inline in the header) provide the clean call site:
+
+```c
+static inline void IDrawable_Draw(IDrawable self)
+{
+    self.VTable->Draw(self.Self);
+}
+
+static inline void IDrawable_Destroy(IDrawable self)
+{
+    self.VTable->Destroy(self.Self);
+}
+```
+
+Callers always go through these wrappers, never through the vtable directly.
+
+Inside a vtable implementation, the concrete type is recovered from `void*` without a cast — in C,
+`void*` converts implicitly to and from any object pointer type:
+
+```c
+static void Circle_Draw(void* self)
+{
+    Circle* circleSelf = self;
+    // use circleSelf ...
+}
+```
+
+### Abstract Classes
+
+Abstract classes follow the same vtable pattern as interfaces, but:
+- The struct is **not** prefixed with `I`.
+- The struct may contain concrete data fields alongside the vtable pointer.
+- Because the abstract class type is known to the vtable definition, vtable function pointers take a
+  pointer to the abstract class type directly — **not** `void*`. No cast is needed at the call site.
+
+```c
+typedef struct ShapeVTableStruct
+{
+    void (*Draw)(Shape* self);
+    void (*Destroy)(Shape* self);
+} ShapeVTable;
+
+typedef struct ShapeStruct
+{
+    const ShapeVTable* VTable;
+    Vector2 Position; // concrete shared data
+} Shape;
+```
+
+If a concrete type needs fields beyond what the abstract class defines, it embeds the abstract struct
+as its **first member**. A pointer to the concrete struct is then pointer-compatible with a pointer to
+the abstract struct, so no cast is required:
+
+```c
+typedef struct CircleStruct
+{
+    Shape Base; // must be first
+    float Radius;
+} Circle;
+
+static void Circle_Draw(Shape* self)
+{
+    Circle* circleSelf = self; // valid, no cast needed — Base is first member
+    // use circleSelf->Radius, self->Position, etc.
+}
+```
+
+### Concrete Implementations
+
+A concrete type implementing an interface or abstract class defines a `static const` vtable and an
+upcast function that fills in the interface/abstract struct:
+
+```c
+static const IDrawableVTable CIRCLE_DRAWABLE_VTABLE =
+{
+    .Draw    = Circle_DrawAsDrawable,
+    .Destroy = Circle_Destroy,
+};
+
+IDrawable Circle_AsDrawable(Circle* self)
+{
+    return (IDrawable){ .VTable = &CIRCLE_DRAWABLE_VTABLE, .Self = self };
+}
+```
+
+### Constructors and Destructors
+
+- Constructors are named `TypeName_Construct1`, `TypeName_Construct2`, etc. when multiple exist.
+- The destructor is `TypeName_Deconstruct`.
+- **Every type must have a `TypeName_Deconstruct`**, even if the current implementation allocates
+  nothing. This ensures the hook exists if memory use is added later.
+- Factory methods that allocate and return a ready-to-use object use descriptive names like
+  `TypeName_Create` or `TypeName_CreateFromFile` — **not** the `ConstructN` naming.
+- Every vtable **must** include a `Destroy` function pointer so any holder of an interface can release
+  resources without knowing the concrete type.
+
+### Class Methods
+
+The first parameter of any method is the relevant object, named `self` (camelCase, as it is a
+parameter):
+
+```c
+void List_Append(List* self, int value);
+```
+
+## Memory Management
+
+- The project uses a **custom memory module** instead of `malloc`/`free` directly. Once available, all
+  allocations and deallocations must go through it. Until it is implemented, standard `malloc`/`free`
+  may be used as a placeholder — mark any such usage with `// TODO: replace with memory module`.
+- The custom module tracks allocation counts and provides additional utilities, but is otherwise
+  semantically equivalent to `malloc`/`free`.
+- **Minimize heap fragmentation.** Prefer allocating larger contiguous blocks over many small individual
+  allocations. Design data structures with this in mind.
+- **Every type must have a `TypeName_Deconstruct`**, even if no memory is currently allocated. This
+  ensures the destructor hook exists for when memory use is added later.
+- Each object owns its own memory — anything allocated during construction is freed in `Deconstruct`.
+- Never free memory you did not allocate. If a pointer is borrowed (not owned), document it with a comment.
+- Any interface vtable must expose a `Destroy` slot so callers holding only an interface can release the
+  underlying object without knowing its concrete type.
+
+---
+
+## Error Handling
+
+The project will use a custom error handling system modelled after exceptions (similar to C# / Java).
+This module has not been implemented yet — details will be added here once it is. Until then, do not
+add any error handling infrastructure. Do not use `assert`, error codes, or out-parameters for errors
+unless explicitly instructed.
+
+---
+
+## Raylib and Header Hygiene
+
+- **Minimize Raylib symbols in public headers.** Prefer forward declarations where possible.
+- If a public struct field or function parameter uses a Raylib type unavoidably, include the minimum Raylib header
+  needed, and leave a comment noting the dependency.
+- Implementation files (`.c`) may include Raylib freely.
+
+---
+
+## Incomplete Work
+
+- When leaving work intentionally incomplete (mid-feature, deferred logic, known gap), mark it with a `// TODO:` comment.
+- Do **not** leave uncommented placeholder code or stubs that silently do the wrong thing.
+- There is no formal testing step — correctness is verified by code review and eventual build + run between features.
+
+---
+
+## New Modules
+
+- Before creating a new module (new `.h` / `.c` pair), note it explicitly in your response so it is visible in review.
+- Do not silently add files. State the new module name and a one-line rationale.
+
+---
+
+## Quick Reference Checklist (for agents before submitting)
+
+- [ ] Compiles cleanly under strict flags (no warnings, no conversions, pedantic-safe)?
+- [ ] All new types are `typedef`-ed with an inner tag name?
+- [ ] Enum constants use `EnumName_ConstantName` format?
+- [ ] Public struct members PascalCase, read-only ones `_camelCase`?
+- [ ] Local variables PascalCase, function parameters camelCase?
+- [ ] No `const` on struct members (only on pointer parameters where applicable)?
+- [ ] Every new interface has a vtable struct, a wrapper struct, and static inline wrapper functions?
+- [ ] Interface vtable functions use `void*` for self; abstract class vtable functions use the abstract type?
+- [ ] No unnecessary casts from `void*`?
+- [ ] Every vtable includes a `Destroy` slot?
+- [ ] Every concrete vtable instance is `static const`?
+- [ ] Every type has a `Deconstruct`, even if currently empty?
+- [ ] Memory allocated in Construct is freed in Deconstruct?
+- [ ] Custom memory module used for allocations (or placeholder `// TODO` if not yet available)?
+- [ ] No Raylib types leaked into public headers unnecessarily?
+- [ ] Public headers are platform-agnostic; platform-specific code is in implementation files only?
+- [ ] New modules explicitly noted in response?
+- [ ] Incomplete sections marked with `// TODO:`?

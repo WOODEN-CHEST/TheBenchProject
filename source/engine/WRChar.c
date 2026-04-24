@@ -31,6 +31,7 @@ static const CodePoint SURROGATE_LOW_MAX = 0xDFFF;
 static const CodePoint SURROGATE_HIGH_MIN = 0xD800;
 static const CodePoint SURROGATE_HIGH_MAX = 0xDBFF;
 
+static const CodePoint CODEPOINT_MIN = 0x0;
 static const CodePoint CODEPOINT_MAX = 0x10FFFF;
 
 
@@ -72,7 +73,7 @@ static inline bool IsInSurrogateRange(CodePoint codepoint)
 
 static inline bool IsInUnicodeRange(CodePoint codepoint)
 {
-    return codepoint <= CODEPOINT_MAX;
+    return (codepoint <= CODEPOINT_MAX) && (codepoint >= CODEPOINT_MIN);
 }
 
 
@@ -127,7 +128,7 @@ bool CharUTF8_IsCharBufferValid(const unsigned char* character, size_t bufferLen
 
     CodePoint CharCodepoint = CharUTF8_GetCodePoint(character);
     bool IsOverlongEncoding = CharUTF8_GetByteCountChar(character) > CharUTF8_GetByteCountCodepoint(CharCodepoint);
-    if (IsOverlongEncoding || !CharUTF8_IsCodePointValid(CharCodepoint))
+    if (IsOverlongEncoding)
     {
         return false;
     }
@@ -158,28 +159,24 @@ size_t CharUTF8_GetByteCountChar(const unsigned char* character)
     return 0;
 }
 
-size_t CharUTF8_GetByteCountCharFromEnd(const unsigned char* characterLastByte, size_t remainingBytes)
+size_t CharUTF8_GetByteCountCharFromEnd(const unsigned char* characterLastByte, size_t remainingPreBytes)
 {
-    const unsigned char* CharStart = characterLastByte;
-    if ((remainingBytes >= 1) && Is1ByteUTF8(*CharStart))
+    if ((remainingPreBytes == 0) && Is1ByteUTF8(*characterLastByte))
     {
         return 1;
     }
 
-    CharStart--;
-    if ((remainingBytes >= 2) && Is2ByteUTF8(*CharStart))
+    if ((remainingPreBytes >= 1) && Is2ByteUTF8(*(characterLastByte - 1)))
     {
         return 2;
     }
 
-    CharStart--;
-    if ((remainingBytes >= 3) && Is3ByteUTF8(*CharStart))
+    if ((remainingPreBytes >= 2) && Is3ByteUTF8(*(characterLastByte - 2)))
     {
         return 3;
     }
 
-    CharStart--;
-    if ((remainingBytes >= 4) && Is4ByteUTF8(*CharStart))
+    if ((remainingPreBytes >= 3) && Is4ByteUTF8(*(characterLastByte - 3)))
     {
         return 4;
     }
@@ -189,7 +186,7 @@ size_t CharUTF8_GetByteCountCharFromEnd(const unsigned char* characterLastByte, 
 
 size_t CharUTF8_GetByteCountCodepoint(CodePoint codepoint)
 {
-    if (!IsInUnicodeRange(codepoint))
+    if (!CharUTF8_IsCodePointValid(codepoint))
     {
         return 0;
     }
@@ -211,7 +208,7 @@ size_t CharUTF8_GetByteCountCodepoint(CodePoint codepoint)
 
 size_t CharUTF8_WriteCodePoint(unsigned char* character, CodePoint codepoint)
 {
-    if (IsInSurrogateRange(codepoint) || !IsInUnicodeRange(codepoint))
+    if (!CharUTF8_IsCodePointValid(codepoint))
     {
         return 0;
     }
@@ -245,56 +242,58 @@ size_t CharUTF8_WriteCodePoint(unsigned char* character, CodePoint codepoint)
 CodePoint CharUTF8_GetCodePoint(const unsigned char* character)
 {
     unsigned char FirstByte = *character;
+    CodePoint CreatedCodePoint = CODEPOINT_NONE;
 
     if (Is1ByteUTF8(FirstByte))
     {
-        return (CodePoint)(character[0] & (~UTF8_1B_FIRST_BYTE_VALUE_MASK));
+        CreatedCodePoint = (CodePoint)(character[0] & (~UTF8_1B_FIRST_BYTE_VALUE_MASK));
     }
-    if (Is2ByteUTF8(FirstByte))
+    else if (Is2ByteUTF8(FirstByte))
     {
         return (CodePoint)(((character[0] & (~UTF8_2B_FIRST_BYTE_VALUE_MASK)) << UTF8_TRAIL_BIT_COUNT)
         | (character[1] & (~UTF8_TRAIL_VALUE_MASK)));
     }
-    if (Is3ByteUTF8(FirstByte))
+    else if (Is3ByteUTF8(FirstByte))
     {
         return (CodePoint)(((character[0] & (~UTF8_3B_FIRST_BYTE_VALUE_MASK)) << (UTF8_TRAIL_BIT_COUNT * 2))
         | ((character[1] & (~UTF8_TRAIL_VALUE_MASK)) << UTF8_TRAIL_BIT_COUNT)
         | (character[2] & (~UTF8_TRAIL_VALUE_MASK)));
     }
-    if (Is4ByteUTF8(FirstByte))
+    else if (Is4ByteUTF8(FirstByte))
     {
         return (CodePoint)(((character[0] & (~UTF8_4B_FIRST_BYTE_VALUE_MASK)) << (UTF8_TRAIL_BIT_COUNT * 3))
         | ((character[1] & (~UTF8_TRAIL_VALUE_MASK)) << (UTF8_TRAIL_BIT_COUNT * 2))
         | ((character[2] & (~UTF8_TRAIL_VALUE_MASK)) << UTF8_TRAIL_BIT_COUNT)
         | (character[3] & (~UTF8_TRAIL_VALUE_MASK)));
     }
-    return CODEPOINT_NONE;
+
+    if (!CharUTF8_IsCodePointValid(CreatedCodePoint))
+    {
+        return CODEPOINT_NONE;
+    }
+    return CreatedCodePoint;
 }
 
-CodePoint CharUTF8_GetCodePointFromEnd(const unsigned char* characterLastByte, size_t remainingBytes)
+CodePoint CharUTF8_GetCodePointFromEnd(const unsigned char* characterLastByte, size_t remainingPreBytes)
 {
-    const unsigned char* CharStart = characterLastByte;
-    if ((remainingBytes >= 1) && Is1ByteUTF8(*CharStart))
+    if ((remainingPreBytes == 0) && Is1ByteUTF8(*characterLastByte))
     {
-        return CharUTF8_GetCodePoint(CharStart);
+        return CharUTF8_GetCodePoint(characterLastByte);
     }
 
-    CharStart--;
-    if ((remainingBytes >= 2) && Is2ByteUTF8(*CharStart))
+    if ((remainingPreBytes >= 1) && Is2ByteUTF8(*(characterLastByte - 1)))
     {
-        return CharUTF8_GetCodePoint(CharStart);
+        return CharUTF8_GetCodePoint(characterLastByte - 1);
     }
 
-    CharStart--;
-    if ((remainingBytes >= 3) && Is3ByteUTF8(*CharStart))
+    if ((remainingPreBytes >= 2) && Is3ByteUTF8(*(characterLastByte - 2)))
     {
-        return CharUTF8_GetCodePoint(CharStart);
+        return CharUTF8_GetCodePoint(characterLastByte - 2);
     }
 
-    CharStart--;
-    if ((remainingBytes >= 4) && Is4ByteUTF8(*CharStart))
+    if ((remainingPreBytes >= 3) && Is4ByteUTF8(*(characterLastByte - 3)))
     {
-        return CharUTF8_GetCodePoint(CharStart);
+        return CharUTF8_GetCodePoint(characterLastByte - 3);
     }
 
     return CODEPOINT_NONE;

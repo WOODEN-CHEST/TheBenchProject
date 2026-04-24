@@ -207,7 +207,7 @@ static Error FileStreamRead(IOStream* stream, size_t bytesToRead, GenericBuffer*
     FILE* FileStream = stream->_data;
     clearerr(FileStream);
 
-    if (!GenericBuffer_ReserveCapacity(outBuffer, bytesToRead))
+    if (!GenericBuffer_ReserveMoreCapacity(outBuffer, bytesToRead))
     {
         return CreateBufferTooSmallError(stream->ErrorPool, stream->_type, u8"read bulk");
     }
@@ -303,7 +303,7 @@ static Error MemoryStreamFlush(ErrorMessagePool* errorPool, IOStream* stream)
 static Error MemoryStreamWriteByte(ErrorMessagePool* errorPool, IOStream* stream, unsigned char byte)
 {
     IOMemoryStreamData* MemData = stream->_data;
-    if ((MemData->_buffer->_count == MemData->_position) && !GenericBuffer_ReserveCapacity(MemData->_buffer, 1))
+    if ((MemData->_buffer->_count == MemData->_position) && !GenericBuffer_ReserveMoreCapacity(MemData->_buffer, 1))
     {
         return CreateBufferTooSmallError(stream->ErrorPool, stream->_type, u8"write byte");
     }
@@ -316,7 +316,7 @@ static Error MemoryStreamWrite(ErrorMessagePool* errorPool, IOStream* stream, co
 {
     IOMemoryStreamData* MemData = stream->_data;
     size_t BytesToReserve = dataSize - MemData->_buffer->_count + MemData->_position;
-    if (!GenericBuffer_ReserveCapacity(MemData->_buffer, BytesToReserve))
+    if (!GenericBuffer_ReserveMoreCapacity(MemData->_buffer, BytesToReserve))
     {
         return CreateBufferTooSmallError(stream->ErrorPool, stream->_type, u8"write bulk");
     }
@@ -365,7 +365,7 @@ static Error MemoryStreamRead(ErrorMessagePool* errorPool, IOStream* stream, siz
         return Error_CreateSuccess();
     }
 
-    if (!GenericBuffer_ReserveCapacity(outBuffer, MaxBytesToRead))
+    if (!GenericBuffer_ReserveMoreCapacity(outBuffer, MaxBytesToRead))
     {
         return Error_Construct3(errorPool,
             ErrorCode_BufferTooSmall,

@@ -6,12 +6,19 @@
 
 
 // Types.
-typedef enum FilePathTypeEnum
+typedef enum PathTypeEnum
 {
-    FIlePath_None,
+    FilePath_None,
     FilePathType_Absolute,
     FilePathType_Relative
-} FilePathType;
+} PathType;
+
+typedef enum PathNormalizeConditionsEnum
+{
+    PathNormalizeConditions_None,
+    PathNormalizeConditions_Separator,
+    PathNormalizeConditions_DirectorySegment,
+} PathNormalizeConditions;
 
 
 // Functions.
@@ -35,15 +42,19 @@ Error Path_GetLastEntryName(ErrorMessagePool* errorPool, const unsigned char* pa
 
 Error Path_GetLastEntryStem(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result);
 
-FilePathType Path_GetPathType(const unsigned char* path);
+bool Path_IsEntryNameValid(const unsigned char* entryName);
+
+Error Path_ValidateEntryName(ErrorMessagePool* errorPool, const unsigned char* entryName);
 
 bool Path_IsValid(const unsigned char* path);
 
 Error Path_Validate(ErrorMessagePool* errorPool, const unsigned char* path);
 
-Error Path_Normalize(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* buffer);
+PathType Path_GetPathType(const unsigned char* path);
 
-bool Path_IsNormalized(const unsigned char* path, bool requirePrimarySeparator);
+Error Path_Normalize(ErrorMessagePool* errorPool, const unsigned char* path, PathNormalizeConditions conditions, GenericBuffer* buffer);
+
+bool Path_IsNormalized(const unsigned char* path, PathNormalizeConditions conditions);
 
 bool Path_IsRooted(const unsigned char* path);
 
@@ -57,7 +68,7 @@ Error Path_TrimTrailingSeparator(ErrorMessagePool* errorPool, const unsigned cha
 
 Error Path_EnsureTrailingSeparator(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result);
 
-bool Path_ContainsRelativeSegments(const unsigned char* path);
+bool Path_ContainsDirectorySegments(const unsigned char* path);
 
 Error Path_Split(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* strBuffer, GenericBuffer* segmentPtrBuffer);
 

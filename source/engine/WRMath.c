@@ -7,7 +7,7 @@
 #define SUFFIX_DOUBLE
 #define WRITE_DECIMAL(value, suffix) value##suffix
 
-// Lord forgive me for my sins.
+// Well...
 #define DECIMAL_ROUND_IMPLEMENTATION(typeName, funcTypeName, suffix, roundingThreshold, marginOfErrorScale)\
     static const typeName RoundingThresholds##funcTypeName[] =\
     {\

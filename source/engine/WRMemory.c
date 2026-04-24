@@ -13,7 +13,8 @@ static atomic_size_t CurrentAllocations = 0;
 
 
 // Static functions.
-static inline GenericBuffer CreateGenericBuffer(void* destination,
+static inline void CreateGenericBuffer(GenericBuffer* buffer,
+    void* destination,
     size_t bufferCapacity,
     size_t elementSize,
     size_t elementCount,
@@ -21,17 +22,16 @@ static inline GenericBuffer CreateGenericBuffer(void* destination,
     GenericBufferAllocateCallback callback,
     GenericBufferFlags flags)
 {
-    return (GenericBuffer)
-    {
-        ._data = destination,
-        ._capacity = bufferCapacity,
-        ._elementSize = elementSize,
-        ._count = elementCount,
-        ._requestMoreSpaceCallback = callback,
-        ._userData = userData,
-        ._flags = flags
-    };
+    buffer->_data = destination;
+    buffer->_capacity = bufferCapacity;
+    buffer->_elementSize = elementSize;
+    buffer->_count = elementCount;
+    buffer->_requestMoreSpaceCallback = callback;
+    buffer->_userData = userData;
+    buffer->_flags = flags;
 }
+
+
 // Functions.
 void* Memory_Allocate(size_t size)
 {
@@ -90,14 +90,16 @@ void Memory_Move(void* source, void* destination, size_t size)
     memmove(destination, source, size);
 }
 
-GenericBuffer GenericBuffer_CreateVariable(void* destination,
+void GenericBuffer_CreateVariable(GenericBuffer* buffer,
+    void* destination,
     size_t bufferCapacity,
     size_t elementSize,
     size_t elementCount,
     void* userData,
     GenericBufferAllocateCallback callback)
 {
-    return CreateGenericBuffer(destination,
+    CreateGenericBuffer(buffer,
+        destination,
         bufferCapacity,
         elementSize,
         elementCount,
@@ -106,26 +108,20 @@ GenericBuffer GenericBuffer_CreateVariable(void* destination,
         GenericBufferFlags_None);
 }
 
-GenericBuffer GenericBuffer_CreateConstant(void* destination, size_t bufferCapacity, size_t elementSize, size_t elementCount)
+void GenericBuffer_CreateConstant(GenericBuffer* buffer, 
+    void* destination, 
+    size_t bufferCapacity, 
+    size_t elementSize, 
+    size_t elementCount)
 {
-    return CreateGenericBuffer(destination,
+    CreateGenericBuffer(buffer,
+        destination,
         bufferCapacity,
         elementSize,
         elementCount,
         NULL,
         NULL,
         GenericBufferFlags_FixedCapacity);
-}
-
-GenericBuffer GenericBuffer_CreateVariableIncomplete(void* destination, size_t bufferCapacity, size_t elementSize, size_t elementCount)
-{
-    return CreateGenericBuffer(destination,
-        bufferCapacity,
-        elementSize,
-        elementCount,
-        NULL,
-        NULL,
-        GenericBufferFlags_None);
 }
 
 void GenericBuffer_SetCallback(GenericBuffer* buffer, GenericBufferAllocateCallback callback, void* userData)
@@ -140,7 +136,7 @@ void GenericBuffer_ClearCallback(GenericBuffer* buffer)
     buffer->_userData = NULL;
 }
 
-bool GenericBuffer_EnsureCapacity(GenericBuffer* buffer, size_t capacity)
+bool GenericBuffer_EnsureTotalCapacity(GenericBuffer* buffer, size_t capacity)
 {
     if ((buffer->_capacity < capacity) || !buffer->_data)
     {
@@ -153,136 +149,64 @@ bool GenericBuffer_EnsureCapacity(GenericBuffer* buffer, size_t capacity)
     return true;
 }
 
-bool GenericBuffer_ReserveCapacity(GenericBuffer* buffer, size_t requiredSize)
+bool GenericBuffer_ReserveMoreCapacity(GenericBuffer* buffer, size_t requiredSize)
 {
-    return GenericBuffer_EnsureCapacity(buffer, buffer->_count + requiredSize);
+    return GenericBuffer_EnsureTotalCapacity(buffer, buffer->_count + requiredSize);
 }
 
-bool GenericBuffer_Write(GenericBuffer* buffer, void* itemToWrite)
+
+bool GenericBuffer_AddLast(GenericBuffer* buffer, void* item)
 {
-    if (!GenericBuffer_ReserveCapacity(buffer, 1))
+    return GenericBuffer_Insert(buffer, item, buffer->_count);
+}
+
+bool GenericBuffer_AddFirst(GenericBuffer* buffer, void* item)
+{
+    return GenericBuffer_Insert(buffer, item, 0);
+}
+
+bool GenericBuffer_Insert(GenericBuffer* buffer, void* item, size_t index)
+{
+    if (index > buffer->_count)
+    {
+        return false;
+    }
+    if (GenericBuffer_IsReadOnly(buffer))
+    {
+        return false;
+    }
+    if (!GenericBuffer_ReserveMoreCapacity(buffer, 1))
     {
         return false;
     }
 
-    size_t WriteOffset = buffer->_count * buffer->_elementSize;
-    void* WritePosition = (void*)((uintptr_t)buffer->_data + WriteOffset);
-    Memory_Copy(itemToWrite, WritePosition, buffer->_elementSize);
+    size_t MovedByteCount = (buffer->_count - index) * buffer->_elementSize;
+    unsigned char* MoveSource = buffer->_data + (index * buffer->_elementSize);
+    unsigned char* MoveDestination = MoveSource + buffer->_elementSize;
+    
+    Memory_Move(MoveSource, MoveDestination, MovedByteCount);
+
+    Memory_Copy(item, MoveDestination, buffer->_elementSize);
     buffer->_count++;
+
     return true;
 }
 
-bool GenericBuffer_WriteUChar(GenericBuffer* buffer, unsigned char character)
-{
-    if (!GenericBuffer_ReserveCapacity(buffer, 1))
-    {
-        return false;
-    }
+bool GenericBuffer_Replace(GenericBuffer* buffer, void* item, size_t index);
 
-    size_t WriteOffset = buffer->_count;
-    unsigned char* WritePosition = (unsigned char*)((uintptr_t)buffer->_data + WriteOffset);
-    *WritePosition = character;
-    buffer->_count++;
-    return true;
-}
 
-bool GenericBuffer_WriteString(GenericBuffer* buffer, const unsigned char* str)
-{
-    for (size_t i = 0; str[i] != '\0'; i++)
-    {
-        if (!GenericBuffer_WriteUChar(buffer, str[i]))
-        {
-            return false;
-        }
-    }
-    return true;
-}
 
-bool GenericBuffer_WriteStringBySize(GenericBuffer* buffer, const unsigned char* str, size_t stringSize)
-{
-    return GenericBuffer_WriteBytes(buffer, str, stringSize);
-}
 
-bool GenericBuffer_WriteBytes(GenericBuffer* buffer, const unsigned char* bytes, size_t size)
-{
-    if (size == 0)
-    {
-        return true;
-    }
-    if (!GenericBuffer_ReserveCapacity(buffer, size))
-    {
-        return false;
-    }
 
-    size_t WriteOffset = buffer->_count;
-    unsigned char* WritePosition = (unsigned char*)buffer->_data + WriteOffset;
-    Memory_Copy(bytes, WritePosition, size);
-    buffer->_count += size;
-    return true;
-}
 
-bool GenericBuffer_TryNullTerminate(GenericBuffer* buffer)
-{
-    if ((buffer->_capacity == 0) || (buffer->_count > buffer->_capacity))
-    {
-        return false;
-    }
-    else if (buffer->_capacity == buffer->_count)
-    {
-        ((unsigned char*)buffer->_data)[buffer->_capacity - 1] = '\0';
-    }
-    else
-    {
-        ((unsigned char*)buffer->_data)[buffer->_count] = '\0';
-        buffer->_count++; 
-    }
-    return true;
-}
 
-bool GenericBuffer_WriteBulk(GenericBuffer* buffer, void* data, size_t elementCount)
-{
-    if (elementCount == 0)
-    {
-        return true;
-    }
-    if (!GenericBuffer_ReserveCapacity(buffer, elementCount))
-    {
-        return false;
-    }
-}
 
-bool GenericBuffer_WriteVoidPtr(GenericBuffer* buffer, void* ptr)
-{
-    if (!GenericBuffer_ReserveCapacity(buffer, 1))
-    {
-        return false;
-    }
 
-    size_t WriteOffset = buffer->_count * sizeof(ptr);
-    void** WritePosition = (void**)((uintptr_t)buffer->_data + WriteOffset);
-    *WritePosition = ptr;
-    buffer->_count++;
-    return true;
-}
 
-bool GenericBuffer_WriteSizeT(GenericBuffer* buffer, size_t value)
-{
-    if (!GenericBuffer_ReserveCapacity(buffer, 1))
-    {
-        return false;
-    }
 
-    size_t WriteOffset = buffer->_count * sizeof(value);
-    size_t* WritePosition = (size_t*)((uintptr_t)buffer->_data + WriteOffset);
-    *WritePosition = value;
-    buffer->_count++;
-    return true;
-}
 
-void GenericBuffer_Clear(GenericBuffer* buffer)
-{
-    buffer->_count = 0;
-}
+
+
 
 size_t GenericBuffer_GetCapacityRemaining(GenericBuffer* buffer)
 {

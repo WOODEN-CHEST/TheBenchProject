@@ -156,6 +156,7 @@ static bool VerifyListSequence(TestErrorMessage* errorMsg,
 /* Test functions. */
 static bool TestSimpleMutation(TestErrorMessage* errorMsg, ErrorMessagePool* errorPool, WRList* list)
 {
+    /* Lord forgive me for my sins. */
     SIMPLE_MUTATION_ELEMENT Arr1[] = { 1 };
     Error Result = WRList_AddFirst(list, &Arr1[0]);
     if (Result.Code != ErrorCode_Success)

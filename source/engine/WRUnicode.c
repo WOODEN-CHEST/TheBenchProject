@@ -3,7 +3,7 @@
 #include "WRCompile.h"
 
 // Fields.
-const CodePoint CODEPOINT_NONE = -1;
+#define CODEPOINT_NONE -1
 
 
 static const CodePointCategory LETTER_CATEGORIES[] = 

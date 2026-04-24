@@ -1,5 +1,18 @@
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
+
+typedef union FloatBitsUnion
+{
+    float Float;
+    uint32_t Int;
+} FloatBits;
+
+typedef union DoubleBitsUnion
+{
+    double Double;
+    uint64_t Int;
+} DoubleBits;
 
 
 #define NAN_FLOAT ((FloatBits) { .Int = 0x7F800001 }.Float)
@@ -44,19 +57,6 @@ typedef struct RoundingOptionsStruct
     RoundingType _type;
     uint32_t _digitCountAfterDecimal;
 } RoundingOptions;
-
-typedef union FloatBitsUnion
-{
-    float Float;
-    uint32_t Int;
-} FloatBits;
-
-typedef union DoubleBitsUnion
-{
-    double Double;
-    uint64_t Int;
-} DoubleBits;
-
 
 
 // Functions.

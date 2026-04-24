@@ -11,7 +11,7 @@
  * 
  * The integer parse functions all fail with the illegal argument error if one if these conditions is met:
  *  * The string is empty.
- *  * The contains characters that are not valid digits in the specified base. 
+ *  * The string contains characters that are not valid digits in the specified base. 
  *    This includes leading and trailing whitespace, so the strings containing the numbers must be trimmed.
  *  * The string contains more than one sign ('+' or '-') or the sign is not at the beginning of the string.
  *  * The passed in base is not between NUMBER_BASE_MIN and NUMBER_BASE_MAX, and not set to NUMBER_BASE_AUTO_DETECT.
@@ -33,9 +33,6 @@
  * (but after the sign) if the base is 16 or 2 respectively. Other bases will not have a prefix written.
  * If the given buffer is too small to hold the resulting string version of the number, the buffer will contain the
  * incomplete data and shouldn't be read a string.
- * 
- * The float / double parse functions all fail with the illegal argument exception if one of these conditions is met:
- *  * The
  */
 
 
