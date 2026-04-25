@@ -2,6 +2,7 @@
 #include "WRError.h"
 #include "WRMemory.h"
 #include "WRFileStream.h"
+#include <stdbool.h>
 #include <time.h>
 #include <stddef.h>
 
@@ -49,31 +50,46 @@ typedef enum FileOpenModeEnum
 
 
 // Functions.
-Error FileSystem_GetEntries(ErrorMessagePool* errorPool,
-    const unsigned char* path,
+Error FileSystem_GetEntries(const unsigned char* path,
     DirectorySearchOption searchOption,
     DirectoryEntryEnumerator** enumerator);
 
-Error FileSystem_GetFiles(ErrorMessagePool* errorPool, 
-    const unsigned char* path,
+Error FileSystem_GetFiles(const unsigned char* path,
     DirectorySearchOption searchOption,
     DirectoryEntryEnumerator** enumerator);
 
-Error FileSystem_GetDirectories(ErrorMessagePool* errorPool,
-    const unsigned char* path,
+Error FileSystem_GetDirectories(const unsigned char* path,
     DirectorySearchOption searchOption,
     DirectoryEntryEnumerator** enumerator);
 
-Error FileSystem_GetEntryInfo(ErrorMessagePool* errorPool, const unsigned char* path, FileSystemEntryInfo* info);
+Error DirectoryEntryEnumerator_HasNext(DirectoryEntryEnumerator* enumerator, bool* hasNext);
 
-Error FileSystem_CreateLastDirectory(ErrorMessagePool* errorPool, const unsigned char* path);
+Error DirectoryEntryEnumerator_Next(DirectoryEntryEnumerator* enumerator, FileSystemEntryInfo* outInfo);
 
-Error FileSystem_CreateAllDirectories(ErrorMessagePool* errorPool, const unsigned char* path);
+Error DirectoryEntryEnumerator_Deconstruct(DirectoryEntryEnumerator* enumerator);
 
-Error FileSystem_OpenFileStream(ErrorMessagePool* errorPool, const unsigned char* path, FileOpenMode mode, FileStream** stream);
+Error FileSystem_GetEntryInfo(const unsigned char* path, FileSystemEntryInfo* outInfo);
 
-Error FileSystem_DeleteEntry(ErrorMessagePool* errorPool, const unsigned char* path);
+Error FileSystem_CreateDirectory(const unsigned char* path);
 
-Error FileSystem_MoveEntry(ErrorMessagePool* errorPool, const unsigned char* oldPath, const unsigned char* newPath);
+Error FileSystem_CreateAllDirectories(const unsigned char* path);
 
-Error FileSystem_RenameEntry(ErrorMessagePool* errorPool, const unsigned char* path, const unsigned char* newName);
+Error FileSystem_OpenFileStream(const unsigned char* path, FileOpenMode mode, FileStream* stream);
+
+Error FileSystem_ReadAllText(const unsigned char* path, GenericBuffer* destination);
+
+Error FileSystem_ReadAllBytes(const unsigned char* path, GenericBuffer* destination);
+
+Error FileSystem_WriteAllText(const unsigned char* path, const unsigned char* text);
+
+Error FileSystem_WriteAllBytes(const unsigned char* path, const unsigned char* bytes, size_t byteCount);
+
+Error FileSystem_DeleteEntry(const unsigned char* path);
+
+Error FileSystem_MoveEntry(const unsigned char* oldPath, const unsigned char* newPath);
+
+Error FileSystem_RenameEntry(const unsigned char* path, const unsigned char* newName);
+
+Error FileSystem_CreateFile(const unsigned char* path);
+
+void FileSystemEntryInfo_Deconstruct(FileSystemEntryInfo* self);

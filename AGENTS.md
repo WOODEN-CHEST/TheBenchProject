@@ -28,8 +28,8 @@ these two unless explicitly introduced later.
 
 - The build script lives in the `compile/` directory.
 - **Do not run the build script mid-feature.** Building is only done between complete, self-contained features.
-- If you need to verify syntax or types during development, reason about it statically — do not invoke the compiler
-  as part of a work-in-progress step.
+- If you need to verify syntax or types during development, you can try to invoke the compiler on just the modules or files
+  which you are working on. Compiling the entire project mid-feature likely won't work.
 
 ---
 
