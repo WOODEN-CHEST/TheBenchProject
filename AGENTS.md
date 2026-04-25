@@ -60,6 +60,7 @@ headers and implementation files:
   - Don't need them for: `(a && c)` — no ambiguity there.
 - Prefer **early returns** to reduce nesting. Deeply nested if-chains should be refactored with guard clauses.
 - Try to keep functions at a reasonable size, no 100+ line monoliths.
+- Do NOT make any implementation file dependent on symbols from another implementation file. A .c file may only use symbols declared in headers it explicitly includes. Mark all functions and variables in an implementation file that are not declared in any header as static. If implementation files share dependencies that shouldn't be exposed as the project's public API, create new private headers for those members in the source directory (public headers go in include/, private headers in source/).
 
 ### Naming
 

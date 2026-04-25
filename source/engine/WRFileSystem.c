@@ -1,4 +1,5 @@
 #include "WRFileSystem.h"
+#include "WRFileSystemInternal.h"
 #include "WRIO.h"
 #include "WRMemory.h"
 #include "WREnvironment.h"
@@ -41,22 +42,6 @@ static const size_t FILE_SYSTEM_TEMP_BUFFER_INITIAL_CAPACITY = 256;
 
 
 // Static functions.
-Error FileSystemPlatform_OpenFileStream(const unsigned char* path, FileOpenMode mode, FileStream* stream);
-
-Error FileSystemPlatform_GetEntryInfo(const unsigned char* path, FileSystemEntryInfo* outInfo);
-
-Error FileSystemPlatform_CreateDirectory(const unsigned char* path);
-
-Error FileSystemPlatform_OpenDirectory(const unsigned char* path, void** handle);
-
-Error FileSystemPlatform_ReadDirectoryEntry(void* handle, const unsigned char* directoryPath, FileSystemEntryInfo* outInfo, bool* hasEntry);
-
-void FileSystemPlatform_CloseDirectory(void* handle);
-
-Error FileSystemPlatform_DeleteEntry(const unsigned char* path);
-
-Error FileSystemPlatform_MoveEntry(const unsigned char* oldPath, const unsigned char* newPath);
-
 static bool FileSystemBufferAllocate(GenericBuffer* destination, size_t requestedCapacity)
 {
     unsigned char* NewData = Memory_Reallocate(destination->_data, requestedCapacity);

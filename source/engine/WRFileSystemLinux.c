@@ -1,4 +1,5 @@
 #include "WRFileSystem.h"
+#include "WRFileSystemInternal.h"
 #include "WRMemory.h"
 #include "WREnvironment.h"
 #include "WRPath.h"
@@ -13,7 +14,6 @@
 #if defined(__linux__)
 
 
-// Macros.
 
 
 // Types.
