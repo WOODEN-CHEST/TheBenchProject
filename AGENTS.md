@@ -59,6 +59,7 @@ headers and implementation files:
   - Do: `((a > b) && c)`
   - Don't need them for: `(a && c)` — no ambiguity there.
 - Prefer **early returns** to reduce nesting. Deeply nested if-chains should be refactored with guard clauses.
+- Try to keep functions at a reasonable size, no 100+ line monoliths.
 
 ### Naming
 

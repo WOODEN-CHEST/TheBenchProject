@@ -1,5 +1,7 @@
 #include "WRFileSystem.h"
 #include "WRMemory.h"
+#include "WREnvironment.h"
+#include "WRPath.h"
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
@@ -22,6 +24,7 @@ typedef struct NativeDirectoryEnumeratorStruct
 
 
 // Fields.
+static const size_t FILE_SYSTEM_PLATFORM_TEMP_BUFFER_INITIAL_CAPACITY = 256;
 
 
 // Static functions.
@@ -39,7 +42,35 @@ static size_t GetStringLength(const unsigned char* text)
 
 static bool IsDirectorySeparator(unsigned char character)
 {
-    return (character == u8'/') || (character == u8'\\');
+    return (character == ENVIRONMENT_PATH_SEPARATOR_PRIMARY)
+        || (character == ENVIRONMENT_PATH_SEPARATOR_SECONDARY);
+}
+
+static bool FileSystemPlatformBufferAllocate(GenericBuffer* destination, size_t requestedCapacity)
+{
+    unsigned char* NewData = Memory_Reallocate(destination->_data, requestedCapacity);
+
+    if (NewData == NULL)
+    {
+        return false;
+    }
+
+    destination->_data = NewData;
+    destination->_capacity = requestedCapacity;
+    return true;
+}
+
+static void CreateGrowableByteBuffer(GenericBuffer* buffer)
+{
+    unsigned char* Data = Memory_Allocate(FILE_SYSTEM_PLATFORM_TEMP_BUFFER_INITIAL_CAPACITY);
+
+    GenericBuffer_CreateVariable(buffer,
+        Data,
+        FILE_SYSTEM_PLATFORM_TEMP_BUFFER_INITIAL_CAPACITY,
+        sizeof(unsigned char),
+        0,
+        NULL,
+        &FileSystemPlatformBufferAllocate);
 }
 
 static Error CreateNullArgumentError(const unsigned char* argumentName)
@@ -107,47 +138,32 @@ static Error DuplicateString(const unsigned char* text, unsigned char** outText)
 
 static Error CombinePaths(const unsigned char* leftPath, const unsigned char* rightPath, unsigned char** outPath)
 {
-    size_t LeftLength = GetStringLength(leftPath);
-    size_t RightLength = GetStringLength(rightPath);
-    bool NeedsSeparator = (LeftLength > 0)
-        && (RightLength > 0)
-        && !IsDirectorySeparator(leftPath[LeftLength - 1])
-        && !IsDirectorySeparator(rightPath[0]);
-    size_t TotalLength = LeftLength + RightLength + (NeedsSeparator ? 1U : 0U);
-    unsigned char* Result = NULL;
+    GenericBuffer Buffer;
+    Error Result = Error_CreateSuccess();
 
-    if (TotalLength < LeftLength)
+    if (outPath == NULL)
     {
-        return Error_Construct1(ErrorCode_ArgumentOutOfRange,
-            u8"Linux file system path combination overflowed.");
+        return CreateNullArgumentError(u8"outPath");
     }
 
-    Result = Memory_Allocate(TotalLength + 1);
-    if (LeftLength > 0)
+    *outPath = NULL;
+    CreateGrowableByteBuffer(&Buffer);
+    Result = Path_Append(leftPath, rightPath, &Buffer);
+    if (Result.Code != ErrorCode_Success)
     {
-        Memory_Copy(leftPath, Result, LeftLength);
+        Memory_Free(Buffer._data);
+        return Result;
     }
 
-    if (NeedsSeparator)
-    {
-        Result[LeftLength] = u8'/';
-        LeftLength++;
-    }
-    if (RightLength > 0)
-    {
-        Memory_Copy(rightPath, Result + LeftLength, RightLength);
-    }
-
-    Result[TotalLength] = 0;
-    *outPath = Result;
-    return Error_CreateSuccess();
+    Result = DuplicateString((const unsigned char*)Buffer._data, outPath);
+    Memory_Free(Buffer._data);
+    return Result;
 }
 
 static Error CopyLastEntryName(const unsigned char* path, unsigned char** outName)
 {
-    size_t Length = GetStringLength(path);
-    size_t TrimmedLength = Length;
-    size_t StartIndex = 0;
+    GenericBuffer Buffer;
+    Error Result = Error_CreateSuccess();
 
     if (outName == NULL)
     {
@@ -155,18 +171,17 @@ static Error CopyLastEntryName(const unsigned char* path, unsigned char** outNam
     }
 
     *outName = NULL;
-    while ((TrimmedLength > 1) && IsDirectorySeparator(path[TrimmedLength - 1]))
+    CreateGrowableByteBuffer(&Buffer);
+    Result = Path_GetLastEntryName(path, &Buffer);
+    if (Result.Code != ErrorCode_Success)
     {
-        TrimmedLength--;
+        Memory_Free(Buffer._data);
+        return Result;
     }
 
-    StartIndex = TrimmedLength;
-    while ((StartIndex > 0) && !IsDirectorySeparator(path[StartIndex - 1]))
-    {
-        StartIndex--;
-    }
-
-    return DuplicateStringBySize(path + StartIndex, TrimmedLength - StartIndex, outName);
+    Result = DuplicateString((const unsigned char*)Buffer._data, outName);
+    Memory_Free(Buffer._data);
+    return Result;
 }
 
 static Error ConvertStatToEntryInfo(const unsigned char* path,

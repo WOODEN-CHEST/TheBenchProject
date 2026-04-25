@@ -1,6 +1,8 @@
 #include "WRFileSystem.h"
 #include "WRIO.h"
 #include "WRMemory.h"
+#include "WREnvironment.h"
+#include "WRPath.h"
 #include <stdint.h>
 
 
@@ -35,6 +37,7 @@ struct DirectoryEntryEnumeratorStruct
 
 // Fields.
 static const size_t DIRECTORY_ENUMERATOR_LEVEL_GROWTH = 4;
+static const size_t FILE_SYSTEM_TEMP_BUFFER_INITIAL_CAPACITY = 256;
 
 
 // Static functions.
@@ -53,6 +56,46 @@ void FileSystemPlatform_CloseDirectory(void* handle);
 Error FileSystemPlatform_DeleteEntry(const unsigned char* path);
 
 Error FileSystemPlatform_MoveEntry(const unsigned char* oldPath, const unsigned char* newPath);
+
+static bool FileSystemBufferAllocate(GenericBuffer* destination, size_t requestedCapacity)
+{
+    unsigned char* NewData = Memory_Reallocate(destination->_data, requestedCapacity);
+
+    if (NewData == NULL)
+    {
+        return false;
+    }
+
+    destination->_data = NewData;
+    destination->_capacity = requestedCapacity;
+    return true;
+}
+
+static void CreateGrowableByteBuffer(GenericBuffer* buffer)
+{
+    unsigned char* Data = Memory_Allocate(FILE_SYSTEM_TEMP_BUFFER_INITIAL_CAPACITY);
+
+    GenericBuffer_CreateVariable(buffer,
+        Data,
+        FILE_SYSTEM_TEMP_BUFFER_INITIAL_CAPACITY,
+        sizeof(unsigned char),
+        0,
+        NULL,
+        &FileSystemBufferAllocate);
+}
+
+static void CreateGrowablePointerBuffer(GenericBuffer* buffer)
+{
+    unsigned char** Data = Memory_Allocate(sizeof(*Data) * FILE_SYSTEM_TEMP_BUFFER_INITIAL_CAPACITY);
+
+    GenericBuffer_CreateVariable(buffer,
+        Data,
+        FILE_SYSTEM_TEMP_BUFFER_INITIAL_CAPACITY,
+        sizeof(unsigned char*),
+        0,
+        NULL,
+        &FileSystemBufferAllocate);
+}
 
 static size_t GetStringLength(const unsigned char* text)
 {
@@ -73,13 +116,8 @@ static size_t GetStringLength(const unsigned char* text)
 
 static bool IsDirectorySeparator(unsigned char character)
 {
-    return (character == u8'/') || (character == u8'\\');
-}
-
-static bool IsAsciiLetter(unsigned char character)
-{
-    return ((character >= u8'a') && (character <= u8'z'))
-        || ((character >= u8'A') && (character <= u8'Z'));
+    return (character == ENVIRONMENT_PATH_SEPARATOR_PRIMARY)
+        || (character == ENVIRONMENT_PATH_SEPARATOR_SECONDARY);
 }
 
 static Error CreateNullArgumentError(const unsigned char* argumentName)
@@ -126,6 +164,8 @@ static Error CreateNoMoreEntriesError(void)
 
 static Error ValidatePathArgument(const unsigned char* path, const unsigned char* argumentName)
 {
+    Error Result = Error_CreateSuccess();
+
     if (path == NULL)
     {
         return CreateNullArgumentError(argumentName);
@@ -133,6 +173,12 @@ static Error ValidatePathArgument(const unsigned char* path, const unsigned char
     if (path[0] == 0)
     {
         return CreateEmptyPathError();
+    }
+
+    Result = Path_Validate(path);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
     }
 
     return Error_CreateSuccess();
@@ -194,103 +240,10 @@ static Error DuplicateString(const unsigned char* text, unsigned char** outText)
     return DuplicateStringBySize(text, GetStringLength(text), outText);
 }
 
-static size_t GetRootLength(const unsigned char* path)
-{
-    size_t Index = 0;
-
-    if ((path == NULL) || (path[0] == 0))
-    {
-        return 0;
-    }
-
-    if (IsDirectorySeparator(path[0]))
-    {
-        if (!IsDirectorySeparator(path[1]))
-        {
-            return 1;
-        }
-
-        Index = 2;
-        while ((path[Index] != 0) && !IsDirectorySeparator(path[Index]))
-        {
-            Index++;
-        }
-        while (IsDirectorySeparator(path[Index]))
-        {
-            Index++;
-        }
-        while ((path[Index] != 0) && !IsDirectorySeparator(path[Index]))
-        {
-            Index++;
-        }
-        while (IsDirectorySeparator(path[Index]))
-        {
-            Index++;
-        }
-
-        return Index;
-    }
-
-    if (IsAsciiLetter(path[0]) && (path[1] == u8':'))
-    {
-        if (IsDirectorySeparator(path[2]))
-        {
-            return 3;
-        }
-
-        return 2;
-    }
-
-    return 0;
-}
-
-static size_t GetTrimmedPathLength(const unsigned char* path)
-{
-    size_t Length = GetStringLength(path);
-    size_t RootLength = GetRootLength(path);
-
-    while ((Length > RootLength) && IsDirectorySeparator(path[Length - 1]))
-    {
-        Length--;
-    }
-
-    return Length;
-}
-
-static size_t GetParentPathLength(const unsigned char* path)
-{
-    size_t Length = GetTrimmedPathLength(path);
-    size_t RootLength = GetRootLength(path);
-
-    if (Length <= RootLength)
-    {
-        return RootLength;
-    }
-
-    while ((Length > RootLength) && !IsDirectorySeparator(path[Length - 1]))
-    {
-        Length--;
-    }
-    while ((Length > RootLength) && IsDirectorySeparator(path[Length - 1]))
-    {
-        Length--;
-    }
-
-    if ((Length == 0) && (RootLength > 0))
-    {
-        return RootLength;
-    }
-
-    return Length;
-}
-
 static Error CombinePaths(const unsigned char* leftPath, const unsigned char* rightPath, unsigned char** outPath)
 {
-    size_t LeftLength = 0;
-    size_t RightLength = 0;
-    bool NeedsSeparator = false;
-    size_t TotalLength = 0;
-    unsigned char* Result = NULL;
+    GenericBuffer Buffer;
+    Error Result = Error_CreateSuccess();
 
     if (outPath == NULL)
     {
@@ -298,48 +251,19 @@ static Error CombinePaths(const unsigned char* leftPath, const unsigned char* ri
     }
 
     *outPath = NULL;
-    LeftLength = GetStringLength(leftPath);
-    RightLength = GetStringLength(rightPath);
-    NeedsSeparator = (LeftLength > 0)
-        && (RightLength > 0)
-        && !IsDirectorySeparator(leftPath[LeftLength - 1])
-        && !IsDirectorySeparator(rightPath[0]);
+    CreateGrowableByteBuffer(&Buffer);
 
-    if (LeftLength > SIZE_MAX - RightLength)
+    Result = Path_Append(leftPath, rightPath, &Buffer);
+    if (Result.Code != ErrorCode_Success)
     {
-        return CreateOverflowError(u8"combine file system paths");
+        Memory_Free(Buffer._data);
+        return Result;
     }
 
-    TotalLength = LeftLength + RightLength;
-    if (NeedsSeparator)
-    {
-        if (TotalLength == SIZE_MAX)
-        {
-            return CreateOverflowError(u8"combine file system paths");
-        }
+    Result = DuplicateString((const unsigned char*)Buffer._data, outPath);
+    Memory_Free(Buffer._data);
 
-        TotalLength++;
-    }
-
-    Result = Memory_Allocate(TotalLength + 1);
-    if (LeftLength > 0)
-    {
-        Memory_Copy(leftPath, Result, LeftLength);
-    }
-
-    if (NeedsSeparator)
-    {
-        Result[LeftLength] = u8'/';
-        LeftLength++;
-    }
-    if (RightLength > 0)
-    {
-        Memory_Copy(rightPath, Result + LeftLength, RightLength);
-    }
-
-    Result[TotalLength] = 0;
-    *outPath = Result;
-    return Error_CreateSuccess();
+    return Result;
 }
 
 static bool IsSpecialDirectoryName(const unsigned char* name)
@@ -837,10 +761,13 @@ Error FileSystem_CreateDirectory(const unsigned char* path)
 
 Error FileSystem_CreateAllDirectories(const unsigned char* path)
 {
-    size_t PathLength = 0;
-    size_t RootLength = 0;
-    size_t PrefixLength = 0;
-    size_t Index = 0;
+    GenericBuffer PrefixPathBuffer;
+    GenericBuffer SegmentStringBuffer;
+    GenericBuffer SegmentPointerBuffer;
+    GenericBuffer RootBuffer;
+    const unsigned char* RootString = NULL;
+    unsigned char** Segments = NULL;
+    size_t SegmentCount = 0;
     Error Result = Error_CreateSuccess();
 
     Result = ValidatePathArgument(path, u8"path");
@@ -849,48 +776,78 @@ Error FileSystem_CreateAllDirectories(const unsigned char* path)
         return Result;
     }
 
-    PathLength = GetTrimmedPathLength(path);
-    RootLength = GetRootLength(path);
-    if (PathLength == 0)
+    CreateGrowableByteBuffer(&PrefixPathBuffer);
+    CreateGrowableByteBuffer(&SegmentStringBuffer);
+    CreateGrowablePointerBuffer(&SegmentPointerBuffer);
+    CreateGrowableByteBuffer(&RootBuffer);
+
+    Result = Path_GetRoot(path, &RootBuffer);
+    if (Result.Code != ErrorCode_Success)
     {
-        return Error_CreateSuccess();
+        Memory_Free(PrefixPathBuffer._data);
+        Memory_Free(SegmentStringBuffer._data);
+        Memory_Free(SegmentPointerBuffer._data);
+        Memory_Free(RootBuffer._data);
+        return Result;
+    }
+    Result = Path_Split(path, &SegmentStringBuffer, &SegmentPointerBuffer);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Memory_Free(PrefixPathBuffer._data);
+        Memory_Free(SegmentStringBuffer._data);
+        Memory_Free(SegmentPointerBuffer._data);
+        Memory_Free(RootBuffer._data);
+        return Result;
     }
 
-    PrefixLength = RootLength;
-    while (PrefixLength < PathLength)
+    RootString = (const unsigned char*)RootBuffer._data;
+    Segments = (unsigned char**)SegmentPointerBuffer._data;
+    SegmentCount = SegmentPointerBuffer._count;
+
+    if ((RootBuffer._count > 1) && (RootString[0] != 0))
     {
-        while ((PrefixLength < PathLength) && IsDirectorySeparator(path[PrefixLength]))
+        Result = Path_TrimTrailingSeparator(RootString, &PrefixPathBuffer);
+        if (Result.Code != ErrorCode_Success)
         {
-            PrefixLength++;
+            Memory_Free(PrefixPathBuffer._data);
+            Memory_Free(SegmentStringBuffer._data);
+            Memory_Free(SegmentPointerBuffer._data);
+            Memory_Free(RootBuffer._data);
+            return Result;
         }
-
-        Index = PrefixLength;
-        while ((Index < PathLength) && !IsDirectorySeparator(path[Index]))
-        {
-            Index++;
-        }
-
-        if (Index > 0)
-        {
-            unsigned char* PrefixPath = NULL;
-
-            Result = DuplicateStringBySize(path, Index, &PrefixPath);
-            if (Result.Code != ErrorCode_Success)
-            {
-                return Result;
-            }
-
-            Result = CreateDirectoryIfMissing(PrefixPath);
-            Memory_Free(PrefixPath);
-            if (Result.Code != ErrorCode_Success)
-            {
-                return Result;
-            }
-        }
-
-        PrefixLength = Index + 1;
     }
 
+    for (size_t Index = 0; Index < SegmentCount; Index++)
+    {
+        Result = Path_Append((const unsigned char*)PrefixPathBuffer._data, Segments[Index], &PrefixPathBuffer);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Memory_Free(PrefixPathBuffer._data);
+            Memory_Free(SegmentStringBuffer._data);
+            Memory_Free(SegmentPointerBuffer._data);
+            Memory_Free(RootBuffer._data);
+            return Result;
+        }
+        if (Path_ContainsDirectorySegments((const unsigned char*)PrefixPathBuffer._data))
+        {
+            continue;
+        }
+
+        Result = CreateDirectoryIfMissing((const unsigned char*)PrefixPathBuffer._data);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Memory_Free(PrefixPathBuffer._data);
+            Memory_Free(SegmentStringBuffer._data);
+            Memory_Free(SegmentPointerBuffer._data);
+            Memory_Free(RootBuffer._data);
+            return Result;
+        }
+    }
+
+    Memory_Free(PrefixPathBuffer._data);
+    Memory_Free(SegmentStringBuffer._data);
+    Memory_Free(SegmentPointerBuffer._data);
+    Memory_Free(RootBuffer._data);
     return Error_CreateSuccess();
 }
 
@@ -965,8 +922,8 @@ Error FileSystem_MoveEntry(const unsigned char* oldPath, const unsigned char* ne
 
 Error FileSystem_RenameEntry(const unsigned char* path, const unsigned char* newName)
 {
-    size_t ParentLength = 0;
-    unsigned char* NewPath = NULL;
+    GenericBuffer ParentPathBuffer;
+    GenericBuffer NewPathBuffer;
     Error Result = Error_CreateSuccess();
 
     Result = ValidatePathArgument(path, u8"path");
@@ -979,44 +936,44 @@ Error FileSystem_RenameEntry(const unsigned char* path, const unsigned char* new
     {
         return Result;
     }
-
-    for (size_t Index = 0; newName[Index] != 0; Index++)
-    {
-        if (IsDirectorySeparator(newName[Index]))
-        {
-            return Error_Construct3(ErrorCode_InvalidPath,
-                u8"Cannot rename the file system entry because the new name \"%s\" contains directory separators.",
-                newName);
-        }
-    }
-
-    ParentLength = GetParentPathLength(path);
-    if (ParentLength == 0)
-    {
-        Result = DuplicateString(newName, &NewPath);
-    }
-    else
-    {
-        unsigned char* ParentPath = NULL;
-        Result = DuplicateStringBySize(path, ParentLength, &ParentPath);
-        if (Result.Code == ErrorCode_Success)
-        {
-            Result = CombinePaths(ParentPath, newName, &NewPath);
-        }
-
-        if (ParentPath != NULL)
-        {
-            Memory_Free(ParentPath);
-        }
-    }
-
+    Result = Path_ValidateEntryName(newName);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    Result = FileSystem_MoveEntry(path, NewPath);
-    Memory_Free(NewPath);
+    CreateGrowableByteBuffer(&ParentPathBuffer);
+    CreateGrowableByteBuffer(&NewPathBuffer);
+
+    Result = Path_GetParentPath(path, &ParentPathBuffer);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Memory_Free(ParentPathBuffer._data);
+        Memory_Free(NewPathBuffer._data);
+        return Result;
+    }
+
+    if (((const unsigned char*)ParentPathBuffer._data)[0] == 0)
+    {
+        Result = FileSystem_MoveEntry(path, newName);
+        Memory_Free(ParentPathBuffer._data);
+        Memory_Free(NewPathBuffer._data);
+        return Result;
+    }
+    else
+    {
+        Result = Path_Append((const unsigned char*)ParentPathBuffer._data, newName, &NewPathBuffer);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Memory_Free(ParentPathBuffer._data);
+        Memory_Free(NewPathBuffer._data);
+        return Result;
+    }
+
+    Result = FileSystem_MoveEntry(path, (const unsigned char*)NewPathBuffer._data);
+    Memory_Free(ParentPathBuffer._data);
+    Memory_Free(NewPathBuffer._data);
     return Result;
 }
 

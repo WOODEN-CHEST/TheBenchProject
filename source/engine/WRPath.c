@@ -1,522 +1,1861 @@
 #include "WRPath.h"
-#include "WRMemory.h"
-#include "WRError.h"
-#include <stddef.h>
-#include "WRUnicode.h"
-#include "WREnvironment.h"
 #include "WRChar.h"
-#include "WRString.h"
+#include "WREnvironment.h"
+#include <stdint.h>
 
 
-// DOS paths in the style "\\.\C:\Test\Foo.txt" for Windows are not supported.
-
-#if defined __linux__
-#define LINUX_PATH_IMPL
-#elif defined _WIN32
-#define WINDOWS_PATH_IMPL
-#endif
+// Macros.
+#define PATH_WINDOWS_UNC_PREFIX_SEPARATOR_COUNT 2
 
 
 // Types.
-typedef struct PathSegmentExtensionStruct
+typedef enum PathRootKindEnum
 {
-    const unsigned char* _value;
-    size_t _startIndexInIdentifier;
-} PathIdentifierExtension;
+    PathRootKind_None,
+    PathRootKind_UnixRoot,
+    PathRootKind_WindowsCurrentDrive,
+    PathRootKind_WindowsDriveRelative,
+    PathRootKind_WindowsDriveAbsolute,
+    PathRootKind_WindowsUNC,
+    PathRootKind_WindowsUnsupportedDevice,
+} PathRootKind;
 
-typedef struct PathIdentifierStruct
+typedef struct PathRootInfoStruct
 {
-    const unsigned char* _entry;
-    PathIdentifierExtension _extensionLast;
-    PathIdentifierExtension _extensionFull;
-    size_t _identifierIndex;
-    size_t _sizeBytes;
-    size_t _startIndexInPath;
-    bool _isFinalIdentifier;
-} PathIdentifier;
+    PathRootKind Kind;
+    size_t Length;
+    bool IsRooted;
+    bool IsFullyQualified;
+} PathRootInfo;
 
-typedef enum PathRootTypeEnum
+typedef struct PathSegmentViewStruct
 {
-    PathRootType_None,
-    PathRootType_Unix,
-    PathRootType_WinDriveAbsolute,
-    PathRootType_WinDriveRelative,
-    PathRootType_WinUNC,
-} PathRootType;
-
-typedef struct PathRootStruct
-{
-    size_t _sizeBytes;
-} PathRoot;
-
-typedef struct PathTraversalDataStruct
-{
-    const unsigned char* _path;
-    PathIdentifier _currentIdentifier;
-    size_t _nextSegmentIndex;
-    const unsigned char** _nextSegmentStart;
-    PathRootType _rootType;
-} PathTraversalData;
+    const unsigned char* Start;
+    size_t Length;
+} PathSegmentView;
 
 
 // Fields.
-static const unsigned char EXTENSION_INDICATOR = '.';
-
-
-// OS-specific.
-static PathRootType TryTraverseSegmentAsRoot(PathTraversalData* traversalData, PathIdentifier* segment, size_t* segmentStartIndex);
-
-static unsigned char ASCIICharToLower(CodePoint codePoint)
+static const unsigned char* const WINDOWS_RESERVED_NAMES[] =
 {
-    if (('A' <= codePoint) && (codePoint <= 'A'))
-    {
-        return codePoint + ('a' - 'A');
-    }
-    return codePoint;
-}
-
-#if defined LINUX_PATH_IMPL
-static const unsigned char* const ILLEGAL_FILENAMES[] = 
-{
-    u8".", u8".."
+    u8"CON",
+    u8"PRN",
+    u8"AUX",
+    u8"NUL",
+    u8"COM1",
+    u8"COM2",
+    u8"COM3",
+    u8"COM4",
+    u8"COM5",
+    u8"COM6",
+    u8"COM7",
+    u8"COM8",
+    u8"COM9",
+    u8"LPT1",
+    u8"LPT2",
+    u8"LPT3",
+    u8"LPT4",
+    u8"LPT5",
+    u8"LPT6",
+    u8"LPT7",
+    u8"LPT8",
+    u8"LPT9",
 };
-
-static const CodePoint ILLEGAL_CHARACTERS[] = { };
-
-static size_t SkipUntilIdentifierStart(const unsigned char* str);
-
-static PathRootType TryTraverseSegmentAsRoot(PathTraversalData* traversalData, PathIdentifier* segment, size_t* segmentStartIndex)
-{
-    const unsigned char* SegmentStr = traversalData->_nextSegmentStart;
-    size_t SkippedSeparatorCount = SkipUntilIdentifierStart(SegmentStr);
-    if (SkippedSeparatorCount > 0)
-    {
-        segment->_entry = SegmentStr;
-        segment->_isFinalIdentifier = SegmentStr[SkippedSeparatorCount] == '\0';
-        segment->_sizeBytes = SkippedSeparatorCount;
-        segment->_startIndexInPath = 0;
-
-        *segmentStartIndex = SkippedSeparatorCount;
-
-        traversalData->_nextSegmentStart = SegmentStr + SkippedSeparatorCount;
-
-        return PathRootType_Unix;
-    }
-    *segmentStartIndex = 0;
-    return PathRootType_None;
-}
-
-
-#elif defined WINDOWS_PATH_IMPL
-static const unsigned char* const ILLEGAL_FILENAMES[] = 
-{
-    u8"CON", u8"PRN", "AUX", "NUL",
-    u8"COM1", u8"COM2", u8"COM3", u8"COM4", u8"COM5", u8"COM6", u8"COM7", u8"COM8", u8"COM9",
-    u8"COM¹", u8"COM²", u8"COM³",
-    u8"LPT1", u8"LPT2", u8"LPT3", u8"LPT4", u8"LPT5", u8"LPT6", u8"LPT7", u8"LPT8", u8"LPT9",
-    u8"LPT¹", u8"LPT²", u8"LPT³"
-}
-
-static const CodePoint ILLEGAL_CHARACTERS[] = 
-{
-    '<', '>', ':', '"', '|', '?', '*',
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-    17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
-}
-#endif
 
 
 // Static functions.
-static Error CreateDestBufferTooSmallError(ErrorMessagePool* errorPool)
+static size_t GetStringLength(const unsigned char* text)
 {
-    return Error_Construct3(errorPool,
-        ErrorCode_BufferTooSmall,
-        u8"Destination buffer is too small to hold the given path.");
-}
+    size_t Length = 0;
 
-static inline bool IsSeparator(CodePoint codePoint)
-{
-    return (codePoint == ENVIRONMENT_PATH_SEPARATOR_PRIMARY) || (codePoint == ENVIRONMENT_PATH_SEPARATOR_SECONDARY);
-}
-
-static size_t SkipUntilIdentifierStart(const unsigned char* str)
-{
-    size_t Index = 0;
-    while ((str[Index] != '\0') && IsSeparator(str[Index]))
+    while ((text != NULL) && (text[Length] != 0))
     {
-        Index++;
-    }
-    return Index;
-}
-
-static void BeginPathTraversal(const unsigned char* path, PathTraversalData* data)
-{
-    Memory_Zero(data, sizeof(data));
-    data->_nextSegmentStart = path;
-    data->_path = path;
-}
-
-static bool IsIllegalCharacter(CodePoint charCodePoint)
-{
-    for (size_t i = 0; i < (sizeof(ILLEGAL_CHARACTERS) / sizeof(*ILLEGAL_CHARACTERS)); i++)
-    {
-        if (ILLEGAL_CHARACTERS[i] == charCodePoint)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-static Error TraverseIdentifier(ErrorMessagePool* errorPool,
-    PathTraversalData* traversalData,
-    PathIdentifier* segment,
-    const unsigned char* identifierStart)
-{
-    size_t Index = 0;
-    segment->_entry = identifierStart;
-
-    while ((identifierStart[Index] != '\0') && !IsSeparator(identifierStart[Index]))
-    {
-        if (identifierStart[Index] == EXTENSION_INDICATOR)
-        {
-            PathIdentifierExtension CurrentExtension = (PathIdentifierExtension)
-            {
-                ._value = identifierStart + Index,
-                ._startIndexInIdentifier = Index 
-            };
-
-            if (!segment->_extensionFull._value)
-            {
-                segment->_extensionFull = CurrentExtension;
-            }
-            segment->_extensionLast = CurrentExtension;
-        }
-
-        size_t CharSize = CharUTF8_GetByteCountChar(identifierStart + Index);
-        if (CharSize == 0)
-        {
-            return Error_Construct3(errorPool,
-                ErrorCode_InvalidTextEncoding,
-                u8"Found invalid character data in the path segment at segment index %zu and "
-                "character index %zu; the byte has a value of %d.",
-                traversalData->_nextSegmentIndex, Index, (int)identifierStart[Index]);
-        }
-
-        Index += CharSize;
+        Length++;
     }
 
-    segment->_isFinalIdentifier = (identifierStart[Index] == '\0');
-    segment->_sizeBytes = Index;
-    traversalData->_nextSegmentStart = identifierStart + Index;
-    return Error_CreateSuccess();
+    return Length;
 }
 
-static Error TraverseSegment(ErrorMessagePool* errorPool, PathTraversalData* traversalData)
+static bool IsDirectorySeparatorByte(unsigned char character)
 {
-    PathIdentifier CurrentIdentifier;
-    Memory_Zero(&CurrentIdentifier, sizeof(CurrentIdentifier));
-    CurrentIdentifier._identifierIndex = traversalData->_nextSegmentIndex;
+    return (character == ENVIRONMENT_PATH_SEPARATOR_PRIMARY) || (character == ENVIRONMENT_PATH_SEPARATOR_SECONDARY);
+}
 
-    bool WasRootTraversed = false;
-    if (traversalData->_rootType == PathRootType_None)
-    {
-        size_t IdentifierStartIndexInSegment;
+static bool IsAsciiLetter(unsigned char character)
+{
+    return (((character >= u8'a') && (character <= u8'z'))
+        || ((character >= u8'A') && (character <= u8'Z')));
+}
 
-        PathRootType RootType = TryTraverseSegmentAsRoot(traversalData,
-            &CurrentIdentifier,
-            &IdentifierStartIndexInSegment);
-        
-        if (RootType != PathRootType_None)
-        {
-            WasRootTraversed = true;
-            traversalData->_rootType = RootType;
-        }
-    }
-    
-    if (!WasRootTraversed)
+static unsigned char ToAsciiLower(unsigned char character)
+{
+    if ((character >= u8'A') && (character <= u8'Z'))
     {
-        size_t SkipAmount = SkipUntilIdentifierStart(traversalData->_nextSegmentStart);
-        TraverseIdentifier(errorPool, traversalData, &CurrentIdentifier, traversalData->_nextSegmentStart + SkipAmount);
+        return (unsigned char)(character + (u8'a' - u8'A'));
     }
 
-    traversalData->_nextSegmentIndex++;
-    traversalData->_currentIdentifier = CurrentIdentifier;
+    return character;
+}
+
+static Error CreateNullArgumentError(const unsigned char* argumentName)
+{
+    return Error_Construct3(ErrorCode_IllegalArgument,
+        u8"Path argument \"%s\" must not be null.",
+        argumentName);
+}
+
+static Error CreateEmptyPathError(void)
+{
+    return Error_Construct1(ErrorCode_InvalidPath,
+        u8"Path arguments must not be empty.");
+}
+
+static Error CreateBufferTypeError(const unsigned char* argumentName, size_t elementSize)
+{
+    return Error_Construct3(ErrorCode_IllegalArgument,
+        u8"Path argument \"%s\" must be a byte buffer, got element size %zu.",
+        argumentName,
+        elementSize);
+}
+
+static Error CreatePointerBufferTypeError(const unsigned char* argumentName, size_t elementSize)
+{
+    return Error_Construct3(ErrorCode_IllegalArgument,
+        u8"Path argument \"%s\" must be a pointer buffer, got element size %zu.",
+        argumentName,
+        elementSize);
+}
+
+static Error CreateOverflowError(const unsigned char* operationName)
+{
+    return Error_Construct3(ErrorCode_ArgumentOutOfRange,
+        u8"Cannot %s because the required size exceeds the supported range.",
+        operationName);
+}
+
+static Error CreateInvalidPathError(const unsigned char* path, const unsigned char* reason)
+{
+    return Error_Construct3(ErrorCode_InvalidPath,
+        u8"Invalid path \"%s\": %s",
+        path,
+        reason);
+}
+
+static Error CreateInvalidEntryNameError(const unsigned char* entryName, const unsigned char* reason)
+{
+    return Error_Construct3(ErrorCode_InvalidPath,
+        u8"Invalid path entry name \"%s\": %s",
+        entryName,
+        reason);
+}
+
+static Error ValidatePathArgument(const unsigned char* path, const unsigned char* argumentName)
+{
+    if (path == NULL)
+    {
+        return CreateNullArgumentError(argumentName);
+    }
+    if (path[0] == 0)
+    {
+        return CreateEmptyPathError();
+    }
 
     return Error_CreateSuccess();
 }
 
-static Error GetLastSegment(ErrorMessagePool* errorPool, const unsigned char* path, PathIdentifier* lastSegment)
+static Error ValidateByteBuffer(GenericBuffer* buffer, const unsigned char* argumentName)
 {
-    PathTraversalData TraversalData;
-    BeginPathTraversal(path, &TraversalData);
-
-    do
+    if (buffer == NULL)
     {
-        Error ErrorResult = TraverseSegment(errorPool, &TraversalData);
-        if (ErrorResult.Code != ErrorCode_Success)
-        {
-            return ErrorResult;
-        }
-    } while (!TraversalData._currentIdentifier._isFinalIdentifier);
+        return CreateNullArgumentError(argumentName);
+    }
+    if (buffer->_elementSize != sizeof(unsigned char))
+    {
+        return CreateBufferTypeError(argumentName, buffer->_elementSize);
+    }
 
-    *lastSegment = TraversalData._currentIdentifier;
     return Error_CreateSuccess();
 }
 
-static bool IsEntryNameValidAgainst(const unsigned char* entryName, const unsigned char* illegalName)
+static Error ValidatePointerBuffer(GenericBuffer* buffer, const unsigned char* argumentName)
 {
-    size_t IllegalNameIndex = 0;
-    for (size_t i = 0; (entryName[i] != '\0') && (illegalName[i] != '\0') && !IsSeparator(entryName + i);)
+    if (buffer == NULL)
     {
-        CodePoint EntryCodePoint = CharUTF8_GetCodePoint(entryName + i);
-        CodePoint IllegalCodePoint = CharUTF8_GetCodePoint(entryName + i);
-        if ((EntryCodePoint == CODEPOINT_NONE) || (IllegalCodePoint == CODEPOINT_NONE))
-        {
-            return false;
-        }
-
-        if (ASCIICharToLower(EntryCodePoint) != ASCIICharToLower(IllegalCodePoint))
-        {
-            return true;
-        }
-
-        IllegalNameIndex += CharUTF8_GetByteCountCodepoint(IllegalCodePoint);
-        if (illegalName[IllegalNameIndex] == '\0')
-        {
-            return false;
-        }
-        i += CharUTF8_GetByteCountCodepoint(EntryCodePoint);
+        return CreateNullArgumentError(argumentName);
     }
+    if (buffer->_elementSize != sizeof(unsigned char*))
+    {
+        return CreatePointerBufferTypeError(argumentName, buffer->_elementSize);
+    }
+
+    return Error_CreateSuccess();
+}
+
+static Error PrepareByteBuffer(GenericBuffer* buffer, const unsigned char* argumentName)
+{
+    Error Result = ValidateByteBuffer(buffer, argumentName);
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    GenericBuffer_Clear(buffer);
+    return Error_CreateSuccess();
+}
+
+static Error EnsureByteBufferCapacity(GenericBuffer* buffer, size_t requiredCapacity, const unsigned char* operationName)
+{
+    if (!GenericBuffer_EnsureTotalCapacity(buffer, requiredCapacity))
+    {
+        return Error_Construct3(ErrorCode_BufferTooSmall,
+            u8"Cannot %s because the destination buffer requires at least %zu bytes of capacity.",
+            operationName,
+            requiredCapacity);
+    }
+
+    return Error_CreateSuccess();
+}
+
+static Error WriteBufferBytes(GenericBuffer* buffer,
+    const unsigned char* bytes,
+    size_t length,
+    bool nullTerminate,
+    const unsigned char* operationName)
+{
+    size_t RequiredCapacity = length;
+
+    if (nullTerminate)
+    {
+        if (RequiredCapacity == SIZE_MAX)
+        {
+            return CreateOverflowError(operationName);
+        }
+
+        RequiredCapacity++;
+    }
+
+    GenericBuffer_Clear(buffer);
+    if (RequiredCapacity > 0)
+    {
+        Error Result = EnsureByteBufferCapacity(buffer, RequiredCapacity, operationName);
+
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+
+    if (length > 0)
+    {
+        Memory_Copy(bytes, buffer->_data, length);
+    }
+
+    buffer->_count = length;
+    if (nullTerminate)
+    {
+        buffer->_data[length] = 0;
+        buffer->_count++;
+    }
+
+    return Error_CreateSuccess();
+}
+
+static bool IsSpecialDirectorySegment(const unsigned char* start, size_t length)
+{
+    if ((start == NULL) || (length == 0))
+    {
+        return false;
+    }
+
+    if ((length == 1) && (start[0] == u8'.'))
+    {
+        return true;
+    }
+
+    return (length == 2) && (start[0] == u8'.') && (start[1] == u8'.');
+}
+
+static bool IsParentDirectorySegment(const unsigned char* start, size_t length)
+{
+    return (length == 2) && (start[0] == u8'.') && (start[1] == u8'.');
+}
+
+static bool IsCurrentDirectorySegment(const unsigned char* start, size_t length)
+{
+    return (length == 1) && (start[0] == u8'.');
+}
+
+static bool SegmentHasExtension(const unsigned char* start, size_t length, size_t* extensionIndex)
+{
+    size_t DotIndex = SIZE_MAX;
+
+    if ((start == NULL) || (length == 0))
+    {
+        return false;
+    }
+
+    for (size_t Index = 0; Index < length; Index++)
+    {
+        if (start[Index] == u8'.')
+        {
+            DotIndex = Index;
+        }
+    }
+
+    if ((DotIndex == SIZE_MAX) || (DotIndex == 0) || (DotIndex == (length - 1)))
+    {
+        return false;
+    }
+
+    if (extensionIndex != NULL)
+    {
+        *extensionIndex = DotIndex;
+    }
+
     return true;
 }
 
-
-// Functions.
-Error Path_ChangeExtension(ErrorMessagePool* errorPool, const unsigned char* path, const unsigned char* newExtension, GenericBuffer* result)
+static size_t GetTrimmedPathLength(const unsigned char* path, size_t rootLength)
 {
-    PathIdentifier LastSegment;
-    Error ErrorResult = GetLastSegment(errorPool, path, &LastSegment);
-    if (ErrorResult.Code != ErrorCode_Success)
+    size_t Length = GetStringLength(path);
+
+    while ((Length > rootLength) && IsDirectorySeparatorByte(path[Length - 1]))
     {
-        return ErrorResult;
+        Length--;
     }
 
-    size_t PathSizeWithoutLastExtension = LastSegment._sizeBytes;
-    if (LastSegment._extensionLast._value)
+    return Length;
+}
+
+static PathRootInfo GetPathRootInfo(const unsigned char* path)
+{
+    PathRootInfo Result =
     {
-        PathSizeWithoutLastExtension = LastSegment._extensionLast._startIndexInIdentifier;
-    }
-    
-    if (!GenericBuffer_WriteStringBySize(path, path, PathSizeWithoutLastExtension))
+        .Kind = PathRootKind_None,
+        .Length = 0,
+        .IsRooted = false,
+        .IsFullyQualified = false,
+    };
+
+    if ((path == NULL) || (path[0] == 0))
     {
-        return CreateDestBufferTooSmallError(errorPool);
+        return Result;
     }
 
-    if (!StringUTF8_IsNullOrEmpty(newExtension))
+#if defined(__linux__)
+    if (IsDirectorySeparatorByte(path[0]))
     {
-        if ((newExtension[0] != EXTENSION_INDICATOR) && !GenericBuffer_WriteUChar(result, EXTENSION_INDICATOR))
+        Result.Kind = PathRootKind_UnixRoot;
+        Result.Length = 1;
+        Result.IsRooted = true;
+        Result.IsFullyQualified = true;
+    }
+#elif defined(_WIN32)
+    if ((path[0] == u8'\\')
+        && (path[1] == u8'\\')
+        && (((path[2] == u8'.') || (path[2] == u8'?')))
+        && (path[3] == u8'\\'))
+    {
+        Result.Kind = PathRootKind_WindowsUnsupportedDevice;
+        Result.Length = 4;
+        Result.IsRooted = true;
+        Result.IsFullyQualified = false;
+        return Result;
+    }
+
+    if (IsAsciiLetter(path[0]) && (path[1] == u8':'))
+    {
+        Result.Length = 2;
+        if (IsDirectorySeparatorByte(path[2]))
         {
-            return CreateDestBufferTooSmallError(errorPool);
+            Result.Kind = PathRootKind_WindowsDriveAbsolute;
+            Result.Length = 3;
+            Result.IsRooted = true;
+            Result.IsFullyQualified = true;
+            return Result;
         }
-        if (!GenericBuffer_WriteString(result, newExtension))
+
+        Result.Kind = PathRootKind_WindowsDriveRelative;
+        Result.IsRooted = false;
+        Result.IsFullyQualified = false;
+        return Result;
+    }
+
+    if (IsDirectorySeparatorByte(path[0]))
+    {
+        if (IsDirectorySeparatorByte(path[1]))
         {
-            return CreateDestBufferTooSmallError(errorPool);
+            size_t Index = PATH_WINDOWS_UNC_PREFIX_SEPARATOR_COUNT;
+            bool HasServer = false;
+            bool HasShare = false;
+
+            while ((path[Index] != 0) && !IsDirectorySeparatorByte(path[Index]))
+            {
+                HasServer = true;
+                Index++;
+            }
+            while (IsDirectorySeparatorByte(path[Index]))
+            {
+                Index++;
+            }
+            while ((path[Index] != 0) && !IsDirectorySeparatorByte(path[Index]))
+            {
+                HasShare = true;
+                Index++;
+            }
+            while (IsDirectorySeparatorByte(path[Index]))
+            {
+                Index++;
+            }
+
+            Result.Kind = PathRootKind_WindowsUNC;
+            Result.Length = Index;
+            Result.IsRooted = true;
+            Result.IsFullyQualified = HasServer && HasShare;
+            return Result;
+        }
+
+        Result.Kind = PathRootKind_WindowsCurrentDrive;
+        Result.Length = 1;
+        Result.IsRooted = true;
+        Result.IsFullyQualified = false;
+    }
+#endif
+
+    return Result;
+}
+
+static bool PathContainsInvalidUtf8(const unsigned char* path)
+{
+    size_t Index = 0;
+
+    if (path == NULL)
+    {
+        return true;
+    }
+
+    while (path[Index] != 0)
+    {
+        size_t CharacterByteCount = 0;
+
+        if (!CharUTF8_IsCharValid(path + Index))
+        {
+            return true;
+        }
+
+        CharacterByteCount = CharUTF8_GetByteCountChar(path + Index);
+        if (CharacterByteCount == 0)
+        {
+            return true;
+        }
+
+        Index += CharacterByteCount;
+    }
+
+    return false;
+}
+
+static bool IsWindowsReservedName(const unsigned char* start, size_t length)
+{
+    size_t CompareLength = length;
+
+    for (size_t Index = 0; Index < length; Index++)
+    {
+        if (start[Index] == u8'.')
+        {
+            CompareLength = Index;
+            break;
         }
     }
 
-    if (!GenericBuffer_TryNullTerminate(result))
+    if (CompareLength == 0)
     {
-        return CreateDestBufferTooSmallError(errorPool);
+        return false;
     }
 
-    return Error_CreateSuccess();
-}
-
-Error Path_RemoveExtension(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result)
-{
-    return Path_ChangeExtension(errorPool, path, NULL, result);
-}
-
-Error Path_GetExtension(ErrorMessagePool* errorPool, const unsigned char* path, const unsigned char** extension)
-{
-    PathIdentifier LastSegment;
-    *extension = NULL;
-    Error ErrorResult = GetLastSegment(errorPool, path, &LastSegment);
-    if (ErrorResult.Code != ErrorCode_Success)
+    for (size_t Index = 0; Index < (sizeof(WINDOWS_RESERVED_NAMES) / sizeof(WINDOWS_RESERVED_NAMES[0])); Index++)
     {
-        return ErrorResult;
-    }
+        const unsigned char* Candidate = WINDOWS_RESERVED_NAMES[Index];
+        size_t CandidateLength = GetStringLength(Candidate);
+        bool Matches = CandidateLength == CompareLength;
 
-    *extension = LastSegment._extensionLast._value;
-    return Error_CreateSuccess();
-}
-
-Error Path_HasExtension(ErrorMessagePool* errorPool, const unsigned char* path, bool* hasExtension)
-{
-    const unsigned char* Extension = NULL;
-    Error ErrorResult = Path_GetExtension(errorPool, path, &Extension);
-    *hasExtension = Extension != NULL;
-    return ErrorResult;
-}
-
-Error Path_Combine(ErrorMessagePool* errorPool, const unsigned char** paths, size_t pathCount, GenericBuffer* result)
-{
-    bool IsAnythingWritten = false;
-    bool EndsWithSeparatorPrevious = false;
-
-    for (size_t i = 0; i < pathCount; i++)
-    {
-        const unsigned char* TargetPath = paths[i];
-        size_t PathLength = StringUTF8_GetByteLength(TargetPath);
-        if (PathLength == 0)
+        if (!Matches)
         {
             continue;
         }
 
-        if (Path_IsRooted(TargetPath) && IsAnythingWritten)
+        for (size_t CharacterIndex = 0; CharacterIndex < CompareLength; CharacterIndex++)
         {
-            return Error_Construct3(errorPool,
-                ErrorCode_IllegalArgument,
-                u8"Cannot append path; found rooted path \"%s\" at index %zu, it should've been the first non-empty path.",
-                TargetPath, i);
+            if (ToAsciiLower(start[CharacterIndex]) != ToAsciiLower(Candidate[CharacterIndex]))
+            {
+                Matches = false;
+                break;
+            }
         }
 
-        bool StartWithSeparatorCurrent = IsSeparator(TargetPath[0]);
-
-        if (!StartWithSeparatorCurrent && !EndsWithSeparatorPrevious
-            && !GenericBuffer_WriteUChar(result, ENVIRONMENT_PATH_SEPARATOR_PRIMARY))
+        if (Matches)
         {
-            return CreateDestBufferTooSmallError(errorPool);  
+            return true;
         }
-
-        size_t PathStartIndex = (StartWithSeparatorCurrent && EndsWithSeparatorPrevious) ? 1 : 0;
-        if (!GenericBuffer_WriteStringBySize(result, TargetPath + PathStartIndex, PathLength - PathStartIndex))
-        {
-            return CreateDestBufferTooSmallError(errorPool);
-        }
-
-        EndsWithSeparatorPrevious = IsSeparator(TargetPath[PathLength - 1]);
-        IsAnythingWritten = true;
     }
 
-    if (!GenericBuffer_TryNullTerminate(result))
+    return false;
+}
+
+static Error ValidateEntrySegment(const unsigned char* start, size_t length, bool allowDirectorySegments)
+{
+    if (length == 0)
     {
-        return CreateDestBufferTooSmallError(errorPool);
+        return Error_Construct1(ErrorCode_InvalidPath,
+            u8"Path segments must not be empty.");
+    }
+
+    if (allowDirectorySegments && IsSpecialDirectorySegment(start, length))
+    {
+        return Error_CreateSuccess();
+    }
+
+    if ((length == 1) && (start[0] == u8'.'))
+    {
+        return Error_Construct1(ErrorCode_InvalidPath,
+            u8"Path entry names must not be \".\".");
+    }
+    if ((length == 2) && (start[0] == u8'.') && (start[1] == u8'.'))
+    {
+        return Error_Construct1(ErrorCode_InvalidPath,
+            u8"Path entry names must not be \"..\".");
+    }
+
+    for (size_t Index = 0; Index < length; Index++)
+    {
+        unsigned char Character = start[Index];
+
+        if (Character == 0)
+        {
+            return Error_Construct1(ErrorCode_InvalidPath,
+                u8"Path entry names must not contain null bytes.");
+        }
+        if (IsDirectorySeparatorByte(Character))
+        {
+            return Error_Construct1(ErrorCode_InvalidPath,
+                u8"Path entry names must not contain directory separators.");
+        }
+
+#if defined(_WIN32)
+        if ((Character < 32)
+            || (Character == u8'<')
+            || (Character == u8'>')
+            || (Character == u8':')
+            || (Character == u8'"')
+            || (Character == u8'|')
+            || (Character == u8'?')
+            || (Character == u8'*'))
+        {
+            return Error_Construct1(ErrorCode_InvalidPath,
+                u8"Windows path entry names contain a reserved character.");
+        }
+#endif
+    }
+
+#if defined(_WIN32)
+    if ((start[length - 1] == u8' ') || (start[length - 1] == u8'.'))
+    {
+        return Error_Construct1(ErrorCode_InvalidPath,
+            u8"Windows path entry names must not end with a space or dot.");
+    }
+    if (IsWindowsReservedName(start, length))
+    {
+        return Error_Construct1(ErrorCode_InvalidPath,
+            u8"Windows path entry names must not use reserved device names.");
+    }
+#endif
+
+    return Error_CreateSuccess();
+}
+
+static bool TryGetNextSegmentView(const unsigned char* path, size_t* index, PathSegmentView* outSegment)
+{
+    size_t SegmentStart = 0;
+
+    if ((path == NULL) || (index == NULL) || (outSegment == NULL))
+    {
+        return false;
+    }
+
+    while (IsDirectorySeparatorByte(path[*index]))
+    {
+        (*index)++;
+    }
+    if (path[*index] == 0)
+    {
+        outSegment->Start = NULL;
+        outSegment->Length = 0;
+        return false;
+    }
+
+    SegmentStart = *index;
+    while ((path[*index] != 0) && !IsDirectorySeparatorByte(path[*index]))
+    {
+        (*index)++;
+    }
+
+    outSegment->Start = path + SegmentStart;
+    outSegment->Length = *index - SegmentStart;
+    return true;
+}
+
+static Error ValidatePathRootRules(const unsigned char* path, PathRootInfo rootInfo)
+{
+#if !defined(_WIN32)
+    (void)path;
+    (void)rootInfo;
+#endif
+
+#if defined(_WIN32)
+    if (rootInfo.Kind == PathRootKind_WindowsUnsupportedDevice)
+    {
+        return CreateInvalidPathError(path, u8"Windows device paths beginning with \\\\.\\ or \\\\?\\ are not supported.");
+    }
+    if ((rootInfo.Kind == PathRootKind_WindowsUNC) && !rootInfo.IsFullyQualified)
+    {
+        return CreateInvalidPathError(path, u8"UNC paths must include both a server and share name.");
+    }
+#endif
+
+    return Error_CreateSuccess();
+}
+
+static Error ValidatePathSegmentViews(const unsigned char* path, size_t startIndex)
+{
+    size_t Index = startIndex;
+    PathSegmentView Segment;
+
+    while (TryGetNextSegmentView(path, &Index, &Segment))
+    {
+        Error Result = ValidateEntrySegment(Segment.Start, Segment.Length, true);
+
+        if (Result.Code != ErrorCode_Success)
+        {
+            return CreateInvalidPathError(path, Result.Message != NULL ? Result.Message : u8"path contains an invalid segment.");
+        }
     }
 
     return Error_CreateSuccess();
 }
 
-Error Path_Append(ErrorMessagePool* errorPool, const unsigned char* pathA, const unsigned char* pathB, GenericBuffer* result)
+static Error ValidatePathInternal(const unsigned char* path)
 {
-    const unsigned char* PathArray[] = { pathA, pathB };
-    return Path_Combine(errorPool, PathArray, sizeof(PathArray) / sizeof(*PathArray), result);
+    PathRootInfo RootInfo;
+    Error Result = ValidatePathArgument(path, u8"path");
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (PathContainsInvalidUtf8(path))
+    {
+        return CreateInvalidPathError(path, u8"path text is not valid UTF-8.");
+    }
+
+    RootInfo = GetPathRootInfo(path);
+    Result = ValidatePathRootRules(path, RootInfo);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    return ValidatePathSegmentViews(path, RootInfo.Length);
+}
+
+static size_t CountSegments(const unsigned char* path)
+{
+    PathRootInfo RootInfo = GetPathRootInfo(path);
+    size_t Index = RootInfo.Length;
+    size_t Count = 0;
+    PathSegmentView Segment;
+
+    while (TryGetNextSegmentView(path, &Index, &Segment))
+    {
+        Count++;
+    }
+
+    return Count;
+}
+
+static size_t GetLastEntryStart(const unsigned char* path, size_t trimmedLength, size_t rootLength)
+{
+    size_t StartIndex = trimmedLength;
+
+    while ((StartIndex > rootLength) && !IsDirectorySeparatorByte(path[StartIndex - 1]))
+    {
+        StartIndex--;
+    }
+
+    return StartIndex;
+}
+
+static bool TryGetLastEntryView(const unsigned char* path, PathSegmentView* outView)
+{
+    PathRootInfo RootInfo = GetPathRootInfo(path);
+    size_t TrimmedLength = GetTrimmedPathLength(path, RootInfo.Length);
+    size_t StartIndex = 0;
+
+    if (outView == NULL)
+    {
+        return false;
+    }
+
+    outView->Start = NULL;
+    outView->Length = 0;
+    if (TrimmedLength <= RootInfo.Length)
+    {
+        return true;
+    }
+
+    StartIndex = GetLastEntryStart(path, TrimmedLength, RootInfo.Length);
+    outView->Start = path + StartIndex;
+    outView->Length = TrimmedLength - StartIndex;
+    return true;
+}
+
+static size_t GetParentPathLength(const unsigned char* path)
+{
+    PathRootInfo RootInfo = GetPathRootInfo(path);
+    size_t TrimmedLength = GetTrimmedPathLength(path, RootInfo.Length);
+
+    if (TrimmedLength <= RootInfo.Length)
+    {
+        return RootInfo.Length;
+    }
+
+    while ((TrimmedLength > RootInfo.Length) && !IsDirectorySeparatorByte(path[TrimmedLength - 1]))
+    {
+        TrimmedLength--;
+    }
+    while ((TrimmedLength > RootInfo.Length) && IsDirectorySeparatorByte(path[TrimmedLength - 1]))
+    {
+        TrimmedLength--;
+    }
+
+    if ((TrimmedLength == 0) && (RootInfo.Length > 0))
+    {
+        return RootInfo.Length;
+    }
+
+    return TrimmedLength;
+}
+
+static bool PathsEqualNormalized(const unsigned char* leftPath, const unsigned char* rightPath)
+{
+    size_t Index = 0;
+
+    while ((leftPath[Index] != 0) && (rightPath[Index] != 0))
+    {
+#if defined(_WIN32)
+        if (ToAsciiLower(leftPath[Index]) != ToAsciiLower(rightPath[Index]))
+        {
+            return false;
+        }
+#else
+        if (leftPath[Index] != rightPath[Index])
+        {
+            return false;
+        }
+#endif
+        Index++;
+    }
+
+    return (leftPath[Index] == 0) && (rightPath[Index] == 0);
+}
+
+static bool HasTrailingSeparatorPastRoot(const unsigned char* path, PathRootInfo rootInfo)
+{
+    size_t PathLength = GetStringLength(path);
+    size_t TrimmedLength = GetTrimmedPathLength(path, rootInfo.Length);
+
+    return (TrimmedLength < PathLength) && (TrimmedLength > 0);
+}
+
+static unsigned char GetNormalizationSeparator(const unsigned char* path, bool fixSeparators)
+{
+    if (fixSeparators)
+    {
+        return ENVIRONMENT_PATH_SEPARATOR_PRIMARY;
+    }
+
+    for (size_t Index = 0; path[Index] != 0; Index++)
+    {
+        if (IsDirectorySeparatorByte(path[Index]))
+        {
+            return path[Index];
+        }
+    }
+
+    return ENVIRONMENT_PATH_SEPARATOR_PRIMARY;
+}
+
+static void WriteNormalizedRootPrefix(const unsigned char* path,
+    PathRootInfo rootInfo,
+    unsigned char* output,
+    size_t* writeIndex)
+{
+    *writeIndex = 0;
+
+#if defined(__linux__)
+    (void)path;
+    if (rootInfo.Kind == PathRootKind_UnixRoot)
+    {
+        output[(*writeIndex)++] = ENVIRONMENT_PATH_SEPARATOR_PRIMARY;
+    }
+#elif defined(_WIN32)
+    if (rootInfo.Kind == PathRootKind_WindowsDriveAbsolute)
+    {
+        output[(*writeIndex)++] = path[0];
+        output[(*writeIndex)++] = u8':';
+        output[(*writeIndex)++] = ENVIRONMENT_PATH_SEPARATOR_PRIMARY;
+    }
+    else if (rootInfo.Kind == PathRootKind_WindowsDriveRelative)
+    {
+        output[(*writeIndex)++] = path[0];
+        output[(*writeIndex)++] = u8':';
+    }
+    else if (rootInfo.Kind == PathRootKind_WindowsCurrentDrive)
+    {
+        output[(*writeIndex)++] = ENVIRONMENT_PATH_SEPARATOR_PRIMARY;
+    }
+    else if (rootInfo.Kind == PathRootKind_WindowsUNC)
+    {
+        size_t Index = PATH_WINDOWS_UNC_PREFIX_SEPARATOR_COUNT;
+        size_t ServerStart = Index;
+        size_t ShareStart = 0;
+        size_t ShareLength = 0;
+
+        while ((path[Index] != 0) && !IsDirectorySeparatorByte(path[Index]))
+        {
+            Index++;
+        }
+
+        output[(*writeIndex)++] = ENVIRONMENT_PATH_SEPARATOR_PRIMARY;
+        output[(*writeIndex)++] = ENVIRONMENT_PATH_SEPARATOR_PRIMARY;
+        Memory_Copy(path + ServerStart, output + *writeIndex, Index - ServerStart);
+        *writeIndex += Index - ServerStart;
+        output[(*writeIndex)++] = ENVIRONMENT_PATH_SEPARATOR_PRIMARY;
+
+        while (IsDirectorySeparatorByte(path[Index]))
+        {
+            Index++;
+        }
+
+        ShareStart = Index;
+        while ((path[Index] != 0) && !IsDirectorySeparatorByte(path[Index]))
+        {
+            Index++;
+        }
+
+        ShareLength = Index - ShareStart;
+        Memory_Copy(path + ShareStart, output + *writeIndex, ShareLength);
+        *writeIndex += ShareLength;
+    }
+#endif
+}
+
+static size_t CollectNormalizedSegments(const unsigned char* path,
+    PathRootInfo rootInfo,
+    bool collapseSegments,
+    PathSegmentView* segments)
+{
+    size_t Index = rootInfo.Length;
+    size_t SegmentCount = 0;
+    PathSegmentView Segment;
+
+    while (TryGetNextSegmentView(path, &Index, &Segment))
+    {
+        if (!collapseSegments)
+        {
+            segments[SegmentCount++] = Segment;
+            continue;
+        }
+        if (IsCurrentDirectorySegment(Segment.Start, Segment.Length))
+        {
+            continue;
+        }
+        if (IsParentDirectorySegment(Segment.Start, Segment.Length))
+        {
+            if ((SegmentCount > 0) && !IsParentDirectorySegment(segments[SegmentCount - 1].Start, segments[SegmentCount - 1].Length))
+            {
+                SegmentCount--;
+                continue;
+            }
+            if (rootInfo.IsRooted)
+            {
+                continue;
+            }
+        }
+
+        segments[SegmentCount++] = Segment;
+    }
+
+    return SegmentCount;
+}
+
+static bool NormalizedSegmentNeedsSeparator(const unsigned char* output, size_t writeIndex, PathRootInfo rootInfo)
+{
+    if (writeIndex == 0)
+    {
+        return false;
+    }
+
+#if defined(_WIN32)
+    if ((writeIndex == 2) && (rootInfo.Kind == PathRootKind_WindowsDriveRelative))
+    {
+        return false;
+    }
+#else
+    (void)rootInfo;
+#endif
+
+    return !IsDirectorySeparatorByte(output[writeIndex - 1]);
+}
+
+static size_t WriteNormalizedSegments(unsigned char* output,
+    size_t writeIndex,
+    PathRootInfo rootInfo,
+    const PathSegmentView* segments,
+    size_t segmentCount,
+    unsigned char separator)
+{
+    for (size_t Index = 0; Index < segmentCount; Index++)
+    {
+        if (NormalizedSegmentNeedsSeparator(output, writeIndex, rootInfo))
+        {
+            output[writeIndex++] = separator;
+        }
+
+        Memory_Copy(segments[Index].Start, output + writeIndex, segments[Index].Length);
+        writeIndex += segments[Index].Length;
+    }
+
+    return writeIndex;
+}
+
+static size_t FinalizeNormalizedPath(const unsigned char* path,
+    PathRootInfo rootInfo,
+    unsigned char* output,
+    size_t writeIndex,
+    size_t segmentCount,
+    unsigned char separator)
+{
+    if ((HasTrailingSeparatorPastRoot(path, rootInfo) || (rootInfo.IsRooted && (segmentCount == 0)))
+        && (writeIndex > 0)
+        && !IsDirectorySeparatorByte(output[writeIndex - 1]))
+    {
+        output[writeIndex++] = separator;
+    }
+
+    if (writeIndex == 0)
+    {
+        if (rootInfo.Kind == PathRootKind_WindowsDriveRelative)
+        {
+            output[writeIndex++] = path[0];
+            output[writeIndex++] = u8':';
+        }
+        else if (!rootInfo.IsRooted)
+        {
+            output[writeIndex++] = u8'.';
+        }
+    }
+
+    output[writeIndex] = 0;
+    return writeIndex;
+}
+
+static Error DuplicatePathString(const unsigned char* path, unsigned char** outNormalizedPath)
+{
+    size_t PathLength = GetStringLength(path);
+    unsigned char* Output = Memory_Allocate(PathLength + 1);
+
+    Memory_Copy(path, Output, PathLength + 1);
+    *outNormalizedPath = Output;
+    return Error_CreateSuccess();
+}
+
+static Error BuildNormalizedPathString(const unsigned char* path,
+    PathNormalizeConditions conditions,
+    unsigned char** outNormalizedPath)
+{
+    PathRootInfo RootInfo = GetPathRootInfo(path);
+    size_t PathLength = GetStringLength(path);
+    size_t SegmentCapacity = CountSegments(path);
+    size_t SegmentCount = 0;
+    size_t WriteIndex = 0;
+    unsigned char Separator = GetNormalizationSeparator(path,
+        (conditions & PathNormalizeConditions_FixSeparators) != 0);
+    PathSegmentView* Segments = NULL;
+    unsigned char* Output = Memory_Allocate(PathLength + 1);
+
+    if (SegmentCapacity > 0)
+    {
+        Segments = Memory_Allocate(sizeof(*Segments) * SegmentCapacity);
+    }
+
+    WriteNormalizedRootPrefix(path, RootInfo, Output, &WriteIndex);
+    SegmentCount = CollectNormalizedSegments(path,
+        RootInfo,
+        (conditions & PathNormalizeConditions_CollapseDirectorySegment) != 0,
+        Segments);
+    WriteIndex = WriteNormalizedSegments(Output, WriteIndex, RootInfo, Segments, SegmentCount, Separator);
+    WriteIndex = FinalizeNormalizedPath(path, RootInfo, Output, WriteIndex, SegmentCount, Separator);
+
+    Memory_Free(Segments);
+    *outNormalizedPath = Output;
+    return Error_CreateSuccess();
+}
+
+static Error NormalizePathToOwnedString(const unsigned char* path,
+    PathNormalizeConditions conditions,
+    unsigned char** outNormalizedPath)
+{
+    Error Result = Error_CreateSuccess();
+
+    if (outNormalizedPath == NULL)
+    {
+        return CreateNullArgumentError(u8"outNormalizedPath");
+    }
+
+    *outNormalizedPath = NULL;
+    Result = ValidatePathInternal(path);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (conditions == PathNormalizeConditions_None)
+    {
+        return DuplicatePathString(path, outNormalizedPath);
+    }
+
+    return BuildNormalizedPathString(path, conditions, outNormalizedPath);
+}
+
+static Error MeasureCombinedPathLength(const unsigned char** paths, size_t pathCount, size_t* totalLength)
+{
+    size_t TotalLength = 0;
+
+    for (size_t Index = 0; Index < pathCount; Index++)
+    {
+        PathRootInfo RootInfo;
+        size_t Length = 0;
+        Error Result = ValidatePathArgument(paths[Index], u8"paths[index]");
+
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+
+        Result = ValidatePathInternal(paths[Index]);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+
+        RootInfo = GetPathRootInfo(paths[Index]);
+        if ((Index > 0) && (RootInfo.Length > 0))
+        {
+            return Error_Construct1(ErrorCode_InvalidPath,
+                u8"Only the first path in a path combination may be rooted.");
+        }
+
+        Length = GetStringLength(paths[Index]);
+        if ((Index > 0)
+            && !Path_EndsInDirectorySeparator(paths[Index - 1])
+            && (paths[Index][0] != 0)
+            && !IsDirectorySeparatorByte(paths[Index][0]))
+        {
+            if (TotalLength == SIZE_MAX)
+            {
+                return CreateOverflowError(u8"combine paths");
+            }
+
+            TotalLength++;
+        }
+        if (TotalLength > (SIZE_MAX - Length))
+        {
+            return CreateOverflowError(u8"combine paths");
+        }
+
+        TotalLength += Length;
+    }
+
+    *totalLength = TotalLength;
+    return Error_CreateSuccess();
+}
+
+static size_t WriteCombinedPath(const unsigned char** paths, size_t pathCount, unsigned char* output)
+{
+    size_t WrittenLength = 0;
+    bool HasWrittenAny = false;
+
+    for (size_t Index = 0; Index < pathCount; Index++)
+    {
+        size_t Length = GetStringLength(paths[Index]);
+
+        if ((HasWrittenAny)
+            && (WrittenLength > 0)
+            && !IsDirectorySeparatorByte(output[WrittenLength - 1])
+            && (Length > 0)
+            && !IsDirectorySeparatorByte(paths[Index][0]))
+        {
+            output[WrittenLength++] = ENVIRONMENT_PATH_SEPARATOR_PRIMARY;
+        }
+        if (Length > 0)
+        {
+            Memory_Copy(paths[Index], output + WrittenLength, Length);
+            WrittenLength += Length;
+        }
+
+        HasWrittenAny = true;
+    }
+
+    output[WrittenLength] = 0;
+    return WrittenLength;
+}
+
+static Error MeasureSplitRequirements(const unsigned char* path,
+    size_t startIndex,
+    size_t* segmentCount,
+    size_t* totalStringBytes)
+{
+    size_t SegmentCount = 0;
+    size_t TotalStringBytes = 0;
+    size_t Index = startIndex;
+    PathSegmentView Segment;
+
+    while (TryGetNextSegmentView(path, &Index, &Segment))
+    {
+        if (TotalStringBytes > (SIZE_MAX - Segment.Length - 1))
+        {
+            return CreateOverflowError(u8"split the path");
+        }
+
+        TotalStringBytes += Segment.Length + 1;
+        SegmentCount++;
+    }
+
+    *segmentCount = SegmentCount;
+    *totalStringBytes = TotalStringBytes;
+    return Error_CreateSuccess();
+}
+
+static Error EnsureSplitBufferCapacity(GenericBuffer* strBuffer, GenericBuffer* segmentPtrBuffer, size_t segmentCount, size_t totalStringBytes)
+{
+    Error Result = EnsureByteBufferCapacity(strBuffer, totalStringBytes, u8"split the path");
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (!GenericBuffer_EnsureTotalCapacity(segmentPtrBuffer, segmentCount))
+    {
+        return Error_Construct3(ErrorCode_BufferTooSmall,
+            u8"Cannot split the path because the segment pointer buffer requires at least %zu elements of capacity.",
+            segmentCount);
+    }
+
+    return Error_CreateSuccess();
+}
+
+static void WriteSplitBuffers(const unsigned char* path,
+    size_t startIndex,
+    GenericBuffer* strBuffer,
+    GenericBuffer* segmentPtrBuffer)
+{
+    size_t Index = startIndex;
+    size_t StringWriteIndex = 0;
+    size_t PointerWriteIndex = 0;
+    PathSegmentView Segment;
+
+    while (TryGetNextSegmentView(path, &Index, &Segment))
+    {
+        unsigned char* SegmentText = strBuffer->_data + StringWriteIndex;
+
+        if (Segment.Length > 0)
+        {
+            Memory_Copy(Segment.Start, SegmentText, Segment.Length);
+        }
+
+        SegmentText[Segment.Length] = 0;
+        StringWriteIndex += Segment.Length + 1;
+        ((unsigned char**)segmentPtrBuffer->_data)[PointerWriteIndex++] = SegmentText;
+    }
+
+    strBuffer->_count = StringWriteIndex;
+    segmentPtrBuffer->_count = PointerWriteIndex;
+}
+
+
+// Public functions.
+Error Path_ChangeExtension(const unsigned char* path, const unsigned char* newExtension, GenericBuffer* result)
+{
+    if (newExtension == NULL)
+    {
+        return Path_RemoveExtension(path, result);
+    }
+
+    PathSegmentView LastEntry;
+    size_t ExtensionIndex = 0;
+    size_t PathLength = 0;
+    size_t LastEntryOffset = 0;
+    size_t PrefixLength = 0;
+    size_t NewExtensionLength = 0;
+    bool HasExtension = false;
+    bool NeedsDot = false;
+    size_t OutputLength = 0;
+    Error Result = Error_CreateSuccess();
+
+    Result = ValidatePathArgument(path, u8"path");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (newExtension == NULL)
+    {
+        return CreateNullArgumentError(u8"newExtension");
+    }
+
+    Result = PrepareByteBuffer(result, u8"result");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = ValidatePathInternal(path);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    PathLength = GetStringLength(path);
+    TryGetLastEntryView(path, &LastEntry);
+    if ((LastEntry.Length == 0) || IsSpecialDirectorySegment(LastEntry.Start, LastEntry.Length))
+    {
+        return WriteBufferBytes(result, path, PathLength, true, u8"change the path extension");
+    }
+
+    LastEntryOffset = (size_t)(LastEntry.Start - path);
+    PrefixLength = PathLength;
+    HasExtension = SegmentHasExtension(LastEntry.Start, LastEntry.Length, &ExtensionIndex);
+    if (HasExtension)
+    {
+        PrefixLength = LastEntryOffset + ExtensionIndex;
+    }
+
+    NewExtensionLength = GetStringLength(newExtension);
+    NeedsDot = (NewExtensionLength > 0) && (newExtension[0] != u8'.');
+    OutputLength = PrefixLength + NewExtensionLength + (NeedsDot ? 1U : 0U);
+    if (OutputLength < PrefixLength)
+    {
+        return CreateOverflowError(u8"change the path extension");
+    }
+
+    Result = EnsureByteBufferCapacity(result, OutputLength + 1, u8"change the path extension");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    if (PrefixLength > 0)
+    {
+        Memory_Copy(path, result->_data, PrefixLength);
+    }
+
+    result->_count = PrefixLength;
+    if (NeedsDot)
+    {
+        result->_data[result->_count++] = u8'.';
+    }
+    if (NewExtensionLength > 0)
+    {
+        Memory_Copy(newExtension, result->_data + result->_count, NewExtensionLength);
+        result->_count += NewExtensionLength;
+    }
+
+    result->_data[result->_count++] = 0;
+    return Error_CreateSuccess();
+}
+
+Error Path_RemoveExtension(const unsigned char* path, GenericBuffer* result)
+{
+    return Path_ChangeExtension(path, u8"", result);
+}
+
+Error Path_GetExtension(const unsigned char* path, GenericBuffer* result)
+{
+    PathSegmentView LastEntry;
+    size_t ExtensionIndex = 0;
+    Error Result = ValidatePathArgument(path, u8"path");
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    Result = PrepareByteBuffer(result, u8"result");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = ValidatePathInternal(path);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    TryGetLastEntryView(path, &LastEntry);
+    if (!SegmentHasExtension(LastEntry.Start, LastEntry.Length, &ExtensionIndex))
+    {
+        return WriteBufferBytes(result, u8"", 0, true, u8"get the path extension");
+    }
+
+    return WriteBufferBytes(result,
+        LastEntry.Start + ExtensionIndex,
+        LastEntry.Length - ExtensionIndex,
+        true,
+        u8"get the path extension");
+}
+
+Error Path_HasExtension(const unsigned char* path, bool* hasExtension)
+{
+    PathSegmentView LastEntry;
+    Error Result = ValidatePathArgument(path, u8"path");
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (hasExtension == NULL)
+    {
+        return CreateNullArgumentError(u8"hasExtension");
+    }
+
+    Result = ValidatePathInternal(path);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    TryGetLastEntryView(path, &LastEntry);
+    *hasExtension = SegmentHasExtension(LastEntry.Start, LastEntry.Length, NULL);
+    return Error_CreateSuccess();
+}
+
+Error Path_Combine(const unsigned char** paths, size_t pathCount, GenericBuffer* result)
+{
+    Error Result = ValidateByteBuffer(result, u8"result");
+    size_t TotalLength = 0;
+
+    if (paths == NULL)
+    {
+        return CreateNullArgumentError(u8"paths");
+    }
+    if (pathCount == 0)
+    {
+        GenericBuffer_Clear(result);
+        return WriteBufferBytes(result, u8"", 0, true, u8"combine paths");
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    Result = MeasureCombinedPathLength(paths, pathCount, &TotalLength);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    Result = PrepareByteBuffer(result, u8"result");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = EnsureByteBufferCapacity(result, TotalLength + 1, u8"combine paths");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    result->_count = WriteCombinedPath(paths, pathCount, result->_data) + 1;
+    return Error_CreateSuccess();
+}
+
+Error Path_Append(const unsigned char* pathA, const unsigned char* pathB, GenericBuffer* result)
+{
+    const unsigned char* Paths[2] = { pathA, pathB };
+
+    return Path_Combine(Paths, 2, result);
 }
 
 bool Path_EndsInDirectorySeparator(const unsigned char* path)
 {
-    size_t StrLength = StringUTF8_GetByteLength(path);
-    return (StrLength > 0) && IsSeparator(path[StrLength - 1]);
+    size_t Length = GetStringLength(path);
+
+    if (Length == 0)
+    {
+        return false;
+    }
+
+    return IsDirectorySeparatorByte(path[Length - 1]);
 }
 
-Error Path_GetParentPath(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result)
+Error Path_GetParentPath(const unsigned char* path, GenericBuffer* result)
 {
-    PathIdentifier PreviousIdentifier;
-    Memory_Zero(&PreviousIdentifier, sizeof(PreviousIdentifier));
+    size_t ParentLength = 0;
+    Error Result = ValidatePathArgument(path, u8"path");
 
-    PathTraversalData TraversalData;
-    BeginPathTraversal(path, &TraversalData);
-    do
+    if (Result.Code != ErrorCode_Success)
     {
-        PreviousIdentifier = TraversalData._currentIdentifier;
-        TraverseSegment(errorPool, &TraversalData);
-    } while (!TraversalData._currentIdentifier._isFinalIdentifier);
+        return Result;
+    }
 
-    size_t PathLength = PreviousIdentifier._startIndexInPath + PreviousIdentifier._sizeBytes;
-    return StringUTF8_Substring(path, 0, PathLength, result, errorPool);
+    Result = PrepareByteBuffer(result, u8"result");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = ValidatePathInternal(path);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    ParentLength = GetParentPathLength(path);
+    return WriteBufferBytes(result, path, ParentLength, true, u8"get the parent path");
 }
 
-Error Path_GetLastEntryName(ErrorMessagePool* errorPool, const unsigned char* path, const unsigned char** lastEntryName)
+Error Path_GetLastEntryName(const unsigned char* path, GenericBuffer* result)
 {
-    *lastEntryName = NULL;
-    PathTraversalData TraversalData;
-    BeginPathTraversal(path, &TraversalData);
-    do
+    PathSegmentView LastEntry;
+    Error Result = ValidatePathArgument(path, u8"path");
+
+    if (Result.Code != ErrorCode_Success)
     {
-        Error ErrorResult = TraverseSegment(errorPool, &TraversalData);
-        if (ErrorResult.Code != ErrorCode_Success)
-        {
-            return ErrorResult;
-        }
-    } while (TraversalData._currentIdentifier._isFinalIdentifier);
+        return Result;
+    }
 
-    *lastEntryName = TraversalData._currentIdentifier._entry;
+    Result = PrepareByteBuffer(result, u8"result");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = ValidatePathInternal(path);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
 
-    return Error_CreateSuccess();
+    TryGetLastEntryView(path, &LastEntry);
+    return WriteBufferBytes(result, LastEntry.Start, LastEntry.Length, true, u8"get the last path entry");
 }
 
-Error Path_GetLastEntryStem(ErrorMessagePool* errorPool, const unsigned char* path, GenericBuffer* result)
+Error Path_GetLastEntryStem(const unsigned char* path, GenericBuffer* result)
 {
-    const unsigned char* LastEntryName = NULL;
-    Error ErrorResult = Path_GetLastEntryName(errorPool, path, &LastEntryName);
-    if (ErrorResult.Code != ErrorCode_Success)
+    PathSegmentView LastEntry;
+    size_t ExtensionIndex = 0;
+    Error Result = ValidatePathArgument(path, u8"path");
+
+    if (Result.Code != ErrorCode_Success)
     {
-        return ErrorResult;
+        return Result;
     }
 
-    const unsigned char Indicator[] = { EXTENSION_INDICATOR, '\0'};
-    size_t FirstIndicatorIndex;
-    ErrorResult = StringUTF8_IndexOf(path, Indicator, String_CreateIndexOptionsNormal(), errorPool, &FirstIndicatorIndex);
-    if (ErrorResult.Code != ErrorCode_Success)
+    Result = PrepareByteBuffer(result, u8"result");
+    if (Result.Code != ErrorCode_Success)
     {
-        return ErrorResult;
+        return Result;
+    }
+    Result = ValidatePathInternal(path);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
     }
 
-    if (FirstIndicatorIndex != STRING_INDEX_INVALID)
+    TryGetLastEntryView(path, &LastEntry);
+    if (!SegmentHasExtension(LastEntry.Start, LastEntry.Length, &ExtensionIndex))
     {
-        return StringUTF8_Substring(LastEntryName, 0, FirstIndicatorIndex, result, errorPool);
-    }
-    if (!GenericBuffer_WriteString(result, LastEntryName) || !GenericBuffer_TryNullTerminate(result))
-    {
-        return CreateDestBufferTooSmallError(errorPool);
+        return WriteBufferBytes(result, LastEntry.Start, LastEntry.Length, true, u8"get the last path entry stem");
     }
 
-    return Error_CreateSuccess();
+    return WriteBufferBytes(result, LastEntry.Start, ExtensionIndex, true, u8"get the last path entry stem");
 }
 
 bool Path_IsEntryNameValid(const unsigned char* entryName)
 {
-    return Path_ValidateEntryName(NULL, entryName).Code == ErrorCode_Success;
+    if ((entryName == NULL) || (entryName[0] == 0))
+    {
+        return false;
+    }
+    if (PathContainsInvalidUtf8(entryName))
+    {
+        return false;
+    }
+
+    return ValidateEntrySegment(entryName, GetStringLength(entryName), false).Code == ErrorCode_Success;
 }
 
-Error Path_ValidateEntryName(ErrorMessagePool* errorPool, const unsigned char* entryName)
+Error Path_ValidateEntryName(const unsigned char* entryName)
 {
-    const ErrorCode FailCode = ErrorCode_IllegalArgument;
+    Error Result;
 
-    for (size_t i = 0; entryName[i] != '\0';)
+    if (entryName == NULL)
     {
-        if (IsIllegalCharacter(entryName + i))
+        return CreateNullArgumentError(u8"entryName");
+    }
+    if (entryName[0] == 0)
+    {
+        return CreateInvalidEntryNameError(entryName, u8"entry names must not be empty.");
+    }
+    if (PathContainsInvalidUtf8(entryName))
+    {
+        return CreateInvalidEntryNameError(entryName, u8"entry names must be valid UTF-8.");
+    }
+
+    Result = ValidateEntrySegment(entryName, GetStringLength(entryName), false);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return CreateInvalidEntryNameError(entryName, Result.Message != NULL ? Result.Message : u8"entry name is invalid.");
+    }
+
+    return Error_CreateSuccess();
+}
+
+bool Path_IsValid(const unsigned char* path)
+{
+    return ValidatePathInternal(path).Code == ErrorCode_Success;
+}
+
+Error Path_Validate(const unsigned char* path)
+{
+    return ValidatePathInternal(path);
+}
+
+PathType Path_GetPathType(const unsigned char* path)
+{
+    PathRootInfo RootInfo = GetPathRootInfo(path);
+
+    if ((path == NULL) || (path[0] == 0))
+    {
+        return PathType_None;
+    }
+
+    return RootInfo.IsRooted ? FilePathType_Absolute : FilePathType_Relative;
+}
+
+Error Path_Normalize(const unsigned char* path, PathNormalizeConditions conditions, GenericBuffer* buffer)
+{
+    unsigned char* NormalizedPath = NULL;
+    Error Result = PrepareByteBuffer(buffer, u8"buffer");
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    Result = NormalizePathToOwnedString(path, conditions, &NormalizedPath);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    Result = WriteBufferBytes(buffer,
+        NormalizedPath,
+        GetStringLength(NormalizedPath),
+        true,
+        u8"normalize the path");
+    Memory_Free(NormalizedPath);
+    return Result;
+}
+
+bool Path_IsNormalized(const unsigned char* path, PathNormalizeConditions conditions)
+{
+    unsigned char* NormalizedPath = NULL;
+    bool IsEqual = false;
+    Error Result = NormalizePathToOwnedString(path, conditions, &NormalizedPath);
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return false;
+    }
+
+    IsEqual = PathsEqualNormalized(path, NormalizedPath);
+    Memory_Free(NormalizedPath);
+    return IsEqual;
+}
+
+bool Path_IsRooted(const unsigned char* path)
+{
+    return GetPathRootInfo(path).IsRooted;
+}
+
+bool Path_IsFullyQualified(const unsigned char* path)
+{
+    return GetPathRootInfo(path).IsFullyQualified;
+}
+
+Error Path_GetRoot(const unsigned char* path, GenericBuffer* result)
+{
+    PathRootInfo RootInfo;
+    Error Result = ValidatePathArgument(path, u8"path");
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    Result = PrepareByteBuffer(result, u8"result");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = ValidatePathInternal(path);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    RootInfo = GetPathRootInfo(path);
+    return WriteBufferBytes(result, path, RootInfo.Length, true, u8"get the path root");
+}
+
+bool Path_IsSubPath(const unsigned char* parentPath, const unsigned char* childPath)
+{
+    unsigned char* NormalizedParent = NULL;
+    unsigned char* NormalizedChild = NULL;
+    size_t ParentLength = 0;
+    bool IsMatch = false;
+    Error Result = NormalizePathToOwnedString(parentPath,
+        PathNormalizeConditions_FixSeparators | PathNormalizeConditions_CollapseDirectorySegment,
+        &NormalizedParent);
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return false;
+    }
+
+    Result = NormalizePathToOwnedString(childPath,
+        PathNormalizeConditions_FixSeparators | PathNormalizeConditions_CollapseDirectorySegment,
+        &NormalizedChild);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Memory_Free(NormalizedParent);
+        return false;
+    }
+
+    if (Path_GetPathType(NormalizedParent) != Path_GetPathType(NormalizedChild))
+    {
+        Memory_Free(NormalizedParent);
+        Memory_Free(NormalizedChild);
+        return false;
+    }
+
+    ParentLength = GetStringLength(NormalizedParent);
+    if (ParentLength == 0)
+    {
+        Memory_Free(NormalizedParent);
+        Memory_Free(NormalizedChild);
+        return false;
+    }
+
+    if (PathsEqualNormalized(NormalizedParent, NormalizedChild))
+    {
+        Memory_Free(NormalizedParent);
+        Memory_Free(NormalizedChild);
+        return true;
+    }
+    if (GetStringLength(NormalizedChild) <= ParentLength)
+    {
+        Memory_Free(NormalizedParent);
+        Memory_Free(NormalizedChild);
+        return false;
+    }
+
+    IsMatch = true;
+    for (size_t Index = 0; Index < ParentLength; Index++)
+    {
+#if defined(_WIN32)
+        if (ToAsciiLower(NormalizedParent[Index]) != ToAsciiLower(NormalizedChild[Index]))
         {
-            return Error_Construct3(errorPool,
-                FailCode,
-                u8"Found illegal character %d at index %zu.",
-                entryName[i], i);
+            IsMatch = false;
+            break;
+        }
+#else
+        if (NormalizedParent[Index] != NormalizedChild[Index])
+        {
+            IsMatch = false;
+            break;
+        }
+#endif
+    }
+
+    if (IsMatch && !IsDirectorySeparatorByte(NormalizedChild[ParentLength]))
+    {
+        IsMatch = false;
+    }
+
+    Memory_Free(NormalizedParent);
+    Memory_Free(NormalizedChild);
+    return IsMatch;
+}
+
+Error Path_TrimTrailingSeparator(const unsigned char* path, GenericBuffer* result)
+{
+    PathRootInfo RootInfo;
+    size_t TrimmedLength = 0;
+    Error Result = ValidatePathArgument(path, u8"path");
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    Result = PrepareByteBuffer(result, u8"result");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = ValidatePathInternal(path);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    RootInfo = GetPathRootInfo(path);
+    TrimmedLength = GetTrimmedPathLength(path, RootInfo.Length);
+    return WriteBufferBytes(result, path, TrimmedLength, true, u8"trim the trailing path separator");
+}
+
+Error Path_EnsureTrailingSeparator(const unsigned char* path, GenericBuffer* result)
+{
+    size_t Length = 0;
+    Error Result = ValidatePathArgument(path, u8"path");
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    Result = PrepareByteBuffer(result, u8"result");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = ValidatePathInternal(path);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    if (Path_EndsInDirectorySeparator(path))
+    {
+        return WriteBufferBytes(result, path, GetStringLength(path), true, u8"ensure the trailing path separator");
+    }
+
+    Length = GetStringLength(path);
+    Result = EnsureByteBufferCapacity(result, Length + 2, u8"ensure the trailing path separator");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    Memory_Copy(path, result->_data, Length);
+    result->_count = Length;
+    result->_data[result->_count++] = ENVIRONMENT_PATH_SEPARATOR_PRIMARY;
+    result->_data[result->_count++] = 0;
+    return Error_CreateSuccess();
+}
+
+bool Path_ContainsDirectorySegments(const unsigned char* path)
+{
+    PathRootInfo RootInfo;
+    size_t Index = 0;
+
+    if ((path == NULL) || (path[0] == 0))
+    {
+        return false;
+    }
+
+    RootInfo = GetPathRootInfo(path);
+    Index = RootInfo.Length;
+    while (path[Index] != 0)
+    {
+        size_t SegmentStart = 0;
+        size_t SegmentLength = 0;
+
+        while (IsDirectorySeparatorByte(path[Index]))
+        {
+            Index++;
+        }
+        if (path[Index] == 0)
+        {
+            break;
+        }
+
+        SegmentStart = Index;
+        while ((path[Index] != 0) && !IsDirectorySeparatorByte(path[Index]))
+        {
+            Index++;
+        }
+
+        SegmentLength = Index - SegmentStart;
+        if (IsSpecialDirectorySegment(path + SegmentStart, SegmentLength))
+        {
+            return true;
         }
     }
 
-    const size_t IllegalNameCount = sizeof(ILLEGAL_FILENAMES) / sizeof(*ILLEGAL_FILENAMES);
-    for (size_t IllegalNameIndex = 0; IllegalNameIndex < ILLEGAL_FILENAMES; IllegalNameIndex++)
+    return false;
+}
+
+Error Path_Split(const unsigned char* path, GenericBuffer* strBuffer, GenericBuffer* segmentPtrBuffer)
+{
+    PathRootInfo RootInfo;
+    size_t SegmentCount = 0;
+    size_t TotalStringBytes = 0;
+    Error Result = ValidatePathArgument(path, u8"path");
+
+    if (Result.Code != ErrorCode_Success)
     {
-        const unsigned char* IllegalName = ILLEGAL_FILENAMES[IllegalNameIndex];
-        if (!IsEntryNameValidAgainst(entryName, IllegalName))
-        {
-            return Error_Construct3(errorPool,
-                FailCode,
-                u8"The entry name \"%s\" or its variations is illegal.",
-                IllegalName);
-        }
+        return Result;
     }
 
+    Result = ValidateByteBuffer(strBuffer, u8"strBuffer");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = ValidatePointerBuffer(segmentPtrBuffer, u8"segmentPtrBuffer");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = ValidatePathInternal(path);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    RootInfo = GetPathRootInfo(path);
+    Result = MeasureSplitRequirements(path, RootInfo.Length, &SegmentCount, &TotalStringBytes);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    GenericBuffer_Clear(strBuffer);
+    GenericBuffer_Clear(segmentPtrBuffer);
+    Result = EnsureSplitBufferCapacity(strBuffer, segmentPtrBuffer, SegmentCount, TotalStringBytes);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    WriteSplitBuffers(path, RootInfo.Length, strBuffer, segmentPtrBuffer);
     return Error_CreateSuccess();
 }
