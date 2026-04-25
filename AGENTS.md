@@ -360,6 +360,12 @@ a macro will be fine.
 ## Comments
 - Do not add useless comments everywhere, only comment the super non-obvious, weird or hacky stuff, which should be rare.
 
+# Types
+- Be wary of desktop platform dependant code. Use explicit int types and limits from stdint
+instead of platform-dependant int types from the language.
+Exception is if the API being used also doesn't use explicit int types (like how many OpenGL functions just use int instead of
+something like int32_t). Be careful about clib printf formatting too, since some of it is platform dependant too.
+
 
 ## Quick Reference Checklist (for agents before submitting)
 

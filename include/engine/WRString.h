@@ -2,7 +2,7 @@
 #include "WRUnicode.h"
 #include "WRChar.h"
 #include <stddef.h>
-#include "WRComparasionResult.h"
+#include "WRComparator.h"
 #include "WRMemory.h"
 
 
@@ -54,7 +54,7 @@ extern const unsigned char* const STRING_EMPTY;
 // Functions.
 bool StringUTF8_IsEncodingValid(const unsigned char* str);
 
-bool StringUTF8_IsCodepointsValid(const unsigned char* str, UnicodeData* unicode);
+bool StringUTF8_AreCodepointsValid(const unsigned char* str, UnicodeData* unicode);
 
 bool StringUTF8_IsValid(const unsigned char* str, UnicodeData* unicode);
 
