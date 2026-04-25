@@ -1074,6 +1074,24 @@ bool GenericBuffer_SetByte(GenericBuffer* buffer, size_t index, unsigned char by
     return GenericBuffer_Replace(buffer, &byte, index);
 }
 
+bool GenericBuffer_Mutate(GenericBuffer* buffer, size_t addedElementCount, GenericBufferMutator mutator, void* userData)
+{
+    if ((buffer == NULL) || (mutator == NULL))
+    {
+        return false;
+    }
+    if (!GenericBuffer_CanModify(buffer))
+    {
+        return false;
+    }
+    if (!GenericBuffer_ReserveMoreCapacity(buffer, addedElementCount))
+    {
+        return false;
+    }
+
+    mutator(buffer, userData);
+}
+
 size_t Memory_GetTotalAllocationCount(void)
 {
     return atomic_load_explicit(&TotalAllocations, memory_order_relaxed);

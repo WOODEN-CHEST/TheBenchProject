@@ -52,21 +52,25 @@ extern const unsigned char* const STRING_EMPTY;
 
 
 // Functions.
+
+/* These comments in asterisk slash are for implementers, not documentation. */
+
+/* Tests if the string is properly encoded, no tests on if such unicode characters exist. */
 bool StringUTF8_IsEncodingValid(const unsigned char* str);
 
-bool StringUTF8_AreCodepointsValid(const unsigned char* str, UnicodeData* unicode);
 
-bool StringUTF8_IsValid(const unsigned char* str, UnicodeData* unicode);
+/* Tests if the codepoints in the string exist in the given unicode table. Probably tests encoding too since were iterating the codepoints. */
+bool StringUTF8_AreCodepointsValid(const unsigned char* str, UnicodeData* unicode);
 
 bool StringUTF8_IsNullOrEmpty(const unsigned char* str);
 
-Error StringUTF8_IsNullOrWhitespace(const unsigned char* str, UnicodeData* unicode, ErrorMessagePool* errorPool, bool* outValue);
+Error StringUTF8_IsNullOrWhitespace(const unsigned char* str, UnicodeData* unicode, bool* outValue);
 
-Error StringUTF8_ToLower(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination, ErrorMessagePool* errorPool);
+Error StringUTF8_ToLower(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination);
 
-Error StringUTF8_ToUpper(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination, ErrorMessagePool* errorPool);
+Error StringUTF8_ToUpper(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination);
 
-Error StringUTF8_InvertCase(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination, ErrorMessagePool* errorPool);
+Error StringUTF8_InvertCase(const unsigned char* str, UnicodeData* unicode, GenericBuffer* destination);
 
 size_t StringUTF8_GetByteLength(const unsigned char* str);
 
@@ -208,3 +212,4 @@ Error StringUTF8_Reverse(const unsigned char* str, GenericBuffer* destination, E
 Error StringUTF8_Repeat(const unsigned char* str, GenericBuffer* destination, size_t count, ErrorMessagePool* errorPool);
 
 Error StringUTF8_GetCharacterIndexArray(const unsigned char* str, GenericBuffer* indexArray, ErrorMessagePool* errorPool);
+

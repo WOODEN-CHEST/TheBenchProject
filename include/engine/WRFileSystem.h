@@ -1,9 +1,9 @@
 #pragma once
 #include "WRError.h"
 #include "WRMemory.h"
+#include "WRFileStream.h"
 #include <time.h>
 #include <stddef.h>
-#include "WRIO.h"
 
 
 // Types.
@@ -70,7 +70,7 @@ Error FileSystem_CreateLastDirectory(ErrorMessagePool* errorPool, const unsigned
 
 Error FileSystem_CreateAllDirectories(ErrorMessagePool* errorPool, const unsigned char* path);
 
-Error FileSystem_OpenFileStream(ErrorMessagePool* errorPool, const unsigned char* path, FileOpenMode mode, IOStream** stream);
+Error FileSystem_OpenFileStream(ErrorMessagePool* errorPool, const unsigned char* path, FileOpenMode mode, FileStream** stream);
 
 Error FileSystem_DeleteEntry(ErrorMessagePool* errorPool, const unsigned char* path);
 
