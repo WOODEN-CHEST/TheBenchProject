@@ -340,6 +340,9 @@ should also be null. If the error code is not success, there may be a pointer to
 of regular char arrays. Since this is Unicode and UTF-8 encoding of it, determining whether a character is something
 should be done by extracting its codepoint and testing that, and writing it same way (use codepoint write functions).
 - Remember to prefix strings and character literals with the 'u8' prefix.
+- If you're dealing with UTF-16 strings (in Windows, for example), then use uint16_t as the unit type for them. However,
+generally you should be trying to make sure the project uses UTF-8, whatever API gave UTF-16 strings should have the strings
+in usage converted to UTF-8.
 
 
 ## Static state
