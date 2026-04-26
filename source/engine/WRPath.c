@@ -1,5 +1,6 @@
 #include "WRPath.h"
 #include "WRChar.h"
+#include "WRString.h"
 #include "WREnvironment.h"
 #include <stdint.h>
 
@@ -66,14 +67,7 @@ static const unsigned char* const WINDOWS_RESERVED_NAMES[] =
 // Static functions.
 static size_t GetStringLength(const unsigned char* text)
 {
-    size_t Length = 0;
-
-    while ((text != NULL) && (text[Length] != 0))
-    {
-        Length++;
-    }
-
-    return Length;
+    return StringUTF8_GetByteLength(text);
 }
 
 static bool IsDirectorySeparatorByte(unsigned char character)
@@ -193,15 +187,7 @@ static Error ValidatePointerBuffer(GenericBuffer* buffer, const unsigned char* a
 
 static Error PrepareByteBuffer(GenericBuffer* buffer, const unsigned char* argumentName)
 {
-    Error Result = ValidateByteBuffer(buffer, argumentName);
-
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    GenericBuffer_Clear(buffer);
-    return Error_CreateSuccess();
+    return ValidateByteBuffer(buffer, argumentName);
 }
 
 static Error EnsureByteBufferCapacity(GenericBuffer* buffer, size_t requiredCapacity, const unsigned char* operationName)
@@ -223,39 +209,38 @@ static Error WriteBufferBytes(GenericBuffer* buffer,
     bool nullTerminate,
     const unsigned char* operationName)
 {
-    size_t RequiredCapacity = length;
-
     if (nullTerminate)
     {
-        if (RequiredCapacity == SIZE_MAX)
-        {
-            return CreateOverflowError(operationName);
-        }
-
-        RequiredCapacity++;
+        return StringUTF8_CopyToBySize(bytes, length, buffer);
     }
 
-    GenericBuffer_Clear(buffer);
-    if (RequiredCapacity > 0)
+    if (length == 0)
     {
-        Error Result = EnsureByteBufferCapacity(buffer, RequiredCapacity, operationName);
-
-        if (Result.Code != ErrorCode_Success)
-        {
-            return Result;
-        }
+        return Error_CreateSuccess();
     }
 
-    if (length > 0)
+    if (bytes == NULL)
     {
-        Memory_Copy(bytes, buffer->_data, length);
+        return CreateNullArgumentError(u8"bytes");
     }
-
-    buffer->_count = length;
-    if (nullTerminate)
+    if (buffer->_count > (SIZE_MAX - length))
     {
-        buffer->_data[length] = 0;
-        buffer->_count++;
+        return Error_Construct1(ErrorCode_ArgumentOutOfRange,
+            u8"Cannot write the path bytes because the required size exceeds the supported range.");
+    }
+    if (!GenericBuffer_EnsureTotalCapacity(buffer, buffer->_count + length))
+    {
+        return Error_Construct3(ErrorCode_BufferTooSmall,
+            u8"Cannot %s because the destination buffer requires at least %zu bytes of capacity.",
+            operationName,
+            buffer->_count + length);
+    }
+    if (!GenericBuffer_AddLastRange(buffer, (void*)bytes, length))
+    {
+        return Error_Construct3(ErrorCode_BufferTooSmall,
+            u8"Cannot %s because the destination buffer requires at least %zu bytes of capacity.",
+            operationName,
+            buffer->_count + length);
     }
 
     return Error_CreateSuccess();
@@ -1358,7 +1343,6 @@ Error Path_Combine(const unsigned char** paths, size_t pathCount, GenericBuffer*
     }
     if (pathCount == 0)
     {
-        GenericBuffer_Clear(result);
         return WriteBufferBytes(result, u8"", 0, true, u8"combine paths");
     }
     if (Result.Code != ErrorCode_Success)
@@ -1849,8 +1833,6 @@ Error Path_Split(const unsigned char* path, GenericBuffer* strBuffer, GenericBuf
         return Result;
     }
 
-    GenericBuffer_Clear(strBuffer);
-    GenericBuffer_Clear(segmentPtrBuffer);
     Result = EnsureSplitBufferCapacity(strBuffer, segmentPtrBuffer, SegmentCount, TotalStringBytes);
     if (Result.Code != ErrorCode_Success)
     {

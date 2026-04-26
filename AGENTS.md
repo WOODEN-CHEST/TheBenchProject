@@ -280,16 +280,26 @@ void List_Append(List* self, int value);
 
 ## Memory Management
 
-- The project uses a **custom memory module** instead of `malloc`/`free` directly. Once available, all
-  allocations and deallocations must go through it. Until it is implemented, standard `malloc`/`free`
-  may be used as a placeholder — mark any such usage with `// TODO: replace with memory module`.
-- `WRMemory` is now the active memory layer. Use `Memory_Allocate`, `Memory_Reallocate`, `Memory_Free`,
+- The project uses a **custom memory module** instead of `malloc`/`free` directly.
+-  Use `Memory_Allocate`, `Memory_Reallocate`, `Memory_Free`,
   `Memory_Copy`, `Memory_Move`, `Memory_Set`, and `Memory_Zero` instead of calling the C standard library directly.
 - `GenericBuffer` capacity and count are measured in elements, not bytes. The byte/string helpers are only valid when
   `buffer->_elementSize == sizeof(unsigned char)`, and they still must obey the same validation and capacity rules as
   the generic operations. The generic buffer should be used in place of raw buffers where possible. Obviously the
   generic buffer still requires a raw buffer to be passed into it to work, but after that, use the generic buffer.
-  The generic buffer should only ever be written to via its methods; reading from it directly is fine, however.
+  The generic buffer should only ever be written to via its write methods. The generic buffer has many validations
+  it must make when writing, so if you manually mutate the bytes and length of it, it may cause issues. If passing
+  the byte buffer of the generic buffer is required to a function which will write to them, use the generic buffer's
+  mutate method, it handles all constraints; the mutation function pointer parameter is supposed to
+  modify the bytes of the generic buffer and update its length. Reading from the generic buffer directly
+  without its methods is fine, however.
+- Functions which write to a generic buffer should NOT clear the buffer beforehand, that is the responsibility of the
+  caller of said function.
+- This rule is strict: do not call `GenericBuffer_Clear` inside a function just because that function writes to a
+  destination buffer. Writer functions append into the buffer's current contents unless the caller explicitly cleared it
+  first.
+- If a function should behave like overwrite/replace, still do not silently clear inside that function. Either require
+  the caller to pass a cleared buffer or expose a separate API whose contract explicitly says it clears/replaces.
 - The custom module tracks allocation counts and provides additional utilities, but is otherwise
   semantically equivalent to `malloc`/`free`.
 - **Minimize heap fragmentation.** Prefer allocating larger contiguous blocks over many small individual
@@ -392,3 +402,4 @@ something like int32_t). Be careful about clib printf formatting too, since some
 - [ ] Public headers are platform-agnostic; platform-specific code is in implementation files only?
 - [ ] New modules explicitly noted in response?
 - [ ] Incomplete sections marked with `// TODO:`?
+- [ ] Generic buffer, if written to, written to via its methods and not directly?

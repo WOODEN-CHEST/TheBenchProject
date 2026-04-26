@@ -797,6 +797,7 @@ bool GenericBuffer_Filter(GenericBuffer* buffer, GenericBufferPredicate predicat
 
 bool GenericBuffer_Map(GenericBuffer* buffer, GenericBuffer* destination, GenericBufferMapper mapper, void* userData)
 {
+    size_t DestinationStartIndex = 0;
     size_t SourceCount = 0;
 
     if ((buffer == NULL) || (destination == NULL) || (mapper == NULL))
@@ -812,10 +813,13 @@ bool GenericBuffer_Map(GenericBuffer* buffer, GenericBuffer* destination, Generi
         return false;
     }
 
+    DestinationStartIndex = destination->_count;
     SourceCount = buffer->_count;
-    GenericBuffer_Clear(destination);
-
-    if (!GenericBuffer_EnsureTotalCapacity(destination, SourceCount))
+    if (DestinationStartIndex > (SIZE_MAX - SourceCount))
+    {
+        return false;
+    }
+    if (!GenericBuffer_EnsureTotalCapacity(destination, DestinationStartIndex + SourceCount))
     {
         return false;
     }
@@ -823,12 +827,12 @@ bool GenericBuffer_Map(GenericBuffer* buffer, GenericBuffer* destination, Generi
     for (size_t Index = 0; Index < SourceCount; Index++)
     {
         GenericBufferElementData SourceElement = CreateGenericBufferElementData(buffer, Index);
-        void* DestinationElement = GenericBuffer_GetElementAddress(destination, Index);
+        void* DestinationElement = GenericBuffer_GetElementAddress(destination, DestinationStartIndex + Index);
 
         mapper(buffer, SourceElement, DestinationElement, userData);
     }
 
-    destination->_count = SourceCount;
+    destination->_count = DestinationStartIndex + SourceCount;
     return true;
 }
 

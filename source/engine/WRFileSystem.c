@@ -4,6 +4,7 @@
 #include "WRMemory.h"
 #include "WREnvironment.h"
 #include "WRPath.h"
+#include "WRString.h"
 #include <stdint.h>
 
 
@@ -84,19 +85,7 @@ static void CreateGrowablePointerBuffer(GenericBuffer* buffer)
 
 static size_t GetStringLength(const unsigned char* text)
 {
-    size_t Length = 0;
-
-    if (text == NULL)
-    {
-        return 0;
-    }
-
-    while (text[Length] != 0)
-    {
-        Length++;
-    }
-
-    return Length;
+    return StringUTF8_GetByteLength(text);
 }
 
 static bool IsDirectorySeparator(unsigned char character)
@@ -186,6 +175,7 @@ static Error ValidateByteBuffer(GenericBuffer* buffer, const unsigned char* argu
 static Error DuplicateStringBySize(const unsigned char* text, size_t length, unsigned char** outText)
 {
     unsigned char* Copy = NULL;
+    GenericBuffer Buffer;
 
     if (outText == NULL)
     {
@@ -199,12 +189,16 @@ static Error DuplicateStringBySize(const unsigned char* text, size_t length, uns
     }
 
     Copy = Memory_Allocate(length + 1);
-    if (length > 0)
+    GenericBuffer_CreateConstant(&Buffer, Copy, length + 1, sizeof(unsigned char), 0);
     {
-        Memory_Copy(text, Copy, length);
-    }
+        Error Result = StringUTF8_CopyToBySize(text, length, &Buffer);
 
-    Copy[length] = 0;
+        if (Result.Code != ErrorCode_Success)
+        {
+            Memory_Free(Copy);
+            return Result;
+        }
+    }
     *outText = Copy;
     return Error_CreateSuccess();
 }
@@ -505,7 +499,6 @@ static Error TryReadEntireFile(const unsigned char* path, GenericBuffer* destina
         return Result;
     }
 
-    GenericBuffer_Clear(destination);
     Result = FileSystem_OpenFileStream(path, FileOpenMode_ReadBinary, &Stream);
     if (Result.Code != ErrorCode_Success)
     {
