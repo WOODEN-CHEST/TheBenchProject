@@ -629,7 +629,7 @@ static Error ValidatePathSegmentViews(const unsigned char* path, size_t startInd
 
         if (Result.Code != ErrorCode_Success)
         {
-            return CreateInvalidPathError(path, Result.Message != NULL ? Result.Message : u8"path contains an invalid segment.");
+            return CreateInvalidPathError(path, (Result.Message != NULL) ? Result.Message : u8"path contains an invalid segment.");
         }
     }
 

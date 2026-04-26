@@ -320,6 +320,7 @@ An error status is returned via a struct. The struct has an error code (an enum)
 and an OPTIONAL error message. The error code can be the success code to indicate no error, at which point the message
 should also be null. If the error code is not success, there may be a pointer to an optional error message.
 - If you do not see a suitable error code for an error, you can add it.
+- Remember that errors with messages need to be freed once no longer used since the message is heap-allocated. 
 ---
 
 ## Raylib and Header Hygiene
