@@ -61,6 +61,10 @@ headers and implementation files:
 - Prefer **early returns** to reduce nesting. Deeply nested if-chains should be refactored with guard clauses.
 - Try to keep functions at a reasonable size, no 100+ line monoliths.
 - Do NOT make any implementation file dependent on symbols from another implementation file. A .c file may only use symbols declared in headers it explicitly includes. Mark all functions and variables in an implementation file that are not declared in any header as static. If implementation files share dependencies that shouldn't be exposed as the project's public API, create new private headers for those members in the source directory (public headers go in include/, private headers in source/).
+- When working with a "class" (struct + methods), for field writing or reading purposes check if the class has getters or setters.
+  Getters often exist for API stability so that the internal layout can be changed without affecting users.
+  Setters often are just used for validation. If you're writing a new class, if the class is very stable then there is no need for getters,
+  otherwise you can add static inline getters in the class' header file.
 
 ### Naming
 
@@ -321,6 +325,8 @@ and an OPTIONAL error message. The error code can be the success code to indicat
 should also be null. If the error code is not success, there may be a pointer to an optional error message.
 - If you do not see a suitable error code for an error, you can add it.
 - Remember that errors with messages need to be freed once no longer used since the message is heap-allocated. 
+- Do NOT swallow errors by ignoring them completely. If you feel an error is ignorable and not critical,
+at least remember to deconstruct it to free any used memory by it.
 ---
 
 ## Raylib and Header Hygiene

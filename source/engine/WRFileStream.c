@@ -339,7 +339,8 @@ static void FileStream_VTableDeconstruct(void* selfVoid)
 {
     FileStream* self = selfVoid;
 
-    (void)FileStream_Close(self);
+    Error Result =FileStream_Close(self);
+    Error_Deconstruct(&Result);
     Memory_Zero(self, sizeof(*self));
 }
 
