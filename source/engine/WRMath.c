@@ -3,6 +3,9 @@
 #include <math.h>
 
 
+// Macros.
+
+
 #define SUFFIX_FLOAT f
 #define SUFFIX_DOUBLE
 #define WRITE_DECIMAL(value, suffix) value##suffix
@@ -95,7 +98,52 @@
     }
 
 
-// Functions.
+// Types.
+
+
+// Fields.
+
+
+// Static functions.
+
+
+// Public functions.
+RoundingOptions RoundingOptions_CreateNormal(void)
+{
+    return (RoundingOptions)
+    {
+        ._type = RoundingType_ToEven,
+        ._digitCountAfterDecimal = 0,
+    };
+}
+
+RoundingOptions RoundingOptions_CreateWithDigitCount(uint32_t digitCount)
+{
+    return (RoundingOptions)
+    {
+        ._type = RoundingType_ToEven,
+        ._digitCountAfterDecimal = digitCount,
+    };
+}
+
+RoundingOptions RoundingOptions_CreateWithType(RoundingType type)
+{
+    return (RoundingOptions)
+    {
+        ._type = type,
+        ._digitCountAfterDecimal = 0,
+    };
+}
+
+RoundingOptions RoundingOptions_CreateFull(RoundingType type, uint32_t digitCount)
+{
+    return (RoundingOptions)
+    {
+        ._type = type,
+        ._digitCountAfterDecimal = digitCount,
+    };
+}
+
 DECIMAL_ROUND_IMPLEMENTATION(double, Double, SUFFIX_DOUBLE, 0.5, 0.0000000001)
 DECIMAL_ROUND_IMPLEMENTATION(float, Float, SUFFIX_FLOAT, 0.5f, 0.00001f)
 #undef DECIMAL_ROUND_IMPLEMENTATION
@@ -177,7 +225,7 @@ float Math_ATanFloat(float value)
 
 float Math_ATan2Float(float x, float y)
 {
-    return atan2f(x, y);
+    return atan2f(y, x);
 }
 
 float Math_SinHypFloat(float value)
@@ -302,7 +350,7 @@ double Math_ATanDouble(double value)
 
 double Math_ATan2Double(double x, double y)
 {
-    return atan2(x, y);
+    return atan2(y, x);
 }
 
 double Math_SinHypDouble(double value)
@@ -343,6 +391,11 @@ double Math_CeilDouble(double value)
 double Math_FloorDouble(double value)
 {
     return floor(value);
+}
+
+double Math_TruncateDouble(double value)
+{
+    return trunc(value);
 }
 
 double Math_SplitNumberDouble(double number, double* integralPart)

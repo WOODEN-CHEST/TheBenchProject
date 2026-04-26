@@ -1,12 +1,24 @@
 #include "WRNumber.h"
-#include "WRError.h"
-#include "stdint.h"
-#include "WRMemory.h"
-#include <limits.h>
-#include "WREnvironment.h"
-#include <stdio.h>
-#include <string.h>
 #include "WRMath.h"
+#include <errno.h>
+#include <float.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+
+// Macros.
+#define INTEGER_TO_STRING_BUFFER_SIZE 66
+#define DECIMAL_FORMAT_BUFFER_SIZE 32
+
+
+// Types.
+typedef struct ParsedIntegerStruct
+{
+    uint64_t Magnitude;
+    bool IsNegative;
+    int32_t Base;
+} ParsedInteger;
 
 
 // Fields.
@@ -20,1082 +32,852 @@ const int32_t NUMBER_BASE_16 = 16;
 const int32_t DIGIT_COUNT_AFTER_SEPARATOR_SHORTEST = -1;
 const int32_t DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED = -2;
 
-static const unsigned char MINUS = '-';
-static const unsigned char PLUS = '+';
+static const unsigned char MINUS_SIGN = u8'-';
+static const unsigned char PLUS_SIGN = u8'+';
+static const unsigned char PREFIX_START = u8'0';
+static const unsigned char PREFIX_BASE_2 = u8'b';
+static const unsigned char PREFIX_BASE_16 = u8'x';
+static const unsigned char PERIOD_SEPARATOR = u8'.';
+static const unsigned char COMMA_SEPARATOR = u8',';
+static const unsigned char EXPONENT_LOWER = u8'e';
+static const unsigned char EXPONENT_UPPER = u8'E';
 
-static const int32_t DIGIT_INVALID_VALUE = -1;
-
-static const unsigned char PREFIX_BASE_16_A = 'x';
-static const unsigned char PREFIX_BASE_16_B = 'X';
-static const unsigned char PREFIX_BASE_2_A = 'b';
-static const unsigned char PREFIX_BASE_2_B = 'B';
-static const unsigned char BASE_INDICATOR_START = '0';
-
-static const size_t BASE_SPECIFIED_LENGTH = 2;
-
-static const int32_t DIGIT_VALUE_MAX_BASE_10 = 9;
-
-static const size_t BITS_PER_BYTE = 8;
-static const uint64_t BIT_TO_SHIFT = 1;
-static const uint64_t MAX_BIT_COUNT = sizeof(uint64_t) * BITS_PER_BYTE;
-
-static const unsigned char* STRING_NAN = u8"nan";
-static const unsigned char* STRING_INF_POS = u8"infinity";
-static const unsigned char* STRING_INF_NEG = u8"-infinity";
-
-static const unsigned char SEPARATOR_PERIOD = '.';
-static const unsigned char SEPARATOR_COMMA = ',';
-static const unsigned char EXPONENT_INDICATOR = 'e';
+static const unsigned char* STRING_NAN_LOWER = u8"nan";
+static const unsigned char* STRING_NAN_NORMAL = u8"NaN";
+static const unsigned char* STRING_POSITIVE_INFINITY = u8"infinity";
+static const unsigned char* STRING_NEGATIVE_INFINITY = u8"-infinity";
 
 
 // Static functions.
-static Error CreateBufferOutOfSpaceError(ErrorMessagePool* errorPool, GenericBuffer* buffer)
+static Error CreateNullArgumentError(const unsigned char* argumentName)
 {
-    return Error_Construct3(errorPool,
-        ErrorCode_BufferTooSmall,
-        u8"Passed in generic buffer with size of %zu is too small to fit the number converter to a string.",
-        buffer->_capacity * buffer->_elementSize);
+    return Error_Construct3(ErrorCode_IllegalArgument,
+        u8"Argument \"%s\" must not be null.",
+        argumentName);
 }
 
-static unsigned char GetCharToLower(unsigned char value)
+static Error CreateInvalidBaseError(int32_t base)
 {
-    if (('A' <= value) && (value <= 'Z'))
+    return Error_Construct3(ErrorCode_IllegalArgument,
+        u8"Invalid number base %d. Valid bases are %d through %d, or %d for auto-detect.",
+        base,
+        NUMBER_BASE_MIN,
+        NUMBER_BASE_MAX,
+        NUMBER_BASE_AUTO_DETECT);
+}
+
+static Error CreateAtLeastOneDigitRequiredError(void)
+{
+    return Error_Construct1(ErrorCode_IllegalArgument, u8"At least 1 digit is required in a number.");
+}
+
+static Error CreateInvalidCharacterError(unsigned char character, int32_t base)
+{
+    return Error_Construct3(ErrorCode_IllegalArgument,
+        u8"Invalid character '%c' for a base %d number.",
+        character,
+        base);
+}
+
+static Error CreateNumberOverflowError(const unsigned char* str, size_t targetByteSize)
+{
+    return Error_Construct3(ErrorCode_ArgumentOutOfRange,
+        u8"Number \"%s\" is out of range for a %zu-byte integer.",
+        str,
+        targetByteSize);
+}
+
+static Error CreateInvalidDecimalSeparatorError(unsigned char separator)
+{
+    return Error_Construct3(ErrorCode_IllegalArgument,
+        u8"Invalid decimal separator '%c' in number string.",
+        separator);
+}
+
+static Error CreateInvalidDecimalStringError(const unsigned char* str)
+{
+    return Error_Construct3(ErrorCode_IllegalArgument,
+        u8"Invalid decimal number string \"%s\".",
+        str);
+}
+
+static Error CreateDecimalBufferError(void)
+{
+    return Error_Construct1(ErrorCode_BufferTooSmall,
+        u8"Passed in generic buffer is too small to fit the number string.");
+}
+
+static unsigned char ToLowerAscii(unsigned char value)
+{
+    if ((value >= u8'A') && (value <= u8'Z'))
     {
-        return value + 32;
+        return (unsigned char)(value - u8'A' + u8'a');
     }
+
     return value;
 }
 
-static bool StringEqualsIgnoreCase(const unsigned char* strA, const unsigned char* strB)
+static bool EqualsIgnoreCaseAscii(const unsigned char* a, const unsigned char* b)
 {
-    size_t Index;
-    for (Index = 0; (strA[Index] != '\0') && (strB[Index] != '\0'); Index++)
-    {
-        unsigned char CharA = GetCharToLower(strA[Index]);
-        unsigned char CharB = GetCharToLower(strB[Index]);
+    size_t Index = 0;
 
-        if (CharA != CharB)
+    while ((a[Index] != 0) && (b[Index] != 0))
+    {
+        if (ToLowerAscii(a[Index]) != ToLowerAscii(b[Index]))
         {
             return false;
         }
+
+        Index++;
     }
 
-    return strA[Index] == strB[Index];
+    return a[Index] == b[Index];
 }
 
-static Error CreateAtLeast1DigitRequiredError(ErrorMessagePool* errorPool)
+static int32_t GetDigitValue(unsigned char character)
 {
-    return Error_Construct3(errorPool,
-        ErrorCode_IllegalArgument,
-        u8"At least 1 digit is required in a number.");
-}
-
-static Error CreateInvalidBaseError(ErrorMessagePool* errorPool, int32_t base)
-{
-    return Error_Construct3(errorPool,
-        ErrorCode_IllegalArgument,
-        u8"Invalid number base %d. Min is %d, max is %d and base auto detect is %d.",
-        base, NUMBER_BASE_MIN, NUMBER_BASE_MAX, NUMBER_BASE_AUTO_DETECT);
-}
-
-static Error CreateMultipleSignSymbolsError(ErrorMessagePool* errorPool, unsigned char symbol)
-{
-    return Error_Construct3(errorPool,
-        ErrorCode_IllegalArgument,
-        u8"Numbers may only have 1 sign symbol (- or +, in this case the issue was caused by a '%c' symbol).",
-        symbol);
-}
-
-static inline bool IsBaseDigit(int32_t digitValue, int32_t base)
-{
-    return (digitValue >= 0) && (digitValue < base);
-}
-
-static inline int32_t DigitToValue(unsigned char digit)
-{
-    if (('0' <= digit) && (digit <= '9'))
+    if ((character >= u8'0') && (character <= u8'9'))
     {
-        return (int32_t)(digit - '0');
+        return (int32_t)(character - u8'0');
     }
 
-    unsigned char DigitLower = GetCharToLower(digit);
-    if (('a' <= DigitLower) && (DigitLower <= 'f'))
+    character = ToLowerAscii(character);
+    if ((character >= u8'a') && (character <= u8'f'))
     {
-        return (int32_t)(DigitLower - 'a') + 10;
+        return (int32_t)(character - u8'a') + 10;
     }
-    return DIGIT_INVALID_VALUE;
+
+    return -1;
 }
 
-static bool TryWriteBaseFromChar(unsigned char prefix, int32_t* base)
+static bool IsValidBase(int32_t base)
 {
-    if ((prefix == PREFIX_BASE_16_A) || (prefix == PREFIX_BASE_16_B))
+    if (base == NUMBER_BASE_AUTO_DETECT)
     {
-        *base = NUMBER_BASE_16;
         return true;
     }
-    if ((prefix == PREFIX_BASE_2_A) || (prefix == PREFIX_BASE_2_B))
-    {
-        *base = NUMBER_BASE_2;
-        return true;
-    }
-    return false;
+
+    return (base >= NUMBER_BASE_MIN) && (base <= NUMBER_BASE_MAX);
 }
 
-static Error CreateNoNumberBaseError(ErrorMessagePool* errorPool)
+static const unsigned char* SkipOptionalSign(const unsigned char* str, bool* isNegative)
 {
-    return Error_Construct3(errorPool, ErrorCode_IllegalArgument, u8"Unable to detect the given number's base.");
-}
-
-static Error IsIntNegative(ErrorMessagePool* errorPool, const unsigned char* str, size_t* skipAmount, bool* isNegative)
-{
-    *skipAmount = 0;
     *isNegative = false;
 
-    bool HadSign = false;
-    for (size_t i = 0; str[i] != '\0'; i++)
-    {
-        unsigned char Character = str[i];
-        if ((Character == MINUS) || (Character == PLUS))
-        {
-            if (HadSign)
-            {
-                return CreateMultipleSignSymbolsError(errorPool, Character);
-            }
-            HadSign = true;
-            *isNegative = Character == MINUS;
-            *skipAmount = 1;
-        }
-        else
-        {
-            return Error_CreateSuccess();
-        }
-    }
-
-    return Error_CreateSuccess();
-}
-
-static size_t GetBasePrefixSkipAmount(const unsigned char* str)
-{
-    if (str[0] != BASE_INDICATOR_START)
-    {
-        return 0;
-    }
-    unsigned char LowerPrefixChar = GetCharToLower(str[1]);
-
-    if ((LowerPrefixChar == PREFIX_BASE_16_A) || (LowerPrefixChar == PREFIX_BASE_2_A))
-    {
-        return BASE_SPECIFIED_LENGTH;
-    }
-    return 0;
-}
-
-static Error GetBase(ErrorMessagePool* errorPool, const unsigned char* str, int32_t givenBase, int32_t* finalBase, size_t* prefixSkipAmount)
-{
-    *prefixSkipAmount = 0;
-    *finalBase = NUMBER_BASE_AUTO_DETECT;
-    
-    if ((givenBase != NUMBER_BASE_AUTO_DETECT) && ((givenBase < NUMBER_BASE_MIN) || (givenBase > NUMBER_BASE_MAX)))
-    {
-        return CreateInvalidBaseError(errorPool, givenBase);
-    }
-    if (givenBase != NUMBER_BASE_AUTO_DETECT)
-    {
-        *finalBase = givenBase;
-        *prefixSkipAmount = GetBasePrefixSkipAmount(str);
-        return Error_CreateSuccess();
-    }
-
-    bool IsPrefixPossible = false;
-    int32_t DetectedBase = givenBase;
-    for (size_t i = 0; str[i] != '\0'; i++)
-    {
-        unsigned char CharAtIndex = str[i];
-        if ((i == 0) && (CharAtIndex == BASE_INDICATOR_START))
-        {
-            DetectedBase = NUMBER_BASE_10;
-            IsPrefixPossible = true;
-            continue;
-        }
-        if (IsPrefixPossible && TryWriteBaseFromChar(CharAtIndex, &DetectedBase))
-        {
-            *prefixSkipAmount = BASE_SPECIFIED_LENGTH;
-            break;
-        }
-
-        IsPrefixPossible = false;
-        int32_t Value = DigitToValue(CharAtIndex);
-        if (Value == DIGIT_INVALID_VALUE)
-        {
-            continue;
-        }
-        if ((Value <= DIGIT_VALUE_MAX_BASE_10) && (DetectedBase < NUMBER_BASE_10))
-        {
-            DetectedBase = NUMBER_BASE_10;
-        }
-        else if ((Value > DIGIT_VALUE_MAX_BASE_10) && (DetectedBase < NUMBER_BASE_16))
-        {
-            DetectedBase = NUMBER_BASE_16;
-        }
-    }
-
-    if (DetectedBase == NUMBER_BASE_AUTO_DETECT)
-    {
-        return CreateNoNumberBaseError(errorPool);
-    }
-    *finalBase = DetectedBase;
-    return Error_CreateSuccess();
-}
-
-static Error CreateInvalidCharacterError(ErrorMessagePool* errorPool, int32_t base, unsigned char character)
-{
-    return Error_Construct3(errorPool,
-        ErrorCode_IllegalArgument,
-        u8"Invalid character '%c' for a base %d number.", character, base);
-}
-
-static Error CreateNumberOverflowError(ErrorMessagePool* errorPool, const unsigned char* number, size_t byteSize)
-{
-    return Error_Construct3(errorPool,
-        ErrorCode_IllegalArgument,
-        u8"Number %s is out of the valid range for a size of %zu bytes.",
-        number, byteSize);
-}
-
-static bool WillOverflow(uint64_t sourceValue, int32_t base, int32_t digitValue)
-{
-    uint64_t UBase = (uint64_t)base;
-    uint64_t UDigitValue = (uint64_t)digitValue;
-
-    if (sourceValue > (UINT64_MAX / UBase))
-    {
-        return true;
-    }
-    if ((UINT64_MAX - (sourceValue * UBase)) < UDigitValue)
-    {
-        return true;
-    }
-
-    return false;
-}
-
-static bool IsRangeValid(uint64_t bits, bool isSignAdded, size_t targetByteSize, bool isTargetSigned)
-{
-    StandardIntegers Value = { .UInt64 = bits };
-    size_t BitCount = targetByteSize * BITS_PER_BYTE;
-
-    if (isTargetSigned)
-    {
-        uint64_t Max = (UINT64_MAX >> (MAX_BIT_COUNT - BitCount + 1));
-        int64_t Min = (int64_t)(-Max - 1);
-        if (!isSignAdded)
-        {
-            return (Value.Int64 >= 0) && (Value.Int64 <= (int64_t)Max);
-        }
-        
-        return (Value.UInt64 <= Max + 1) && (Min <= (-Value.Int64));
-    }
-
-    if (isSignAdded)
-    {
-        return false;
-    }
-    uint64_t Max = (UINT64_MAX >> (MAX_BIT_COUNT - BitCount));
-    return Value.UInt64 <= Max;
-}
-
-static Error UInt64ToTargetInt(ErrorMessagePool* errorPool,
-    const unsigned char* numberStr,
-    uint64_t bits,
-    bool isBitsSigned,
-    size_t targetbyteSize,
-    bool isTargetSigned,
-    void* result)
-{
-    if (!IsRangeValid(bits, isBitsSigned, targetbyteSize, isTargetSigned))
-    {
-        return CreateNumberOverflowError(errorPool, numberStr, targetbyteSize);
-    }
-
-    size_t BitCount = targetbyteSize * BITS_PER_BYTE;
-    uint64_t SizeMask = (UINT64_MAX >> (MAX_BIT_COUNT - BitCount));
-    uint64_t FinalBits = bits;
-    if (isBitsSigned)
-    {
-        FinalBits = (((~FinalBits) + 1) & (SizeMask));
-    }
-
-    if (Environment_GetEndianess() == MachineEndianess_BigEndian)
-    {
-        FinalBits <<= ((sizeof(uint64_t) - targetbyteSize) * BITS_PER_BYTE);
-    }
-
-    Memory_Copy(&FinalBits, result, targetbyteSize);
-    return Error_CreateSuccess();
-}
-
-static Error ParseInteger(ErrorMessagePool* errorPool,
-    const unsigned char* str,
-    int32_t base,
-    bool isTargetSigned,
-    size_t targetByteSize,
-    void* result)
-{
-    size_t SignSkipAmount;
-    bool IsNegative;
-    Error ErrorResult = IsIntNegative(errorPool, str, &SignSkipAmount, &IsNegative);
-    if (ErrorResult.Code != ErrorCode_Success)
-    {
-        return ErrorResult;
-    }
-
-    int32_t FinalBase;
-    size_t PrefixSkipAmount;
-    ErrorResult = GetBase(errorPool, str + SignSkipAmount, base, &FinalBase, &PrefixSkipAmount);
-    if (ErrorResult.Code != ErrorCode_Success)
-    {
-        return ErrorResult;
-    }
-
-    uint64_t Value = 0;
-    bool IsDigitFound = false;
-    for (size_t i = SignSkipAmount + PrefixSkipAmount; str[i] != '\0'; i++)
-    {
-        unsigned char Character = str[i];
-
-        int32_t DigitValue = DigitToValue(Character);
-        if ((DigitValue == DIGIT_INVALID_VALUE) || (DigitValue >= FinalBase))
-        {
-            return CreateInvalidCharacterError(errorPool, FinalBase, Character);
-        }
-        if (WillOverflow(Value, FinalBase, DigitValue))
-        {
-            return CreateNumberOverflowError(errorPool, str, targetByteSize);
-        }
-
-        Value = (Value * (uint64_t)FinalBase) + (uint64_t)DigitValue;
-        IsDigitFound = true;
-    }
-
-    if (!IsDigitFound)
-    {
-        return CreateAtLeast1DigitRequiredError(errorPool);
-    }
-
-    return UInt64ToTargetInt(errorPool, str, Value, IsNegative, targetByteSize, isTargetSigned, result);
-}
-
-static Error ValidateBaseForWriting(ErrorMessagePool* errorPool, int32_t base)
-{
-    if ((base < NUMBER_BASE_MIN) || (base > NUMBER_BASE_MAX))
-    {
-        return Error_Construct3(errorPool,
-            ErrorCode_IllegalArgument,
-            u8"Invalid base %d for writing an integer to a string conversion. Minimum base is %d and maximum base is %d.",
-            base, NUMBER_BASE_MIN, NUMBER_BASE_MAX);
-    }
-    return Error_CreateSuccess();
-}
-
-static unsigned char DigitValueToChar(uint64_t digitValue)
-{
-    if (digitValue <= (uint64_t)DIGIT_VALUE_MAX_BASE_10)
-    {
-        return (unsigned char)('0' + digitValue);
-    }
-    return (unsigned char)('a' + (digitValue - 10));
-}
-
-static void ReverseDigits(unsigned char* str, size_t charCount, size_t digitCount)
-{
-    size_t Offset = charCount - digitCount;
-    for (size_t i = 0; i < (digitCount / 2); i++)
-    {
-        size_t IndexA = i + Offset;
-        size_t IndexB = digitCount + Offset - i - 1;
-        unsigned char DigitA = str[IndexA];
-        unsigned char DigitB = str[IndexB];
-        str[IndexA] = DigitB;
-        str[IndexB] = DigitA;
-    }
-}
-
-static Error TryWriteBasePrefix(ErrorMessagePool* errorPool, GenericBuffer* buffer, int32_t base, bool* hasPrefix)
-{
-    if ((base != NUMBER_BASE_16) && (base != NUMBER_BASE_2))
-    {
-        *hasPrefix = false;
-        return Error_CreateSuccess();
-    }
-
-    *hasPrefix = true;
-    if (!GenericBuffer_WriteUChar(buffer, BASE_INDICATOR_START))
-    {
-        return CreateBufferOutOfSpaceError(errorPool, buffer);
-    }
-
-    if ((base == NUMBER_BASE_16) && !GenericBuffer_WriteUChar(buffer, PREFIX_BASE_16_A))
-    {
-        return CreateBufferOutOfSpaceError(errorPool, buffer);
-    }
-    else if ((base == NUMBER_BASE_2) && !GenericBuffer_WriteUChar(buffer, PREFIX_BASE_2_A))
-    {
-        return CreateBufferOutOfSpaceError(errorPool, buffer);
-    }
-
-    return Error_CreateSuccess();
-}
-
-static Error WriteIntString(ErrorMessagePool* errorPool,
-    uint64_t bits,
-    bool isSigned,
-    size_t numberSize,
-    int32_t base,
-    bool tryIncludePrefix,
-    GenericBuffer* buffer)
-{
-    Error ErrorResult = ValidateBaseForWriting(errorPool, base);
-    if (ErrorResult.Code != ErrorCode_Success)
-    {
-        return ErrorResult;
-    }
-
-    size_t BitCount = numberSize * BITS_PER_BYTE;
-    uint64_t SignBit = (BIT_TO_SHIFT << (BitCount - 1));
-    uint64_t Mask = (UINT64_MAX >> (MAX_BIT_COUNT - BitCount));
-
-    uint64_t BitsWithoutSign;
-    bool HasMinusSign = isSigned && (bits & SignBit);
-    if (HasMinusSign)
-    {
-        if (!GenericBuffer_WriteUChar(buffer, MINUS))
-        {
-            return CreateBufferOutOfSpaceError(errorPool, buffer);
-        }
-        BitsWithoutSign = ((~bits) & Mask) + 1;
-    }
-    else
-    {
-        BitsWithoutSign = bits;
-    }
-
-    bool HasPrefix = false;
-    if (tryIncludePrefix)
-    {
-        ErrorResult = TryWriteBasePrefix(errorPool, buffer, base, &HasPrefix);
-        if (ErrorResult.Code != ErrorCode_Success)
-        {
-            return ErrorResult;
-        }
-    }
-
-    for (size_t i = 0; (i == 0) || (BitsWithoutSign != 0); BitsWithoutSign /= (uint64_t)base, i++)
-    {
-        uint64_t DigitValue = BitsWithoutSign % (uint64_t)base;
-        if (!GenericBuffer_WriteUChar(buffer, DigitValueToChar(DigitValue)))
-        {
-            return CreateBufferOutOfSpaceError(errorPool, buffer);
-        }
-    }
-
-    size_t StartIndex = (HasMinusSign ? 1 : 0) + (HasPrefix ? BASE_SPECIFIED_LENGTH : 0);
-    ReverseDigits(buffer->_data, buffer->_count, buffer->_count - StartIndex);
-    GenericBuffer_TryNullTerminate(buffer);
-    return Error_CreateSuccess();
-}
-
-static bool IsStringInf(const unsigned char* str, bool* isNegative)
-{
-    *isNegative = false;
-    if (StringEqualsIgnoreCase(str, STRING_INF_POS))
-    {
-        return true;
-    }
-    if (StringEqualsIgnoreCase(str, STRING_INF_NEG))
+    if (*str == MINUS_SIGN)
     {
         *isNegative = true;
-        return true;
+        return str + 1;
     }
-    return false;
-}
 
-static bool IsStringNan(const unsigned char* str)
-{
-    return StringEqualsIgnoreCase(str, STRING_NAN);
-}
-
-static bool IsCharSeparator(unsigned char value, DecimalSeparator allowedSeparator)
-{
-    if ((value == SEPARATOR_COMMA) | (value == SEPARATOR_PERIOD))
+    if (*str == PLUS_SIGN)
     {
-        return (allowedSeparator == DecimalSeparator_Any)
-            || ((allowedSeparator == DecimalSeparator_Period) && (value == SEPARATOR_PERIOD))
-            || ((allowedSeparator == DecimalSeparator_Comma) && (value == SEPARATOR_COMMA));
+        return str + 1;
     }
-    return false;
+
+    return str;
 }
 
-static Error CreateTooManySeparatorsError(ErrorMessagePool* pool, unsigned char separator)
+static const unsigned char* SkipBasePrefix(const unsigned char* str, int32_t base)
 {
-    ErrorCode Code = ErrorCode_IllegalArgument;
-    if (pool)
+    if (str[0] != PREFIX_START)
     {
-        return Error_Construct3(pool,
-            Code,
-            u8"Found duplicate number decimal separator '%c'.",
-            separator);
+        return str;
     }
-    return Error_Construct5(Code);
+
+    if ((base == NUMBER_BASE_16) && (ToLowerAscii(str[1]) == PREFIX_BASE_16))
+    {
+        return str + 2;
+    }
+
+    if ((base == NUMBER_BASE_2) && (ToLowerAscii(str[1]) == PREFIX_BASE_2))
+    {
+        return str + 2;
+    }
+
+    return str;
 }
 
-static Error GetDoubleMantissa(ErrorMessagePool* errorPool,
-    const unsigned char* str,
-    double* value,
-    DecimalSeparator separator,
-    size_t* parsedCharCount)
+static int32_t DetectBase(const unsigned char* str, int32_t requestedBase)
 {
-    *value = 0.0;
-    double Mantissa = 0.0;
-    double AfterDecimalDivider = 10.0;
-    bool IsSeparatorFound = false;
+    if (requestedBase != NUMBER_BASE_AUTO_DETECT)
+    {
+        return requestedBase;
+    }
+
+    if ((str[0] == PREFIX_START) && (ToLowerAscii(str[1]) == PREFIX_BASE_16))
+    {
+        return NUMBER_BASE_16;
+    }
+
+    if ((str[0] == PREFIX_START) && (ToLowerAscii(str[1]) == PREFIX_BASE_2))
+    {
+        return NUMBER_BASE_2;
+    }
+
+    return NUMBER_BASE_10;
+}
+
+static Error ParseUnsignedMagnitude(const unsigned char* digits, int32_t base, uint64_t maxValue, uint64_t* magnitude)
+{
+    uint64_t Value = 0;
+    bool HasDigit = false;
+
+    for (size_t Index = 0; digits[Index] != 0; Index++)
+    {
+        int32_t DigitValue = GetDigitValue(digits[Index]);
+        if ((DigitValue < 0) || (DigitValue >= base))
+        {
+            return CreateInvalidCharacterError(digits[Index], base);
+        }
+
+        if (Value > (maxValue / (uint64_t)base))
+        {
+            return Error_Construct5(ErrorCode_ArgumentOutOfRange);
+        }
+
+        Value *= (uint64_t)base;
+        if (Value > (maxValue - (uint64_t)DigitValue))
+        {
+            return Error_Construct5(ErrorCode_ArgumentOutOfRange);
+        }
+
+        Value += (uint64_t)DigitValue;
+        HasDigit = true;
+    }
+
+    if (!HasDigit)
+    {
+        return CreateAtLeastOneDigitRequiredError();
+    }
+
+    *magnitude = Value;
+    return Error_CreateSuccess();
+}
+
+static Error ParseIntegerCore(const unsigned char* str, int32_t base, uint64_t maxMagnitude, ParsedInteger* result)
+{
     bool IsNegative = false;
-    bool IsPositive = false;
-    bool IsDigitFound = false;
-    *parsedCharCount = 0;
+    int32_t FinalBase = 0;
+    const unsigned char* Digits = NULL;
+    Error Result = Error_CreateSuccess();
 
-    size_t Index;
-    for (Index = 0; str[Index] != '\0'; Index++)
+    if (str == NULL)
     {
-        unsigned char Character = str[Index];
-        if (IsCharSeparator(Character, separator))
-        {
-            if (IsSeparatorFound)
-            {
-                return CreateTooManySeparatorsError(errorPool, Character);
-            }
-            IsSeparatorFound = true;
-            continue;
-        }
-        if ((Character == MINUS) || (Character == PLUS))
-        {
-            if (IsNegative || IsPositive)
-            {
-                return CreateMultipleSignSymbolsError(errorPool, Character);
-            }
-            IsNegative = Character == MINUS;
-            IsPositive = Character == PLUS;
-            continue;
-        }
-
-        int32_t DigitValue = DigitToValue(Character);
-        if (Math_IsInfinityDouble(Mantissa) || (DigitValue == DIGIT_INVALID_VALUE) || (DigitValue > DIGIT_VALUE_MAX_BASE_10))
-        {
-            break;
-        }
-
-        if (IsSeparatorFound)
-        {
-            Mantissa += (double)DigitValue / AfterDecimalDivider;
-            AfterDecimalDivider *= 10.0;
-        }
-        else
-        {
-            Mantissa *= 10.0;
-            Mantissa += (double)DigitValue;
-        }
-        IsDigitFound = true;
+        return CreateNullArgumentError(u8"str");
     }
 
-    if (!IsDigitFound)
+    if (!IsValidBase(base))
     {
-        return CreateAtLeast1DigitRequiredError(errorPool);
-    }
-    if (IsNegative)
-    {
-        Mantissa = -Mantissa;
+        return CreateInvalidBaseError(base);
     }
 
-    *parsedCharCount = Index;
-    *value = Mantissa;
+    Digits = SkipOptionalSign(str, &IsNegative);
+    FinalBase = DetectBase(Digits, base);
+    Digits = SkipBasePrefix(Digits, FinalBase);
+
+    Result = ParseUnsignedMagnitude(Digits, FinalBase, maxMagnitude, &result->Magnitude);
+    if (Result.Code == ErrorCode_ArgumentOutOfRange)
+    {
+        return CreateNumberOverflowError(str, sizeof(uint64_t));
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    result->IsNegative = IsNegative;
+    result->Base = FinalBase;
     return Error_CreateSuccess();
 }
 
-static Error CreateExpectedExponentIndicator(ErrorMessagePool* errorPool, unsigned char recievedChar)
+static bool AppendIntegerPrefix(GenericBuffer* buffer, int32_t base, bool includePrefix)
 {
-    ErrorCode Code = ErrorCode_IllegalArgument;
-    if (errorPool)
+    if (!includePrefix)
     {
-        return Error_Construct3(errorPool,
-            Code,
-            u8"Expected exponent indicator '%c' or end of decimal number mantissa, got '%c'.",
-            EXPONENT_INDICATOR, recievedChar);
-    }
-    return Error_Construct5(Code);
-}
-
-static Error CreateInvalidExponentError(ErrorMessagePool* errorPool, const unsigned char* exponent)
-{
-    ErrorCode Code = ErrorCode_IllegalArgument;
-    if (errorPool)
-    {
-        return Error_Construct3(errorPool,
-            Code,
-            u8"Expected signed integer as exponent, got '%s'.",
-            exponent);
-    }
-    return Error_Construct5(Code);
-}
-
-static Error TryParseExponent(ErrorMessagePool* errorPool,
-    const unsigned char* str,
-    double* exponent)
-{
-    *exponent = 0.0;
-    if (GetCharToLower(str[0]) != EXPONENT_INDICATOR)
-    {
-        return CreateExpectedExponentIndicator(errorPool, str[0]);
-    }
-
-    const unsigned char* RawExponentStr = str + 1;
-    int64_t ParsedExponent = 0;
-    Error ExponentParseResult = ParseInteger(NULL, RawExponentStr, NUMBER_BASE_10, true, sizeof(int64_t), &ParsedExponent);
-    if (ExponentParseResult.Code != ErrorCode_Success)
-    {
-        return CreateInvalidExponentError(errorPool, RawExponentStr);
-    }
-
-    *exponent = (double)ParsedExponent;
-
-    return Error_CreateSuccess();
-}
-
-static bool TryWriteDecimalEdgeCase(const unsigned char* str, double* outValue)
-{
-    if (IsStringNan(str))
-    {
-        *outValue = NAN_DOUBLE;
         return true;
     }
-    else
-    {
-        bool IsNegative = false;
-        if (IsStringInf(str, &IsNegative))
-        {
-            *outValue = IsNegative ? INFINITY_NEG_DOUBLE : INFINITY_POS_DOUBLE;
-            return true;
-        }
-    }
-    return false;
-}
 
-static Error ParseDecimalNormal(ErrorMessagePool* errorPool,
-    const unsigned char* str,
-    double* value,
-    DecimalSeparator separator)
-{
-    double FinalValue;
-    size_t ParsedCharAmount = 0;
-    Error ErrorResult = GetDoubleMantissa(errorPool, str, &FinalValue, separator, &ParsedCharAmount);
-    if (ErrorResult.Code != ErrorCode_Success)
+    if (base == NUMBER_BASE_16)
     {
-        return ErrorResult;
+        return GenericBuffer_AppendByte(buffer, PREFIX_START)
+            && GenericBuffer_AppendByte(buffer, PREFIX_BASE_16);
     }
 
-    if (str[ParsedCharAmount] != '\0')
+    if (base == NUMBER_BASE_2)
     {
-        double Exponent;
-        ErrorResult = TryParseExponent(errorPool, str + ParsedCharAmount, &Exponent);
-        if (ErrorResult.Code != ErrorCode_Success)
-        {
-            return ErrorResult;
-        }
-        FinalValue = FinalValue * Math_PowDouble(10.0, Exponent);
+        return GenericBuffer_AppendByte(buffer, PREFIX_START)
+            && GenericBuffer_AppendByte(buffer, PREFIX_BASE_2);
     }
 
-    *value = FinalValue;
-    return Error_CreateSuccess();
-}
-
-static bool TryWriteNanOrInfString(double value, GenericBuffer* buffer)
-{
-    if (Math_IsInfinityDouble(value))
-    {
-        GenericBuffer_WriteString(buffer, (value > 0.0f) ? STRING_INF_POS : STRING_INF_NEG);
-    }
-    else if (Math_IsNaNDouble(value))
-    {
-        GenericBuffer_WriteString(buffer, STRING_NAN);
-    }
-    else
-    {
-        return false;
-    }
     return true;
 }
 
-static void CreateSpecifierFormat(DecimalFormatOptions formatOptions, unsigned char* specifier, size_t specifierSize)
+static Error WriteUnsignedMagnitudeToBuffer(uint64_t magnitude, int32_t base, GenericBuffer* buffer)
 {
-    if (specifierSize == 0)
-    {
-        return;
-    }
+    unsigned char Digits[INTEGER_TO_STRING_BUFFER_SIZE];
+    size_t DigitCount = 0;
 
-    if (formatOptions._digitCountAfterSeparator == DIGIT_COUNT_AFTER_SEPARATOR_SHORTEST)
+    do
     {
-        specifier[0] = formatOptions._isUpperCase ? 'G' : 'g';
-        return;
-    }
-
-    unsigned char SpecifierLetter = 'f';
-    if (formatOptions._digitCountAfterSeparator == DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED)
-    {
-        specifier[0] = SpecifierLetter;
-    }
-    else
-    {
-        snprintf((char*)specifier, specifierSize, ".%d%c", formatOptions._digitCountAfterSeparator, SpecifierLetter);
-    }
-}
-
-static void CreateDecimalPrintfFormat(DecimalFormatOptions formatOptions, unsigned char* format, size_t formatSize)
-{
-    if (formatSize <= 1)
-    {
-        return;
-    }
-
-    // https://cplusplus.com/reference/cstdio/printf/
-    Memory_Set(format, 0, formatSize);
-    format[0] = '%';
-    if (formatOptions._isScientificNotation)
-    {
-        format[1] = formatOptions._isUpperCase ? 'E' : 'e';
-    }
-    else
-    {
-        CreateSpecifierFormat(formatOptions, format + 1, formatSize);
-    }
-}
-
-static void EnsureDecimalSeparatorInString(unsigned char* str, DecimalSeparator separator)
-{
-    for (size_t i = 0; str[i] != '\0'; i++)
-    {
-        if (!IsCharSeparator(str[i], DecimalSeparator_Any))
+        uint64_t DigitValue = magnitude % (uint64_t)base;
+        if (DigitValue <= 9U)
         {
-            continue;
-        }
-
-        if ((separator == DecimalSeparator_Any) || (separator == DecimalSeparator_Period))
-        {
-            str[i] = SEPARATOR_PERIOD;
+            Digits[DigitCount] = (unsigned char)(u8'0' + DigitValue);
         }
         else
         {
-            str[i] = SEPARATOR_COMMA;
+            Digits[DigitCount] = (unsigned char)(u8'a' + (DigitValue - 10U));
+        }
+
+        magnitude /= (uint64_t)base;
+        DigitCount++;
+    } while (magnitude != 0U);
+
+    while (DigitCount > 0U)
+    {
+        DigitCount--;
+        if (!GenericBuffer_AppendByte(buffer, Digits[DigitCount]))
+        {
+            return CreateDecimalBufferError();
+        }
+    }
+
+    return Error_CreateSuccess();
+}
+
+static Error WriteIntegerCore(uint64_t magnitude, bool isNegative, int32_t base, bool includePrefix, GenericBuffer* buffer)
+{
+    Error Result = Error_CreateSuccess();
+
+    if (buffer == NULL)
+    {
+        return CreateNullArgumentError(u8"buffer");
+    }
+
+    if (!IsValidBase(base) || (base == NUMBER_BASE_AUTO_DETECT))
+    {
+        return CreateInvalidBaseError(base);
+    }
+
+    if (isNegative && !GenericBuffer_AppendByte(buffer, MINUS_SIGN))
+    {
+        return CreateDecimalBufferError();
+    }
+
+    if (!AppendIntegerPrefix(buffer, base, includePrefix))
+    {
+        return CreateDecimalBufferError();
+    }
+
+    Result = WriteUnsignedMagnitudeToBuffer(magnitude, base, buffer);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    if (!GenericBuffer_NullTerminate(buffer))
+    {
+        return CreateDecimalBufferError();
+    }
+
+    return Error_CreateSuccess();
+}
+
+static Error BuildNormalizedDecimalString(const unsigned char* str, DecimalSeparator separator, char** normalizedOut)
+{
+    size_t Length = 0;
+    char* Normalized = NULL;
+    bool HasSeparator = false;
+    bool HasExponent = false;
+    bool HasDigit = false;
+
+    if (str == NULL)
+    {
+        return CreateNullArgumentError(u8"str");
+    }
+
+    while (str[Length] != 0)
+    {
+        Length++;
+    }
+
+    Normalized = Memory_Allocate(Length + 1U);
+    if (Normalized == NULL)
+    {
+        return Error_Construct5(ErrorCode_BufferTooSmall);
+    }
+
+    for (size_t Index = 0; Index < Length; Index++)
+    {
+        unsigned char Character = str[Index];
+        bool IsExponentCharacter = (Character == EXPONENT_LOWER) || (Character == EXPONENT_UPPER);
+        bool IsSignCharacter = (Character == PLUS_SIGN) || (Character == MINUS_SIGN);
+
+        if ((Character >= u8'0') && (Character <= u8'9'))
+        {
+            Normalized[Index] = (char)Character;
+            HasDigit = true;
+            continue;
+        }
+
+        if (IsSignCharacter)
+        {
+            bool IsSignPositionValid = (Index == 0U)
+                || (((str[Index - 1U] == EXPONENT_LOWER) || (str[Index - 1U] == EXPONENT_UPPER)) && (Index > 0U));
+            if (!IsSignPositionValid)
+            {
+                Memory_Free(Normalized);
+                return CreateInvalidDecimalStringError(str);
+            }
+
+            Normalized[Index] = (char)Character;
+            continue;
+        }
+
+        if (IsExponentCharacter)
+        {
+            if (HasExponent || !HasDigit)
+            {
+                Memory_Free(Normalized);
+                return CreateInvalidDecimalStringError(str);
+            }
+
+            HasExponent = true;
+            Normalized[Index] = (char)EXPONENT_LOWER;
+            continue;
+        }
+
+        if ((Character == PERIOD_SEPARATOR) || (Character == COMMA_SEPARATOR))
+        {
+            bool IsSeparatorAllowed = (separator == DecimalSeparator_Any)
+                || ((separator == DecimalSeparator_Period) && (Character == PERIOD_SEPARATOR))
+                || ((separator == DecimalSeparator_Comma) && (Character == COMMA_SEPARATOR));
+            if (!IsSeparatorAllowed)
+            {
+                Memory_Free(Normalized);
+                return CreateInvalidDecimalSeparatorError(Character);
+            }
+            if (HasSeparator || HasExponent)
+            {
+                Memory_Free(Normalized);
+                return CreateInvalidDecimalStringError(str);
+            }
+
+            HasSeparator = true;
+            Normalized[Index] = '.';
+            continue;
+        }
+
+        Memory_Free(Normalized);
+        return CreateInvalidDecimalStringError(str);
+    }
+
+    if (!HasDigit)
+    {
+        Memory_Free(Normalized);
+        return CreateAtLeastOneDigitRequiredError();
+    }
+
+    Normalized[Length] = '\0';
+    *normalizedOut = Normalized;
+    return Error_CreateSuccess();
+}
+
+static bool TryParseSpecialDouble(const unsigned char* str, double* value)
+{
+    if (EqualsIgnoreCaseAscii(str, STRING_NAN_LOWER))
+    {
+        *value = NAN_DOUBLE;
+        return true;
+    }
+
+    if (EqualsIgnoreCaseAscii(str, STRING_POSITIVE_INFINITY))
+    {
+        *value = INFINITY_POS_DOUBLE;
+        return true;
+    }
+
+    if (EqualsIgnoreCaseAscii(str, STRING_NEGATIVE_INFINITY))
+    {
+        *value = INFINITY_NEG_DOUBLE;
+        return true;
+    }
+
+    return false;
+}
+
+static void ReplaceDecimalSeparator(unsigned char* str, size_t count, DecimalSeparator separator)
+{
+    unsigned char DesiredSeparator = PERIOD_SEPARATOR;
+    if (separator == DecimalSeparator_Comma)
+    {
+        DesiredSeparator = COMMA_SEPARATOR;
+    }
+
+    for (size_t Index = 0; Index < count; Index++)
+    {
+        if (str[Index] == PERIOD_SEPARATOR)
+        {
+            str[Index] = DesiredSeparator;
         }
     }
 }
 
-static Error CreateInternalPrintfFromatError(ErrorMessagePool* errorPool, double number, int code, const unsigned char* format)
+static void CreateDecimalPrintfFormat(DecimalFormatOptions options, char* format, size_t formatSize)
 {
-    ErrorCode Code = ErrorCode_IllegalArgument;
-    if (errorPool)
+    char Conversion = 'f';
+
+    if (options._isScientificNotation)
     {
-        return Error_Construct3(errorPool,
-            Code,
-            u8"Intenral error converting a decimal number to a string. (number '%f', code '%d', format '%d').",
-            number, code, format);
-    }
-    return Error_Construct5(Code);
-}
-
-
-// Functions.
-Error Number_Int8FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int8_t* value)
-{
-    return ParseInteger(errorPool, str, base, true, sizeof(int8_t), value);
-}
-
-Error Number_Int8ToString(ErrorMessagePool* errorPool, int8_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
-{
-    StandardIntegers FullValue;
-    Memory_Zero(&FullValue, sizeof(FullValue));
-    FullValue.Int8 = value;
-
-    return WriteIntString(errorPool,
-        FullValue.UInt64,
-        true,
-        sizeof(int8_t),
-        base,
-        includePrefix,
-        buffer);
-}
-
-
-Error Number_UInt8FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, uint8_t* value)
-{
-    return ParseInteger(errorPool, str, base, false, sizeof(uint8_t), value);
-}
-
-Error Number_UInt8ToString(ErrorMessagePool* errorPool, uint8_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
-{
-    StandardIntegers FullValue;
-    Memory_Zero(&FullValue, sizeof(FullValue));
-    FullValue.UInt8 = value;
-
-    return WriteIntString(errorPool,
-        FullValue.UInt64,
-        false,
-        sizeof(uint8_t),
-        base,
-        includePrefix,
-        buffer);
-}
-
-
-Error Number_Int16FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int16_t* value)
-{
-    return ParseInteger(errorPool, str, base, true, sizeof(int16_t), value);
-}
-
-Error Number_Int16ToString(ErrorMessagePool* errorPool, int16_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
-{
-    StandardIntegers FullValue;
-    Memory_Zero(&FullValue, sizeof(FullValue));
-    FullValue.Int16 = value;
-
-    return WriteIntString(errorPool,
-        FullValue.UInt64,
-        true,
-        sizeof(int16_t),
-        base,
-        includePrefix,
-        buffer);
-}
-
-
-Error Number_UInt16FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, uint16_t* value)
-{
-    return ParseInteger(errorPool, str, base, false, sizeof(uint16_t), value);
-}
-
-Error Number_UInt16ToString(ErrorMessagePool* errorPool, uint16_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
-{
-    StandardIntegers FullValue;
-    Memory_Zero(&FullValue, sizeof(FullValue));
-    FullValue.UInt16 = value;
-
-    return WriteIntString(errorPool,
-        FullValue.UInt64,
-        false,
-        sizeof(uint16_t),
-        base,
-        includePrefix,
-        buffer);
-}
-
-
-Error Number_Int32FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int32_t* value)
-{
-    return ParseInteger(errorPool, str, base, true, sizeof(int32_t), value);
-}
-
-Error Number_Int32ToString(ErrorMessagePool* errorPool, int32_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
-{
-    StandardIntegers FullValue;
-    Memory_Zero(&FullValue, sizeof(FullValue));
-    FullValue.Int32 = value;
-
-    return WriteIntString(errorPool,
-        FullValue.UInt64,
-        true,
-        sizeof(int32_t),
-        base,
-        includePrefix,
-        buffer);
-}
-
-
-Error Number_UInt32FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, uint32_t* value)
-{
-    return ParseInteger(errorPool, str, base, false, sizeof(uint32_t), value);
-}
-
-Error Number_UInt32ToString(ErrorMessagePool* errorPool, uint32_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
-{
-    StandardIntegers FullValue;
-    Memory_Zero(&FullValue, sizeof(FullValue));
-    FullValue.UInt32 = value;
-
-    return WriteIntString(errorPool,
-        FullValue.UInt64,
-        false,
-        sizeof(uint32_t),
-        base,
-        includePrefix,
-        buffer);
-}
-
-
-Error Number_Int64FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, int64_t* value)
-{
-    return ParseInteger(errorPool, str, base, true, sizeof(int64_t), value);
-}
-
-Error Number_Int64ToString(ErrorMessagePool* errorPool, int64_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
-{
-    StandardIntegers FullValue;
-    Memory_Zero(&FullValue, sizeof(FullValue));
-    FullValue.Int64 = value;
-
-    return WriteIntString(errorPool,
-        FullValue.UInt64,
-        true,
-        sizeof(int64_t),
-        base,
-        includePrefix,
-        buffer);
-}
-
-
-Error Number_UInt64FromString(ErrorMessagePool* errorPool, const unsigned char* str, int32_t base, uint64_t* value)
-{
-    return ParseInteger(errorPool, str, base, false, sizeof(uint64_t), value);
-}
-
-Error Number_UInt64ToString(ErrorMessagePool* errorPool, uint64_t value, int32_t base, bool includePrefix, GenericBuffer* buffer)
-{
-    return WriteIntString(errorPool,
-        value,
-        false,
-        sizeof(uint64_t),
-        base,
-        includePrefix,
-        buffer);
-}
-
-
-Error Number_FloatFromString(ErrorMessagePool* errorPool,
-    const unsigned char* str,
-    float* value,
-    DecimalSeparator separator)
-{
-    double DoubleValue;
-    Error ErrorResult = Number_DoubleFromString(errorPool, str, &DoubleValue, separator);
-    if (ErrorResult.Code != ErrorCode_Success)
-    {
-        return ErrorResult;
+        Conversion = options._isUpperCase ? 'E' : 'e';
+        if (options._digitCountAfterSeparator >= 0)
+        {
+            snprintf(format, formatSize, "%%.%d%c", options._digitCountAfterSeparator, Conversion);
+        }
+        else
+        {
+            snprintf(format, formatSize, "%%%c", Conversion);
+        }
+        return;
     }
 
-    *value = (float)DoubleValue;
-    return Error_CreateSuccess();
-}
-
-Error Number_FloatToString(ErrorMessagePool* errorPool,
-    float value,
-    GenericBuffer* buffer,
-    DecimalFormatOptions options)
-{
-    return Number_DoubleToString(errorPool, value, buffer, options);
-}
-
-
-Error Number_DoubleFromString(ErrorMessagePool* errorPool,
-    const unsigned char* str,
-    double* value,
-    DecimalSeparator separator)
-{
-    if (TryWriteDecimalEdgeCase(str, value))
+    if (options._digitCountAfterSeparator == DIGIT_COUNT_AFTER_SEPARATOR_SHORTEST)
     {
-        return Error_CreateSuccess();
-    }
-    return ParseDecimalNormal(errorPool, str, value, separator);
-}
-
-Error Number_DoubleToString(ErrorMessagePool* errorPool,
-    double value,
-    GenericBuffer* buffer,
-    DecimalFormatOptions options)
-{
-    if (TryWriteNanOrInfString(value, buffer))
-    {
-        return Error_CreateSuccess();
+        Conversion = options._isUpperCase ? 'G' : 'g';
+        snprintf(format, formatSize, "%%%c", Conversion);
+        return;
     }
 
-    bool IsFullyWritten = false;
-    unsigned char Format[64];
+    if (options._digitCountAfterSeparator == DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED)
+    {
+        snprintf(format, formatSize, "%%f");
+        return;
+    }
+
+    snprintf(format, formatSize, "%%.%df", options._digitCountAfterSeparator);
+}
+
+static Error AppendFormattedDouble(double value, GenericBuffer* buffer, DecimalFormatOptions options)
+{
+    char Format[DECIMAL_FORMAT_BUFFER_SIZE];
+    int RequiredCharacterCount = 0;
+    size_t RequiredSize = 0;
+    unsigned char* WriteStart = NULL;
+
+    if (buffer == NULL)
+    {
+        return CreateNullArgumentError(u8"buffer");
+    }
+
     CreateDecimalPrintfFormat(options, Format, sizeof(Format));
-    size_t AttemptCount = 0;
-    const size_t MAX_ATTEMPT_COUNT = 2;
-    do
+    RequiredCharacterCount = snprintf(NULL, 0, Format, value);
+    if (RequiredCharacterCount < 0)
     {
-        AttemptCount++;
+        return CreateInvalidDecimalStringError(u8"<format>");
+    }
 
-        int PrintResult = snprintf(buffer->_data, buffer->_capacity, (char*)Format, value);
-        if (PrintResult < 0)
-        {
-            return CreateInternalPrintfFromatError(errorPool, value, PrintResult, Format);
-        }
+    RequiredSize = (size_t)RequiredCharacterCount;
+    if (!GenericBuffer_TryPrepareForManualMutation(buffer, RequiredSize + 1U))
+    {
+        return CreateDecimalBufferError();
+    }
 
-        size_t RequiredBufferSize = (size_t)PrintResult + 1;
-        if (RequiredBufferSize <= buffer->_capacity)
-        {
-            IsFullyWritten = true;
-        }
-        else if ((AttemptCount < MAX_ATTEMPT_COUNT) && !GenericBuffer_ReserveMoreCapacity(buffer, RequiredBufferSize))
-        {
-            return CreateBufferOutOfSpaceError(errorPool, buffer);
-        }
-    } while (!IsFullyWritten && (AttemptCount < MAX_ATTEMPT_COUNT));
+    WriteStart = buffer->_data + buffer->_count;
+    snprintf((char*)WriteStart, buffer->_capacity - buffer->_count, Format, value);
+    ReplaceDecimalSeparator(WriteStart, RequiredSize, options._separator);
+    buffer->_count += RequiredSize;
 
-    EnsureDecimalSeparatorInString(buffer->_data, options._separator);
+    if (!GenericBuffer_NullTerminate(buffer))
+    {
+        return CreateDecimalBufferError();
+    }
+
     return Error_CreateSuccess();
+}
+
+static Error ParseDoubleCore(const unsigned char* str, DecimalSeparator separator, double* value)
+{
+    char* Normalized = NULL;
+    char* ParseEnd = NULL;
+    double ParsedValue = 0.0;
+    Error Result = Error_CreateSuccess();
+
+    if (value == NULL)
+    {
+        return CreateNullArgumentError(u8"value");
+    }
+
+    if (TryParseSpecialDouble(str, value))
+    {
+        return Error_CreateSuccess();
+    }
+
+    Result = BuildNormalizedDecimalString(str, separator, &Normalized);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    errno = 0;
+    ParsedValue = strtod(Normalized, &ParseEnd);
+    if ((ParseEnd == Normalized) || (*ParseEnd != '\0') || (errno == ERANGE))
+    {
+        Memory_Free(Normalized);
+        return CreateInvalidDecimalStringError(str);
+    }
+
+    Memory_Free(Normalized);
+    *value = ParsedValue;
+    return Error_CreateSuccess();
+}
+
+
+// Public functions.
+#define DEFINE_SIGNED_FROM_STRING(functionName, typeName, minValue, maxValue) \
+    Error functionName(const unsigned char* str, int32_t base, typeName* value) \
+    { \
+        ParsedInteger Parsed = { 0 }; \
+        uint64_t MaxMagnitude = 0; \
+        Error Result = Error_CreateSuccess(); \
+        \
+        if (value == NULL) \
+        { \
+            return CreateNullArgumentError(u8"value"); \
+        } \
+        \
+        Result = ParseIntegerCore(str, base, (uint64_t)(maxValue), &Parsed); \
+        if (Result.Code != ErrorCode_Success) \
+        { \
+            if ((Result.Code == ErrorCode_ArgumentOutOfRange) || (Result.Code == ErrorCode_BufferTooSmall)) \
+            { \
+                return CreateNumberOverflowError(str, sizeof(typeName)); \
+            } \
+            return Result; \
+        } \
+        \
+        MaxMagnitude = Parsed.IsNegative ? ((uint64_t)(maxValue) + 1U) : (uint64_t)(maxValue); \
+        if (Parsed.Magnitude > MaxMagnitude) \
+        { \
+            return CreateNumberOverflowError(str, sizeof(typeName)); \
+        } \
+        \
+        if (Parsed.IsNegative) \
+        { \
+            if (Parsed.Magnitude == ((uint64_t)(maxValue) + 1U)) \
+            { \
+                *value = (minValue); \
+            } \
+            else \
+            { \
+                *value = (typeName)(-(int64_t)Parsed.Magnitude); \
+            } \
+        } \
+        else \
+        { \
+            *value = (typeName)Parsed.Magnitude; \
+        } \
+        \
+        return Error_CreateSuccess(); \
+    }
+
+#define DEFINE_UNSIGNED_FROM_STRING(functionName, typeName, maxValue) \
+    Error functionName(const unsigned char* str, int32_t base, typeName* value) \
+    { \
+        ParsedInteger Parsed = { 0 }; \
+        Error Result = Error_CreateSuccess(); \
+        \
+        if (value == NULL) \
+        { \
+            return CreateNullArgumentError(u8"value"); \
+        } \
+        \
+        Result = ParseIntegerCore(str, base, (uint64_t)(maxValue), &Parsed); \
+        if (Result.Code != ErrorCode_Success) \
+        { \
+            if ((Result.Code == ErrorCode_ArgumentOutOfRange) || (Result.Code == ErrorCode_BufferTooSmall)) \
+            { \
+                return CreateNumberOverflowError(str, sizeof(typeName)); \
+            } \
+            return Result; \
+        } \
+        \
+        if (Parsed.IsNegative || (Parsed.Magnitude > (uint64_t)(maxValue))) \
+        { \
+            return CreateNumberOverflowError(str, sizeof(typeName)); \
+        } \
+        \
+        *value = (typeName)Parsed.Magnitude; \
+        return Error_CreateSuccess(); \
+    }
+
+#define DEFINE_SIGNED_TO_STRING(functionName, typeName) \
+    Error functionName(typeName value, int32_t base, bool includePrefix, GenericBuffer* buffer) \
+    { \
+        bool IsNegative = value < 0; \
+        uint64_t Magnitude = 0; \
+        \
+        if (IsNegative) \
+        { \
+            Magnitude = (uint64_t)(-(value + 1)) + 1U; \
+        } \
+        else \
+        { \
+            Magnitude = (uint64_t)value; \
+        } \
+        \
+        return WriteIntegerCore(Magnitude, IsNegative, base, includePrefix, buffer); \
+    }
+
+#define DEFINE_UNSIGNED_TO_STRING(functionName, typeName) \
+    Error functionName(typeName value, int32_t base, bool includePrefix, GenericBuffer* buffer) \
+    { \
+        return WriteIntegerCore((uint64_t)value, false, base, includePrefix, buffer); \
+    }
+
+DEFINE_SIGNED_FROM_STRING(Number_Int8FromString, int8_t, INT8_MIN, INT8_MAX)
+DEFINE_UNSIGNED_FROM_STRING(Number_UInt8FromString, uint8_t, UINT8_MAX)
+DEFINE_SIGNED_FROM_STRING(Number_Int16FromString, int16_t, INT16_MIN, INT16_MAX)
+DEFINE_UNSIGNED_FROM_STRING(Number_UInt16FromString, uint16_t, UINT16_MAX)
+DEFINE_SIGNED_FROM_STRING(Number_Int32FromString, int32_t, INT32_MIN, INT32_MAX)
+DEFINE_UNSIGNED_FROM_STRING(Number_UInt32FromString, uint32_t, UINT32_MAX)
+DEFINE_SIGNED_FROM_STRING(Number_Int64FromString, int64_t, INT64_MIN, INT64_MAX)
+DEFINE_UNSIGNED_FROM_STRING(Number_UInt64FromString, uint64_t, UINT64_MAX)
+
+DEFINE_SIGNED_TO_STRING(Number_Int8ToString, int8_t)
+DEFINE_UNSIGNED_TO_STRING(Number_UInt8ToString, uint8_t)
+DEFINE_SIGNED_TO_STRING(Number_Int16ToString, int16_t)
+DEFINE_UNSIGNED_TO_STRING(Number_UInt16ToString, uint16_t)
+DEFINE_SIGNED_TO_STRING(Number_Int32ToString, int32_t)
+DEFINE_UNSIGNED_TO_STRING(Number_UInt32ToString, uint32_t)
+DEFINE_SIGNED_TO_STRING(Number_Int64ToString, int64_t)
+DEFINE_UNSIGNED_TO_STRING(Number_UInt64ToString, uint64_t)
+
+#undef DEFINE_SIGNED_FROM_STRING
+#undef DEFINE_UNSIGNED_FROM_STRING
+#undef DEFINE_SIGNED_TO_STRING
+#undef DEFINE_UNSIGNED_TO_STRING
+
+Error Number_FloatFromString(const unsigned char* str, float* value, DecimalSeparator separator)
+{
+    double ParsedValue = 0.0;
+    Error Result = Error_CreateSuccess();
+
+    if (value == NULL)
+    {
+        return CreateNullArgumentError(u8"value");
+    }
+
+    Result = ParseDoubleCore(str, separator, &ParsedValue);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    if (!Math_IsNaNDouble(ParsedValue) && !Math_IsInfinityDouble(ParsedValue))
+    {
+        if ((ParsedValue > FLT_MAX) || (ParsedValue < -FLT_MAX))
+        {
+            return CreateNumberOverflowError(str, sizeof(float));
+        }
+    }
+
+    *value = (float)ParsedValue;
+    return Error_CreateSuccess();
+}
+
+Error Number_FloatToString(float value, GenericBuffer* buffer, DecimalFormatOptions options)
+{
+    return AppendFormattedDouble((double)value, buffer, options);
+}
+
+Error Number_DoubleFromString(const unsigned char* str, double* value, DecimalSeparator separator)
+{
+    return ParseDoubleCore(str, separator, value);
+}
+
+Error Number_DoubleToString(double value, GenericBuffer* buffer, DecimalFormatOptions options)
+{
+    if (buffer == NULL)
+    {
+        return CreateNullArgumentError(u8"buffer");
+    }
+
+    if (Math_IsNaNDouble(value))
+    {
+        if (!GenericBuffer_AppendString(buffer, STRING_NAN_NORMAL) || !GenericBuffer_NullTerminate(buffer))
+        {
+            return CreateDecimalBufferError();
+        }
+        return Error_CreateSuccess();
+    }
+
+    if (Math_IsInfinityPosDouble(value))
+    {
+        if (!GenericBuffer_AppendString(buffer, STRING_POSITIVE_INFINITY) || !GenericBuffer_NullTerminate(buffer))
+        {
+            return CreateDecimalBufferError();
+        }
+        return Error_CreateSuccess();
+    }
+
+    if (Math_IsInfinityNegDouble(value))
+    {
+        if (!GenericBuffer_AppendString(buffer, STRING_NEGATIVE_INFINITY) || !GenericBuffer_NullTerminate(buffer))
+        {
+            return CreateDecimalBufferError();
+        }
+        return Error_CreateSuccess();
+    }
+
+    return AppendFormattedDouble(value, buffer, options);
 }
 
 DecimalFormatOptions DecimalFormatOptions_CreateScientific(DecimalSeparator separator, bool isUpperCase)
 {
     return (DecimalFormatOptions)
     {
-        ._isUpperCase = isUpperCase,
         ._separator = separator,
+        ._digitCountAfterSeparator = DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED,
+        ._isUpperCase = isUpperCase,
         ._isScientificNotation = true,
-        ._digitCountAfterSeparator = DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED
     };
 }
 
 DecimalFormatOptions DecimalFormatOptions_CreateFixed(DecimalSeparator separator, int32_t digitCountAfterDecimal)
 {
-    int32_t ClampedDigitCount = (digitCountAfterDecimal < 0) ? 0 : digitCountAfterDecimal;
+    if (digitCountAfterDecimal < 0)
+    {
+        digitCountAfterDecimal = 0;
+    }
 
     return (DecimalFormatOptions)
     {
-        ._isUpperCase = false,
         ._separator = separator,
+        ._digitCountAfterSeparator = digitCountAfterDecimal,
+        ._isUpperCase = false,
         ._isScientificNotation = false,
-        ._digitCountAfterSeparator = ClampedDigitCount
     };
 }
-
 
 DecimalFormatOptions DecimalFormatOptions_CreateShortest(DecimalSeparator separator)
 {
     return (DecimalFormatOptions)
     {
-        ._isUpperCase = false,
         ._separator = separator,
+        ._digitCountAfterSeparator = DIGIT_COUNT_AFTER_SEPARATOR_SHORTEST,
+        ._isUpperCase = false,
         ._isScientificNotation = false,
-        ._digitCountAfterSeparator = DIGIT_COUNT_AFTER_SEPARATOR_SHORTEST
     };
 }
-
 
 DecimalFormatOptions DecimalFormatOptions_CreateFull(DecimalSeparator separator)
 {
     return (DecimalFormatOptions)
     {
-        ._isUpperCase = false,
         ._separator = separator,
+        ._digitCountAfterSeparator = DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED,
+        ._isUpperCase = false,
         ._isScientificNotation = false,
-        ._digitCountAfterSeparator = DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED
     };
 }
