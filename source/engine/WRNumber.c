@@ -279,6 +279,7 @@ static Error ParseIntegerCore(const unsigned char* str, int32_t base, uint64_t m
     Result = ParseUnsignedMagnitude(Digits, FinalBase, maxMagnitude, &result->Magnitude);
     if (Result.Code == ErrorCode_ArgumentOutOfRange)
     {
+        Error_Deconstruct(&Result);
         return CreateNumberOverflowError(str, sizeof(uint64_t));
     }
     if (Result.Code != ErrorCode_Success)
@@ -651,6 +652,7 @@ static Error ParseDoubleCore(const unsigned char* str, DecimalSeparator separato
         { \
             if ((Result.Code == ErrorCode_ArgumentOutOfRange) || (Result.Code == ErrorCode_BufferTooSmall)) \
             { \
+                Error_Deconstruct(&Result); \
                 return CreateNumberOverflowError(str, sizeof(typeName)); \
             } \
             return Result; \
@@ -697,6 +699,7 @@ static Error ParseDoubleCore(const unsigned char* str, DecimalSeparator separato
         { \
             if ((Result.Code == ErrorCode_ArgumentOutOfRange) || (Result.Code == ErrorCode_BufferTooSmall)) \
             { \
+                Error_Deconstruct(&Result); \
                 return CreateNumberOverflowError(str, sizeof(typeName)); \
             } \
             return Result; \

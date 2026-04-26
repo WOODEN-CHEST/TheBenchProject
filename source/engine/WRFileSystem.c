@@ -610,6 +610,7 @@ static Error CreateDirectoryIfMissing(const unsigned char* path)
         return Result;
     }
 
+    Error_Deconstruct(&Result);
     return FileSystem_CreateDirectory(path);
 }
 

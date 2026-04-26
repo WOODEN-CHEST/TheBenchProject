@@ -629,7 +629,10 @@ static Error ValidatePathSegmentViews(const unsigned char* path, size_t startInd
 
         if (Result.Code != ErrorCode_Success)
         {
-            return CreateInvalidPathError(path, (Result.Message != NULL) ? Result.Message : u8"path contains an invalid segment.");
+            Error MappedError = CreateInvalidPathError(path,
+                (Result.Message != NULL) ? Result.Message : u8"path contains an invalid segment.");
+            Error_Deconstruct(&Result);
+            return MappedError;
         }
     }
 
@@ -1485,6 +1488,8 @@ Error Path_GetLastEntryStem(const unsigned char* path, GenericBuffer* result)
 
 bool Path_IsEntryNameValid(const unsigned char* entryName)
 {
+    Error Result;
+
     if ((entryName == NULL) || (entryName[0] == 0))
     {
         return false;
@@ -1494,7 +1499,15 @@ bool Path_IsEntryNameValid(const unsigned char* entryName)
         return false;
     }
 
-    return ValidateEntrySegment(entryName, GetStringLength(entryName), false).Code == ErrorCode_Success;
+    Result = ValidateEntrySegment(entryName, GetStringLength(entryName), false);
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return false;
+    }
+
+    return true;
 }
 
 Error Path_ValidateEntryName(const unsigned char* entryName)
@@ -1517,7 +1530,10 @@ Error Path_ValidateEntryName(const unsigned char* entryName)
     Result = ValidateEntrySegment(entryName, GetStringLength(entryName), false);
     if (Result.Code != ErrorCode_Success)
     {
-        return CreateInvalidEntryNameError(entryName, Result.Message != NULL ? Result.Message : u8"entry name is invalid.");
+        Error MappedError = CreateInvalidEntryNameError(entryName,
+            Result.Message != NULL ? Result.Message : u8"entry name is invalid.");
+        Error_Deconstruct(&Result);
+        return MappedError;
     }
 
     return Error_CreateSuccess();
@@ -1525,7 +1541,15 @@ Error Path_ValidateEntryName(const unsigned char* entryName)
 
 bool Path_IsValid(const unsigned char* path)
 {
-    return ValidatePathInternal(path).Code == ErrorCode_Success;
+    Error Result = ValidatePathInternal(path);
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return false;
+    }
+
+    return true;
 }
 
 Error Path_Validate(const unsigned char* path)
@@ -1578,6 +1602,7 @@ bool Path_IsNormalized(const unsigned char* path, PathNormalizeConditions condit
 
     if (Result.Code != ErrorCode_Success)
     {
+        Error_Deconstruct(&Result);
         return false;
     }
 
@@ -1633,6 +1658,7 @@ bool Path_IsSubPath(const unsigned char* parentPath, const unsigned char* childP
 
     if (Result.Code != ErrorCode_Success)
     {
+        Error_Deconstruct(&Result);
         return false;
     }
 
@@ -1642,6 +1668,7 @@ bool Path_IsSubPath(const unsigned char* parentPath, const unsigned char* childP
     if (Result.Code != ErrorCode_Success)
     {
         Memory_Free(NormalizedParent);
+        Error_Deconstruct(&Result);
         return false;
     }
 
