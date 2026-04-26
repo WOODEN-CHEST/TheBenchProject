@@ -192,7 +192,14 @@ static Error PrepareByteBuffer(GenericBuffer* buffer, const unsigned char* argum
 
 static Error EnsureByteBufferCapacity(GenericBuffer* buffer, size_t requiredCapacity, const unsigned char* operationName)
 {
-    if (!GenericBuffer_EnsureTotalCapacity(buffer, requiredCapacity))
+    size_t AddedElementCount = 0;
+
+    if (requiredCapacity > buffer->_count)
+    {
+        AddedElementCount = requiredCapacity - buffer->_count;
+    }
+
+    if (!GenericBuffer_TryPrepareForManualMutation(buffer, AddedElementCount))
     {
         return Error_Construct3(ErrorCode_BufferTooSmall,
             u8"Cannot %s because the destination buffer requires at least %zu bytes of capacity.",
@@ -1134,12 +1141,17 @@ static Error MeasureSplitRequirements(const unsigned char* path,
 static Error EnsureSplitBufferCapacity(GenericBuffer* strBuffer, GenericBuffer* segmentPtrBuffer, size_t segmentCount, size_t totalStringBytes)
 {
     Error Result = EnsureByteBufferCapacity(strBuffer, totalStringBytes, u8"split the path");
+    size_t AddedSegmentCount = 0;
 
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
-    if (!GenericBuffer_EnsureTotalCapacity(segmentPtrBuffer, segmentCount))
+    if (segmentCount > segmentPtrBuffer->_count)
+    {
+        AddedSegmentCount = segmentCount - segmentPtrBuffer->_count;
+    }
+    if (!GenericBuffer_TryPrepareForManualMutation(segmentPtrBuffer, AddedSegmentCount))
     {
         return Error_Construct3(ErrorCode_BufferTooSmall,
             u8"Cannot split the path because the segment pointer buffer requires at least %zu elements of capacity.",

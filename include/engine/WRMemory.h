@@ -47,8 +47,6 @@ typedef int64_t (*GenericBufferIntExtractor)(GenericBuffer* buffer, GenericBuffe
 
 typedef double (*GenericBufferDoubleExtractor)(GenericBuffer* buffer, GenericBufferElementData sourceElement, void* userData);
 
-typedef void (*GenericBufferMutator)(GenericBuffer* buffer, void* userData);
-
 
 // Functions.
 void GenericBuffer_CreateVariable(GenericBuffer* buffer, 
@@ -165,7 +163,7 @@ bool GenericBuffer_NullTerminate(GenericBuffer* buffer);
 
 bool GenericBuffer_SetByte(GenericBuffer* buffer, size_t index, unsigned char byte);
 
-bool GenericBuffer_Mutate(GenericBuffer* buffer, size_t addedElementCount, GenericBufferMutator mutator, void* userData);
+bool GenericBuffer_TryPrepareForManualMutation(GenericBuffer* buffer, size_t addedElementCount);
 
 
 

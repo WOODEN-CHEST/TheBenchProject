@@ -58,19 +58,12 @@ static inline bool GenericBuffer_IsByteBuffer(GenericBuffer* buffer)
 
 static inline size_t GenericBuffer_GetStringLength(const unsigned char* str)
 {
-    size_t Length = 0;
-
     if (str == NULL)
     {
         return 0;
     }
 
-    while (str[Length] != 0)
-    {
-        Length++;
-    }
-
-    return Length;
+    return strlen(str);
 }
 
 static inline bool GenericBuffer_IsIndexValid(GenericBuffer* buffer, size_t index)
@@ -1040,6 +1033,10 @@ bool GenericBuffer_AppendString(GenericBuffer* buffer, const unsigned char* str)
     {
         return false;
     }
+    if (!GenericBuffer_CanModify(buffer))
+    {
+        return false;
+    }
 
     Length = GenericBuffer_GetStringLength(str);
     if (!GenericBuffer_ReserveMoreCapacity(buffer, Length))
@@ -1078,9 +1075,9 @@ bool GenericBuffer_SetByte(GenericBuffer* buffer, size_t index, unsigned char by
     return GenericBuffer_Replace(buffer, &byte, index);
 }
 
-bool GenericBuffer_Mutate(GenericBuffer* buffer, size_t addedElementCount, GenericBufferMutator mutator, void* userData)
+bool GenericBuffer_TryPrepareForManualMutation(GenericBuffer* buffer, size_t addedElementCount)
 {
-    if ((buffer == NULL) || (mutator == NULL))
+    if (buffer == NULL)
     {
         return false;
     }
@@ -1093,7 +1090,7 @@ bool GenericBuffer_Mutate(GenericBuffer* buffer, size_t addedElementCount, Gener
         return false;
     }
 
-    mutator(buffer, userData);
+    return true;
 }
 
 size_t Memory_GetTotalAllocationCount(void)

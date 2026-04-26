@@ -545,9 +545,10 @@ static Error TryReadEntireFile(const unsigned char* path, GenericBuffer* destina
         return Result;
     }
 
-    if (nullTerminate && (destination->_data != NULL))
+    if (nullTerminate && !GenericBuffer_NullTerminate(destination))
     {
-        destination->_data[destination->_count] = 0;
+        FileStream_Deconstruct(&Stream);
+        return CreateBufferTooSmallError(u8"read the file text", destination->_count + 1);
     }
 
     FileStream_Deconstruct(&Stream);

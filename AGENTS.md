@@ -288,10 +288,10 @@ void List_Append(List* self, int value);
   the generic operations. The generic buffer should be used in place of raw buffers where possible. Obviously the
   generic buffer still requires a raw buffer to be passed into it to work, but after that, use the generic buffer.
   The generic buffer should only ever be written to via its write methods. The generic buffer has many validations
-  it must make when writing, so if you manually mutate the bytes and length of it, it may cause issues. If passing
-  the byte buffer of the generic buffer is required to a function which will write to them, use the generic buffer's
-  mutate method, it handles all constraints; the mutation function pointer parameter is supposed to
-  modify the bytes of the generic buffer and update its length. Reading from the generic buffer directly
+  it must make when writing, so if you must manually mutate it may cause issues. If passing
+  the byte buffer of the generic buffer is required to a function which will write to them (manual mutation),
+  use the generic buffer's TryPrepareForManualMutation, it handles all constraints, ensure the capacity and only
+  returns true if the buffer can be mutated in the requested context. Reading from the generic buffer directly
   without its methods is fine, however.
 - Functions which write to a generic buffer should NOT clear the buffer beforehand, that is the responsibility of the
   caller of said function.

@@ -234,6 +234,8 @@ static Error EnsureBufferCapacity(GenericBuffer* buffer, size_t requiredCapacity
 
 static Error AppendBytes(GenericBuffer* destination, const unsigned char* bytes, size_t byteCount, const unsigned char* operationName)
 {
+    size_t RequiredCapacity = 0;
+
     if (byteCount == 0)
     {
         return Error_CreateSuccess();
@@ -242,13 +244,16 @@ static Error AppendBytes(GenericBuffer* destination, const unsigned char* bytes,
     {
         return CreateNullArgumentError(u8"bytes");
     }
-    if (!GenericBuffer_ReserveMoreCapacity(destination, byteCount))
+    if (destination->_count > (SIZE_MAX - byteCount))
     {
-        return CreateBufferTooSmallError(operationName, destination->_count + byteCount);
+        return CreateOverflowError(operationName);
     }
 
-    Memory_Copy(bytes, ((unsigned char*)destination->_data) + destination->_count, byteCount);
-    destination->_count += byteCount;
+    RequiredCapacity = destination->_count + byteCount;
+    if (!GenericBuffer_AddLastRange(destination, (void*)bytes, byteCount))
+    {
+        return CreateBufferTooSmallError(operationName, RequiredCapacity);
+    }
 
     return Error_CreateSuccess();
 }

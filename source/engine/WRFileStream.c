@@ -271,7 +271,7 @@ static Error FileStream_Read(void* selfVoid, GenericBuffer* dest, size_t readSiz
     {
         return Error_CreateSuccess();
     }
-    if (!GenericBuffer_ReserveMoreCapacity(dest, readSize))
+    if (!GenericBuffer_TryPrepareForManualMutation(dest, readSize))
     {
         return Error_Construct3(ErrorCode_BufferTooSmall,
             u8"Destination buffer is too small to read %zu bytes from the file stream.",

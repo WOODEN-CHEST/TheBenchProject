@@ -105,7 +105,7 @@ static Error MemoryStream_EnsureOpen(MemoryStream* self, const unsigned char* op
 static Error MemoryStream_EnsureWritableBytes(MemoryStream* self, size_t writeSize)
 {
     size_t WriteEnd = 0;
-    size_t RequiredCount = 0;
+    size_t AddedElementCount = 0;
 
     if (GenericBuffer_IsReadOnly(self->_buffer))
     {
@@ -117,8 +117,12 @@ static Error MemoryStream_EnsureWritableBytes(MemoryStream* self, size_t writeSi
     }
 
     WriteEnd = self->_position + writeSize;
-    RequiredCount = (self->_buffer->_count > WriteEnd) ? self->_buffer->_count : WriteEnd;
-    if (!GenericBuffer_EnsureTotalCapacity(self->_buffer, RequiredCount))
+    if (WriteEnd > self->_buffer->_count)
+    {
+        AddedElementCount = WriteEnd - self->_buffer->_count;
+    }
+
+    if (!GenericBuffer_TryPrepareForManualMutation(self->_buffer, AddedElementCount))
     {
         return Error_Construct3(ErrorCode_BufferTooSmall,
             u8"Memory stream buffer is too small to hold %zu bytes at position %zu.",
@@ -296,7 +300,7 @@ static Error MemoryStream_Read(void* selfVoid, GenericBuffer* dest, size_t readS
     {
         return Error_CreateSuccess();
     }
-    if (!GenericBuffer_ReserveMoreCapacity(dest, ActualReadSize))
+    if (!GenericBuffer_TryPrepareForManualMutation(dest, ActualReadSize))
     {
         return Error_Construct3(ErrorCode_BufferTooSmall,
             u8"Destination buffer is too small to read %zu bytes from the memory stream.",
