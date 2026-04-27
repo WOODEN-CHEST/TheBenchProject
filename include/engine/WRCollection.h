@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "WRError.h"
+#include "WRMemory.h"
 
 
 // Types.
@@ -45,12 +46,21 @@ static inline CollectionEnumerator* ICollection_GetEnumerator(ICollection* self)
     return (*self->_vtable._getEnumerator)(self->_vtable.Self);
 }
 
+Error ICollection_WriteToBufferByValue(ICollection* self, GenericBuffer* buffer);
+
+Error ICollection_WriteToBufferByReference(ICollection* self, GenericBuffer* buffer);
 
 
 static inline Error CollectionEnumerator_HasNext(CollectionEnumerator* self, bool* outValue)
 {
     return (*self->_vtable._hasNext)(self->_vtable.Self, outValue);
 }
+
+static inline size_t CollectionEnumerator_GetSingleElementSize(CollectionEnumerator* self)
+{
+    return self->_singleElementSize;
+}
+
 
 static inline Error CollectionEnumerator_NextByValue(CollectionEnumerator* self, void* outValue)
 {

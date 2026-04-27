@@ -52,15 +52,15 @@ typedef struct IListElementDataStruct
     size_t _index;
 } IListElementData;
 
-typedef bool (*IListPredicate)(IList* buffer, IListElementData element, void* userData);
+typedef bool (*IListPredicate)(IList* list, IListElementData element, void* userData);
 
-typedef ComparisonResult (*IListComparator)(IList* buffer, IListElementData a, IListElementData b, void* userData);
+typedef ComparisonResult (*IListComparator)(IList* list, IListElementData a, IListElementData b, void* userData);
 
-typedef void (*IListMapper)(IList* buffer, IListElementData sourceElement, void* destinationElement, void* userData);
+typedef void (*IListMapper)(IList* list, IListElementData sourceElement, void* destinationElement, void* userData);
 
-typedef int64_t (*IListIntExtractor)(IList* buffer, IListElementData sourceElement, void* userData);
+typedef int64_t (*IListIntExtractor)(IList* list, IListElementData sourceElement, void* userData);
 
-typedef double (*IListDoubleExtractor)(IList* buffer, IListElementData sourceElement, void* userData);
+typedef double (*IListDoubleExtractor)(IList* list, IListElementData sourceElement, void* userData);
 
 
 

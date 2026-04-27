@@ -15,8 +15,81 @@ static Error CreateReferenceEnumerationUnsupportedError(void)
         u8"This collection enumerator does not support returning elements by reference.");
 }
 
+static Error CreateInvalidArgumentError(const unsigned char* argumentName, const unsigned char* message)
+{
+    return Error_Construct3(ErrorCode_IllegalArgument,
+        u8"Argument \"%s\" is invalid: %s.",
+        argumentName,
+        message);
+}
+
+static Error CreateDestinationBufferTooSmallError()
+{
+    return Error_Construct3(ErrorCode_BufferTooSmall,
+        u8"The destination buffer is too small to hold the collection elements.");
+}
+
+static Error WriteToBuffer(ICollection* self, GenericBuffer* buffer, bool isByReference)
+{
+    if ((self == NULL) || (buffer == NULL))
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+
+    CollectionEnumerator* Enumerator = ICollection_GetEnumerator(self);
+    size_t ElementSize = isByReference ? sizeof(void*) : CollectionEnumerator_GetSingleElementSize(Enumerator);
+    if (buffer->_elementSize != ElementSize)
+    {
+        CollectionEnumerator_Deconstruct(Enumerator);
+        return CreateInvalidArgumentError(u8"buffer", u8"element size mismatch");
+    }
+    
+    bool HasNext = false;
+    Error Result = CollectionEnumerator_HasNext(Enumerator, &HasNext);
+    while (HasNext && (Result.Code == ErrorCode_Success))
+    {
+        if (!GenericBuffer_TryPrepareForManualMutation(buffer, 1))
+        {
+            CollectionEnumerator_Deconstruct(Enumerator);
+            return CreateDestinationBufferTooSmallError();
+        }
+        unsigned char* TargetData = buffer->_data + (buffer->_count * buffer->_elementSize);
+        
+        if (isByReference)
+        {
+            Result = CollectionEnumerator_NextByReference(Enumerator, &TargetData);
+        }
+        else
+        {
+            Result = CollectionEnumerator_NextByValue(Enumerator, TargetData);
+        }
+
+        if (Result.Code != ErrorCode_Success)
+        {
+            CollectionEnumerator_Deconstruct(Enumerator);
+            return Result;
+        }
+        buffer->_count += 1;
+
+        Result = CollectionEnumerator_HasNext(Enumerator, &HasNext);
+    }
+
+    CollectionEnumerator_Deconstruct(Enumerator);
+    return Error_CreateSuccess();
+}
+
 
 // Public functions.
+Error ICollection_WriteToBufferByValue(ICollection* self, GenericBuffer* buffer)
+{
+    return WriteToBuffer(self, buffer, false);
+}
+
+Error ICollection_WriteToBufferByReference(ICollection* self, GenericBuffer* buffer)
+{
+    return WriteToBuffer(self, buffer, true);
+}
+
 Error CollectionEnumerator_NextByReference(CollectionEnumerator* self, void** outPointer)
 {
     if (self == NULL)
