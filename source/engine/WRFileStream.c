@@ -18,6 +18,7 @@ static const IOStreamVTable FILE_STREAM_VTABLE =
     ._getPosition = NULL,
     ._setPosition = NULL,
     ._setPositionSpecial = NULL,
+    ._setLength = NULL,
     ._flush = NULL,
     ._writeByte = NULL,
     ._write = NULL,

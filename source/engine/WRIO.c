@@ -120,6 +120,24 @@ Error IOStream_SetPositionSpecial(IOStream* stream, IOStreamSeekOrigin origin)
     return (*stream->_vtable._setPositionSpecial)(stream->_vtable.Self, origin);
 }
 
+Error IOStream_SetLength(IOStream* stream, size_t length)
+{
+    if (stream == NULL)
+    {
+        return CreateNullArgumentError(u8"stream");
+    }
+    if (!IOStream_IsLengthSettable(stream))
+    {
+        return CreateCapabilityError(stream, u8"set the length of", u8"length-settable");
+    }
+    if (stream->_vtable._setLength == NULL)
+    {
+        return CreateMissingOperationError(stream, u8"set length");
+    }
+
+    return (*stream->_vtable._setLength)(stream->_vtable.Self, length);
+}
+
 Error IOStream_WriteByte(IOStream* stream, unsigned char byte)
 {
     if (stream == NULL)

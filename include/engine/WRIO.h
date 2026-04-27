@@ -20,6 +20,7 @@ typedef enum IOStreamFlagsEnum
     IOStreamFlags_CanWrite = (1 << 0),
     IOStreamFlags_CanRead = (1 << 1),
     IOStreamFlags_CanSeek = (1 << 2),
+    IOStreamFlags_CanSetLength = (1 << 3),
 } IOStreamFlags;
 
 typedef enum IOStreamSeekOriginEnum
@@ -36,6 +37,7 @@ typedef struct IOStreamVTableStruct
     Error (*_getPosition)(void* self, size_t* position);
     Error (*_setPosition)(void* self, size_t position);
     Error (*_setPositionSpecial)(void* self, IOStreamSeekOrigin origin);
+    Error (*_setLength)(void* self, size_t length);
     Error (*_flush)(void* self);
     Error (*_writeByte)(void* self, unsigned char byte);
     Error (*_write)(void* self, const unsigned char* buffer, size_t bufferSize);
@@ -85,6 +87,11 @@ static inline bool IOStream_IsReadable(IOStream* stream)
     return ((stream->_flags & IOStreamFlags_CanRead) != 0);
 }
 
+static inline bool IOStream_IsLengthSettable(IOStream* stream)
+{
+    return ((stream->_flags & IOStreamFlags_CanSetLength) != 0);
+}
+
 static inline bool IOStream_IsEndOfStream(IOStream* stream)
 {
     return (*stream->_vtable._isEOF)(stream->_vtable.Self);
@@ -93,6 +100,8 @@ static inline bool IOStream_IsEndOfStream(IOStream* stream)
 Error IOStream_SetPosition(IOStream* stream, size_t position);
 
 Error IOStream_SetPositionSpecial(IOStream* stream, IOStreamSeekOrigin origin);
+
+Error IOStream_SetLength(IOStream* stream, size_t length);
 
 Error IOStream_WriteByte(IOStream* stream, unsigned char byte);
 

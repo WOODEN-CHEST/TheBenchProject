@@ -226,23 +226,6 @@ typedef struct ShapeStruct
 } Shape;
 ```
 
-If a concrete type needs fields beyond what the abstract class defines, it embeds the abstract struct
-as its **first member**. A pointer to the concrete struct is then pointer-compatible with a pointer to
-the abstract struct, so no cast is required:
-
-```c
-typedef struct CircleStruct
-{
-    Shape Base; // must be first
-    float Radius;
-} Circle;
-
-static void Circle_Draw(Shape* self)
-{
-    Circle* circleSelf = self; // valid, no cast needed — Base is first member
-    // use circleSelf->Radius, self->Position, etc.
-}
-```
 
 ### Concrete Implementations
 

@@ -660,18 +660,19 @@ bool GenericBuffer_GetLast(GenericBuffer* buffer, void* out)
     return GenericBuffer_GetAt(buffer, buffer->_count - 1, out);
 }
 
-void GenericBuffer_Clear(GenericBuffer* buffer)
+bool GenericBuffer_Clear(GenericBuffer* buffer)
 {
     if (buffer == NULL)
     {
-        return;
+        return false;
     }
     if (!GenericBuffer_CanModify(buffer))
     {
-        return;
+        return false;
     }
 
     buffer->_count = 0;
+    return true;
 }
 
 bool GenericBuffer_Contains(GenericBuffer* buffer, GenericBufferPredicate predicate, void* userData)
@@ -719,17 +720,17 @@ size_t GenericBuffer_LastIndexOf(GenericBuffer* buffer, GenericBufferPredicate p
     return GENERIC_BUFFER_INDEX_INVALID;
 }
 
-void GenericBuffer_Reverse(GenericBuffer* buffer)
+bool GenericBuffer_Reverse(GenericBuffer* buffer)
 {
     unsigned char* Temp = NULL;
 
     if ((buffer == NULL) || (buffer->_count < 2))
     {
-        return;
+        return false;
     }
     if (!GenericBuffer_CanModify(buffer))
     {
-        return;
+        return false;
     }
 
     Temp = Memory_Allocate(buffer->_elementSize);
@@ -742,6 +743,7 @@ void GenericBuffer_Reverse(GenericBuffer* buffer)
     }
 
     Memory_Free(Temp);
+    return true;
 }
 
 bool GenericBuffer_SortAscending(GenericBuffer* buffer, GenericBufferComparator comparator, void* userData)

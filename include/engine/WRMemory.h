@@ -118,7 +118,7 @@ bool GenericBuffer_GetFirst(GenericBuffer* buffer, void* out);
 
 bool GenericBuffer_GetLast(GenericBuffer* buffer, void* out);
 
-void GenericBuffer_Clear(GenericBuffer* buffer);
+bool GenericBuffer_Clear(GenericBuffer* buffer);
 
 
 bool GenericBuffer_Contains(GenericBuffer* buffer, GenericBufferPredicate predicate, void* userData);
@@ -127,7 +127,7 @@ size_t GenericBuffer_FirstIndexOf(GenericBuffer* buffer, GenericBufferPredicate 
 
 size_t GenericBuffer_LastIndexOf(GenericBuffer* buffer, GenericBufferPredicate predicate, void* userData);
 
-void GenericBuffer_Reverse(GenericBuffer* buffer);
+bool GenericBuffer_Reverse(GenericBuffer* buffer);
 
 
 bool GenericBuffer_SortAscending(GenericBuffer* buffer, GenericBufferComparator comparator, void* userData);

@@ -20,8 +20,15 @@ static inline IOStream* MemoryStream_AsIOStream(MemoryStream* self)
     return &self->Base;
 }
 
+static inline GenericBuffer* MemoryStream_GetBuffer(MemoryStream* self)
+{
+    return self->_buffer;
+}
+
 Error MemoryStream_Construct1(MemoryStream* self, IOStreamFlags flags);
 
 Error MemoryStream_Construct2(MemoryStream* self, GenericBuffer* bufferToWrap, IOStreamFlags flags);
+
+Error MemoryStream_SetLength(MemoryStream* self, size_t length);
 
 void MemoryStream_Deconstruct(MemoryStream* self);

@@ -17,6 +17,7 @@ static const IOStreamVTable MEMORY_STREAM_VTABLE =
     ._getPosition = NULL,
     ._setPosition = NULL,
     ._setPositionSpecial = NULL,
+    ._setLength = NULL,
     ._flush = NULL,
     ._writeByte = NULL,
     ._write = NULL,
@@ -191,6 +192,12 @@ static Error MemoryStream_Flush(void* selfVoid)
     return MemoryStream_EnsureOpen(self, u8"flush");
 }
 
+static Error MemoryStream_SetLengthVTable(void* selfVoid, size_t length)
+{
+    MemoryStream* self = selfVoid;
+    return MemoryStream_SetLength(self, length);
+}
+
 static Error MemoryStream_WriteByte(void* selfVoid, unsigned char byte)
 {
     MemoryStream* self = selfVoid;
@@ -330,7 +337,8 @@ static void MemoryStream_VTableDeconstruct(void* selfVoid)
 {
     MemoryStream* self = selfVoid;
 
-    (void)MemoryStream_Close(self);
+    Error Result = MemoryStream_Close(self);
+    Error_Deconstruct(&Result);
     if (self->_ownsBuffer && (self->_selfContainedBuffer._data != NULL))
     {
         Memory_Free(self->_selfContainedBuffer._data);
@@ -346,6 +354,7 @@ static IOStreamVTable CreateMemoryStreamVTable(MemoryStream* self)
     Result._getPosition = &MemoryStream_GetPosition;
     Result._setPosition = &MemoryStream_SetPosition;
     Result._setPositionSpecial = &MemoryStream_SetPositionSpecial;
+    Result._setLength = &MemoryStream_SetLengthVTable;
     Result._flush = &MemoryStream_Flush;
     Result._writeByte = &MemoryStream_WriteByte;
     Result._write = &MemoryStream_Write;
@@ -368,7 +377,7 @@ Error MemoryStream_Construct1(MemoryStream* self, IOStreamFlags flags)
 
     Memory_Zero(self, sizeof(*self));
     self->Base._type = IOStreamType_Memory;
-    self->Base._flags = flags | IOStreamFlags_CanSeek;
+    self->Base._flags = flags | IOStreamFlags_CanSeek | IOStreamFlags_CanSetLength;
     self->Base._vtable = CreateMemoryStreamVTable(self);
     GenericBuffer_CreateVariable(&self->_selfContainedBuffer,
         NULL,
@@ -381,6 +390,57 @@ Error MemoryStream_Construct1(MemoryStream* self, IOStreamFlags flags)
     self->_position = 0;
     self->_ownsBuffer = true;
     self->_isClosed = false;
+    return Error_CreateSuccess();
+}
+
+Error MemoryStream_SetLength(MemoryStream* self, size_t length)
+{
+    Error Result = Error_CreateSuccess();
+    size_t PreviousCount = 0;
+    size_t AddedCount = 0;
+
+    if (self == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+
+    Result = MemoryStream_EnsureOpen(self, u8"set the length of");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    if (GenericBuffer_IsReadOnly(self->_buffer))
+    {
+        return Error_Construct1(ErrorCode_InvalidOperation, u8"Cannot set the length of a read-only memory stream buffer.");
+    }
+
+    PreviousCount = self->_buffer->_count;
+    if (length < PreviousCount)
+    {
+        self->_buffer->_count = length;
+        if (self->_position > length)
+        {
+            self->_position = length;
+        }
+
+        return Error_CreateSuccess();
+    }
+    if (length == PreviousCount)
+    {
+        return Error_CreateSuccess();
+    }
+
+    AddedCount = length - PreviousCount;
+    if (!GenericBuffer_TryPrepareForManualMutation(self->_buffer, AddedCount))
+    {
+        return Error_Construct3(ErrorCode_BufferTooSmall,
+            u8"Memory stream buffer is too small to set its length to %zu bytes.",
+            length);
+    }
+
+    Memory_Zero(self->_buffer->_data + PreviousCount, AddedCount);
+    self->_buffer->_count = length;
     return Error_CreateSuccess();
 }
 
@@ -405,7 +465,7 @@ Error MemoryStream_Construct2(MemoryStream* self, GenericBuffer* bufferToWrap, I
 
     Memory_Zero(self, sizeof(*self));
     self->Base._type = IOStreamType_Memory;
-    self->Base._flags = flags | IOStreamFlags_CanSeek;
+    self->Base._flags = flags | IOStreamFlags_CanSeek | IOStreamFlags_CanSetLength;
     self->Base._vtable = CreateMemoryStreamVTable(self);
     self->_buffer = bufferToWrap;
     self->_position = 0;

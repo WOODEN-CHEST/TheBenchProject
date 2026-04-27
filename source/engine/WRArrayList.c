@@ -475,7 +475,10 @@ static Error ArrayList_ListClear(void* self)
         return Result;
     }
 
-    GenericBuffer_Clear(ArrayListSelf->_activeBuffer);
+    if (!GenericBuffer_Clear(ArrayListSelf->_activeBuffer))
+    {
+        return CreateReadOnlyError();
+    }
     return Error_CreateSuccess();
 }
 
