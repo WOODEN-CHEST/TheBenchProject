@@ -12,6 +12,7 @@ typedef enum IOStreamTypeEnum
     IOStreamType_Unknown = 0,
     IOStreamType_File,
     IOStreamType_Memory,
+    IOStreamType_Socket,
 } IOStreamType;
 
 typedef enum IOStreamFlagsEnum

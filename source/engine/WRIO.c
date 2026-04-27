@@ -24,6 +24,9 @@ static const unsigned char* GetStreamTypeName(IOStreamType type)
         case IOStreamType_Memory:
             return u8"memory";
 
+        case IOStreamType_Socket:
+            return u8"socket";
+
         default:
             return u8"unknown";
     }
