@@ -287,6 +287,7 @@ void List_Append(List* self, int value);
   first.
 - If a function should behave like overwrite/replace, still do not silently clear inside that function. Either require
   the caller to pass a cleared buffer or expose a separate API whose contract explicitly says it clears/replaces.
+- Only clear the generic buffer in a data structure or function if it doesnt make sense for it to have any data beforehand.
 - The custom module tracks allocation counts and provides additional utilities, but is otherwise
   semantically equivalent to `malloc`/`free`.
 - **Minimize heap fragmentation.** Prefer allocating larger contiguous blocks over many small individual

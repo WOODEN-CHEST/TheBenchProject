@@ -57,6 +57,10 @@ void GenericBuffer_CreateVariable(GenericBuffer* buffer,
     void* userData,
     GenericBufferAllocateCallback callback);
 
+void GenericBuffer_AllocateVariable(GenericBuffer* buffer, 
+     size_t initialCapacity,
+     size_t elementSize);
+
 void GenericBuffer_CreateConstant(GenericBuffer* buffer, void* destination, size_t bufferCapacity, size_t elementSize, size_t elementCount);
 
 void GenericBuffer_SetCallback(GenericBuffer* buffer, GenericBufferAllocateCallback callback, void* userData);

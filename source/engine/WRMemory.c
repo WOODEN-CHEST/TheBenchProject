@@ -7,6 +7,7 @@
 // Macros.
 #define GENERIC_BUFFER_SORT_ASCENDING (1)
 #define GENERIC_BUFFER_SORT_DESCENDING (-1)
+#define DEFAULT_GROWABLE_BUFFER_CAPACITY_MULTIPLIER 2
 
 
 // Types.
@@ -69,6 +70,35 @@ static inline size_t GenericBuffer_GetStringLength(const unsigned char* str)
 static inline bool GenericBuffer_IsIndexValid(GenericBuffer* buffer, size_t index)
 {
     return (buffer != NULL) && (index < buffer->_count);
+}
+
+static bool GenericBuffer_DefaultAllocateVariableCallback(GenericBuffer* destination, size_t requestedCapacity)
+{
+    size_t AllocationSize = 0;
+
+    if (destination == NULL)
+    {
+        return false;
+    }
+    if (destination->_elementSize == 0)
+    {
+        return false;
+    }
+
+    size_t NewCapacity = (destination->_capacity == 0) ? 1 : destination->_capacity;
+    while (NewCapacity < requestedCapacity)
+    {
+        NewCapacity *= DEFAULT_GROWABLE_BUFFER_CAPACITY_MULTIPLIER;
+    }
+    if (NewCapacity > (SIZE_MAX / destination->_elementSize))
+    {
+        return false;
+    }
+
+    AllocationSize = NewCapacity * destination->_elementSize;
+    destination->_data = Memory_Reallocate(destination->_data, AllocationSize);
+    destination->_capacity = NewCapacity;
+    return true;
 }
 
 static inline void CreateGenericBuffer(GenericBuffer* buffer,
@@ -307,6 +337,25 @@ void GenericBuffer_CreateVariable(GenericBuffer* buffer,
         elementCount,
         userData,
         callback,
+        GenericBufferFlags_None);
+}
+
+void GenericBuffer_AllocateVariable(GenericBuffer* buffer, size_t initialCapacity, size_t elementSize)
+{
+    void* Destination = NULL;
+
+    if ((initialCapacity > 0) && (elementSize > 0))
+    {
+        Destination = Memory_Allocate(initialCapacity * elementSize);
+    }
+
+    CreateGenericBuffer(buffer,
+        Destination,
+        initialCapacity,
+        elementSize,
+        0,
+        NULL,
+        GenericBuffer_DefaultAllocateVariableCallback,
         GenericBufferFlags_None);
 }
 
