@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "WRFileSystem.h"
 #include "WRFileSystemInternal.h"
 #include "WRMemory.h"
@@ -38,12 +39,6 @@ static size_t GetStringLength(const unsigned char* text)
     }
 
     return Length;
-}
-
-static bool IsDirectorySeparator(unsigned char character)
-{
-    return (character == ENVIRONMENT_PATH_SEPARATOR_PRIMARY)
-        || (character == ENVIRONMENT_PATH_SEPARATOR_SECONDARY);
 }
 
 static bool FileSystemPlatformBufferAllocate(GenericBuffer* destination, size_t requestedCapacity)

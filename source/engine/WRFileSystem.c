@@ -88,12 +88,6 @@ static size_t GetStringLength(const unsigned char* text)
     return StringUTF8_GetByteLength(text);
 }
 
-static bool IsDirectorySeparator(unsigned char character)
-{
-    return (character == ENVIRONMENT_PATH_SEPARATOR_PRIMARY)
-        || (character == ENVIRONMENT_PATH_SEPARATOR_SECONDARY);
-}
-
 static Error CreateNullArgumentError(const unsigned char* argumentName)
 {
     return Error_Construct3(ErrorCode_IllegalArgument,
@@ -217,32 +211,6 @@ static Error DuplicateString(const unsigned char* text, unsigned char** outText)
     }
 
     return DuplicateStringBySize(text, GetStringLength(text), outText);
-}
-
-static Error CombinePaths(const unsigned char* leftPath, const unsigned char* rightPath, unsigned char** outPath)
-{
-    GenericBuffer Buffer;
-    Error Result = Error_CreateSuccess();
-
-    if (outPath == NULL)
-    {
-        return CreateNullArgumentError(u8"outPath");
-    }
-
-    *outPath = NULL;
-    CreateGrowableByteBuffer(&Buffer);
-
-    Result = Path_Append(leftPath, rightPath, &Buffer);
-    if (Result.Code != ErrorCode_Success)
-    {
-        Memory_Free(Buffer._data);
-        return Result;
-    }
-
-    Result = DuplicateString((const unsigned char*)Buffer._data, outPath);
-    Memory_Free(Buffer._data);
-
-    return Result;
 }
 
 static bool IsSpecialDirectoryName(const unsigned char* name)

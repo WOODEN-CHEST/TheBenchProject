@@ -113,21 +113,19 @@ static bool SocketLibraryStarted = false;
 
 
 // Static functions.
+#if defined(_WIN32)
 static void SocketLibrary_Lock(void)
 {
-#if defined(_WIN32)
     while (atomic_flag_test_and_set(&SocketLibraryLock))
     {
     }
-#endif
 }
 
 static void SocketLibrary_Unlock(void)
 {
-#if defined(_WIN32)
     atomic_flag_clear(&SocketLibraryLock);
-#endif
 }
+#endif
 
 static int SocketPlatform_GetLastErrorCode(void)
 {
@@ -183,6 +181,7 @@ static Error CreateTimeoutRangeError(size_t milliseconds)
         milliseconds);
 }
 
+#if defined(_WIN32)
 static Error CreateSizeRangeError(const unsigned char* operationName, size_t size)
 {
     return Error_Construct3(ErrorCode_ArgumentOutOfRange,
@@ -190,6 +189,7 @@ static Error CreateSizeRangeError(const unsigned char* operationName, size_t siz
         operationName,
         size);
 }
+#endif
 
 static Error CreateSocketClosedError(const unsigned char* socketName, const unsigned char* operationName)
 {
@@ -370,11 +370,6 @@ static Error SocketAddress_CreateFromNative(const struct sockaddr* nativeAddress
     Memory_Copy(nativeAddress, &Result->_storage, (size_t)nativeLength);
     *outAddress = Result;
     return Error_CreateSuccess();
-}
-
-static struct sockaddr* SocketAddress_GetNative(SocketAddress* self)
-{
-    return (struct sockaddr*)&self->_storage;
 }
 
 static const struct sockaddr* SocketAddress_GetNativeConst(const SocketAddress* self)

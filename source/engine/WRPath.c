@@ -37,6 +37,7 @@ typedef struct PathSegmentViewStruct
 
 
 // Fields.
+#if defined(_WIN32)
 static const unsigned char* const WINDOWS_RESERVED_NAMES[] =
 {
     u8"CON",
@@ -62,6 +63,7 @@ static const unsigned char* const WINDOWS_RESERVED_NAMES[] =
     u8"LPT8",
     u8"LPT9",
 };
+#endif
 
 
 // Static functions.
@@ -75,6 +77,7 @@ static bool IsDirectorySeparatorByte(unsigned char character)
     return (character == ENVIRONMENT_PATH_SEPARATOR_PRIMARY) || (character == ENVIRONMENT_PATH_SEPARATOR_SECONDARY);
 }
 
+#if defined(_WIN32)
 static bool IsAsciiLetter(unsigned char character)
 {
     return (((character >= u8'a') && (character <= u8'z'))
@@ -90,6 +93,7 @@ static unsigned char ToAsciiLower(unsigned char character)
 
     return character;
 }
+#endif
 
 static Error CreateNullArgumentError(const unsigned char* argumentName)
 {
@@ -448,6 +452,7 @@ static bool PathContainsInvalidUtf8(const unsigned char* path)
     return false;
 }
 
+#if defined(_WIN32)
 static bool IsWindowsReservedName(const unsigned char* start, size_t length)
 {
     size_t CompareLength = length;
@@ -494,6 +499,7 @@ static bool IsWindowsReservedName(const unsigned char* start, size_t length)
 
     return false;
 }
+#endif
 
 static Error ValidateEntrySegment(const unsigned char* start, size_t length, bool allowDirectorySegments)
 {

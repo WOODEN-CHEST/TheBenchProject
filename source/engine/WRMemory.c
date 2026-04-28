@@ -63,7 +63,7 @@ static inline size_t GenericBuffer_GetStringLength(const unsigned char* str)
         return 0;
     }
 
-    return strlen(str);
+    return strlen((char*)str);
 }
 
 static inline bool GenericBuffer_IsIndexValid(GenericBuffer* buffer, size_t index)
