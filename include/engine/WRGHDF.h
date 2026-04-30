@@ -87,7 +87,7 @@ Error GHDFCompound_Clear(GHDFCompound* self);
 
 Error GHDFCompound_Remove(GHDFCompound* self, GHDFEntryID id);
 
-Error GHDFCompound_Set(GHDFCompound* self, GHDFEntryID id, GHDFValueType valueType, void* value);
+Error GHDFCompound_Set(GHDFCompound* self, GHDFEntryID id, GHDFCompoundEntryType entryType, void* value);
 
 Error GHDFCompound_Get(GHDFCompound* self, GHDFEntryID id, GHDFObjectValue* outEntry);
 
