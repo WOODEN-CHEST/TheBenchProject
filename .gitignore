@@ -67,3 +67,4 @@ compile/out/TheBenchProject*
 
 # Test stuff.
 compile/out/unicode_data.txt
+local/

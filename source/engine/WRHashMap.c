@@ -172,7 +172,7 @@ static size_t HashMap_GetMetadataByteCountForCapacity(size_t capacity)
 
 static size_t HashMap_GetKeyByteCountForCapacity(HashMap* self, size_t capacity)
 {
-    return capacity * Map_GetKeySize(HashMap_AsMap(self));
+    return capacity * IMap_GetKeySize(HashMap_AsMap(self));
 }
 
 static bool HashMap_TryGetStorageByteCount(HashMap* self, size_t capacity, size_t* outByteCount)
@@ -190,11 +190,11 @@ static bool HashMap_TryGetStorageByteCount(HashMap* self, size_t capacity, size_
     {
         return false;
     }
-    if (!TryMultiplySize(capacity, Map_GetKeySize(HashMap_AsMap(self)), &KeyBytes))
+    if (!TryMultiplySize(capacity, IMap_GetKeySize(HashMap_AsMap(self)), &KeyBytes))
     {
         return false;
     }
-    if (!TryMultiplySize(capacity, Map_GetValueSize(HashMap_AsMap(self)), &ValueBytes))
+    if (!TryMultiplySize(capacity, IMap_GetValueSize(HashMap_AsMap(self)), &ValueBytes))
     {
         return false;
     }
@@ -243,12 +243,12 @@ static unsigned char* HashMap_GetValueBlock(HashMap* self)
 
 static unsigned char* HashMap_GetKeyPointerFromBlock(HashMap* self, unsigned char* keyBlock, size_t index)
 {
-    return keyBlock + (index * Map_GetKeySize(HashMap_AsMap(self)));
+    return keyBlock + (index * IMap_GetKeySize(HashMap_AsMap(self)));
 }
 
 static unsigned char* HashMap_GetValuePointerFromBlock(HashMap* self, unsigned char* valueBlock, size_t index)
 {
-    return valueBlock + (index * Map_GetValueSize(HashMap_AsMap(self)));
+    return valueBlock + (index * IMap_GetValueSize(HashMap_AsMap(self)));
 }
 
 static unsigned char* HashMap_GetKeyPointerAt(HashMap* self, size_t index)
@@ -549,10 +549,10 @@ static Error HashMap_RebuildStorage(HashMap* self, size_t requestedCapacity)
             NewBuckets[SlotResult.InsertionIndex].State = HashMapBucketState_Occupied;
             Memory_Copy(HashMap_GetKeyPointerFromBlock(self, OldKeys, Index),
                 HashMap_GetKeyPointerFromBlock(self, NewKeys, SlotResult.InsertionIndex),
-                Map_GetKeySize(HashMap_AsMap(self)));
+                IMap_GetKeySize(HashMap_AsMap(self)));
             Memory_Copy(HashMap_GetValuePointerFromBlock(self, OldValues, Index),
                 HashMap_GetValuePointerFromBlock(self, NewValues, SlotResult.InsertionIndex),
-                Map_GetValueSize(HashMap_AsMap(self)));
+                IMap_GetValueSize(HashMap_AsMap(self)));
         }
 
         Memory_Free(OldStorage);
@@ -760,7 +760,7 @@ static Error HashMap_MapGetElement(void* self, const void* key, void* outValue)
 
     Memory_Copy(HashMap_GetValuePointerAt(HashMapSelf, SlotResult.FoundIndex),
         outValue,
-        Map_GetValueSize(HashMap_AsMap(HashMapSelf)));
+        IMap_GetValueSize(HashMap_AsMap(HashMapSelf)));
     return Error_CreateSuccess();
 }
 
@@ -834,7 +834,7 @@ static Error HashMap_MapAdd(void* self, const void* key, const void* value, bool
     {
         Memory_Copy(value,
             HashMap_GetValuePointerAt(HashMapSelf, SlotResult.FoundIndex),
-            Map_GetValueSize(HashMap_AsMap(HashMapSelf)));
+            IMap_GetValueSize(HashMap_AsMap(HashMapSelf)));
         *outWasAdded = false;
         return Error_CreateSuccess();
     }
@@ -848,10 +848,10 @@ static Error HashMap_MapAdd(void* self, const void* key, const void* value, bool
     HashMap_GetBuckets(HashMapSelf)[SlotResult.InsertionIndex].State = HashMapBucketState_Occupied;
     Memory_Copy(key,
         HashMap_GetKeyPointerAt(HashMapSelf, SlotResult.InsertionIndex),
-        Map_GetKeySize(HashMap_AsMap(HashMapSelf)));
+        IMap_GetKeySize(HashMap_AsMap(HashMapSelf)));
     Memory_Copy(value,
         HashMap_GetValuePointerAt(HashMapSelf, SlotResult.InsertionIndex),
-        Map_GetValueSize(HashMap_AsMap(HashMapSelf)));
+        IMap_GetValueSize(HashMap_AsMap(HashMapSelf)));
     HashMapSelf->_entryCount++;
     *outWasAdded = true;
     return Error_CreateSuccess();
@@ -1014,11 +1014,11 @@ static CollectionEnumerator* HashMap_CreateEnumerator(HashMap* self, HashMapColl
     Enumerator->Base._singleElementSize = sizeof(MapEntryView);
     if (kind == HashMapCollectionKind_Key)
     {
-        Enumerator->Base._singleElementSize = Map_GetKeySize(HashMap_AsMap(self));
+        Enumerator->Base._singleElementSize = IMap_GetKeySize(HashMap_AsMap(self));
     }
     else if (kind == HashMapCollectionKind_Value)
     {
-        Enumerator->Base._singleElementSize = Map_GetValueSize(HashMap_AsMap(self));
+        Enumerator->Base._singleElementSize = IMap_GetValueSize(HashMap_AsMap(self));
     }
 
     Enumerator->Base._flags = EnumeratorFlags_CanReturnByReference;
@@ -1092,13 +1092,13 @@ static Error HashMapEnumerator_NextByValue(void* self, void* outEntryValue)
     {
         Memory_Copy(HashMap_GetKeyPointerAt(EnumeratorSelf->_hashMap, NextIndex),
             outEntryValue,
-            Map_GetKeySize(HashMap_AsMap(EnumeratorSelf->_hashMap)));
+            IMap_GetKeySize(HashMap_AsMap(EnumeratorSelf->_hashMap)));
     }
     else
     {
         Memory_Copy(HashMap_GetValuePointerAt(EnumeratorSelf->_hashMap, NextIndex),
             outEntryValue,
-            Map_GetValueSize(HashMap_AsMap(EnumeratorSelf->_hashMap)));
+            IMap_GetValueSize(HashMap_AsMap(EnumeratorSelf->_hashMap)));
     }
 
     EnumeratorSelf->_currentIndex = NextIndex + 1;

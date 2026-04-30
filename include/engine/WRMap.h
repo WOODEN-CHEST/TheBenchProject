@@ -54,43 +54,43 @@ typedef struct IMapStruct
 
 
 // Functions.
-static inline size_t Map_GetKeySize(IMap* map);
+static inline size_t IMap_GetKeySize(IMap* map);
 
-static inline size_t Map_GetValueSize(IMap* map);
+static inline size_t IMap_GetValueSize(IMap* map);
 
 static inline bool MapKeyComparator_Default(IMap* map, const void* key1, const void* key2, void* userData)
 {
     UNUSED(userData);
-    return Memory_IsEqual(key1, key2, Map_GetKeySize(map));
+    return Memory_IsEqual(key1, key2, IMap_GetKeySize(map));
 }
 
 static inline bool MapValueComparator_Default(IMap* map, const void* value1, const void* value2, void* userData)
 {
     UNUSED(userData);
-    return Memory_IsEqual(value1, value2, Map_GetValueSize(map));
+    return Memory_IsEqual(value1, value2, IMap_GetValueSize(map));
 }
 
-static inline size_t Map_GetKeySize(IMap* map)
+static inline size_t IMap_GetKeySize(IMap* map)
 {
     return map->_keySize;
 }
 
-static inline size_t Map_GetValueSize(IMap* map)
+static inline size_t IMap_GetValueSize(IMap* map)
 {
     return map->_valueSize;
 }
 
-static inline ICollection* Map_AsEntryCollection(IMap* map)
+static inline ICollection* IMap_AsEntryCollection(IMap* map)
 {
     return &map->_entryCollection;
 }
 
-static inline ICollection* Map_AsKeyCollection(IMap* map)
+static inline ICollection* IMap_AsKeyCollection(IMap* map)
 {
     return &map->_keyCollection;
 }
 
-static inline ICollection* Map_AsValueCollection(IMap* map)
+static inline ICollection* IMap_AsValueCollection(IMap* map)
 {
     return &map->_valueCollection;
 }
