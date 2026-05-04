@@ -1,21 +1,14 @@
 #pragma once
-#include "WRMemory.h"
+#include "WRCollection.h"
 #include "WRError.h"
 #include "WRIO.h"
+#include "WRMemory.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include "WRCollection.h"
 
 
 #define GHDF_ENTRY_ID_INVALID ((GHDFEntryID)0)
-
-
-/* void* pointers in GHDF object setters are pointers to raw values to set,
-* like int32_t*, unsigned char*, GHDFCompound*, etc. 
-* GHDFObjectPool owns object pools for GHDF compounds, arrays and string buffers. They can be borrowed by users
-* and returned for re-use afterwards. When returned, their datra is cleared, but allocated memory remains.
-* When the pool is deconstructed, all objects owned by it are freed. */
 
 
 // Types.
@@ -30,7 +23,7 @@ typedef enum GHDFValueTypeEnum
     GHDFValueType_None = 0,
     GHDFValueType_UInt8 = 1,
     GHDFValueType_Int8 = 2,
-    GHDFValueType_Int16 =3,
+    GHDFValueType_Int16 = 3,
     GHDFValueType_UInt16 = 4,
     GHDFValueType_Int32 = 5,
     GHDFValueType_UInt32 = 6,
@@ -53,7 +46,8 @@ typedef struct GHDFCompoundEntryTypeStruct
 typedef struct GHDFObjectValueStruct
 {
     GHDFValueType Type;
-    union {
+    union
+    {
         uint8_t UInt8;
         int8_t Int8;
         uint16_t UInt16;
@@ -65,29 +59,175 @@ typedef struct GHDFObjectValueStruct
         float Float;
         double Double;
         bool Boolean;
-        unsigned char* String;
+        GenericBuffer* String;
         GHDFCompound* Compound;
         GHDFArray* Array;
         int64_t EncodedInteger;
     } Value;
 } GHDFObjectValue;
 
+typedef struct GHDFCompoundEntryStruct
+{
+    GHDFEntryID Id;
+    GHDFCompoundEntryType EntryType;
+    GHDFObjectValue Value;
+} GHDFCompoundEntry;
+
+typedef struct GHDFArrayIndexedValueStruct
+{
+    size_t Index;
+    GHDFObjectValue Value;
+} GHDFArrayIndexedValue;
+
+typedef struct GHDFCompoundKeyCollectionStruct
+{
+    ICollection* _collection;
+} GHDFCompoundKeyCollection;
+
+typedef struct GHDFCompoundValueCollectionStruct
+{
+    ICollection* _collection;
+} GHDFCompoundValueCollection;
+
+typedef struct GHDFCompoundEntryCollectionStruct
+{
+    ICollection* _collection;
+} GHDFCompoundEntryCollection;
+
+typedef struct GHDFArrayElementCollectionStruct
+{
+    ICollection* _collection;
+} GHDFArrayElementCollection;
+
 
 // Functions.
+static inline ICollection* GHDFCompoundKeyCollection_AsCollection(GHDFCompoundKeyCollection* self)
+{
+    if (self == NULL)
+    {
+        return NULL;
+    }
+
+    return self->_collection;
+}
+
+static inline ICollection* GHDFCompoundValueCollection_AsCollection(GHDFCompoundValueCollection* self)
+{
+    if (self == NULL)
+    {
+        return NULL;
+    }
+
+    return self->_collection;
+}
+
+static inline ICollection* GHDFCompoundEntryCollection_AsCollection(GHDFCompoundEntryCollection* self)
+{
+    if (self == NULL)
+    {
+        return NULL;
+    }
+
+    return self->_collection;
+}
+
+static inline ICollection* GHDFArrayElementCollection_AsCollection(GHDFArrayElementCollection* self)
+{
+    if (self == NULL)
+    {
+        return NULL;
+    }
+
+    return self->_collection;
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateUInt8(uint8_t value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_UInt8, .Value.UInt8 = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateInt8(int8_t value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_Int8, .Value.Int8 = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateInt16(int16_t value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_Int16, .Value.Int16 = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateUInt16(uint16_t value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_UInt16, .Value.UInt16 = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateInt32(int32_t value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_Int32, .Value.Int32 = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateUInt32(uint32_t value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_UInt32, .Value.UInt32 = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateInt64(int64_t value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_Int64, .Value.Int64 = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateUInt64(uint64_t value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_UInt64, .Value.UInt64 = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateFloat(float value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_Float, .Value.Float = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateDouble(double value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_Double, .Value.Double = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateBoolean(bool value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_Boolean, .Value.Boolean = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateString(GenericBuffer* value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_String, .Value.String = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateCompound(GHDFCompound* value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_Compound, .Value.Compound = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateArray(GHDFArray* value, GHDFValueType valueType)
+{
+    return (GHDFObjectValue){ .Type = valueType, .Value.Array = value };
+}
+
+static inline GHDFObjectValue GHDFObjectValue_CreateEncodedInteger(int64_t value)
+{
+    return (GHDFObjectValue){ .Type = GHDFValueType_EncodedInteger, .Value.EncodedInteger = value };
+}
+
 Error GHDF_Write(const GHDFCompound* root, IOStream* stream);
 
 Error GHDF_Read(IOStream* stream, GHDFObjectPool* objectPool, GHDFCompound** outRoot);
-
-
-Error GHDFCompound_Construct1(GHDFCompound* self);
-
-Error GHDFCompound_Deconstruct(GHDFCompound* self);
 
 Error GHDFCompound_Clear(GHDFCompound* self);
 
 Error GHDFCompound_Remove(GHDFCompound* self, GHDFEntryID id);
 
-Error GHDFCompound_Set(GHDFCompound* self, GHDFEntryID id, GHDFCompoundEntryType entryType, void* value);
+Error GHDFCompound_SetValue(GHDFCompound* self,
+    GHDFEntryID id,
+    GHDFCompoundEntryType entryType,
+    const GHDFObjectValue* value);
 
 Error GHDFCompound_Get(GHDFCompound* self, GHDFEntryID id, GHDFObjectValue* outEntry);
 
@@ -106,26 +246,21 @@ Error GHDFCompound_GetOptionalVerified(GHDFCompound* self,
 
 size_t GHDFCompound_GetEntryCount(GHDFCompound* self);
 
-ICollection* GHDFCompound_AsEntryCollection(GHDFCompound* self);
+GHDFCompoundEntryCollection GHDFCompound_GetEntryCollection(GHDFCompound* self);
 
-ICollection* GHDFCompound_AsValueCollection(GHDFCompound* self);
+GHDFCompoundValueCollection GHDFCompound_GetValueCollection(GHDFCompound* self);
 
-ICollection* GHDFCompound_AsKeyCollection(GHDFCompound* self);
-
-
-Error GHDFArray_Construct1(GHDFArray* self, GHDFValueType elementType);
-
-Error GHDFArray_Deconstruct(GHDFArray* self);
+GHDFCompoundKeyCollection GHDFCompound_GetKeyCollection(GHDFCompound* self);
 
 Error GHDFArray_Clear(GHDFArray* self);
 
 Error GHDFArray_RemoveAt(GHDFArray* self, size_t index);
 
-Error GHDFArray_Add(GHDFArray* self, void* element);
+Error GHDFArray_AddValue(GHDFArray* self, const GHDFObjectValue* value);
 
-Error GHDFArray_Insert(GHDFArray* self, size_t index, void* element);
+Error GHDFArray_InsertValue(GHDFArray* self, size_t index, const GHDFObjectValue* value);
 
-Error GHDFArray_Replace(GHDFArray* self, size_t index, void* element);
+Error GHDFArray_ReplaceValue(GHDFArray* self, size_t index, const GHDFObjectValue* value);
 
 Error GHDFArray_Get(GHDFArray* self, size_t index, GHDFObjectValue* outValue);
 
@@ -133,8 +268,7 @@ size_t GHDFArray_GetElementCount(GHDFArray* self);
 
 GHDFValueType GHDFArray_GetElementType(GHDFArray* self);
 
-ICollection* GHDFArray_AsElementCollection(GHDFArray* self);
-
+GHDFArrayElementCollection GHDFArray_GetElementCollection(GHDFArray* self);
 
 Error GHDFObjectPool_Create(GHDFObjectPool** outPool);
 
@@ -142,7 +276,7 @@ Error GHDFObjectPool_Deconstruct(GHDFObjectPool* self);
 
 Error GHDFObjectPool_BorrowCompound(GHDFObjectPool* self, GHDFCompound** outCompound);
 
-Error GHDFObjectPool_BorrowArray(GHDFObjectPool* self, GHDFArray** outArray);
+Error GHDFObjectPool_BorrowArray(GHDFObjectPool* self, GHDFValueType elementType, GHDFArray** outArray);
 
 Error GHDFObjectPool_BorrowString(GHDFObjectPool* self, GenericBuffer** outStringBuffer);
 
@@ -151,7 +285,6 @@ Error GHDFObjectPool_ReturnCompound(GHDFObjectPool* self, GHDFCompound* compound
 Error GHDFObjectPool_ReturnArray(GHDFObjectPool* self, GHDFArray* array, bool includeNestedStructures);
 
 Error GHDFObjectPool_ReturnString(GHDFObjectPool* self, GenericBuffer* stringBuffer);
-
 
 GHDFCompoundEntryType GHDF_CreateRegularType(GHDFValueType valueType);
 

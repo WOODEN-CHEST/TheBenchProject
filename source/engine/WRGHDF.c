@@ -3,8 +3,8 @@
 #include "WRBinaryIO.h"
 #include "WRHash.h"
 #include "WRHashMap.h"
-#include "WRObjectPool.h"
 #include "WRMap.h"
+#include "WRObjectPool.h"
 #include <inttypes.h>
 
 
@@ -15,38 +15,67 @@
 
 
 // Types.
-typedef struct GHDFEntryMetadataStruct
+typedef enum GHDFBorrowKindEnum
 {
-    bool IsArray;
-    GenericBuffer* OwnedStringBuffer;
-} GHDFEntryMetadata;
+    GHDFBorrowKind_None = 0,
+    GHDFBorrowKind_Compound = 1,
+    GHDFBorrowKind_Array = 2,
+    GHDFBorrowKind_String = 3
+} GHDFBorrowKind;
 
-typedef struct GHDFArrayElementMetadataStruct
+typedef struct GHDFBorrowTokenStruct
 {
-    GenericBuffer* OwnedStringBuffer;
-} GHDFArrayElementMetadata;
+    GHDFBorrowKind Kind;
+    GHDFObjectPool* OwnerPool;
+} GHDFBorrowToken;
 
-typedef struct GHDFCompoundStruct
+typedef struct GHDFStoredCompoundEntryStruct
+{
+    GHDFCompoundEntryType EntryType;
+    GHDFObjectValue Value;
+} GHDFStoredCompoundEntry;
+
+typedef struct GHDFCompoundEntryEnumeratorStruct
+{
+    CollectionEnumerator Base;
+    CollectionEnumerator* _innerEnumerator;
+} GHDFCompoundEntryEnumerator;
+
+typedef struct GHDFCompoundValueEnumeratorStruct
+{
+    CollectionEnumerator Base;
+    CollectionEnumerator* _innerEnumerator;
+} GHDFCompoundValueEnumerator;
+
+typedef struct GHDFArrayElementEnumeratorStruct
+{
+    CollectionEnumerator Base;
+    GHDFArray* _array;
+    size_t _currentIndex;
+} GHDFArrayElementEnumerator;
+
+struct GHDFCompoundStruct
 {
     HashMap _entries;
-    HashMap _entryMetadata;
-    GHDFObjectPool* _ownerPool;
-} GHDFCompound;
+    GHDFBorrowToken _borrowToken;
+    ICollection _entryCollection;
+    ICollection _valueCollection;
+};
 
-typedef struct GHDFArrayStruct
+struct GHDFArrayStruct
 {
     ArrayList _values;
-    ArrayList _valueMetadata;
     GHDFValueType _elementType;
-    GHDFObjectPool* _ownerPool;
-} GHDFArray;
+    GHDFBorrowToken _borrowToken;
+    ICollection _elementCollection;
+};
 
-typedef struct GHDFObjectPoolStruct
+struct GHDFObjectPoolStruct
 {
     ObjectPool _compoundPool;
     ObjectPool _arrayPool;
     ObjectPool _stringPool;
-} GHDFObjectPool;
+};
 
 
 // Fields.
@@ -127,21 +156,50 @@ static Error CreateInvalidArrayValueError(void)
         u8"GHDF arrays cannot contain array entries.");
 }
 
-static size_t GetUTF8ByteCount(const unsigned char* text)
+static Error CreateInvalidBorrowedResourceError(const unsigned char* resourceName)
 {
-    size_t ByteCount = 0U;
+    return Error_Construct3(ErrorCode_IllegalArgument,
+        u8"GHDF %s must be borrowed from a GHDF object pool.",
+        resourceName);
+}
 
-    if (text == NULL)
+static Error CreateInvalidStringBufferError(void)
+{
+    return Error_Construct1(ErrorCode_IllegalArgument,
+        u8"GHDF string buffers must be UTF-8 byte buffers with a trailing null terminator.");
+}
+
+static Error CreateInvalidPoolOwnershipError(const unsigned char* resourceName)
+{
+    return Error_Construct3(ErrorCode_IllegalArgument,
+        u8"The provided GHDF %s does not belong to the specified object pool.",
+        resourceName);
+}
+
+static Error CreateEnumerationCompletedError(void)
+{
+    return Error_Construct1(ErrorCode_InvalidOperation,
+        u8"The GHDF enumerator has already reached the end of the collection.");
+}
+
+static Error CreateReferenceEnumerationNotSupportedError(void)
+{
+    return Error_Construct1(ErrorCode_InvalidOperation,
+        u8"This GHDF collection does not support returning elements by reference.");
+}
+
+static size_t GetStringByteCount(GenericBuffer* stringBuffer)
+{
+    if (stringBuffer == NULL)
     {
         return 0U;
     }
-
-    while (text[ByteCount] != 0U)
+    if ((stringBuffer->_count > 0U) && (stringBuffer->_data[stringBuffer->_count - 1U] == 0U))
     {
-        ByteCount++;
+        return stringBuffer->_count - 1U;
     }
 
-    return ByteCount;
+    return stringBuffer->_count;
 }
 
 static HashCode GHDFEntryIDHash(IMap* map, const void* key, void* userData)
@@ -204,21 +262,6 @@ static Error ConvertUInt64ToSize(uint64_t value, const unsigned char* kindName, 
     return Error_CreateSuccess();
 }
 
-static GHDFEntryMetadata GHDFEntryMetadata_Create(bool isArray, GenericBuffer* ownedStringBuffer)
-{
-    return (GHDFEntryMetadata) {
-        .IsArray = isArray,
-        .OwnedStringBuffer = ownedStringBuffer,
-    };
-}
-
-static GHDFArrayElementMetadata GHDFArrayElementMetadata_Create(GenericBuffer* ownedStringBuffer)
-{
-    return (GHDFArrayElementMetadata) {
-        .OwnedStringBuffer = ownedStringBuffer,
-    };
-}
-
 static void GHDFCreateTempByteBuffer(GenericBuffer* buffer, unsigned char* data, size_t capacity)
 {
     GenericBuffer_CreateVariable(buffer,
@@ -252,8 +295,394 @@ static Error GHDFHashMap_Construct(HashMap* map, size_t valueSize)
     return HashMap_Construct1(map, Options);
 }
 
+static size_t GHDFArray_GetStorageElementSize(GHDFValueType elementType)
+{
+    switch (elementType)
+    {
+        case GHDFValueType_UInt8:
+            return sizeof(uint8_t);
+
+        case GHDFValueType_Int8:
+            return sizeof(int8_t);
+
+        case GHDFValueType_Int16:
+            return sizeof(int16_t);
+
+        case GHDFValueType_UInt16:
+            return sizeof(uint16_t);
+
+        case GHDFValueType_Int32:
+            return sizeof(int32_t);
+
+        case GHDFValueType_UInt32:
+            return sizeof(uint32_t);
+
+        case GHDFValueType_Int64:
+            return sizeof(int64_t);
+
+        case GHDFValueType_UInt64:
+            return sizeof(uint64_t);
+
+        case GHDFValueType_Float:
+            return sizeof(float);
+
+        case GHDFValueType_Double:
+            return sizeof(double);
+
+        case GHDFValueType_Boolean:
+            return sizeof(bool);
+
+        case GHDFValueType_String:
+            return sizeof(GenericBuffer*);
+
+        case GHDFValueType_Compound:
+            return sizeof(GHDFCompound*);
+
+        case GHDFValueType_EncodedInteger:
+            return sizeof(int64_t);
+
+        case GHDFValueType_None:
+        default:
+            return 0U;
+    }
+}
+
+static Error GHDFCompoundEntryCollection_GetNextValue(MapEntryView entryView, GHDFCompoundEntry* outEntry)
+{
+    GHDFEntryID* Id = NULL;
+    GHDFStoredCompoundEntry* StoredEntry = NULL;
+
+    if (outEntry == NULL)
+    {
+        return CreateNullArgumentError(u8"outEntry");
+    }
+
+    Id = entryView._key;
+    StoredEntry = entryView._value;
+    if ((Id == NULL) || (StoredEntry == NULL))
+    {
+        return Error_Construct1(ErrorCode_InvalidState,
+            u8"Encountered an invalid GHDF compound entry during iteration.");
+    }
+
+    outEntry->Id = *Id;
+    outEntry->EntryType = StoredEntry->EntryType;
+    outEntry->Value = StoredEntry->Value;
+    return Error_CreateSuccess();
+}
+
+static Error GHDFCompoundValueCollection_GetNextValue(MapEntryView entryView, GHDFObjectValue* outValue)
+{
+    GHDFStoredCompoundEntry* StoredEntry = NULL;
+
+    if (outValue == NULL)
+    {
+        return CreateNullArgumentError(u8"outValue");
+    }
+
+    StoredEntry = entryView._value;
+    if (StoredEntry == NULL)
+    {
+        return Error_Construct1(ErrorCode_InvalidState,
+            u8"Encountered an invalid GHDF compound value during iteration.");
+    }
+
+    *outValue = StoredEntry->Value;
+    return Error_CreateSuccess();
+}
+
+static Error GHDFCompoundEntryEnumerator_HasNext(void* self, bool* outHasNext)
+{
+    GHDFCompoundEntryEnumerator* Enumerator = self;
+
+    if (Enumerator == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+    if (outHasNext == NULL)
+    {
+        return CreateNullArgumentError(u8"outHasNext");
+    }
+
+    return CollectionEnumerator_HasNext(Enumerator->_innerEnumerator, outHasNext);
+}
+
+static Error GHDFCompoundEntryEnumerator_NextByValue(void* self, void* outEntryValue)
+{
+    GHDFCompoundEntryEnumerator* Enumerator = self;
+    MapEntryView EntryView;
+    Error Result = Error_CreateSuccess();
+
+    if (Enumerator == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+    if (outEntryValue == NULL)
+    {
+        return CreateNullArgumentError(u8"outEntryValue");
+    }
+
+    Result = CollectionEnumerator_NextByValue(Enumerator->_innerEnumerator, &EntryView);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    return GHDFCompoundEntryCollection_GetNextValue(EntryView, outEntryValue);
+}
+
+static Error GHDFCompoundEntryEnumerator_NextByReference(void* self, void** outPointer)
+{
+    (void)self;
+    (void)outPointer;
+    return CreateReferenceEnumerationNotSupportedError();
+}
+
+static void GHDFCompoundEntryEnumerator_Deconstruct(void* self)
+{
+    GHDFCompoundEntryEnumerator* Enumerator = self;
+
+    if (Enumerator == NULL)
+    {
+        return;
+    }
+    if (Enumerator->_innerEnumerator != NULL)
+    {
+        CollectionEnumerator_Deconstruct(Enumerator->_innerEnumerator);
+    }
+
+    Memory_Free(Enumerator);
+}
+
+static CollectionEnumerator* GHDFCompoundEntryCollection_GetEnumerator(void* self)
+{
+    static const CollectionEnumeratorVTable EnumeratorVTable =
+    {
+        .Self = NULL,
+        ._hasNext = GHDFCompoundEntryEnumerator_HasNext,
+        ._nextByValue = GHDFCompoundEntryEnumerator_NextByValue,
+        ._nextByReference = GHDFCompoundEntryEnumerator_NextByReference,
+        ._deconstruct = GHDFCompoundEntryEnumerator_Deconstruct,
+    };
+    GHDFCompound* Compound = self;
+    GHDFCompoundEntryEnumerator* Enumerator = NULL;
+    ICollection* UnderlyingCollection = NULL;
+
+    if (Compound == NULL)
+    {
+        return NULL;
+    }
+
+    UnderlyingCollection = IMap_AsEntryCollection(HashMap_AsMap(&Compound->_entries));
+    Enumerator = Memory_Allocate(sizeof(*Enumerator));
+    Enumerator->Base._singleElementSize = sizeof(GHDFCompoundEntry);
+    Enumerator->Base._flags = EnumeratorFlags_None;
+    Enumerator->Base._vtable = EnumeratorVTable;
+    Enumerator->Base._vtable.Self = Enumerator;
+    Enumerator->_innerEnumerator = ICollection_GetEnumerator(UnderlyingCollection);
+    return &Enumerator->Base;
+}
+
+static Error GHDFCompoundValueEnumerator_HasNext(void* self, bool* outHasNext)
+{
+    GHDFCompoundValueEnumerator* Enumerator = self;
+
+    if (Enumerator == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+    if (outHasNext == NULL)
+    {
+        return CreateNullArgumentError(u8"outHasNext");
+    }
+
+    return CollectionEnumerator_HasNext(Enumerator->_innerEnumerator, outHasNext);
+}
+
+static Error GHDFCompoundValueEnumerator_NextByValue(void* self, void* outEntryValue)
+{
+    GHDFCompoundValueEnumerator* Enumerator = self;
+    MapEntryView EntryView;
+    Error Result = Error_CreateSuccess();
+
+    if (Enumerator == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+    if (outEntryValue == NULL)
+    {
+        return CreateNullArgumentError(u8"outEntryValue");
+    }
+
+    Result = CollectionEnumerator_NextByValue(Enumerator->_innerEnumerator, &EntryView);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    return GHDFCompoundValueCollection_GetNextValue(EntryView, outEntryValue);
+}
+
+static Error GHDFCompoundValueEnumerator_NextByReference(void* self, void** outPointer)
+{
+    (void)self;
+    (void)outPointer;
+    return CreateReferenceEnumerationNotSupportedError();
+}
+
+static void GHDFCompoundValueEnumerator_Deconstruct(void* self)
+{
+    GHDFCompoundValueEnumerator* Enumerator = self;
+
+    if (Enumerator == NULL)
+    {
+        return;
+    }
+    if (Enumerator->_innerEnumerator != NULL)
+    {
+        CollectionEnumerator_Deconstruct(Enumerator->_innerEnumerator);
+    }
+
+    Memory_Free(Enumerator);
+}
+
+static CollectionEnumerator* GHDFCompoundValueCollection_GetEnumerator(void* self)
+{
+    static const CollectionEnumeratorVTable EnumeratorVTable =
+    {
+        .Self = NULL,
+        ._hasNext = GHDFCompoundValueEnumerator_HasNext,
+        ._nextByValue = GHDFCompoundValueEnumerator_NextByValue,
+        ._nextByReference = GHDFCompoundValueEnumerator_NextByReference,
+        ._deconstruct = GHDFCompoundValueEnumerator_Deconstruct,
+    };
+    GHDFCompound* Compound = self;
+    GHDFCompoundValueEnumerator* Enumerator = NULL;
+    ICollection* UnderlyingCollection = NULL;
+
+    if (Compound == NULL)
+    {
+        return NULL;
+    }
+
+    UnderlyingCollection = IMap_AsEntryCollection(HashMap_AsMap(&Compound->_entries));
+    Enumerator = Memory_Allocate(sizeof(*Enumerator));
+    Enumerator->Base._singleElementSize = sizeof(GHDFObjectValue);
+    Enumerator->Base._flags = EnumeratorFlags_None;
+    Enumerator->Base._vtable = EnumeratorVTable;
+    Enumerator->Base._vtable.Self = Enumerator;
+    Enumerator->_innerEnumerator = ICollection_GetEnumerator(UnderlyingCollection);
+    return &Enumerator->Base;
+}
+
+static Error GHDFArray_GetValueAt(GHDFArray* self, size_t index, GHDFObjectValue* outValue);
+
+static Error GHDFArrayElementEnumerator_HasNext(void* self, bool* outHasNext)
+{
+    GHDFArrayElementEnumerator* Enumerator = self;
+
+    if (Enumerator == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+    if (outHasNext == NULL)
+    {
+        return CreateNullArgumentError(u8"outHasNext");
+    }
+
+    *outHasNext = (Enumerator->_currentIndex < GHDFArray_GetElementCount(Enumerator->_array));
+    return Error_CreateSuccess();
+}
+
+static Error GHDFArrayElementEnumerator_NextByValue(void* self, void* outEntryValue)
+{
+    GHDFArrayElementEnumerator* Enumerator = self;
+    GHDFArrayIndexedValue* IndexedValue = outEntryValue;
+    Error Result = Error_CreateSuccess();
+
+    if (Enumerator == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+    if (IndexedValue == NULL)
+    {
+        return CreateNullArgumentError(u8"outEntryValue");
+    }
+    if (Enumerator->_currentIndex >= GHDFArray_GetElementCount(Enumerator->_array))
+    {
+        return CreateEnumerationCompletedError();
+    }
+
+    IndexedValue->Index = Enumerator->_currentIndex;
+    Result = GHDFArray_GetValueAt(Enumerator->_array, Enumerator->_currentIndex, &IndexedValue->Value);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    Enumerator->_currentIndex++;
+    return Error_CreateSuccess();
+}
+
+static Error GHDFArrayElementEnumerator_NextByReference(void* self, void** outPointer)
+{
+    (void)self;
+    (void)outPointer;
+    return CreateReferenceEnumerationNotSupportedError();
+}
+
+static void GHDFArrayElementEnumerator_Deconstruct(void* self)
+{
+    GHDFArrayElementEnumerator* Enumerator = self;
+
+    if (Enumerator == NULL)
+    {
+        return;
+    }
+
+    Memory_Free(Enumerator);
+}
+
+static CollectionEnumerator* GHDFArrayElementCollection_GetEnumerator(void* self)
+{
+    static const CollectionEnumeratorVTable EnumeratorVTable =
+    {
+        .Self = NULL,
+        ._hasNext = GHDFArrayElementEnumerator_HasNext,
+        ._nextByValue = GHDFArrayElementEnumerator_NextByValue,
+        ._nextByReference = GHDFArrayElementEnumerator_NextByReference,
+        ._deconstruct = GHDFArrayElementEnumerator_Deconstruct,
+    };
+    GHDFArray* Array = self;
+    GHDFArrayElementEnumerator* Enumerator = NULL;
+
+    if (Array == NULL)
+    {
+        return NULL;
+    }
+
+    Enumerator = Memory_Allocate(sizeof(*Enumerator));
+    Enumerator->Base._singleElementSize = sizeof(GHDFArrayIndexedValue);
+    Enumerator->Base._flags = EnumeratorFlags_None;
+    Enumerator->Base._vtable = EnumeratorVTable;
+    Enumerator->Base._vtable.Self = Enumerator;
+    Enumerator->_array = Array;
+    Enumerator->_currentIndex = 0U;
+    return &Enumerator->Base;
+}
+
 static Error GHDFCompound_Initialize(GHDFCompound* self)
 {
+    static const ICollectionVtable EntryCollectionVTable =
+    {
+        .Self = NULL,
+        ._getEnumerator = GHDFCompoundEntryCollection_GetEnumerator,
+    };
+    static const ICollectionVtable ValueCollectionVTable =
+    {
+        .Self = NULL,
+        ._getEnumerator = GHDFCompoundValueCollection_GetEnumerator,
+    };
     Error Result = Error_CreateSuccess();
 
     if (self == NULL)
@@ -262,43 +691,203 @@ static Error GHDFCompound_Initialize(GHDFCompound* self)
     }
 
     Memory_Zero(self, sizeof(*self));
-    Result = GHDFHashMap_Construct(&self->_entries, sizeof(GHDFObjectValue));
+    Result = GHDFHashMap_Construct(&self->_entries, sizeof(GHDFStoredCompoundEntry));
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    Result = GHDFHashMap_Construct(&self->_entryMetadata, sizeof(GHDFEntryMetadata));
-    if (Result.Code != ErrorCode_Success)
-    {
-        (void)HashMap_Deconstruct(&self->_entries);
-        Memory_Zero(self, sizeof(*self));
-        return Result;
-    }
-
-    self->_ownerPool = NULL;
+    self->_borrowToken.Kind = GHDFBorrowKind_Compound;
+    self->_borrowToken.OwnerPool = NULL;
+    self->_entryCollection._vtable = EntryCollectionVTable;
+    self->_entryCollection._vtable.Self = self;
+    self->_valueCollection._vtable = ValueCollectionVTable;
+    self->_valueCollection._vtable.Self = self;
     return Error_CreateSuccess();
 }
 
-static Error GHDFArray_Initialize(GHDFArray* self, GHDFValueType elementType)
+static Error GHDFArray_Initialize(GHDFArray* self)
 {
+    static const ICollectionVtable ElementCollectionVTable =
+    {
+        .Self = NULL,
+        ._getEnumerator = GHDFArrayElementCollection_GetEnumerator,
+    };
+
     if (self == NULL)
     {
         return CreateNullArgumentError(u8"self");
     }
 
     Memory_Zero(self, sizeof(*self));
-    ArrayList_Construct1(&self->_values, sizeof(GHDFObjectValue));
-    ArrayList_Construct1(&self->_valueMetadata, sizeof(GHDFArrayElementMetadata));
+    ArrayList_Construct1(&self->_values, sizeof(unsigned char));
+    self->_elementType = GHDFValueType_None;
+    self->_borrowToken.Kind = GHDFBorrowKind_Array;
+    self->_borrowToken.OwnerPool = NULL;
+    self->_elementCollection._vtable = ElementCollectionVTable;
+    self->_elementCollection._vtable.Self = self;
+    return Error_CreateSuccess();
+}
+
+static Error GHDFArray_PrepareForElementType(GHDFArray* self, GHDFValueType elementType)
+{
+    size_t ElementSize = 0U;
+    Error Result = ValidateArrayElementType(elementType);
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (self == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+
+    ElementSize = GHDFArray_GetStorageElementSize(elementType);
+    if (ElementSize == 0U)
+    {
+        return CreateInvalidTypeError(elementType);
+    }
+    if (IList_GetElementSize(&self->_values._list) != ElementSize)
+    {
+        ArrayList_Deconstruct(&self->_values);
+        ArrayList_Construct1(&self->_values, ElementSize);
+    }
+
     self->_elementType = elementType;
-    self->_ownerPool = NULL;
+    return Error_CreateSuccess();
+}
+
+static bool GHDFBorrowToken_IsOwnedByPool(const GHDFBorrowToken* token, GHDFBorrowKind expectedKind, GHDFObjectPool* pool)
+{
+    return (token != NULL)
+        && (token->Kind == expectedKind)
+        && (token->OwnerPool == pool);
+}
+
+static bool GHDFStringBuffer_IsBorrowed(GenericBuffer* stringBuffer, GHDFObjectPool** outOwnerPool)
+{
+    GHDFBorrowToken* Token = NULL;
+
+    if (outOwnerPool != NULL)
+    {
+        *outOwnerPool = NULL;
+    }
+    if (stringBuffer == NULL)
+    {
+        return false;
+    }
+
+    Token = stringBuffer->_userData;
+    if ((Token == NULL) || (Token->Kind != GHDFBorrowKind_String) || (Token->OwnerPool == NULL))
+    {
+        return false;
+    }
+    if (outOwnerPool != NULL)
+    {
+        *outOwnerPool = Token->OwnerPool;
+    }
+
+    return true;
+}
+
+static bool GHDFCompound_IsBorrowed(GHDFCompound* compound, GHDFObjectPool** outOwnerPool)
+{
+    if (outOwnerPool != NULL)
+    {
+        *outOwnerPool = NULL;
+    }
+    if ((compound == NULL) || (compound->_borrowToken.Kind != GHDFBorrowKind_Compound) || (compound->_borrowToken.OwnerPool == NULL))
+    {
+        return false;
+    }
+    if (outOwnerPool != NULL)
+    {
+        *outOwnerPool = compound->_borrowToken.OwnerPool;
+    }
+
+    return true;
+}
+
+static bool GHDFArray_IsBorrowed(GHDFArray* array, GHDFObjectPool** outOwnerPool)
+{
+    if (outOwnerPool != NULL)
+    {
+        *outOwnerPool = NULL;
+    }
+    if ((array == NULL) || (array->_borrowToken.Kind != GHDFBorrowKind_Array) || (array->_borrowToken.OwnerPool == NULL))
+    {
+        return false;
+    }
+    if (outOwnerPool != NULL)
+    {
+        *outOwnerPool = array->_borrowToken.OwnerPool;
+    }
+
+    return true;
+}
+
+static bool GHDFStringBuffer_IsValidForStorage(GenericBuffer* stringBuffer)
+{
+    if (stringBuffer == NULL)
+    {
+        return false;
+    }
+    if (stringBuffer->_elementSize != sizeof(unsigned char))
+    {
+        return false;
+    }
+    if (stringBuffer->_count == 0U)
+    {
+        return false;
+    }
+
+    return stringBuffer->_data[stringBuffer->_count - 1U] == 0U;
+}
+
+static Error GHDFValidateBorrowedString(GenericBuffer* stringBuffer)
+{
+    if (!GHDFStringBuffer_IsBorrowed(stringBuffer, NULL))
+    {
+        return CreateInvalidBorrowedResourceError(u8"string");
+    }
+    if (!GHDFStringBuffer_IsValidForStorage(stringBuffer))
+    {
+        return CreateInvalidStringBufferError();
+    }
+
+    return Error_CreateSuccess();
+}
+
+static Error GHDFValidateBorrowedCompound(GHDFCompound* compound)
+{
+    if (!GHDFCompound_IsBorrowed(compound, NULL))
+    {
+        return CreateInvalidBorrowedResourceError(u8"compound");
+    }
+
+    return Error_CreateSuccess();
+}
+
+static Error GHDFValidateBorrowedArray(GHDFArray* array, GHDFValueType expectedType)
+{
+    if (!GHDFArray_IsBorrowed(array, NULL))
+    {
+        return CreateInvalidBorrowedResourceError(u8"array");
+    }
+    if (array->_elementType != expectedType)
+    {
+        return CreateTypeMismatchError(array->_elementType, GHDF_CreateArrayType(expectedType), true);
+    }
+
     return Error_CreateSuccess();
 }
 
 static Error GHDFStringBuffer_ConstructObject(void* object, void* userData)
 {
     GenericBuffer* Buffer = object;
-    (void)userData;
+    GHDFObjectPool* Pool = userData;
+    GHDFBorrowToken* Token = NULL;
 
     if (Buffer == NULL)
     {
@@ -306,13 +895,18 @@ static Error GHDFStringBuffer_ConstructObject(void* object, void* userData)
     }
 
     GenericBuffer_AllocateVariable(Buffer, 0, sizeof(unsigned char));
+    Token = Memory_Allocate(sizeof(*Token));
+    Token->Kind = GHDFBorrowKind_String;
+    Token->OwnerPool = Pool;
+    Buffer->_userData = Token;
     return Error_CreateSuccess();
 }
 
 static Error GHDFStringBuffer_ResetObject(void* object, void* userData)
 {
     GenericBuffer* Buffer = object;
-    (void)userData;
+    GHDFBorrowToken* Token = NULL;
+    GHDFObjectPool* Pool = userData;
 
     if (Buffer == NULL)
     {
@@ -322,6 +916,13 @@ static Error GHDFStringBuffer_ResetObject(void* object, void* userData)
     {
         return Error_Construct1(ErrorCode_InvalidOperation,
             u8"Could not clear a GHDF string buffer.");
+    }
+
+    Token = Buffer->_userData;
+    if (Token != NULL)
+    {
+        Token->Kind = GHDFBorrowKind_String;
+        Token->OwnerPool = Pool;
     }
 
     return Error_CreateSuccess();
@@ -337,6 +938,7 @@ static Error GHDFStringBuffer_DeconstructObject(void* object, void* userData)
         return CreateNullArgumentError(u8"object");
     }
 
+    Memory_Free(Buffer->_userData);
     Memory_Free(Buffer->_data);
     Memory_Zero(Buffer, sizeof(*Buffer));
     return Error_CreateSuccess();
@@ -353,7 +955,7 @@ static Error GHDFCompoundPool_ConstructObject(void* object, void* userData)
         return Result;
     }
 
-    Compound->_ownerPool = Pool;
+    Compound->_borrowToken.OwnerPool = Pool;
     return Error_CreateSuccess();
 }
 
@@ -361,365 +963,333 @@ static Error GHDFArrayPool_ConstructObject(void* object, void* userData)
 {
     GHDFArray* Array = object;
     GHDFObjectPool* Pool = userData;
-    Error Result = GHDFArray_Initialize(Array, GHDFValueType_None);
+    Error Result = GHDFArray_Initialize(Array);
 
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    Array->_ownerPool = Pool;
+    Array->_borrowToken.OwnerPool = Pool;
     return Error_CreateSuccess();
+}
+
+static Error GHDFObjectValue_Release(GHDFCompoundEntryType entryType, const GHDFObjectValue* value);
+
+static Error GHDFCompound_ClearInternal(GHDFCompound* self)
+{
+    CollectionEnumerator* Enumerator = NULL;
+    Error Result = Error_CreateSuccess();
+
+    if (self == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+
+    Enumerator = ICollection_GetEnumerator(IMap_AsEntryCollection(HashMap_AsMap(&self->_entries)));
+    if (Enumerator != NULL)
+    {
+        while (true)
+        {
+            bool HasNext = false;
+            MapEntryView EntryView;
+            GHDFStoredCompoundEntry* StoredEntry = NULL;
+
+            Result = CollectionEnumerator_HasNext(Enumerator, &HasNext);
+            if (Result.Code != ErrorCode_Success)
+            {
+                break;
+            }
+            if (!HasNext)
+            {
+                Result = Error_CreateSuccess();
+                break;
+            }
+
+            Result = CollectionEnumerator_NextByValue(Enumerator, &EntryView);
+            if (Result.Code != ErrorCode_Success)
+            {
+                break;
+            }
+
+            StoredEntry = EntryView._value;
+            if (StoredEntry == NULL)
+            {
+                Result = Error_Construct1(ErrorCode_InvalidState,
+                    u8"Encountered an invalid GHDF compound entry while clearing.");
+                break;
+            }
+
+            Result = GHDFObjectValue_Release(StoredEntry->EntryType, &StoredEntry->Value);
+            if (Result.Code != ErrorCode_Success)
+            {
+                break;
+            }
+        }
+
+        CollectionEnumerator_Deconstruct(Enumerator);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+
+    return IMap_Clear(HashMap_AsMap(&self->_entries));
 }
 
 static Error GHDFCompoundPool_ResetObject(void* object, void* userData)
 {
     GHDFCompound* Compound = object;
     GHDFObjectPool* Pool = userData;
-    Error Result = GHDFCompound_Clear(Compound);
+    Error Result = GHDFCompound_ClearInternal(Compound);
 
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    Compound->_ownerPool = Pool;
+    Compound->_borrowToken.Kind = GHDFBorrowKind_Compound;
+    Compound->_borrowToken.OwnerPool = Pool;
     return Error_CreateSuccess();
 }
 
 static Error GHDFCompoundPool_DeconstructObject(void* object, void* userData)
 {
+    GHDFCompound* Compound = object;
     (void)userData;
-    return GHDFCompound_Deconstruct(object);
+
+    if (Compound == NULL)
+    {
+        return CreateNullArgumentError(u8"object");
+    }
+
+    (void)GHDFCompound_ClearInternal(Compound);
+    (void)HashMap_Deconstruct(&Compound->_entries);
+    Memory_Zero(Compound, sizeof(*Compound));
+    return Error_CreateSuccess();
+}
+
+static Error GHDFArray_ClearInternal(GHDFArray* self)
+{
+    size_t ElementCount = 0U;
+    Error Result = Error_CreateSuccess();
+
+    if (self == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+
+    ElementCount = IList_GetElementCount(&self->_values._list);
+    for (size_t Index = 0U; Index < ElementCount; Index++)
+    {
+        GHDFObjectValue Value;
+
+        Result = GHDFArray_GetValueAt(self, Index, &Value);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+
+        Result = GHDFObjectValue_Release(GHDF_CreateRegularType(self->_elementType), &Value);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+
+    return IList_Clear(&self->_values._list);
 }
 
 static Error GHDFArrayPool_ResetObject(void* object, void* userData)
 {
     GHDFArray* Array = object;
     GHDFObjectPool* Pool = userData;
-    Error Result = GHDFArray_Clear(Array);
+    Error Result = GHDFArray_ClearInternal(Array);
 
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    Array->_ownerPool = Pool;
+    Array->_borrowToken.Kind = GHDFBorrowKind_Array;
+    Array->_borrowToken.OwnerPool = Pool;
     Array->_elementType = GHDFValueType_None;
     return Error_CreateSuccess();
 }
 
 static Error GHDFArrayPool_DeconstructObject(void* object, void* userData)
 {
+    GHDFArray* Array = object;
     (void)userData;
-    return GHDFArray_Deconstruct(object);
-}
 
-static Error GHDFMetadataMap_Get(GHDFCompound* self, GHDFEntryID id, GHDFEntryMetadata* outMetadata)
-{
-    Error Result = Error_CreateSuccess();
-
-    if (outMetadata == NULL)
+    if (Array == NULL)
     {
-        return CreateNullArgumentError(u8"outMetadata");
+        return CreateNullArgumentError(u8"object");
     }
 
-    Result = IMap_GetElement(HashMap_AsMap(&self->_entryMetadata), &id, outMetadata);
-    if (Result.Code != ErrorCode_Success)
-    {
-        Error_Deconstruct(&Result);
-        return Error_Construct3(ErrorCode_InvalidState,
-            u8"Missing GHDF metadata for entry %" PRIu64 ".",
-            (uint64_t)id);
-    }
-
+    (void)GHDFArray_ClearInternal(Array);
+    ArrayList_Deconstruct(&Array->_values);
+    Memory_Zero(Array, sizeof(*Array));
     return Error_CreateSuccess();
 }
 
-static Error GHDFEntryMetadata_Set(GHDFCompound* self, GHDFEntryID id, GHDFEntryMetadata metadata)
+static Error GHDFObjectValue_Release(GHDFCompoundEntryType entryType, const GHDFObjectValue* value)
 {
-    bool WasAdded = false;
+    GHDFObjectPool* OwnerPool = NULL;
 
-    return IMap_Add(HashMap_AsMap(&self->_entryMetadata), &id, &metadata, &WasAdded);
-}
-
-static Error GHDFObjectPool_ReturnOwnedStringBuffer(GHDFObjectPool* self, GenericBuffer* stringBuffer)
-{
-    if (stringBuffer == NULL)
-    {
-        return Error_CreateSuccess();
-    }
-    if (self == NULL)
-    {
-        return Error_Construct1(ErrorCode_InvalidState,
-            u8"Cannot return a GHDF string buffer without its owner pool.");
-    }
-
-    return GHDFObjectPool_ReturnString(self, stringBuffer);
-}
-
-static Error GHDFCompound_ReleaseEntryResources(GHDFCompound* self, GHDFEntryID id)
-{
-    GHDFEntryMetadata Metadata;
-    Error Result = Error_CreateSuccess();
-
-    Result = GHDFMetadataMap_Get(self, id, &Metadata);
-    if (Result.Code != ErrorCode_Success)
-    {
-        Error_Deconstruct(&Result);
-        return Error_CreateSuccess();
-    }
-
-    if (Metadata.OwnedStringBuffer != NULL)
-    {
-        return GHDFObjectPool_ReturnOwnedStringBuffer(self->_ownerPool, Metadata.OwnedStringBuffer);
-    }
-
-    return Error_CreateSuccess();
-}
-
-static Error GHDFArray_ReleaseElementResources(GHDFArray* self, size_t index)
-{
-    GHDFArrayElementMetadata Metadata;
-    Error Result = Error_CreateSuccess();
-
-    Result = IList_GetElement(&self->_valueMetadata._list, index, &Metadata);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    if (Metadata.OwnedStringBuffer != NULL)
-    {
-        return GHDFObjectPool_ReturnOwnedStringBuffer(self->_ownerPool, Metadata.OwnedStringBuffer);
-    }
-
-    return Error_CreateSuccess();
-}
-
-static Error GHDFCompound_ReturnExistingNestedValue(GHDFCompound* self, GHDFEntryID id)
-{
-    GHDFObjectValue ExistingValue;
-    GHDFEntryMetadata Metadata;
-    Error Result = Error_CreateSuccess();
-
-    if ((self == NULL) || (self->_ownerPool == NULL))
-    {
-        return Error_CreateSuccess();
-    }
-
-    Result = IMap_GetElement(HashMap_AsMap(&self->_entries), &id, &ExistingValue);
-    if (Result.Code != ErrorCode_Success)
-    {
-        Error_Deconstruct(&Result);
-        return Error_CreateSuccess();
-    }
-
-    Result = GHDFMetadataMap_Get(self, id, &Metadata);
-    if (Result.Code != ErrorCode_Success)
-    {
-        Error_Deconstruct(&Result);
-        return Error_CreateSuccess();
-    }
-
-    if (Metadata.IsArray && (ExistingValue.Value.Array != NULL))
-    {
-        return GHDFObjectPool_ReturnArray(self->_ownerPool, ExistingValue.Value.Array, true);
-    }
-    if ((ExistingValue.Type == GHDFValueType_Compound) && (ExistingValue.Value.Compound != NULL))
-    {
-        return GHDFObjectPool_ReturnCompound(self->_ownerPool, ExistingValue.Value.Compound, true);
-    }
-
-    return Error_CreateSuccess();
-}
-
-static Error GHDFArray_ReturnExistingNestedValue(GHDFArray* self, size_t index)
-{
-    GHDFObjectValue ExistingValue;
-    Error Result = Error_CreateSuccess();
-
-    if ((self == NULL) || (self->_ownerPool == NULL) || (self->_elementType != GHDFValueType_Compound))
-    {
-        return Error_CreateSuccess();
-    }
-
-    Result = IList_GetElement(&self->_values._list, index, &ExistingValue);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-    if (ExistingValue.Value.Compound != NULL)
-    {
-        return GHDFObjectPool_ReturnCompound(self->_ownerPool, ExistingValue.Value.Compound, true);
-    }
-
-    return Error_CreateSuccess();
-}
-
-static Error GHDFArray_InsertValueWithMetadata(GHDFArray* self,
-    size_t index,
-    GHDFObjectValue value,
-    GHDFArrayElementMetadata metadata)
-{
-    Error Result = IList_Insert(&self->_values._list, index, &value);
-
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    Result = IList_Insert(&self->_valueMetadata._list, index, &metadata);
-    if (Result.Code != ErrorCode_Success)
-    {
-        (void)IList_RemoveAt(&self->_values._list, index);
-        return Result;
-    }
-
-    return Error_CreateSuccess();
-}
-
-static Error GHDFArray_AddValueWithMetadata(GHDFArray* self, GHDFObjectValue value, GHDFArrayElementMetadata metadata)
-{
-    return GHDFArray_InsertValueWithMetadata(self, IList_GetElementCount(&self->_values._list), value, metadata);
-}
-
-static Error GHDFArray_ReplaceValueWithMetadata(GHDFArray* self,
-    size_t index,
-    GHDFObjectValue value,
-    GHDFArrayElementMetadata metadata)
-{
-    Error Result = GHDFArray_ReturnExistingNestedValue(self, index);
-
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    Result = GHDFArray_ReleaseElementResources(self, index);
-
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    Result = IList_Replace(&self->_values._list, index, &value);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    return IList_Replace(&self->_valueMetadata._list, index, &metadata);
-}
-
-static Error GHDFCompound_SetEntryValue(GHDFCompound* self,
-    GHDFEntryID id,
-    GHDFCompoundEntryType entryType,
-    GHDFObjectValue value,
-    GenericBuffer* ownedStringBuffer)
-{
-    GHDFEntryMetadata Metadata = GHDFEntryMetadata_Create(entryType.IsArray, ownedStringBuffer);
-    bool WasAdded = false;
-    Error Result = Error_CreateSuccess();
-
-    Result = GHDFCompound_ReturnExistingNestedValue(self, id);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    Result = GHDFCompound_ReleaseEntryResources(self, id);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    Result = IMap_Add(HashMap_AsMap(&self->_entries), &id, &value, &WasAdded);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    return GHDFEntryMetadata_Set(self, id, Metadata);
-}
-
-static Error GHDFObjectValue_FromScalar(GHDFValueType valueType, void* value, GHDFObjectValue* outValue)
-{
-    if (outValue == NULL)
-    {
-        return CreateNullArgumentError(u8"outValue");
-    }
     if (value == NULL)
     {
         return CreateNullArgumentError(u8"value");
     }
 
-    GHDFObjectValue_Zero(outValue);
-    outValue->Type = valueType;
-    switch (valueType)
+    if (entryType.IsArray)
     {
-        case GHDFValueType_UInt8:
-            outValue->Value.UInt8 = *((uint8_t*)value);
+        if (value->Value.Array == NULL)
+        {
             return Error_CreateSuccess();
+        }
+        if (!GHDFArray_IsBorrowed(value->Value.Array, &OwnerPool))
+        {
+            return CreateInvalidBorrowedResourceError(u8"array");
+        }
 
-        case GHDFValueType_Int8:
-            outValue->Value.Int8 = *((int8_t*)value);
-            return Error_CreateSuccess();
+        return GHDFObjectPool_ReturnArray(OwnerPool, value->Value.Array, true);
+    }
 
-        case GHDFValueType_Int16:
-            outValue->Value.Int16 = *((int16_t*)value);
-            return Error_CreateSuccess();
-
-        case GHDFValueType_UInt16:
-            outValue->Value.UInt16 = *((uint16_t*)value);
-            return Error_CreateSuccess();
-
-        case GHDFValueType_Int32:
-            outValue->Value.Int32 = *((int32_t*)value);
-            return Error_CreateSuccess();
-
-        case GHDFValueType_UInt32:
-            outValue->Value.UInt32 = *((uint32_t*)value);
-            return Error_CreateSuccess();
-
-        case GHDFValueType_Int64:
-            outValue->Value.Int64 = *((int64_t*)value);
-            return Error_CreateSuccess();
-
-        case GHDFValueType_UInt64:
-            outValue->Value.UInt64 = *((uint64_t*)value);
-            return Error_CreateSuccess();
-
-        case GHDFValueType_Float:
-            outValue->Value.Float = *((float*)value);
-            return Error_CreateSuccess();
-
-        case GHDFValueType_Double:
-            outValue->Value.Double = *((double*)value);
-            return Error_CreateSuccess();
-
-        case GHDFValueType_Boolean:
-            outValue->Value.Boolean = *((bool*)value);
-            return Error_CreateSuccess();
-
+    switch (entryType.ValueType)
+    {
         case GHDFValueType_String:
-            outValue->Value.String = value;
-            return Error_CreateSuccess();
+            if (value->Value.String == NULL)
+            {
+                return Error_CreateSuccess();
+            }
+            if (!GHDFStringBuffer_IsBorrowed(value->Value.String, &OwnerPool))
+            {
+                return CreateInvalidBorrowedResourceError(u8"string");
+            }
+
+            return GHDFObjectPool_ReturnString(OwnerPool, value->Value.String);
 
         case GHDFValueType_Compound:
-            outValue->Value.Compound = value;
-            return Error_CreateSuccess();
+            if (value->Value.Compound == NULL)
+            {
+                return Error_CreateSuccess();
+            }
+            if (!GHDFCompound_IsBorrowed(value->Value.Compound, &OwnerPool))
+            {
+                return CreateInvalidBorrowedResourceError(u8"compound");
+            }
 
-        case GHDFValueType_EncodedInteger:
-            outValue->Value.EncodedInteger = *((int64_t*)value);
-            return Error_CreateSuccess();
+            return GHDFObjectPool_ReturnCompound(OwnerPool, value->Value.Compound, true);
 
-        case GHDFValueType_None:
         default:
-            return CreateInvalidTypeError(valueType);
+            return Error_CreateSuccess();
     }
 }
 
+static Error GHDFValidateValueAgainstEntryType(GHDFCompoundEntryType entryType, const GHDFObjectValue* value)
+{
+    Error Result = ValidateCompoundEntryType(entryType);
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (value == NULL)
+    {
+        return CreateNullArgumentError(u8"value");
+    }
+    if (value->Type != entryType.ValueType)
+    {
+        return CreateTypeMismatchError(value->Type, entryType, false);
+    }
+
+    if (entryType.IsArray)
+    {
+        return GHDFValidateBorrowedArray(value->Value.Array, entryType.ValueType);
+    }
+
+    switch (entryType.ValueType)
+    {
+        case GHDFValueType_String:
+            return GHDFValidateBorrowedString(value->Value.String);
+
+        case GHDFValueType_Compound:
+            return GHDFValidateBorrowedCompound(value->Value.Compound);
+
+        default:
+            return Error_CreateSuccess();
+    }
+}
+
+static Error GHDFValidateValueAgainstArrayType(GHDFArray* self, const GHDFObjectValue* value)
+{
+    GHDFCompoundEntryType ExpectedType;
+
+    if (self == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+    if (self->_elementType == GHDFValueType_None)
+    {
+        return CreateInvalidTypeError(self->_elementType);
+    }
+
+    ExpectedType = GHDF_CreateRegularType(self->_elementType);
+    return GHDFValidateValueAgainstEntryType(ExpectedType, value);
+}
+
+static const void* GHDFObjectValue_GetStoragePointer(const GHDFObjectValue* value)
+{
+    switch (value->Type)
+    {
+        case GHDFValueType_UInt8:
+            return &value->Value.UInt8;
+
+        case GHDFValueType_Int8:
+            return &value->Value.Int8;
+
+        case GHDFValueType_Int16:
+            return &value->Value.Int16;
+
+        case GHDFValueType_UInt16:
+            return &value->Value.UInt16;
+
+        case GHDFValueType_Int32:
+            return &value->Value.Int32;
+
+        case GHDFValueType_UInt32:
+            return &value->Value.UInt32;
+
+        case GHDFValueType_Int64:
+            return &value->Value.Int64;
+
+        case GHDFValueType_UInt64:
+            return &value->Value.UInt64;
+
+        case GHDFValueType_Float:
+            return &value->Value.Float;
+
+        case GHDFValueType_Double:
+            return &value->Value.Double;
+
+        case GHDFValueType_Boolean:
+            return &value->Value.Boolean;
+
+        case GHDFValueType_String:
+            return &value->Value.String;
+
+        case GHDFValueType_Compound:
+            return &value->Value.Compound;
+
+        case GHDFValueType_EncodedInteger:
+            return &value->Value.EncodedInteger;
+
+        case GHDFValueType_None:
+        default:
+            return NULL;
+    }
+}
 static Error GHDFWriteExactBytes(BinaryIOStream* stream, const unsigned char* bytes, size_t byteCount)
 {
     if (stream == NULL)
@@ -841,30 +1411,29 @@ static Error GHDF_ParseTypeByte(uint8_t typeByte, GHDFCompoundEntryType* outEntr
     return Error_CreateSuccess();
 }
 
-static Error GHDF_WriteStringValue(BinaryIOStream* stream, const unsigned char* text)
+static Error GHDF_WriteStringValue(BinaryIOStream* stream, GenericBuffer* stringBuffer)
 {
     size_t ByteCount = 0U;
-    Error Result = Error_CreateSuccess();
+    Error Result = GHDFValidateBorrowedString(stringBuffer);
 
-    if (text == NULL)
+    if (Result.Code != ErrorCode_Success)
     {
-        return CreateNullArgumentError(u8"text");
+        return Result;
     }
 
-    ByteCount = GetUTF8ByteCount(text);
+    ByteCount = GetStringByteCount(stringBuffer);
     Result = BinaryIOStream_WriteEncodedUInt64(stream, (uint64_t)ByteCount);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    return GHDFWriteExactBytes(stream, text, ByteCount);
+    return GHDFWriteExactBytes(stream, stringBuffer->_data, ByteCount);
 }
 
 static Error GHDF_ReadOwnedStringValue(BinaryIOStream* stream,
     GHDFObjectPool* objectPool,
-    unsigned char** outString,
-    GenericBuffer** outStringBuffer)
+    GenericBuffer** outString)
 {
     uint64_t Length64 = 0U;
     size_t Length = 0U;
@@ -875,13 +1444,8 @@ static Error GHDF_ReadOwnedStringValue(BinaryIOStream* stream,
     {
         return CreateNullArgumentError(u8"outString");
     }
-    if (outStringBuffer == NULL)
-    {
-        return CreateNullArgumentError(u8"outStringBuffer");
-    }
 
     *outString = NULL;
-    *outStringBuffer = NULL;
     Result = BinaryIOStream_ReadEncodedUInt64(stream, &Length64);
     if (Result.Code != ErrorCode_Success)
     {
@@ -920,8 +1484,7 @@ static Error GHDF_ReadOwnedStringValue(BinaryIOStream* stream,
             u8"Could not null-terminate a GHDF string.");
     }
 
-    *outString = StringBuffer->_data;
-    *outStringBuffer = StringBuffer;
+    *outString = StringBuffer;
     return Error_CreateSuccess();
 }
 
@@ -978,8 +1541,7 @@ static Error GHDF_WriteScalarValue(BinaryIOStream* stream, GHDFObjectValue value
 static Error GHDF_ReadScalarValue(BinaryIOStream* stream,
     GHDFValueType valueType,
     GHDFObjectPool* objectPool,
-    GHDFObjectValue* outValue,
-    GenericBuffer** outOwnedStringBuffer);
+    GHDFObjectValue* outValue);
 
 static Error GHDF_WriteArray(BinaryIOStream* stream, GHDFArray* array);
 
@@ -992,30 +1554,16 @@ static Error GHDF_ReadArray(BinaryIOStream* stream,
     GHDFValueType elementType,
     GHDFArray** outArray);
 
-static Error GHDFObjectPool_ReturnNestedFromCompound(GHDFObjectPool* objectPool, GHDFCompound* compound);
-
-static Error GHDFObjectPool_ReturnNestedFromArray(GHDFObjectPool* objectPool, GHDFArray* array);
-
-static Error GHDFCompound_ReturnExistingNestedValue(GHDFCompound* self, GHDFEntryID id);
-
-static Error GHDFArray_ReturnExistingNestedValue(GHDFArray* self, size_t index);
-
 static Error GHDF_ReadScalarValue(BinaryIOStream* stream,
     GHDFValueType valueType,
     GHDFObjectPool* objectPool,
-    GHDFObjectValue* outValue,
-    GenericBuffer** outOwnedStringBuffer)
+    GHDFObjectValue* outValue)
 {
     if (outValue == NULL)
     {
         return CreateNullArgumentError(u8"outValue");
     }
-    if (outOwnedStringBuffer == NULL)
-    {
-        return CreateNullArgumentError(u8"outOwnedStringBuffer");
-    }
 
-    *outOwnedStringBuffer = NULL;
     GHDFObjectValue_Zero(outValue);
     outValue->Type = valueType;
     switch (valueType)
@@ -1054,7 +1602,7 @@ static Error GHDF_ReadScalarValue(BinaryIOStream* stream,
             return BinaryIOStream_ReadBoolean(stream, &outValue->Value.Boolean);
 
         case GHDFValueType_String:
-            return GHDF_ReadOwnedStringValue(stream, objectPool, &outValue->Value.String, outOwnedStringBuffer);
+            return GHDF_ReadOwnedStringValue(stream, objectPool, &outValue->Value.String);
 
         case GHDFValueType_EncodedInteger:
             return BinaryIOStream_ReadEncodedInt64(stream, &outValue->Value.EncodedInteger);
@@ -1095,8 +1643,7 @@ static Error GHDF_WriteEntryValue(BinaryIOStream* stream,
 static Error GHDF_ReadEntryValue(BinaryIOStream* stream,
     GHDFObjectPool* objectPool,
     GHDFCompoundEntryType entryType,
-    GHDFObjectValue* outValue,
-    GenericBuffer** outOwnedStringBuffer)
+    GHDFObjectValue* outValue)
 {
     Error Result = Error_CreateSuccess();
 
@@ -1104,12 +1651,7 @@ static Error GHDF_ReadEntryValue(BinaryIOStream* stream,
     {
         return CreateNullArgumentError(u8"outValue");
     }
-    if (outOwnedStringBuffer == NULL)
-    {
-        return CreateNullArgumentError(u8"outOwnedStringBuffer");
-    }
 
-    *outOwnedStringBuffer = NULL;
     GHDFObjectValue_Zero(outValue);
     outValue->Type = entryType.ValueType;
     if (entryType.IsArray)
@@ -1137,12 +1679,13 @@ static Error GHDF_ReadEntryValue(BinaryIOStream* stream,
         return Error_CreateSuccess();
     }
 
-    return GHDF_ReadScalarValue(stream, entryType.ValueType, objectPool, outValue, outOwnedStringBuffer);
+    return GHDF_ReadScalarValue(stream, entryType.ValueType, objectPool, outValue);
 }
 
 static Error GHDF_WriteArray(BinaryIOStream* stream, GHDFArray* array)
 {
     size_t ElementCount = 0U;
+    Error Result = Error_CreateSuccess();
 
     if (array == NULL)
     {
@@ -1155,17 +1698,17 @@ static Error GHDF_WriteArray(BinaryIOStream* stream, GHDFArray* array)
         return CreateInvalidTypeError(array->_elementType);
     }
 
-    Error Result = BinaryIOStream_WriteEncodedUInt64(stream, (uint64_t)ElementCount);
+    Result = BinaryIOStream_WriteEncodedUInt64(stream, (uint64_t)ElementCount);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    for (size_t Index = 0; Index < ElementCount; Index++)
+    for (size_t Index = 0U; Index < ElementCount; Index++)
     {
         GHDFObjectValue Value;
 
-        Result = IList_GetElement(&array->_values._list, Index, &Value);
+        Result = GHDFArray_GetValueAt(array, Index, &Value);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
@@ -1214,17 +1757,15 @@ static Error GHDF_ReadArray(BinaryIOStream* stream,
         return Result;
     }
 
-    Result = GHDFObjectPool_BorrowArray(objectPool, &Array);
+    Result = GHDFObjectPool_BorrowArray(objectPool, elementType, &Array);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    Array->_elementType = elementType;
-    for (size_t Index = 0; Index < ElementCount; Index++)
+    for (size_t Index = 0U; Index < ElementCount; Index++)
     {
         GHDFObjectValue Value;
-        GenericBuffer* OwnedStringBuffer = NULL;
 
         if (elementType == GHDFValueType_Compound)
         {
@@ -1240,21 +1781,19 @@ static Error GHDF_ReadArray(BinaryIOStream* stream,
         }
         else
         {
-            Result = GHDF_ReadScalarValue(stream, elementType, objectPool, &Value, &OwnedStringBuffer);
+            Result = GHDF_ReadScalarValue(stream, elementType, objectPool, &Value);
         }
         if (Result.Code != ErrorCode_Success)
         {
+            (void)GHDFObjectValue_Release(GHDF_CreateRegularType(elementType), &Value);
             (void)GHDFObjectPool_ReturnArray(objectPool, Array, true);
             return Result;
         }
 
-        Result = GHDFArray_AddValueWithMetadata(Array, Value, GHDFArrayElementMetadata_Create(OwnedStringBuffer));
+        Result = GHDFArray_AddValue(Array, &Value);
         if (Result.Code != ErrorCode_Success)
         {
-            if (OwnedStringBuffer != NULL)
-            {
-                (void)GHDFObjectPool_ReturnString(objectPool, OwnedStringBuffer);
-            }
+            (void)GHDFObjectValue_Release(GHDF_CreateRegularType(elementType), &Value);
             (void)GHDFObjectPool_ReturnArray(objectPool, Array, true);
             return Result;
         }
@@ -1292,8 +1831,8 @@ static Error GHDF_WriteCompoundBody(BinaryIOStream* stream, const GHDFCompound* 
     {
         bool HasNext = false;
         MapEntryView EntryView;
-        GHDFEntryMetadata Metadata;
-        GHDFCompoundEntryType EntryType;
+        GHDFEntryID* EntryID = NULL;
+        GHDFStoredCompoundEntry* StoredEntry = NULL;
 
         Result = CollectionEnumerator_HasNext(Enumerator, &HasNext);
         if (Result.Code != ErrorCode_Success)
@@ -1312,100 +1851,28 @@ static Error GHDF_WriteCompoundBody(BinaryIOStream* stream, const GHDFCompound* 
             break;
         }
 
-        Result = GHDFMetadataMap_Get(MutableCompound, *((GHDFEntryID*)EntryView._key), &Metadata);
+        EntryID = EntryView._key;
+        StoredEntry = EntryView._value;
+        if ((EntryID == NULL) || (StoredEntry == NULL))
+        {
+            Result = Error_Construct1(ErrorCode_InvalidState,
+                u8"Encountered an invalid GHDF compound entry during serialization.");
+            break;
+        }
+
+        Result = BinaryIOStream_WriteEncodedUInt64(stream, *EntryID);
         if (Result.Code != ErrorCode_Success)
         {
             break;
         }
 
-        EntryType.ValueType = ((GHDFObjectValue*)EntryView._value)->Type;
-        EntryType.IsArray = Metadata.IsArray;
-        Result = BinaryIOStream_WriteEncodedUInt64(stream, *((GHDFEntryID*)EntryView._key));
+        Result = BinaryIOStream_WriteUInt8(stream, GHDF_ComposeTypeByte(StoredEntry->EntryType));
         if (Result.Code != ErrorCode_Success)
         {
             break;
         }
 
-        Result = BinaryIOStream_WriteUInt8(stream, GHDF_ComposeTypeByte(EntryType));
-        if (Result.Code != ErrorCode_Success)
-        {
-            break;
-        }
-
-        Result = GHDF_WriteEntryValue(stream, EntryType, *((GHDFObjectValue*)EntryView._value));
-        if (Result.Code != ErrorCode_Success)
-        {
-            break;
-        }
-    }
-
-    CollectionEnumerator_Deconstruct(Enumerator);
-    return Result;
-}
-
-static Error GHDFObjectPool_ReturnNestedFromCompound(GHDFObjectPool* objectPool, GHDFCompound* compound)
-{
-    CollectionEnumerator* Enumerator = NULL;
-    Error Result = Error_CreateSuccess();
-
-    if ((objectPool == NULL) || (compound == NULL))
-    {
-        return Error_CreateSuccess();
-    }
-
-    Enumerator = ICollection_GetEnumerator(IMap_AsEntryCollection(HashMap_AsMap(&compound->_entries)));
-    if (Enumerator == NULL)
-    {
-        return Error_CreateSuccess();
-    }
-
-    while (true)
-    {
-        bool HasNext = false;
-        MapEntryView EntryView;
-        GHDFEntryMetadata Metadata;
-
-        Result = CollectionEnumerator_HasNext(Enumerator, &HasNext);
-        if (Result.Code != ErrorCode_Success)
-        {
-            break;
-        }
-        if (!HasNext)
-        {
-            Result = Error_CreateSuccess();
-            break;
-        }
-
-        Result = CollectionEnumerator_NextByValue(Enumerator, &EntryView);
-        if (Result.Code != ErrorCode_Success)
-        {
-            break;
-        }
-
-        Result = GHDFMetadataMap_Get(compound, *((GHDFEntryID*)EntryView._key), &Metadata);
-        if (Result.Code != ErrorCode_Success)
-        {
-            break;
-        }
-
-        if (Metadata.IsArray)
-        {
-            GHDFArray* NestedArray = ((GHDFObjectValue*)EntryView._value)->Value.Array;
-
-            if (NestedArray != NULL)
-            {
-                Result = GHDFObjectPool_ReturnArray(objectPool, NestedArray, true);
-            }
-        }
-        else if (((GHDFObjectValue*)EntryView._value)->Type == GHDFValueType_Compound)
-        {
-            GHDFCompound* NestedCompound = ((GHDFObjectValue*)EntryView._value)->Value.Compound;
-
-            if (NestedCompound != NULL)
-            {
-                Result = GHDFObjectPool_ReturnCompound(objectPool, NestedCompound, true);
-            }
-        }
+        Result = GHDF_WriteEntryValue(stream, StoredEntry->EntryType, StoredEntry->Value);
         if (Result.Code != ErrorCode_Success)
         {
             break;
@@ -1414,65 +1881,36 @@ static Error GHDFObjectPool_ReturnNestedFromCompound(GHDFObjectPool* objectPool,
 
     CollectionEnumerator_Deconstruct(Enumerator);
     return Result;
-}
-
-static Error GHDFObjectPool_ReturnNestedFromArray(GHDFObjectPool* objectPool, GHDFArray* array)
-{
-    size_t ElementCount = 0U;
-    Error Result = Error_CreateSuccess();
-
-    if ((objectPool == NULL) || (array == NULL) || (array->_elementType != GHDFValueType_Compound))
-    {
-        return Error_CreateSuccess();
-    }
-
-    ElementCount = IList_GetElementCount(&array->_values._list);
-    for (size_t Index = 0; Index < ElementCount; Index++)
-    {
-        GHDFObjectValue Value;
-
-        Result = IList_GetElement(&array->_values._list, Index, &Value);
-        if (Result.Code != ErrorCode_Success)
-        {
-            return Result;
-        }
-        if (Value.Value.Compound != NULL)
-        {
-            Result = GHDFObjectPool_ReturnCompound(objectPool, Value.Value.Compound, true);
-            if (Result.Code != ErrorCode_Success)
-            {
-                return Result;
-            }
-        }
-    }
-
-    return Error_CreateSuccess();
 }
 
 static Error GHDF_ReadCompoundBody(BinaryIOStream* stream, GHDFObjectPool* objectPool, GHDFCompound* compound)
 {
     uint64_t EntryCount64 = 0U;
     size_t EntryCount = 0U;
-    Error Result = BinaryIOStream_ReadEncodedUInt64(stream, &EntryCount64);
+    Error Result = Error_CreateSuccess();
 
+    if (compound == NULL)
+    {
+        return CreateNullArgumentError(u8"compound");
+    }
+
+    Result = BinaryIOStream_ReadEncodedUInt64(stream, &EntryCount64);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
-
     Result = ConvertUInt64ToSize(EntryCount64, u8"compound", &EntryCount);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    for (size_t Index = 0; Index < EntryCount; Index++)
+    for (size_t Index = 0U; Index < EntryCount; Index++)
     {
-        GHDFEntryID EntryID = GHDF_ENTRY_ID_INVALID;
+        uint64_t EntryID = 0U;
         uint8_t TypeByte = 0U;
         GHDFCompoundEntryType EntryType;
         GHDFObjectValue Value;
-        GenericBuffer* OwnedStringBuffer = NULL;
 
         Result = BinaryIOStream_ReadEncodedUInt64(stream, &EntryID);
         if (Result.Code != ErrorCode_Success)
@@ -1496,114 +1934,196 @@ static Error GHDF_ReadCompoundBody(BinaryIOStream* stream, GHDFObjectPool* objec
             return Result;
         }
 
-        Result = GHDF_ReadEntryValue(stream, objectPool, EntryType, &Value, &OwnedStringBuffer);
+        Result = GHDF_ReadEntryValue(stream, objectPool, EntryType, &Value);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
         }
 
-        Result = GHDFCompound_SetEntryValue(compound, EntryID, EntryType, Value, OwnedStringBuffer);
+        Result = GHDFCompound_SetValue(compound, EntryID, EntryType, &Value);
         if (Result.Code != ErrorCode_Success)
         {
-            if (OwnedStringBuffer != NULL)
+            (void)GHDFObjectValue_Release(EntryType, &Value);
+            return Result;
+        }
+    }
+
+    return Error_CreateSuccess();
+}
+
+static Error GHDFArray_GetValueAt(GHDFArray* self, size_t index, GHDFObjectValue* outValue)
+{
+    Error Result = Error_CreateSuccess();
+
+    if (self == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+    if (outValue == NULL)
+    {
+        return CreateNullArgumentError(u8"outValue");
+    }
+
+    switch (self->_elementType)
+    {
+        case GHDFValueType_UInt8:
+        {
+            uint8_t Value = 0U;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
             {
-                (void)GHDFObjectPool_ReturnString(objectPool, OwnedStringBuffer);
+                *outValue = GHDFObjectValue_CreateUInt8(Value);
             }
             return Result;
         }
-    }
 
-    return Error_CreateSuccess();
-}
-
-static Error GHDFCompound_GetEntryMetadata(GHDFCompound* self,
-    GHDFEntryID id,
-    GHDFObjectValue* outEntry,
-    GHDFEntryMetadata* outMetadata)
-{
-    Error Result = Error_CreateSuccess();
-
-    if (self == NULL)
-    {
-        return CreateNullArgumentError(u8"self");
-    }
-    if (outEntry == NULL)
-    {
-        return CreateNullArgumentError(u8"outEntry");
-    }
-    if (outMetadata == NULL)
-    {
-        return CreateNullArgumentError(u8"outMetadata");
-    }
-
-    Result = IMap_GetElement(HashMap_AsMap(&self->_entries), &id, outEntry);
-    if (Result.Code != ErrorCode_Success)
-    {
-        Error_Deconstruct(&Result);
-        return CreateEntryNotFoundError(id);
-    }
-
-    return GHDFMetadataMap_Get(self, id, outMetadata);
-}
-
-static Error GHDFArray_SetElementValue(GHDFArray* self,
-    size_t index,
-    GHDFObjectValue value,
-    GenericBuffer* ownedStringBuffer,
-    bool isReplace)
-{
-    GHDFArrayElementMetadata Metadata = GHDFArrayElementMetadata_Create(ownedStringBuffer);
-
-    if (isReplace)
-    {
-        return GHDFArray_ReplaceValueWithMetadata(self, index, value, Metadata);
-    }
-
-    return GHDFArray_InsertValueWithMetadata(self, index, value, Metadata);
-}
-
-static Error GHDFArray_CreateValue(GHDFArray* self, void* element, GHDFObjectValue* outValue)
-{
-    Error Result = Error_CreateSuccess();
-
-    if (self == NULL)
-    {
-        return CreateNullArgumentError(u8"self");
-    }
-
-    if (self->_elementType == GHDFValueType_None)
-    {
-        return CreateInvalidTypeError(self->_elementType);
-    }
-    if (self->_elementType == GHDFValueType_Compound)
-    {
-        if (outValue == NULL)
+        case GHDFValueType_Int8:
         {
-            return CreateNullArgumentError(u8"outValue");
-        }
-        if (element == NULL)
-        {
-            return CreateNullArgumentError(u8"element");
+            int8_t Value = 0;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateInt8(Value);
+            }
+            return Result;
         }
 
-        GHDFObjectValue_Zero(outValue);
-        outValue->Type = GHDFValueType_Compound;
-        outValue->Value.Compound = element;
-        return Error_CreateSuccess();
-    }
+        case GHDFValueType_Int16:
+        {
+            int16_t Value = 0;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateInt16(Value);
+            }
+            return Result;
+        }
 
-    Result = GHDFObjectValue_FromScalar(self->_elementType, element, outValue);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
+        case GHDFValueType_UInt16:
+        {
+            uint16_t Value = 0U;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateUInt16(Value);
+            }
+            return Result;
+        }
 
-    if (outValue->Type == GHDFValueType_Compound)
-    {
-        return CreateInvalidArrayValueError();
-    }
+        case GHDFValueType_Int32:
+        {
+            int32_t Value = 0;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateInt32(Value);
+            }
+            return Result;
+        }
 
-    return Error_CreateSuccess();
+        case GHDFValueType_UInt32:
+        {
+            uint32_t Value = 0U;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateUInt32(Value);
+            }
+            return Result;
+        }
+
+        case GHDFValueType_Int64:
+        {
+            int64_t Value = 0;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateInt64(Value);
+            }
+            return Result;
+        }
+
+        case GHDFValueType_UInt64:
+        {
+            uint64_t Value = 0U;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateUInt64(Value);
+            }
+            return Result;
+        }
+
+        case GHDFValueType_Float:
+        {
+            float Value = 0.0f;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateFloat(Value);
+            }
+            return Result;
+        }
+
+        case GHDFValueType_Double:
+        {
+            double Value = 0.0;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateDouble(Value);
+            }
+            return Result;
+        }
+
+        case GHDFValueType_Boolean:
+        {
+            bool Value = false;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateBoolean(Value);
+            }
+            return Result;
+        }
+
+        case GHDFValueType_String:
+        {
+            GenericBuffer* Value = NULL;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateString(Value);
+            }
+            return Result;
+        }
+
+        case GHDFValueType_Compound:
+        {
+            GHDFCompound* Value = NULL;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateCompound(Value);
+            }
+            return Result;
+        }
+
+        case GHDFValueType_EncodedInteger:
+        {
+            int64_t Value = 0;
+            Result = IList_GetElement(&self->_values._list, index, &Value);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outValue = GHDFObjectValue_CreateEncodedInteger(Value);
+            }
+            return Result;
+        }
+
+        case GHDFValueType_None:
+        default:
+            return CreateInvalidTypeError(self->_elementType);
+    }
 }
 
 static Error GHDFObjectPool_Construct(GHDFObjectPool* self)
@@ -1760,102 +2280,14 @@ Error GHDF_Read(IOStream* stream, GHDFObjectPool* objectPool, GHDFCompound** out
     return Error_CreateSuccess();
 }
 
-Error GHDFCompound_Construct1(GHDFCompound* self)
-{
-    return GHDFCompound_Initialize(self);
-}
-
-Error GHDFCompound_Deconstruct(GHDFCompound* self)
-{
-    Error Result = Error_CreateSuccess();
-
-    if (self == NULL)
-    {
-        return CreateNullArgumentError(u8"self");
-    }
-
-    Result = GHDFCompound_Clear(self);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    Result = HashMap_Deconstruct(&self->_entryMetadata);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    Result = HashMap_Deconstruct(&self->_entries);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    Memory_Zero(self, sizeof(*self));
-    return Error_CreateSuccess();
-}
-
 Error GHDFCompound_Clear(GHDFCompound* self)
 {
-    CollectionEnumerator* Enumerator = NULL;
-    Error Result = Error_CreateSuccess();
-
-    if (self == NULL)
-    {
-        return CreateNullArgumentError(u8"self");
-    }
-
-    Enumerator = ICollection_GetEnumerator(IMap_AsKeyCollection(HashMap_AsMap(&self->_entries)));
-    if (Enumerator != NULL)
-    {
-        while (true)
-        {
-            bool HasNext = false;
-            GHDFEntryID EntryID = GHDF_ENTRY_ID_INVALID;
-
-            Result = CollectionEnumerator_HasNext(Enumerator, &HasNext);
-            if (Result.Code != ErrorCode_Success)
-            {
-                break;
-            }
-            if (!HasNext)
-            {
-                Result = Error_CreateSuccess();
-                break;
-            }
-
-            Result = CollectionEnumerator_NextByValue(Enumerator, &EntryID);
-            if (Result.Code != ErrorCode_Success)
-            {
-                break;
-            }
-
-            Result = GHDFCompound_ReleaseEntryResources(self, EntryID);
-            if (Result.Code != ErrorCode_Success)
-            {
-                break;
-            }
-        }
-
-        CollectionEnumerator_Deconstruct(Enumerator);
-        if (Result.Code != ErrorCode_Success)
-        {
-            return Result;
-        }
-    }
-
-    Result = IMap_Clear(HashMap_AsMap(&self->_entryMetadata));
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    return IMap_Clear(HashMap_AsMap(&self->_entries));
+    return GHDFCompound_ClearInternal(self);
 }
 
 Error GHDFCompound_Remove(GHDFCompound* self, GHDFEntryID id)
 {
+    GHDFStoredCompoundEntry StoredEntry;
     bool WasRemoved = false;
     Error Result = Error_CreateSuccess();
 
@@ -1868,13 +2300,14 @@ Error GHDFCompound_Remove(GHDFCompound* self, GHDFEntryID id)
         return CreateInvalidEntryIDError();
     }
 
-    Result = GHDFCompound_ReleaseEntryResources(self, id);
+    Result = IMap_GetElement(HashMap_AsMap(&self->_entries), &id, &StoredEntry);
     if (Result.Code != ErrorCode_Success)
     {
-        return Result;
+        Error_Deconstruct(&Result);
+        return CreateEntryNotFoundError(id);
     }
 
-    Result = IMap_Remove(HashMap_AsMap(&self->_entryMetadata), &id, &WasRemoved);
+    Result = GHDFObjectValue_Release(StoredEntry.EntryType, &StoredEntry.Value);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
@@ -1883,9 +2316,15 @@ Error GHDFCompound_Remove(GHDFCompound* self, GHDFEntryID id)
     return IMap_Remove(HashMap_AsMap(&self->_entries), &id, &WasRemoved);
 }
 
-Error GHDFCompound_Set(GHDFCompound* self, GHDFEntryID id, GHDFCompoundEntryType entryType, void* value)
+Error GHDFCompound_SetValue(GHDFCompound* self,
+    GHDFEntryID id,
+    GHDFCompoundEntryType entryType,
+    const GHDFObjectValue* value)
 {
-    GHDFObjectValue ObjectValue;
+    GHDFStoredCompoundEntry StoredEntry;
+    GHDFStoredCompoundEntry ExistingEntry;
+    bool HasExistingEntry = false;
+    bool WasAdded = false;
     Error Result = Error_CreateSuccess();
 
     if (self == NULL)
@@ -1897,53 +2336,82 @@ Error GHDFCompound_Set(GHDFCompound* self, GHDFEntryID id, GHDFCompoundEntryType
         return CreateInvalidEntryIDError();
     }
 
-    Result = ValidateCompoundEntryType(entryType);
+    Result = GHDFValidateValueAgainstEntryType(entryType, value);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    if (entryType.IsArray)
+    Result = IMap_GetElement(HashMap_AsMap(&self->_entries), &id, &ExistingEntry);
+    if (Result.Code == ErrorCode_Success)
     {
-        if (value == NULL)
-        {
-            return CreateNullArgumentError(u8"value");
-        }
-
-        GHDFObjectValue_Zero(&ObjectValue);
-        ObjectValue.Type = entryType.ValueType;
-        ObjectValue.Value.Array = value;
-        return GHDFCompound_SetEntryValue(self, id, entryType, ObjectValue, NULL);
+        HasExistingEntry = true;
+    }
+    else
+    {
+        Error_Deconstruct(&Result);
     }
 
-    Result = GHDFObjectValue_FromScalar(entryType.ValueType, value, &ObjectValue);
+    StoredEntry.EntryType = entryType;
+    StoredEntry.Value = *value;
+    Result = IMap_Add(HashMap_AsMap(&self->_entries), &id, &StoredEntry, &WasAdded);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
+    if (HasExistingEntry)
+    {
+        return GHDFObjectValue_Release(ExistingEntry.EntryType, &ExistingEntry.Value);
+    }
 
-    return GHDFCompound_SetEntryValue(self, id, entryType, ObjectValue, NULL);
+    return Error_CreateSuccess();
 }
 
 Error GHDFCompound_Get(GHDFCompound* self, GHDFEntryID id, GHDFObjectValue* outEntry)
 {
-    GHDFEntryMetadata Metadata;
-    UNUSED(Metadata);
-    return GHDFCompound_GetEntryMetadata(self, id, outEntry, &Metadata);
+    GHDFStoredCompoundEntry StoredEntry;
+    Error Result = Error_CreateSuccess();
+
+    if (self == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+    if (outEntry == NULL)
+    {
+        return CreateNullArgumentError(u8"outEntry");
+    }
+
+    Result = IMap_GetElement(HashMap_AsMap(&self->_entries), &id, &StoredEntry);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return CreateEntryNotFoundError(id);
+    }
+
+    *outEntry = StoredEntry.Value;
+    return Error_CreateSuccess();
 }
 
 Error GHDFCompound_GetOptional(GHDFCompound* self, GHDFEntryID id, GHDFObjectValue* outEntry, bool* outWasFound)
 {
-    GHDFEntryMetadata Metadata;
+    GHDFStoredCompoundEntry StoredEntry;
     Error Result = Error_CreateSuccess();
 
+    if (self == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+    if (outEntry == NULL)
+    {
+        return CreateNullArgumentError(u8"outEntry");
+    }
     if (outWasFound == NULL)
     {
         return CreateNullArgumentError(u8"outWasFound");
     }
 
     *outWasFound = false;
-    Result = GHDFCompound_GetEntryMetadata(self, id, outEntry, &Metadata);
+    Result = IMap_GetElement(HashMap_AsMap(&self->_entries), &id, &StoredEntry);
     if (Result.Code != ErrorCode_Success)
     {
         Error_Deconstruct(&Result);
@@ -1951,6 +2419,7 @@ Error GHDFCompound_GetOptional(GHDFCompound* self, GHDFEntryID id, GHDFObjectVal
     }
 
     *outWasFound = true;
+    *outEntry = StoredEntry.Value;
     return Error_CreateSuccess();
 }
 
@@ -1959,24 +2428,34 @@ Error GHDFCompound_GetVerified(GHDFCompound* self,
     GHDFCompoundEntryType expectedType,
     GHDFObjectValue* outEntry)
 {
-    GHDFEntryMetadata Metadata;
+    GHDFStoredCompoundEntry StoredEntry;
     Error Result = ValidateCompoundEntryType(expectedType);
 
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
+    if (self == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+    if (outEntry == NULL)
+    {
+        return CreateNullArgumentError(u8"outEntry");
+    }
 
-    Result = GHDFCompound_GetEntryMetadata(self, id, outEntry, &Metadata);
+    Result = IMap_GetElement(HashMap_AsMap(&self->_entries), &id, &StoredEntry);
     if (Result.Code != ErrorCode_Success)
     {
-        return Result;
+        Error_Deconstruct(&Result);
+        return CreateEntryNotFoundError(id);
     }
-    if ((outEntry->Type != expectedType.ValueType) || (Metadata.IsArray != expectedType.IsArray))
+    if ((StoredEntry.EntryType.ValueType != expectedType.ValueType) || (StoredEntry.EntryType.IsArray != expectedType.IsArray))
     {
-        return CreateTypeMismatchError(outEntry->Type, expectedType, Metadata.IsArray);
+        return CreateTypeMismatchError(StoredEntry.EntryType.ValueType, expectedType, StoredEntry.EntryType.IsArray);
     }
 
+    *outEntry = StoredEntry.Value;
     return Error_CreateSuccess();
 }
 
@@ -2006,118 +2485,46 @@ size_t GHDFCompound_GetEntryCount(GHDFCompound* self)
     return IMap_GetEntryCount(HashMap_AsMap(&self->_entries));
 }
 
-ICollection* GHDFCompound_AsEntryCollection(GHDFCompound* self)
+GHDFCompoundEntryCollection GHDFCompound_GetEntryCollection(GHDFCompound* self)
 {
-    if (self == NULL)
+    return (GHDFCompoundEntryCollection)
     {
-        return NULL;
-    }
-
-    return IMap_AsEntryCollection(HashMap_AsMap(&self->_entries));
+        ._collection = (self == NULL) ? NULL : &self->_entryCollection,
+    };
 }
 
-ICollection* GHDFCompound_AsValueCollection(GHDFCompound* self)
+GHDFCompoundValueCollection GHDFCompound_GetValueCollection(GHDFCompound* self)
 {
-    if (self == NULL)
+    return (GHDFCompoundValueCollection)
     {
-        return NULL;
-    }
-
-    return IMap_AsValueCollection(HashMap_AsMap(&self->_entries));
+        ._collection = (self == NULL) ? NULL : &self->_valueCollection,
+    };
 }
 
-ICollection* GHDFCompound_AsKeyCollection(GHDFCompound* self)
+GHDFCompoundKeyCollection GHDFCompound_GetKeyCollection(GHDFCompound* self)
 {
-    if (self == NULL)
+    return (GHDFCompoundKeyCollection)
     {
-        return NULL;
-    }
-
-    return IMap_AsKeyCollection(HashMap_AsMap(&self->_entries));
-}
-
-Error GHDFArray_Construct1(GHDFArray* self, GHDFValueType elementType)
-{
-    Error Result = ValidateArrayElementType(elementType);
-
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    return GHDFArray_Initialize(self, elementType);
-}
-
-Error GHDFArray_Deconstruct(GHDFArray* self)
-{
-    Error Result = Error_CreateSuccess();
-
-    if (self == NULL)
-    {
-        return CreateNullArgumentError(u8"self");
-    }
-
-    Result = GHDFArray_Clear(self);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    ArrayList_Deconstruct(&self->_valueMetadata);
-    ArrayList_Deconstruct(&self->_values);
-    Memory_Zero(self, sizeof(*self));
-    return Error_CreateSuccess();
+        ._collection = (self == NULL) ? NULL : IMap_AsKeyCollection(HashMap_AsMap(&self->_entries)),
+    };
 }
 
 Error GHDFArray_Clear(GHDFArray* self)
 {
-    size_t ElementCount = 0U;
-    Error Result = Error_CreateSuccess();
-
-    if (self == NULL)
-    {
-        return CreateNullArgumentError(u8"self");
-    }
-
-    ElementCount = IList_GetElementCount(&self->_values._list);
-    for (size_t Index = 0; Index < ElementCount; Index++)
-    {
-        Result = GHDFArray_ReleaseElementResources(self, Index);
-        if (Result.Code != ErrorCode_Success)
-        {
-            return Result;
-        }
-    }
-
-    Result = IList_Clear(&self->_valueMetadata._list);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    Result = IList_Clear(&self->_values._list);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    if (self->_ownerPool != NULL)
-    {
-        self->_elementType = GHDFValueType_None;
-    }
-    return Error_CreateSuccess();
+    return GHDFArray_ClearInternal(self);
 }
 
 Error GHDFArray_RemoveAt(GHDFArray* self, size_t index)
 {
-    Error Result = GHDFArray_ReleaseElementResources(self, index);
+    GHDFObjectValue Value;
+    Error Result = GHDFArray_GetValueAt(self, index, &Value);
 
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    Result = IList_RemoveAt(&self->_valueMetadata._list, index);
+    Result = GHDFObjectValue_Release(GHDF_CreateRegularType(self->_elementType), &Value);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
@@ -2126,49 +2533,65 @@ Error GHDFArray_RemoveAt(GHDFArray* self, size_t index)
     return IList_RemoveAt(&self->_values._list, index);
 }
 
-Error GHDFArray_Add(GHDFArray* self, void* element)
+Error GHDFArray_AddValue(GHDFArray* self, const GHDFObjectValue* value)
 {
-    return GHDFArray_Insert(self, IList_GetElementCount(&self->_values._list), element);
+    return GHDFArray_InsertValue(self, IList_GetElementCount(&self->_values._list), value);
 }
 
-Error GHDFArray_Insert(GHDFArray* self, size_t index, void* element)
+Error GHDFArray_InsertValue(GHDFArray* self, size_t index, const GHDFObjectValue* value)
 {
-    GHDFObjectValue Value;
-    Error Result = GHDFArray_CreateValue(self, element, &Value);
+    const void* StoragePointer = NULL;
+    Error Result = GHDFValidateValueAgainstArrayType(self, value);
 
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    return GHDFArray_SetElementValue(self, index, Value, NULL, false);
+    StoragePointer = GHDFObjectValue_GetStoragePointer(value);
+    if (StoragePointer == NULL)
+    {
+        return CreateInvalidArrayValueError();
+    }
+
+    return IList_Insert(&self->_values._list, index, (void*)StoragePointer);
 }
 
-Error GHDFArray_Replace(GHDFArray* self, size_t index, void* element)
+Error GHDFArray_ReplaceValue(GHDFArray* self, size_t index, const GHDFObjectValue* value)
 {
-    GHDFObjectValue Value;
-    Error Result = GHDFArray_CreateValue(self, element, &Value);
+    GHDFObjectValue ExistingValue;
+    const void* StoragePointer = NULL;
+    Error Result = GHDFValidateValueAgainstArrayType(self, value);
 
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    return GHDFArray_SetElementValue(self, index, Value, NULL, true);
+    Result = GHDFArray_GetValueAt(self, index, &ExistingValue);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    StoragePointer = GHDFObjectValue_GetStoragePointer(value);
+    if (StoragePointer == NULL)
+    {
+        return CreateInvalidArrayValueError();
+    }
+
+    Result = IList_Replace(&self->_values._list, index, (void*)StoragePointer);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    return GHDFObjectValue_Release(GHDF_CreateRegularType(self->_elementType), &ExistingValue);
 }
 
 Error GHDFArray_Get(GHDFArray* self, size_t index, GHDFObjectValue* outValue)
 {
-    if (self == NULL)
-    {
-        return CreateNullArgumentError(u8"self");
-    }
-    if (outValue == NULL)
-    {
-        return CreateNullArgumentError(u8"outValue");
-    }
-
-    return IList_GetElement(&self->_values._list, index, outValue);
+    return GHDFArray_GetValueAt(self, index, outValue);
 }
 
 size_t GHDFArray_GetElementCount(GHDFArray* self)
@@ -2191,14 +2614,12 @@ GHDFValueType GHDFArray_GetElementType(GHDFArray* self)
     return self->_elementType;
 }
 
-ICollection* GHDFArray_AsElementCollection(GHDFArray* self)
+GHDFArrayElementCollection GHDFArray_GetElementCollection(GHDFArray* self)
 {
-    if (self == NULL)
+    return (GHDFArrayElementCollection)
     {
-        return NULL;
-    }
-
-    return IList_AsCollection(&self->_values._list);
+        ._collection = (self == NULL) ? NULL : &self->_elementCollection,
+    };
 }
 
 Error GHDFObjectPool_Create(GHDFObjectPool** outPool)
@@ -2231,16 +2652,16 @@ Error GHDFObjectPool_Deconstruct(GHDFObjectPool* self)
         return CreateNullArgumentError(u8"self");
     }
 
-    ObjectPool_Deconstruct(&self->_compoundPool);
-    ObjectPool_Deconstruct(&self->_arrayPool);
     ObjectPool_Deconstruct(&self->_stringPool);
+    ObjectPool_Deconstruct(&self->_arrayPool);
+    ObjectPool_Deconstruct(&self->_compoundPool);
     Memory_Free(self);
     return Error_CreateSuccess();
 }
 
 Error GHDFObjectPool_BorrowCompound(GHDFObjectPool* self, GHDFCompound** outCompound)
 {
-    GHDFCompound* Compound = NULL;
+    void* Object = NULL;
     Error Result = Error_CreateSuccess();
 
     if (self == NULL)
@@ -2252,19 +2673,20 @@ Error GHDFObjectPool_BorrowCompound(GHDFObjectPool* self, GHDFCompound** outComp
         return CreateNullArgumentError(u8"outCompound");
     }
 
-    Result = ObjectPool_GetNewObject(&self->_compoundPool, (void**)&Compound);
+    *outCompound = NULL;
+    Result = ObjectPool_GetNewObject(&self->_compoundPool, &Object);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    Compound->_ownerPool = self;
-    *outCompound = Compound;
+    *outCompound = Object;
     return Error_CreateSuccess();
 }
 
-Error GHDFObjectPool_BorrowArray(GHDFObjectPool* self, GHDFArray** outArray)
+Error GHDFObjectPool_BorrowArray(GHDFObjectPool* self, GHDFValueType elementType, GHDFArray** outArray)
 {
+    void* Object = NULL;
     GHDFArray* Array = NULL;
     Error Result = Error_CreateSuccess();
 
@@ -2277,20 +2699,34 @@ Error GHDFObjectPool_BorrowArray(GHDFObjectPool* self, GHDFArray** outArray)
         return CreateNullArgumentError(u8"outArray");
     }
 
-    Result = ObjectPool_GetNewObject(&self->_arrayPool, (void**)&Array);
+    *outArray = NULL;
+    Result = ValidateArrayElementType(elementType);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    Array->_ownerPool = self;
+    Result = ObjectPool_GetNewObject(&self->_arrayPool, &Object);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    Array = Object;
+    Result = GHDFArray_PrepareForElementType(Array, elementType);
+    if (Result.Code != ErrorCode_Success)
+    {
+        (void)ObjectPool_DisposeObject(&self->_arrayPool, Array);
+        return Result;
+    }
+
     *outArray = Array;
     return Error_CreateSuccess();
 }
 
 Error GHDFObjectPool_BorrowString(GHDFObjectPool* self, GenericBuffer** outStringBuffer)
 {
-    GenericBuffer* StringBuffer = NULL;
+    void* Object = NULL;
     Error Result = Error_CreateSuccess();
 
     if (self == NULL)
@@ -2302,19 +2738,20 @@ Error GHDFObjectPool_BorrowString(GHDFObjectPool* self, GenericBuffer** outStrin
         return CreateNullArgumentError(u8"outStringBuffer");
     }
 
-    Result = ObjectPool_GetNewObject(&self->_stringPool, (void**)&StringBuffer);
+    *outStringBuffer = NULL;
+    Result = ObjectPool_GetNewObject(&self->_stringPool, &Object);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    *outStringBuffer = StringBuffer;
+    *outStringBuffer = Object;
     return Error_CreateSuccess();
 }
 
 Error GHDFObjectPool_ReturnCompound(GHDFObjectPool* self, GHDFCompound* compound, bool includeNestedStructures)
 {
-    Error Result = Error_CreateSuccess();
+    (void)includeNestedStructures;
 
     if (self == NULL)
     {
@@ -2322,16 +2759,11 @@ Error GHDFObjectPool_ReturnCompound(GHDFObjectPool* self, GHDFCompound* compound
     }
     if (compound == NULL)
     {
-        return CreateNullArgumentError(u8"compound");
+        return Error_CreateSuccess();
     }
-
-    if (includeNestedStructures)
+    if (!GHDFBorrowToken_IsOwnedByPool(&compound->_borrowToken, GHDFBorrowKind_Compound, self))
     {
-        Result = GHDFObjectPool_ReturnNestedFromCompound(self, compound);
-        if (Result.Code != ErrorCode_Success)
-        {
-            return Result;
-        }
+        return CreateInvalidPoolOwnershipError(u8"compound");
     }
 
     return ObjectPool_DisposeObject(&self->_compoundPool, compound);
@@ -2339,7 +2771,7 @@ Error GHDFObjectPool_ReturnCompound(GHDFObjectPool* self, GHDFCompound* compound
 
 Error GHDFObjectPool_ReturnArray(GHDFObjectPool* self, GHDFArray* array, bool includeNestedStructures)
 {
-    Error Result = Error_CreateSuccess();
+    (void)includeNestedStructures;
 
     if (self == NULL)
     {
@@ -2347,16 +2779,11 @@ Error GHDFObjectPool_ReturnArray(GHDFObjectPool* self, GHDFArray* array, bool in
     }
     if (array == NULL)
     {
-        return CreateNullArgumentError(u8"array");
+        return Error_CreateSuccess();
     }
-
-    if (includeNestedStructures)
+    if (!GHDFBorrowToken_IsOwnedByPool(&array->_borrowToken, GHDFBorrowKind_Array, self))
     {
-        Result = GHDFObjectPool_ReturnNestedFromArray(self, array);
-        if (Result.Code != ErrorCode_Success)
-        {
-            return Result;
-        }
+        return CreateInvalidPoolOwnershipError(u8"array");
     }
 
     return ObjectPool_DisposeObject(&self->_arrayPool, array);
@@ -2364,13 +2791,21 @@ Error GHDFObjectPool_ReturnArray(GHDFObjectPool* self, GHDFArray* array, bool in
 
 Error GHDFObjectPool_ReturnString(GHDFObjectPool* self, GenericBuffer* stringBuffer)
 {
+    GHDFBorrowToken* Token = NULL;
+
     if (self == NULL)
     {
         return CreateNullArgumentError(u8"self");
     }
     if (stringBuffer == NULL)
     {
-        return CreateNullArgumentError(u8"stringBuffer");
+        return Error_CreateSuccess();
+    }
+
+    Token = stringBuffer->_userData;
+    if (!GHDFStringBuffer_IsBorrowed(stringBuffer, NULL) || (Token->OwnerPool != self))
+    {
+        return CreateInvalidPoolOwnershipError(u8"string");
     }
 
     return ObjectPool_DisposeObject(&self->_stringPool, stringBuffer);
@@ -2378,7 +2813,8 @@ Error GHDFObjectPool_ReturnString(GHDFObjectPool* self, GenericBuffer* stringBuf
 
 GHDFCompoundEntryType GHDF_CreateRegularType(GHDFValueType valueType)
 {
-    return (GHDFCompoundEntryType) {
+    return (GHDFCompoundEntryType)
+    {
         .ValueType = valueType,
         .IsArray = false,
     };
@@ -2386,7 +2822,8 @@ GHDFCompoundEntryType GHDF_CreateRegularType(GHDFValueType valueType)
 
 GHDFCompoundEntryType GHDF_CreateArrayType(GHDFValueType valueType)
 {
-    return (GHDFCompoundEntryType) {
+    return (GHDFCompoundEntryType)
+    {
         .ValueType = valueType,
         .IsArray = true,
     };
