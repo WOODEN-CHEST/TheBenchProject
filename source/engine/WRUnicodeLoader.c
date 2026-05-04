@@ -1,13 +1,13 @@
-#include "WRError.h"
-#include "WRUnicode.h"
 #include "WRUnicodeLoader.h"
+#include "WRFileSystem.h"
 #include "WRMemory.h"
-#include <stdint.h>
-#include <stddef.h>
-#include "raylib.h"
-#include <stdlib.h>
-#include <stdio.h>
 #include <math.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+
+// Macros.
 
 
 // Types.
@@ -15,6 +15,7 @@ typedef struct UnicodeParserStruct
 {
     const unsigned char* FilePath;
 
+    GenericBuffer TextBuffer;
     unsigned char* Text;
     size_t TextIndex;
     size_t LineIndex;
@@ -35,7 +36,6 @@ typedef struct LineParseActionStruct
 } LineParseAction;
 
 
-// Function declarations.
 static Error ParseCategory(UnicodeParser* parser);
 
 static Error ParseNumericValue(UnicodeParser* parser);
@@ -52,6 +52,7 @@ static Error ParseIsDigit(UnicodeParser* parser);
 // Fields.
 static const size_t UNICODE_DATA_CAPACITY_DEFAULT = 2 << 15; // If the unicode data file text doesn't change much, then this should be large enough.
 static const size_t UNICODE_DATA_CAPACITY_GROWTH = 2;
+static const size_t UNICODE_TEXT_INITIAL_CAPACITY = 256;
 static const unsigned char SEPARATOR = ';';
 static const unsigned char NEWLINE = '\n';
 static const unsigned char DIVIDER = '/';
@@ -62,7 +63,7 @@ static const size_t SECTION_COUNT = 15;
 static const float DIGIT_VALUE_MIN = 0.0f;
 static const float DIGIT_VALUE_MAX = 9.0f;
 
-static LineParseAction PARSE_ACTIONS[] = 
+static const LineParseAction PARSE_ACTIONS[] =
 {
     { false, &ParseCodePoint, },
     { false, NULL },
@@ -85,6 +86,31 @@ static const size_t MAX_CODEPOINTS = 1 << 21; // Let's be reasonable with the si
 
 
 // Static functions.
+static bool UnicodeLoaderTextBufferAllocate(GenericBuffer* destination, size_t requestedCapacity)
+{
+    unsigned char* NewData = Memory_Reallocate(destination->_data, requestedCapacity);
+    if (NewData == NULL)
+    {
+        return false;
+    }
+
+    destination->_data = NewData;
+    destination->_capacity = requestedCapacity;
+    return true;
+}
+
+static void CreateGrowableByteBuffer(GenericBuffer* buffer)
+{
+    unsigned char* Data = Memory_Allocate(UNICODE_TEXT_INITIAL_CAPACITY);
+    GenericBuffer_CreateVariable(buffer,
+        Data,
+        UNICODE_TEXT_INITIAL_CAPACITY,
+        sizeof(unsigned char),
+        0,
+        NULL,
+        &UnicodeLoaderTextBufferAllocate);
+}
+
 static inline unsigned char GetParserChar(UnicodeParser* parser)
 {
     return parser->Text[parser->TextIndex];
@@ -95,6 +121,18 @@ static inline bool IsCharSectionEnd(unsigned char character)
     return (character == SEPARATOR) || (character == NEWLINE) || (character == '\0');
 }
 
+static inline bool ParserHasFilePath(const UnicodeParser* parser)
+{
+    return (parser->FilePath != NULL) && (parser->FilePath[0] != '\0');
+}
+
+static bool IsCategoryText(const unsigned char* sourceText, unsigned char firstCharacter, unsigned char secondCharacter)
+{
+    return (sourceText[0] == firstCharacter) &&
+        (sourceText[1] == secondCharacter) &&
+        (sourceText[2] == '\0');
+}
+
 static void EnsureUnicodeDataCapacity(UnicodeParser* parser, size_t capacity)
 {
     if (parser->DataCapacity >= capacity)
@@ -102,60 +140,183 @@ static void EnsureUnicodeDataCapacity(UnicodeParser* parser, size_t capacity)
         return;
     }
 
-    size_t NewCapacity = parser->DataCapacity == 0 ? UNICODE_DATA_CAPACITY_DEFAULT : parser->DataCapacity;
+    size_t NewCapacity = (parser->DataCapacity == 0) ? UNICODE_DATA_CAPACITY_DEFAULT : parser->DataCapacity;
     while (NewCapacity < capacity)
     {
         NewCapacity *= UNICODE_DATA_CAPACITY_GROWTH;
     }
 
     size_t NewSize = NewCapacity * sizeof(UnicodeCharacter);
-    parser->Data = parser->Data ? Memory_Reallocate(parser->Data, NewSize) : Memory_Allocate(NewSize);
+    parser->Data = (parser->Data != NULL) ? Memory_Reallocate(parser->Data, NewSize) : Memory_Allocate(NewSize);
     parser->DataCapacity = NewCapacity;
 }
 
-static Error InitParser(const unsigned char* dataBaseFilePath, UnicodeParser* parser)
+static Error InitParser(const unsigned char* filePath, GenericBuffer* textBuffer, UnicodeParser* parser)
 {
-    const char* CharFilePath = (const char*)dataBaseFilePath;
-    if (!FileExists(CharFilePath))
+    if ((textBuffer == NULL) || (parser == NULL))
     {
         return Error_Construct3(
-            ErrorCode_FileNotFound, 
-            u8"Unicode data file \"%s\" not found.",
-            dataBaseFilePath);
+            ErrorCode_IllegalArgument,
+            u8"Unicode parser initialization requires both text buffer and parser.");
     }
 
-    char* Text = LoadFileText(CharFilePath);
-    if (!Text)
-    {
-        return Error_Construct3(
-            ErrorCode_IO, 
-            u8"Failed to read Unicode data file \"%s\" due to an unknown reason.",
-            dataBaseFilePath);
-    }
-
-    parser->Text = (unsigned char*)Text;
-    parser->TextIndex = 0;
-    parser->Data = NULL;
-    parser->DataCapacity = 0;
-    parser->DataCount = 0;
-    parser->FilePath = dataBaseFilePath;
-    parser->LineIndex = 0;
+    Memory_Zero(parser, sizeof(*parser));
+    parser->FilePath = filePath;
+    parser->TextBuffer = *textBuffer;
+    parser->Text = parser->TextBuffer._data;
     parser->MaxCodePoint = CODEPOINT_NONE;
     EnsureUnicodeDataCapacity(parser, UNICODE_DATA_CAPACITY_DEFAULT);
-
     return Error_CreateSuccess();
 }
 
 static void DeinitParser(UnicodeParser* parser)
 {
+    if (parser == NULL)
+    {
+        return;
+    }
+
     if (parser->Data != NULL)
     {
         Memory_Free(parser->Data);
         parser->Data = NULL;
     }
 
-    UnloadFileText((char*)parser->Text);
+    if (parser->TextBuffer._data != NULL)
+    {
+        Memory_Free(parser->TextBuffer._data);
+        parser->TextBuffer._data = NULL;
+    }
+
     parser->Text = NULL;
+    parser->DataCapacity = 0;
+    parser->DataCount = 0;
+}
+
+static Error CreateIncompleteLineError(UnicodeParser* parser, size_t sectionIndex)
+{
+    if (ParserHasFilePath(parser))
+    {
+        return Error_Construct3(ErrorCode_InvalidUnicodeData,
+            u8"Malformed Unicode file \"%s\", expected %zu sections at line %zu, got %zu instead.",
+            parser->FilePath,
+            SECTION_COUNT,
+            parser->LineIndex + 1,
+            sectionIndex + 1);
+    }
+
+    return Error_Construct3(ErrorCode_InvalidUnicodeData,
+        u8"Malformed Unicode data, expected %zu sections at line %zu, got %zu instead.",
+        SECTION_COUNT,
+        parser->LineIndex + 1,
+        sectionIndex + 1);
+}
+
+static Error CreateMalformedHexadecimalError(UnicodeParser* parser, const unsigned char* str, const unsigned char* context)
+{
+    if (ParserHasFilePath(parser))
+    {
+        return Error_Construct3(
+            ErrorCode_InvalidUnicodeData,
+            u8"Malformed Unicode source file \"%s\", expected hexadecimal number at line %zu, got \"%s\" (%s).",
+            parser->FilePath,
+            parser->LineIndex + 1,
+            str,
+            context);
+    }
+
+    return Error_Construct3(
+        ErrorCode_InvalidUnicodeData,
+        u8"Malformed Unicode data, expected hexadecimal number at line %zu, got \"%s\" (%s).",
+        parser->LineIndex + 1,
+        str,
+        context);
+}
+
+static Error CreateMalformedDecimalError(UnicodeParser* parser, const unsigned char* str, const unsigned char* context)
+{
+    if (ParserHasFilePath(parser))
+    {
+        return Error_Construct3(
+            ErrorCode_InvalidUnicodeData,
+            u8"Malformed Unicode source file \"%s\", expected decimal number at line %zu, got \"%s\" (%s).",
+            parser->FilePath,
+            parser->LineIndex + 1,
+            str,
+            context);
+    }
+
+    return Error_Construct3(
+        ErrorCode_InvalidUnicodeData,
+        u8"Malformed Unicode data, expected decimal number at line %zu, got \"%s\" (%s).",
+        parser->LineIndex + 1,
+        str,
+        context);
+}
+
+static Error CreateInvalidNumericFormatError(UnicodeParser* parser)
+{
+    if (ParserHasFilePath(parser))
+    {
+        return Error_Construct3(
+            ErrorCode_InvalidUnicodeData,
+            u8"Invalid Unicode file \"%s\" on line %zu, expected either a constant numeric value or division without spaces, got \"%s\".",
+            parser->FilePath,
+            parser->LineIndex + 1,
+            parser->Text + parser->TextIndex);
+    }
+
+    return Error_Construct3(
+        ErrorCode_InvalidUnicodeData,
+        u8"Invalid Unicode data on line %zu, expected either a constant numeric value or division without spaces, got \"%s\".",
+        parser->LineIndex + 1,
+        parser->Text + parser->TextIndex);
+}
+
+static Error LoadTextFromPath(const unsigned char* dataBaseFilePath, GenericBuffer* textBuffer)
+{
+    Error Result = Error_CreateSuccess();
+
+    CreateGrowableByteBuffer(textBuffer);
+    Result = FileSystem_ReadAllText(dataBaseFilePath, textBuffer);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Memory_Free(textBuffer->_data);
+        textBuffer->_data = NULL;
+        textBuffer->_capacity = 0;
+        textBuffer->_count = 0;
+    }
+
+    return Result;
+}
+
+static Error LoadTextFromStream(IOStream* stream, GenericBuffer* textBuffer)
+{
+    Error Result = Error_CreateSuccess();
+
+    CreateGrowableByteBuffer(textBuffer);
+    Result = IOStream_ReadAll(stream, textBuffer);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Memory_Free(textBuffer->_data);
+        textBuffer->_data = NULL;
+        textBuffer->_capacity = 0;
+        textBuffer->_count = 0;
+        return Result;
+    }
+
+    if (!GenericBuffer_NullTerminate(textBuffer))
+    {
+        Memory_Free(textBuffer->_data);
+        textBuffer->_data = NULL;
+        textBuffer->_capacity = 0;
+        textBuffer->_count = 0;
+        return Error_Construct3(
+            ErrorCode_BufferTooSmall,
+            u8"Failed to null terminate the Unicode stream text buffer.");
+    }
+
+    return Error_CreateSuccess();
 }
 
 static void MarkSectionEnd(UnicodeParser* parser, bool* isFileEnd, bool* isLineEnd, size_t* sectionLength)
@@ -168,15 +329,15 @@ static void MarkSectionEnd(UnicodeParser* parser, bool* isFileEnd, bool* isLineE
         LocalIndex++;
     }
 
-    *isFileEnd = parser->Text[LocalIndex] == '\0';
-    *isLineEnd = parser->Text[LocalIndex] == '\n';
+    *isFileEnd = (parser->Text[LocalIndex] == '\0');
+    *isLineEnd = (parser->Text[LocalIndex] == '\n');
     *sectionLength = LocalIndex - parser->TextIndex;
     parser->Text[LocalIndex] = '\0';
 }
 
 static inline bool IsLastSection(size_t sectionIndex)
 {
-    return sectionIndex >= SECTION_COUNT - 1;
+    return sectionIndex >= (SECTION_COUNT - 1);
 }
 
 static bool SkipSection(UnicodeParser* parser, size_t sectionIndex)
@@ -199,15 +360,8 @@ static bool SkipSection(UnicodeParser* parser, size_t sectionIndex)
     {
         parser->TextIndex++;
     }
-    
-    return true;
-}
 
-static Error CreateIncompleteLineError(UnicodeParser* parser, size_t sectionIndex)
-{
-    return Error_Construct3(ErrorCode_InvalidUnicodeData,
-        u8"Malformed Unicode file \"%s\", expected %zu sections at line %zu, got %zu instead.",
-        parser->FilePath, SECTION_COUNT, parser->LineIndex + 1, sectionIndex + 1);
+    return true;
 }
 
 static bool SkipUntilNonWhitespace(UnicodeParser* parser)
@@ -218,6 +372,7 @@ static bool SkipUntilNonWhitespace(UnicodeParser* parser)
     {
         LocalIndex++;
     }
+
     parser->TextIndex = LocalIndex;
     return GetParserChar(parser) != '\0';
 }
@@ -246,7 +401,7 @@ static Error ParseSingleLine(UnicodeParser* parser, bool* isFileEnd, bool* wasLi
     for (size_t i = 0; i < SECTION_COUNT; i++)
     {
         LineParseAction Action = PARSE_ACTIONS[i];
-        if (Action.IsSkipped || !Action.ParseCallback)
+        if (Action.IsSkipped || (Action.ParseCallback == NULL))
         {
             bool WasSkipValid = SkipSection(parser, i);
             if (!WasSkipValid)
@@ -257,18 +412,20 @@ static Error ParseSingleLine(UnicodeParser* parser, bool* isFileEnd, bool* wasLi
         }
         else
         {
-            bool IsLineEnd;
-            size_t SectionLength;
+            bool IsLineEnd = false;
+            size_t SectionLength = 0;
             MarkSectionEnd(parser, isFileEnd, &IsLineEnd, &SectionLength);
             if ((IsLineEnd || *isFileEnd) && !IsLastSection(i))
             {
                 return CreateIncompleteLineError(parser, i);
             }
+
             Error Result = (*Action.ParseCallback)(parser);
             if (Result.Code != ErrorCode_Success)
             {
                 return Result;
             }
+
             parser->TextIndex += SectionLength;
             if (!*isFileEnd)
             {
@@ -291,10 +448,10 @@ static Error ParseSingleLine(UnicodeParser* parser, bool* isFileEnd, bool* wasLi
 
 static Error ParseUnicodeData(UnicodeParser* parser)
 {
-    bool IsFileEnd;
+    bool IsFileEnd = false;
     do
     {
-        bool WasLineParsed;
+        bool WasLineParsed = false;
         Error Result = ParseSingleLine(parser, &IsFileEnd, &WasLineParsed);
         if (Result.Code != ErrorCode_Success)
         {
@@ -312,125 +469,125 @@ static Error ParseUnicodeData(UnicodeParser* parser)
 static Error ParseCategory(UnicodeParser* parser)
 {
     CodePointCategory Category;
-    const char* SourceText= (const char*)(parser->Text + parser->TextIndex);
+    const unsigned char* SourceText = parser->Text + parser->TextIndex;
 
-    if (TextIsEqual(SourceText, "Lu"))
+    if (IsCategoryText(SourceText, 'L', 'u'))
     {
         Category = CodePointCategory_UppercaseLetter;
     }
-    else if (TextIsEqual(SourceText, "Ll"))
+    else if (IsCategoryText(SourceText, 'L', 'l'))
     {
         Category = CodePointCategory_LowercaseLetter;
     }
-    else if (TextIsEqual(SourceText, "Lt"))
+    else if (IsCategoryText(SourceText, 'L', 't'))
     {
         Category = CodePointCategory_TitlecaseLetter;
     }
-    else if (TextIsEqual(SourceText, "Lm"))
+    else if (IsCategoryText(SourceText, 'L', 'm'))
     {
         Category = CodePointCategory_ModifiedLetter;
     }
-    else if (TextIsEqual(SourceText, "Lo"))
+    else if (IsCategoryText(SourceText, 'L', 'o'))
     {
         Category = CodePointCategory_OtherLetter;
     }
-    else if (TextIsEqual(SourceText, "Mn"))
+    else if (IsCategoryText(SourceText, 'M', 'n'))
     {
         Category = CodePointCategory_NonspacingMark;
     }
-    else if (TextIsEqual(SourceText, "Mc"))
+    else if (IsCategoryText(SourceText, 'M', 'c'))
     {
         Category = CodePointCategory_SpacingMark;
     }
-    else if (TextIsEqual(SourceText, "Me"))
+    else if (IsCategoryText(SourceText, 'M', 'e'))
     {
         Category = CodePointCategory_EnclosingMark;
     }
-    else if (TextIsEqual(SourceText, "Nd"))
+    else if (IsCategoryText(SourceText, 'N', 'd'))
     {
         Category = CodePointCategory_DecimalNumber;
     }
-    else if (TextIsEqual(SourceText, "Nl"))
+    else if (IsCategoryText(SourceText, 'N', 'l'))
     {
         Category = CodePointCategory_LetterNumber;
     }
-    else if (TextIsEqual(SourceText, "No"))
+    else if (IsCategoryText(SourceText, 'N', 'o'))
     {
         Category = CodePointCategory_OtherNumber;
     }
-    else if (TextIsEqual(SourceText, "Pc"))
+    else if (IsCategoryText(SourceText, 'P', 'c'))
     {
         Category = CodePointCategory_ConnectorPunctuation;
     }
-    else if (TextIsEqual(SourceText, "Pd"))
+    else if (IsCategoryText(SourceText, 'P', 'd'))
     {
         Category = CodePointCategory_DashPunctuation;
     }
-    else if (TextIsEqual(SourceText, "Ps"))
+    else if (IsCategoryText(SourceText, 'P', 's'))
     {
         Category = CodePointCategory_OpenPunctuation;
     }
-    else if (TextIsEqual(SourceText, "Pe"))
+    else if (IsCategoryText(SourceText, 'P', 'e'))
     {
         Category = CodePointCategory_ClosePunctuation;
     }
-    else if (TextIsEqual(SourceText, "Pi"))
+    else if (IsCategoryText(SourceText, 'P', 'i'))
     {
         Category = CodePointCategory_InitialPunctuation;
     }
-    else if (TextIsEqual(SourceText, "Pf"))
+    else if (IsCategoryText(SourceText, 'P', 'f'))
     {
         Category = CodePointCategory_FinalPunctuation;
     }
-    else if (TextIsEqual(SourceText, "Po"))
+    else if (IsCategoryText(SourceText, 'P', 'o'))
     {
         Category = CodePointCategory_OtherPunctuation;
     }
-    else if (TextIsEqual(SourceText, "Sm"))
+    else if (IsCategoryText(SourceText, 'S', 'm'))
     {
         Category = CodePointCategory_Math_Symbol;
     }
-    else if (TextIsEqual(SourceText, "Sc"))
+    else if (IsCategoryText(SourceText, 'S', 'c'))
     {
         Category = CodePointCategory_CurrencySymbol;
     }
-    else if (TextIsEqual(SourceText, "Sk"))
+    else if (IsCategoryText(SourceText, 'S', 'k'))
     {
         Category = CodePointCategory_ModifierSymbol;
     }
-    else if (TextIsEqual(SourceText, "So"))
+    else if (IsCategoryText(SourceText, 'S', 'o'))
     {
         Category = CodePointCategory_OtherSymbol;
     }
-    else if (TextIsEqual(SourceText, "Zs"))
+    else if (IsCategoryText(SourceText, 'Z', 's'))
     {
         Category = CodePointCategory_SpaceSeparator;
     }
-    else if (TextIsEqual(SourceText, "Zl"))
+    else if (IsCategoryText(SourceText, 'Z', 'l'))
     {
         Category = CodePointCategory_LineSeparator;
     }
-    else if (TextIsEqual(SourceText, "Zp"))
+    else if (IsCategoryText(SourceText, 'Z', 'p'))
     {
         Category = CodePointCategory_ParagraphSeparator;
     }
-    else if (TextIsEqual(SourceText, "Cc"))
+    else if (IsCategoryText(SourceText, 'C', 'c'))
     {
         Category = CodePointCategory_Control;
     }
-    else if (TextIsEqual(SourceText, "Cf"))
+    else if (IsCategoryText(SourceText, 'C', 'f'))
     {
         Category = CodePointCategory_Format;
     }
-    else if (TextIsEqual(SourceText, "Cs"))
+    else if (IsCategoryText(SourceText, 'C', 's'))
     {
         Category = CodePointCategory_Surrogate;
     }
-    else if (TextIsEqual(SourceText, "Co"))
+    else if (IsCategoryText(SourceText, 'C', 'o'))
     {
         Category = CodePointCategory_Private_Use;
     }
-    else if (TextIsEqual(SourceText, "Cn"))
+    else if (IsCategoryText(SourceText, 'C', 'n'))
     {
         Category = CodePointCategory_Unassigned;
     }
@@ -444,7 +601,6 @@ static Error ParseCategory(UnicodeParser* parser)
     }
 
     parser->Data[parser->DataCount]._category = Category;
-
     return Error_CreateSuccess();
 }
 
@@ -454,7 +610,8 @@ static Error StringToCodePoint(UnicodeParser* parser,
     const unsigned char* context,
     bool isInvalidAllowed)
 {
-    unsigned char* End;
+    unsigned char* End = NULL;
+
     *codepoint = CODEPOINT_NONE;
     CodePoint Value = (CodePoint)strtol((const char*)str, (char**)&End, NUMBER_BASE);
     if (End == str)
@@ -464,24 +621,13 @@ static Error StringToCodePoint(UnicodeParser* parser,
             return Error_CreateSuccess();
         }
 
-        return Error_Construct3(
-            ErrorCode_InvalidUnicodeData,
-            u8"Malformed Unicode source file \"%s\", expected hexadecimal number at line %zu, got \"%s\" (%s).",
-            parser->FilePath,
-            parser->LineIndex + 1,
-            str,
-            context);
+        return CreateMalformedHexadecimalError(parser, str, context);
     }
     if (*End != '\0')
     {
-        return Error_Construct3(
-            ErrorCode_InvalidUnicodeData,
-            u8"Malformed Unicode source file \"%s\", expected hexadecimal number at line %zu, got \"%s\" (%s).",
-            parser->FilePath,
-            parser->LineIndex + 1,
-            str,
-            context);
+        return CreateMalformedHexadecimalError(parser, str, context);
     }
+
     *codepoint = Value;
     return Error_CreateSuccess();
 }
@@ -491,29 +637,19 @@ static Error StringToFloat(UnicodeParser* parser,
     float* value,
     const unsigned char* context)
 {
+    unsigned char* End = NULL;
+
     *value = NAN;
-    unsigned char* End;
     float Value = strtof((const char*)str, (char**)&End);
     if (End == str)
     {
-        return Error_Construct3(
-            ErrorCode_InvalidUnicodeData,
-            u8"Malformed Unicode source file \"%s\", expected decimal number at line %zu, got \"%s\" (%s).",
-            parser->FilePath,
-            parser->LineIndex + 1,
-            str,
-            context);
+        return CreateMalformedDecimalError(parser, str, context);
     }
     if (*End != '\0')
     {
-        return Error_Construct3(
-            ErrorCode_InvalidUnicodeData,
-            u8"Malformed Unicode source file \"%s\", expected decimal number at line %zu, got \"%s\" (%s).",
-            parser->FilePath,
-            parser->LineIndex + 1,
-            str,
-            context);
+        return CreateMalformedDecimalError(parser, str, context);
     }
+
     *value = Value;
     return Error_CreateSuccess();
 }
@@ -523,7 +659,9 @@ static size_t ReadNumberIntoBuffer(const unsigned char* source, size_t startInde
     size_t MaxBufferIndex = bufferSize - 2;
     size_t LocalIndex = startIndex;
 
-    for (size_t i = 0; (i < MaxBufferIndex) && !IsCharSectionEnd(source[LocalIndex]) && (source[LocalIndex] != DIVIDER); i++, LocalIndex++)
+    for (size_t i = 0;
+        (i < MaxBufferIndex) && !IsCharSectionEnd(source[LocalIndex]) && (source[LocalIndex] != DIVIDER);
+        i++, LocalIndex++)
     {
         buffer[i] = source[LocalIndex];
     }
@@ -546,7 +684,7 @@ static Error ParseNumericValue(UnicodeParser* parser)
     size_t LocalIndex = parser->TextIndex;
 
     LocalIndex += ReadNumberIntoBuffer(parser->Text, LocalIndex, Buffer, sizeof(Buffer));
-    float NumberA;
+    float NumberA = NAN;
     Error Result = StringToFloat(parser, Buffer, &NumberA, u8"First or only number value.");
     if (Result.Code != ErrorCode_Success)
     {
@@ -558,27 +696,21 @@ static Error ParseNumericValue(UnicodeParser* parser)
         *Value = NumberA;
         return Error_CreateSuccess();
     }
-    else if (parser->Text[LocalIndex] != DIVIDER)
+    if (parser->Text[LocalIndex] != DIVIDER)
     {
-        return Error_Construct3(
-            ErrorCode_InvalidUnicodeData,
-            u8"Invalid Unicode file \"%s\" on line %zu, expected either a constant numeric value or " 
-            u8"division without spaces, got \"%s\".",
-            parser->FilePath,
-            parser->LineIndex + 1,
-            parser->Text + parser->TextIndex);
+        return CreateInvalidNumericFormatError(parser);
     }
 
     LocalIndex++;
     ReadNumberIntoBuffer(parser->Text, LocalIndex, Buffer, sizeof(Buffer));
-    float NumberB;
+    float NumberB = NAN;
     Result = StringToFloat(parser, Buffer, &NumberB, u8"Second number value (denominator).");
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
-    *Value = (NumberB == 0.0f) ? NAN : (NumberA / NumberB);
 
+    *Value = (NumberB == 0.0f) ? NAN : (NumberA / NumberB);
     return Error_CreateSuccess();
 }
 
@@ -622,9 +754,12 @@ static void EnsureNullTerminatorInDatabase(UnicodeData* data)
     };
 }
 
-static void LoadParsedUnicodeIntoTable(UnicodeCharacter* characters, size_t characterCount, CodePoint maxCodePoint, UnicodeData* data)
+static void LoadParsedUnicodeIntoTable(UnicodeCharacter* characters,
+    size_t characterCount,
+    CodePoint maxCodePoint,
+    UnicodeData* data)
 {
-    size_t CodepointCount;
+    size_t CodepointCount = 0;
     if (maxCodePoint < 1)
     {
         CodepointCount = 1;
@@ -639,7 +774,7 @@ static void LoadParsedUnicodeIntoTable(UnicodeCharacter* characters, size_t char
     }
 
     data->_characters = Memory_Allocate(CodepointCount * sizeof(UnicodeCharacter));
-    
+
     for (size_t i = 0; i < CodepointCount; i++)
     {
         UnicodeCharacter* Character = &data->_characters[i];
@@ -647,7 +782,7 @@ static void LoadParsedUnicodeIntoTable(UnicodeCharacter* characters, size_t char
         Character->_codepoint = CODEPOINT_NONE;
         Character->_category = CodePointCategory_None;
         Character->_lowerMapping = CODEPOINT_NONE;
-        Character->_upperMapping= CODEPOINT_NONE;
+        Character->_upperMapping = CODEPOINT_NONE;
         Character->_numericValue = NAN;
     }
 
@@ -674,7 +809,7 @@ static Error ParseIsDigit(UnicodeParser* parser)
         return Error_CreateSuccess();
     }
 
-    float DigitValue;
+    float DigitValue = NAN;
     Error Result = StringToFloat(parser, parser->Text + parser->TextIndex, &DigitValue, u8"character digit value");
     if (Result.Code != ErrorCode_Success)
     {
@@ -685,28 +820,22 @@ static Error ParseIsDigit(UnicodeParser* parser)
         return Error_Construct3(
             ErrorCode_InvalidUnicodeData,
             u8"Invalid digit value %f, it must be in the bounds [%f,%f]",
-            DigitValue, DIGIT_VALUE_MIN, DIGIT_VALUE_MAX);
+            DigitValue,
+            DIGIT_VALUE_MIN,
+            DIGIT_VALUE_MAX);
     }
 
     parser->Data[parser->DataCount]._flags |= CharacterFlags_IsDigit;
     return Error_CreateSuccess();
 }
 
-
-// Functions.
-Error UnicodeData_Load(const unsigned char* dataBaseFilePath, UnicodeData* data)
+static Error LoadUnicodeDataFromSource(const unsigned char* filePath, GenericBuffer* textBuffer, UnicodeData* data)
 {
-    if ((dataBaseFilePath == NULL) || (data == NULL))
-    {
-        return Error_Construct3(
-            ErrorCode_IllegalArgument,
-            u8"UnicodeData_Load requires both a database file path and destination data.");
-    }
-
     UnicodeParser Parser;
-    Error Result = InitParser(dataBaseFilePath, &Parser);
+    Error Result = InitParser(filePath, textBuffer, &Parser);
     if (Result.Code != ErrorCode_Success)
     {
+        Memory_Free(textBuffer->_data);
         return Result;
     }
 
@@ -719,8 +848,63 @@ Error UnicodeData_Load(const unsigned char* dataBaseFilePath, UnicodeData* data)
 
     LoadParsedUnicodeIntoTable(Parser.Data, Parser.DataCount, Parser.MaxCodePoint, data);
     DeinitParser(&Parser);
-
     return Error_CreateSuccess();
+}
+
+
+// Public functions.
+Error UnicodeData_Load(const unsigned char* dataBaseFilePath, UnicodeData* data)
+{
+    GenericBuffer TextBuffer;
+    Error Result = Error_CreateSuccess();
+
+    if (dataBaseFilePath == NULL)
+    {
+        return Error_Construct3(
+            ErrorCode_IllegalArgument,
+            u8"UnicodeData_Load requires a database file path.");
+    }
+    if (data == NULL)
+    {
+        return Error_Construct3(
+            ErrorCode_IllegalArgument,
+            u8"UnicodeData_Load requires destination data.");
+    }
+
+    Result = LoadTextFromPath(dataBaseFilePath, &TextBuffer);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    return LoadUnicodeDataFromSource(dataBaseFilePath, &TextBuffer, data);
+}
+
+Error UnicodeData_LoadFromStream(IOStream* stream, UnicodeData* data)
+{
+    GenericBuffer TextBuffer;
+    Error Result = Error_CreateSuccess();
+
+    if (stream == NULL)
+    {
+        return Error_Construct3(
+            ErrorCode_IllegalArgument,
+            u8"UnicodeData_LoadFromStream requires a stream.");
+    }
+    if (data == NULL)
+    {
+        return Error_Construct3(
+            ErrorCode_IllegalArgument,
+            u8"UnicodeData_LoadFromStream requires destination data.");
+    }
+
+    Result = LoadTextFromStream(stream, &TextBuffer);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    return LoadUnicodeDataFromSource(NULL, &TextBuffer, data);
 }
 
 Error UnicodeData_CreateEmpty(UnicodeData* data)
@@ -743,7 +927,7 @@ void UnicodeData_Deconstruct(UnicodeData* data)
         return;
     }
 
-    if (data->_characters)
+    if (data->_characters != NULL)
     {
         Memory_Free(data->_characters);
     }
