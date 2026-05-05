@@ -12,14 +12,14 @@
  * All JSON strings, compounds and arrays must be acquired from a JSON object pool, 
  * then returned to the pool when no longer used.
  * 
- * Compound string keys must be alive for the duration of their use.
+ * Compound string keys are copied into pool-managed storage when inserted.
  * 
- * String values are stored as generic buffers.
+ * String values are stored as generic buffers borrowed from the pool.
  * 
  * The compound and array get functions work with the following mannet:
  * - The regular get functions return an error if no value is found, otherwise return the value.
  * - Optional modifier doesnt return an error for no value found, it also returns whether the value was found.
- * - The verified modifier additionally returns an error if the value is not of the expected type.
+ * - The verified modifier, if a value is present, additionally returns an error if the value is not of the expected type.
  * Both optional and verified modifiers can be present at the same time.
  */
 
@@ -27,7 +27,7 @@
 
 // Types.
 typedef struct JSONCompoundStruct JSONCompound;
-typedef struct JSONCArrayStruct JSONArray;
+typedef struct JSONArrayStruct JSONArray;
 typedef struct JSONObjectPoolStruct JSONObjectPool;
 
 typedef enum JSONValueTypeEnum
@@ -116,7 +116,7 @@ static inline JSONObjectValue JSONObjectValue_CreateArray(JSONArray* value)
 
 Error JSON_Serialize(JSONObjectValue* value, GenericBuffer* destination, JSONSerializeFlags flags);
 
-Error JSON_Deserialize(GenericBuffer* source, JSONObjectValue* outValue);
+Error JSON_Deserialize(JSONObjectPool* pool, GenericBuffer* source, JSONObjectValue* outValue);
 
 
 Error JSONCompound_Set(JSONCompound* self, const unsigned char* key, JSONObjectValue* value);
@@ -162,15 +162,17 @@ Error JSONArray_Add(JSONArray* self, JSONObjectValue* value);
 
 Error JSONArray_Insert(JSONArray* self, size_t index, JSONObjectValue* value);
 
-Error JSONARray_Remove(JSONArray* self, size_t index);
-
 Error JSONArray_Get(JSONArray* self, size_t index, JSONObjectValue* outValue);
 
 Error JSONArray_GetOptional(JSONArray* self, size_t index, JSONObjectValue* outValue, bool* outWasFound);
 
 Error JSONArray_GetVerified(JSONArray* self, size_t index, JSONValueType expectedType, JSONObjectValue* outValue);
 
-Error JSONArray_GetOptionalVerified(JSONArray* self, size_t index, JSONValueType expectedType, JSONObjectValue* outValue, bool* outWasFound);
+Error JSONArray_GetOptionalVerified(JSONArray* self, 
+    size_t index,
+    JSONValueType expectedType,
+    JSONObjectValue* outValue,
+    bool* outWasFound);
 
 Error JSONArray_Clear(JSONArray* self);
 
@@ -188,7 +190,7 @@ Error JSONObjectPool_Deconstruct(JSONObjectPool* self);
 
 Error JSONObjectPool_BorrowCompound(JSONObjectPool* self, JSONCompound** outCompound);
 
-Error JSONObjectPool_BorrowArray(JSONObjectPool* self, JSONArray elementType, JSONArray** outArray);
+Error JSONObjectPool_BorrowArray(JSONObjectPool* self, JSONArray** outArray);
 
 Error JSONObjectPool_BorrowString(JSONObjectPool* self, GenericBuffer** outStringBuffer);
 
