@@ -20,4 +20,4 @@ static inline IOStream* FileStream_AsIOStream(FileStream* self)
 
 Error FileStream_ConstructFromHandle(FileStream* self, void* nativeHandle, IOStreamFlags flags, bool ownsHandle);
 
-void FileStream_Deconstruct(FileStream* self);
+Error FileStream_Deconstruct(FileStream* self);

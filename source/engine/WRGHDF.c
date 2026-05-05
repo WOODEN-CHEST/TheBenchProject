@@ -1116,16 +1116,21 @@ static Error GHDFCompoundPool_DeconstructObject(void* object, void* userData)
 {
     GHDFCompound* Compound = object;
     (void)userData;
+    Error Result = Error_CreateSuccess();
 
     if (Compound == NULL)
     {
         return CreateNullArgumentError(u8"object");
     }
 
-    (void)GHDFCompound_ClearInternal(Compound);
-    (void)HashMap_Deconstruct(&Compound->_entries);
+    Result = GHDFCompound_ClearInternal(Compound);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = HashMap_Deconstruct(&Compound->_entries);
+    }
+
     Memory_Zero(Compound, sizeof(*Compound));
-    return Error_CreateSuccess();
+    return Result;
 }
 
 static Error GHDFArray_ClearInternal(GHDFArray* self)
@@ -1180,16 +1185,17 @@ static Error GHDFArrayPool_DeconstructObject(void* object, void* userData)
 {
     GHDFArray* Array = object;
     (void)userData;
+    Error Result = Error_CreateSuccess();
 
     if (Array == NULL)
     {
         return CreateNullArgumentError(u8"object");
     }
 
-    (void)GHDFArray_ClearInternal(Array);
+    Result = GHDFArray_ClearInternal(Array);
     ArrayList_Deconstruct(&Array->_values);
     Memory_Zero(Array, sizeof(*Array));
-    return Error_CreateSuccess();
+    return Result;
 }
 
 static Error GHDFObjectValue_Release(GHDFCompoundEntryType entryType, const GHDFObjectValue* value)
@@ -2230,7 +2236,13 @@ static Error GHDFObjectPool_Construct(GHDFObjectPool* self)
         self);
     if (Result.Code != ErrorCode_Success)
     {
-        ObjectPool_Deconstruct(&self->_compoundPool);
+        Error CleanupResult = ObjectPool_Deconstruct(&self->_compoundPool);
+        if (CleanupResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return CleanupResult;
+        }
+
         return Result;
     }
 
@@ -2241,8 +2253,25 @@ static Error GHDFObjectPool_Construct(GHDFObjectPool* self)
         self);
     if (Result.Code != ErrorCode_Success)
     {
-        ObjectPool_Deconstruct(&self->_arrayPool);
-        ObjectPool_Deconstruct(&self->_compoundPool);
+        Error CleanupResult = ObjectPool_Deconstruct(&self->_arrayPool);
+        if (CleanupResult.Code == ErrorCode_Success)
+        {
+            CleanupResult = ObjectPool_Deconstruct(&self->_compoundPool);
+        }
+        else
+        {
+            Error DeconstructCompoundResult = ObjectPool_Deconstruct(&self->_compoundPool);
+            if (DeconstructCompoundResult.Code != ErrorCode_Success)
+            {
+                Error_Deconstruct(&DeconstructCompoundResult);
+            }
+        }
+        if (CleanupResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return CleanupResult;
+        }
+
         return Result;
     }
 
@@ -2281,7 +2310,13 @@ Error GHDF_Write(const GHDFCompound* root, IOStream* stream)
         Result = GHDF_WriteCompoundBody(&BinaryStream, root);
     }
 
-    BinaryIOStream_Deconstruct(&BinaryStream);
+    Error CleanupResult = BinaryIOStream_Deconstruct(&BinaryStream);
+    if (CleanupResult.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return CleanupResult;
+    }
+
     return Result;
 }
 
@@ -2325,14 +2360,24 @@ Error GHDF_Read(IOStream* stream, GHDFObjectPool* objectPool, GHDFCompound** out
         Result = GHDF_ReadCompoundBody(&BinaryStream, objectPool, Root);
     }
 
-    BinaryIOStream_Deconstruct(&BinaryStream);
+    Error CleanupResult = BinaryIOStream_Deconstruct(&BinaryStream);
     if (Result.Code != ErrorCode_Success)
     {
         if (Root != NULL)
         {
             (void)GHDFObjectPool_ReturnCompound(objectPool, Root, true);
         }
+        if (CleanupResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return CleanupResult;
+        }
+
         return Result;
+    }
+    if (CleanupResult.Code != ErrorCode_Success)
+    {
+        return CleanupResult;
     }
 
     *outRoot = Root;
@@ -2759,16 +2804,42 @@ Error GHDFObjectPool_Create(GHDFObjectPool** outPool)
 
 Error GHDFObjectPool_Deconstruct(GHDFObjectPool* self)
 {
+    Error Result = Error_CreateSuccess();
+
     if (self == NULL)
     {
         return CreateNullArgumentError(u8"self");
     }
 
-    ObjectPool_Deconstruct(&self->_stringPool);
-    ObjectPool_Deconstruct(&self->_arrayPool);
-    ObjectPool_Deconstruct(&self->_compoundPool);
+    Result = ObjectPool_Deconstruct(&self->_stringPool);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ObjectPool_Deconstruct(&self->_arrayPool);
+    }
+    else
+    {
+        Error DeconstructArrayResult = ObjectPool_Deconstruct(&self->_arrayPool);
+        if (DeconstructArrayResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&DeconstructArrayResult);
+        }
+    }
+
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ObjectPool_Deconstruct(&self->_compoundPool);
+    }
+    else
+    {
+        Error DeconstructCompoundResult = ObjectPool_Deconstruct(&self->_compoundPool);
+        if (DeconstructCompoundResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&DeconstructCompoundResult);
+        }
+    }
+
     Memory_Free(self);
-    return Error_CreateSuccess();
+    return Result;
 }
 
 Error GHDFObjectPool_BorrowCompound(GHDFObjectPool* self, GHDFCompound** outCompound)

@@ -46,7 +46,7 @@ typedef struct IOStreamVTableStruct
     Error (*_read)(void* self, GenericBuffer* dest, size_t readSize);
     Error (*_close)(void* self);
     bool (*_isEOF)(void* self);
-    void (*_deconstruct)(void* self);
+    Error (*_deconstruct)(void* self);
 } IOStreamVTable;
 
 struct IOStreamStruct
@@ -122,4 +122,4 @@ Error IOStream_WriteString(IOStream* stream, const unsigned char* str);
 
 Error IOStream_ReadAll(IOStream* stream, GenericBuffer* buffer);
 
-void IOStream_Deconstruct(IOStream* stream);
+Error IOStream_Deconstruct(IOStream* stream);

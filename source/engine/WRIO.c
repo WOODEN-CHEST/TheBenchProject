@@ -391,12 +391,12 @@ Error IOStream_ReadAll(IOStream* stream, GenericBuffer* buffer)
     return ReadAllFromNonSeekable(stream, buffer);
 }
 
-void IOStream_Deconstruct(IOStream* stream)
+Error IOStream_Deconstruct(IOStream* stream)
 {
     if ((stream == NULL) || (stream->_vtable._deconstruct == NULL))
     {
-        return;
+        return Error_CreateSuccess();
     }
 
-    (*stream->_vtable._deconstruct)(stream->_vtable.Self);
+    return (*stream->_vtable._deconstruct)(stream->_vtable.Self);
 }

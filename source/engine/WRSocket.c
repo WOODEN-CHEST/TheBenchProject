@@ -626,6 +626,11 @@ static Error TcpSocket_CloseOwnedHandle(TcpSocket* self)
     }
 
     Result = SocketPlatform_CloseHandle(self->_handle);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
     self->_hasSocket = false;
     self->_isShutDown = true;
     if (self->_stream != NULL)
@@ -829,7 +834,7 @@ static bool SocketStream_IsEOF(void* selfVoid)
     return (self == NULL) ? true : self->_isEOF;
 }
 
-static void SocketStream_Deconstruct(void* selfVoid)
+static Error SocketStream_Deconstruct(void* selfVoid)
 {
     TcpSocketStream* self = selfVoid;
 
@@ -837,6 +842,8 @@ static void SocketStream_Deconstruct(void* selfVoid)
     {
         self->_isClosed = true;
     }
+
+    return Error_CreateSuccess();
 }
 
 static IOStreamVTable CreateSocketStreamVTable(TcpSocketStream* self)
@@ -1240,20 +1247,28 @@ Error TcpListener_GetLocalAddress(const TcpListener* self, SocketAddress** outAd
     return SocketPlatform_FillAddress(self->_handle, true, outAddress);
 }
 
-void TcpListener_Deconstruct(TcpListener* self)
+Error TcpListener_Deconstruct(TcpListener* self)
 {
+    Error Result = Error_CreateSuccess();
+
     if (self == NULL)
     {
-        return;
+        return Error_CreateSuccess();
     }
     if (self->_hasSocket)
     {
-        (void)SocketPlatform_CloseHandle(self->_handle);
+        Result = SocketPlatform_CloseHandle(self->_handle);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+
         self->_hasSocket = false;
         SocketLibrary_Release();
     }
 
     Memory_Free(self);
+    return Error_CreateSuccess();
 }
 
 Error TcpSocket_Connect(const SocketAddress* address, TcpSocket** outSocket)
@@ -1406,20 +1421,28 @@ Error TcpSocket_Shutdown(TcpSocket* self)
     return Error_CreateSuccess();
 }
 
-void TcpSocket_Deconstruct(TcpSocket* self)
+Error TcpSocket_Deconstruct(TcpSocket* self)
 {
+    Error Result = Error_CreateSuccess();
+
     if (self == NULL)
     {
-        return;
+        return Error_CreateSuccess();
     }
 
-    (void)TcpSocket_CloseOwnedHandle(self);
+    Result = TcpSocket_CloseOwnedHandle(self);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
     if (self->_stream != NULL)
     {
         Memory_Free(self->_stream);
     }
 
     Memory_Free(self);
+    return Error_CreateSuccess();
 }
 
 Error UdpSocket_Create(SocketFamily family, UdpSocket** outSocket)
@@ -1626,18 +1649,26 @@ Error UdpSocket_SetReceiveTimeout(UdpSocket* self, size_t milliseconds)
     return SocketPlatform_SetTimeoutMilliseconds(self->_handle, SO_RCVTIMEO, milliseconds);
 }
 
-void UdpSocket_Deconstruct(UdpSocket* self)
+Error UdpSocket_Deconstruct(UdpSocket* self)
 {
+    Error Result = Error_CreateSuccess();
+
     if (self == NULL)
     {
-        return;
+        return Error_CreateSuccess();
     }
     if (self->_hasSocket)
     {
-        (void)SocketPlatform_CloseHandle(self->_handle);
+        Result = SocketPlatform_CloseHandle(self->_handle);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+
         self->_hasSocket = false;
         SocketLibrary_Release();
     }
 
     Memory_Free(self);
+    return Error_CreateSuccess();
 }

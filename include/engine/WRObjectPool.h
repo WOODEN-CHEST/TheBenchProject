@@ -35,7 +35,7 @@ Error ObjectPool_Construct2(ObjectPool* self,
     ObjectPoolLifecycle lifecycle,
     void* userData);
 
-void ObjectPool_Deconstruct(ObjectPool* self);
+Error ObjectPool_Deconstruct(ObjectPool* self);
 
 static inline size_t ObjectPool_GetElementSize(ObjectPool* self)
 {

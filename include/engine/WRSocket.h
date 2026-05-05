@@ -39,7 +39,7 @@ Error TcpListener_Accept(TcpListener* self, TcpSocket** outSocket);
 
 Error TcpListener_GetLocalAddress(const TcpListener* self, SocketAddress** outAddress);
 
-void  TcpListener_Deconstruct(TcpListener* self);
+Error TcpListener_Deconstruct(TcpListener* self);
 
 
 
@@ -57,7 +57,7 @@ Error TcpSocket_SetSendTimeout(TcpSocket* self, size_t milliseconds);
 
 Error TcpSocket_Shutdown(TcpSocket* self);
 
-void  TcpSocket_Deconstruct(TcpSocket* self);
+Error TcpSocket_Deconstruct(TcpSocket* self);
 
 
 
@@ -71,4 +71,4 @@ Error UdpSocket_Receive(UdpSocket* self, GenericBuffer* buffer, size_t* outBytes
 
 Error UdpSocket_SetReceiveTimeout(UdpSocket* self, size_t milliseconds);
 
-void  UdpSocket_Deconstruct(UdpSocket* self);
+Error UdpSocket_Deconstruct(UdpSocket* self);

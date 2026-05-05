@@ -101,13 +101,19 @@ bool Thread_PlatformIsRunning(Thread* self)
     return ExitCode == STILL_ACTIVE;
 }
 
-void Thread_PlatformDeconstruct(Thread* self)
+Error Thread_PlatformDeconstruct(Thread* self)
 {
     if (self->_handle != NULL)
     {
-        (void)CloseHandle(self->_handle);
+        if (!CloseHandle(self->_handle))
+        {
+            return CreateWin32Error(u8"CloseHandle", GetLastError());
+        }
+
         self->_handle = NULL;
     }
+
+    return Error_CreateSuccess();
 }
 
 Error Thread_PlatformGetCurrent(Thread* self)
@@ -154,9 +160,10 @@ Error Mutex_PlatformRelease(Mutex* self)
     return Error_CreateSuccess();
 }
 
-void Mutex_PlatformDeconstruct(Mutex* self)
+Error Mutex_PlatformDeconstruct(Mutex* self)
 {
     DeleteCriticalSection(&self->_nativeMutex);
+    return Error_CreateSuccess();
 }
 
 Error ConditionVariable_PlatformCreate(ConditionVariable* self)
@@ -218,9 +225,10 @@ Error ConditionVariable_PlatformBroadcast(ConditionVariable* self)
     return Error_CreateSuccess();
 }
 
-void ConditionVariable_PlatformDeconstruct(ConditionVariable* self)
+Error ConditionVariable_PlatformDeconstruct(ConditionVariable* self)
 {
     (void)self;
+    return Error_CreateSuccess();
 }
 
 Error ReadWriteLock_PlatformCreate(ReadWriteLock* self)
@@ -253,9 +261,10 @@ Error ReadWriteLock_PlatformReleaseWrite(ReadWriteLock* self)
     return Error_CreateSuccess();
 }
 
-void ReadWriteLock_PlatformDeconstruct(ReadWriteLock* self)
+Error ReadWriteLock_PlatformDeconstruct(ReadWriteLock* self)
 {
     (void)self;
+    return Error_CreateSuccess();
 }
 
 Error Thread_PlatformSleep(size_t milliseconds)

@@ -24,7 +24,7 @@ Error Thread_Join(Thread* self, void** outResult);
 
 bool  Thread_IsRunning(Thread* self);
 
-void  Thread_Deconstruct(Thread* self);
+Error Thread_Deconstruct(Thread* self);
 
 Error Thread_Sleep(size_t milliseconds);
 
@@ -39,7 +39,7 @@ Error Mutex_TryLock(Mutex* mutex, bool* outAcquired);
 
 Error Mutex_Release(Mutex* self);
 
-void  Mutex_Deconstruct(Mutex* self);
+Error Mutex_Deconstruct(Mutex* self);
 
 
 Error ConditionVariable_Create(ConditionVariable** outVariable);
@@ -52,7 +52,7 @@ Error ConditionVariable_Signal(ConditionVariable* self);
 
 Error ConditionVariable_Broadcast(ConditionVariable* self);
 
-void ConditionVariable_Deconstruct(ConditionVariable* self);
+Error ConditionVariable_Deconstruct(ConditionVariable* self);
 
 
 Error ReadWriteLock_Create(ReadWriteLock** outLock);
@@ -65,4 +65,4 @@ Error ReadWriteLock_ReleaseRead(ReadWriteLock* self);
 
 Error ReadWriteLock_ReleaseWrite(ReadWriteLock* self);
 
-void  ReadWriteLock_Deconstruct(ReadWriteLock* self);
+Error ReadWriteLock_Deconstruct(ReadWriteLock* self);

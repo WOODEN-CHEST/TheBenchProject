@@ -71,11 +71,12 @@ Error BinaryConverter_Construct1(BinaryConverter* self);
 
 Error BinaryConverter_Construct2(BinaryConverter* self, MachineEndianess targetEndianness);
 
-Error BinaryConverter_SetTargetEndianness(BinaryConverter* self, MachineEndianess targetEndianness)
+static inline Error BinaryConverter_SetTargetEndianness(BinaryConverter* self, MachineEndianess targetEndianness)
 {
     self->_targetEndianness = targetEndianness;
     return Error_CreateSuccess();
 }
+
 Error BinaryConverter_WriteInt8(BinaryConverter* self, GenericBuffer* destination, int8_t value);
 
 Error BinaryConverter_WriteUInt8(BinaryConverter* self, GenericBuffer* destination, uint8_t value);
@@ -227,4 +228,4 @@ Error BinaryIOStream_ReadEncodedInt64(BinaryIOStream* self, int64_t* value);
 
 Error BinaryIOStream_ReadEncodedUInt64(BinaryIOStream* self, uint64_t* value);
 
-void BinaryIOStream_Deconstruct(BinaryIOStream* self);
+Error BinaryIOStream_Deconstruct(BinaryIOStream* self);

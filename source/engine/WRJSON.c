@@ -1714,9 +1714,9 @@ static Error SerializeString(GenericBuffer* source, GenericBuffer* destination)
                         uint16_t Shift = (uint16_t)((3U - DigitIndex) * 4U);
                         uint16_t Nibble = (uint16_t)((Word >> Shift) & UINT16_C(0x000F));
 
-                        Digits[DigitIndex] = (unsigned char)((Nibble < 10U)
-                            ? (JSON_BYTE_ZERO + Nibble)
-                            : (u8'A' + (Nibble - 10U)));
+                        Digits[DigitIndex] = (Nibble < 10U)
+                            ? (unsigned char)(JSON_BYTE_ZERO + Nibble)
+                            : (unsigned char)(u8'A' + (Nibble - 10U));
                     }
 
                     Result = AppendBytes(destination, Digits, 4, u8"write unicode escape");
@@ -2559,6 +2559,7 @@ Error JSONObjectPool_Create(JSONObjectPool** outPool)
 Error JSONObjectPool_Deconstruct(JSONObjectPool* self)
 {
     size_t Count = 0;
+    Error Result = Error_CreateSuccess();
 
     if (self == NULL)
     {
@@ -2572,7 +2573,13 @@ Error JSONObjectPool_Deconstruct(JSONObjectPool* self)
 
         if (IList_GetElement(&self->_allCompounds._list, Index, &Compound).Code == ErrorCode_Success)
         {
-            HashMap_Deconstruct(&Compound->_elements);
+            Result = HashMap_Deconstruct(&Compound->_elements);
+            if (Result.Code != ErrorCode_Success)
+            {
+                Memory_Free(Compound);
+                return Result;
+            }
+
             Memory_Free(Compound);
         }
     }

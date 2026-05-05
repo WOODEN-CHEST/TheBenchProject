@@ -73,7 +73,7 @@ Error Thread_PlatformJoin(Thread* self);
 
 bool Thread_PlatformIsRunning(Thread* self);
 
-void Thread_PlatformDeconstruct(Thread* self);
+Error Thread_PlatformDeconstruct(Thread* self);
 
 Error Thread_PlatformGetCurrent(Thread* self);
 
@@ -85,7 +85,7 @@ Error Mutex_PlatformTryLock(Mutex* self, bool* outAcquired);
 
 Error Mutex_PlatformRelease(Mutex* self);
 
-void Mutex_PlatformDeconstruct(Mutex* self);
+Error Mutex_PlatformDeconstruct(Mutex* self);
 
 Error ConditionVariable_PlatformCreate(ConditionVariable* self);
 
@@ -100,7 +100,7 @@ Error ConditionVariable_PlatformSignal(ConditionVariable* self);
 
 Error ConditionVariable_PlatformBroadcast(ConditionVariable* self);
 
-void ConditionVariable_PlatformDeconstruct(ConditionVariable* self);
+Error ConditionVariable_PlatformDeconstruct(ConditionVariable* self);
 
 Error ReadWriteLock_PlatformCreate(ReadWriteLock* self);
 
@@ -112,6 +112,6 @@ Error ReadWriteLock_PlatformReleaseRead(ReadWriteLock* self);
 
 Error ReadWriteLock_PlatformReleaseWrite(ReadWriteLock* self);
 
-void ReadWriteLock_PlatformDeconstruct(ReadWriteLock* self);
+Error ReadWriteLock_PlatformDeconstruct(ReadWriteLock* self);
 
 Error Thread_PlatformSleep(size_t milliseconds);

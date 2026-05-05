@@ -21,4 +21,4 @@ Error StandardStream_CreateFromStandardOutput(StandardStream* self);
 
 Error StandardStream_CreateFromStandardError(StandardStream* self);
 
-void StandardStream_Deconstruct(StandardStream* self);
+Error StandardStream_Deconstruct(StandardStream* self);

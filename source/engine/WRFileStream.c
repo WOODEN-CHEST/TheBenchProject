@@ -336,13 +336,19 @@ static bool FileStream_IsEOF(void* selfVoid)
     return (feof(GetHandle(self)) != 0);
 }
 
-static void FileStream_VTableDeconstruct(void* selfVoid)
+static Error FileStream_VTableDeconstruct(void* selfVoid)
 {
     FileStream* self = selfVoid;
+    Error Result = Error_CreateSuccess();
 
-    Error Result =FileStream_Close(self);
-    Error_Deconstruct(&Result);
+    Result = FileStream_Close(self);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
     Memory_Zero(self, sizeof(*self));
+    return Error_CreateSuccess();
 }
 
 static IOStreamVTable CreateFileStreamVTable(FileStream* self)
@@ -386,12 +392,12 @@ Error FileStream_ConstructFromHandle(FileStream* self, void* nativeHandle, IOStr
     return Error_CreateSuccess();
 }
 
-void FileStream_Deconstruct(FileStream* self)
+Error FileStream_Deconstruct(FileStream* self)
 {
     if (self == NULL)
     {
-        return;
+        return Error_CreateSuccess();
     }
 
-    FileStream_VTableDeconstruct(self);
+    return FileStream_VTableDeconstruct(self);
 }

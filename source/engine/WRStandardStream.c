@@ -41,12 +41,12 @@ Error StandardStream_CreateFromStandardError(StandardStream* self)
     return FileStream_ConstructFromHandle(&self->Base, stderr, IOStreamFlags_CanWrite, false);
 }
 
-void StandardStream_Deconstruct(StandardStream* self)
+Error StandardStream_Deconstruct(StandardStream* self)
 {
     if (self == NULL)
     {
-        return;
+        return Error_CreateSuccess();
     }
 
-    FileStream_Deconstruct(&self->Base);
+    return FileStream_Deconstruct(&self->Base);
 }

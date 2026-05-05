@@ -143,15 +143,21 @@ bool Thread_IsRunning(Thread* self)
     return Thread_PlatformIsRunning(self);
 }
 
-void Thread_Deconstruct(Thread* self)
+Error Thread_Deconstruct(Thread* self)
 {
     if (self == NULL)
     {
-        return;
+        return Error_CreateSuccess();
     }
 
-    Thread_PlatformDeconstruct(self);
+    Error Result = Thread_PlatformDeconstruct(self);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
     Memory_Free(self);
+    return Error_CreateSuccess();
 }
 
 Error Thread_Sleep(size_t milliseconds)
@@ -240,15 +246,21 @@ Error Mutex_Release(Mutex* self)
     return Mutex_PlatformRelease(self);
 }
 
-void Mutex_Deconstruct(Mutex* self)
+Error Mutex_Deconstruct(Mutex* self)
 {
     if (self == NULL)
     {
-        return;
+        return Error_CreateSuccess();
     }
 
-    Mutex_PlatformDeconstruct(self);
+    Error Result = Mutex_PlatformDeconstruct(self);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
     Memory_Free(self);
+    return Error_CreateSuccess();
 }
 
 Error ConditionVariable_Create(ConditionVariable** outVariable)
@@ -326,15 +338,21 @@ Error ConditionVariable_Broadcast(ConditionVariable* self)
     return ConditionVariable_PlatformBroadcast(self);
 }
 
-void ConditionVariable_Deconstruct(ConditionVariable* self)
+Error ConditionVariable_Deconstruct(ConditionVariable* self)
 {
     if (self == NULL)
     {
-        return;
+        return Error_CreateSuccess();
     }
 
-    ConditionVariable_PlatformDeconstruct(self);
+    Error Result = ConditionVariable_PlatformDeconstruct(self);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
     Memory_Free(self);
+    return Error_CreateSuccess();
 }
 
 Error ReadWriteLock_Create(ReadWriteLock** outLock)
@@ -400,13 +418,19 @@ Error ReadWriteLock_ReleaseWrite(ReadWriteLock* self)
     return ReadWriteLock_PlatformReleaseWrite(self);
 }
 
-void ReadWriteLock_Deconstruct(ReadWriteLock* self)
+Error ReadWriteLock_Deconstruct(ReadWriteLock* self)
 {
     if (self == NULL)
     {
-        return;
+        return Error_CreateSuccess();
     }
 
-    ReadWriteLock_PlatformDeconstruct(self);
+    Error Result = ReadWriteLock_PlatformDeconstruct(self);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
     Memory_Free(self);
+    return Error_CreateSuccess();
 }

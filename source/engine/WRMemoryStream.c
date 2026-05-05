@@ -333,18 +333,23 @@ static bool MemoryStream_IsEOF(void* selfVoid)
     return (self->_position >= self->_buffer->_count);
 }
 
-static void MemoryStream_VTableDeconstruct(void* selfVoid)
+static Error MemoryStream_VTableDeconstruct(void* selfVoid)
 {
     MemoryStream* self = selfVoid;
 
     Error Result = MemoryStream_Close(self);
-    Error_Deconstruct(&Result);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
     if (self->_ownsBuffer && (self->_selfContainedBuffer._data != NULL))
     {
         Memory_Free(self->_selfContainedBuffer._data);
     }
 
     Memory_Zero(self, sizeof(*self));
+    return Error_CreateSuccess();
 }
 
 static IOStreamVTable CreateMemoryStreamVTable(MemoryStream* self)

@@ -715,10 +715,10 @@ static bool BinaryIOStream_IsEOFRaw(void* selfVoid)
     return IOStream_IsEndOfStream(self->_wrappedStream);
 }
 
-static void BinaryIOStream_VTableDeconstruct(void* selfVoid)
+static Error BinaryIOStream_VTableDeconstruct(void* selfVoid)
 {
     BinaryIOStream* self = selfVoid;
-    BinaryIOStream_Deconstruct(self);
+    return BinaryIOStream_Deconstruct(self);
 }
 
 static IOStreamVTable CreateBinaryIOStreamVTable(BinaryIOStream* self)
@@ -1530,25 +1530,35 @@ Error BinaryIOStream_ReadEncodedUInt64(BinaryIOStream* self, uint64_t* value)
     return BinaryIOStream_ReadEncodedUnsigned(self, value, 10U, 64U, &BytesRead);
 }
 
-void BinaryIOStream_Deconstruct(BinaryIOStream* self)
+Error BinaryIOStream_Deconstruct(BinaryIOStream* self)
 {
-    Error Result = Error_CreateSuccess();
     IOStream* WrappedStream = NULL;
     bool OwnsWrappedStream = false;
+    Error Result = Error_CreateSuccess();
 
     if (self == NULL)
     {
-        return;
+        return Error_CreateSuccess();
     }
 
     WrappedStream = self->_wrappedStream;
     OwnsWrappedStream = self->_ownsWrappedStream;
     Result = BinaryIOStream_CloseRaw(self);
-    Error_Deconstruct(&Result);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
     BinaryConverter_Deconstruct(&self->_converter);
     if (OwnsWrappedStream && (WrappedStream != NULL))
     {
-        IOStream_Deconstruct(WrappedStream);
+        Result = IOStream_Deconstruct(WrappedStream);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
     }
+
     Memory_Zero(self, sizeof(*self));
+    return Error_CreateSuccess();
 }

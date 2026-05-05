@@ -62,7 +62,7 @@ static Error HashMap_MapContainsKey(void* self, const void* key, bool* outContai
 
 static Error HashMap_MapContainsValue(void* self, const void* value, bool* outContainsValue);
 
-static void HashMap_MapDeconstruct(void* self);
+static Error HashMap_MapDeconstruct(void* self);
 
 static CollectionEnumerator* HashMap_EntryCollectionGetEnumerator(void* self);
 
@@ -988,9 +988,9 @@ static Error HashMap_MapContainsValue(void* self, const void* value, bool* outCo
     return Error_CreateSuccess();
 }
 
-static void HashMap_MapDeconstruct(void* self)
+static Error HashMap_MapDeconstruct(void* self)
 {
-    (void)HashMap_Deconstruct(self);
+    return HashMap_Deconstruct(self);
 }
 
 static CollectionEnumerator* HashMap_CreateEnumerator(HashMap* self, HashMapCollectionKind kind)

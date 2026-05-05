@@ -238,6 +238,5 @@ Error IMap_Deconstruct(IMap* self)
         return Result;
     }
 
-    self->_vtable._deconstruct(self->_vtable.Self);
-    return Error_CreateSuccess();
+    return self->_vtable._deconstruct(self->_vtable.Self);
 }

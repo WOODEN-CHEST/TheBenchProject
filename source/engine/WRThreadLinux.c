@@ -139,13 +139,22 @@ bool Thread_PlatformIsRunning(Thread* self)
     return NativeResult == 0;
 }
 
-void Thread_PlatformDeconstruct(Thread* self)
+Error Thread_PlatformDeconstruct(Thread* self)
 {
+    int NativeResult = 0;
+
     if (self->_isJoinable && !self->_isJoined && self->_hasNativeThread)
     {
-        (void)pthread_detach(self->_thread);
+        NativeResult = pthread_detach(self->_thread);
+        if (NativeResult != 0)
+        {
+            return CreatePThreadError(u8"pthread_detach", NativeResult);
+        }
+
         self->_hasNativeThread = false;
     }
+
+    return Error_CreateSuccess();
 }
 
 Error Thread_PlatformGetCurrent(Thread* self)
@@ -210,9 +219,16 @@ Error Mutex_PlatformRelease(Mutex* self)
     return Error_CreateSuccess();
 }
 
-void Mutex_PlatformDeconstruct(Mutex* self)
+Error Mutex_PlatformDeconstruct(Mutex* self)
 {
-    (void)pthread_mutex_destroy(&self->_nativeMutex);
+    int NativeResult = pthread_mutex_destroy(&self->_nativeMutex);
+
+    if (NativeResult != 0)
+    {
+        return CreatePThreadError(u8"pthread_mutex_destroy", NativeResult);
+    }
+
+    return Error_CreateSuccess();
 }
 
 Error ConditionVariable_PlatformCreate(ConditionVariable* self)
@@ -293,9 +309,16 @@ Error ConditionVariable_PlatformBroadcast(ConditionVariable* self)
     return Error_CreateSuccess();
 }
 
-void ConditionVariable_PlatformDeconstruct(ConditionVariable* self)
+Error ConditionVariable_PlatformDeconstruct(ConditionVariable* self)
 {
-    (void)pthread_cond_destroy(&self->_nativeConditionVariable);
+    int NativeResult = pthread_cond_destroy(&self->_nativeConditionVariable);
+
+    if (NativeResult != 0)
+    {
+        return CreatePThreadError(u8"pthread_cond_destroy", NativeResult);
+    }
+
+    return Error_CreateSuccess();
 }
 
 Error ReadWriteLock_PlatformCreate(ReadWriteLock* self)
@@ -351,9 +374,16 @@ Error ReadWriteLock_PlatformReleaseWrite(ReadWriteLock* self)
     return ReadWriteLock_PlatformReleaseRead(self);
 }
 
-void ReadWriteLock_PlatformDeconstruct(ReadWriteLock* self)
+Error ReadWriteLock_PlatformDeconstruct(ReadWriteLock* self)
 {
-    (void)pthread_rwlock_destroy(&self->_nativeReadWriteLock);
+    int NativeResult = pthread_rwlock_destroy(&self->_nativeReadWriteLock);
+
+    if (NativeResult != 0)
+    {
+        return CreatePThreadError(u8"pthread_rwlock_destroy", NativeResult);
+    }
+
+    return Error_CreateSuccess();
 }
 
 Error Thread_PlatformSleep(size_t milliseconds)

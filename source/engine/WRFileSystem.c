@@ -477,7 +477,13 @@ static Error TryReadEntireFile(const unsigned char* path, GenericBuffer* destina
     Result = IOStream_GetStreamSizeTotal(StreamBase, &StreamSize);
     if (Result.Code != ErrorCode_Success)
     {
-        FileStream_Deconstruct(&Stream);
+        Error CleanupResult = FileStream_Deconstruct(&Stream);
+        if (CleanupResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return CleanupResult;
+        }
+
         return Result;
     }
 
@@ -486,8 +492,15 @@ static Error TryReadEntireFile(const unsigned char* path, GenericBuffer* destina
     {
         if (RequiredCapacity == SIZE_MAX)
         {
-            FileStream_Deconstruct(&Stream);
-            return CreateOverflowError(u8"read the file text");
+            Result = CreateOverflowError(u8"read the file text");
+            Error CleanupResult = FileStream_Deconstruct(&Stream);
+            if (CleanupResult.Code != ErrorCode_Success)
+            {
+                Error_Deconstruct(&Result);
+                return CleanupResult;
+            }
+
+            return Result;
         }
 
         RequiredCapacity++;
@@ -495,32 +508,57 @@ static Error TryReadEntireFile(const unsigned char* path, GenericBuffer* destina
 
     if (!GenericBuffer_EnsureTotalCapacity(destination, RequiredCapacity))
     {
-        FileStream_Deconstruct(&Stream);
-        return CreateBufferTooSmallError(nullTerminate ? u8"read the file text" : u8"read the file bytes", RequiredCapacity);
+        Result = CreateBufferTooSmallError(nullTerminate ? u8"read the file text" : u8"read the file bytes", RequiredCapacity);
+        Error CleanupResult = FileStream_Deconstruct(&Stream);
+        if (CleanupResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return CleanupResult;
+        }
+
+        return Result;
     }
 
     Result = IOStream_SetPosition(StreamBase, 0);
     if (Result.Code != ErrorCode_Success)
     {
-        FileStream_Deconstruct(&Stream);
+        Error CleanupResult = FileStream_Deconstruct(&Stream);
+        if (CleanupResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return CleanupResult;
+        }
+
         return Result;
     }
 
     Result = IOStream_Read(StreamBase, StreamSize, destination);
     if (Result.Code != ErrorCode_Success)
     {
-        FileStream_Deconstruct(&Stream);
+        Error CleanupResult = FileStream_Deconstruct(&Stream);
+        if (CleanupResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return CleanupResult;
+        }
+
         return Result;
     }
 
     if (nullTerminate && !GenericBuffer_NullTerminate(destination))
     {
-        FileStream_Deconstruct(&Stream);
-        return CreateBufferTooSmallError(u8"read the file text", destination->_count + 1);
+        Result = CreateBufferTooSmallError(u8"read the file text", destination->_count + 1);
+        Error CleanupResult = FileStream_Deconstruct(&Stream);
+        if (CleanupResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return CleanupResult;
+        }
+
+        return Result;
     }
 
-    FileStream_Deconstruct(&Stream);
-    return Error_CreateSuccess();
+    return FileStream_Deconstruct(&Stream);
 }
 
 static Error WriteEntireFile(const unsigned char* path, FileOpenMode mode, const unsigned char* bytes, size_t byteCount)
@@ -548,7 +586,13 @@ static Error WriteEntireFile(const unsigned char* path, FileOpenMode mode, const
 
     StreamBase = FileStream_AsIOStream(&Stream);
     Result = IOStream_Write(StreamBase, bytes, byteCount);
-    FileStream_Deconstruct(&Stream);
+    Error CleanupResult = FileStream_Deconstruct(&Stream);
+    if (CleanupResult.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return CleanupResult;
+    }
+
     return Result;
 }
 
@@ -937,8 +981,7 @@ Error FileSystem_CreateFile(const unsigned char* path)
         return Result;
     }
 
-    FileStream_Deconstruct(&Stream);
-    return Error_CreateSuccess();
+    return FileStream_Deconstruct(&Stream);
 }
 
 void FileSystemEntryInfo_Deconstruct(FileSystemEntryInfo* self)

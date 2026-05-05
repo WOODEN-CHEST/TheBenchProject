@@ -38,7 +38,7 @@ typedef struct MapVTableStruct
     Error (*_containsKey)(void* self, const void* key, bool* outContainsKey);
     Error (*_containsValue)(void* self, const void* value, bool* outContainsValue);
     size_t (*_getEntryCount)(void* self);
-    void (*_deconstruct)(void* self);
+    Error (*_deconstruct)(void* self);
 } MapVTable;
 
 typedef struct IMapStruct

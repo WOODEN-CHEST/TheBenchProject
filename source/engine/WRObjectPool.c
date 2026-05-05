@@ -414,13 +414,14 @@ Error ObjectPool_Construct1(ObjectPool* self, size_t elementSize, size_t section
         NULL);
 }
 
-void ObjectPool_Deconstruct(ObjectPool* self)
+Error ObjectPool_Deconstruct(ObjectPool* self)
 {
+    Error FirstError = Error_CreateSuccess();
     Error Result = Error_CreateSuccess();
 
     if (self == NULL)
     {
-        return;
+        return Error_CreateSuccess();
     }
 
     for (size_t SectionIndex = 0; SectionIndex < GetSectionCount(self); SectionIndex++)
@@ -429,9 +430,9 @@ void ObjectPool_Deconstruct(ObjectPool* self)
         for (size_t SlotIndex = 0; SlotIndex < Section->InitializedCount; SlotIndex++)
         {
             Result = DeconstructObjectIfNeeded(self, GetObjectAddress(self, Section, SlotIndex));
-            if (Result.Code != ErrorCode_Success)
+            if ((Result.Code != ErrorCode_Success) && (FirstError.Code == ErrorCode_Success))
             {
-                Error_Deconstruct(&Result);
+                FirstError = Result;
             }
         }
         DeconstructSection(Section);
@@ -439,6 +440,7 @@ void ObjectPool_Deconstruct(ObjectPool* self)
 
     Memory_Free(self->_sections._data);
     Memory_Zero(self, sizeof(*self));
+    return FirstError;
 }
 
 Error ObjectPool_GetNewObject(ObjectPool* self, void** outObject)
