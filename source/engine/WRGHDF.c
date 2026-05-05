@@ -169,11 +169,37 @@ static Error CreateInvalidStringBufferError(void)
         u8"GHDF string buffers must be UTF-8 byte buffers with a trailing null terminator.");
 }
 
+static Error CreateElementSizeMismatchError(const unsigned char* argumentName, size_t actualElementSize, size_t expectedElementSize)
+{
+    return Error_Construct3(ErrorCode_IllegalArgument,
+        u8"GHDF argument \"%s\" must use element size %zu, got %zu.",
+        argumentName,
+        expectedElementSize,
+        actualElementSize);
+}
+
 static Error CreateInvalidPoolOwnershipError(const unsigned char* resourceName)
 {
     return Error_Construct3(ErrorCode_IllegalArgument,
         u8"The provided GHDF %s does not belong to the specified object pool.",
         resourceName);
+}
+
+static Error CreateIndexOutOfRangeError(size_t index, size_t elementCount)
+{
+    return Error_Construct3(ErrorCode_ArgumentOutOfRange,
+        u8"GHDF array index %zu is out of range for an array with %zu elements.",
+        index,
+        elementCount);
+}
+
+static Error CreateElementRangeOutOfRangeError(size_t startIndex, size_t requestedCount, size_t actualCount)
+{
+    return Error_Construct3(ErrorCode_ArgumentOutOfRange,
+        u8"GHDF array range [%zu, %zu) is out of range for an array with %zu elements.",
+        startIndex,
+        startIndex + requestedCount,
+        actualCount);
 }
 
 static Error CreateEnumerationCompletedError(void)
@@ -345,6 +371,39 @@ static size_t GHDFArray_GetStorageElementSize(GHDFValueType elementType)
         default:
             return 0U;
     }
+}
+
+static bool GHDFArray_IsRawByteCopySupported(GHDFValueType elementType)
+{
+    switch (elementType)
+    {
+        case GHDFValueType_UInt8:
+        case GHDFValueType_Int8:
+        case GHDFValueType_Int16:
+        case GHDFValueType_UInt16:
+        case GHDFValueType_Int32:
+        case GHDFValueType_UInt32:
+        case GHDFValueType_Int64:
+        case GHDFValueType_UInt64:
+        case GHDFValueType_Float:
+        case GHDFValueType_Double:
+        case GHDFValueType_Boolean:
+        case GHDFValueType_EncodedInteger:
+            return true;
+
+        case GHDFValueType_String:
+        case GHDFValueType_Compound:
+        case GHDFValueType_None:
+        default:
+            return false;
+    }
+}
+
+static Error CreateRawByteCopyUnsupportedError(GHDFValueType elementType)
+{
+    return Error_Construct3(ErrorCode_InvalidOperation,
+        u8"GHDF arrays of element type %d do not support raw byte copying.",
+        (int)elementType);
 }
 
 static Error GHDFCompoundEntryCollection_GetNextValue(MapEntryView entryView, GHDFCompoundEntry* outEntry)
@@ -2485,28 +2544,19 @@ size_t GHDFCompound_GetEntryCount(GHDFCompound* self)
     return IMap_GetEntryCount(HashMap_AsMap(&self->_entries));
 }
 
-GHDFCompoundEntryCollection GHDFCompound_GetEntryCollection(GHDFCompound* self)
+ICollection* GHDFCompound_GetEntryCollection(GHDFCompound* self)
 {
-    return (GHDFCompoundEntryCollection)
-    {
-        ._collection = (self == NULL) ? NULL : &self->_entryCollection,
-    };
+    return (self == NULL) ? NULL : &self->_entryCollection;
 }
 
-GHDFCompoundValueCollection GHDFCompound_GetValueCollection(GHDFCompound* self)
+ICollection* GHDFCompound_GetValueCollection(GHDFCompound* self)
 {
-    return (GHDFCompoundValueCollection)
-    {
-        ._collection = (self == NULL) ? NULL : &self->_valueCollection,
-    };
+    return (self == NULL) ? NULL : &self->_valueCollection;
 }
 
-GHDFCompoundKeyCollection GHDFCompound_GetKeyCollection(GHDFCompound* self)
+ICollection* GHDFCompound_GetKeyCollection(GHDFCompound* self)
 {
-    return (GHDFCompoundKeyCollection)
-    {
-        ._collection = (self == NULL) ? NULL : IMap_AsKeyCollection(HashMap_AsMap(&self->_entries)),
-    };
+    return (self == NULL) ? NULL : IMap_AsKeyCollection(HashMap_AsMap(&self->_entries));
 }
 
 Error GHDFArray_Clear(GHDFArray* self)
@@ -2594,6 +2644,71 @@ Error GHDFArray_Get(GHDFArray* self, size_t index, GHDFObjectValue* outValue)
     return GHDFArray_GetValueAt(self, index, outValue);
 }
 
+Error GHDFArray_CopyRawBytes(GHDFArray* self,
+    size_t startIndex,
+    size_t elementCount,
+    GenericBuffer* destination)
+{
+    size_t TotalElementCount = 0U;
+    size_t StorageElementSize = 0U;
+    void* StartPointer = NULL;
+    Error Result = Error_CreateSuccess();
+
+    if (self == NULL)
+    {
+        return CreateNullArgumentError(u8"self");
+    }
+    if (destination == NULL)
+    {
+        return CreateNullArgumentError(u8"destination");
+    }
+    if (self->_elementType == GHDFValueType_None)
+    {
+        return CreateInvalidTypeError(self->_elementType);
+    }
+    if (!GHDFArray_IsRawByteCopySupported(self->_elementType))
+    {
+        return CreateRawByteCopyUnsupportedError(self->_elementType);
+    }
+
+    TotalElementCount = IList_GetElementCount(&self->_values._list);
+    StorageElementSize = IList_GetElementSize(&self->_values._list);
+    if (destination->_elementSize != StorageElementSize)
+    {
+        return CreateElementSizeMismatchError(u8"destination", destination->_elementSize, StorageElementSize);
+    }
+    if (startIndex > TotalElementCount)
+    {
+        return CreateIndexOutOfRangeError(startIndex, TotalElementCount);
+    }
+    if (elementCount > (TotalElementCount - startIndex))
+    {
+        return CreateElementRangeOutOfRangeError(startIndex, elementCount, TotalElementCount);
+    }
+    if (elementCount == 0U)
+    {
+        return Error_CreateSuccess();
+    }
+
+    if (elementCount > (SIZE_MAX / StorageElementSize))
+    {
+        return Error_Construct1(ErrorCode_BufferTooLarge,
+            u8"GHDF array raw byte copy exceeds addressable size.");
+    }
+    Result = IList_GetPointerToElement(&self->_values._list, startIndex, &StartPointer);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (!GenericBuffer_AddLastRange(destination, StartPointer, elementCount))
+    {
+        return Error_Construct1(ErrorCode_BufferTooSmall,
+            u8"Could not append GHDF array elements to the destination buffer.");
+    }
+
+    return Error_CreateSuccess();
+}
+
 size_t GHDFArray_GetElementCount(GHDFArray* self)
 {
     if (self == NULL)
@@ -2614,12 +2729,9 @@ GHDFValueType GHDFArray_GetElementType(GHDFArray* self)
     return self->_elementType;
 }
 
-GHDFArrayElementCollection GHDFArray_GetElementCollection(GHDFArray* self)
+ICollection* GHDFArray_GetElementCollection(GHDFArray* self)
 {
-    return (GHDFArrayElementCollection)
-    {
-        ._collection = (self == NULL) ? NULL : &self->_elementCollection,
-    };
+    return (self == NULL) ? NULL : &self->_elementCollection;
 }
 
 Error GHDFObjectPool_Create(GHDFObjectPool** outPool)

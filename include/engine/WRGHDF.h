@@ -79,67 +79,8 @@ typedef struct GHDFArrayIndexedValueStruct
     GHDFObjectValue Value;
 } GHDFArrayIndexedValue;
 
-typedef struct GHDFCompoundKeyCollectionStruct
-{
-    ICollection* _collection;
-} GHDFCompoundKeyCollection;
-
-typedef struct GHDFCompoundValueCollectionStruct
-{
-    ICollection* _collection;
-} GHDFCompoundValueCollection;
-
-typedef struct GHDFCompoundEntryCollectionStruct
-{
-    ICollection* _collection;
-} GHDFCompoundEntryCollection;
-
-typedef struct GHDFArrayElementCollectionStruct
-{
-    ICollection* _collection;
-} GHDFArrayElementCollection;
-
 
 // Functions.
-static inline ICollection* GHDFCompoundKeyCollection_AsCollection(GHDFCompoundKeyCollection* self)
-{
-    if (self == NULL)
-    {
-        return NULL;
-    }
-
-    return self->_collection;
-}
-
-static inline ICollection* GHDFCompoundValueCollection_AsCollection(GHDFCompoundValueCollection* self)
-{
-    if (self == NULL)
-    {
-        return NULL;
-    }
-
-    return self->_collection;
-}
-
-static inline ICollection* GHDFCompoundEntryCollection_AsCollection(GHDFCompoundEntryCollection* self)
-{
-    if (self == NULL)
-    {
-        return NULL;
-    }
-
-    return self->_collection;
-}
-
-static inline ICollection* GHDFArrayElementCollection_AsCollection(GHDFArrayElementCollection* self)
-{
-    if (self == NULL)
-    {
-        return NULL;
-    }
-
-    return self->_collection;
-}
 
 static inline GHDFObjectValue GHDFObjectValue_CreateUInt8(uint8_t value)
 {
@@ -246,11 +187,14 @@ Error GHDFCompound_GetOptionalVerified(GHDFCompound* self,
 
 size_t GHDFCompound_GetEntryCount(GHDFCompound* self);
 
-GHDFCompoundEntryCollection GHDFCompound_GetEntryCollection(GHDFCompound* self);
+/* Enumerates GHDFCompoundEntry values. */
+ICollection* GHDFCompound_GetEntryCollection(GHDFCompound* self);
 
-GHDFCompoundValueCollection GHDFCompound_GetValueCollection(GHDFCompound* self);
+/* Enumerates GHDFObjectValue values. */
+ICollection* GHDFCompound_GetValueCollection(GHDFCompound* self);
 
-GHDFCompoundKeyCollection GHDFCompound_GetKeyCollection(GHDFCompound* self);
+/* Enumerates GHDFEntryID values. */
+ICollection* GHDFCompound_GetKeyCollection(GHDFCompound* self);
 
 Error GHDFArray_Clear(GHDFArray* self);
 
@@ -264,11 +208,21 @@ Error GHDFArray_ReplaceValue(GHDFArray* self, size_t index, const GHDFObjectValu
 
 Error GHDFArray_Get(GHDFArray* self, size_t index, GHDFObjectValue* outValue);
 
+/* Appends in-memory array elements to destination without per-element conversion.
+ * Destination must use the same element layout as this GHDF array's in-memory storage.
+ * Example: a UInt8 GHDF array appends bytes, an Int16 GHDF array appends int16_t values. */
+Error GHDFArray_CopyRawBytes(GHDFArray* self,
+    size_t startIndex,
+    size_t elementCount,
+    GenericBuffer* destination);
+
 size_t GHDFArray_GetElementCount(GHDFArray* self);
 
 GHDFValueType GHDFArray_GetElementType(GHDFArray* self);
 
-GHDFArrayElementCollection GHDFArray_GetElementCollection(GHDFArray* self);
+/* Enumerates GHDFArrayIndexedValue values. */
+ICollection* GHDFArray_GetElementCollection(GHDFArray* self);
+
 
 Error GHDFObjectPool_Create(GHDFObjectPool** outPool);
 
