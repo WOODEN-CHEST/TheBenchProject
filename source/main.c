@@ -1,9 +1,9 @@
 #include <stdio.h>
-#include "libs/raylib.h"
+#include "wr/WRCompile.h"
 
-// Functions.
-int main()
+int main(int argc, char** argv)
 {
+    UNUSED(argc);
+    UNUSED(argv);
     printf("Hello World!\n");
-    return 0;
 }
