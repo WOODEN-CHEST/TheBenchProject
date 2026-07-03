@@ -26,4 +26,6 @@ The references/ directory contains various reference files for various things. I
 * The full specification of the binary file format GHDF.
 * The unicode data loaded into the game at runtime.
 
+For storing BINARY game data, use the GHDF module, for human-readable game data, JSON module.
+
 This is pretty much all that I can write here, read WRFramework.md for the rest.
