@@ -1,0 +1,95 @@
+Garden Hose Data File
+ specification
+Version 1
+
+
+Introduction.
+
+The “Garden Hose Data File” (GHDF), is a binary data container format for general purpose applications. It is used mainly to store data in files on the computer's secondary memory. It is similar to the JSON format. Data is stored in a key-value fashion, with integer IDs representing keys, each of which has a certain value assigned to it.  The format does not support partial reads or writes of data to a GHDF container, requiring a full container write / read operation to be done any time the data needs to be modified or read. However, attempts at partial reads / writes can be made.
+
+
+Data format
+A byte in this specification is 8 bits.
+
+Data in this format is stored in little endian, regardless of the endianess of the system 
+
+All signed integers are stored in Two’s complement format.
+
+Here is an explanation of the data types used in the specification:
+“int8” A signed 8 bit integer.
+“uint8” An unsigned 8 bit integer.
+“int16” A signed 16 bit integer.
+“uint16” An unsigned 16 bit integer.
+“int32” A signed 32 bit integer.
+“uint32” An unsigned 32 bit integer.
+“int64” A signed 64 bit integer.
+“uint64” An unsigned 64 bit integer.
+“float” An IEEE 754 single precision floating-point number. 
+“double” An IEEE 754 double precision floating-point number.
+“string” An array of UTF-8 unicode characters. Strings have a maximum length of 264 - 1 bytes.
+“boolean” An either signed or unsigned 8 bit integer whose only allowed values are 0 and 1. Encoders should never write other values than these two, and decoders should raise an error if a value outside of these is read.
+“encoded integer” A signed or unsigned (depending on context) 64 bit integer which is 7 bit encoded.
+“compound” A map of integer keys and variable type values. Compounds have a maximum entry count of 264 - 1 entries. Compounds may contain nested compounds, either directly as an entry or in an array of compounds. There is no limit on the nesting depth a compound may have.
+
+
+
+Encoded integer
+
+The encoded integer is a 7 bit encoded variable byte length integer. For each byte in the integer, the most significant bit determines whether there is another byte available, and the least significant 7 bits are used to store the integer’s value. When decoding, for each byte, the first 7 bits must be extracted for the integer value, and the most significant bit indicates whether another byte follows this one. If the most significant bit is 1, continue this with the next byte, otherwise the integer is fully read. For encoders, write the integer as a series of bytes, 7 bits of the integer at a time, with the most significant bit indicating if another byte will follow. If all remaining bits of an integer are 0, then the most significant bit should be 0, if not, then it must be set to 1 for the corresponding byte and the remaining bytes should be written. It takes at most 10 bytes to store a single encoded integer. This integer is stored in little endian as well.
+
+
+File structure
+When stored in a named file on a system, each GHDF file should have the file extension “ghdf” (e.g. “MyFile.ghdf”).
+
+Signature
+The first 16 bytes of a container indicate the container's signature.
+The signatures bytes, in order in which they appear, have the following values (as an unsigned 8 bit integer):
+102, 37, 143, 181, 3, 205, 123, 185, 148, 157, 98, 177, 178, 151, 43, 170
+Each GHDF container must have these signature bytes as the first bytes of data. If a GHDF container does not have this signature, then it is not a valid GHDF container and any decoders should stop decoding it.
+
+Version
+After the signature comes an unsigned encoded integer which describes the version of the GHDF specification the container is formatted in. If a version mismatch occurs between the decoder and container, the decoder should either try to switch to a different and appropriate version of a decoder or raise an error and stop decoding.
+
+
+Entries
+A GHDF container consists of a series of data entries. An entry is a key-value pair of data. Keys in this file format are encoded integers, and values can vary in type.
+Immediately after the format version comes an encoded unsigned integer which describes how many entries exist in this file.
+Afterwards come the entries themselves.
+
+Entry composition (in order):
+ID: Each entry begins with an unsigned encoded integer which is the entry’s ID. The ID can be any value except 0. An ID of 0 is illegal, it should never be written by encoders and cause a failure in reading by decoders.
+Type: A single byte which indicates the type of the entry’s value.
+Length*: For strings, arrays and compounds there exists an encoded unsigned integer denoting the length of the entry. For strings, this is the amount of bytes it contains. For arrays, the amount of items in it. For compounds, the amount of entries it contains. Other types of entries outside of these 3 do not have this length property.
+Entry’s value.
+
+The type of an entry is a single byte which is composed of 2 things:
+The type number.
+Array bit flag.
+
+The value of an entry’s type byte with the array bit set to 0 denotes the type of item that the entry holds. The types and their respective values are as follows:
+	None = 0 (Decoders should fail if they encounter this type, encoders should never write it)
+UInt8 = 1
+Int8 = 2
+Int16 = 3
+UInt16 = 4
+Int32 = 5
+UInt32 = 6
+Int64 = 7
+UInt64 = 8
+Float = 9
+Double = 10
+Boolean = 11
+String = 12
+Compound = 13
+EncodedInteger (signed) = 14
+
+The array bit for a type byte is the most significant bit of the byte, it indicates whether the entry is an array of the items.
+
+The value of an entry depends on its type. For most types the value is how it is described in the data format section. For compounds, the value is N entries, where N is the amount described in the compound’s length field. For arrays, it is N entries as described in the array’s length field, except that entries in an array do not have IDs or type specifiers, thus an array entry’s format is just the length (if needed) and the value.
+
+Entries in a compound do not need to appear in a specific order based on their types, IDs or any other characteristics, they can appear in any order in the compound.
+
+There should only be 1 entry per ID in the container. Multiple entries with the same ID may exist without raising an error, but in this case the value of the entry with the given ID should be that of the last (in byte order) entry with the ID.
+
+The file does not have a special ending requirement, however, the data should not end abruptly and whatever data is expected should exist. If data ends abruptly while decoding, the decoder should raise an error.
+
