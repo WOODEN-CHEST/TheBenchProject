@@ -23,8 +23,9 @@ Try to keep memory allocation count to a minimum by reusing buffers or passing r
 throughout the application, this is a game after all. Performance matters.
 
 The references/ directory contains various reference files for various things. It contains:
-* The full specification of the binary file format GHDF.
-* The unicode data loaded into the game at runtime.
+* ghdf.txt - The full specification of the binary file format GHDF.
+* unicode_data.txt The unicode data loaded into the game at runtime.
+* AssetStructure.md - A file which describes the JSON asset structure that assets must have.
 
 For storing BINARY game data, use the GHDF module, for human-readable game data, JSON module.
 
