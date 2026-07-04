@@ -36,6 +36,9 @@ description of what the module is for.
 Current module list:
 * Config (Config.md) - Loads the game's JSON config file (window/render settings) into a plain, expandable GameConfig struct.
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to logs/latest.log and stdout, and rotates the previous log into logs/archived/.
+* ProgramTime (ProgramTime.md) - Tiny value type carrying a tick's total time and passed (delta) time, in seconds.
+* GameFrame (GameFrame.md) - Abstract base for a game "scene"/section (menu, level, loading screen), with stepped load/unload, logic lifecycle, and per-target rendering.
+* GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop, and composites them to the screen; crashes gracefully on frame errors.
 
 Logging:
 Use the Logger module for all program output. Do NOT print to the standard streams directly (no
