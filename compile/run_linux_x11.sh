@@ -1,1 +1,3 @@
-./out/TheBenchProject
+cd out
+./TheBenchProject
+cd ..

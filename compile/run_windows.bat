@@ -1,1 +1,3 @@
-out\TheBenchProject.exe
+cd out
+TheBenchProject.exe
+cd ..

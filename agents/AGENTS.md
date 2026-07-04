@@ -29,4 +29,12 @@ The references/ directory contains various reference files for various things. I
 
 For storing BINARY game data, use the GHDF module, for human-readable game data, JSON module.
 
+When you implement a new module, create an mc file in the agents directory describing the module and
+its usage, then in this file, in the modules list, add the module, the md file reference and a short
+description of what the module is for.
+
+Current module list:
+* Config (Config.md) - Loads the game's JSON config file (window/render settings) into a plain, expandable GameConfig struct.
+
+
 This is pretty much all that I can write here, read WRFramework.md for the rest.
