@@ -53,6 +53,8 @@ The modules are (in alphabetical order):
   - Functions: [compare number, compare string]
 - WRCompile: Random compiling utils, like a macro which marks a parameter as unused.
   - Functions: none (provides only the UNUSED macro)
+- WRDateTime: A queryable snapshot value struct of the current wall-clock date and time (broken-down calendar fields, millisecond precision), in local or UTC form, like C#'s DateTime. Platform clock access is hidden behind the public API.
+  - Functions: [now (local), utc now, compare, equals, to string, deconstruct]
 - WREnvironment: Environment properties of the host machine, like newline, directory sperator, endianess, etc.
   - Functions: [get endianness]
 - WRError: Exception like errors and their handling functions.

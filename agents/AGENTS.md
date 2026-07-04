@@ -35,6 +35,18 @@ description of what the module is for.
 
 Current module list:
 * Config (Config.md) - Loads the game's JSON config file (window/render settings) into a plain, expandable GameConfig struct.
+* Logger (Logger.md) - Writes timestamped, level-tagged messages to logs/latest.log and stdout, and rotates the previous log into logs/archived/.
+
+Logging:
+Use the Logger module for all program output. Do NOT print to the standard streams directly (no
+printf / fprintf(stdout|stderr, ...) or other direct stdout/stderr writes) in game code. Route
+messages through a Logger (passed by pointer) at the appropriate level instead. The only allowed
+exception is the bootstrap fallback in main when the logger itself fails to initialize and therefore
+cannot be used.
+
+If you cannot compile because a WRFramework or other library header file exists, but there is no such defined function
+in the library file, then this is an error on my part and should be flagged.
+The headers are correct, the function missing from the library is just a version mismatch on my end.
 
 
 This is pretty much all that I can write here, read WRFramework.md for the rest.
