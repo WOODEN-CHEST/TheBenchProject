@@ -20,6 +20,8 @@
 #define TEST_MODEL_ASSET_NAME ((const unsigned char*)u8"test")
 /** Name given to the test model object. */
 #define TEST_MODEL_OBJECT_NAME ((const unsigned char*)u8"test_object")
+/** Name given to the ground-slab object (a flattened test model that receives the sun shadow). */
+#define TEST_GROUND_OBJECT_NAME ((const unsigned char*)u8"ground")
 
 /** Base movement speed, in world units per second. */
 #define MOVE_SPEED 6.0f
@@ -68,6 +70,32 @@ static void LogTimeOfDay(WorldTestFrame* frame, const unsigned char* label, cons
     Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
         (const unsigned char*)u8"WorldTest: %s (TimeOfDay=%.3f).", (const char*)label, (double)environment->TimeOfDay);
     Error_Deconstruct(&LogResult);
+}
+
+/* Applies the debug time-of-day controls (pause/resume, phase presets, manual scrub). Runs once per REAL
+ * frame (called from Render, like mouse-look) — the presets/pause are edge-triggered (IsKeyPressed), and the
+ * fixed-timestep Update does not tick 1:1 with raylib's once-per-frame input polling, so running them there
+ * would miss presses (some frames Update never ticks) or double-fire the toggle (some frames it ticks twice). */
+static void HandleDebugTimeInput(WorldTestFrame* frame)
+{
+    WorldEnvironment* Environment = World_GetEnvironment(&frame->_world);
+
+    if (IsKeyPressed(KEY_P))
+    {
+        Environment->IsDayNightCycleEnabled = !Environment->IsDayNightCycleEnabled;
+        LogTimeOfDay(frame, Environment->IsDayNightCycleEnabled
+            ? (const unsigned char*)u8"cycle resumed" : (const unsigned char*)u8"cycle paused", Environment);
+    }
+    // Number keys jump to a phase and freeze the clock there.
+    if (IsKeyPressed(KEY_ONE))   { Environment->TimeOfDay = 0.25f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"dawn (frozen)", Environment); }
+    if (IsKeyPressed(KEY_TWO))   { Environment->TimeOfDay = 0.50f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"noon (frozen)", Environment); }
+    if (IsKeyPressed(KEY_THREE)) { Environment->TimeOfDay = 0.75f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"dusk (frozen)", Environment); }
+    if (IsKeyPressed(KEY_FOUR))  { Environment->TimeOfDay = 0.00f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"midnight (frozen)", Environment); }
+
+    // [ and ] scrub the time of day manually (per-real-frame step, wraps into [0,1)).
+    float ScrubStep = TIME_SCRUB_RATE * GetFrameTime();
+    if (IsKeyDown(KEY_LEFT_BRACKET))  { Environment->TimeOfDay -= ScrubStep; if (Environment->TimeOfDay < 0.0f) { Environment->TimeOfDay += 1.0f; } }
+    if (IsKeyDown(KEY_RIGHT_BRACKET)) { Environment->TimeOfDay += ScrubStep; if (Environment->TimeOfDay >= 1.0f) { Environment->TimeOfDay -= 1.0f; } }
 }
 
 
@@ -130,25 +158,9 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
         Frame->_camera.Position = Vector3Add(Frame->_camera.Position, Movement);
     }
 
-    // Debug time-of-day controls (so a fixed sky can be inspected with the clock stopped).
-    WorldEnvironment* Environment = World_GetEnvironment(&Frame->_world);
-    if (IsKeyPressed(KEY_P))
-    {
-        Environment->IsDayNightCycleEnabled = !Environment->IsDayNightCycleEnabled;
-        LogTimeOfDay(Frame, Environment->IsDayNightCycleEnabled
-            ? (const unsigned char*)u8"cycle resumed" : (const unsigned char*)u8"cycle paused", Environment);
-    }
-    // Number keys jump to a phase and freeze the clock there.
-    if (IsKeyPressed(KEY_ONE))   { Environment->TimeOfDay = 0.25f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(Frame, (const unsigned char*)u8"dawn (frozen)", Environment); }
-    if (IsKeyPressed(KEY_TWO))   { Environment->TimeOfDay = 0.50f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(Frame, (const unsigned char*)u8"noon (frozen)", Environment); }
-    if (IsKeyPressed(KEY_THREE)) { Environment->TimeOfDay = 0.75f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(Frame, (const unsigned char*)u8"dusk (frozen)", Environment); }
-    if (IsKeyPressed(KEY_FOUR))  { Environment->TimeOfDay = 0.00f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(Frame, (const unsigned char*)u8"midnight (frozen)", Environment); }
-    // [ and ] scrub the time of day manually (small step, wraps into [0,1)).
-    if (IsKeyDown(KEY_LEFT_BRACKET))  { Environment->TimeOfDay -= TIME_SCRUB_RATE * Delta; if (Environment->TimeOfDay < 0.0f) { Environment->TimeOfDay += 1.0f; } }
-    if (IsKeyDown(KEY_RIGHT_BRACKET)) { Environment->TimeOfDay += TIME_SCRUB_RATE * Delta; if (Environment->TimeOfDay >= 1.0f) { Environment->TimeOfDay -= 1.0f; } }
-
-    // Advance the world's day-night cycle (a no-op while paused).
-    WorldEnvironment_Advance(Environment, Delta);
+    // Advance the world's day-night cycle (a no-op while paused). Debug time controls are edge-triggered and
+    // live in Render (per real frame) — see HandleDebugTimeInput for why.
+    WorldEnvironment_Advance(World_GetEnvironment(&Frame->_world), Delta);
 
     return Error_CreateSuccess();
 }
@@ -206,6 +218,9 @@ static Error WorldTestFrame_Render(void* self, const FrameRenderContext* context
         Frame->_camera.Pitch = Clamp(Frame->_camera.Pitch, -GAME_CAMERA_MAX_PITCH, GAME_CAMERA_MAX_PITCH);
     }
 
+    // Edge-triggered debug time controls, per real frame (see HandleDebugTimeInput).
+    HandleDebugTimeInput(Frame);
+
     return WorldRenderer_RenderToTarget(Frame->_renderer, &Frame->_world, &Frame->_camera, target);
 }
 
@@ -253,7 +268,36 @@ static const GameFrameVTable WorldTestFrameVTable =
 
 
 // Static functions: world construction.
-/* Builds the test world (the test model at the origin). */
+/* Creates a model object with the given transform and hands it to the world (which takes ownership). On any
+ * failure the partial object is destroyed and the error is returned. */
+static Error AddModelObject(World* world, const unsigned char* name, const unsigned char* assetName,
+    Vector3 position, Vector3 scale)
+{
+    WorldModelObject* ModelObject = NULL;
+    Error Result = WorldModelObject_Create(name, assetName, &ModelObject);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    WorldObject* Base = WorldModelObject_AsObject(ModelObject);
+    Result = WorldObject_SetPosition(Base, position);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldObject_SetScale(Base, scale);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = World_AddObject(world, Base);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        WorldObject_Destroy(Base);
+    }
+    return Result;
+}
+
+/* Builds the test world: a raised centre model that casts a shadow onto a wide ground slab. */
 static Error BuildTestWorld(World* world)
 {
     Error ConstructResult = World_Construct(world);
@@ -270,22 +314,19 @@ static Error BuildTestWorld(World* world)
     Environment->TimeOfDay = WORLD_ENVIRONMENT_TIME_OF_DAY_NOON;    // 0=midnight, 0.25=dawn, 0.5=noon, 0.75=dusk
     Environment->SunAngle = TEST_SUN_ANGLE;                        // radians the noon sun leans from straight up
 
-    WorldModelObject* ModelObject = NULL;
-    Error ModelResult = WorldModelObject_Create(TEST_MODEL_OBJECT_NAME, TEST_MODEL_ASSET_NAME, &ModelObject);
-    if (ModelResult.Code != ErrorCode_Success)
+    // Centre model, raised so its shadow lands on the ground; then a wide, thin slab as the ground receiver.
+    Error Result = AddModelObject(world, TEST_MODEL_OBJECT_NAME, TEST_MODEL_ASSET_NAME,
+        (Vector3){ 0.0f, 1.2f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f });
+    if (Result.Code == ErrorCode_Success)
     {
-        Error DeconstructResult = World_Deconstruct(world);
-        Error_Deconstruct(&DeconstructResult);
-        return ModelResult;
+        Result = AddModelObject(world, TEST_GROUND_OBJECT_NAME, TEST_MODEL_ASSET_NAME,
+            (Vector3){ 0.0f, 0.0f, 0.0f }, (Vector3){ 40.0f, 0.2f, 40.0f });
     }
-
-    Error AddResult = World_AddObject(world, WorldModelObject_AsObject(ModelObject));
-    if (AddResult.Code != ErrorCode_Success)
+    if (Result.Code != ErrorCode_Success)
     {
-        WorldObject_Destroy(WorldModelObject_AsObject(ModelObject));
         Error DeconstructResult = World_Deconstruct(world);
         Error_Deconstruct(&DeconstructResult);
-        return AddResult;
+        return Result;
     }
 
     return Error_CreateSuccess();

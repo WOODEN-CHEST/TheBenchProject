@@ -1,0 +1,4 @@
+{
+    "name": "world_depth",
+    "fragment_location": "depth/fragment"
+}

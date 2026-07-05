@@ -17,6 +17,13 @@ uniform float sunIntensity;
 uniform vec3 ambientColor;     // linear
 uniform float ambientIntensity;
 
+// Sun shadow map (directional). shadowStrength 0 disables it (night, disabled, or shader unavailable).
+uniform mat4 lightVP;          // world -> sun light-clip space
+uniform sampler2D shadowMap;   // directional depth map rendered from the sun
+uniform float shadowStrength;  // 0..1, how much the sun contribution is darkened in shadow
+uniform float shadowBias;      // base depth bias to combat shadow acne
+uniform float shadowTexelSize; // 1.0 / shadow-map resolution, for PCF tap offsets
+
 // Surface material parameters. Scalar for now; per-material PBR texture maps land in a later step.
 uniform float metallic;
 uniform float roughness;
@@ -59,6 +66,36 @@ vec3 FresnelSchlick(float cosTheta, vec3 f0)
     return f0 + (1.0 - f0)*pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
+// Returns 0 (fully lit) .. 1 (fully shadowed) for the fragment, sampling the sun's depth map with 3x3 PCF.
+// A slope-scaled bias reduces acne on surfaces near-parallel to the sun. Fragments outside the shadow
+// frustum are treated as lit.
+float ComputeShadow(vec3 worldPos, float nDotL)
+{
+    if (shadowStrength <= 0.0)
+    {
+        return 0.0;
+    }
+    vec4 clip = lightVP*vec4(worldPos, 1.0);
+    vec3 proj = clip.xyz/clip.w;
+    proj = proj*0.5 + 0.5; // NDC -> [0,1]
+    if ((proj.z > 1.0) || (proj.x < 0.0) || (proj.x > 1.0) || (proj.y < 0.0) || (proj.y > 1.0))
+    {
+        return 0.0;
+    }
+
+    float bias = max(shadowBias*(1.0 - nDotL), shadowBias*0.15);
+    float shadow = 0.0;
+    for (int x = -1; x <= 1; x++)
+    {
+        for (int y = -1; y <= 1; y++)
+        {
+            float closest = texture(shadowMap, proj.xy + vec2(float(x), float(y))*shadowTexelSize).r;
+            shadow += (proj.z - bias > closest) ? 1.0 : 0.0;
+        }
+    }
+    return shadow/9.0;
+}
+
 void main()
 {
     vec4 texel = texture(texture0, fragTexCoord)*colDiffuse*fragColor;
@@ -90,7 +127,10 @@ void main()
 
     float nDotL = max(dot(n, l), 0.0);
     vec3 radiance = sunColor*sunIntensity;
-    vec3 direct = (kD*albedo/PI + specular)*radiance*nDotL;
+    // Sun shadow: darken the direct (sun) term only; ambient still lights shadowed surfaces.
+    float shadow = ComputeShadow(fragPosition, nDotL);
+    float sunVisibility = 1.0 - shadow*clamp(shadowStrength, 0.0, 1.0);
+    vec3 direct = (kD*albedo/PI + specular)*radiance*nDotL*sunVisibility;
 
     // Flat ambient skylight stand-in (proper image-based lighting lands with the atmospheric sky step).
     vec3 ambient = ambientColor*ambientIntensity*albedo*ao;

@@ -42,6 +42,27 @@
 /** sRGB gamma used to convert stored 8-bit colours to/from linear light. */
 #define SRGB_GAMMA 2.2f
 
+/** Asset name of the depth-only shader used for the sun shadow-map pass. */
+#define DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_depth")
+/** Resolution (square) of the sun shadow map, in texels. */
+#define SHADOW_MAP_SIZE 2048
+/** World-space size (width/height) of the sun's orthographic shadow frustum, centred on the camera. Larger
+ *  covers more of the scene (shadows persist as you move) at the cost of shadow-map resolution per unit. */
+#define SHADOW_ORTHO_SIZE 60.0f
+/** Distance the shadow light camera is placed from its focus, along the sun direction. */
+#define SHADOW_DISTANCE 80.0f
+/** Near plane of the shadow orthographic frustum. */
+#define SHADOW_NEAR 1.0f
+/** Far plane of the shadow orthographic frustum (brackets the scene around the focus). */
+#define SHADOW_FAR (SHADOW_DISTANCE * 2.0f)
+/** Base shadow depth bias (normalized light-clip depth) to combat acne; slope-scaled in the shader. Tuned
+ *  for the SHADOW_NEAR..SHADOW_FAR range: ~0.0009 * (far-near) is the world-space offset (a few cm here). */
+#define SHADOW_BIAS 0.0009f
+/** Minimum sun elevation (sunDir.y) for shadows to be cast; below this the sun is too low / set. */
+#define SHADOW_MIN_SUN_ELEVATION 0.05f
+/** Texture unit the shadow map is bound to for the PBR shader (kept clear of the material map slots 0-2). */
+#define SHADOW_TEXTURE_SLOT 10
+
 
 // Types.
 struct WorldRendererStruct
@@ -62,6 +83,8 @@ struct WorldRendererStruct
     GameShader* _tonemapShader;
     /** The atmospheric sky shader drawn behind the geometry; borrowed. NULL = fall back to the gradient clear. */
     GameShader* _skyShader;
+    /** The depth-only shader used for the sun shadow-map pass; borrowed. NULL = no shadows. */
+    GameShader* _depthShader;
     /** Set once the shaders' load has been attempted (success or failure), so it is tried only once. */
     bool _shadersLoadAttempted;
     /** Cached world_sky uniform locations (-1 when absent). */
@@ -88,6 +111,20 @@ struct WorldRendererStruct
     int _locSunIntensity;
     int _locAmbientColor;
     int _locAmbientIntensity;
+    /** Cached PBR shadow uniform locations (-1 when absent). */
+    int _locLightVP;
+    int _locShadowMap;
+    int _locShadowStrength;
+    int _locShadowBias;
+    int _locShadowTexelSize;
+    /** The sun shadow map (depth-only framebuffer); its samplable depth texture is in _shadowMap.depth. */
+    RenderTexture2D _shadowMap;
+    /** Whether _shadowMap has been created. */
+    bool _hasShadowMap;
+    /** World -> sun light-clip matrix for the most recent shadow pass (uploaded to the PBR shader). */
+    Matrix _lightVP;
+    /** Whether shadows are active this frame (sun up + enabled + shadow map ready). */
+    bool _shadowActive;
     /** Internal scene target the 3D world renders into (pixel resolution when pixelating). */
     RenderTexture2D _sceneTarget;
     /** Whether _sceneTarget has been created. */
@@ -172,6 +209,32 @@ static RenderTexture2D CreateSceneTarget(int width, int height, bool* outIsHDR)
     }
 
     *outIsHDR = true;
+    return Target;
+}
+
+/* Creates a depth-only framebuffer whose depth attachment is a samplable texture, for the sun shadow map.
+ * Returns a zero target (id 0) if the framebuffer could not be created. The depth texture lives in .depth. */
+static RenderTexture2D LoadShadowMap(int width, int height)
+{
+    RenderTexture2D Target = { 0 };
+    Target.id = rlLoadFramebuffer();
+    if (Target.id == 0)
+    {
+        return Target;
+    }
+
+    rlEnableFramebuffer(Target.id);
+    // No colour attachment (depth-only). BeginTextureMode reads .texture size for the viewport, so set it.
+    Target.texture.width = width;
+    Target.texture.height = height;
+    Target.depth.id = rlLoadTextureDepth(width, height, false); // false => a samplable depth TEXTURE
+    Target.depth.width = width;
+    Target.depth.height = height;
+    Target.depth.format = SCENE_DEPTH_FORMAT;
+    Target.depth.mipmaps = 1;
+    rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);
+    rlFramebufferComplete(Target.id);
+    rlDisableFramebuffer();
     return Target;
 }
 
@@ -291,20 +354,38 @@ static void EnsureShaders(WorldRenderer* self)
         self->_locAmbientColor = GetShaderLocation(RayShader, "ambientColor");
         self->_locAmbientIntensity = GetShaderLocation(RayShader, "ambientIntensity");
 
-        // Constant material parameters (scalar until per-material PBR maps land); upload once.
+        self->_locLightVP = GetShaderLocation(RayShader, "lightVP");
+        self->_locShadowMap = GetShaderLocation(RayShader, "shadowMap");
+        self->_locShadowStrength = GetShaderLocation(RayShader, "shadowStrength");
+        self->_locShadowBias = GetShaderLocation(RayShader, "shadowBias");
+        self->_locShadowTexelSize = GetShaderLocation(RayShader, "shadowTexelSize");
+
+        // Constant material + shadow parameters; upload once.
         float Metallic = PBR_DEFAULT_METALLIC;
         float Roughness = PBR_DEFAULT_ROUGHNESS;
         float Ao = PBR_DEFAULT_AO;
         float EmissiveColor[3] = { 0.0f, 0.0f, 0.0f };
         float EmissiveIntensity = 0.0f;
+        float ShadowBias = SHADOW_BIAS;
+        float ShadowTexel = 1.0f / (float)SHADOW_MAP_SIZE;
         SetShaderValue(RayShader, GetShaderLocation(RayShader, "metallic"), &Metallic, SHADER_UNIFORM_FLOAT);
         SetShaderValue(RayShader, GetShaderLocation(RayShader, "roughness"), &Roughness, SHADER_UNIFORM_FLOAT);
         SetShaderValue(RayShader, GetShaderLocation(RayShader, "ao"), &Ao, SHADER_UNIFORM_FLOAT);
         SetShaderValue(RayShader, GetShaderLocation(RayShader, "emissiveColor"), EmissiveColor, SHADER_UNIFORM_VEC3);
         SetShaderValue(RayShader, GetShaderLocation(RayShader, "emissiveIntensity"), &EmissiveIntensity, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(RayShader, self->_locShadowBias, &ShadowBias, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(RayShader, self->_locShadowTexelSize, &ShadowTexel, SHADER_UNIFORM_FLOAT);
     }
 
     self->_tonemapShader = LoadRendererShader(self, TONEMAP_SHADER_ASSET_NAME);
+
+    // Depth shader + shadow map for the sun shadow pass (optional; models draw unshadowed without them).
+    self->_depthShader = LoadRendererShader(self, DEPTH_SHADER_ASSET_NAME);
+    if ((self->_depthShader != NULL) && !self->_hasShadowMap)
+    {
+        self->_shadowMap = LoadShadowMap(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+        self->_hasShadowMap = (self->_shadowMap.id != 0);
+    }
 
     self->_skyShader = LoadRendererShader(self, SKY_SHADER_ASSET_NAME);
     if (self->_skyShader != NULL)
@@ -352,10 +433,25 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
     ColorToLinear(Environment->AmbientSkylightColor, AmbientColor);
     SetShaderValue(RayShader, self->_locAmbientColor, AmbientColor, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, self->_locAmbientIntensity, &Environment->AmbientSkylightIntensity, SHADER_UNIFORM_FLOAT);
+
+    // Sun shadow: upload the light matrix and bind the depth map (to a slot clear of the material maps) when
+    // shadows are active this frame; otherwise pass strength 0 so the PBR shader skips shadow sampling.
+    if (self->_shadowActive)
+    {
+        SetShaderValueMatrix(RayShader, self->_locLightVP, self->_lightVP);
+        rlActiveTextureSlot(SHADOW_TEXTURE_SLOT);
+        rlEnableTexture(self->_shadowMap.depth.id);
+        int Slot = SHADOW_TEXTURE_SLOT;
+        rlSetUniform(self->_locShadowMap, &Slot, SHADER_UNIFORM_INT, 1);
+    }
+    float ShadowStrength = self->_shadowActive ? Environment->ShadowStrength : 0.0f;
+    SetShaderValue(RayShader, self->_locShadowStrength, &ShadowStrength, SHADER_UNIFORM_FLOAT);
 }
 
-/* Draws a single model object. Missing/failed assets are skipped silently (PrepareWorld reports them). */
-static void DrawModelObject(WorldRenderer* self, WorldModelObject* modelObject)
+/* Draws a single model object through @p shader (bound onto each material slot; NULL keeps Raylib's default
+ * shader). Used by the scene pass (PBR shader) and the shadow depth pass (depth shader). Missing/failed
+ * assets are skipped silently (PrepareWorld reports them). */
+static void DrawModelObjectWithShader(WorldRenderer* self, WorldModelObject* modelObject, GameShader* shader)
 {
     const unsigned char* AssetName = WorldModelObject_GetModelAssetName(modelObject);
     if (AssetName == NULL)
@@ -383,21 +479,41 @@ static void DrawModelObject(WorldRenderer* self, WorldModelObject* modelObject)
     // DrawModelEx convention, then draw with a neutral extra transform so only our matrix and tint apply.
     Model RayModel = GameModel_GetRaylibModel(ModelAsset);
 
-    // Bind the PBR shader onto every material slot so DrawModel shades through it. The by-value model copy
-    // shares the asset's materials array, so this persists on the asset (intended: all objects shade PBR).
-    // When the shader is unavailable the material keeps Raylib's default shader (unlit) so the model still draws.
-    if (self->_pbrShader != NULL)
+    // Bind the given shader onto every material slot so DrawModel shades through it. The by-value model copy
+    // shares the asset's materials array, so this persists on the asset (fine: the next pass rebinds it).
+    // A NULL shader keeps Raylib's default (unlit) so the model still draws.
+    if (shader != NULL)
     {
-        Shader PbrShader = GameShader_GetRaylibShader(self->_pbrShader);
+        Shader RayShaderHandle = GameShader_GetRaylibShader(shader);
         for (int MaterialIndex = 0; MaterialIndex < RayModel.materialCount; MaterialIndex++)
         {
-            RayModel.materials[MaterialIndex].shader = PbrShader;
+            RayModel.materials[MaterialIndex].shader = RayShaderHandle;
         }
     }
 
     RayModel.transform = MatrixMultiply(RayModel.transform, World);
     Color Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Base));
     DrawModel(RayModel, (Vector3){ 0.0f, 0.0f, 0.0f }, 1.0f, Tint);
+}
+
+/* Draws every model object in the world through @p shader. Sprites/lights are not drawn here yet. */
+static void DrawWorldModels(WorldRenderer* self, World* world, GameShader* shader)
+{
+    size_t Count = World_GetObjectCount(world);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        WorldObject* Object = NULL;
+        Error GetResult = World_GetObjectByIndex(world, Index, &Object);
+        if (GetResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&GetResult);
+            continue;
+        }
+        if (WorldObject_GetType(Object) == WorldObjectType_Model)
+        {
+            DrawModelObjectWithShader(self, (WorldModelObject*)Object, shader);
+        }
+    }
 }
 
 /* Draws the atmospheric sky as a full-screen pass into the currently bound scene target, reconstructing each
@@ -476,34 +592,40 @@ static void DrawScene(WorldRenderer* self, World* world, const GameCamera* camer
         DrawGrid(DEBUG_GRID_SLICES, DEBUG_GRID_SPACING);
     }
 
-    size_t Count = World_GetObjectCount(world);
-    for (size_t Index = 0; Index < Count; Index++)
-    {
-        WorldObject* Object = NULL;
-        Error GetResult = World_GetObjectByIndex(world, Index, &Object);
-        if (GetResult.Code != ErrorCode_Success)
-        {
-            Error_Deconstruct(&GetResult);
-            continue;
-        }
-
-        switch (WorldObject_GetType(Object))
-        {
-            case WorldObjectType_Model:
-                DrawModelObject(self, (WorldModelObject*)Object);
-                break;
-
-            case WorldObjectType_Sprite:
-                // TODO: draw sprite objects (textured, world-placed planes) in a later step.
-                break;
-
-            case WorldObjectType_Light:
-                // TODO: feed lights into the (future) lighting pass; lights draw no geometry.
-                break;
-        }
-    }
+    // Model objects, shaded through the PBR shader (or the default shader when it is unavailable).
+    // TODO: sprite objects (world-placed planes) and light objects layer in later.
+    DrawWorldModels(self, world, self->_pbrShader);
 
     EndMode3D();
+}
+
+/* Renders the world's model depth from the sun into the shadow map and stores the world->light-clip matrix
+ * in _lightVP. The light is an orthographic camera looking from the sun toward the viewer's position, so the
+ * shadowed area follows the camera. Opens/closes its own texture + 3D passes. */
+static void RenderShadowMap(WorldRenderer* self, World* world, const GameCamera* camera, Vector3 sunDir)
+{
+    Vector3 Focus = camera->Position;
+    Vector3 LightPos = Vector3Add(Focus, Vector3Scale(sunDir, SHADOW_DISTANCE));
+    // Avoid a degenerate look-at when the sun is near straight up.
+    Vector3 Up = (fabsf(sunDir.y) > 0.99f) ? (Vector3){ 0.0f, 0.0f, 1.0f } : (Vector3){ 0.0f, 1.0f, 0.0f };
+
+    // Explicit tight orthographic frustum around the focus (rather than BeginMode3D, which would force
+    // Raylib's global cull distances and make the depth bias unintuitive). Depth is linear across
+    // SHADOW_NEAR..SHADOW_FAR, so SHADOW_BIAS maps to a small, world-relative offset.
+    Matrix LightView = MatrixLookAt(LightPos, Focus, Up);
+    float HalfExtent = SHADOW_ORTHO_SIZE*0.5f;
+    Matrix LightProj = MatrixOrtho(-HalfExtent, HalfExtent, -HalfExtent, HalfExtent, SHADOW_NEAR, SHADOW_FAR);
+
+    BeginTextureMode(self->_shadowMap);
+    ClearBackground(WHITE); // clears depth to the far plane (colour is irrelevant on the depth-only target)
+    rlEnableDepthTest();
+    rlSetMatrixProjection(LightProj);
+    rlSetMatrixModelview(LightView);   // DrawMesh reads these to build each model's light-space MVP
+    DrawWorldModels(self, world, self->_depthShader);
+    rlDisableDepthTest();
+    EndTextureMode();
+
+    self->_lightVP = MatrixMultiply(LightView, LightProj);
 }
 
 
@@ -548,6 +670,13 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     {
         UnloadRenderTexture(self->_sceneTarget);
         self->_hasSceneTarget = false;
+    }
+
+    if (self->_hasShadowMap)
+    {
+        // Frees the framebuffer and its depth-texture attachment (Raylib queries + deletes attachments).
+        rlUnloadFramebuffer(self->_shadowMap.id);
+        self->_hasShadowMap = false;
     }
 
     Error Result = AssetManager_ReleaseAllAssetsForUser(self->_assetManager, self->_assetUser);
@@ -620,6 +749,17 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     }
 
     EnsureShaders(self);
+
+    // Decide whether the sun casts shadows this frame; if so, render the shadow map BEFORE the scene pass.
+    const WorldEnvironment* Environment = World_GetEnvironment(world);
+    Vector3 SunDir = WorldEnvironment_GetSunDirection(Environment);
+    self->_shadowActive = self->_hasShadowMap && (self->_depthShader != NULL) && (self->_pbrShader != NULL)
+        && Environment->AreShadowsEnabled && (Environment->ShadowStrength > 0.0f)
+        && (SunDir.y > SHADOW_MIN_SUN_ELEVATION);
+    if (self->_shadowActive)
+    {
+        RenderShadowMap(self, world, camera, SunDir);
+    }
 
     int WindowWidth = target.texture.width;
     int WindowHeight = target.texture.height;
