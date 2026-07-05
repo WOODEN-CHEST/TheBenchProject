@@ -29,6 +29,10 @@
 #define MOUSE_SENSITIVITY 0.0025f
 /** Day-night cycle length for the test world, in seconds (short so the cycle is easy to observe). */
 #define TEST_DAY_LENGTH_SECONDS 120.0f
+/** Sun-arc tilt from the zenith at noon for the test world, in radians (~23 degrees). */
+#define TEST_SUN_ANGLE 0.4f
+/** Manual time-of-day scrub rate (fraction of a full day per second while [ or ] is held). */
+#define TIME_SCRUB_RATE 0.1f
 
 
 // Types.
@@ -53,6 +57,20 @@ typedef struct WorldTestFrameStruct
 static const Vector3 FrameWorldUp = { .x = 0.0f, .y = 1.0f, .z = 0.0f };
 
 
+// Static functions: helpers.
+/* Logs a time-of-day change (label + the current TimeOfDay), so debug scrubbing is observable. */
+static void LogTimeOfDay(WorldTestFrame* frame, const unsigned char* label, const WorldEnvironment* environment)
+{
+    if (frame->_services->Logger == NULL)
+    {
+        return;
+    }
+    Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+        (const unsigned char*)u8"WorldTest: %s (TimeOfDay=%.3f).", (const char*)label, (double)environment->TimeOfDay);
+    Error_Deconstruct(&LogResult);
+}
+
+
 // Static functions: vtable behavior.
 static Error WorldTestFrame_Start(void* self, ProgramTime time)
 {
@@ -65,7 +83,8 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
     if (Frame->_services->Logger != NULL)
     {
         Error LogResult = Logger_LogInfo(Frame->_services->Logger,
-            (const unsigned char*)u8"WorldTest: entered the world (WASD to move, mouse to look).");
+            (const unsigned char*)u8"WorldTest: entered the world. WASD+SPACE/CTRL move, SHIFT sprint, mouse look; "
+            u8"P pause/resume day-night, 1-4 = dawn/noon/dusk/midnight (frozen), [ ] scrub time, ESC quit.");
         Error_Deconstruct(&LogResult);
     }
     return Error_CreateSuccess();
@@ -111,8 +130,25 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
         Frame->_camera.Position = Vector3Add(Frame->_camera.Position, Movement);
     }
 
-    // Advance the world's day-night cycle.
-    WorldEnvironment_Advance(World_GetEnvironment(&Frame->_world), Delta);
+    // Debug time-of-day controls (so a fixed sky can be inspected with the clock stopped).
+    WorldEnvironment* Environment = World_GetEnvironment(&Frame->_world);
+    if (IsKeyPressed(KEY_P))
+    {
+        Environment->IsDayNightCycleEnabled = !Environment->IsDayNightCycleEnabled;
+        LogTimeOfDay(Frame, Environment->IsDayNightCycleEnabled
+            ? (const unsigned char*)u8"cycle resumed" : (const unsigned char*)u8"cycle paused", Environment);
+    }
+    // Number keys jump to a phase and freeze the clock there.
+    if (IsKeyPressed(KEY_ONE))   { Environment->TimeOfDay = 0.25f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(Frame, (const unsigned char*)u8"dawn (frozen)", Environment); }
+    if (IsKeyPressed(KEY_TWO))   { Environment->TimeOfDay = 0.50f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(Frame, (const unsigned char*)u8"noon (frozen)", Environment); }
+    if (IsKeyPressed(KEY_THREE)) { Environment->TimeOfDay = 0.75f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(Frame, (const unsigned char*)u8"dusk (frozen)", Environment); }
+    if (IsKeyPressed(KEY_FOUR))  { Environment->TimeOfDay = 0.00f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(Frame, (const unsigned char*)u8"midnight (frozen)", Environment); }
+    // [ and ] scrub the time of day manually (small step, wraps into [0,1)).
+    if (IsKeyDown(KEY_LEFT_BRACKET))  { Environment->TimeOfDay -= TIME_SCRUB_RATE * Delta; if (Environment->TimeOfDay < 0.0f) { Environment->TimeOfDay += 1.0f; } }
+    if (IsKeyDown(KEY_RIGHT_BRACKET)) { Environment->TimeOfDay += TIME_SCRUB_RATE * Delta; if (Environment->TimeOfDay >= 1.0f) { Environment->TimeOfDay -= 1.0f; } }
+
+    // Advance the world's day-night cycle (a no-op while paused).
+    WorldEnvironment_Advance(Environment, Delta);
 
     return Error_CreateSuccess();
 }
@@ -226,7 +262,13 @@ static Error BuildTestWorld(World* world)
         return ConstructResult;
     }
 
-    World_GetEnvironment(world)->DayLengthSeconds = TEST_DAY_LENGTH_SECONDS;
+    // Day-night cycle settings. These live on the world's WorldEnvironment and are saved WITH the world
+    // (see the WorldEncoder environment schema), so this is the place to tweak them for the test world.
+    WorldEnvironment* Environment = World_GetEnvironment(world);
+    Environment->IsDayNightCycleEnabled = true;                    // false freezes the clock at TimeOfDay
+    Environment->DayLengthSeconds = TEST_DAY_LENGTH_SECONDS;        // real seconds for one full day
+    Environment->TimeOfDay = WORLD_ENVIRONMENT_TIME_OF_DAY_NOON;    // 0=midnight, 0.25=dawn, 0.5=noon, 0.75=dusk
+    Environment->SunAngle = TEST_SUN_ANGLE;                        // radians the noon sun leans from straight up
 
     WorldModelObject* ModelObject = NULL;
     Error ModelResult = WorldModelObject_Create(TEST_MODEL_OBJECT_NAME, TEST_MODEL_ASSET_NAME, &ModelObject);

@@ -118,9 +118,9 @@ float hash13(vec3 p)
 
 // Sparse star field hashed directly from the 3D view ray, so stars are spread uniformly across the whole
 // dome (the previous atan/asin mapping was singular at the zenith and clustered every star near the horizon).
+// No horizon gate: stars cover the entire sphere so the sky reads as an infinite starfield.
 vec3 stars(vec3 rayDir, float seed, float density, float brightness)
 {
-    if (rayDir.y < -0.05) return vec3(0.0);            // no stars below the horizon
     vec3 cell = floor(rayDir*300.0 + seed);
     float present = hash13(cell);
     float threshold = 1.0 - clamp(density, 0.0, 1.0)*0.02;
@@ -142,17 +142,23 @@ void main()
 
     float kMie = K_MIE_BASE*max(turbidity, 0.0)/3.0;
     float iSun = SUN_RADIANCE*max(sunIntensity, 0.0);
-    vec3 sky = atmosphere(rayDir, rayOrigin, sunDir, iSun, kMie);
 
-    // Sun disc, only when the ray is above the horizon (does not show through the ground).
-    bool hitsGround = raySphere(rayOrigin, rayDir, R_PLANET).x > 0.0;
+    // Infinite-skybox look: there is no ground. Compute the atmosphere with the ray mirrored into the upper
+    // hemisphere (abs(y)) so every direction gets a sky colour, then darken below the horizon so it still
+    // reads as "down" instead of a mirror-bright ground.
+    vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
+    vec3 sky = atmosphere(skyRay, rayOrigin, sunDir, iSun, kMie);
+    float belowFactor = smoothstep(0.0, -0.12, rayDir.y); // 0 above the horizon, 1 below
+    sky *= mix(1.0, 0.5, belowFactor);
+
+    // Sun disc, only above the horizon (so the mirror does not create a second sun below).
     float discCos = cos(radians(0.5*max(sunSize, 0.01)));
-    if (!hitsGround && (dot(rayDir, sunDir) > discCos))
+    if ((rayDir.y > -0.02) && (dot(rayDir, sunDir) > discCos))
     {
         sky += max(sunColor, vec3(0.0))*iSun;
     }
 
-    // Stars fade in as the sun drops below the horizon.
+    // Stars cover the whole dome (above and below the horizon), fading in as the sun drops below the horizon.
     float night = clamp(-sunDir.y*4.0, 0.0, 1.0);
     sky += stars(rayDir, starSeed, starDensity, starBrightness)*night;
 

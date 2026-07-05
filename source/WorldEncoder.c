@@ -146,6 +146,8 @@ static Error EncodeEnvironment(GHDFObjectPool* pool, GHDFCompound* compound, con
     if (Result.Code != ErrorCode_Success) { return Result; }
     Result = PutFloat(compound, WorldEncoderEnvironmentField_DayLengthSeconds, environment->DayLengthSeconds);
     if (Result.Code != ErrorCode_Success) { return Result; }
+    Result = PutFloat(compound, WorldEncoderEnvironmentField_SunAngle, environment->SunAngle);
+    if (Result.Code != ErrorCode_Success) { return Result; }
     Result = PutFloat(compound, WorldEncoderEnvironmentField_SkyTurbidity, environment->SkyTurbidity);
     if (Result.Code != ErrorCode_Success) { return Result; }
     Result = PutColor(pool, compound, WorldEncoderEnvironmentField_SkyGroundAlbedo, environment->SkyGroundAlbedo);

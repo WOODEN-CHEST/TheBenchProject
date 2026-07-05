@@ -43,6 +43,10 @@ typedef struct WorldEnvironmentStruct
     bool IsDayNightCycleEnabled;
     /** @brief Real-time length of a full day-night cycle, in seconds. Must be > 0 to advance. */
     float DayLengthSeconds;
+    /** @brief Tilt of the sun's arc away from the zenith at noon, in radians. 0 makes the noon sun pass
+     *  straight overhead; larger values lean the noon sun toward the horizon (elevation at noon = 90deg minus
+     *  this angle). Sunrise and sunset stay on the horizon regardless. Expected finite, typically [0, PI/2). */
+    float SunAngle;
 
     /** @brief Atmospheric turbidity (haziness) for the physically based sky; higher is hazier. */
     float SkyTurbidity;
@@ -115,9 +119,10 @@ void WorldEnvironment_Deconstruct(WorldEnvironment* self);
 /**
  * @brief Returns the unit direction pointing TO the sun for the current time of day.
  *
- * The sun arcs overhead: at noon (TimeOfDay 0.5) it points straight up (+Y); at dawn (0.25) and dusk
- * (0.75) it lies on the horizon; at midnight it points below. The horizontal component sweeps along the X
- * axis. This is the light direction the later sky/shadow/lighting passes use.
+ * The sun arcs overhead: at dawn (TimeOfDay 0.25) and dusk (0.75) it lies on the horizon; at midnight it
+ * points below. The east-west sweep is along the X axis. SunAngle tilts the arc out of vertical (around the
+ * X axis, into Z), so at noon the sun sits SunAngle radians from the zenith rather than straight up (0 =
+ * straight overhead). This is the light direction the sky/shadow/lighting passes use.
  * @param self The environment; must not be NULL.
  * @returns The normalized direction to the sun.
  */
