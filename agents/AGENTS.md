@@ -48,6 +48,11 @@ Current module list:
   * World - Owns the objects, mints the shared uint64 id counter, holds the environment.
   * WorldDTO - Flat persistent snapshot of a world + World<->DTO conversions.
   * WorldEncoder - Encodes a WorldDTO into a GHDF compound tree (no binary write yet).
+* World runtime layer (WorldRuntime.md) - Camera, renderer, services bundle and bootstrap for viewing a world:
+  * GameCamera - 3D camera (pos/fov/yaw/pitch/roll; +Y up, +Z forward), converted to a raylib camera at render time.
+  * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, GHDF pool).
+  * WorldRenderer - Renders a World's model objects through a GameCamera; separate from the world data.
+  * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a world with the test model centred.
 
 Logging:
 Use the Logger module for all program output. Do NOT print to the standard streams directly (no

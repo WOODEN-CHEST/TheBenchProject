@@ -38,8 +38,9 @@ typedef struct AssetKeyStruct
 typedef struct TypeRecordStruct
 {
     AssetTypeID ID;
-    unsigned char* Name;          // owned
-    unsigned char* DirectoryName; // owned
+    unsigned char* Name;                    // owned
+    unsigned char* DirectoryName;           // owned
+    unsigned char* DefinitionFileExtension; // owned, may be NULL (no filter)
     AssetDefinitionConstructor Constructor;
     UserData ConstructorUserData;
 } TypeRecord;
@@ -1027,6 +1028,7 @@ Error AssetManager_Deconstruct(AssetManager* self)
         if (GetResult.Code != ErrorCode_Success) { Error_Deconstruct(&GetResult); continue; }
         Memory_Free(Record->Name);
         Memory_Free(Record->DirectoryName);
+        Memory_Free(Record->DefinitionFileExtension);
         Memory_Free(Record);
     }
 
@@ -1095,6 +1097,7 @@ Error AssetManager_CreateAssetType(AssetManager* self, const AssetTypeInfo* info
     Record->ID = self->_nextTypeID;
     Record->Name = DuplicateString(info->Name);
     Record->DirectoryName = DuplicateString(info->DirectoryName);
+    Record->DefinitionFileExtension = DuplicateString(info->DefinitionFileExtension);
     Record->Constructor = info->Constructor;
     Record->ConstructorUserData = info->ConstructorUserData;
 
@@ -1103,6 +1106,7 @@ Error AssetManager_CreateAssetType(AssetManager* self, const AssetTypeInfo* info
     {
         Memory_Free(Record->Name);
         Memory_Free(Record->DirectoryName);
+        Memory_Free(Record->DefinitionFileExtension);
         Memory_Free(Record);
         return AddResult;
     }
@@ -1151,6 +1155,7 @@ Error AssetManager_CreateStandardAssetTypes(AssetManager* self, StandardAssetTyp
         Memory_Zero(&Info, sizeof(Info));
         Info.Name = Standard[i].Name;
         Info.DirectoryName = Standard[i].Directory;
+        Info.DefinitionFileExtension = ASSET_TYPE_DEFINITION_EXTENSION;
         Info.Constructor = Standard[i].Constructor;
         Info.ConstructorUserData = PoolUserData;
 
@@ -1196,6 +1201,7 @@ Error AssetManager_RemoveAssetType(AssetManager* self, AssetTypeID id)
         if (RemoveResult.Code != ErrorCode_Success) { return RemoveResult; }
         Memory_Free(Record->Name);
         Memory_Free(Record->DirectoryName);
+        Memory_Free(Record->DefinitionFileExtension);
         Memory_Free(Record);
         return Error_CreateSuccess();
     }
@@ -1563,6 +1569,39 @@ Error AssetManager_SetCacheDirectory(AssetManager* self, const unsigned char* di
     return ClearCacheDirectory(self);
 }
 
+/* Case-insensitive ASCII compare of a file extension (with a leading dot, e.g. ".json", as produced by
+ * Path_GetExtension) against a type's definition extension (without the dot, e.g. "json"). */
+static bool ExtensionMatches(const unsigned char* fileExtensionWithDot, const unsigned char* typeExtension)
+{
+    if ((fileExtensionWithDot == NULL) || (typeExtension == NULL) || (fileExtensionWithDot[0] != (unsigned char)u8'.'))
+    {
+        return false;
+    }
+
+    const unsigned char* Left = fileExtensionWithDot + 1;
+    const unsigned char* Right = typeExtension;
+    while ((*Left != (unsigned char)u8'\0') && (*Right != (unsigned char)u8'\0'))
+    {
+        unsigned char LeftChar = *Left;
+        unsigned char RightChar = *Right;
+        if ((LeftChar >= (unsigned char)u8'A') && (LeftChar <= (unsigned char)u8'Z'))
+        {
+            LeftChar = (unsigned char)(LeftChar + ((unsigned char)u8'a' - (unsigned char)u8'A'));
+        }
+        if ((RightChar >= (unsigned char)u8'A') && (RightChar <= (unsigned char)u8'Z'))
+        {
+            RightChar = (unsigned char)(RightChar + ((unsigned char)u8'a' - (unsigned char)u8'A'));
+        }
+        if (LeftChar != RightChar)
+        {
+            return false;
+        }
+        Left++;
+        Right++;
+    }
+    return (*Left == (unsigned char)u8'\0') && (*Right == (unsigned char)u8'\0');
+}
+
 Error AssetManager_ReadDefinitions(AssetManager* self)
 {
     if (self == NULL) { return CreateNullError(u8"self"); }
@@ -1572,8 +1611,10 @@ Error AssetManager_ReadDefinitions(AssetManager* self)
 
     GenericBuffer DirectoryPath;
     GenericBuffer FileBytes;
+    GenericBuffer FileExtension;
     GenericBuffer_AllocateVariable(&DirectoryPath, 0U, 1U);
     GenericBuffer_AllocateVariable(&FileBytes, 0U, 1U);
+    GenericBuffer_AllocateVariable(&FileExtension, 0U, 1U);
     Error Result = Error_CreateSuccess();
 
     // Process roots in priority order (index 0 = highest); skip-if-exists gives override semantics.
@@ -1615,6 +1656,22 @@ Error AssetManager_ReadDefinitions(AssetManager* self)
                 Error NextResult = DirectoryEntryEnumerator_Next(Enumerator, &Info);
                 if (NextResult.Code != ErrorCode_Success) { Result = NextResult; break; }
 
+                // When the type declares a definition-file extension, only files with that extension are
+                // definitions; skip everything else (e.g. resource files sharing the type directory).
+                if (Type->DefinitionFileExtension != NULL)
+                {
+                    GenericBuffer_Clear(&FileExtension);
+                    Error ExtResult = Path_GetExtension(Info._path, &FileExtension);
+                    bool IsDefinitionFile = (ExtResult.Code == ErrorCode_Success)
+                        && ExtensionMatches(FileExtension._data, Type->DefinitionFileExtension);
+                    Error_Deconstruct(&ExtResult);
+                    if (!IsDefinitionFile)
+                    {
+                        FileSystemEntryInfo_Deconstruct(&Info);
+                        continue;
+                    }
+                }
+
                 GenericBuffer_Clear(&FileBytes);
                 Error ReadResult = FileSystem_ReadAllBytes(Info._path, &FileBytes);
                 if (ReadResult.Code == ErrorCode_Success)
@@ -1645,6 +1702,7 @@ Error AssetManager_ReadDefinitions(AssetManager* self)
 
     Memory_Free(DirectoryPath._data);
     Memory_Free(FileBytes._data);
+    Memory_Free(FileExtension._data);
     return Result;
 }
 

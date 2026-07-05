@@ -274,6 +274,12 @@ typedef struct AssetTypeInfoStruct
     /** @brief NUL-terminated UTF-8 sub-directory name under each search root for this type's resources
      *         and definitions (e.g. u8"sprite_sheets"). Copied. */
     const unsigned char* DirectoryName;
+    /** @brief OPTIONAL definition-file extension WITHOUT the dot (e.g. u8"json"). When set,
+     *         AssetManager_ReadDefinitions only treats files with this extension as definitions and skips
+     *         all others (so resource files — models, textures, etc. — may live alongside definitions in
+     *         this type's directory). When NULL, every file in the directory is parsed as a definition.
+     *         Copied; matched case-insensitively. */
+    const unsigned char* DefinitionFileExtension;
     /** @brief Builds definitions of this type from raw bytes. Must not be NULL. */
     AssetDefinitionConstructor Constructor;
     /** @brief Context passed to Constructor on every call (e.g. a shared JSONObjectPool*). Copied by value. */

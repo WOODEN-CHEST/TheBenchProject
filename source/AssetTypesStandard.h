@@ -32,6 +32,10 @@
 #define ASSET_TYPE_NAME_MODEL      ((const unsigned char*)u8"model")
 #define ASSET_TYPE_DIRECTORY_MODEL ((const unsigned char*)u8"models")
 
+/** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
+ *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
+#define ASSET_TYPE_DEFINITION_EXTENSION ((const unsigned char*)u8"json")
+
 
 /** @brief Builds a sprite sheet definition from a JSON blob. See AssetDefinitionConstructor. */
 Error SpriteSheetDefinition_Construct(AssetManager* manager, const UserData* userData,
