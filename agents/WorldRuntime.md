@@ -26,11 +26,16 @@ is produced. Instance/runtime data — never saved to a world.
 
 ## WorldRenderer
 
-Owns a borrowed `AssetManager` + `Logger` and its own `AssetUserID`; resolves each object's model asset by
-name (idempotent `AssetManager_LoadModel` under that user) and releases them all on deconstruct.
-`WorldRenderer_Render(world, camera, RenderContext*)` is called INSIDE an active render pass (the frame
-opens the target pass): it `ClearBackground(sky)`, enters 3D mode with the camera, draws a debug grid (if
-enabled) and every model object, then leaves 3D mode. It does NOT open/close the target pass or composite.
+Owns a borrowed `AssetManager` + `Logger`, its own `AssetUserID`, and an internal `RenderTexture2D` scene
+target. Resolves each object's model asset by name (idempotent `AssetManager_LoadModel`) and releases them
+all on deconstruct. `WorldRenderer_RenderToTarget(world, camera, RenderTexture2D target)` runs the whole
+pipeline and opens/closes ALL its own passes (so it must NOT be called inside an active pass): it draws the
+3D world (sky clear, camera, debug grid, model objects) into the scene target, then blits that into the
+frame `target`. **Pixelation pass** (Step 3 increment 1): when enabled (default), the scene target is sized
+to the low pixel resolution (`ComputeSceneSize`: longer window axis pinned to 640, shorter derived → square
+pixels; 16:9 = 640x360) with `TEXTURE_FILTER_POINT`, and point-upscaled to the window = chunky pixels. The
+scene→frame blit uses a **negative source height** (same flip convention the frame manager uses on composite
+— verified: every RT-to-RT/screen hop uses negative source). Toggle via `WorldRenderer_SetPixelationEnabled`.
 
 Model draw: composes the object's world transform (scale → Euler XYZ → translate) OVER the model's baked
 import transform (`RayModel.transform = MatrixMultiply(RayModel.transform, world)`), matching raylib's own

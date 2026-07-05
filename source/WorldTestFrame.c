@@ -150,6 +150,7 @@ static bool WorldTestFrame_IsUnloaded(void* self)
 
 static Error WorldTestFrame_Render(void* self, const FrameRenderContext* context, RenderTexture2D target)
 {
+    UNUSED(context); // The renderer owns its own passes and the 3D view fills the whole target.
     WorldTestFrame* Frame = self;
 
     // Mouse look is per real frame, so it is applied here (Render runs once per frame) rather than in the
@@ -164,14 +165,7 @@ static Error WorldTestFrame_Render(void* self, const FrameRenderContext* context
         Frame->_camera.Pitch = Clamp(Frame->_camera.Pitch, -GAME_CAMERA_MAX_PITCH, GAME_CAMERA_MAX_PITCH);
     }
 
-    RenderContext Context;
-    RenderContext_Create(&Context, &target, context->TargetAspectRatio, context->TargetAreaPosition);
-    RenderContext_BeginRendering(&Context);
-    Error RenderResult = WorldRenderer_Render(Frame->_renderer, &Frame->_world, &Frame->_camera, &Context);
-    RenderContext_EndRendering(&Context);
-    RenderContext_Deconstruct(&Context);
-
-    return RenderResult;
+    return WorldRenderer_RenderToTarget(Frame->_renderer, &Frame->_world, &Frame->_camera, target);
 }
 
 static void WorldTestFrame_Destroy(void* self)

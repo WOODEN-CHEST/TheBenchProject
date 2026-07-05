@@ -68,3 +68,6 @@ compile/out/TheBenchProject*
 compile/out/unicode_data.txt
 local/
 compile/out/logs/
+
+# Agent handoff docs (continuity between context windows).
+handoff/
