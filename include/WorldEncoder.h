@@ -68,7 +68,9 @@ typedef enum WorldEncoderEnvironmentFieldEnum
     WorldEncoderEnvironmentField_SunshaftStrength = 20,     /**< @brief float sunshaft strength. */
     WorldEncoderEnvironmentField_AreShadowsEnabled = 21,    /**< @brief bool shadows enabled. */
     WorldEncoderEnvironmentField_ShadowStrength = 22,       /**< @brief float shadow strength. */
-    WorldEncoderEnvironmentField_SunAngle = 23             /**< @brief float sun-arc tilt from zenith at noon (radians). */
+    WorldEncoderEnvironmentField_SunAngle = 23,            /**< @brief float sun-arc tilt from zenith at noon (radians). */
+    WorldEncoderEnvironmentField_IsAmbientOcclusionEnabled = 24, /**< @brief bool ambient occlusion enabled. */
+    WorldEncoderEnvironmentField_AmbientOcclusionStrength = 25  /**< @brief float ambient occlusion strength. */
 } WorldEncoderEnvironmentField;
 
 /**

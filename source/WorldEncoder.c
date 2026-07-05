@@ -184,7 +184,11 @@ static Error EncodeEnvironment(GHDFObjectPool* pool, GHDFCompound* compound, con
     if (Result.Code != ErrorCode_Success) { return Result; }
     Result = PutBool(compound, WorldEncoderEnvironmentField_AreShadowsEnabled, environment->AreShadowsEnabled);
     if (Result.Code != ErrorCode_Success) { return Result; }
-    return PutFloat(compound, WorldEncoderEnvironmentField_ShadowStrength, environment->ShadowStrength);
+    Result = PutFloat(compound, WorldEncoderEnvironmentField_ShadowStrength, environment->ShadowStrength);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    Result = PutBool(compound, WorldEncoderEnvironmentField_IsAmbientOcclusionEnabled, environment->IsAmbientOcclusionEnabled);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    return PutFloat(compound, WorldEncoderEnvironmentField_AmbientOcclusionStrength, environment->AmbientOcclusionStrength);
 }
 
 static Error EncodeObject(GHDFObjectPool* pool, GHDFCompound* compound, const WorldObjectDTO* record)

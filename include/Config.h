@@ -45,6 +45,20 @@ typedef struct GameConfigStruct
     int32_t ResolutionWidth;
     /** @brief Window height in pixels; always strictly positive and within a sane range after loading. */
     int32_t ResolutionHeight;
+
+    // ---- Post-effect config-side multipliers ----
+    // These are the game-wide multipliers the renderer combines (by multiplication) with each world's own
+    // per-effect strength. A value of 0 disables the effect regardless of the world's setting; 1 leaves the
+    // world's setting untouched. All are finite and >= 0 after loading (negatives/NaN fall back to default).
+    /** @brief Config-side shadow strength multiplier (times the world's ShadowStrength). Default 1. */
+    float ShadowStrength;
+    /** @brief Config-side bloom strength multiplier (times the world's BloomStrength). Default 1. */
+    float BloomStrength;
+    /** @brief Config-side sunshaft strength multiplier (times the world's SunshaftStrength). Default 1. */
+    float SunshaftStrength;
+    /** @brief Config-side ambient-occlusion strength multiplier (times the world's AmbientOcclusionStrength).
+     *  Default 1. Scales how strongly screen-space AO darkens creased/contact areas. */
+    float AmbientOcclusionStrength;
 } GameConfig;
 
 

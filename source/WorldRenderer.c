@@ -7,6 +7,7 @@
 #include "AssetManager.h"
 #include "GameModel.h"
 #include "GameShader.h"
+#include "Config.h"
 #include "Logger.h"
 #include "Renderer.h"
 #include "raylib/raylib.h"
@@ -63,6 +64,18 @@
 /** Texture unit the shadow map is bound to for the PBR shader (kept clear of the material map slots 0-2). */
 #define SHADOW_TEXTURE_SLOT 10
 
+/** Asset name of the post-process shader (screen-space AO + hand-drawn outlines) run before the tonemap. */
+#define POSTFX_SHADER_ASSET_NAME ((const unsigned char*)u8"world_postfx")
+/** Texture unit the scene depth texture is bound to for the postfx shader (clear of the blit's slot 0). */
+#define POSTFX_DEPTH_TEXTURE_SLOT 1
+/** Built-in outline strength (multiplied by nothing config-side per spec: outlines are code-configurable).
+ *  0..1; scales how strongly edges are recoloured toward the hand-drawn outline shade. */
+#define OUTLINE_BASE_STRENGTH 1.0f
+/** Near/far planes the scene 3D pass uses (Raylib's global cull distances); the postfx pass rebuilds the same
+ *  projection to reconstruct view positions from the depth buffer. */
+#define SCENE_NEAR_PLANE ((double)RL_CULL_DISTANCE_NEAR)
+#define SCENE_FAR_PLANE ((double)RL_CULL_DISTANCE_FAR)
+
 
 // Types.
 struct WorldRendererStruct
@@ -71,6 +84,8 @@ struct WorldRendererStruct
     AssetManager* _assetManager;
     /** Logger for diagnostics; borrowed, may be NULL. */
     Logger* _logger;
+    /** Game config supplying the config-side post-effect multipliers; borrowed, may be NULL (defaults to 1x). */
+    const GameConfig* _config;
     /** The renderer's asset user id; every asset it loads is held under this. */
     AssetUserID _assetUser;
     /** Whether the debug reference grid is drawn. */
@@ -85,8 +100,19 @@ struct WorldRendererStruct
     GameShader* _skyShader;
     /** The depth-only shader used for the sun shadow-map pass; borrowed. NULL = no shadows. */
     GameShader* _depthShader;
+    /** The post-process shader (screen-space AO + hand-drawn outlines); borrowed. NULL = post pass skipped. */
+    GameShader* _postfxShader;
     /** Set once the shaders' load has been attempted (success or failure), so it is tried only once. */
     bool _shadersLoadAttempted;
+    /** Whether hand-drawn outlines are drawn (code-configurable per spec; on by default). */
+    bool _outlineEnabled;
+    /** Cached world_postfx uniform locations (-1 when absent). */
+    int _postfxLocResolution;
+    int _postfxLocInvProjection;
+    int _postfxLocProjection;
+    int _postfxLocDepthTexture;
+    int _postfxLocAoStrength;
+    int _postfxLocOutlineStrength;
     /** Cached world_sky uniform locations (-1 when absent). */
     int _skyLocResolution;
     int _skyLocInvViewProj;
@@ -129,6 +155,12 @@ struct WorldRendererStruct
     RenderTexture2D _sceneTarget;
     /** Whether _sceneTarget has been created. */
     bool _hasSceneTarget;
+    /** Whether _sceneTarget's depth attachment is a samplable texture (required by the postfx pass). */
+    bool _sceneDepthSamplable;
+    /** Ping target the postfx pass writes into (same size/format as _sceneTarget); only made when postfx runs. */
+    RenderTexture2D _postTarget;
+    /** Whether _postTarget has been created. */
+    bool _hasPostTarget;
     /** Current width of _sceneTarget, in pixels. */
     int _sceneWidth;
     /** Current height of _sceneTarget, in pixels. */
@@ -190,14 +222,16 @@ static RenderTexture2D CreateSceneTarget(int width, int height, bool* outIsHDR)
     Target.texture.format = PIXELFORMAT_UNCOMPRESSED_R16G16B16A16;
     Target.texture.mipmaps = 1;
 
-    Target.depth.id = rlLoadTextureDepth(width, height, true);
+    // A samplable depth TEXTURE (false), not a renderbuffer, so the postfx pass can read scene depth for
+    // ambient occlusion and outline edge detection. Depth testing works identically either way.
+    Target.depth.id = rlLoadTextureDepth(width, height, false);
     Target.depth.width = width;
     Target.depth.height = height;
     Target.depth.format = SCENE_DEPTH_FORMAT;
     Target.depth.mipmaps = 1;
 
     rlFramebufferAttach(Target.id, Target.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
-    rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_RENDERBUFFER, 0);
+    rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);
 
     bool Complete = (Target.texture.id != 0) && rlFramebufferComplete(Target.id);
     rlDisableFramebuffer();
@@ -209,6 +243,35 @@ static RenderTexture2D CreateSceneTarget(int width, int height, bool* outIsHDR)
     }
 
     *outIsHDR = true;
+    return Target;
+}
+
+/* Creates a colour-only HDR (RGBA16F) framebuffer for the postfx ping target (no depth: the post pass writes
+ * every pixel with no depth test). Returns a zero target (id 0) if it could not be made complete. */
+static RenderTexture2D CreatePostTarget(int width, int height)
+{
+    RenderTexture2D Target = { 0 };
+    Target.id = rlLoadFramebuffer();
+    if (Target.id == 0)
+    {
+        return Target;
+    }
+
+    rlEnableFramebuffer(Target.id);
+    Target.texture.id = rlLoadTexture(NULL, width, height, PIXELFORMAT_UNCOMPRESSED_R16G16B16A16, 1);
+    Target.texture.width = width;
+    Target.texture.height = height;
+    Target.texture.format = PIXELFORMAT_UNCOMPRESSED_R16G16B16A16;
+    Target.texture.mipmaps = 1;
+    rlFramebufferAttach(Target.id, Target.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
+
+    bool Complete = (Target.texture.id != 0) && rlFramebufferComplete(Target.id);
+    rlDisableFramebuffer();
+    if (!Complete)
+    {
+        UnloadRenderTexture(Target);
+        Target = (RenderTexture2D){ 0 };
+    }
     return Target;
 }
 
@@ -255,13 +318,36 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
         UnloadRenderTexture(self->_sceneTarget);
         self->_hasSceneTarget = false;
     }
+    if (self->_hasPostTarget)
+    {
+        UnloadRenderTexture(self->_postTarget);
+        self->_hasPostTarget = false;
+    }
 
     self->_sceneTarget = CreateSceneTarget(DesiredWidth, DesiredHeight, &self->_sceneIsHDR);
     // Point filtering makes the upscale to the window produce hard, square pixels.
     SetTextureFilter(self->_sceneTarget.texture, TEXTURE_FILTER_POINT);
+    // Only the manual HDR path attaches a samplable depth texture; the 8-bit fallback keeps a renderbuffer.
+    self->_sceneDepthSamplable = self->_sceneIsHDR;
+    if (self->_sceneDepthSamplable)
+    {
+        // The postfx pass compares raw depth texels, so nearest (point) sampling is required.
+        SetTextureFilter(self->_sceneTarget.depth, TEXTURE_FILTER_POINT);
+    }
     self->_hasSceneTarget = true;
     self->_sceneWidth = DesiredWidth;
     self->_sceneHeight = DesiredHeight;
+
+    // The postfx ping target: only needed when the post pass can run (shader present + samplable depth).
+    if ((self->_postfxShader != NULL) && self->_sceneDepthSamplable)
+    {
+        self->_postTarget = CreatePostTarget(DesiredWidth, DesiredHeight);
+        self->_hasPostTarget = (self->_postTarget.id != 0);
+        if (self->_hasPostTarget)
+        {
+            SetTextureFilter(self->_postTarget.texture, TEXTURE_FILTER_POINT);
+        }
+    }
 
     // Report the HDR/fallback choice once so it is easy to confirm the float pipeline is active.
     if (!self->_sceneHdrReported && (self->_logger != NULL))
@@ -286,6 +372,18 @@ static void ReportAssetFailure(WorldRenderer* self, const unsigned char* assetNa
         Error_Deconstruct(&LogResult);
     }
     Error_Deconstruct(error);
+}
+
+/* Config-side shadow strength multiplier (1.0 when no config is bound). Combined with the world's own. */
+static float ConfigShadowStrength(const WorldRenderer* self)
+{
+    return (self->_config != NULL) ? self->_config->ShadowStrength : 1.0f;
+}
+
+/* Config-side ambient-occlusion strength multiplier (1.0 when no config is bound). */
+static float ConfigAoStrength(const WorldRenderer* self)
+{
+    return (self->_config != NULL) ? self->_config->AmbientOcclusionStrength : 1.0f;
 }
 
 /* Converts an 8-bit sRGB colour to linear light in [0,1]^3 (alpha ignored). Light/ambient colours must be
@@ -410,6 +508,20 @@ static void EnsureShaders(WorldRenderer* self)
         self->_skyLocStarDensity = GetShaderLocation(RayShader, "starDensity");
         self->_skyLocStarBrightness = GetShaderLocation(RayShader, "starBrightness");
     }
+
+    // Post-process shader (screen-space AO + hand-drawn outlines). Optional: without it the scene is blitted
+    // straight to the tonemap pass. It also needs the samplable-depth HDR scene target (checked at use time).
+    self->_postfxShader = LoadRendererShader(self, POSTFX_SHADER_ASSET_NAME);
+    if (self->_postfxShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_postfxShader);
+        self->_postfxLocResolution = GetShaderLocation(RayShader, "resolution");
+        self->_postfxLocInvProjection = GetShaderLocation(RayShader, "invProjection");
+        self->_postfxLocProjection = GetShaderLocation(RayShader, "projection");
+        self->_postfxLocDepthTexture = GetShaderLocation(RayShader, "depthTexture");
+        self->_postfxLocAoStrength = GetShaderLocation(RayShader, "aoStrength");
+        self->_postfxLocOutlineStrength = GetShaderLocation(RayShader, "outlineStrength");
+    }
 }
 
 /* Uploads the per-frame PBR lighting uniforms (camera position, sun and ambient light) from the world's
@@ -450,7 +562,7 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
         int Slot = SHADOW_TEXTURE_SLOT;
         rlSetUniform(self->_locShadowMap, &Slot, SHADER_UNIFORM_INT, 1);
     }
-    float ShadowStrength = self->_shadowActive ? Environment->ShadowStrength : 0.0f;
+    float ShadowStrength = self->_shadowActive ? (Environment->ShadowStrength * ConfigShadowStrength(self)) : 0.0f;
     SetShaderValue(RayShader, self->_locShadowStrength, &ShadowStrength, SHADER_UNIFORM_FLOAT);
 }
 
@@ -638,9 +750,56 @@ static void RenderShadowMap(WorldRenderer* self, World* world, const GameCamera*
     self->_lightVP = MatrixMultiply(LightView, LightProj);
 }
 
+/* Runs the post-process pass (screen-space AO + hand-drawn outlines) into the currently bound post target,
+ * reading the scene colour + depth. Reconstructs the same perspective projection the scene pass used so the
+ * shader can turn depth back into view positions. Outputs linear HDR; the tonemap pass maps it afterwards. */
+static void DrawPostFX(WorldRenderer* self, World* world, const GameCamera* camera)
+{
+    Shader RayShader = GameShader_GetRaylibShader(self->_postfxShader);
+    const WorldEnvironment* Environment = World_GetEnvironment(world);
+
+    Camera3D RayCam = GameCamera_ToRaylibCamera(camera);
+    double Aspect = (self->_sceneHeight > 0) ? ((double)self->_sceneWidth / (double)self->_sceneHeight) : 1.0;
+    Matrix Projection = MatrixPerspective((double)RayCam.fovy * DEG2RAD, Aspect, SCENE_NEAR_PLANE, SCENE_FAR_PLANE);
+    Matrix InvProjection = MatrixInvert(Projection);
+
+    float Resolution[2] = { (float)self->_sceneWidth, (float)self->_sceneHeight };
+    SetShaderValue(RayShader, self->_postfxLocResolution, Resolution, SHADER_UNIFORM_VEC2);
+    SetShaderValueMatrix(RayShader, self->_postfxLocProjection, Projection);
+    SetShaderValueMatrix(RayShader, self->_postfxLocInvProjection, InvProjection);
+
+    // Effective AO strength = world multiplier x config multiplier (0 / disabled => the shader skips SSAO).
+    float AoStrength = Environment->IsAmbientOcclusionEnabled
+        ? (Environment->AmbientOcclusionStrength * ConfigAoStrength(self)) : 0.0f;
+    if (AoStrength < 0.0f) { AoStrength = 0.0f; }
+    SetShaderValue(RayShader, self->_postfxLocAoStrength, &AoStrength, SHADER_UNIFORM_FLOAT);
+
+    // Outlines are code-configurable (not JSON) per spec: a single renderer toggle + a built-in strength.
+    float OutlineStrength = self->_outlineEnabled ? OUTLINE_BASE_STRENGTH : 0.0f;
+    SetShaderValue(RayShader, self->_postfxLocOutlineStrength, &OutlineStrength, SHADER_UNIFORM_FLOAT);
+
+    BeginShaderMode(RayShader);
+    // Bind the scene depth texture to a spare slot; the postfx shader samples it as 'depthTexture'. The blit
+    // below binds the scene colour to slot 0 (texture0), leaving this slot-1 binding intact through the draw.
+    rlActiveTextureSlot(POSTFX_DEPTH_TEXTURE_SLOT);
+    rlEnableTexture(self->_sceneTarget.depth.id);
+    int DepthSlot = POSTFX_DEPTH_TEXTURE_SLOT;
+    rlSetUniform(self->_postfxLocDepthTexture, &DepthSlot, SHADER_UNIFORM_INT, 1);
+
+    // The shader samples by gl_FragCoord (not fragTexCoord), so this straight full-screen copy needs no flip.
+    Rectangle Source = { 0.0f, 0.0f, (float)self->_sceneTarget.texture.width, (float)self->_sceneTarget.texture.height };
+    Rectangle Destination = { 0.0f, 0.0f, (float)self->_sceneWidth, (float)self->_sceneHeight };
+    DrawTexturePro(self->_sceneTarget.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
+    EndShaderMode();
+
+    // Restore the active texture slot so later draws (the tonemap blit, the frame compositor) are unaffected.
+    rlActiveTextureSlot(0);
+}
+
 
 // Public functions.
-Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, WorldRenderer** outRenderer)
+Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const GameConfig* config,
+    WorldRenderer** outRenderer)
 {
     if ((assetManager == NULL) || (outRenderer == NULL))
     {
@@ -660,9 +819,11 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, WorldRend
     Memory_Zero(Renderer, sizeof(*Renderer));
     Renderer->_assetManager = assetManager;
     Renderer->_logger = logger;
+    Renderer->_config = config;
     Renderer->_assetUser = User;
     Renderer->_drawDebugGrid = true;
     Renderer->_pixelationEnabled = true;
+    Renderer->_outlineEnabled = true;
     Renderer->_hasSceneTarget = false;
 
     *outRenderer = Renderer;
@@ -680,6 +841,12 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     {
         UnloadRenderTexture(self->_sceneTarget);
         self->_hasSceneTarget = false;
+    }
+
+    if (self->_hasPostTarget)
+    {
+        UnloadRenderTexture(self->_postTarget);
+        self->_hasPostTarget = false;
     }
 
     if (self->_hasShadowMap)
@@ -764,7 +931,7 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     const WorldEnvironment* Environment = World_GetEnvironment(world);
     Vector3 SunDir = WorldEnvironment_GetSunDirection(Environment);
     self->_shadowActive = self->_hasShadowMap && (self->_depthShader != NULL) && (self->_pbrShader != NULL)
-        && Environment->AreShadowsEnabled && (Environment->ShadowStrength > 0.0f)
+        && Environment->AreShadowsEnabled && ((Environment->ShadowStrength * ConfigShadowStrength(self)) > 0.0f)
         && (SunDir.y > SHADOW_MIN_SUN_ELEVATION);
     if (self->_shadowActive)
     {
@@ -780,7 +947,19 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     DrawScene(self, world, camera);
     EndTextureMode();
 
-    // Pass 2: blit the scene target into the frame target, tonemapping the linear-HDR scene to displayable
+    // Pass 1.5 (optional): screen-space AO + hand-drawn outlines, low-res, reading the scene colour + depth.
+    // Needs the postfx shader and the samplable-depth HDR scene target; otherwise the scene is blitted as-is.
+    RenderTexture2D BlitSource = self->_sceneTarget;
+    if ((self->_postfxShader != NULL) && self->_hasPostTarget && self->_sceneDepthSamplable)
+    {
+        BeginTextureMode(self->_postTarget);
+        ClearBackground(BLACK);
+        DrawPostFX(self, world, camera);
+        EndTextureMode();
+        BlitSource = self->_postTarget;
+    }
+
+    // Pass 2: blit the (post-processed) scene into the frame target, tonemapping the linear-HDR result to
     // sRGB via the tonemap shader as it upscales. A negative source height applies the vertical flip Raylib
     // render textures need (the same convention the frame manager uses when compositing), and point filtering
     // on the scene texture makes the upscale produce hard square pixels. If the tonemap shader is unavailable
@@ -791,15 +970,15 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     {
         .x = 0.0f,
         .y = 0.0f,
-        .width = (float)self->_sceneTarget.texture.width,
-        .height = -(float)self->_sceneTarget.texture.height
+        .width = (float)BlitSource.texture.width,
+        .height = -(float)BlitSource.texture.height
     };
     Rectangle Destination = { .x = 0.0f, .y = 0.0f, .width = (float)WindowWidth, .height = (float)WindowHeight };
     if (self->_tonemapShader != NULL)
     {
         BeginShaderMode(GameShader_GetRaylibShader(self->_tonemapShader));
     }
-    DrawTexturePro(self->_sceneTarget.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
+    DrawTexturePro(BlitSource.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
     if (self->_tonemapShader != NULL)
     {
         EndShaderMode();

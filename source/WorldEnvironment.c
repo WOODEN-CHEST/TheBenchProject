@@ -68,6 +68,9 @@ void WorldEnvironment_SetDefaults(WorldEnvironment* self)
 
     self->AreShadowsEnabled = true;
     self->ShadowStrength = DEFAULT_EFFECT_STRENGTH;
+
+    self->IsAmbientOcclusionEnabled = true;
+    self->AmbientOcclusionStrength = DEFAULT_EFFECT_STRENGTH;
 }
 
 void WorldEnvironment_Deconstruct(WorldEnvironment* self)

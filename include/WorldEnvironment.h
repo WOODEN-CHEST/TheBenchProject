@@ -97,6 +97,12 @@ typedef struct WorldEnvironmentStruct
     bool AreShadowsEnabled;
     /** @brief World-side shadow intensity multiplier (multiplied by the config's shadow strength). Finite and >= 0. */
     float ShadowStrength;
+
+    /** @brief When false, this world suppresses screen-space ambient occlusion regardless of the config. */
+    bool IsAmbientOcclusionEnabled;
+    /** @brief World-side ambient-occlusion strength multiplier (multiplied by the config's AO strength).
+     *  Scales how strongly the screen-space AO darkens creased/contact areas. Finite and >= 0. */
+    float AmbientOcclusionStrength;
 } WorldEnvironment;
 
 

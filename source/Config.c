@@ -15,6 +15,14 @@
 #define CONFIG_KEY_RESOLUTION ((const unsigned char*)u8"resolution")
 /** JSON key for the target render frame rate. */
 #define CONFIG_KEY_TARGET_FPS ((const unsigned char*)u8"target_fps")
+/** JSON key for the config-side shadow strength multiplier. */
+#define CONFIG_KEY_SHADOW_STRENGTH ((const unsigned char*)u8"shadow_strength")
+/** JSON key for the config-side bloom strength multiplier. */
+#define CONFIG_KEY_BLOOM_STRENGTH ((const unsigned char*)u8"bloom_strength")
+/** JSON key for the config-side sunshaft strength multiplier. */
+#define CONFIG_KEY_SUNSHAFT_STRENGTH ((const unsigned char*)u8"sunshaft_strength")
+/** JSON key for the config-side ambient-occlusion strength multiplier. */
+#define CONFIG_KEY_AMBIENT_OCCLUSION_STRENGTH ((const unsigned char*)u8"ambient_occlusion_strength")
 
 /** Index of the width element within the resolution array. */
 #define CONFIG_RESOLUTION_WIDTH_INDEX ((size_t)0)
@@ -38,6 +46,12 @@
 #define CONFIG_MIN_TARGET_FPS ((int32_t)10)
 /** Largest accepted target FPS; larger values fall back to the default. */
 #define CONFIG_MAX_TARGET_FPS ((int32_t)1000)
+
+/** Default value for every post-effect config-side strength multiplier. */
+#define CONFIG_DEFAULT_EFFECT_STRENGTH (1.0f)
+/** Largest accepted effect strength multiplier; larger (or non-finite/negative) values fall back to the
+ *  default. Effects are multipliers, so a generous ceiling still lets a config boost an effect. */
+#define CONFIG_MAX_EFFECT_STRENGTH (16.0f)
 
 /** Smallest window width accepted from the config; smaller values fall back to the default. */
 #define CONFIG_MIN_RESOLUTION_WIDTH ((int32_t)320)
@@ -100,6 +114,30 @@ static void ReadInt32(JSONCompound* root, const unsigned char* key, int32_t* out
     Error_Deconstruct(&Result);
 }
 
+/* Reads a floating-point setting (JSON real or integer); a missing/wrong-typed value keeps the default. */
+static void ReadFloat(JSONCompound* root, const unsigned char* key, float* outValue)
+{
+    JSONObjectValue Value;
+    bool WasFound = false;
+    Error Result = JSONCompound_GetOptional(root, key, &Value, &WasFound);
+    if ((Result.Code == ErrorCode_Success) && WasFound)
+    {
+        if (Value.Type == JSONValueType_RealNumber) { *outValue = (float)Value.Value.RealNumber; }
+        else if (Value.Type == JSONValueType_Integer) { *outValue = (float)Value.Value.Integer; }
+    }
+    Error_Deconstruct(&Result);
+}
+
+/* Clamps a post-effect strength multiplier into [0, CONFIG_MAX_EFFECT_STRENGTH], replacing non-finite or
+   out-of-range values with the default so the renderer always gets a usable multiplier. */
+static void ClampEffectStrength(float* value)
+{
+    if (!(*value >= 0.0f) || (*value > CONFIG_MAX_EFFECT_STRENGTH)) // the !(>=0) form also rejects NaN
+    {
+        *value = CONFIG_DEFAULT_EFFECT_STRENGTH;
+    }
+}
+
 /* Reads a single integer element from an array. Returns false (leaving outValue untouched) when the element
    is absent or not numeric; JSON reals are truncated toward zero. */
 static bool ReadArrayInt32(JSONArray* array, size_t index, int32_t* outValue)
@@ -156,6 +194,10 @@ static void ReadConfigValues(JSONCompound* root, GameConfig* config)
     ReadBool(root, CONFIG_KEY_IS_FULLSCREEN, &config->IsFullscreen);
     ReadInt32(root, CONFIG_KEY_TARGET_FPS, &config->TargetFPS);
     ReadResolution(root, config);
+    ReadFloat(root, CONFIG_KEY_SHADOW_STRENGTH, &config->ShadowStrength);
+    ReadFloat(root, CONFIG_KEY_BLOOM_STRENGTH, &config->BloomStrength);
+    ReadFloat(root, CONFIG_KEY_SUNSHAFT_STRENGTH, &config->SunshaftStrength);
+    ReadFloat(root, CONFIG_KEY_AMBIENT_OCCLUSION_STRENGTH, &config->AmbientOcclusionStrength);
 }
 
 /* Parses the raw file bytes as a JSON object and overlays its settings onto the config, then discards the
@@ -208,6 +250,10 @@ void GameConfig_SetDefaults(GameConfig* self)
     self->TargetFPS = CONFIG_DEFAULT_TARGET_FPS;
     self->ResolutionWidth = CONFIG_DEFAULT_RESOLUTION_WIDTH;
     self->ResolutionHeight = CONFIG_DEFAULT_RESOLUTION_HEIGHT;
+    self->ShadowStrength = CONFIG_DEFAULT_EFFECT_STRENGTH;
+    self->BloomStrength = CONFIG_DEFAULT_EFFECT_STRENGTH;
+    self->SunshaftStrength = CONFIG_DEFAULT_EFFECT_STRENGTH;
+    self->AmbientOcclusionStrength = CONFIG_DEFAULT_EFFECT_STRENGTH;
 }
 
 Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
@@ -240,6 +286,10 @@ Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
     {
         outConfig->TargetFPS = CONFIG_DEFAULT_TARGET_FPS;
     }
+    ClampEffectStrength(&outConfig->ShadowStrength);
+    ClampEffectStrength(&outConfig->BloomStrength);
+    ClampEffectStrength(&outConfig->SunshaftStrength);
+    ClampEffectStrength(&outConfig->AmbientOcclusionStrength);
     return ParseResult;
 }
 

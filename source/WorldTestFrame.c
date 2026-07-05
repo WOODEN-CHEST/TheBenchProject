@@ -359,7 +359,7 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         return WorldResult;
     }
 
-    Error RendererResult = WorldRenderer_Create(services->Assets, services->Logger, &Frame->_renderer);
+    Error RendererResult = WorldRenderer_Create(services->Assets, services->Logger, services->Config, &Frame->_renderer);
     if (RendererResult.Code != ErrorCode_Success)
     {
         Error DeconstructResult = World_Deconstruct(&Frame->_world);

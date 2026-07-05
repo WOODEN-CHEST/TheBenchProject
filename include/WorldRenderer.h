@@ -18,9 +18,10 @@
  * blits that up into the caller's frame target. When pixelation is enabled (default), the scene target is
  * sized to the low pixel resolution (~640 on the long axis, square pixels) and point-upscaled to the frame
  * target, giving the game's chunky pixel look — this is the "pixel pass" and it runs last. When disabled,
- * the scene target matches the frame target (no pixelation). The intended richer pipeline (physically based
- * sky/sun, PBR, sun shadow map, light culling, bloom, sunshafts, fog, 1px outlines) layers into the scene
- * pass in later work; sprite objects, lights, and the per-object "omit pixelation" toggle are not handled
+ * the scene target matches the frame target (no pixelation). The richer pipeline layers in: physically based
+ * sky/sun, PBR, a sun shadow map, and a low-resolution post pass that applies screen-space ambient occlusion
+ * and 1px hand-drawn (object-coloured) outlines before the tonemap upscale. Light culling, bloom, sunshafts,
+ * and fog are later work; sprite objects, lights, and the per-object "omit pixelation" toggle are not handled
  * yet.
  *
  * USAGE. Create one renderer, call WorldRenderer_PrepareWorld once the objects are set, then call
@@ -37,6 +38,8 @@
 typedef struct AssetManagerStruct AssetManager;
 /** @brief The logger; full type in Logger.h. Borrowed; may be NULL. */
 typedef struct LoggerStruct Logger;
+/** @brief The game config (post-effect config-side multipliers); full type in Config.h. Borrowed; may be NULL. */
+typedef struct GameConfigStruct GameConfig;
 /** @brief A live world; full type in World.h. */
 typedef struct WorldStruct World;
 /** @brief The game camera; full type in GameCamera.h. */
@@ -51,11 +54,14 @@ typedef struct WorldRendererStruct WorldRenderer;
  * @brief Creates a world renderer bound to an asset manager (mints its own asset user).
  * @param assetManager Resolves object assets; borrowed, must outlive the renderer. Must not be NULL.
  * @param logger For asset-resolution diagnostics; borrowed, may be NULL.
+ * @param config The game config supplying the config-side post-effect multipliers (shadow/AO/...); borrowed,
+ *        must outlive the renderer, may be NULL (then the config-side multipliers default to 1).
  * @param outRenderer [out] Receives the new renderer, NULL on failure. Must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p assetManager or @p outRenderer is NULL.
  * @note May propagate errors from internal calls.
  */
-Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, WorldRenderer** outRenderer);
+Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const GameConfig* config,
+    WorldRenderer** outRenderer);
 
 /**
  * @brief Releases the renderer: unloads its render targets, drops asset holds, and retires its asset user.
