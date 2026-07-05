@@ -31,11 +31,19 @@ out vec4 finalColor;
 
 // ---- SSAO tuning ----
 const int   AO_KERNEL_SIZE = 12;
-const float AO_RADIUS = 0.55;    // hemisphere radius, view-space units
-const float AO_BIAS = 0.025;     // depth bias to avoid self-occlusion acne
-const float AO_MAX = 0.9;        // clamp so AO never fully blackens a surface
+const float AO_RADIUS = 0.5;     // hemisphere radius, view-space units
+// Occlusion is counted only where the occluder rises ABOVE this surface's own tangent plane by more than
+// AO_TANGENT_BIAS (ramping to full at AO_TANGENT_FULL), in view-space units. On a flat surface (even a steeply
+// tilted floor seen grazing) all neighbours lie IN the tangent plane, so this is ~0 -> no false darkening of
+// the ground at grazing angles. Only geometry that genuinely stands proud of the surface (a wall meeting the
+// floor, a crease) occludes.
+const float AO_TANGENT_BIAS = 0.02;
+const float AO_TANGENT_FULL = 0.10;
+const float AO_MAX = 0.6;        // clamp so AO never fully blackens a surface
 
-// Fixed hemisphere kernel (all +z); rotated per-pixel and oriented to the reconstructed normal.
+// Fixed hemisphere kernel (all +z); oriented to the reconstructed normal via a stable (non-random) basis, so
+// the AO is smooth rather than speckled at the low pixel resolution (a per-pixel random rotation needs a blur
+// pass to not look like noise, and there is none here).
 // (Explicit array size in the constructor: implicit-size constructors are valid GLSL 330 but some drivers
 // reject them, and a failed compile silently degrades this pass to a plain copy.)
 const vec3 AO_KERNEL[12] = vec3[12](
@@ -70,23 +78,24 @@ vec3 ViewPosFromUv(vec2 uv)
     return view.xyz/view.w;
 }
 
-float Hash21(vec2 p)
+// Builds a stable orthonormal basis around a +z-ish normal (Duff et al., branchless). normal.z is forced >= 0
+// by the caller, so the sign term is always +1. No randomness -> no SSAO speckle.
+mat3 TangentBasis(vec3 normal)
 {
-    p = fract(p*vec2(123.34, 345.45));
-    p += dot(p, p + 34.345);
-    return fract(p.x*p.y);
+    float a = -1.0/(1.0 + normal.z);
+    float b = normal.x*normal.y*a;
+    vec3 tangent = vec3(1.0 + normal.x*normal.x*a, b, -normal.x);
+    vec3 bitangent = vec3(b, 1.0 + normal.y*normal.y*a, -normal.y);
+    return mat3(tangent, bitangent, normal);
 }
 
-// Standard hemisphere SSAO: samples the depth buffer around the reconstructed view position and counts how
-// many samples are occluded by nearer geometry. Returns occlusion in [0,1] (0 = fully open).
+// Tangent-plane hemisphere SSAO: for each hemisphere sample, read the ACTUAL geometry at that screen location
+// and count it as an occluder only insofar as it stands ABOVE this surface's tangent plane. Flat surfaces
+// (their neighbours lie in the plane) self-occlude ~0, which is what kills the grazing-angle dark ground.
+// Returns occlusion in [0,1] (0 = fully open).
 float ComputeOcclusion(vec3 viewPos, vec3 normal)
 {
-    // Per-pixel random rotation vector so the small fixed kernel does not band.
-    float rnd = Hash21(gl_FragCoord.xy)*6.2831853;
-    vec3 randomVec = vec3(cos(rnd), sin(rnd), 0.0);
-    vec3 tangent = normalize(randomVec - normal*dot(randomVec, normal));
-    vec3 bitangent = cross(normal, tangent);
-    mat3 tbn = mat3(tangent, bitangent, normal);
+    mat3 tbn = TangentBasis(normal);
 
     float occlusion = 0.0;
     for (int i = 0; i < AO_KERNEL_SIZE; i++)
@@ -107,10 +116,11 @@ float ComputeOcclusion(vec3 viewPos, vec3 normal)
             continue;
         }
 
-        float sceneZ = ViewPosFromUv(sampleUv).z;
-        float occluded = (sceneZ >= samplePos.z + AO_BIAS) ? 1.0 : 0.0;
-        float rangeCheck = smoothstep(0.0, 1.0, AO_RADIUS/max(abs(viewPos.z - sceneZ), 1e-4));
-        occlusion += occluded*rangeCheck;
+        vec3 occluder = ViewPosFromUv(sampleUv);   // real geometry at this screen sample
+        vec3 diff = occluder - viewPos;
+        float aboveTangent = smoothstep(AO_TANGENT_BIAS, AO_TANGENT_FULL, dot(diff, normal));
+        float rangeCheck = smoothstep(0.0, 1.0, AO_RADIUS/max(length(diff), 1e-4));
+        occlusion += aboveTangent*rangeCheck;
     }
     return occlusion/float(AO_KERNEL_SIZE);
 }
@@ -157,14 +167,23 @@ void main()
         vec2 uvR = clamp(uv + vec2(texel.x, 0.0), uvMin, uvMax);
         vec2 uvU = clamp(uv - vec2(0.0, texel.y), uvMin, uvMax);
         vec2 uvD = clamp(uv + vec2(0.0, texel.y), uvMin, uvMax);
+        // Diagonal taps too: an outline object's edge against the background is a staircase at this low
+        // resolution; a 4-neighbour test misses the inner-corner pixels (their orthogonal neighbours are all
+        // inside the object, only the DIAGONAL neighbour is outside), leaving gaps that the point-upscale turns
+        // into a dashed line. The 8-neighbour test flags those corners, so the outline stays continuous.
+        vec2 uvLU = clamp(uv - texel, uvMin, uvMax);
+        vec2 uvRU = clamp(uv + vec2(texel.x, -texel.y), uvMin, uvMax);
+        vec2 uvLD = clamp(uv + vec2(-texel.x, texel.y), uvMin, uvMax);
+        vec2 uvRD = clamp(uv + texel, uvMin, uvMax);
 
         // Silhouette: THIS pixel is an outline object and a neighbour is not (sky/grid/non-outline object).
         // Keyed purely on the object mask, so shadows and flat ground never create a silhouette.
-        float fL = texture(maskTexture, uvL).r;
-        float fR = texture(maskTexture, uvR).r;
-        float fU = texture(maskTexture, uvU).r;
-        float fD = texture(maskTexture, uvD).r;
-        float silhouette = outlineFlagC*(1.0 - min(min(fL, fR), min(fU, fD)));
+        float minNeighbour = min(
+            min(min(texture(maskTexture, uvL).r, texture(maskTexture, uvR).r),
+                min(texture(maskTexture, uvU).r, texture(maskTexture, uvD).r)),
+            min(min(texture(maskTexture, uvLU).r, texture(maskTexture, uvRU).r),
+                min(texture(maskTexture, uvLD).r, texture(maskTexture, uvRD).r)));
+        float silhouette = outlineFlagC*(1.0 - minNeighbour);
 
         // Interior crease: only inside a solid outline object (all four neighbours must be surface too, so the
         // detector never reconstructs sky depth). Uses tangent-plane deviation, which is 0 for any flat/tilted
