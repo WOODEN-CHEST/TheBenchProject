@@ -234,9 +234,16 @@ A sound is any audio played in the game. This includes music.
 
 ```
 {
-    "location": asset location
+    "name": "world_pbr",
+    "vertex_location": asset location,   // [OPTIONAL] the vertex-stage source; omit to use Raylib's default
+    "fragment_location": asset location  // [OPTIONAL] the fragment-stage source; omit to use Raylib's default
 }
 ```
+
+At least one of `vertex_location` / `fragment_location` must be present. A bare `"location"` is accepted as a
+back-compat alias for `fragment_location` (the original single-stage behavior). Because the resource resolver
+matches source files by stem (ignoring extension), the two stage files must have DISTINCT stems — e.g.
+`shaders/pbr/vertex.vert` and `shaders/pbr/fragment.frag`, referenced as `"pbr/vertex"` and `"pbr/fragment"`.
 
 
 ## Models.

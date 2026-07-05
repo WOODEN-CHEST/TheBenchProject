@@ -43,10 +43,31 @@ import transform (`RayModel.transform = MatrixMultiply(RayModel.transform, world
 which only supports single-axis rotation). `GameModel_GetRaylibModel` returns a by-value copy, so mutating
 `.transform` is local and does not touch the asset.
 
-SCOPE this step: models only. Sprites, lights, and the full effect pipeline (atmospheric sky/sun, PBR,
-sun shadow map, light culling, bloom, sunshafts, fog, outlines, pixelation) are marked TODO and layer on
-later. Renders 3D straight into the frame's depth-backed target; the frame manager flips + composites to
-screen.
+**PBR lighting** (Step 3 increment 3): the renderer loads the `world_pbr` shader asset once (idempotent
+`EnsurePbrShader`, under its own asset user), caches its uniform locations, and binds it onto every model
+material before `DrawModel`. Per frame, `UpdateLightingUniforms` uploads the camera position plus the sun and
+ambient-skylight colours/intensities from the world's `WorldEnvironment` (colours converted sRGB→linear on
+the CPU; the sun direction comes from `WorldEnvironment_GetSunDirection`). The shader is a full
+metallic/roughness Cook-Torrance model with a single directional sun + a flat ambient term, ACES tonemap and
+gamma; material metallic/roughness/ao are global scalar uniforms for now (per-material PBR maps land with a
+later step). If the shader fails to load the renderer logs a warning and falls back to raylib's default
+(unlit) shader so models still draw. NOTE: binding the shader mutates the *shared* asset material array
+(intended — the renderer is the sole model consumer); a future second consumer would need per-draw material
+copies instead.
+
+SCOPE now: models are PBR-lit; the sky is still the CPU day-night gradient (increment 2). Sprites, lights,
+and the remaining effect pipeline (atmospheric-scattering sky/sun + stars, sun shadow map, point-light
+culling, fog, bloom, sunshafts, 1px outlines, per-object omit-pixelation) are marked TODO and layer on later.
+
+## Shader assets (vertex + fragment)
+
+`source/ShaderDefinition.c` loads an optional vertex stage and an optional fragment stage
+(`vertex_location` / `fragment_location`; a bare `location` is a back-compat alias for the fragment stage).
+Either may be omitted to fall back to raylib's built-in stage. Because the asset resource resolver matches
+files by **stem** (ignoring extension), a paired shader's two source files must have DISTINCT stems — the
+`world_pbr` shader uses `shaders/pbr/vertex.vert` + `shaders/pbr/fragment.frag`, referenced as `"pbr/vertex"`
+and `"pbr/fragment"`. The `.vert`/`.frag` files sit beside `pbr.json` and are skipped by `ReadDefinitions`
+via the per-type `json` definition-file extension.
 
 ## WorldTestFrame
 
