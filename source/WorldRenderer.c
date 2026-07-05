@@ -385,6 +385,12 @@ static void EnsureShaders(WorldRenderer* self)
     {
         self->_shadowMap = LoadShadowMap(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
         self->_hasShadowMap = (self->_shadowMap.id != 0);
+        if (self->_hasShadowMap)
+        {
+            // Manual PCF compares raw depth texels, so nearest (point) sampling is required; linear
+            // filtering would interpolate depths and corrupt the comparison.
+            SetTextureFilter(self->_shadowMap.depth, TEXTURE_FILTER_POINT);
+        }
     }
 
     self->_skyShader = LoadRendererShader(self, SKY_SHADER_ASSET_NAME);
@@ -621,7 +627,11 @@ static void RenderShadowMap(WorldRenderer* self, World* world, const GameCamera*
     rlEnableDepthTest();
     rlSetMatrixProjection(LightProj);
     rlSetMatrixModelview(LightView);   // DrawMesh reads these to build each model's light-space MVP
+    // Render BACK faces into the shadow map (cull front). The lit front faces then sit well in front of the
+    // stored depth, which removes most self-shadowing acne without a large (peter-panning) depth bias.
+    rlSetCullFace(RL_CULL_FACE_FRONT);
     DrawWorldModels(self, world, self->_depthShader);
+    rlSetCullFace(RL_CULL_FACE_BACK);  // restore the default culling for the scene pass
     rlDisableDepthTest();
     EndTextureMode();
 

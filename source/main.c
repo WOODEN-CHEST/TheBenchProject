@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <time.h>
 #include "wr/WRCompile.h"
 #include "wr/WRError.h"
 #include "wr/WRMemory.h"
@@ -27,8 +28,6 @@
 #define UNICODE_DATA_RELATIVE ((const unsigned char*)u8"asset/text/unicode_data.txt")
 /** Window title shown in the title bar. */
 #define WINDOW_TITLE ((const char*)u8"The Bench Project")
-/** Frame rate cap applied when the config does not request an unlocked frame rate. */
-#define DEFAULT_TARGET_FPS 240
 /** Fixed update rate in hertz. Deliberately a code constant (not a config value) and higher than the
  *  render rate so simulation stays smooth and deterministic regardless of frame rate. */
 #define UPDATE_RATE_HZ 480.0
@@ -67,37 +66,55 @@ static void InitializeWindow(const GameConfig* config)
 
     InitWindow((int)config->ResolutionWidth, (int)config->ResolutionHeight, WINDOW_TITLE);
 
-    if (!config->IsFPSUnlocked)
-    {
-        SetTargetFPS(DEFAULT_TARGET_FPS);
-    }
+    // NOTE: deliberately no SetTargetFPS. Rendering is paced by RunGameLoop against an INDEPENDENT time.h
+    // clock so the update loop stays decoupled from the render loop. EndDrawing still swaps buffers and polls
+    // input as usual; leaving the target unset just means it does NOT halt to cap the rate (we gate renders
+    // ourselves), so we never block the update loop waiting on the renderer.
 }
 
-/* Runs the game loop: a fixed-timestep update accumulator plus a render each iteration, both delegated
- * to the frame manager. Returns when the window is closed or the manager reports a fatal error. */
-static void RunGameLoop(GameFrameManager* frameManager)
+/* Returns a high-resolution timestamp in seconds from the C standard clock (time.h), independent of the
+ * render loop. Raylib's GetTime/GetFrameTime advance with the render/EndDrawing cadence, which is exactly
+ * what we decouple from here so update and render can run at their own rates. */
+static double GetClockSeconds(void)
+{
+    struct timespec Now;
+    timespec_get(&Now, TIME_UTC);
+    return (double)Now.tv_sec + ((double)Now.tv_nsec / 1.0e9);
+}
+
+/* Runs the game loop with the UPDATE and RENDER cadences DECOUPLED, both timed from an independent time.h
+ * clock (not Raylib's render-tied timer). Fixed-timestep updates run at UPDATE_RATE_HZ; a render happens only
+ * when @p targetRenderSeconds has elapsed since the last one (or every iteration when it is <= 0 — unlocked).
+ * The loop never halts (no WaitTime), so capping the render rate never blocks the update loop; it spins on
+ * the clock instead. Returns when the window is closed or the manager reports a fatal error.
+ *
+ * NOTE: EndDrawing (inside the manager's render) still swaps buffers and polls input — this project's Raylib
+ * is NOT built with SUPPORT_CUSTOM_FRAME_CONTROL, so we must NOT swap/poll manually (doing so double-swaps
+ * and tears). Not calling SetTargetFPS keeps EndDrawing from halting, so it never blocks the update loop. */
+static void RunGameLoop(GameFrameManager* frameManager, double targetRenderSeconds)
 {
     const double UpdateDelta = 1.0 / UPDATE_RATE_HZ;
 
-    double PreviousTime = GetTime();
-    double Accumulator = 0.0;
+    double PreviousTime = GetClockSeconds();
+    double LastRenderTime = PreviousTime;
+    double UpdateAccumulator = 0.0;
     double TotalUpdateTime = 0.0;
     bool HasFatalError = false;
 
     while (!WindowShouldClose() && !GameFrameManager_ShouldStop(frameManager) && !HasFatalError)
     {
-        double CurrentTime = GetTime();
-        double FrameTime = CurrentTime - PreviousTime;
+        double CurrentTime = GetClockSeconds();
+        double Elapsed = CurrentTime - PreviousTime;
         PreviousTime = CurrentTime;
-
-        if (FrameTime > MAX_FRAME_TIME_SECONDS)
+        if (Elapsed > MAX_FRAME_TIME_SECONDS)
         {
-            FrameTime = MAX_FRAME_TIME_SECONDS;
+            Elapsed = MAX_FRAME_TIME_SECONDS;
         }
-        Accumulator += FrameTime;
 
-        // Fixed-timestep updates: run as many whole steps as have accumulated.
-        while (Accumulator >= UpdateDelta)
+        // Update loop: run whole fixed steps for the real time elapsed. GameFrameManager_Update polls input
+        // at its start, so edge-triggered input stays reliable no matter the render rate.
+        UpdateAccumulator += Elapsed;
+        while (UpdateAccumulator >= UpdateDelta)
         {
             TotalUpdateTime += UpdateDelta;
             Error UpdateResult = GameFrameManager_Update(frameManager, ProgramTime_Create(TotalUpdateTime, UpdateDelta));
@@ -108,21 +125,26 @@ static void RunGameLoop(GameFrameManager* frameManager)
                 HasFatalError = true;
                 break;
             }
-            Accumulator -= UpdateDelta;
+            UpdateAccumulator -= UpdateDelta;
         }
-
         if (HasFatalError)
         {
             break;
         }
 
-        // One render at the real, variable frame delta; the FPS cap is applied inside EndDrawing.
-        Error RenderResult = GameFrameManager_Render(frameManager, ProgramTime_Create(CurrentTime, FrameTime));
-        if (RenderResult.Code != ErrorCode_Success)
+        // Render loop: only when the target interval has elapsed (or every iteration when unlocked). The
+        // render delta is the real time since the previous render, kept independent of the update cadence.
+        double SinceRender = CurrentTime - LastRenderTime;
+        if ((targetRenderSeconds <= 0.0) || (SinceRender >= targetRenderSeconds))
         {
-            Error_Deconstruct(&RenderResult);
-            HasFatalError = true;
-            break;
+            Error RenderResult = GameFrameManager_Render(frameManager, ProgramTime_Create(CurrentTime, SinceRender));
+            LastRenderTime = CurrentTime;
+            if (RenderResult.Code != ErrorCode_Success)
+            {
+                Error_Deconstruct(&RenderResult);
+                HasFatalError = true;
+                break;
+            }
         }
     }
 }
@@ -339,7 +361,10 @@ int main(int argc, char** argv)
         }
     }
 
-    RunGameLoop(&FrameManager);
+    // Render pacing target (seconds/frame); 0 = unlocked (render every loop iteration). The update loop
+    // runs at its own fixed rate regardless.
+    double TargetRenderSeconds = Config.IsFPSUnlocked ? 0.0 : (1.0 / (double)Config.TargetFPS);
+    RunGameLoop(&FrameManager, TargetRenderSeconds);
 
     // Tear down in the reverse of construction: frames first (they release assets and GPU render targets
     // and need both the asset manager and the GL context alive), then the asset manager and pools, then

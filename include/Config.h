@@ -33,8 +33,12 @@
  */
 typedef struct GameConfigStruct
 {
-    /** @brief true to let the frame rate run unbounded; false to cap it at the default target rate. */
+    /** @brief true to let the frame rate run unbounded (render every loop iteration); false to cap rendering
+     *  at TargetFPS. The update loop runs at its own fixed rate regardless of this. */
     bool IsFPSUnlocked;
+    /** @brief Target render frames per second when IsFPSUnlocked is false; always within a sane range after
+     *  loading. Ignored when IsFPSUnlocked is true. */
+    int32_t TargetFPS;
     /** @brief true to create the window in fullscreen mode; false for a regular windowed mode. */
     bool IsFullscreen;
     /** @brief Window width in pixels; always strictly positive and within a sane range after loading. */

@@ -347,6 +347,13 @@ Error GameFrameManager_Update(GameFrameManager* self, ProgramTime time)
         return Error_Construct2(ErrorCode_IllegalArgument, "GameFrameManager_Update: self must not be NULL.");
     }
 
+    // Poll input once here, before any frame's update, so frames read fresh input this tick. The update loop
+    // runs faster than (and decoupled from) rendering, so polling here — rather than relying on EndDrawing's
+    // once-per-render poll — is what makes edge-triggered input (IsKeyPressed) reliable in frame updates.
+    // (EndDrawing still also polls; this project's Raylib lacks SUPPORT_CUSTOM_FRAME_CONTROL to disable that,
+    // but the extra poll is harmless and this remains the authoritative poll for update-time input.)
+    //PollInputEvents();
+
     size_t i = 0;
     while (i < self->_records._count)
     {

@@ -13,6 +13,8 @@
 #define CONFIG_KEY_IS_FULLSCREEN ((const unsigned char*)u8"is_fullscreen")
 /** JSON key for the [width, height] resolution array. */
 #define CONFIG_KEY_RESOLUTION ((const unsigned char*)u8"resolution")
+/** JSON key for the target render frame rate. */
+#define CONFIG_KEY_TARGET_FPS ((const unsigned char*)u8"target_fps")
 
 /** Index of the width element within the resolution array. */
 #define CONFIG_RESOLUTION_WIDTH_INDEX ((size_t)0)
@@ -30,6 +32,12 @@
 #define CONFIG_DEFAULT_RESOLUTION_WIDTH ((int32_t)1280)
 /** Default window height in pixels. */
 #define CONFIG_DEFAULT_RESOLUTION_HEIGHT ((int32_t)720)
+/** Default target render frame rate (used when the frame rate is not unlocked). */
+#define CONFIG_DEFAULT_TARGET_FPS ((int32_t)60)
+/** Smallest accepted target FPS; smaller values fall back to the default. */
+#define CONFIG_MIN_TARGET_FPS ((int32_t)10)
+/** Largest accepted target FPS; larger values fall back to the default. */
+#define CONFIG_MAX_TARGET_FPS ((int32_t)1000)
 
 /** Smallest window width accepted from the config; smaller values fall back to the default. */
 #define CONFIG_MIN_RESOLUTION_WIDTH ((int32_t)320)
@@ -74,6 +82,20 @@ static void ReadBool(JSONCompound* root, const unsigned char* key, bool* outValu
     {
         *outValue = Value.Value.Boolean;
         return;
+    }
+    Error_Deconstruct(&Result);
+}
+
+/* Reads an integer setting (JSON integer or truncated real); a missing/wrong-typed value keeps the default. */
+static void ReadInt32(JSONCompound* root, const unsigned char* key, int32_t* outValue)
+{
+    JSONObjectValue Value;
+    bool WasFound = false;
+    Error Result = JSONCompound_GetOptional(root, key, &Value, &WasFound);
+    if ((Result.Code == ErrorCode_Success) && WasFound)
+    {
+        if (Value.Type == JSONValueType_Integer) { *outValue = ClampToInt32(Value.Value.Integer); }
+        else if (Value.Type == JSONValueType_RealNumber) { *outValue = ClampToInt32((int64_t)Value.Value.RealNumber); }
     }
     Error_Deconstruct(&Result);
 }
@@ -132,6 +154,7 @@ static void ReadConfigValues(JSONCompound* root, GameConfig* config)
 {
     ReadBool(root, CONFIG_KEY_IS_FPS_UNLOCKED, &config->IsFPSUnlocked);
     ReadBool(root, CONFIG_KEY_IS_FULLSCREEN, &config->IsFullscreen);
+    ReadInt32(root, CONFIG_KEY_TARGET_FPS, &config->TargetFPS);
     ReadResolution(root, config);
 }
 
@@ -182,6 +205,7 @@ void GameConfig_SetDefaults(GameConfig* self)
 
     self->IsFPSUnlocked = CONFIG_DEFAULT_IS_FPS_UNLOCKED;
     self->IsFullscreen = CONFIG_DEFAULT_IS_FULLSCREEN;
+    self->TargetFPS = CONFIG_DEFAULT_TARGET_FPS;
     self->ResolutionWidth = CONFIG_DEFAULT_RESOLUTION_WIDTH;
     self->ResolutionHeight = CONFIG_DEFAULT_RESOLUTION_HEIGHT;
 }
@@ -212,6 +236,10 @@ Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
 
     // Guard against invalid values regardless of whether parsing fully succeeded.
     ClampResolution(outConfig);
+    if ((outConfig->TargetFPS < CONFIG_MIN_TARGET_FPS) || (outConfig->TargetFPS > CONFIG_MAX_TARGET_FPS))
+    {
+        outConfig->TargetFPS = CONFIG_DEFAULT_TARGET_FPS;
+    }
     return ParseResult;
 }
 

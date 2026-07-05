@@ -72,11 +72,10 @@ static void LogTimeOfDay(WorldTestFrame* frame, const unsigned char* label, cons
     Error_Deconstruct(&LogResult);
 }
 
-/* Applies the debug time-of-day controls (pause/resume, phase presets, manual scrub). Runs once per REAL
- * frame (called from Render, like mouse-look) — the presets/pause are edge-triggered (IsKeyPressed), and the
- * fixed-timestep Update does not tick 1:1 with raylib's once-per-frame input polling, so running them there
- * would miss presses (some frames Update never ticks) or double-fire the toggle (some frames it ticks twice). */
-static void HandleDebugTimeInput(WorldTestFrame* frame)
+/* Applies the debug time-of-day controls (pause/resume, phase presets, manual scrub). Called from Update:
+ * the frame manager polls input once per update tick, so edge-triggered keys (IsKeyPressed) register
+ * reliably here. @p deltaSeconds is the fixed-step delta, used to pace the manual scrub. */
+static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
 {
     WorldEnvironment* Environment = World_GetEnvironment(&frame->_world);
 
@@ -92,8 +91,8 @@ static void HandleDebugTimeInput(WorldTestFrame* frame)
     if (IsKeyPressed(KEY_THREE)) { Environment->TimeOfDay = 0.75f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"dusk (frozen)", Environment); }
     if (IsKeyPressed(KEY_FOUR))  { Environment->TimeOfDay = 0.00f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"midnight (frozen)", Environment); }
 
-    // [ and ] scrub the time of day manually (per-real-frame step, wraps into [0,1)).
-    float ScrubStep = TIME_SCRUB_RATE * GetFrameTime();
+    // [ and ] scrub the time of day manually (wraps into [0,1)).
+    float ScrubStep = TIME_SCRUB_RATE * deltaSeconds;
     if (IsKeyDown(KEY_LEFT_BRACKET))  { Environment->TimeOfDay -= ScrubStep; if (Environment->TimeOfDay < 0.0f) { Environment->TimeOfDay += 1.0f; } }
     if (IsKeyDown(KEY_RIGHT_BRACKET)) { Environment->TimeOfDay += ScrubStep; if (Environment->TimeOfDay >= 1.0f) { Environment->TimeOfDay -= 1.0f; } }
 }
@@ -135,6 +134,19 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     WorldTestFrame* Frame = self;
 
     float Delta = (float)time.PassedTime;
+
+    // Mouse look. Input is polled once per update tick (by the frame manager), so GetMouseDelta returns this
+    // tick's incremental movement; summed across the tick(s) in a frame it equals the full frame delta.
+    if (Frame->_cursorCaptured)
+    {
+        Vector2 MouseDelta = GetMouseDelta();
+        // Mouse-right must turn the view right: increasing yaw rotates forward toward +X, which renders on
+        // the screen's left under the right-handed view, so a rightward mouse delta lowers yaw.
+        Frame->_camera.Yaw -= MouseDelta.x * MOUSE_SENSITIVITY;
+        Frame->_camera.Pitch -= MouseDelta.y * MOUSE_SENSITIVITY;
+        Frame->_camera.Pitch = Clamp(Frame->_camera.Pitch, -GAME_CAMERA_MAX_PITCH, GAME_CAMERA_MAX_PITCH);
+    }
+
     float Speed = MOVE_SPEED;
     if (IsKeyDown(KEY_LEFT_SHIFT))
     {
@@ -158,8 +170,10 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
         Frame->_camera.Position = Vector3Add(Frame->_camera.Position, Movement);
     }
 
-    // Advance the world's day-night cycle (a no-op while paused). Debug time controls are edge-triggered and
-    // live in Render (per real frame) — see HandleDebugTimeInput for why.
+    // Debug time-of-day controls (edge-triggered; reliable here now that input is polled per update tick).
+    HandleDebugTimeInput(Frame, Delta);
+
+    // Advance the world's day-night cycle (a no-op while paused).
     WorldEnvironment_Advance(World_GetEnvironment(&Frame->_world), Delta);
 
     return Error_CreateSuccess();
@@ -205,22 +219,7 @@ static Error WorldTestFrame_Render(void* self, const FrameRenderContext* context
 {
     UNUSED(context); // The renderer owns its own passes and the 3D view fills the whole target.
     WorldTestFrame* Frame = self;
-
-    // Mouse look is per real frame, so it is applied here (Render runs once per frame) rather than in the
-    // fixed-timestep Update (which can run several times per frame and would over-apply the mouse delta).
-    if (Frame->_cursorCaptured)
-    {
-        Vector2 MouseDelta = GetMouseDelta();
-        // Mouse-right must turn the view right: increasing yaw rotates forward toward +X, which renders on
-        // the screen's left under the right-handed view, so a rightward mouse delta lowers yaw.
-        Frame->_camera.Yaw -= MouseDelta.x * MOUSE_SENSITIVITY;
-        Frame->_camera.Pitch -= MouseDelta.y * MOUSE_SENSITIVITY;
-        Frame->_camera.Pitch = Clamp(Frame->_camera.Pitch, -GAME_CAMERA_MAX_PITCH, GAME_CAMERA_MAX_PITCH);
-    }
-
-    // Edge-triggered debug time controls, per real frame (see HandleDebugTimeInput).
-    HandleDebugTimeInput(Frame);
-
+    // All input (movement, mouse look, debug keys) is handled in Update, where input is polled per tick.
     return WorldRenderer_RenderToTarget(Frame->_renderer, &Frame->_world, &Frame->_camera, target);
 }
 
