@@ -1,0 +1,4 @@
+{
+    "name": "world_tonemap",
+    "fragment_location": "tonemap/fragment"
+}

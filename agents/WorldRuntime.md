@@ -47,17 +47,27 @@ which only supports single-axis rotation). `GameModel_GetRaylibModel` returns a 
 `EnsurePbrShader`, under its own asset user), caches its uniform locations, and binds it onto every model
 material before `DrawModel`. Per frame, `UpdateLightingUniforms` uploads the camera position plus the sun and
 ambient-skylight colours/intensities from the world's `WorldEnvironment` (colours converted sRGB→linear on
-the CPU; the sun direction comes from `WorldEnvironment_GetSunDirection`). The shader is a full
-metallic/roughness Cook-Torrance model with a single directional sun + a flat ambient term, ACES tonemap and
-gamma; material metallic/roughness/ao are global scalar uniforms for now (per-material PBR maps land with a
-later step). If the shader fails to load the renderer logs a warning and falls back to raylib's default
-(unlit) shader so models still draw. NOTE: binding the shader mutates the *shared* asset material array
-(intended — the renderer is the sole model consumer); a future second consumer would need per-draw material
-copies instead.
+the CPU; the sun direction comes from `WorldEnvironment_GetSunDirection`). The shader is a full metallic/roughness
+Cook-Torrance model with a single directional sun + a flat ambient term, outputting **linear HDR** (no
+tonemap/gamma in the shader — that is the post-pass, below); material metallic/roughness/ao are global scalar
+uniforms for now (per-material PBR maps land with a later step). If the shader fails to load the renderer logs
+a warning and falls back to raylib's default (unlit) shader so models still draw. NOTE: binding the shader
+mutates the *shared* asset material array (intended — the renderer is the sole model consumer); a future
+second consumer would need per-draw material copies instead.
 
-SCOPE now: models are PBR-lit; the sky is still the CPU day-night gradient (increment 2). Sprites, lights,
-and the remaining effect pipeline (atmospheric-scattering sky/sun + stars, sun shadow map, point-light
-culling, fog, bloom, sunshafts, 1px outlines, per-object omit-pixelation) are marked TODO and layer on later.
+**HDR pipeline** (Step 3 increment 4): the scene render target is a floating-point **RGBA16F** framebuffer
+(`CreateSceneTarget`, built via rlgl since raylib's `LoadRenderTexture` is 8-bit only; 8-bit fallback + a
+one-time log if the GPU can't make the float FBO complete). All scene content is composited in linear HDR: the
+PBR models write linear HDR and the sky clear is linearized (`LinearizeColorBytes`). Tonemapping is a **post
+pass** — the `world_tonemap` fragment shader (ACES + gamma) is applied via `BeginShaderMode` around the
+scene→frame blit, so it runs AFTER the pixelation point-upscale. Result: HDR/realistic colour compositing
+that still reads as chunky pixels, mapped to display [0,1] only at the very end. Bloom/sunshafts later plug
+into the HDR buffer before this tonemap.
+
+SCOPE now: models are PBR-lit and the whole scene is HDR→tonemapped; the sky is still the CPU day-night
+gradient (increment 2), linearized into the HDR buffer. Sprites, lights, and the remaining effect pipeline
+(atmospheric-scattering sky/sun + stars [the next stage], sun shadow map, point-light culling, fog, bloom,
+sunshafts, 1px outlines, per-object omit-pixelation) are marked TODO and layer on later.
 
 ## Shader assets (vertex + fragment)
 

@@ -11,6 +11,8 @@
 #include "Renderer.h"
 #include "raylib/raylib.h"
 #include "raylib/raymath.h"
+// rlgl is needed to build a floating-point (HDR) framebuffer; raylib's LoadRenderTexture is 8-bit only.
+#include "raylib/rlgl.h"
 #include "wr/WRMemory.h"
 
 
@@ -25,6 +27,10 @@
 
 /** Asset name of the world PBR (metallic/roughness) shader used to shade model objects. */
 #define PBR_SHADER_ASSET_NAME ((const unsigned char*)u8"world_pbr")
+/** Asset name of the tonemap post-pass shader (maps the linear-HDR scene to displayable sRGB). */
+#define TONEMAP_SHADER_ASSET_NAME ((const unsigned char*)u8"world_tonemap")
+/** Bookkeeping value Raylib uses for a RenderTexture's depth attachment format (24-bit depth renderbuffer). */
+#define SCENE_DEPTH_FORMAT 19
 /** Default surface metallic value (dielectric) until per-material PBR maps exist. */
 #define PBR_DEFAULT_METALLIC 0.0f
 /** Default surface roughness until per-material PBR maps exist. */
@@ -50,8 +56,14 @@ struct WorldRendererStruct
     bool _pixelationEnabled;
     /** The PBR shader used to shade model objects; borrowed (held under _assetUser). NULL = unavailable. */
     GameShader* _pbrShader;
-    /** Set once the PBR shader load has been attempted (success or failure), so it is tried only once. */
-    bool _pbrLoadAttempted;
+    /** The tonemap post-pass shader applied when blitting the HDR scene to the frame; borrowed. NULL = unavailable. */
+    GameShader* _tonemapShader;
+    /** Set once the shaders' load has been attempted (success or failure), so it is tried only once. */
+    bool _shadersLoadAttempted;
+    /** Whether the scene target is a floating-point (HDR) framebuffer; false = 8-bit fallback. */
+    bool _sceneIsHDR;
+    /** Set once the HDR/fallback status has been logged, so it is reported only once. */
+    bool _sceneHdrReported;
     /** Cached PBR uniform locations set every frame (-1 when the uniform is absent/optimized out). */
     int _locViewPos;
     int _locSunDirection;
@@ -101,6 +113,51 @@ static void ComputeSceneSize(bool pixelation, int windowWidth, int windowHeight,
     if (*outHeight < 1) { *outHeight = 1; }
 }
 
+/* Creates a scene render target whose colour attachment is a 16-bit float (HDR) texture plus a depth
+ * renderbuffer, mirroring raylib's LoadRenderTexture but with a floating-point colour format so the scene
+ * can hold linear HDR values before tonemapping. Falls back to a standard 8-bit target (and sets *outIsHDR
+ * false) if the GPU cannot make the float framebuffer complete. */
+static RenderTexture2D CreateSceneTarget(int width, int height, bool* outIsHDR)
+{
+    *outIsHDR = false;
+
+    RenderTexture2D Target = { 0 };
+    Target.id = rlLoadFramebuffer();
+    if (Target.id == 0)
+    {
+        return LoadRenderTexture(width, height);
+    }
+
+    rlEnableFramebuffer(Target.id);
+
+    Target.texture.id = rlLoadTexture(NULL, width, height, PIXELFORMAT_UNCOMPRESSED_R16G16B16A16, 1);
+    Target.texture.width = width;
+    Target.texture.height = height;
+    Target.texture.format = PIXELFORMAT_UNCOMPRESSED_R16G16B16A16;
+    Target.texture.mipmaps = 1;
+
+    Target.depth.id = rlLoadTextureDepth(width, height, true);
+    Target.depth.width = width;
+    Target.depth.height = height;
+    Target.depth.format = SCENE_DEPTH_FORMAT;
+    Target.depth.mipmaps = 1;
+
+    rlFramebufferAttach(Target.id, Target.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
+    rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_RENDERBUFFER, 0);
+
+    bool Complete = (Target.texture.id != 0) && rlFramebufferComplete(Target.id);
+    rlDisableFramebuffer();
+
+    if (!Complete)
+    {
+        UnloadRenderTexture(Target); // frees the framebuffer and its attachments
+        return LoadRenderTexture(width, height);
+    }
+
+    *outIsHDR = true;
+    return Target;
+}
+
 /* Ensures the scene target exists and matches the desired size for the given window size / pixelation. */
 static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHeight)
 {
@@ -119,12 +176,22 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
         self->_hasSceneTarget = false;
     }
 
-    self->_sceneTarget = LoadRenderTexture(DesiredWidth, DesiredHeight);
+    self->_sceneTarget = CreateSceneTarget(DesiredWidth, DesiredHeight, &self->_sceneIsHDR);
     // Point filtering makes the upscale to the window produce hard, square pixels.
     SetTextureFilter(self->_sceneTarget.texture, TEXTURE_FILTER_POINT);
     self->_hasSceneTarget = true;
     self->_sceneWidth = DesiredWidth;
     self->_sceneHeight = DesiredHeight;
+
+    // Report the HDR/fallback choice once so it is easy to confirm the float pipeline is active.
+    if (!self->_sceneHdrReported && (self->_logger != NULL))
+    {
+        self->_sceneHdrReported = true;
+        Error LogResult = Logger_LogInfo(self->_logger, self->_sceneIsHDR
+            ? (const unsigned char*)u8"WorldRenderer: scene target is HDR (RGBA16F float)."
+            : (const unsigned char*)u8"WorldRenderer: HDR framebuffer unsupported; using 8-bit scene target.");
+        Error_Deconstruct(&LogResult);
+    }
 }
 
 /* Logs an asset-resolution failure (if a logger is present) and releases the error. */
@@ -150,54 +217,77 @@ static void ColorToLinear(Color color, float outRGB[3])
     outRGB[2] = powf((float)color.b / 255.0f, SRGB_GAMMA);
 }
 
-/* Loads the PBR shader once (idempotent), caching its per-frame uniform locations and uploading the
- * constant material parameters. On failure the renderer keeps _pbrShader NULL and models draw with Raylib's
- * default (unlit) shader; the failure is logged. Must run with a live GL context (post-InitWindow). */
-static void EnsurePbrShader(WorldRenderer* self)
+/* Converts an opaque sRGB colour to the byte encoding of its LINEAR value, so clearing the linear-HDR scene
+ * buffer to a CPU-authored (sRGB) sky colour leaves the buffer consistently linear for the tonemap pass. */
+static Color LinearizeColorBytes(Color color)
 {
-    if (self->_pbrLoadAttempted)
+    return (Color)
     {
-        return;
-    }
-    self->_pbrLoadAttempted = true;
+        .r = (unsigned char)lroundf(powf((float)color.r / 255.0f, SRGB_GAMMA) * 255.0f),
+        .g = (unsigned char)lroundf(powf((float)color.g / 255.0f, SRGB_GAMMA) * 255.0f),
+        .b = (unsigned char)lroundf(powf((float)color.b / 255.0f, SRGB_GAMMA) * 255.0f),
+        .a = color.a
+    };
+}
 
+/* Loads a shader asset by name under the renderer's user, logging and swallowing failure (returns NULL). */
+static GameShader* LoadRendererShader(WorldRenderer* self, const unsigned char* assetName)
+{
     GameShader* LoadedShader = NULL;
-    Error LoadResult = AssetManager_LoadShader(self->_assetManager, PBR_SHADER_ASSET_NAME, self->_assetUser, &LoadedShader);
+    Error LoadResult = AssetManager_LoadShader(self->_assetManager, assetName, self->_assetUser, &LoadedShader);
     if (LoadResult.Code != ErrorCode_Success)
     {
         if (self->_logger != NULL)
         {
             Error LogResult = Logger_LogWarningFormatted(self->_logger,
-                (const unsigned char*)u8"WorldRenderer: PBR shader \"%s\" unavailable (%s); models render unlit.",
-                (const char*)PBR_SHADER_ASSET_NAME,
+                (const unsigned char*)u8"WorldRenderer: shader \"%s\" unavailable (%s).",
+                (const char*)assetName,
                 (LoadResult.Message != NULL) ? (const char*)LoadResult.Message : "no details");
             Error_Deconstruct(&LogResult);
         }
         Error_Deconstruct(&LoadResult);
+        return NULL;
+    }
+    return LoadedShader;
+}
+
+/* Loads the PBR + tonemap shaders once (idempotent). If PBR is unavailable models draw with Raylib's
+ * default (unlit) shader; if the tonemap is unavailable the HDR scene is blitted untonemapped. Caches the
+ * PBR per-frame uniform locations and uploads its constant material parameters. Needs a live GL context. */
+static void EnsureShaders(WorldRenderer* self)
+{
+    if (self->_shadersLoadAttempted)
+    {
         return;
     }
+    self->_shadersLoadAttempted = true;
 
-    self->_pbrShader = LoadedShader;
-    Shader RayShader = GameShader_GetRaylibShader(LoadedShader);
+    self->_pbrShader = LoadRendererShader(self, PBR_SHADER_ASSET_NAME);
+    if (self->_pbrShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_pbrShader);
 
-    self->_locViewPos = GetShaderLocation(RayShader, "viewPos");
-    self->_locSunDirection = GetShaderLocation(RayShader, "sunDirection");
-    self->_locSunColor = GetShaderLocation(RayShader, "sunColor");
-    self->_locSunIntensity = GetShaderLocation(RayShader, "sunIntensity");
-    self->_locAmbientColor = GetShaderLocation(RayShader, "ambientColor");
-    self->_locAmbientIntensity = GetShaderLocation(RayShader, "ambientIntensity");
+        self->_locViewPos = GetShaderLocation(RayShader, "viewPos");
+        self->_locSunDirection = GetShaderLocation(RayShader, "sunDirection");
+        self->_locSunColor = GetShaderLocation(RayShader, "sunColor");
+        self->_locSunIntensity = GetShaderLocation(RayShader, "sunIntensity");
+        self->_locAmbientColor = GetShaderLocation(RayShader, "ambientColor");
+        self->_locAmbientIntensity = GetShaderLocation(RayShader, "ambientIntensity");
 
-    // Constant material parameters (scalar until per-material PBR maps land); upload once.
-    float Metallic = PBR_DEFAULT_METALLIC;
-    float Roughness = PBR_DEFAULT_ROUGHNESS;
-    float Ao = PBR_DEFAULT_AO;
-    float EmissiveColor[3] = { 0.0f, 0.0f, 0.0f };
-    float EmissiveIntensity = 0.0f;
-    SetShaderValue(RayShader, GetShaderLocation(RayShader, "metallic"), &Metallic, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, GetShaderLocation(RayShader, "roughness"), &Roughness, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, GetShaderLocation(RayShader, "ao"), &Ao, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, GetShaderLocation(RayShader, "emissiveColor"), EmissiveColor, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, GetShaderLocation(RayShader, "emissiveIntensity"), &EmissiveIntensity, SHADER_UNIFORM_FLOAT);
+        // Constant material parameters (scalar until per-material PBR maps land); upload once.
+        float Metallic = PBR_DEFAULT_METALLIC;
+        float Roughness = PBR_DEFAULT_ROUGHNESS;
+        float Ao = PBR_DEFAULT_AO;
+        float EmissiveColor[3] = { 0.0f, 0.0f, 0.0f };
+        float EmissiveIntensity = 0.0f;
+        SetShaderValue(RayShader, GetShaderLocation(RayShader, "metallic"), &Metallic, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(RayShader, GetShaderLocation(RayShader, "roughness"), &Roughness, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(RayShader, GetShaderLocation(RayShader, "ao"), &Ao, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(RayShader, GetShaderLocation(RayShader, "emissiveColor"), EmissiveColor, SHADER_UNIFORM_VEC3);
+        SetShaderValue(RayShader, GetShaderLocation(RayShader, "emissiveIntensity"), &EmissiveIntensity, SHADER_UNIFORM_FLOAT);
+    }
+
+    self->_tonemapShader = LoadRendererShader(self, TONEMAP_SHADER_ASSET_NAME);
 }
 
 /* Uploads the per-frame PBR lighting uniforms (camera position, sun and ambient light) from the world's
@@ -278,9 +368,10 @@ static void DrawModelObject(WorldRenderer* self, WorldModelObject* modelObject)
 /* Draws the world's 3D content into the currently active render target with the given camera. */
 static void DrawScene(WorldRenderer* self, World* world, const GameCamera* camera)
 {
-    // Clear to the world's current sky color (a time-of-day gradient); the full atmospheric sky pass
-    // replaces this later but is driven by the same environment.
-    ClearBackground(WorldEnvironment_ComputeSkyColor(World_GetEnvironment(world)));
+    // Clear to the world's current sky color (a time-of-day gradient). The scene buffer is linear HDR, so
+    // linearize the sRGB sky before clearing; the tonemap pass maps the whole scene back to display range.
+    // (The full atmospheric sky pass replaces this later, writing linear HDR directly.)
+    ClearBackground(LinearizeColorBytes(WorldEnvironment_ComputeSkyColor(World_GetEnvironment(world))));
 
     // Feed the sun/ambient/camera into the PBR shader before drawing any lit geometry (no-op if unavailable).
     UpdateLightingUniforms(self, world, camera);
@@ -390,8 +481,8 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
             "WorldRenderer_PrepareWorld: self and world must not be NULL.");
     }
 
-    // Preload the PBR shader so the first frame does not stall compiling it (idempotent, logged on failure).
-    EnsurePbrShader(self);
+    // Preload the shaders so the first frame does not stall compiling them (idempotent, logged on failure).
+    EnsureShaders(self);
 
     size_t Count = World_GetObjectCount(world);
     for (size_t Index = 0; Index < Count; Index++)
@@ -435,7 +526,7 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
             "WorldRenderer_RenderToTarget: self, world and camera must not be NULL.");
     }
 
-    EnsurePbrShader(self);
+    EnsureShaders(self);
 
     int WindowWidth = target.texture.width;
     int WindowHeight = target.texture.height;
@@ -446,9 +537,11 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     DrawScene(self, world, camera);
     EndTextureMode();
 
-    // Pass 2: blit the scene target into the frame target. A negative source height applies the vertical
-    // flip Raylib render textures need (the same convention the frame manager uses when compositing), and
-    // point filtering on the scene texture makes the upscale produce hard square pixels.
+    // Pass 2: blit the scene target into the frame target, tonemapping the linear-HDR scene to displayable
+    // sRGB via the tonemap shader as it upscales. A negative source height applies the vertical flip Raylib
+    // render textures need (the same convention the frame manager uses when compositing), and point filtering
+    // on the scene texture makes the upscale produce hard square pixels. If the tonemap shader is unavailable
+    // the raw (untonemapped) HDR is blitted so the scene still shows (degraded).
     BeginTextureMode(target);
     ClearBackground(BLACK);
     Rectangle Source =
@@ -459,7 +552,15 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
         .height = -(float)self->_sceneTarget.texture.height
     };
     Rectangle Destination = { .x = 0.0f, .y = 0.0f, .width = (float)WindowWidth, .height = (float)WindowHeight };
+    if (self->_tonemapShader != NULL)
+    {
+        BeginShaderMode(GameShader_GetRaylibShader(self->_tonemapShader));
+    }
     DrawTexturePro(self->_sceneTarget.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
+    if (self->_tonemapShader != NULL)
+    {
+        EndShaderMode();
+    }
     EndTextureMode();
 
     return Error_CreateSuccess();

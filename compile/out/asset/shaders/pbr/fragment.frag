@@ -59,17 +59,6 @@ vec3 FresnelSchlick(float cosTheta, vec3 f0)
     return f0 + (1.0 - f0)*pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// Narkowicz ACES filmic tonemapping approximation (maps linear HDR to displayable 0..1).
-vec3 TonemapACES(vec3 x)
-{
-    const float a = 2.51;
-    const float b = 0.03;
-    const float c = 2.43;
-    const float d = 0.59;
-    const float e = 0.14;
-    return clamp((x*(a*x + b))/(x*(c*x + d) + e), 0.0, 1.0);
-}
-
 void main()
 {
     vec4 texel = texture(texture0, fragTexCoord)*colDiffuse*fragColor;
@@ -108,8 +97,7 @@ void main()
 
     vec3 color = ambient + direct + emissiveColor*emissiveIntensity;
 
-    color = TonemapACES(color);
-    color = pow(color, vec3(1.0/2.2)); // linear -> sRGB for the 8-bit target
-
+    // Output LINEAR HDR. Tonemapping + gamma happen later in the tonemap post-pass (after the pixelation
+    // upscale), so the scene is composited in high dynamic range and mapped to [0,1] only for display.
     finalColor = vec4(color, alpha);
 }
