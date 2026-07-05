@@ -132,6 +132,7 @@ int main(int argc, char** argv)
     Logger_LogInfo(&Log, u8"Loaded game config");
 
     InitializeWindow(&Config);
+    SetExitKey(KEY_NULL);
 
     Error ReadyResult = Logger_LogInfo(&Log, (const unsigned char*)u8"Window initialized.");
     Error_Deconstruct(&ReadyResult);
