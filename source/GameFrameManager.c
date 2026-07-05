@@ -352,7 +352,7 @@ Error GameFrameManager_Update(GameFrameManager* self, ProgramTime time)
     // once-per-render poll — is what makes edge-triggered input (IsKeyPressed) reliable in frame updates.
     // (EndDrawing still also polls; this project's Raylib lacks SUPPORT_CUSTOM_FRAME_CONTROL to disable that,
     // but the extra poll is harmless and this remains the authoritative poll for update-time input.)
-    //PollInputEvents();
+    PollInputEvents();
 
     size_t i = 0;
     while (i < self->_records._count)
@@ -538,6 +538,7 @@ Error GameFrameManager_Render(GameFrameManager* self, ProgramTime time)
         DrawTexturePro(Record->Target.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, Tint);
     }
     EndDrawing();
+    SwapScreenBuffer();
 
     return Error_CreateSuccess();
 }

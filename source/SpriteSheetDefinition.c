@@ -80,26 +80,26 @@ static Image BuildPaddedImage(Image original, int padX, int padY, SpriteSheetPad
 
     Rectangle Source = { 0.0f, 0.0f, (float)OriginalWidth, (float)OriginalHeight };
     Rectangle Destination = { (float)padX, (float)padY, (float)OriginalWidth, (float)OriginalHeight };
-    ImageDraw(&Canvas, original, Source, Destination, WHITE);
+    ImageDrawImagePro(&Canvas, original, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
 
     bool ReplicateEdges = (mode == SpriteSheetPaddingColor_NearestPixel) || (mode == SpriteSheetPaddingColor_NearestPixelTransparent);
     if (ReplicateEdges && (padX > 0))
     {
         Rectangle LeftSource = { 0.0f, 0.0f, 1.0f, (float)OriginalHeight };
         Rectangle LeftDestination = { 0.0f, (float)padY, (float)padX, (float)OriginalHeight };
-        ImageDraw(&Canvas, original, LeftSource, LeftDestination, WHITE);
+        ImageDrawImagePro(&Canvas, original, LeftSource, LeftDestination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
         Rectangle RightSource = { (float)(OriginalWidth - 1), 0.0f, 1.0f, (float)OriginalHeight };
         Rectangle RightDestination = { (float)(padX + OriginalWidth), (float)padY, (float)padX, (float)OriginalHeight };
-        ImageDraw(&Canvas, original, RightSource, RightDestination, WHITE);
+        ImageDrawImagePro(&Canvas, original, RightSource, RightDestination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
     }
     if (ReplicateEdges && (padY > 0))
     {
         Rectangle TopSource = { 0.0f, 0.0f, (float)OriginalWidth, 1.0f };
         Rectangle TopDestination = { (float)padX, 0.0f, (float)OriginalWidth, (float)padY };
-        ImageDraw(&Canvas, original, TopSource, TopDestination, WHITE);
+        ImageDrawImagePro(&Canvas, original, TopSource, TopDestination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
         Rectangle BottomSource = { 0.0f, (float)(OriginalHeight - 1), (float)OriginalWidth, 1.0f };
         Rectangle BottomDestination = { (float)padX, (float)(padY + OriginalHeight), (float)OriginalWidth, (float)padY };
-        ImageDraw(&Canvas, original, BottomSource, BottomDestination, WHITE);
+        ImageDrawImagePro(&Canvas, original, BottomSource, BottomDestination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
     }
     if (ReplicateEdges && (padX > 0) && (padY > 0))
     {
@@ -117,7 +117,7 @@ static Image BuildPaddedImage(Image original, int padX, int padY, SpriteSheetPad
         };
         for (size_t i = 0; i < 4U; i++)
         {
-            ImageDraw(&Canvas, original, Corners[i], CornerDestinations[i], WHITE);
+            ImageDrawImagePro(&Canvas, original, Corners[i], CornerDestinations[i], (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
         }
     }
     return Canvas;
@@ -262,7 +262,7 @@ static Error SpriteSheetDefinition_LoadAsset(void* self, AssetManager* manager, 
     {
         Rectangle Source = { 0.0f, 0.0f, (float)Items[i].Padded.width, (float)Items[i].Padded.height };
         Rectangle Destination = { (float)Items[i].X, (float)Items[i].Y, (float)Items[i].Padded.width, (float)Items[i].Padded.height };
-        ImageDraw(&Atlas, Items[i].Padded, Source, Destination, WHITE);
+        ImageDrawImagePro(&Atlas, Items[i].Padded, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
     }
 
     GenericBuffer* Entries = NULL;
