@@ -95,6 +95,20 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
     float ScrubStep = TIME_SCRUB_RATE * deltaSeconds;
     if (IsKeyDown(KEY_LEFT_BRACKET))  { Environment->TimeOfDay -= ScrubStep; if (Environment->TimeOfDay < 0.0f) { Environment->TimeOfDay += 1.0f; } }
     if (IsKeyDown(KEY_RIGHT_BRACKET)) { Environment->TimeOfDay += ScrubStep; if (Environment->TimeOfDay >= 1.0f) { Environment->TimeOfDay -= 1.0f; } }
+
+    // O toggles the whole post-effects pass (AO + outlines) for A/B-ing whether an artifact comes from it;
+    // off = the scene blits straight to the tonemap, bit-exact with the pre-postfx pipeline.
+    if (IsKeyPressed(KEY_O))
+    {
+        bool Enabled = !WorldRenderer_ArePostEffectsEnabled(frame->_renderer);
+        WorldRenderer_SetPostEffectsEnabled(frame->_renderer, Enabled);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: post effects (AO + outlines) %s.", Enabled ? "ON" : "OFF");
+            Error_Deconstruct(&LogResult);
+        }
+    }
 }
 
 

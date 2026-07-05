@@ -66,8 +66,8 @@
 
 /** Asset name of the post-process shader (screen-space AO + hand-drawn outlines) run before the tonemap. */
 #define POSTFX_SHADER_ASSET_NAME ((const unsigned char*)u8"world_postfx")
-/** Texture unit the scene depth texture is bound to for the postfx shader (clear of the blit's slot 0). */
-#define POSTFX_DEPTH_TEXTURE_SLOT 1
+/** Asset name of the object-mask shader used to tag world objects (outline flag + surface flag) for postfx. */
+#define MASK_SHADER_ASSET_NAME ((const unsigned char*)u8"world_mask")
 /** Built-in outline strength (multiplied by nothing config-side per spec: outlines are code-configurable).
  *  0..1; scales how strongly edges are recoloured toward the hand-drawn outline shade. */
 #define OUTLINE_BASE_STRENGTH 1.0f
@@ -102,15 +102,24 @@ struct WorldRendererStruct
     GameShader* _depthShader;
     /** The post-process shader (screen-space AO + hand-drawn outlines); borrowed. NULL = post pass skipped. */
     GameShader* _postfxShader;
+    /** The object-mask shader (tags world objects with an outline flag + surface flag); borrowed. NULL = post
+     *  pass skipped (needs the mask to know which pixels are outline-enabled objects vs sky/grid). */
+    GameShader* _maskShader;
+    /** Cached world_mask outline-flag uniform location (-1 when absent). */
+    int _maskLocOutlineFlag;
     /** Set once the shaders' load has been attempted (success or failure), so it is tried only once. */
     bool _shadersLoadAttempted;
     /** Whether hand-drawn outlines are drawn (code-configurable per spec; on by default). */
     bool _outlineEnabled;
+    /** Master toggle for the whole post pass (AO + outlines); when false the scene blits straight to the
+     *  tonemap, bit-exact with the pre-postfx pipeline. For debugging/A-B comparison; on by default. */
+    bool _postfxEnabled;
     /** Cached world_postfx uniform locations (-1 when absent). */
     int _postfxLocResolution;
     int _postfxLocInvProjection;
     int _postfxLocProjection;
     int _postfxLocDepthTexture;
+    int _postfxLocMaskTexture;
     int _postfxLocAoStrength;
     int _postfxLocOutlineStrength;
     /** Cached world_sky uniform locations (-1 when absent). */
@@ -161,6 +170,10 @@ struct WorldRendererStruct
     RenderTexture2D _postTarget;
     /** Whether _postTarget has been created. */
     bool _hasPostTarget;
+    /** Low-res object mask (R=outline flag, G=surface flag) the postfx pass reads; only made when postfx runs. */
+    RenderTexture2D _maskTarget;
+    /** Whether _maskTarget has been created. */
+    bool _hasMaskTarget;
     /** Current width of _sceneTarget, in pixels. */
     int _sceneWidth;
     /** Current height of _sceneTarget, in pixels. */
@@ -199,19 +212,17 @@ static void ComputeSceneSize(bool pixelation, int windowWidth, int windowHeight,
     if (*outHeight < 1) { *outHeight = 1; }
 }
 
-/* Creates a scene render target whose colour attachment is a 16-bit float (HDR) texture plus a depth
- * renderbuffer, mirroring raylib's LoadRenderTexture but with a floating-point colour format so the scene
- * can hold linear HDR values before tonemapping. Falls back to a standard 8-bit target (and sets *outIsHDR
- * false) if the GPU cannot make the float framebuffer complete. */
-static RenderTexture2D CreateSceneTarget(int width, int height, bool* outIsHDR)
+/* Tries to create an HDR (RGBA16F) scene framebuffer. The depth attachment is a samplable depth TEXTURE
+ * when @p samplableDepth is true (the postfx pass reads scene depth; depth TESTING is identical either way)
+ * or a plain depth renderbuffer otherwise. Returns a zero target (id 0) if the GPU cannot make the
+ * combination complete. */
+static RenderTexture2D TryCreateHdrSceneTarget(int width, int height, bool samplableDepth)
 {
-    *outIsHDR = false;
-
     RenderTexture2D Target = { 0 };
     Target.id = rlLoadFramebuffer();
     if (Target.id == 0)
     {
-        return LoadRenderTexture(width, height);
+        return Target;
     }
 
     rlEnableFramebuffer(Target.id);
@@ -222,16 +233,15 @@ static RenderTexture2D CreateSceneTarget(int width, int height, bool* outIsHDR)
     Target.texture.format = PIXELFORMAT_UNCOMPRESSED_R16G16B16A16;
     Target.texture.mipmaps = 1;
 
-    // A samplable depth TEXTURE (false), not a renderbuffer, so the postfx pass can read scene depth for
-    // ambient occlusion and outline edge detection. Depth testing works identically either way.
-    Target.depth.id = rlLoadTextureDepth(width, height, false);
+    Target.depth.id = rlLoadTextureDepth(width, height, !samplableDepth);
     Target.depth.width = width;
     Target.depth.height = height;
     Target.depth.format = SCENE_DEPTH_FORMAT;
     Target.depth.mipmaps = 1;
 
     rlFramebufferAttach(Target.id, Target.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
-    rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);
+    rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH,
+        samplableDepth ? RL_ATTACHMENT_TEXTURE2D : RL_ATTACHMENT_RENDERBUFFER, 0);
 
     bool Complete = (Target.texture.id != 0) && rlFramebufferComplete(Target.id);
     rlDisableFramebuffer();
@@ -239,11 +249,37 @@ static RenderTexture2D CreateSceneTarget(int width, int height, bool* outIsHDR)
     if (!Complete)
     {
         UnloadRenderTexture(Target); // frees the framebuffer and its attachments
-        return LoadRenderTexture(width, height);
+        Target = (RenderTexture2D){ 0 };
+    }
+    return Target;
+}
+
+/* Creates the scene render target, degrading gracefully so the post pass can never cost the HDR pipeline:
+ * (1) HDR + samplable depth texture (full pipeline incl. postfx), (2) HDR + depth renderbuffer (postfx
+ * disabled, sky/tonemap intact — the pre-postfx arrangement), (3) 8-bit LoadRenderTexture as the last
+ * resort. An 8-bit scene buffer clamps/quantizes the linear-HDR sky badly, so it must never be entered just
+ * because the depth-texture combination failed. */
+static RenderTexture2D CreateSceneTarget(int width, int height, bool* outIsHDR, bool* outDepthSamplable)
+{
+    *outIsHDR = false;
+    *outDepthSamplable = false;
+
+    RenderTexture2D Target = TryCreateHdrSceneTarget(width, height, true);
+    if (Target.id != 0)
+    {
+        *outIsHDR = true;
+        *outDepthSamplable = true;
+        return Target;
     }
 
-    *outIsHDR = true;
-    return Target;
+    Target = TryCreateHdrSceneTarget(width, height, false);
+    if (Target.id != 0)
+    {
+        *outIsHDR = true;
+        return Target;
+    }
+
+    return LoadRenderTexture(width, height);
 }
 
 /* Creates a colour-only HDR (RGBA16F) framebuffer for the postfx ping target (no depth: the post pass writes
@@ -323,12 +359,15 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
         UnloadRenderTexture(self->_postTarget);
         self->_hasPostTarget = false;
     }
+    if (self->_hasMaskTarget)
+    {
+        UnloadRenderTexture(self->_maskTarget);
+        self->_hasMaskTarget = false;
+    }
 
-    self->_sceneTarget = CreateSceneTarget(DesiredWidth, DesiredHeight, &self->_sceneIsHDR);
+    self->_sceneTarget = CreateSceneTarget(DesiredWidth, DesiredHeight, &self->_sceneIsHDR, &self->_sceneDepthSamplable);
     // Point filtering makes the upscale to the window produce hard, square pixels.
     SetTextureFilter(self->_sceneTarget.texture, TEXTURE_FILTER_POINT);
-    // Only the manual HDR path attaches a samplable depth texture; the 8-bit fallback keeps a renderbuffer.
-    self->_sceneDepthSamplable = self->_sceneIsHDR;
     if (self->_sceneDepthSamplable)
     {
         // The postfx pass compares raw depth texels, so nearest (point) sampling is required.
@@ -338,8 +377,9 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
     self->_sceneWidth = DesiredWidth;
     self->_sceneHeight = DesiredHeight;
 
-    // The postfx ping target: only needed when the post pass can run (shader present + samplable depth).
-    if ((self->_postfxShader != NULL) && self->_sceneDepthSamplable)
+    // The postfx ping + object-mask targets: only needed when the post pass can run (postfx + mask shaders
+    // present, samplable depth). The mask target is a plain 8-bit colour+depth RT (it holds flags, not HDR).
+    if ((self->_postfxShader != NULL) && (self->_maskShader != NULL) && self->_sceneDepthSamplable)
     {
         self->_postTarget = CreatePostTarget(DesiredWidth, DesiredHeight);
         self->_hasPostTarget = (self->_postTarget.id != 0);
@@ -347,15 +387,33 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
         {
             SetTextureFilter(self->_postTarget.texture, TEXTURE_FILTER_POINT);
         }
+
+        self->_maskTarget = LoadRenderTexture(DesiredWidth, DesiredHeight);
+        self->_hasMaskTarget = (self->_maskTarget.id != 0);
+        if (self->_hasMaskTarget)
+        {
+            SetTextureFilter(self->_maskTarget.texture, TEXTURE_FILTER_POINT);
+        }
     }
 
-    // Report the HDR/fallback choice once so it is easy to confirm the float pipeline is active.
+    // Report the scene-target tier once so it is easy to confirm which pipeline is active from the log.
     if (!self->_sceneHdrReported && (self->_logger != NULL))
     {
         self->_sceneHdrReported = true;
-        Error LogResult = Logger_LogInfo(self->_logger, self->_sceneIsHDR
-            ? (const unsigned char*)u8"WorldRenderer: scene target is HDR (RGBA16F float)."
-            : (const unsigned char*)u8"WorldRenderer: HDR framebuffer unsupported; using 8-bit scene target.");
+        const unsigned char* Message;
+        if (self->_sceneIsHDR && self->_sceneDepthSamplable)
+        {
+            Message = (const unsigned char*)u8"WorldRenderer: scene target is HDR (RGBA16F) with samplable depth (post effects available).";
+        }
+        else if (self->_sceneIsHDR)
+        {
+            Message = (const unsigned char*)u8"WorldRenderer: scene target is HDR (RGBA16F); depth not samplable, post effects (AO/outlines) disabled.";
+        }
+        else
+        {
+            Message = (const unsigned char*)u8"WorldRenderer: HDR framebuffer unsupported; using 8-bit scene target (post effects disabled).";
+        }
+        Error LogResult = Logger_LogInfo(self->_logger, Message);
         Error_Deconstruct(&LogResult);
     }
 }
@@ -519,8 +577,17 @@ static void EnsureShaders(WorldRenderer* self)
         self->_postfxLocInvProjection = GetShaderLocation(RayShader, "invProjection");
         self->_postfxLocProjection = GetShaderLocation(RayShader, "projection");
         self->_postfxLocDepthTexture = GetShaderLocation(RayShader, "depthTexture");
+        self->_postfxLocMaskTexture = GetShaderLocation(RayShader, "maskTexture");
         self->_postfxLocAoStrength = GetShaderLocation(RayShader, "aoStrength");
         self->_postfxLocOutlineStrength = GetShaderLocation(RayShader, "outlineStrength");
+    }
+
+    // Object-mask shader: tags each drawn world model with its outline flag + a surface flag so the postfx
+    // pass affects objects only (not the sky/grid/shadows). Without it the post pass is skipped.
+    self->_maskShader = LoadRendererShader(self, MASK_SHADER_ASSET_NAME);
+    if (self->_maskShader != NULL)
+    {
+        self->_maskLocOutlineFlag = GetShaderLocation(GameShader_GetRaylibShader(self->_maskShader), "outlineFlag");
     }
 }
 
@@ -632,6 +699,48 @@ static void DrawWorldModels(WorldRenderer* self, World* world, GameShader* shade
             DrawModelObjectWithShader(self, (WorldModelObject*)Object, shader);
         }
     }
+}
+
+/* Draws every world MODEL object into the object mask through the mask shader, setting the per-object outline
+ * flag uniform (1 when the object has outlines enabled, else 0) before each draw. The mask shader writes
+ * R=outlineFlag, G=1 (surface); pixels the sky/grid leave untouched stay at the cleared 0. */
+static void DrawOutlineMaskModels(WorldRenderer* self, World* world)
+{
+    Shader RayMaskShader = GameShader_GetRaylibShader(self->_maskShader);
+    size_t Count = World_GetObjectCount(world);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        WorldObject* Object = NULL;
+        Error GetResult = World_GetObjectByIndex(world, Index, &Object);
+        if (GetResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&GetResult);
+            continue;
+        }
+        if (WorldObject_GetType(Object) != WorldObjectType_Model)
+        {
+            continue;
+        }
+
+        WorldModelObject* ModelObject = (WorldModelObject*)Object;
+        float OutlineFlag = ModelObject->HasOutline ? 1.0f : 0.0f;
+        SetShaderValue(RayMaskShader, self->_maskLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
+        DrawModelObjectWithShader(self, ModelObject, self->_maskShader);
+    }
+}
+
+/* Renders the object mask (which world pixels are outline-enabled objects vs sky/grid) into _maskTarget with
+ * the scene camera, so the postfx pass can restrict AO + outlines to world objects. Opens/closes its own
+ * passes. Uses its own depth (occlusion among model objects only; the debug grid is intentionally not drawn
+ * here so it never gets outlined). */
+static void RenderOutlineMask(WorldRenderer* self, World* world, const GameCamera* camera)
+{
+    BeginTextureMode(self->_maskTarget);
+    ClearBackground(BLACK); // R=0 (no outline), G=0 (not a surface) everywhere the geometry does not draw
+    BeginMode3D(GameCamera_ToRaylibCamera(camera));
+    DrawOutlineMaskModels(self, world);
+    EndMode3D();
+    EndTextureMode();
 }
 
 /* Draws the atmospheric sky as a full-screen pass into the currently bound scene target, reconstructing each
@@ -779,21 +888,22 @@ static void DrawPostFX(WorldRenderer* self, World* world, const GameCamera* came
     SetShaderValue(RayShader, self->_postfxLocOutlineStrength, &OutlineStrength, SHADER_UNIFORM_FLOAT);
 
     BeginShaderMode(RayShader);
-    // Bind the scene depth texture to a spare slot; the postfx shader samples it as 'depthTexture'. The blit
-    // below binds the scene colour to slot 0 (texture0), leaving this slot-1 binding intact through the draw.
-    rlActiveTextureSlot(POSTFX_DEPTH_TEXTURE_SLOT);
-    rlEnableTexture(self->_sceneTarget.depth.id);
-    int DepthSlot = POSTFX_DEPTH_TEXTURE_SLOT;
-    rlSetUniform(self->_postfxLocDepthTexture, &DepthSlot, SHADER_UNIFORM_INT, 1);
+    // Bind the scene depth + object mask as extra sampler2Ds. This MUST use SetShaderValueTexture (not manual
+    // rlActiveTextureSlot/rlEnableTexture): DrawTexturePro draws through Raylib's 2D batch, and the batch only
+    // binds textures it tracks in its own activeTextureId[] table (which SetShaderValueTexture populates) plus
+    // texture0. A manual glActiveTexture bind is NOT in that table, so the batch would leave these samplers on
+    // unit 0 = the scene colour texture, making the shader read colour as depth+mask (the sky-noise/ring bug).
+    // Call these AFTER BeginShaderMode (its batch flush clears the table) and before the draw.
+    SetShaderValueTexture(RayShader, self->_postfxLocDepthTexture, self->_sceneTarget.depth);
+    SetShaderValueTexture(RayShader, self->_postfxLocMaskTexture, self->_maskTarget.texture);
 
     // The shader samples by gl_FragCoord (not fragTexCoord), so this straight full-screen copy needs no flip.
+    // DrawTexturePro binds the scene colour to unit 0 (texture0); the batch binds depth/mask to units 1/2 and
+    // resets the table after drawing, so nothing lingers on those units into the next pass.
     Rectangle Source = { 0.0f, 0.0f, (float)self->_sceneTarget.texture.width, (float)self->_sceneTarget.texture.height };
     Rectangle Destination = { 0.0f, 0.0f, (float)self->_sceneWidth, (float)self->_sceneHeight };
     DrawTexturePro(self->_sceneTarget.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
     EndShaderMode();
-
-    // Restore the active texture slot so later draws (the tonemap blit, the frame compositor) are unaffected.
-    rlActiveTextureSlot(0);
 }
 
 
@@ -824,6 +934,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_drawDebugGrid = true;
     Renderer->_pixelationEnabled = true;
     Renderer->_outlineEnabled = true;
+    Renderer->_postfxEnabled = true;
     Renderer->_hasSceneTarget = false;
 
     *outRenderer = Renderer;
@@ -847,6 +958,12 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     {
         UnloadRenderTexture(self->_postTarget);
         self->_hasPostTarget = false;
+    }
+
+    if (self->_hasMaskTarget)
+    {
+        UnloadRenderTexture(self->_maskTarget);
+        self->_hasMaskTarget = false;
     }
 
     if (self->_hasShadowMap)
@@ -947,11 +1064,18 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     DrawScene(self, world, camera);
     EndTextureMode();
 
-    // Pass 1.5 (optional): screen-space AO + hand-drawn outlines, low-res, reading the scene colour + depth.
-    // Needs the postfx shader and the samplable-depth HDR scene target; otherwise the scene is blitted as-is.
+    // Pass 1.5 (optional): screen-space AO + hand-drawn outlines, low-res, reading the scene colour + depth +
+    // an object mask. Needs the master toggle on, at least one contributing effect, the postfx + mask shaders,
+    // the samplable-depth HDR scene target, and both post targets; otherwise the scene is blitted as-is
+    // (bit-exact with the pre-postfx pipeline). The mask pass runs first so postfx can read it.
     RenderTexture2D BlitSource = self->_sceneTarget;
-    if ((self->_postfxShader != NULL) && self->_hasPostTarget && self->_sceneDepthSamplable)
+    float EffectiveAoStrength = Environment->IsAmbientOcclusionEnabled
+        ? (Environment->AmbientOcclusionStrength * ConfigAoStrength(self)) : 0.0f;
+    if (self->_postfxEnabled && ((EffectiveAoStrength > 0.0f) || self->_outlineEnabled)
+        && (self->_postfxShader != NULL) && (self->_maskShader != NULL) && self->_hasPostTarget
+        && self->_hasMaskTarget && self->_sceneDepthSamplable)
     {
+        RenderOutlineMask(self, world, camera);
         BeginTextureMode(self->_postTarget);
         ClearBackground(BLACK);
         DrawPostFX(self, world, camera);
@@ -996,6 +1120,16 @@ void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_IsPixelationEnabled(const WorldRenderer* self)
 {
     return self->_pixelationEnabled;
+}
+
+void WorldRenderer_SetPostEffectsEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_postfxEnabled = enabled;
+}
+
+bool WorldRenderer_ArePostEffectsEnabled(const WorldRenderer* self)
+{
+    return self->_postfxEnabled;
 }
 
 void WorldRenderer_SetDebugGridEnabled(WorldRenderer* self, bool enabled)

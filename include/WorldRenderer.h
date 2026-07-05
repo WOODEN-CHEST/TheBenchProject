@@ -115,6 +115,24 @@ void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled);
 bool WorldRenderer_IsPixelationEnabled(const WorldRenderer* self);
 
 /**
+ * @brief Enables or disables the whole post-effects pass (screen-space AO + hand-drawn outlines).
+ *
+ * When disabled the scene is blitted straight to the tonemap stage, bit-exact with the pipeline before the
+ * post pass existed — useful for A/B-ing whether a visual artifact comes from the post effects. Default
+ * enabled. Applied on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to run the post-effects pass, false to bypass it entirely.
+ */
+void WorldRenderer_SetPostEffectsEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the post-effects pass (screen-space AO + hand-drawn outlines) is enabled.
+ * @param self The renderer; must not be NULL.
+ * @returns true if the post-effects pass runs (given the shaders/targets are available).
+ */
+bool WorldRenderer_ArePostEffectsEnabled(const WorldRenderer* self);
+
+/**
  * @brief Enables or disables the debug reference grid drawn on the ground plane.
  * @param self The renderer; must not be NULL.
  * @param enabled true to draw the grid, false to hide it.
