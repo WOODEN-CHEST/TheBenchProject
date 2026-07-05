@@ -48,12 +48,6 @@ struct WorldRendererStruct
 
 
 // Static functions.
-/* Placeholder sky color used until the physically based sky pass is implemented. */
-static Color GetSkyColor(void)
-{
-    return (Color){ .r = 132, .g = 173, .b = 220, .a = 255 };
-}
-
 /* Computes the scene-target size for a given window size. With pixelation, the longer window axis is
  * pinned to PIXELATION_LONG_AXIS and the shorter axis derived proportionally, so the upscale to the window
  * is a near-uniform (square-pixel) magnification. Without pixelation the scene target matches the window. */
@@ -160,7 +154,9 @@ static void DrawModelObject(WorldRenderer* self, WorldModelObject* modelObject)
 /* Draws the world's 3D content into the currently active render target with the given camera. */
 static void DrawScene(WorldRenderer* self, World* world, const GameCamera* camera)
 {
-    ClearBackground(GetSkyColor());
+    // Clear to the world's current sky color (a time-of-day gradient); the full atmospheric sky pass
+    // replaces this later but is driven by the same environment.
+    ClearBackground(WorldEnvironment_ComputeSkyColor(World_GetEnvironment(world)));
 
     BeginMode3D(GameCamera_ToRaylibCamera(camera));
 

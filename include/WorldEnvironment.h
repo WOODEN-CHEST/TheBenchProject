@@ -111,3 +111,35 @@ void WorldEnvironment_SetDefaults(WorldEnvironment* self);
  * @param self The environment to release, or NULL.
  */
 void WorldEnvironment_Deconstruct(WorldEnvironment* self);
+
+/**
+ * @brief Returns the unit direction pointing TO the sun for the current time of day.
+ *
+ * The sun arcs overhead: at noon (TimeOfDay 0.5) it points straight up (+Y); at dawn (0.25) and dusk
+ * (0.75) it lies on the horizon; at midnight it points below. The horizontal component sweeps along the X
+ * axis. This is the light direction the later sky/shadow/lighting passes use.
+ * @param self The environment; must not be NULL.
+ * @returns The normalized direction to the sun.
+ */
+Vector3 WorldEnvironment_GetSunDirection(const WorldEnvironment* self);
+
+/**
+ * @brief Advances the time of day by @p deltaSeconds when the day-night cycle is enabled.
+ *
+ * Adds @p deltaSeconds / DayLengthSeconds to TimeOfDay and wraps the result into [0, 1). Does nothing if
+ * the cycle is disabled or DayLengthSeconds is not positive.
+ * @param self The environment; may be NULL (no-op).
+ * @param deltaSeconds Elapsed real seconds to advance by; finite and non-negative expected.
+ */
+void WorldEnvironment_Advance(WorldEnvironment* self, float deltaSeconds);
+
+/**
+ * @brief Computes the sky/background color for the current time of day (a day-night gradient, tinted).
+ *
+ * Blends between day, horizon (sunrise/sunset) and night colors by the sun's elevation, then multiplies by
+ * SkyTint so a world can push the sky toward alien hues. This is a cheap CPU approximation; the full
+ * atmospheric-scattering sky pass replaces it later but is driven by the same time-of-day.
+ * @param self The environment; must not be NULL.
+ * @returns The opaque sky color.
+ */
+Color WorldEnvironment_ComputeSkyColor(const WorldEnvironment* self);

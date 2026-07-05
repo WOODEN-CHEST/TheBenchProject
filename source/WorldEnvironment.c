@@ -1,9 +1,12 @@
 #include <stddef.h>
+#include <math.h>
 #include "WorldEnvironment.h"
 #include "wr/WRCompile.h"
 
 
 // Macros.
+/** Pi as a float (M_PI is not standard C, so it is defined locally for -Wpedantic). */
+#define ENVIRONMENT_PI 3.14159265358979323846f
 /** Default real-time length of a full day-night cycle, in seconds (20 minutes). */
 #define DEFAULT_DAY_LENGTH_SECONDS 1200.0f
 /** Default atmospheric turbidity (a clear-ish sky). */
@@ -67,4 +70,85 @@ void WorldEnvironment_SetDefaults(WorldEnvironment* self)
 void WorldEnvironment_Deconstruct(WorldEnvironment* self)
 {
     UNUSED(self);
+}
+
+
+// Static functions.
+/* Linearly interpolates one 8-bit channel, clamped to [0, 255]. */
+static unsigned char LerpChannel(unsigned char from, unsigned char to, float factor)
+{
+    float Value = (float)from + ((float)to - (float)from) * factor;
+    if (Value < 0.0f) { Value = 0.0f; }
+    if (Value > 255.0f) { Value = 255.0f; }
+    return (unsigned char)lroundf(Value);
+}
+
+/* Linearly interpolates an opaque RGB color. */
+static Color LerpColor(Color from, Color to, float factor)
+{
+    return (Color)
+    {
+        .r = LerpChannel(from.r, to.r, factor),
+        .g = LerpChannel(from.g, to.g, factor),
+        .b = LerpChannel(from.b, to.b, factor),
+        .a = 255
+    };
+}
+
+/* Multiplies an RGB color by a tint color (each channel scaled by tint/255). */
+static Color TintColor(Color base, Color tint)
+{
+    return (Color)
+    {
+        .r = (unsigned char)(((int)base.r * (int)tint.r) / 255),
+        .g = (unsigned char)(((int)base.g * (int)tint.g) / 255),
+        .b = (unsigned char)(((int)base.b * (int)tint.b) / 255),
+        .a = 255
+    };
+}
+
+
+// Public functions.
+Vector3 WorldEnvironment_GetSunDirection(const WorldEnvironment* self)
+{
+    // Angle sweeps so that noon (0.5) is straight up, dawn (0.25)/dusk (0.75) are on the horizon.
+    float Angle = (self->TimeOfDay - 0.25f) * 2.0f * ENVIRONMENT_PI;
+    return (Vector3)
+    {
+        .x = cosf(Angle),
+        .y = sinf(Angle),
+        .z = 0.0f
+    };
+}
+
+void WorldEnvironment_Advance(WorldEnvironment* self, float deltaSeconds)
+{
+    if ((self == NULL) || !self->IsDayNightCycleEnabled || (self->DayLengthSeconds <= 0.0f))
+    {
+        return;
+    }
+
+    self->TimeOfDay += deltaSeconds / self->DayLengthSeconds;
+    self->TimeOfDay -= floorf(self->TimeOfDay); // wrap into [0, 1)
+}
+
+Color WorldEnvironment_ComputeSkyColor(const WorldEnvironment* self)
+{
+    const Color DayColor = { .r = 108, .g = 158, .b = 224, .a = 255 };
+    const Color HorizonColor = { .r = 232, .g = 138, .b = 88, .a = 255 };
+    const Color NightColor = { .r = 9, .g = 12, .b = 28, .a = 255 };
+
+    float Elevation = WorldEnvironment_GetSunDirection(self).y; // [-1, 1]
+
+    Color Base;
+    if (Elevation >= 0.0f)
+    {
+        Base = LerpColor(HorizonColor, DayColor, Elevation);
+    }
+    else
+    {
+        Base = LerpColor(HorizonColor, NightColor, -Elevation);
+    }
+
+    return TintColor(Base, self->SkyTint);
 }

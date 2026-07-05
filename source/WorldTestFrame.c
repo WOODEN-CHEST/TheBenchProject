@@ -27,6 +27,8 @@
 #define SPRINT_MULTIPLIER 3.0f
 /** Mouse look sensitivity, in radians per pixel of mouse movement. */
 #define MOUSE_SENSITIVITY 0.0025f
+/** Day-night cycle length for the test world, in seconds (short so the cycle is easy to observe). */
+#define TEST_DAY_LENGTH_SECONDS 120.0f
 
 
 // Types.
@@ -108,6 +110,9 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
         Movement = Vector3Scale(Vector3Normalize(Movement), Speed * Delta);
         Frame->_camera.Position = Vector3Add(Frame->_camera.Position, Movement);
     }
+
+    // Advance the world's day-night cycle.
+    WorldEnvironment_Advance(World_GetEnvironment(&Frame->_world), Delta);
 
     return Error_CreateSuccess();
 }
@@ -220,6 +225,8 @@ static Error BuildTestWorld(World* world)
     {
         return ConstructResult;
     }
+
+    World_GetEnvironment(world)->DayLengthSeconds = TEST_DAY_LENGTH_SECONDS;
 
     WorldModelObject* ModelObject = NULL;
     Error ModelResult = WorldModelObject_Create(TEST_MODEL_OBJECT_NAME, TEST_MODEL_ASSET_NAME, &ModelObject);
