@@ -29,6 +29,8 @@
 #define PBR_SHADER_ASSET_NAME ((const unsigned char*)u8"world_pbr")
 /** Asset name of the tonemap post-pass shader (maps the linear-HDR scene to displayable sRGB). */
 #define TONEMAP_SHADER_ASSET_NAME ((const unsigned char*)u8"world_tonemap")
+/** Asset name of the atmospheric sky shader (full-screen Rayleigh/Mie sky + sun + stars). */
+#define SKY_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sky")
 /** Bookkeeping value Raylib uses for a RenderTexture's depth attachment format (24-bit depth renderbuffer). */
 #define SCENE_DEPTH_FORMAT 19
 /** Default surface metallic value (dielectric) until per-material PBR maps exist. */
@@ -58,8 +60,23 @@ struct WorldRendererStruct
     GameShader* _pbrShader;
     /** The tonemap post-pass shader applied when blitting the HDR scene to the frame; borrowed. NULL = unavailable. */
     GameShader* _tonemapShader;
+    /** The atmospheric sky shader drawn behind the geometry; borrowed. NULL = fall back to the gradient clear. */
+    GameShader* _skyShader;
     /** Set once the shaders' load has been attempted (success or failure), so it is tried only once. */
     bool _shadersLoadAttempted;
+    /** Cached world_sky uniform locations (-1 when absent). */
+    int _skyLocResolution;
+    int _skyLocInvViewProj;
+    int _skyLocCameraPos;
+    int _skyLocSunDirection;
+    int _skyLocSunColor;
+    int _skyLocSunIntensity;
+    int _skyLocSunSize;
+    int _skyLocTurbidity;
+    int _skyLocSkyTint;
+    int _skyLocStarSeed;
+    int _skyLocStarDensity;
+    int _skyLocStarBrightness;
     /** Whether the scene target is a floating-point (HDR) framebuffer; false = 8-bit fallback. */
     bool _sceneIsHDR;
     /** Set once the HDR/fallback status has been logged, so it is reported only once. */
@@ -288,6 +305,24 @@ static void EnsureShaders(WorldRenderer* self)
     }
 
     self->_tonemapShader = LoadRendererShader(self, TONEMAP_SHADER_ASSET_NAME);
+
+    self->_skyShader = LoadRendererShader(self, SKY_SHADER_ASSET_NAME);
+    if (self->_skyShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_skyShader);
+        self->_skyLocResolution = GetShaderLocation(RayShader, "resolution");
+        self->_skyLocInvViewProj = GetShaderLocation(RayShader, "invViewProj");
+        self->_skyLocCameraPos = GetShaderLocation(RayShader, "cameraPos");
+        self->_skyLocSunDirection = GetShaderLocation(RayShader, "sunDirection");
+        self->_skyLocSunColor = GetShaderLocation(RayShader, "sunColor");
+        self->_skyLocSunIntensity = GetShaderLocation(RayShader, "sunIntensity");
+        self->_skyLocSunSize = GetShaderLocation(RayShader, "sunSize");
+        self->_skyLocTurbidity = GetShaderLocation(RayShader, "turbidity");
+        self->_skyLocSkyTint = GetShaderLocation(RayShader, "skyTint");
+        self->_skyLocStarSeed = GetShaderLocation(RayShader, "starSeed");
+        self->_skyLocStarDensity = GetShaderLocation(RayShader, "starDensity");
+        self->_skyLocStarBrightness = GetShaderLocation(RayShader, "starBrightness");
+    }
 }
 
 /* Uploads the per-frame PBR lighting uniforms (camera position, sun and ambient light) from the world's
@@ -365,13 +400,71 @@ static void DrawModelObject(WorldRenderer* self, WorldModelObject* modelObject)
     DrawModel(RayModel, (Vector3){ 0.0f, 0.0f, 0.0f }, 1.0f, Tint);
 }
 
+/* Draws the atmospheric sky as a full-screen pass into the currently bound scene target, reconstructing each
+ * pixel's world ray from the inverse view-projection so the sky lines up with the 3D camera. Outputs linear
+ * HDR. Must run after the depth clear and BEFORE the 3D geometry: it is a 2D pass that writes no depth, so
+ * the geometry (depth-tested against the cleared far plane) draws over it. No-op guard is the caller's. */
+static void DrawSky(WorldRenderer* self, World* world, const GameCamera* camera)
+{
+    Shader RayShader = GameShader_GetRaylibShader(self->_skyShader);
+    const WorldEnvironment* Environment = World_GetEnvironment(world);
+
+    // Reconstruct the same view-projection BeginMode3D uses, so the sky ray matches the geometry per pixel.
+    Camera3D RayCam = GameCamera_ToRaylibCamera(camera);
+    double Aspect = (self->_sceneHeight > 0) ? ((double)self->_sceneWidth / (double)self->_sceneHeight) : 1.0;
+    Matrix View = GetCameraMatrix(RayCam);
+    Matrix Projection = MatrixPerspective((double)RayCam.fovy * DEG2RAD, Aspect, RL_CULL_DISTANCE_NEAR, RL_CULL_DISTANCE_FAR);
+    Matrix InvViewProj = MatrixInvert(MatrixMultiply(View, Projection));
+
+    float Resolution[2] = { (float)self->_sceneWidth, (float)self->_sceneHeight };
+    SetShaderValue(RayShader, self->_skyLocResolution, Resolution, SHADER_UNIFORM_VEC2);
+    SetShaderValueMatrix(RayShader, self->_skyLocInvViewProj, InvViewProj);
+
+    float CameraPos[3] = { camera->Position.x, camera->Position.y, camera->Position.z };
+    SetShaderValue(RayShader, self->_skyLocCameraPos, CameraPos, SHADER_UNIFORM_VEC3);
+
+    Vector3 SunDirection = WorldEnvironment_GetSunDirection(Environment);
+    float SunDir[3] = { SunDirection.x, SunDirection.y, SunDirection.z };
+    SetShaderValue(RayShader, self->_skyLocSunDirection, SunDir, SHADER_UNIFORM_VEC3);
+
+    float SunColor[3];
+    ColorToLinear(Environment->SunColor, SunColor);
+    SetShaderValue(RayShader, self->_skyLocSunColor, SunColor, SHADER_UNIFORM_VEC3);
+    SetShaderValue(RayShader, self->_skyLocSunIntensity, &Environment->SunIntensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_skyLocSunSize, &Environment->SunSizeMultiplier, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_skyLocTurbidity, &Environment->SkyTurbidity, SHADER_UNIFORM_FLOAT);
+
+    float SkyTint[3];
+    ColorToLinear(Environment->SkyTint, SkyTint);
+    SetShaderValue(RayShader, self->_skyLocSkyTint, SkyTint, SHADER_UNIFORM_VEC3);
+
+    // The low 24 bits of the seed are enough to vary star placement and stay exactly representable as a float.
+    float StarSeed = (float)(Environment->StarSeed & 0xFFFFFFu);
+    SetShaderValue(RayShader, self->_skyLocStarSeed, &StarSeed, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_skyLocStarDensity, &Environment->StarDensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_skyLocStarBrightness, &Environment->StarBrightness, SHADER_UNIFORM_FLOAT);
+
+    BeginShaderMode(RayShader);
+    DrawRectangle(0, 0, self->_sceneWidth, self->_sceneHeight, WHITE);
+    EndShaderMode();
+}
+
 /* Draws the world's 3D content into the currently active render target with the given camera. */
 static void DrawScene(WorldRenderer* self, World* world, const GameCamera* camera)
 {
-    // Clear to the world's current sky color (a time-of-day gradient). The scene buffer is linear HDR, so
-    // linearize the sRGB sky before clearing; the tonemap pass maps the whole scene back to display range.
-    // (The full atmospheric sky pass replaces this later, writing linear HDR directly.)
-    ClearBackground(LinearizeColorBytes(WorldEnvironment_ComputeSkyColor(World_GetEnvironment(world))));
+    // Clear the depth buffer (and colour). When the atmospheric sky shader is present it overwrites every
+    // pixel below, so the clear colour only matters as the fallback (the linearized CPU gradient) for when
+    // the sky shader is unavailable. The scene buffer is linear HDR; the tonemap pass maps it to display.
+    Color ClearColor = (self->_skyShader != NULL)
+        ? BLACK
+        : LinearizeColorBytes(WorldEnvironment_ComputeSkyColor(World_GetEnvironment(world)));
+    ClearBackground(ClearColor);
+
+    // Atmospheric sky behind the geometry (full-screen linear-HDR pass; writes no depth).
+    if (self->_skyShader != NULL)
+    {
+        DrawSky(self, world, camera);
+    }
 
     // Feed the sun/ambient/camera into the PBR shader before drawing any lit geometry (no-op if unavailable).
     UpdateLightingUniforms(self, world, camera);

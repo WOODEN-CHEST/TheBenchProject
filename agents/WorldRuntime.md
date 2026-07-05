@@ -64,10 +64,17 @@ scene→frame blit, so it runs AFTER the pixelation point-upscale. Result: HDR/r
 that still reads as chunky pixels, mapped to display [0,1] only at the very end. Bloom/sunshafts later plug
 into the HDR buffer before this tonemap.
 
-SCOPE now: models are PBR-lit and the whole scene is HDR→tonemapped; the sky is still the CPU day-night
-gradient (increment 2), linearized into the HDR buffer. Sprites, lights, and the remaining effect pipeline
-(atmospheric-scattering sky/sun + stars [the next stage], sun shadow map, point-light culling, fog, bloom,
-sunshafts, 1px outlines, per-object omit-pixelation) are marked TODO and layer on later.
+**Atmospheric sky** (Step 3 increment 5): a full-screen `world_sky` shader (Rayleigh + Mie single-scattering,
+sun disc, night stars) drawn behind the geometry in `DrawSky` — a 2D pass that writes no depth, so the
+depth-tested 3D geometry draws over it. Each pixel's world ray is reconstructed from the inverse
+view-projection (`MatrixInvert(MatrixMultiply(GetCameraMatrix, MatrixPerspective(...)))`, matching
+`BeginMode3D`), so the sky lines up with the camera. Outputs linear HDR (tonemapped by the post-pass). Driven
+entirely by `WorldEnvironment` (turbidity, sky tint, sun colour/intensity/size, star seed/density/brightness);
+falls back to the linearized CPU gradient clear if `world_sky` is unavailable. GPU look unverified/untuned.
+
+SCOPE now: models are PBR-lit, the sky is the atmospheric-scattering shader, and the whole scene is
+HDR→tonemapped. Sprites, lights, and the remaining effect pipeline (sun shadow map, point-light culling, fog,
+bloom, sunshafts, 1px outlines, per-object omit-pixelation) are marked TODO and layer on later.
 
 ## Shader assets (vertex + fragment)
 
