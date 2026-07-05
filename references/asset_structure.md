@@ -237,3 +237,38 @@ A sound is any audio played in the game. This includes music.
     "location": asset location
 }
 ```
+
+
+## Models.
+
+```
+{
+    "name": "player_character",
+    "location": asset location,          // the model file (.obj / .gltf / .glb)
+
+    "transform": {                       // [OPTIONAL] baked import transform applied at load
+        "scale": number or vector3,      // uniform if a single number
+        "rotation_euler": vector3,       // degrees
+        "translation": vector3
+    },
+
+    "material_overrides": [              // [OPTIONAL] rebind material slots to game-managed assets
+        {
+            "slot": 0,                   // material index within the model, OR:
+            "material_name": "body",     // ...address by name (GLTF names materials)
+            "albedo": asset location,    // [OPTIONAL] texture asset location or reference
+            "tint": color,               // [OPTIONAL]
+            "texture_properties": texture properties  // [OPTIONAL]
+        }
+    ],
+
+    "format": "glb",                     // [OPTIONAL] file extension WITHOUT the dot. REQUIRED only when
+                                         // "location" is a reference (in-memory) model, since the format
+                                         // can't be inferred from bytes; ignored for file locations
+                                         // (their real extension is used). Reference models must be
+                                         // self-contained single files (.glb recommended).
+
+    "rig": "none"                        // [OPTIONAL, GLTF only] "none" (default) | "skinned"
+                                         // present only if/when skeletal support lands; OBJ ignores it
+}
+```

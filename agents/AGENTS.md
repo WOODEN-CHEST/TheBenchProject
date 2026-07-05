@@ -39,6 +39,15 @@ Current module list:
 * ProgramTime (ProgramTime.md) - Tiny value type carrying a tick's total time and passed (delta) time, in seconds.
 * GameFrame (GameFrame.md) - Abstract base for a game "scene"/section (menu, level, loading screen), with stepped load/unload, logic lifecycle, and per-target rendering.
 * GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop, and composites them to the screen; crashes gracefully on frame errors.
+* World data layer (WorldData.md) - The rendering-independent 3D world model. Covers eight modules:
+  * WorldObject - Abstract base of every world object (id, name, transform, tint; validating setters).
+  * WorldModelObject - 3D model object referencing a model asset by name (+ outline / pixelation toggles).
+  * WorldSpriteObject - 2D sprite object referencing a sprite animation by name (+ outline / pixelation toggles).
+  * WorldLight - Point light (color, intensity, size, casts-shadows toggle).
+  * WorldEnvironment - Per-world sky/sun/fog/effect settings (plain, expandable data).
+  * World - Owns the objects, mints the shared uint64 id counter, holds the environment.
+  * WorldDTO - Flat persistent snapshot of a world + World<->DTO conversions.
+  * WorldEncoder - Encodes a WorldDTO into a GHDF compound tree (no binary write yet).
 
 Logging:
 Use the Logger module for all program output. Do NOT print to the standard streams directly (no
