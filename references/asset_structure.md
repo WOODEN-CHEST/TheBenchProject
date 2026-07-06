@@ -261,11 +261,26 @@ matches source files by stem (ignoring extension), the two stage files must have
 
     "material_overrides": [              // [OPTIONAL] rebind material slots to game-managed assets
         {
-            "slot": 0,                   // material index within the model, OR:
-            "material_name": "body",     // ...address by name (GLTF names materials)
-            "albedo": asset location,    // [OPTIONAL] texture asset location or reference
-            "tint": color,               // [OPTIONAL]
-            "texture_properties": texture properties  // [OPTIONAL]
+            "slot": 0,                   // material index within the model (REQUIRED, >= 0). Addressing a
+                                         // material by name is not implemented yet; use the index.
+
+            // --- PBR texture maps (all [OPTIONAL]; each an asset location, resolved against the models dir) ---
+            "albedo": asset location,    // base colour (sRGB)
+            "normal": asset location,    // tangent-space normal map (the shader derives a TBN per-fragment, so
+                                         // the mesh needs no tangents)
+            "mra": asset location,       // packed ORM map: R=occlusion, G=roughness, B=metallic. MULTIPLIES the
+                                         // metallic/roughness/occlusion factors below (glTF metal-rough style).
+            "emissive": asset location,  // sRGB emissive colour map; MULTIPLIES emissive_color*emissive_intensity
+
+            // --- PBR scalar factors (all [OPTIONAL]) ---
+            "tint": color,               // multiplies the albedo (combined with the object's own tint)
+            "metallic": number,          // 0..1 base metallic factor (default: importer value, else 0)
+            "roughness": number,         // 0..1 base roughness factor (default: importer value, else 0.5)
+            "emissive_color": color,     // emissive colour (default WHITE when an emissive map is present)
+            "emissive_intensity": number,// emissive multiplier (default 0; defaults to 1 when an emissive map
+                                         // is present, so the map is visible without extra keys)
+
+            "texture_properties": texture properties  // [OPTIONAL] filtering, applied to all this slot's maps
         }
     ],
 

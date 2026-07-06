@@ -29,6 +29,12 @@
 /** Name of the demo sprite object + the sprite-animation asset it draws (the added test image). */
 #define TEST_SPRITE_OBJECT_NAME ((const unsigned char*)u8"sprite_object")
 #define TEST_SPRITE_ASSET_NAME ((const unsigned char*)u8"test_sprite")
+/** Demo of per-material PBR MAPS: a cube whose material carries albedo/normal/ORM/emissive textures. */
+#define TEST_PBR_DEMO_OBJECT_NAME ((const unsigned char*)u8"pbr_demo_object")
+#define TEST_PBR_DEMO_ASSET_NAME ((const unsigned char*)u8"pbr_demo")
+/** Demo of per-material PBR scalar VALUES (no maps): a polished gold cube (metallic 1, low roughness). */
+#define TEST_PBR_METAL_OBJECT_NAME ((const unsigned char*)u8"pbr_metal_object")
+#define TEST_PBR_METAL_ASSET_NAME ((const unsigned char*)u8"pbr_metal")
 
 /** Base movement speed, in world units per second. */
 #define MOVE_SPEED 6.0f
@@ -514,6 +520,18 @@ static Error BuildTestWorld(World* world)
     {
         Result = AddSpriteObject(world, TEST_SPRITE_OBJECT_NAME, TEST_SPRITE_ASSET_NAME,
             (Vector3){ -3.0f, 1.5f, 0.0f }, (Vector3){ 1.5f, 1.5f, 1.0f });
+    }
+    // Per-material PBR demos: a mapped cube (albedo/normal/ORM/emissive textures) on the left, and a scalar-
+    // value gold metal cube (metallic 1, low roughness, no maps) on the right — A/B for the maps vs values path.
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddModelObject(world, TEST_PBR_DEMO_OBJECT_NAME, TEST_PBR_DEMO_ASSET_NAME,
+            (Vector3){ -6.0f, 1.2f, 0.0f }, (Vector3){ 2.0f, 2.0f, 2.0f }, false);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddModelObject(world, TEST_PBR_METAL_OBJECT_NAME, TEST_PBR_METAL_ASSET_NAME,
+            (Vector3){ 6.0f, 1.2f, 0.0f }, (Vector3){ 2.0f, 2.0f, 2.0f }, false);
     }
     if (Result.Code != ErrorCode_Success)
     {

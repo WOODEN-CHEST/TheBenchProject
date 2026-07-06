@@ -38,12 +38,6 @@
 #define SKY_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sky")
 /** Bookkeeping value Raylib uses for a RenderTexture's depth attachment format (24-bit depth renderbuffer). */
 #define SCENE_DEPTH_FORMAT 19
-/** Default surface metallic value (dielectric) until per-material PBR maps exist. */
-#define PBR_DEFAULT_METALLIC 0.0f
-/** Default surface roughness until per-material PBR maps exist. */
-#define PBR_DEFAULT_ROUGHNESS 0.5f
-/** Default ambient occlusion (none) until per-material occlusion maps exist. */
-#define PBR_DEFAULT_AO 1.0f
 /** sRGB gamma used to convert stored 8-bit colours to/from linear light. */
 #define SRGB_GAMMA 2.2f
 
@@ -343,6 +337,17 @@ struct WorldRendererStruct
     int _locSunIntensity;
     int _locAmbientColor;
     int _locAmbientIntensity;
+    /** Cached PBR per-material scalar-factor + map-presence uniform locations (-1 when absent). Uploaded per
+     *  material by the custom mesh draw loop; the map SAMPLER locations are instead written into the shader's
+     *  own locs[SHADER_LOC_MAP_*] so raylib's DrawMesh binds those textures. */
+    int _locMetallic;
+    int _locRoughness;
+    int _locAo;
+    int _locEmissiveColor;
+    int _locEmissiveIntensity;
+    int _locHasMraMap;
+    int _locHasNormalMap;
+    int _locHasEmissiveMap;
     /** Cached PBR shadow uniform locations (-1 when absent). */
     int _locLightVP;
     int _locShadowMap;
@@ -944,19 +949,26 @@ static void EnsureShaders(WorldRenderer* self)
         self->_locFogSkyTint = GetShaderLocation(RayShader, "skyTint");
         self->_locFogSunIntensity = GetShaderLocation(RayShader, "skySunIntensity");
 
-        // Constant material + shadow parameters; upload once.
-        float Metallic = PBR_DEFAULT_METALLIC;
-        float Roughness = PBR_DEFAULT_ROUGHNESS;
-        float Ao = PBR_DEFAULT_AO;
-        float EmissiveColor[3] = { 0.0f, 0.0f, 0.0f };
-        float EmissiveIntensity = 0.0f;
+        // Per-material scalar-factor + map-presence uniforms, uploaded per material by DrawModelPbr.
+        self->_locMetallic = GetShaderLocation(RayShader, "metallic");
+        self->_locRoughness = GetShaderLocation(RayShader, "roughness");
+        self->_locAo = GetShaderLocation(RayShader, "ao");
+        self->_locEmissiveColor = GetShaderLocation(RayShader, "emissiveColor");
+        self->_locEmissiveIntensity = GetShaderLocation(RayShader, "emissiveIntensity");
+        self->_locHasMraMap = GetShaderLocation(RayShader, "hasMraMap");
+        self->_locHasNormalMap = GetShaderLocation(RayShader, "hasNormalMap");
+        self->_locHasEmissiveMap = GetShaderLocation(RayShader, "hasEmissiveMap");
+
+        // Point the shader's material map-sampler locations at our sampler names so raylib's DrawMesh binds each
+        // material's textures to their conventional units (albedo->0 is already raylib's default "texture0").
+        // The METALNESS slot carries our packed ORM map, matching where ModelDefinition stores the mra texture.
+        RayShader.locs[SHADER_LOC_MAP_METALNESS] = GetShaderLocation(RayShader, "mraMap");
+        RayShader.locs[SHADER_LOC_MAP_NORMAL] = GetShaderLocation(RayShader, "normalMap");
+        RayShader.locs[SHADER_LOC_MAP_EMISSION] = GetShaderLocation(RayShader, "emissiveMap");
+
+        // Constant shadow parameters; upload once (material params are now per-material).
         float ShadowBias = SHADOW_BIAS;
         float ShadowTexel = 1.0f / (float)SHADOW_MAP_SIZE;
-        SetShaderValue(RayShader, GetShaderLocation(RayShader, "metallic"), &Metallic, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(RayShader, GetShaderLocation(RayShader, "roughness"), &Roughness, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(RayShader, GetShaderLocation(RayShader, "ao"), &Ao, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(RayShader, GetShaderLocation(RayShader, "emissiveColor"), EmissiveColor, SHADER_UNIFORM_VEC3);
-        SetShaderValue(RayShader, GetShaderLocation(RayShader, "emissiveIntensity"), &EmissiveIntensity, SHADER_UNIFORM_FLOAT);
         SetShaderValue(RayShader, self->_locShadowBias, &ShadowBias, SHADER_UNIFORM_FLOAT);
         SetShaderValue(RayShader, self->_locShadowTexelSize, &ShadowTexel, SHADER_UNIFORM_FLOAT);
     }
@@ -1414,6 +1426,65 @@ static void UploadPointLightsForObject(WorldRenderer* self, World* world, Vector
     }
 }
 
+/* Per-channel 0..255 colour multiply (a*b/255), matching how raylib's DrawModel folds the object tint into a
+ * material's albedo colour. */
+static Color MultiplyColor(Color a, Color b)
+{
+    Color Result;
+    Result.r = (unsigned char)(((int)a.r * (int)b.r) / 255);
+    Result.g = (unsigned char)(((int)a.g * (int)b.g) / 255);
+    Result.b = (unsigned char)(((int)a.b * (int)b.b) / 255);
+    Result.a = (unsigned char)(((int)a.a * (int)b.a) / 255);
+    return Result;
+}
+
+/* Uploads one material's per-material PBR scalar factors + map-presence flags to the PBR shader before its
+ * mesh draws. raylib's DrawMesh uploads colDiffuse and binds the material's textures (via the map-sampler locs
+ * set in EnsureShaders), but NOT the scalar factors or the has*Map guards, so we do that here. A map flag is
+ * true only when the slot actually holds a texture; the shader must not sample an unbound map sampler (it
+ * would read texture unit 0 = albedo — the silent-fallback bug seen across the post passes). */
+static void UploadMaterialUniforms(WorldRenderer* self, Shader shader, const Material* material)
+{
+    float Metallic = material->maps[MATERIAL_MAP_METALNESS].value;
+    float Roughness = material->maps[MATERIAL_MAP_ROUGHNESS].value;
+    float Ao = material->maps[MATERIAL_MAP_OCCLUSION].value;
+    float EmissiveIntensity = material->maps[MATERIAL_MAP_EMISSION].value;
+    float EmissiveColor[3];
+    ColorToLinear(material->maps[MATERIAL_MAP_EMISSION].color, EmissiveColor);
+
+    int HasMra = (material->maps[MATERIAL_MAP_METALNESS].texture.id > 0) ? 1 : 0;
+    int HasNormal = (material->maps[MATERIAL_MAP_NORMAL].texture.id > 0) ? 1 : 0;
+    int HasEmissive = (material->maps[MATERIAL_MAP_EMISSION].texture.id > 0) ? 1 : 0;
+
+    SetShaderValue(shader, self->_locMetallic, &Metallic, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, self->_locRoughness, &Roughness, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, self->_locAo, &Ao, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, self->_locEmissiveColor, EmissiveColor, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, self->_locEmissiveIntensity, &EmissiveIntensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, self->_locHasMraMap, &HasMra, SHADER_UNIFORM_INT);
+    SetShaderValue(shader, self->_locHasNormalMap, &HasNormal, SHADER_UNIFORM_INT);
+    SetShaderValue(shader, self->_locHasEmissiveMap, &HasEmissive, SHADER_UNIFORM_INT);
+}
+
+/* Draws a model through the PBR shader mesh-by-mesh so each material's per-material PBR factors + map flags can
+ * be uploaded before its draw (raylib's DrawModel can't do that). The object tint is folded into each
+ * material's albedo colour for the draw and restored after, exactly like raylib's DrawModel. Each material's
+ * .shader was already set to the PBR shader by the caller, so DrawMesh shades through it and binds its maps. */
+static void DrawModelPbr(WorldRenderer* self, Model model, Color tint)
+{
+    Shader RayShader = GameShader_GetRaylibShader(self->_pbrShader);
+    for (int MeshIndex = 0; MeshIndex < model.meshCount; MeshIndex++)
+    {
+        Material* Mat = &model.materials[model.meshMaterial[MeshIndex]];
+        UploadMaterialUniforms(self, RayShader, Mat);
+
+        Color SavedAlbedo = Mat->maps[MATERIAL_MAP_ALBEDO].color;
+        Mat->maps[MATERIAL_MAP_ALBEDO].color = MultiplyColor(SavedAlbedo, tint);
+        DrawMesh(model.meshes[MeshIndex], *Mat, model.transform);
+        Mat->maps[MATERIAL_MAP_ALBEDO].color = SavedAlbedo;
+    }
+}
+
 /* Draws a single model object through @p shader (bound onto each material slot; NULL keeps Raylib's default
  * shader). Used by the scene pass (PBR shader) and the shadow depth pass (depth shader). For the PBR pass it
  * also reach-culls and uploads this object's point lights. Missing/failed assets are skipped silently
@@ -1473,7 +1544,16 @@ static void DrawModelObjectWithShader(WorldRenderer* self, World* world, WorldMo
 
     RayModel.transform = FinalTransform;
     Color Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Base));
-    DrawModel(RayModel, (Vector3){ 0.0f, 0.0f, 0.0f }, 1.0f, Tint);
+    // PBR scene/crisp pass: draw mesh-by-mesh so per-material factors + map flags upload per material. The
+    // depth/normal passes don't light, so they keep raylib's plain DrawModel.
+    if ((shader == self->_pbrShader) && (self->_pbrShader != NULL))
+    {
+        DrawModelPbr(self, RayModel, Tint);
+    }
+    else
+    {
+        DrawModel(RayModel, (Vector3){ 0.0f, 0.0f, 0.0f }, 1.0f, Tint);
+    }
 }
 
 /* Whether an object with the given OmitPixelation flag passes the pixelation filter (used for both models and

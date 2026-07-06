@@ -24,12 +24,21 @@ uniform float shadowStrength;  // 0..1, how much the sun contribution is darkene
 uniform float shadowBias;      // base depth bias to combat shadow acne
 uniform float shadowTexelSize; // 1.0 / shadow-map resolution, for PCF tap offsets
 
-// Surface material parameters. Scalar for now; per-material PBR texture maps land in a later step.
-uniform float metallic;
-uniform float roughness;
-uniform float ao;
-uniform vec3 emissiveColor;    // linear
+// Surface material parameters, uploaded PER MATERIAL by the renderer's custom mesh draw loop. The scalar
+// values are the material's base factors; the optional maps modulate them. A map is only sampled when its
+// has*Map flag is set (an unbound sampler would read texture unit 0 = albedo, the classic silent-fallback bug).
+uniform float metallic;        // base metallic factor
+uniform float roughness;       // base roughness factor
+uniform float ao;              // base ambient-occlusion factor
+uniform vec3 emissiveColor;    // linear emissive colour
 uniform float emissiveIntensity;
+
+uniform sampler2D mraMap;      // packed ORM: R=occlusion, G=roughness, B=metallic; MULTIPLIES the scalars above
+uniform sampler2D normalMap;   // tangent-space normal map (RGB in 0..1 -> [-1,1])
+uniform sampler2D emissiveMap; // sRGB emissive colour map; MULTIPLIES emissiveColor*emissiveIntensity
+uniform bool hasMraMap;
+uniform bool hasNormalMap;
+uniform bool hasEmissiveMap;
 
 // Point lights, culled + uploaded per object by the renderer (nearest/strongest that reach this object).
 // MAX_POINT_LIGHTS MUST match WORLD_MAX_FORWARD_LIGHTS in WorldLightCulling.h.
@@ -91,6 +100,28 @@ float GeometrySmith(vec3 n, vec3 v, vec3 l, float rough)
 vec3 FresnelSchlick(float cosTheta, vec3 f0)
 {
     return f0 + (1.0 - f0)*pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Perturbs the geometric normal by a tangent-space normal map WITHOUT needing per-vertex tangents: it rebuilds
+// a cotangent frame from the screen-space derivatives of the world position and UV (Christian Schuler's
+// method). Robust for any mesh (OBJ meshes carry no tangents), at the cost of a per-fragment derivative frame.
+// worldPos + uv are the fragment's world position and texture coordinate; n is the interpolated world normal;
+// mapN is the sampled normal already remapped to [-1,1].
+vec3 PerturbNormal(vec3 n, vec3 worldPos, vec2 uv, vec3 mapN)
+{
+    vec3 dp1 = dFdx(worldPos);
+    vec3 dp2 = dFdy(worldPos);
+    vec2 duv1 = dFdx(uv);
+    vec2 duv2 = dFdy(uv);
+
+    vec3 dp2perp = cross(dp2, n);
+    vec3 dp1perp = cross(n, dp1);
+    vec3 t = dp2perp*duv1.x + dp1perp*duv2.x;
+    vec3 b = dp2perp*duv1.y + dp1perp*duv2.y;
+
+    float invMax = inversesqrt(max(dot(t, t), dot(b, b)));
+    mat3 tbn = mat3(t*invMax, b*invMax, n);
+    return normalize(tbn*mapN);
 }
 
 // Returns 0 (fully lit) .. 1 (fully shadowed) for the fragment. Crisp, hard-edged pixel-art shadow: a 2x2 PCF
@@ -269,10 +300,26 @@ void main()
     vec3 albedo = pow(max(texel.rgb, vec3(0.0)), vec3(2.2)); // sRGB -> linear
     float alpha = texel.a;
 
-    float rough = clamp(roughness, 0.045, 1.0);
-    float metal = clamp(metallic, 0.0, 1.0);
+    float rough = roughness;
+    float metal = metallic;
+    float occlusion = ao;
+    // ORM map multiplies the scalar factors (glTF metallic-roughness convention, plus occlusion in R).
+    if (hasMraMap)
+    {
+        vec3 orm = texture(mraMap, fragTexCoord).rgb;
+        occlusion *= orm.r;
+        rough *= orm.g;
+        metal *= orm.b;
+    }
+    rough = clamp(rough, 0.045, 1.0);
+    metal = clamp(metal, 0.0, 1.0);
 
     vec3 n = normalize(fragNormal);
+    if (hasNormalMap)
+    {
+        vec3 mapN = texture(normalMap, fragTexCoord).xyz*2.0 - 1.0;
+        n = PerturbNormal(n, fragPosition, fragTexCoord, mapN);
+    }
     vec3 v = normalize(viewPos - fragPosition);
     vec3 l = normalize(sunDirection);
     vec3 h = normalize(v + l);
@@ -351,9 +398,16 @@ void main()
     }
 
     // Flat ambient skylight stand-in (proper image-based lighting lands with the atmospheric sky step).
-    vec3 ambient = ambientColor*ambientIntensity*albedo*ao;
+    vec3 ambient = ambientColor*ambientIntensity*albedo*occlusion;
 
-    vec3 color = ambient + direct + pointTotal + emissiveColor*emissiveIntensity;
+    vec3 emissive = emissiveColor*emissiveIntensity;
+    if (hasEmissiveMap)
+    {
+        vec3 em = texture(emissiveMap, fragTexCoord).rgb;
+        emissive *= pow(max(em, vec3(0.0)), vec3(2.2)); // sRGB -> linear
+    }
+
+    vec3 color = ambient + direct + pointTotal + emissive;
 
     // Distance fog: fade toward the atmospheric sky colour along this fragment's own view ray with an
     // exponential falloff, so distant geometry dissolves into the exact sky behind it. The sky is only

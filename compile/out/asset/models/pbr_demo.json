@@ -1,0 +1,15 @@
+{
+    "name": "pbr_demo",
+    "location": "test/test_model",
+    "material_overrides": [
+        {
+            "slot": 0,
+            "albedo": "pbr_demo/albedo",
+            "normal": "pbr_demo/normal",
+            "mra": "pbr_demo/orm",
+            "emissive": "pbr_demo/emissive",
+            "emissive_intensity": 2.0,
+            "texture_properties": { "filtering": "point" }
+        }
+    ]
+}

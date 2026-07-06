@@ -1,0 +1,12 @@
+{
+    "name": "pbr_metal",
+    "location": "test/test_model",
+    "material_overrides": [
+        {
+            "slot": 0,
+            "tint": "#ffcc55ff",
+            "metallic": 1.0,
+            "roughness": 0.12
+        }
+    ]
+}

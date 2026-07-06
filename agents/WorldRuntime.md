@@ -49,8 +49,15 @@ material before `DrawModel`. Per frame, `UpdateLightingUniforms` uploads the cam
 ambient-skylight colours/intensities from the world's `WorldEnvironment` (colours converted sRGB→linear on
 the CPU; the sun direction comes from `WorldEnvironment_GetSunDirection`). The shader is a full metallic/roughness
 Cook-Torrance model with a single directional sun + a flat ambient term, outputting **linear HDR** (no
-tonemap/gamma in the shader — that is the post-pass, below); material metallic/roughness/ao are global scalar
-uniforms for now (per-material PBR maps land with a later step). If the shader fails to load the renderer logs
+tonemap/gamma in the shader — that is the post-pass, below). **Per-material PBR** (increment 21): materials
+now carry their own metallic/roughness/occlusion/emissive scalar factors + optional albedo / normal / packed
+ORM (occlusion-roughness-metallic) / emissive **texture maps**, authored in the model definition's
+`material_overrides` (see `references/asset_structure.md`) and stored on the raylib `Material.maps[]` slots at
+load (`ModelDefinition.c` seeds sensible defaults so bare OBJs shade correctly). The PBR pass draws models
+**mesh-by-mesh** (`DrawModelPbr`) so each material's scalar factors + `has*Map` guard flags upload per material
+before its `DrawMesh`; the map SAMPLER units are wired via the shader's own `locs[SHADER_LOC_MAP_*]` so raylib
+binds each material's textures. Normal mapping derives a TBN frame per-fragment from screen-space derivatives
+(no per-vertex tangents needed). If the shader fails to load the renderer logs
 a warning and falls back to raylib's default (unlit) shader so models still draw. NOTE: binding the shader
 mutates the *shared* asset material array (intended — the renderer is the sole model consumer); a future
 second consumer would need per-draw material copies instead.
