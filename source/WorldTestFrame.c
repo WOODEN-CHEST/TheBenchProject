@@ -4,6 +4,7 @@
 #include "World.h"
 #include "WorldObject.h"
 #include "WorldModelObject.h"
+#include "WorldSpriteObject.h"
 #include "WorldLight.h"
 #include "GameCamera.h"
 #include "WorldRenderer.h"
@@ -25,6 +26,9 @@
 #define TEST_GROUND_OBJECT_NAME ((const unsigned char*)u8"ground")
 /** Name given to the crisp (OmitPixelation) demo object — renders un-pixelated to stand in for a screen. */
 #define TEST_CRISP_OBJECT_NAME ((const unsigned char*)u8"crisp_object")
+/** Name of the demo sprite object + the sprite-animation asset it draws (the added test image). */
+#define TEST_SPRITE_OBJECT_NAME ((const unsigned char*)u8"sprite_object")
+#define TEST_SPRITE_ASSET_NAME ((const unsigned char*)u8"test_sprite")
 
 /** Base movement speed, in world units per second. */
 #define MOVE_SPEED 6.0f
@@ -355,6 +359,35 @@ static Error AddModelObject(World* world, const unsigned char* name, const unsig
     return Result;
 }
 
+/* Creates a sprite object (a billboard drawing the named sprite-animation asset) at the given position and
+ * size, and hands it to the world. On any failure the partial object is destroyed and the error is returned. */
+static Error AddSpriteObject(World* world, const unsigned char* name, const unsigned char* assetName,
+    Vector3 position, Vector3 scale)
+{
+    WorldSpriteObject* SpriteObject = NULL;
+    Error Result = WorldSpriteObject_Create(name, assetName, &SpriteObject);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    WorldObject* Base = WorldSpriteObject_AsObject(SpriteObject);
+    Result = WorldObject_SetPosition(Base, position);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldObject_SetScale(Base, scale);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = World_AddObject(world, Base);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        WorldObject_Destroy(Base);
+    }
+    return Result;
+}
+
 /* Creates a point light with the given transform/color/reach and hands it to the world (which takes
  * ownership). On any failure the partial light is destroyed and the error is returned. */
 static Error AddPointLight(World* world, const unsigned char* name, Vector3 position, Color color,
@@ -433,6 +466,12 @@ static Error BuildTestWorld(World* world)
     {
         Result = AddPointLight(world, (const unsigned char*)u8"cool_light",
             (Vector3){ -2.5f, 1.2f, -2.0f }, (Color){ 80, 150, 255, 255 }, 6.0f, 10.0f);
+    }
+    // A demo sprite billboard (the added test image) off to the left, raised to eye level, sized ~1.5 units.
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddSpriteObject(world, TEST_SPRITE_OBJECT_NAME, TEST_SPRITE_ASSET_NAME,
+            (Vector3){ -3.0f, 1.5f, 0.0f }, (Vector3){ 1.5f, 1.5f, 1.0f });
     }
     if (Result.Code != ErrorCode_Success)
     {

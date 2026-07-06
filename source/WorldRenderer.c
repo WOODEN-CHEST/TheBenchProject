@@ -3,6 +3,8 @@
 #include "World.h"
 #include "WorldObject.h"
 #include "WorldModelObject.h"
+#include "WorldSpriteObject.h"
+#include "SpriteAnimation.h"
 #include "GameCamera.h"
 #include "AssetManager.h"
 #include "GameModel.h"
@@ -176,6 +178,11 @@
  *  over the pixelated frame, depth-tested against the scene so they are occluded correctly. */
 #define CRISP_COMPOSITE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_crisp_composite")
 
+/** Asset name of the sprite shader: draws 2D sprite billboards, linearizing their sRGB art into the HDR scene. */
+#define SPRITE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sprite")
+/** Radius of the debug wireframe gizmo drawn at each light's position (only with the debug grid enabled). */
+#define LIGHT_GIZMO_RADIUS 0.2f
+
 
 // Types.
 /* Which model objects a draw pass should include, by their OmitPixelation flag. The pixelated scene pass draws
@@ -246,6 +253,9 @@ struct WorldRendererStruct
     /** Whether the crisp overlay is drawn (code toggle for A/B testing; on by default). When off, OmitPixelation
      *  objects render pixelated with the rest of the world. */
     bool _crispEnabled;
+    /** The sprite shader (draws 2D sprite billboards, sRGB->linear HDR); borrowed. NULL = sprites draw with
+     *  Raylib's default shader (their sRGB art then lands in the linear buffer slightly wrong, but still shows). */
+    GameShader* _spriteShader;
     /** Base scene-illumination luminance (ambient + sun) computed each frame in the lighting upload; the eye
      *  adaptation step adds nearby point lights to it. */
     float _baseSceneLuminance;
@@ -904,6 +914,10 @@ static void EnsureShaders(WorldRenderer* self)
         self->_crispLocExposure = GetShaderLocation(RayShader, "exposure");
     }
 
+    // Sprite shader (linearizes sprite sRGB art into the HDR scene). Optional: without it sprites fall back to
+    // Raylib's default (unlit) shader; it needs no cached uniform locations (texture0/colDiffuse are built-in).
+    self->_spriteShader = LoadRendererShader(self, SPRITE_SHADER_ASSET_NAME);
+
     // Depth shader + shadow map for the sun shadow pass (optional; models draw unshadowed without them).
     self->_depthShader = LoadRendererShader(self, DEPTH_SHADER_ASSET_NAME);
     if ((self->_depthShader != NULL) && !self->_hasShadowMap)
@@ -1331,6 +1345,98 @@ static void DrawWorldModels(WorldRenderer* self, World* world, GameShader* shade
     }
 }
 
+/* Draws the world's sprite objects as camera-facing billboards through the sprite shader (which linearizes
+ * their sRGB art into the linear-HDR scene). The (static) first frame of each sprite's animation is drawn for
+ * now; per-object animation PLAYBACK is a follow-up (it needs a decision on where per-object playback state
+ * lives, since the data layer is deliberately render-independent). The billboard is sized by the object's
+ * X/Y scale and tinted by its tint; it depth-tests against the rest of the scene. Must run inside BeginMode3D. */
+static void DrawWorldSprites(WorldRenderer* self, World* world, const GameCamera* camera)
+{
+    Camera3D RayCam = GameCamera_ToRaylibCamera(camera);
+    if (self->_spriteShader != NULL)
+    {
+        BeginShaderMode(GameShader_GetRaylibShader(self->_spriteShader));
+    }
+
+    size_t Count = World_GetObjectCount(world);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        WorldObject* Object = NULL;
+        Error GetResult = World_GetObjectByIndex(world, Index, &Object);
+        if (GetResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&GetResult);
+            continue;
+        }
+        if (WorldObject_GetType(Object) != WorldObjectType_Sprite)
+        {
+            continue;
+        }
+
+        WorldSpriteObject* SpriteObject = (WorldSpriteObject*)Object;
+        const unsigned char* AssetName = WorldSpriteObject_GetSpriteAnimationAssetName(SpriteObject);
+        if (AssetName == NULL)
+        {
+            continue;
+        }
+
+        SpriteAnimation* Animation = NULL;
+        Error LoadResult = AssetManager_LoadSpriteAnimation(self->_assetManager, AssetName, self->_assetUser, &Animation);
+        if (LoadResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&LoadResult);
+            continue;
+        }
+        if (SpriteAnimation_GetFrameCount(Animation) == 0)
+        {
+            continue;
+        }
+
+        SpriteAnimationFrame Frame;
+        Error FrameResult = SpriteAnimation_GetFrameAt(Animation, 0, &Frame); // TODO: per-object animation playback
+        if (FrameResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&FrameResult);
+            continue;
+        }
+
+        Vector3 Position = WorldObject_GetPosition(Object);
+        Vector3 Scale = WorldObject_GetScale(Object);
+        Vector2 Size = { Scale.x, Scale.y };
+        Color Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Object));
+        DrawBillboardRec(RayCam, Frame._texture, Frame._areaInTexture, Position, Size, Tint);
+    }
+
+    if (self->_spriteShader != NULL)
+    {
+        EndShaderMode();
+    }
+}
+
+/* Draws a small wireframe sphere at each light's position (tinted by the light colour) as a debug authoring
+ * aid — lights are otherwise invisible (they only contribute to shading). Only called with the debug grid on.
+ * Must run inside BeginMode3D. */
+static void DrawLightGizmos(World* world)
+{
+    size_t Count = World_GetObjectCount(world);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        WorldObject* Object = NULL;
+        Error GetResult = World_GetObjectByIndex(world, Index, &Object);
+        if (GetResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&GetResult);
+            continue;
+        }
+        if (WorldObject_GetType(Object) != WorldObjectType_Light)
+        {
+            continue;
+        }
+        WorldLight* Light = (WorldLight*)Object;
+        DrawSphereWires(WorldObject_GetPosition(Object), LIGHT_GIZMO_RADIUS, 6, 6, Light->Color);
+    }
+}
+
 /* Draws every world MODEL object into the normal G-buffer through the normal shader, setting the per-object
  * outline flag uniform (1 when the object has outlines enabled, else 0) before each draw. The normal shader
  * writes RGB=view-space normal, A=surface/outline flag (0.5 = surface, 1.0 = surface with outline); pixels the
@@ -1461,8 +1567,17 @@ static void DrawScene(WorldRenderer* self, World* world, const GameCamera* camer
     }
 
     // Model objects, shaded through the PBR shader (or the default shader when it is unavailable).
-    // TODO: sprite objects (world-placed planes) and light objects layer in later.
     DrawWorldModels(self, world, self->_pbrShader, modelFilter);
+
+    // Sprite objects (2D billboards). Drawn after models so they depth-test against them. Sprites are not
+    // filtered by OmitPixelation yet (crisp sprites are a follow-up), so they always draw in this pixelated pass.
+    DrawWorldSprites(self, world, camera);
+
+    // Light gizmos: a debug authoring aid so light placement is visible (lights are otherwise invisible).
+    if (self->_drawDebugGrid)
+    {
+        DrawLightGizmos(world);
+    }
 
     EndMode3D();
 }
@@ -1881,23 +1996,34 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
             continue;
         }
 
-        if (WorldObject_GetType(Object) != WorldObjectType_Model)
+        WorldObjectType Type = WorldObject_GetType(Object);
+        if (Type == WorldObjectType_Model)
         {
-            continue;
+            const unsigned char* AssetName = WorldModelObject_GetModelAssetName((WorldModelObject*)Object);
+            if (AssetName == NULL)
+            {
+                continue;
+            }
+            GameModel* ModelAsset = NULL;
+            Error LoadResult = AssetManager_LoadModel(self->_assetManager, AssetName, self->_assetUser, &ModelAsset);
+            if (LoadResult.Code != ErrorCode_Success)
+            {
+                ReportAssetFailure(self, AssetName, &LoadResult);
+            }
         }
-
-        WorldModelObject* ModelObject = (WorldModelObject*)Object;
-        const unsigned char* AssetName = WorldModelObject_GetModelAssetName(ModelObject);
-        if (AssetName == NULL)
+        else if (Type == WorldObjectType_Sprite)
         {
-            continue;
-        }
-
-        GameModel* ModelAsset = NULL;
-        Error LoadResult = AssetManager_LoadModel(self->_assetManager, AssetName, self->_assetUser, &ModelAsset);
-        if (LoadResult.Code != ErrorCode_Success)
-        {
-            ReportAssetFailure(self, AssetName, &LoadResult);
+            const unsigned char* AssetName = WorldSpriteObject_GetSpriteAnimationAssetName((WorldSpriteObject*)Object);
+            if (AssetName == NULL)
+            {
+                continue;
+            }
+            SpriteAnimation* Animation = NULL;
+            Error LoadResult = AssetManager_LoadSpriteAnimation(self->_assetManager, AssetName, self->_assetUser, &Animation);
+            if (LoadResult.Code != ErrorCode_Success)
+            {
+                ReportAssetFailure(self, AssetName, &LoadResult);
+            }
         }
     }
 

@@ -1,0 +1,10 @@
+{
+    "name": "test_sprite",
+    "frames": [
+        {
+            "source": "texture",
+            "location": "test/test_image",
+            "texture_properties": { "filtering": "point" }
+        }
+    ]
+}
