@@ -172,8 +172,22 @@
  *  still enter the frame); beyond this margin the pass is skipped. */
 #define SUNSHAFT_SCREEN_MARGIN 0.35f
 
+/** Asset name of the crisp-composite shader: composites the full-res, un-pixelated (OmitPixelation) objects
+ *  over the pixelated frame, depth-tested against the scene so they are occluded correctly. */
+#define CRISP_COMPOSITE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_crisp_composite")
+
 
 // Types.
+/* Which model objects a draw pass should include, by their OmitPixelation flag. The pixelated scene pass draws
+ * only pixelated objects (when the crisp overlay is active), the crisp overlay pass draws only the flagged
+ * ones, and the shadow pass draws all (everything casts shadows). */
+typedef enum
+{
+    ModelPixelationFilter_All,
+    ModelPixelationFilter_PixelatedOnly, // OmitPixelation == false
+    ModelPixelationFilter_CrispOnly,     // OmitPixelation == true
+} ModelPixelationFilter;
+
 struct WorldRendererStruct
 {
     /** Asset manager used to resolve object assets; borrowed. */
@@ -222,6 +236,16 @@ struct WorldRendererStruct
     /** Whether sun shafts are drawn (code toggle for A/B testing; on by default). Also self-disable when the
      *  effective (world x config) strength is 0, the sun is below the horizon, or off-screen. */
     bool _sunshaftEnabled;
+    /** The crisp-composite shader (draws OmitPixelation objects full-res over the pixelated frame); borrowed.
+     *  NULL = unavailable, in which case flagged objects fall back to being drawn pixelated in the scene pass. */
+    GameShader* _crispCompositeShader;
+    /** Cached crisp-composite uniform locations (-1 when absent). */
+    int _crispLocCrispDepth;
+    int _crispLocSceneDepth;
+    int _crispLocExposure;
+    /** Whether the crisp overlay is drawn (code toggle for A/B testing; on by default). When off, OmitPixelation
+     *  objects render pixelated with the rest of the world. */
+    bool _crispEnabled;
     /** Base scene-illumination luminance (ambient + sun) computed each frame in the lighting upload; the eye
      *  adaptation step adds nearby point lights to it. */
     float _baseSceneLuminance;
@@ -342,6 +366,15 @@ struct WorldRendererStruct
     /** Size of the sun-shaft buffer, in pixels. */
     int _sunshaftWidth;
     int _sunshaftHeight;
+    /** Crisp overlay target (HDR colour + samplable depth) at WINDOW resolution: the un-pixelated OmitPixelation
+     *  objects render here, then composite over the pixelated frame. Only made when the crisp shader is present. */
+    RenderTexture2D _crispTarget;
+    /** Whether the crisp overlay target has been created, and whether its depth is a samplable texture. */
+    bool _hasCrispTarget;
+    bool _crispDepthSamplable;
+    /** Size of the crisp overlay target, in pixels (matches the window / frame target). */
+    int _crispWidth;
+    int _crispHeight;
     /** Current width of _sceneTarget, in pixels. */
     int _sceneWidth;
     /** Current height of _sceneTarget, in pixels. */
@@ -512,7 +545,15 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
     int DesiredHeight = 0;
     ComputeSceneSize(self->_pixelationEnabled, windowWidth, windowHeight, &DesiredWidth, &DesiredHeight);
 
-    if (self->_hasSceneTarget && (self->_sceneWidth == DesiredWidth) && (self->_sceneHeight == DesiredHeight))
+    // The crisp overlay is WINDOW-resolution, so it must also track the raw window size (which can change while
+    // the pixelated scene size stays put — same aspect, different window). Guard on both.
+    int SafeWindowWidth = (windowWidth < 1) ? 1 : windowWidth;
+    int SafeWindowHeight = (windowHeight < 1) ? 1 : windowHeight;
+    bool CrispSizeOk = (self->_crispCompositeShader == NULL)
+        || (self->_hasCrispTarget && (self->_crispWidth == SafeWindowWidth) && (self->_crispHeight == SafeWindowHeight));
+
+    if (self->_hasSceneTarget && (self->_sceneWidth == DesiredWidth) && (self->_sceneHeight == DesiredHeight)
+        && CrispSizeOk)
     {
         return;
     }
@@ -542,6 +583,11 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
     {
         UnloadRenderTexture(self->_sunshaftTarget);
         self->_hasSunshaftTarget = false;
+    }
+    if (self->_hasCrispTarget)
+    {
+        UnloadRenderTexture(self->_crispTarget);
+        self->_hasCrispTarget = false;
     }
 
     self->_sceneTarget = CreateSceneTarget(DesiredWidth, DesiredHeight, &self->_sceneIsHDR, &self->_sceneDepthSamplable);
@@ -617,6 +663,26 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
             self->_sunshaftWidth = ShaftWidth;
             self->_sunshaftHeight = ShaftHeight;
             SetTextureFilter(self->_sunshaftTarget.texture, TEXTURE_FILTER_BILINEAR);
+        }
+    }
+
+    // Crisp overlay target at WINDOW resolution (not the low pixelation resolution — that is the whole point):
+    // an HDR colour + SAMPLABLE depth texture (the composite depth-tests the crisp objects against the scene).
+    // BILINEAR so the crisp surface (e.g. a readable screen) is smoothly sampled, not pixelated. Only when the
+    // crisp shader is present; if the samplable-depth FBO cannot be made, the crisp overlay stays off.
+    if (self->_crispCompositeShader != NULL)
+    {
+        int CrispWidth = (windowWidth < 1) ? 1 : windowWidth;
+        int CrispHeight = (windowHeight < 1) ? 1 : windowHeight;
+        self->_crispTarget = TryCreateHdrSceneTarget(CrispWidth, CrispHeight, true);
+        self->_hasCrispTarget = (self->_crispTarget.id != 0);
+        self->_crispDepthSamplable = self->_hasCrispTarget;
+        if (self->_hasCrispTarget)
+        {
+            self->_crispWidth = CrispWidth;
+            self->_crispHeight = CrispHeight;
+            SetTextureFilter(self->_crispTarget.texture, TEXTURE_FILTER_BILINEAR);
+            SetTextureFilter(self->_crispTarget.depth, TEXTURE_FILTER_POINT);
         }
     }
 
@@ -825,6 +891,17 @@ static void EnsureShaders(WorldRenderer* self)
         self->_sunshaftLocResolution = GetShaderLocation(RayShader, "resolution");
         self->_sunshaftLocDepthTexture = GetShaderLocation(RayShader, "depthTexture");
         self->_sunshaftLocSunScreenPos = GetShaderLocation(RayShader, "sunScreenPos");
+    }
+
+    // Crisp-composite shader (un-pixelated OmitPixelation objects over the pixelated frame). Optional: without
+    // it (or a samplable-depth crisp target) OmitPixelation objects just render pixelated with the rest.
+    self->_crispCompositeShader = LoadRendererShader(self, CRISP_COMPOSITE_SHADER_ASSET_NAME);
+    if (self->_crispCompositeShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_crispCompositeShader);
+        self->_crispLocCrispDepth = GetShaderLocation(RayShader, "crispDepth");
+        self->_crispLocSceneDepth = GetShaderLocation(RayShader, "sceneDepth");
+        self->_crispLocExposure = GetShaderLocation(RayShader, "exposure");
     }
 
     // Depth shader + shadow map for the sun shadow pass (optional; models draw unshadowed without them).
@@ -1220,8 +1297,21 @@ static void DrawModelObjectWithShader(WorldRenderer* self, World* world, WorldMo
     DrawModel(RayModel, (Vector3){ 0.0f, 0.0f, 0.0f }, 1.0f, Tint);
 }
 
-/* Draws every model object in the world through @p shader. Sprites/lights are not drawn here yet. */
-static void DrawWorldModels(WorldRenderer* self, World* world, GameShader* shader)
+/* Whether a model object should be drawn under the given OmitPixelation filter. */
+static bool ModelPassesFilter(const WorldModelObject* modelObject, ModelPixelationFilter filter)
+{
+    switch (filter)
+    {
+        case ModelPixelationFilter_PixelatedOnly: return !modelObject->OmitPixelation;
+        case ModelPixelationFilter_CrispOnly:     return modelObject->OmitPixelation;
+        case ModelPixelationFilter_All:
+        default:                                  return true;
+    }
+}
+
+/* Draws the world's model objects through @p shader, restricted to those passing @p filter (by their
+ * OmitPixelation flag). Sprites/lights are not drawn here yet. */
+static void DrawWorldModels(WorldRenderer* self, World* world, GameShader* shader, ModelPixelationFilter filter)
 {
     size_t Count = World_GetObjectCount(world);
     for (size_t Index = 0; Index < Count; Index++)
@@ -1233,7 +1323,8 @@ static void DrawWorldModels(WorldRenderer* self, World* world, GameShader* shade
             Error_Deconstruct(&GetResult);
             continue;
         }
-        if (WorldObject_GetType(Object) == WorldObjectType_Model)
+        if ((WorldObject_GetType(Object) == WorldObjectType_Model)
+            && ModelPassesFilter((WorldModelObject*)Object, filter))
         {
             DrawModelObjectWithShader(self, world, (WorldModelObject*)Object, shader);
         }
@@ -1244,7 +1335,7 @@ static void DrawWorldModels(WorldRenderer* self, World* world, GameShader* shade
  * outline flag uniform (1 when the object has outlines enabled, else 0) before each draw. The normal shader
  * writes RGB=view-space normal, A=surface/outline flag (0.5 = surface, 1.0 = surface with outline); pixels the
  * sky/grid leave untouched stay at the cleared 0 (not a surface). */
-static void DrawNormalBufferModels(WorldRenderer* self, World* world)
+static void DrawNormalBufferModels(WorldRenderer* self, World* world, ModelPixelationFilter filter)
 {
     Shader RayNormalShader = GameShader_GetRaylibShader(self->_normalShader);
     size_t Count = World_GetObjectCount(world);
@@ -1263,6 +1354,10 @@ static void DrawNormalBufferModels(WorldRenderer* self, World* world)
         }
 
         WorldModelObject* ModelObject = (WorldModelObject*)Object;
+        if (!ModelPassesFilter(ModelObject, filter))
+        {
+            continue;
+        }
         float OutlineFlag = ModelObject->HasOutline ? 1.0f : 0.0f;
         SetShaderValue(RayNormalShader, self->_normalLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
         DrawModelObjectWithShader(self, world, ModelObject, self->_normalShader);
@@ -1275,13 +1370,13 @@ static void DrawNormalBufferModels(WorldRenderer* self, World* world)
  * here so it never gets outlined). Colour blending is DISABLED so the encoded normal (RGB) and the flag (A,
  * which is 0.5 for non-outline surfaces) are written verbatim — with blending on, an alpha of 0.5 would blend
  * the normal with the cleared background and corrupt it. */
-static void RenderNormalBuffer(WorldRenderer* self, World* world, const GameCamera* camera)
+static void RenderNormalBuffer(WorldRenderer* self, World* world, const GameCamera* camera, ModelPixelationFilter filter)
 {
     BeginTextureMode(self->_normalTarget);
     ClearBackground(BLANK); // RGBA (0,0,0,0): A=0 = "not a surface" everywhere the geometry does not draw
     rlDisableColorBlend();  // write RGB (normal) + A (flag) directly; no alpha blend
     BeginMode3D(GameCamera_ToRaylibCamera(camera));
-    DrawNormalBufferModels(self, world);
+    DrawNormalBufferModels(self, world, filter);
     EndMode3D();
     rlEnableColorBlend();   // restore the default blending for the following 2D passes
     EndTextureMode();
@@ -1336,8 +1431,10 @@ static void DrawSky(WorldRenderer* self, World* world, const GameCamera* camera)
     EndShaderMode();
 }
 
-/* Draws the world's 3D content into the currently active render target with the given camera. */
-static void DrawScene(WorldRenderer* self, World* world, const GameCamera* camera)
+/* Draws the world's 3D content into the currently active render target with the given camera. @p modelFilter
+ * selects which model objects to draw (the pixelated scene pass draws only pixelated objects when the crisp
+ * overlay is active, so the flagged ones are not also drawn pixelated under the crisp layer). */
+static void DrawScene(WorldRenderer* self, World* world, const GameCamera* camera, ModelPixelationFilter modelFilter)
 {
     // Clear the depth buffer (and colour). When the atmospheric sky shader is present it overwrites every
     // pixel below, so the clear colour only matters as the fallback (the linearized CPU gradient) for when
@@ -1365,7 +1462,7 @@ static void DrawScene(WorldRenderer* self, World* world, const GameCamera* camer
 
     // Model objects, shaded through the PBR shader (or the default shader when it is unavailable).
     // TODO: sprite objects (world-placed planes) and light objects layer in later.
-    DrawWorldModels(self, world, self->_pbrShader);
+    DrawWorldModels(self, world, self->_pbrShader, modelFilter);
 
     EndMode3D();
 }
@@ -1395,7 +1492,7 @@ static void RenderShadowMap(WorldRenderer* self, World* world, const GameCamera*
     // Render BACK faces into the shadow map (cull front). The lit front faces then sit well in front of the
     // stored depth, which removes most self-shadowing acne without a large (peter-panning) depth bias.
     rlSetCullFace(RL_CULL_FACE_FRONT);
-    DrawWorldModels(self, world, self->_depthShader);
+    DrawWorldModels(self, world, self->_depthShader, ModelPixelationFilter_All); // everything casts shadows
     rlSetCullFace(RL_CULL_FACE_BACK);  // restore the default culling for the scene pass
     rlDisableDepthTest();
     EndTextureMode();
@@ -1590,6 +1687,73 @@ static void RenderSunshafts(WorldRenderer* self, RenderTexture2D source, Vector2
     EndTextureMode();
 }
 
+/* Whether the world contains any OmitPixelation (crisp) model object; used to skip the whole crisp overlay when
+ * nothing needs it. */
+static bool WorldHasCrispObjects(World* world)
+{
+    size_t Count = World_GetObjectCount(world);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        WorldObject* Object = NULL;
+        Error GetResult = World_GetObjectByIndex(world, Index, &Object);
+        if (GetResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&GetResult);
+            continue;
+        }
+        if ((WorldObject_GetType(Object) == WorldObjectType_Model) && ((WorldModelObject*)Object)->OmitPixelation)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Renders the OmitPixelation (crisp) model objects into the full-res HDR crisp target with the scene camera +
+ * PBR lighting, so they can be composited un-pixelated over the pixelated frame. Opens/closes its own passes.
+ * Caller ensures the crisp target + PBR shader exist. */
+static void RenderCrispObjects(WorldRenderer* self, World* world, const GameCamera* camera)
+{
+    BeginTextureMode(self->_crispTarget);
+    ClearBackground(BLANK); // clears colour to (0,0,0,0) and depth to the far plane: "no crisp object here"
+    // Re-upload the PBR lighting (sun/ambient/fog/shadow + re-bind the shadow map) — the crisp pass runs after
+    // the bloom/shaft passes, which may have changed GL texture-slot / shader state.
+    UpdateLightingUniforms(self, world, camera);
+    BeginMode3D(GameCamera_ToRaylibCamera(camera));
+    DrawWorldModels(self, world, self->_pbrShader, ModelPixelationFilter_CrispOnly);
+    EndMode3D();
+    EndTextureMode();
+}
+
+/* Composites the crisp objects over the frame target: draws the crisp HDR colour through the crisp-composite
+ * shader, which tonemaps it (matching the main tonemap, via @p exposure) and keeps only pixels where a crisp
+ * object is the frontmost surface (depth-tested against the low-res scene depth). Must run into @p target AFTER
+ * the pixelated scene has been blitted there. The negative source height applies the same vertical flip the
+ * tonemap blit uses, so the crisp overlay aligns with the pixelated frame already in the target. */
+static void CompositeCrispObjects(WorldRenderer* self, RenderTexture2D target, int windowWidth, int windowHeight,
+    float exposure)
+{
+    Shader Composite = GameShader_GetRaylibShader(self->_crispCompositeShader);
+    BeginTextureMode(target);
+    SetShaderValue(Composite, self->_crispLocExposure, &exposure, SHADER_UNIFORM_FLOAT);
+    BeginShaderMode(Composite);
+    // Crisp colour is bound to unit 0 by DrawTexturePro; the two depth textures go to units 1/2 via
+    // SetShaderValueTexture (after BeginShaderMode) so they enter Raylib's 2D batch texture table.
+    SetShaderValueTexture(Composite, self->_crispLocCrispDepth, self->_crispTarget.depth);
+    SetShaderValueTexture(Composite, self->_crispLocSceneDepth, self->_sceneTarget.depth);
+    Rectangle Source =
+    {
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = (float)self->_crispTarget.texture.width,
+        .height = -(float)self->_crispTarget.texture.height
+    };
+    Rectangle Destination = { .x = 0.0f, .y = 0.0f, .width = (float)windowWidth, .height = (float)windowHeight };
+    DrawTexturePro(self->_crispTarget.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
+    EndShaderMode();
+    EndTextureMode();
+}
+
 
 // Public functions.
 Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const GameConfig* config,
@@ -1621,6 +1785,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_postfxEnabled = true;
     Renderer->_bloomEnabled = true;
     Renderer->_sunshaftEnabled = true;
+    Renderer->_crispEnabled = true;
     Renderer->_hasSceneTarget = false;
 
     *outRenderer = Renderer;
@@ -1663,6 +1828,12 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     {
         UnloadRenderTexture(self->_sunshaftTarget);
         self->_hasSunshaftTarget = false;
+    }
+
+    if (self->_hasCrispTarget)
+    {
+        UnloadRenderTexture(self->_crispTarget);
+        self->_hasCrispTarget = false;
     }
 
     if (self->_hasShadowMap)
@@ -1759,9 +1930,20 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     int WindowHeight = target.texture.height;
     EnsureSceneTarget(self, WindowWidth, WindowHeight);
 
+    // Decide whether the crisp overlay runs this frame (un-pixelated OmitPixelation objects composited full-res
+    // over the pixelated frame). When it does, the pixelated scene + normal passes SKIP the flagged objects (the
+    // crisp pass draws them instead); when it does not, the flagged objects fall back to the pixelated pass so
+    // they never vanish. Needs the crisp shader + a samplable-depth crisp target + samplable scene depth (for the
+    // occlusion test) + at least one flagged object.
+    bool CrispActive = self->_crispEnabled && (self->_crispCompositeShader != NULL) && (self->_pbrShader != NULL)
+        && self->_hasCrispTarget && self->_crispDepthSamplable && self->_sceneDepthSamplable
+        && WorldHasCrispObjects(world);
+    ModelPixelationFilter SceneFilter = CrispActive
+        ? ModelPixelationFilter_PixelatedOnly : ModelPixelationFilter_All;
+
     // Pass 1: draw the 3D world into the scene target (pixel resolution when pixelating).
     BeginTextureMode(self->_sceneTarget);
-    DrawScene(self, world, camera);
+    DrawScene(self, world, camera, SceneFilter);
     EndTextureMode();
 
     // Pass 1.5 (optional): screen-space AO + depth/normal-edge outlines, low-res, reading the scene colour +
@@ -1775,7 +1957,7 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
         && (self->_postfxShader != NULL) && (self->_normalShader != NULL) && self->_hasPostTarget
         && self->_hasNormalTarget && self->_sceneDepthSamplable)
     {
-        RenderNormalBuffer(self, world, camera);
+        RenderNormalBuffer(self, world, camera, SceneFilter);
         BeginTextureMode(self->_postTarget);
         ClearBackground(BLACK);
         DrawPostFX(self, world, camera);
@@ -1860,6 +2042,15 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     }
     EndTextureMode();
 
+    // Pass 3 (optional): crisp overlay. Render the un-pixelated OmitPixelation objects at full window resolution
+    // and composite them over the just-blitted pixelated frame, depth-tested against the scene so they are
+    // occluded correctly. Runs last so it draws over the finished pixelated image (e.g. a readable 3D screen).
+    if (CrispActive)
+    {
+        RenderCrispObjects(self, world, camera);
+        CompositeCrispObjects(self, target, WindowWidth, WindowHeight, Exposure);
+    }
+
     return Error_CreateSuccess();
 }
 
@@ -1901,6 +2092,16 @@ void WorldRenderer_SetSunshaftsEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_AreSunshaftsEnabled(const WorldRenderer* self)
 {
     return self->_sunshaftEnabled;
+}
+
+void WorldRenderer_SetCrispOverlayEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_crispEnabled = enabled;
+}
+
+bool WorldRenderer_IsCrispOverlayEnabled(const WorldRenderer* self)
+{
+    return self->_crispEnabled;
 }
 
 void WorldRenderer_SetDebugGridEnabled(WorldRenderer* self, bool enabled)

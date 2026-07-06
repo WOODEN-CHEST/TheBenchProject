@@ -23,6 +23,8 @@
 #define TEST_MODEL_OBJECT_NAME ((const unsigned char*)u8"test_object")
 /** Name given to the ground-slab object (a flattened test model that receives the sun shadow). */
 #define TEST_GROUND_OBJECT_NAME ((const unsigned char*)u8"ground")
+/** Name given to the crisp (OmitPixelation) demo object — renders un-pixelated to stand in for a screen. */
+#define TEST_CRISP_OBJECT_NAME ((const unsigned char*)u8"crisp_object")
 
 /** Base movement speed, in world units per second. */
 #define MOVE_SPEED 6.0f
@@ -133,6 +135,19 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
         {
             Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
                 (const unsigned char*)u8"WorldTest: sun shafts %s.", Enabled ? "ON" : "OFF");
+            Error_Deconstruct(&LogResult);
+        }
+    }
+
+    // C toggles the crisp overlay (OmitPixelation objects rendered un-pixelated); off = they render pixelated.
+    if (IsKeyPressed(KEY_C))
+    {
+        bool Enabled = !WorldRenderer_IsCrispOverlayEnabled(frame->_renderer);
+        WorldRenderer_SetCrispOverlayEnabled(frame->_renderer, Enabled);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: crisp overlay %s.", Enabled ? "ON" : "OFF");
             Error_Deconstruct(&LogResult);
         }
     }
@@ -312,7 +327,7 @@ static const GameFrameVTable WorldTestFrameVTable =
 /* Creates a model object with the given transform and hands it to the world (which takes ownership). On any
  * failure the partial object is destroyed and the error is returned. */
 static Error AddModelObject(World* world, const unsigned char* name, const unsigned char* assetName,
-    Vector3 position, Vector3 scale)
+    Vector3 position, Vector3 scale, bool omitPixelation)
 {
     WorldModelObject* ModelObject = NULL;
     Error Result = WorldModelObject_Create(name, assetName, &ModelObject);
@@ -320,6 +335,8 @@ static Error AddModelObject(World* world, const unsigned char* name, const unsig
     {
         return Result;
     }
+
+    ModelObject->OmitPixelation = omitPixelation; // crisp (un-pixelated) full-res overlay when true
 
     WorldObject* Base = WorldModelObject_AsObject(ModelObject);
     Result = WorldObject_SetPosition(Base, position);
@@ -392,11 +409,18 @@ static Error BuildTestWorld(World* world)
 
     // Centre model, raised so its shadow lands on the ground; then a wide, thin slab as the ground receiver.
     Error Result = AddModelObject(world, TEST_MODEL_OBJECT_NAME, TEST_MODEL_ASSET_NAME,
-        (Vector3){ 0.0f, 1.2f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f });
+        (Vector3){ 0.0f, 1.2f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f }, false);
     if (Result.Code == ErrorCode_Success)
     {
         Result = AddModelObject(world, TEST_GROUND_OBJECT_NAME, TEST_MODEL_ASSET_NAME,
-            (Vector3){ 0.0f, 0.0f, 0.0f }, (Vector3){ 40.0f, 0.2f, 40.0f });
+            (Vector3){ 0.0f, 0.0f, 0.0f }, (Vector3){ 40.0f, 0.2f, 40.0f }, false);
+    }
+    // A crisp (OmitPixelation) model to the side: it renders un-pixelated + full-res while the rest of the world
+    // stays chunky — a stand-in for a readable in-world screen. Toggle it against pixelated with the C key.
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddModelObject(world, TEST_CRISP_OBJECT_NAME, TEST_MODEL_ASSET_NAME,
+            (Vector3){ 3.0f, 1.2f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f }, true);
     }
     // Two coloured point lights flanking the centre cube (reach 10 units, so they light the cube + nearby
     // ground and fade out before the slab edges — exercises the per-object reach culling + forward shading).

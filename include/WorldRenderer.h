@@ -174,6 +174,26 @@ void WorldRenderer_SetSunshaftsEnabled(WorldRenderer* self, bool enabled);
 bool WorldRenderer_AreSunshaftsEnabled(const WorldRenderer* self);
 
 /**
+ * @brief Enables or disables the crisp overlay for OmitPixelation objects.
+ *
+ * When enabled (the default), objects flagged OmitPixelation are drawn un-pixelated at full resolution and
+ * composited over the pixelated frame (depth-tested so they are occluded correctly) — e.g. a readable in-world
+ * screen. When disabled, those objects fall back to rendering pixelated with the rest of the world (useful for
+ * A/B-ing the effect). The overlay also self-disables when its shader/target is unavailable or the world has no
+ * flagged objects. Applied on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to draw flagged objects crisply, false to render them pixelated.
+ */
+void WorldRenderer_SetCrispOverlayEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the crisp overlay is enabled (the code-side toggle only, not the shader/object gates).
+ * @param self The renderer; must not be NULL.
+ * @returns true if the crisp overlay toggle is on.
+ */
+bool WorldRenderer_IsCrispOverlayEnabled(const WorldRenderer* self);
+
+/**
  * @brief Enables or disables the debug reference grid drawn on the ground plane.
  * @param self The renderer; must not be NULL.
  * @param enabled true to draw the grid, false to hide it.
