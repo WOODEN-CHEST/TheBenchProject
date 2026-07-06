@@ -1,13 +1,15 @@
 #version 330
 
 // Full-screen post pass run at the LOW (pixelated) scene resolution, between the scene pass and the tonemap
-// upscale. It does two stylised effects on the linear-HDR scene, both driven by the low-res NORMAL/MASK
-// G-buffer (normalTexture) so they touch world objects only (never the sky, the debug grid, or shadows):
-//   1. Screen-space ambient occlusion (SSAO): darkens creases/contact areas on solid world geometry.
-//   2. Outlines, in the style of the three.js RenderPixelatedPass and the Godot 3D-pixel-art shader:
-//        * SILHOUETTES (depth / surface discontinuities) darken the near object's rim.
-//        * INTERIOR CREASES (view-normal discontinuities) darken on the sun-lit side and brighten on the
-//          shadowed side, tying the line art to the same sun that casts the shadows.
+// upscale. It draws OUTLINES on the linear-HDR scene, driven by the low-res NORMAL/MASK G-buffer
+// (normalTexture) so they touch world objects only (never the sky, the debug grid, or shadows), in the style
+// of the three.js RenderPixelatedPass and the Godot 3D-pixel-art shader:
+//   * SILHOUETTES (depth / surface discontinuities) darken the near object's rim.
+//   * INTERIOR CREASES (view-normal discontinuities) darken on the sun-lit side and brighten on the shadowed
+//     side, tying the line art to the same sun that casts the shadows.
+// (Screen-space ambient occlusion USED to live here too, as a multiply on the final colour; it moved to a
+// dedicated PRE-pass — shaders/ao/fragment.frag — that feeds AO into ONLY the PBR ambient term, so it no
+// longer dims direct light.)
 // The G-buffer packs a VIEW-SPACE normal in RGB (encoded n*0.5+0.5) and a surface/outline flag in A:
 //   A = 0.0 -> not a surface (sky / grid);  0.5 -> surface, no outline;  1.0 -> surface, outline enabled.
 // Because the sky is never drawn into the G-buffer it has A = 0, so it is neither ambient-occluded nor
@@ -29,7 +31,6 @@ uniform mat4 invProjection;      // inverse of the perspective projection used b
 uniform mat4 projection;         // the perspective projection used by the scene pass (for SSAO re-projection)
 uniform vec3 sunDirectionView;   // unit direction TO the sun, in VIEW space (for sun-aware crease colouring)
 
-uniform float aoStrength;        // effective AO strength (config x world); 0 disables SSAO
 uniform float outlineStrength;   // effective outline strength (0..1); 0 disables outlines
 
 out vec4 finalColor;
@@ -37,32 +38,6 @@ out vec4 finalColor;
 // ---- G-buffer flag thresholds (the alpha channel is 0.0 / 0.5 / 1.0) ----
 const float SURFACE_ON = 0.25;   // alpha above this = a solid world-model surface (0 = sky / grid)
 const float OUTLINE_ON = 0.75;   // alpha above this = surface with per-object outlines enabled
-
-// ---- SSAO tuning ----
-const int   AO_KERNEL_SIZE = 12;
-const float AO_RADIUS = 0.5;     // hemisphere radius, view-space units
-// Occlusion is counted only where the occluder rises ABOVE this surface's own tangent plane by more than
-// AO_TANGENT_BIAS (ramping to full at AO_TANGENT_FULL), in view-space units. On a flat surface (even a steeply
-// tilted floor seen grazing) all neighbours lie IN the tangent plane, so this is ~0 -> no false darkening of
-// the ground at grazing angles. Only geometry that genuinely stands proud of the surface (a wall meeting the
-// floor, a crease) occludes.
-const float AO_TANGENT_BIAS = 0.02;
-const float AO_TANGENT_FULL = 0.10;
-const float AO_MAX = 0.6;        // clamp so AO never fully blackens a surface
-
-// Fixed hemisphere kernel (all +z); oriented to the reconstructed normal via a stable (non-random) basis, so
-// the AO is smooth rather than speckled at the low pixel resolution (a per-pixel random rotation needs a blur
-// pass to not look like noise, and there is none here).
-// (Explicit array size in the constructor: implicit-size constructors are valid GLSL 330 but some drivers
-// reject them, and a failed compile silently degrades this pass to a plain copy.)
-const vec3 AO_KERNEL[12] = vec3[12](
-    vec3( 0.50,  0.00,  0.50), vec3(-0.40,  0.30,  0.40),
-    vec3( 0.20, -0.50,  0.30), vec3(-0.30, -0.20,  0.60),
-    vec3( 0.60,  0.40,  0.20), vec3(-0.50, -0.40,  0.30),
-    vec3( 0.10,  0.60,  0.50), vec3( 0.35, -0.15,  0.70),
-    vec3(-0.15,  0.10,  0.25), vec3( 0.00, -0.35,  0.20),
-    vec3(-0.25,  0.45,  0.55), vec3( 0.45, -0.45,  0.25)
-);
 
 // ---- Outline tuning (depth + view-normal edge detection) ----
 // three.js normal-edge bias: a fixed direction that decides which side of a crease is treated as the edge, so
@@ -85,53 +60,6 @@ vec3 ViewPosFromUv(vec2 uv)
     vec4 ndc = vec4(uv*2.0 - 1.0, d*2.0 - 1.0, 1.0);
     vec4 view = invProjection*ndc;
     return view.xyz/view.w;
-}
-
-// Builds a stable orthonormal basis around a +z-ish normal (Duff et al., branchless). normal.z is forced >= 0
-// by the caller, so the sign term is always +1. No randomness -> no SSAO speckle.
-mat3 TangentBasis(vec3 normal)
-{
-    float a = -1.0/(1.0 + normal.z);
-    float b = normal.x*normal.y*a;
-    vec3 tangent = vec3(1.0 + normal.x*normal.x*a, b, -normal.x);
-    vec3 bitangent = vec3(b, 1.0 + normal.y*normal.y*a, -normal.y);
-    return mat3(tangent, bitangent, normal);
-}
-
-// Tangent-plane hemisphere SSAO: for each hemisphere sample, read the ACTUAL geometry at that screen location
-// and count it as an occluder only insofar as it stands ABOVE this surface's tangent plane. Flat surfaces
-// (their neighbours lie in the plane) self-occlude ~0, which is what kills the grazing-angle dark ground.
-// Returns occlusion in [0,1] (0 = fully open).
-float ComputeOcclusion(vec3 viewPos, vec3 normal)
-{
-    mat3 tbn = TangentBasis(normal);
-
-    float occlusion = 0.0;
-    for (int i = 0; i < AO_KERNEL_SIZE; i++)
-    {
-        float scale = float(i)/float(AO_KERNEL_SIZE);
-        scale = mix(0.1, 1.0, scale*scale);
-        vec3 samplePos = viewPos + (tbn*(normalize(AO_KERNEL[i])*scale))*AO_RADIUS;
-
-        vec4 offset = projection*vec4(samplePos, 1.0);
-        vec2 sampleUv = (offset.xy/offset.w)*0.5 + 0.5;
-        if ((sampleUv.x < 0.0) || (sampleUv.x > 1.0) || (sampleUv.y < 0.0) || (sampleUv.y > 1.0))
-        {
-            continue;
-        }
-        // Only solid world geometry occludes (sky/grid have surface flag 0), so the sky never darkens objects.
-        if (texture(normalTexture, sampleUv).a < SURFACE_ON)
-        {
-            continue;
-        }
-
-        vec3 occluder = ViewPosFromUv(sampleUv);   // real geometry at this screen sample
-        vec3 diff = occluder - viewPos;
-        float aboveTangent = smoothstep(AO_TANGENT_BIAS, AO_TANGENT_FULL, dot(diff, normal));
-        float rangeCheck = smoothstep(0.0, 1.0, AO_RADIUS/max(length(diff), 1e-4));
-        occlusion += aboveTangent*rangeCheck;
-    }
-    return occlusion/float(AO_KERNEL_SIZE);
 }
 
 // Silhouette contribution of one neighbour: 1 when the neighbour lies BEHIND the centre, i.e. part of the
@@ -174,22 +102,12 @@ void main()
 
     vec3 color = sceneColor;
 
-    // Reconstruct the centre's view position + a geometric normal once (used by the AO and, for its z, by the
-    // outline's distance-scaled silhouette test). Only meaningful on surfaces.
+    // Reconstruct the centre's view position once (used, for its z, by the outline's distance-scaled
+    // silhouette test). Only meaningful on surfaces.
     vec3 viewPos = vec3(0.0);
-    vec3 geoNormal = vec3(0.0, 0.0, 1.0);
     if (isSurface)
     {
         viewPos = ViewPosFromUv(uv);
-        geoNormal = normalize(cross(dFdx(viewPos), dFdy(viewPos)));
-        if (geoNormal.z < 0.0) { geoNormal = -geoNormal; }
-    }
-
-    // --- Ambient occlusion (solid world geometry only) ---
-    if ((aoStrength > 0.0) && isSurface)
-    {
-        float occlusion = ComputeOcclusion(viewPos, geoNormal);
-        color *= 1.0 - clamp(occlusion*aoStrength, 0.0, AO_MAX);
     }
 
     // --- Outline (depth + view-normal edge detection; outline-enabled surfaces only, never the sky) ---

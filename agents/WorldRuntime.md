@@ -90,16 +90,22 @@ map plus a low-res post pass give the stylised look.
   PCF + slope-scaled bias** for CRISP, hard-edged pixel-art shadows, darkening only the sun's direct term
   (ambient still lights shadows). Near cascade on texture slot 10, far on slot 12. Gated on shadows-enabled +
   strength > 0 + sun above the horizon; the far cascade is an optional add-on (skipped if its map can't be made).
-* **Normal G-buffer + outlines**: `RenderNormalBuffer` draws model objects through the `world_normal` shader
-  (a vertex+fragment pair) into a low-res 8-bit RGBA target with blending disabled — RGB = view-space normal,
-  A = surface/outline flag (0 = sky/grid, 0.5 = surface, 1.0 = surface with per-object `HasOutline`). The
-  `world_postfx` pass then edge-detects in the style of the three.js RenderPixelatedPass / Godot 3D-pixel-art
-  shader: **depth/surface-edge silhouettes darken** the near object's rim, and **view-normal-edge creases** are
-  recoloured **sun-aware** (darken on the sun-lit side, brighten on the shadowed side, using the sun direction
-  transformed into view space). The sky (flag 0) is never a surface, so it is never outlined. The same pass
-  also does tangent-plane SSAO (gated to surfaces via the flag). Outlines are code-configurable (renderer
-  toggle + built-in strength); AO/shadow strengths are config × world multipliers. This G-buffer replaced the
-  old flag-only `world_mask`.
+* **Normal G-buffer + outlines + AO**: `RenderNormalBuffer` draws model objects through the `world_normal`
+  shader (a vertex+fragment pair) into a low-res 8-bit RGBA target (blending disabled) with a **samplable depth
+  texture** — RGB = view-space normal, A = surface/outline flag (0 = sky/grid, 0.5 = surface, 1.0 = surface with
+  per-object `HasOutline`). It is rendered ONCE, BEFORE the scene pass, and feeds two consumers:
+  * **AO into the ambient term** (increment 23): a dedicated `world_ao` PRE-pass computes tangent-plane SSAO
+    from the G-buffer's depth + surface flag into a low-res AO-multiplier texture; the `world_pbr` scene pass
+    then samples it (`gl_FragCoord/sceneRes`) and multiplies it into **ONLY its ambient term** — so AO no longer
+    dims the direct sun / point lights (the old approach multiplied AO onto the final scene colour). AO needs
+    the samplable-depth normal target; without it AO is simply off (outlines still work).
+  * **Outlines**: the `world_postfx` pass (now outlines-only) edge-detects AFTER the scene in the style of the
+    three.js RenderPixelatedPass / Godot 3D-pixel-art shader: **depth/surface-edge silhouettes darken** the near
+    object's rim, and **view-normal-edge creases** are recoloured **sun-aware** (darken on the sun-lit side,
+    brighten on the shadowed side). The sky (flag 0) is never outlined.
+  Outlines are code-configurable (renderer toggle + built-in strength); AO strength is a config × world
+  multiplier. Both are gated by the `_postfxEnabled` master toggle (O key). This G-buffer replaced the old
+  flag-only `world_mask`.
 
 SCOPE now: models are PBR-lit with crisp sun shadows, the sky is the atmospheric-scattering shader, the post
 pass adds SSAO + depth/normal-edge outlines, and the whole scene is HDR→tonemapped. Sprites, lights, and the

@@ -142,8 +142,13 @@
 /** Per-point-light weight in the adaptation estimate (how strongly being near a light lowers exposure). */
 #define POINT_ADAPT_WEIGHT 0.5f
 
-/** Asset name of the post-process shader (screen-space AO + hand-drawn outlines) run before the tonemap. */
+/** Asset name of the post-process shader (hand-drawn outlines) run before the tonemap. */
 #define POSTFX_SHADER_ASSET_NAME ((const unsigned char*)u8"world_postfx")
+/** Asset name of the ambient-occlusion PRE-pass shader: computes SSAO from the normal G-buffer's depth + flag
+ *  into an AO-multiplier texture that the PBR scene pass applies to ONLY its ambient term. */
+#define AO_SHADER_ASSET_NAME ((const unsigned char*)u8"world_ao")
+/** Texture unit the AO map is bound to for the PBR shader (10 = near shadow, 11 = point cube, 12 = far shadow). */
+#define AO_TEXTURE_SLOT 13
 /** Asset name of the normal/mask G-buffer shader: writes a view-space normal (RGB) + surface/outline flag (A)
  *  that the postfx pass edge-detects for outlines. Replaces the old flag-only object mask. */
 #define NORMAL_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal")
@@ -300,13 +305,22 @@ struct WorldRendererStruct
     GameShader* _cubeDepthShader;
     int _cubeDepthLocLightPos;
     int _cubeDepthLocLightFar;
-    /** The post-process shader (screen-space AO + hand-drawn outlines); borrowed. NULL = post pass skipped. */
+    /** The post-process shader (hand-drawn outlines); borrowed. NULL = outline pass skipped. */
     GameShader* _postfxShader;
-    /** The normal/mask G-buffer shader (writes view-space normals + a surface/outline flag for the postfx
-     *  outline pass); borrowed. NULL = post pass skipped (the outline pass needs the normal/flag buffer). */
+    /** The normal/mask G-buffer shader (writes view-space normals + a surface/outline flag for the outline +
+     *  AO passes); borrowed. NULL = both skipped (they need the normal/flag buffer). */
     GameShader* _normalShader;
     /** Cached world_normal outline-flag uniform location (-1 when absent). */
     int _normalLocOutlineFlag;
+    /** The AO pre-pass shader (SSAO from the normal G-buffer -> AO-multiplier texture); borrowed. NULL = no AO.
+     *  Its uniform locations follow. */
+    GameShader* _aoShader;
+    int _aoLocResolution;
+    int _aoLocInvProjection;
+    int _aoLocProjection;
+    int _aoLocDepthTexture;
+    int _aoLocNormalTexture;
+    int _aoLocAoStrength;
     /** Set once the shaders' load has been attempted (success or failure), so it is tried only once. */
     bool _shadersLoadAttempted;
     /** Whether hand-drawn outlines are drawn (code-configurable per spec; on by default). */
@@ -321,7 +335,6 @@ struct WorldRendererStruct
     int _postfxLocDepthTexture;
     int _postfxLocNormalTexture;
     int _postfxLocSunDirectionView;
-    int _postfxLocAoStrength;
     int _postfxLocOutlineStrength;
     /** Cached world_sky uniform locations (-1 when absent). */
     int _skyLocResolution;
@@ -358,6 +371,11 @@ struct WorldRendererStruct
     int _locHasMraMap;
     int _locHasNormalMap;
     int _locHasEmissiveMap;
+    /** Cached PBR screen-space-AO uniform locations (-1 when absent): the AO map + its active flag + the scene
+     *  resolution used to map gl_FragCoord to the AO map's UV. */
+    int _locAmbientOcclusionMap;
+    int _locAoMapActive;
+    int _locAoResolution;
     /** Cached PBR shadow uniform locations (-1 when absent). */
     int _locLightVP;
     int _locShadowMap;
@@ -430,11 +448,20 @@ struct WorldRendererStruct
     RenderTexture2D _postTarget;
     /** Whether _postTarget has been created. */
     bool _hasPostTarget;
-    /** Low-res normal/mask G-buffer (RGB=view normal, A=surface/outline flag) the postfx pass reads; only made
-     *  when postfx runs. */
+    /** Low-res normal/mask G-buffer (RGB=view normal, A=surface/outline flag) the postfx + AO passes read; only
+     *  made when postfx/AO run. Its depth is a samplable texture (for the AO pre-pass) when the driver allows. */
     RenderTexture2D _normalTarget;
     /** Whether _normalTarget has been created. */
     bool _hasNormalTarget;
+    /** Whether _normalTarget's depth is a samplable texture (required for the AO pre-pass). */
+    bool _normalDepthSamplable;
+    /** Low-res AO-multiplier buffer (R = 1 open .. <1 occluded) written by the AO pre-pass and sampled by the
+     *  PBR scene pass to darken ONLY its ambient term. Only made when AO can run. */
+    RenderTexture2D _aoTarget;
+    /** Whether _aoTarget has been created. */
+    bool _hasAoTarget;
+    /** Whether the AO pre-pass ran this frame (so the PBR shader should sample the AO map). */
+    bool _aoActive;
     /** Ping-pong bloom buffers (colour-only HDR, reduced resolution, BILINEAR): prefilter writes A, then the
      *  separable blur ping-pongs A<->B, leaving the final blurred bloom in A. Only made when bloom can run. */
     RenderTexture2D _bloomTargetA;
@@ -568,6 +595,50 @@ static RenderTexture2D CreateSceneTarget(int width, int height, bool* outIsHDR, 
     return LoadRenderTexture(width, height);
 }
 
+/* Creates the normal/flag G-buffer target: an 8-bit RGBA colour texture + a SAMPLABLE depth texture (so the AO
+ * pre-pass can reconstruct view positions from it). Sets *outDepthSamplable true on success. Falls back to a
+ * plain LoadRenderTexture (renderbuffer depth, not samplable → AO disabled, outlines still work) if the
+ * samplable-depth framebuffer cannot be made complete. Returns a zero target only if even the fallback fails. */
+static RenderTexture2D TryCreateNormalTarget(int width, int height, bool* outDepthSamplable)
+{
+    *outDepthSamplable = false;
+
+    RenderTexture2D Target = { 0 };
+    Target.id = rlLoadFramebuffer();
+    if (Target.id != 0)
+    {
+        rlEnableFramebuffer(Target.id);
+
+        Target.texture.id = rlLoadTexture(NULL, width, height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1);
+        Target.texture.width = width;
+        Target.texture.height = height;
+        Target.texture.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+        Target.texture.mipmaps = 1;
+
+        Target.depth.id = rlLoadTextureDepth(width, height, false); // false => a samplable depth TEXTURE
+        Target.depth.width = width;
+        Target.depth.height = height;
+        Target.depth.format = SCENE_DEPTH_FORMAT;
+        Target.depth.mipmaps = 1;
+
+        rlFramebufferAttach(Target.id, Target.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
+        rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);
+
+        bool Complete = (Target.texture.id != 0) && rlFramebufferComplete(Target.id);
+        rlDisableFramebuffer();
+        if (Complete)
+        {
+            *outDepthSamplable = true;
+            return Target;
+        }
+        UnloadRenderTexture(Target);
+    }
+
+    // Fallback: a plain render texture (renderbuffer depth). Outlines still work (they read the SCENE depth);
+    // the AO pre-pass, which needs this target's depth samplable, stays off.
+    return LoadRenderTexture(width, height);
+}
+
 /* Creates a colour-only HDR (RGBA16F) framebuffer for the postfx ping target (no depth: the post pass writes
  * every pixel with no depth test). Returns a zero target (id 0) if it could not be made complete. */
 static RenderTexture2D CreatePostTarget(int width, int height)
@@ -698,6 +769,12 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
     {
         UnloadRenderTexture(self->_normalTarget);
         self->_hasNormalTarget = false;
+        self->_normalDepthSamplable = false;
+    }
+    if (self->_hasAoTarget)
+    {
+        UnloadRenderTexture(self->_aoTarget);
+        self->_hasAoTarget = false;
     }
     if (self->_hasBloomTargets)
     {
@@ -728,10 +805,28 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
     self->_sceneWidth = DesiredWidth;
     self->_sceneHeight = DesiredHeight;
 
-    // The postfx ping + normal G-buffer targets: only needed when the post pass can run (postfx + normal
-    // shaders present, samplable depth). The normal target is a plain 8-bit RGBA colour+depth RT (it holds an
-    // encoded normal + flags, not HDR); its own depth lets the nearest model's normal win per pixel.
-    if ((self->_postfxShader != NULL) && (self->_normalShader != NULL) && self->_sceneDepthSamplable)
+    // Normal/flag G-buffer: read by BOTH the outline postfx AND the AO pre-pass. 8-bit RGBA colour (encoded
+    // normal + flag, not HDR) + a SAMPLABLE depth texture so the AO pass can reconstruct view positions from it;
+    // its own depth also lets the nearest model's normal win per pixel. Made when the normal shader is present,
+    // the scene has samplable depth, and at least one consumer (outlines / AO) exists.
+    if ((self->_normalShader != NULL) && self->_sceneDepthSamplable
+        && ((self->_postfxShader != NULL) || (self->_aoShader != NULL)))
+    {
+        self->_normalTarget = TryCreateNormalTarget(DesiredWidth, DesiredHeight, &self->_normalDepthSamplable);
+        self->_hasNormalTarget = (self->_normalTarget.id != 0);
+        if (self->_hasNormalTarget)
+        {
+            SetTextureFilter(self->_normalTarget.texture, TEXTURE_FILTER_POINT);
+            if (self->_normalDepthSamplable)
+            {
+                SetTextureFilter(self->_normalTarget.depth, TEXTURE_FILTER_POINT);
+            }
+        }
+    }
+
+    // Outline postfx ping target (colour-only HDR). Only when the outline shader is present + scene depth is
+    // samplable (the outline pass reconstructs view positions from the scene depth).
+    if ((self->_postfxShader != NULL) && self->_sceneDepthSamplable)
     {
         self->_postTarget = CreatePostTarget(DesiredWidth, DesiredHeight);
         self->_hasPostTarget = (self->_postTarget.id != 0);
@@ -739,12 +834,17 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
         {
             SetTextureFilter(self->_postTarget.texture, TEXTURE_FILTER_POINT);
         }
+    }
 
-        self->_normalTarget = LoadRenderTexture(DesiredWidth, DesiredHeight);
-        self->_hasNormalTarget = (self->_normalTarget.id != 0);
-        if (self->_hasNormalTarget)
+    // AO-multiplier target (8-bit, low-res, BILINEAR so the PBR ambient reads a smooth AO term). Only when the
+    // AO shader is present and the normal target carries samplable depth for the AO pass to read.
+    if ((self->_aoShader != NULL) && self->_hasNormalTarget && self->_normalDepthSamplable)
+    {
+        self->_aoTarget = LoadRenderTexture(DesiredWidth, DesiredHeight);
+        self->_hasAoTarget = (self->_aoTarget.id != 0);
+        if (self->_hasAoTarget)
         {
-            SetTextureFilter(self->_normalTarget.texture, TEXTURE_FILTER_POINT);
+            SetTextureFilter(self->_aoTarget.texture, TEXTURE_FILTER_BILINEAR);
         }
     }
 
@@ -985,6 +1085,9 @@ static void EnsureShaders(WorldRenderer* self)
         self->_locHasMraMap = GetShaderLocation(RayShader, "hasMraMap");
         self->_locHasNormalMap = GetShaderLocation(RayShader, "hasNormalMap");
         self->_locHasEmissiveMap = GetShaderLocation(RayShader, "hasEmissiveMap");
+        self->_locAmbientOcclusionMap = GetShaderLocation(RayShader, "ambientOcclusionMap");
+        self->_locAoMapActive = GetShaderLocation(RayShader, "aoMapActive");
+        self->_locAoResolution = GetShaderLocation(RayShader, "aoResolution");
 
         // Point the shader's material map-sampler locations at our sampler names so raylib's DrawMesh binds each
         // material's textures to their conventional units (albedo->0 is already raylib's default "texture0").
@@ -1129,7 +1232,6 @@ static void EnsureShaders(WorldRenderer* self)
         self->_postfxLocDepthTexture = GetShaderLocation(RayShader, "depthTexture");
         self->_postfxLocNormalTexture = GetShaderLocation(RayShader, "normalTexture");
         self->_postfxLocSunDirectionView = GetShaderLocation(RayShader, "sunDirectionView");
-        self->_postfxLocAoStrength = GetShaderLocation(RayShader, "aoStrength");
         self->_postfxLocOutlineStrength = GetShaderLocation(RayShader, "outlineStrength");
     }
 
@@ -1141,11 +1243,28 @@ static void EnsureShaders(WorldRenderer* self)
     {
         self->_normalLocOutlineFlag = GetShaderLocation(GameShader_GetRaylibShader(self->_normalShader), "outlineFlag");
     }
+
+    // Ambient-occlusion pre-pass shader: computes SSAO from the normal G-buffer into an AO-multiplier texture
+    // the PBR pass applies to its ambient term. Optional (without it, or without a samplable-depth normal
+    // target, AO is simply off).
+    self->_aoShader = LoadRendererShader(self, AO_SHADER_ASSET_NAME);
+    if (self->_aoShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_aoShader);
+        self->_aoLocResolution = GetShaderLocation(RayShader, "resolution");
+        self->_aoLocInvProjection = GetShaderLocation(RayShader, "invProjection");
+        self->_aoLocProjection = GetShaderLocation(RayShader, "projection");
+        self->_aoLocDepthTexture = GetShaderLocation(RayShader, "depthTexture");
+        self->_aoLocNormalTexture = GetShaderLocation(RayShader, "normalTexture");
+        self->_aoLocAoStrength = GetShaderLocation(RayShader, "aoStrength");
+    }
 }
 
 /* Uploads the per-frame PBR lighting uniforms (camera position, sun and ambient light) from the world's
- * environment. No-op when the PBR shader is unavailable. */
-static void UpdateLightingUniforms(WorldRenderer* self, World* world, const GameCamera* camera)
+ * environment. No-op when the PBR shader is unavailable. @p applyScreenAo binds the screen-space AO map so the
+ * ambient term is occluded (the low-res scene pass); the full-res crisp overlay passes false (its gl_FragCoord
+ * would not match the low-res AO map, and crisp objects deliberately get no AO). */
+static void UpdateLightingUniforms(WorldRenderer* self, World* world, const GameCamera* camera, bool applyScreenAo)
 {
     if (self->_pbrShader == NULL)
     {
@@ -1248,6 +1367,22 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
             int SlotFar = SHADOW_FAR_TEXTURE_SLOT;
             rlSetUniform(self->_locShadowMapFar, &SlotFar, SHADER_UNIFORM_INT, 1);
         }
+    }
+
+    // Screen-space AO: bind the AO-multiplier map (computed in the pre-pass) so the PBR ambient term is occluded.
+    // Bound like the shadow maps (manual slot; the scene pass draws via DrawMesh = a direct draw, not the 2D
+    // batch). The crisp overlay passes applyScreenAo=false (its full-res gl_FragCoord would mis-sample this
+    // low-res map). aoMapActive false => the shader leaves the ambient term unoccluded.
+    int AoMapActive = (applyScreenAo && self->_aoActive) ? 1 : 0;
+    SetShaderValue(RayShader, self->_locAoMapActive, &AoMapActive, SHADER_UNIFORM_INT);
+    if (AoMapActive)
+    {
+        float AoResolution[2] = { (float)self->_sceneWidth, (float)self->_sceneHeight };
+        SetShaderValue(RayShader, self->_locAoResolution, AoResolution, SHADER_UNIFORM_VEC2);
+        rlActiveTextureSlot(AO_TEXTURE_SLOT);
+        rlEnableTexture(self->_aoTarget.texture.id);
+        int AoSlot = AO_TEXTURE_SLOT;
+        rlSetUniform(self->_locAmbientOcclusionMap, &AoSlot, SHADER_UNIFORM_INT, 1);
     }
 
     // Point-light (cube) shadow: shade the selected shadow light separately with its cube map. Bind the cube to
@@ -1971,7 +2106,8 @@ static void DrawScene(WorldRenderer* self, World* world, const GameCamera* camer
     }
 
     // Feed the sun/ambient/camera into the PBR shader before drawing any lit geometry (no-op if unavailable).
-    UpdateLightingUniforms(self, world, camera);
+    // The scene pass applies the screen-space AO map (occludes the ambient term).
+    UpdateLightingUniforms(self, world, camera, true);
 
     BeginMode3D(GameCamera_ToRaylibCamera(camera));
 
@@ -2163,12 +2299,6 @@ static void DrawPostFX(WorldRenderer* self, World* world, const GameCamera* came
     float SunDirView[3] = { ViewSun.x, ViewSun.y, ViewSun.z };
     SetShaderValue(RayShader, self->_postfxLocSunDirectionView, SunDirView, SHADER_UNIFORM_VEC3);
 
-    // Effective AO strength = world multiplier x config multiplier (0 / disabled => the shader skips SSAO).
-    float AoStrength = Environment->IsAmbientOcclusionEnabled
-        ? (Environment->AmbientOcclusionStrength * ConfigAoStrength(self)) : 0.0f;
-    if (AoStrength < 0.0f) { AoStrength = 0.0f; }
-    SetShaderValue(RayShader, self->_postfxLocAoStrength, &AoStrength, SHADER_UNIFORM_FLOAT);
-
     // Outlines are code-configurable (not JSON) per spec: a single renderer toggle + a built-in strength.
     float OutlineStrength = self->_outlineEnabled ? OUTLINE_BASE_STRENGTH : 0.0f;
     SetShaderValue(RayShader, self->_postfxLocOutlineStrength, &OutlineStrength, SHADER_UNIFORM_FLOAT);
@@ -2190,6 +2320,40 @@ static void DrawPostFX(WorldRenderer* self, World* world, const GameCamera* came
     Rectangle Destination = { 0.0f, 0.0f, (float)self->_sceneWidth, (float)self->_sceneHeight };
     DrawTexturePro(self->_sceneTarget.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
     EndShaderMode();
+}
+
+/* Runs the AO pre-pass (BEFORE the scene colour pass): computes SSAO from the normal G-buffer's samplable depth
+ * + surface flag into _aoTarget (an AO multiplier in R). The PBR scene pass then samples it to darken ONLY its
+ * ambient term. Reconstructs the same perspective projection the scene pass uses. @p aoStrength is the effective
+ * (config x world) strength. Opens/closes its own passes. Caller ensures the AO shader + _aoTarget + a
+ * samplable-depth normal target exist and the normal buffer was rendered this frame. */
+static void RenderAO(WorldRenderer* self, const GameCamera* camera, float aoStrength)
+{
+    Shader RayShader = GameShader_GetRaylibShader(self->_aoShader);
+
+    Camera3D RayCam = GameCamera_ToRaylibCamera(camera);
+    double Aspect = (self->_sceneHeight > 0) ? ((double)self->_sceneWidth / (double)self->_sceneHeight) : 1.0;
+    Matrix Projection = MatrixPerspective((double)RayCam.fovy * DEG2RAD, Aspect, SCENE_NEAR_PLANE, SCENE_FAR_PLANE);
+    Matrix InvProjection = MatrixInvert(Projection);
+
+    float Resolution[2] = { (float)self->_sceneWidth, (float)self->_sceneHeight };
+
+    BeginTextureMode(self->_aoTarget);
+    ClearBackground(WHITE); // AO multiplier 1 (fully open) wherever nothing draws / no occlusion
+    SetShaderValue(RayShader, self->_aoLocResolution, Resolution, SHADER_UNIFORM_VEC2);
+    SetShaderValueMatrix(RayShader, self->_aoLocProjection, Projection);
+    SetShaderValueMatrix(RayShader, self->_aoLocInvProjection, InvProjection);
+    SetShaderValue(RayShader, self->_aoLocAoStrength, &aoStrength, SHADER_UNIFORM_FLOAT);
+    BeginShaderMode(RayShader);
+    // Bind the normal G-buffer's depth (unit 1) + colour/flag (unit 2) via SetShaderValueTexture AFTER
+    // BeginShaderMode so they enter Raylib's 2D batch texture table (see the postfx binding note).
+    SetShaderValueTexture(RayShader, self->_aoLocDepthTexture, self->_normalTarget.depth);
+    SetShaderValueTexture(RayShader, self->_aoLocNormalTexture, self->_normalTarget.texture);
+    Rectangle Source = { 0.0f, 0.0f, (float)self->_normalTarget.texture.width, (float)self->_normalTarget.texture.height };
+    Rectangle Destination = { 0.0f, 0.0f, (float)self->_sceneWidth, (float)self->_sceneHeight };
+    DrawTexturePro(self->_normalTarget.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
+    EndShaderMode();
+    EndTextureMode();
 }
 
 /* Runs the bloom pass: bright-passes @p source (the linear-HDR scene, or post-processed scene) into the
@@ -2371,8 +2535,9 @@ static void RenderCrispObjects(WorldRenderer* self, World* world, const GameCame
     BeginTextureMode(self->_crispTarget);
     ClearBackground(BLANK); // clears colour to (0,0,0,0) and depth to the far plane: "no crisp object here"
     // Re-upload the PBR lighting (sun/ambient/fog/shadow + re-bind the shadow map) — the crisp pass runs after
-    // the bloom/shaft passes, which may have changed GL texture-slot / shader state.
-    UpdateLightingUniforms(self, world, camera);
+    // the bloom/shaft passes, which may have changed GL texture-slot / shader state. applyScreenAo=false: this
+    // is a full-res pass, so the low-res AO map (sampled by gl_FragCoord) would mis-align; crisp objects get no AO.
+    UpdateLightingUniforms(self, world, camera, false);
     BeginMode3D(GameCamera_ToRaylibCamera(camera));
     DrawWorldModels(self, world, self->_pbrShader, ModelPixelationFilter_CrispOnly);
     // Crisp sprites (OmitPixelation) render full-res here too, so they stay sharp like crisp models.
@@ -2472,6 +2637,13 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     {
         UnloadRenderTexture(self->_normalTarget);
         self->_hasNormalTarget = false;
+        self->_normalDepthSamplable = false;
+    }
+
+    if (self->_hasAoTarget)
+    {
+        UnloadRenderTexture(self->_aoTarget);
+        self->_hasAoTarget = false;
     }
 
     if (self->_hasBloomTargets)
@@ -2643,23 +2815,44 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     ModelPixelationFilter SceneFilter = CrispActive
         ? ModelPixelationFilter_PixelatedOnly : ModelPixelationFilter_All;
 
-    // Pass 1: draw the 3D world into the scene target (pixel resolution when pixelating).
+    // The normal/flag G-buffer feeds BOTH the AO pre-pass (samplable depth + surface flag) and the outline pass;
+    // it is drawn ONCE, before the scene, whenever either effect runs. AO then runs as a PRE-pass so the scene
+    // pass can sample it into the ambient term. Outlines still run AFTER the scene (they read the scene colour).
+    float EffectiveAoStrength = Environment->IsAmbientOcclusionEnabled
+        ? (Environment->AmbientOcclusionStrength * ConfigAoStrength(self)) : 0.0f;
+    if (EffectiveAoStrength < 0.0f) { EffectiveAoStrength = 0.0f; }
+
+    // AO into the ambient term: needs the master toggle, a positive strength, the AO + normal shaders, the AO
+    // target, and a SAMPLABLE-depth normal target (the AO pass reconstructs positions from it).
+    bool AoActive = self->_postfxEnabled && (EffectiveAoStrength > 0.0f) && (self->_pbrShader != NULL)
+        && (self->_aoShader != NULL) && (self->_normalShader != NULL) && self->_hasNormalTarget
+        && self->_normalDepthSamplable && self->_hasAoTarget;
+    // Outlines: run after the scene, reading the scene colour + depth + the normal G-buffer.
+    bool OutlineActive = self->_postfxEnabled && self->_outlineEnabled && (self->_postfxShader != NULL)
+        && (self->_normalShader != NULL) && self->_hasPostTarget && self->_hasNormalTarget
+        && self->_sceneDepthSamplable;
+
+    if (AoActive || OutlineActive)
+    {
+        RenderNormalBuffer(self, world, camera, SceneFilter);
+    }
+    self->_aoActive = AoActive;
+    if (AoActive)
+    {
+        RenderAO(self, camera, EffectiveAoStrength);
+    }
+
+    // Pass 1: draw the 3D world into the scene target (pixel resolution when pixelating). DrawScene samples the
+    // AO map (when active) into the PBR ambient term.
     BeginTextureMode(self->_sceneTarget);
     DrawScene(self, world, camera, SceneFilter);
     EndTextureMode();
 
-    // Pass 1.5 (optional): screen-space AO + depth/normal-edge outlines, low-res, reading the scene colour +
-    // depth + a normal G-buffer. Needs the master toggle on, at least one contributing effect, the postfx +
-    // normal shaders, the samplable-depth HDR scene target, and both post targets; otherwise the scene is
-    // blitted as-is (bit-exact with the pre-postfx pipeline). The normal pass runs first so postfx can read it.
+    // Pass 1.5 (optional): depth/normal-edge OUTLINES, low-res, reading the scene colour + depth + the normal
+    // G-buffer (already rendered above). Otherwise the scene is blitted as-is (bit-exact pre-postfx pipeline).
     RenderTexture2D BlitSource = self->_sceneTarget;
-    float EffectiveAoStrength = Environment->IsAmbientOcclusionEnabled
-        ? (Environment->AmbientOcclusionStrength * ConfigAoStrength(self)) : 0.0f;
-    if (self->_postfxEnabled && ((EffectiveAoStrength > 0.0f) || self->_outlineEnabled)
-        && (self->_postfxShader != NULL) && (self->_normalShader != NULL) && self->_hasPostTarget
-        && self->_hasNormalTarget && self->_sceneDepthSamplable)
+    if (OutlineActive)
     {
-        RenderNormalBuffer(self, world, camera, SceneFilter);
         BeginTextureMode(self->_postTarget);
         ClearBackground(BLACK);
         DrawPostFX(self, world, camera);

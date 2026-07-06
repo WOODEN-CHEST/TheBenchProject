@@ -46,6 +46,12 @@ uniform bool hasMraMap;
 uniform bool hasNormalMap;
 uniform bool hasEmissiveMap;
 
+// Screen-space ambient occlusion, computed in a pre-pass (shaders/ao) and applied to ONLY the ambient term
+// here (so it never dims the direct sun / point lights). aoMapActive false => no SSAO this frame.
+uniform sampler2D ambientOcclusionMap; // AO multiplier in R (1 = open, < 1 = occluded)
+uniform bool aoMapActive;
+uniform vec2 aoResolution;             // scene-target size in pixels, to map gl_FragCoord -> AO map uv
+
 // Point lights, culled + uploaded per object by the renderer (nearest/strongest that reach this object).
 // MAX_POINT_LIGHTS MUST match WORLD_MAX_FORWARD_LIGHTS in WorldLightCulling.h.
 #define MAX_POINT_LIGHTS 8
@@ -420,7 +426,9 @@ void main()
     }
 
     // Flat ambient skylight stand-in (proper image-based lighting lands with the atmospheric sky step).
-    vec3 ambient = ambientColor*ambientIntensity*albedo*occlusion;
+    // Screen-space AO darkens ONLY this ambient term (never the direct light below).
+    float screenAo = aoMapActive ? texture(ambientOcclusionMap, gl_FragCoord.xy/aoResolution).r : 1.0;
+    vec3 ambient = ambientColor*ambientIntensity*albedo*occlusion*screenAo;
 
     vec3 emissive = emissiveColor*emissiveIntensity;
     if (hasEmissiveMap)
