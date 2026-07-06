@@ -1,0 +1,4 @@
+{
+    "name": "world_bloom_prefilter",
+    "fragment_location": "bloom_prefilter/fragment"
+}

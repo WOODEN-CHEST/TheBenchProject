@@ -11,6 +11,11 @@ uniform sampler2D texture0;   // the linear-HDR scene render target
 uniform vec4 colDiffuse;      // blit tint (WHITE in normal use)
 uniform float exposure;       // HDR eye-adaptation multiplier (1 = neutral); set by the renderer each frame
 
+// Bloom: a blurred bright-pass of the scene, added back in linear HDR before tonemapping. bloomStrength 0
+// disables it (and the sampler is then NOT read, so it need not be bound — avoids reading unit 0 by mistake).
+uniform sampler2D bloomTexture;
+uniform float bloomStrength;
+
 out vec4 finalColor;
 
 // Narkowicz ACES filmic tonemapping approximation (maps linear HDR to displayable 0..1).
@@ -27,10 +32,19 @@ vec3 TonemapACES(vec3 x)
 void main()
 {
     vec4 scene = texture(texture0, fragTexCoord);
+    vec3 hdr = max(scene.rgb, vec3(0.0));
+
+    // Add bloom (already the blurred bright-pass) in linear HDR. Only sample when it actually contributes, so a
+    // disabled/unbound bloom sampler is never read (an unbound sampler would read texture unit 0 = the scene).
+    if (bloomStrength > 0.0)
+    {
+        hdr += max(texture(bloomTexture, fragTexCoord).rgb, vec3(0.0)) * bloomStrength;
+    }
+
     // Apply eye-adaptation exposure in linear HDR, then tonemap. exposure defaults to 0 if the renderer never
     // set it (uninitialized uniform); guard so the image is not blacked out in that case.
     float ev = (exposure > 0.0) ? exposure : 1.0;
-    vec3 mapped = TonemapACES(max(scene.rgb, vec3(0.0))*ev);
+    vec3 mapped = TonemapACES(hdr*ev);
     mapped = pow(mapped, vec3(1.0/2.2)); // linear -> sRGB for the 8-bit frame target
 
     finalColor = vec4(mapped, scene.a)*fragColor*colDiffuse;

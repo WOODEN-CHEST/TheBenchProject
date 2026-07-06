@@ -110,6 +110,19 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
             Error_Deconstruct(&LogResult);
         }
     }
+
+    // B toggles bloom independently (for A/B-ing the glow).
+    if (IsKeyPressed(KEY_B))
+    {
+        bool Enabled = !WorldRenderer_IsBloomEnabled(frame->_renderer);
+        WorldRenderer_SetBloomEnabled(frame->_renderer, Enabled);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: bloom %s.", Enabled ? "ON" : "OFF");
+            Error_Deconstruct(&LogResult);
+        }
+    }
 }
 
 

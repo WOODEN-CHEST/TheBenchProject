@@ -137,6 +137,24 @@ void WorldRenderer_SetPostEffectsEnabled(WorldRenderer* self, bool enabled);
 bool WorldRenderer_ArePostEffectsEnabled(const WorldRenderer* self);
 
 /**
+ * @brief Enables or disables the bloom pass (a blurred bright-pass of the scene added back in HDR).
+ *
+ * A code-side toggle for A/B-ing bloom independently of the AO/outline post pass; when disabled the tonemap
+ * adds no bloom. Bloom also self-disables when the effective (world x config) bloom strength is 0 or the bloom
+ * shaders/targets are unavailable. Default enabled. Applied on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to run the bloom pass, false to skip it.
+ */
+void WorldRenderer_SetBloomEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the bloom pass is enabled (the code-side toggle only, not the strength/asset gates).
+ * @param self The renderer; must not be NULL.
+ * @returns true if the bloom toggle is on.
+ */
+bool WorldRenderer_IsBloomEnabled(const WorldRenderer* self);
+
+/**
  * @brief Enables or disables the debug reference grid drawn on the ground plane.
  * @param self The renderer; must not be NULL.
  * @param enabled true to draw the grid, false to hide it.

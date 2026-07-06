@@ -1,0 +1,4 @@
+{
+    "name": "world_bloom_blur",
+    "fragment_location": "bloom_blur/fragment"
+}

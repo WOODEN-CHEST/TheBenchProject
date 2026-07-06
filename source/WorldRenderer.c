@@ -141,6 +141,21 @@
 #define SCENE_NEAR_PLANE ((double)RL_CULL_DISTANCE_NEAR)
 #define SCENE_FAR_PLANE ((double)RL_CULL_DISTANCE_FAR)
 
+/** Asset names of the two bloom shaders: a bright-pass/downsample prefilter and a separable Gaussian blur. */
+#define BLOOM_PREFILTER_SHADER_ASSET_NAME ((const unsigned char*)u8"world_bloom_prefilter")
+#define BLOOM_BLUR_SHADER_ASSET_NAME ((const unsigned char*)u8"world_bloom_blur")
+/** Divisor on the scene resolution for the bloom buffers (2 = half res). Bloom is a soft glow, so a lower-res
+ *  buffer is cheaper and looks the same; the blur taps rely on BILINEAR filtering of these buffers. */
+#define BLOOM_RESOLUTION_DIVISOR 2
+/** Number of horizontal+vertical blur iterations; more = a wider, softer glow (at more passes). */
+#define BLOOM_BLUR_ITERATIONS 2
+/** Linear-HDR brightness (max channel) above which a pixel starts to bloom, and the soft-knee width [0,1]. */
+#define BLOOM_THRESHOLD 1.0f
+#define BLOOM_SOFT_KNEE 0.5f
+/** Base bloom intensity at world+config bloom strength 1.0 (how strongly the blurred bright-pass is added back
+ *  in linear HDR); the world and config bloom-strength multipliers scale this. */
+#define BLOOM_BASE_INTENSITY 0.15f
+
 
 // Types.
 struct WorldRendererStruct
@@ -161,8 +176,23 @@ struct WorldRendererStruct
     GameShader* _pbrShader;
     /** The tonemap post-pass shader applied when blitting the HDR scene to the frame; borrowed. NULL = unavailable. */
     GameShader* _tonemapShader;
-    /** Cached tonemap exposure uniform location (-1 when absent). */
+    /** Cached tonemap uniform locations (-1 when absent). */
     int _tonemapLocExposure;
+    int _tonemapLocBloomTexture;
+    int _tonemapLocBloomStrength;
+    /** The two bloom shaders (bright-pass prefilter + separable blur); borrowed. NULL = bloom unavailable. */
+    GameShader* _bloomPrefilterShader;
+    GameShader* _bloomBlurShader;
+    /** Cached bloom-prefilter uniform locations (-1 when absent). */
+    int _bloomPrefilterLocResolution;
+    int _bloomPrefilterLocThreshold;
+    int _bloomPrefilterLocSoftKnee;
+    /** Cached bloom-blur uniform locations (-1 when absent). */
+    int _bloomBlurLocResolution;
+    int _bloomBlurLocDirection;
+    /** Whether bloom is drawn (code toggle for A/B testing; on by default). Bloom also self-disables when the
+     *  effective (world x config) bloom strength is 0. */
+    bool _bloomEnabled;
     /** Base scene-illumination luminance (ambient + sun) computed each frame in the lighting upload; the eye
      *  adaptation step adds nearby point lights to it. */
     float _baseSceneLuminance;
@@ -267,6 +297,15 @@ struct WorldRendererStruct
     RenderTexture2D _normalTarget;
     /** Whether _normalTarget has been created. */
     bool _hasNormalTarget;
+    /** Ping-pong bloom buffers (colour-only HDR, reduced resolution, BILINEAR): prefilter writes A, then the
+     *  separable blur ping-pongs A<->B, leaving the final blurred bloom in A. Only made when bloom can run. */
+    RenderTexture2D _bloomTargetA;
+    RenderTexture2D _bloomTargetB;
+    /** Whether the bloom targets have been created. */
+    bool _hasBloomTargets;
+    /** Size of the bloom buffers, in pixels. */
+    int _bloomWidth;
+    int _bloomHeight;
     /** Current width of _sceneTarget, in pixels. */
     int _sceneWidth;
     /** Current height of _sceneTarget, in pixels. */
@@ -457,6 +496,12 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
         UnloadRenderTexture(self->_normalTarget);
         self->_hasNormalTarget = false;
     }
+    if (self->_hasBloomTargets)
+    {
+        UnloadRenderTexture(self->_bloomTargetA);
+        UnloadRenderTexture(self->_bloomTargetB);
+        self->_hasBloomTargets = false;
+    }
 
     self->_sceneTarget = CreateSceneTarget(DesiredWidth, DesiredHeight, &self->_sceneIsHDR, &self->_sceneDepthSamplable);
     // Point filtering makes the upscale to the window produce hard, square pixels.
@@ -487,6 +532,33 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
         if (self->_hasNormalTarget)
         {
             SetTextureFilter(self->_normalTarget.texture, TEXTURE_FILTER_POINT);
+        }
+    }
+
+    // Bloom ping-pong buffers (colour-only HDR, reduced resolution). Only when both bloom shaders are present.
+    // BILINEAR filtering is required — the blur's fractional-texel taps and the tonemap's bloom upsample both
+    // rely on it (the smooth glow is intentionally NOT the pixelated look).
+    if ((self->_bloomPrefilterShader != NULL) && (self->_bloomBlurShader != NULL))
+    {
+        int BloomWidth = DesiredWidth / BLOOM_RESOLUTION_DIVISOR;
+        int BloomHeight = DesiredHeight / BLOOM_RESOLUTION_DIVISOR;
+        if (BloomWidth < 1) { BloomWidth = 1; }
+        if (BloomHeight < 1) { BloomHeight = 1; }
+        self->_bloomTargetA = CreatePostTarget(BloomWidth, BloomHeight);
+        self->_bloomTargetB = CreatePostTarget(BloomWidth, BloomHeight);
+        self->_hasBloomTargets = (self->_bloomTargetA.id != 0) && (self->_bloomTargetB.id != 0);
+        if (self->_hasBloomTargets)
+        {
+            self->_bloomWidth = BloomWidth;
+            self->_bloomHeight = BloomHeight;
+            SetTextureFilter(self->_bloomTargetA.texture, TEXTURE_FILTER_BILINEAR);
+            SetTextureFilter(self->_bloomTargetB.texture, TEXTURE_FILTER_BILINEAR);
+        }
+        else
+        {
+            // Partial creation: release whichever succeeded so nothing leaks and the pass cleanly skips.
+            if (self->_bloomTargetA.id != 0) { UnloadRenderTexture(self->_bloomTargetA); }
+            if (self->_bloomTargetB.id != 0) { UnloadRenderTexture(self->_bloomTargetB); }
         }
     }
 
@@ -542,6 +614,12 @@ static float ConfigAoStrength(const WorldRenderer* self)
 static float ConfigFogStrength(const WorldRenderer* self)
 {
     return (self->_config != NULL) ? self->_config->FogStrength : 1.0f;
+}
+
+/* Config-side bloom strength multiplier (1.0 when no config is bound). Combined with the world's own. */
+static float ConfigBloomStrength(const WorldRenderer* self)
+{
+    return (self->_config != NULL) ? self->_config->BloomStrength : 1.0f;
 }
 
 /* Converts an 8-bit sRGB colour to linear light in [0,1]^3 (alpha ignored). Light/ambient colours must be
@@ -646,7 +724,28 @@ static void EnsureShaders(WorldRenderer* self)
     self->_tonemapShader = LoadRendererShader(self, TONEMAP_SHADER_ASSET_NAME);
     if (self->_tonemapShader != NULL)
     {
-        self->_tonemapLocExposure = GetShaderLocation(GameShader_GetRaylibShader(self->_tonemapShader), "exposure");
+        Shader RayShader = GameShader_GetRaylibShader(self->_tonemapShader);
+        self->_tonemapLocExposure = GetShaderLocation(RayShader, "exposure");
+        self->_tonemapLocBloomTexture = GetShaderLocation(RayShader, "bloomTexture");
+        self->_tonemapLocBloomStrength = GetShaderLocation(RayShader, "bloomStrength");
+    }
+
+    // Bloom shaders (bright-pass prefilter + separable blur). Optional: without them (or without the tonemap's
+    // bloom uniforms, or the reduced-res bloom targets) the bloom pass is skipped and the scene tonemaps as-is.
+    self->_bloomPrefilterShader = LoadRendererShader(self, BLOOM_PREFILTER_SHADER_ASSET_NAME);
+    if (self->_bloomPrefilterShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_bloomPrefilterShader);
+        self->_bloomPrefilterLocResolution = GetShaderLocation(RayShader, "resolution");
+        self->_bloomPrefilterLocThreshold = GetShaderLocation(RayShader, "threshold");
+        self->_bloomPrefilterLocSoftKnee = GetShaderLocation(RayShader, "softKnee");
+    }
+    self->_bloomBlurShader = LoadRendererShader(self, BLOOM_BLUR_SHADER_ASSET_NAME);
+    if (self->_bloomBlurShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_bloomBlurShader);
+        self->_bloomBlurLocResolution = GetShaderLocation(RayShader, "resolution");
+        self->_bloomBlurLocDirection = GetShaderLocation(RayShader, "direction");
     }
 
     // Depth shader + shadow map for the sun shadow pass (optional; models draw unshadowed without them).
@@ -1283,6 +1382,59 @@ static void DrawPostFX(WorldRenderer* self, World* world, const GameCamera* came
     EndShaderMode();
 }
 
+/* Runs the bloom pass: bright-passes @p source (the linear-HDR scene, or post-processed scene) into the
+ * reduced-res bloom buffer A, then blurs it with a separable Gaussian (BLOOM_BLUR_ITERATIONS horizontal+vertical
+ * iterations, ping-ponging A<->B), leaving the final blurred bloom in _bloomTargetA for the tonemap to add. Each
+ * sub-pass opens/closes its own texture + shader modes. The bloom shaders sample by gl_FragCoord/resolution, so
+ * a positive-height full copy keeps every bloom buffer in the scene's orientation (the tonemap then samples the
+ * bloom with the same fragTexCoord it uses for the scene, so the glow lines up). Caller ensures bloom is ready. */
+static void RenderBloom(WorldRenderer* self, RenderTexture2D source)
+{
+    float BloomResolution[2] = { (float)self->_bloomWidth, (float)self->_bloomHeight };
+    Rectangle FullDest = { 0.0f, 0.0f, (float)self->_bloomWidth, (float)self->_bloomHeight };
+    Rectangle BloomSourceRect = { 0.0f, 0.0f, (float)self->_bloomWidth, (float)self->_bloomHeight };
+
+    // Bright-pass + downsample the source into bloom buffer A.
+    Shader Prefilter = GameShader_GetRaylibShader(self->_bloomPrefilterShader);
+    float Threshold = BLOOM_THRESHOLD;
+    float SoftKnee = BLOOM_SOFT_KNEE;
+    Rectangle SourceRect = { 0.0f, 0.0f, (float)source.texture.width, (float)source.texture.height };
+    BeginTextureMode(self->_bloomTargetA);
+    ClearBackground(BLANK);
+    SetShaderValue(Prefilter, self->_bloomPrefilterLocResolution, BloomResolution, SHADER_UNIFORM_VEC2);
+    SetShaderValue(Prefilter, self->_bloomPrefilterLocThreshold, &Threshold, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(Prefilter, self->_bloomPrefilterLocSoftKnee, &SoftKnee, SHADER_UNIFORM_FLOAT);
+    BeginShaderMode(Prefilter);
+    DrawTexturePro(source.texture, SourceRect, FullDest, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
+    EndShaderMode();
+    EndTextureMode();
+
+    // Separable Gaussian blur, ping-ponging A<->B: horizontal (A->B) then vertical (B->A) per iteration.
+    Shader Blur = GameShader_GetRaylibShader(self->_bloomBlurShader);
+    for (int Iteration = 0; Iteration < BLOOM_BLUR_ITERATIONS; Iteration++)
+    {
+        float DirectionH[2] = { 1.0f, 0.0f };
+        BeginTextureMode(self->_bloomTargetB);
+        ClearBackground(BLANK);
+        SetShaderValue(Blur, self->_bloomBlurLocResolution, BloomResolution, SHADER_UNIFORM_VEC2);
+        SetShaderValue(Blur, self->_bloomBlurLocDirection, DirectionH, SHADER_UNIFORM_VEC2);
+        BeginShaderMode(Blur);
+        DrawTexturePro(self->_bloomTargetA.texture, BloomSourceRect, FullDest, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
+        EndShaderMode();
+        EndTextureMode();
+
+        float DirectionV[2] = { 0.0f, 1.0f };
+        BeginTextureMode(self->_bloomTargetA);
+        ClearBackground(BLANK);
+        SetShaderValue(Blur, self->_bloomBlurLocResolution, BloomResolution, SHADER_UNIFORM_VEC2);
+        SetShaderValue(Blur, self->_bloomBlurLocDirection, DirectionV, SHADER_UNIFORM_VEC2);
+        BeginShaderMode(Blur);
+        DrawTexturePro(self->_bloomTargetB.texture, BloomSourceRect, FullDest, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
+        EndShaderMode();
+        EndTextureMode();
+    }
+}
+
 
 // Public functions.
 Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const GameConfig* config,
@@ -1312,6 +1464,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_pixelationEnabled = true;
     Renderer->_outlineEnabled = true;
     Renderer->_postfxEnabled = true;
+    Renderer->_bloomEnabled = true;
     Renderer->_hasSceneTarget = false;
 
     *outRenderer = Renderer;
@@ -1341,6 +1494,13 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     {
         UnloadRenderTexture(self->_normalTarget);
         self->_hasNormalTarget = false;
+    }
+
+    if (self->_hasBloomTargets)
+    {
+        UnloadRenderTexture(self->_bloomTargetA);
+        UnloadRenderTexture(self->_bloomTargetB);
+        self->_hasBloomTargets = false;
     }
 
     if (self->_hasShadowMap)
@@ -1461,6 +1621,20 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
         BlitSource = self->_postTarget;
     }
 
+    // Pass 1.75 (optional): bloom. Bright-pass + blur the (post-processed) HDR scene into _bloomTargetA; the
+    // tonemap adds it back in linear HDR. Needs bloom on (code toggle + world flag), a positive effective
+    // strength (world x config), the bloom shaders/targets, and the tonemap's bloom uniforms.
+    float EffectiveBloom = (Environment->IsBloomEnabled && self->_bloomEnabled)
+        ? (Environment->BloomStrength * ConfigBloomStrength(self) * BLOOM_BASE_INTENSITY) : 0.0f;
+    if (EffectiveBloom < 0.0f) { EffectiveBloom = 0.0f; }
+    bool BloomActive = (EffectiveBloom > 0.0f) && self->_hasBloomTargets
+        && (self->_bloomPrefilterShader != NULL) && (self->_bloomBlurShader != NULL)
+        && (self->_tonemapShader != NULL) && (self->_tonemapLocBloomStrength >= 0);
+    if (BloomActive)
+    {
+        RenderBloom(self, BlitSource);
+    }
+
     // Pass 2: blit the (post-processed) scene into the frame target, tonemapping the linear-HDR result to
     // sRGB via the tonemap shader as it upscales. A negative source height applies the vertical flip Raylib
     // render textures need (the same convention the frame manager uses when compositing), and point filtering
@@ -1483,7 +1657,16 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     {
         Shader TonemapRay = GameShader_GetRaylibShader(self->_tonemapShader);
         SetShaderValue(TonemapRay, self->_tonemapLocExposure, &Exposure, SHADER_UNIFORM_FLOAT);
+        // Bloom strength (0 when inactive → the shader skips sampling the bloom texture, so it need not bind).
+        float BloomStrengthUniform = BloomActive ? EffectiveBloom : 0.0f;
+        SetShaderValue(TonemapRay, self->_tonemapLocBloomStrength, &BloomStrengthUniform, SHADER_UNIFORM_FLOAT);
         BeginShaderMode(TonemapRay);
+        // Bind the blurred bloom as a second sampler (unit 1) AFTER BeginShaderMode, via SetShaderValueTexture so
+        // it enters Raylib's 2D batch texture table (the manual-slot idiom would leave it on unit 0 = the scene).
+        if (BloomActive)
+        {
+            SetShaderValueTexture(TonemapRay, self->_tonemapLocBloomTexture, self->_bloomTargetA.texture);
+        }
     }
     DrawTexturePro(BlitSource.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
     if (self->_tonemapShader != NULL)
@@ -1513,6 +1696,16 @@ void WorldRenderer_SetPostEffectsEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_ArePostEffectsEnabled(const WorldRenderer* self)
 {
     return self->_postfxEnabled;
+}
+
+void WorldRenderer_SetBloomEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_bloomEnabled = enabled;
+}
+
+bool WorldRenderer_IsBloomEnabled(const WorldRenderer* self)
+{
+    return self->_bloomEnabled;
 }
 
 void WorldRenderer_SetDebugGridEnabled(WorldRenderer* self, bool enabled)
