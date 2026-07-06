@@ -70,6 +70,40 @@
  *  Caching avoids re-scanning a model's mesh vertices every frame just to get its bounding sphere. */
 #define BOUNDS_CACHE_CAPACITY 256
 
+/** Dim cool night ambient (LINEAR RGB) the daytime skylight fades to at night, so the world darkens instead of
+ *  keeping its daytime blue tint. Kept just above 0 so eye adaptation has something to reveal (like moonlight). */
+#define NIGHT_AMBIENT_R 0.006f
+#define NIGHT_AMBIENT_G 0.008f
+#define NIGHT_AMBIENT_B 0.016f
+/** How much the (directional) sun counts toward the scene-illumination estimate driving eye adaptation. */
+#define SUN_ADAPT_WEIGHT 0.5f
+/** Base exponential fog density at world+config fog strength 1.0 (per world unit). Distant geometry fades to
+ *  the fog colour; the world and config fog-strength multipliers scale this. */
+#define BASE_FOG_DENSITY 0.008f
+/** Fraction of the fog colour that survives at night (so distant geometry fades to dark, not daytime blue). */
+#define FOG_NIGHT_FLOOR 0.05f
+
+// ---- Eye adaptation (HDR auto-exposure) ----
+/** Scene illumination that maps to exposure 1.0 (roughly full daylight); brighter dims, darker brightens. */
+#define ADAPT_REFERENCE_LUMINANCE 0.80f
+/** Exposure clamp: never darker than this (so a bright light cannot black the world out)... */
+#define ADAPT_MIN_EXPOSURE 0.5f
+/** ...and never brighter than this (bounds how far a pitch-black night is lifted). */
+#define ADAPT_MAX_EXPOSURE 40.0f
+/** Floor on the estimated scene luminance, so exposure never divides by ~0. */
+#define ADAPT_MIN_LUMINANCE 0.02f
+/** Base adaptation rate (1/seconds); deliberately slow. Higher = quicker adaptation overall. */
+#define ADAPT_BASE_SPEED 0.6f
+/** Extra rate per unit of |brightness change|, so large jumps adapt faster than gentle drifts. */
+#define ADAPT_DELTA_GAIN 0.8f
+/** Multiplier applied when BRIGHTENING (target > current): light adaptation is quicker than dark adaptation,
+ *  so going from a dark night to facing a light snaps down fast, while dark-adapting stays slow. */
+#define ADAPT_BRIGHTEN_MULTIPLIER 5.0f
+/** Clamp on a single frame's delta time feeding adaptation, so one long stall cannot jump the exposure. */
+#define ADAPT_MAX_DELTA_SECONDS 0.1f
+/** Per-point-light weight in the adaptation estimate (how strongly being near a light lowers exposure). */
+#define POINT_ADAPT_WEIGHT 0.5f
+
 /** Asset name of the post-process shader (screen-space AO + hand-drawn outlines) run before the tonemap. */
 #define POSTFX_SHADER_ASSET_NAME ((const unsigned char*)u8"world_postfx")
 /** Asset name of the normal/mask G-buffer shader: writes a view-space normal (RGB) + surface/outline flag (A)
@@ -103,6 +137,15 @@ struct WorldRendererStruct
     GameShader* _pbrShader;
     /** The tonemap post-pass shader applied when blitting the HDR scene to the frame; borrowed. NULL = unavailable. */
     GameShader* _tonemapShader;
+    /** Cached tonemap exposure uniform location (-1 when absent). */
+    int _tonemapLocExposure;
+    /** Base scene-illumination luminance (ambient + sun) computed each frame in the lighting upload; the eye
+     *  adaptation step adds nearby point lights to it. */
+    float _baseSceneLuminance;
+    /** The eye's currently adapted luminance (drives auto-exposure); eased toward the scene luminance over time. */
+    float _adaptedLuminance;
+    /** false until the first adaptation update snaps _adaptedLuminance to the scene (avoids a first-frame flash). */
+    bool _adaptationInitialized;
     /** The atmospheric sky shader drawn behind the geometry; borrowed. NULL = fall back to the gradient clear. */
     GameShader* _skyShader;
     /** The depth-only shader used for the sun shadow-map pass; borrowed. NULL = no shadows. */
@@ -165,6 +208,9 @@ struct WorldRendererStruct
     int _locPointLightPositions;
     int _locPointLightRadiances;
     int _locPointLightRanges;
+    /** Cached PBR distance-fog uniform locations (-1 when absent). */
+    int _locFogColor;
+    int _locFogDensity;
     /** Per-asset local bounding-sphere cache (keyed by GameModel*), for point-light reach culling. */
     const void* _boundsCacheAsset[BOUNDS_CACHE_CAPACITY];
     Vector3 _boundsCacheCenter[BOUNDS_CACHE_CAPACITY];
@@ -464,6 +510,12 @@ static float ConfigAoStrength(const WorldRenderer* self)
     return (self->_config != NULL) ? self->_config->AmbientOcclusionStrength : 1.0f;
 }
 
+/* Config-side fog strength multiplier (1.0 when no config is bound). */
+static float ConfigFogStrength(const WorldRenderer* self)
+{
+    return (self->_config != NULL) ? self->_config->FogStrength : 1.0f;
+}
+
 /* Converts an 8-bit sRGB colour to linear light in [0,1]^3 (alpha ignored). Light/ambient colours must be
  * linear before they enter the PBR maths; the shader linearizes textured albedo itself. */
 static void ColorToLinear(Color color, float outRGB[3])
@@ -541,6 +593,9 @@ static void EnsureShaders(WorldRenderer* self)
         self->_locPointLightRadiances = GetShaderLocation(RayShader, "pointLightRadiances");
         self->_locPointLightRanges = GetShaderLocation(RayShader, "pointLightRanges");
 
+        self->_locFogColor = GetShaderLocation(RayShader, "fogColor");
+        self->_locFogDensity = GetShaderLocation(RayShader, "fogDensity");
+
         // Constant material + shadow parameters; upload once.
         float Metallic = PBR_DEFAULT_METALLIC;
         float Roughness = PBR_DEFAULT_ROUGHNESS;
@@ -559,6 +614,10 @@ static void EnsureShaders(WorldRenderer* self)
     }
 
     self->_tonemapShader = LoadRendererShader(self, TONEMAP_SHADER_ASSET_NAME);
+    if (self->_tonemapShader != NULL)
+    {
+        self->_tonemapLocExposure = GetShaderLocation(GameShader_GetRaylibShader(self->_tonemapShader), "exposure");
+    }
 
     // Depth shader + shadow map for the sun shadow pass (optional; models draw unshadowed without them).
     self->_depthShader = LoadRendererShader(self, DEPTH_SHADER_ASSET_NAME);
@@ -636,15 +695,51 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
     float SunDir[3] = { SunDirection.x, SunDirection.y, SunDirection.z };
     SetShaderValue(RayShader, self->_locSunDirection, SunDir, SHADER_UNIFORM_VEC3);
 
+    // Day-night cycle: the sun stops lighting objects once it is below the horizon, and the ambient skylight
+    // fades from its authored daytime colour to a dim night ambient. Without this the constant ambient kept
+    // objects fully bright and daytime-blue-tinted all night.
+    float Daylight = WorldEnvironment_GetDaylightFactor(Environment); // 1 day .. 0 night
+
     float SunColor[3];
     ColorToLinear(Environment->SunColor, SunColor);
     SetShaderValue(RayShader, self->_locSunColor, SunColor, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_locSunIntensity, &Environment->SunIntensity, SHADER_UNIFORM_FLOAT);
+    float EffectiveSunIntensity = Environment->SunIntensity * Daylight;
+    SetShaderValue(RayShader, self->_locSunIntensity, &EffectiveSunIntensity, SHADER_UNIFORM_FLOAT);
 
+    // Ambient blended day->night, folded into the colour (intensity kept at 1). Daytime = authored skylight ×
+    // its intensity; night = the dim cool NIGHT_AMBIENT.
+    float DayAmbient[3];
+    ColorToLinear(Environment->AmbientSkylightColor, DayAmbient);
+    float NightAmbient[3] = { NIGHT_AMBIENT_R, NIGHT_AMBIENT_G, NIGHT_AMBIENT_B };
     float AmbientColor[3];
-    ColorToLinear(Environment->AmbientSkylightColor, AmbientColor);
+    for (int Channel = 0; Channel < 3; Channel++)
+    {
+        float Day = DayAmbient[Channel] * Environment->AmbientSkylightIntensity;
+        AmbientColor[Channel] = NightAmbient[Channel] + (Day - NightAmbient[Channel]) * Daylight;
+    }
     SetShaderValue(RayShader, self->_locAmbientColor, AmbientColor, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_locAmbientIntensity, &Environment->AmbientSkylightIntensity, SHADER_UNIFORM_FLOAT);
+    float AmbientIntensity = 1.0f;
+    SetShaderValue(RayShader, self->_locAmbientIntensity, &AmbientIntensity, SHADER_UNIFORM_FLOAT);
+
+    // Stash the base scene-illumination luminance (ambient + weighted sun) for the eye-adaptation step, which
+    // adds nearby point lights and eases the exposure toward it.
+    float SunLum = (0.2126f*SunColor[0] + 0.7152f*SunColor[1] + 0.0722f*SunColor[2]) * EffectiveSunIntensity;
+    float AmbientLum = 0.2126f*AmbientColor[0] + 0.7152f*AmbientColor[1] + 0.0722f*AmbientColor[2];
+    self->_baseSceneLuminance = AmbientLum + SunLum*SUN_ADAPT_WEIGHT;
+
+    // Distance fog: colour (linear) darkened toward night by the daylight factor so distant geometry fades to
+    // dark at night rather than to the daytime fog blue; density = base × world × config fog strength.
+    float FogColor[3];
+    ColorToLinear(Environment->FogColor, FogColor);
+    float FogDayScale = FOG_NIGHT_FLOOR + (1.0f - FOG_NIGHT_FLOOR)*Daylight;
+    for (int Channel = 0; Channel < 3; Channel++)
+    {
+        FogColor[Channel] *= FogDayScale;
+    }
+    SetShaderValue(RayShader, self->_locFogColor, FogColor, SHADER_UNIFORM_VEC3);
+    float FogDensity = BASE_FOG_DENSITY * Environment->FogStrength * ConfigFogStrength(self);
+    if (FogDensity < 0.0f) { FogDensity = 0.0f; }
+    SetShaderValue(RayShader, self->_locFogDensity, &FogDensity, SHADER_UNIFORM_FLOAT);
 
     // Sun shadow: upload the light matrix and bind the depth map (to a slot clear of the material maps) when
     // shadows are active this frame; otherwise pass strength 0 so the PBR shader skips shadow sampling.
@@ -658,6 +753,95 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
     }
     float ShadowStrength = self->_shadowActive ? (Environment->ShadowStrength * ConfigShadowStrength(self)) : 0.0f;
     SetShaderValue(RayShader, self->_locShadowStrength, &ShadowStrength, SHADER_UNIFORM_FLOAT);
+}
+
+/* Eases the adapted luminance toward the scene luminance over @p dt seconds. Slow in general, but faster the
+ * larger the brightness change, and faster still when BRIGHTENING (facing a light) than when dark-adapting —
+ * so a jump from a black night to a bright light snaps down quickly while dark-adaptation stays gradual. */
+static float AdaptLuminance(float adapted, float target, float dt)
+{
+    if (dt <= 0.0f)
+    {
+        return adapted;
+    }
+    if (dt > ADAPT_MAX_DELTA_SECONDS)
+    {
+        dt = ADAPT_MAX_DELTA_SECONDS;
+    }
+    float Delta = target - adapted;
+    float Speed = ADAPT_BASE_SPEED * (1.0f + ADAPT_DELTA_GAIN * fabsf(Delta));
+    if (Delta > 0.0f)
+    {
+        Speed *= ADAPT_BRIGHTEN_MULTIPLIER;
+    }
+    float Rate = 1.0f - expf(-dt * Speed);
+    if (Rate < 0.0f) { Rate = 0.0f; }
+    if (Rate > 1.0f) { Rate = 1.0f; }
+    return adapted + Delta * Rate;
+}
+
+/* Maps an adapted luminance to a tonemap exposure: reference/adapted, clamped. Day-level luminance gives ~1,
+ * a dark night gives a large exposure (revealing the dim ambient), a bright light gives a small one. */
+static float ExposureFromAdapted(float adapted)
+{
+    float Luminance = (adapted < ADAPT_MIN_LUMINANCE) ? ADAPT_MIN_LUMINANCE : adapted;
+    float Exposure = ADAPT_REFERENCE_LUMINANCE / Luminance;
+    if (Exposure < ADAPT_MIN_EXPOSURE) { Exposure = ADAPT_MIN_EXPOSURE; }
+    if (Exposure > ADAPT_MAX_EXPOSURE) { Exposure = ADAPT_MAX_EXPOSURE; }
+    return Exposure;
+}
+
+/* Updates HDR eye adaptation for the frame and returns the exposure for the tonemap. Starts from the base
+ * scene luminance (ambient + sun, set by UpdateLightingUniforms), adds nearby point lights (being near a
+ * light raises the estimate → lowers exposure), then eases the adapted luminance toward it. */
+static float UpdateEyeAdaptation(WorldRenderer* self, World* world, const GameCamera* camera, float dt)
+{
+    float SceneLuminance = self->_baseSceneLuminance;
+
+    size_t ObjectCount = World_GetObjectCount(world);
+    for (size_t Index = 0; Index < ObjectCount; Index++)
+    {
+        WorldObject* Object = NULL;
+        Error GetResult = World_GetObjectByIndex(world, Index, &Object);
+        if (GetResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&GetResult);
+            continue;
+        }
+        if (WorldObject_GetType(Object) != WorldObjectType_Light)
+        {
+            continue;
+        }
+
+        WorldLight* Light = (WorldLight*)Object;
+        float Range = WorldLight_GetSize(Light);
+        float Intensity = WorldLight_GetIntensity(Light);
+        if ((Range <= 0.0f) || (Intensity <= 0.0f))
+        {
+            continue;
+        }
+        float Distance = Vector3Distance(WorldObject_GetPosition(Object), camera->Position);
+        if (Distance >= Range)
+        {
+            continue;
+        }
+        float LinearColor[3];
+        ColorToLinear(Light->Color, LinearColor);
+        float LightLum = 0.2126f*LinearColor[0] + 0.7152f*LinearColor[1] + 0.0722f*LinearColor[2];
+        float Proximity = 1.0f - (Distance / Range);
+        SceneLuminance += LightLum*Intensity*Proximity*Proximity*POINT_ADAPT_WEIGHT;
+    }
+
+    if (!self->_adaptationInitialized)
+    {
+        self->_adaptedLuminance = SceneLuminance; // snap on the first frame so there is no start-up flash
+        self->_adaptationInitialized = true;
+    }
+    else
+    {
+        self->_adaptedLuminance = AdaptLuminance(self->_adaptedLuminance, SceneLuminance, dt);
+    }
+    return ExposureFromAdapted(self->_adaptedLuminance);
 }
 
 /* Returns the model's LOCAL (pre-transform) bounding-sphere centre + radius, caching per asset so the mesh
@@ -1176,7 +1360,8 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
     return Error_CreateSuccess();
 }
 
-Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const GameCamera* camera, RenderTexture2D target)
+Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const GameCamera* camera,
+    double deltaSeconds, RenderTexture2D target)
 {
     if ((self == NULL) || (world == NULL) || (camera == NULL))
     {
@@ -1240,9 +1425,14 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
         .height = -(float)BlitSource.texture.height
     };
     Rectangle Destination = { .x = 0.0f, .y = 0.0f, .width = (float)WindowWidth, .height = (float)WindowHeight };
+    // HDR eye adaptation: ease the exposure toward the scene brightness and feed it to the tonemap, so the
+    // day-night cycle stays readable (a dark night is lifted; a bright light pulls it back down).
+    float Exposure = UpdateEyeAdaptation(self, world, camera, (float)deltaSeconds);
     if (self->_tonemapShader != NULL)
     {
-        BeginShaderMode(GameShader_GetRaylibShader(self->_tonemapShader));
+        Shader TonemapRay = GameShader_GetRaylibShader(self->_tonemapShader);
+        SetShaderValue(TonemapRay, self->_tonemapLocExposure, &Exposure, SHADER_UNIFORM_FLOAT);
+        BeginShaderMode(TonemapRay);
     }
     DrawTexturePro(BlitSource.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
     if (self->_tonemapShader != NULL)

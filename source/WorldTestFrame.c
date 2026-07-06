@@ -232,10 +232,11 @@ static bool WorldTestFrame_IsUnloaded(void* self)
 
 static Error WorldTestFrame_Render(void* self, const FrameRenderContext* context, RenderTexture2D target)
 {
-    UNUSED(context); // The renderer owns its own passes and the 3D view fills the whole target.
     WorldTestFrame* Frame = self;
     // All input (movement, mouse look, debug keys) is handled in Update, where input is polled per tick.
-    return WorldRenderer_RenderToTarget(Frame->_renderer, &Frame->_world, &Frame->_camera, target);
+    // The render tick's real frame delta paces the renderer's HDR eye adaptation.
+    return WorldRenderer_RenderToTarget(Frame->_renderer, &Frame->_world, &Frame->_camera,
+        context->Time.PassedTime, target);
 }
 
 static void WorldTestFrame_Destroy(void* self)

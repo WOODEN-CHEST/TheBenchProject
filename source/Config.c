@@ -23,6 +23,8 @@
 #define CONFIG_KEY_SUNSHAFT_STRENGTH ((const unsigned char*)u8"sunshaft_strength")
 /** JSON key for the config-side ambient-occlusion strength multiplier. */
 #define CONFIG_KEY_AMBIENT_OCCLUSION_STRENGTH ((const unsigned char*)u8"ambient_occlusion_strength")
+/** JSON key for the config-side fog strength multiplier. */
+#define CONFIG_KEY_FOG_STRENGTH ((const unsigned char*)u8"fog_strength")
 
 /** Index of the width element within the resolution array. */
 #define CONFIG_RESOLUTION_WIDTH_INDEX ((size_t)0)
@@ -198,6 +200,7 @@ static void ReadConfigValues(JSONCompound* root, GameConfig* config)
     ReadFloat(root, CONFIG_KEY_BLOOM_STRENGTH, &config->BloomStrength);
     ReadFloat(root, CONFIG_KEY_SUNSHAFT_STRENGTH, &config->SunshaftStrength);
     ReadFloat(root, CONFIG_KEY_AMBIENT_OCCLUSION_STRENGTH, &config->AmbientOcclusionStrength);
+    ReadFloat(root, CONFIG_KEY_FOG_STRENGTH, &config->FogStrength);
 }
 
 /* Parses the raw file bytes as a JSON object and overlays its settings onto the config, then discards the
@@ -254,6 +257,7 @@ void GameConfig_SetDefaults(GameConfig* self)
     self->BloomStrength = CONFIG_DEFAULT_EFFECT_STRENGTH;
     self->SunshaftStrength = CONFIG_DEFAULT_EFFECT_STRENGTH;
     self->AmbientOcclusionStrength = CONFIG_DEFAULT_EFFECT_STRENGTH;
+    self->FogStrength = CONFIG_DEFAULT_EFFECT_STRENGTH;
 }
 
 Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
@@ -290,6 +294,7 @@ Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
     ClampEffectStrength(&outConfig->BloomStrength);
     ClampEffectStrength(&outConfig->SunshaftStrength);
     ClampEffectStrength(&outConfig->AmbientOcclusionStrength);
+    ClampEffectStrength(&outConfig->FogStrength);
     return ParseResult;
 }
 

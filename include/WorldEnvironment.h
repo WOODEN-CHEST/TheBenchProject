@@ -135,6 +135,19 @@ void WorldEnvironment_Deconstruct(WorldEnvironment* self);
 Vector3 WorldEnvironment_GetSunDirection(const WorldEnvironment* self);
 
 /**
+ * @brief Returns how much of the sun's light reaches the world right now: 1 in full day, 0 at night.
+ *
+ * A smooth 0..1 factor derived from the sun's elevation (the Y of WorldEnvironment_GetSunDirection): it is 1
+ * while the sun is well above the horizon, ramps down through twilight as the sun approaches and crosses the
+ * horizon, and is 0 once the sun is below it. The renderer multiplies the sun's intensity by this (so the sun
+ * stops lighting objects at night) and blends the ambient skylight from its daytime color toward a dim night
+ * ambient by the same factor, so the world actually darkens over the day-night cycle.
+ * @param self The environment; must not be NULL.
+ * @returns The daylight factor in [0, 1].
+ */
+float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self);
+
+/**
  * @brief Advances the time of day by @p deltaSeconds when the day-night cycle is enabled.
  *
  * Adds @p deltaSeconds / DayLengthSeconds to TimeOfDay and wraps the result into [0, 1). Does nothing if

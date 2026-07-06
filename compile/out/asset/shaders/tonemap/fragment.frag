@@ -9,6 +9,7 @@ in vec4 fragColor;
 
 uniform sampler2D texture0;   // the linear-HDR scene render target
 uniform vec4 colDiffuse;      // blit tint (WHITE in normal use)
+uniform float exposure;       // HDR eye-adaptation multiplier (1 = neutral); set by the renderer each frame
 
 out vec4 finalColor;
 
@@ -26,7 +27,10 @@ vec3 TonemapACES(vec3 x)
 void main()
 {
     vec4 scene = texture(texture0, fragTexCoord);
-    vec3 mapped = TonemapACES(max(scene.rgb, vec3(0.0)));
+    // Apply eye-adaptation exposure in linear HDR, then tonemap. exposure defaults to 0 if the renderer never
+    // set it (uninitialized uniform); guard so the image is not blacked out in that case.
+    float ev = (exposure > 0.0) ? exposure : 1.0;
+    vec3 mapped = TonemapACES(max(scene.rgb, vec3(0.0))*ev);
     mapped = pow(mapped, vec3(1.0/2.2)); // linear -> sRGB for the 8-bit frame target
 
     finalColor = vec4(mapped, scene.a)*fragColor*colDiffuse;

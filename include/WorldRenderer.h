@@ -96,10 +96,13 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world);
  * @param self The renderer; must not be NULL.
  * @param world The world to draw; must not be NULL.
  * @param camera The camera to view from; must not be NULL.
+ * @param deltaSeconds Real seconds since the previous render, used to pace HDR eye adaptation (auto-exposure).
+ *        Pass the render tick's frame delta; 0 (or negative) holds the current adaptation.
  * @param target The frame render target to blit the final image into (its texture size is the window size).
  * @returns Success; ErrorCode_IllegalArgument if @p self, @p world or @p camera is NULL.
  */
-Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const GameCamera* camera, RenderTexture2D target);
+Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const GameCamera* camera,
+    double deltaSeconds, RenderTexture2D target);
 
 /**
  * @brief Enables or disables the final pixelation pass (default enabled). Applied on the next render.

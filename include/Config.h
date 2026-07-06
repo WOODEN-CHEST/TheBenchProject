@@ -59,6 +59,9 @@ typedef struct GameConfigStruct
     /** @brief Config-side ambient-occlusion strength multiplier (times the world's AmbientOcclusionStrength).
      *  Default 1. Scales how strongly screen-space AO darkens creased/contact areas. */
     float AmbientOcclusionStrength;
+    /** @brief Config-side fog strength multiplier (times the world's FogStrength). Default 1. Scales how
+     *  quickly distant geometry fades into the fog. */
+    float FogStrength;
 } GameConfig;
 
 

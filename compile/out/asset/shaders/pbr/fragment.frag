@@ -39,6 +39,10 @@ uniform vec3 pointLightPositions[MAX_POINT_LIGHTS];   // world space
 uniform vec3 pointLightRadiances[MAX_POINT_LIGHTS];   // linear colour * intensity
 uniform float pointLightRanges[MAX_POINT_LIGHTS];     // reach radius (attenuation falls to 0 here)
 
+// Distance fog. fogColor is LINEAR and already day-night scaled by the renderer; fogDensity 0 disables fog.
+uniform vec3 fogColor;
+uniform float fogDensity;
+
 out vec4 finalColor;
 
 const float PI = 3.14159265358979323846;
@@ -169,6 +173,12 @@ void main()
     vec3 ambient = ambientColor*ambientIntensity*albedo*ao;
 
     vec3 color = ambient + direct + pointTotal + emissiveColor*emissiveIntensity;
+
+    // Distance fog: fade toward the (day-night-scaled, linear) fog colour with an exponential falloff, so
+    // distant geometry dissolves into the atmosphere. fogDensity 0 leaves the colour untouched.
+    float fragDistance = length(fragPosition - viewPos);
+    float fogFactor = clamp(1.0 - exp(-fragDistance*fogDensity), 0.0, 1.0);
+    color = mix(color, fogColor, fogFactor);
 
     // Output LINEAR HDR. Tonemapping + gamma happen later in the tonemap post-pass (after the pixelation
     // upscale), so the scene is composited in high dynamic range and mapped to [0,1] only for display.

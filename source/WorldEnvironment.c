@@ -27,6 +27,10 @@
 #define DEFAULT_FOG_STRENGTH 1.0f
 /** Default post-effect strength multiplier applied to bloom/sunshafts/shadows. */
 #define DEFAULT_EFFECT_STRENGTH 1.0f
+/** Sun elevation (GetSunDirection().y) at/below which daylight is fully gone (night). */
+#define DAYLIGHT_SET_ELEVATION (-0.12f)
+/** Sun elevation at/above which daylight is at full strength (day). Twilight ramps between the two. */
+#define DAYLIGHT_RISE_ELEVATION (0.10f)
 
 
 // Public functions.
@@ -130,6 +134,17 @@ Vector3 WorldEnvironment_GetSunDirection(const WorldEnvironment* self)
         .y = BaseY * cosf(Tilt),
         .z = BaseY * sinf(Tilt)
     };
+}
+
+float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self)
+{
+    float Elevation = WorldEnvironment_GetSunDirection(self).y; // [-1, 1]
+    // Smoothstep from "set" to "rise": 0 below the horizon band, 1 above it, a smooth twilight in between.
+    float Range = DAYLIGHT_RISE_ELEVATION - DAYLIGHT_SET_ELEVATION;
+    float T = (Elevation - DAYLIGHT_SET_ELEVATION) / Range;
+    if (T < 0.0f) { T = 0.0f; }
+    if (T > 1.0f) { T = 1.0f; }
+    return T * T * (3.0f - 2.0f * T);
 }
 
 void WorldEnvironment_Advance(WorldEnvironment* self, float deltaSeconds)
