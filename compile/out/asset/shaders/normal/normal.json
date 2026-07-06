@@ -1,0 +1,5 @@
+{
+    "name": "world_normal",
+    "vertex_location": "normal/vertex",
+    "fragment_location": "normal/fragment"
+}

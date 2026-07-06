@@ -19,10 +19,11 @@
  * sized to the low pixel resolution (~640 on the long axis, square pixels) and point-upscaled to the frame
  * target, giving the game's chunky pixel look — this is the "pixel pass" and it runs last. When disabled,
  * the scene target matches the frame target (no pixelation). The richer pipeline layers in: physically based
- * sky/sun, PBR, a sun shadow map, and a low-resolution post pass that applies screen-space ambient occlusion
- * and 1px hand-drawn (object-coloured) outlines before the tonemap upscale. Light culling, bloom, sunshafts,
- * and fog are later work; sprite objects, lights, and the per-object "omit pixelation" toggle are not handled
- * yet.
+ * sky/sun, PBR, a sun shadow map (crisp, hard-edged), and a low-resolution post pass that applies screen-space
+ * ambient occlusion and 1px outlines (depth/surface-edge silhouettes darken, view-normal-edge creases are
+ * sun-aware, in the style of the three.js RenderPixelatedPass) before the tonemap upscale. The sky is never
+ * outlined. Light culling, bloom, sunshafts, and fog are later work; sprite objects, lights, and the
+ * per-object "omit pixelation" toggle are not handled yet.
  *
  * USAGE. Create one renderer, call WorldRenderer_PrepareWorld once the objects are set, then call
  * WorldRenderer_RenderToTarget each frame from a game frame's Render with the frame's target. The renderer
@@ -115,7 +116,7 @@ void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled);
 bool WorldRenderer_IsPixelationEnabled(const WorldRenderer* self);
 
 /**
- * @brief Enables or disables the whole post-effects pass (screen-space AO + hand-drawn outlines).
+ * @brief Enables or disables the whole post-effects pass (screen-space AO + depth/normal-edge outlines).
  *
  * When disabled the scene is blitted straight to the tonemap stage, bit-exact with the pipeline before the
  * post pass existed — useful for A/B-ing whether a visual artifact comes from the post effects. Default
@@ -126,7 +127,7 @@ bool WorldRenderer_IsPixelationEnabled(const WorldRenderer* self);
 void WorldRenderer_SetPostEffectsEnabled(WorldRenderer* self, bool enabled);
 
 /**
- * @brief Reports whether the post-effects pass (screen-space AO + hand-drawn outlines) is enabled.
+ * @brief Reports whether the post-effects pass (screen-space AO + depth/normal-edge outlines) is enabled.
  * @param self The renderer; must not be NULL.
  * @returns true if the post-effects pass runs (given the shaders/targets are available).
  */

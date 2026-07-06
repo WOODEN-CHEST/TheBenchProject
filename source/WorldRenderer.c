@@ -66,10 +66,11 @@
 
 /** Asset name of the post-process shader (screen-space AO + hand-drawn outlines) run before the tonemap. */
 #define POSTFX_SHADER_ASSET_NAME ((const unsigned char*)u8"world_postfx")
-/** Asset name of the object-mask shader used to tag world objects (outline flag + surface flag) for postfx. */
-#define MASK_SHADER_ASSET_NAME ((const unsigned char*)u8"world_mask")
+/** Asset name of the normal/mask G-buffer shader: writes a view-space normal (RGB) + surface/outline flag (A)
+ *  that the postfx pass edge-detects for outlines. Replaces the old flag-only object mask. */
+#define NORMAL_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal")
 /** Built-in outline strength (multiplied by nothing config-side per spec: outlines are code-configurable).
- *  0..1; scales how strongly edges are recoloured toward the hand-drawn outline shade. */
+ *  0..1; scales how strongly the depth/normal edge detection recolours silhouettes and creases. */
 #define OUTLINE_BASE_STRENGTH 1.0f
 /** Near/far planes the scene 3D pass uses (Raylib's global cull distances); the postfx pass rebuilds the same
  *  projection to reconstruct view positions from the depth buffer. */
@@ -102,11 +103,11 @@ struct WorldRendererStruct
     GameShader* _depthShader;
     /** The post-process shader (screen-space AO + hand-drawn outlines); borrowed. NULL = post pass skipped. */
     GameShader* _postfxShader;
-    /** The object-mask shader (tags world objects with an outline flag + surface flag); borrowed. NULL = post
-     *  pass skipped (needs the mask to know which pixels are outline-enabled objects vs sky/grid). */
-    GameShader* _maskShader;
-    /** Cached world_mask outline-flag uniform location (-1 when absent). */
-    int _maskLocOutlineFlag;
+    /** The normal/mask G-buffer shader (writes view-space normals + a surface/outline flag for the postfx
+     *  outline pass); borrowed. NULL = post pass skipped (the outline pass needs the normal/flag buffer). */
+    GameShader* _normalShader;
+    /** Cached world_normal outline-flag uniform location (-1 when absent). */
+    int _normalLocOutlineFlag;
     /** Set once the shaders' load has been attempted (success or failure), so it is tried only once. */
     bool _shadersLoadAttempted;
     /** Whether hand-drawn outlines are drawn (code-configurable per spec; on by default). */
@@ -119,7 +120,8 @@ struct WorldRendererStruct
     int _postfxLocInvProjection;
     int _postfxLocProjection;
     int _postfxLocDepthTexture;
-    int _postfxLocMaskTexture;
+    int _postfxLocNormalTexture;
+    int _postfxLocSunDirectionView;
     int _postfxLocAoStrength;
     int _postfxLocOutlineStrength;
     /** Cached world_sky uniform locations (-1 when absent). */
@@ -170,10 +172,11 @@ struct WorldRendererStruct
     RenderTexture2D _postTarget;
     /** Whether _postTarget has been created. */
     bool _hasPostTarget;
-    /** Low-res object mask (R=outline flag, G=surface flag) the postfx pass reads; only made when postfx runs. */
-    RenderTexture2D _maskTarget;
-    /** Whether _maskTarget has been created. */
-    bool _hasMaskTarget;
+    /** Low-res normal/mask G-buffer (RGB=view normal, A=surface/outline flag) the postfx pass reads; only made
+     *  when postfx runs. */
+    RenderTexture2D _normalTarget;
+    /** Whether _normalTarget has been created. */
+    bool _hasNormalTarget;
     /** Current width of _sceneTarget, in pixels. */
     int _sceneWidth;
     /** Current height of _sceneTarget, in pixels. */
@@ -359,10 +362,10 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
         UnloadRenderTexture(self->_postTarget);
         self->_hasPostTarget = false;
     }
-    if (self->_hasMaskTarget)
+    if (self->_hasNormalTarget)
     {
-        UnloadRenderTexture(self->_maskTarget);
-        self->_hasMaskTarget = false;
+        UnloadRenderTexture(self->_normalTarget);
+        self->_hasNormalTarget = false;
     }
 
     self->_sceneTarget = CreateSceneTarget(DesiredWidth, DesiredHeight, &self->_sceneIsHDR, &self->_sceneDepthSamplable);
@@ -377,9 +380,10 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
     self->_sceneWidth = DesiredWidth;
     self->_sceneHeight = DesiredHeight;
 
-    // The postfx ping + object-mask targets: only needed when the post pass can run (postfx + mask shaders
-    // present, samplable depth). The mask target is a plain 8-bit colour+depth RT (it holds flags, not HDR).
-    if ((self->_postfxShader != NULL) && (self->_maskShader != NULL) && self->_sceneDepthSamplable)
+    // The postfx ping + normal G-buffer targets: only needed when the post pass can run (postfx + normal
+    // shaders present, samplable depth). The normal target is a plain 8-bit RGBA colour+depth RT (it holds an
+    // encoded normal + flags, not HDR); its own depth lets the nearest model's normal win per pixel.
+    if ((self->_postfxShader != NULL) && (self->_normalShader != NULL) && self->_sceneDepthSamplable)
     {
         self->_postTarget = CreatePostTarget(DesiredWidth, DesiredHeight);
         self->_hasPostTarget = (self->_postTarget.id != 0);
@@ -388,11 +392,11 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
             SetTextureFilter(self->_postTarget.texture, TEXTURE_FILTER_POINT);
         }
 
-        self->_maskTarget = LoadRenderTexture(DesiredWidth, DesiredHeight);
-        self->_hasMaskTarget = (self->_maskTarget.id != 0);
-        if (self->_hasMaskTarget)
+        self->_normalTarget = LoadRenderTexture(DesiredWidth, DesiredHeight);
+        self->_hasNormalTarget = (self->_normalTarget.id != 0);
+        if (self->_hasNormalTarget)
         {
-            SetTextureFilter(self->_maskTarget.texture, TEXTURE_FILTER_POINT);
+            SetTextureFilter(self->_normalTarget.texture, TEXTURE_FILTER_POINT);
         }
     }
 
@@ -577,17 +581,19 @@ static void EnsureShaders(WorldRenderer* self)
         self->_postfxLocInvProjection = GetShaderLocation(RayShader, "invProjection");
         self->_postfxLocProjection = GetShaderLocation(RayShader, "projection");
         self->_postfxLocDepthTexture = GetShaderLocation(RayShader, "depthTexture");
-        self->_postfxLocMaskTexture = GetShaderLocation(RayShader, "maskTexture");
+        self->_postfxLocNormalTexture = GetShaderLocation(RayShader, "normalTexture");
+        self->_postfxLocSunDirectionView = GetShaderLocation(RayShader, "sunDirectionView");
         self->_postfxLocAoStrength = GetShaderLocation(RayShader, "aoStrength");
         self->_postfxLocOutlineStrength = GetShaderLocation(RayShader, "outlineStrength");
     }
 
-    // Object-mask shader: tags each drawn world model with its outline flag + a surface flag so the postfx
-    // pass affects objects only (not the sky/grid/shadows). Without it the post pass is skipped.
-    self->_maskShader = LoadRendererShader(self, MASK_SHADER_ASSET_NAME);
-    if (self->_maskShader != NULL)
+    // Normal/mask G-buffer shader: draws each world model's view-space normal + a surface/outline flag so the
+    // postfx pass can edge-detect outlines and restrict AO to objects (not the sky/grid/shadows). Without it
+    // the post pass is skipped.
+    self->_normalShader = LoadRendererShader(self, NORMAL_SHADER_ASSET_NAME);
+    if (self->_normalShader != NULL)
     {
-        self->_maskLocOutlineFlag = GetShaderLocation(GameShader_GetRaylibShader(self->_maskShader), "outlineFlag");
+        self->_normalLocOutlineFlag = GetShaderLocation(GameShader_GetRaylibShader(self->_normalShader), "outlineFlag");
     }
 }
 
@@ -701,12 +707,13 @@ static void DrawWorldModels(WorldRenderer* self, World* world, GameShader* shade
     }
 }
 
-/* Draws every world MODEL object into the object mask through the mask shader, setting the per-object outline
- * flag uniform (1 when the object has outlines enabled, else 0) before each draw. The mask shader writes
- * R=outlineFlag, G=1 (surface); pixels the sky/grid leave untouched stay at the cleared 0. */
-static void DrawOutlineMaskModels(WorldRenderer* self, World* world)
+/* Draws every world MODEL object into the normal G-buffer through the normal shader, setting the per-object
+ * outline flag uniform (1 when the object has outlines enabled, else 0) before each draw. The normal shader
+ * writes RGB=view-space normal, A=surface/outline flag (0.5 = surface, 1.0 = surface with outline); pixels the
+ * sky/grid leave untouched stay at the cleared 0 (not a surface). */
+static void DrawNormalBufferModels(WorldRenderer* self, World* world)
 {
-    Shader RayMaskShader = GameShader_GetRaylibShader(self->_maskShader);
+    Shader RayNormalShader = GameShader_GetRaylibShader(self->_normalShader);
     size_t Count = World_GetObjectCount(world);
     for (size_t Index = 0; Index < Count; Index++)
     {
@@ -724,22 +731,26 @@ static void DrawOutlineMaskModels(WorldRenderer* self, World* world)
 
         WorldModelObject* ModelObject = (WorldModelObject*)Object;
         float OutlineFlag = ModelObject->HasOutline ? 1.0f : 0.0f;
-        SetShaderValue(RayMaskShader, self->_maskLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
-        DrawModelObjectWithShader(self, ModelObject, self->_maskShader);
+        SetShaderValue(RayNormalShader, self->_normalLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
+        DrawModelObjectWithShader(self, ModelObject, self->_normalShader);
     }
 }
 
-/* Renders the object mask (which world pixels are outline-enabled objects vs sky/grid) into _maskTarget with
- * the scene camera, so the postfx pass can restrict AO + outlines to world objects. Opens/closes its own
- * passes. Uses its own depth (occlusion among model objects only; the debug grid is intentionally not drawn
- * here so it never gets outlined). */
-static void RenderOutlineMask(WorldRenderer* self, World* world, const GameCamera* camera)
+/* Renders the normal/mask G-buffer (view-space normals + a surface/outline flag) into _normalTarget with the
+ * scene camera, so the postfx pass can edge-detect outlines and restrict AO to world objects. Opens/closes its
+ * own passes. Uses its own depth (the nearest model's normal wins; the debug grid is intentionally not drawn
+ * here so it never gets outlined). Colour blending is DISABLED so the encoded normal (RGB) and the flag (A,
+ * which is 0.5 for non-outline surfaces) are written verbatim — with blending on, an alpha of 0.5 would blend
+ * the normal with the cleared background and corrupt it. */
+static void RenderNormalBuffer(WorldRenderer* self, World* world, const GameCamera* camera)
 {
-    BeginTextureMode(self->_maskTarget);
-    ClearBackground(BLACK); // R=0 (no outline), G=0 (not a surface) everywhere the geometry does not draw
+    BeginTextureMode(self->_normalTarget);
+    ClearBackground(BLANK); // RGBA (0,0,0,0): A=0 = "not a surface" everywhere the geometry does not draw
+    rlDisableColorBlend();  // write RGB (normal) + A (flag) directly; no alpha blend
     BeginMode3D(GameCamera_ToRaylibCamera(camera));
-    DrawOutlineMaskModels(self, world);
+    DrawNormalBufferModels(self, world);
     EndMode3D();
+    rlEnableColorBlend();   // restore the default blending for the following 2D passes
     EndTextureMode();
 }
 
@@ -877,6 +888,17 @@ static void DrawPostFX(WorldRenderer* self, World* world, const GameCamera* came
     SetShaderValueMatrix(RayShader, self->_postfxLocProjection, Projection);
     SetShaderValueMatrix(RayShader, self->_postfxLocInvProjection, InvProjection);
 
+    // Sun direction in VIEW space for the sun-aware crease colouring. The G-buffer stores view-space normals,
+    // so transforming the (world-space) sun direction by the same view matrix's rotation makes the shader's
+    // sun test a plain dot product. Subtract the transformed origin to drop the translation (a direction, not
+    // a point).
+    Matrix View = GetCameraMatrix(RayCam);
+    Vector3 WorldSun = WorldEnvironment_GetSunDirection(Environment);
+    Vector3 ViewSun = Vector3Normalize(Vector3Subtract(
+        Vector3Transform(WorldSun, View), Vector3Transform((Vector3){ 0.0f, 0.0f, 0.0f }, View)));
+    float SunDirView[3] = { ViewSun.x, ViewSun.y, ViewSun.z };
+    SetShaderValue(RayShader, self->_postfxLocSunDirectionView, SunDirView, SHADER_UNIFORM_VEC3);
+
     // Effective AO strength = world multiplier x config multiplier (0 / disabled => the shader skips SSAO).
     float AoStrength = Environment->IsAmbientOcclusionEnabled
         ? (Environment->AmbientOcclusionStrength * ConfigAoStrength(self)) : 0.0f;
@@ -888,17 +910,17 @@ static void DrawPostFX(WorldRenderer* self, World* world, const GameCamera* came
     SetShaderValue(RayShader, self->_postfxLocOutlineStrength, &OutlineStrength, SHADER_UNIFORM_FLOAT);
 
     BeginShaderMode(RayShader);
-    // Bind the scene depth + object mask as extra sampler2Ds. This MUST use SetShaderValueTexture (not manual
-    // rlActiveTextureSlot/rlEnableTexture): DrawTexturePro draws through Raylib's 2D batch, and the batch only
-    // binds textures it tracks in its own activeTextureId[] table (which SetShaderValueTexture populates) plus
-    // texture0. A manual glActiveTexture bind is NOT in that table, so the batch would leave these samplers on
-    // unit 0 = the scene colour texture, making the shader read colour as depth+mask (the sky-noise/ring bug).
-    // Call these AFTER BeginShaderMode (its batch flush clears the table) and before the draw.
+    // Bind the scene depth + normal G-buffer as extra sampler2Ds. This MUST use SetShaderValueTexture (not
+    // manual rlActiveTextureSlot/rlEnableTexture): DrawTexturePro draws through Raylib's 2D batch, and the
+    // batch only binds textures it tracks in its own activeTextureId[] table (which SetShaderValueTexture
+    // populates) plus texture0. A manual glActiveTexture bind is NOT in that table, so the batch would leave
+    // these samplers on unit 0 = the scene colour texture, making the shader read colour as depth+normal (the
+    // sky-noise/ring bug). Call these AFTER BeginShaderMode (its batch flush clears the table), before the draw.
     SetShaderValueTexture(RayShader, self->_postfxLocDepthTexture, self->_sceneTarget.depth);
-    SetShaderValueTexture(RayShader, self->_postfxLocMaskTexture, self->_maskTarget.texture);
+    SetShaderValueTexture(RayShader, self->_postfxLocNormalTexture, self->_normalTarget.texture);
 
     // The shader samples by gl_FragCoord (not fragTexCoord), so this straight full-screen copy needs no flip.
-    // DrawTexturePro binds the scene colour to unit 0 (texture0); the batch binds depth/mask to units 1/2 and
+    // DrawTexturePro binds the scene colour to unit 0 (texture0); the batch binds depth/normal to units 1/2 and
     // resets the table after drawing, so nothing lingers on those units into the next pass.
     Rectangle Source = { 0.0f, 0.0f, (float)self->_sceneTarget.texture.width, (float)self->_sceneTarget.texture.height };
     Rectangle Destination = { 0.0f, 0.0f, (float)self->_sceneWidth, (float)self->_sceneHeight };
@@ -960,10 +982,10 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
         self->_hasPostTarget = false;
     }
 
-    if (self->_hasMaskTarget)
+    if (self->_hasNormalTarget)
     {
-        UnloadRenderTexture(self->_maskTarget);
-        self->_hasMaskTarget = false;
+        UnloadRenderTexture(self->_normalTarget);
+        self->_hasNormalTarget = false;
     }
 
     if (self->_hasShadowMap)
@@ -1064,18 +1086,18 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     DrawScene(self, world, camera);
     EndTextureMode();
 
-    // Pass 1.5 (optional): screen-space AO + hand-drawn outlines, low-res, reading the scene colour + depth +
-    // an object mask. Needs the master toggle on, at least one contributing effect, the postfx + mask shaders,
-    // the samplable-depth HDR scene target, and both post targets; otherwise the scene is blitted as-is
-    // (bit-exact with the pre-postfx pipeline). The mask pass runs first so postfx can read it.
+    // Pass 1.5 (optional): screen-space AO + depth/normal-edge outlines, low-res, reading the scene colour +
+    // depth + a normal G-buffer. Needs the master toggle on, at least one contributing effect, the postfx +
+    // normal shaders, the samplable-depth HDR scene target, and both post targets; otherwise the scene is
+    // blitted as-is (bit-exact with the pre-postfx pipeline). The normal pass runs first so postfx can read it.
     RenderTexture2D BlitSource = self->_sceneTarget;
     float EffectiveAoStrength = Environment->IsAmbientOcclusionEnabled
         ? (Environment->AmbientOcclusionStrength * ConfigAoStrength(self)) : 0.0f;
     if (self->_postfxEnabled && ((EffectiveAoStrength > 0.0f) || self->_outlineEnabled)
-        && (self->_postfxShader != NULL) && (self->_maskShader != NULL) && self->_hasPostTarget
-        && self->_hasMaskTarget && self->_sceneDepthSamplable)
+        && (self->_postfxShader != NULL) && (self->_normalShader != NULL) && self->_hasPostTarget
+        && self->_hasNormalTarget && self->_sceneDepthSamplable)
     {
-        RenderOutlineMask(self, world, camera);
+        RenderNormalBuffer(self, world, camera);
         BeginTextureMode(self->_postTarget);
         ClearBackground(BLACK);
         DrawPostFX(self, world, camera);

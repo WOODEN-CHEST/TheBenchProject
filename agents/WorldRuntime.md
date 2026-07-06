@@ -72,9 +72,28 @@ view-projection (`MatrixInvert(MatrixMultiply(GetCameraMatrix, MatrixPerspective
 entirely by `WorldEnvironment` (turbidity, sky tint, sun colour/intensity/size, star seed/density/brightness);
 falls back to the linearized CPU gradient clear if `world_sky` is unavailable. GPU look unverified/untuned.
 
-SCOPE now: models are PBR-lit, the sky is the atmospheric-scattering shader, and the whole scene is
-HDR→tonemapped. Sprites, lights, and the remaining effect pipeline (sun shadow map, point-light culling, fog,
-bloom, sunshafts, 1px outlines, per-object omit-pixelation) are marked TODO and layer on later.
+**Sun shadows + outlines** (Step 3 increments 7–10 + the outline/shadow refactor): a directional sun shadow
+map plus a low-res post pass give the stylised look.
+* **Shadow map**: `RenderShadowMap` renders model depth (via the trivial `world_depth` shader) from a tight,
+  camera-following orthographic sun frustum into a 2048² depth texture, storing the world→light-clip matrix.
+  The `world_pbr` fragment samples it with a **2×2 PCF + slope-scaled bias** for CRISP, hard-edged pixel-art
+  shadows (the old soft 3×3 PCF + frustum edge-fade were dropped), darkening only the sun's direct term
+  (ambient still lights shadows). Gated on shadows-enabled + strength > 0 + sun above the horizon.
+* **Normal G-buffer + outlines**: `RenderNormalBuffer` draws model objects through the `world_normal` shader
+  (a vertex+fragment pair) into a low-res 8-bit RGBA target with blending disabled — RGB = view-space normal,
+  A = surface/outline flag (0 = sky/grid, 0.5 = surface, 1.0 = surface with per-object `HasOutline`). The
+  `world_postfx` pass then edge-detects in the style of the three.js RenderPixelatedPass / Godot 3D-pixel-art
+  shader: **depth/surface-edge silhouettes darken** the near object's rim, and **view-normal-edge creases** are
+  recoloured **sun-aware** (darken on the sun-lit side, brighten on the shadowed side, using the sun direction
+  transformed into view space). The sky (flag 0) is never a surface, so it is never outlined. The same pass
+  also does tangent-plane SSAO (gated to surfaces via the flag). Outlines are code-configurable (renderer
+  toggle + built-in strength); AO/shadow strengths are config × world multipliers. This G-buffer replaced the
+  old flag-only `world_mask`.
+
+SCOPE now: models are PBR-lit with crisp sun shadows, the sky is the atmospheric-scattering shader, the post
+pass adds SSAO + depth/normal-edge outlines, and the whole scene is HDR→tonemapped. Sprites, lights, and the
+remaining effect pipeline (point-light culling, fog, bloom, sunshafts, per-object omit-pixelation) are marked
+TODO and layer on later.
 
 ## Shader assets (vertex + fragment)
 
@@ -84,7 +103,8 @@ Either may be omitted to fall back to raylib's built-in stage. Because the asset
 files by **stem** (ignoring extension), a paired shader's two source files must have DISTINCT stems — the
 `world_pbr` shader uses `shaders/pbr/vertex.vert` + `shaders/pbr/fragment.frag`, referenced as `"pbr/vertex"`
 and `"pbr/fragment"`. The `.vert`/`.frag` files sit beside `pbr.json` and are skipped by `ReadDefinitions`
-via the per-type `json` definition-file extension.
+via the per-type `json` definition-file extension. The `world_normal` G-buffer shader is a second such pair
+(`normal/vertex` + `normal/fragment`), whose vertex stage emits view-space normals for the outline pass.
 
 ## WorldTestFrame
 

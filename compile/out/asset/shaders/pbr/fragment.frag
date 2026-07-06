@@ -34,8 +34,6 @@ uniform float emissiveIntensity;
 out vec4 finalColor;
 
 const float PI = 3.14159265358979323846;
-// Where (0..1 from the shadow-frustum centre) the shadow starts fading out to avoid a hard edge.
-const float SHADOW_FADE_START = 0.8;
 
 // GGX / Trowbridge-Reitz normal distribution.
 float DistributionGGX(vec3 n, vec3 h, float rough)
@@ -68,9 +66,10 @@ vec3 FresnelSchlick(float cosTheta, vec3 f0)
     return f0 + (1.0 - f0)*pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// Returns 0 (fully lit) .. 1 (fully shadowed) for the fragment, sampling the sun's depth map with 3x3 PCF.
-// A slope-scaled bias reduces acne on surfaces near-parallel to the sun. Fragments outside the shadow
-// frustum are treated as lit.
+// Returns 0 (fully lit) .. 1 (fully shadowed) for the fragment. Crisp, hard-edged pixel-art shadow: a 2x2 PCF
+// (the minimal filtering that stops a single-tap edge from crawling pixel-to-pixel as the camera moves, while
+// staying sharp at the low pixel-art resolution) with a slope-scaled bias to combat acne. Fragments outside
+// the shadow frustum are treated as lit (a hard cutoff, no soft edge fade).
 float ComputeShadow(vec3 worldPos, float nDotL)
 {
     if (shadowStrength <= 0.0)
@@ -86,23 +85,14 @@ float ComputeShadow(vec3 worldPos, float nDotL)
     }
 
     float bias = max(shadowBias*(1.0 - nDotL), shadowBias*0.15);
+    // 2x2 PCF: four taps half a texel off-centre, averaged. Reads as a hard edge after the point-upscale but
+    // dithers the boundary just enough to stop sub-pixel shimmer.
     float shadow = 0.0;
-    for (int x = -1; x <= 1; x++)
-    {
-        for (int y = -1; y <= 1; y++)
-        {
-            float closest = texture(shadowMap, proj.xy + vec2(float(x), float(y))*shadowTexelSize).r;
-            shadow += (proj.z - bias > closest) ? 1.0 : 0.0;
-        }
-    }
-    shadow /= 9.0;
-
-    // Fade the shadow out toward the edge of the (camera-following) shadow frustum, so distant shadows
-    // dissolve smoothly instead of ending in a hard line where the map runs out.
-    vec2 fromCentre = abs(proj.xy - 0.5)*2.0;         // 0 at the centre, 1 at the frustum edge
-    float edge = max(fromCentre.x, fromCentre.y);
-    shadow *= 1.0 - smoothstep(SHADOW_FADE_START, 1.0, edge);
-    return shadow;
+    shadow += (proj.z - bias > texture(shadowMap, proj.xy + vec2(-0.5, -0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
+    shadow += (proj.z - bias > texture(shadowMap, proj.xy + vec2( 0.5, -0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
+    shadow += (proj.z - bias > texture(shadowMap, proj.xy + vec2(-0.5,  0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
+    shadow += (proj.z - bias > texture(shadowMap, proj.xy + vec2( 0.5,  0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
+    return shadow*0.25;
 }
 
 void main()
