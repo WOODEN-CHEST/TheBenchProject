@@ -17,9 +17,15 @@ uniform float sunIntensity;
 uniform vec3 ambientColor;     // linear
 uniform float ambientIntensity;
 
-// Sun shadow map (directional). shadowStrength 0 disables it (night, disabled, or shader unavailable).
-uniform mat4 lightVP;          // world -> sun light-clip space
-uniform sampler2D shadowMap;   // directional depth map rendered from the sun
+// Sun shadow map — TWO cascades. shadowStrength 0 disables shadows (night, disabled, or shader unavailable).
+// The NEAR cascade is a small, sharp map for close detail; the FAR cascade is a large, coarse map for distant /
+// large casters (each object's WorldShadowTier decides which cascade(s) it was rendered into). A fragment
+// samples the near cascade first and falls back to the far cascade when it lies beyond the near frustum.
+uniform mat4 lightVP;          // world -> near-cascade light-clip space
+uniform sampler2D shadowMap;   // near-cascade directional depth map
+uniform mat4 lightVPFar;       // world -> far-cascade light-clip space
+uniform sampler2D shadowMapFar;// far-cascade directional depth map
+uniform bool shadowFarActive;  // whether the far cascade is available this frame
 uniform float shadowStrength;  // 0..1, how much the sun contribution is darkened in shadow
 uniform float shadowBias;      // base depth bias to combat shadow acne
 uniform float shadowTexelSize; // 1.0 / shadow-map resolution, for PCF tap offsets
@@ -124,33 +130,49 @@ vec3 PerturbNormal(vec3 n, vec3 worldPos, vec2 uv, vec3 mapN)
     return normalize(tbn*mapN);
 }
 
-// Returns 0 (fully lit) .. 1 (fully shadowed) for the fragment. Crisp, hard-edged pixel-art shadow: a 2x2 PCF
-// (the minimal filtering that stops a single-tap edge from crawling pixel-to-pixel as the camera moves, while
-// staying sharp at the low pixel-art resolution) with a slope-scaled bias to combat acne. Fragments outside
-// the shadow frustum are treated as lit (a hard cutoff, no soft edge fade).
+// The far cascade's texels cover ~5x more world than the near cascade's, so it needs a proportionally larger
+// depth bias to avoid self-shadow acne; the near cascade uses the base bias.
+const float SHADOW_FAR_BIAS_SCALE = 4.0;
+
+// Samples ONE shadow cascade. Returns -1.0 when the fragment falls outside this cascade's frustum (so the caller
+// can fall back to the next cascade / treat it as lit), else 0 (fully lit) .. 1 (fully shadowed). Crisp
+// pixel-art shadow: a 2x2 PCF (the minimal filtering that stops a single-tap edge crawling pixel-to-pixel as the
+// camera moves, while staying sharp at the low resolution) with a slope-scaled bias to combat acne.
+float SampleShadowCascade(sampler2D map, mat4 vp, vec3 worldPos, float nDotL, float biasScale)
+{
+    vec4 clip = vp*vec4(worldPos, 1.0);
+    vec3 proj = clip.xyz/clip.w;
+    proj = proj*0.5 + 0.5; // NDC -> [0,1]
+    if ((proj.z > 1.0) || (proj.x < 0.0) || (proj.x > 1.0) || (proj.y < 0.0) || (proj.y > 1.0))
+    {
+        return -1.0; // outside this cascade
+    }
+
+    float bias = max(shadowBias*biasScale*(1.0 - nDotL), shadowBias*biasScale*0.15);
+    // 2x2 PCF: four taps half a texel off-centre, averaged. Reads as a hard edge after the point-upscale but
+    // dithers the boundary just enough to stop sub-pixel shimmer.
+    float shadow = 0.0;
+    shadow += (proj.z - bias > texture(map, proj.xy + vec2(-0.5, -0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
+    shadow += (proj.z - bias > texture(map, proj.xy + vec2( 0.5, -0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
+    shadow += (proj.z - bias > texture(map, proj.xy + vec2(-0.5,  0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
+    shadow += (proj.z - bias > texture(map, proj.xy + vec2( 0.5,  0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
+    return shadow*0.25;
+}
+
+// Returns 0 (lit) .. 1 (shadowed) for the fragment, sampling the NEAR cascade first (sharp) and falling back to
+// the FAR cascade (coarse, long-range) when the fragment lies beyond the near frustum. Outside both = lit.
 float ComputeShadow(vec3 worldPos, float nDotL)
 {
     if (shadowStrength <= 0.0)
     {
         return 0.0;
     }
-    vec4 clip = lightVP*vec4(worldPos, 1.0);
-    vec3 proj = clip.xyz/clip.w;
-    proj = proj*0.5 + 0.5; // NDC -> [0,1]
-    if ((proj.z > 1.0) || (proj.x < 0.0) || (proj.x > 1.0) || (proj.y < 0.0) || (proj.y > 1.0))
+    float shadow = SampleShadowCascade(shadowMap, lightVP, worldPos, nDotL, 1.0);
+    if ((shadow < 0.0) && shadowFarActive)
     {
-        return 0.0;
+        shadow = SampleShadowCascade(shadowMapFar, lightVPFar, worldPos, nDotL, SHADOW_FAR_BIAS_SCALE);
     }
-
-    float bias = max(shadowBias*(1.0 - nDotL), shadowBias*0.15);
-    // 2x2 PCF: four taps half a texel off-centre, averaged. Reads as a hard edge after the point-upscale but
-    // dithers the boundary just enough to stop sub-pixel shimmer.
-    float shadow = 0.0;
-    shadow += (proj.z - bias > texture(shadowMap, proj.xy + vec2(-0.5, -0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
-    shadow += (proj.z - bias > texture(shadowMap, proj.xy + vec2( 0.5, -0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
-    shadow += (proj.z - bias > texture(shadowMap, proj.xy + vec2(-0.5,  0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
-    shadow += (proj.z - bias > texture(shadowMap, proj.xy + vec2( 0.5,  0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
-    return shadow*0.25;
+    return max(shadow, 0.0);
 }
 
 // ---- Atmospheric sky (distance-fog target) -----------------------------------------------------------------

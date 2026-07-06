@@ -20,11 +20,15 @@ void main()
     vec2 uv = gl_FragCoord.xy / resolution;
     vec2 texel = direction / resolution;
 
+    // Clamp each offset tap to [0,1]: raylib render-texture samplers default to REPEAT wrap, so an out-of-range
+    // tap near a screen edge would wrap to the OPPOSITE edge and smear a bright (e.g. emissive) glow into a
+    // faded line along that far edge. Clamping keeps edge taps on the edge. (The bloom targets are also set to
+    // CLAMP wrap, which additionally protects the tonemap's bilinear upsample of this buffer.)
     vec3 sum = texture(texture0, uv).rgb * 0.227027;
-    sum += texture(texture0, uv + texel * 1.3846153846).rgb * 0.3162162162;
-    sum += texture(texture0, uv - texel * 1.3846153846).rgb * 0.3162162162;
-    sum += texture(texture0, uv + texel * 3.2307692308).rgb * 0.0702702703;
-    sum += texture(texture0, uv - texel * 3.2307692308).rgb * 0.0702702703;
+    sum += texture(texture0, clamp(uv + texel * 1.3846153846, 0.0, 1.0)).rgb * 0.3162162162;
+    sum += texture(texture0, clamp(uv - texel * 1.3846153846, 0.0, 1.0)).rgb * 0.3162162162;
+    sum += texture(texture0, clamp(uv + texel * 3.2307692308, 0.0, 1.0)).rgb * 0.0702702703;
+    sum += texture(texture0, clamp(uv - texel * 3.2307692308, 0.0, 1.0)).rgb * 0.0702702703;
 
     finalColor = vec4(sum, 1.0) * fragColor * colDiffuse;
 }

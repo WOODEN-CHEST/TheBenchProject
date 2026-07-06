@@ -7,6 +7,7 @@
 #include "wr/WRMemory.h"
 #include "Renderer.h"
 #include "WorldObject.h"
+#include "WorldModelObject.h"
 #include "WorldEnvironment.h"
 
 
@@ -71,6 +72,8 @@ typedef struct WorldObjectDTOStruct
             bool HasOutline;
             /** @brief Whether the object is exempt from the pixelation pass. */
             bool OmitPixelation;
+            /** @brief Which sun shadow cascade(s) the object casts into. */
+            WorldShadowTier ShadowTier;
         } Model;
 
         /** @brief Valid when Type is WorldObjectType_Sprite. */

@@ -95,6 +95,7 @@ typedef enum WorldEncoderObjectFieldEnum
     WorldEncoderObjectField_AssetName = 20,     /**< @brief String model/sprite asset name (omitted when NULL). */
     WorldEncoderObjectField_HasOutline = 21,    /**< @brief bool outline toggle (model/sprite). */
     WorldEncoderObjectField_OmitPixelation = 22,/**< @brief bool pixelation-exempt toggle (model/sprite). */
+    WorldEncoderObjectField_ShadowTier = 23,    /**< @brief uint8 WorldShadowTier sun-shadow cascade tier (model). */
 
     WorldEncoderObjectField_LightColor = 40,    /**< @brief uint8[4] RGBA light color. */
     WorldEncoderObjectField_LightIntensity = 41,/**< @brief float light intensity. */

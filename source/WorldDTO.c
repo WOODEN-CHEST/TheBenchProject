@@ -56,6 +56,7 @@ static void FillObjectDTO(WorldObject* object, WorldObjectDTO* outRecord)
                 &outRecord->Data.Model.ModelAssetName);
             outRecord->Data.Model.HasOutline = Model->HasOutline;
             outRecord->Data.Model.OmitPixelation = Model->OmitPixelation;
+            outRecord->Data.Model.ShadowTier = Model->ShadowTier;
             break;
         }
 
@@ -120,6 +121,7 @@ static Error BuildObjectFromDTO(const WorldObjectDTO* record, WorldObject** outO
             }
             Model->HasOutline = record->Data.Model.HasOutline;
             Model->OmitPixelation = record->Data.Model.OmitPixelation;
+            Model->ShadowTier = record->Data.Model.ShadowTier;
             Base = WorldModelObject_AsObject(Model);
             break;
         }

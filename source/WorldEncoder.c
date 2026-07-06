@@ -219,7 +219,9 @@ static Error EncodeObject(GHDFObjectPool* pool, GHDFCompound* compound, const Wo
             if (Result.Code != ErrorCode_Success) { return Result; }
             Result = PutBool(compound, WorldEncoderObjectField_HasOutline, record->Data.Model.HasOutline);
             if (Result.Code != ErrorCode_Success) { return Result; }
-            return PutBool(compound, WorldEncoderObjectField_OmitPixelation, record->Data.Model.OmitPixelation);
+            Result = PutBool(compound, WorldEncoderObjectField_OmitPixelation, record->Data.Model.OmitPixelation);
+            if (Result.Code != ErrorCode_Success) { return Result; }
+            return PutUInt8(compound, WorldEncoderObjectField_ShadowTier, (uint8_t)record->Data.Model.ShadowTier);
 
         case WorldObjectType_Sprite:
             Result = PutString(pool, compound, WorldEncoderObjectField_AssetName,

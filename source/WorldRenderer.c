@@ -43,24 +43,29 @@
 
 /** Asset name of the depth-only shader used for the sun shadow-map pass. */
 #define DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_depth")
-/** Resolution (square) of the sun shadow map, in texels. */
+/** Resolution (square) of each sun shadow-map cascade, in texels. */
 #define SHADOW_MAP_SIZE 2048
-/** World-space size (width/height) of the sun's orthographic shadow frustum, centred on the camera. Larger
- *  covers more of the scene (shadows persist as you move) at the cost of shadow-map resolution per unit. */
-#define SHADOW_ORTHO_SIZE 60.0f
+/** The sun casts TWO cascaded orthographic shadow maps, both centred on the camera: a NEAR cascade with a small
+ *  extent (sharp shadows for close detail) and a FAR cascade with a large extent (coarse shadows for big /
+ *  distant casters). Per-object WorldShadowTier routes which cascade(s) each object casts into. World-space
+ *  width/height of each cascade's frustum: */
+#define SHADOW_NEAR_ORTHO_SIZE 32.0f
+#define SHADOW_FAR_ORTHO_SIZE 160.0f
 /** Distance the shadow light camera is placed from its focus, along the sun direction. */
-#define SHADOW_DISTANCE 80.0f
-/** Near plane of the shadow orthographic frustum. */
+#define SHADOW_DISTANCE 120.0f
+/** Near plane of the shadow orthographic frustum (shared by both cascades). */
 #define SHADOW_NEAR 1.0f
-/** Far plane of the shadow orthographic frustum (brackets the scene around the focus). */
+/** Far plane of the shadow orthographic frustum (brackets the scene around the focus; shared by both cascades). */
 #define SHADOW_FAR (SHADOW_DISTANCE * 2.0f)
 /** Base shadow depth bias (normalized light-clip depth) to combat acne; slope-scaled in the shader. Tuned
  *  for the SHADOW_NEAR..SHADOW_FAR range: ~0.0009 * (far-near) is the world-space offset (a few cm here). */
 #define SHADOW_BIAS 0.0009f
 /** Minimum sun elevation (sunDir.y) for shadows to be cast; below this the sun is too low / set. */
 #define SHADOW_MIN_SUN_ELEVATION 0.05f
-/** Texture unit the shadow map is bound to for the PBR shader (kept clear of the material map slots 0-2). */
+/** Texture unit the NEAR shadow cascade is bound to for the PBR shader (kept clear of the material map slots). */
 #define SHADOW_TEXTURE_SLOT 10
+/** Texture unit the FAR shadow cascade is bound to (10 = near, 11 = point-light cube, 12 = far). */
+#define SHADOW_FAR_TEXTURE_SLOT 12
 
 /** Asset name of the point-light omnidirectional (cube) shadow depth shader (stores packed linear distance). */
 #define CUBE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_cube_depth")
@@ -178,8 +183,13 @@
  *  they do not fire at night and stay gentle right at the horizon. */
 #define SUNSHAFT_MIN_ELEVATION 0.05f
 /** How far outside the [0,1] screen box the sun may sit and still cast shafts (rays from a just-off-screen sun
- *  still enter the frame); beyond this margin the pass is skipped. */
+ *  still enter the frame); beyond this margin the pass is skipped. The shaft strength fades smoothly to 0 as
+ *  the sun crosses this margin (rather than a hard cutoff) so turning the camera away dims the shafts gradually
+ *  instead of making them pop off. */
 #define SUNSHAFT_SCREEN_MARGIN 0.35f
+/** Elevation band (above SUNSHAFT_MIN_ELEVATION) over which the shafts fade in, so they also ease off gently at
+ *  the horizon instead of cutting out abruptly. */
+#define SUNSHAFT_ELEVATION_FADE_BAND 0.15f
 
 /** Asset name of the crisp-composite shader: composites the full-res, un-pixelated (OmitPixelation) objects
  *  over the pixelated frame, depth-tested against the scene so they are occluded correctly. */
@@ -351,6 +361,9 @@ struct WorldRendererStruct
     /** Cached PBR shadow uniform locations (-1 when absent). */
     int _locLightVP;
     int _locShadowMap;
+    int _locLightVPFar;
+    int _locShadowMapFar;
+    int _locShadowFarActive;
     int _locShadowStrength;
     int _locShadowBias;
     int _locShadowTexelSize;
@@ -379,13 +392,19 @@ struct WorldRendererStruct
     Vector3 _boundsCacheCenter[BOUNDS_CACHE_CAPACITY];
     float _boundsCacheRadius[BOUNDS_CACHE_CAPACITY];
     size_t _boundsCacheCount;
-    /** The sun shadow map (depth-only framebuffer); its samplable depth texture is in _shadowMap.depth. */
+    /** The NEAR sun shadow cascade (small extent, sharp); its samplable depth texture is in _shadowMap.depth. */
     RenderTexture2D _shadowMap;
-    /** Whether _shadowMap has been created. */
+    /** Whether _shadowMap (near cascade) has been created. */
     bool _hasShadowMap;
-    /** World -> sun light-clip matrix for the most recent shadow pass (uploaded to the PBR shader). */
+    /** World -> sun light-clip matrix for the NEAR cascade's most recent pass (uploaded to the PBR shader). */
     Matrix _lightVP;
-    /** Whether shadows are active this frame (sun up + enabled + shadow map ready). */
+    /** The FAR sun shadow cascade (large extent, coarse) + its light-clip matrix + creation flag. Sampled by the
+     *  PBR shader for fragments outside the near cascade so big / distant casters still shadow at range. */
+    RenderTexture2D _shadowMapFar;
+    bool _hasShadowMapFar;
+    Matrix _lightVPFar;
+    /** Whether shadows are active this frame (sun up + enabled + near cascade ready). The far cascade is an
+     *  optional add-on: it renders + is sampled only when it too was created. */
     bool _shadowActive;
     /** Point-light omnidirectional shadow: a colour CUBE (RGBA8 packed distance) + its own depth renderbuffer +
      *  framebuffer; the shadow-casting point light renders 6 faces into it each frame. */
@@ -747,6 +766,10 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
             self->_bloomHeight = BloomHeight;
             SetTextureFilter(self->_bloomTargetA.texture, TEXTURE_FILTER_BILINEAR);
             SetTextureFilter(self->_bloomTargetB.texture, TEXTURE_FILTER_BILINEAR);
+            // CLAMP wrap so edge taps (blur + the tonemap's bilinear upsample) don't wrap a bright glow to the
+            // opposite screen edge (the emissive-coloured edge lines). raylib RTs default to REPEAT.
+            SetTextureWrap(self->_bloomTargetA.texture, TEXTURE_WRAP_CLAMP);
+            SetTextureWrap(self->_bloomTargetB.texture, TEXTURE_WRAP_CLAMP);
         }
         else
         {
@@ -770,6 +793,7 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
             self->_sunshaftWidth = ShaftWidth;
             self->_sunshaftHeight = ShaftHeight;
             SetTextureFilter(self->_sunshaftTarget.texture, TEXTURE_FILTER_BILINEAR);
+            SetTextureWrap(self->_sunshaftTarget.texture, TEXTURE_WRAP_CLAMP); // no opposite-edge wrap on upsample
         }
     }
 
@@ -927,6 +951,9 @@ static void EnsureShaders(WorldRenderer* self)
 
         self->_locLightVP = GetShaderLocation(RayShader, "lightVP");
         self->_locShadowMap = GetShaderLocation(RayShader, "shadowMap");
+        self->_locLightVPFar = GetShaderLocation(RayShader, "lightVPFar");
+        self->_locShadowMapFar = GetShaderLocation(RayShader, "shadowMapFar");
+        self->_locShadowFarActive = GetShaderLocation(RayShader, "shadowFarActive");
         self->_locShadowStrength = GetShaderLocation(RayShader, "shadowStrength");
         self->_locShadowBias = GetShaderLocation(RayShader, "shadowBias");
         self->_locShadowTexelSize = GetShaderLocation(RayShader, "shadowTexelSize");
@@ -1049,6 +1076,13 @@ static void EnsureShaders(WorldRenderer* self)
             // Manual PCF compares raw depth texels, so nearest (point) sampling is required; linear
             // filtering would interpolate depths and corrupt the comparison.
             SetTextureFilter(self->_shadowMap.depth, TEXTURE_FILTER_POINT);
+        }
+        // FAR cascade (optional add-on). If it can't be made the renderer falls back to the near cascade only.
+        self->_shadowMapFar = LoadShadowMap(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+        self->_hasShadowMapFar = (self->_shadowMapFar.id != 0);
+        if (self->_hasShadowMapFar)
+        {
+            SetTextureFilter(self->_shadowMapFar.depth, TEXTURE_FILTER_POINT);
         }
     }
 
@@ -1194,8 +1228,8 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
     if (FogDensity < 0.0f) { FogDensity = 0.0f; }
     SetShaderValue(RayShader, self->_locFogDensity, &FogDensity, SHADER_UNIFORM_FLOAT);
 
-    // Sun shadow: upload the light matrix and bind the depth map (to a slot clear of the material maps) when
-    // shadows are active this frame.
+    // Sun shadow: upload the light matrices and bind the cascade depth maps (to slots clear of the material
+    // maps) when shadows are active this frame. Near cascade always; far cascade only when its map exists.
     if (self->_shadowActive)
     {
         SetShaderValueMatrix(RayShader, self->_locLightVP, self->_lightVP);
@@ -1203,6 +1237,17 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
         rlEnableTexture(self->_shadowMap.depth.id);
         int Slot = SHADOW_TEXTURE_SLOT;
         rlSetUniform(self->_locShadowMap, &Slot, SHADER_UNIFORM_INT, 1);
+
+        int ShadowFarActive = self->_hasShadowMapFar ? 1 : 0;
+        SetShaderValue(RayShader, self->_locShadowFarActive, &ShadowFarActive, SHADER_UNIFORM_INT);
+        if (self->_hasShadowMapFar)
+        {
+            SetShaderValueMatrix(RayShader, self->_locLightVPFar, self->_lightVPFar);
+            rlActiveTextureSlot(SHADOW_FAR_TEXTURE_SLOT);
+            rlEnableTexture(self->_shadowMapFar.depth.id);
+            int SlotFar = SHADOW_FAR_TEXTURE_SLOT;
+            rlSetUniform(self->_locShadowMapFar, &SlotFar, SHADER_UNIFORM_INT, 1);
+        }
     }
 
     // Point-light (cube) shadow: shade the selected shadow light separately with its cube map. Bind the cube to
@@ -1591,6 +1636,42 @@ static void DrawWorldModels(WorldRenderer* self, World* world, GameShader* shade
         }
         if ((WorldObject_GetType(Object) == WorldObjectType_Model)
             && ModelPassesFilter((WorldModelObject*)Object, filter))
+        {
+            DrawModelObjectWithShader(self, world, (WorldModelObject*)Object, shader);
+        }
+    }
+}
+
+/* Whether a model object casts into the given sun shadow cascade, per its WorldShadowTier: Both casts into
+ * either; Near casts only into the near cascade; Far casts only into the far cascade. */
+static bool ModelCastsIntoCascade(const WorldModelObject* modelObject, bool isNearCascade)
+{
+    switch (modelObject->ShadowTier)
+    {
+        case WorldShadowTier_Near: return isNearCascade;
+        case WorldShadowTier_Far:  return !isNearCascade;
+        case WorldShadowTier_Both:
+        default:                   return true;
+    }
+}
+
+/* Draws the depth of the world's model objects that cast into the given sun shadow cascade (per WorldShadowTier)
+ * through @p shader. Used by the two shadow-map passes; ignores the pixelation filter (every pixelation state
+ * casts). Sprites do not cast the sun shadow (billboards are not in the shadow passes). */
+static void DrawShadowCasters(WorldRenderer* self, World* world, GameShader* shader, bool isNearCascade)
+{
+    size_t Count = World_GetObjectCount(world);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        WorldObject* Object = NULL;
+        Error GetResult = World_GetObjectByIndex(world, Index, &Object);
+        if (GetResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&GetResult);
+            continue;
+        }
+        if ((WorldObject_GetType(Object) == WorldObjectType_Model)
+            && ModelCastsIntoCascade((WorldModelObject*)Object, isNearCascade))
         {
             DrawModelObjectWithShader(self, world, (WorldModelObject*)Object, shader);
         }
@@ -2006,10 +2087,11 @@ static void RenderPointLightShadows(WorldRenderer* self, World* world)
     }
 }
 
-/* Renders the world's model depth from the sun into the shadow map and stores the world->light-clip matrix
- * in _lightVP. The light is an orthographic camera looking from the sun toward the viewer's position, so the
- * shadowed area follows the camera. Opens/closes its own texture + 3D passes. */
-static void RenderShadowMap(WorldRenderer* self, World* world, const GameCamera* camera, Vector3 sunDir)
+/* Renders one sun shadow cascade: the depth of the casters assigned to this cascade (per WorldShadowTier), from
+ * the sun into @p map, using a camera-centred orthographic frustum of the given world-space extent. Stores the
+ * world->light-clip matrix in @p outLightVP. Opens/closes its own texture + 3D passes. */
+static void RenderShadowCascade(WorldRenderer* self, World* world, const GameCamera* camera, Vector3 sunDir,
+    RenderTexture2D map, float orthoSize, bool isNearCascade, Matrix* outLightVP)
 {
     Vector3 Focus = camera->Position;
     Vector3 LightPos = Vector3Add(Focus, Vector3Scale(sunDir, SHADOW_DISTANCE));
@@ -2020,10 +2102,10 @@ static void RenderShadowMap(WorldRenderer* self, World* world, const GameCamera*
     // Raylib's global cull distances and make the depth bias unintuitive). Depth is linear across
     // SHADOW_NEAR..SHADOW_FAR, so SHADOW_BIAS maps to a small, world-relative offset.
     Matrix LightView = MatrixLookAt(LightPos, Focus, Up);
-    float HalfExtent = SHADOW_ORTHO_SIZE*0.5f;
+    float HalfExtent = orthoSize*0.5f;
     Matrix LightProj = MatrixOrtho(-HalfExtent, HalfExtent, -HalfExtent, HalfExtent, SHADOW_NEAR, SHADOW_FAR);
 
-    BeginTextureMode(self->_shadowMap);
+    BeginTextureMode(map);
     ClearBackground(WHITE); // clears depth to the far plane (colour is irrelevant on the depth-only target)
     rlEnableDepthTest();
     rlSetMatrixProjection(LightProj);
@@ -2031,12 +2113,25 @@ static void RenderShadowMap(WorldRenderer* self, World* world, const GameCamera*
     // Render BACK faces into the shadow map (cull front). The lit front faces then sit well in front of the
     // stored depth, which removes most self-shadowing acne without a large (peter-panning) depth bias.
     rlSetCullFace(RL_CULL_FACE_FRONT);
-    DrawWorldModels(self, world, self->_depthShader, ModelPixelationFilter_All); // everything casts shadows
+    DrawShadowCasters(self, world, self->_depthShader, isNearCascade);
     rlSetCullFace(RL_CULL_FACE_BACK);  // restore the default culling for the scene pass
     rlDisableDepthTest();
     EndTextureMode();
 
-    self->_lightVP = MatrixMultiply(LightView, LightProj);
+    *outLightVP = MatrixMultiply(LightView, LightProj);
+}
+
+/* Renders both sun shadow cascades (near = sharp/close, far = coarse/long-range), each with its own tier-filtered
+ * caster set, and stores their light-clip matrices. The far cascade is skipped when its map was not created (the
+ * PBR shader then samples only the near cascade). */
+static void RenderShadowMap(WorldRenderer* self, World* world, const GameCamera* camera, Vector3 sunDir)
+{
+    RenderShadowCascade(self, world, camera, sunDir, self->_shadowMap, SHADOW_NEAR_ORTHO_SIZE, true, &self->_lightVP);
+    if (self->_hasShadowMapFar)
+    {
+        RenderShadowCascade(self, world, camera, sunDir, self->_shadowMapFar, SHADOW_FAR_ORTHO_SIZE, false,
+            &self->_lightVPFar);
+    }
 }
 
 /* Runs the post-process pass (screen-space AO + hand-drawn outlines) into the currently bound post target,
@@ -2164,8 +2259,11 @@ static void RenderBloom(WorldRenderer* self, RenderTexture2D source)
 /* Projects the sun to a screen-space UV for the sun-shaft pass, using the same view+projection the scene pass
  * uses (so the UV lines up with the shaft buffer, which samples by gl_FragCoord/resolution → y up, matching the
  * NDC->UV here). Returns false (shafts skipped) when the sun is below SUNSHAFT_MIN_ELEVATION, behind the camera,
- * or further than SUNSHAFT_SCREEN_MARGIN outside the screen box. On success @p outUV is the sun UV in [0,1]. */
-static bool ComputeSunScreenUV(const GameCamera* camera, int width, int height, Vector3 sunDir, Vector2* outUV)
+ * or fully past SUNSHAFT_SCREEN_MARGIN outside the screen box. On success @p outUV is the sun UV in [0,1] and
+ * @p outFade is a 0..1 weight that fades the shafts smoothly to 0 as the sun nears the screen margin / horizon
+ * (so turning away dims them gradually instead of popping them off). */
+static bool ComputeSunScreenUV(const GameCamera* camera, int width, int height, Vector3 sunDir, Vector2* outUV,
+    float* outFade)
 {
     if (sunDir.y < SUNSHAFT_MIN_ELEVATION)
     {
@@ -2190,14 +2288,26 @@ static bool ComputeSunScreenUV(const GameCamera* camera, int width, int height, 
 
     float UvX = (ClipX / ClipW)*0.5f + 0.5f;
     float UvY = (ClipY / ClipW)*0.5f + 0.5f;
-    if ((UvX < -SUNSHAFT_SCREEN_MARGIN) || (UvX > 1.0f + SUNSHAFT_SCREEN_MARGIN)
-        || (UvY < -SUNSHAFT_SCREEN_MARGIN) || (UvY > 1.0f + SUNSHAFT_SCREEN_MARGIN))
+
+    // How far outside the [0,1] box the sun sits (0 while on-screen). Fade linearly to 0 across the margin so
+    // the shafts dim smoothly as the camera turns away, instead of the pass cutting out at the box edge.
+    float OutsideX = fmaxf(fmaxf(-UvX, UvX - 1.0f), 0.0f);
+    float OutsideY = fmaxf(fmaxf(-UvY, UvY - 1.0f), 0.0f);
+    float Outside = fmaxf(OutsideX, OutsideY);
+    float MarginFade = 1.0f - (Outside / SUNSHAFT_SCREEN_MARGIN);
+    // Ease the shafts in over a small band above the minimum elevation so they also fade gently at the horizon.
+    float ElevationFade = (sunDir.y - SUNSHAFT_MIN_ELEVATION) / SUNSHAFT_ELEVATION_FADE_BAND;
+    if (ElevationFade > 1.0f) { ElevationFade = 1.0f; }
+
+    float Fade = MarginFade * ElevationFade;
+    if (Fade <= 0.0f)
     {
-        return false; // sun too far off-screen for its shafts to reach the frame
+        return false; // sun too far off-screen / too low for its shafts to reach the frame
     }
 
     outUV->x = UvX;
     outUV->y = UvY;
+    *outFade = Fade;
     return true;
 }
 
@@ -2390,6 +2500,12 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
         self->_hasShadowMap = false;
     }
 
+    if (self->_hasShadowMapFar)
+    {
+        rlUnloadFramebuffer(self->_shadowMapFar.id);
+        self->_hasShadowMapFar = false;
+    }
+
     if (self->_hasPointShadowCube)
     {
         rlUnloadTexture(self->_pointShadowCube);
@@ -2573,9 +2689,13 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
         ? (Environment->SunshaftStrength * ConfigSunshaftStrength(self) * SUNSHAFT_BASE_INTENSITY) : 0.0f;
     if (EffectiveSunshaft < 0.0f) { EffectiveSunshaft = 0.0f; }
     Vector2 SunUV = { 0.0f, 0.0f };
+    float SunshaftFade = 0.0f;
     bool SunshaftActive = (EffectiveSunshaft > 0.0f) && self->_hasSunshaftTarget && (self->_sunshaftShader != NULL)
         && (self->_tonemapShader != NULL) && (self->_tonemapLocSunshaftStrength >= 0) && self->_sceneDepthSamplable
-        && ComputeSunScreenUV(camera, self->_sceneWidth, self->_sceneHeight, SunDir, &SunUV);
+        && ComputeSunScreenUV(camera, self->_sceneWidth, self->_sceneHeight, SunDir, &SunUV, &SunshaftFade);
+    // Fade the composited strength with the sun's screen-margin/elevation weight so the shafts dim gradually as
+    // the camera turns away, rather than the pass switching off abruptly at the margin.
+    EffectiveSunshaft *= SunshaftFade;
     if (SunshaftActive)
     {
         RenderSunshafts(self, BlitSource, SunUV);

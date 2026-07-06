@@ -20,6 +20,24 @@
 
 // Types.
 /**
+ * @brief Which sun shadow-map cascade(s) a model object casts into.
+ *
+ * The sun uses two cascaded directional shadow maps: a NEAR map (small extent, sharp, for close detail) and a
+ * FAR map (large extent, coarse, for big / distant casters). This per-object tier routes each caster: a small
+ * detailed prop can cast only up close (Near — no coarse shadow at distance, and cheaper), a large object can
+ * cast at long range (Far), or both (the default, correct everywhere). Persisted with the world.
+ */
+typedef enum WorldShadowTierEnum
+{
+    /** @brief Casts into both cascades (default) — a correct shadow at every distance. */
+    WorldShadowTier_Both = 0,
+    /** @brief Casts into the NEAR cascade only — sharp up close, no shadow past the near range (detail props). */
+    WorldShadowTier_Near = 1,
+    /** @brief Casts into the FAR cascade only — long-range coarse shadow (large objects, buildings, terrain). */
+    WorldShadowTier_Far = 2
+} WorldShadowTier;
+
+/**
  * @brief A 3D model object: the base world object plus a referenced model asset and render toggles.
  *
  * Underscore-prefixed fields are read-only to outside code; use the accessors. The plain-named boolean
@@ -37,6 +55,8 @@ typedef struct WorldModelObjectStruct
     bool HasOutline;
     /** @brief When true, this object is excluded from the final pixelation pass (drawn at full resolution). */
     bool OmitPixelation;
+    /** @brief Which sun shadow cascade(s) this object casts into (default WorldShadowTier_Both). */
+    WorldShadowTier ShadowTier;
 } WorldModelObject;
 
 

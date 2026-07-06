@@ -81,11 +81,15 @@ falls back to the linearized CPU gradient clear if `world_sky` is unavailable. G
 
 **Sun shadows + outlines** (Step 3 increments 7–10 + the outline/shadow refactor): a directional sun shadow
 map plus a low-res post pass give the stylised look.
-* **Shadow map**: `RenderShadowMap` renders model depth (via the trivial `world_depth` shader) from a tight,
-  camera-following orthographic sun frustum into a 2048² depth texture, storing the world→light-clip matrix.
-  The `world_pbr` fragment samples it with a **2×2 PCF + slope-scaled bias** for CRISP, hard-edged pixel-art
-  shadows (the old soft 3×3 PCF + frustum edge-fade were dropped), darkening only the sun's direct term
-  (ambient still lights shadows). Gated on shadows-enabled + strength > 0 + sun above the horizon.
+* **Shadow map (two cascades)**: `RenderShadowMap` renders model depth (via the trivial `world_depth` shader)
+  from a tight, camera-following orthographic sun frustum into a 2048² depth texture per cascade — a **NEAR**
+  cascade (small extent, sharp, for close detail) and a **FAR** cascade (large extent, coarse, for big /
+  distant casters). Each object's saved `WorldShadowTier` (Near / Far / Both, default Both) routes which
+  cascade(s) it is rendered into (`DrawShadowCasters` filters per cascade). The `world_pbr` fragment samples
+  the near cascade first and falls back to the far cascade for fragments beyond the near frustum, with a **2×2
+  PCF + slope-scaled bias** for CRISP, hard-edged pixel-art shadows, darkening only the sun's direct term
+  (ambient still lights shadows). Near cascade on texture slot 10, far on slot 12. Gated on shadows-enabled +
+  strength > 0 + sun above the horizon; the far cascade is an optional add-on (skipped if its map can't be made).
 * **Normal G-buffer + outlines**: `RenderNormalBuffer` draws model objects through the `world_normal` shader
   (a vertex+fragment pair) into a low-res 8-bit RGBA target with blending disabled — RGB = view-space normal,
   A = surface/outline flag (0 = sky/grid, 0.5 = surface, 1.0 = surface with per-object `HasOutline`). The

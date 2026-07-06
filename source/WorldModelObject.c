@@ -42,6 +42,7 @@ Error WorldModelObject_Create(const unsigned char* name, const unsigned char* mo
     WorldShared_CloneString(modelAssetName, &Object->_modelAssetName);
     Object->HasOutline = true;
     Object->OmitPixelation = false;
+    Object->ShadowTier = WorldShadowTier_Both;
 
     *outObject = Object;
     return Error_CreateSuccess();

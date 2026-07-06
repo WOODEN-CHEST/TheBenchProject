@@ -32,7 +32,8 @@ transform/tint/name are reached through **validating setters** (reject NaN/inf) 
 
 - `WorldModelObject` / `WorldSpriteObject`: add an owned asset name (model / sprite-animation) plus two
   render toggles honored by the renderer — `HasOutline` (default true) and `OmitPixelation` (default
-  false).
+  false). `WorldModelObject` additionally carries `ShadowTier` (`WorldShadowTier` enum: Both / Near / Far,
+  default Both), selecting which sun shadow cascade(s) it casts into (persisted, encoder field id 23).
 - `WorldLight`: adds `Color`, validated `_intensity` and `_size` (finite, >= 0), and `CastsShadows`. It
   uses the base Position/id/name; rotation/scale/tint are inherited but unused.
 

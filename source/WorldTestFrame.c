@@ -377,7 +377,7 @@ static const GameFrameVTable WorldTestFrameVTable =
 /* Creates a model object with the given transform and hands it to the world (which takes ownership). On any
  * failure the partial object is destroyed and the error is returned. */
 static Error AddModelObject(World* world, const unsigned char* name, const unsigned char* assetName,
-    Vector3 position, Vector3 scale, bool omitPixelation)
+    Vector3 position, Vector3 scale, bool omitPixelation, WorldShadowTier shadowTier)
 {
     WorldModelObject* ModelObject = NULL;
     Error Result = WorldModelObject_Create(name, assetName, &ModelObject);
@@ -387,6 +387,7 @@ static Error AddModelObject(World* world, const unsigned char* name, const unsig
     }
 
     ModelObject->OmitPixelation = omitPixelation; // crisp (un-pixelated) full-res overlay when true
+    ModelObject->ShadowTier = shadowTier;         // which sun shadow cascade(s) it casts into
 
     WorldObject* Base = WorldModelObject_AsObject(ModelObject);
     Result = WorldObject_SetPosition(Base, position);
@@ -488,19 +489,20 @@ static Error BuildTestWorld(World* world)
     Environment->SunAngle = TEST_SUN_ANGLE;                        // radians the noon sun leans from straight up
 
     // Centre model, raised so its shadow lands on the ground; then a wide, thin slab as the ground receiver.
+    // (Both cast into both shadow cascades by default.)
     Error Result = AddModelObject(world, TEST_MODEL_OBJECT_NAME, TEST_MODEL_ASSET_NAME,
-        (Vector3){ 0.0f, 1.2f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f }, false);
+        (Vector3){ 0.0f, 1.2f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f }, false, WorldShadowTier_Both);
     if (Result.Code == ErrorCode_Success)
     {
         Result = AddModelObject(world, TEST_GROUND_OBJECT_NAME, TEST_MODEL_ASSET_NAME,
-            (Vector3){ 0.0f, 0.0f, 0.0f }, (Vector3){ 40.0f, 0.2f, 40.0f }, false);
+            (Vector3){ 0.0f, 0.0f, 0.0f }, (Vector3){ 40.0f, 0.2f, 40.0f }, false, WorldShadowTier_Both);
     }
     // A crisp (OmitPixelation) model to the side: it renders un-pixelated + full-res while the rest of the world
     // stays chunky — a stand-in for a readable in-world screen. Toggle it against pixelated with the C key.
     if (Result.Code == ErrorCode_Success)
     {
         Result = AddModelObject(world, TEST_CRISP_OBJECT_NAME, TEST_MODEL_ASSET_NAME,
-            (Vector3){ 3.0f, 1.2f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f }, true);
+            (Vector3){ 3.0f, 1.2f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f }, true, WorldShadowTier_Both);
     }
     // Two coloured point lights flanking the centre cube (reach 10 units, so they light the cube + nearby
     // ground and fade out before the slab edges — exercises the per-object reach culling + forward shading).
@@ -523,15 +525,17 @@ static Error BuildTestWorld(World* world)
     }
     // Per-material PBR demos: a mapped cube (albedo/normal/ORM/emissive textures) on the left, and a scalar-
     // value gold metal cube (metallic 1, low roughness, no maps) on the right — A/B for the maps vs values path.
+    // Shadow-tier demo: the mapped cube casts NEAR-only (its shadow vanishes once you fly far from it — a
+    // detailed prop), the metal cube casts FAR-only (still shadows coarsely at a distance — a large object).
     if (Result.Code == ErrorCode_Success)
     {
         Result = AddModelObject(world, TEST_PBR_DEMO_OBJECT_NAME, TEST_PBR_DEMO_ASSET_NAME,
-            (Vector3){ -6.0f, 1.2f, 0.0f }, (Vector3){ 2.0f, 2.0f, 2.0f }, false);
+            (Vector3){ -6.0f, 1.2f, 0.0f }, (Vector3){ 2.0f, 2.0f, 2.0f }, false, WorldShadowTier_Near);
     }
     if (Result.Code == ErrorCode_Success)
     {
         Result = AddModelObject(world, TEST_PBR_METAL_OBJECT_NAME, TEST_PBR_METAL_ASSET_NAME,
-            (Vector3){ 6.0f, 1.2f, 0.0f }, (Vector3){ 2.0f, 2.0f, 2.0f }, false);
+            (Vector3){ 6.0f, 1.2f, 0.0f }, (Vector3){ 2.0f, 2.0f, 2.0f }, false, WorldShadowTier_Far);
     }
     if (Result.Code != ErrorCode_Success)
     {
