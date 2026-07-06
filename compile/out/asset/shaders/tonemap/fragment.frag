@@ -16,6 +16,10 @@ uniform float exposure;       // HDR eye-adaptation multiplier (1 = neutral); se
 uniform sampler2D bloomTexture;
 uniform float bloomStrength;
 
+// Sun shafts (god rays): same idea — added in linear HDR, and only sampled when its strength is > 0.
+uniform sampler2D sunshaftTexture;
+uniform float sunshaftStrength;
+
 out vec4 finalColor;
 
 // Narkowicz ACES filmic tonemapping approximation (maps linear HDR to displayable 0..1).
@@ -39,6 +43,10 @@ void main()
     if (bloomStrength > 0.0)
     {
         hdr += max(texture(bloomTexture, fragTexCoord).rgb, vec3(0.0)) * bloomStrength;
+    }
+    if (sunshaftStrength > 0.0)
+    {
+        hdr += max(texture(sunshaftTexture, fragTexCoord).rgb, vec3(0.0)) * sunshaftStrength;
     }
 
     // Apply eye-adaptation exposure in linear HDR, then tonemap. exposure defaults to 0 if the renderer never

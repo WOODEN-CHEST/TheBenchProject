@@ -154,7 +154,23 @@
 #define BLOOM_SOFT_KNEE 0.5f
 /** Base bloom intensity at world+config bloom strength 1.0 (how strongly the blurred bright-pass is added back
  *  in linear HDR); the world and config bloom-strength multipliers scale this. */
-#define BLOOM_BASE_INTENSITY 0.15f
+#define BLOOM_BASE_INTENSITY 0.75f
+
+/** Asset name of the screen-space sun-shafts (god rays) shader. */
+#define SUNSHAFT_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sunshafts")
+/** Divisor on the scene resolution for the sun-shaft buffer (2 = half res). Shafts are soft, so a lower-res
+ *  radial blur is cheaper and looks the same; the buffer is BILINEAR for a smooth upsample in the tonemap. */
+#define SUNSHAFT_RESOLUTION_DIVISOR 2
+/** Base sun-shaft intensity at world+config strength 1.0 (how strongly the shafts are added back in linear
+ *  HDR); the world and config sunshaft-strength multipliers scale this. Kept low — shafts sample the very
+ *  bright near-sun sky, so a little goes a long way. */
+#define SUNSHAFT_BASE_INTENSITY 0.5f
+/** Minimum sun elevation (sunDir.y) for shafts: below this the sun is too low/set and shafts are skipped, so
+ *  they do not fire at night and stay gentle right at the horizon. */
+#define SUNSHAFT_MIN_ELEVATION 0.05f
+/** How far outside the [0,1] screen box the sun may sit and still cast shafts (rays from a just-off-screen sun
+ *  still enter the frame); beyond this margin the pass is skipped. */
+#define SUNSHAFT_SCREEN_MARGIN 0.35f
 
 
 // Types.
@@ -180,6 +196,8 @@ struct WorldRendererStruct
     int _tonemapLocExposure;
     int _tonemapLocBloomTexture;
     int _tonemapLocBloomStrength;
+    int _tonemapLocSunshaftTexture;
+    int _tonemapLocSunshaftStrength;
     /** The two bloom shaders (bright-pass prefilter + separable blur); borrowed. NULL = bloom unavailable. */
     GameShader* _bloomPrefilterShader;
     GameShader* _bloomBlurShader;
@@ -187,12 +205,23 @@ struct WorldRendererStruct
     int _bloomPrefilterLocResolution;
     int _bloomPrefilterLocThreshold;
     int _bloomPrefilterLocSoftKnee;
+    int _bloomPrefilterLocDepthTexture;
+    int _bloomPrefilterLocDepthMask;
     /** Cached bloom-blur uniform locations (-1 when absent). */
     int _bloomBlurLocResolution;
     int _bloomBlurLocDirection;
     /** Whether bloom is drawn (code toggle for A/B testing; on by default). Bloom also self-disables when the
      *  effective (world x config) bloom strength is 0. */
     bool _bloomEnabled;
+    /** The sun-shafts (god rays) shader; borrowed. NULL = sun shafts unavailable. */
+    GameShader* _sunshaftShader;
+    /** Cached sun-shaft uniform locations (-1 when absent). */
+    int _sunshaftLocResolution;
+    int _sunshaftLocDepthTexture;
+    int _sunshaftLocSunScreenPos;
+    /** Whether sun shafts are drawn (code toggle for A/B testing; on by default). Also self-disable when the
+     *  effective (world x config) strength is 0, the sun is below the horizon, or off-screen. */
+    bool _sunshaftEnabled;
     /** Base scene-illumination luminance (ambient + sun) computed each frame in the lighting upload; the eye
      *  adaptation step adds nearby point lights to it. */
     float _baseSceneLuminance;
@@ -306,6 +335,13 @@ struct WorldRendererStruct
     /** Size of the bloom buffers, in pixels. */
     int _bloomWidth;
     int _bloomHeight;
+    /** Sun-shaft buffer (colour-only HDR, reduced resolution, BILINEAR); only made when sun shafts can run. */
+    RenderTexture2D _sunshaftTarget;
+    /** Whether the sun-shaft target has been created. */
+    bool _hasSunshaftTarget;
+    /** Size of the sun-shaft buffer, in pixels. */
+    int _sunshaftWidth;
+    int _sunshaftHeight;
     /** Current width of _sceneTarget, in pixels. */
     int _sceneWidth;
     /** Current height of _sceneTarget, in pixels. */
@@ -502,6 +538,11 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
         UnloadRenderTexture(self->_bloomTargetB);
         self->_hasBloomTargets = false;
     }
+    if (self->_hasSunshaftTarget)
+    {
+        UnloadRenderTexture(self->_sunshaftTarget);
+        self->_hasSunshaftTarget = false;
+    }
 
     self->_sceneTarget = CreateSceneTarget(DesiredWidth, DesiredHeight, &self->_sceneIsHDR, &self->_sceneDepthSamplable);
     // Point filtering makes the upscale to the window produce hard, square pixels.
@@ -559,6 +600,23 @@ static void EnsureSceneTarget(WorldRenderer* self, int windowWidth, int windowHe
             // Partial creation: release whichever succeeded so nothing leaks and the pass cleanly skips.
             if (self->_bloomTargetA.id != 0) { UnloadRenderTexture(self->_bloomTargetA); }
             if (self->_bloomTargetB.id != 0) { UnloadRenderTexture(self->_bloomTargetB); }
+        }
+    }
+
+    // Sun-shaft buffer (colour-only HDR, reduced resolution, BILINEAR). Only when the shaft shader is present.
+    if (self->_sunshaftShader != NULL)
+    {
+        int ShaftWidth = DesiredWidth / SUNSHAFT_RESOLUTION_DIVISOR;
+        int ShaftHeight = DesiredHeight / SUNSHAFT_RESOLUTION_DIVISOR;
+        if (ShaftWidth < 1) { ShaftWidth = 1; }
+        if (ShaftHeight < 1) { ShaftHeight = 1; }
+        self->_sunshaftTarget = CreatePostTarget(ShaftWidth, ShaftHeight);
+        self->_hasSunshaftTarget = (self->_sunshaftTarget.id != 0);
+        if (self->_hasSunshaftTarget)
+        {
+            self->_sunshaftWidth = ShaftWidth;
+            self->_sunshaftHeight = ShaftHeight;
+            SetTextureFilter(self->_sunshaftTarget.texture, TEXTURE_FILTER_BILINEAR);
         }
     }
 
@@ -620,6 +678,12 @@ static float ConfigFogStrength(const WorldRenderer* self)
 static float ConfigBloomStrength(const WorldRenderer* self)
 {
     return (self->_config != NULL) ? self->_config->BloomStrength : 1.0f;
+}
+
+/* Config-side sun-shaft strength multiplier (1.0 when no config is bound). Combined with the world's own. */
+static float ConfigSunshaftStrength(const WorldRenderer* self)
+{
+    return (self->_config != NULL) ? self->_config->SunshaftStrength : 1.0f;
 }
 
 /* Converts an 8-bit sRGB colour to linear light in [0,1]^3 (alpha ignored). Light/ambient colours must be
@@ -728,6 +792,8 @@ static void EnsureShaders(WorldRenderer* self)
         self->_tonemapLocExposure = GetShaderLocation(RayShader, "exposure");
         self->_tonemapLocBloomTexture = GetShaderLocation(RayShader, "bloomTexture");
         self->_tonemapLocBloomStrength = GetShaderLocation(RayShader, "bloomStrength");
+        self->_tonemapLocSunshaftTexture = GetShaderLocation(RayShader, "sunshaftTexture");
+        self->_tonemapLocSunshaftStrength = GetShaderLocation(RayShader, "sunshaftStrength");
     }
 
     // Bloom shaders (bright-pass prefilter + separable blur). Optional: without them (or without the tonemap's
@@ -739,6 +805,8 @@ static void EnsureShaders(WorldRenderer* self)
         self->_bloomPrefilterLocResolution = GetShaderLocation(RayShader, "resolution");
         self->_bloomPrefilterLocThreshold = GetShaderLocation(RayShader, "threshold");
         self->_bloomPrefilterLocSoftKnee = GetShaderLocation(RayShader, "softKnee");
+        self->_bloomPrefilterLocDepthTexture = GetShaderLocation(RayShader, "depthTexture");
+        self->_bloomPrefilterLocDepthMask = GetShaderLocation(RayShader, "depthMask");
     }
     self->_bloomBlurShader = LoadRendererShader(self, BLOOM_BLUR_SHADER_ASSET_NAME);
     if (self->_bloomBlurShader != NULL)
@@ -746,6 +814,17 @@ static void EnsureShaders(WorldRenderer* self)
         Shader RayShader = GameShader_GetRaylibShader(self->_bloomBlurShader);
         self->_bloomBlurLocResolution = GetShaderLocation(RayShader, "resolution");
         self->_bloomBlurLocDirection = GetShaderLocation(RayShader, "direction");
+    }
+
+    // Sun-shafts (god rays) shader. Optional: without it (or the tonemap's sunshaft uniforms, or the shaft
+    // target, or samplable depth) the pass is skipped and the scene tonemaps without shafts.
+    self->_sunshaftShader = LoadRendererShader(self, SUNSHAFT_SHADER_ASSET_NAME);
+    if (self->_sunshaftShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_sunshaftShader);
+        self->_sunshaftLocResolution = GetShaderLocation(RayShader, "resolution");
+        self->_sunshaftLocDepthTexture = GetShaderLocation(RayShader, "depthTexture");
+        self->_sunshaftLocSunScreenPos = GetShaderLocation(RayShader, "sunScreenPos");
     }
 
     // Depth shader + shadow map for the sun shadow pass (optional; models draw unshadowed without them).
@@ -1394,17 +1473,28 @@ static void RenderBloom(WorldRenderer* self, RenderTexture2D source)
     Rectangle FullDest = { 0.0f, 0.0f, (float)self->_bloomWidth, (float)self->_bloomHeight };
     Rectangle BloomSourceRect = { 0.0f, 0.0f, (float)self->_bloomWidth, (float)self->_bloomHeight };
 
-    // Bright-pass + downsample the source into bloom buffer A.
+    // Bright-pass + downsample the source into bloom buffer A. The sky (sun disc + stars) is excluded from bloom
+    // by masking against the scene depth (sky wrote no depth → sits at the far plane), so only objects glow —
+    // but only when the scene depth is a samplable texture; otherwise everything blooms (graceful fallback).
     Shader Prefilter = GameShader_GetRaylibShader(self->_bloomPrefilterShader);
     float Threshold = BLOOM_THRESHOLD;
     float SoftKnee = BLOOM_SOFT_KNEE;
+    float DepthMask = self->_sceneDepthSamplable ? 1.0f : 0.0f;
     Rectangle SourceRect = { 0.0f, 0.0f, (float)source.texture.width, (float)source.texture.height };
     BeginTextureMode(self->_bloomTargetA);
     ClearBackground(BLANK);
     SetShaderValue(Prefilter, self->_bloomPrefilterLocResolution, BloomResolution, SHADER_UNIFORM_VEC2);
     SetShaderValue(Prefilter, self->_bloomPrefilterLocThreshold, &Threshold, SHADER_UNIFORM_FLOAT);
     SetShaderValue(Prefilter, self->_bloomPrefilterLocSoftKnee, &SoftKnee, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(Prefilter, self->_bloomPrefilterLocDepthMask, &DepthMask, SHADER_UNIFORM_FLOAT);
     BeginShaderMode(Prefilter);
+    // Bind the scene depth (unit 1) via SetShaderValueTexture AFTER BeginShaderMode so it enters Raylib's 2D
+    // batch texture table (a manual slot bind would leave the sampler on unit 0 = the scene colour). Only when
+    // it will actually be sampled (depthMask on), so a disabled mask never reads an unbound sampler.
+    if (self->_sceneDepthSamplable)
+    {
+        SetShaderValueTexture(Prefilter, self->_bloomPrefilterLocDepthTexture, self->_sceneTarget.depth);
+    }
     DrawTexturePro(source.texture, SourceRect, FullDest, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
     EndShaderMode();
     EndTextureMode();
@@ -1433,6 +1523,71 @@ static void RenderBloom(WorldRenderer* self, RenderTexture2D source)
         EndShaderMode();
         EndTextureMode();
     }
+}
+
+/* Projects the sun to a screen-space UV for the sun-shaft pass, using the same view+projection the scene pass
+ * uses (so the UV lines up with the shaft buffer, which samples by gl_FragCoord/resolution → y up, matching the
+ * NDC->UV here). Returns false (shafts skipped) when the sun is below SUNSHAFT_MIN_ELEVATION, behind the camera,
+ * or further than SUNSHAFT_SCREEN_MARGIN outside the screen box. On success @p outUV is the sun UV in [0,1]. */
+static bool ComputeSunScreenUV(const GameCamera* camera, int width, int height, Vector3 sunDir, Vector2* outUV)
+{
+    if (sunDir.y < SUNSHAFT_MIN_ELEVATION)
+    {
+        return false; // sun set / too low
+    }
+
+    Camera3D RayCam = GameCamera_ToRaylibCamera(camera);
+    double Aspect = (height > 0) ? ((double)width / (double)height) : 1.0;
+    Matrix View = GetCameraMatrix(RayCam);
+    Matrix Projection = MatrixPerspective((double)RayCam.fovy * DEG2RAD, Aspect, RL_CULL_DISTANCE_NEAR, RL_CULL_DISTANCE_FAR);
+    Matrix ViewProj = MatrixMultiply(View, Projection); // world -> clip (matches DrawSky's invViewProj inverse)
+
+    // A point far along the direction TO the sun from the camera; project it to clip space.
+    Vector3 SunPoint = Vector3Add(camera->Position, Vector3Scale(sunDir, 100000.0f));
+    float ClipX = ViewProj.m0*SunPoint.x + ViewProj.m4*SunPoint.y + ViewProj.m8*SunPoint.z + ViewProj.m12;
+    float ClipY = ViewProj.m1*SunPoint.x + ViewProj.m5*SunPoint.y + ViewProj.m9*SunPoint.z + ViewProj.m13;
+    float ClipW = ViewProj.m3*SunPoint.x + ViewProj.m7*SunPoint.y + ViewProj.m11*SunPoint.z + ViewProj.m15;
+    if (ClipW <= 1e-4f)
+    {
+        return false; // sun behind the camera
+    }
+
+    float UvX = (ClipX / ClipW)*0.5f + 0.5f;
+    float UvY = (ClipY / ClipW)*0.5f + 0.5f;
+    if ((UvX < -SUNSHAFT_SCREEN_MARGIN) || (UvX > 1.0f + SUNSHAFT_SCREEN_MARGIN)
+        || (UvY < -SUNSHAFT_SCREEN_MARGIN) || (UvY > 1.0f + SUNSHAFT_SCREEN_MARGIN))
+    {
+        return false; // sun too far off-screen for its shafts to reach the frame
+    }
+
+    outUV->x = UvX;
+    outUV->y = UvY;
+    return true;
+}
+
+/* Runs the sun-shaft pass: a radial blur from @p sunUV that accumulates the unoccluded sky's radiance (in its
+ * own sky colour) into _sunshaftTarget; the tonemap adds it in HDR. Reads @p source's colour and the scene
+ * depth (for occlusion). Opens/closes its own passes. Caller ensures shafts are ready + the sun is visible +
+ * the scene depth is samplable. */
+static void RenderSunshafts(WorldRenderer* self, RenderTexture2D source, Vector2 sunUV)
+{
+    Shader Shaft = GameShader_GetRaylibShader(self->_sunshaftShader);
+    float Resolution[2] = { (float)self->_sunshaftWidth, (float)self->_sunshaftHeight };
+    float SunPos[2] = { sunUV.x, sunUV.y };
+    Rectangle SourceRect = { 0.0f, 0.0f, (float)source.texture.width, (float)source.texture.height };
+    Rectangle FullDest = { 0.0f, 0.0f, (float)self->_sunshaftWidth, (float)self->_sunshaftHeight };
+
+    BeginTextureMode(self->_sunshaftTarget);
+    ClearBackground(BLANK);
+    SetShaderValue(Shaft, self->_sunshaftLocResolution, Resolution, SHADER_UNIFORM_VEC2);
+    SetShaderValue(Shaft, self->_sunshaftLocSunScreenPos, SunPos, SHADER_UNIFORM_VEC2);
+    BeginShaderMode(Shaft);
+    // Bind the scene depth (unit 1) via SetShaderValueTexture AFTER BeginShaderMode (batch texture table), like
+    // the postfx/bloom passes; the source colour is bound to unit 0 by DrawTexturePro.
+    SetShaderValueTexture(Shaft, self->_sunshaftLocDepthTexture, self->_sceneTarget.depth);
+    DrawTexturePro(source.texture, SourceRect, FullDest, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
+    EndShaderMode();
+    EndTextureMode();
 }
 
 
@@ -1465,6 +1620,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_outlineEnabled = true;
     Renderer->_postfxEnabled = true;
     Renderer->_bloomEnabled = true;
+    Renderer->_sunshaftEnabled = true;
     Renderer->_hasSceneTarget = false;
 
     *outRenderer = Renderer;
@@ -1501,6 +1657,12 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
         UnloadRenderTexture(self->_bloomTargetA);
         UnloadRenderTexture(self->_bloomTargetB);
         self->_hasBloomTargets = false;
+    }
+
+    if (self->_hasSunshaftTarget)
+    {
+        UnloadRenderTexture(self->_sunshaftTarget);
+        self->_hasSunshaftTarget = false;
     }
 
     if (self->_hasShadowMap)
@@ -1635,6 +1797,22 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
         RenderBloom(self, BlitSource);
     }
 
+    // Pass 1.8 (optional): sun shafts (god rays). Needs shafts on (code toggle + world flag), a positive
+    // effective strength (world x config), the shaft shader/target, the tonemap's shaft uniforms, samplable
+    // scene depth (for occlusion), AND the sun projecting to a usable on-screen position (above the horizon,
+    // in front, not too far off-screen). The shaft radiance is tinted by the (linear) sun colour.
+    float EffectiveSunshaft = (Environment->AreSunshaftsEnabled && self->_sunshaftEnabled)
+        ? (Environment->SunshaftStrength * ConfigSunshaftStrength(self) * SUNSHAFT_BASE_INTENSITY) : 0.0f;
+    if (EffectiveSunshaft < 0.0f) { EffectiveSunshaft = 0.0f; }
+    Vector2 SunUV = { 0.0f, 0.0f };
+    bool SunshaftActive = (EffectiveSunshaft > 0.0f) && self->_hasSunshaftTarget && (self->_sunshaftShader != NULL)
+        && (self->_tonemapShader != NULL) && (self->_tonemapLocSunshaftStrength >= 0) && self->_sceneDepthSamplable
+        && ComputeSunScreenUV(camera, self->_sceneWidth, self->_sceneHeight, SunDir, &SunUV);
+    if (SunshaftActive)
+    {
+        RenderSunshafts(self, BlitSource, SunUV);
+    }
+
     // Pass 2: blit the (post-processed) scene into the frame target, tonemapping the linear-HDR result to
     // sRGB via the tonemap shader as it upscales. A negative source height applies the vertical flip Raylib
     // render textures need (the same convention the frame manager uses when compositing), and point filtering
@@ -1657,15 +1835,22 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     {
         Shader TonemapRay = GameShader_GetRaylibShader(self->_tonemapShader);
         SetShaderValue(TonemapRay, self->_tonemapLocExposure, &Exposure, SHADER_UNIFORM_FLOAT);
-        // Bloom strength (0 when inactive → the shader skips sampling the bloom texture, so it need not bind).
+        // Bloom + sun-shaft strengths (0 when inactive → the shader skips sampling that texture, so it need not
+        // bind). Both are added in linear HDR before the tonemap.
         float BloomStrengthUniform = BloomActive ? EffectiveBloom : 0.0f;
         SetShaderValue(TonemapRay, self->_tonemapLocBloomStrength, &BloomStrengthUniform, SHADER_UNIFORM_FLOAT);
+        float SunshaftStrengthUniform = SunshaftActive ? EffectiveSunshaft : 0.0f;
+        SetShaderValue(TonemapRay, self->_tonemapLocSunshaftStrength, &SunshaftStrengthUniform, SHADER_UNIFORM_FLOAT);
         BeginShaderMode(TonemapRay);
-        // Bind the blurred bloom as a second sampler (unit 1) AFTER BeginShaderMode, via SetShaderValueTexture so
-        // it enters Raylib's 2D batch texture table (the manual-slot idiom would leave it on unit 0 = the scene).
+        // Bind the extra samplers (bloom unit 1, sun shafts unit 2) AFTER BeginShaderMode, via SetShaderValueTexture
+        // so they enter Raylib's 2D batch texture table (the manual-slot idiom would leave them on unit 0 = scene).
         if (BloomActive)
         {
             SetShaderValueTexture(TonemapRay, self->_tonemapLocBloomTexture, self->_bloomTargetA.texture);
+        }
+        if (SunshaftActive)
+        {
+            SetShaderValueTexture(TonemapRay, self->_tonemapLocSunshaftTexture, self->_sunshaftTarget.texture);
         }
     }
     DrawTexturePro(BlitSource.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
@@ -1706,6 +1891,16 @@ void WorldRenderer_SetBloomEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_IsBloomEnabled(const WorldRenderer* self)
 {
     return self->_bloomEnabled;
+}
+
+void WorldRenderer_SetSunshaftsEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_sunshaftEnabled = enabled;
+}
+
+bool WorldRenderer_AreSunshaftsEnabled(const WorldRenderer* self)
+{
+    return self->_sunshaftEnabled;
 }
 
 void WorldRenderer_SetDebugGridEnabled(WorldRenderer* self, bool enabled)

@@ -155,6 +155,25 @@ void WorldRenderer_SetBloomEnabled(WorldRenderer* self, bool enabled);
 bool WorldRenderer_IsBloomEnabled(const WorldRenderer* self);
 
 /**
+ * @brief Enables or disables the sun-shaft (god-ray) pass.
+ *
+ * A code-side toggle for A/B-ing the sun shafts; when disabled the tonemap adds no shafts. Shafts also
+ * self-disable when the effective (world x config) strength is 0, the shader/target is unavailable, the scene
+ * depth is not samplable, or the sun is below the horizon / off-screen. Default enabled. Applied on the next
+ * render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to run the sun-shaft pass, false to skip it.
+ */
+void WorldRenderer_SetSunshaftsEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the sun-shaft pass is enabled (the code-side toggle only, not the strength/sun gates).
+ * @param self The renderer; must not be NULL.
+ * @returns true if the sun-shaft toggle is on.
+ */
+bool WorldRenderer_AreSunshaftsEnabled(const WorldRenderer* self);
+
+/**
  * @brief Enables or disables the debug reference grid drawn on the ground plane.
  * @param self The renderer; must not be NULL.
  * @param enabled true to draw the grid, false to hide it.

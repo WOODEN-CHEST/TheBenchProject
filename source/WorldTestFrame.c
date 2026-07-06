@@ -123,6 +123,19 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
             Error_Deconstruct(&LogResult);
         }
     }
+
+    // G toggles the sun shafts (god rays) independently.
+    if (IsKeyPressed(KEY_G))
+    {
+        bool Enabled = !WorldRenderer_AreSunshaftsEnabled(frame->_renderer);
+        WorldRenderer_SetSunshaftsEnabled(frame->_renderer, Enabled);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: sun shafts %s.", Enabled ? "ON" : "OFF");
+            Error_Deconstruct(&LogResult);
+        }
+    }
 }
 
 
