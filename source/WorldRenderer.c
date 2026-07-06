@@ -180,6 +180,9 @@
 
 /** Asset name of the sprite shader: draws 2D sprite billboards, linearizing their sRGB art into the HDR scene. */
 #define SPRITE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sprite")
+/** Asset name of the sprite normal/mask shader: writes sprites into the outline G-buffer with an alpha discard
+ *  (so the outline follows the sprite's shape, not its billboard rectangle) + a constant camera-facing normal. */
+#define NORMAL_SPRITE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal_sprite")
 /** Radius of the debug wireframe gizmo drawn at each light's position (only with the debug grid enabled). */
 #define LIGHT_GIZMO_RADIUS 0.2f
 
@@ -256,6 +259,11 @@ struct WorldRendererStruct
     /** The sprite shader (draws 2D sprite billboards, sRGB->linear HDR); borrowed. NULL = sprites draw with
      *  Raylib's default shader (their sRGB art then lands in the linear buffer slightly wrong, but still shows). */
     GameShader* _spriteShader;
+    /** The sprite normal/mask shader (draws sprites into the outline G-buffer, alpha-discarded); borrowed.
+     *  NULL = sprites are not written to the normal buffer, so they get no outlines (they still render). */
+    GameShader* _normalSpriteShader;
+    /** Cached world_normal_sprite outline-flag uniform location (-1 when absent). */
+    int _normalSpriteLocOutlineFlag;
     /** Base scene-illumination luminance (ambient + sun) computed each frame in the lighting upload; the eye
      *  adaptation step adds nearby point lights to it. */
     float _baseSceneLuminance;
@@ -918,6 +926,14 @@ static void EnsureShaders(WorldRenderer* self)
     // Raylib's default (unlit) shader; it needs no cached uniform locations (texture0/colDiffuse are built-in).
     self->_spriteShader = LoadRendererShader(self, SPRITE_SHADER_ASSET_NAME);
 
+    // Sprite normal/mask shader (writes sprites into the outline G-buffer, alpha-discarded). Optional: without
+    // it sprites are simply not drawn into the normal buffer, so they get no outlines.
+    self->_normalSpriteShader = LoadRendererShader(self, NORMAL_SPRITE_SHADER_ASSET_NAME);
+    if (self->_normalSpriteShader != NULL)
+    {
+        self->_normalSpriteLocOutlineFlag = GetShaderLocation(GameShader_GetRaylibShader(self->_normalSpriteShader), "outlineFlag");
+    }
+
     // Depth shader + shadow map for the sun shadow pass (optional; models draw unshadowed without them).
     self->_depthShader = LoadRendererShader(self, DEPTH_SHADER_ASSET_NAME);
     if ((self->_depthShader != NULL) && !self->_hasShadowMap)
@@ -1311,16 +1327,23 @@ static void DrawModelObjectWithShader(WorldRenderer* self, World* world, WorldMo
     DrawModel(RayModel, (Vector3){ 0.0f, 0.0f, 0.0f }, 1.0f, Tint);
 }
 
-/* Whether a model object should be drawn under the given OmitPixelation filter. */
-static bool ModelPassesFilter(const WorldModelObject* modelObject, ModelPixelationFilter filter)
+/* Whether an object with the given OmitPixelation flag passes the pixelation filter (used for both models and
+ * sprites). */
+static bool OmitFlagPassesFilter(bool omitPixelation, ModelPixelationFilter filter)
 {
     switch (filter)
     {
-        case ModelPixelationFilter_PixelatedOnly: return !modelObject->OmitPixelation;
-        case ModelPixelationFilter_CrispOnly:     return modelObject->OmitPixelation;
+        case ModelPixelationFilter_PixelatedOnly: return !omitPixelation;
+        case ModelPixelationFilter_CrispOnly:     return omitPixelation;
         case ModelPixelationFilter_All:
         default:                                  return true;
     }
+}
+
+/* Whether a model object should be drawn under the given OmitPixelation filter. */
+static bool ModelPassesFilter(const WorldModelObject* modelObject, ModelPixelationFilter filter)
+{
+    return OmitFlagPassesFilter(modelObject->OmitPixelation, filter);
 }
 
 /* Draws the world's model objects through @p shader, restricted to those passing @p filter (by their
@@ -1345,12 +1368,53 @@ static void DrawWorldModels(WorldRenderer* self, World* world, GameShader* shade
     }
 }
 
-/* Draws the world's sprite objects as camera-facing billboards through the sprite shader (which linearizes
- * their sRGB art into the linear-HDR scene). The (static) first frame of each sprite's animation is drawn for
- * now; per-object animation PLAYBACK is a follow-up (it needs a decision on where per-object playback state
- * lives, since the data layer is deliberately render-independent). The billboard is sized by the object's
- * X/Y scale and tinted by its tint; it depth-tests against the rest of the scene. Must run inside BeginMode3D. */
-static void DrawWorldSprites(WorldRenderer* self, World* world, const GameCamera* camera)
+/* Resolves a sprite's CURRENT animation frame into @p outFrame, lazy-wiring the backing animation from the
+ * object's asset name the first time (idempotent once the instance has a source). Returns false (skip drawing)
+ * when there is no asset name, the asset fails to load/set, the animation has no frames, or the current frame
+ * cannot be read. The instance's playback is advanced by game logic; this only reads it. */
+static bool ResolveSpriteFrame(WorldRenderer* self, WorldSpriteObject* spriteObject, SpriteAnimationFrame* outFrame)
+{
+    SpriteAnimationInstance* Instance = WorldSpriteObject_GetAnimationInstance(spriteObject);
+    if (!SpriteAnimationInstance_HasSource(Instance))
+    {
+        const unsigned char* AssetName = WorldSpriteObject_GetSpriteAnimationAssetName(spriteObject);
+        if (AssetName == NULL)
+        {
+            return false;
+        }
+        SpriteAnimation* Animation = NULL;
+        Error LoadResult = AssetManager_LoadSpriteAnimation(self->_assetManager, AssetName, self->_assetUser, &Animation);
+        if (LoadResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&LoadResult);
+            return false;
+        }
+        Error SetResult = WorldSpriteObject_SetAnimation(spriteObject, Animation);
+        if (SetResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&SetResult);
+            return false;
+        }
+    }
+
+    if (SpriteAnimationInstance_GetFrameCount(Instance) == 0)
+    {
+        return false;
+    }
+    Error FrameResult = SpriteAnimationInstance_GetCurrentFrame(Instance, outFrame);
+    if (FrameResult.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&FrameResult);
+        return false;
+    }
+    return true;
+}
+
+/* Draws the world's sprite objects (passing @p filter by their OmitPixelation flag) as camera-facing billboards
+ * through the sprite shader (which linearizes their sRGB art into the linear-HDR scene). Each draws its
+ * instance's CURRENT frame, sized by the object's X/Y scale and tinted by its tint; it depth-tests against the
+ * rest of the scene. Must run inside BeginMode3D. */
+static void DrawWorldSprites(WorldRenderer* self, World* world, const GameCamera* camera, ModelPixelationFilter filter)
 {
     Camera3D RayCam = GameCamera_ToRaylibCamera(camera);
     if (self->_spriteShader != NULL)
@@ -1372,31 +1436,15 @@ static void DrawWorldSprites(WorldRenderer* self, World* world, const GameCamera
         {
             continue;
         }
-
         WorldSpriteObject* SpriteObject = (WorldSpriteObject*)Object;
-        const unsigned char* AssetName = WorldSpriteObject_GetSpriteAnimationAssetName(SpriteObject);
-        if (AssetName == NULL)
-        {
-            continue;
-        }
-
-        SpriteAnimation* Animation = NULL;
-        Error LoadResult = AssetManager_LoadSpriteAnimation(self->_assetManager, AssetName, self->_assetUser, &Animation);
-        if (LoadResult.Code != ErrorCode_Success)
-        {
-            Error_Deconstruct(&LoadResult);
-            continue;
-        }
-        if (SpriteAnimation_GetFrameCount(Animation) == 0)
+        if (!OmitFlagPassesFilter(SpriteObject->OmitPixelation, filter))
         {
             continue;
         }
 
         SpriteAnimationFrame Frame;
-        Error FrameResult = SpriteAnimation_GetFrameAt(Animation, 0, &Frame); // TODO: per-object animation playback
-        if (FrameResult.Code != ErrorCode_Success)
+        if (!ResolveSpriteFrame(self, SpriteObject, &Frame))
         {
-            Error_Deconstruct(&FrameResult);
             continue;
         }
 
@@ -1411,6 +1459,60 @@ static void DrawWorldSprites(WorldRenderer* self, World* world, const GameCamera
     {
         EndShaderMode();
     }
+}
+
+/* Draws the world's sprite objects (passing @p filter) into the normal/mask G-buffer through the sprite normal
+ * shader, so they get outlines from the postfx pass. Alpha-discards transparent texels (outline hugs the sprite
+ * shape) and sets the per-sprite outline flag. No-op if the sprite normal shader is unavailable. Must run inside
+ * the normal-buffer pass's BeginMode3D (colour blending disabled by the caller). */
+static void DrawWorldSpritesToNormalBuffer(WorldRenderer* self, World* world, const GameCamera* camera,
+    ModelPixelationFilter filter)
+{
+    if (self->_normalSpriteShader == NULL)
+    {
+        return;
+    }
+    Camera3D RayCam = GameCamera_ToRaylibCamera(camera);
+    Shader RayShader = GameShader_GetRaylibShader(self->_normalSpriteShader);
+    BeginShaderMode(RayShader);
+
+    size_t Count = World_GetObjectCount(world);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        WorldObject* Object = NULL;
+        Error GetResult = World_GetObjectByIndex(world, Index, &Object);
+        if (GetResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&GetResult);
+            continue;
+        }
+        if (WorldObject_GetType(Object) != WorldObjectType_Sprite)
+        {
+            continue;
+        }
+        WorldSpriteObject* SpriteObject = (WorldSpriteObject*)Object;
+        if (!OmitFlagPassesFilter(SpriteObject->OmitPixelation, filter))
+        {
+            continue;
+        }
+
+        SpriteAnimationFrame Frame;
+        if (!ResolveSpriteFrame(self, SpriteObject, &Frame))
+        {
+            continue;
+        }
+
+        float OutlineFlag = SpriteObject->HasOutline ? 1.0f : 0.0f;
+        SetShaderValue(RayShader, self->_normalSpriteLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
+
+        Vector3 Position = WorldObject_GetPosition(Object);
+        Vector3 Scale = WorldObject_GetScale(Object);
+        Vector2 Size = { Scale.x, Scale.y };
+        // Tint WHITE: the normal buffer only cares about the frame's ALPHA (for the discard), not its colour.
+        DrawBillboardRec(RayCam, Frame._texture, Frame._areaInTexture, Position, Size, WHITE);
+    }
+
+    EndShaderMode();
 }
 
 /* Draws a small wireframe sphere at each light's position (tinted by the light colour) as a debug authoring
@@ -1483,6 +1585,8 @@ static void RenderNormalBuffer(WorldRenderer* self, World* world, const GameCame
     rlDisableColorBlend();  // write RGB (normal) + A (flag) directly; no alpha blend
     BeginMode3D(GameCamera_ToRaylibCamera(camera));
     DrawNormalBufferModels(self, world, filter);
+    // Sprites into the same G-buffer (alpha-discarded) so they get silhouette outlines too.
+    DrawWorldSpritesToNormalBuffer(self, world, camera, filter);
     EndMode3D();
     rlEnableColorBlend();   // restore the default blending for the following 2D passes
     EndTextureMode();
@@ -1569,9 +1673,9 @@ static void DrawScene(WorldRenderer* self, World* world, const GameCamera* camer
     // Model objects, shaded through the PBR shader (or the default shader when it is unavailable).
     DrawWorldModels(self, world, self->_pbrShader, modelFilter);
 
-    // Sprite objects (2D billboards). Drawn after models so they depth-test against them. Sprites are not
-    // filtered by OmitPixelation yet (crisp sprites are a follow-up), so they always draw in this pixelated pass.
-    DrawWorldSprites(self, world, camera);
+    // Sprite objects (2D billboards). Drawn after models so they depth-test against them. Filtered by the same
+    // OmitPixelation filter as models — crisp sprites are drawn in the crisp overlay pass instead.
+    DrawWorldSprites(self, world, camera, modelFilter);
 
     // Light gizmos: a debug authoring aid so light placement is visible (lights are otherwise invisible).
     if (self->_drawDebugGrid)
@@ -1802,8 +1906,8 @@ static void RenderSunshafts(WorldRenderer* self, RenderTexture2D source, Vector2
     EndTextureMode();
 }
 
-/* Whether the world contains any OmitPixelation (crisp) model object; used to skip the whole crisp overlay when
- * nothing needs it. */
+/* Whether the world contains any OmitPixelation (crisp) model OR sprite object; used to skip the whole crisp
+ * overlay when nothing needs it. */
 static bool WorldHasCrispObjects(World* world)
 {
     size_t Count = World_GetObjectCount(world);
@@ -1816,7 +1920,12 @@ static bool WorldHasCrispObjects(World* world)
             Error_Deconstruct(&GetResult);
             continue;
         }
-        if ((WorldObject_GetType(Object) == WorldObjectType_Model) && ((WorldModelObject*)Object)->OmitPixelation)
+        WorldObjectType Type = WorldObject_GetType(Object);
+        if ((Type == WorldObjectType_Model) && ((WorldModelObject*)Object)->OmitPixelation)
+        {
+            return true;
+        }
+        if ((Type == WorldObjectType_Sprite) && ((WorldSpriteObject*)Object)->OmitPixelation)
         {
             return true;
         }
@@ -1836,6 +1945,8 @@ static void RenderCrispObjects(WorldRenderer* self, World* world, const GameCame
     UpdateLightingUniforms(self, world, camera);
     BeginMode3D(GameCamera_ToRaylibCamera(camera));
     DrawWorldModels(self, world, self->_pbrShader, ModelPixelationFilter_CrispOnly);
+    // Crisp sprites (OmitPixelation) render full-res here too, so they stay sharp like crisp models.
+    DrawWorldSprites(self, world, camera, ModelPixelationFilter_CrispOnly);
     EndMode3D();
     EndTextureMode();
 }
@@ -2023,6 +2134,13 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
             if (LoadResult.Code != ErrorCode_Success)
             {
                 ReportAssetFailure(self, AssetName, &LoadResult);
+            }
+            else
+            {
+                // Wire the loaded animation onto the object's instance so it is ready before the first update
+                // (the draw path also lazy-wires as a fallback).
+                Error SetResult = WorldSpriteObject_SetAnimation((WorldSpriteObject*)Object, Animation);
+                Error_Deconstruct(&SetResult);
             }
         }
     }

@@ -157,6 +157,30 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
     }
 }
 
+/* Advances every sprite object's animation playback by the elapsed time (a no-op for empty / source-less
+ * instances). Best-effort: an advance error on one sprite does not stop the others or the update tick. */
+static void AdvanceSpriteAnimations(World* world, double deltaSeconds)
+{
+    size_t Count = World_GetObjectCount(world);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        WorldObject* Object = NULL;
+        Error GetResult = World_GetObjectByIndex(world, Index, &Object);
+        if (GetResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&GetResult);
+            continue;
+        }
+        if (WorldObject_GetType(Object) != WorldObjectType_Sprite)
+        {
+            continue;
+        }
+        SpriteAnimationInstance* Instance = WorldSpriteObject_GetAnimationInstance((WorldSpriteObject*)Object);
+        Error UpdateResult = SpriteAnimationInstance_Update(Instance, deltaSeconds);
+        Error_Deconstruct(&UpdateResult);
+    }
+}
+
 
 // Static functions: vtable behavior.
 static Error WorldTestFrame_Start(void* self, ProgramTime time)
@@ -235,6 +259,9 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
 
     // Advance the world's day-night cycle (a no-op while paused).
     WorldEnvironment_Advance(World_GetEnvironment(&Frame->_world), Delta);
+
+    // Advance sprite animations (game logic; the renderer only reads the current frame).
+    AdvanceSpriteAnimations(&Frame->_world, time.PassedTime);
 
     return Error_CreateSuccess();
 }
