@@ -39,6 +39,16 @@ uniform vec3 pointLightPositions[MAX_POINT_LIGHTS];   // world space
 uniform vec3 pointLightRadiances[MAX_POINT_LIGHTS];   // linear colour * intensity
 uniform float pointLightRanges[MAX_POINT_LIGHTS];     // reach radius (attenuation falls to 0 here)
 
+// ONE shadow-casting point light, shaded SEPARATELY from the culled set above (which excludes it) so it can
+// sample its own omnidirectional (cube) shadow map. pointShadowActive false => no shadow-casting point light.
+uniform bool pointShadowActive;
+uniform vec3 pointShadowLightPos;       // world space
+uniform vec3 pointShadowLightRadiance;  // linear colour * intensity
+uniform float pointShadowLightRange;    // reach radius
+uniform samplerCube pointShadowCube;    // packed (RGBA8) linear distance from the light, per direction
+uniform float pointShadowFar;           // far range the stored distance was normalized by
+uniform float pointShadowBias;          // world-space depth bias to combat shadow acne
+
 // Atmospheric distance fog: distant geometry fades into the SAME sky the sky pass draws, evaluated along the
 // fragment's own view ray, so far objects dissolve seamlessly into the sky (not a flat "close but not quite"
 // colour). The sky parameters below MUST stay in sync with shaders/sky/fragment.frag (identical constants +
@@ -211,6 +221,22 @@ vec3 fogSkyColor(vec3 rayDir)
     return sky;
 }
 
+// Unpacks a distance packed by the cube-depth shader's packDistance (RGBA8 -> [0,1]).
+float unpackDistance(vec4 rgba)
+{
+    return dot(rgba, vec4(1.0, 1.0/255.0, 1.0/65025.0, 1.0/16581375.0));
+}
+
+// 0 (lit) .. 1 (shadowed) for the shadow-casting point light: samples its cube map along the light->fragment
+// direction, unpacks the nearest occluder distance, and compares it to this fragment's distance from the light.
+float ComputePointShadow(vec3 fragPos)
+{
+    vec3 toFrag = fragPos - pointShadowLightPos;
+    float current = length(toFrag);
+    float stored = unpackDistance(texture(pointShadowCube, toFrag)) * pointShadowFar;
+    return ((current - pointShadowBias) > stored) ? 1.0 : 0.0;
+}
+
 void main()
 {
     vec4 texel = texture(texture0, fragTexCoord)*colDiffuse*fragColor;
@@ -271,6 +297,31 @@ void main()
         float atten = (window*window)/(dist*dist + 1.0);
 
         pointTotal += (kDp*albedo/PI + specp)*pointLightRadiances[i]*ndlp*atten;
+    }
+
+    // The shadow-casting point light (same Cook-Torrance BRDF), darkened by its own cube shadow map. Shaded
+    // here rather than in the culled loop so it can sample the cube; the renderer excludes it from that loop.
+    if (pointShadowActive)
+    {
+        vec3 toLight = pointShadowLightPos - fragPosition;
+        float dist = length(toLight);
+        vec3 lp = toLight/max(dist, 1e-4);
+        vec3 hp = normalize(v + lp);
+
+        float ndfp = DistributionGGX(n, hp, rough);
+        float gp = GeometrySmith(n, v, lp, rough);
+        vec3 fp = FresnelSchlick(max(dot(hp, v), 0.0), f0);
+        vec3 specp = (ndfp*gp*fp)/(4.0*max(dot(n, v), 0.0)*max(dot(n, lp), 0.0) + 1e-4);
+        vec3 kDp = (vec3(1.0) - fp)*(1.0 - metal);
+        float ndlp = max(dot(n, lp), 0.0);
+
+        float range = max(pointShadowLightRange, 1e-3);
+        float window = clamp(1.0 - pow(dist/range, 4.0), 0.0, 1.0);
+        float atten = (window*window)/(dist*dist + 1.0);
+
+        float shadow = ComputePointShadow(fragPosition);
+        float visibility = 1.0 - shadow*clamp(shadowStrength, 0.0, 1.0);
+        pointTotal += (kDp*albedo/PI + specp)*pointShadowLightRadiance*ndlp*atten*visibility;
     }
 
     // Flat ambient skylight stand-in (proper image-based lighting lands with the atmospheric sky step).

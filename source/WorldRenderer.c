@@ -68,6 +68,18 @@
 /** Texture unit the shadow map is bound to for the PBR shader (kept clear of the material map slots 0-2). */
 #define SHADOW_TEXTURE_SLOT 10
 
+/** Asset name of the point-light omnidirectional (cube) shadow depth shader (stores packed linear distance). */
+#define CUBE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_cube_depth")
+/** Resolution (per cube face) of the point-light shadow cube map, in texels. */
+#define POINT_SHADOW_CUBE_SIZE 512
+/** Near plane of the point-light shadow cube's 90-degree face projections. */
+#define POINT_SHADOW_NEAR 0.05
+/** World-space depth bias for the point-light shadow comparison (combats acne; raise if acne, lower if
+ *  peter-panning/detached). */
+#define POINT_SHADOW_BIAS 0.15f
+/** Texture unit the point-light shadow CUBE is bound to for the PBR shader (clear of the sun map on slot 10). */
+#define POINT_SHADOW_TEXTURE_SLOT 11
+
 /** Capacity of the per-asset local-bounds cache used for point-light reach culling (distinct model assets).
  *  Caching avoids re-scanning a model's mesh vertices every frame just to get its bounding sphere. */
 #define BOUNDS_CACHE_CAPACITY 256
@@ -210,6 +222,9 @@ struct WorldRendererStruct
     AssetUserID _assetUser;
     /** Whether the debug reference grid is drawn. */
     bool _drawDebugGrid;
+    /** Whether the debug light gizmos (wireframe spheres at light positions) are drawn. Independent of the grid;
+     *  a real game turns this OFF so lights have no visible sphere. Default on (for authoring). */
+    bool _lightGizmosEnabled;
     /** Whether the final pixelation pass is applied. */
     bool _pixelationEnabled;
     /** The PBR shader used to shade model objects; borrowed (held under _assetUser). NULL = unavailable. */
@@ -275,6 +290,11 @@ struct WorldRendererStruct
     GameShader* _skyShader;
     /** The depth-only shader used for the sun shadow-map pass; borrowed. NULL = no shadows. */
     GameShader* _depthShader;
+    /** The cube-depth shader for the point-light omnidirectional shadow pass; borrowed. NULL = no point shadows.
+     *  Cached uniform locations: the shadow light's world position + far range. */
+    GameShader* _cubeDepthShader;
+    int _cubeDepthLocLightPos;
+    int _cubeDepthLocLightFar;
     /** The post-process shader (screen-space AO + hand-drawn outlines); borrowed. NULL = post pass skipped. */
     GameShader* _postfxShader;
     /** The normal/mask G-buffer shader (writes view-space normals + a surface/outline flag for the postfx
@@ -328,6 +348,14 @@ struct WorldRendererStruct
     int _locShadowStrength;
     int _locShadowBias;
     int _locShadowTexelSize;
+    /** Cached PBR point-light (cube) shadow uniform locations (-1 when absent). */
+    int _locPointShadowActive;
+    int _locPointShadowLightPos;
+    int _locPointShadowLightRadiance;
+    int _locPointShadowLightRange;
+    int _locPointShadowCube;
+    int _locPointShadowFar;
+    int _locPointShadowBias;
     /** Cached PBR point-light uniform locations (-1 when absent); uploaded per drawn object after reach-culling. */
     int _locPointLightCount;
     int _locPointLightPositions;
@@ -353,6 +381,20 @@ struct WorldRendererStruct
     Matrix _lightVP;
     /** Whether shadows are active this frame (sun up + enabled + shadow map ready). */
     bool _shadowActive;
+    /** Point-light omnidirectional shadow: a colour CUBE (RGBA8 packed distance) + its own depth renderbuffer +
+     *  framebuffer; the shadow-casting point light renders 6 faces into it each frame. */
+    unsigned int _pointShadowCube;
+    unsigned int _pointShadowDepthRB;
+    unsigned int _pointShadowFBO;
+    /** Whether the point-light shadow cube resources have been created. */
+    bool _hasPointShadowCube;
+    /** Whether a point light casts shadows this frame (a shadow light was selected + resources are ready). */
+    bool _pointShadowActive;
+    /** The point light casting shadows this frame (borrowed; excluded from the per-object culled set so it is
+     *  shaded once, with its shadow). NULL when none. */
+    const WorldLight* _shadowPointLight;
+    /** The far range the current point shadow cube's distances were normalized by (the shadow light's reach). */
+    float _pointShadowFar;
     /** Internal scene target the 3D world renders into (pixel resolution when pixelating). */
     RenderTexture2D _sceneTarget;
     /** Whether _sceneTarget has been created. */
@@ -554,6 +596,47 @@ static RenderTexture2D LoadShadowMap(int width, int height)
     rlFramebufferComplete(Target.id);
     rlDisableFramebuffer();
     return Target;
+}
+
+/* Creates the point-light omnidirectional shadow resources: an RGBA8 colour CUBE (rlgl cannot make empty float
+ * cube maps, so linear distance is PACKED into RGBA8), a shared depth renderbuffer, and a framebuffer with the
+ * depth + face 0 attached (the colour face is re-pointed per face at render time). Sets _hasPointShadowCube on
+ * success; on any failure releases whatever it made and leaves it false. Needs a live GL context. */
+static void LoadPointShadowCube(WorldRenderer* self)
+{
+    unsigned int Cube = rlLoadTextureCubemap(NULL, POINT_SHADOW_CUBE_SIZE, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1);
+    if (Cube == 0)
+    {
+        return;
+    }
+    // Packed distance must be read with NEAREST (linear filtering would blend the packed bytes into garbage).
+    rlCubemapParameters(Cube, RL_TEXTURE_MAG_FILTER, RL_TEXTURE_FILTER_NEAREST);
+    rlCubemapParameters(Cube, RL_TEXTURE_MIN_FILTER, RL_TEXTURE_FILTER_NEAREST);
+
+    unsigned int DepthRB = rlLoadTextureDepth(POINT_SHADOW_CUBE_SIZE, POINT_SHADOW_CUBE_SIZE, true); // renderbuffer
+    unsigned int Fbo = rlLoadFramebuffer();
+    if ((DepthRB == 0) || (Fbo == 0))
+    {
+        rlUnloadTexture(Cube);
+        if (DepthRB != 0) { rlUnloadTexture(DepthRB); }
+        if (Fbo != 0) { rlUnloadFramebuffer(Fbo); }
+        return;
+    }
+
+    rlFramebufferAttach(Fbo, DepthRB, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_RENDERBUFFER, 0);
+    rlFramebufferAttach(Fbo, Cube, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_CUBEMAP_POSITIVE_X, 0);
+    if (!rlFramebufferComplete(Fbo))
+    {
+        rlUnloadTexture(Cube);
+        rlUnloadTexture(DepthRB);
+        rlUnloadFramebuffer(Fbo);
+        return;
+    }
+
+    self->_pointShadowCube = Cube;
+    self->_pointShadowDepthRB = DepthRB;
+    self->_pointShadowFBO = Fbo;
+    self->_hasPointShadowCube = true;
 }
 
 /* Ensures the scene target exists and matches the desired size for the given window size / pixelation. */
@@ -842,6 +925,14 @@ static void EnsureShaders(WorldRenderer* self)
         self->_locShadowBias = GetShaderLocation(RayShader, "shadowBias");
         self->_locShadowTexelSize = GetShaderLocation(RayShader, "shadowTexelSize");
 
+        self->_locPointShadowActive = GetShaderLocation(RayShader, "pointShadowActive");
+        self->_locPointShadowLightPos = GetShaderLocation(RayShader, "pointShadowLightPos");
+        self->_locPointShadowLightRadiance = GetShaderLocation(RayShader, "pointShadowLightRadiance");
+        self->_locPointShadowLightRange = GetShaderLocation(RayShader, "pointShadowLightRange");
+        self->_locPointShadowCube = GetShaderLocation(RayShader, "pointShadowCube");
+        self->_locPointShadowFar = GetShaderLocation(RayShader, "pointShadowFar");
+        self->_locPointShadowBias = GetShaderLocation(RayShader, "pointShadowBias");
+
         self->_locPointLightCount = GetShaderLocation(RayShader, "pointLightCount");
         self->_locPointLightPositions = GetShaderLocation(RayShader, "pointLightPositions");
         self->_locPointLightRadiances = GetShaderLocation(RayShader, "pointLightRadiances");
@@ -945,6 +1036,19 @@ static void EnsureShaders(WorldRenderer* self)
             // Manual PCF compares raw depth texels, so nearest (point) sampling is required; linear
             // filtering would interpolate depths and corrupt the comparison.
             SetTextureFilter(self->_shadowMap.depth, TEXTURE_FILTER_POINT);
+        }
+    }
+
+    // Cube-depth shader + point-light shadow cube (optional; point lights cast no shadows without them).
+    self->_cubeDepthShader = LoadRendererShader(self, CUBE_DEPTH_SHADER_ASSET_NAME);
+    if (self->_cubeDepthShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_cubeDepthShader);
+        self->_cubeDepthLocLightPos = GetShaderLocation(RayShader, "lightPosition");
+        self->_cubeDepthLocLightFar = GetShaderLocation(RayShader, "lightFar");
+        if (!self->_hasPointShadowCube)
+        {
+            LoadPointShadowCube(self);
         }
     }
 
@@ -1078,7 +1182,7 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
     SetShaderValue(RayShader, self->_locFogDensity, &FogDensity, SHADER_UNIFORM_FLOAT);
 
     // Sun shadow: upload the light matrix and bind the depth map (to a slot clear of the material maps) when
-    // shadows are active this frame; otherwise pass strength 0 so the PBR shader skips shadow sampling.
+    // shadows are active this frame.
     if (self->_shadowActive)
     {
         SetShaderValueMatrix(RayShader, self->_locLightVP, self->_lightVP);
@@ -1087,7 +1191,42 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
         int Slot = SHADOW_TEXTURE_SLOT;
         rlSetUniform(self->_locShadowMap, &Slot, SHADER_UNIFORM_INT, 1);
     }
-    float ShadowStrength = self->_shadowActive ? (Environment->ShadowStrength * ConfigShadowStrength(self)) : 0.0f;
+
+    // Point-light (cube) shadow: shade the selected shadow light separately with its cube map. Bind the cube to
+    // its own slot. The shader gates its own sampling on pointShadowActive.
+    int PointShadowActive = self->_pointShadowActive ? 1 : 0;
+    SetShaderValue(RayShader, self->_locPointShadowActive, &PointShadowActive, SHADER_UNIFORM_INT);
+    if (self->_pointShadowActive)
+    {
+        const WorldObject* LightBase = (const WorldObject*)self->_shadowPointLight;
+        Vector3 LightPos = WorldObject_GetPosition(LightBase);
+        float LightPosArr[3] = { LightPos.x, LightPos.y, LightPos.z };
+        SetShaderValue(RayShader, self->_locPointShadowLightPos, LightPosArr, SHADER_UNIFORM_VEC3);
+
+        float LinearColor[3];
+        ColorToLinear(self->_shadowPointLight->Color, LinearColor);
+        float Intensity = WorldLight_GetIntensity(self->_shadowPointLight);
+        float Radiance[3] = { LinearColor[0]*Intensity, LinearColor[1]*Intensity, LinearColor[2]*Intensity };
+        SetShaderValue(RayShader, self->_locPointShadowLightRadiance, Radiance, SHADER_UNIFORM_VEC3);
+
+        float Range = WorldLight_GetSize(self->_shadowPointLight);
+        SetShaderValue(RayShader, self->_locPointShadowLightRange, &Range, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(RayShader, self->_locPointShadowFar, &self->_pointShadowFar, SHADER_UNIFORM_FLOAT);
+        float PointBias = POINT_SHADOW_BIAS;
+        SetShaderValue(RayShader, self->_locPointShadowBias, &PointBias, SHADER_UNIFORM_FLOAT);
+
+        rlActiveTextureSlot(POINT_SHADOW_TEXTURE_SLOT);
+        rlEnableTextureCubemap(self->_pointShadowCube);
+        int CubeSlot = POINT_SHADOW_TEXTURE_SLOT;
+        rlSetUniform(self->_locPointShadowCube, &CubeSlot, SHADER_UNIFORM_INT, 1);
+    }
+
+    // shadowStrength is shared by the sun and point-shadow visibility, so gate it on global shadow enablement
+    // (NOT the sun being up) — otherwise a point light would cast no shadow at night. The sun's own shadow term
+    // still self-gates (frustum test + the sun contributes ~0 at night, so a stale sun map cannot show).
+    float EffectiveShadowStrength = Environment->ShadowStrength * ConfigShadowStrength(self);
+    float ShadowStrength = (Environment->AreShadowsEnabled && (EffectiveShadowStrength > 0.0f))
+        ? EffectiveShadowStrength : 0.0f;
     SetShaderValue(RayShader, self->_locShadowStrength, &ShadowStrength, SHADER_UNIFORM_FLOAT);
 }
 
@@ -1237,31 +1376,40 @@ static void UploadPointLightsForObject(WorldRenderer* self, World* world, Vector
     float Positions[WORLD_MAX_FORWARD_LIGHTS * 3];
     float Radiances[WORLD_MAX_FORWARD_LIGHTS * 3];
     float Ranges[WORLD_MAX_FORWARD_LIGHTS];
+    size_t OutCount = 0;
     for (size_t Index = 0; Index < Count; Index++)
     {
         const WorldLight* Light = Lights[Index];
+        // The shadow-casting point light is shaded separately (with its cube shadow), so skip it here to avoid
+        // lighting it twice.
+        if ((self->_shadowPointLight != NULL) && (Light == self->_shadowPointLight))
+        {
+            continue;
+        }
+
         Vector3 Position = WorldObject_GetPosition((const WorldObject*)Light); // base is the first member
-        Positions[Index*3 + 0] = Position.x;
-        Positions[Index*3 + 1] = Position.y;
-        Positions[Index*3 + 2] = Position.z;
+        Positions[OutCount*3 + 0] = Position.x;
+        Positions[OutCount*3 + 1] = Position.y;
+        Positions[OutCount*3 + 2] = Position.z;
 
         float LinearColor[3];
         ColorToLinear(Light->Color, LinearColor);
         float Intensity = WorldLight_GetIntensity(Light);
-        Radiances[Index*3 + 0] = LinearColor[0]*Intensity;
-        Radiances[Index*3 + 1] = LinearColor[1]*Intensity;
-        Radiances[Index*3 + 2] = LinearColor[2]*Intensity;
+        Radiances[OutCount*3 + 0] = LinearColor[0]*Intensity;
+        Radiances[OutCount*3 + 1] = LinearColor[1]*Intensity;
+        Radiances[OutCount*3 + 2] = LinearColor[2]*Intensity;
 
-        Ranges[Index] = WorldLight_GetSize(Light);
+        Ranges[OutCount] = WorldLight_GetSize(Light);
+        OutCount++;
     }
 
-    int CountInt = (int)Count;
+    int CountInt = (int)OutCount;
     SetShaderValue(RayShader, self->_locPointLightCount, &CountInt, SHADER_UNIFORM_INT);
-    if (Count > 0)
+    if (OutCount > 0)
     {
-        SetShaderValueV(RayShader, self->_locPointLightPositions, Positions, SHADER_UNIFORM_VEC3, (int)Count);
-        SetShaderValueV(RayShader, self->_locPointLightRadiances, Radiances, SHADER_UNIFORM_VEC3, (int)Count);
-        SetShaderValueV(RayShader, self->_locPointLightRanges, Ranges, SHADER_UNIFORM_FLOAT, (int)Count);
+        SetShaderValueV(RayShader, self->_locPointLightPositions, Positions, SHADER_UNIFORM_VEC3, (int)OutCount);
+        SetShaderValueV(RayShader, self->_locPointLightRadiances, Radiances, SHADER_UNIFORM_VEC3, (int)OutCount);
+        SetShaderValueV(RayShader, self->_locPointLightRanges, Ranges, SHADER_UNIFORM_FLOAT, (int)OutCount);
     }
 }
 
@@ -1678,12 +1826,103 @@ static void DrawScene(WorldRenderer* self, World* world, const GameCamera* camer
     DrawWorldSprites(self, world, camera, modelFilter);
 
     // Light gizmos: a debug authoring aid so light placement is visible (lights are otherwise invisible).
-    if (self->_drawDebugGrid)
+    // Independent of the debug grid; a real game leaves this off so lights have no visible sphere.
+    if (self->_lightGizmosEnabled)
     {
         DrawLightGizmos(world);
     }
 
     EndMode3D();
+}
+
+/* Picks the single point light that casts shadows this frame: the CastsShadows point light (with positive
+ * intensity + reach) nearest the camera, or NULL if none. One shadow light is supported for now. */
+static const WorldLight* SelectShadowPointLight(World* world, const GameCamera* camera)
+{
+    const WorldLight* Best = NULL;
+    float BestDistance = 0.0f;
+    size_t Count = World_GetObjectCount(world);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        WorldObject* Object = NULL;
+        Error GetResult = World_GetObjectByIndex(world, Index, &Object);
+        if (GetResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&GetResult);
+            continue;
+        }
+        if (WorldObject_GetType(Object) != WorldObjectType_Light)
+        {
+            continue;
+        }
+        WorldLight* Light = (WorldLight*)Object;
+        if (!Light->CastsShadows || (WorldLight_GetIntensity(Light) <= 0.0f) || (WorldLight_GetSize(Light) <= 0.0f))
+        {
+            continue;
+        }
+        float Distance = Vector3Distance(WorldObject_GetPosition(Object), camera->Position);
+        if ((Best == NULL) || (Distance < BestDistance))
+        {
+            Best = Light;
+            BestDistance = Distance;
+        }
+    }
+    return Best;
+}
+
+/* Renders the model depth from the selected point light into all 6 faces of its shadow cube map (each face a
+ * 90-degree perspective from the light), storing the packed linear distance. _shadowPointLight + the cube
+ * resources must be ready. The colour attachment is re-pointed to each face in turn; BeginTextureMode re-binds
+ * the framebuffer + sets the viewport. Back faces are rendered (cull front) to reduce self-shadow acne. */
+static void RenderPointLightShadows(WorldRenderer* self, World* world)
+{
+    Vector3 LightPos = WorldObject_GetPosition((const WorldObject*)self->_shadowPointLight);
+    float Far = WorldLight_GetSize(self->_shadowPointLight);
+    if (Far < (float)(POINT_SHADOW_NEAR * 2.0))
+    {
+        Far = (float)(POINT_SHADOW_NEAR * 2.0);
+    }
+    self->_pointShadowFar = Far;
+
+    Shader Cube = GameShader_GetRaylibShader(self->_cubeDepthShader);
+    float LightPosArr[3] = { LightPos.x, LightPos.y, LightPos.z };
+    SetShaderValue(Cube, self->_cubeDepthLocLightPos, LightPosArr, SHADER_UNIFORM_VEC3);
+    SetShaderValue(Cube, self->_cubeDepthLocLightFar, &Far, SHADER_UNIFORM_FLOAT);
+
+    Matrix CubeProj = MatrixPerspective(90.0 * DEG2RAD, 1.0, POINT_SHADOW_NEAR, (double)Far);
+
+    // Standard OpenGL cube-map face directions + up vectors, so the rendered faces line up with samplerCube(dir).
+    const Vector3 Targets[6] = { { 1.0f, 0.0f, 0.0f }, { -1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f },
+        { 0.0f, -1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, -1.0f } };
+    const Vector3 Ups[6] = { { 0.0f, -1.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f },
+        { 0.0f, 0.0f, -1.0f }, { 0.0f, -1.0f, 0.0f }, { 0.0f, -1.0f, 0.0f } };
+    const int FaceAttach[6] = {
+        RL_ATTACHMENT_CUBEMAP_POSITIVE_X, RL_ATTACHMENT_CUBEMAP_NEGATIVE_X,
+        RL_ATTACHMENT_CUBEMAP_POSITIVE_Y, RL_ATTACHMENT_CUBEMAP_NEGATIVE_Y,
+        RL_ATTACHMENT_CUBEMAP_POSITIVE_Z, RL_ATTACHMENT_CUBEMAP_NEGATIVE_Z };
+
+    RenderTexture2D CubeTarget = { 0 };
+    CubeTarget.id = self->_pointShadowFBO;
+    CubeTarget.texture.id = self->_pointShadowCube;
+    CubeTarget.texture.width = POINT_SHADOW_CUBE_SIZE;
+    CubeTarget.texture.height = POINT_SHADOW_CUBE_SIZE;
+
+    for (int Face = 0; Face < 6; Face++)
+    {
+        rlFramebufferAttach(self->_pointShadowFBO, self->_pointShadowCube, RL_ATTACHMENT_COLOR_CHANNEL0, FaceAttach[Face], 0);
+        Matrix FaceView = MatrixLookAt(LightPos, Vector3Add(LightPos, Targets[Face]), Ups[Face]);
+
+        BeginTextureMode(CubeTarget);
+        ClearBackground(WHITE); // packed white = far distance (no occluder); clears depth to the far plane too
+        rlEnableDepthTest();
+        rlSetMatrixProjection(CubeProj);
+        rlSetMatrixModelview(FaceView);
+        rlSetCullFace(RL_CULL_FACE_FRONT);
+        DrawWorldModels(self, world, self->_cubeDepthShader, ModelPixelationFilter_All);
+        rlSetCullFace(RL_CULL_FACE_BACK);
+        rlDisableDepthTest();
+        EndTextureMode();
+    }
 }
 
 /* Renders the world's model depth from the sun into the shadow map and stores the world->light-clip matrix
@@ -2006,6 +2245,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_config = config;
     Renderer->_assetUser = User;
     Renderer->_drawDebugGrid = true;
+    Renderer->_lightGizmosEnabled = true;
     Renderer->_pixelationEnabled = true;
     Renderer->_outlineEnabled = true;
     Renderer->_postfxEnabled = true;
@@ -2067,6 +2307,14 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
         // Frees the framebuffer and its depth-texture attachment (Raylib queries + deletes attachments).
         rlUnloadFramebuffer(self->_shadowMap.id);
         self->_hasShadowMap = false;
+    }
+
+    if (self->_hasPointShadowCube)
+    {
+        rlUnloadTexture(self->_pointShadowCube);
+        rlUnloadTexture(self->_pointShadowDepthRB);
+        rlUnloadFramebuffer(self->_pointShadowFBO);
+        self->_hasPointShadowCube = false;
     }
 
     Error Result = AssetManager_ReleaseAllAssetsForUser(self->_assetManager, self->_assetUser);
@@ -2168,6 +2416,19 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     if (self->_shadowActive)
     {
         RenderShadowMap(self, world, camera, SunDir);
+    }
+
+    // Point-light shadows: pick the shadow-casting point light (if any) and render its cube map. Gated on global
+    // shadow enablement (independent of the sun) + the cube shader/resources. _shadowPointLight must be set
+    // before the scene pass (the per-object cull excludes it) and _pointShadowActive before the lighting upload.
+    bool ShadowsGloballyOn = Environment->AreShadowsEnabled
+        && ((Environment->ShadowStrength * ConfigShadowStrength(self)) > 0.0f);
+    self->_shadowPointLight = (ShadowsGloballyOn && self->_hasPointShadowCube && (self->_cubeDepthShader != NULL)
+        && (self->_pbrShader != NULL)) ? SelectShadowPointLight(world, camera) : NULL;
+    self->_pointShadowActive = (self->_shadowPointLight != NULL);
+    if (self->_pointShadowActive)
+    {
+        RenderPointLightShadows(self, world);
     }
 
     int WindowWidth = target.texture.width;
@@ -2356,4 +2617,14 @@ void WorldRenderer_SetDebugGridEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_IsDebugGridEnabled(const WorldRenderer* self)
 {
     return self->_drawDebugGrid;
+}
+
+void WorldRenderer_SetLightGizmosEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_lightGizmosEnabled = enabled;
+}
+
+bool WorldRenderer_AreLightGizmosEnabled(const WorldRenderer* self)
+{
+    return self->_lightGizmosEnabled;
 }

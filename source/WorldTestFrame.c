@@ -155,6 +155,19 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
             Error_Deconstruct(&LogResult);
         }
     }
+
+    // L toggles the debug light gizmos (wireframe spheres at light positions).
+    if (IsKeyPressed(KEY_L))
+    {
+        bool Enabled = !WorldRenderer_AreLightGizmosEnabled(frame->_renderer);
+        WorldRenderer_SetLightGizmosEnabled(frame->_renderer, Enabled);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: light gizmos %s.", Enabled ? "ON" : "OFF");
+            Error_Deconstruct(&LogResult);
+        }
+    }
 }
 
 /* Advances every sprite object's animation playback by the elapsed time (a no-op for empty / source-less
@@ -418,7 +431,7 @@ static Error AddSpriteObject(World* world, const unsigned char* name, const unsi
 /* Creates a point light with the given transform/color/reach and hands it to the world (which takes
  * ownership). On any failure the partial light is destroyed and the error is returned. */
 static Error AddPointLight(World* world, const unsigned char* name, Vector3 position, Color color,
-    float intensity, float size)
+    float intensity, float size, bool castsShadows)
 {
     WorldLight* Light = NULL;
     Error Result = WorldLight_Create(name, &Light);
@@ -429,6 +442,7 @@ static Error AddPointLight(World* world, const unsigned char* name, Vector3 posi
 
     WorldObject* Base = WorldLight_AsObject(Light);
     Light->Color = color;
+    Light->CastsShadows = castsShadows;
     Result = WorldObject_SetPosition(Base, position);
     if (Result.Code == ErrorCode_Success)
     {
@@ -486,13 +500,14 @@ static Error BuildTestWorld(World* world)
     // ground and fade out before the slab edges — exercises the per-object reach culling + forward shading).
     if (Result.Code == ErrorCode_Success)
     {
+        // The warm light casts shadows (exercises the point-light cube shadow map); the cool one does not.
         Result = AddPointLight(world, (const unsigned char*)u8"warm_light",
-            (Vector3){ 2.5f, 1.6f, 2.5f }, (Color){ 255, 150, 60, 255 }, 6.0f, 10.0f);
+            (Vector3){ 2.5f, 1.6f, 2.5f }, (Color){ 255, 150, 60, 255 }, 6.0f, 10.0f, true);
     }
     if (Result.Code == ErrorCode_Success)
     {
         Result = AddPointLight(world, (const unsigned char*)u8"cool_light",
-            (Vector3){ -2.5f, 1.2f, -2.0f }, (Color){ 80, 150, 255, 255 }, 6.0f, 10.0f);
+            (Vector3){ -2.5f, 1.2f, -2.0f }, (Color){ 80, 150, 255, 255 }, 6.0f, 10.0f, false);
     }
     // A demo sprite billboard (the added test image) off to the left, raised to eye level, sized ~1.5 units.
     if (Result.Code == ErrorCode_Success)

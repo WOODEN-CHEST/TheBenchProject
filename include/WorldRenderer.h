@@ -194,6 +194,23 @@ void WorldRenderer_SetCrispOverlayEnabled(WorldRenderer* self, bool enabled);
 bool WorldRenderer_IsCrispOverlayEnabled(const WorldRenderer* self);
 
 /**
+ * @brief Enables or disables the debug light gizmos (wireframe spheres drawn at each light's position).
+ *
+ * These mark otherwise-invisible light positions for authoring; a real game should turn them OFF so lights
+ * have no visible sphere. Independent of the debug grid. Default enabled. Applied on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to draw the light gizmos, false to hide them.
+ */
+void WorldRenderer_SetLightGizmosEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the debug light gizmos are drawn.
+ * @param self The renderer; must not be NULL.
+ * @returns true if the light gizmos are drawn.
+ */
+bool WorldRenderer_AreLightGizmosEnabled(const WorldRenderer* self);
+
+/**
  * @brief Enables or disables the debug reference grid drawn on the ground plane.
  * @param self The renderer; must not be NULL.
  * @param enabled true to draw the grid, false to hide it.

@@ -1,0 +1,5 @@
+{
+    "name": "world_cube_depth",
+    "vertex_location": "cube_depth/vertex",
+    "fragment_location": "cube_depth/fragment"
+}
