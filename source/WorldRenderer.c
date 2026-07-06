@@ -71,12 +71,13 @@
 /** Asset name of the point-light omnidirectional (cube) shadow depth shader (stores packed linear distance). */
 #define CUBE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_cube_depth")
 /** Resolution (per cube face) of the point-light shadow cube map, in texels. */
-#define POINT_SHADOW_CUBE_SIZE 512
+#define POINT_SHADOW_CUBE_SIZE 1024
 /** Near plane of the point-light shadow cube's 90-degree face projections. */
 #define POINT_SHADOW_NEAR 0.05
-/** World-space depth bias for the point-light shadow comparison (combats acne; raise if acne, lower if
- *  peter-panning/detached). */
-#define POINT_SHADOW_BIAS 0.15f
+/** Base world-space depth bias for the point-light shadow comparison; the PBR shader SLOPE-SCALES this (much
+ *  larger where the light grazes a surface, a small fraction head-on). Raise if acne (streaky self-shadowing),
+ *  lower if peter-panning (the shadow detaches from its caster). */
+#define POINT_SHADOW_BIAS 0.35f
 /** Texture unit the point-light shadow CUBE is bound to for the PBR shader (clear of the sun map on slot 10). */
 #define POINT_SHADOW_TEXTURE_SLOT 11
 
@@ -1917,9 +1918,9 @@ static void RenderPointLightShadows(WorldRenderer* self, World* world)
         rlEnableDepthTest();
         rlSetMatrixProjection(CubeProj);
         rlSetMatrixModelview(FaceView);
-        rlSetCullFace(RL_CULL_FACE_FRONT);
+        // Default (back-face) culling + the PBR shader's slope-scaled bias handles acne; front-face culling
+        // here caused peter-panning + seam artifacts, so it is intentionally not used.
         DrawWorldModels(self, world, self->_cubeDepthShader, ModelPixelationFilter_All);
-        rlSetCullFace(RL_CULL_FACE_BACK);
         rlDisableDepthTest();
         EndTextureMode();
     }

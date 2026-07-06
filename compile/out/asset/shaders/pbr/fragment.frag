@@ -227,14 +227,40 @@ float unpackDistance(vec4 rgba)
     return dot(rgba, vec4(1.0, 1.0/255.0, 1.0/65025.0, 1.0/16581375.0));
 }
 
-// 0 (lit) .. 1 (shadowed) for the shadow-casting point light: samples its cube map along the light->fragment
-// direction, unpacks the nearest occluder distance, and compares it to this fragment's distance from the light.
-float ComputePointShadow(vec3 fragPos)
+// 20 sample directions for cube-map PCF (a small 3D disk around the light->fragment ray).
+const vec3 CUBE_PCF_OFFSETS[20] = vec3[]
+(
+    vec3( 1,  1,  1), vec3( 1, -1,  1), vec3(-1, -1,  1), vec3(-1,  1,  1),
+    vec3( 1,  1, -1), vec3( 1, -1, -1), vec3(-1, -1, -1), vec3(-1,  1, -1),
+    vec3( 1,  1,  0), vec3( 1, -1,  0), vec3(-1, -1,  0), vec3(-1,  1,  0),
+    vec3( 1,  0,  1), vec3(-1,  0,  1), vec3( 1,  0, -1), vec3(-1,  0, -1),
+    vec3( 0,  1,  1), vec3( 0, -1,  1), vec3( 0, -1, -1), vec3( 0,  1, -1)
+);
+
+// 0 (lit) .. 1 (shadowed) for the shadow-casting point light. Samples the light's cube map along the
+// light->fragment direction with soft PCF, comparing the stored nearest-occluder distance to this fragment's
+// distance from the light. The bias is SLOPE-SCALED (much larger where the light grazes the surface) — a
+// constant bias leaves grazing-angle self-shadow acne (the streaky bands). PCF also blends the cube's face
+// seams so they do not show as a hard cut through the shadow.
+float ComputePointShadow(vec3 fragPos, vec3 nrm)
 {
     vec3 toFrag = fragPos - pointShadowLightPos;
     float current = length(toFrag);
-    float stored = unpackDistance(texture(pointShadowCube, toFrag)) * pointShadowFar;
-    return ((current - pointShadowBias) > stored) ? 1.0 : 0.0;
+    vec3 toLight = (current > 1e-4) ? (-toFrag/current) : vec3(0.0, 1.0, 0.0);
+    float ndotl = max(dot(normalize(nrm), toLight), 0.0);
+
+    // Slope-scaled world-space bias: full at grazing incidence, a small floor head-on.
+    float bias = max(pointShadowBias*(1.0 - ndotl), pointShadowBias*0.2);
+
+    // PCF disk widens a little with distance (the cube texel covers more world far from the light).
+    float diskRadius = 0.02 + 0.02*current;
+    float shadow = 0.0;
+    for (int i = 0; i < 20; i++)
+    {
+        float stored = unpackDistance(texture(pointShadowCube, toFrag + CUBE_PCF_OFFSETS[i]*diskRadius))*pointShadowFar;
+        if ((current - bias) > stored) { shadow += 1.0; }
+    }
+    return shadow/20.0;
 }
 
 void main()
@@ -319,7 +345,7 @@ void main()
         float window = clamp(1.0 - pow(dist/range, 4.0), 0.0, 1.0);
         float atten = (window*window)/(dist*dist + 1.0);
 
-        float shadow = ComputePointShadow(fragPosition);
+        float shadow = ComputePointShadow(fragPosition, n);
         float visibility = 1.0 - shadow*clamp(shadowStrength, 0.0, 1.0);
         pointTotal += (kDp*albedo/PI + specp)*pointShadowLightRadiance*ndlp*atten*visibility;
     }
