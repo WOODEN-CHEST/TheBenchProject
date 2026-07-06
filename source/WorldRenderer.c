@@ -70,26 +70,50 @@
  *  Caching avoids re-scanning a model's mesh vertices every frame just to get its bounding sphere. */
 #define BOUNDS_CACHE_CAPACITY 256
 
-/** Dim cool night ambient (LINEAR RGB) the daytime skylight fades to at night, so the world darkens instead of
- *  keeping its daytime blue tint. Kept just above 0 so eye adaptation has something to reveal (like moonlight). */
-#define NIGHT_AMBIENT_R 0.006f
-#define NIGHT_AMBIENT_G 0.008f
-#define NIGHT_AMBIENT_B 0.016f
+/** ===== NIGHT DARKNESS KNOB (1 of 2) =====
+ *  Dim cool night-ambient floor (LINEAR RGB): the darkest the sky-derived ambient is allowed to get at night.
+ *  Kept just above 0 (a faint blue, like moonlight) so night is not pure black and the eye adaptation has a
+ *  little light to lift. LOWER these to make the night DARKER (and less tinted); raise them to brighten it.
+ *  Works together with ADAPT_MAX_EXPOSURE below — the perceived night brightness is roughly this floor's
+ *  luminance times that exposure cap. */
+#define NIGHT_AMBIENT_R 0.004f
+#define NIGHT_AMBIENT_G 0.005f
+#define NIGHT_AMBIENT_B 0.011f
+/** Overall scale on the daytime ambient skylight (before the night floor). Tempers the fill-light magnitude so
+ *  daytime sits at a natural level; the day/night fade and the warm twilight tint are applied on top. */
+#define AMBIENT_SKY_STRENGTH 0.85f
+/** Daytime ambient fill colour (LINEAR RGB) — the blue skylight when the sun is well above the horizon. */
+#define AMBIENT_DAY_R 0.15f
+#define AMBIENT_DAY_G 0.35f
+#define AMBIENT_DAY_B 0.75f
+/** Twilight ambient fill colour (LINEAR RGB) — the warm sunrise/sunset tint the fill blends toward while the
+ *  sun is near the horizon. */
+#define AMBIENT_SUNSET_R 0.80f
+#define AMBIENT_SUNSET_G 0.28f
+#define AMBIENT_SUNSET_B 0.08f
+/** How near the horizon (in sun-elevation units, where 0 = on the horizon and 1 = zenith) the ambient warms
+ *  toward the sunset colour: the warm tint is a Gaussian of the sun's elevation with this as its width, so a
+ *  SMALLER value keeps the fill blue until the sun is closer to setting, a LARGER value warms it earlier.
+ *  This is the "orange comes in too early / too late" knob. The warm tint is additionally gated by the daylight
+ *  factor so it can never linger once the sun has set. */
+#define AMBIENT_SUNSET_BAND 0.15f
 /** How much the (directional) sun counts toward the scene-illumination estimate driving eye adaptation. */
 #define SUN_ADAPT_WEIGHT 0.5f
-/** Base exponential fog density at world+config fog strength 1.0 (per world unit). Distant geometry fades to
- *  the fog colour; the world and config fog-strength multipliers scale this. */
+/** Base exponential fog density at world+config fog strength 1.0 (per world unit). Distant geometry fades into
+ *  the atmospheric sky colour; the world and config fog-strength multipliers scale this. */
 #define BASE_FOG_DENSITY 0.008f
-/** Fraction of the fog colour that survives at night (so distant geometry fades to dark, not daytime blue). */
-#define FOG_NIGHT_FLOOR 0.05f
 
 // ---- Eye adaptation (HDR auto-exposure) ----
 /** Scene illumination that maps to exposure 1.0 (roughly full daylight); brighter dims, darker brightens. */
 #define ADAPT_REFERENCE_LUMINANCE 0.80f
 /** Exposure clamp: never darker than this (so a bright light cannot black the world out)... */
 #define ADAPT_MIN_EXPOSURE 0.5f
-/** ...and never brighter than this (bounds how far a pitch-black night is lifted). */
-#define ADAPT_MAX_EXPOSURE 40.0f
+/** ===== NIGHT DARKNESS KNOB (2 of 2) =====
+ *  ...and never brighter than this. This bounds how far the auto-exposure lifts a dark night, so it is the
+ *  dominant control of how bright the night LOOKS: the eye adaptation would otherwise brighten the dim night
+ *  ambient all the way back up. LOWER this to make the night DARKER; raise it to brighten the night. (Was 40;
+ *  lowered so night reads as night.) Pairs with the NIGHT_AMBIENT_* floor above. */
+#define ADAPT_MAX_EXPOSURE 24.0f
 /** Floor on the estimated scene luminance, so exposure never divides by ~0. */
 #define ADAPT_MIN_LUMINANCE 0.02f
 /** Base adaptation rate (1/seconds); deliberately slow. Higher = quicker adaptation overall. */
@@ -208,9 +232,13 @@ struct WorldRendererStruct
     int _locPointLightPositions;
     int _locPointLightRadiances;
     int _locPointLightRanges;
-    /** Cached PBR distance-fog uniform locations (-1 when absent). */
-    int _locFogColor;
+    /** Cached PBR distance-fog uniform locations (-1 when absent). The fog fades distant geometry into the
+     *  atmospheric sky colour, so it needs the same sky parameters the sky pass uses (turbidity, tint, raw
+     *  sun intensity) plus the fog density. */
     int _locFogDensity;
+    int _locFogTurbidity;
+    int _locFogSkyTint;
+    int _locFogSunIntensity;
     /** Per-asset local bounding-sphere cache (keyed by GameModel*), for point-light reach culling. */
     const void* _boundsCacheAsset[BOUNDS_CACHE_CAPACITY];
     Vector3 _boundsCacheCenter[BOUNDS_CACHE_CAPACITY];
@@ -593,8 +621,10 @@ static void EnsureShaders(WorldRenderer* self)
         self->_locPointLightRadiances = GetShaderLocation(RayShader, "pointLightRadiances");
         self->_locPointLightRanges = GetShaderLocation(RayShader, "pointLightRanges");
 
-        self->_locFogColor = GetShaderLocation(RayShader, "fogColor");
         self->_locFogDensity = GetShaderLocation(RayShader, "fogDensity");
+        self->_locFogTurbidity = GetShaderLocation(RayShader, "skyTurbidity");
+        self->_locFogSkyTint = GetShaderLocation(RayShader, "skyTint");
+        self->_locFogSunIntensity = GetShaderLocation(RayShader, "skySunIntensity");
 
         // Constant material + shadow parameters; upload once.
         float Metallic = PBR_DEFAULT_METALLIC;
@@ -708,14 +738,35 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
 
     // Ambient blended day->night, folded into the colour (intensity kept at 1). Daytime = authored skylight ×
     // its intensity; night = the dim cool NIGHT_AMBIENT.
-    float DayAmbient[3];
-    ColorToLinear(Environment->AmbientSkylightColor, DayAmbient);
+    // Ambient skylight is built to TRACK the sky's timing, driven by the sun's elevation and the SAME daylight
+    // thresholds the sun lighting uses (WorldEnvironment_GetDaylightFactor), so the fill light and the sun agree:
+    //   * day  (sun well above the horizon) -> the daytime blue fill, at full brightness;
+    //   * twilight (sun near the horizon)   -> blended toward the warm sunrise/sunset colour;
+    //   * night (sun below the horizon)     -> the fill fades out to the dim NIGHT_AMBIENT floor.
+    // The warm tint is gated by BOTH a narrow band around the horizon (AMBIENT_SUNSET_BAND, a Gaussian of the
+    // sun elevation) AND the daylight factor, so it can neither appear while the sun is still high (sky still
+    // blue) nor linger once the sun has set — the two bugs the flat sky-colour gradient produced. The hues are
+    // authored (AMBIENT_DAY_* / AMBIENT_SUNSET_*), tinted by AmbientSkylightColor (WHITE = neutral) and scaled
+    // by AmbientSkylightIntensity x AMBIENT_SKY_STRENGTH; the whole fill fades with the daylight factor.
+    float Elevation = SunDirection.y; // sun elevation in [-1, 1]; 0 = on the horizon
+    float SunsetT = Elevation / AMBIENT_SUNSET_BAND;
+    float Sunset = expf(-(SunsetT * SunsetT)) * Daylight; // warm only near the horizon AND while it is still day
+    if (Sunset < 0.0f) { Sunset = 0.0f; }
+    if (Sunset > 1.0f) { Sunset = 1.0f; }
+
+    float DayHue[3] = { AMBIENT_DAY_R, AMBIENT_DAY_G, AMBIENT_DAY_B };
+    float SunsetHue[3] = { AMBIENT_SUNSET_R, AMBIENT_SUNSET_G, AMBIENT_SUNSET_B };
+    float AmbientTint[3];
+    ColorToLinear(Environment->AmbientSkylightColor, AmbientTint);
     float NightAmbient[3] = { NIGHT_AMBIENT_R, NIGHT_AMBIENT_G, NIGHT_AMBIENT_B };
+    float AmbientMagnitude = Daylight * Environment->AmbientSkylightIntensity * AMBIENT_SKY_STRENGTH;
+
     float AmbientColor[3];
     for (int Channel = 0; Channel < 3; Channel++)
     {
-        float Day = DayAmbient[Channel] * Environment->AmbientSkylightIntensity;
-        AmbientColor[Channel] = NightAmbient[Channel] + (Day - NightAmbient[Channel]) * Daylight;
+        float Hue = DayHue[Channel] + (SunsetHue[Channel] - DayHue[Channel]) * Sunset;
+        float Lit = Hue * AmbientTint[Channel] * AmbientMagnitude;
+        AmbientColor[Channel] = fmaxf(Lit, NightAmbient[Channel]);
     }
     SetShaderValue(RayShader, self->_locAmbientColor, AmbientColor, SHADER_UNIFORM_VEC3);
     float AmbientIntensity = 1.0f;
@@ -727,16 +778,16 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
     float AmbientLum = 0.2126f*AmbientColor[0] + 0.7152f*AmbientColor[1] + 0.0722f*AmbientColor[2];
     self->_baseSceneLuminance = AmbientLum + SunLum*SUN_ADAPT_WEIGHT;
 
-    // Distance fog: colour (linear) darkened toward night by the daylight factor so distant geometry fades to
-    // dark at night rather than to the daytime fog blue; density = base × world × config fog strength.
-    float FogColor[3];
-    ColorToLinear(Environment->FogColor, FogColor);
-    float FogDayScale = FOG_NIGHT_FLOOR + (1.0f - FOG_NIGHT_FLOOR)*Daylight;
-    for (int Channel = 0; Channel < 3; Channel++)
-    {
-        FogColor[Channel] *= FogDayScale;
-    }
-    SetShaderValue(RayShader, self->_locFogColor, FogColor, SHADER_UNIFORM_VEC3);
+    // Atmospheric distance fog: the PBR shader fades distant geometry into the SAME sky the sky pass draws,
+    // evaluated per fragment along its view ray, so far objects dissolve seamlessly into the sky (and, because
+    // the atmospheric sky is already dark at night, distant geometry fades to the dark night sky on its own).
+    // Feed it the sky parameters the sky pass uses (turbidity, linear tint, RAW — not day-scaled — sun
+    // intensity); the sun direction is the one uploaded above. Density = base × world × config fog strength.
+    SetShaderValue(RayShader, self->_locFogTurbidity, &Environment->SkyTurbidity, SHADER_UNIFORM_FLOAT);
+    float FogSkyTint[3];
+    ColorToLinear(Environment->SkyTint, FogSkyTint);
+    SetShaderValue(RayShader, self->_locFogSkyTint, FogSkyTint, SHADER_UNIFORM_VEC3);
+    SetShaderValue(RayShader, self->_locFogSunIntensity, &Environment->SunIntensity, SHADER_UNIFORM_FLOAT);
     float FogDensity = BASE_FOG_DENSITY * Environment->FogStrength * ConfigFogStrength(self);
     if (FogDensity < 0.0f) { FogDensity = 0.0f; }
     SetShaderValue(RayShader, self->_locFogDensity, &FogDensity, SHADER_UNIFORM_FLOAT);

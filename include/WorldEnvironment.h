@@ -71,13 +71,19 @@ typedef struct WorldEnvironmentStruct
     float StarBrightness;
 
     // ---- Ambient / skylight ----
-    /** @brief Ambient skylight color applied to shaded surfaces. Alpha ignored. */
+    /** @brief Tint on the ambient skylight applied to shaded surfaces. The renderer picks the ambient HUE from
+     *  the sun's elevation to track the sky (blue by day, warm at sunrise/sunset, fading to a faint blue at
+     *  night); this colour multiplies that, so WHITE (the default) leaves it as-is and other colours warm/cool
+     *  the whole fill. Alpha ignored. */
     Color AmbientSkylightColor;
     /** @brief Ambient skylight intensity multiplier. Finite and >= 0. */
     float AmbientSkylightIntensity;
 
     // ---- Fog (fades distant objects into the sky) ----
-    /** @brief Fog color; distant objects fade toward this (usually matched to the sky). Alpha ignored. */
+    /** @brief Legacy flat fog colour. NOTE: the renderer's distance fog now fades distant geometry into the
+     *  atmospheric SKY colour along each view ray (so far objects dissolve seamlessly into the sky), and no
+     *  longer reads this field; it is retained for data/back-compat and possible non-atmospheric fallbacks.
+     *  Alpha ignored. */
     Color FogColor;
     /** @brief World-side fog strength multiplier (combined with the game config's fog strength). Finite and >= 0. */
     float FogStrength;

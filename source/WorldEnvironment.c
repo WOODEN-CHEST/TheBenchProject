@@ -58,7 +58,9 @@ void WorldEnvironment_SetDefaults(WorldEnvironment* self)
     self->StarDensity = DEFAULT_STAR_DENSITY;
     self->StarBrightness = DEFAULT_STAR_BRIGHTNESS;
 
-    self->AmbientSkylightColor = (Color){ .r = 130, .g = 160, .b = 200, .a = 255 };
+    // Neutral (white) by default: the renderer derives the ambient HUE from the sky colour, so this acts as a
+    // tint on top of it (white = pure sky-driven ambient). A world can push it to warm/cool its fill light.
+    self->AmbientSkylightColor = WHITE;
     self->AmbientSkylightIntensity = DEFAULT_AMBIENT_INTENSITY;
 
     self->FogColor = (Color){ .r = 170, .g = 190, .b = 220, .a = 255 };
