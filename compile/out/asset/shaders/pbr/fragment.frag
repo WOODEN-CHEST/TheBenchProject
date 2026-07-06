@@ -31,6 +31,14 @@ uniform float ao;
 uniform vec3 emissiveColor;    // linear
 uniform float emissiveIntensity;
 
+// Point lights, culled + uploaded per object by the renderer (nearest/strongest that reach this object).
+// MAX_POINT_LIGHTS MUST match WORLD_MAX_FORWARD_LIGHTS in WorldLightCulling.h.
+#define MAX_POINT_LIGHTS 8
+uniform int pointLightCount;                          // active entries in the arrays below (0..MAX)
+uniform vec3 pointLightPositions[MAX_POINT_LIGHTS];   // world space
+uniform vec3 pointLightRadiances[MAX_POINT_LIGHTS];   // linear colour * intensity
+uniform float pointLightRanges[MAX_POINT_LIGHTS];     // reach radius (attenuation falls to 0 here)
+
 out vec4 finalColor;
 
 const float PI = 3.14159265358979323846;
@@ -131,10 +139,36 @@ void main()
     float sunVisibility = 1.0 - shadow*clamp(shadowStrength, 0.0, 1.0);
     vec3 direct = (kD*albedo/PI + specular)*radiance*nDotL*sunVisibility;
 
+    // Point lights: same Cook-Torrance BRDF per light, with a windowed inverse-square falloff. No per-light
+    // shadows (deferred). The count + arrays are the reach-culled set the renderer chose for this object.
+    vec3 pointTotal = vec3(0.0);
+    for (int i = 0; i < pointLightCount; i++)
+    {
+        vec3 toLight = pointLightPositions[i] - fragPosition;
+        float dist = length(toLight);
+        vec3 lp = toLight/max(dist, 1e-4);
+        vec3 hp = normalize(v + lp);
+
+        float ndfp = DistributionGGX(n, hp, rough);
+        float gp = GeometrySmith(n, v, lp, rough);
+        vec3 fp = FresnelSchlick(max(dot(hp, v), 0.0), f0);
+        vec3 specp = (ndfp*gp*fp)/(4.0*max(dot(n, v), 0.0)*max(dot(n, lp), 0.0) + 1e-4);
+        vec3 kDp = (vec3(1.0) - fp)*(1.0 - metal);
+        float ndlp = max(dot(n, lp), 0.0);
+
+        // Physical 1/d^2 falloff, smoothly windowed to exactly 0 at the light's range so the shaded set
+        // agrees with what the CPU reach-culler decided affects this object (no hard popping at the edge).
+        float range = max(pointLightRanges[i], 1e-3);
+        float window = clamp(1.0 - pow(dist/range, 4.0), 0.0, 1.0);
+        float atten = (window*window)/(dist*dist + 1.0);
+
+        pointTotal += (kDp*albedo/PI + specp)*pointLightRadiances[i]*ndlp*atten;
+    }
+
     // Flat ambient skylight stand-in (proper image-based lighting lands with the atmospheric sky step).
     vec3 ambient = ambientColor*ambientIntensity*albedo*ao;
 
-    vec3 color = ambient + direct + emissiveColor*emissiveIntensity;
+    vec3 color = ambient + direct + pointTotal + emissiveColor*emissiveIntensity;
 
     // Output LINEAR HDR. Tonemapping + gamma happen later in the tonemap post-pass (after the pixelation
     // upscale), so the scene is composited in high dynamic range and mapped to [0,1] only for display.

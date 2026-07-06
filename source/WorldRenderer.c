@@ -10,6 +10,8 @@
 #include "Config.h"
 #include "Logger.h"
 #include "Renderer.h"
+#include "WorldLight.h"
+#include "WorldLightCulling.h"
 #include "raylib/raylib.h"
 #include "raylib/raymath.h"
 // rlgl is needed to build a floating-point (HDR) framebuffer; raylib's LoadRenderTexture is 8-bit only.
@@ -63,6 +65,10 @@
 #define SHADOW_MIN_SUN_ELEVATION 0.05f
 /** Texture unit the shadow map is bound to for the PBR shader (kept clear of the material map slots 0-2). */
 #define SHADOW_TEXTURE_SLOT 10
+
+/** Capacity of the per-asset local-bounds cache used for point-light reach culling (distinct model assets).
+ *  Caching avoids re-scanning a model's mesh vertices every frame just to get its bounding sphere. */
+#define BOUNDS_CACHE_CAPACITY 256
 
 /** Asset name of the post-process shader (screen-space AO + hand-drawn outlines) run before the tonemap. */
 #define POSTFX_SHADER_ASSET_NAME ((const unsigned char*)u8"world_postfx")
@@ -154,6 +160,16 @@ struct WorldRendererStruct
     int _locShadowStrength;
     int _locShadowBias;
     int _locShadowTexelSize;
+    /** Cached PBR point-light uniform locations (-1 when absent); uploaded per drawn object after reach-culling. */
+    int _locPointLightCount;
+    int _locPointLightPositions;
+    int _locPointLightRadiances;
+    int _locPointLightRanges;
+    /** Per-asset local bounding-sphere cache (keyed by GameModel*), for point-light reach culling. */
+    const void* _boundsCacheAsset[BOUNDS_CACHE_CAPACITY];
+    Vector3 _boundsCacheCenter[BOUNDS_CACHE_CAPACITY];
+    float _boundsCacheRadius[BOUNDS_CACHE_CAPACITY];
+    size_t _boundsCacheCount;
     /** The sun shadow map (depth-only framebuffer); its samplable depth texture is in _shadowMap.depth. */
     RenderTexture2D _shadowMap;
     /** Whether _shadowMap has been created. */
@@ -520,6 +536,11 @@ static void EnsureShaders(WorldRenderer* self)
         self->_locShadowBias = GetShaderLocation(RayShader, "shadowBias");
         self->_locShadowTexelSize = GetShaderLocation(RayShader, "shadowTexelSize");
 
+        self->_locPointLightCount = GetShaderLocation(RayShader, "pointLightCount");
+        self->_locPointLightPositions = GetShaderLocation(RayShader, "pointLightPositions");
+        self->_locPointLightRadiances = GetShaderLocation(RayShader, "pointLightRadiances");
+        self->_locPointLightRanges = GetShaderLocation(RayShader, "pointLightRanges");
+
         // Constant material + shadow parameters; upload once.
         float Metallic = PBR_DEFAULT_METALLIC;
         float Roughness = PBR_DEFAULT_ROUGHNESS;
@@ -639,10 +660,96 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
     SetShaderValue(RayShader, self->_locShadowStrength, &ShadowStrength, SHADER_UNIFORM_FLOAT);
 }
 
+/* Returns the model's LOCAL (pre-transform) bounding-sphere centre + radius, caching per asset so the mesh
+ * vertices are scanned only once (GetModelBoundingBox re-walks every vertex). Uses an identity transform so
+ * the result is the raw mesh-local AABB regardless of the raylib version's transform handling. */
+static void GetAssetLocalBounds(WorldRenderer* self, const GameModel* asset, Model rayModel,
+    Vector3* outCenter, float* outRadius)
+{
+    for (size_t Index = 0; Index < self->_boundsCacheCount; Index++)
+    {
+        if (self->_boundsCacheAsset[Index] == asset)
+        {
+            *outCenter = self->_boundsCacheCenter[Index];
+            *outRadius = self->_boundsCacheRadius[Index];
+            return;
+        }
+    }
+
+    Model LocalModel = rayModel;
+    LocalModel.transform = MatrixIdentity();
+    BoundingBox Box = GetModelBoundingBox(LocalModel);
+    Vector3 Center = { (Box.min.x + Box.max.x)*0.5f, (Box.min.y + Box.max.y)*0.5f, (Box.min.z + Box.max.z)*0.5f };
+    Vector3 Half = { (Box.max.x - Box.min.x)*0.5f, (Box.max.y - Box.min.y)*0.5f, (Box.max.z - Box.min.z)*0.5f };
+    float Radius = Vector3Length(Half);
+
+    if (self->_boundsCacheCount < BOUNDS_CACHE_CAPACITY)
+    {
+        size_t Slot = self->_boundsCacheCount++;
+        self->_boundsCacheAsset[Slot] = asset;
+        self->_boundsCacheCenter[Slot] = Center;
+        self->_boundsCacheRadius[Slot] = Radius;
+    }
+    *outCenter = Center;
+    *outRadius = Radius;
+}
+
+/* Largest axis scale factor of a transform (longest of its three basis-vector columns), for conservatively
+ * scaling a local bounding-sphere radius into world space under non-uniform scale + rotation. */
+static float MatrixMaxScale(Matrix m)
+{
+    float ScaleX = Vector3Length((Vector3){ m.m0, m.m1, m.m2 });
+    float ScaleY = Vector3Length((Vector3){ m.m4, m.m5, m.m6 });
+    float ScaleZ = Vector3Length((Vector3){ m.m8, m.m9, m.m10 });
+    return fmaxf(ScaleX, fmaxf(ScaleY, ScaleZ));
+}
+
+/* Reach-culls the world's point lights against an object's world bounding sphere and uploads the strongest
+ * few (up to WORLD_MAX_FORWARD_LIGHTS) to the PBR shader for forward shading. Called once per object drawn in
+ * the scene pass, immediately before its DrawModel so the per-object light set is in effect for that draw. */
+static void UploadPointLightsForObject(WorldRenderer* self, World* world, Vector3 worldCenter, float worldRadius)
+{
+    const WorldLight* Lights[WORLD_MAX_FORWARD_LIGHTS];
+    size_t Count = WorldLightCulling_SelectForSphere(world, worldCenter, worldRadius, Lights, WORLD_MAX_FORWARD_LIGHTS);
+
+    Shader RayShader = GameShader_GetRaylibShader(self->_pbrShader);
+
+    float Positions[WORLD_MAX_FORWARD_LIGHTS * 3];
+    float Radiances[WORLD_MAX_FORWARD_LIGHTS * 3];
+    float Ranges[WORLD_MAX_FORWARD_LIGHTS];
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        const WorldLight* Light = Lights[Index];
+        Vector3 Position = WorldObject_GetPosition((const WorldObject*)Light); // base is the first member
+        Positions[Index*3 + 0] = Position.x;
+        Positions[Index*3 + 1] = Position.y;
+        Positions[Index*3 + 2] = Position.z;
+
+        float LinearColor[3];
+        ColorToLinear(Light->Color, LinearColor);
+        float Intensity = WorldLight_GetIntensity(Light);
+        Radiances[Index*3 + 0] = LinearColor[0]*Intensity;
+        Radiances[Index*3 + 1] = LinearColor[1]*Intensity;
+        Radiances[Index*3 + 2] = LinearColor[2]*Intensity;
+
+        Ranges[Index] = WorldLight_GetSize(Light);
+    }
+
+    int CountInt = (int)Count;
+    SetShaderValue(RayShader, self->_locPointLightCount, &CountInt, SHADER_UNIFORM_INT);
+    if (Count > 0)
+    {
+        SetShaderValueV(RayShader, self->_locPointLightPositions, Positions, SHADER_UNIFORM_VEC3, (int)Count);
+        SetShaderValueV(RayShader, self->_locPointLightRadiances, Radiances, SHADER_UNIFORM_VEC3, (int)Count);
+        SetShaderValueV(RayShader, self->_locPointLightRanges, Ranges, SHADER_UNIFORM_FLOAT, (int)Count);
+    }
+}
+
 /* Draws a single model object through @p shader (bound onto each material slot; NULL keeps Raylib's default
- * shader). Used by the scene pass (PBR shader) and the shadow depth pass (depth shader). Missing/failed
- * assets are skipped silently (PrepareWorld reports them). */
-static void DrawModelObjectWithShader(WorldRenderer* self, WorldModelObject* modelObject, GameShader* shader)
+ * shader). Used by the scene pass (PBR shader) and the shadow depth pass (depth shader). For the PBR pass it
+ * also reach-culls and uploads this object's point lights. Missing/failed assets are skipped silently
+ * (PrepareWorld reports them). */
+static void DrawModelObjectWithShader(WorldRenderer* self, World* world, WorldModelObject* modelObject, GameShader* shader)
 {
     const unsigned char* AssetName = WorldModelObject_GetModelAssetName(modelObject);
     if (AssetName == NULL)
@@ -669,6 +776,7 @@ static void DrawModelObjectWithShader(WorldRenderer* self, WorldModelObject* mod
     // Compose over the model's baked import transform (import inner, world outer), matching raylib's own
     // DrawModelEx convention, then draw with a neutral extra transform so only our matrix and tint apply.
     Model RayModel = GameModel_GetRaylibModel(ModelAsset);
+    Matrix FinalTransform = MatrixMultiply(RayModel.transform, World);
 
     // Bind the given shader onto every material slot so DrawModel shades through it. The by-value model copy
     // shares the asset's materials array, so this persists on the asset (fine: the next pass rebinds it).
@@ -682,7 +790,19 @@ static void DrawModelObjectWithShader(WorldRenderer* self, WorldModelObject* mod
         }
     }
 
-    RayModel.transform = MatrixMultiply(RayModel.transform, World);
+    // Scene (PBR) pass only: reach-cull this object's point lights and upload them before the draw. The depth
+    // and normal passes do not light, so they skip this.
+    if ((shader == self->_pbrShader) && (self->_pbrShader != NULL) && (self->_locPointLightCount >= 0))
+    {
+        Vector3 LocalCenter;
+        float LocalRadius;
+        GetAssetLocalBounds(self, ModelAsset, RayModel, &LocalCenter, &LocalRadius);
+        Vector3 WorldCenter = Vector3Transform(LocalCenter, FinalTransform);
+        float WorldRadius = LocalRadius * MatrixMaxScale(FinalTransform);
+        UploadPointLightsForObject(self, world, WorldCenter, WorldRadius);
+    }
+
+    RayModel.transform = FinalTransform;
     Color Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Base));
     DrawModel(RayModel, (Vector3){ 0.0f, 0.0f, 0.0f }, 1.0f, Tint);
 }
@@ -702,7 +822,7 @@ static void DrawWorldModels(WorldRenderer* self, World* world, GameShader* shade
         }
         if (WorldObject_GetType(Object) == WorldObjectType_Model)
         {
-            DrawModelObjectWithShader(self, (WorldModelObject*)Object, shader);
+            DrawModelObjectWithShader(self, world, (WorldModelObject*)Object, shader);
         }
     }
 }
@@ -732,7 +852,7 @@ static void DrawNormalBufferModels(WorldRenderer* self, World* world)
         WorldModelObject* ModelObject = (WorldModelObject*)Object;
         float OutlineFlag = ModelObject->HasOutline ? 1.0f : 0.0f;
         SetShaderValue(RayNormalShader, self->_normalLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
-        DrawModelObjectWithShader(self, ModelObject, self->_normalShader);
+        DrawModelObjectWithShader(self, world, ModelObject, self->_normalShader);
     }
 }
 

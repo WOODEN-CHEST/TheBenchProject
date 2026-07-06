@@ -4,6 +4,7 @@
 #include "World.h"
 #include "WorldObject.h"
 #include "WorldModelObject.h"
+#include "WorldLight.h"
 #include "GameCamera.h"
 #include "WorldRenderer.h"
 #include "Renderer.h"
@@ -310,7 +311,42 @@ static Error AddModelObject(World* world, const unsigned char* name, const unsig
     return Result;
 }
 
-/* Builds the test world: a raised centre model that casts a shadow onto a wide ground slab. */
+/* Creates a point light with the given transform/color/reach and hands it to the world (which takes
+ * ownership). On any failure the partial light is destroyed and the error is returned. */
+static Error AddPointLight(World* world, const unsigned char* name, Vector3 position, Color color,
+    float intensity, float size)
+{
+    WorldLight* Light = NULL;
+    Error Result = WorldLight_Create(name, &Light);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    WorldObject* Base = WorldLight_AsObject(Light);
+    Light->Color = color;
+    Result = WorldObject_SetPosition(Base, position);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldLight_SetIntensity(Light, intensity);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldLight_SetSize(Light, size);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = World_AddObject(world, Base);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        WorldObject_Destroy(Base);
+    }
+    return Result;
+}
+
+/* Builds the test world: a raised centre model that casts a shadow onto a wide ground slab, lit by the sun
+ * plus a couple of coloured point lights near the centre model (to exercise point-light reach culling). */
 static Error BuildTestWorld(World* world)
 {
     Error ConstructResult = World_Construct(world);
@@ -334,6 +370,18 @@ static Error BuildTestWorld(World* world)
     {
         Result = AddModelObject(world, TEST_GROUND_OBJECT_NAME, TEST_MODEL_ASSET_NAME,
             (Vector3){ 0.0f, 0.0f, 0.0f }, (Vector3){ 40.0f, 0.2f, 40.0f });
+    }
+    // Two coloured point lights flanking the centre cube (reach 10 units, so they light the cube + nearby
+    // ground and fade out before the slab edges — exercises the per-object reach culling + forward shading).
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddPointLight(world, (const unsigned char*)u8"warm_light",
+            (Vector3){ 2.5f, 1.6f, 2.5f }, (Color){ 255, 150, 60, 255 }, 6.0f, 10.0f);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddPointLight(world, (const unsigned char*)u8"cool_light",
+            (Vector3){ -2.5f, 1.2f, -2.0f }, (Color){ 80, 150, 255, 255 }, 6.0f, 10.0f);
     }
     if (Result.Code != ErrorCode_Success)
     {

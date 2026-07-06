@@ -53,6 +53,7 @@ Current module list:
   * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, GHDF pool).
   * WorldRenderer - Renders a World's model objects through a GameCamera; separate from the world data.
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a world with the test model centred.
+* World light culling (WorldLightCulling.md) - Reach-culls a world's point lights to the strongest few (up to WORLD_MAX_FORWARD_LIGHTS) overlapping an object's bounding sphere, ranked by influence, for the renderer's per-object forward shading.
 
 Logging:
 Use the Logger module for all program output. Do NOT print to the standard streams directly (no
