@@ -17,6 +17,7 @@
 #include "Services.h"
 #include "WorldTestFrame.h"
 #include "raylib/raylib.h"
+#include "wr/WRStopwatch.h"
 
 
 // Macros.
@@ -72,14 +73,9 @@ static void InitializeWindow(const GameConfig* config)
     // ourselves), so we never block the update loop waiting on the renderer.
 }
 
-/* Returns a high-resolution timestamp in seconds from the C standard clock (time.h), independent of the
- * render loop. Raylib's GetTime/GetFrameTime advance with the render/EndDrawing cadence, which is exactly
- * what we decouple from here so update and render can run at their own rates. */
 static double GetClockSeconds(void)
 {
-    struct timespec Now;
-    timespec_get(&Now, TIME_UTC);
-    return (double)Now.tv_sec + ((double)Now.tv_nsec / 1.0e9);
+    return (double)Stopwatch_GetTimestampNanoseconds() / 1e9;
 }
 
 /* Runs the game loop with the UPDATE and RENDER cadences DECOUPLED, both timed from an independent time.h

@@ -1,1 +1,1 @@
-gcc ../source/*.c -I"../include" -std=c2x -Werror -Wall -Wextra -Wpedantic -O3 -o "out/TheBenchProject.exe" -L"../lib" -l:libraylib.a -l:libwr.a -lGL -lm -lpthread -ldl -lrt -lX11
+gcc ../source/*.c -I"../include" -std=c2x -Werror -Wall -Wextra -Wpedantic -O3 -o "out/TheBenchProject.exe" -L"../lib" -l:libraylib.a -l:libwr.a -lgdi32 -lwinmm
