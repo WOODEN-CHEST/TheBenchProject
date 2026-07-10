@@ -152,12 +152,6 @@ static bool Logger_EntryExists(const unsigned char* path)
     return Exists;
 }
 
-/* Ensures a single directory exists, creating it only if absent.
-
-   NOTE: this deliberately avoids FileSystem_CreateAllDirectories, which is currently broken for
-   relative paths in WRFramework (it rejects them as empty/invalid). GetEntryInfo and the single-level
-   CreateDirectory both handle relative paths correctly, so we compose those. Revert to
-   CreateAllDirectories once the library bug is fixed. */
 static Error Logger_EnsureDirectory(const unsigned char* path)
 {
     FileSystemEntryInfo Info;
@@ -176,7 +170,7 @@ static Error Logger_EnsureDirectory(const unsigned char* path)
     if ((InfoResult.Code == ErrorCode_FileNotFound) || (InfoResult.Code == ErrorCode_DirectoryNotFound))
     {
         Error_Deconstruct(&InfoResult);
-        return FileSystem_CreateDirectory(path);
+        return FileSystem_CreateAllDirectories(path);
     }
     return InfoResult;
 }
@@ -196,21 +190,21 @@ static Error Logger_EnsureLogDirectories(void)
    "logs/archived/<date>.log", then "...<date> 1.log", "...<date> 2.log", ... until one is unused. */
 static Error Logger_BuildArchiveTargetPath(GenericBuffer* outPath, const DateTime* logDate)
 {
-    for (int32_t Number = 0; Number < INT32_MAX; Number++)
+    for (int32_t Index = 0; Index < INT32_MAX; Index++)
     {
         GenericBuffer_Clear(outPath);
 
-        bool Ok = true;
-        Ok = Ok && GenericBuffer_AppendString(outPath, LOGGER_ARCHIVE_PREFIX);
-        Ok = Ok && Logger_AppendDate(outPath, logDate);
-        if (Number > 0)
+        bool IsOk = true;
+        IsOk = IsOk && GenericBuffer_AppendString(outPath, LOGGER_ARCHIVE_PREFIX);
+        IsOk = IsOk && Logger_AppendDate(outPath, logDate);
+        if (Index > 0)
         {
-            Ok = Ok && GenericBuffer_AppendByte(outPath, (unsigned char)u8' ');
-            Ok = Ok && Logger_AppendInt32(outPath, Number);
+            IsOk = IsOk && GenericBuffer_AppendByte(outPath, (unsigned char)u8' ');
+            IsOk = IsOk && Logger_AppendInt32(outPath, Index + 1);
         }
-        Ok = Ok && GenericBuffer_AppendString(outPath, LOGGER_LOG_EXTENSION);
-        Ok = Ok && GenericBuffer_NullTerminate(outPath);
-        if (!Ok)
+        IsOk = IsOk && GenericBuffer_AppendString(outPath, LOGGER_LOG_EXTENSION);
+        IsOk = IsOk && GenericBuffer_NullTerminate(outPath);
+        if (!IsOk)
         {
             return Error_Construct3(ErrorCode_BufferTooSmall,
                 (const unsigned char*)u8"Logger: failed to build archive path.");

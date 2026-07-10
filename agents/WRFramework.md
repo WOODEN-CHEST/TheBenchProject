@@ -54,7 +54,7 @@ The modules are (in alphabetical order):
 - WRCompile: Random compiling utils, like a macro which marks a parameter as unused.
   - Functions: none (provides only the UNUSED macro)
 - WRDateTime: A queryable snapshot value struct of the current wall-clock date and time (broken-down calendar fields, millisecond precision), in local or UTC form, like C#'s DateTime. Platform clock access is hidden behind the public API.
-  - Functions: [now (local), utc now, compare, equals, to string, deconstruct]
+  - Functions: [now (local), utc now, from unix seconds, to unix seconds, compare, equals, to string, deconstruct]
 - WREnvironment: Environment properties of the host machine, like newline, directory sperator, endianess, etc.
   - Functions: [get endianness]
 - WRError: Exception like errors and their handling functions.
@@ -109,6 +109,8 @@ The modules are (in alphabetical order):
   - Functions: [SocketAddress parse from string, SocketAddress resolve from hostname, SocketAddress get IP, SocketAddress get port, SocketAddress get family, SocketAddress deconstruct, TcpListener create and listen, TcpListener accept connection, TcpListener get local address, TcpListener deconstruct, TcpSocket connect, TcpSocket get IO stream, TcpSocket get local address, TcpSocket get remote address, TcpSocket set receive timeout, TcpSocket set send timeout, TcpSocket shutdown, TcpSocket deconstruct, UdpSocket create, UdpSocket bind, UdpSocket send datagram, UdpSocket receive datagram, UdpSocket set receive timeout, UdpSocket deconstruct]
 - WRStandardStream: IO streams for stdin, stdout and stderr.
   - Functions: [as IO stream, create from standard input/output/error, deconstruct]
+- WRStopwatch: A monotonic, high-resolution clock for measuring elapsed time (never decreases, immune to wall-clock adjustments), plus a Stopwatch value type built on top, like C#'s System.Diagnostics.Stopwatch / Java's System.nanoTime(). Platform clock access is hidden behind the public API.
+  - Functions: [get timestamp nanoseconds, Stopwatch start new, Stopwatch elapsed nanoseconds, Stopwatch restart, Stopwatch deconstruct]
 - WRString: String operations.
   - Functions: [validate encoding, are codepoints defined, is null or empty, is null or whitespace, to lower, to upper, invert case, get byte length, get codepoint length, equals, equals exact, copy to, split, index of, concat, contains, count occurrences, ends with, starts with, format, join, replace, substring, trim, get trim indices, compare, remove, insert, reverse, repeat, get character index array, create split options, create index options]
 - WRStringBuilder: A stringbuilder class.
@@ -172,6 +174,11 @@ functionality is handled through a strict split between public headers and imple
 | Read-only (to outside modules) struct members | `_camelCase` | `._refCount`, `._capacity` |
 | Local variables (non-parameter) | PascalCase | `EntityCount`, `Temp` |
 | Function parameters | camelCase | `entityCount`, `self` |
+
+When naming booleans name them in a way that they can answer a question.
+For example, "isJumping", "hasJumped", "wasJumping", not "jumping."
+When creating booleans, IF POSSIBLE (depends on context, don't force if impossible), try to make the boolean answer an enabled state.
+For example, use "IsPixelationEnabled" instead of something like "IsPixelationDisabled" or "IsPixelationOmitted".
 
 **"Public" means accessible to modules outside the one that owns the struct.** Read-only members use the `_camelCase`
 prefix as a signal — C has no enforcement, so this is a convention the agent must respect and not bypass.
@@ -487,7 +494,7 @@ a macro will be fine.
 ---
 
 ## Comments
-- Do not add useless comments everywhere, only comment the super non-obvious, weird or hacky stuff, which should be rare.
+- Do not add useless comments everywhere.
 
 ---
 

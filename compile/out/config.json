@@ -1,11 +1,40 @@
 {
     "is_fps_unlocked": true,
     "target_fps": 144,
+
     "is_fullscreen": true,
     "resolution": [ 1280, 720 ],
+
+    "are_shadows_enabled": true,
     "shadow_strength": 1.0,
+
+    "is_bloom_enabled": true,
     "bloom_strength": 1.0,
+
+    "are_sunshafts_enabled": true,
     "sunshaft_strength": 1.0,
+
+    "is_ambient_occlusion_enabled": true,
     "ambient_occlusion_strength": 1.0,
-    "fog_strength": 1.0
+
+    "is_fog_enabled": true,
+    "fog_strength": 1.0,
+
+    "global_brightness": 1.0,
+    "global_saturation": 1.0,
+    "global_contrast": 1.0,
+
+    "is_saturation_postfx_enabled": true,
+    "saturation_postfx_strength": 1.0,
+    "is_noise_postfx_enabled": true,
+    "noise_postfx_strength": 1.0,
+    "is_contrast_postfx_enabled": true,
+    "contrast_postfx_strength": 1.0,
+    "is_brightness_postfx_enabled": true,
+    "brightness_postfx_strength": 1.0,
+    "is_tint_postfx_enabled": true,
+    "tint_postfx_strength": 1.0,
+
+    "global_volume": 1.0,
+    "are_sound_modifiers_enabled": true
 }
