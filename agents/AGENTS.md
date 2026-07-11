@@ -54,6 +54,14 @@ Current module list:
   * WorldRenderer - Renders a World's model objects through a GameCamera; separate from the world data.
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a world with the test model centred.
 * World light culling (WorldLightCulling.md) - Reach-culls a world's point lights to the strongest few (up to WORLD_MAX_FORWARD_LIGHTS) overlapping an object's bounding sphere, ranked by influence, for the renderer's per-object forward shading.
+* UI framework (UIFramework.md) - The in-game UI. A screen context object owns a widget factory (pooled, capability-registered widget types), routes input to the top-most/focused widget, drives keyboard navigation, hosts keyframed property animations, and renders a z-ordered tree of abstract widgets through per-widget local render contexts. Covers six modules:
+  * UIInput - Raylib-free input value types (UIKey/UIMouseButton enums, hover/mouse/keyboard argument structs) shared by widgets and the screen.
+  * UIAnimation - Keyframed interpolation of a typed property: easing methods (constant/linear/exp in-out pow 2-5/sine/custom), keyframes, and evaluation. Pure data + math.
+  * UIRenderContext - The widget-local drawing device: wraps the renderer's RenderContext with the widget's absolute box + accumulated tint, and maps widget-local [0;1] draws onto the screen.
+  * UIWidgetFactory - Registers capabilities and widget types (struct size + constructor + capability resolvers), owns per-type object pools, and constructs/recycles widget instances.
+  * UIWidget - The abstract widget base (vtable, lifecycle, geometry/flags/state, subwidgets, capabilities, state-change events, generic property get/set); concrete widgets embed it first.
+  * UIScreen - The context: widget registry, roots, focus/z-order, input routing, keyboard navigation + outlines, animation host, and the reused per-tick update snapshot.
+  Also adds 2D rectangle/outline/line primitives to the Renderer module.
 
 Logging:
 Use the Logger module for all program output. Do NOT print to the standard streams directly (no

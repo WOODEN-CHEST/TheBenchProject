@@ -93,6 +93,7 @@ void RenderContext_Create(RenderContext* self,
     self->_stringDrawCount = 0;
     self->_modelDrawCount = 0;
     self->_meshDrawCount = 0;
+    self->_primitiveDrawCount = 0;
 }
 
 void RenderContext_RenderTexture2D(RenderContext* self, const TextureRenderArguments* args)
@@ -196,6 +197,55 @@ void RenderContext_RenderMeshInstanced(RenderContext* self, const MeshInstancedR
 
     DrawMeshInstanced(args->TargetMesh, args->TargetMaterial, args->Transforms, args->InstanceCount);
     self->_meshDrawCount += (size_t)args->InstanceCount;
+}
+
+void RenderContext_RenderRectangle(RenderContext* self, const RectangleRenderArguments* args)
+{
+    Vector2 PixelPosition = RenderContext_GetPixelVector(self, args->Position, true);
+    Vector2 PixelSize = RenderContext_GetPixelVector(self, args->Size, false);
+    Rectangle Destination = (Rectangle)
+    {
+        .x = PixelPosition.x,
+        .y = PixelPosition.y,
+        .width = PixelSize.x,
+        .height = PixelSize.y
+    };
+    Vector2 PixelOrigin = (Vector2)
+    {
+        .x = PixelSize.x * args->RelativeOrigin.x,
+        .y = PixelSize.y * args->RelativeOrigin.y,
+    };
+    Color FinalTint = RenderColor_GetFinalColor(args->TargetColor);
+    float RotationDeg = Math_RadToDegFloat(args->RotationRad);
+    DrawRectanglePro(Destination, PixelOrigin, RotationDeg, FinalTint);
+    self->_primitiveDrawCount++;
+}
+
+void RenderContext_RenderRectangleOutline(RenderContext* self, const RectangleOutlineRenderArguments* args)
+{
+    Vector2 PixelPosition = RenderContext_GetPixelVector(self, args->Position, true);
+    Vector2 PixelSize = RenderContext_GetPixelVector(self, args->Size, false);
+    Rectangle Destination = (Rectangle)
+    {
+        .x = PixelPosition.x,
+        .y = PixelPosition.y,
+        .width = PixelSize.x,
+        .height = PixelSize.y
+    };
+    float PixelThickness = RenderContext_GetPixelFloat(self, args->Thickness);
+    Color FinalTint = RenderColor_GetFinalColor(args->TargetColor);
+    DrawRectangleLinesEx(Destination, PixelThickness, FinalTint);
+    self->_primitiveDrawCount++;
+}
+
+void RenderContext_RenderLine(RenderContext* self, const LineRenderArguments* args)
+{
+    Vector2 PixelStart = RenderContext_GetPixelVector(self, args->StartPosition, true);
+    Vector2 PixelEnd = RenderContext_GetPixelVector(self, args->EndPosition, true);
+    float PixelThickness = RenderContext_GetPixelFloat(self, args->Thickness);
+    Color FinalTint = RenderColor_GetFinalColor(args->TargetColor);
+    DrawLineEx(PixelStart, PixelEnd, PixelThickness, FinalTint);
+    self->_primitiveDrawCount++;
 }
 
 void RenderContext_Begin3DMode(RenderContext* self, Camera3D camera)

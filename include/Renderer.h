@@ -84,6 +84,8 @@ typedef struct RenderContextStruct
     size_t _modelDrawCount;
     /** @brief Number of meshes drawn through this context since it was created; instanced draws count each instance. */
     size_t _meshDrawCount;
+    /** @brief Number of 2D primitives (rectangles, outlines, lines) drawn through this context since it was created. */
+    size_t _primitiveDrawCount;
 } RenderContext;
 
 /**
@@ -260,6 +262,63 @@ typedef struct MeshInstancedRenderArgumentsStruct
     /** @brief Number of instances to draw; must not exceed the length of @c Transforms. */
     int InstanceCount;
 } MeshInstancedRenderArguments;
+
+/**
+ * @brief The full set of parameters for drawing a filled 2D rectangle through a render context.
+ *
+ * The rectangle is placed so its origin (see @c RelativeOrigin) lands at @c Position, then rotated
+ * around that origin — matching the placement semantics of TextureRenderArguments.
+ */
+typedef struct RectangleRenderArgumentsStruct
+{
+    /** @brief Where to place the rectangle; the origin (see @c RelativeOrigin) is positioned here. */
+    RenderVector2D Position;
+    /** @brief Size of the rectangle in the tagged coordinate space. */
+    RenderVector2D Size;
+    /** @brief Origin within the rectangle, normalized [0;1]; also the rotation pivot. */
+    Vector2 RelativeOrigin;
+    /** @brief Rotation around the origin, in radians. */
+    float RotationRad;
+    /** @brief The fill color/tint. */
+    RenderColor TargetColor;
+} RectangleRenderArguments;
+
+/**
+ * @brief The full set of parameters for drawing an axis-aligned 2D rectangle outline (border).
+ *
+ * The border is drawn inside the rectangle bounds with the given thickness. @c Thickness is a tagged
+ * scalar, so a pixel-space thickness stays a constant on-screen width regardless of render resolution.
+ * Unlike the filled rectangle this primitive is axis-aligned (no origin/rotation).
+ */
+typedef struct RectangleOutlineRenderArgumentsStruct
+{
+    /** @brief Top-left corner of the rectangle. */
+    RenderVector2D Position;
+    /** @brief Size of the rectangle in the tagged coordinate space. */
+    RenderVector2D Size;
+    /** @brief Border thickness in the tagged coordinate space (pixel type gives a resolution-independent width). */
+    RenderFloat Thickness;
+    /** @brief The border color/tint. */
+    RenderColor TargetColor;
+} RectangleOutlineRenderArguments;
+
+/**
+ * @brief The full set of parameters for drawing a 2D line segment through a render context.
+ *
+ * @c Thickness is a tagged scalar, so a pixel-space thickness stays a constant on-screen width
+ * regardless of render resolution.
+ */
+typedef struct LineRenderArgumentsStruct
+{
+    /** @brief Line start position. */
+    RenderVector2D StartPosition;
+    /** @brief Line end position. */
+    RenderVector2D EndPosition;
+    /** @brief Line thickness in the tagged coordinate space (pixel type gives a resolution-independent width). */
+    RenderFloat Thickness;
+    /** @brief The line color/tint. */
+    RenderColor TargetColor;
+} LineRenderArguments;
 
 
 // Functions.
@@ -494,6 +553,36 @@ void RenderContext_RenderMesh(RenderContext* self, const MeshRenderArguments* ar
  *        least @c args->InstanceCount entries.
  */
 void RenderContext_RenderMeshInstanced(RenderContext* self, const MeshInstancedRenderArguments* args);
+
+/**
+ * @brief Draws a filled 2D rectangle through the render context using the given arguments.
+ *
+ * Converts the position and size from their tagged coordinate spaces into pixels, applies the origin and
+ * rotation and resolved color, draws the rectangle, and increments the primitive draw counter.
+ * @param self The render context to draw with; must not be NULL.
+ * @param args The rectangle draw parameters; must not be NULL.
+ */
+void RenderContext_RenderRectangle(RenderContext* self, const RectangleRenderArguments* args);
+
+/**
+ * @brief Draws an axis-aligned 2D rectangle outline through the render context using the given arguments.
+ *
+ * Converts the position, size and thickness into pixels, draws the border inside the rectangle bounds
+ * with the resolved color, and increments the primitive draw counter.
+ * @param self The render context to draw with; must not be NULL.
+ * @param args The rectangle outline draw parameters; must not be NULL.
+ */
+void RenderContext_RenderRectangleOutline(RenderContext* self, const RectangleOutlineRenderArguments* args);
+
+/**
+ * @brief Draws a 2D line segment through the render context using the given arguments.
+ *
+ * Converts the endpoints and thickness into pixels, draws the line with the resolved color, and
+ * increments the primitive draw counter.
+ * @param self The render context to draw with; must not be NULL.
+ * @param args The line draw parameters; must not be NULL.
+ */
+void RenderContext_RenderLine(RenderContext* self, const LineRenderArguments* args);
 
 /**
  * @brief Begins a 3D rendering pass with the given camera.
