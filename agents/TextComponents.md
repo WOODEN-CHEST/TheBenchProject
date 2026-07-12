@@ -31,6 +31,11 @@ ordered subcomponent list (`_subComponents`, element `TextComponent*`, owned by 
   Vector2).
 - **EmptyComponent**: no own content (but may still hold children).
 
+For serialization/binding, `StringComponent` also carries a borrowed `_fontName` and `SpriteComponent` a
+borrowed `_animationName` (the asset reference names their live `GameFont`/`SpriteAnimationInstance` came
+from, which those handles cannot report). They are set via setters and bound by the `TextComponentResolver`
+(see `agents/TextComponentSerialization.md`).
+
 Properties are **per-component** and are NOT inherited by children. Validated numeric/color/text
 properties use validating setters + inline getters; the plain bool flags (`IsShadowActive`,
 `IsUnderlined`, `IsStrikethrough`) are public fields.

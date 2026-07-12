@@ -135,6 +135,10 @@ typedef struct StringComponentStruct
     const unsigned char* _text;
     /** @brief Font to render the text with; defaults to the raylib default font. */
     GameFont _font;
+    /** @brief Borrowed, NUL-terminated UTF-8 font asset reference name for serialization/binding; not owned,
+     *         may be NULL. Records which font asset @c _font came from (a GameFont cannot report its name).
+     *         Bound to a live @c _font by the TextComponentResolver. */
+    const unsigned char* _fontName;
     /** @brief Text color; defaults to opaque, full-brightness white. */
     RenderColor _color;
     /** @brief Render size of the text (see TextComponentRenderer); defaults to STRING_COMPONENT_DEFAULT_SIZE. */
@@ -171,6 +175,10 @@ typedef struct SpriteComponentStruct
 
     /** @brief Borrowed sprite animation instance to render; not owned, may be NULL (renders nothing). */
     SpriteAnimationInstance* _animationInstance;
+    /** @brief Borrowed, NUL-terminated UTF-8 sprite-animation asset reference name for serialization/binding;
+     *         not owned, may be NULL. Records which animation asset to use (an instance cannot report its
+     *         name). Bound to a live @c _animationInstance by the TextComponentResolver. */
+    const unsigned char* _animationName;
     /** @brief Render color/tint; defaults to opaque, full-brightness white. */
     RenderColor _color;
     /** @brief Render size of the sprite (see TextComponentRenderer for units); defaults to (0, 0). */
@@ -393,6 +401,28 @@ static inline GameFont StringComponent_GetFont(const StringComponent* self)
 Error StringComponent_SetFont(StringComponent* self, GameFont font);
 
 /**
+ * @brief Returns the component's borrowed font asset reference name (may be NULL).
+ * @param self The string component; must not be NULL.
+ * @returns The NUL-terminated UTF-8 font name, or NULL if unset.
+ */
+static inline const unsigned char* StringComponent_GetFontName(const StringComponent* self)
+{
+    return self->_fontName;
+}
+
+/**
+ * @brief Sets the component's font asset reference name to a borrowed UTF-8 string (or NULL).
+ *
+ * The string is not copied or validated; the caller retains ownership and must keep it alive while the
+ * component references it. This only records the name for serialization/binding and does not change the
+ * live @c _font (bind it with the TextComponentResolver).
+ * @param self The string component; must not be NULL.
+ * @param fontName Borrowed NUL-terminated UTF-8 font name, or NULL to clear.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error StringComponent_SetFontName(StringComponent* self, const unsigned char* fontName);
+
+/**
  * @brief Returns the component's text color.
  * @param self The string component; must not be NULL.
  * @returns The color.
@@ -523,6 +553,28 @@ static inline SpriteAnimationInstance* SpriteComponent_GetAnimationInstance(cons
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  */
 Error SpriteComponent_SetAnimationInstance(SpriteComponent* self, SpriteAnimationInstance* animationInstance);
+
+/**
+ * @brief Returns the component's borrowed sprite-animation asset reference name (may be NULL).
+ * @param self The sprite component; must not be NULL.
+ * @returns The NUL-terminated UTF-8 animation name, or NULL if unset.
+ */
+static inline const unsigned char* SpriteComponent_GetAnimationName(const SpriteComponent* self)
+{
+    return self->_animationName;
+}
+
+/**
+ * @brief Sets the component's sprite-animation asset reference name to a borrowed UTF-8 string (or NULL).
+ *
+ * The string is not copied or validated; the caller retains ownership and must keep it alive while the
+ * component references it. This only records the name for serialization/binding and does not change the
+ * live @c _animationInstance (bind it with the TextComponentResolver).
+ * @param self The sprite component; must not be NULL.
+ * @param animationName Borrowed NUL-terminated UTF-8 animation name, or NULL to clear.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error SpriteComponent_SetAnimationName(SpriteComponent* self, const unsigned char* animationName);
 
 /**
  * @brief Returns the component's render color.

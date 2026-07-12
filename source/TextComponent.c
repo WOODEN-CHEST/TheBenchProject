@@ -252,6 +252,7 @@ Error StringComponent_Construct(StringComponent* self, GenericBuffer* subCompone
 
     self->_text = text;
     self->_font = (GameFont){ ._rayFont = GetFontDefault() };
+    self->_fontName = NULL;
     self->_color = RenderColor_White();
     self->_size = STRING_COMPONENT_DEFAULT_SIZE;
     self->IsShadowActive = STRING_COMPONENT_DEFAULT_IS_SHADOW_ACTIVE;
@@ -281,6 +282,7 @@ Error SpriteComponent_Construct(SpriteComponent* self, GenericBuffer* subCompone
     }
 
     self->_animationInstance = animationInstance;
+    self->_animationName = NULL;
     self->_color = RenderColor_White();
     self->_size = (Vector2){ .x = 0.0f, .y = 0.0f };
     return Error_CreateSuccess();
@@ -322,6 +324,17 @@ Error StringComponent_SetFont(StringComponent* self, GameFont font)
     }
 
     self->_font = font;
+    return Error_CreateSuccess();
+}
+
+Error StringComponent_SetFontName(StringComponent* self, const unsigned char* fontName)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "StringComponent_SetFontName: self must not be NULL.");
+    }
+
+    self->_fontName = fontName;
     return Error_CreateSuccess();
 }
 
@@ -429,6 +442,18 @@ Error SpriteComponent_SetAnimationInstance(SpriteComponent* self, SpriteAnimatio
     }
 
     self->_animationInstance = animationInstance;
+    return Error_CreateSuccess();
+}
+
+Error SpriteComponent_SetAnimationName(SpriteComponent* self, const unsigned char* animationName)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "SpriteComponent_SetAnimationName: self must not be NULL.");
+    }
+
+    self->_animationName = animationName;
     return Error_CreateSuccess();
 }
 

@@ -69,9 +69,25 @@ Current module list:
   TextComponentRenderer that measures and draws component trees inline (bottom-aligned lines, shadows,
   underline/strikethrough, sprites) through a RenderContext. Covers four modules:
   * TextComponent - Abstract base + StringComponent/SpriteComponent/EmptyComponent + subcomponent management.
+    String/sprite components also carry a borrowed asset reference NAME (_fontName / _animationName) for
+    serialization and binding.
   * TextComponentFactory - Pooled create/clone/return; number/codepoint/space/tab/newline shorthands.
   * TextStyle - Optional, presence-guarded style properties applied to a component by type.
   * TextComponentRenderer - Inline layout, measuring and drawing of a component tree (normalized-fitted units).
+* GameJSON (GameJSON.md) - Shared parsers for the game's common JSON value shapes (numbers, booleans,
+  strings, colors, render colors, vectors); the asset-definition helpers and the text component JSON parser
+  both use it so the value conventions live in one place. Raises ErrorCode_InvalidJSON on wrong-shape values.
+* Text component serialization (TextComponentSerialization.md) - Serializes text component trees to/from the
+  game's three formats and binds their asset references. JSON is the human-facing form
+  (references/text_component_structure.md); GHDF is compact binary storage; plain text is a lossy strings-only
+  extraction. Structured forms convert to/from the format's STRUCT tree (JSONCompound/GHDFCompound), not
+  bytes. Serializers take all working memory from the caller (object pools, factory, a WRBufferPool for
+  stable deserialized strings). Covers four modules:
+  * TextComponentText - Component -> plain UTF-8 string (no deserializer).
+  * TextComponentJSON - Component <-> WRJSON value tree.
+  * TextComponentGHDF - Component <-> GHDF compound tree.
+  * TextComponentResolver - Binds a parsed tree's font/animation NAMES to live GameFont/SpriteAnimationInstance
+    handles via the AssetManager (call after parsing; instances owned by a caller ObjectPool).
 
 Logging:
 Use the Logger module for all program output. Do NOT print to the standard streams directly (no
@@ -83,6 +99,10 @@ cannot be used.
 If you cannot compile because a WRFramework or other library header file exists, but there is no such defined function
 in the library file, then this is an error on my part and should be flagged.
 The headers are correct, the function missing from the library is just a version mismatch on my end.
+
+You should not edit the WRFramework.md file, it is regularly pulled from the actual framework repository when
+changes are made to it, so making changes to this file is useless as they will be overwritten. If more info
+is needed, make changes to either a module file or this file.
 
 
 This is pretty much all that I can write here, read WRFramework.md for the rest.
