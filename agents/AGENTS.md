@@ -62,6 +62,16 @@ Current module list:
   * UIWidget - The abstract widget base (vtable, lifecycle, geometry/flags/state, subwidgets, capabilities, state-change events, generic property get/set); concrete widgets embed it first.
   * UIScreen - The context: widget registry, roots, focus/z-order, input routing, keyboard navigation + outlines, animation host, and the reused per-tick update snapshot.
   Also adds 2D rectangle/outline/line primitives to the Renderer module.
+* Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text. Abstract mutable
+  TextComponent tree (String/Sprite/Empty types) with ordered subcomponents and cycle-checked composition;
+  a pooling TextComponentFactory that is the sole creator/cloner/returner (plus number/codepoint/special-char
+  helpers over caller-owned buffers); a presence-guarded TextStyle applied onto components; and a
+  TextComponentRenderer that measures and draws component trees inline (bottom-aligned lines, shadows,
+  underline/strikethrough, sprites) through a RenderContext. Covers four modules:
+  * TextComponent - Abstract base + StringComponent/SpriteComponent/EmptyComponent + subcomponent management.
+  * TextComponentFactory - Pooled create/clone/return; number/codepoint/space/tab/newline shorthands.
+  * TextStyle - Optional, presence-guarded style properties applied to a component by type.
+  * TextComponentRenderer - Inline layout, measuring and drawing of a component tree (normalized-fitted units).
 
 Logging:
 Use the Logger module for all program output. Do NOT print to the standard streams directly (no
