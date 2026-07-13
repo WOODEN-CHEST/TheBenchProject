@@ -60,14 +60,13 @@ static void DisposePartialTypeRecord(TypeRecord* record)
 
 
 // Public functions.
-Error UIWidgetFactory_Construct(UIWidgetFactory* self, UIScreen* screen)
+Error UIWidgetFactory_Construct(UIWidgetFactory* self)
 {
     if (self == NULL)
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "UIWidgetFactory_Construct: self must not be NULL.");
     }
 
-    self->_screen = screen;
     GenericBuffer_AllocateVariable(&self->_capabilities, 8U, sizeof(CapabilityRecord));
     GenericBuffer_AllocateVariable(&self->_types, 8U, sizeof(TypeRecord));
     return Error_CreateSuccess();
@@ -239,11 +238,11 @@ Error UIWidgetFactory_UnregisterType(UIWidgetFactory* self, uint64_t typeId)
     return PoolResult;
 }
 
-Error UIWidgetFactory_ConstructWidget(UIWidgetFactory* self, uint64_t typeId, void* args, Widget** outWidget)
+Error UIWidgetFactory_ConstructWidget(UIWidgetFactory* self, UIScreen* screen, uint64_t typeId, void* args, Widget** outWidget)
 {
-    if ((self == NULL) || (outWidget == NULL))
+    if ((self == NULL) || (screen == NULL) || (outWidget == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIWidgetFactory_ConstructWidget: self and outWidget must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIWidgetFactory_ConstructWidget: self, screen and outWidget must not be NULL.");
     }
     *outWidget = NULL;
 
@@ -264,7 +263,7 @@ Error UIWidgetFactory_ConstructWidget(UIWidgetFactory* self, uint64_t typeId, vo
         return PoolResult;
     }
 
-    Error ConstructResult = Record->Constructor(Memory, self->_screen, typeId, args);
+    Error ConstructResult = Record->Constructor(Memory, screen, typeId, args);
     if (ConstructResult.Code != ErrorCode_Success)
     {
         // The constructor must not have grown the type registry, but re-fetch the record defensively.

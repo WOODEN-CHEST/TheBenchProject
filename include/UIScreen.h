@@ -73,8 +73,8 @@ typedef struct UIScreenButtonTrackingStruct
  */
 typedef struct UIScreenStruct
 {
-    /** @brief The widget factory this screen owns (borrows the screen back). */
-    UIWidgetFactory _factory;
+    /** @brief The program-wide widget factory; borrowed, not owned (one factory serves many screens). */
+    UIWidgetFactory* _factory;
     /** @brief Registry of every widget owned by this screen (by id). Layout is internal. */
     GenericBuffer _widgets;
     /** @brief Next widget id to mint; starts at 1 and only increases. */
@@ -120,10 +120,12 @@ typedef struct UIScreenStruct
 /**
  * @brief Initializes an empty screen: its factory, registries and input/navigation/animation state.
  * @param self The screen to initialize; must not be NULL.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; propagates factory construction errors.
+ * @param factory The program-wide widget factory the screen builds widgets from; borrowed, must outlive
+ *        the screen and must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p factory is NULL.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
  */
-Error UIScreen_Construct(UIScreen* self);
+Error UIScreen_Construct(UIScreen* self, UIWidgetFactory* factory);
 
 /**
  * @brief Releases the screen and everything it owns (the factory and internal storage).
@@ -139,13 +141,13 @@ Error UIScreen_Construct(UIScreen* self);
 Error UIScreen_Deconstruct(UIScreen* self);
 
 /**
- * @brief Returns the screen's widget factory.
+ * @brief Returns the screen's (borrowed, program-wide) widget factory.
  * @param self The screen; must not be NULL.
- * @returns A pointer to the embedded factory.
+ * @returns The borrowed factory pointer.
  */
 static inline UIWidgetFactory* UIScreen_GetFactory(UIScreen* self)
 {
-    return &self->_factory;
+    return self->_factory;
 }
 
 

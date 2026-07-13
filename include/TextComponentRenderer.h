@@ -53,6 +53,11 @@ typedef struct ComponentRenderArgumentsStruct
     bool HasCachedRenderSize;
     /** @brief Cached draw size in normalized-fitted units (from TextComponentRenderer_MeasureComponent). */
     Vector2 CachedRenderSize;
+    /** @brief true to clip drawing to @c ScissorRelative (used e.g. to cut label text to its bounds). */
+    bool HasScissor;
+    /** @brief Clip rectangle in screen-relative [0;1] coordinates (x, y, width, height); used when @c HasScissor.
+     *         The GPU scissor does not nest, so this replaces (then disables) any outer clip for this draw. */
+    Rectangle ScissorRelative;
 } ComponentRenderArguments;
 
 /**
@@ -87,7 +92,9 @@ static inline ComponentRenderArguments ComponentRenderArguments_Create(RenderVec
         .RotationRad = 0.0f,
         .RelativeOrigin = (Vector2){ .x = 0.0f, .y = 0.0f },
         .HasCachedRenderSize = false,
-        .CachedRenderSize = (Vector2){ .x = 0.0f, .y = 0.0f }
+        .CachedRenderSize = (Vector2){ .x = 0.0f, .y = 0.0f },
+        .HasScissor = false,
+        .ScissorRelative = (Rectangle){ .x = 0.0f, .y = 0.0f, .width = 0.0f, .height = 0.0f }
     };
 }
 

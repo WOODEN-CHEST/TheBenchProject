@@ -60,7 +60,8 @@ Current module list:
   * UIRenderContext - The widget-local drawing device: wraps the renderer's RenderContext with the widget's absolute box + accumulated tint, and maps widget-local [0;1] draws onto the screen.
   * UIWidgetFactory - Registers capabilities and widget types (struct size + constructor + capability resolvers), owns per-type object pools, and constructs/recycles widget instances.
   * UIWidget - The abstract widget base (vtable, lifecycle, geometry/flags/state, subwidgets, capabilities, state-change events, generic property get/set); concrete widgets embed it first.
-  * UIScreen - The context: widget registry, roots, focus/z-order, input routing, keyboard navigation + outlines, animation host, and the reused per-tick update snapshot.
+  * UIScreen - The context: widget registry, roots, focus/z-order, input routing, keyboard navigation + outlines, animation host, and the reused per-tick update snapshot. The widget factory is program-wide (one shared across all screens), passed into each screen rather than owned by it.
+  * LabelWidget - The first concrete widget: displays a (possibly multi-line) TextComponent with per-line alignment and bound handling (cut/wrap/resize/wrap-then-resize/wrap-then-cut). Auto-fits its widget box to the rendered text. Built on the text component system (TextComponents.md); adds an optional scissor to TextComponentRenderer for cutting.
   Also adds 2D rectangle/outline/line primitives to the Renderer module.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text. Abstract mutable
   TextComponent tree (String/Sprite/Empty types) with ordered subcomponents and cycle-checked composition;

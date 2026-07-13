@@ -89,7 +89,10 @@ children, left to right, breaking on `\n`; within a line, shorter runs are BOTTO
   (`TextComponentRenderer_MeasureComponent`) is render-context-free; drawing converts to pixels.
 - **Draw args** (`ComponentRenderArguments`, a struct so it can grow): position, additional size
   multiplier (multiplies component sizes), tint (multiplied into component colors), rotation and relative
-  origin (both applied to the whole composed block), and an optional cached render size.
+  origin (both applied to the whole composed block), an optional cached render size, and an optional
+  scissor (`HasScissor` + `ScissorRelative`, a screen-relative [0;1] rect) that clips the draw — used e.g.
+  by the label widget to cut text to its bounds. The GPU scissor does not nest, so it replaces (then
+  disables) any outer clip for that draw.
 - **Shadows**: same text drawn behind at an offset relative to the component size; excluded from
   measurement and origin; default color = component color with brightness × 0.25.
 - Underline/strikethrough draw as line primitives. The renderer never touches the render target or

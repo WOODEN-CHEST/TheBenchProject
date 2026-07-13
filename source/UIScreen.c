@@ -1130,20 +1130,15 @@ static Error AdvanceAnimations(UIScreen* self, ProgramTime time)
 
 
 // Public functions: lifecycle.
-Error UIScreen_Construct(UIScreen* self)
+Error UIScreen_Construct(UIScreen* self, UIWidgetFactory* factory)
 {
-    if (self == NULL)
+    if ((self == NULL) || (factory == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_Construct: self must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_Construct: self and factory must not be NULL.");
     }
 
     Memory_Zero(self, sizeof(*self));
-
-    Error FactoryResult = UIWidgetFactory_Construct(&self->_factory, self);
-    if (FactoryResult.Code != ErrorCode_Success)
-    {
-        return FactoryResult;
-    }
+    self->_factory = factory;
 
     GenericBuffer_AllocateVariable(&self->_widgets, 8U, sizeof(RegistryEntry));
     GenericBuffer_AllocateVariable(&self->_roots, 4U, sizeof(Widget*));
@@ -1177,9 +1172,9 @@ Error UIScreen_Deconstruct(UIScreen* self)
     Memory_Free(self->_roots._data);
     Memory_Free(self->_widgets._data);
 
-    Error FirstError = UIWidgetFactory_Deconstruct(&self->_factory);
+    // The factory is borrowed (program-wide); the screen does not deconstruct it.
     Memory_Zero(self, sizeof(*self));
-    return FirstError;
+    return Error_CreateSuccess();
 }
 
 

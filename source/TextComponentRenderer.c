@@ -486,6 +486,19 @@ static void DrawRuns(TextComponentRenderer* self, RenderContext* context, const 
     {
         return;
     }
+
+    // Optional clip. Raylib's scissor does not nest, so this replaces (then disables) any outer clip.
+    bool StartedScissor = false;
+    if (args->HasScissor)
+    {
+        Vector2 ScissorPos = RenderContext_VectorRelativeToPixel(context,
+            (Vector2){ .x = args->ScissorRelative.x, .y = args->ScissorRelative.y });
+        Vector2 ScissorSize = RenderContext_VectorRelativeToPixel(context,
+            (Vector2){ .x = args->ScissorRelative.width, .y = args->ScissorRelative.height });
+        BeginScissorMode((int)ScissorPos.x, (int)ScissorPos.y, (int)ScissorSize.x, (int)ScissorSize.y);
+        StartedScissor = true;
+    }
+
     TextRun* Runs = GenericBuffer_GetPointerToElement(&self->_runs, 0);
     for (size_t Index = 0; Index < Count; Index++)
     {
@@ -502,6 +515,11 @@ static void DrawRuns(TextComponentRenderer* self, RenderContext* context, const 
         {
             DrawTextRun(self, context, args, Run, OriginPixels, BasePixels, CosValue, SinValue);
         }
+    }
+
+    if (StartedScissor)
+    {
+        EndScissorMode();
     }
 }
 

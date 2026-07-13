@@ -37,7 +37,8 @@ fatal. Pure value getters (ids, flags, cached bounds) do not return `Error`.
   constructor, and the `(capabilityId, resolver)` pairs it implements, and minting a type id). It owns one
   object pool per type: `UIWidgetFactory_ConstructWidget` borrows a slot and runs the constructor;
   `UIWidgetFactory_ReturnWidget` (driven by `Widget_Deconstruct`) returns it for reuse. Capability
-  resolution is keyed by `(type, capability)`. Lives embedded in a screen (borrows it, doesn't own it).
+  resolution is keyed by `(type, capability)`. It is a single program-wide object shared by every screen
+  (each screen borrows it); the target screen is passed per widget to `UIWidgetFactory_ConstructWidget`.
 - **UIWidget** (`UIWidget.h/.c`) — the abstract widget base. A concrete widget embeds a `Widget` as its
   FIRST member and supplies a `WidgetVTable` (all slots optional; a NULL slot is a no-op success). Holds
   identity (unique id + type id + screen + parent), geometry (`Position`, `Size`, `ZLayer`, cached
@@ -59,9 +60,10 @@ thickness stays a constant on-screen size across resolutions.
 
 `construct → initialize → (update/render/input enable) → … → (disable) → deinitialize → deconstruct`.
 
-- **Construct**: only through the factory. `UIWidgetFactory_ConstructWidget(typeId, args, &widget)` borrows
-  pooled storage and runs the type's constructor, which calls `Widget_Construct(&self->Base, &vtable,
-  screen, typeId)` (mints the id, registers with the screen, sets defaults) and then fills concrete fields.
+- **Construct**: only through the factory. `UIWidgetFactory_ConstructWidget(factory, screen, typeId, args,
+  &widget)` borrows pooled storage and runs the type's constructor, which calls `Widget_Construct(&self->Base,
+  &vtable, screen, typeId)` (mints the id, registers with the screen, sets defaults) and then fills concrete
+  fields.
 - **Initialize**: `Widget_InitializeWidget(widget)` runs the `Initialize` hook, then fires
   `OnUpdateEnable`/`OnRenderEnable`/`OnInputEnable` (the flags default to enabled). Call once before the
   widget is first added.
@@ -88,6 +90,29 @@ uint64_t typeId; UIWidgetFactory_RegisterType(factory, sizeof(MyWidget), MyWidge
 A capability is an interface the widget implements; `Widget_GetCapability(widget, capId)` returns a pointer
 to the capability struct embedded in that concrete widget (no stability guarantee — it points inside the
 live widget). Resolution goes through the widget's own type on the screen's factory.
+
+The factory is **one per program**, shared by every screen: create it once, register every widget type
+(and any capabilities) against it, then pass it to each `UIScreen_Construct(screen, factory)`. Widget
+construction takes the destination screen per call (`UIWidgetFactory_ConstructWidget(factory, screen, …)`),
+and `Widget_Deconstruct` returns the storage to the factory pool via the widget's screen.
+
+## Widgets
+
+Concrete widget modules embed `Widget` first and register a type with the factory. The first one:
+
+- **LabelWidget** (`LabelWidget.h/.c`) — displays a (possibly multi-line) `TextComponent` for labels,
+  buttons, textboxes, etc. It renders through a shared `TextComponentRenderer`, adding per-line horizontal
+  alignment (left/center/right) and bound handling the plain component renderer lacks: **Cut** (GPU scissor
+  to the bounds), **Wrap** (break on spaces), **Resize** (shrink over-wide lines to fit), and the
+  **WrapThenResize** / **WrapThenCut** combinations. Text is measured/drawn in normalized-fitted units ×
+  the label's `Size`; the block's top-left sits at the widget box top-left, and the label writes its own
+  base `Size` each render so the box (hit-test + nav outline) hugs the text (auto-fit). `Origin` is the
+  rotation pivot / `DrawSize` reference; `Rotation`, `Tint`, `Size` and `Origin` are animatable via the
+  `LabelProperty_*` ids. The label keeps the original text plus a lazily-built cache of per-line component
+  subtrees (backed by an owned substring buffer), rebuilt only when text/size/bounds/handling change.
+  Build via `LabelWidget_RegisterType` (once) then `LabelWidget_Create` (passing a borrowed
+  `TextComponentFactory` + `TextComponentRenderer` + optional text). See `agents/TextComponents.md` for the
+  text component system it builds on.
 
 ## Input
 
@@ -142,7 +167,8 @@ Removing/deconstructing a widget purges its animations.
 
 ## Memory ownership
 
-- The factory owns each type's pool (and thus every widget's storage); it borrows the screen. The screen
-  owns the factory and its registries but **borrows** the widgets (roots and subwidgets are borrowed
-  pointers). Deconstruct widgets that own external resources **before** `UIScreen_Deconstruct`, since that
-  only releases the pools, not each widget's own events/subwidget buffer.
+- The program-wide factory owns each type's pool (and thus every widget's storage). A screen **borrows**
+  the factory and **borrows** its widgets (roots and subwidgets are borrowed pointers); it owns only its own
+  registries/state. Deconstruct widgets that own external resources **before** deconstructing the factory
+  (which releases the pools) and, for a widget's own events/subwidget buffer, before dropping it. Tear down
+  order at program end is: widgets → screens → factory.

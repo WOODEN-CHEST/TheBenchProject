@@ -12,8 +12,9 @@
  * @brief Registry and producer of widgets: registers capabilities and widget types, then constructs
  *        (and recycles) widget instances from per-type pools.
  *
- * The factory lives inside a screen (embedded by value) and borrows that screen; it does not own it.
- * It solves two problems:
+ * The factory is a single program-wide object shared by every screen (a screen borrows it rather than
+ * owning it); the target screen is supplied per widget to UIWidgetFactory_ConstructWidget. It solves two
+ * problems:
  *   - Type identity without a giant central enum. Capabilities are registered first, each minting a
  *     capability id (a small interface identity). Widget types are registered next, each supplying its
  *     concrete struct size, a constructor, and the (capabilityId, resolver) pairs it implements, and each
@@ -95,8 +96,6 @@ typedef struct WidgetCapabilityEntryStruct
  */
 typedef struct UIWidgetFactoryStruct
 {
-    /** @brief The screen this factory serves; borrowed, not owned. */
-    UIScreen* _screen;
     /** @brief Registry of capabilities (one record per capability id; id is index + 1). */
     GenericBuffer _capabilities;
     /** @brief Registry of widget types (one record per type id; id is index + 1). Records hold each type's pool. */
@@ -106,15 +105,16 @@ typedef struct UIWidgetFactoryStruct
 
 // Functions.
 /**
- * @brief Initializes an empty factory bound to the given screen.
+ * @brief Initializes an empty factory.
+ *
+ * The factory is screen-independent: one factory is shared across every screen in the program, and the
+ * target screen is supplied per widget via UIWidgetFactory_ConstructWidget.
  * @param self The factory to initialize; must not be NULL.
- * @param screen The screen the factory serves; borrowed, must outlive the factory. May be NULL only if
- *        set before any widget is constructed.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
-Error UIWidgetFactory_Construct(UIWidgetFactory* self, UIScreen* screen);
+Error UIWidgetFactory_Construct(UIWidgetFactory* self);
 
 /**
  * @brief Releases the factory: deconstructs every type's pool and registry storage.
@@ -128,16 +128,6 @@ Error UIWidgetFactory_Construct(UIWidgetFactory* self, UIScreen* screen);
  *       full set.
  */
 Error UIWidgetFactory_Deconstruct(UIWidgetFactory* self);
-
-/**
- * @brief Returns the screen the factory serves.
- * @param self The factory; must not be NULL.
- * @returns The borrowed screen (may be NULL if never set).
- */
-static inline UIScreen* UIWidgetFactory_GetScreen(const UIWidgetFactory* self)
-{
-    return self->_screen;
-}
 
 /**
  * @brief Registers a new capability, minting its id.
@@ -202,22 +192,24 @@ Error UIWidgetFactory_RegisterType(UIWidgetFactory* self,
 Error UIWidgetFactory_UnregisterType(UIWidgetFactory* self, uint64_t typeId);
 
 /**
- * @brief Constructs a widget of the given type from its pool.
+ * @brief Constructs a widget of the given type from its pool, into the given screen.
  *
- * Borrows a slot from the type's object pool and runs the type's constructor into it (passing the
- * factory's screen, the type id, and @p args). On constructor failure the slot is returned to the pool
- * and the error is propagated.
+ * Borrows a slot from the type's object pool and runs the type's constructor into it (passing @p screen,
+ * the type id, and @p args). On constructor failure the slot is returned to the pool and the error is
+ * propagated.
  * @param self The factory; must not be NULL.
+ * @param screen The screen the widget is being built into; borrowed, passed to the constructor. Must not
+ *        be NULL.
  * @param typeId The registered type to construct; must be a currently-registered id.
  * @param args The type-specific argument struct for the constructor; may be NULL if the type takes none.
  * @param outWidget [out] Receives the constructed widget on success, NULL on failure. Must not be NULL.
- * @returns Success with *outWidget set; ErrorCode_IllegalArgument if @p self or @p outWidget is NULL;
- *          ErrorCode_ArgumentOutOfRange if @p typeId is out of range; ErrorCode_InvalidOperation if the
- *          type is not registered; otherwise the constructor's or pool's error.
+ * @returns Success with *outWidget set; ErrorCode_IllegalArgument if @p self, @p screen or @p outWidget is
+ *          NULL; ErrorCode_ArgumentOutOfRange if @p typeId is out of range; ErrorCode_InvalidOperation if
+ *          the type is not registered; otherwise the constructor's or pool's error.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
-Error UIWidgetFactory_ConstructWidget(UIWidgetFactory* self, uint64_t typeId, void* args, Widget** outWidget);
+Error UIWidgetFactory_ConstructWidget(UIWidgetFactory* self, UIScreen* screen, uint64_t typeId, void* args, Widget** outWidget);
 
 /**
  * @brief Returns a widget's storage to its type's pool for reuse.
