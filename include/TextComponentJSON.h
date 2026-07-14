@@ -11,7 +11,7 @@
  * @brief JSON (value-tree) serialization and deserialization of text components.
  *
  * Converts between a text component tree and a WRJSON value tree (JSONCompound / JSONArray / values), NOT
- * JSON text — use JSON_Serialize / JSON_Deserialize to go to and from bytes. The JSON shape is documented
+ * JSON text - use JSON_Serialize / JSON_Deserialize to go to and from bytes. The JSON shape is documented
  * in references/text_component_structure.md.
  *
  * All JSON structures are borrowed from a caller-provided JSONObjectPool; all components are produced by a

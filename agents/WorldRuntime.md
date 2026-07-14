@@ -157,6 +157,22 @@ a small `ExtensionMatches` helper). The standard types set it to `json` (`ASSET_
 On-disk: renamed `asset/model`→`asset/models` and `test_model.json`→`test.json` (distinct stem from
 `test_model.obj`). Verified headlessly: `ReadDefinitions` succeeds and `HasDefinition(model,"test")` is true.
 
+### Follow-up: definitions may share a stem with their resource
+
+The extension filter above was applied only to `ReadDefinitions`, not to `ResolveExistingFilePath` (the
+resolver behind `OpenResource` / `AcquireResourcePath`). That resolver matches an extension-less location
+against directory file *stems*, so for `location: "test"` both `test.json` and `test.png` matched and the
+**first entry readdir happened to return won** — a coin flip (~50% of stems hash `.json` first on ext4).
+This is what forced the distinct-stem workarounds (`test_model.obj`, `test_image.png`).
+
+`ResolveExistingFilePath` now skips files carrying the type's `DefinitionFileExtension`, via a shared
+`IsDefinitionFile(type, path, extensionScratch)` helper that `ReadDefinitions` also uses. The rule is
+consistent in both directions: within a type's directory tree a `.json` file *is* a definition, so it can
+never also be a resource. Definitions may now share a stem with the resource they define (`test.json` +
+`test.png`); the distinct-stem workarounds are no longer needed (existing assets keep working either way).
+Verified with a standalone harness on a fixture whose `.json` enumerates first: fails on the pre-fix code,
+passes after.
+
 ## Status
 
 Builds clean (full project, incl. `-Wconversion`). The renderer/frame path is not runtime-verifiable

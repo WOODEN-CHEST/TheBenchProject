@@ -277,8 +277,10 @@ typedef struct AssetTypeInfoStruct
     /** @brief OPTIONAL definition-file extension WITHOUT the dot (e.g. u8"json"). When set,
      *         AssetManager_ReadDefinitions only treats files with this extension as definitions and skips
      *         all others (so resource files — models, textures, etc. — may live alongside definitions in
-     *         this type's directory). When NULL, every file in the directory is parsed as a definition.
-     *         Copied; matched case-insensitively. */
+     *         this type's directory). Conversely, file-location resolution never returns a file with this
+     *         extension, so a definition may share its stem with the resource it defines (test.json +
+     *         test.png). When NULL, every file in the directory is parsed as a definition and no file is
+     *         excluded from resolution. Copied; matched case-insensitively. */
     const unsigned char* DefinitionFileExtension;
     /** @brief Builds definitions of this type from raw bytes. Must not be NULL. */
     AssetDefinitionConstructor Constructor;

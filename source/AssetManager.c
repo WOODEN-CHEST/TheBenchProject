@@ -648,9 +648,62 @@ static Error ClearCacheDirectory(AssetManager* self)
     return Result;
 }
 
+/* Case-insensitive ASCII compare of a file extension (with a leading dot, e.g. ".json", as produced by
+ * Path_GetExtension) against a type's definition extension (without the dot, e.g. "json"). */
+static bool ExtensionMatches(const unsigned char* fileExtensionWithDot, const unsigned char* typeExtension)
+{
+    if ((fileExtensionWithDot == NULL) || (typeExtension == NULL) || (fileExtensionWithDot[0] != (unsigned char)u8'.'))
+    {
+        return false;
+    }
+
+    const unsigned char* Left = fileExtensionWithDot + 1;
+    const unsigned char* Right = typeExtension;
+    while ((*Left != (unsigned char)u8'\0') && (*Right != (unsigned char)u8'\0'))
+    {
+        unsigned char LeftChar = *Left;
+        unsigned char RightChar = *Right;
+        if ((LeftChar >= (unsigned char)u8'A') && (LeftChar <= (unsigned char)u8'Z'))
+        {
+            LeftChar = (unsigned char)(LeftChar + ((unsigned char)u8'a' - (unsigned char)u8'A'));
+        }
+        if ((RightChar >= (unsigned char)u8'A') && (RightChar <= (unsigned char)u8'Z'))
+        {
+            RightChar = (unsigned char)(RightChar + ((unsigned char)u8'a' - (unsigned char)u8'A'));
+        }
+        if (LeftChar != RightChar)
+        {
+            return false;
+        }
+        Left++;
+        Right++;
+    }
+    return (*Left == (unsigned char)u8'\0') && (*Right == (unsigned char)u8'\0');
+}
+
+/* True when @p path is one of @p type's definition files. AssetManager_ReadDefinitions treats every file
+   with the type's definition extension as a definition, so such a file can never also be a resource; the
+   stem-based resolver must skip them or "test.json" would shadow the "test.png" it defines. */
+static bool IsDefinitionFile(TypeRecord* type, const unsigned char* path, GenericBuffer* extensionScratch)
+{
+    if (type->DefinitionFileExtension == NULL)
+    {
+        return false;
+    }
+
+    GenericBuffer_Clear(extensionScratch);
+    Error ExtensionResult = Path_GetExtension(path, extensionScratch);
+    bool IsDefinition = (ExtensionResult.Code == ErrorCode_Success)
+        && ExtensionMatches(extensionScratch->_data, type->DefinitionFileExtension);
+    Error_Deconstruct(&ExtensionResult);
+    return IsDefinition;
+}
+
 /* Resolves an extension-less relative path to an existing file across the search roots (priority order).
    Matches by comparing each candidate directory's file stems to the target stem, so the extension is
-   discovered automatically. On success @p outFullPath receives the full path and @p outFound is true. */
+   discovered automatically. Files carrying the type's definition extension are skipped, so a definition
+   may share its stem with the resource it defines. On success @p outFullPath receives the full path and
+   @p outFound is true. */
 static Error ResolveExistingFilePath(AssetManager* self, TypeRecord* type, const unsigned char* relativePath,
     GenericBuffer* outFullPath, bool* outFound)
 {
@@ -667,11 +720,13 @@ static Error ResolveExistingFilePath(AssetManager* self, TypeRecord* type, const
     GenericBuffer ParentDirectory;
     GenericBuffer TargetStem;
     GenericBuffer FileStem;
+    GenericBuffer FileExtension;
     GenericBuffer_AllocateVariable(&Combined, 0U, 1U);
     GenericBuffer_AllocateVariable(&Normalized, 0U, 1U);
     GenericBuffer_AllocateVariable(&ParentDirectory, 0U, 1U);
     GenericBuffer_AllocateVariable(&TargetStem, 0U, 1U);
     GenericBuffer_AllocateVariable(&FileStem, 0U, 1U);
+    GenericBuffer_AllocateVariable(&FileExtension, 0U, 1U);
 
     Error Result = Error_CreateSuccess();
     size_t RootCount = IList_GetElementCount(RootsList(self));
@@ -754,6 +809,12 @@ static Error ResolveExistingFilePath(AssetManager* self, TypeRecord* type, const
                 break;
             }
 
+            if (IsDefinitionFile(type, Info._path, &FileExtension))
+            {
+                FileSystemEntryInfo_Deconstruct(&Info);
+                continue;
+            }
+
             GenericBuffer_Clear(&FileStem);
             Error FileStemResult = Path_GetLastEntryStem(Info._name, &FileStem);
             if (FileStemResult.Code != ErrorCode_Success)
@@ -795,6 +856,7 @@ static Error ResolveExistingFilePath(AssetManager* self, TypeRecord* type, const
     Memory_Free(ParentDirectory._data);
     Memory_Free(TargetStem._data);
     Memory_Free(FileStem._data);
+    Memory_Free(FileExtension._data);
     return Result;
 }
 
@@ -1569,39 +1631,6 @@ Error AssetManager_SetCacheDirectory(AssetManager* self, const unsigned char* di
     return ClearCacheDirectory(self);
 }
 
-/* Case-insensitive ASCII compare of a file extension (with a leading dot, e.g. ".json", as produced by
- * Path_GetExtension) against a type's definition extension (without the dot, e.g. "json"). */
-static bool ExtensionMatches(const unsigned char* fileExtensionWithDot, const unsigned char* typeExtension)
-{
-    if ((fileExtensionWithDot == NULL) || (typeExtension == NULL) || (fileExtensionWithDot[0] != (unsigned char)u8'.'))
-    {
-        return false;
-    }
-
-    const unsigned char* Left = fileExtensionWithDot + 1;
-    const unsigned char* Right = typeExtension;
-    while ((*Left != (unsigned char)u8'\0') && (*Right != (unsigned char)u8'\0'))
-    {
-        unsigned char LeftChar = *Left;
-        unsigned char RightChar = *Right;
-        if ((LeftChar >= (unsigned char)u8'A') && (LeftChar <= (unsigned char)u8'Z'))
-        {
-            LeftChar = (unsigned char)(LeftChar + ((unsigned char)u8'a' - (unsigned char)u8'A'));
-        }
-        if ((RightChar >= (unsigned char)u8'A') && (RightChar <= (unsigned char)u8'Z'))
-        {
-            RightChar = (unsigned char)(RightChar + ((unsigned char)u8'a' - (unsigned char)u8'A'));
-        }
-        if (LeftChar != RightChar)
-        {
-            return false;
-        }
-        Left++;
-        Right++;
-    }
-    return (*Left == (unsigned char)u8'\0') && (*Right == (unsigned char)u8'\0');
-}
-
 Error AssetManager_ReadDefinitions(AssetManager* self)
 {
     if (self == NULL) { return CreateNullError(u8"self"); }
@@ -1658,18 +1687,10 @@ Error AssetManager_ReadDefinitions(AssetManager* self)
 
                 // When the type declares a definition-file extension, only files with that extension are
                 // definitions; skip everything else (e.g. resource files sharing the type directory).
-                if (Type->DefinitionFileExtension != NULL)
+                if ((Type->DefinitionFileExtension != NULL) && !IsDefinitionFile(Type, Info._path, &FileExtension))
                 {
-                    GenericBuffer_Clear(&FileExtension);
-                    Error ExtResult = Path_GetExtension(Info._path, &FileExtension);
-                    bool IsDefinitionFile = (ExtResult.Code == ErrorCode_Success)
-                        && ExtensionMatches(FileExtension._data, Type->DefinitionFileExtension);
-                    Error_Deconstruct(&ExtResult);
-                    if (!IsDefinitionFile)
-                    {
-                        FileSystemEntryInfo_Deconstruct(&Info);
-                        continue;
-                    }
+                    FileSystemEntryInfo_Deconstruct(&Info);
+                    continue;
                 }
 
                 GenericBuffer_Clear(&FileBytes);
