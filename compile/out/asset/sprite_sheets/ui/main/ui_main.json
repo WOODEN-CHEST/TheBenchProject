@@ -1,0 +1,77 @@
+{
+    "name": "ui_main",
+    "images": [
+        {
+            "name": "button_top_left_up",
+            "location": "ui/main/button_top_left_up"
+        },
+        {
+            "name": "button_top_right_up",
+            "location": "ui/main/button_top_right_up"
+        },
+        {
+            "name": "button_bottom_left_up",
+            "location": "ui/main/button_bottom_left_up"
+        },
+        {
+            "name": "button_bottom_right_up",
+            "location": "ui/main/button_bottom_right_up"
+        },
+        {
+            "name": "button_top_up",
+            "location": "ui/main/button_top_up"
+        },
+        {
+            "name": "button_bottom_up",
+            "location": "ui/main/button_bottom_up"
+        },
+        {
+            "name": "button_left_up",
+            "location": "ui/main/button_left_up"
+        },
+        {
+            "name": "button_right_up",
+            "location": "ui/main/button_right_up"
+        },
+        {
+            "name": "button_center_up",
+            "location": "ui/main/button_center_up"
+        },
+        {
+            "name": "button_top_left_down",
+            "location": "ui/main/button_top_left_down"
+        },
+        {
+            "name": "button_top_right_down",
+            "location": "ui/main/button_top_right_down"
+        },
+        {
+            "name": "button_bottom_left_down",
+            "location": "ui/main/button_bottom_left_down"
+        },
+        {
+            "name": "button_bottom_right_down",
+            "location": "ui/main/button_bottom_right_down"
+        },
+        {
+            "name": "button_top_down",
+            "location": "ui/main/button_top_down"
+        },
+        {
+            "name": "button_bottom_down",
+            "location": "ui/main/button_bottom_down"
+        },
+        {
+            "name": "button_left_down",
+            "location": "ui/main/button_left_down"
+        },
+        {
+            "name": "button_right_down",
+            "location": "ui/main/button_right_down"
+        },
+        {
+            "name": "button_center_down",
+            "location": "ui/main/button_center_down"
+        }
+    ]
+}
