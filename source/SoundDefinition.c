@@ -1,13 +1,14 @@
 #include "AssetTypesStandard.h"
 #include "AssetDefinitionCommon.h"
-#include "GameSound.h"
+#include "SoundEngine.h"
 #include "wr/WRMemory.h"
 #include "wr/WRJSON.h"
 
 /*
- * The sound loader produces a fully-decoded Raylib Sound (not a streamed Music). It requires the Raylib
- * audio device to already be initialized (the game initializes it via the audio engine); this loader does
- * not manage the device's lifetime.
+ * The sound loader decodes an audio file into normalized interleaved 32-bit float samples and wraps them in
+ * an audio-engine GameSound (the source sound the SoundEngine plays), so loaded sounds can be fed straight
+ * to AudioTrack_CreateSoundInstance. The loaded asset owns the sample buffer and the GameSound borrows it.
+ * Decoding is done with Raylib's wave loader and does not touch the audio device.
  */
 
 
@@ -21,7 +22,8 @@ typedef struct SoundDefinitionStruct
 
 typedef struct SoundLoadedStruct
 {
-    GameSound Sound; // Asset points here
+    float* Samples;  // Owned decoded sample buffer (from LoadWaveSamples); borrowed by Sound.
+    GameSound Sound; // Asset points here; borrows Samples.
 } SoundLoaded;
 
 
@@ -30,7 +32,9 @@ static void SoundLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
 {
     (void)manager;
     SoundLoaded* Loaded = self->DestroyContext;
-    UnloadSound(Loaded->Sound._raySound);
+    Error DeconstructResult = GameSound_Deconstruct(&Loaded->Sound);
+    Error_Deconstruct(&DeconstructResult);
+    UnloadWaveSamples(Loaded->Samples); // Raylib-allocated; must be freed with its matching unloader.
     Memory_Free(Loaded);
 }
 
@@ -46,18 +50,45 @@ static Error SoundDefinition_LoadAsset(void* self, AssetManager* manager, AssetU
     Error PathResult = AssetManager_AcquireResourcePath(manager, Definition->Base.Type, &Location, Definition->Format, &PathHandle);
     if (PathResult.Code != ErrorCode_Success) { return PathResult; }
 
-    Sound RaySound = LoadSound((const char*)AssetResourcePath_Get(PathHandle));
+    Wave LoadedWave = LoadWave((const char*)AssetResourcePath_Get(PathHandle));
     Error ReleaseResult = AssetManager_ReleaseResourcePath(manager, PathHandle);
     Error_Deconstruct(&ReleaseResult);
 
-    if (RaySound.frameCount == 0)
+    if (LoadedWave.frameCount == 0)
     {
         return Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to load sound \"%s\".", Definition->Base.Name);
+    }
+    if ((LoadedWave.channels < 1U) || (LoadedWave.channels > (unsigned int)MAX_AUDIO_CHANNELS))
+    {
+        Error Result = Error_Construct3(ErrorCode_InvalidAssetData,
+            u8"Sound \"%s\" has %d channels; only 1 to %d are supported.",
+            Definition->Base.Name, (int32_t)LoadedWave.channels, MAX_AUDIO_CHANNELS);
+        UnloadWave(LoadedWave);
+        return Result;
+    }
+
+    // Decode into normalized interleaved float samples; the raw wave is no longer needed afterwards.
+    float* Samples = LoadWaveSamples(LoadedWave);
+    AudioFormat Format = { .SampleRate = (float)LoadedWave.sampleRate, .ChannelCount = (int32_t)LoadedWave.channels };
+    size_t SampleCount = (size_t)LoadedWave.frameCount * (size_t)LoadedWave.channels;
+    UnloadWave(LoadedWave);
+
+    if (Samples == NULL)
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to decode samples for sound \"%s\".", Definition->Base.Name);
     }
 
     SoundLoaded* Loaded = Memory_Allocate(sizeof(SoundLoaded));
     Memory_Zero(Loaded, sizeof(*Loaded));
-    Loaded->Sound._raySound = RaySound;
+    Loaded->Samples = Samples;
+
+    Error ConstructResult = GameSound_Construct1(&Loaded->Sound, Samples, SampleCount, Format);
+    if (ConstructResult.Code != ErrorCode_Success)
+    {
+        UnloadWaveSamples(Samples);
+        Memory_Free(Loaded);
+        return ConstructResult;
+    }
 
     outLoaded->Asset = &Loaded->Sound;
     outLoaded->VTable = &SoundLoadedVTable;
