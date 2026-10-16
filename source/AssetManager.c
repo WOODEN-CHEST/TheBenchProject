@@ -23,6 +23,8 @@
 // Macros.
 /** Default cache directory (relative to the working directory) for materialized temp files. */
 #define ASSET_MANAGER_DEFAULT_CACHE_DIRECTORY ((const unsigned char*)u8".wr_asset_cache")
+/** Name prefix of every temp file the manager materializes; clearing the cache only deletes such files. */
+#define ASSET_MANAGER_TEMP_FILE_PREFIX ((const unsigned char*)u8"temp_")
 /** Read stamp of a definition registered in code rather than read from a file. */
 #define DEFINITION_READ_STAMP_CODE ((uint64_t)0)
 /** Separator between the entries of a name list in an error message. */
@@ -175,6 +177,7 @@ struct AssetManagerStruct
     AssetTypeID _nextTypeID;
     WRBufferPool _bufferPool;
     unsigned char* _cacheDirectory; // owned
+    bool _isCacheDirectoryPrepared;  // created and cleared of stale files this session (on first use)
     uint64_t _tempFileCounter;
     AssetReferenceResolver _referenceResolver;
     UserData _referenceResolverUserData;
@@ -899,7 +902,8 @@ static Error UnloadRecord(AssetManager* self, LoadedAssetRecord* record)
         return RemoveResult;
     }
 
-    // Tear the wrapper down before its dependencies (it may reference their data, e.g. textures).
+    // Tear the wrapper down before releasing its dependency holds. A Destroy must still never touch its
+    // dependencies' data: AssetManager_Deconstruct unloads in map order, so a dependency may already be gone.
     if ((record->Loaded.VTable != NULL) && (record->Loaded.VTable->Destroy != NULL))
     {
         record->Loaded.VTable->Destroy(&record->Loaded, self);
@@ -925,6 +929,32 @@ static Error UnloadRecord(AssetManager* self, LoadedAssetRecord* record)
 static Error EnsureCacheDirectory(AssetManager* self)
 {
     return FileSystem_CreateAllDirectories(self->_cacheDirectory);
+}
+
+static Error ClearCacheDirectory(AssetManager* self);
+
+/* Prepares the cache directory on its first use this session: creates it, then deletes temp files a previous
+   (e.g. crashed) run left behind. The directory is only touched when a reference resource needs a temp file,
+   so a game that never does so creates no cache directory at all. */
+static Error PrepareCacheDirectory(AssetManager* self)
+{
+    if (self->_isCacheDirectoryPrepared)
+    {
+        return Error_CreateSuccess();
+    }
+
+    Error EnsureResult = EnsureCacheDirectory(self);
+    if (EnsureResult.Code != ErrorCode_Success)
+    {
+        return EnsureResult;
+    }
+    Error ClearResult = ClearCacheDirectory(self);
+    if (ClearResult.Code != ErrorCode_Success)
+    {
+        return ClearResult;
+    }
+    self->_isCacheDirectoryPrepared = true;
+    return Error_CreateSuccess();
 }
 
 static Error ClearCacheDirectory(AssetManager* self)
@@ -965,8 +995,20 @@ static Error ClearCacheDirectory(AssetManager* self)
             break;
         }
 
-        Error DeleteResult = FileSystem_DeleteEntry(Info._path);
-        KeepFirstError(&Result, &DeleteResult);
+        // Only the manager's own temp files are deleted, so a cache directory that was pointed at a folder
+        // holding other files never loses them.
+        bool IsTempFile = false;
+        if (Info._entryType == FileSystemEntryType_File)
+        {
+            Error PrefixResult = StringUTF8_StartsWith(Info._name, ASSET_MANAGER_TEMP_FILE_PREFIX,
+                StringCaseRule_MatchCase, NULL, &IsTempFile);
+            Error_Deconstruct(&PrefixResult);
+        }
+        if (IsTempFile)
+        {
+            Error DeleteResult = FileSystem_DeleteEntry(Info._path);
+            KeepFirstError(&Result, &DeleteResult);
+        }
         FileSystemEntryInfo_Deconstruct(&Info);
     }
 
@@ -1268,7 +1310,7 @@ static Error BuildTempFilePath(AssetManager* self, const unsigned char* extensio
     // pieces after the number go through StringUTF8_CopyTo, which drops that NUL first. (Appending raw after
     // the number placed the extension behind the NUL and silently cut the name to "temp_<n>".)
     Error Result = Error_CreateSuccess();
-    if (!GenericBuffer_AppendString(&FileName, (const unsigned char*)u8"temp_"))
+    if (!GenericBuffer_AppendString(&FileName, ASSET_MANAGER_TEMP_FILE_PREFIX))
     {
         Result = Error_Construct3(ErrorCode_BufferTooLarge, u8"Failed to build temp file name.");
     }
@@ -1488,27 +1530,13 @@ Error AssetManager_Construct1(Logger* logger, AssetManager** outSelf)
     Self->_nextUserID = 1U;
     Self->_nextTypeID = 1U;
     Self->_tempFileCounter = 0U;
+    // Only the path is stored: the directory is created on first use (PrepareCacheDirectory), so constructing
+    // a manager never creates directories relative to the working directory.
     Self->_cacheDirectory = DuplicateString(ASSET_MANAGER_DEFAULT_CACHE_DIRECTORY);
+    Self->_isCacheDirectoryPrepared = false;
     Self->_logger = logger;
     Self->_lastReadStamp = DEFINITION_READ_STAMP_CODE;
     Self->_loadFailureCount = 0U;
-
-    // A cache directory that cannot be prepared only matters once a reference resource needs a temp file.
-    Error CacheResult = EnsureCacheDirectory(Self);
-    if (CacheResult.Code == ErrorCode_Success)
-    {
-        CacheResult = ClearCacheDirectory(Self);
-    }
-    if (CacheResult.Code != ErrorCode_Success)
-    {
-        if (logger != NULL)
-        {
-            Error LogResult = Logger_LogWarningFormatted(logger, u8"Could not prepare the asset cache directory \"%s\": %s",
-                Self->_cacheDirectory, GetErrorMessage(&CacheResult));
-            Error_Deconstruct(&LogResult);
-        }
-        Error_Deconstruct(&CacheResult);
-    }
 
     *outSelf = Self;
     return Error_CreateSuccess();
@@ -1592,8 +1620,11 @@ Error AssetManager_Deconstruct(AssetManager* self)
         Memory_Free(Blob);
     }
 
-    Error ClearResult = ClearCacheDirectory(self);
-    KeepFirstError(&FirstError, &ClearResult);
+    if (self->_isCacheDirectoryPrepared)
+    {
+        Error ClearResult = ClearCacheDirectory(self);
+        KeepFirstError(&FirstError, &ClearResult);
+    }
 
     Error DefinitionsResult = HashMap_Deconstruct(&self->_definitions);
     KeepFirstError(&FirstError, &DefinitionsResult);
@@ -2088,11 +2119,11 @@ Error AssetManager_AcquireResourcePath(AssetManager* self, AssetTypeID assetType
         return BytesResult;
     }
 
-    Error EnsureResult = EnsureCacheDirectory(self);
-    if (EnsureResult.Code != ErrorCode_Success)
+    Error PrepareResult = PrepareCacheDirectory(self);
+    if (PrepareResult.Code != ErrorCode_Success)
     {
         Memory_Free(Bytes._data);
-        return EnsureResult;
+        return PrepareResult;
     }
 
     GenericBuffer TempPath;
@@ -2148,16 +2179,13 @@ Error AssetManager_SetCacheDirectory(AssetManager* self, const unsigned char* di
     if (self == NULL) { return CreateNullError(u8"self"); }
     if (StringUTF8_IsNullOrEmpty(directory)) { return Error_Construct3(ErrorCode_IllegalArgument, u8"Directory is empty."); }
 
+    // Only the path changes. Temp files already in the old directory belong to resource paths still held,
+    // which delete them on release; the new directory is prepared on its first use.
     unsigned char* Copy = DuplicateString(directory);
     Memory_Free(self->_cacheDirectory);
     self->_cacheDirectory = Copy;
-
-    Error EnsureResult = EnsureCacheDirectory(self);
-    if (EnsureResult.Code != ErrorCode_Success)
-    {
-        return EnsureResult;
-    }
-    return ClearCacheDirectory(self);
+    self->_isCacheDirectoryPrepared = false;
+    return Error_CreateSuccess();
 }
 
 Error AssetManager_ReadDefinitions(AssetManager* self, size_t* outFailedFileCount)
@@ -2524,6 +2552,8 @@ Error AssetManager_LoadModel(AssetManager* self, const unsigned char* name, Asse
     return LoadStandard(self, (self != NULL) ? self->_standardTypes.Model : ASSET_TYPE_ID_INVALID, name, user, (void**)outAsset);
 }
 
+// TODO: Bulk operations are complete but unused: no frame drives them from its stepped load yet (GameFrame's
+// BeginLoad/LoadStep are meant to; WorldTestFrame still loads everything at once in PrepareWorld).
 Error AssetManager_CreateAssetBulkOperation(AssetManager* self, AssetUserID user, AssetBulkOperation** outOp)
 {
     if (self == NULL) { return CreateNullError(u8"self"); }

@@ -42,15 +42,6 @@ lib/
 *.idb
 *.pdb
 
-# Kernel Module Compile Results
-*.mod*
-*.cmd
-.tmp_versions/
-modules.order
-Module.symvers
-Mkfile.old
-dkms.conf
-
 # debug information files
 *.dwo
 
@@ -68,6 +59,10 @@ compile/out/TheBenchProject*
 compile/out/unicode_data.txt
 local/
 compile/out/logs/
+tests/out/
+
+# Asset manager temp-file cache (created next to the executable when needed).
+.wr_asset_cache/
 
 # Agent handoff docs (continuity between context windows).
 handoff/

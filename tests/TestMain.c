@@ -1,0 +1,28 @@
+#include "TestSuites.h"
+#include <stdio.h>
+
+
+// Program entry.
+int main(void)
+{
+    TestRun Run;
+    Error ConstructResult = TestRun_Construct(&Run);
+    if (ConstructResult.Code != ErrorCode_Success)
+    {
+        printf("Could not start the test run: %s\n",
+            (ConstructResult.Message != NULL) ? (const char*)ConstructResult.Message : "(no message)");
+        Error_Deconstruct(&ConstructResult);
+        TestRun_Deconstruct(&Run);
+        return 2;
+    }
+
+    GameJSONTests_Run(&Run);
+    ConfigTests_Run(&Run);
+    AssetManagerTests_Run(&Run);
+    WorldLightCullingTests_Run(&Run);
+    LoggerTests_Run(&Run);
+
+    int ExitCode = TestRun_Finish(&Run);
+    TestRun_Deconstruct(&Run);
+    return ExitCode;
+}

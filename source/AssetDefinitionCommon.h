@@ -60,7 +60,8 @@ extern const AssetExtensionFilter ASSET_EXTENSIONS_SHADER_STAGE;
  *        JSONObjectPool_ReturnValue once finished (on success or failure paths). Set to a None value on
  *        failure so returning it is a safe no-op.
  * @param outRoot [out] Receives the root compound (borrowed from @p outRootValue). Must not be NULL.
- * @returns Success; ErrorCode_InvalidAssetDefinition if the JSON is malformed or the root is not a compound.
+ * @returns Success; ErrorCode_InvalidJSON (from JSON_Deserialize) if the JSON is malformed;
+ *          ErrorCode_InvalidAssetDefinition if the root is not a compound.
  */
 Error AssetJSON_DeserializeRoot(JSONObjectPool* pool, const GenericBuffer* rawData,
     const unsigned char* sourceDescription, JSONObjectValue* outRootValue, JSONCompound** outRoot);
@@ -69,7 +70,7 @@ Error AssetJSON_DeserializeRoot(JSONObjectPool* pool, const GenericBuffer* rawDa
  * @brief Copies a JSON string value's bytes into an owned, NUL-terminated string.
  * @param value The value; must be of type JSONValueType_String.
  * @param outString [out] Receives the owned copy. Must not be NULL.
- * @returns Success; ErrorCode_InvalidAssetDefinition if @p value is not a string.
+ * @returns Success; ErrorCode_InvalidJSON (from GameJSON) if @p value is not a string.
  */
 Error AssetJSON_ValueToOwnedString(const JSONObjectValue* value, unsigned char** outString);
 
@@ -130,7 +131,8 @@ Error AssetJSON_ReadTextureProperties(JSONCompound* compound, const unsigned cha
  * @param key The key.
  * @param defaultValue Value used when the key is absent.
  * @param outValue [out] Receives the value. Must not be NULL.
- * @returns Success; ErrorCode_InvalidAssetDefinition if present but not an integer/number/parsable string.
+ * @returns Success; ErrorCode_InvalidJSON (from GameJSON) if present but not an integer, a whole in-range
+ *          real number or a parsable string.
  */
 Error AssetJSON_ReadOptionalInteger(JSONCompound* compound, const unsigned char* key,
     int64_t defaultValue, int64_t* outValue);
@@ -141,7 +143,7 @@ Error AssetJSON_ReadOptionalInteger(JSONCompound* compound, const unsigned char*
  * @param key The key.
  * @param defaultValue Value used when the key is absent.
  * @param outValue [out] Receives the value. Must not be NULL.
- * @returns Success; ErrorCode_InvalidAssetDefinition if present but not a boolean/parsable string.
+ * @returns Success; ErrorCode_InvalidJSON (from GameJSON) if present but not a boolean/parsable string.
  */
 Error AssetJSON_ReadOptionalBoolean(JSONCompound* compound, const unsigned char* key,
     bool defaultValue, bool* outValue);
@@ -154,7 +156,7 @@ Error AssetJSON_ReadOptionalBoolean(JSONCompound* compound, const unsigned char*
  * @param defaultY Default y when absent.
  * @param outX [out] Receives x. Must not be NULL.
  * @param outY [out] Receives y. Must not be NULL.
- * @returns Success; ErrorCode_InvalidAssetDefinition if present but malformed.
+ * @returns Success; ErrorCode_InvalidJSON (from GameJSON) if present but malformed.
  */
 Error AssetJSON_ReadOptionalVectorInt(JSONCompound* compound, const unsigned char* key,
     int64_t defaultX, int64_t defaultY, int64_t* outX, int64_t* outY);
@@ -164,7 +166,7 @@ Error AssetJSON_ReadOptionalVectorInt(JSONCompound* compound, const unsigned cha
  *        {r,g,b,(a)}). Missing alpha is opaque (255).
  * @param value The JSON value.
  * @param outColor [out] Receives the color. Must not be NULL.
- * @returns Success; ErrorCode_InvalidAssetDefinition on a malformed color.
+ * @returns Success; ErrorCode_InvalidJSON (from GameJSON) on a malformed color.
  */
 Error AssetJSON_ParseColor(const JSONObjectValue* value, Color* outColor);
 

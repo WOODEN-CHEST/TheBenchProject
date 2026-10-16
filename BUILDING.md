@@ -9,8 +9,13 @@ non-default raylib configuration.
 - **GCC 13 or newer** (C23). Older GCCs type `u8"..."` literals as `char[]`, not `unsigned char[]`, which
   breaks the `-Werror` build at every `u8` string passed as `const unsigned char*`.
 - Linux build: `cd compile && sh compile_linux_x11.sh` (it writes `compile/out/TheBenchProject`). Run the
-  game with `sh run_linux_x11.sh`, also from `compile/`: it starts the binary inside `compile/out`, where
-  config, assets and logs are currently resolved (they depend on the working directory).
+  game with `sh run_linux_x11.sh`, also from `compile/`. The game finds `config.json`, `asset/`, `logs/` and
+  its temp-file cache next to the executable (`compile/out`), whatever the working directory is.
+- Debug build with AddressSanitizer + UndefinedBehaviorSanitizer: `sh compile_linux_debug.sh`, then
+  `sh run_linux_x11_debug.sh` (both from `compile/`). `lsan_suppressions.txt` hides leaks inside GL/X11 system
+  libraries only.
+- Tests: `sh tests/run_linux.sh` from anywhere (`--sanitize` adds the sanitizers). Headless; see
+  `tests/TestFramework.h`.
 - Windows build (`compile_windows.bat`, MinGW-w64): not set up or tested yet. See the Windows notes below.
 
 ## Library versions
@@ -18,9 +23,11 @@ non-default raylib configuration.
 | Library | Source | Version | Build |
 |---|---|---|---|
 | raylib | https://github.com/raysan5/raylib (local copy: `../raylib/6.0`) | commit `65abee1` (2026-07-04), reports `6.1-dev` | CMake, see below |
-| WRFramework | `../WRFramework` | commit `8951837` (2026-07-10) | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
+| WRFramework | `../WRFramework` | commit `8bb312a` (2026-10-17, adds `FileSystem_GetExecutableDirectory`) | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
 
 The project's `include/raylib/` and `include/wr/` headers must come from the same versions as the libraries.
+To update WRFramework: build it with its own script, then copy its `include/*.h` into `include/wr/`,
+`compile/libwr.a` into `lib/`, and its `AGENTS.md` over `agents/WRFramework.md`.
 
 ## raylib: required configuration
 
@@ -72,9 +79,10 @@ Reusing an existing build directory works too: re-run the `cmake -B build ...` l
 
 ### Current state
 
-`lib/libraylib.a` is byte-identical to `../raylib/6.0/build/raylib/libraylib.a`: commit `65abee1` with the
-`config.h` edit, configured with an **empty build type**, so it is unoptimised. Rebuilding it as Release is
-planned (handoff/FIX_PLAN.md, Phase 2).
+`lib/libraylib.a` was rebuilt on 2026-10-17 as **Release** (`-O3 -DNDEBUG`) from `../raylib/6.0` (commit
+`65abee1` with the `config.h` edit), reusing its existing `build/` directory: `cmake -B build
+-DCMAKE_BUILD_TYPE=Release`, then `cmake --build build --target raylib`. The check above confirms custom frame
+control. Until then it had been built with an empty build type, i.e. unoptimised.
 
 ## Windows notes (for when the Windows build is set up)
 

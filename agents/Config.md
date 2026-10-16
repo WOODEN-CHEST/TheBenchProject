@@ -4,8 +4,8 @@ Files: `include/Config.h`, `source/Config.c`.
 
 ## Purpose
 
-Loads the game's human-editable settings from a JSON file (by default `config.json` in the working
-directory) into a plain `GameConfig` struct. The rest of the game reads settings from this struct and never
+Loads the game's human-editable settings from a JSON file (the game uses `config.json` next to the
+executable; `main.c` builds the path from `Services.BaseDirectory`) into a plain `GameConfig` struct. The rest of the game reads settings from this struct and never
 touches JSON: the JSON document and its object pool are created, read from, and fully deconstructed inside
 the loader, so nothing JSON-related outlives the call.
 

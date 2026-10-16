@@ -273,6 +273,8 @@ Error WorldDTO_ApplyToWorld(const WorldDTO* dto, World* world)
     {
         return NameResult;
     }
+    // TODO: Validate the environment before applying it (a NaN day length from a bad save makes the time of
+    // day NaN forever) and replace this struct copy with a WorldEnvironment_CopyTo (FIX_PLAN.md, Phase 3).
     *World_GetEnvironment(world) = dto->Environment;
 
     for (size_t Index = 0; Index < dto->_objects._count; Index++)

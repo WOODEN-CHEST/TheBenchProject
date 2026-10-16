@@ -36,8 +36,10 @@
  *    size_t values as (uint64_t)/(int64_t) with the PRIu64/PRId64 macros from <inttypes.h>, because
  *    "long" is 32-bit on Windows.
  *
- * Paths are relative to the process working directory: "logs/latest.log" for the active log and
- * "logs/archived/" for rotated logs. Only the newest archives are kept (see Logger_Construct).
+ * Paths live under a base directory passed to Logger_Construct: "<base>/logs/latest.log" for the active
+ * log and "<base>/logs/archived/" for rotated logs. The game passes the executable's directory, so logs
+ * do not depend on where the game was launched from; NULL keeps the paths relative to the process working
+ * directory. Only the newest archives are kept (see Logger_Construct).
  */
 
 
@@ -85,40 +87,46 @@ typedef struct LoggerStruct
 
 // Functions.
 /**
- * @brief Moves an existing "logs/latest.log" into the archive directory, if one exists.
+ * @brief Moves an existing "<base>/logs/latest.log" into the archive directory, if one exists.
  *
- * If "logs/latest.log" exists, this reads its last-modification date, ensures "logs/archived/" exists,
- * and moves the log (a single filesystem rename) to "logs/archived/<date>.log", where <date> is
- * formatted like the log timestamps, e.g. "2026y;07m;05d". If a file with that name already exists, a
- * space and the lowest free number from 2 upward are appended ("...<date> 2.log", "...<date> 3.log",
- * ...) until an unused name is found. If "logs/latest.log" does not exist, this is a successful no-op
- * (nothing to move). It does not prune old archives; Logger_Construct does that.
+ * If the latest log exists, this reads its last-modification date, ensures "<base>/logs/archived/"
+ * exists, and moves the log (a single filesystem rename) to "<base>/logs/archived/<date>.log", where
+ * <date> is formatted like the log timestamps, e.g. "2026y;07m;05d". If a file with that name already
+ * exists, a space and the lowest free number from 2 upward are appended ("...<date> 2.log",
+ * "...<date> 3.log", ...) until an unused name is found. If there is no latest log, this is a successful
+ * no-op (nothing to move). It does not prune old archives; Logger_Construct does that.
  *
  * This is normally called for you by Logger_Construct; it is exposed so a log can be rotated on demand.
+ * @param baseDirectory Null-terminated UTF-8 directory that contains "logs/" (the same one given to
+ *        Logger_Construct), or NULL for the process working directory.
  * @returns A success Error on success (including the "nothing to archive" case). Propagates
  *          filesystem errors from querying or moving the log (e.g. ErrorCode_IO,
- *          ErrorCode_DirectoryNotFound), and ErrorCode_BufferTooSmall if a path could not be built.
+ *          ErrorCode_DirectoryNotFound), path errors from joining @p baseDirectory (e.g.
+ *          ErrorCode_InvalidPath), and ErrorCode_BufferTooSmall if a path could not be built.
  * @note May propagate errors from internal calls; consult the documentation of called functions for
  *       the full set.
  */
-Error Logger_ArchiveLatestLog(void);
+Error Logger_ArchiveLatestLog(const unsigned char* baseDirectory);
 
 /**
- * @brief Initializes a logger, rotating any previous log and opening a fresh "logs/latest.log".
+ * @brief Initializes a logger, rotating any previous log and opening a fresh "<base>/logs/latest.log".
  *
- * Ensures the "logs" directory exists, archives any existing "logs/latest.log" via
- * Logger_ArchiveLatestLog, opens a fresh "logs/latest.log" for writing, binds stdout, and allocates
- * the reusable scratch buffers. Finally it deletes the oldest archived logs (by modification time)
- * until at most 30 remain; a failure there is logged as a warning and does not fail construction. On
- * failure @p self is left uninitialized (safe to pass to Logger_Deconstruct, which will do nothing).
+ * Ensures "<base>/logs" and "<base>/logs/archived" exist, archives any existing latest log (see
+ * Logger_ArchiveLatestLog), opens a fresh latest log for writing, binds stdout, and allocates the
+ * reusable scratch buffers. Finally it deletes the oldest archived logs (by modification time) until at
+ * most 30 remain; a failure there is logged as a warning and does not fail construction. The paths are
+ * resolved once here; @p baseDirectory is not kept. On failure @p self is left uninitialized (safe to pass
+ * to Logger_Deconstruct, which will do nothing).
  * @param self [out] The logger to initialize. Must not be NULL. Fully overwritten.
- * @returns A success Error on success. ErrorCode_IllegalArgument if @p self is NULL; propagates
- *          filesystem/stream errors from directory creation, archiving, or opening the log/stdout
- *          streams.
+ * @param baseDirectory Null-terminated UTF-8 directory under which "logs/" is created (the game passes the
+ *        executable's directory), or NULL for the process working directory.
+ * @returns A success Error on success. ErrorCode_IllegalArgument if @p self is NULL; propagates path errors
+ *          from joining @p baseDirectory (e.g. ErrorCode_InvalidPath) and filesystem/stream errors from
+ *          directory creation, archiving, or opening the log/stdout streams.
  * @note May propagate errors from internal calls; consult the documentation of called functions for
  *       the full set.
  */
-Error Logger_Construct(Logger* self);
+Error Logger_Construct(Logger* self, const unsigned char* baseDirectory);
 
 /**
  * @brief Logs a message at the given level.

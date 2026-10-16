@@ -171,6 +171,11 @@ typedef struct SpriteAnimationStateReachEventArgsStruct
  * borrowed and may be NULL, which is a valid "no animation" state. Construct with
  * SpriteAnimationInstance_Construct1 (no source) or SpriteAnimation_CreateInstance (source + defaults),
  * and always release with SpriteAnimationInstance_Deconstruct to tear down the embedded event.
+ *
+ * Never move or copy a constructed instance by value (no struct assignment, memcpy or realloc of an array
+ * of instances): the embedded event points into the instance itself, so a copy would raise through the
+ * original's memory. Keep instances at a stable address, e.g. embedded in a heap object or in a pool slot.
+ * The source animation must also outlive the instance: it is owned by the asset user that loaded it.
  */
 struct SpriteAnimationInstanceStruct
 {

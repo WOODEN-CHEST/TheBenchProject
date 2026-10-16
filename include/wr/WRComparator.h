@@ -167,14 +167,19 @@ static inline ComparisonResult Comparator_CompareDouble(double a, double b)
 }
 
 /**
- * @brief Compares two UTF-8 encoded strings in lexicographic order.
+ * @brief Compares two UTF-8 encoded strings by Unicode code point.
  *
- * Both arguments are treated as NUL-terminated UTF-8 strings and are ordered
- * by comparing their bytes (equivalently, their Unicode code points for valid
- * UTF-8) from the start; the first differing position determines the result.
- * If one string is a prefix of the other, the shorter string compares as less.
- * @param a The left-hand string.
- * @param b The right-hand string.
+ * Both arguments are treated as NUL-terminated UTF-8 strings and are ordered by
+ * decoding and comparing their code points from the start; the first differing
+ * code point determines the result. For valid UTF-8 this is identical to an
+ * unsigned byte-wise comparison. If one string is a prefix of the other, the
+ * shorter string compares as less.
+ *
+ * NULL is accepted: a NULL pointer orders before any non-NULL string and two
+ * NULL pointers compare equal. A position whose bytes are not valid UTF-8 falls
+ * back to an unsigned byte comparison, keeping the result a total order.
+ * @param a The left-hand string. May be NULL.
+ * @param b The right-hand string. May be NULL.
  * @returns Whether `a` is less than, equal to, or greater than `b`.
  */
 ComparisonResult Comparator_CompareString(const unsigned char* a, const unsigned char* b);

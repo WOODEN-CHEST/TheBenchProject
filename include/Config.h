@@ -7,8 +7,8 @@
 /**
  * The game configuration module.
  *
- * Holds the small set of human-editable settings loaded from the JSON config file in the working
- * directory (see GameConfig_LoadFromFile). The settings are copied into the plain GameConfig struct so the
+ * Holds the small set of human-editable settings loaded from the game's JSON config file (see
+ * GameConfig_LoadFromFile; the game passes the path of config.json next to the executable). The settings are copied into the plain GameConfig struct so the
  * rest of the game never has to touch JSON: the JSON document and its object pool are discarded once
  * reading is done.
  *

@@ -28,8 +28,8 @@
  * DEFINITIONS. Each definition has a name that is unique within its type (names may repeat across types).
  * A name starts with a lowercase ASCII letter and contains only a-z, 0-9, '_', '.' and '-' (see
  * AssetManager_IsValidAssetName). Definitions may be added or removed at any time; removing a definition
- * does NOT unload an asset already built from it, it only prevents future loads until the definition is
- * re-added. Definitions are usually read from files at startup with AssetManager_ReadDefinitions (a bad
+ * does NOT unload an asset already built from it: while that asset stays loaded it keeps being shared with
+ * new users, and only once it has been unloaded can it no longer be built (until the definition is re-added). Definitions are usually read from files at startup with AssetManager_ReadDefinitions (a bad
  * definition file is logged and skipped, never fatal), but they can also be built in code and registered
  * with AssetManager_SetDefinition, or built from raw bytes with AssetManager_BuildDefinition (e.g. by a
  * custom, non-filesystem source such as a server download).
@@ -364,13 +364,14 @@ typedef struct AssetLoadProgressStruct AssetLoadProgress;
  * @brief Allocates and initializes an empty asset manager.
  *
  * The new manager has no types, definitions, search roots, or loaded assets, and a default cache
- * directory (see AssetManager_SetCacheDirectory). Release with AssetManager_Deconstruct.
+ * directory (see AssetManager_SetCacheDirectory). Construction does not touch the filesystem: the cache
+ * directory is only created when it is first needed. Release with AssetManager_Deconstruct.
  *
  * The manager reports recoverable problems through @p logger: definition files skipped by
- * AssetManager_ReadDefinitions (one ERROR each plus a WARNING summary), the first failure of each asset
- * load (ERROR), and a cache directory that cannot be prepared (WARNING). It never logs per frame. The
- * logger is BORROWED: it must stay valid until AssetManager_Deconstruct returns. Pass NULL (e.g. in tests)
- * to log nothing; return values carry the same information.
+ * AssetManager_ReadDefinitions (one ERROR each plus a WARNING summary) and the first failure of each asset
+ * load (ERROR). It never logs per frame. The logger is BORROWED: it must stay valid until
+ * AssetManager_Deconstruct returns. Pass NULL (e.g. in tests) to log nothing; return values carry the same
+ * information.
  * @param logger The logger to report through; borrowed, may be NULL.
  * @param outSelf [out] Receives the new manager on success, NULL on failure. Must not be NULL.
  * @returns Success, or ErrorCode_IllegalArgument if @p outSelf is NULL.
@@ -383,7 +384,7 @@ Error AssetManager_Construct1(Logger* logger, AssetManager** outSelf);
  * @brief Unloads everything and frees the manager.
  *
  * Unloads all loaded assets (regardless of remaining holders), destroys all definitions and types, clears
- * the cache directory, and frees the manager itself. Teardown is best-effort: the first error is returned
+ * the cache directory if it was used this session, and frees the manager itself. Teardown is best-effort: the first error is returned
  * and later errors are released so none leak. Safe to call with NULL (returns success).
  * @param self The manager to deconstruct; may be NULL.
  * @returns Success, or the first non-success Error encountered while tearing down.
@@ -690,8 +691,12 @@ Error AssetManager_ReleaseResourcePath(AssetManager* self, AssetResourcePath* ha
 /**
  * @brief Sets the directory where temp files (for reference resources needing a path) are materialized.
  *
- * Defaults to a hidden subdirectory of the working directory. The cache directory is cleared on this
- * call, and on manager deconstruct, so a crash mid-load cannot leave orphaned temp files.
+ * Defaults to ".wr_asset_cache" relative to the working directory; the game sets it next to the executable.
+ * This call only stores the path and does not touch the filesystem. The directory is created the first time
+ * a reference resource needs a temp file, and at that first use the manager's own leftover temp files (regular
+ * files named "temp_*" from a previous, e.g. crashed, run) are deleted; AssetManager_Deconstruct deletes them
+ * again if the directory was used. Other files in the directory are never touched. Temp files already created in
+ * a previous directory are still deleted when their resource paths are released.
  * @param self The manager; must not be NULL.
  * @param directory NUL-terminated UTF-8 directory path; copied. Must not be NULL/empty.
  * @returns Success; ErrorCode_IllegalArgument for NULL/empty args.

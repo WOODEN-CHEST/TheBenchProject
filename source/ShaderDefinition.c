@@ -1,6 +1,8 @@
 #include "AssetTypesStandard.h"
 #include "AssetDefinitionCommon.h"
 #include "GameShader.h"
+// rlgl provides rlGetShaderIdDefault, needed to detect raylib's silent default-shader fallback.
+#include "raylib/rlgl.h"
 #include "wr/WRMemory.h"
 #include "wr/WRIO.h"
 #include "wr/WRJSON.h"
@@ -150,9 +152,14 @@ static Error ShaderDefinition_LoadAsset(void* self, AssetManager* manager, Asset
         Error_Deconstruct(&ReturnResult);
     }
 
-    if (RayShader.id == 0)
+    // raylib reports a stage that fails to compile with id 0 (still allocating the location array) and a program
+    // that fails to link by silently substituting its default shader. Both are failures here, never a quiet
+    // default shader. UnloadShader frees the array for id 0 and leaves the default shader alone.
+    if ((RayShader.id == 0) || (RayShader.id == rlGetShaderIdDefault()))
     {
-        return Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to compile shader \"%s\".", Definition->Base.Name);
+        UnloadShader(RayShader);
+        return Error_Construct3(ErrorCode_InvalidAssetData,
+            u8"Failed to compile or link shader \"%s\" (raylib's log has the compiler output).", Definition->Base.Name);
     }
 
     ShaderLoaded* Loaded = Memory_Allocate(sizeof(ShaderLoaded));

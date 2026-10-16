@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include "wr/WRCompile.h"
 #include "wr/WRError.h"
+#include "wr/WRFileSystem.h"
 #include "wr/WRMemory.h"
 #include "wr/WRPath.h"
 #include "wr/WRUnicode.h"
@@ -21,12 +22,16 @@
 
 
 // Macros.
-/** File name (resolved against the working directory) of the game configuration file. */
+/** File name (resolved against the base directory) of the game configuration file. */
 #define CONFIG_FILE_NAME ((const unsigned char*)u8"config.json")
-/** Relative path (under the working directory) of the root asset directory. */
+/** Relative path (under the base directory) of the root asset directory. */
 #define ASSET_ROOT_RELATIVE ((const unsigned char*)u8"asset")
-/** Relative path (under the working directory) of the Unicode database. */
+/** Relative path (under the base directory) of the Unicode database. */
 #define UNICODE_DATA_RELATIVE ((const unsigned char*)u8"asset/text/unicode_data.txt")
+/** Relative path (under the base directory) of the asset manager's temp-file cache. */
+#define ASSET_CACHE_RELATIVE ((const unsigned char*)u8".wr_asset_cache")
+/** Initial capacity (bytes) of the base directory path buffer; it grows if needed. */
+#define BASE_DIRECTORY_INITIAL_CAPACITY ((size_t)256)
 /** Window title shown in the title bar. */
 #define WINDOW_TITLE ((const char*)u8"The Bench Project")
 /** Fixed update rate in hertz. Deliberately a code constant (not a config value) and higher than the
@@ -199,12 +204,12 @@ static void RunGameLoop(GameFrameManager* frameManager, double targetRenderSecon
 }
 
 /* Loads the game config from the absolute config path, warning (and keeping defaults) on failure. */
-static void LoadConfig(Logger* logger, const unsigned char* workingDirectory, GameConfig* outConfig)
+static void LoadConfig(Logger* logger, const unsigned char* baseDirectory, GameConfig* outConfig)
 {
     GameConfig_SetDefaults(outConfig);
 
     GenericBuffer ConfigPath;
-    Error PathResult = BuildAbsolutePath(workingDirectory, CONFIG_FILE_NAME, &ConfigPath);
+    Error PathResult = BuildAbsolutePath(baseDirectory, CONFIG_FILE_NAME, &ConfigPath);
     if (PathResult.Code != ErrorCode_Success)
     {
         LogWarningAndRelease(logger, (const unsigned char*)u8"Failed to build config path: %s", &PathResult);
@@ -221,10 +226,10 @@ static void LoadConfig(Logger* logger, const unsigned char* workingDirectory, Ga
 }
 
 /* Loads the Unicode database from disk, falling back to an empty (valid) database on failure. */
-static void LoadUnicodeData(Logger* logger, const unsigned char* workingDirectory, UnicodeData* outData)
+static void LoadUnicodeData(Logger* logger, const unsigned char* baseDirectory, UnicodeData* outData)
 {
     GenericBuffer UnicodePath;
-    Error PathResult = BuildAbsolutePath(workingDirectory, UNICODE_DATA_RELATIVE, &UnicodePath);
+    Error PathResult = BuildAbsolutePath(baseDirectory, UNICODE_DATA_RELATIVE, &UnicodePath);
     if (PathResult.Code != ErrorCode_Success)
     {
         LogWarningAndRelease(logger, (const unsigned char*)u8"Failed to build unicode data path: %s", &PathResult);
@@ -247,7 +252,7 @@ static void LoadUnicodeData(Logger* logger, const unsigned char* workingDirector
 /* Sets up the asset manager: standard types, the absolute asset search root, and reads definitions.
  * Returns success with the out-params set, or a failure (with both left NULL) if the manager or its
  * standard types could not be created. A failed definition read is warned about, not fatal. */
-static Error SetUpAssetManager(Logger* logger, const unsigned char* workingDirectory,
+static Error SetUpAssetManager(Logger* logger, const unsigned char* baseDirectory,
     AssetManager** outManager, StandardAssetTypes* outTypes, JSONObjectPool** outPool)
 {
     *outManager = NULL;
@@ -268,8 +273,26 @@ static Error SetUpAssetManager(Logger* logger, const unsigned char* workingDirec
         return TypesResult;
     }
 
+    // Keep temp files next to the executable too (the manager's default is relative to the working
+    // directory). Only the path is stored; the directory is created on first use.
+    GenericBuffer CacheDirectory;
+    Error CachePathResult = BuildAbsolutePath(baseDirectory, ASSET_CACHE_RELATIVE, &CacheDirectory);
+    if (CachePathResult.Code == ErrorCode_Success)
+    {
+        Error CacheResult = AssetManager_SetCacheDirectory(Manager, CacheDirectory._data);
+        if (CacheResult.Code != ErrorCode_Success)
+        {
+            LogWarningAndRelease(logger, (const unsigned char*)u8"Failed to set the asset cache directory: %s", &CacheResult);
+        }
+    }
+    else
+    {
+        LogWarningAndRelease(logger, (const unsigned char*)u8"Failed to build the asset cache path: %s", &CachePathResult);
+    }
+    Memory_Free(CacheDirectory._data);
+
     GenericBuffer AssetRoot;
-    Error PathResult = BuildAbsolutePath(workingDirectory, ASSET_ROOT_RELATIVE, &AssetRoot);
+    Error PathResult = BuildAbsolutePath(baseDirectory, ASSET_ROOT_RELATIVE, &AssetRoot);
     if (PathResult.Code == ErrorCode_Success)
     {
         Error RootResult = AssetManager_AddSearchRoot(Manager, AssetRoot._data);
@@ -303,9 +326,16 @@ int main(int argc, char** argv)
     UNUSED(argc);
     UNUSED(argv);
 
+    // Every game file (config, assets, logs, the asset cache) is resolved against the executable's directory,
+    // so the game works no matter which directory it is started from.
+    GenericBuffer BaseDirectory;
+    GenericBuffer_AllocateVariable(&BaseDirectory, BASE_DIRECTORY_INITIAL_CAPACITY, sizeof(unsigned char));
+    Error BaseDirectoryResult = FileSystem_GetExecutableDirectory(&BaseDirectory);
+    bool HasExecutableDirectory = (BaseDirectoryResult.Code == ErrorCode_Success);
+
     // The logger is the very first thing initialized so every later step can log through it.
     Logger Log;
-    Error LoggerResult = Logger_Construct(&Log);
+    Error LoggerResult = Logger_Construct(&Log, HasExecutableDirectory ? BaseDirectory._data : NULL);
     if (LoggerResult.Code != ErrorCode_Success)
     {
         // The logger itself is unavailable, so this is the one place we fall back to a raw stdout
@@ -313,27 +343,47 @@ int main(int argc, char** argv)
         fprintf(stdout, "Failed to initialize the logger: %s\n",
             (LoggerResult.Message != NULL) ? (const char*)LoggerResult.Message : "no details");
         Error_Deconstruct(&LoggerResult);
+        Error_Deconstruct(&BaseDirectoryResult);
+        Memory_Free(BaseDirectory._data);
         return 1;
     }
 
-    // Resolve everything against an absolute working directory so path handling does not depend on the
-    // process's current directory. GetWorkingDirectory returns a static buffer, so copy it once.
-    GenericBuffer WorkingDirectory;
-    GenericBuffer_AllocateVariable(&WorkingDirectory, 64U, sizeof(unsigned char));
-    GenericBuffer_AppendString(&WorkingDirectory, (const unsigned char*)GetWorkingDirectory());
-    GenericBuffer_NullTerminate(&WorkingDirectory);
+    if (!HasExecutableDirectory)
+    {
+        // Fall back to the working directory (the old behaviour) so the game can still start, and say so.
+        // GetWorkingDirectory returns a static buffer, so copy it.
+        LogWarningAndRelease(&Log, (const unsigned char*)u8"Could not determine the executable's directory; using the working directory instead: %s",
+            &BaseDirectoryResult);
+        GenericBuffer_Clear(&BaseDirectory);
+        GenericBuffer_AppendString(&BaseDirectory, (const unsigned char*)GetWorkingDirectory());
+        GenericBuffer_NullTerminate(&BaseDirectory);
+    }
 
     GameConfig Config;
-    LoadConfig(&Log, WorkingDirectory._data, &Config);
+    LoadConfig(&Log, BaseDirectory._data, &Config);
     Error ConfigLogResult = Logger_LogInfo(&Log, u8"Loaded game config.");
     Error_Deconstruct(&ConfigLogResult);
 
     UnicodeData Unicode;
-    LoadUnicodeData(&Log, WorkingDirectory._data, &Unicode);
+    LoadUnicodeData(&Log, BaseDirectory._data, &Unicode);
     Error UnicodeLogResult = Logger_LogInfo(&Log, u8"Loaded unicode data.");
     Error_Deconstruct(&UnicodeLogResult);
 
     InitializeWindow(&Config);
+    if (!IsWindowReady())
+    {
+        // Everything after this point needs a window and its GL context. raylib has printed the cause (e.g. no
+        // display, or no usable OpenGL 3.3 driver) to stdout.
+        Error FailLogResult = Logger_LogCritical(&Log,
+            (const unsigned char*)u8"Could not create the game window or its OpenGL context; see raylib's output above.");
+        Error_Deconstruct(&FailLogResult);
+        UnicodeData_Deconstruct(&Unicode);
+        GameConfig_Deconstruct(&Config);
+        Memory_Free(BaseDirectory._data);
+        Error CloseLog = Logger_Deconstruct(&Log);
+        Error_Deconstruct(&CloseLog);
+        return 1;
+    }
     // For this test milestone ESC quits the window (the world-test frame captures the cursor).
     SetExitKey(KEY_ESCAPE);
     Error WindowLogResult = Logger_LogInfo(&Log, u8"Window initialized.");
@@ -343,7 +393,7 @@ int main(int argc, char** argv)
     StandardAssetTypes AssetTypes;
     Memory_Zero(&AssetTypes, sizeof(AssetTypes));
     JSONObjectPool* JsonPool = NULL;
-    Error AssetSetupResult = SetUpAssetManager(&Log, WorkingDirectory._data, &Assets, &AssetTypes, &JsonPool);
+    Error AssetSetupResult = SetUpAssetManager(&Log, BaseDirectory._data, &Assets, &AssetTypes, &JsonPool);
     if (AssetSetupResult.Code != ErrorCode_Success)
     {
         LogWarningAndRelease(&Log, (const unsigned char*)u8"Failed to set up the asset manager: %s", &AssetSetupResult);
@@ -374,7 +424,7 @@ int main(int argc, char** argv)
         CloseWindow();
         UnicodeData_Deconstruct(&Unicode);
         GameConfig_Deconstruct(&Config);
-        Memory_Free(WorkingDirectory._data);
+        Memory_Free(BaseDirectory._data);
         Error CloseLog = Logger_Deconstruct(&Log);
         Error_Deconstruct(&CloseLog);
         return 1;
@@ -390,7 +440,7 @@ int main(int argc, char** argv)
     GameServices.AssetTypes = AssetTypes;
     GameServices.FrameManager = &FrameManager;
     GameServices.GHDFPool = GhdfPool;
-    GameServices.WorkingDirectory = WorkingDirectory._data;
+    GameServices.BaseDirectory = BaseDirectory._data;
 
     // The world-test frame needs the asset manager; only add it if the asset manager came up.
     if (Assets != NULL)
@@ -450,7 +500,7 @@ int main(int argc, char** argv)
     Services_Deconstruct(&GameServices);
     UnicodeData_Deconstruct(&Unicode);
     GameConfig_Deconstruct(&Config);
-    Memory_Free(WorkingDirectory._data);
+    Memory_Free(BaseDirectory._data);
 
     Error ShutdownResult = Logger_LogInfo(&Log, (const unsigned char*)u8"Shutting down.");
     Error_Deconstruct(&ShutdownResult);

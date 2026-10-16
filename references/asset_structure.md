@@ -39,7 +39,8 @@ roots or reference resources change (the game can also clear the remembered fail
 
 **The first location type is the path of a file which contains the asset.**
 It is a string path relative to the asset type's root directory. All directory separators are forward slashes '/'.
-Relative directory parts like ".." or "." are not allowed, absolute and empty paths aren't either.
+Relative directory parts like ".." or "." are not allowed, absolute and empty paths aren't either. (The ".."/"."
+rule is not enforced by the loader yet, so breaking it is not reported: just don't.)
 The path does not contain the file extension, that is resolved automatically (see "How a file location picks a
 file" below).
 Paths may start with a directory separator, though it is unnecessary.
@@ -240,7 +241,7 @@ The texture filtering of the spritesheet texture is specifiable.
         }
     ],
     "padding_pixels": vector, // [OPTIONAL] Integer vector. Negative values count as 0; more than 64 on either axis is an error. If not present, set to (0;0).
-    "padding_color": "nearest_pixel" or "transparent" or "nearest_pixel_transparent" // [OPTIONAL]. If not present, defaults to nearest pixel.
+    "padding_color": "nearest_pixel" or "transparent" or "nearest_pixel_transparent" // [OPTIONAL]. If not present, defaults to nearest pixel. NOTE: "nearest_pixel_transparent" currently behaves exactly like "nearest_pixel" (the alpha-0 variant is a TODO in SpriteSheetDefinition.c).
     "texture_properties": texture properties // [OPTIONAL]
 }
 ```

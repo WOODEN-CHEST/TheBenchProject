@@ -49,7 +49,8 @@
  */
 typedef struct FrameRenderContextStruct
 {
-    /** @brief The render tick's time (real wall time and real frame delta, in seconds). */
+    /** @brief The render tick's time, in seconds: simulation time (the update clock plus the not-yet-simulated
+     *  remainder, same epoch as update ticks) and the simulation time elapsed since the previous render. */
     ProgramTime Time;
     /** @brief Aspect ratio (width / height) the game is designed for; defines the target render area. */
     float TargetAspectRatio;

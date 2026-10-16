@@ -1,3 +1,6 @@
+// TODO: The text component system has never run in the game and has known lifetime bugs (shared children
+// crash on return, deserialized strings leak, bound fonts dangle). Rebuild it around TextDocument before any
+// frame uses it (handoff/FIX_PLAN.md, Phase 4; review section 2.1).
 #include "TextComponent.h"
 #include "wr/WRString.h"
 #include <math.h>

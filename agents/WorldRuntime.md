@@ -59,8 +59,8 @@ before its `DrawMesh`; the map SAMPLER units are wired via the shader's own `loc
 binds each material's textures. Normal mapping derives a TBN frame per-fragment from screen-space derivatives
 (no per-vertex tangents needed). If the shader fails to load the renderer logs
 a warning and falls back to raylib's default (unlit) shader so models still draw. NOTE: binding the shader
-mutates the *shared* asset material array (intended — the renderer is the sole model consumer); a future
-second consumer would need per-draw material copies instead.
+mutates the *shared* asset material array. That violates the "render never writes shared assets" rule
+(AGENTS.md) and is scheduled for handoff/FIX_PLAN.md Phase 3 (per-draw materials built on the stack).
 
 **HDR pipeline** (Step 3 increment 4): the scene render target is a floating-point **RGBA16F** framebuffer
 (`CreateSceneTarget`, built via rlgl since raylib's `LoadRenderTexture` is 8-bit only; 8-bit fallback + a
@@ -150,24 +150,26 @@ via the per-type `json` definition-file extension. The `world_normal` G-buffer s
 ## WorldTestFrame
 
 Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World` (test model at origin), a `GameCamera`, and
-a `WorldRenderer`. Movement (WASD + SPACE/CTRL, SHIFT to sprint) runs in `Update` at the fixed timestep;
-mouse-look runs in `Render` (once per real frame — avoids the fixed-step over-applying the per-frame mouse
-delta). Captures the cursor (`DisableCursor`) in `Start`, releases it in `End`/`Destroy`. Loading is
+a `WorldRenderer`. All input runs in `Update` at the fixed timestep: movement (WASD + SPACE/CTRL, SHIFT to
+sprint), mouse-look (input is polled once per update tick, so `GetMouseDelta` is that tick's movement) and the
+debug toggle keys. `Render` handles no input. Captures the cursor (`DisableCursor`) in `Start`, releases it in `End`/`Destroy`. Loading is
 synchronous (assets preloaded in `BeginLoad` via `WorldRenderer_PrepareWorld`), so the stepped load/unload
 slots are trivial. `Create` builds everything up front so `Destroy` is always safe (even on forced teardown).
 
 ## Bootstrap (main.c)
 
-Order: Logger → copy `GetWorkingDirectory()` once (absolute base) → load config (absolute path) → load
-unicode DB (`asset/text/unicode_data.txt`, empty-DB fallback) → `InitWindow` + `SetExitKey(KEY_ESCAPE)`
-(so the test is quittable) → AssetManager (`Construct1`, `CreateStandardAssetTypes`, add absolute `asset`
-search root, `ReadDefinitions`) → GHDF pool → GameFrameManager → build `Services` → create + add
-`WorldTestFrame` → run loop. Teardown (reverse, ordering matters): frame manager (releases assets + GPU
-targets, needs asset manager + GL alive) → asset manager → JSON pool → GHDF pool → `CloseWindow` → unicode
-→ config → working-dir buffer → logger.
+Order: base directory (`FileSystem_GetExecutableDirectory`) → Logger (`<base>/logs`) → if the executable's
+directory was unavailable, warn and fall back to a copy of `GetWorkingDirectory()` → load config
+(`<base>/config.json`) → load unicode DB (`<base>/asset/text/unicode_data.txt`, empty-DB fallback) →
+`InitWindow` (fullscreen/vsync flags from the config) + `SetExitKey(KEY_ESCAPE)` (so the test is quittable) →
+AssetManager (`Construct1` with the logger, `CreateStandardAssetTypes`, cache directory `<base>/.wr_asset_cache`,
+absolute `<base>/asset` search root, `ReadDefinitions`) → GHDF pool → GameFrameManager → build `Services`
+(`Services.BaseDirectory`) → create + add `WorldTestFrame` → run loop. Teardown (reverse, ordering matters):
+frame manager (releases assets + GPU targets, needs asset manager + GL alive) → asset manager → JSON pool →
+GHDF pool → `CloseWindow` → unicode → config → base-directory buffer → logger.
 
-Paths are absolute (built via `Path_Append(workingDir, relative)`). The Logger is the exception: it has no
-path parameter and resolves its `logs/` relative to CWD (runtime CWD is `compile/out`); left as-is.
+Every game file is resolved against the executable's directory (built via `Path_Append(base, relative)`), so
+the game works no matter where it is started from.
 
 ## Asset-pipeline fix (this step)
 

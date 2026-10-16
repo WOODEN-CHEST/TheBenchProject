@@ -448,6 +448,41 @@ Error FileSystem_RenameEntry(const unsigned char* path, const unsigned char* new
 Error FileSystem_CreateFile(const unsigned char* path);
 
 /**
+ * @brief Gets the absolute path of the directory that contains the running executable.
+ *
+ * Asks the operating system where the current process's executable file is and appends the path of
+ * the directory containing it to @p outPath. The result does not depend on the current working
+ * directory, so it can be used to find files shipped next to the executable (configuration, assets,
+ * logs). It is an absolute UTF-8 path in the platform's native form ('/' separators on Linux,
+ * backslash separators on Windows) with no trailing separator, unless the directory is a root such as
+ * "/" or "C:\". On Linux the path is read from the /proc/self/exe link, so /proc must be mounted, and
+ * symbolic links are resolved (a program started through a symbolic link reports the directory of the
+ * real file). On Windows the path is reported as the process was started, so it may still contain
+ * symbolic links or 8.3 short names; an extended-length prefix is removed, turning
+ * "\\?\C:\Games\Game.exe" into "C:\Games\Game.exe" and "\\?\UNC\server\share\Game.exe" into
+ * "\\server\share\Game.exe".
+ *
+ * @p outPath is treated as a growing UTF-8 string and is never cleared: an existing trailing null
+ * terminator is dropped, the directory path is appended, and a null terminator is written. A
+ * temporary working buffer is allocated and freed during the call. The function keeps no state, so
+ * it may be called from several threads at once as long as each call uses its own @p outPath.
+ * @param outPath [out] Destination byte buffer (element size 1). Receives the directory path,
+ *        appended as a null-terminated UTF-8 string. Must not be NULL.
+ * @returns A success Error on success. ErrorCode_IllegalArgument if @p outPath is NULL or is not a
+ *          byte buffer; ErrorCode_IO if the operating system fails to report the executable's path
+ *          (for example when /proc is not mounted on Linux; the message includes the native error
+ *          code); ErrorCode_ArgumentOutOfRange if the executable's path is longer than the supported
+ *          maximum (65,535 bytes on Linux, 32,767 UTF-16 code units on Windows);
+ *          ErrorCode_InvalidPath if the reported path is not a valid path, for example a Linux path
+ *          that is not valid UTF-8, a Windows path that cannot be converted to UTF-8, or a Windows
+ *          device path other than the extended-length drive and UNC forms above;
+ *          ErrorCode_BufferTooSmall if @p outPath is read-only or cannot be grown to hold the path, or
+ *          if the temporary working buffer cannot be grown.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error FileSystem_GetExecutableDirectory(GenericBuffer* outPath);
+
+/**
  * @brief Releases the heap-allocated strings owned by a FileSystemEntryInfo and clears it.
  *
  * Frees the _path and _name strings (if any) held by @p self and zeroes the struct so it holds no

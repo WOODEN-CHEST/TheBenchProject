@@ -4,15 +4,19 @@ Files: `include/Logger.h`, `source/Logger.c`.
 
 ## Purpose
 
-Writes timestamped, level-tagged messages to both a log file (`logs/latest.log`) and standard output.
-It is the single output channel for the game: nothing else should print to stdout/stderr directly (see
-the rule in `AGENTS.md`).
+Writes timestamped, level-tagged messages to both a log file (`<base>/logs/latest.log`) and standard
+output. It is the single output channel for the game: nothing else should print to stdout/stderr directly
+(see the rule in `AGENTS.md`).
+
+`<base>` is the base directory passed to `Logger_Construct` / `Logger_ArchiveLatestLog`: the game passes the
+executable's directory (`main.c`), so logs land next to the executable wherever the game is started from.
+NULL means the process working directory (handy for small tools).
 
 The module has two parts:
 
-1. **Old-log moving (rotation).** `Logger_ArchiveLatestLog` moves an existing `logs/latest.log` into
-   `logs/archived/`.
-2. **New-log creating and using.** `Logger_Construct` opens a fresh `logs/latest.log`, and the
+1. **Old-log moving (rotation).** `Logger_ArchiveLatestLog` moves an existing `<base>/logs/latest.log` into
+   `<base>/logs/archived/`.
+2. **New-log creating and using.** `Logger_Construct` opens a fresh `<base>/logs/latest.log`, and the
    `Logger_Log*` methods write to it (and to stdout).
 
 ## Type
@@ -44,7 +48,7 @@ stdout copy is written without color (colored Windows output is a future change)
 
 `Logger_ArchiveLatestLog`:
 
-- No-op (success) if `logs/latest.log` does not exist.
+- No-op (success) if `<base>/logs/latest.log` does not exist.
 - Otherwise moves the log (one filesystem rename, `FileSystem_MoveEntry`) to `logs/archived/<date>.log`,
   where `<date>` is the **old log's own last-modification date** (formatted like the date prefix above).
 - On a name clash, appends a space and the lowest free number: `<date> 2.log`, `<date> 3.log`, ...
@@ -58,7 +62,7 @@ construction.
 
 ```c
 Logger Log;
-Error Result = Logger_Construct(&Log);
+Error Result = Logger_Construct(&Log, BaseDirectory._data); // or NULL for the working directory
 if (Result.Code != ErrorCode_Success)
 {
     // The logger is unavailable; fall back to a raw print and abort.

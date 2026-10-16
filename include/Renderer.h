@@ -5,7 +5,8 @@
 
 
 /**
- * The renderer stuff for ErrDLogi.
+ * The low-level 2D render context (RenderContext): the drawing device the UI and text renderers draw
+ * through. It is not the world renderer (see WorldRenderer.h).
  *
  * The render context is used for all render functions.
  * It can have an optional custom render buffer which is just a target to render to. If it isn't present

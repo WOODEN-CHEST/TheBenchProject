@@ -1,0 +1,14 @@
+# LeakSanitizer suppressions for the debug build (see run_linux_x11_debug.sh).
+# Only leaks inside system graphics/windowing libraries belong here: they are allocations the drivers keep
+# until exit and cannot be fixed by the game. Never suppress a leak whose stack goes through game code.
+# If your driver reports others, add its library name the same way.
+leak:libGLX
+leak:libGL.so
+leak:libEGL
+leak:libgallium
+leak:_dri.so
+leak:libLLVM
+leak:libnvidia
+leak:libX11.so
+leak:libxcb
+leak:libdbus

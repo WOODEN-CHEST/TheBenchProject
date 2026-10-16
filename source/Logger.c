@@ -6,6 +6,7 @@
 #include "wr/WRFileSystem.h"
 #include "wr/WRIO.h"
 #include "wr/WRMemory.h"
+#include "wr/WRPath.h"
 #include "wr/WRString.h"
 #include "wr/WRCompile.h"
 #include <stdarg.h>
@@ -14,14 +15,12 @@
 
 
 // Macros.
-/** Directory (relative to the working directory) that holds the log files. */
-#define LOGGER_LOGS_DIR ((const unsigned char*)u8"logs")
-/** Path of the active log file. */
-#define LOGGER_LATEST_LOG_PATH ((const unsigned char*)u8"logs/latest.log")
-/** Directory that holds rotated (archived) logs. */
-#define LOGGER_ARCHIVE_DIR ((const unsigned char*)u8"logs/archived")
-/** Prefix used when building an archived log path (archive directory plus separator). */
-#define LOGGER_ARCHIVE_PREFIX ((const unsigned char*)u8"logs/archived/")
+/** Directory that holds the log files, relative to the logger's base directory. */
+#define LOGGER_LOGS_RELATIVE_PATH ((const unsigned char*)u8"logs")
+/** Path of the active log file, relative to the logger's base directory. */
+#define LOGGER_LATEST_LOG_RELATIVE_PATH ((const unsigned char*)u8"logs/latest.log")
+/** Directory that holds rotated (archived) logs, relative to the logger's base directory. */
+#define LOGGER_ARCHIVE_RELATIVE_PATH ((const unsigned char*)u8"logs/archived")
 /** Extension appended to archived log file names. */
 #define LOGGER_LOG_EXTENSION ((const unsigned char*)u8".log")
 
@@ -48,6 +47,16 @@
 /** Red (the closest cross-platform "dark red"), used for Critical. */
 #define LOGGER_ANSI_RED ((const unsigned char*)u8"\x1b[31m")
 #endif
+
+
+// Types.
+/* The log paths, resolved once against the logger's base directory (each a NUL-terminated owned buffer). */
+typedef struct LoggerPathsStruct
+{
+    GenericBuffer LogsDirectory;    // "<base>/logs"
+    GenericBuffer LatestLog;        // "<base>/logs/latest.log"
+    GenericBuffer ArchiveDirectory; // "<base>/logs/archived"
+} LoggerPaths;
 
 
 // Static functions.
@@ -182,47 +191,106 @@ static Error Logger_EnsureDirectory(const unsigned char* path)
     return InfoResult;
 }
 
-/* Ensures both "logs" and "logs/archived" exist (parent first). Idempotent. */
-static Error Logger_EnsureLogDirectories(void)
+/* Resolves @p relativePath against @p baseDirectory into a freshly allocated NUL-terminated buffer, which the
+   caller frees (outPath->_data) whatever the result. A NULL base leaves the path relative to the working
+   directory. */
+static Error Logger_ResolvePath(const unsigned char* baseDirectory, const unsigned char* relativePath,
+    GenericBuffer* outPath)
 {
-    Error LogsResult = Logger_EnsureDirectory(LOGGER_LOGS_DIR);
+    GenericBuffer_AllocateVariable(outPath, LOGGER_PATH_BUFFER_INITIAL_CAPACITY, sizeof(unsigned char));
+    if (baseDirectory != NULL)
+    {
+        return Path_Append(baseDirectory, relativePath, outPath);
+    }
+    if (!GenericBuffer_AppendString(outPath, relativePath) || !GenericBuffer_NullTerminate(outPath))
+    {
+        return Error_Construct3(ErrorCode_BufferTooSmall, (const unsigned char*)u8"Logger: failed to build a log path.");
+    }
+    return Error_CreateSuccess();
+}
+
+static void LoggerPaths_Deconstruct(LoggerPaths* self)
+{
+    Memory_Free(self->LogsDirectory._data);
+    Memory_Free(self->LatestLog._data);
+    Memory_Free(self->ArchiveDirectory._data);
+    Memory_Zero(self, sizeof(*self));
+}
+
+/* Resolves every log path against @p baseDirectory (NULL = the working directory). On failure nothing is
+   left for the caller to release. */
+static Error LoggerPaths_Construct(LoggerPaths* self, const unsigned char* baseDirectory)
+{
+    Memory_Zero(self, sizeof(*self));
+    Error Result = Logger_ResolvePath(baseDirectory, LOGGER_LOGS_RELATIVE_PATH, &self->LogsDirectory);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = Logger_ResolvePath(baseDirectory, LOGGER_LATEST_LOG_RELATIVE_PATH, &self->LatestLog);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = Logger_ResolvePath(baseDirectory, LOGGER_ARCHIVE_RELATIVE_PATH, &self->ArchiveDirectory);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        LoggerPaths_Deconstruct(self);
+    }
+    return Result;
+}
+
+/* Ensures both the logs directory and the archive directory exist (parent first). Idempotent. */
+static Error Logger_EnsureLogDirectories(const LoggerPaths* paths)
+{
+    Error LogsResult = Logger_EnsureDirectory(paths->LogsDirectory._data);
     if (LogsResult.Code != ErrorCode_Success)
     {
         return LogsResult;
     }
-    return Logger_EnsureDirectory(LOGGER_ARCHIVE_DIR);
+    return Logger_EnsureDirectory(paths->ArchiveDirectory._data);
 }
 
-/* Builds the first free archive path for a date into outPath (NUL-terminated): tries
-   "logs/archived/<date>.log", then "...<date> 1.log", "...<date> 2.log", ... until one is unused. */
-static Error Logger_BuildArchiveTargetPath(GenericBuffer* outPath, const DateTime* logDate)
+/* Builds the first free archive path for a date, REPLACING outPath's contents (NUL-terminated): tries
+   "<archive>/<date>.log", then "<archive>/<date> 2.log", "<archive>/<date> 3.log", ... until one is unused. */
+static Error Logger_BuildArchiveTargetPath(const unsigned char* archiveDirectory, GenericBuffer* outPath,
+    const DateTime* logDate)
 {
+    GenericBuffer FileName;
+    GenericBuffer_AllocateVariable(&FileName, LOGGER_PATH_BUFFER_INITIAL_CAPACITY, sizeof(unsigned char));
+
     for (int32_t Index = 0; Index < INT32_MAX; Index++)
     {
+        GenericBuffer_Clear(&FileName);
         GenericBuffer_Clear(outPath);
 
-        bool IsOk = true;
-        IsOk = IsOk && GenericBuffer_AppendString(outPath, LOGGER_ARCHIVE_PREFIX);
-        IsOk = IsOk && Logger_AppendDate(outPath, logDate);
+        bool IsOk = Logger_AppendDate(&FileName, logDate);
         if (Index > 0)
         {
-            IsOk = IsOk && GenericBuffer_AppendByte(outPath, (unsigned char)u8' ');
-            IsOk = IsOk && Logger_AppendInt32(outPath, Index + 1);
+            IsOk = IsOk && GenericBuffer_AppendByte(&FileName, (unsigned char)u8' ');
+            IsOk = IsOk && Logger_AppendInt32(&FileName, Index + 1);
         }
-        IsOk = IsOk && GenericBuffer_AppendString(outPath, LOGGER_LOG_EXTENSION);
-        IsOk = IsOk && GenericBuffer_NullTerminate(outPath);
+        IsOk = IsOk && GenericBuffer_AppendString(&FileName, LOGGER_LOG_EXTENSION);
+        IsOk = IsOk && GenericBuffer_NullTerminate(&FileName);
         if (!IsOk)
         {
+            Memory_Free(FileName._data);
             return Error_Construct3(ErrorCode_BufferTooSmall,
                 (const unsigned char*)u8"Logger: failed to build archive path.");
         }
 
+        Error JoinResult = Path_Append(archiveDirectory, FileName._data, outPath);
+        if (JoinResult.Code != ErrorCode_Success)
+        {
+            Memory_Free(FileName._data);
+            return JoinResult;
+        }
         if (!Logger_EntryExists(outPath->_data))
         {
+            Memory_Free(FileName._data);
             return Error_CreateSuccess();
         }
     }
 
+    Memory_Free(FileName._data);
     return Error_Construct3(ErrorCode_IO, (const unsigned char*)u8"Logger: no free archive name available.");
 }
 
@@ -239,12 +307,13 @@ static bool Logger_IsArchivedLog(const FileSystemEntryInfo* info)
 /* Counts the archived logs and finds the oldest one (by modification time) in one pass over the archive
    directory. When *outCount ends up non-zero, outOldest holds the oldest entry and the caller must
    FileSystemEntryInfo_Deconstruct it; on failure nothing is left for the caller to release. */
-static Error Logger_FindOldestArchivedLog(size_t* outCount, FileSystemEntryInfo* outOldest)
+static Error Logger_FindOldestArchivedLog(const unsigned char* archiveDirectory, size_t* outCount,
+    FileSystemEntryInfo* outOldest)
 {
     *outCount = 0;
 
     DirectoryEntryEnumerator* Enumerator = NULL;
-    Error Result = FileSystem_GetFiles(LOGGER_ARCHIVE_DIR, DirectorySearchOption_TopLevel, &Enumerator);
+    Error Result = FileSystem_GetFiles(archiveDirectory, DirectorySearchOption_TopLevel, &Enumerator);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
@@ -299,7 +368,7 @@ static Error Logger_FindOldestArchivedLog(size_t* outCount, FileSystemEntryInfo*
 /* Deletes the oldest archived logs until at most LOGGER_MAX_ARCHIVED_LOGS remain. Each pass rescans the
    directory and deletes one file; the number of passes is bounded by the excess found on the first scan
    (normally one, since each session adds one archive). */
-static Error Logger_PruneArchivedLogs(void)
+static Error Logger_PruneArchivedLogs(const unsigned char* archiveDirectory)
 {
     size_t Excess = SIZE_MAX; // Unknown until the first scan.
     while (Excess > 0)
@@ -307,7 +376,7 @@ static Error Logger_PruneArchivedLogs(void)
         size_t Count = 0;
         FileSystemEntryInfo Oldest;
         Memory_Zero(&Oldest, sizeof(Oldest));
-        Error FindResult = Logger_FindOldestArchivedLog(&Count, &Oldest);
+        Error FindResult = Logger_FindOldestArchivedLog(archiveDirectory, &Count, &Oldest);
         if (FindResult.Code != ErrorCode_Success)
         {
             return FindResult;
@@ -435,13 +504,13 @@ static Error Logger_LogFormattedImpl(Logger* self, LogLevel level, const unsigne
     return Logger_Log(self, level, self->_formatBuffer._data);
 }
 
-
-// Public functions.
-Error Logger_ArchiveLatestLog(void)
+/* Moves an existing latest log into the archive directory, named after its own last-modification date. A
+   missing latest log is a successful no-op. */
+static Error Logger_MoveLatestLogToArchive(const LoggerPaths* paths)
 {
     // Nothing to move if there is no active log yet.
     FileSystemEntryInfo Info;
-    Error InfoResult = FileSystem_GetEntryInfo(LOGGER_LATEST_LOG_PATH, &Info);
+    Error InfoResult = FileSystem_GetEntryInfo(paths->LatestLog._data, &Info);
     if ((InfoResult.Code == ErrorCode_FileNotFound) || (InfoResult.Code == ErrorCode_DirectoryNotFound))
     {
         Error_Deconstruct(&InfoResult);
@@ -462,7 +531,7 @@ Error Logger_ArchiveLatestLog(void)
         return DateResult;
     }
 
-    Error DirResult = Logger_EnsureLogDirectories();
+    Error DirResult = Logger_EnsureLogDirectories(paths);
     if (DirResult.Code != ErrorCode_Success)
     {
         return DirResult;
@@ -470,7 +539,7 @@ Error Logger_ArchiveLatestLog(void)
 
     GenericBuffer TargetPath;
     GenericBuffer_AllocateVariable(&TargetPath, LOGGER_PATH_BUFFER_INITIAL_CAPACITY, sizeof(unsigned char));
-    Error PathResult = Logger_BuildArchiveTargetPath(&TargetPath, &LogDate);
+    Error PathResult = Logger_BuildArchiveTargetPath(paths->ArchiveDirectory._data, &TargetPath, &LogDate);
     if (PathResult.Code != ErrorCode_Success)
     {
         Memory_Free(TargetPath._data);
@@ -479,34 +548,29 @@ Error Logger_ArchiveLatestLog(void)
 
     // One filesystem move. The target name was chosen to be unused, so the platform-defined "replace an
     // existing entry" behaviour of FileSystem_MoveEntry never comes into play.
-    Error MoveResult = FileSystem_MoveEntry(LOGGER_LATEST_LOG_PATH, TargetPath._data);
+    Error MoveResult = FileSystem_MoveEntry(paths->LatestLog._data, TargetPath._data);
     Memory_Free(TargetPath._data);
     return MoveResult;
 }
 
-Error Logger_Construct(Logger* self)
+/* Prepares the log directories, archives the previous session's log, opens a fresh latest log and binds
+   stdout. On failure nothing is left open. */
+static Error Logger_OpenStreams(Logger* self, const LoggerPaths* paths)
 {
-    if (self == NULL)
-    {
-        return Error_Construct5(ErrorCode_IllegalArgument);
-    }
-
-    Memory_Zero(self, sizeof(*self));
-
-    Error DirResult = Logger_EnsureLogDirectories();
+    Error DirResult = Logger_EnsureLogDirectories(paths);
     if (DirResult.Code != ErrorCode_Success)
     {
         return DirResult;
     }
 
     // Move any previous session's log aside before opening a fresh one (this truncates latest.log).
-    Error ArchiveResult = Logger_ArchiveLatestLog();
+    Error ArchiveResult = Logger_MoveLatestLogToArchive(paths);
     if (ArchiveResult.Code != ErrorCode_Success)
     {
         return ArchiveResult;
     }
 
-    Error OpenResult = FileSystem_OpenFileStream(LOGGER_LATEST_LOG_PATH, FileOpenMode_WriteText, &self->_logFileStream);
+    Error OpenResult = FileSystem_OpenFileStream(paths->LatestLog._data, FileOpenMode_WriteText, &self->_logFileStream);
     if (OpenResult.Code != ErrorCode_Success)
     {
         return OpenResult;
@@ -519,6 +583,47 @@ Error Logger_Construct(Logger* self)
         Error_Deconstruct(&CloseResult);
         return StdoutResult;
     }
+    return Error_CreateSuccess();
+}
+
+
+// Public functions.
+Error Logger_ArchiveLatestLog(const unsigned char* baseDirectory)
+{
+    LoggerPaths Paths;
+    Error PathsResult = LoggerPaths_Construct(&Paths, baseDirectory);
+    if (PathsResult.Code != ErrorCode_Success)
+    {
+        return PathsResult;
+    }
+
+    Error Result = Logger_MoveLatestLogToArchive(&Paths);
+    LoggerPaths_Deconstruct(&Paths);
+    return Result;
+}
+
+Error Logger_Construct(Logger* self, const unsigned char* baseDirectory)
+{
+    if (self == NULL)
+    {
+        return Error_Construct5(ErrorCode_IllegalArgument);
+    }
+
+    Memory_Zero(self, sizeof(*self));
+
+    LoggerPaths Paths;
+    Error PathsResult = LoggerPaths_Construct(&Paths, baseDirectory);
+    if (PathsResult.Code != ErrorCode_Success)
+    {
+        return PathsResult;
+    }
+
+    Error OpenResult = Logger_OpenStreams(self, &Paths);
+    if (OpenResult.Code != ErrorCode_Success)
+    {
+        LoggerPaths_Deconstruct(&Paths);
+        return OpenResult;
+    }
 
     GenericBuffer_AllocateVariable(&self->_lineBuffer, LOGGER_LINE_BUFFER_INITIAL_CAPACITY, sizeof(unsigned char));
     GenericBuffer_AllocateVariable(&self->_formatBuffer, LOGGER_FORMAT_BUFFER_INITIAL_CAPACITY, sizeof(unsigned char));
@@ -527,7 +632,8 @@ Error Logger_Construct(Logger* self)
 
     // Prune only now that the fresh log can report a failure: losing old archives is not worth failing
     // startup over, so a prune error is logged and otherwise ignored.
-    Error PruneResult = Logger_PruneArchivedLogs();
+    Error PruneResult = Logger_PruneArchivedLogs(Paths.ArchiveDirectory._data);
+    LoggerPaths_Deconstruct(&Paths);
     if (PruneResult.Code != ErrorCode_Success)
     {
         Error LogResult = Logger_LogWarningFormatted(self, (const unsigned char*)u8"Could not prune archived logs: %s",

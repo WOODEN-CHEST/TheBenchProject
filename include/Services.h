@@ -59,8 +59,9 @@ typedef struct ServicesStruct
     GameFrameManager* FrameManager;
     /** @brief A GHDF object pool for encoding/decoding world documents. Borrowed. */
     GHDFObjectPool* GHDFPool;
-    /** @brief The process working directory as an absolute UTF-8 path; base for building absolute paths. Borrowed. */
-    const unsigned char* WorkingDirectory;
+    /** @brief Absolute UTF-8 directory that game files (config, assets, logs, the asset cache) are resolved
+     *  against: the executable's directory, or the working directory if the OS could not report it. Borrowed. */
+    const unsigned char* BaseDirectory;
 } Services;
 
 

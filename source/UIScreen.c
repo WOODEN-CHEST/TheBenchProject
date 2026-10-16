@@ -1,3 +1,6 @@
+// TODO: The UI framework has never run in the game and has known lifetime bugs (widgets destroyed inside
+// callbacks crash or alias new widgets, children leak). Land deferred destruction, slot+generation ids and the
+// GameInput routing before any frame uses it (handoff/FIX_PLAN.md, Phase 5; review section 2.2).
 #include "UIScreen.h"
 #include "UIWidget.h"
 #include "UIWidgetFactory.h"

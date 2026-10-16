@@ -1,3 +1,5 @@
+// TODO: Saves are write-only so far: there is no decoder (GHDF -> WorldDTO), no stream read/write and no
+// round-trip test. Planned as WorldDecoder + a tests/ round trip (handoff/FIX_PLAN.md, Phase 3).
 #include "WorldEncoder.h"
 #include "wr/WRMemory.h"
 
