@@ -2,10 +2,18 @@
 
 All asset definitions have a root compound { } which has the property "name", its value is a string which
 describes the asset's name to access it by.
-The name's value can be any UTF-8 string whose characters consist of a-z, 0-9, '_', '.' and '-', it must start with a letter and have a
-length of >= 1.
+The name must match `[a-z][a-z0-9_.-]*`: at least 1 character, starting with a lowercase letter a-z, followed only
+by a-z, 0-9, '_', '.' and '-'. Uppercase letters, spaces, '/', and any non-ASCII character make the name invalid.
+The asset manager checks this for every definition (whatever its type, and also for definitions built in code);
+a definition with an invalid name is rejected.
+
 No two asset definitions OF THE SAME TYPE may have the same name. Each one must be unique. Names can
-be shared across different asset types, however.
+be shared across different asset types, however. How a repeated name is handled:
+* Two definitions of the same type and name inside the SAME search root are an error. The definition read first
+  stays registered, the other one is skipped, and the error names both files. (Which file is read first depends
+  on directory order, so fix the duplicate rather than relying on it.)
+* The same type and name in DIFFERENT search roots is the override mechanism: the higher-priority root (lower
+  index) wins and the other definition is ignored without an error. Resource packs and mods use this.
 
 For example.
 ```
@@ -15,17 +23,60 @@ For example.
 }
 ```
 
+### Bad definition files are skipped, not fatal.
+Definitions are read per file. A file that cannot be read, is not valid JSON, fails its type's checks (a bad key,
+an unsupported `format`, a padding over the limit...), has an invalid name, or duplicates a name in the same root
+is skipped: the game logs an error naming the file and the reason (`Skipped font definition "<path>": <reason>`),
+keeps reading every other file and type, and logs a warning with the number of skipped files at the end. One broken
+file therefore only costs the asset it defines.
+
+When an asset fails to load later (for example its texture file is missing), the failure is logged once and
+remembered: further loads of that asset fail immediately, without touching the disk, until definitions, search
+roots or reference resources change (the game can also clear the remembered failures explicitly to retry).
+
 
 ### There are 2 types of asset locations (places they're pulled from).**
 
 **The first location type is the path of a file which contains the asset.**
 It is a string path relative to the asset type's root directory. All directory separators are forward slashes '/'.
 Relative directory parts like ".." or "." are not allowed, absolute and empty paths aren't either.
-The path does not contain the file extension, that is resolved automatically. This means there may only
-be 1 file in that directory with a given name, no matter the extension.
+The path does not contain the file extension, that is resolved automatically (see "How a file location picks a
+file" below).
 Paths may start with a directory separator, though it is unnecessary.
 For example: `dir_a/dir_b/file_name`
 The full path this would resolve to would be `{asset_root_dir}/{asset_type_dir_name}/dir_a/dir_b/file_name{found_extension}`
+
+**How a file location picks a file.**
+The search roots are tried in priority order. In each root, the candidates are the files in the location's directory
+* whose name without its LAST extension equals the location's last part (`file_name` above),
+* that are not definition files (`.json` for the standard types), and
+* whose extension the loader can read (table below; compared case-insensitively). When the definition has a
+  `format`, only that extension is a candidate.
+
+The first root with at least one candidate decides:
+* exactly 1 candidate: that file is used;
+* 2 or more candidates: loading fails with an error listing them ("location is ambiguous"). Keep only one, or
+  pick one with `format` where the asset type has that key;
+* no candidate: the next root is tried. If no root has one, loading fails: "no file found", or, when files with
+  the right name exist but none has a supported extension, an error listing those files and the supported
+  extensions (so a `.jpg` texture gets a clear "unsupported format" message).
+
+Examples (model directory): `ships/ship` picks `ships/ship.obj` even though Blender also wrote `ships/ship.mtl`,
+because `mtl` is not a model extension. `a/b.c` only matches files named `b.c.<ext>` (such as `a/b.c.png`), never
+`a/b.png`. A leftover `fragment.frag.bak` never collides with `fragment.frag`, since its name without the last
+extension is `fragment.frag`.
+
+| Loader | Accepted extensions |
+|---|---|
+| Textures (sprite sheet images, texture animation frames, model material maps) | `png` `bmp` `gif` `qoi` `dds` |
+| Models | `obj` `gltf` `glb` `iqm` `vox` `m3d` |
+| Fonts | `ttf` `otf` |
+| Sounds | `wav` `ogg` `mp3` `qoa` |
+| Shader stages | `vert` `frag` `vs` `fs` `glsl` |
+
+These are exactly the formats the game's raylib build decodes with the function each loader uses (jpg, tga, psd and
+hdr readers are not compiled in; BMFont `.fnt` and the `xm`/`mod` tracker formats are only read by raylib functions
+the font and sound loaders do not use).
 
 
 **The second location type is a name which references an asset.**
@@ -35,6 +86,12 @@ In these cases, the asset can be referenced by a name (any valid UTF-8 Unicode s
 referenced name, resolves what needs to be loaded or created.
 This form of location specification is mostly used by the game itself when loading dynamic assets rather than
 the asset JSON definitions.
+A reference has no file extension, so loaders that need a real file must be told the format:
+* Models, fonts and sounds: a reference location REQUIRES the definition's `format` key; without it the definition
+  is rejected when it is read.
+* Textures (sprite sheet images, texture animation frames, model material maps) have no `format` key, so their
+  locations must be file paths; a reference there is rejected when the definition is read.
+* Shader stages are read as text and need no format, so references work there as they are.
 
 
 **Specifying locations.**
@@ -140,6 +197,16 @@ Both forms are acceptable for both integer and decimal vectors. Integer vectors,
 ```
 
 
+### Format.
+Models, fonts and sounds accept an optional `"format"` string: a file extension WITHOUT the dot (e.g. `"glb"`),
+compared case-insensitively. It must be one of the extensions that asset type's loader accepts (see the table
+under "How a file location picks a file"); anything else rejects the definition when it is read, with a message
+listing the supported values.
+* For a file location it narrows the choice to that extension, e.g. `"format": "glb"` picks `ship.glb` when
+  `ship.obj` sits next to it.
+* For a reference location it is required and names the file type of the referenced data.
+
+
 
 ## Asset definition structure.
 
@@ -172,11 +239,17 @@ The texture filtering of the spritesheet texture is specifiable.
             "location": asset location
         }
     ],
-    "padding_pixels": vector, // [OPTIONAL] (values are clamped to >= 0, floored to integer if not one already). If not present, set to (0;0).
+    "padding_pixels": vector, // [OPTIONAL] Integer vector. Negative values count as 0; more than 64 on either axis is an error. If not present, set to (0;0).
     "padding_color": "nearest_pixel" or "transparent" or "nearest_pixel_transparent" // [OPTIONAL]. If not present, defaults to nearest pixel.
     "texture_properties": texture properties // [OPTIONAL]
 }
 ```
+
+Image locations must be file paths (see "Specifying locations"; textures cannot be references).
+
+Size limits: `padding_pixels` is at most 64 per axis (a larger value rejects the definition when it is read).
+Every image plus its padding on both sides, and the packed atlas as a whole, must fit in 8192 x 8192 pixels; a
+sheet that does not fit fails to load with an error naming the image or the sheet (split it into several sheets).
 
 
 ## Sprite animations.
@@ -195,7 +268,7 @@ Sprite animation:
         {
             "source": "spritesheet" or "texture",
 
-            "location": asset location, // The location of the texture OR spritesheet.
+            "location": asset location, // The location of the texture OR spritesheet. A texture location must be a file path.
 
             "name": spritesheet image name // The name of the spritehseet image (as discussed earlier) IF the source is a spritehseet, otherwise not present.
 
@@ -216,7 +289,8 @@ A sound is any audio played in the game. This includes music.
 
 ```
 {
-    "location": asset location
+    "location": asset location, // a wav, ogg, mp3 or qoa file
+    "format": "ogg"             // [OPTIONAL] see "Format"; REQUIRED when "location" is a reference
 }
 ```
 
@@ -225,7 +299,8 @@ A sound is any audio played in the game. This includes music.
 
 ```
 {
-    "location": asset location
+    "location": asset location, // a ttf or otf file
+    "format": "ttf"             // [OPTIONAL] see "Format"; REQUIRED when "location" is a reference
 }
 ```
 
@@ -241,8 +316,9 @@ A sound is any audio played in the game. This includes music.
 ```
 
 At least one of `vertex_location` / `fragment_location` must be present. A bare `"location"` is accepted as a
-back-compat alias for `fragment_location` (the original single-stage behavior). Because the resource resolver
-matches source files by stem (ignoring extension), the two stage files must have DISTINCT stems — e.g.
+back-compat alias for `fragment_location` (the original single-stage behavior). Every shader-stage extension
+(`vert`, `frag`, `vs`, `fs`, `glsl`) is accepted for either stage, so two stage files with the same name but
+different extensions would make the location ambiguous: give the two stage files DISTINCT names — e.g.
 `shaders/pbr/vertex.vert` and `shaders/pbr/fragment.frag`, referenced as `"pbr/vertex"` and `"pbr/fragment"`.
 
 
@@ -251,7 +327,7 @@ matches source files by stem (ignoring extension), the two stage files must have
 ```
 {
     "name": "player_character",
-    "location": asset location,          // the model file (.obj / .gltf / .glb)
+    "location": asset location,          // the model file (obj / gltf / glb / iqm / vox / m3d)
 
     "transform": {                       // [OPTIONAL] baked import transform applied at load
         "scale": number or vector3,      // uniform if a single number
@@ -264,7 +340,7 @@ matches source files by stem (ignoring extension), the two stage files must have
             "slot": 0,                   // material index within the model (REQUIRED, >= 0). Addressing a
                                          // material by name is not implemented yet; use the index.
 
-            // --- PBR texture maps (all [OPTIONAL]; each an asset location, resolved against the models dir) ---
+            // --- PBR texture maps (all [OPTIONAL]; each a texture FILE location, resolved against the models dir) ---
             "albedo": asset location,    // base colour (sRGB)
             "normal": asset location,    // tangent-space normal map (the shader derives a TBN per-fragment, so
                                          // the mesh needs no tangents)
@@ -284,10 +360,11 @@ matches source files by stem (ignoring extension), the two stage files must have
         }
     ],
 
-    "format": "glb",                     // [OPTIONAL] file extension WITHOUT the dot. REQUIRED only when
+    "format": "glb",                     // [OPTIONAL] see "Format": file extension WITHOUT the dot, one of
+                                         // obj / gltf / glb / iqm / vox / m3d. For a file location it
+                                         // narrows the file choice to that extension. REQUIRED when
                                          // "location" is a reference (in-memory) model, since the format
-                                         // can't be inferred from bytes; ignored for file locations
-                                         // (their real extension is used). Reference models must be
+                                         // can't be inferred from bytes. Reference models must be
                                          // self-contained single files (.glb recommended).
 
     "rig": "none"                        // [OPTIONAL, GLTF only] "none" (default) | "skinned"

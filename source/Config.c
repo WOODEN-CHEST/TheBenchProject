@@ -1,4 +1,5 @@
 #include "Config.h"
+#include "GameJSON.h"
 #include "wr/WRMemory.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRJSON.h"
@@ -9,6 +10,8 @@
 // Macros.
 /** JSON key for the unlocked-frame-rate flag. */
 #define CONFIG_KEY_IS_FPS_UNLOCKED ((const unsigned char*)u8"is_fps_unlocked")
+/** JSON key for the vertical-sync flag. */
+#define CONFIG_KEY_IS_VSYNC_ENABLED ((const unsigned char*)u8"is_vsync_enabled")
 /** JSON key for the fullscreen flag. */
 #define CONFIG_KEY_IS_FULLSCREEN ((const unsigned char*)u8"is_fullscreen")
 /** JSON key for the [width, height] resolution array. */
@@ -36,6 +39,8 @@
 
 /** Default value for the unlocked-frame-rate flag. */
 #define CONFIG_DEFAULT_IS_FPS_UNLOCKED false
+/** Default value for the vertical-sync flag (off: the buffer swap never blocks the loop). */
+#define CONFIG_DEFAULT_IS_VSYNC_ENABLED false
 /** Default value for the fullscreen flag. */
 #define CONFIG_DEFAULT_IS_FULLSCREEN false
 /** Default window width in pixels. */
@@ -102,7 +107,8 @@ static void ReadBool(JSONCompound* root, const unsigned char* key, bool* outValu
     Error_Deconstruct(&Result);
 }
 
-/* Reads an integer setting (JSON integer or truncated real); a missing/wrong-typed value keeps the default. */
+/* Reads an integer setting with GameJSON's integer rules (an integer, a whole in-range real, or a numeric
+   string); a missing or unconvertible value keeps the default. */
 static void ReadInt32(JSONCompound* root, const unsigned char* key, int32_t* outValue)
 {
     JSONObjectValue Value;
@@ -110,8 +116,12 @@ static void ReadInt32(JSONCompound* root, const unsigned char* key, int32_t* out
     Error Result = JSONCompound_GetOptional(root, key, &Value, &WasFound);
     if ((Result.Code == ErrorCode_Success) && WasFound)
     {
-        if (Value.Type == JSONValueType_Integer) { *outValue = ClampToInt32(Value.Value.Integer); }
-        else if (Value.Type == JSONValueType_RealNumber) { *outValue = ClampToInt32((int64_t)Value.Value.RealNumber); }
+        int64_t Parsed = 0;
+        Result = GameJSON_ValueToInt64(&Value, &Parsed);
+        if (Result.Code == ErrorCode_Success)
+        {
+            *outValue = ClampToInt32(Parsed);
+        }
     }
     Error_Deconstruct(&Result);
 }
@@ -140,8 +150,8 @@ static void ClampEffectStrength(float* value)
     }
 }
 
-/* Reads a single integer element from an array. Returns false (leaving outValue untouched) when the element
-   is absent or not numeric; JSON reals are truncated toward zero. */
+/* Reads a single integer element from an array with GameJSON's integer rules. Returns false (leaving outValue
+   untouched) when the element is absent or not convertible. */
 static bool ReadArrayInt32(JSONArray* array, size_t index, int32_t* outValue)
 {
     JSONObjectValue Value;
@@ -153,17 +163,15 @@ static bool ReadArrayInt32(JSONArray* array, size_t index, int32_t* outValue)
         return false;
     }
 
-    if (Value.Type == JSONValueType_Integer)
+    int64_t Parsed = 0;
+    Error ConvertResult = GameJSON_ValueToInt64(&Value, &Parsed);
+    if (ConvertResult.Code != ErrorCode_Success)
     {
-        *outValue = ClampToInt32(Value.Value.Integer);
-        return true;
+        Error_Deconstruct(&ConvertResult);
+        return false;
     }
-    if (Value.Type == JSONValueType_RealNumber)
-    {
-        *outValue = ClampToInt32((int64_t)Value.Value.RealNumber);
-        return true;
-    }
-    return false;
+    *outValue = ClampToInt32(Parsed);
+    return true;
 }
 
 /* Reads the resolution array; only overwrites the defaults when both components are present and numeric. */
@@ -193,6 +201,7 @@ static void ReadResolution(JSONCompound* root, GameConfig* config)
 static void ReadConfigValues(JSONCompound* root, GameConfig* config)
 {
     ReadBool(root, CONFIG_KEY_IS_FPS_UNLOCKED, &config->IsFPSUnlocked);
+    ReadBool(root, CONFIG_KEY_IS_VSYNC_ENABLED, &config->IsVSyncEnabled);
     ReadBool(root, CONFIG_KEY_IS_FULLSCREEN, &config->IsFullscreen);
     ReadInt32(root, CONFIG_KEY_TARGET_FPS, &config->TargetFPS);
     ReadResolution(root, config);
@@ -249,6 +258,7 @@ void GameConfig_SetDefaults(GameConfig* self)
     if (self == NULL) { return; }
 
     self->IsFPSUnlocked = CONFIG_DEFAULT_IS_FPS_UNLOCKED;
+    self->IsVSyncEnabled = CONFIG_DEFAULT_IS_VSYNC_ENABLED;
     self->IsFullscreen = CONFIG_DEFAULT_IS_FULLSCREEN;
     self->TargetFPS = CONFIG_DEFAULT_TARGET_FPS;
     self->ResolutionWidth = CONFIG_DEFAULT_RESOLUTION_WIDTH;

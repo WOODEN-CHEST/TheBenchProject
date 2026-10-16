@@ -486,15 +486,15 @@ static Error DeserializeStringComponent(GHDFCompound* compound, TextComponentFac
     }
 
     {
-        RenderColor Color;
-        Result = ReadRenderColor(compound, FIELD_COLOR, &Color, &Found);
+        RenderColor ParsedColor;
+        Result = ReadRenderColor(compound, FIELD_COLOR, &ParsedColor, &Found);
         if (Result.Code != ErrorCode_Success)
         {
             goto Cleanup;
         }
         if (Found)
         {
-            Result = StringComponent_SetColor(Component, Color);
+            Result = StringComponent_SetColor(Component, ParsedColor);
             if (Result.Code != ErrorCode_Success)
             {
                 goto Cleanup;
@@ -666,15 +666,15 @@ static Error DeserializeSpriteComponent(GHDFCompound* compound, TextComponentFac
     }
 
     {
-        RenderColor Color;
-        Result = ReadRenderColor(compound, FIELD_SPRITE_COLOR, &Color, &Found);
+        RenderColor ParsedColor;
+        Result = ReadRenderColor(compound, FIELD_SPRITE_COLOR, &ParsedColor, &Found);
         if (Result.Code != ErrorCode_Success)
         {
             goto Cleanup;
         }
         if (Found)
         {
-            Result = SpriteComponent_SetColor(Component, Color);
+            Result = SpriteComponent_SetColor(Component, ParsedColor);
             if (Result.Code != ErrorCode_Success)
             {
                 goto Cleanup;

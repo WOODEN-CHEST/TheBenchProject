@@ -30,6 +30,26 @@ typedef struct TexturePropertiesStruct
 } TextureProperties;
 
 
+/*
+ * Accepted resource-file extensions per loader: what the shipped raylib build can decode through the
+ * function each loader calls. Pass them to AssetManager_OpenResource / AssetManager_AcquireResourcePath so
+ * a File location only ever picks a file the loader can read (and an unsupported file gets a clear error).
+ */
+/** @brief Texture images (LoadImage/LoadTexture): png, bmp, gif, qoi, dds. Used by sprite sheet images,
+ *         texture animation frames and model material maps. */
+extern const AssetExtensionFilter ASSET_EXTENSIONS_TEXTURE;
+/** @brief Models (LoadModel): obj, gltf, glb, iqm, vox, m3d. */
+extern const AssetExtensionFilter ASSET_EXTENSIONS_MODEL;
+/** @brief Fonts (LoadFontEx): ttf, otf. BMFont .fnt is only read by raylib's LoadFont, which the font
+ *         loader does not use. */
+extern const AssetExtensionFilter ASSET_EXTENSIONS_FONT;
+/** @brief Sounds (LoadWave): wav, ogg, mp3, qoa. The xm/mod tracker formats are only read by raylib's
+ *         music streams, which the sound loader does not use. */
+extern const AssetExtensionFilter ASSET_EXTENSIONS_SOUND;
+/** @brief Shader stage sources (read as text): vert, frag, vs, fs, glsl. */
+extern const AssetExtensionFilter ASSET_EXTENSIONS_SHADER_STAGE;
+
+
 /**
  * @brief Deserializes raw bytes into a JSON tree and verifies the root is a compound.
  *
@@ -149,10 +169,71 @@ Error AssetJSON_ReadOptionalVectorInt(JSONCompound* compound, const unsigned cha
 Error AssetJSON_ParseColor(const JSONObjectValue* value, Color* outColor);
 
 /**
+ * @brief Reads the optional "format" key (a file extension without the dot) and checks the loader accepts it.
+ *
+ * The comparison is case-insensitive (ASCII). For a File location the format narrows the file choice to
+ * that extension (see AssetFormat_SelectFilter); for a Reference location it names the temp file's type.
+ * @param root The definition root compound.
+ * @param accepted The extensions the loader can decode; must not be NULL.
+ * @param assetKindName What the definition describes, for messages (e.g. u8"model").
+ * @param outFormat [out] Receives the owned format string, or NULL when the key is absent. Must not be NULL.
+ * @returns Success; ErrorCode_InvalidAssetDefinition if "format" is present but not a string or not an
+ *          accepted extension (the message lists the accepted ones).
+ */
+Error AssetJSON_ReadOptionalFormat(JSONCompound* root, const AssetExtensionFilter* accepted,
+    const unsigned char* assetKindName, unsigned char** outFormat);
+
+/**
+ * @brief Checks at parse time that a location whose loader needs a real file can be loaded.
+ *
+ * A Reference location is materialized as a temp file, which needs an extension, so it requires a format.
+ * File locations always pass (their file supplies the extension).
+ * @param self The parsed location; must not be NULL.
+ * @param format The definition's validated "format", or NULL when absent.
+ * @param accepted The loader's accepted extensions (listed in the message); must not be NULL.
+ * @param assetKindName What the definition describes, for messages (e.g. u8"model").
+ * @returns Success; ErrorCode_InvalidAssetDefinition for a Reference location without a format.
+ */
+Error OwnedAssetLocation_ValidateReferenceFormat(const OwnedAssetLocation* self, const unsigned char* format,
+    const AssetExtensionFilter* accepted, const unsigned char* assetKindName);
+
+/**
+ * @brief Checks at parse time that a location for a resource without a "format" key is a file path.
+ *
+ * Texture locations (sprite sheet images, texture animation frames, model material maps) have no way to
+ * name a format, so a Reference location for them could never be loaded and is rejected here instead.
+ * @param self The parsed location; must not be NULL.
+ * @param resourceKindName What the location points at, for messages (e.g. u8"texture").
+ * @returns Success; ErrorCode_InvalidAssetDefinition for a Reference location.
+ */
+Error OwnedAssetLocation_RequireFile(const OwnedAssetLocation* self, const unsigned char* resourceKindName);
+
+/**
  * @brief Frees an owned location's string and zeroes it.
  * @param self The location to free; may be NULL.
  */
 void OwnedAssetLocation_Deconstruct(OwnedAssetLocation* self);
+
+/**
+ * @brief Picks the extension filter for resolving a resource: only the definition's format when it has
+ *        one, else every extension the loader accepts.
+ * @param accepted The loader's accepted extensions; must not be NULL.
+ * @param format Pointer to the definition's validated format string (or to NULL when it has none). The
+ *        returned filter borrows this pointer, so the pointed-to variable must outlive the filter.
+ * @returns The filter to pass to AssetManager_OpenResource / AssetManager_AcquireResourcePath.
+ */
+static inline AssetExtensionFilter AssetFormat_SelectFilter(const AssetExtensionFilter* accepted,
+    const unsigned char* const* format)
+{
+    if (*format == NULL)
+    {
+        return *accepted;
+    }
+    AssetExtensionFilter Filter;
+    Filter.Extensions = format;
+    Filter.Count = 1U;
+    return Filter;
+}
 
 /**
  * @brief Builds a borrowing AssetLocation view over an owned location (valid while the owner lives).

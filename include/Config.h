@@ -39,6 +39,11 @@ typedef struct GameConfigStruct
     /** @brief Target render frames per second when IsFPSUnlocked is false; always within a sane range after
      *  loading. Ignored when IsFPSUnlocked is true. */
     int32_t TargetFPS;
+    /** @brief true to synchronize buffer swaps with the display refresh (no tearing). The swap then blocks
+     *  until the next refresh, and the fixed-step updates owed for that wait run right after it, so input
+     *  is still polled every update tick but in a burst. Usually paired with IsFPSUnlocked so the display,
+     *  not TargetFPS, paces rendering. Default false. */
+    bool IsVSyncEnabled;
     /** @brief true to create the window in fullscreen mode; false for a regular windowed mode. */
     bool IsFullscreen;
     /** @brief Window width in pixels; always strictly positive and within a sane range after loading. */

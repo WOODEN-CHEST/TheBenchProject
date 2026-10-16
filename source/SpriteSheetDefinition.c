@@ -1,3 +1,4 @@
+#include <inttypes.h>
 #include "AssetTypesStandard.h"
 #include "AssetDefinitionCommon.h"
 #include "SpriteSheet.h"
@@ -11,12 +12,23 @@
  * fills the border transparent; "nearest_pixel" replicates the edge pixels (the default). NOTE:
  * "nearest_pixel_transparent" (edge color with zero alpha) is currently approximated by "nearest_pixel";
  * true zero-alpha edge replication needs per-pixel work and is a TODO.
+ *
+ * Limits: padding is at most SPRITE_SHEET_MAX_PADDING_PIXELS per axis (a larger value is a definition error;
+ * negative values count as 0), and every padded image and the packed atlas must fit in
+ * SPRITE_SHEET_MAX_ATLAS_DIMENSION pixels per side. The sizes are checked in 64-bit before any image is
+ * generated, because raylib's GenImageColor computes its buffer size in int and would overflow.
  */
 
 
 // Macros.
 /* Maximum atlas row width before the shelf packer wraps to a new row. */
 #define SPRITE_SHEET_MAX_ATLAS_WIDTH 2048
+/* Largest accepted "padding_pixels" value per axis. */
+#define SPRITE_SHEET_MAX_PADDING_PIXELS 64
+/* Largest accepted width or height of a padded image and of the packed atlas, in pixels. */
+#define SPRITE_SHEET_MAX_ATLAS_DIMENSION 8192
+/* What a sheet image's location points at, for parse-time messages. */
+#define SPRITE_SHEET_IMAGE_KIND ((const unsigned char*)u8"sprite sheet image")
 
 
 // Types.
@@ -152,7 +164,8 @@ static Error LoadSourceImages(SpriteSheetDefinition* definition, AssetManager* m
         SpriteSheetImage* SourceImage = &definition->Images[i];
         AssetLocation Location = OwnedAssetLocation_View(&SourceImage->Location);
         AssetResourcePath* PathHandle = NULL;
-        Error PathResult = AssetManager_AcquireResourcePath(manager, definition->Base.Type, &Location, NULL, &PathHandle);
+        Error PathResult = AssetManager_AcquireResourcePath(manager, definition->Base.Type, &Location,
+            &ASSET_EXTENSIONS_TEXTURE, NULL, &PathHandle);
         if (PathResult.Code != ErrorCode_Success)
         {
             UnloadPackedImages(items, i);
@@ -170,6 +183,18 @@ static Error LoadSourceImages(SpriteSheetDefinition* definition, AssetManager* m
             return Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to load sprite sheet image \"%s\".", SourceImage->Name);
         }
 
+        int64_t PaddedWidth = (int64_t)Original.width + (2 * (int64_t)definition->PaddingX);
+        int64_t PaddedHeight = (int64_t)Original.height + (2 * (int64_t)definition->PaddingY);
+        if ((PaddedWidth > SPRITE_SHEET_MAX_ATLAS_DIMENSION) || (PaddedHeight > SPRITE_SHEET_MAX_ATLAS_DIMENSION))
+        {
+            Error SizeResult = Error_Construct3(ErrorCode_InvalidAssetData,
+                u8"Sprite sheet image \"%s\" is %" PRId64 u8" x %" PRId64 u8" pixels with padding; at most %d x %d is supported.",
+                SourceImage->Name, PaddedWidth, PaddedHeight, SPRITE_SHEET_MAX_ATLAS_DIMENSION, SPRITE_SHEET_MAX_ATLAS_DIMENSION);
+            UnloadImage(Original);
+            UnloadPackedImages(items, i);
+            return SizeResult;
+        }
+
         items[i].OriginalWidth = Original.width;
         items[i].OriginalHeight = Original.height;
         items[i].Padded = BuildPaddedImage(Original, definition->PaddingX, definition->PaddingY, definition->PaddingColor);
@@ -178,31 +203,42 @@ static Error LoadSourceImages(SpriteSheetDefinition* definition, AssetManager* m
     return Error_CreateSuccess();
 }
 
-/* Shelf-packs @p items and writes the resulting atlas dimensions. */
-static void PackImages(PackItem* items, size_t count, int* outAtlasWidth, int* outAtlasHeight)
+/* Shelf-packs @p items and writes the resulting atlas dimensions. Positions and sizes are computed in 64-bit
+   and the atlas must fit in SPRITE_SHEET_MAX_ATLAS_DIMENSION per side, so every stored value fits an int. */
+static Error PackImages(const SpriteSheetDefinition* definition, PackItem* items, size_t count,
+    int* outAtlasWidth, int* outAtlasHeight)
 {
-    int X = 0;
-    int Y = 0;
-    int RowHeight = 0;
-    int AtlasWidth = 0;
+    int64_t X = 0;
+    int64_t Y = 0;
+    int64_t RowHeight = 0;
+    int64_t AtlasWidth = 0;
     for (size_t i = 0; i < count; i++)
     {
-        int Width = items[i].Padded.width;
-        int Height = items[i].Padded.height;
+        int64_t Width = items[i].Padded.width;
+        int64_t Height = items[i].Padded.height;
         if ((X > 0) && ((X + Width) > SPRITE_SHEET_MAX_ATLAS_WIDTH))
         {
             X = 0;
             Y += RowHeight;
             RowHeight = 0;
         }
-        items[i].X = X;
-        items[i].Y = Y;
+        if ((Y + Height) > SPRITE_SHEET_MAX_ATLAS_DIMENSION)
+        {
+            return Error_Construct3(ErrorCode_InvalidAssetData,
+                u8"Sprite sheet \"%s\" does not fit in a %d x %d atlas; split it into several sheets.",
+                definition->Base.Name, SPRITE_SHEET_MAX_ATLAS_DIMENSION, SPRITE_SHEET_MAX_ATLAS_DIMENSION);
+        }
+        items[i].X = (int)X;
+        items[i].Y = (int)Y;
         X += Width;
         if (X > AtlasWidth) { AtlasWidth = X; }
         if (Height > RowHeight) { RowHeight = Height; }
     }
-    *outAtlasWidth = (AtlasWidth > 0) ? AtlasWidth : 1;
-    *outAtlasHeight = ((Y + RowHeight) > 0) ? (Y + RowHeight) : 1;
+
+    // Each row is at most max(shelf width, widest image) wide, and every image passed the per-image limit.
+    *outAtlasWidth = (AtlasWidth > 0) ? (int)AtlasWidth : 1;
+    *outAtlasHeight = ((Y + RowHeight) > 0) ? (int)(Y + RowHeight) : 1;
+    return Error_CreateSuccess();
 }
 
 static Error BuildEntries(SpriteSheetDefinition* definition, PackItem* items, GenericBuffer* entries)
@@ -254,7 +290,13 @@ static Error SpriteSheetDefinition_LoadAsset(void* self, AssetManager* manager, 
 
     int AtlasWidth = 0;
     int AtlasHeight = 0;
-    PackImages(Items, Definition->ImageCount, &AtlasWidth, &AtlasHeight);
+    Result = PackImages(Definition, Items, Definition->ImageCount, &AtlasWidth, &AtlasHeight);
+    if (Result.Code != ErrorCode_Success)
+    {
+        UnloadPackedImages(Items, Definition->ImageCount);
+        Memory_Free(Items);
+        return Result;
+    }
 
     Color Transparent = { 0, 0, 0, 0 };
     Image Atlas = GenImageColor(AtlasWidth, AtlasHeight, Transparent);
@@ -286,13 +328,13 @@ static Error SpriteSheetDefinition_LoadAsset(void* self, AssetManager* manager, 
         return EntriesResult;
     }
 
-    Texture2D Texture = LoadTextureFromImage(Atlas);
-    SetTextureFilter(Texture, Definition->Filter);
+    Texture2D AtlasTexture = LoadTextureFromImage(Atlas);
+    SetTextureFilter(AtlasTexture, Definition->Filter);
     UnloadImage(Atlas);
     UnloadPackedImages(Items, Definition->ImageCount);
     Memory_Free(Items);
 
-    if (Texture.id == 0)
+    if (AtlasTexture.id == 0)
     {
         Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, Entries);
         Error_Deconstruct(&ReturnResult);
@@ -301,12 +343,12 @@ static Error SpriteSheetDefinition_LoadAsset(void* self, AssetManager* manager, 
 
     SpriteSheetLoaded* Loaded = Memory_Allocate(sizeof(SpriteSheetLoaded));
     Memory_Zero(Loaded, sizeof(*Loaded));
-    Loaded->Texture = Texture;
+    Loaded->Texture = AtlasTexture;
     Loaded->Entries = Entries;
-    Error ConstructResult = SpriteSheet_Construct1(&Loaded->Sheet, Texture, Entries);
+    Error ConstructResult = SpriteSheet_Construct1(&Loaded->Sheet, AtlasTexture, Entries);
     if (ConstructResult.Code != ErrorCode_Success)
     {
-        UnloadTexture(Texture);
+        UnloadTexture(AtlasTexture);
         Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, Entries);
         Error_Deconstruct(&ReturnResult);
         Memory_Free(Loaded);
@@ -346,7 +388,28 @@ static Error ParseImage(JSONCompound* compound, const unsigned char* sourceDescr
     Error NameCopyResult = AssetJSON_ValueToOwnedString(&NameValue, &outImage->Name);
     if (NameCopyResult.Code != ErrorCode_Success) { return NameCopyResult; }
 
-    return AssetJSON_ReadLocation(compound, (const unsigned char*)u8"location", sourceDescription, &outImage->Location);
+    Error LocationResult = AssetJSON_ReadLocation(compound, (const unsigned char*)u8"location", sourceDescription, &outImage->Location);
+    if (LocationResult.Code != ErrorCode_Success) { return LocationResult; }
+    return OwnedAssetLocation_RequireFile(&outImage->Location, SPRITE_SHEET_IMAGE_KIND);
+}
+
+/* Reads "padding_pixels": negative values count as 0 (as documented), values above
+   SPRITE_SHEET_MAX_PADDING_PIXELS are a definition error rather than being clamped silently. */
+static Error ParsePadding(JSONCompound* root, int* outPaddingX, int* outPaddingY)
+{
+    int64_t PaddingX = 0;
+    int64_t PaddingY = 0;
+    Error Result = AssetJSON_ReadOptionalVectorInt(root, (const unsigned char*)u8"padding_pixels", 0, 0, &PaddingX, &PaddingY);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    if ((PaddingX > SPRITE_SHEET_MAX_PADDING_PIXELS) || (PaddingY > SPRITE_SHEET_MAX_PADDING_PIXELS))
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+            u8"\"padding_pixels\" is (%" PRId64 u8", %" PRId64 u8"); at most %d per axis is allowed.",
+            PaddingX, PaddingY, SPRITE_SHEET_MAX_PADDING_PIXELS);
+    }
+    *outPaddingX = (PaddingX > 0) ? (int)PaddingX : 0;
+    *outPaddingY = (PaddingY > 0) ? (int)PaddingY : 0;
+    return Error_CreateSuccess();
 }
 
 static Error ParsePaddingColor(JSONCompound* root, SpriteSheetPaddingColor* outColor)
@@ -447,14 +510,7 @@ Error SpriteSheetDefinition_Construct(AssetManager* manager, const UserData* use
     }
     if (Result.Code == ErrorCode_Success)
     {
-        int64_t PaddingX = 0;
-        int64_t PaddingY = 0;
-        Result = AssetJSON_ReadOptionalVectorInt(RootCompound, (const unsigned char*)u8"padding_pixels", 0, 0, &PaddingX, &PaddingY);
-        if (Result.Code == ErrorCode_Success)
-        {
-            Definition->PaddingX = (PaddingX > 0) ? (int)PaddingX : 0;
-            Definition->PaddingY = (PaddingY > 0) ? (int)PaddingY : 0;
-        }
+        Result = ParsePadding(RootCompound, &Definition->PaddingX, &Definition->PaddingY);
     }
     if (Result.Code == ErrorCode_Success)
     {

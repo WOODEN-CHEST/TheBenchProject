@@ -51,12 +51,12 @@ static void FillObjectDTO(WorldObject* object, WorldObjectDTO* outRecord)
     {
         case WorldObjectType_Model:
         {
-            WorldModelObject* Model = (WorldModelObject*)object;
-            WorldShared_CloneString(WorldModelObject_GetModelAssetName(Model),
+            WorldModelObject* ModelObject = (WorldModelObject*)object;
+            WorldShared_CloneString(WorldModelObject_GetModelAssetName(ModelObject),
                 &outRecord->Data.Model.ModelAssetName);
-            outRecord->Data.Model.HasOutline = Model->HasOutline;
-            outRecord->Data.Model.OmitPixelation = Model->OmitPixelation;
-            outRecord->Data.Model.ShadowTier = Model->ShadowTier;
+            outRecord->Data.Model.HasOutline = ModelObject->HasOutline;
+            outRecord->Data.Model.OmitPixelation = ModelObject->OmitPixelation;
+            outRecord->Data.Model.ShadowTier = ModelObject->ShadowTier;
             break;
         }
 
@@ -113,16 +113,16 @@ static Error BuildObjectFromDTO(const WorldObjectDTO* record, WorldObject** outO
     {
         case WorldObjectType_Model:
         {
-            WorldModelObject* Model = NULL;
-            Error Result = WorldModelObject_Create(record->Name, record->Data.Model.ModelAssetName, &Model);
+            WorldModelObject* ModelObject = NULL;
+            Error Result = WorldModelObject_Create(record->Name, record->Data.Model.ModelAssetName, &ModelObject);
             if (Result.Code != ErrorCode_Success)
             {
                 return Result;
             }
-            Model->HasOutline = record->Data.Model.HasOutline;
-            Model->OmitPixelation = record->Data.Model.OmitPixelation;
-            Model->ShadowTier = record->Data.Model.ShadowTier;
-            Base = WorldModelObject_AsObject(Model);
+            ModelObject->HasOutline = record->Data.Model.HasOutline;
+            ModelObject->OmitPixelation = record->Data.Model.OmitPixelation;
+            ModelObject->ShadowTier = record->Data.Model.ShadowTier;
+            Base = WorldModelObject_AsObject(ModelObject);
             break;
         }
 
@@ -167,9 +167,11 @@ static Error BuildObjectFromDTO(const WorldObjectDTO* record, WorldObject** outO
             Base = WorldLight_AsObject(Light);
             break;
         }
-
-        default:
-            return Error_Construct2(ErrorCode_IllegalArgument, "BuildObjectFromDTO: unknown object type.");
+    }
+    if (Base == NULL)
+    {
+        // No case matched: the record carries a value outside WorldObjectType (corrupted or newer data).
+        return Error_Construct2(ErrorCode_IllegalArgument, "BuildObjectFromDTO: unknown object type.");
     }
 
     Error BaseResult = ApplyBaseFields(Base, record);

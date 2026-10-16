@@ -23,10 +23,21 @@
  * A Logger is a value type the caller owns: construct one with Logger_Construct, keep it alive for the
  * lifetime of the session, pass a pointer to it wherever logging is needed, and release it with
  * Logger_Deconstruct. It holds an open file handle and reusable scratch buffers, so it is not copied
- * by value and is not thread-safe (guard it externally if logged from multiple threads).
+ * by value.
+ *
+ * Usage rules:
+ *  - Main thread only. The logger shares its line and format buffers between calls and is not
+ *    thread-safe; code running on another thread (e.g. an audio callback) must never log.
+ *  - Never log per tick from the update loop. Every line is flushed to the file and to stdout
+ *    immediately (so a crash never loses it), which makes logging far too slow for hot paths. Log
+ *    state changes instead: a recoverable failure is logged once, when it first happens.
+ *  - The *Formatted functions are printf-style. With GCC their arguments are checked against the
+ *    format at compile time (see LOGGER_CHECK_FORMAT). Stick to %s, %d and %f, and print 64-bit or
+ *    size_t values as (uint64_t)/(int64_t) with the PRIu64/PRId64 macros from <inttypes.h>, because
+ *    "long" is 32-bit on Windows.
  *
  * Paths are relative to the process working directory: "logs/latest.log" for the active log and
- * "logs/archived/" for rotated logs.
+ * "logs/archived/" for rotated logs. Only the newest archives are kept (see Logger_Construct).
  */
 
 
@@ -77,17 +88,16 @@ typedef struct LoggerStruct
  * @brief Moves an existing "logs/latest.log" into the archive directory, if one exists.
  *
  * If "logs/latest.log" exists, this reads its last-modification date, ensures "logs/archived/" exists,
- * copies the log's contents to "logs/archived/<date>.log" (where <date> is formatted like the log
- * timestamps, e.g. "2026y,07m,05d"), and then deletes the original so the move is complete. If a file
- * with that name already exists, a space and the lowest free number are appended
- * ("...<date> 1.log", "...<date> 2.log", ...) until an unused name is found. If "logs/latest.log" does
- * not exist, this is a successful no-op (nothing to move).
+ * and moves the log (a single filesystem rename) to "logs/archived/<date>.log", where <date> is
+ * formatted like the log timestamps, e.g. "2026y;07m;05d". If a file with that name already exists, a
+ * space and the lowest free number from 2 upward are appended ("...<date> 2.log", "...<date> 3.log",
+ * ...) until an unused name is found. If "logs/latest.log" does not exist, this is a successful no-op
+ * (nothing to move). It does not prune old archives; Logger_Construct does that.
  *
  * This is normally called for you by Logger_Construct; it is exposed so a log can be rotated on demand.
  * @returns A success Error on success (including the "nothing to archive" case). Propagates
- *          filesystem errors from querying, reading, writing or deleting the logs (e.g.
- *          ErrorCode_IO, ErrorCode_DirectoryNotFound), and ErrorCode_BufferTooSmall if a path could
- *          not be built.
+ *          filesystem errors from querying or moving the log (e.g. ErrorCode_IO,
+ *          ErrorCode_DirectoryNotFound), and ErrorCode_BufferTooSmall if a path could not be built.
  * @note May propagate errors from internal calls; consult the documentation of called functions for
  *       the full set.
  */
@@ -98,8 +108,9 @@ Error Logger_ArchiveLatestLog(void);
  *
  * Ensures the "logs" directory exists, archives any existing "logs/latest.log" via
  * Logger_ArchiveLatestLog, opens a fresh "logs/latest.log" for writing, binds stdout, and allocates
- * the reusable scratch buffers. On failure @p self is left uninitialized (safe to pass to
- * Logger_Deconstruct, which will do nothing).
+ * the reusable scratch buffers. Finally it deletes the oldest archived logs (by modification time)
+ * until at most 30 remain; a failure there is logged as a warning and does not fail construction. On
+ * failure @p self is left uninitialized (safe to pass to Logger_Deconstruct, which will do nothing).
  * @param self [out] The logger to initialize. Must not be NULL. Fully overwritten.
  * @returns A success Error on success. ErrorCode_IllegalArgument if @p self is NULL; propagates
  *          filesystem/stream errors from directory creation, archiving, or opening the log/stdout
@@ -225,3 +236,62 @@ Error Logger_LogCriticalFormatted(Logger* self, const unsigned char* format, ...
  *          otherwise (all resources are still released).
  */
 Error Logger_Deconstruct(Logger* self);
+
+
+// Compile-time format checking.
+#if defined(__GNUC__)
+/**
+ * @brief Compile-time printf format checker used by LOGGER_CHECK_FORMAT; never called at run time.
+ *
+ * It only ever appears inside sizeof, which does not evaluate its operand, so no code is generated.
+ * The format attribute still makes GCC type-check the arguments against the format. The attribute
+ * only accepts a plain `const char*` format parameter, which is why LOGGER_CHECK_FORMAT casts the
+ * project's `unsigned char` UTF-8 formats.
+ * @param format The printf-style format.
+ * @param ... The arguments to check against @p format.
+ * @returns Always 0.
+ */
+__attribute__((format(printf, 1, 2))) static inline int Logger_CheckFormat(const char* format, ...)
+{
+    (void)format;
+    return 0;
+}
+
+/**
+ * @brief Type-checks a Logger format string and its arguments at compile time; generates no code.
+ *
+ * A mismatch (e.g. "%d" given a string) is a -Wformat warning, which -Werror turns into a build error.
+ * Only active with GCC-compatible compilers; elsewhere it expands to nothing.
+ */
+#define LOGGER_CHECK_FORMAT(format, ...) \
+    ((void)sizeof(Logger_CheckFormat((const char*)(format) __VA_OPT__(,) __VA_ARGS__)))
+#else
+#define LOGGER_CHECK_FORMAT(format, ...) ((void)0)
+#endif
+
+// The *Formatted functions are wrapped in same-named macros so every call site is format-checked
+// without changing how it is written. A macro is not re-expanded inside its own expansion, so the inner
+// name still calls the function. Logger.c defines LOGGER_IMPLEMENTATION to opt out while it defines the
+// functions.
+#ifndef LOGGER_IMPLEMENTATION
+/** @brief Format-checked call of Logger_LogFormatted (see LOGGER_CHECK_FORMAT). */
+#define Logger_LogFormatted(self, level, format, ...) \
+    (LOGGER_CHECK_FORMAT(format __VA_OPT__(,) __VA_ARGS__), \
+    Logger_LogFormatted((self), (level), (format) __VA_OPT__(,) __VA_ARGS__))
+/** @brief Format-checked call of Logger_LogInfoFormatted (see LOGGER_CHECK_FORMAT). */
+#define Logger_LogInfoFormatted(self, format, ...) \
+    (LOGGER_CHECK_FORMAT(format __VA_OPT__(,) __VA_ARGS__), \
+    Logger_LogInfoFormatted((self), (format) __VA_OPT__(,) __VA_ARGS__))
+/** @brief Format-checked call of Logger_LogWarningFormatted (see LOGGER_CHECK_FORMAT). */
+#define Logger_LogWarningFormatted(self, format, ...) \
+    (LOGGER_CHECK_FORMAT(format __VA_OPT__(,) __VA_ARGS__), \
+    Logger_LogWarningFormatted((self), (format) __VA_OPT__(,) __VA_ARGS__))
+/** @brief Format-checked call of Logger_LogErrorFormatted (see LOGGER_CHECK_FORMAT). */
+#define Logger_LogErrorFormatted(self, format, ...) \
+    (LOGGER_CHECK_FORMAT(format __VA_OPT__(,) __VA_ARGS__), \
+    Logger_LogErrorFormatted((self), (format) __VA_OPT__(,) __VA_ARGS__))
+/** @brief Format-checked call of Logger_LogCriticalFormatted (see LOGGER_CHECK_FORMAT). */
+#define Logger_LogCriticalFormatted(self, format, ...) \
+    (LOGGER_CHECK_FORMAT(format __VA_OPT__(,) __VA_ARGS__), \
+    Logger_LogCriticalFormatted((self), (format) __VA_OPT__(,) __VA_ARGS__))
+#endif

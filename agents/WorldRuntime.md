@@ -88,7 +88,8 @@ map plus a low-res post pass give the stylised look.
   cascade(s) it is rendered into (`DrawShadowCasters` filters per cascade). The `world_pbr` fragment samples
   the near cascade first and falls back to the far cascade for fragments beyond the near frustum, with a **2×2
   PCF + slope-scaled bias** for CRISP, hard-edged pixel-art shadows, darkening only the sun's direct term
-  (ambient still lights shadows). Near cascade on texture slot 10, far on slot 12. Gated on shadows-enabled +
+  (ambient still lights shadows). Near cascade on texture unit 12, far on unit 13 (see "Fixed texture units"
+  under Renderer structure). Gated on shadows-enabled +
   strength > 0 + sun above the horizon; the far cascade is an optional add-on (skipped if its map can't be made).
 * **Normal G-buffer + outlines + AO**: `RenderNormalBuffer` draws model objects through the `world_normal`
   shader (a vertex+fragment pair) into a low-res 8-bit RGBA target (blending disabled) with a **samplable depth
@@ -111,6 +112,29 @@ SCOPE now: models are PBR-lit with crisp sun shadows, the sky is the atmospheric
 pass adds SSAO + depth/normal-edge outlines, and the whole scene is HDR→tonemapped. Sprites, lights, and the
 remaining effect pipeline (point-light culling, fog, bloom, sunshafts, per-object omit-pixelation) are marked
 TODO and layer on later.
+
+### Renderer structure (keep it clean)
+
+`WorldRenderer.c` is about 3,000 lines with a state struct of about 160 fields. It is scheduled to be split by
+render pass (handoff/FIX_PLAN.md, Phase 3): targets, per-object render cache, geometry, lighting, shadows,
+G-buffer/AO, sky and post-processing in separate files, sharing a private header and a per-frame context.
+The renderer will keep receiving features, so these rules apply now and after the split:
+
+- **One pass, one place.** A new pass gets its own clearly separated section (after the split, its own
+  file) instead of being threaded through existing functions. Do not grow the monolith.
+- **Group state per pass.** A pass's shader, uniform locations, targets and toggles belong together (after
+  the split, one sub-struct per pass), not appended to the flat field list.
+- **Render reads, it never writes.** Drawing must not mutate world objects or shared assets. Two known
+  violations are scheduled for Phase 3: pass shaders written into the shared model's materials, and sprite
+  animations bound lazily during render.
+- **Fixed texture units.** Renderer-owned samplers use `WorldRendererTextureUnit` (units 12–15, above
+  raylib's material-map units 0–11 and the 2D batch's 0–4). Add new ones there, point each sampler at its
+  unit once in `EnsureShaders`, and only bind textures per frame. Never leave a sampler on unit 0: OpenGL
+  forbids samplers of different types on one unit.
+- **Constants shared with GLSL stay in sync.** `MAX_POINT_LIGHTS` in `pbr/fragment.frag` must equal
+  `WORLD_MAX_FORWARD_LIGHTS` until Phase 3 adds a shader-side clamp and a load-time check.
+- **Failures degrade loudly once.** A missing shader or target falls back with one log line, never silently
+  and never per frame.
 
 ## Shader assets (vertex + fragment)
 

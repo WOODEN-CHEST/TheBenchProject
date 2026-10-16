@@ -26,11 +26,28 @@
  * registered together by AssetManager_CreateStandardAssetTypes.
  *
  * DEFINITIONS. Each definition has a name that is unique within its type (names may repeat across types).
- * Definitions may be added or removed at any time; removing a definition does NOT unload an asset already
- * built from it, it only prevents future loads until the definition is re-added. Definitions are usually
- * read from files at startup with AssetManager_ReadDefinitions, but they can also be built in code and
- * registered with AssetManager_SetDefinition, or built from raw bytes with AssetManager_BuildDefinition
- * (e.g. by a custom, non-filesystem source such as a server download).
+ * A name starts with a lowercase ASCII letter and contains only a-z, 0-9, '_', '.' and '-' (see
+ * AssetManager_IsValidAssetName). Definitions may be added or removed at any time; removing a definition
+ * does NOT unload an asset already built from it, it only prevents future loads until the definition is
+ * re-added. Definitions are usually read from files at startup with AssetManager_ReadDefinitions (a bad
+ * definition file is logged and skipped, never fatal), but they can also be built in code and registered
+ * with AssetManager_SetDefinition, or built from raw bytes with AssetManager_BuildDefinition (e.g. by a
+ * custom, non-filesystem source such as a server download).
+ *
+ * RESOURCE FILES. A File location names a resource WITHOUT its extension. Loaders pass the extensions they
+ * can decode (an AssetExtensionFilter); in each search root, in priority order, the candidates are the
+ * files in the location's directory whose stem equals the location's last entry name, that are not
+ * definition files and whose extension the filter accepts. The first root with any candidate decides: one
+ * candidate resolves, two or more is an ambiguity error listing them, none moves on to the next root.
+ *
+ * FAILED LOADS. When building an asset fails, the failure is logged once and remembered on its definition.
+ * Later loads of that asset return the same error code immediately, without touching the disk, until
+ * definitions, types, search roots or reference resources change, or AssetManager_ClearLoadFailures is
+ * called.
+ *
+ * LOGGING. The manager borrows an optional Logger (given to AssetManager_Construct1) and reports
+ * recoverable problems through it: skipped definition files and first-time load failures. With a NULL
+ * logger nothing is logged; the same information is still available through return values.
  *
  * NOT TIED TO JSON. The manager core only ever moves opaque byte buffers; it never parses them. The
  * format of a definition blob is entirely the concern of that type's AssetDefinitionConstructor. The
@@ -69,6 +86,9 @@
 /** @brief Opaque handle to a JSON object pool (from WRJSON); used only by the standard-types helper so
  *         this header need not include WRJSON. */
 typedef struct JSONObjectPoolStruct JSONObjectPool;
+
+/** @brief The logger; full type in Logger.h. The manager only borrows it (see AssetManager_Construct1). */
+typedef struct LoggerStruct Logger;
 
 /** @brief The asset manager. Opaque; construct with AssetManager_Construct1. */
 typedef struct AssetManagerStruct AssetManager;
@@ -119,6 +139,24 @@ typedef struct AssetLocationStruct
      *         reference name (Reference). Not retained past the call it is passed to. */
     const unsigned char* Value;
 } AssetLocation;
+
+/**
+ * @brief The file extensions a loader accepts when a File location is resolved to a real file.
+ *
+ * A borrowed view built by the caller (usually a constant per loader); nothing is copied or retained past
+ * the call it is passed to. Extensions are written WITHOUT the dot (u8"png") and are compared
+ * case-insensitively for ASCII letters. A filter whose Extensions is NULL, or whose Count is 0, accepts
+ * every extension (including files without one). See AssetManager_OpenResource for how the filter takes
+ * part in choosing a file.
+ */
+typedef struct AssetExtensionFilterStruct
+{
+    /** @brief Borrowed array of Count NUL-terminated extensions without the dot, matched
+     *         case-insensitively; NULL accepts any extension. */
+    const unsigned char* const* Extensions;
+    /** @brief Number of entries in Extensions; 0 accepts any extension. */
+    size_t Count;
+} AssetExtensionFilter;
 
 /**
  * @brief Produces a readable stream for a named (non-file) resource.
@@ -199,7 +237,8 @@ typedef struct AssetDefinitionVTableStruct
      * @brief Builds a concrete asset from this recipe.
      *
      * Opens the definition's resources via the manager (AssetManager_OpenResource /
-     * AssetManager_AcquireResourcePath), builds the custom wrapper (drawing scratch/backing storage from
+     * AssetManager_AcquireResourcePath, passing the extensions the loader can decode so a File location
+     * picks the right file), builds the custom wrapper (drawing scratch/backing storage from
      * the manager's buffer pools where useful), and fills @p outLoaded. To pull in dependency assets
      * (e.g. a sprite animation depending on a sprite sheet), load them via AssetManager_LoadAssetSingle
      * attributed to @p dependencyUser so they stay alive exactly as long as this asset does. Runs on the
@@ -236,7 +275,8 @@ typedef struct AssetDefinitionStruct
     const AssetDefinitionVTable* VTable;
     /** @brief The type this definition belongs to; set by the manager at registration. */
     AssetTypeID Type;
-    /** @brief Owned, NUL-terminated UTF-8 asset name, unique within the type; set by the constructor. */
+    /** @brief Owned, NUL-terminated UTF-8 asset name, unique within the type; set by the constructor.
+     *         Registration rejects names that fail AssetManager_IsValidAssetName. */
     unsigned char* Name;
 } AssetDefinition;
 
@@ -325,12 +365,19 @@ typedef struct AssetLoadProgressStruct AssetLoadProgress;
  *
  * The new manager has no types, definitions, search roots, or loaded assets, and a default cache
  * directory (see AssetManager_SetCacheDirectory). Release with AssetManager_Deconstruct.
+ *
+ * The manager reports recoverable problems through @p logger: definition files skipped by
+ * AssetManager_ReadDefinitions (one ERROR each plus a WARNING summary), the first failure of each asset
+ * load (ERROR), and a cache directory that cannot be prepared (WARNING). It never logs per frame. The
+ * logger is BORROWED: it must stay valid until AssetManager_Deconstruct returns. Pass NULL (e.g. in tests)
+ * to log nothing; return values carry the same information.
+ * @param logger The logger to report through; borrowed, may be NULL.
  * @param outSelf [out] Receives the new manager on success, NULL on failure. Must not be NULL.
  * @returns Success, or ErrorCode_IllegalArgument if @p outSelf is NULL.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
-Error AssetManager_Construct1(AssetManager** outSelf);
+Error AssetManager_Construct1(Logger* logger, AssetManager** outSelf);
 
 /**
  * @brief Unloads everything and frees the manager.
@@ -351,7 +398,8 @@ Error AssetManager_Deconstruct(AssetManager* self);
  * @brief Registers a new asset type and returns its id.
  *
  * Copies the names from @p info. The type name and directory name must each be unique among registered
- * types.
+ * types. Clears all cached load failures (see AssetManager_ClearLoadFailures) before adding the type,
+ * since a loader may have failed for want of it.
  * @param self The manager; must not be NULL.
  * @param info The type description; must not be NULL, with a non-NULL Name, DirectoryName, and Constructor.
  * @param outID [out] Receives the new type id on success, ASSET_TYPE_ID_INVALID on failure. Must not be NULL.
@@ -387,11 +435,14 @@ Error AssetManager_CreateStandardAssetTypes(AssetManager* self, StandardAssetTyp
  * @brief Unregisters an asset type.
  *
  * Fails if any definition of the type is still registered or any asset of the type is still loaded; remove
- * those first.
+ * those first. Once those checks pass, all cached load failures are cleared (see
+ * AssetManager_ClearLoadFailures) and the type is removed.
  * @param self The manager; must not be NULL.
  * @param id The type to remove.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p id is invalid/unknown;
  *          ErrorCode_InvalidOperation if definitions or loaded assets of the type remain.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
  */
 Error AssetManager_RemoveAssetType(AssetManager* self, AssetTypeID id);
 
@@ -424,8 +475,12 @@ Error AssetManager_GetAssetTypeByName(AssetManager* self, const unsigned char* n
 
 
 // ---- Search roots / resource packs ----
+// Changing the root list clears all cached load failures first (see AssetManager_ClearLoadFailures),
+// because a different file may now resolve.
 /**
  * @brief Appends a search root at the lowest priority.
+ *
+ * Clears all cached load failures before adding the root.
  * @param self The manager; must not be NULL.
  * @param directory NUL-terminated UTF-8 directory path; copied. Must not be NULL/empty.
  * @returns Success; ErrorCode_IllegalArgument for NULL/empty args.
@@ -436,6 +491,8 @@ Error AssetManager_AddSearchRoot(AssetManager* self, const unsigned char* direct
 
 /**
  * @brief Inserts a search root at a given priority index (0 = highest priority / override winner).
+ *
+ * Clears all cached load failures before inserting the root.
  * @param self The manager; must not be NULL.
  * @param index Insertion index in [0, current count]. Out-of-range fails.
  * @param directory NUL-terminated UTF-8 directory path; copied. Must not be NULL/empty.
@@ -448,6 +505,8 @@ Error AssetManager_InsertSearchRoot(AssetManager* self, size_t index, const unsi
 
 /**
  * @brief Removes the first search root equal to @p directory.
+ *
+ * Clears all cached load failures before removing the root (not when the root is absent).
  * @param self The manager; must not be NULL.
  * @param directory NUL-terminated UTF-8 directory path to remove. Must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument for NULL args; ErrorCode_InvalidOperation if not present.
@@ -477,11 +536,14 @@ Error AssetManager_GetSearchRoot(AssetManager* self, size_t index, const unsigne
 /**
  * @brief Sets the fallback resolver used for reference locations with no registered in-memory bytes.
  *
- * Replaces any previous resolver. Passing a NULL resolver clears it.
+ * Replaces any previous resolver. Passing a NULL resolver clears it. Clears all cached load failures
+ * first.
  * @param self The manager; must not be NULL.
  * @param resolver The resolver callback, or NULL to clear.
  * @param userData Context stored by value and handed to the resolver on each call; may be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
  */
 Error AssetManager_SetReferenceResolver(AssetManager* self, AssetReferenceResolver resolver, const UserData* userData);
 
@@ -489,7 +551,8 @@ Error AssetManager_SetReferenceResolver(AssetManager* self, AssetReferenceResolv
  * @brief Registers a fixed in-memory blob under a reference name (the manager copies the bytes).
  *
  * A later reference location with this name resolves to these bytes (taking precedence over the resolver).
- * Registering the same name again replaces the bytes.
+ * Registering the same name again replaces the bytes. Clears all cached load failures before storing
+ * the bytes.
  * @param self The manager; must not be NULL.
  * @param referenceName NUL-terminated UTF-8 reference name; copied. Must not be NULL/empty.
  * @param bytes The resource bytes; copied into pooled storage. May be NULL only if @p byteCount is 0.
@@ -502,25 +565,66 @@ Error AssetManager_SetReferenceBytes(AssetManager* self, const unsigned char* re
     const unsigned char* bytes, size_t byteCount);
 
 /**
+ * @brief Reports whether an extension filter accepts a file extension.
+ *
+ * Compares @p extension against each entry case-insensitively (ASCII letters only; other bytes must match
+ * exactly). An empty filter (NULL @p self, NULL Extensions or Count 0) accepts everything.
+ * @param self The filter; may be NULL (accepts everything).
+ * @param extension The extension WITHOUT the dot (u8"png"), or an empty string for a file without one;
+ *        NUL-terminated. NULL is treated as an empty string.
+ * @returns true if the extension is accepted, false otherwise.
+ */
+bool AssetExtensionFilter_Accepts(const AssetExtensionFilter* self, const unsigned char* extension);
+
+/**
+ * @brief Appends a human-readable list of a filter's extensions (e.g. "png, bmp, gif") for messages.
+ *
+ * Treats @p destination as one growing string: an existing trailing NUL is dropped, the list is appended
+ * and the result is NUL-terminated. An empty filter appends "any extension". Does not clear
+ * @p destination first.
+ * @param self The filter; may be NULL (appends "any extension").
+ * @param destination The byte buffer (element size 1) to append to; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p destination is NULL or not a byte buffer;
+ *          ErrorCode_BufferTooSmall if the buffer cannot grow.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error AssetExtensionFilter_AppendList(const AssetExtensionFilter* self, GenericBuffer* destination);
+
+/**
  * @brief Opens a resource location as a readable stream.
  *
- * For a File location: resolves @p location->Value (an extension-less relative path) under
- * @p assetType's directory across the search roots in priority order, opening the first match (the file's
- * extension is discovered automatically). For a Reference location: returns a stream over registered
- * in-memory bytes if present, else dispatches to the reference resolver. The returned stream is owned by
- * the manager; the caller must close it with AssetManager_CloseResource (NOT IOStream_Deconstruct, which
- * would not free the manager's heap wrapper and any backing buffer).
+ * For a File location, @p location->Value is a relative path WITHOUT an extension, resolved under
+ * @p assetType's directory. The search roots are tried in priority order. In a root, the candidates are
+ * the files in the location's directory whose stem (name minus its last extension) equals the location's
+ * last entry name, that do not carry the type's definition-file extension, and whose extension
+ * @p extensions accepts. The first root with at least one candidate decides: exactly one candidate is
+ * opened; two or more fail with ErrorCode_InvalidAssetDefinition naming every candidate (so leftover
+ * files never make the choice depend on directory order); none moves on to the next root. Example: with
+ * the model filter, "ships/ship" picks "ships/ship.obj" over "ships/ship.mtl"; "a/b.c" only matches
+ * files whose stem is "b.c" (such as "a/b.c.png"), never "a/b.png".
+ *
+ * For a Reference location, returns a stream over registered in-memory bytes if present, else dispatches
+ * to the reference resolver; @p extensions is not used.
+ *
+ * The returned stream is owned by the manager; the caller must close it with AssetManager_CloseResource
+ * (NOT IOStream_Deconstruct, which would not free the manager's heap wrapper and any backing buffer).
  * @param self The manager; must not be NULL.
  * @param assetType The type whose directory to resolve File locations under.
  * @param location The location to open; must not be NULL.
+ * @param extensions The extensions the caller can decode; borrowed. NULL (or an empty filter) accepts
+ *        any extension.
  * @param outStream [out] Receives the opened stream on success, NULL on failure. Must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument for NULL args or an unknown type; ErrorCode_FileNotFound if
- *          no root contains the file; ErrorCode_InvalidOperation if a reference cannot be resolved.
+ *          no root contains a file for the location; ErrorCode_InvalidAssetData if files with the right
+ *          stem exist but none has an accepted extension (the message lists them and the accepted set);
+ *          ErrorCode_InvalidAssetDefinition if the deciding root holds several candidates;
+ *          ErrorCode_InvalidOperation if a reference cannot be resolved.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
 Error AssetManager_OpenResource(AssetManager* self, AssetTypeID assetType,
-    const AssetLocation* location, IOStream** outStream);
+    const AssetLocation* location, const AssetExtensionFilter* extensions, IOStream** outStream);
 
 /**
  * @brief Closes and frees a stream returned by AssetManager_OpenResource.
@@ -541,24 +645,30 @@ Error AssetManager_CloseResource(AssetManager* self, IOStream* stream);
 /**
  * @brief Resolves a location to a usable filesystem path (for loaders that cannot take a stream).
  *
- * A File location resolves to its real path under the search roots (no copy). A Reference location is
- * written to a temp file in the cache directory named with @p preferredExtension, and that path is
- * returned. Release the handle with AssetManager_ReleaseResourcePath (which deletes any temp file).
- * Reference resources used this way must be self-contained single files, since a temp file cannot resolve
- * external sibling files.
+ * A File location resolves to its real path under the search roots (no copy), choosing the file exactly
+ * as AssetManager_OpenResource does (including the ambiguity error). A Reference location is written to a
+ * temp file in the cache directory named with @p preferredExtension, and that path is returned. Release
+ * the handle with AssetManager_ReleaseResourcePath (which deletes any temp file). Reference resources used
+ * this way must be self-contained single files, since a temp file cannot resolve external sibling files.
  * @param self The manager; must not be NULL.
  * @param assetType The type whose directory to resolve File locations under.
  * @param location The location to resolve; must not be NULL.
+ * @param extensions The extensions the caller can decode, used for File locations; borrowed. NULL (or an
+ *        empty filter) accepts any extension. A loader with a definition "format" passes a filter holding
+ *        only that format.
  * @param preferredExtension Extension WITHOUT the dot (e.g. u8"glb") used to name a materialized temp
  *        file; ignored for File locations. May be NULL only for File locations.
  * @param outHandle [out] Receives the path handle on success, NULL on failure. Must not be NULL.
- * @returns Success; ErrorCode_IllegalArgument for NULL args or an unknown type; ErrorCode_FileNotFound if
- *          no root contains the file; ErrorCode_InvalidOperation if a reference cannot be resolved.
+ * @returns Success; ErrorCode_IllegalArgument for NULL args or an unknown type; ErrorCode_FileNotFound,
+ *          ErrorCode_InvalidAssetData or ErrorCode_InvalidAssetDefinition when a File location does not
+ *          resolve to exactly one file (see AssetManager_OpenResource); ErrorCode_InvalidOperation if a
+ *          reference cannot be resolved.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
 Error AssetManager_AcquireResourcePath(AssetManager* self, AssetTypeID assetType,
-    const AssetLocation* location, const unsigned char* preferredExtension, AssetResourcePath** outHandle);
+    const AssetLocation* location, const AssetExtensionFilter* extensions, const unsigned char* preferredExtension,
+    AssetResourcePath** outHandle);
 
 /**
  * @brief Returns the NUL-terminated filesystem path a handle resolved to (borrowed; valid until release).
@@ -595,16 +705,37 @@ Error AssetManager_SetCacheDirectory(AssetManager* self, const unsigned char* di
 /**
  * @brief Reads and registers every definition found under the search roots (filesystem source).
  *
- * For each registered type, walks each search root's type sub-directory for definition files, reads each
- * file's bytes, builds a definition with the type's constructor, and registers it. On a (type, name)
- * collision across roots, the higher-priority (lower-index) root wins.
+ * For each search root (in priority order) and each registered type, walks the root's type
+ * sub-directory recursively for definition files, reads each file's bytes, builds a definition with the
+ * type's constructor, and registers it with the file as its source.
+ *
+ * Each file is handled on its own. A file that cannot be read, does not parse, fails its constructor or
+ * cannot be registered (invalid name, duplicate) is SKIPPED: it is logged as an ERROR
+ * ("Skipped <type> definition \"<path>\": <reason>"), counted, and the scan continues with the next file.
+ * If any file was skipped, one WARNING with the count follows. A directory that cannot be enumerated
+ * aborts only that directory (logged as an ERROR); the scan continues with the next type and root.
+ *
+ * Name collisions within a type:
+ *  - Same search root: the definition found first stays registered and every later one is skipped as an
+ *    error naming both files, because the winner would otherwise depend on directory order.
+ *  - Different roots: the higher-priority (lower-index) root wins and the lower one is ignored silently;
+ *    this is how resource packs override base assets.
+ *  - A definition read by an EARLIER call is replaced by this call's winner, so calling this again after
+ *    changing the roots applies the new override order. A definition registered in code with
+ *    AssetManager_SetDefinition is never replaced by a file.
+ *
+ * Clears every cached load failure (see AssetManager_ClearLoadFailures).
  * @param self The manager; must not be NULL.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL. Individual malformed definitions may be
- *          reported per the manager's error policy.
+ * @param outFailedFileCount [out] Receives the number of skipped definition files (0 when all were
+ *        registered). May be NULL. Set to 0 first, also on failure.
+ * @returns Success when every directory could be scanned, even if individual files were skipped (see
+ *          @p outFailedFileCount); ErrorCode_IllegalArgument if @p self is NULL; otherwise the FIRST
+ *          directory-enumeration or structural error (later ones are logged and released), after the
+ *          rest of the scan has still run.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
-Error AssetManager_ReadDefinitions(AssetManager* self);
+Error AssetManager_ReadDefinitions(AssetManager* self, size_t* outFailedFileCount);
 
 /**
  * @brief Builds a definition from raw bytes using a type's constructor, WITHOUT registering it.
@@ -625,14 +756,24 @@ Error AssetManager_BuildDefinition(AssetManager* self, AssetTypeID type,
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
 
 /**
- * @brief Registers (or overrides) a definition by its (Type, Name); the manager takes ownership.
+ * @brief Registers (or overrides) a definition by its (Type, Name); the manager ALWAYS takes ownership.
  *
  * The definition's Type must be set to a registered type (a builder/constructor result already carries it
- * via the type used) and Name must be non-empty. If a definition with the same (Type, Name) exists it is
- * destroyed and replaced. This is the entry point for runtime-created definitions and custom sources.
+ * via the type used) and Name must pass AssetManager_IsValidAssetName. If a definition with the same
+ * (Type, Name) exists it is destroyed and replaced, whatever its source. This is the entry point for
+ * runtime-created definitions and custom sources; such a definition has no source file and is never
+ * replaced by AssetManager_ReadDefinitions.
+ *
+ * OWNERSHIP. Ownership of @p definition transfers on every call: on success the manager keeps it, and on
+ * EVERY failure (including a NULL @p self) it is destroyed through its vtable before this returns, so the
+ * caller must not touch it afterwards. The one exception is a definition whose VTable or VTable->Destroy
+ * is NULL: it cannot be destroyed, so the call fails and leaves it with the caller.
+ *
+ * Clears all cached load failures before registering (when @p self and @p definition are usable).
  * @param self The manager; must not be NULL.
- * @param definition The definition to register; must not be NULL, ownership transfers to the manager.
- * @returns Success; ErrorCode_IllegalArgument for NULL args, an unset/invalid Type, or an empty Name.
+ * @param definition The definition to register; must not be NULL. Ownership transfers (see above).
+ * @returns Success; ErrorCode_IllegalArgument for NULL args, an unset/unregistered Type, or a definition
+ *          without a destroy function; ErrorCode_InvalidAssetDefinition if the name is invalid.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
@@ -640,13 +781,43 @@ Error AssetManager_SetDefinition(AssetManager* self, AssetDefinition* definition
 
 /**
  * @brief Removes a definition. Does not unload any asset already built from it.
+ *
+ * Clears all cached load failures before removing the definition (not when it does not exist).
  * @param self The manager; must not be NULL.
  * @param type The definition's type.
  * @param name The definition's name; NUL-terminated UTF-8, must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument for NULL args; ErrorCode_InvalidOperation if no such
  *          definition exists.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
  */
 Error AssetManager_RemoveDefinition(AssetManager* self, AssetTypeID type, const unsigned char* name);
+
+/**
+ * @brief Reports whether a string is a valid asset definition name.
+ *
+ * The grammar is [a-z][a-z0-9_.-]*: at least one byte, starting with a lowercase ASCII letter, followed
+ * only by lowercase ASCII letters, ASCII digits, '_', '.' and '-'. Any other byte (uppercase, space,
+ * '/', or any non-ASCII UTF-8 sequence) makes the name invalid. Registration applies this check to every
+ * definition, whatever its type or source. Pure function; no allocation.
+ * @param name The candidate name; NUL-terminated. NULL is invalid.
+ * @returns true if @p name is a valid asset name, false otherwise.
+ */
+bool AssetManager_IsValidAssetName(const unsigned char* name);
+
+/**
+ * @brief Forgets every remembered load failure, so the next load of each such asset is attempted again.
+ *
+ * When building an asset fails, AssetManager_LoadAssetSingle remembers the failure on the asset's
+ * definition and later loads return it at once. The manager clears these automatically whenever
+ * definitions, types, search roots or reference resources change; call this for a manual retry (e.g.
+ * after fixing a file on disk while the game runs). Cheap when nothing failed.
+ * @param self The manager; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error AssetManager_ClearLoadFailures(AssetManager* self);
 
 /**
  * @brief Reports whether a definition with the given (type, name) is registered.
@@ -710,10 +881,17 @@ Error AssetManager_RetireUser(AssetManager* self, AssetUserID user);
 /**
  * @brief Loads an asset (or shares an already-loaded one) and records a hold for @p user.
  *
- * If the (assetType, name) asset is already loaded, returns the same wrapper and adds @p user to its
- * holder set (idempotent if already a holder). Otherwise resolves the definition, builds the asset, and
- * inserts it. The returned pointer is BORROWED, manager-owned, and valid until the asset's holder set
- * empties (after every holder releases it).
+ * In order: if the (assetType, name) asset is already loaded, returns the same wrapper and adds @p user to
+ * its holder set (idempotent if already a holder). Otherwise looks up the definition. If an earlier build
+ * of this definition failed and the failure is still remembered, returns that failure's error code at
+ * once with a fresh message that quotes the original one; no file is touched and nothing is allocated
+ * apart from the message. Otherwise builds the asset and inserts it. When the build fails, the failure is
+ * remembered on the definition, logged once as an ERROR (type, name, definition file, reason), and the
+ * loader's error is returned. Remembered failures are cleared when definitions, types, search roots or
+ * reference resources change, and by AssetManager_ClearLoadFailures.
+ *
+ * The returned pointer is BORROWED, manager-owned, and valid until the asset's holder set empties (after
+ * every holder releases it).
  * @param self The manager; must not be NULL.
  * @param assetType The asset's type.
  * @param name The asset's name; NUL-terminated UTF-8, must not be NULL.
@@ -721,7 +899,8 @@ Error AssetManager_RetireUser(AssetManager* self, AssetUserID user);
  * @param outAsset [out] Receives the borrowed wrapper pointer on success, NULL on failure. Must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument for NULL args or an unknown type/invalid user;
  *          ErrorCode_InvalidOperation if no definition exists for (assetType, name); forwards the loader's
- *          error on a build failure.
+ *          error on a build failure, and that same error code (with a new message) while the failure is
+ *          remembered.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */

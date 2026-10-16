@@ -25,11 +25,16 @@
 
 // Value conversions.
 /**
- * @brief Converts a JSON value to an int64 (accepts an integer, a real number truncated to integer, or a
- *        numeric string with optional 0x/0b base prefix).
+ * @brief Converts a JSON value to an int64 (accepts an integer, a whole real number, or a numeric string
+ *        with optional 0x/0b base prefix).
+ *
+ * A real number is accepted only when it is a whole number within the int64 range: `60.0` converts to
+ * 60, while `2.9`, `1e19`, infinities and NaN are rejected rather than truncated (an out-of-range
+ * conversion would otherwise be undefined behaviour).
  * @param value The value to convert; must not be NULL.
- * @param outValue [out] Receives the integer. Must not be NULL.
- * @returns Success; ErrorCode_InvalidJSON if the value is not an integer/number/parsable string.
+ * @param outValue [out] Receives the integer. Must not be NULL. Unchanged on failure.
+ * @returns Success; ErrorCode_InvalidJSON if the value is not an integer, a whole in-range real number or
+ *          a parsable string.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */

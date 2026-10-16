@@ -1,8 +1,12 @@
+// Logger.h wraps the *Formatted functions in same-named format-checking macros; this file defines the
+// functions themselves, so it opts out of those macros.
+#define LOGGER_IMPLEMENTATION
 #include "Logger.h"
 #include "wr/WRDateTime.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRIO.h"
 #include "wr/WRMemory.h"
+#include "wr/WRString.h"
 #include "wr/WRCompile.h"
 #include <stdarg.h>
 #include <stdio.h>
@@ -27,8 +31,9 @@
 #define LOGGER_FORMAT_BUFFER_INITIAL_CAPACITY ((size_t)256)
 /** Initial capacity (bytes) of the temporary archive-path buffer. */
 #define LOGGER_PATH_BUFFER_INITIAL_CAPACITY ((size_t)64)
-/** Initial capacity (bytes) of the temporary buffer holding a log's contents during archival. */
-#define LOGGER_CONTENTS_BUFFER_INITIAL_CAPACITY ((size_t)256)
+/** Most archived logs kept in "logs/archived"; Logger_Construct deletes the oldest (by modification time)
+ *  until no more than this many remain. */
+#define LOGGER_MAX_ARCHIVED_LOGS ((size_t)30)
 
 // ANSI SGR color escape sequences (Linux stdout only; see Logger_WriteToStdout).
 #ifdef __linux__
@@ -119,8 +124,9 @@ static const unsigned char* Logger_GetLevelString(LogLevel level)
         case LogLevel_Warning: return (const unsigned char*)u8"Warning";
         case LogLevel_Error: return (const unsigned char*)u8"Error";
         case LogLevel_Critical: return (const unsigned char*)u8"CRITICAL";
-        default: return (const unsigned char*)u8"Info";
     }
+    // Only reachable with a corrupted level value; tag it as Info rather than fail the log call.
+    return (const unsigned char*)u8"Info";
 }
 
 #ifdef __linux__
@@ -133,8 +139,9 @@ static const unsigned char* Logger_GetLevelColor(LogLevel level)
         case LogLevel_Warning: return LOGGER_ANSI_YELLOW;
         case LogLevel_Error: return LOGGER_ANSI_BRIGHT_RED;
         case LogLevel_Critical: return LOGGER_ANSI_RED;
-        default: return LOGGER_ANSI_WHITE;
     }
+    // Only reachable with a corrupted level value.
+    return LOGGER_ANSI_WHITE;
 }
 #endif
 
@@ -217,6 +224,116 @@ static Error Logger_BuildArchiveTargetPath(GenericBuffer* outPath, const DateTim
     }
 
     return Error_Construct3(ErrorCode_IO, (const unsigned char*)u8"Logger: no free archive name available.");
+}
+
+/* Reports whether an archive-directory file is an archived log (its name ends in ".log"). */
+static bool Logger_IsArchivedLog(const FileSystemEntryInfo* info)
+{
+    bool HasLogExtension = false;
+    Error Result = StringUTF8_EndsWith(info->_name, LOGGER_LOG_EXTENSION, StringCaseRule_MatchCase, NULL,
+        &HasLogExtension);
+    Error_Deconstruct(&Result);
+    return HasLogExtension;
+}
+
+/* Counts the archived logs and finds the oldest one (by modification time) in one pass over the archive
+   directory. When *outCount ends up non-zero, outOldest holds the oldest entry and the caller must
+   FileSystemEntryInfo_Deconstruct it; on failure nothing is left for the caller to release. */
+static Error Logger_FindOldestArchivedLog(size_t* outCount, FileSystemEntryInfo* outOldest)
+{
+    *outCount = 0;
+
+    DirectoryEntryEnumerator* Enumerator = NULL;
+    Error Result = FileSystem_GetFiles(LOGGER_ARCHIVE_DIR, DirectorySearchOption_TopLevel, &Enumerator);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    while (true)
+    {
+        bool HasNext = false;
+        Result = DirectoryEntryEnumerator_HasNext(Enumerator, &HasNext);
+        if ((Result.Code != ErrorCode_Success) || !HasNext)
+        {
+            break;
+        }
+
+        FileSystemEntryInfo Entry;
+        Result = DirectoryEntryEnumerator_Next(Enumerator, &Entry);
+        if (Result.Code != ErrorCode_Success)
+        {
+            break;
+        }
+        if (!Logger_IsArchivedLog(&Entry))
+        {
+            FileSystemEntryInfo_Deconstruct(&Entry);
+            continue;
+        }
+
+        if ((*outCount == 0) || (Entry._lastModificationTime < outOldest->_lastModificationTime))
+        {
+            if (*outCount > 0)
+            {
+                FileSystemEntryInfo_Deconstruct(outOldest);
+            }
+            *outOldest = Entry;
+        }
+        else
+        {
+            FileSystemEntryInfo_Deconstruct(&Entry);
+        }
+        (*outCount)++;
+    }
+
+    Error CloseResult = DirectoryEntryEnumerator_Deconstruct(Enumerator);
+    Error_Deconstruct(&CloseResult);
+    if ((Result.Code != ErrorCode_Success) && (*outCount > 0))
+    {
+        FileSystemEntryInfo_Deconstruct(outOldest);
+        *outCount = 0;
+    }
+    return Result;
+}
+
+/* Deletes the oldest archived logs until at most LOGGER_MAX_ARCHIVED_LOGS remain. Each pass rescans the
+   directory and deletes one file; the number of passes is bounded by the excess found on the first scan
+   (normally one, since each session adds one archive). */
+static Error Logger_PruneArchivedLogs(void)
+{
+    size_t Excess = SIZE_MAX; // Unknown until the first scan.
+    while (Excess > 0)
+    {
+        size_t Count = 0;
+        FileSystemEntryInfo Oldest;
+        Memory_Zero(&Oldest, sizeof(Oldest));
+        Error FindResult = Logger_FindOldestArchivedLog(&Count, &Oldest);
+        if (FindResult.Code != ErrorCode_Success)
+        {
+            return FindResult;
+        }
+        if (Count <= LOGGER_MAX_ARCHIVED_LOGS)
+        {
+            if (Count > 0)
+            {
+                FileSystemEntryInfo_Deconstruct(&Oldest);
+            }
+            return Error_CreateSuccess();
+        }
+        if (Excess == SIZE_MAX)
+        {
+            Excess = Count - LOGGER_MAX_ARCHIVED_LOGS;
+        }
+
+        Error DeleteResult = FileSystem_DeleteEntry(Oldest._path);
+        FileSystemEntryInfo_Deconstruct(&Oldest);
+        if (DeleteResult.Code != ErrorCode_Success)
+        {
+            return DeleteResult;
+        }
+        Excess--;
+    }
+    return Error_CreateSuccess();
 }
 
 /* Writes a completed line (without trailing newline) plus a newline to the log file, then flushes. */
@@ -360,26 +477,11 @@ Error Logger_ArchiveLatestLog(void)
         return PathResult;
     }
 
-    GenericBuffer Contents;
-    GenericBuffer_AllocateVariable(&Contents, LOGGER_CONTENTS_BUFFER_INITIAL_CAPACITY, sizeof(unsigned char));
-    Error ReadResult = FileSystem_ReadAllBytes(LOGGER_LATEST_LOG_PATH, &Contents);
-    if (ReadResult.Code != ErrorCode_Success)
-    {
-        Memory_Free(Contents._data);
-        Memory_Free(TargetPath._data);
-        return ReadResult;
-    }
-
-    Error WriteResult = FileSystem_WriteAllBytes(TargetPath._data, Contents._data, Contents._count);
-    Memory_Free(Contents._data);
+    // One filesystem move. The target name was chosen to be unused, so the platform-defined "replace an
+    // existing entry" behaviour of FileSystem_MoveEntry never comes into play.
+    Error MoveResult = FileSystem_MoveEntry(LOGGER_LATEST_LOG_PATH, TargetPath._data);
     Memory_Free(TargetPath._data);
-    if (WriteResult.Code != ErrorCode_Success)
-    {
-        return WriteResult;
-    }
-
-    // The copy succeeded, so remove the original to complete the move.
-    return FileSystem_DeleteEntry(LOGGER_LATEST_LOG_PATH);
+    return MoveResult;
 }
 
 Error Logger_Construct(Logger* self)
@@ -422,6 +524,17 @@ Error Logger_Construct(Logger* self)
     GenericBuffer_AllocateVariable(&self->_formatBuffer, LOGGER_FORMAT_BUFFER_INITIAL_CAPACITY, sizeof(unsigned char));
 
     self->_isInitialized = true;
+
+    // Prune only now that the fresh log can report a failure: losing old archives is not worth failing
+    // startup over, so a prune error is logged and otherwise ignored.
+    Error PruneResult = Logger_PruneArchivedLogs();
+    if (PruneResult.Code != ErrorCode_Success)
+    {
+        Error LogResult = Logger_LogWarningFormatted(self, (const unsigned char*)u8"Could not prune archived logs: %s",
+            (PruneResult.Message != NULL) ? (const char*)PruneResult.Message : "no details");
+        Error_Deconstruct(&LogResult);
+        Error_Deconstruct(&PruneResult);
+    }
     return Error_CreateSuccess();
 }
 

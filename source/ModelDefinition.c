@@ -2,6 +2,7 @@
 #include "AssetDefinitionCommon.h"
 #include "GameModel.h"
 #include "raylib/raymath.h"
+#include "raylib/rlgl.h"
 #include "wr/WRMemory.h"
 #include "wr/WRNumber.h"
 #include "wr/WRJSON.h"
@@ -11,9 +12,15 @@
  * transform matrix, seeds sensible PBR scalar defaults, and applies optional material overrides (rebinding a
  * slot's albedo / normal / ORM (occlusion-roughness-metallic) / emissive textures and its tint + metallic /
  * roughness / emissive scalar factors). Skeletal animation and material addressing by name are out of scope
- * for now (slots are addressed by index). NOTE: an override replaces a material slot's texture; if that slot
- * already carried an embedded texture (rather than the default), the replaced texture is not separately
- * unloaded.
+ * for now (slots are addressed by index).
+ *
+ * TEXTURE OWNERSHIP. raylib's UnloadModel only unloads the meshes and frees each material's map array; it
+ * never unloads textures or shaders. The loaded asset therefore lists the GPU texture ids it owns: every
+ * texture the importer loaded (OBJ/MTL: up to 4 per material, glTF: up to 6) and every override texture,
+ * skipping raylib's default texture and duplicates. Importer textures an override replaced are unloaded as
+ * soon as the overrides are applied. Unloading the asset, and every failed load, unloads the listed textures
+ * and then calls UnloadModel. UnloadMaterial is never used: it would also unload material.shader, which the
+ * renderer points at the shared PBR shader asset.
  */
 
 
@@ -24,6 +31,14 @@
  *  these. Metallic 0 (dielectric) is a fine default and is left as the importer set it. */
 #define MODEL_DEFAULT_ROUGHNESS 0.5f
 #define MODEL_DEFAULT_AO 1.0f
+/** First and last material map scanned for texture ids (the full MaterialMapIndex range; raylib does not
+ *  export MAX_MATERIAL_MAPS). */
+#define MODEL_FIRST_MATERIAL_MAP MATERIAL_MAP_ALBEDO
+#define MODEL_LAST_MATERIAL_MAP MATERIAL_MAP_BRDF
+/** What this loader describes, for parse-time messages. */
+#define MODEL_ASSET_KIND ((const unsigned char*)u8"model")
+/** What a material override map points at, for parse-time messages. */
+#define MODEL_TEXTURE_KIND ((const unsigned char*)u8"material texture")
 
 
 // Types.
@@ -55,7 +70,7 @@ typedef struct ModelDefinitionStruct
 {
     AssetDefinition Base;
     OwnedAssetLocation Location;
-    unsigned char* Format; // owned; extension hint for reference locations, else NULL
+    unsigned char* Format; // owned; validated extension: narrows the file choice, names a reference's type
     bool HasTransform;
     Matrix Transform;
     ModelMaterialOverride* Overrides; // owned array
@@ -64,7 +79,8 @@ typedef struct ModelDefinitionStruct
 
 typedef struct ModelLoadedStruct
 {
-    GameModel Model; // Asset points here; owns its meshes/materials/override textures via UnloadModel
+    GameModel Model;                // Asset points here; meshes + material map arrays freed by UnloadModel
+    GenericBuffer* OwnedTextureIds; // borrowed from the manager pool (unsigned int elements); textures to unload
 } ModelLoaded;
 
 
@@ -191,9 +207,9 @@ static Error ParseTransform(JSONCompound* root, bool* outHas, Matrix* outMatrix)
     return Error_CreateSuccess();
 }
 
-/* Reads an OPTIONAL asset-location key ("albedo"/"normal"/...) into @p outLocation, setting @p outHas. Absent
- * key -> outHas false and no location parsed (leave the default). */
-static Error ReadOptionalLocationKey(JSONCompound* compound, const unsigned char* key, bool* outHas, OwnedAssetLocation* outLocation)
+/* Reads an OPTIONAL texture-location key ("albedo"/"normal"/...) into @p outLocation, setting @p outHas.
+ * Absent key -> outHas false and no location parsed. A texture location must be a file path. */
+static Error ReadOptionalTextureLocationKey(JSONCompound* compound, const unsigned char* key, bool* outHas, OwnedAssetLocation* outLocation)
 {
     *outHas = false;
     JSONObjectValue Value;
@@ -203,6 +219,8 @@ static Error ReadOptionalLocationKey(JSONCompound* compound, const unsigned char
     if (!Found) { return Error_CreateSuccess(); }
     Error LocationResult = AssetJSON_ParseLocation(&Value, NULL, outLocation);
     if (LocationResult.Code != ErrorCode_Success) { return LocationResult; }
+    Error FileResult = OwnedAssetLocation_RequireFile(outLocation, MODEL_TEXTURE_KIND);
+    if (FileResult.Code != ErrorCode_Success) { return FileResult; }
     *outHas = true;
     return Error_CreateSuccess();
 }
@@ -253,13 +271,13 @@ static Error ParseMaterialOverride(JSONCompound* compound, ModelMaterialOverride
     }
     outOverride->Slot = Slot;
 
-    Error Result = ReadOptionalLocationKey(compound, (const unsigned char*)u8"albedo", &outOverride->HasAlbedo, &outOverride->Albedo);
+    Error Result = ReadOptionalTextureLocationKey(compound, (const unsigned char*)u8"albedo", &outOverride->HasAlbedo, &outOverride->Albedo);
     if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = ReadOptionalLocationKey(compound, (const unsigned char*)u8"normal", &outOverride->HasNormal, &outOverride->Normal);
+    Result = ReadOptionalTextureLocationKey(compound, (const unsigned char*)u8"normal", &outOverride->HasNormal, &outOverride->Normal);
     if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = ReadOptionalLocationKey(compound, (const unsigned char*)u8"mra", &outOverride->HasMra, &outOverride->Mra);
+    Result = ReadOptionalTextureLocationKey(compound, (const unsigned char*)u8"mra", &outOverride->HasMra, &outOverride->Mra);
     if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = ReadOptionalLocationKey(compound, (const unsigned char*)u8"emissive", &outOverride->HasEmissiveMap, &outOverride->EmissiveMap);
+    Result = ReadOptionalTextureLocationKey(compound, (const unsigned char*)u8"emissive", &outOverride->HasEmissiveMap, &outOverride->EmissiveMap);
     if (Result.Code != ErrorCode_Success) { return Result; }
 
     Result = ReadOptionalColorKey(compound, (const unsigned char*)u8"tint", &outOverride->HasTint, &outOverride->Tint);
@@ -281,35 +299,156 @@ static Error ParseMaterialOverride(JSONCompound* compound, ModelMaterialOverride
     return Error_CreateSuccess();
 }
 
+/* Lists @p textureId as owned by the model unless it is 0, raylib's default texture, or already listed. */
+static Error AddOwnedTextureId(GenericBuffer* ownedTextureIds, unsigned int textureId)
+{
+    if ((textureId == 0U) || (textureId == rlGetTextureIdDefault()))
+    {
+        return Error_CreateSuccess();
+    }
+    for (size_t i = 0; i < ownedTextureIds->_count; i++)
+    {
+        unsigned int OwnedId = 0U;
+        if (GenericBuffer_GetAt(ownedTextureIds, i, &OwnedId) && (OwnedId == textureId))
+        {
+            return Error_CreateSuccess();
+        }
+    }
+    if (!GenericBuffer_AddLast(ownedTextureIds, &textureId))
+    {
+        return Error_Construct3(ErrorCode_BufferTooLarge, u8"Failed to track a model texture.");
+    }
+    return Error_CreateSuccess();
+}
+
+/* Lists every texture any material map of @p model references (right after LoadModel: the importer's). */
+static Error CollectMaterialTextureIds(const Model* model, GenericBuffer* ownedTextureIds)
+{
+    if (model->materials == NULL)
+    {
+        return Error_CreateSuccess();
+    }
+    for (int materialIndex = 0; materialIndex < model->materialCount; materialIndex++)
+    {
+        const Material* ModelMaterial = &model->materials[materialIndex];
+        if (ModelMaterial->maps == NULL)
+        {
+            continue;
+        }
+        for (int mapIndex = MODEL_FIRST_MATERIAL_MAP; mapIndex <= MODEL_LAST_MATERIAL_MAP; mapIndex++)
+        {
+            Error AddResult = AddOwnedTextureId(ownedTextureIds, ModelMaterial->maps[mapIndex].texture.id);
+            if (AddResult.Code != ErrorCode_Success)
+            {
+                return AddResult;
+            }
+        }
+    }
+    return Error_CreateSuccess();
+}
+
+static bool IsTextureIdReferenced(const Model* model, unsigned int textureId)
+{
+    if (model->materials == NULL)
+    {
+        return false;
+    }
+    for (int materialIndex = 0; materialIndex < model->materialCount; materialIndex++)
+    {
+        const Material* ModelMaterial = &model->materials[materialIndex];
+        if (ModelMaterial->maps == NULL)
+        {
+            continue;
+        }
+        for (int mapIndex = MODEL_FIRST_MATERIAL_MAP; mapIndex <= MODEL_LAST_MATERIAL_MAP; mapIndex++)
+        {
+            if (ModelMaterial->maps[mapIndex].texture.id == textureId)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* Unloads and forgets every listed texture that no material references any more (importer textures an
+ * override replaced). A texture is only unloaded once it is off the list, so it can never be unloaded twice. */
+static void PruneUnreferencedTextures(const Model* model, GenericBuffer* ownedTextureIds)
+{
+    for (size_t i = ownedTextureIds->_count; i > 0U; i--)
+    {
+        size_t Index = i - 1U;
+        unsigned int OwnedId = 0U;
+        if (!GenericBuffer_GetAt(ownedTextureIds, Index, &OwnedId) || IsTextureIdReferenced(model, OwnedId))
+        {
+            continue;
+        }
+        if (GenericBuffer_RemoveAt(ownedTextureIds, Index))
+        {
+            rlUnloadTexture(OwnedId);
+        }
+    }
+}
+
+/* Unloads every listed texture and empties the list. */
+static void UnloadOwnedTextures(GenericBuffer* ownedTextureIds)
+{
+    for (size_t i = 0; i < ownedTextureIds->_count; i++)
+    {
+        unsigned int OwnedId = 0U;
+        if (GenericBuffer_GetAt(ownedTextureIds, i, &OwnedId))
+        {
+            rlUnloadTexture(OwnedId);
+        }
+    }
+    GenericBuffer_Clear(ownedTextureIds);
+}
+
+/* Releases a loaded model completely: its owned textures first, then meshes and material map arrays. */
+static void DiscardModel(Model* model, GenericBuffer* ownedTextureIds)
+{
+    UnloadOwnedTextures(ownedTextureIds);
+    UnloadModel(*model);
+}
+
 static void ModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
 {
-    (void)manager;
     ModelLoaded* Loaded = self->DestroyContext;
-    UnloadModel(Loaded->Model._rayModel);
+    DiscardModel(&Loaded->Model._rayModel, Loaded->OwnedTextureIds);
+    Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, Loaded->OwnedTextureIds);
+    Error_Deconstruct(&ReturnResult);
     Memory_Free(Loaded);
 }
 
 static const LoadedAssetVTable ModelLoadedVTable = { ModelLoaded_Destroy };
 
-/* Loads a material-override texture (resolved against the model asset-type dir, like the albedo override),
- * applies @p filter, and returns it by value in @p outTexture. On failure returns the error and does not touch
- * outTexture. The returned texture is owned by the model's Material slot and freed by UnloadModel. */
+/* Loads a material-override texture (resolved against the model asset-type dir), lists it as owned by the
+ * model immediately, applies @p filter and writes it to @p outTexture. On failure nothing stays loaded and
+ * @p outTexture is untouched. */
 static Error LoadMaterialTexture(AssetManager* manager, AssetTypeID type, const OwnedAssetLocation* location,
-    int filter, const unsigned char* modelName, Texture2D* outTexture)
+    int filter, const unsigned char* modelName, GenericBuffer* ownedTextureIds, Texture2D* outTexture)
 {
-    AssetLocation Loc = OwnedAssetLocation_View(location);
+    AssetLocation Location = OwnedAssetLocation_View(location);
     AssetResourcePath* Handle = NULL;
-    Error PathResult = AssetManager_AcquireResourcePath(manager, type, &Loc, NULL, &Handle);
+    Error PathResult = AssetManager_AcquireResourcePath(manager, type, &Location, &ASSET_EXTENSIONS_TEXTURE, NULL, &Handle);
     if (PathResult.Code != ErrorCode_Success) { return PathResult; }
-    Texture2D Texture = LoadTexture((const char*)AssetResourcePath_Get(Handle));
+    Texture2D MaterialTexture = LoadTexture((const char*)AssetResourcePath_Get(Handle));
     Error ReleaseResult = AssetManager_ReleaseResourcePath(manager, Handle);
     Error_Deconstruct(&ReleaseResult);
-    if (Texture.id == 0)
+    if (MaterialTexture.id == 0)
     {
-        return Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to load a material texture for model \"%s\".", modelName);
+        return Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to load material texture \"%s\" for model \"%s\".",
+            location->Value, modelName);
     }
-    SetTextureFilter(Texture, filter);
-    *outTexture = Texture;
+
+    Error TrackResult = AddOwnedTextureId(ownedTextureIds, MaterialTexture.id);
+    if (TrackResult.Code != ErrorCode_Success)
+    {
+        UnloadTexture(MaterialTexture);
+        return TrackResult;
+    }
+    SetTextureFilter(MaterialTexture, filter);
+    *outTexture = MaterialTexture;
     return Error_CreateSuccess();
 }
 
@@ -329,38 +468,35 @@ static void SeedMaterialDefaults(Material* material)
 }
 
 /* Applies one material override to the model's material @p slot: rebinds albedo/normal/mra/emissive textures
- * and sets tint + metallic/roughness/emissive scalar factors. Textures load against the model asset-type dir.
- * On the first texture load failure the error is returned (the caller unloads the whole model). */
+ * and sets tint + metallic/roughness/emissive scalar factors. Textures load against the model asset-type dir
+ * and are listed in @p ownedTextureIds as they load, so the caller can unload them all if a later one fails. */
 static Error ApplyMaterialOverride(AssetManager* manager, AssetTypeID type, const unsigned char* modelName,
-    const ModelMaterialOverride* override, Material* material)
+    const ModelMaterialOverride* override, GenericBuffer* ownedTextureIds, Material* material)
 {
     if (override->HasAlbedo)
     {
-        Texture2D Texture;
-        Error Result = LoadMaterialTexture(manager, type, &override->Albedo, override->Filter, modelName, &Texture);
+        Error Result = LoadMaterialTexture(manager, type, &override->Albedo, override->Filter, modelName,
+            ownedTextureIds, &material->maps[MATERIAL_MAP_ALBEDO].texture);
         if (Result.Code != ErrorCode_Success) { return Result; }
-        material->maps[MATERIAL_MAP_ALBEDO].texture = Texture;
     }
     if (override->HasNormal)
     {
-        Texture2D Texture;
-        Error Result = LoadMaterialTexture(manager, type, &override->Normal, override->Filter, modelName, &Texture);
+        Error Result = LoadMaterialTexture(manager, type, &override->Normal, override->Filter, modelName,
+            ownedTextureIds, &material->maps[MATERIAL_MAP_NORMAL].texture);
         if (Result.Code != ErrorCode_Success) { return Result; }
-        material->maps[MATERIAL_MAP_NORMAL].texture = Texture;
     }
     if (override->HasMra)
     {
-        Texture2D Texture;
-        Error Result = LoadMaterialTexture(manager, type, &override->Mra, override->Filter, modelName, &Texture);
+        // The METALNESS slot carries the packed ORM map.
+        Error Result = LoadMaterialTexture(manager, type, &override->Mra, override->Filter, modelName,
+            ownedTextureIds, &material->maps[MATERIAL_MAP_METALNESS].texture);
         if (Result.Code != ErrorCode_Success) { return Result; }
-        material->maps[MATERIAL_MAP_METALNESS].texture = Texture; // METALNESS slot carries the packed ORM map
     }
     if (override->HasEmissiveMap)
     {
-        Texture2D Texture;
-        Error Result = LoadMaterialTexture(manager, type, &override->EmissiveMap, override->Filter, modelName, &Texture);
+        Error Result = LoadMaterialTexture(manager, type, &override->EmissiveMap, override->Filter, modelName,
+            ownedTextureIds, &material->maps[MATERIAL_MAP_EMISSION].texture);
         if (Result.Code != ErrorCode_Success) { return Result; }
-        material->maps[MATERIAL_MAP_EMISSION].texture = Texture;
     }
 
     if (override->HasTint)
@@ -397,58 +533,102 @@ static Error ApplyMaterialOverride(AssetManager* manager, AssetTypeID type, cons
     return Error_CreateSuccess();
 }
 
-static Error ModelDefinition_LoadAsset(void* self, AssetManager* manager, AssetUserID dependencyUser, LoadedAsset* outLoaded)
+/* Resolves the model file (narrowed to "format" when the definition has one) and loads it with raylib. */
+static Error LoadModelFile(const ModelDefinition* definition, AssetManager* manager, Model* outModel)
 {
-    (void)dependencyUser;
-    ModelDefinition* Definition = self;
-
-    AssetLocation Location = OwnedAssetLocation_View(&Definition->Location);
+    const unsigned char* FormatExtension = definition->Format;
+    AssetExtensionFilter Extensions = AssetFormat_SelectFilter(&ASSET_EXTENSIONS_MODEL, &FormatExtension);
+    AssetLocation Location = OwnedAssetLocation_View(&definition->Location);
     AssetResourcePath* PathHandle = NULL;
-    Error PathResult = AssetManager_AcquireResourcePath(manager, Definition->Base.Type, &Location, Definition->Format, &PathHandle);
+    Error PathResult = AssetManager_AcquireResourcePath(manager, definition->Base.Type, &Location, &Extensions,
+        definition->Format, &PathHandle);
     if (PathResult.Code != ErrorCode_Success) { return PathResult; }
 
-    Model RayModel = LoadModel((const char*)AssetResourcePath_Get(PathHandle));
+    *outModel = LoadModel((const char*)AssetResourcePath_Get(PathHandle));
     Error ReleaseResult = AssetManager_ReleaseResourcePath(manager, PathHandle);
     Error_Deconstruct(&ReleaseResult);
+    return Error_CreateSuccess();
+}
 
-    if (RayModel.meshCount == 0)
+/* Applies the definition to a freshly loaded model: transform, PBR defaults and material overrides. */
+static Error ApplyDefinitionToModel(const ModelDefinition* definition, AssetManager* manager, Model* model,
+    GenericBuffer* ownedTextureIds)
+{
+    if (definition->HasTransform)
     {
-        UnloadModel(RayModel);
-        return Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to load model \"%s\".", Definition->Base.Name);
-    }
-
-    if (Definition->HasTransform)
-    {
-        RayModel.transform = Definition->Transform;
+        model->transform = definition->Transform;
     }
 
     // Seed every material with sensible PBR scalar defaults so un-overridden slots shade correctly through the
     // renderer's per-material path (a bare OBJ leaves roughness/occlusion at 0, which would read as a mirror /
     // black ambient).
-    for (int i = 0; i < RayModel.materialCount; i++)
+    for (int i = 0; i < model->materialCount; i++)
     {
-        SeedMaterialDefaults(&RayModel.materials[i]);
+        SeedMaterialDefaults(&model->materials[i]);
     }
 
-    for (size_t i = 0; i < Definition->OverrideCount; i++)
+    for (size_t i = 0; i < definition->OverrideCount; i++)
     {
-        ModelMaterialOverride* Override = &Definition->Overrides[i];
-        if ((Override->Slot < 0) || (Override->Slot >= RayModel.materialCount))
+        const ModelMaterialOverride* Override = &definition->Overrides[i];
+        if ((Override->Slot < 0) || (Override->Slot >= model->materialCount))
         {
             continue;
         }
-        Error ApplyResult = ApplyMaterialOverride(manager, Definition->Base.Type, Definition->Base.Name,
-            Override, &RayModel.materials[(int)Override->Slot]);
+        Error ApplyResult = ApplyMaterialOverride(manager, definition->Base.Type, definition->Base.Name,
+            Override, ownedTextureIds, &model->materials[(int)Override->Slot]);
         if (ApplyResult.Code != ErrorCode_Success)
         {
-            UnloadModel(RayModel);
             return ApplyResult;
         }
     }
+    return Error_CreateSuccess();
+}
+
+static Error ModelDefinition_LoadAsset(void* self, AssetManager* manager, AssetUserID dependencyUser, LoadedAsset* outLoaded)
+{
+    (void)dependencyUser;
+    ModelDefinition* Definition = self;
+
+    GenericBuffer* OwnedTextureIds = NULL;
+    Error BorrowResult = AssetManager_BorrowGenericBuffer(manager, sizeof(unsigned int), &OwnedTextureIds);
+    if (BorrowResult.Code != ErrorCode_Success) { return BorrowResult; }
+
+    Model RayModel;
+    Memory_Zero(&RayModel, sizeof(RayModel));
+    Error Result = LoadModelFile(Definition, manager, &RayModel);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, OwnedTextureIds);
+        Error_Deconstruct(&ReturnResult);
+        return Result;
+    }
+
+    // From here on every failure must unload whatever the model references; list the importer's textures
+    // first (even a mesh-less result may carry material textures).
+    Result = CollectMaterialTextureIds(&RayModel, OwnedTextureIds);
+    if ((Result.Code == ErrorCode_Success) && (RayModel.meshCount == 0))
+    {
+        Result = Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to load model \"%s\".", Definition->Base.Name);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ApplyDefinitionToModel(Definition, manager, &RayModel, OwnedTextureIds);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DiscardModel(&RayModel, OwnedTextureIds);
+        Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, OwnedTextureIds);
+        Error_Deconstruct(&ReturnResult);
+        return Result;
+    }
+
+    // Importer textures replaced by an override are referenced by no material any more.
+    PruneUnreferencedTextures(&RayModel, OwnedTextureIds);
 
     ModelLoaded* Loaded = Memory_Allocate(sizeof(ModelLoaded));
     Memory_Zero(Loaded, sizeof(*Loaded));
     Loaded->Model._rayModel = RayModel;
+    Loaded->OwnedTextureIds = OwnedTextureIds;
 
     outLoaded->Asset = &Loaded->Model;
     outLoaded->VTable = &ModelLoadedVTable;
@@ -537,7 +717,12 @@ Error ModelDefinition_Construct(AssetManager* manager, const UserData* userData,
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = AssetJSON_ReadOptionalOwnedString(RootCompound, (const unsigned char*)u8"format", &Definition->Format, NULL);
+        Result = AssetJSON_ReadOptionalFormat(RootCompound, &ASSET_EXTENSIONS_MODEL, MODEL_ASSET_KIND, &Definition->Format);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = OwnedAssetLocation_ValidateReferenceFormat(&Definition->Location, Definition->Format,
+            &ASSET_EXTENSIONS_MODEL, MODEL_ASSET_KIND);
     }
     if (Result.Code == ErrorCode_Success)
     {

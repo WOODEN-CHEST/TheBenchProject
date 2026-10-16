@@ -239,10 +239,9 @@ static Error EncodeObject(GHDFObjectPool* pool, GHDFCompound* compound, const Wo
             Result = PutFloat(compound, WorldEncoderObjectField_LightSize, record->Data.Light.Size);
             if (Result.Code != ErrorCode_Success) { return Result; }
             return PutBool(compound, WorldEncoderObjectField_LightCastsShadows, record->Data.Light.CastsShadows);
-
-        default:
-            return Error_Construct2(ErrorCode_EncodeError, "WorldEncoder: unknown object type.");
     }
+    // No case matched: the record carries a value outside WorldObjectType (corrupted data).
+    return Error_Construct2(ErrorCode_EncodeError, "WorldEncoder: unknown object type.");
 }
 
 static Error EncodeObjects(GHDFObjectPool* pool, GHDFArray* array, const WorldDTO* dto)

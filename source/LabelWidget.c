@@ -246,7 +246,7 @@ static Error EmitStringAtoms(LabelWidget* self, const StringComponent* component
         return Error_CreateSuccess();
     }
 
-    GameFont Font = StringComponent_GetFont(component);
+    GameFont ComponentFont = StringComponent_GetFont(component);
     float Spacing = StringComponent_GetSpacing(component);
     float Size = StringComponent_GetSize(component);
 
@@ -257,7 +257,7 @@ static Error EmitStringAtoms(LabelWidget* self, const StringComponent* component
         unsigned char Character = Text[Index];
         if ((Character == 0) || (Character == (unsigned char)'\n'))
         {
-            Error Result = EmitTokens(self, component, Font, Spacing, Size, Text, SegmentStart, Index);
+            Error Result = EmitTokens(self, component, ComponentFont, Spacing, Size, Text, SegmentStart, Index);
             if (Result.Code != ErrorCode_Success)
             {
                 return Result;

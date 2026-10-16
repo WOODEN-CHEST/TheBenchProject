@@ -19,7 +19,8 @@ The module has two parts:
 
 `Logger` — a value type the caller owns. It holds an open log-file handle, a (non-owning) stdout
 stream, and two reusable scratch buffers so logging does not allocate per call. It is **not** copyable
-by value and is **not** thread-safe (guard it externally if logging from multiple threads).
+by value and is **not** thread-safe: log from the main thread only. Code on other threads (e.g. an audio
+callback) must never log.
 
 `LogLevel` — `LogLevel_Info`, `LogLevel_Warning`, `LogLevel_Error`, `LogLevel_Critical`. Rendered into
 the prefix as `Info` / `Warning` / `Error` / `CRITICAL`.
@@ -32,7 +33,7 @@ Each message becomes:
 [<date>][<time>][<level>] <message>\n
 ```
 
-- Date: `<year>y,<month>m,<day>d` — month/day zero-padded to two digits (e.g. `2026y,07m,05d`).
+- Date: `<year>y;<month>m;<day>d` — month/day zero-padded to two digits (e.g. `2026y;07m;05d`).
 - Time: `<hour>h:<minute>m:<second>s` — all fields zero-padded to two digits (e.g. `09h:04m:07s`).
 
 The file copy is plain text. The stdout copy is identical but, **on Linux only**, wrapped in an ANSI
@@ -44,11 +45,14 @@ stdout copy is written without color (colored Windows output is a future change)
 `Logger_ArchiveLatestLog`:
 
 - No-op (success) if `logs/latest.log` does not exist.
-- Otherwise copies the log's contents to `logs/archived/<date>.log`, where `<date>` is the **old log's
-  own last-modification date** (formatted like the date prefix above), then deletes the original.
-- On a name clash, appends a space and the lowest free number: `<date> 1.log`, `<date> 2.log`, ...
+- Otherwise moves the log (one filesystem rename, `FileSystem_MoveEntry`) to `logs/archived/<date>.log`,
+  where `<date>` is the **old log's own last-modification date** (formatted like the date prefix above).
+- On a name clash, appends a space and the lowest free number: `<date> 2.log`, `<date> 3.log`, ...
 
-`Logger_Construct` calls this automatically before opening the new log.
+`Logger_Construct` calls this automatically before opening the new log. After opening it, it also
+**prunes** `logs/archived/`: the oldest archives (by modification time) are deleted until at most 30
+remain (`LOGGER_MAX_ARCHIVED_LOGS`). A pruning failure is logged as a warning and does not fail
+construction.
 
 ## Usage
 
@@ -79,6 +83,18 @@ methods return an `Error`; deconstruct it (logging failures are not fatal to the
 The logger is created by `main` as the **first** thing initialized and passed by pointer to whatever
 needs to log (no global/static logger instance).
 
+## Rules
+
+- **Never log per tick** from the update loop. Every line is flushed to the file and stdout immediately
+  (so a crash never loses it), which is far too slow for hot paths. Log state changes instead: a
+  recoverable failure is logged once, when it first happens.
+- **Format strings are compile-checked** (GCC). `Logger.h` wraps each `*Formatted` function in a
+  same-named macro that type-checks the arguments against the format inside `sizeof` (no code is
+  generated); a mismatch is a `-Wformat` error under `-Werror`. `Logger.c` defines
+  `LOGGER_IMPLEMENTATION` to opt out of the macros while defining the functions.
+- Use only `%s`, `%d` and `%f`. Print 64-bit and `size_t` values as `(uint64_t)` / `(int64_t)` with
+  `PRIu64` / `PRId64` from `<inttypes.h>`, because `long` is 32-bit on Windows.
+
 ## Dependencies / notes
 
 - Uses `WRDateTime` for timestamps: `DateTime_Now` for message times and `DateTime_FromUnixSeconds`
@@ -87,8 +103,3 @@ needs to log (no global/static logger instance).
   `va_list`-accepting formatter to forward variadic arguments into.
 - The Windows ANSI-color path is intentionally omitted for now; enabling it will require turning on
   virtual-terminal processing on the Windows console (a candidate for a future WRFramework hook).
-- Directory creation composes `FileSystem_GetEntryInfo` + single-level `FileSystem_CreateDirectory`
-  (`Logger_EnsureLogDirectories`) rather than `FileSystem_CreateAllDirectories`, because the latter is
-  currently broken for **relative** paths in WRFramework (it rejects them as empty/invalid, with a
-  corrupted error message — a library memory bug). Once that is fixed, this can revert to a single
-  `FileSystem_CreateAllDirectories("logs/archived")` call.

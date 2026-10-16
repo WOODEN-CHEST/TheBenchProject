@@ -1358,6 +1358,14 @@ Error AudioEngine_Construct1(AudioEngine** outEngine)
     }
     *outEngine = NULL;
 
+    // TODO: Construction is disabled until the threading redesign described in agents/SoundEngine.md. The
+    // current contract is unsound: the main and audio threads mutate the same buffers without
+    // synchronization, sample data can be freed while the mixer still reads it, and the audio thread
+    // allocates. The code below is kept as the starting point for the redesign (DSP, ramps, resampling, the
+    // single-producer ring).
+    return Error_Construct3(ErrorCode_InvalidOperation,
+        u8"The audio engine is disabled pending its threading redesign (see agents/SoundEngine.md).");
+
     if (_activeAudioEngine != NULL)
     {
         return Error_Construct3(ErrorCode_InvalidOperation, u8"Only one audio engine may exist at a time.");

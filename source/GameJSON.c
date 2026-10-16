@@ -2,13 +2,32 @@
 #include "wr/WRNumber.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
+#include "wr/WRMath.h"
 
 
 // Macros.
 #define COLOR_CHANNEL_MAX (255)
+/** 2^63 as a double: the exclusive upper bound of the int64 range. Exactly representable, so comparing
+ *  against it (and against its negation, the inclusive lower bound) is exact. */
+#define INT64_RANGE_LIMIT_AS_DOUBLE (9223372036854775808.0)
 
 
 // Static functions.
+/* Converts a JSON real number to an int64 only when it is a whole number inside the int64 range. Anything
+   else (2.9, 1e19, inf, NaN) is rejected instead of being truncated or reaching the undefined behaviour of
+   an out-of-range floating-to-integer cast. */
+static Error RealToInt64(double value, int64_t* outValue)
+{
+    if (Math_IsNaNDouble(value) || Math_IsInfinityDouble(value) || (Math_TruncateDouble(value) != value)
+        || (value < -INT64_RANGE_LIMIT_AS_DOUBLE) || (value >= INT64_RANGE_LIMIT_AS_DOUBLE))
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, "Expected a whole number within the 64-bit integer range.");
+    }
+
+    *outValue = (int64_t)value;
+    return Error_CreateSuccess();
+}
+
 static bool StringsEqual(const unsigned char* a, const unsigned char* b)
 {
     bool Equal = false;
@@ -179,8 +198,7 @@ Error GameJSON_ValueToInt64(const JSONObjectValue* value, int64_t* outValue)
     }
     if (value->Type == JSONValueType_RealNumber)
     {
-        *outValue = (int64_t)value->Value.RealNumber;
-        return Error_CreateSuccess();
+        return RealToInt64(value->Value.RealNumber, outValue);
     }
     if (value->Type == JSONValueType_String)
     {

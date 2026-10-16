@@ -513,11 +513,11 @@ static Error DeserializeStringComponent(JSONCompound* compound, TextComponentFac
     }
     if (Found)
     {
-        RenderColor Color;
-        Result = GameJSON_ParseRenderColor(&Value, &Color);
+        RenderColor ParsedColor;
+        Result = GameJSON_ParseRenderColor(&Value, &ParsedColor);
         if (Result.Code == ErrorCode_Success)
         {
-            Result = StringComponent_SetColor(Component, Color);
+            Result = StringComponent_SetColor(Component, ParsedColor);
         }
         if (Result.Code != ErrorCode_Success)
         {
@@ -639,11 +639,11 @@ static Error DeserializeSpriteComponent(JSONCompound* compound, TextComponentFac
     }
     if (Found)
     {
-        RenderColor Color;
-        Result = GameJSON_ParseRenderColor(&Value, &Color);
+        RenderColor ParsedColor;
+        Result = GameJSON_ParseRenderColor(&Value, &ParsedColor);
         if (Result.Code == ErrorCode_Success)
         {
-            Result = SpriteComponent_SetColor(Component, Color);
+            Result = SpriteComponent_SetColor(Component, ParsedColor);
         }
         if (Result.Code != ErrorCode_Success)
         {

@@ -4,6 +4,27 @@
 #include "wr/WRMemory.h"
 
 
+// Macros.
+/** Number of entries in a fixed array. */
+#define ARRAY_LENGTH(array) (sizeof(array) / sizeof((array)[0]))
+
+
+// Fields.
+/* The accepted extension sets (see AssetDefinitionCommon.h). Each lists exactly what the shipped raylib's
+   loader for that kind decodes, so a file it cannot read is rejected with a clear message at resolution. */
+static const unsigned char* const TextureExtensionList[] = { u8"png", u8"bmp", u8"gif", u8"qoi", u8"dds" };
+static const unsigned char* const ModelExtensionList[] = { u8"obj", u8"gltf", u8"glb", u8"iqm", u8"vox", u8"m3d" };
+static const unsigned char* const FontExtensionList[] = { u8"ttf", u8"otf" };
+static const unsigned char* const SoundExtensionList[] = { u8"wav", u8"ogg", u8"mp3", u8"qoa" };
+static const unsigned char* const ShaderStageExtensionList[] = { u8"vert", u8"frag", u8"vs", u8"fs", u8"glsl" };
+
+const AssetExtensionFilter ASSET_EXTENSIONS_TEXTURE = { TextureExtensionList, ARRAY_LENGTH(TextureExtensionList) };
+const AssetExtensionFilter ASSET_EXTENSIONS_MODEL = { ModelExtensionList, ARRAY_LENGTH(ModelExtensionList) };
+const AssetExtensionFilter ASSET_EXTENSIONS_FONT = { FontExtensionList, ARRAY_LENGTH(FontExtensionList) };
+const AssetExtensionFilter ASSET_EXTENSIONS_SOUND = { SoundExtensionList, ARRAY_LENGTH(SoundExtensionList) };
+const AssetExtensionFilter ASSET_EXTENSIONS_SHADER_STAGE = { ShaderStageExtensionList, ARRAY_LENGTH(ShaderStageExtensionList) };
+
+
 // Static functions.
 static bool StringsEqual(const unsigned char* a, const unsigned char* b)
 {
@@ -198,6 +219,69 @@ Error AssetJSON_ReadOptionalVectorInt(JSONCompound* compound, const unsigned cha
 Error AssetJSON_ParseColor(const JSONObjectValue* value, Color* outColor)
 {
     return GameJSON_ParseColor(value, outColor);
+}
+
+Error AssetJSON_ReadOptionalFormat(JSONCompound* root, const AssetExtensionFilter* accepted,
+    const unsigned char* assetKindName, unsigned char** outFormat)
+{
+    *outFormat = NULL;
+    unsigned char* Format = NULL;
+    Error ReadResult = AssetJSON_ReadOptionalOwnedString(root, (const unsigned char*)u8"format", &Format, NULL);
+    if (ReadResult.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&ReadResult);
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"The %s \"format\" must be a string.", assetKindName);
+    }
+    if ((Format == NULL) || AssetExtensionFilter_Accepts(accepted, Format))
+    {
+        *outFormat = Format;
+        return Error_CreateSuccess();
+    }
+
+    GenericBuffer AcceptedList;
+    GenericBuffer_AllocateVariable(&AcceptedList, 0U, 1U);
+    Error Result = AssetExtensionFilter_AppendList(accepted, &AcceptedList);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = Error_Construct3(ErrorCode_InvalidAssetDefinition,
+            u8"Unsupported %s format \"%s\" (write the extension without the dot); supported: %s.",
+            assetKindName, Format, AcceptedList._data);
+    }
+    Memory_Free(AcceptedList._data);
+    Memory_Free(Format);
+    return Result;
+}
+
+Error OwnedAssetLocation_ValidateReferenceFormat(const OwnedAssetLocation* self, const unsigned char* format,
+    const AssetExtensionFilter* accepted, const unsigned char* assetKindName)
+{
+    if ((self->Type != AssetLocationType_Reference) || (format != NULL))
+    {
+        return Error_CreateSuccess();
+    }
+
+    GenericBuffer AcceptedList;
+    GenericBuffer_AllocateVariable(&AcceptedList, 0U, 1U);
+    Error Result = AssetExtensionFilter_AppendList(accepted, &AcceptedList);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = Error_Construct3(ErrorCode_InvalidAssetDefinition,
+            u8"The %s location is a reference (\"%s\"), so the definition needs a \"format\" naming its file type (one of: %s).",
+            assetKindName, (self->Value != NULL) ? self->Value : (const unsigned char*)u8"", AcceptedList._data);
+    }
+    Memory_Free(AcceptedList._data);
+    return Result;
+}
+
+Error OwnedAssetLocation_RequireFile(const OwnedAssetLocation* self, const unsigned char* resourceKindName)
+{
+    if (self->Type != AssetLocationType_Reference)
+    {
+        return Error_CreateSuccess();
+    }
+    return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+        u8"The %s location must be a file path; the reference \"%s\" cannot be loaded because nothing names its file type.",
+        resourceKindName, (self->Value != NULL) ? self->Value : (const unsigned char*)u8"");
 }
 
 void OwnedAssetLocation_Deconstruct(OwnedAssetLocation* self)

@@ -1,6 +1,7 @@
 {
     "is_fps_unlocked": true,
     "target_fps": 144,
+    "is_vsync_enabled": false,
 
     "is_fullscreen": true,
     "resolution": [ 1280, 720 ],

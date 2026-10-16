@@ -11,8 +11,15 @@
  * animation) or from an image within a sprite sheet asset. Sprite-sheet frames load that sheet as a
  * DEPENDENCY (attributed to the animation's dependency user, so it stays alive for the animation's
  * lifetime and unloads with it). A sprite-sheet frame's "location" value is interpreted as the sprite
- * sheet asset's NAME, and its "name" selects the image within that sheet.
+ * sheet asset's NAME, and its "name" selects the image within that sheet. A texture frame's location must be
+ * a file path (nothing could name a reference's image format). Every failure path unloads the standalone
+ * frame textures loaded so far, so a failed load leaks nothing.
  */
+
+
+// Macros.
+/** What a texture frame's location points at, for parse-time messages. */
+#define ANIMATION_FRAME_TEXTURE_KIND ((const unsigned char*)u8"animation frame texture")
 
 
 // Types.
@@ -59,13 +66,19 @@ static bool StringsEqual(const unsigned char* a, const unsigned char* b)
     return Equal;
 }
 
+/* Unloads the first @p count standalone frame textures of @p textures. */
+static void UnloadStandaloneTextures(const Texture2D* textures, size_t count)
+{
+    for (size_t i = 0; i < count; i++)
+    {
+        UnloadTexture(textures[i]);
+    }
+}
+
 static void SpriteAnimationLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
 {
     SpriteAnimationLoaded* Loaded = self->DestroyContext;
-    for (size_t i = 0; i < Loaded->StandaloneCount; i++)
-    {
-        UnloadTexture(Loaded->StandaloneTextures[i]);
-    }
+    UnloadStandaloneTextures(Loaded->StandaloneTextures, Loaded->StandaloneCount);
     Memory_Free(Loaded->StandaloneTextures);
     Error DeconstructResult = SpriteAnimation_Deconstruct(&Loaded->Animation);
     Error_Deconstruct(&DeconstructResult);
@@ -76,15 +89,68 @@ static void SpriteAnimationLoaded_Destroy(LoadedAsset* self, AssetManager* manag
 
 static const LoadedAssetVTable SpriteAnimationLoadedVTable = { SpriteAnimationLoaded_Destroy };
 
+/* Builds one standalone-texture frame, appending its texture to @p standaloneTextures (and counting it) as
+   soon as it is loaded so the caller can unload it on any later failure. */
+static Error LoadTextureFrame(SpriteAnimationDefinition* definition, AssetManager* manager, const AnimationFrameDef* frameDef,
+    Texture2D* standaloneTextures, size_t* standaloneCount, SpriteAnimationFrame* outFrame)
+{
+    AssetLocation Location = OwnedAssetLocation_View(&frameDef->Location);
+    AssetResourcePath* PathHandle = NULL;
+    Error PathResult = AssetManager_AcquireResourcePath(manager, definition->Base.Type, &Location,
+        &ASSET_EXTENSIONS_TEXTURE, NULL, &PathHandle);
+    if (PathResult.Code != ErrorCode_Success) { return PathResult; }
+    Texture2D FrameTexture = LoadTexture((const char*)AssetResourcePath_Get(PathHandle));
+    Error ReleaseResult = AssetManager_ReleaseResourcePath(manager, PathHandle);
+    Error_Deconstruct(&ReleaseResult);
+    if (FrameTexture.id == 0)
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to load animation frame texture \"%s\" in \"%s\".",
+            frameDef->Location.Value, definition->Base.Name);
+    }
+    SetTextureFilter(FrameTexture, frameDef->Filter);
+    standaloneTextures[*standaloneCount] = FrameTexture;
+    (*standaloneCount)++;
+
+    outFrame->_texture = FrameTexture;
+    outFrame->_areaInTexture = (Rectangle){ 0.0f, 0.0f, (float)FrameTexture.width, (float)FrameTexture.height };
+    outFrame->_isTextureStandalone = true;
+    return Error_CreateSuccess();
+}
+
+/* Builds one sprite-sheet frame, loading the sheet as a dependency under @p dependencyUser. */
+static Error LoadSheetFrame(AssetManager* manager, AssetUserID dependencyUser, AssetTypeID sheetType,
+    const AnimationFrameDef* frameDef, SpriteAnimationFrame* outFrame)
+{
+    if (sheetType == ASSET_TYPE_ID_INVALID)
+    {
+        return Error_Construct3(ErrorCode_InvalidState, u8"The sprite sheet type is not registered.");
+    }
+    void* SheetAsset = NULL;
+    Error LoadResult = AssetManager_LoadAssetSingle(manager, sheetType, frameDef->Location.Value, dependencyUser, &SheetAsset);
+    if (LoadResult.Code != ErrorCode_Success) { return LoadResult; }
+
+    SpriteSheet* Sheet = SheetAsset;
+    Rectangle Area;
+    Error AreaResult = SpriteSheet_GetTextureArea(Sheet, frameDef->ImageName, &Area);
+    if (AreaResult.Code != ErrorCode_Success) { return AreaResult; }
+
+    outFrame->_texture = Sheet->_texture; // borrowed; the sheet dependency keeps it alive
+    outFrame->_areaInTexture = Area;
+    outFrame->_isTextureStandalone = false;
+    return Error_CreateSuccess();
+}
+
 /* Builds all frames into @p frames, loading standalone textures (tracked in @p standaloneTextures) and
-   sprite-sheet dependencies (under @p dependencyUser). On failure unloads any standalone textures it
-   loaded before returning. */
+   sprite-sheet dependencies (under @p dependencyUser). On failure it unloads every standalone texture it
+   loaded and reports a count of 0, so the caller only frees the array; the manager releases the sheet
+   dependencies with the failed load's dependency user. */
 static Error LoadFrames(SpriteAnimationDefinition* definition, AssetManager* manager, AssetUserID dependencyUser,
     AssetTypeID sheetType, GenericBuffer* frames, Texture2D* standaloneTextures, size_t* outStandaloneCount)
 {
-    *outStandaloneCount = 0;
+    size_t StandaloneCount = 0;
+    Error Result = Error_CreateSuccess();
 
-    for (size_t i = 0; i < definition->FrameCount; i++)
+    for (size_t i = 0; (i < definition->FrameCount) && (Result.Code == ErrorCode_Success); i++)
     {
         AnimationFrameDef* FrameDef = &definition->Frames[i];
         SpriteAnimationFrame Frame;
@@ -92,51 +158,26 @@ static Error LoadFrames(SpriteAnimationDefinition* definition, AssetManager* man
 
         if (FrameDef->Source == AnimationFrameSource_Texture)
         {
-            AssetLocation Location = OwnedAssetLocation_View(&FrameDef->Location);
-            AssetResourcePath* PathHandle = NULL;
-            Error PathResult = AssetManager_AcquireResourcePath(manager, definition->Base.Type, &Location, NULL, &PathHandle);
-            if (PathResult.Code != ErrorCode_Success) { return PathResult; }
-            Texture2D Texture = LoadTexture((const char*)AssetResourcePath_Get(PathHandle));
-            Error ReleaseResult = AssetManager_ReleaseResourcePath(manager, PathHandle);
-            Error_Deconstruct(&ReleaseResult);
-            if (Texture.id == 0)
-            {
-                return Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to load animation frame texture in \"%s\".", definition->Base.Name);
-            }
-            SetTextureFilter(Texture, FrameDef->Filter);
-            standaloneTextures[*outStandaloneCount] = Texture;
-            (*outStandaloneCount)++;
-
-            Frame._texture = Texture;
-            Frame._areaInTexture = (Rectangle){ 0.0f, 0.0f, (float)Texture.width, (float)Texture.height };
-            Frame._isTextureStandalone = true;
+            Result = LoadTextureFrame(definition, manager, FrameDef, standaloneTextures, &StandaloneCount, &Frame);
         }
         else
         {
-            if (sheetType == ASSET_TYPE_ID_INVALID)
-            {
-                return Error_Construct3(ErrorCode_InvalidState, u8"The sprite sheet type is not registered.");
-            }
-            void* SheetAsset = NULL;
-            Error LoadResult = AssetManager_LoadAssetSingle(manager, sheetType, FrameDef->Location.Value, dependencyUser, &SheetAsset);
-            if (LoadResult.Code != ErrorCode_Success) { return LoadResult; }
-
-            SpriteSheet* Sheet = SheetAsset;
-            Rectangle Area;
-            Error AreaResult = SpriteSheet_GetTextureArea(Sheet, FrameDef->ImageName, &Area);
-            if (AreaResult.Code != ErrorCode_Success) { return AreaResult; }
-
-            Frame._texture = Sheet->_texture; // borrowed; the sheet dependency keeps it alive
-            Frame._areaInTexture = Area;
-            Frame._isTextureStandalone = false;
+            Result = LoadSheetFrame(manager, dependencyUser, sheetType, FrameDef, &Frame);
         }
 
-        if (!GenericBuffer_AddLast(frames, &Frame))
+        if ((Result.Code == ErrorCode_Success) && !GenericBuffer_AddLast(frames, &Frame))
         {
-            return Error_Construct3(ErrorCode_BufferTooLarge, u8"Failed to store animation frame.");
+            Result = Error_Construct3(ErrorCode_BufferTooLarge, u8"Failed to store animation frame.");
         }
     }
-    return Error_CreateSuccess();
+
+    if (Result.Code != ErrorCode_Success)
+    {
+        UnloadStandaloneTextures(standaloneTextures, StandaloneCount);
+        StandaloneCount = 0;
+    }
+    *outStandaloneCount = StandaloneCount;
+    return Result;
 }
 
 static Error SpriteAnimationDefinition_LoadAsset(void* self, AssetManager* manager, AssetUserID dependencyUser, LoadedAsset* outLoaded)
@@ -165,6 +206,7 @@ static Error SpriteAnimationDefinition_LoadAsset(void* self, AssetManager* manag
     Error FramesResult = LoadFrames(Definition, manager, dependencyUser, SheetType, Frames, StandaloneTextures, &StandaloneCount);
     if (FramesResult.Code != ErrorCode_Success)
     {
+        // LoadFrames already unloaded the textures it loaded.
         Memory_Free(StandaloneTextures);
         Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, Frames);
         Error_Deconstruct(&ReturnResult);
@@ -181,7 +223,7 @@ static Error SpriteAnimationDefinition_LoadAsset(void* self, AssetManager* manag
         (double)Definition->FPS, Definition->FrameStep, Definition->IsRunning, Definition->IsLooped);
     if (ConstructResult.Code != ErrorCode_Success)
     {
-        for (size_t i = 0; i < StandaloneCount; i++) { UnloadTexture(StandaloneTextures[i]); }
+        UnloadStandaloneTextures(StandaloneTextures, StandaloneCount);
         Memory_Free(StandaloneTextures);
         Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, Frames);
         Error_Deconstruct(&ReturnResult);
@@ -254,6 +296,9 @@ static Error ParseFrame(JSONCompound* compound, const unsigned char* sourceDescr
     }
     else
     {
+        Result = OwnedAssetLocation_RequireFile(&outFrame->Location, ANIMATION_FRAME_TEXTURE_KIND);
+        if (Result.Code != ErrorCode_Success) { return Result; }
+
         TextureProperties Properties;
         Result = AssetJSON_ReadTextureProperties(compound, (const unsigned char*)u8"texture_properties", &Properties);
         if (Result.Code != ErrorCode_Success) { return Result; }

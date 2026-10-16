@@ -27,9 +27,13 @@ The references/ directory contains various reference files for various things. I
 * unicode_data.txt The unicode data loaded into the game at runtime.
 * AssetStructure.md - A file which describes the JSON asset structure that assets must have.
 
+BUILDING.md (repository root) records the exact raylib and WRFramework versions and the required raylib
+configuration: raylib is built with SUPPORT_CUSTOM_FRAME_CONTROL, so EndDrawing neither swaps buffers nor polls
+input (the game does both itself). Read it before touching frame timing, input polling or buffer swapping.
+
 For storing BINARY game data, use the GHDF module, for human-readable game data, JSON module.
 
-When you implement a new module, create an mc file in the agents directory describing the module and
+When you implement a new module, create an md file in the agents directory describing the module and
 its usage, then in this file, in the modules list, add the module, the md file reference and a short
 description of what the module is for.
 
@@ -89,6 +93,9 @@ Current module list:
   * TextComponentGHDF - Component <-> GHDF compound tree.
   * TextComponentResolver - Binds a parsed tree's font/animation NAMES to live GameFont/SpriteAnimationInstance
     handles via the AssetManager (call after parsing; instances owned by a caller ObjectPool).
+* SoundEngine (SoundEngine.md) - Custom audio mixer (track tree, effects, scheduled commands) on raylib's audio
+  stream. DISABLED: AudioEngine_Construct1 always fails until its threading redesign; SoundEngine.md lists the
+  defects and is the brief for that redesign (ask the owner its open decisions before starting).
 
 Logging:
 Use the Logger module for all program output. Do NOT print to the standard streams directly (no
@@ -104,6 +111,13 @@ The headers are correct, the function missing from the library is just a version
 You should not edit the WRFramework.md file, it is regularly pulled from the actual framework repository when
 changes are made to it, so making changes to this file is useless as they will be overwritten. If more info
 is needed, make changes to either a module file or this file.
+
+**IMPORTANT: I try to architecture the project myself as much as I can, but the reality is that using Claude to
+write all code leads to me not fully understanding the codebase. If when I request a feature you see a roadblock or
+potential required refactor, please let me know before proceeding and say what is needed, you can even ask questions so you
+can plan out what the refactor should be (but don't instantly perform it, I need to know first and decide myself).
+The codebase should be kept clean, so try to avoid band-aid patches. Refactors are fine and expected, just don't pile on already
+broken code.**
 
 
 This is pretty much all that I can write here, read WRFramework.md for the rest.

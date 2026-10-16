@@ -9,10 +9,11 @@
  * The shader definition loads an optional vertex stage and an optional fragment stage, either of which may
  * be omitted to fall back to Raylib's built-in stage. The definition keys are "vertex_location" and
  * "fragment_location"; a bare "location" is accepted as a back-compat alias for the fragment stage (the
- * original single-stage behavior). At least one stage must be specified. Because two stages sharing a
- * definition would otherwise collide, the two source files must have DISTINCT stems (the resource resolver
- * matches by stem, ignoring extension). Shader source is loaded as text, so this loader uses the streaming
- * resource API rather than a temp file.
+ * original single-stage behavior). At least one stage must be specified. A location names a file without
+ * its extension, and both stage extensions (vert, frag, vs, fs, glsl) are accepted for either stage, so the
+ * two source files must have DISTINCT stems (e.g. "pbr/vertex" + "pbr/fragment"); two files sharing a stem
+ * would make the location ambiguous. Shader source is loaded as text, so this loader uses the streaming
+ * resource API rather than a temp file, and a reference location needs no format.
  */
 
 
@@ -71,7 +72,7 @@ static Error ReadStageSource(AssetManager* manager, AssetTypeID type, const Owne
 
     AssetLocation View = OwnedAssetLocation_View(location);
     IOStream* Stream = NULL;
-    Error OpenResult = AssetManager_OpenResource(manager, type, &View, &Stream);
+    Error OpenResult = AssetManager_OpenResource(manager, type, &View, &ASSET_EXTENSIONS_SHADER_STAGE, &Stream);
     if (OpenResult.Code != ErrorCode_Success) { return OpenResult; }
 
     GenericBuffer* Buffer = NULL;

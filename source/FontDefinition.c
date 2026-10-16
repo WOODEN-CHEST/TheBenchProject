@@ -8,6 +8,8 @@
 // Macros.
 /* Pixel height fonts are rasterized at; drawing scales from this base. */
 #define ASSET_FONT_BASE_SIZE 32
+/* What this loader describes, for parse-time messages. */
+#define FONT_ASSET_KIND ((const unsigned char*)u8"font")
 
 
 // Types.
@@ -15,7 +17,7 @@ typedef struct FontDefinitionStruct
 {
     AssetDefinition Base;
     OwnedAssetLocation Location;
-    unsigned char* Format; // owned; extension hint for reference locations, else NULL
+    unsigned char* Format; // owned; validated extension: narrows the file choice, names a reference's type
 } FontDefinition;
 
 typedef struct FontLoadedStruct
@@ -40,9 +42,12 @@ static Error FontDefinition_LoadAsset(void* self, AssetManager* manager, AssetUs
     (void)dependencyUser;
     FontDefinition* Definition = self;
 
+    const unsigned char* FormatExtension = Definition->Format;
+    AssetExtensionFilter Extensions = AssetFormat_SelectFilter(&ASSET_EXTENSIONS_FONT, &FormatExtension);
     AssetLocation Location = OwnedAssetLocation_View(&Definition->Location);
     AssetResourcePath* PathHandle = NULL;
-    Error PathResult = AssetManager_AcquireResourcePath(manager, Definition->Base.Type, &Location, Definition->Format, &PathHandle);
+    Error PathResult = AssetManager_AcquireResourcePath(manager, Definition->Base.Type, &Location, &Extensions,
+        Definition->Format, &PathHandle);
     if (PathResult.Code != ErrorCode_Success) { return PathResult; }
 
     Font RayFont = LoadFontEx((const char*)AssetResourcePath_Get(PathHandle), ASSET_FONT_BASE_SIZE, NULL, 0);
@@ -105,7 +110,12 @@ Error FontDefinition_Construct(AssetManager* manager, const UserData* userData, 
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = AssetJSON_ReadOptionalOwnedString(RootCompound, (const unsigned char*)u8"format", &Definition->Format, NULL);
+        Result = AssetJSON_ReadOptionalFormat(RootCompound, &ASSET_EXTENSIONS_FONT, FONT_ASSET_KIND, &Definition->Format);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = OwnedAssetLocation_ValidateReferenceFormat(&Definition->Location, Definition->Format,
+            &ASSET_EXTENSIONS_FONT, FONT_ASSET_KIND);
     }
 
     Error ReturnResult = JSONObjectPool_ReturnValue(Pool, &Root);

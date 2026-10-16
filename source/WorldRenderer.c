@@ -1,3 +1,7 @@
+// TODO: Split this file by render pass (handoff/FIX_PLAN.md Phase 3; agents/WorldRuntime.md "Renderer
+// structure"): render targets, per-object render cache, geometry, lighting, shadows, G-buffer/AO, sky and
+// post-processing, sharing a private header and a per-frame context. Until then, do not grow it: keep new
+// code in clearly separated sections and group new state per pass.
 #include <math.h>
 #include "WorldRenderer.h"
 #include "World.h"
@@ -62,10 +66,6 @@
 #define SHADOW_BIAS 0.0009f
 /** Minimum sun elevation (sunDir.y) for shadows to be cast; below this the sun is too low / set. */
 #define SHADOW_MIN_SUN_ELEVATION 0.05f
-/** Texture unit the NEAR shadow cascade is bound to for the PBR shader (kept clear of the material map slots). */
-#define SHADOW_TEXTURE_SLOT 10
-/** Texture unit the FAR shadow cascade is bound to (10 = near, 11 = point-light cube, 12 = far). */
-#define SHADOW_FAR_TEXTURE_SLOT 12
 
 /** Asset name of the point-light omnidirectional (cube) shadow depth shader (stores packed linear distance). */
 #define CUBE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_cube_depth")
@@ -77,8 +77,6 @@
  *  larger where the light grazes a surface, a small fraction head-on). Raise if acne (streaky self-shadowing),
  *  lower if peter-panning (the shadow detaches from its caster). */
 #define POINT_SHADOW_BIAS 0.35f
-/** Texture unit the point-light shadow CUBE is bound to for the PBR shader (clear of the sun map on slot 10). */
-#define POINT_SHADOW_TEXTURE_SLOT 11
 
 /** Capacity of the per-asset local-bounds cache used for point-light reach culling (distinct model assets).
  *  Caching avoids re-scanning a model's mesh vertices every frame just to get its bounding sphere. */
@@ -147,8 +145,6 @@
 /** Asset name of the ambient-occlusion PRE-pass shader: computes SSAO from the normal G-buffer's depth + flag
  *  into an AO-multiplier texture that the PBR scene pass applies to ONLY its ambient term. */
 #define AO_SHADER_ASSET_NAME ((const unsigned char*)u8"world_ao")
-/** Texture unit the AO map is bound to for the PBR shader (10 = near shadow, 11 = point cube, 12 = far shadow). */
-#define AO_TEXTURE_SLOT 13
 /** Asset name of the normal/mask G-buffer shader: writes a view-space normal (RGB) + surface/outline flag (A)
  *  that the postfx pass edge-detects for outlines. Replaces the old flag-only object mask. */
 #define NORMAL_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal")
@@ -210,6 +206,20 @@
 
 
 // Types.
+/* Fixed texture units for the PBR shader's renderer-owned samplers. They sit above raylib's material map units
+ * (DrawMesh binds and unbinds units 0..11; MAX_MATERIAL_MAPS is 12 in this raylib build) and the 2D batch's
+ * units (0..4), so neither can overwrite them. EnsureShaders points each sampler at its unit ONCE; per-frame
+ * code only binds textures. That also keeps every sampler off unit 0 even when its feature is inactive:
+ * OpenGL forbids samplers of different types (here the samplerCube and the albedo sampler2D) on one unit,
+ * whether or not the shader samples them. */
+typedef enum
+{
+    WorldRendererTextureUnit_ShadowNear = 12,       // sampler2D shadowMap (near sun cascade)
+    WorldRendererTextureUnit_ShadowFar = 13,        // sampler2D shadowMapFar (far sun cascade)
+    WorldRendererTextureUnit_PointShadowCube = 14,  // samplerCube pointShadowCube
+    WorldRendererTextureUnit_AmbientOcclusion = 15, // sampler2D ambientOcclusionMap
+} WorldRendererTextureUnit;
+
 /* Which model objects a draw pass should include, by their OmitPixelation flag. The pixelated scene pass draws
  * only pixelated objects (when the crisp overlay is active), the crisp overlay pass draws only the flagged
  * ones, and the shadow pass draws all (everything casts shadows). */
@@ -1026,6 +1036,14 @@ static GameShader* LoadRendererShader(WorldRenderer* self, const unsigned char* 
     return LoadedShader;
 }
 
+/* Points a sampler uniform at a fixed texture unit. Sampler values persist in the program object, so this is
+ * done once at load (raylib's SetShaderValue binds the program and ignores location -1). */
+static void AssignSamplerUnit(Shader shader, int location, WorldRendererTextureUnit unit)
+{
+    int UnitIndex = (int)unit;
+    SetShaderValue(shader, location, &UnitIndex, SHADER_UNIFORM_INT);
+}
+
 /* Loads the PBR + tonemap shaders once (idempotent). If PBR is unavailable models draw with Raylib's
  * default (unlit) shader; if the tonemap is unavailable the HDR scene is blitted untonemapped. Caches the
  * PBR per-frame uniform locations and uploads its constant material parameters. Needs a live GL context. */
@@ -1101,6 +1119,12 @@ static void EnsureShaders(WorldRenderer* self)
         float ShadowTexel = 1.0f / (float)SHADOW_MAP_SIZE;
         SetShaderValue(RayShader, self->_locShadowBias, &ShadowBias, SHADER_UNIFORM_FLOAT);
         SetShaderValue(RayShader, self->_locShadowTexelSize, &ShadowTexel, SHADER_UNIFORM_FLOAT);
+
+        // Point the renderer-owned samplers at their fixed units once (see WorldRendererTextureUnit).
+        AssignSamplerUnit(RayShader, self->_locShadowMap, WorldRendererTextureUnit_ShadowNear);
+        AssignSamplerUnit(RayShader, self->_locShadowMapFar, WorldRendererTextureUnit_ShadowFar);
+        AssignSamplerUnit(RayShader, self->_locPointShadowCube, WorldRendererTextureUnit_PointShadowCube);
+        AssignSamplerUnit(RayShader, self->_locAmbientOcclusionMap, WorldRendererTextureUnit_AmbientOcclusion);
     }
 
     self->_tonemapShader = LoadRendererShader(self, TONEMAP_SHADER_ASSET_NAME);
@@ -1347,25 +1371,21 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
     if (FogDensity < 0.0f) { FogDensity = 0.0f; }
     SetShaderValue(RayShader, self->_locFogDensity, &FogDensity, SHADER_UNIFORM_FLOAT);
 
-    // Sun shadow: upload the light matrices and bind the cascade depth maps (to slots clear of the material
-    // maps) when shadows are active this frame. Near cascade always; far cascade only when its map exists.
+    // Sun shadow: upload the light matrices and bind the cascade depth maps to their fixed units (the samplers
+    // already point there) when shadows are active this frame. Near cascade always; far only when its map exists.
     if (self->_shadowActive)
     {
         SetShaderValueMatrix(RayShader, self->_locLightVP, self->_lightVP);
-        rlActiveTextureSlot(SHADOW_TEXTURE_SLOT);
+        rlActiveTextureSlot(WorldRendererTextureUnit_ShadowNear);
         rlEnableTexture(self->_shadowMap.depth.id);
-        int Slot = SHADOW_TEXTURE_SLOT;
-        rlSetUniform(self->_locShadowMap, &Slot, SHADER_UNIFORM_INT, 1);
 
         int ShadowFarActive = self->_hasShadowMapFar ? 1 : 0;
         SetShaderValue(RayShader, self->_locShadowFarActive, &ShadowFarActive, SHADER_UNIFORM_INT);
         if (self->_hasShadowMapFar)
         {
             SetShaderValueMatrix(RayShader, self->_locLightVPFar, self->_lightVPFar);
-            rlActiveTextureSlot(SHADOW_FAR_TEXTURE_SLOT);
+            rlActiveTextureSlot(WorldRendererTextureUnit_ShadowFar);
             rlEnableTexture(self->_shadowMapFar.depth.id);
-            int SlotFar = SHADOW_FAR_TEXTURE_SLOT;
-            rlSetUniform(self->_locShadowMapFar, &SlotFar, SHADER_UNIFORM_INT, 1);
         }
     }
 
@@ -1379,10 +1399,8 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
     {
         float AoResolution[2] = { (float)self->_sceneWidth, (float)self->_sceneHeight };
         SetShaderValue(RayShader, self->_locAoResolution, AoResolution, SHADER_UNIFORM_VEC2);
-        rlActiveTextureSlot(AO_TEXTURE_SLOT);
+        rlActiveTextureSlot(WorldRendererTextureUnit_AmbientOcclusion);
         rlEnableTexture(self->_aoTarget.texture.id);
-        int AoSlot = AO_TEXTURE_SLOT;
-        rlSetUniform(self->_locAmbientOcclusionMap, &AoSlot, SHADER_UNIFORM_INT, 1);
     }
 
     // Point-light (cube) shadow: shade the selected shadow light separately with its cube map. Bind the cube to
@@ -1408,10 +1426,8 @@ static void UpdateLightingUniforms(WorldRenderer* self, World* world, const Game
         float PointBias = POINT_SHADOW_BIAS;
         SetShaderValue(RayShader, self->_locPointShadowBias, &PointBias, SHADER_UNIFORM_FLOAT);
 
-        rlActiveTextureSlot(POINT_SHADOW_TEXTURE_SLOT);
+        rlActiveTextureSlot(WorldRendererTextureUnit_PointShadowCube);
         rlEnableTextureCubemap(self->_pointShadowCube);
-        int CubeSlot = POINT_SHADOW_TEXTURE_SLOT;
-        rlSetUniform(self->_locPointShadowCube, &CubeSlot, SHADER_UNIFORM_INT, 1);
     }
 
     // shadowStrength is shared by the sun and point-shadow visibility, so gate it on global shadow enablement
@@ -1690,13 +1706,13 @@ static void DrawModelObjectWithShader(WorldRenderer* self, World* world, WorldMo
     Vector3 Rotation = WorldObject_GetRotation(Base);
     Vector3 Scale = WorldObject_GetScale(Base);
 
-    Matrix World = MatrixMultiply(MatrixMultiply(MatrixScale(Scale.x, Scale.y, Scale.z),
+    Matrix WorldTransform = MatrixMultiply(MatrixMultiply(MatrixScale(Scale.x, Scale.y, Scale.z),
         MatrixRotateXYZ(Rotation)), MatrixTranslate(Position.x, Position.y, Position.z));
 
     // Compose over the model's baked import transform (import inner, world outer), matching raylib's own
     // DrawModelEx convention, then draw with a neutral extra transform so only our matrix and tint apply.
     Model RayModel = GameModel_GetRaylibModel(ModelAsset);
-    Matrix FinalTransform = MatrixMultiply(RayModel.transform, World);
+    Matrix FinalTransform = MatrixMultiply(RayModel.transform, WorldTransform);
 
     // Bind the given shader onto every material slot so DrawModel shades through it. The by-value model copy
     // shares the asset's materials array, so this persists on the asset (fine: the next pass rebinds it).
@@ -1744,9 +1760,10 @@ static bool OmitFlagPassesFilter(bool omitPixelation, ModelPixelationFilter filt
     {
         case ModelPixelationFilter_PixelatedOnly: return !omitPixelation;
         case ModelPixelationFilter_CrispOnly:     return omitPixelation;
-        case ModelPixelationFilter_All:
-        default:                                  return true;
+        case ModelPixelationFilter_All:           return true;
     }
+    // Only reachable with a corrupted filter value; drawing the object is the safe choice.
+    return true;
 }
 
 /* Whether a model object should be drawn under the given OmitPixelation filter. */
@@ -1785,9 +1802,10 @@ static bool ModelCastsIntoCascade(const WorldModelObject* modelObject, bool isNe
     {
         case WorldShadowTier_Near: return isNearCascade;
         case WorldShadowTier_Far:  return !isNearCascade;
-        case WorldShadowTier_Both:
-        default:                   return true;
+        case WorldShadowTier_Both: return true;
     }
+    // Only reachable with a corrupted tier value; casting into both cascades is the safe choice.
+    return true;
 }
 
 /* Draws the depth of the world's model objects that cast into the given sun shadow cascade (per WorldShadowTier)

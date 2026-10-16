@@ -12,12 +12,17 @@
  */
 
 
+// Macros.
+/* What this loader describes, for parse-time messages. */
+#define SOUND_ASSET_KIND ((const unsigned char*)u8"sound")
+
+
 // Types.
 typedef struct SoundDefinitionStruct
 {
     AssetDefinition Base;
     OwnedAssetLocation Location;
-    unsigned char* Format; // owned; extension hint for reference locations, else NULL
+    unsigned char* Format; // owned; validated extension: narrows the file choice, names a reference's type
 } SoundDefinition;
 
 typedef struct SoundLoadedStruct
@@ -45,9 +50,12 @@ static Error SoundDefinition_LoadAsset(void* self, AssetManager* manager, AssetU
     (void)dependencyUser;
     SoundDefinition* Definition = self;
 
+    const unsigned char* FormatExtension = Definition->Format;
+    AssetExtensionFilter Extensions = AssetFormat_SelectFilter(&ASSET_EXTENSIONS_SOUND, &FormatExtension);
     AssetLocation Location = OwnedAssetLocation_View(&Definition->Location);
     AssetResourcePath* PathHandle = NULL;
-    Error PathResult = AssetManager_AcquireResourcePath(manager, Definition->Base.Type, &Location, Definition->Format, &PathHandle);
+    Error PathResult = AssetManager_AcquireResourcePath(manager, Definition->Base.Type, &Location, &Extensions,
+        Definition->Format, &PathHandle);
     if (PathResult.Code != ErrorCode_Success) { return PathResult; }
 
     Wave LoadedWave = LoadWave((const char*)AssetResourcePath_Get(PathHandle));
@@ -137,7 +145,12 @@ Error SoundDefinition_Construct(AssetManager* manager, const UserData* userData,
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = AssetJSON_ReadOptionalOwnedString(RootCompound, (const unsigned char*)u8"format", &Definition->Format, NULL);
+        Result = AssetJSON_ReadOptionalFormat(RootCompound, &ASSET_EXTENSIONS_SOUND, SOUND_ASSET_KIND, &Definition->Format);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = OwnedAssetLocation_ValidateReferenceFormat(&Definition->Location, Definition->Format,
+            &ASSET_EXTENSIONS_SOUND, SOUND_ASSET_KIND);
     }
 
     Error ReturnResult = JSONObjectPool_ReturnValue(Pool, &Root);

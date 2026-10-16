@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <time.h>
 #include "wr/WRCompile.h"
 #include "wr/WRError.h"
 #include "wr/WRMemory.h"
@@ -18,6 +17,7 @@
 #include "WorldTestFrame.h"
 #include "raylib/raylib.h"
 #include "wr/WRStopwatch.h"
+#include "wr/WRThread.h"
 
 
 // Macros.
@@ -37,6 +37,13 @@
 #define MAX_FRAME_TIME_SECONDS 0.25
 /** Aspect ratio (width / height) the game's content is designed and fitted for. */
 #define TARGET_ASPECT_RATIO (16.0f / 9.0f)
+/** Idle threshold in seconds: while the next update tick and the next paced render are both at least this
+ *  far away, the loop sleeps instead of spinning. Matches IDLE_SLEEP_MILLISECONDS. */
+#define IDLE_SLEEP_THRESHOLD_SECONDS 0.001
+/** Length of one idle sleep in milliseconds, the shortest sleep the OS reliably honours (raylib raises the
+ *  Windows timer resolution to 1 ms). Waking slightly late is harmless: every owed update tick still runs,
+ *  each with the fixed delta. */
+#define IDLE_SLEEP_MILLISECONDS ((size_t)1)
 
 
 // Static functions.
@@ -60,17 +67,25 @@ static Error BuildAbsolutePath(const unsigned char* base, const unsigned char* r
 /* Creates the game window from the (already validated) config values. */
 static void InitializeWindow(const GameConfig* config)
 {
+    unsigned int Flags = 0;
     if (config->IsFullscreen)
     {
-        SetConfigFlags(FLAG_FULLSCREEN_MODE);
+        Flags |= FLAG_FULLSCREEN_MODE;
+    }
+    if (config->IsVSyncEnabled)
+    {
+        Flags |= FLAG_VSYNC_HINT;
+    }
+    if (Flags != 0)
+    {
+        SetConfigFlags(Flags);
     }
 
     InitWindow((int)config->ResolutionWidth, (int)config->ResolutionHeight, WINDOW_TITLE);
 
-    // NOTE: deliberately no SetTargetFPS. Rendering is paced by RunGameLoop against an INDEPENDENT time.h
-    // clock so the update loop stays decoupled from the render loop. EndDrawing still swaps buffers and polls
-    // input as usual; leaving the target unset just means it does NOT halt to cap the rate (we gate renders
-    // ourselves), so we never block the update loop waiting on the renderer.
+    // Deliberately no SetTargetFPS: RunGameLoop paces rendering itself. This project's raylib is built with
+    // SUPPORT_CUSTOM_FRAME_CONTROL (see BUILDING.md), so EndDrawing neither swaps buffers nor polls input:
+    // GameFrameManager_Update polls input once per update tick, and GameFrameManager_Render swaps buffers.
 }
 
 static double GetClockSeconds(void)
@@ -78,28 +93,60 @@ static double GetClockSeconds(void)
     return (double)Stopwatch_GetTimestampNanoseconds() / 1e9;
 }
 
-/* Runs the game loop with the UPDATE and RENDER cadences DECOUPLED, both timed from an independent time.h
- * clock (not Raylib's render-tied timer). Fixed-timestep updates run at UPDATE_RATE_HZ; a render happens only
- * when @p targetRenderSeconds has elapsed since the last one (or every iteration when it is <= 0 — unlocked).
- * The loop never halts (no WaitTime), so capping the render rate never blocks the update loop; it spins on
- * the clock instead. Returns when the window is closed or the manager reports a fatal error.
+/* Advances the render deadline by one interval, keeping any overshoot so the average rate matches the target
+ * (re-anchoring on the actual render time would make 60 FPS settle below 60). After a stall of a whole
+ * interval or more it re-anchors to now instead of rendering a burst of catch-up frames. */
+static double AdvanceRenderDeadline(double deadline, double currentTime, double interval)
+{
+    double Next = deadline + interval;
+    return (Next <= currentTime) ? (currentTime + interval) : Next;
+}
+
+/* Sleeps one idle step when nothing is due soon: rendering is paced and both the next update tick and the
+ * next render deadline are at least IDLE_SLEEP_THRESHOLD_SECONDS away. With unlocked rendering every
+ * iteration renders, so the loop is never idle. */
+static void SleepIfIdle(bool isRenderPaced, double secondsUntilUpdate, double secondsUntilRender)
+{
+    if (!isRenderPaced
+        || (secondsUntilUpdate < IDLE_SLEEP_THRESHOLD_SECONDS)
+        || (secondsUntilRender < IDLE_SLEEP_THRESHOLD_SECONDS))
+    {
+        return;
+    }
+
+    Error SleepResult = Thread_Sleep(IDLE_SLEEP_MILLISECONDS);
+    Error_Deconstruct(&SleepResult); // A failed sleep only costs one more loop iteration.
+}
+
+/* Runs the game loop with the update and render cadences decoupled, both timed from WRStopwatch's monotonic
+ * clock. Fixed-timestep updates run at UPDATE_RATE_HZ through an accumulator. A render happens whenever the
+ * render deadline (every @p targetRenderSeconds) has passed, or every iteration when @p targetRenderSeconds is
+ * <= 0 (unlocked).
  *
- * NOTE: EndDrawing (inside the manager's render) still swaps buffers and polls input — this project's Raylib
- * is NOT built with SUPPORT_CUSTOM_FRAME_CONTROL, so we must NOT swap/poll manually (doing so double-swaps
- * and tears). Not calling SetTargetFPS keeps EndDrawing from halting, so it never blocks the update loop. */
+ * Both cadences report simulation time: update ticks get the fixed-step clock, and a render gets that clock
+ * plus the not-yet-simulated remainder. They share one epoch (0 when the loop starts) and one pace, so a time
+ * captured in update can be compared with one seen in render, even after a stall clamps the elapsed time.
+ *
+ * When neither an update tick nor a paced render is due soon, the loop sleeps briefly instead of spinning, so
+ * it does not hold a CPU core at 100%. Returns when the window is closed or the manager reports a fatal
+ * error. */
 static void RunGameLoop(GameFrameManager* frameManager, double targetRenderSeconds)
 {
     const double UpdateDelta = 1.0 / UPDATE_RATE_HZ;
+    const bool IsRenderPaced = (targetRenderSeconds > 0.0);
+    const double LoopStartTime = GetClockSeconds();
 
-    double PreviousTime = GetClockSeconds();
-    double LastRenderTime = PreviousTime;
+    double PreviousTime = 0.0;
     double UpdateAccumulator = 0.0;
     double TotalUpdateTime = 0.0;
+    double NextRenderTime = 0.0;
+    double LastRenderSimulationTime = 0.0;
     bool HasFatalError = false;
 
     while (!WindowShouldClose() && !GameFrameManager_ShouldStop(frameManager) && !HasFatalError)
     {
-        double CurrentTime = GetClockSeconds();
+        // Real time since the loop started; drives the accumulator, the render deadline and idle sleeping.
+        double CurrentTime = GetClockSeconds() - LoopStartTime;
         double Elapsed = CurrentTime - PreviousTime;
         PreviousTime = CurrentTime;
         if (Elapsed > MAX_FRAME_TIME_SECONDS)
@@ -128,13 +175,15 @@ static void RunGameLoop(GameFrameManager* frameManager, double targetRenderSecon
             break;
         }
 
-        // Render loop: only when the target interval has elapsed (or every iteration when unlocked). The
-        // render delta is the real time since the previous render, kept independent of the update cadence.
-        double SinceRender = CurrentTime - LastRenderTime;
-        if ((targetRenderSeconds <= 0.0) || (SinceRender >= targetRenderSeconds))
+        // Render loop: when the deadline has passed (or every iteration when unlocked).
+        if (!IsRenderPaced || (CurrentTime >= NextRenderTime))
         {
-            Error RenderResult = GameFrameManager_Render(frameManager, ProgramTime_Create(CurrentTime, SinceRender));
-            LastRenderTime = CurrentTime;
+            double SimulationTime = TotalUpdateTime + UpdateAccumulator;
+            double SinceRender = SimulationTime - LastRenderSimulationTime;
+            LastRenderSimulationTime = SimulationTime;
+            NextRenderTime = AdvanceRenderDeadline(NextRenderTime, CurrentTime, targetRenderSeconds);
+
+            Error RenderResult = GameFrameManager_Render(frameManager, ProgramTime_Create(SimulationTime, SinceRender));
             if (RenderResult.Code != ErrorCode_Success)
             {
                 Error_Deconstruct(&RenderResult);
@@ -142,6 +191,10 @@ static void RunGameLoop(GameFrameManager* frameManager, double targetRenderSecon
                 break;
             }
         }
+
+        double Now = GetClockSeconds() - LoopStartTime;
+        double SecondsUntilUpdate = (UpdateDelta - UpdateAccumulator) - (Now - CurrentTime);
+        SleepIfIdle(IsRenderPaced, SecondsUntilUpdate, NextRenderTime - Now);
     }
 }
 
@@ -201,7 +254,7 @@ static Error SetUpAssetManager(Logger* logger, const unsigned char* workingDirec
     *outPool = NULL;
 
     AssetManager* Manager = NULL;
-    Error ConstructResult = AssetManager_Construct1(&Manager);
+    Error ConstructResult = AssetManager_Construct1(logger, &Manager);
     if (ConstructResult.Code != ErrorCode_Success)
     {
         return ConstructResult;
@@ -231,10 +284,12 @@ static Error SetUpAssetManager(Logger* logger, const unsigned char* workingDirec
     }
     Memory_Free(AssetRoot._data);
 
-    Error ReadResult = AssetManager_ReadDefinitions(Manager);
+    // Bad individual definition files are skipped, and the asset manager logs each one plus a count; an error
+    // here means a whole directory could not be scanned.
+    Error ReadResult = AssetManager_ReadDefinitions(Manager, NULL);
     if (ReadResult.Code != ErrorCode_Success)
     {
-        LogWarningAndRelease(logger, (const unsigned char*)u8"Failed to read some asset definitions: %s", &ReadResult);
+        LogWarningAndRelease(logger, (const unsigned char*)u8"Asset definition scan was incomplete: %s", &ReadResult);
     }
 
     *outManager = Manager;

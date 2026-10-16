@@ -31,7 +31,7 @@ static Error CreateOutOfRangeError(const unsigned char* parameterName,
 
 static bool IsFiniteDouble(double value)
 {
-    return !Math_IsInfinityDouble(value);
+    return !Math_IsNaNDouble(value) && !Math_IsInfinityDouble(value);
 }
 
 static size_t GetFrameCountFromAnimation(const SpriteAnimation* self)

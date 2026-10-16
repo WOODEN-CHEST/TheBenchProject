@@ -19,14 +19,15 @@
  *
  * Audio modifiers (effects) can be applies to audio tracks and sounds.
  *
+ * STATUS: DISABLED. AudioEngine_Construct1 always fails with ErrorCode_InvalidOperation until the engine's
+ * threading model is redesigned; agents/SoundEngine.md describes the defects and the planned redesign.
+ * Nothing in this API is thread-safe. The thread-safety guarantees this header used to give (track and engine
+ * calls usable from any thread at any time) did not hold.
+ *
  * The audio engine, sound, track and modifier pointers and all stable and won't change after creation.
  *
- * Some of the audio engine is thread safe, some of it is not:
- * The audio track functions and audio engine functions are thread safe and can be called any time.
- * They queue work to the audio thread when exact sample timing matters.
- * The sound instance functions are not generally thread safe. To modify sound instances, use audio commands:
+ * The sound instance functions were meant to be used from audio commands only:
  *     Schedule a command on the track timeline, then in that command's function modify the sound instance.
- *     Do not set audio instance properties or query timing-sensitive sound state while not on the audio thread.
  * For commands, if a command is scheduled on a track at a time which has already been passed, it just gets executed
  * at the next opportunity as if it just happened.
  * The command setters all copy the command objects when setting them, so the references do not need to be kept alive after
@@ -404,14 +405,16 @@ typedef Error (*SoundInstanceInitializer)(GameSoundInstance* soundInstance, cons
 
 // Audio Engine.
 /**
- * @brief Creates the process-wide audio engine and starts its output stream.
+ * @brief Creates the process-wide audio engine and starts its output stream. CURRENTLY DISABLED.
  *
- * Allocates the engine, sets up the master track, opens the audio device if one is not already open, and
- * begins streaming. Only one engine may exist at a time. The returned engine is owned by the caller and
- * must be released with AudioEngine_Deconstruct.
+ * While the engine awaits its threading redesign (see agents/SoundEngine.md) this always fails with
+ * ErrorCode_InvalidOperation and creates nothing. Once re-enabled: allocates the engine, sets up the master
+ * track, opens the audio device if one is not already open, and begins streaming. Only one engine may exist at
+ * a time. The returned engine is owned by the caller and must be released with AudioEngine_Deconstruct.
  * @param outEngine [out] Receives the created engine; must not be NULL. Set to NULL on failure.
- * @returns ErrorCode_Success on success; ErrorCode_IllegalArgument if @p outEngine is NULL;
- *          ErrorCode_InvalidOperation if an audio engine already exists.
+ * @returns ErrorCode_IllegalArgument if @p outEngine is NULL; otherwise ErrorCode_InvalidOperation while the
+ *          engine is disabled (once re-enabled: success, or ErrorCode_InvalidOperation if an audio engine
+ *          already exists).
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
