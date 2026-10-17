@@ -169,6 +169,9 @@ void RenderContext_RenderText2D(RenderContext* self, const TextRenderArguments* 
     self->_stringDrawCount++;
 }
 
+// TODO: DrawModelEx writes the tint into the shared asset's material maps for the duration of the draw (and the
+// materials' own shaders are used). Draw mesh by mesh with a per-draw Material copy, like WorldRendererGeometry,
+// before the UI (its only caller, through UIRenderContext_RenderModel) draws models.
 void RenderContext_RenderModel(RenderContext* self, const ModelRenderArguments* args)
 {
     Color FinalTint = RenderColor_GetFinalColor(args->TargetColor);

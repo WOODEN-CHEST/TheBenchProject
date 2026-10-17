@@ -1,5 +1,7 @@
-// TODO: Saves are write-only so far: there is no decoder (GHDF -> WorldDTO), no stream read/write and no
-// round-trip test. Planned as WorldDecoder + a tests/ round trip (handoff/FIX_PLAN.md, Phase 3).
+// TODO: Saves are write-only so far: there is no decoder (GHDF -> WorldDTO) and no stream read/write, so the
+// save schema has never been round-tripped. The hand-written WorldDecoder of FIX_PLAN Phase 3 waits for the
+// owner's architecture decisions A1/A5 (handoff/2026-10_code_review/ARCHITECTURE_PROPOSAL.md): worlds may
+// become JSON with codecs generated from property descriptors.
 #include "WorldEncoder.h"
 #include "wr/WRMemory.h"
 

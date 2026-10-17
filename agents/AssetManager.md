@@ -30,21 +30,21 @@ and [GameAssets.md](GameAssets.md).
 - `AssetManager_Deconstruct` unloads every asset regardless of holders, so every asset user must be finished first
   (`main.c` tears down the frame manager before the asset manager).
 
-### The project rule (handoff/FIX_PLAN.md, decision D3)
+### The project rule (handoff/2026-10_code_review/FIX_PLAN.md, decision D3)
 **Whatever keeps asset data owns its own `AssetUserID`, and nothing stores asset pointers or by-value copies
 (a `GameFont`, a raylib `Model`/`Texture2D`/`Font`/`Shader`, a `SpriteAnimationInstance` source) past that user.**
-- Give each owning object (a frame, the world renderer; later the World, each TextDocument, the audio engine) its
-  own user. Mint it when the owner is created and retire it when the owner is destroyed, also on forced teardown.
+- Give each owning object (a frame, the world renderer, a World built with an asset manager; later each
+  TextDocument and the audio engine) its own user. Mint it when the owner is created and retire it when the owner is destroyed, also on forced teardown.
 - Load what you keep under your own user, even if another user already loaded it: that only adds your hold, with
   no I/O.
 - Hand an asset to another object only for the duration of a call. A receiver that keeps it must load its own hold
   (by name).
 
-Two known violations, scheduled to be fixed:
-- **World sprites (Phase 3).** `WorldRenderer_PrepareWorld`, and lazily the sprite draw path, load sprite animations
-  under the **WorldRenderer's** user and bind them into `WorldSpriteObject` instances that belong to the World.
-  Recreating the renderer, or a world that outlives it, leaves those instances pointing at freed animations.
-  Phase 3 gives the World its own user (`World_Construct2`) and binds animations when sprites are added.
+How the world code follows it: a `World` built with `World_Construct2` owns a user and binds its sprites' animations
+under it when they are added (the renderer only reads frames); the `WorldRenderer` holds its shaders under one user
+and the world's models under another, which `WorldRenderer_PrepareWorld` swaps to release unused models.
+
+One known violation, scheduled to be fixed:
 - **Text fonts (Phase 4).** `TextComponentResolver_ResolveTree` copies the loaded `GameFont` **by value** into each
   `StringComponent` (`StringComponent_SetFont`), and `TextStyle` stores a `GameFont` by value too. The copies dangle
   once the resolving user releases the font. Phase 4 replaces this with `TextDocument` (which owns a user) and
@@ -54,10 +54,9 @@ Two known violations, scheduled to be fixed:
 - Never write to an asset, including through the arrays a by-value copy still points at (`Model.materials`,
   `Material.maps`, `Model.meshes`, `Shader.locs`, `Font.glyphs`). Put per-use state (tint, transform, pass shader)
   into your own copies, for example a `Material` built on the stack.
-- Known violation (Phase 3): the WorldRenderer binds its pass shaders into the shared model materials
-  (`DrawModelObjectWithShader`; the binding persists on the asset) and rewrites map-sampler entries in the shared
-  `world_pbr` shader's `locs` (`EnsureShaders`). Any other code that draws those models or uses that shader
-  inherits these writes.
+- The WorldRenderer draws every mesh with a `Material` built on the stack and keeps its own copy of the PBR shader's
+  location table, so it writes neither. `RenderContext_RenderModel` (raylib's `DrawModelEx`, used only by the dormant
+  UI) still writes the tint into the shared maps for the duration of a draw; it is marked `// TODO:`.
 
 ### Threading
 - **Main thread only.** The manager does no locking, and raylib loading must run on the GL thread.
@@ -255,7 +254,7 @@ All six read JSON definitions (`.json`) and parse them with the shared `JSONObje
 | `sound` (`sounds`) | `AssetManager_LoadSound` | `GameSound` | The decoded float samples (`UnloadWaveSamples`); the `GameSound` borrows them. |
 | `font` (`fonts`) | `AssetManager_LoadFont` | `GameFont` | The raylib `Font` (`UnloadFont`). |
 | `shader` (`shaders`) | `AssetManager_LoadShader` | `GameShader` | The raylib `Shader` (`UnloadShader`). |
-| `model` (`models`) | `AssetManager_LoadModel` | `GameModel` | Meshes, materials and map arrays (`UnloadModel`), plus every texture its materials referenced at load, tracked by id and unloaded first (`rlUnloadTexture`). Never `UnloadMaterial`: it would also unload the material's shader, which the renderer points at shared shader assets. |
+| `model` (`models`) | `AssetManager_LoadModel` | `GameModel` | Meshes, materials and map arrays (`UnloadModel`), plus every texture its materials referenced at load, tracked by id and unloaded first (`rlUnloadTexture`). Never `UnloadMaterial`: it would also unload the material's shader, and a texture shared by two materials twice. |
 
 Details per type: [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md).
 

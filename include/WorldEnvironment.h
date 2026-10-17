@@ -3,6 +3,7 @@
 #include <stdbool.h>
 // Color is a Raylib type used for the sky/fog/light colors stored here, so this include is unavoidable.
 #include "raylib/raylib.h"
+#include "wr/WRError.h"
 
 
 /**
@@ -15,10 +16,15 @@
  * multipliers. These are DATA ONLY; the world renderer reads them, but this module has no rendering
  * logic and no dependency on the renderer.
  *
- * The struct is a plain value type owning no heap memory (copy it freely). It is deliberately expandable:
- * to add a setting, add a field and give it a default in WorldEnvironment_SetDefaults. Effect strengths
- * are stored as multipliers so a world can dial an effect down to 0 or boost it; the renderer multiplies
- * them with the game config's own multipliers.
+ * The struct is a value type that currently owns no heap memory. Copy it with WorldEnvironment_CopyTo rather
+ * than by assignment, so a future owned field (a skybox name, a LUT path) cannot turn copies into double
+ * frees. It is deliberately expandable: to add a setting, add a field, give it a default in
+ * WorldEnvironment_SetDefaults, a rule in WorldEnvironment_Validate (if it has one) and copy it in
+ * WorldEnvironment_CopyTo. Effect strengths are stored as multipliers so a world can dial an effect down to 0
+ * or boost it; the renderer multiplies them with the game config's own multipliers.
+ *
+ * Data from outside the program (a save, an editor, a downloaded story) must pass WorldEnvironment_Validate
+ * before it is used: the field comments below state the rules it enforces.
  */
 
 
@@ -31,24 +37,26 @@
 /**
  * @brief The environment/graphics settings of a single world.
  *
- * A plain value type; populate with WorldEnvironment_SetDefaults, then adjust individual fields. Release
- * with WorldEnvironment_Deconstruct (currently a no-op, present for future-proofing).
+ * A value type; populate with WorldEnvironment_SetDefaults, then adjust individual fields. Copy with
+ * WorldEnvironment_CopyTo. Release with WorldEnvironment_Deconstruct (currently a no-op, present for
+ * future-proofing).
  */
 typedef struct WorldEnvironmentStruct
 {
     // ---- Sky, sun and day-night cycle ----
-    /** @brief Current time of day as a fraction in [0;1]: 0 = midnight, 0.5 = noon. Drives the sun position. */
+    /** @brief Current time of day as a fraction in [0;1]: 0 = midnight, 0.5 = noon. Drives the sun position.
+     *  Finite and in [0;1]. */
     float TimeOfDay;
     /** @brief When true, TimeOfDay advances automatically over DayLengthSeconds; when false it is held fixed. */
     bool IsDayNightCycleEnabled;
-    /** @brief Real-time length of a full day-night cycle, in seconds. Must be > 0 to advance. */
+    /** @brief Real-time length of a full day-night cycle, in seconds. Finite and > 0. */
     float DayLengthSeconds;
     /** @brief Tilt of the sun's arc away from the zenith at noon, in radians. 0 makes the noon sun pass
      *  straight overhead; larger values lean the noon sun toward the horizon (elevation at noon = 90deg minus
-     *  this angle). Sunrise and sunset stay on the horizon regardless. Expected finite, typically [0, PI/2). */
+     *  this angle). Sunrise and sunset stay on the horizon regardless. Finite; typically [0, PI/2). */
     float SunAngle;
 
-    /** @brief Atmospheric turbidity (haziness) for the physically based sky; higher is hazier. */
+    /** @brief Atmospheric turbidity (haziness) for the physically based sky; higher is hazier. Finite and >= 0. */
     float SkyTurbidity;
     /** @brief Ground albedo color feeding atmospheric scattering (affects horizon/sky tint). Alpha ignored. */
     Color SkyGroundAlbedo;
@@ -120,6 +128,30 @@ typedef struct WorldEnvironmentStruct
 void WorldEnvironment_SetDefaults(WorldEnvironment* self);
 
 /**
+ * @brief Checks every field against the rules stated in the field comments.
+ *
+ * Use it on any environment that came from outside the program (a save file, an editor, downloaded content)
+ * before applying it to a world: a NaN or infinite value would otherwise poison the time of day, the sun
+ * direction and the lighting permanently. Colors, booleans and the star seed accept every value.
+ * @param self The environment to check; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange naming the
+ *          first field that breaks its rule.
+ */
+Error WorldEnvironment_Validate(const WorldEnvironment* self);
+
+/**
+ * @brief Copies an environment into another one, replacing the destination's settings.
+ *
+ * Use this instead of struct assignment. Today it is a plain copy; when the environment gains owned fields,
+ * this is the one place that deep-copies them and releases what the destination held.
+ * @param self The environment to copy; must not be NULL.
+ * @param destination The environment to overwrite (populated with WorldEnvironment_SetDefaults or an earlier
+ *        copy); must not be NULL. May equal @p self (then nothing changes).
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p destination is NULL.
+ */
+Error WorldEnvironment_CopyTo(const WorldEnvironment* self, WorldEnvironment* destination);
+
+/**
  * @brief Releases any resources owned by an environment.
  *
  * Present for symmetry and future-proofing; a WorldEnvironment currently owns nothing, so this is a
@@ -157,9 +189,10 @@ float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self);
  * @brief Advances the time of day by @p deltaSeconds when the day-night cycle is enabled.
  *
  * Adds @p deltaSeconds / DayLengthSeconds to TimeOfDay and wraps the result into [0, 1). Does nothing if
- * the cycle is disabled or DayLengthSeconds is not positive.
+ * the cycle is disabled, DayLengthSeconds is not a finite positive number, @p deltaSeconds is negative or not
+ * finite, or the step would not give a finite time, so a bad input can never leave TimeOfDay NaN.
  * @param self The environment; may be NULL (no-op).
- * @param deltaSeconds Elapsed real seconds to advance by; finite and non-negative expected.
+ * @param deltaSeconds Elapsed real seconds to advance by; must be finite and non-negative to have an effect.
  */
 void WorldEnvironment_Advance(WorldEnvironment* self, float deltaSeconds);
 

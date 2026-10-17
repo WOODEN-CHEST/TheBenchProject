@@ -2553,7 +2553,8 @@ Error AssetManager_LoadModel(AssetManager* self, const unsigned char* name, Asse
 }
 
 // TODO: Bulk operations are complete but unused: no frame drives them from its stepped load yet (GameFrame's
-// BeginLoad/LoadStep are meant to; WorldTestFrame still loads everything at once in PrepareWorld).
+// BeginLoad/LoadStep are meant to; WorldTestFrame still loads everything at once: sprites when its world is built,
+// models in WorldRenderer_PrepareWorld).
 Error AssetManager_CreateAssetBulkOperation(AssetManager* self, AssetUserID user, AssetBulkOperation** outOp)
 {
     if (self == NULL) { return CreateNullError(u8"self"); }

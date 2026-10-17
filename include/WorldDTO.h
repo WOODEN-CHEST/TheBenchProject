@@ -141,9 +141,9 @@ Error WorldDTO_Deconstruct(WorldDTO* self);
 /**
  * @brief Builds a DTO snapshot from a live world (initializes @p outDTO, then fills it).
  *
- * Clones the world name, copies the environment, and appends one WorldObjectDTO per world object (with
- * cloned strings). @p outDTO is initialized by this call; do not pre-construct it. On failure @p outDTO
- * is left deconstructed (owning nothing).
+ * Clones the world name, copies the environment (WorldEnvironment_CopyTo), and appends one WorldObjectDTO
+ * per world object (with cloned strings). @p outDTO is initialized by this call; do not pre-construct it. On
+ * failure @p outDTO is left deconstructed (owning nothing).
  * @param world The world to snapshot; must not be NULL.
  * @param outDTO [out] Receives the initialized, populated DTO. Must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p world or @p outDTO is NULL.
@@ -156,13 +156,16 @@ Error WorldDTO_FromWorld(World* world, WorldDTO* outDTO);
  * @brief Rebuilds a live world from a DTO: sets its name/environment and re-creates every object.
  *
  * The target world should be empty; objects are added with their saved ids (WorldDTO_ApplyToWorld fails
- * if an id collides). Object transform/tint values are validated as they are applied, so a corrupt DTO
- * (e.g. non-finite values) is rejected. On failure, objects added before the failing one remain in the
- * world (the caller should discard the world).
+ * if an id collides). The environment is checked with WorldEnvironment_Validate before anything is applied,
+ * so a bad environment leaves the world untouched; object transform/tint values are validated as they are
+ * applied, so a corrupt DTO (e.g. non-finite values) is rejected. On an object failure, objects added before
+ * the failing one remain in the world (the caller should discard the world). Sprite objects are bound to
+ * their animations by the world as they are added (see World_AddObject).
  * @param dto The source DTO; must not be NULL.
  * @param world The target world (should be empty); must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p dto or @p world is NULL, or a stored object has an
- *          unknown type; propagates validation and insertion errors.
+ *          unknown type; ErrorCode_ArgumentOutOfRange if the environment breaks a rule of
+ *          WorldEnvironment_Validate; propagates validation and insertion errors.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */

@@ -20,5 +20,17 @@ void AssetManagerTests_Run(TestRun* run);
 /** @brief Point-light reach culling (WorldLightCullingTests.c). */
 void WorldLightCullingTests_Run(TestRun* run);
 
+/** @brief World object set, sprite binding under the world's asset user, renames (WorldTests.c). */
+void WorldTests_Run(TestRun* run);
+
+/** @brief Environment validation, copying and the day-night advance (WorldEnvironmentTests.c). */
+void WorldEnvironmentTests_Run(TestRun* run);
+
+/** @brief World <-> DTO round trip and snapshot validation (WorldDTOTests.c). */
+void WorldDTOTests_Run(TestRun* run);
+
+/** @brief The renderer's per-object render cache (WorldRenderCacheTests.c; a private module of source/). */
+void WorldRenderCacheTests_Run(TestRun* run);
+
 /** @brief Log rotation, pruning and formatted output under a base directory (LoggerTests.c). */
 void LoggerTests_Run(TestRun* run);

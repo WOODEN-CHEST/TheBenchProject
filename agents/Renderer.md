@@ -101,10 +101,11 @@ nothing calls `RenderContext_Create` today. `WorldRenderer` and `GameFrameManage
 
 - Main thread only, with the window's GL context alive.
 - There is no clip or scissor stack yet; clip push/pop in `RenderContext` is planned for the UI work (Phase 5 of
-  `handoff/FIX_PLAN.md`).
-- `RenderContext_RenderModel` draws with whatever shader each material currently holds. Models the WorldRenderer has
-  drawn keep the last pass shader it bound into their shared materials (a known violation, fixed in Phase 3), so a
-  second consumer inherits it. raylib's `DrawModelEx` also writes the tint into the shared material maps for the
-  duration of the draw and restores it afterwards.
+  `handoff/2026-10_code_review/FIX_PLAN.md`).
+- `RenderContext_RenderModel` draws with raylib's `DrawModelEx`, so each mesh uses its material's own shader (the
+  WorldRenderer no longer writes its pass shaders into shared materials) and the tint is written into the shared
+  material maps for the duration of the draw, then restored. That still breaks "render never writes shared assets";
+  it is marked `// TODO:` and must move to per-draw material copies (as `WorldRendererGeometry` does) before the UI
+  draws models.
 - `TextRenderArguments.TargetFont` is a by-value copy of a font asset's raylib `Font`: use it for the draw, never store
   it past your asset user ([GameAssets.md](GameAssets.md)).

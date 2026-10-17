@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 // RenderTexture2D (the frame target the renderer blits its result into) is a Raylib type in this API,
 // so the Raylib include is unavoidable here (as in the other rendering headers).
 #include "raylib/raylib.h"
@@ -10,25 +11,29 @@
  * @file WorldRenderer.h
  * @brief Renders a World through a GameCamera, owning the render-target pipeline. Separate from world data.
  *
- * The world model carries no rendering logic; the WorldRenderer turns a World + a GameCamera into pixels.
- * World objects reference assets by name; the renderer resolves them through the asset manager and holds
- * them alive under its own asset user, releasing them when destroyed.
+ * The world model carries no rendering logic; the WorldRenderer turns a World + a GameCamera into pixels and
+ * never writes to the world or to shared assets. World objects reference models by name; the renderer
+ * resolves each object's model once (again only when its name changes) and holds the models under its own
+ * asset user. Sprite animations belong to the world (World_Construct2), so the renderer only reads each
+ * sprite's current frame.
  *
- * PIPELINE. The renderer owns an internal "scene" render target that it draws the 3D world into, then
- * blits that up into the caller's frame target. When pixelation is enabled (default), the scene target is
- * sized to the low pixel resolution (~640 on the long axis, square pixels) and point-upscaled to the frame
- * target, giving the game's chunky pixel look — this is the "pixel pass" and it runs last. When disabled,
- * the scene target matches the frame target (no pixelation). The richer pipeline layers in: physically based
- * sky/sun, PBR, a sun shadow map (crisp, hard-edged), and a low-resolution post pass that applies screen-space
- * ambient occlusion and 1px outlines (depth/surface-edge silhouettes darken, view-normal-edge creases are
- * sun-aware, in the style of the three.js RenderPixelatedPass) before the tonemap upscale. The sky is never
- * outlined. Light culling, bloom, sunshafts, and fog are later work; sprite objects, lights, and the
- * per-object "omit pixelation" toggle are not handled yet.
+ * PIPELINE. The world is drawn into an internal floating-point (HDR) "scene" target, then tonemapped into the
+ * caller's frame target. With pixelation enabled (default) the scene target is sized to the low pixel
+ * resolution (~640 on the long axis, square pixels) and point-upscaled, giving the game's chunky pixel look.
+ * In order: sun shadow cascades and the point-light cube shadow; a normal/flag G-buffer and screen-space
+ * ambient occlusion (applied to the ambient term only); the scene pass (atmospheric sky, PBR-lit models with
+ * forward-shaded point lights and distance fog, sprite billboards, debug grid and light gizmos);
+ * depth/normal-edge outlines; bloom and sun shafts (added in HDR); the tonemap with eye adaptation; and last
+ * the crisp overlay, which draws OmitPixelation objects at window resolution over the pixelated image.
  *
- * USAGE. Create one renderer, call WorldRenderer_PrepareWorld once the objects are set, then call
- * WorldRenderer_RenderToTarget each frame from a game frame's Render with the frame's target. The renderer
- * opens and closes all of its own render passes (including the final blit into the frame target), so it
- * must NOT be called inside an already-active render pass.
+ * FAILURES. A missing shader or a GPU target that cannot be created disables the feature that needs it, with
+ * one log line when it happens; WorldRenderer_GetStatus reports what ran. The only fatal failure is a scene
+ * target that cannot be created at all.
+ *
+ * USAGE. Create one renderer, call WorldRenderer_PrepareWorld once the world is built, then call
+ * WorldRenderer_RenderToTarget each frame from a game frame's Render with the frame's target. Objects added
+ * later are picked up automatically. The renderer opens and closes all of its own render passes (including
+ * the final blit into the frame target), so it must NOT be called inside an already-active render pass.
  *
  * THREADING. All calls are main-thread only (asset manager + Raylib rendering).
  */
@@ -50,9 +55,77 @@ typedef struct GameCameraStruct GameCamera;
 typedef struct WorldRendererStruct WorldRenderer;
 
 
+// Types.
+/** @brief The renderer features WorldRenderer_GetStatus reports on. */
+typedef enum WorldRendererFeatureEnum
+{
+    /** @brief PBR lighting of model objects. Without it models draw unlit, with raylib's default shader. */
+    WorldRendererFeature_PbrLighting,
+    /** @brief The atmospheric sky. Without it a CPU-computed gradient colour fills the background. */
+    WorldRendererFeature_Sky,
+    /** @brief The tonemap with eye adaptation. Without it the linear HDR scene is shown untonemapped. */
+    WorldRendererFeature_Tonemap,
+    /** @brief The sprite shader. Without it sprites draw with raylib's default shader (slightly too bright). */
+    WorldRendererFeature_SpriteShading,
+    /** @brief The two sun shadow cascades. */
+    WorldRendererFeature_SunShadows,
+    /** @brief The cube shadow of the shadow-casting point light nearest the camera. */
+    WorldRendererFeature_PointLightShadow,
+    /** @brief Screen-space ambient occlusion of the ambient term. */
+    WorldRendererFeature_AmbientOcclusion,
+    /** @brief Depth/normal-edge outlines. */
+    WorldRendererFeature_Outlines,
+    /** @brief HDR bloom. */
+    WorldRendererFeature_Bloom,
+    /** @brief Sun shafts (god rays). */
+    WorldRendererFeature_Sunshafts,
+    /** @brief The crisp overlay that draws OmitPixelation objects at window resolution. */
+    WorldRendererFeature_CrispOverlay,
+    /** @brief The number of features; not a feature. */
+    WorldRendererFeature_Count
+} WorldRendererFeature;
+
+/** @brief What a feature did in the most recent render. */
+typedef enum WorldRendererFeatureStateEnum
+{
+    /** @brief The feature ran. */
+    WorldRendererFeatureState_Active,
+    /** @brief The feature can run but did not: it is switched off (renderer toggle, world or config strength 0),
+     *  it does not apply (the sun is down, nothing to draw), or nothing has been rendered yet. */
+    WorldRendererFeatureState_Inactive,
+    /** @brief The feature cannot run: a shader it needs failed to load, a GPU target could not be created, or a
+     *  feature it builds on is unavailable. The cause was logged once when it happened. */
+    WorldRendererFeatureState_Unavailable
+} WorldRendererFeatureState;
+
+/**
+ * @brief A snapshot of what the renderer did in its most recent render, for diagnostics and debug overlays.
+ *
+ * Filled by WorldRenderer_GetStatus. A plain value type; nothing to release.
+ */
+typedef struct WorldRendererStatusStruct
+{
+    /** @brief Whether the scene target is floating-point (RGBA16F); false means the 8-bit fallback. */
+    bool IsSceneHdr;
+    /** @brief Whether the scene depth is a samplable texture (AO, outlines, sun shafts and the crisp overlay
+     *  need it). */
+    bool IsSceneDepthSamplable;
+    /** @brief The state of each feature, indexed by WorldRendererFeature. */
+    WorldRendererFeatureState Features[WorldRendererFeature_Count];
+    /** @brief Model objects with a usable model. */
+    size_t ModelCount;
+    /** @brief Model objects that draw nothing: no model name, or a model that failed to load (logged once). */
+    size_t ModelWithoutAssetCount;
+    /** @brief Sprite objects with a frame to draw. */
+    size_t SpriteCount;
+    /** @brief Point lights in the world. */
+    size_t LightCount;
+} WorldRendererStatus;
+
+
 // Functions.
 /**
- * @brief Creates a world renderer bound to an asset manager (mints its own asset user).
+ * @brief Creates a world renderer bound to an asset manager (mints its own asset users).
  * @param assetManager Resolves object assets; borrowed, must outlive the renderer. Must not be NULL.
  * @param logger For asset-resolution diagnostics; borrowed, may be NULL.
  * @param config The game config supplying the config-side post-effect multipliers (shadow/AO/...); borrowed,
@@ -65,7 +138,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     WorldRenderer** outRenderer);
 
 /**
- * @brief Releases the renderer: unloads its render targets, drops asset holds, and retires its asset user.
+ * @brief Releases the renderer: unloads its render targets, drops asset holds, and retires its asset users.
  *
  * Must be called while the GL context is alive (it unloads GPU render targets). Safe on NULL.
  * @param self The renderer, or NULL.
@@ -75,10 +148,15 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
 Error WorldRenderer_Deconstruct(WorldRenderer* self);
 
 /**
- * @brief Loads the assets referenced by the world's objects, so rendering does not stall on first use.
+ * @brief Loads the shaders and the models of the world's objects, so the first frames do not stall on them.
  *
- * Resolves each renderable object's asset once (attributed to the renderer's user). Failures are logged and
- * skipped, not fatal. Safe to call again after the world's objects change.
+ * Resolves every model object's model under a fresh asset user and then retires the previous one, so models
+ * that no world object uses any more are released (asset holds are not counted, so this swap is how unused
+ * models get released). Failures are logged once and skipped, not fatal. Objects added later are resolved by
+ * WorldRenderer_RenderToTarget automatically, but a model that failed is not retried until its object is
+ * renamed: call this again after asset definitions change (new search roots, AssetManager_ReadDefinitions,
+ * AssetManager_ClearLoadFailures), after a large change to release unused models, and whenever a different world
+ * is rebuilt at the address of the previous one.
  * @param self The renderer; must not be NULL.
  * @param world The world whose assets to load; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self or @p world is NULL.
@@ -89,20 +167,46 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world);
 /**
  * @brief Renders the world from the camera through the full pipeline and blits the result into @p target.
  *
- * Draws the 3D world into the renderer's internal scene target (recreating it if the frame size or
- * pixelation setting changed), then blits it into @p target (point-upscaled when pixelation is enabled).
+ * Brings the per-object cache up to date (new objects and renamed models are resolved here, failures logged
+ * once), draws the 3D world into the internal scene target (recreating the targets if the frame size or the
+ * pixelation setting changed), then tonemaps it into @p target (point-upscaled when pixelation is enabled).
  * Opens and closes all its own render passes, so it must NOT be called inside an active render pass.
- * Missing/failed object assets are skipped silently (they are reported by WorldRenderer_PrepareWorld).
  * @param self The renderer; must not be NULL.
- * @param world The world to draw; must not be NULL.
+ * @param world The world to draw; must not be NULL. Read only.
  * @param camera The camera to view from; must not be NULL.
  * @param deltaSeconds Real seconds since the previous render, used to pace HDR eye adaptation (auto-exposure).
- *        Pass the render tick's frame delta; 0 (or negative) holds the current adaptation.
+ *        Pass the render tick's frame delta; 0, negative or non-finite holds the current adaptation.
  * @param target The frame render target to blit the final image into (its texture size is the window size).
- * @returns Success; ErrorCode_IllegalArgument if @p self, @p world or @p camera is NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self, @p world or @p camera is NULL;
+ *          ErrorCode_InvalidState if no scene render target can be created at all (the only fatal failure).
+ * @note May propagate errors from internal calls.
  */
 Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const GameCamera* camera,
     double deltaSeconds, RenderTexture2D target);
+
+/**
+ * @brief Reports what the most recent render did: the scene target tier, each feature's state, object counts.
+ *
+ * Before the first render every feature reads as inactive and the counts are 0.
+ * @param self The renderer; must not be NULL.
+ * @param outStatus [out] Receives the snapshot. Must not be NULL.
+ */
+void WorldRenderer_GetStatus(const WorldRenderer* self, WorldRendererStatus* outStatus);
+
+/**
+ * @brief Returns a short English name for a feature, for log lines and debug overlays.
+ * @param feature The feature.
+ * @returns A static, NUL-terminated UTF-8 string (u8"unknown" for a value outside the enum).
+ */
+const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature);
+
+/**
+ * @brief Logs the status of the most recent render (one info line), e.g. for a debug key.
+ *
+ * The renderer logs it once by itself after its first render. No-op without a logger.
+ * @param self The renderer; must not be NULL.
+ */
+void WorldRenderer_LogStatus(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables the final pixelation pass (default enabled). Applied on the next render.

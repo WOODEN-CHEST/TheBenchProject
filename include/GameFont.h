@@ -14,7 +14,7 @@
  *
  * Do not copy the wrapper or its Font by value into anything that can outlive that asset user: the copy
  * shares the glyph pointers and the texture id, which dangle once the font is unloaded. (Text components do
- * this today; it is scheduled to change to name-based references, handoff/FIX_PLAN.md Phase 4.)
+ * this today; it is scheduled to change to name-based references, handoff/2026-10_code_review/FIX_PLAN.md Phase 4.)
  */
 typedef struct GameFontStruct
 {

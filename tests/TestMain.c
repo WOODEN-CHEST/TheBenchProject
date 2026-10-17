@@ -20,6 +20,10 @@ int main(void)
     ConfigTests_Run(&Run);
     AssetManagerTests_Run(&Run);
     WorldLightCullingTests_Run(&Run);
+    WorldTests_Run(&Run);
+    WorldEnvironmentTests_Run(&Run);
+    WorldDTOTests_Run(&Run);
+    WorldRenderCacheTests_Run(&Run);
     LoggerTests_Run(&Run);
 
     int ExitCode = TestRun_Finish(&Run);

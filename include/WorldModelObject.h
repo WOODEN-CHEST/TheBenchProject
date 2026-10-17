@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 #include "wr/WRError.h"
 #include "WorldObject.h"
 
@@ -50,6 +51,8 @@ typedef struct WorldModelObjectStruct
 
     /** @brief Owned, NUL-terminated UTF-8 name of the model asset this object renders; may be NULL. */
     unsigned char* _modelAssetName;
+    /** @brief Incremented (wrapping) every time the model asset name is set; starts at 0. Not persisted. */
+    uint32_t _assetRevision;
 
     /** @brief When true (default), the renderer draws a 1-pixel outline around this object. */
     bool HasOutline;
@@ -98,7 +101,22 @@ static inline const unsigned char* WorldModelObject_GetModelAssetName(const Worl
 }
 
 /**
+ * @brief Returns a number that changes every time the model asset name is set.
+ *
+ * Lets a consumer that resolved the asset (the renderer's per-object cache) notice a rename by comparing one
+ * integer instead of the name. Runtime only: it is not saved, and it restarts at 0 for every new object.
+ * @param self The model object; must not be NULL.
+ * @returns The current asset revision.
+ */
+static inline uint32_t WorldModelObject_GetAssetRevision(const WorldModelObject* self)
+{
+    return self->_assetRevision;
+}
+
+/**
  * @brief Replaces the referenced model asset name with an owned clone of @p modelAssetName.
+ *
+ * Also advances the asset revision (WorldModelObject_GetAssetRevision), so a renderer re-resolves the model.
  * @param self The model object; must not be NULL.
  * @param modelAssetName Borrowed NUL-terminated UTF-8 asset name to clone, or NULL to clear it.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.

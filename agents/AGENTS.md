@@ -59,19 +59,27 @@ Current module list:
 * GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop, and composites them to the screen; crashes gracefully on frame errors.
 * World data layer (WorldData.md) - The rendering-independent 3D world model. Covers eight modules:
   * WorldObject - Abstract base of every world object (id, name, transform, tint; validating setters).
-  * WorldModelObject - 3D model object referencing a model asset by name (+ outline / pixelation toggles).
-  * WorldSpriteObject - 2D sprite object referencing a sprite animation by name (+ outline / pixelation toggles).
+  * WorldModelObject - 3D model object referencing a model asset by name (+ outline / pixelation / shadow-tier
+    toggles; an asset revision that changes on rename).
+  * WorldSpriteObject - 2D sprite object referencing a sprite animation by name, owning its playback instance
+    (+ outline / pixelation toggles); the World binds its animation.
   * WorldLight - Point light (color, intensity, size, casts-shadows toggle).
-  * WorldEnvironment - Per-world sky/sun/fog/effect settings (plain, expandable data).
-  * World - Owns the objects, mints the shared uint64 id counter, holds the environment.
+  * WorldEnvironment - Per-world sky/sun/fog/effect settings (expandable data; Validate, CopyTo).
+  * World - Owns the objects, mints the shared uint64 id counter, holds the environment; with an asset manager
+    (World_Construct2) it owns an asset user and binds its sprites' animations; an object-set version.
   * WorldDTO - Flat persistent snapshot of a world + World<->DTO conversions.
   * WorldEncoder - Encodes a WorldDTO into a GHDF compound tree (no binary write yet).
 * World runtime layer (WorldRuntime.md) - Camera, renderer, services bundle and bootstrap for viewing a world:
   * GameCamera - 3D camera (pos/fov/yaw/pitch/roll; +Y up, +Z forward), converted to a raylib camera at render time.
   * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, GHDF pool).
-  * WorldRenderer - Renders a World's model objects through a GameCamera; separate from the world data.
-  * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a world with the test model centred.
-* World light culling (WorldLightCulling.md) - Reach-culls a world's point lights to the strongest few (up to WORLD_MAX_FORWARD_LIGHTS) overlapping an object's bounding sphere, ranked by influence, for the renderer's per-object forward shading.
+  * WorldRenderer - Renders a World through a GameCamera (PBR, HDR, sky, shadows, AO, outlines, bloom, sun shafts,
+    crisp overlay); separate from the world data and never writes to it. Split by render pass into
+    source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
+    WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
+  * WorldRenderCache - The renderer's private per-object cache (source/WorldRenderCache.h): one world walk per frame
+    builds the model/sprite/light lists; model assets are resolved once per object and again only on rename.
+  * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world, with debug keys.
+* World light culling (WorldLightCulling.md) - Reach-culls a list of point lights to the strongest few (up to WORLD_MAX_FORWARD_LIGHTS) overlapping an object's bounding sphere, ranked by influence, for the renderer's per-object forward shading.
 * UI framework (UIFramework.md) - The in-game UI. A screen context object owns a widget factory (pooled, capability-registered widget types), routes input to the top-most/focused widget, drives keyboard navigation, hosts keyframed property animations, and renders a z-ordered tree of abstract widgets through per-widget local render contexts. Covers six modules:
   * UIInput - Raylib-free input value types (UIKey/UIMouseButton enums, hover/mouse/keyboard argument structs) shared by widgets and the screen.
   * UIAnimation - Keyframed interpolation of a typed property: easing methods (constant/linear/exp in-out pow 2-5/sine/custom), keyframes, and evaluation. Pure data + math.
@@ -118,16 +126,16 @@ messages through a Logger (passed by pointer) at the appropriate level instead. 
 exception is the bootstrap fallback in main when the logger itself fails to initialize and therefore
 cannot be used.
 
-Project rules (added after the 2026-10 code review; handoff/FIX_PLAN.md has the reasoning):
+Project rules (added after the 2026-10 code review; handoff/2026-10_code_review/FIX_PLAN.md has the reasoning):
 1. Asset lifetime: whatever keeps asset data owns its own AssetUserID, and nothing stores asset pointers or by-value
-   copies (GameFont, Model, Texture2D, sprite animation sources) past that user. See AssetManager.md. Two known
-   violations are scheduled to be fixed: world sprites bound under the renderer's user, and text components copying
-   fonts by value.
+   copies (GameFont, Model, Texture2D, sprite animation sources) past that user. See AssetManager.md. One known
+   violation is scheduled to be fixed: text components copying fonts by value (FIX_PLAN Phase 4).
 2. Never hold a Widget* or text component pointer across a call that can run hooks, events or user callbacks;
    re-resolve it by id afterwards. Never destroy a widget from inside its own event (until the UI's deferred
    destruction exists).
 3. Render reads state, it never writes it: no mutating world objects, widgets or shared assets from render code.
-   Per-object render data belongs in a renderer-side cache.
+   Per-object render data belongs in a renderer-side cache (the WorldRenderer's is WorldRenderCache), and meshes draw
+   with per-draw Material copies, never by writing shaders or tints into a model asset's materials.
 4. Switches over project enums that should handle every value have no `default:`. -Wswitch (on through -Wall, an
    error under -Werror) then fails the build wherever a newly added value is not handled. Handle corrupted values
    after the switch with an explicit error or neutral return, not unreachable().

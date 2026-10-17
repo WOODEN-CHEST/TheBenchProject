@@ -1,4 +1,5 @@
-# Builds and runs the headless test suite: tests/*.c plus every game source except main.c.
+# Builds and runs the headless test suite: tests/*.c plus every game source except main.c. Tests may include the
+# private headers in source/ to test internal modules (for example the renderer's render cache).
 # Usage (from any directory): sh tests/run_linux.sh [--sanitize]
 #   --sanitize  build with AddressSanitizer + UndefinedBehaviorSanitizer: slower, but memory errors and
 #               undefined behaviour stop the run with a stack trace.
@@ -17,7 +18,7 @@ fi
 
 mkdir -p "$OutDirectory"
 GameSources=$(ls "$RootDirectory"/source/*.c | grep -v '/main\.c$')
-gcc $GameSources "$TestsDirectory"/*.c -I"$RootDirectory/include" -I"$TestsDirectory" -std=c2x -Werror -Wall -Wextra -Wpedantic -Wconversion -Wshadow $Flags -o "$OutDirectory/TheBenchProjectTests" -L"$RootDirectory/lib" -l:libraylib.a -l:libwr.a -lGL -lm -lpthread -ldl -lrt -lX11
+gcc $GameSources "$TestsDirectory"/*.c -I"$RootDirectory/include" -I"$RootDirectory/source" -I"$TestsDirectory" -std=c2x -Werror -Wall -Wextra -Wpedantic -Wconversion -Wshadow $Flags -o "$OutDirectory/TheBenchProjectTests" -L"$RootDirectory/lib" -l:libraylib.a -l:libwr.a -lGL -lm -lpthread -ldl -lrt -lX11
 
 rm -rf "$OutDirectory/work"
 cd "$OutDirectory"

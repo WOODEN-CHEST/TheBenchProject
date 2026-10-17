@@ -16,8 +16,9 @@
  * textures and then calls UnloadModel. raylib's UnloadModel alone frees only meshes and map arrays, never
  * textures or shaders, which is why the manager tracks the textures itself. The asset never owns a material's
  * shader. Callers therefore must not call UnloadModel, UnloadMaterial or UnloadTexture on anything reached
- * through GameModel_GetRaylibModel; UnloadMaterial in particular would also unload whatever shader a renderer
- * assigned to the material.
+ * through GameModel_GetRaylibModel (UnloadMaterial would also unload the material's shader, and a texture
+ * shared by two materials twice). The asset is shared and read-only: draw with copies (a Material built on
+ * the stack) instead of writing tints, shaders or maps into its materials.
  */
 
 
@@ -32,6 +33,9 @@ typedef struct GameModelStruct
     /** @brief The wrapped Raylib model (meshes, materials and their textures); owned by the asset manager,
      *         not by this wrapper or its users. */
     Model _rayModel;
+    /** @brief Axis-aligned bounds of all meshes in mesh space (before the import transform), computed once at
+     *         load. */
+    BoundingBox _localBounds;
 } GameModel;
 
 /**
@@ -58,4 +62,17 @@ typedef struct GameMeshStruct
 static inline Model GameModel_GetRaylibModel(GameModel* self)
 {
     return self->_rayModel;
+}
+
+/**
+ * @brief Returns the axis-aligned bounds of all the model's meshes in mesh space.
+ *
+ * The bounds are taken before the model's import transform (Model.transform) and were computed once, when the
+ * model loaded, so this is cheap; transform them yourself (for example into a world-space bounding sphere).
+ * @param self The game model to read; must not be NULL.
+ * @returns The mesh-space bounding box. All zero for a model without vertex data.
+ */
+static inline BoundingBox GameModel_GetLocalBounds(const GameModel* self)
+{
+    return self->_localBounds;
 }

@@ -40,6 +40,7 @@ Error WorldModelObject_Create(const unsigned char* name, const unsigned char* mo
     }
 
     WorldShared_CloneString(modelAssetName, &Object->_modelAssetName);
+    Object->_assetRevision = 0;
     Object->HasOutline = true;
     Object->OmitPixelation = false;
     Object->ShadowTier = WorldShadowTier_Both;
@@ -60,5 +61,6 @@ Error WorldModelObject_SetModelAssetName(WorldModelObject* self, const unsigned 
     WorldShared_CloneString(modelAssetName, &Clone);
     Memory_Free(self->_modelAssetName);
     self->_modelAssetName = Clone;
+    self->_assetRevision++;
     return Error_CreateSuccess();
 }

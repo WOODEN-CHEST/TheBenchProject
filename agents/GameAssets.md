@@ -58,13 +58,14 @@ raylib (or audio-engine) object **by value**. Sprite sheets and sprite animation
   referenced at load (the importer's textures plus the overrides; raylib's default texture is skipped). Importer
   textures that an override replaced are unloaded during the load. On unload each tracked texture id is unloaded
   (`rlUnloadTexture`), then `UnloadModel` runs. The asset never owns a material's **shader** and never calls
-  `UnloadMaterial`, which would also unload the shader the renderer bound.
-- **Known violation (Phase 3):** the WorldRenderer writes its pass shader into the shared materials and the binding
-  persists, so other code drawing the same model (for example `RenderContext_RenderModel`) shades with whichever pass
-  shader was bound last.
+  `UnloadMaterial`, which would also unload the material's shader, and a texture shared by two materials twice.
+- **Read-only:** never write into the materials (shader, tint, maps). The WorldRenderer draws each mesh with a
+  `Material` built on the stack (the asset's maps copied, its own pass shader, the tint applied to the copy).
+- **Local bounds:** `GameModel_GetLocalBounds` returns the mesh-space bounding box (before the import transform),
+  computed once at load, so users never walk the vertices themselves.
 - **Imported textured models shade wrong:** glTF's metallic texture and OBJ's `map_Ks` land in the METALNESS slot,
   which the PBR shader reads as packed ORM (red = occlusion). Normalising imported materials is deferred
-  (`handoff/FIX_PLAN.md`, "Not in this pass").
+  (`handoff/2026-10_code_review/FIX_PLAN.md`, "Not in this pass").
 - No skeletal animation; the `rig` key in the reference is not read.
 - `GameMesh { Mesh _rayMesh; }` is declared in the same header, but the manager does not produce it and nothing uses
   it yet. Whoever builds one releases it with `UnloadMesh`.
@@ -81,8 +82,8 @@ raylib (or audio-engine) object **by value**. Sprite sheets and sprite animation
   **link** comes back from raylib as raylib's default shader, so the load succeeds and only raylib's own trace log
   mentions it.
 - Uniform values live in the GL program, which every holder shares: set the values you rely on before each use.
-  Don't write into `locs` (the WorldRenderer's `EnsureShaders` still does for `world_pbr`, a known violation for
-  Phase 3).
+  Don't write into `locs`: copy the table if you need different entries (the WorldRenderer keeps its own copy for
+  `world_pbr`, `_pbr._locs`, with the material map samplers patched).
 - Known leak: on a compile failure the loader does not call `UnloadShader`, so the small `locs` array raylib allocated
   for the failed shader is lost (once per failure, since failures are cached).
 

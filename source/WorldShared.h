@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "raylib/raylib.h"
+#include "wr/WRError.h"
 #include "wr/WRMemory.h"
 #include "wr/WRMath.h"
 
@@ -11,6 +12,27 @@
  * WorldDTO). Not part of the public API; kept in the source directory so several world implementation
  * files can share small validation/cloning helpers without duplicating them or exposing them.
  */
+
+
+// Forward declarations (full types in WorldSpriteObject.h and SpriteAnimation.h).
+typedef struct WorldSpriteObjectStruct WorldSpriteObject;
+typedef struct SpriteAnimationStruct SpriteAnimation;
+
+
+/**
+ * Backs a sprite object's playback instance with @p animation (borrowed), or empties it when NULL, also while
+ * the sprite belongs to a world. Only the World calls this (its sprites' animations are held under the world's
+ * asset user); the public WorldSpriteObject_SetAnimation refuses sprites that belong to a world. On failure the
+ * instance is left empty but constructed. Implemented in WorldSpriteObject.c.
+ */
+Error WorldSpriteObject_BindAnimation(WorldSpriteObject* self, SpriteAnimation* animation);
+
+/**
+ * Replaces a sprite object's animation asset name with an owned clone of @p name (NULL clears it), also while
+ * the sprite belongs to a world. Only World_SetSpriteAnimationAssetName calls this, so the name and the bound
+ * animation change together. Implemented in WorldSpriteObject.c.
+ */
+void WorldSpriteObject_ReplaceAnimationAssetName(WorldSpriteObject* self, const unsigned char* name);
 
 
 /** Returns true if @p value is a real, finite float (not NaN and not +/- infinity). */

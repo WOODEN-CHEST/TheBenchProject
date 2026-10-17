@@ -53,7 +53,8 @@ uniform bool aoMapActive;
 uniform vec2 aoResolution;             // scene-target size in pixels, to map gl_FragCoord -> AO map uv
 
 // Point lights, culled + uploaded per object by the renderer (nearest/strongest that reach this object).
-// MAX_POINT_LIGHTS MUST match WORLD_MAX_FORWARD_LIGHTS in WorldLightCulling.h.
+// MAX_POINT_LIGHTS should equal WORLD_MAX_FORWARD_LIGHTS in WorldLightCulling.h. A mismatch is safe: the loop
+// below clamps to the array size, and the renderer checks the arrays at load and never uploads more than fit.
 #define MAX_POINT_LIGHTS 8
 uniform int pointLightCount;                          // active entries in the arrays below (0..MAX)
 uniform vec3 pointLightPositions[MAX_POINT_LIGHTS];   // world space
@@ -374,10 +375,12 @@ void main()
     float sunVisibility = 1.0 - shadow*clamp(shadowStrength, 0.0, 1.0);
     vec3 direct = (kD*albedo/PI + specular)*radiance*nDotL*sunVisibility;
 
-    // Point lights: same Cook-Torrance BRDF per light, with a windowed inverse-square falloff. No per-light
-    // shadows (deferred). The count + arrays are the reach-culled set the renderer chose for this object.
+    // Point lights: same Cook-Torrance BRDF per light, with a windowed inverse-square falloff (the cube-shadow
+    // light is shaded separately). The count + arrays are the reach-culled set the renderer chose for this object;
+    // the count is clamped to the arrays' size so a bad upload can never index past them.
     vec3 pointTotal = vec3(0.0);
-    for (int i = 0; i < pointLightCount; i++)
+    int pointLightLimit = min(pointLightCount, MAX_POINT_LIGHTS);
+    for (int i = 0; i < pointLightLimit; i++)
     {
         vec3 toLight = pointLightPositions[i] - fragPosition;
         float dist = length(toLight);

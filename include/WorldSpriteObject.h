@@ -17,10 +17,13 @@
  * 1-pixel outline toggle (on by default) and a pixelation-exempt toggle honored by the world renderer.
  *
  * The object owns a SpriteAnimationInstance holding the playback state (current frame, timing, fps, ...). It
- * starts EMPTY (no backing animation, which is valid); the backing animation is set later via
- * WorldSpriteObject_SetAnimation (typically by whoever loaded the animation asset named here). Advance the
- * instance (SpriteAnimationInstance_Update) from game logic; the renderer only reads its current frame. The
- * backing animation is BORROWED and must outlive the object (or be cleared with SetAnimation(self, NULL)).
+ * starts EMPTY (no backing animation, which is valid). Once the sprite is added to a World built with an asset
+ * manager, the world loads the animation named here under its own asset user and backs the instance with it;
+ * from then on the name changes only through World_SetSpriteAnimationAssetName, which rebinds, so the name and
+ * the playing animation always agree. Each (re)bind re-initializes the instance, dropping its event
+ * subscriptions, so subscribe after the sprite is added or renamed. Advance the instance
+ * (SpriteAnimationInstance_Update) from game logic; the renderer only reads its current frame. The backing
+ * animation is BORROWED and must outlive the object.
  *
  * Create with WorldSpriteObject_Create (which heap-allocates it); ownership normally passes to a World.
  * Because the WorldObject base is the first member, a WorldSpriteObject* is also a valid WorldObject*.
@@ -88,15 +91,20 @@ static inline SpriteAnimationInstance* WorldSpriteObject_GetAnimationInstance(Wo
 }
 
 /**
- * @brief Sets (or clears) the backing animation of this sprite's playback instance.
+ * @brief Sets (or clears) the backing animation of a sprite that does not belong to a world.
  *
  * Re-initializes the embedded instance to play @p animation from its default parameters (fps, frame step,
  * running and looping), or to an empty (no-source) instance when @p animation is NULL. Any previous playback
  * state and event subscriptions on the instance are torn down and replaced. The animation is BORROWED and must
- * outlive the object (or this call with NULL). Does not change the stored asset name.
+ * outlive the object (or this call with NULL). Does not change the stored asset name. If re-initializing
+ * fails, the instance is left empty (still constructed).
+ *
+ * A world binds the animations of its own sprites (see World_AddObject), so this refuses a sprite that
+ * belongs to a world, and adding the sprite to a world with an asset manager replaces what was set here.
  * @param self The sprite object; must not be NULL.
  * @param animation The animation to back the instance with (borrowed), or NULL to clear to an empty instance.
- * @returns ErrorCode_Success on success; ErrorCode_IllegalArgument if @p self is NULL.
+ * @returns ErrorCode_Success on success; ErrorCode_IllegalArgument if @p self is NULL;
+ *          ErrorCode_InvalidOperation if the sprite belongs to a world (its id is not 0).
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
@@ -123,10 +131,13 @@ static inline const unsigned char* WorldSpriteObject_GetSpriteAnimationAssetName
 }
 
 /**
- * @brief Replaces the referenced sprite animation asset name with an owned clone.
+ * @brief Replaces the referenced sprite animation asset name of a sprite that does not belong to a world.
+ *
+ * For a sprite in a world use World_SetSpriteAnimationAssetName, which also rebinds the playing animation.
  * @param self The sprite object; must not be NULL.
  * @param spriteAnimationAssetName Borrowed NUL-terminated UTF-8 asset name to clone, or NULL to clear it.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_InvalidOperation if the sprite
+ *          belongs to a world (its id is not 0).
  */
 Error WorldSpriteObject_SetSpriteAnimationAssetName(WorldSpriteObject* self,
     const unsigned char* spriteAnimationAssetName);

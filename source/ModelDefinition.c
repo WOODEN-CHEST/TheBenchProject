@@ -19,8 +19,8 @@
  * texture the importer loaded (OBJ/MTL: up to 4 per material, glTF: up to 6) and every override texture,
  * skipping raylib's default texture and duplicates. Importer textures an override replaced are unloaded as
  * soon as the overrides are applied. Unloading the asset, and every failed load, unloads the listed textures
- * and then calls UnloadModel. UnloadMaterial is never used: it would also unload material.shader, which the
- * renderer points at the shared PBR shader asset.
+ * and then calls UnloadModel. UnloadMaterial is never used: it unloads each material's textures on their own
+ * (a texture shared by two materials would be unloaded twice) and a material shader the asset never owns.
  */
 
 
@@ -533,6 +533,15 @@ static Error ApplyMaterialOverride(AssetManager* manager, AssetTypeID type, cons
     return Error_CreateSuccess();
 }
 
+/* Returns the bounds of every mesh in mesh space: GetModelBoundingBox walks every vertex and applies
+ * model.transform, so it is called once here, with an identity transform, rather than by each user. */
+static BoundingBox ComputeLocalBounds(Model model)
+{
+    Model MeshSpaceModel = model;
+    MeshSpaceModel.transform = MatrixIdentity();
+    return GetModelBoundingBox(MeshSpaceModel);
+}
+
 /* Resolves the model file (narrowed to "format" when the definition has one) and loads it with raylib. */
 static Error LoadModelFile(const ModelDefinition* definition, AssetManager* manager, Model* outModel)
 {
@@ -628,6 +637,7 @@ static Error ModelDefinition_LoadAsset(void* self, AssetManager* manager, AssetU
     ModelLoaded* Loaded = Memory_Allocate(sizeof(ModelLoaded));
     Memory_Zero(Loaded, sizeof(*Loaded));
     Loaded->Model._rayModel = RayModel;
+    Loaded->Model._localBounds = ComputeLocalBounds(RayModel);
     Loaded->OwnedTextureIds = OwnedTextureIds;
 
     outLoaded->Asset = &Loaded->Model;

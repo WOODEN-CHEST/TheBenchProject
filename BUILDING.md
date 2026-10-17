@@ -51,6 +51,10 @@ To update WRFramework: build it with its own script, then copy its `include/*.h`
      rely on.
    - The default image formats: png, bmp, gif, qoi and dds. jpg, tga, psd and hdr are off, and the asset
      loaders only accept enabled formats.
+   - `MAX_MATERIAL_MAPS` 12 (defined in `src/rmodels.c`, not exported by `raylib.h`). The world renderer copies
+     exactly that many maps into each per-draw material and keeps its own samplers on texture units 12–15,
+     above raylib's material units: `WORLD_RENDERER_MATERIAL_MAP_COUNT` in `source/WorldRendererInternal.h`
+     must match it.
 
 Linux commands (from the raylib source directory):
 

@@ -39,8 +39,8 @@ Every field is read-only to other modules: use the inline getters (`SpriteAnimat
   rule in [AssetManager.md](AssetManager.md)): bind an animation only into an instance whose owner holds that
   animation under its own user, and clear or deconstruct the instance before that user releases it.
   `SpriteAnimationInstance_Deconstruct` never touches the source, so nothing detects a stale one.
-- Known violation (Phase 3): world sprite instances are bound to animations held by the WorldRenderer's user, not
-  the World's.
+- World sprites follow this: a `World` built with `World_Construct2` binds each sprite's animation under its own
+  user and destroys its objects before retiring that user (see [WorldData.md](WorldData.md)).
 - **An instance must not move.** Once constructed, its embedded `WREvent` points into the instance itself. Never copy
   an instance by value, `Memory_Copy` it, or keep instances in a buffer that can reallocate. Keep them at a stable
   address (a member of a heap object, an `ObjectPool` slot) and copy state with

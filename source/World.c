@@ -1,5 +1,8 @@
+#include <inttypes.h>
 #include "World.h"
 #include "WorldShared.h"
+#include "WorldSpriteObject.h"
+#include "Logger.h"
 #include "wr/WRMemory.h"
 
 
@@ -24,18 +27,91 @@ static size_t FindObjectIndexById(World* self, uint64_t id)
     return SIZE_MAX;
 }
 
+/* Logs (once, now) that a sprite's animation could not be bound, and releases the error. */
+static void ReportSpriteBindFailure(World* self, WorldSpriteObject* sprite, const unsigned char* assetName,
+    Error* error)
+{
+    if (self->_logger != NULL)
+    {
+        const unsigned char* ObjectName = WorldObject_GetName(WorldSpriteObject_AsObject(sprite));
+        Error LogResult = Logger_LogWarningFormatted(self->_logger,
+            (const unsigned char*)u8"World: sprite object %" PRIu64 u8" (\"%s\") has no animation: \"%s\" could not "
+            u8"be loaded (%s).",
+            WorldObject_GetId(WorldSpriteObject_AsObject(sprite)),
+            (ObjectName != NULL) ? (const char*)ObjectName : "",
+            (const char*)assetName,
+            (error->Message != NULL) ? (const char*)error->Message : "no details");
+        Error_Deconstruct(&LogResult);
+    }
+    Error_Deconstruct(error);
+}
+
+/* Backs a sprite's playback with the animation its asset name refers to, loaded under the world's asset user, or
+ * empties it when the world has no asset manager, the sprite has no name, or the load fails. A failed load is
+ * a recoverable content problem: it is logged once, here, and the sprite stays empty (it draws nothing). */
+static void BindSpriteAnimation(World* self, WorldSpriteObject* sprite)
+{
+    SpriteAnimation* Animation = NULL;
+    const unsigned char* AssetName = WorldSpriteObject_GetSpriteAnimationAssetName(sprite);
+    if ((self->_assets != NULL) && (AssetName != NULL))
+    {
+        Error LoadResult = AssetManager_LoadSpriteAnimation(self->_assets, AssetName, self->_assetUser, &Animation);
+        if (LoadResult.Code != ErrorCode_Success)
+        {
+            ReportSpriteBindFailure(self, sprite, AssetName, &LoadResult);
+            Animation = NULL;
+        }
+    }
+
+    Error BindResult = WorldSpriteObject_BindAnimation(sprite, Animation);
+    if (BindResult.Code != ErrorCode_Success)
+    {
+        const unsigned char* ReportedName = (AssetName != NULL) ? AssetName : (const unsigned char*)u8"";
+        ReportSpriteBindFailure(self, sprite, ReportedName, &BindResult);
+    }
+}
+
+/* Work every successful insertion shares: the object-set version changes and a sprite gets its animation. */
+static void OnObjectAdded(World* self, WorldObject* object)
+{
+    self->_objectSetVersion++;
+    if (WorldObject_GetType(object) == WorldObjectType_Sprite)
+    {
+        BindSpriteAnimation(self, (WorldSpriteObject*)object);
+    }
+}
+
 
 // Public functions.
-Error World_Construct(World* self)
+Error World_Construct1(World* self)
+{
+    return World_Construct2(self, NULL, NULL);
+}
+
+Error World_Construct2(World* self, AssetManager* assets, Logger* logger)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_Construct: self must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "World_Construct2: self must not be NULL.");
+    }
+
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (assets != NULL)
+    {
+        Error UserResult = AssetManager_GetNewUserID(assets, &User);
+        if (UserResult.Code != ErrorCode_Success)
+        {
+            return UserResult;
+        }
     }
 
     GenericBuffer_AllocateVariable(&self->_objects, INITIAL_OBJECT_CAPACITY, sizeof(WorldObject*));
     self->_nextId = 1;
+    self->_objectSetVersion = 0;
     self->_name = NULL;
+    self->_assets = assets;
+    self->_logger = logger;
+    self->_assetUser = User;
     WorldEnvironment_SetDefaults(&self->Environment);
 
     return Error_CreateSuccess();
@@ -48,6 +124,7 @@ Error World_Deconstruct(World* self)
         return Error_Construct2(ErrorCode_IllegalArgument, "World_Deconstruct: self must not be NULL.");
     }
 
+    // Objects first: a sprite's playback instance points into an animation held by the world's asset user.
     for (size_t Index = 0; Index < self->_objects._count; Index++)
     {
         WorldObject* Object = NULL;
@@ -59,6 +136,10 @@ Error World_Deconstruct(World* self)
     Memory_Free(self->_name);
     WorldEnvironment_Deconstruct(&self->Environment);
 
+    if (self->_assets != NULL)
+    {
+        return AssetManager_RetireUser(self->_assets, self->_assetUser);
+    }
     return Error_CreateSuccess();
 }
 
@@ -82,6 +163,7 @@ Error World_AddObject(World* self, WorldObject* object)
     // Cannot fail: object is non-NULL and NewId is non-zero.
     WorldObject_SetId(object, NewId);
     self->_nextId++;
+    OnObjectAdded(self, object);
     return Error_CreateSuccess();
 }
 
@@ -114,6 +196,7 @@ Error World_AddObjectWithId(World* self, WorldObject* object, uint64_t id)
     {
         self->_nextId = id + 1;
     }
+    OnObjectAdded(self, object);
     return Error_CreateSuccess();
 }
 
@@ -138,6 +221,39 @@ Error World_RemoveObjectById(World* self, uint64_t id)
     GenericBuffer_GetAt(&self->_objects, Index, &Object);
     WorldObject_Destroy(Object);
     GenericBuffer_RemoveAt(&self->_objects, Index);
+    self->_objectSetVersion++;
+    return Error_CreateSuccess();
+}
+
+Error World_SetSpriteAnimationAssetName(World* self, uint64_t id, const unsigned char* assetName)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "World_SetSpriteAnimationAssetName: self must not be NULL.");
+    }
+    if (id == 0)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "World_SetSpriteAnimationAssetName: id must not be 0.");
+    }
+
+    WorldObject* Object = NULL;
+    if (!World_TryGetObjectById(self, id, &Object))
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation,
+            "World_SetSpriteAnimationAssetName: no object with that id.");
+    }
+    if (WorldObject_GetType(Object) != WorldObjectType_Sprite)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation,
+            "World_SetSpriteAnimationAssetName: the object is not a sprite object.");
+    }
+
+    // TODO: The previous animation stays held under the world's user until the world is destroyed (holds are
+    // not counted, so releasing it here could unload it under another sprite). If long-lived edited worlds
+    // pile up unused animations, add a release pass that swaps to a fresh user holding only bound animations.
+    WorldSpriteObject* Sprite = (WorldSpriteObject*)Object;
+    WorldSpriteObject_ReplaceAnimationAssetName(Sprite, assetName);
+    BindSpriteAnimation(self, Sprite);
     return Error_CreateSuccess();
 }
 

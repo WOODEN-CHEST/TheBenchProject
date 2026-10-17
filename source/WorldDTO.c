@@ -235,7 +235,12 @@ Error WorldDTO_FromWorld(World* world, WorldDTO* outDTO)
 
     WorldShared_CloneString(World_GetName(world), &outDTO->Name);
     outDTO->NextObjectId = World_GetNextObjectId(world);
-    outDTO->Environment = *World_GetEnvironment(world);
+    Error CopyResult = WorldEnvironment_CopyTo(World_GetEnvironment(world), &outDTO->Environment);
+    if (CopyResult.Code != ErrorCode_Success)
+    {
+        WorldDTO_Deconstruct(outDTO);
+        return CopyResult;
+    }
 
     size_t Count = World_GetObjectCount(world);
     for (size_t Index = 0; Index < Count; Index++)
@@ -268,14 +273,24 @@ Error WorldDTO_ApplyToWorld(const WorldDTO* dto, World* world)
         return Error_Construct2(ErrorCode_IllegalArgument, "WorldDTO_ApplyToWorld: dto and world must not be NULL.");
     }
 
+    // A bad environment rejects the whole snapshot before the world is touched (a NaN day length would make
+    // the time of day NaN forever), the same as a bad object rejects it.
+    Error ValidateResult = WorldEnvironment_Validate(&dto->Environment);
+    if (ValidateResult.Code != ErrorCode_Success)
+    {
+        return ValidateResult;
+    }
+
     Error NameResult = World_SetName(world, dto->Name);
     if (NameResult.Code != ErrorCode_Success)
     {
         return NameResult;
     }
-    // TODO: Validate the environment before applying it (a NaN day length from a bad save makes the time of
-    // day NaN forever) and replace this struct copy with a WorldEnvironment_CopyTo (FIX_PLAN.md, Phase 3).
-    *World_GetEnvironment(world) = dto->Environment;
+    Error CopyResult = WorldEnvironment_CopyTo(&dto->Environment, World_GetEnvironment(world));
+    if (CopyResult.Code != ErrorCode_Success)
+    {
+        return CopyResult;
+    }
 
     for (size_t Index = 0; Index < dto->_objects._count; Index++)
     {

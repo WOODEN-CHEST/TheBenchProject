@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <math.h>
 #include "WorldEnvironment.h"
+#include "WorldShared.h"
 #include "wr/WRCompile.h"
 
 
@@ -31,6 +32,17 @@
 #define DAYLIGHT_SET_ELEVATION (-0.12f)
 /** Sun elevation at/above which daylight is at full strength (day). Twilight ramps between the two. */
 #define DAYLIGHT_RISE_ELEVATION (0.10f)
+
+
+// Types.
+/* A float field with a lower bound of 0, for WorldEnvironment_Validate: inclusive, or exclusive when 0 itself
+ * breaks the maths (a zero day length or sun size). */
+typedef struct FloatRuleStruct
+{
+    const char* Name;
+    float Value;
+    bool IsZeroExcluded;
+} FloatRule;
 
 
 // Public functions.
@@ -77,6 +89,70 @@ void WorldEnvironment_SetDefaults(WorldEnvironment* self)
 
     self->IsAmbientOcclusionEnabled = true;
     self->AmbientOcclusionStrength = DEFAULT_EFFECT_STRENGTH;
+}
+
+Error WorldEnvironment_Validate(const WorldEnvironment* self)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldEnvironment_Validate: self must not be NULL.");
+    }
+
+    if (!WorldShared_IsFloatFinite(self->TimeOfDay) || (self->TimeOfDay < 0.0f) || (self->TimeOfDay > 1.0f))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
+            "WorldEnvironment: TimeOfDay must be finite and in [0, 1].");
+    }
+    if (!WorldShared_IsFloatFinite(self->SunAngle))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "WorldEnvironment: SunAngle must be finite.");
+    }
+
+    // Every other float has a lower bound: a minimum, or a strict minimum where 0 itself breaks the maths.
+    const FloatRule Rules[] =
+    {
+        { "DayLengthSeconds", self->DayLengthSeconds, true },
+        { "SkyTurbidity", self->SkyTurbidity, false },
+        { "SunIntensity", self->SunIntensity, false },
+        { "SunSizeMultiplier", self->SunSizeMultiplier, true },
+        { "StarDensity", self->StarDensity, false },
+        { "StarBrightness", self->StarBrightness, false },
+        { "AmbientSkylightIntensity", self->AmbientSkylightIntensity, false },
+        { "FogStrength", self->FogStrength, false },
+        { "BloomStrength", self->BloomStrength, false },
+        { "SunshaftStrength", self->SunshaftStrength, false },
+        { "ShadowStrength", self->ShadowStrength, false },
+        { "AmbientOcclusionStrength", self->AmbientOcclusionStrength, false },
+    };
+    for (size_t Index = 0; Index < sizeof(Rules) / sizeof(Rules[0]); Index++)
+    {
+        const FloatRule* Rule = &Rules[Index];
+        bool IsAboveMinimum = Rule->IsZeroExcluded ? (Rule->Value > 0.0f) : (Rule->Value >= 0.0f);
+        if (!WorldShared_IsFloatFinite(Rule->Value) || !IsAboveMinimum)
+        {
+            return Error_Construct4(ErrorCode_ArgumentOutOfRange, "WorldEnvironment: %s must be finite and %s.",
+                Rule->Name, Rule->IsZeroExcluded ? "> 0" : ">= 0");
+        }
+    }
+    return Error_CreateSuccess();
+}
+
+Error WorldEnvironment_CopyTo(const WorldEnvironment* self, WorldEnvironment* destination)
+{
+    if ((self == NULL) || (destination == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "WorldEnvironment_CopyTo: self and destination must not be NULL.");
+    }
+    if (self == destination)
+    {
+        return Error_CreateSuccess();
+    }
+
+    // No owned fields yet, so a plain copy is a full copy. Once one exists: release the destination's, copy the
+    // plain fields, then clone the owned ones.
+    *destination = *self;
+    return Error_CreateSuccess();
 }
 
 void WorldEnvironment_Deconstruct(WorldEnvironment* self)
@@ -151,13 +227,23 @@ float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self)
 
 void WorldEnvironment_Advance(WorldEnvironment* self, float deltaSeconds)
 {
-    if ((self == NULL) || !self->IsDayNightCycleEnabled || (self->DayLengthSeconds <= 0.0f))
+    if ((self == NULL) || !self->IsDayNightCycleEnabled)
+    {
+        return;
+    }
+    if (!WorldShared_IsFloatFinite(self->DayLengthSeconds) || (self->DayLengthSeconds <= 0.0f)
+        || !WorldShared_IsFloatFinite(deltaSeconds) || (deltaSeconds < 0.0f))
     {
         return;
     }
 
-    self->TimeOfDay += deltaSeconds / self->DayLengthSeconds;
-    self->TimeOfDay -= floorf(self->TimeOfDay); // wrap into [0, 1)
+    float NextTimeOfDay = self->TimeOfDay + (deltaSeconds / self->DayLengthSeconds);
+    NextTimeOfDay -= floorf(NextTimeOfDay); // wrap into [0, 1)
+    if (!WorldShared_IsFloatFinite(NextTimeOfDay))
+    {
+        return; // an overflowing step (a tiny day length) must not leave the time of day NaN
+    }
+    self->TimeOfDay = NextTimeOfDay;
 }
 
 Color WorldEnvironment_ComputeSkyColor(const WorldEnvironment* self)

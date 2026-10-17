@@ -5,37 +5,38 @@ small fixed number of lights while a world may hold hundreds.
 
 ## Files
 - `include/WorldLightCulling.h` — public API.
-- `source/WorldLightCulling.c` — implementation (pure selection logic; no rendering dependency, so it is
-  headless-testable).
+- `source/WorldLightCulling.c` — implementation (pure selection logic over an array; no rendering or world
+  dependency, so it is headless-testable: `tests/WorldLightCullingTests.c`).
 
 ## API
-- `#define WORLD_MAX_FORWARD_LIGHTS 8` — the hard cap on lights shaded per object. **MUST equal the
-  `MAX_POINT_LIGHTS` constant in the PBR fragment shader** (`compile/out/asset/shaders/pbr/fragment.frag`),
-  which declares point-light uniform arrays of exactly this length.
-- `size_t WorldLightCulling_SelectForSphere(World* world, Vector3 center, float radius,
-   const WorldLight** outLights, size_t capacity)` — walks every object in `world`, keeps only
-  `WorldObjectType_Light` objects with positive intensity and size whose reach sphere overlaps the sphere at
-  `(center, radius)` (distance from the light to the sphere surface `< light size`), ranks them by influence,
-  and writes the strongest up to `min(capacity, WORLD_MAX_FORWARD_LIGHTS)` into `outLights`, most-influential
-  first. Returns the count. The returned pointers are **borrowed** into the world (valid until its object set
-  changes).
+- `#define WORLD_MAX_FORWARD_LIGHTS 8` — the cap on lights shaded per object. The PBR fragment shader
+  (`compile/out/asset/shaders/pbr/fragment.frag`) declares its point-light arrays with `MAX_POINT_LIGHTS` entries,
+  which should equal it. A mismatch is safe: the shader clamps its loop to its arrays, and the renderer checks the
+  arrays when it loads the shader, logs if they hold fewer, and never uploads more than fit.
+- `WorldCullingLight` — `{ Position, Range, Intensity }`: a light as the culling sees it. The caller keeps any other
+  per-light data in a parallel array with the same indices.
+- `size_t WorldLightCulling_SelectForSphere(const WorldCullingLight* lights, size_t lightCount, Vector3 center,
+  float radius, size_t* outIndices, size_t capacity)` — keeps the lights with positive range and intensity whose
+  reach sphere overlaps the sphere at `(center, radius)` (distance from the light to the sphere surface
+  `< range`), ranks them by influence, and writes the indices of the strongest, up to
+  `min(capacity, WORLD_MAX_FORWARD_LIGHTS)`, most influential first. Returns the count. Does not allocate.
 
 ## Influence metric
-`influence = intensity * (1 - surfaceDistance / size)`, where `surfaceDistance = max(0, distance(light, center)
-- radius)`. So brighter lights and lights whose reach penetrates deeper into the object's sphere rank higher;
-a light whose reach only grazes the sphere ranks lowest; a light that does not reach it at all is excluded.
+`influence = intensity * (1 - surfaceDistance / range)`, where `surfaceDistance = max(0, distance(light, center)
+- radius)`. Brighter lights and lights whose reach penetrates deeper into the object's sphere rank higher; a light
+whose reach only grazes the sphere ranks lowest; a light that does not reach it at all is excluded.
 
-## How the renderer uses it (WorldRenderer)
-Per model object in the scene (PBR) pass, the renderer computes the object's **world bounding sphere** (local
-mesh AABB — cached per asset to avoid re-scanning vertices every frame — transformed by the object's world
-matrix, radius scaled by the matrix's max axis scale), calls `SelectForSphere`, converts each selected light's
-colour to linear × intensity, and uploads position/radiance/range arrays + the count to the PBR shader before
-`DrawModel`. The shader forward-shades each with the same Cook-Torrance BRDF as the sun, using a windowed
-inverse-square falloff that reaches 0 at the light's range (so the shaded set matches what was culled). Per-
-light shadows are still deferred (`WorldLight.CastsShadows` is stored but unused by the shader).
+## How the renderer uses it
+Once per frame, `WorldRendererLighting_PrepareFrame` builds the candidate array from the render cache's lights:
+every light except the one casting the cube shadow (the shader shades that light separately, with its shadow),
+plus a parallel array of linear radiance (colour → linear × intensity, once per light per frame). For each model
+object drawn by a lit pass, `WorldRendererLighting_UploadObjectLights` culls the candidates against the object's
+world bounding sphere (from the render cache: the model's mesh-space bounds, computed once at load, transformed
+by the object's matrix, radius scaled by the matrix's largest axis scale) and uploads the selected positions,
+radiances and ranges. The shader shades each with the same Cook-Torrance BRDF as the sun, with a windowed
+inverse-square falloff that reaches 0 at the light's range. The cost is O(lights) per drawn object.
 
 ## Notes / future
-- The per-asset bounds cache is keyed by `GameModel*` (stable per asset) with `BOUNDS_CACHE_CAPACITY` slots;
-  beyond that, uncached assets recompute bounds each frame (still correct, just slower).
-- The bounding sphere is conservative (over-includes) so a light that reaches any part of a large object is
-  kept, and the shader's per-fragment attenuation handles the actual spatial falloff.
+- The bounding sphere is conservative (over-includes), so a light that reaches any part of a large object is
+  kept; the shader's per-fragment attenuation handles the actual falloff.
+- A spatial index for lights (and objects) comes with the culling/LOD work, after the render cache.

@@ -8,8 +8,8 @@ Files: `include/SoundEngine.h`, `source/SoundEngine.c`; the sound asset type is 
 - `AudioEngine_Construct1` always returns `ErrorCode_InvalidOperation` (see the `// TODO:` in
   `SoundEngine.c`). Nothing constructs the engine and nothing calls `AssetManager_LoadSound`, so no game code
   depends on audio yet.
-- The owner decided (2026-10-17, plan decision D8 in `handoff/FIX_PLAN.md`) to keep this code dormant and
-  redesign it when the game needs sound. **This file is the brief for that redesign.** Before writing code,
+- The owner decided (2026-10-17, plan decision D8 in `handoff/2026-10_code_review/FIX_PLAN.md`) to keep this code
+  dormant and redesign it when the game needs sound. **This file is the brief for that redesign.** Before writing code,
   ask the owner the open decisions at the end of this file and propose the header first: the owner reviews
   API shape before implementation.
 - The old code stays in place as the starting point: its DSP, ramps, resampling and ring buffer are worth

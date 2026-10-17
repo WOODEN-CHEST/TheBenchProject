@@ -162,6 +162,13 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
         }
     }
 
+    // I logs what the renderer did in its last render (active / inactive / unavailable features, object counts),
+    // e.g. to check on a new GPU which effects actually run.
+    if (IsKeyPressed(KEY_I))
+    {
+        WorldRenderer_LogStatus(frame->_renderer);
+    }
+
     // L toggles the debug light gizmos (wireframe spheres at light positions).
     if (IsKeyPressed(KEY_L))
     {
@@ -214,7 +221,8 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
     {
         Error LogResult = Logger_LogInfo(Frame->_services->Logger,
             (const unsigned char*)u8"WorldTest: entered the world. WASD+SPACE/CTRL move, SHIFT sprint, mouse look; "
-            u8"P pause/resume day-night, 1-4 = dawn/noon/dusk/midnight (frozen), [ ] scrub time, ESC quit.");
+            u8"P pause/resume day-night, 1-4 = dawn/noon/dusk/midnight (frozen), [ ] scrub time; O post effects, "
+            u8"B bloom, G sun shafts, C crisp overlay, L light gizmos, I renderer status; ESC quit.");
         Error_Deconstruct(&LogResult);
     }
     return Error_CreateSuccess();
@@ -471,10 +479,11 @@ static Error AddPointLight(World* world, const unsigned char* name, Vector3 posi
 }
 
 /* Builds the test world: a raised centre model that casts a shadow onto a wide ground slab, lit by the sun
- * plus a couple of coloured point lights near the centre model (to exercise point-light reach culling). */
-static Error BuildTestWorld(World* world)
+ * plus a couple of coloured point lights near the centre model (to exercise point-light reach culling). The world
+ * gets the asset manager so it loads its sprites' animations itself. */
+static Error BuildTestWorld(World* world, Services* services)
 {
-    Error ConstructResult = World_Construct(world);
+    Error ConstructResult = World_Construct2(world, services->Assets, services->Logger);
     if (ConstructResult.Code != ErrorCode_Success)
     {
         return ConstructResult;
@@ -567,7 +576,7 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         return BaseResult;
     }
 
-    Error WorldResult = BuildTestWorld(&Frame->_world);
+    Error WorldResult = BuildTestWorld(&Frame->_world, services);
     if (WorldResult.Code != ErrorCode_Success)
     {
         GameFrame_Deconstruct(&Frame->Base);

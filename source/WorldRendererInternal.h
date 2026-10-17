@@ -1,0 +1,815 @@
+#pragma once
+#include <stdbool.h>
+#include <stddef.h>
+#include "WorldRenderer.h"
+#include "WorldRenderCache.h"
+#include "AssetManager.h"
+#include "GameShader.h"
+#include "GameModel.h"
+#include "GameCamera.h"
+#include "World.h"
+#include "WorldEnvironment.h"
+#include "WorldModelObject.h"
+#include "raylib/raylib.h"
+// rlgl supplies RL_MAX_SHADER_LOCATIONS and the scene near/far cull distances.
+#include "raylib/rlgl.h"
+#include "wr/WRMemory.h"
+
+/*
+ * Private header (source/): the WorldRenderer's state and the functions its implementation files share.
+ *
+ * The renderer is split by render pass, one file per pass:
+ *   WorldRenderer.c          the public API; builds the per-frame context and runs the passes in order
+ *   WorldRendererCommon.c    shared helpers (config multipliers, colours, shader loading, target constructors)
+ *   WorldRendererScene.c     the scene target (size, HDR tiers, recreation on resize) and the scene pass
+ *   WorldRendererGeometry.c  model meshes (with per-draw materials), sprite billboards and light gizmos
+ *   WorldRendererLighting.c  the PBR shader and its uniforms, forward point lights, eye adaptation
+ *   WorldRendererShadows.c   the sun shadow cascades and the point-light cube shadow
+ *   WorldRendererGBuffer.c   the normal/flag G-buffer and the ambient-occlusion pre-pass
+ *   WorldRendererSky.c       the atmospheric sky
+ *   WorldRendererPost.c      outlines, bloom, sun shafts and the tonemap
+ *   WorldRendererCrisp.c     the crisp overlay for OmitPixelation objects
+ * plus the per-object render cache (WorldRenderCache.h). Each pass keeps its shader, uniform locations, targets
+ * and toggles in its own state struct below.
+ *
+ * RULES. Render reads the world and shared assets and never writes them: meshes draw with materials built on
+ * the stack, and the PBR shader's location table is a copy owned here. Renderer-owned samplers sit on the fixed
+ * units of WorldRendererTextureUnit, pointed there once at load. A missing shader or target disables its
+ * feature with one log line (WorldRendererCommon_WarnOnce, or the load failure the asset manager logs).
+ */
+
+
+// Macros.
+/** Bookkeeping value Raylib uses for a RenderTexture's depth attachment format (24-bit depth renderbuffer). */
+#define SCENE_DEPTH_FORMAT 19
+/** sRGB gamma used to convert stored 8-bit colours to/from linear light. */
+#define SRGB_GAMMA 2.2f
+/** Near/far planes the scene 3D pass uses (Raylib's global cull distances, which BeginMode3D applies); the
+ *  frame context rebuilds the same projection for the passes that reconstruct view positions from depth. */
+#define SCENE_NEAR_PLANE ((double)RL_CULL_DISTANCE_NEAR)
+#define SCENE_FAR_PLANE ((double)RL_CULL_DISTANCE_FAR)
+/** Resolution (square) of each sun shadow-map cascade, in texels. The PBR shader's PCF needs its texel size. */
+#define SHADOW_MAP_SIZE 2048
+/** Number of maps in a raylib Material (raylib's MAX_MATERIAL_MAPS: 12 in the pinned build, see BUILDING.md,
+ *  and not exported by raylib.h). DrawMesh reads, and binds textures from, exactly this many entries of
+ *  Material.maps, so a per-draw material copy must have this many. Rebuilding raylib with another value means
+ *  changing this and checking WorldRendererTextureUnit. */
+#define WORLD_RENDERER_MATERIAL_MAP_COUNT 12
+
+
+// Types.
+/* Fixed texture units for the PBR shader's renderer-owned samplers. They sit above raylib's material map units
+ * (DrawMesh binds and unbinds units 0..WORLD_RENDERER_MATERIAL_MAP_COUNT-1) and the 2D batch's units (0..4), so
+ * neither can overwrite them. WorldRendererLighting_LoadShader points each sampler at its unit ONCE; per-frame
+ * code only binds textures. That also keeps every sampler off unit 0 even when its feature is inactive:
+ * OpenGL forbids samplers of different types (here the samplerCube and the albedo sampler2D) on one unit,
+ * whether or not the shader samples them. */
+typedef enum
+{
+    WorldRendererTextureUnit_ShadowNear = 12,       // sampler2D shadowMap (near sun cascade)
+    WorldRendererTextureUnit_ShadowFar = 13,        // sampler2D shadowMapFar (far sun cascade)
+    WorldRendererTextureUnit_PointShadowCube = 14,  // samplerCube pointShadowCube
+    WorldRendererTextureUnit_AmbientOcclusion = 15, // sampler2D ambientOcclusionMap
+} WorldRendererTextureUnit;
+
+_Static_assert(WorldRendererTextureUnit_ShadowNear >= WORLD_RENDERER_MATERIAL_MAP_COUNT,
+    "renderer-owned texture units must sit above raylib's material map units");
+
+/* Which objects a draw pass should include, by their OmitPixelation flag. The pixelated scene pass draws only
+ * pixelated objects (when the crisp overlay is active), the crisp overlay pass draws only the flagged ones, and
+ * the shadow passes draw all (everything casts shadows). */
+typedef enum
+{
+    WorldRendererPixelFilter_All,
+    WorldRendererPixelFilter_PixelatedOnly, // OmitPixelation == false
+    WorldRendererPixelFilter_CrispOnly,     // OmitPixelation == true
+} WorldRendererPixelFilter;
+
+/** @brief One light's linear radiance (colour x intensity), parallel to the forward-light culling list. */
+typedef struct WorldRendererRadianceStruct
+{
+    /** @brief Linear RGB radiance. */
+    float Rgb[3];
+} WorldRendererRadiance;
+
+/**
+ * @brief Everything one render decides up front and shares between its passes.
+ *
+ * Built by WorldRenderer_RenderToTarget at the start of every render and passed to each pass, so the passes
+ * do not recompute the camera matrices or re-decide what runs. Pointers are borrowed for the render only.
+ */
+typedef struct WorldRenderFrameStruct
+{
+    /** @brief The world being drawn (read only). */
+    World* World;
+    /** @brief The world's environment. */
+    const WorldEnvironment* Environment;
+    /** @brief The camera, and the raylib camera made from it. */
+    const GameCamera* Camera;
+    Camera3D RayCamera;
+    /** @brief The scene's view and projection matrices (what BeginMode3D builds for the scene target), the
+     *  projection's inverse, and the inverse of view x projection. */
+    Matrix View;
+    Matrix Projection;
+    Matrix InvProjection;
+    Matrix InvViewProjection;
+    /** @brief Unit direction to the sun, and how much daylight there is (1 day .. 0 night). */
+    Vector3 SunDirection;
+    float Daylight;
+    /** @brief The frame target (window) size and the scene target size, in pixels. */
+    int WindowWidth;
+    int WindowHeight;
+    int SceneWidth;
+    int SceneHeight;
+    /** @brief Which objects the pixelated passes (G-buffer, scene) draw: PixelatedOnly while the crisp overlay
+     *  runs, All otherwise. */
+    WorldRendererPixelFilter SceneFilter;
+
+    /** @brief Lighting shared by the scene and crisp passes (computed once per render): linear sun colour and
+     *  daylight-scaled intensity, linear ambient colour, the scene luminance estimate eye adaptation starts
+     *  from, the fog density, and the shadow strength. */
+    float SunColor[3];
+    float SunIntensity;
+    float AmbientColor[3];
+    float BaseSceneLuminance;
+    float FogDensity;
+    float ShadowStrength;
+
+    /** @brief Whether each optional pass runs this render. */
+    bool IsSunShadowActive;
+    bool IsPointShadowActive;
+    bool IsAoActive;
+    bool AreOutlinesActive;
+    bool IsBloomActive;
+    bool AreSunshaftsActive;
+    bool IsCrispActive;
+    /** @brief Index (into the render cache's lights) of the light casting the cube shadow; valid when
+     *  IsPointShadowActive. */
+    size_t ShadowLightIndex;
+    /** @brief Effective strengths of the passes that have one (world x config x base; 0 when inactive). */
+    float AoStrength;
+    float BloomStrength;
+    float SunshaftStrength;
+    /** @brief Where the sun projects on screen ([0,1] UV), for the sun shafts; valid when AreSunshaftsActive. */
+    Vector2 SunScreenUv;
+    /** @brief The tonemap exposure from eye adaptation; set just before the tonemap. */
+    float Exposure;
+} WorldRenderFrame;
+
+/** @brief The scene render target the 3D world is drawn into (pixel resolution when pixelating). */
+typedef struct WorldRendererSceneStateStruct
+{
+    /** @brief Internal scene target the 3D world renders into (pixel resolution when pixelating). */
+    RenderTexture2D _target;
+    /** @brief Whether _target has been created. */
+    bool _hasTarget;
+    /** @brief Whether _target's depth attachment is a samplable texture (required by the post passes). */
+    bool _isDepthSamplable;
+    /** @brief Whether the scene target is a floating-point (HDR) framebuffer; false = 8-bit fallback. */
+    bool _isHdr;
+    /** @brief Set once the HDR/fallback status has been logged, so it is reported only once. */
+    bool _isTierReported;
+    /** @brief Current width and height of _target, in pixels. */
+    int _width;
+    int _height;
+    /** @brief The window (frame target) size the resolution-dependent targets were made for. */
+    int _windowWidth;
+    int _windowHeight;
+} WorldRendererSceneState;
+
+/** @brief The PBR shader that shades model objects, its uniform locations, and this render's forward lights. */
+typedef struct WorldRendererPbrStateStruct
+{
+    /** @brief The PBR shader asset (held under the shader user); NULL = unavailable (models draw unlit). */
+    GameShader* _shader;
+    /** @brief The renderer's own copy of the shader's location table: the asset's table with the material map
+     *  samplers pointed at mraMap/normalMap/emissiveMap, so DrawMesh binds each material's maps without the
+     *  renderer writing into the shared shader asset. */
+    int _locs[RL_MAX_SHADER_LOCATIONS];
+    /** @brief The shader to draw PBR meshes with: the asset's program with _locs as its location table. */
+    Shader _passShader;
+    /** @brief How many point lights the shader's uniform arrays hold, capped at WORLD_MAX_FORWARD_LIGHTS
+     *  (checked at load; uploads never exceed it). */
+    int _maxPointLights;
+    /** @brief Cached uniform locations set every render (-1 when absent/optimized out). */
+    int _locViewPos;
+    int _locSunDirection;
+    int _locSunColor;
+    int _locSunIntensity;
+    int _locAmbientColor;
+    int _locAmbientIntensity;
+    /** @brief Cached per-material scalar-factor and map-presence uniform locations (-1 when absent), uploaded
+     *  per material by the mesh draw loop. */
+    int _locMetallic;
+    int _locRoughness;
+    int _locAo;
+    int _locEmissiveColor;
+    int _locEmissiveIntensity;
+    int _locHasMraMap;
+    int _locHasNormalMap;
+    int _locHasEmissiveMap;
+    /** @brief Cached screen-space-AO uniform locations (-1 when absent): the AO map, its active flag and the
+     *  scene resolution used to map gl_FragCoord to the AO map's UV. */
+    int _locAmbientOcclusionMap;
+    int _locAoMapActive;
+    int _locAoResolution;
+    /** @brief Cached sun shadow uniform locations (-1 when absent). */
+    int _locLightVP;
+    int _locShadowMap;
+    int _locLightVPFar;
+    int _locShadowMapFar;
+    int _locShadowFarActive;
+    int _locShadowStrength;
+    int _locShadowBias;
+    int _locShadowTexelSize;
+    /** @brief Cached point-light (cube) shadow uniform locations (-1 when absent). */
+    int _locPointShadowActive;
+    int _locPointShadowLightPos;
+    int _locPointShadowLightRadiance;
+    int _locPointShadowLightRange;
+    int _locPointShadowCube;
+    int _locPointShadowFar;
+    int _locPointShadowBias;
+    /** @brief Cached forward point-light uniform locations (-1 when absent); uploaded per drawn object. */
+    int _locPointLightCount;
+    int _locPointLightPositions;
+    int _locPointLightRadiances;
+    int _locPointLightRanges;
+    /** @brief Cached distance-fog uniform locations (-1 when absent). The fog fades distant geometry into the
+     *  atmospheric sky colour, so it needs the sky parameters the sky pass uses plus the fog density. */
+    int _locFogDensity;
+    int _locFogTurbidity;
+    int _locFogSkyTint;
+    int _locFogSunIntensity;
+    /** @brief This render's forward-light candidates (WorldCullingLight): every light of the render cache except
+     *  the cube-shadow light, which is shaded on its own. */
+    GenericBuffer _forwardLights;
+    /** @brief The candidates' linear radiance (WorldRendererRadiance), parallel to _forwardLights. */
+    GenericBuffer _forwardRadiances;
+} WorldRendererPbrState;
+
+/** @brief HDR eye adaptation (auto-exposure) state. */
+typedef struct WorldRendererExposureStateStruct
+{
+    /** @brief The eye's currently adapted luminance (drives auto-exposure); eased toward the scene luminance. */
+    float _adaptedLuminance;
+    /** @brief false until the first adaptation update snaps _adaptedLuminance to the scene (no first-frame flash). */
+    bool _isInitialized;
+} WorldRendererExposureState;
+
+/** @brief The tonemap pass (HDR scene -> display, adds bloom and sun shafts). */
+typedef struct WorldRendererTonemapStateStruct
+{
+    /** @brief The tonemap shader; NULL = unavailable (the HDR scene is blitted untonemapped). */
+    GameShader* _shader;
+    /** @brief Cached tonemap uniform locations (-1 when absent). */
+    int _locExposure;
+    int _locBloomTexture;
+    int _locBloomStrength;
+    int _locSunshaftTexture;
+    int _locSunshaftStrength;
+} WorldRendererTonemapState;
+
+/** @brief The atmospheric sky pass. */
+typedef struct WorldRendererSkyStateStruct
+{
+    /** @brief The atmospheric sky shader drawn behind the geometry; NULL = fall back to the gradient clear. */
+    GameShader* _shader;
+    /** @brief Cached world_sky uniform locations (-1 when absent). */
+    int _locResolution;
+    int _locInvViewProj;
+    int _locCameraPos;
+    int _locSunDirection;
+    int _locSunColor;
+    int _locSunIntensity;
+    int _locSunSize;
+    int _locTurbidity;
+    int _locSkyTint;
+    int _locStarSeed;
+    int _locStarDensity;
+    int _locStarBrightness;
+} WorldRendererSkyState;
+
+/** @brief The sprite colour pass (billboards in the scene and crisp passes). */
+typedef struct WorldRendererSpriteStateStruct
+{
+    /** @brief The sprite shader (sRGB art -> linear HDR); NULL = sprites draw with Raylib's default shader (their
+     *  sRGB art then lands in the linear buffer slightly too bright, but still shows). */
+    GameShader* _shader;
+} WorldRendererSpriteState;
+
+/** @brief The two sun shadow cascades. */
+typedef struct WorldRendererSunShadowStateStruct
+{
+    /** @brief The depth-only shader used for the cascades; NULL = no sun shadows. */
+    GameShader* _depthShader;
+    /** @brief The NEAR cascade (small extent, sharp); its samplable depth texture is in .depth. */
+    RenderTexture2D _nearMap;
+    /** @brief Whether _nearMap has been created (and its framebuffer is complete). */
+    bool _hasNearMap;
+    /** @brief World -> sun light-clip matrix of the near cascade's most recent pass. */
+    Matrix _nearLightVP;
+    /** @brief The FAR cascade (large extent, coarse) + its creation flag + light-clip matrix. Sampled by the PBR
+     *  shader outside the near cascade so big / distant casters still shadow at range. Optional. */
+    RenderTexture2D _farMap;
+    bool _hasFarMap;
+    Matrix _farLightVP;
+} WorldRendererSunShadowState;
+
+/** @brief The cube shadow of the shadow-casting point light. */
+typedef struct WorldRendererPointShadowStateStruct
+{
+    /** @brief The cube-depth shader; NULL = no point-light shadow. Cached uniform locations: the shadow light's
+     *  world position and far range. */
+    GameShader* _shader;
+    int _locLightPos;
+    int _locLightFar;
+    /** @brief A colour CUBE (RGBA8 packed distance) + its own depth renderbuffer + framebuffer; the shadow light
+     *  renders 6 faces into it each frame it is active. */
+    unsigned int _cube;
+    unsigned int _depthRenderbuffer;
+    unsigned int _framebuffer;
+    /** @brief Whether the cube resources have been created. */
+    bool _hasCube;
+    /** @brief The far range the cube's distances were normalized by in its most recent pass (the light's reach). */
+    float _far;
+} WorldRendererPointShadowState;
+
+/** @brief The normal/flag G-buffer (view-space normals + surface/outline flag) read by the AO and outline passes. */
+typedef struct WorldRendererGBufferStateStruct
+{
+    /** @brief The G-buffer shader for models; NULL = AO and outlines are unavailable. */
+    GameShader* _shader;
+    /** @brief Cached world_normal outline-flag uniform location (-1 when absent). */
+    int _locOutlineFlag;
+    /** @brief The G-buffer shader for sprites (alpha-discarded); NULL = sprites get no outlines. */
+    GameShader* _spriteShader;
+    /** @brief Cached world_normal_sprite outline-flag uniform location (-1 when absent). */
+    int _spriteLocOutlineFlag;
+    /** @brief The low-res G-buffer target (RGB = view normal, A = surface/outline flag). Its depth is a samplable
+     *  texture (for the AO pre-pass) when the driver allows. */
+    RenderTexture2D _target;
+    /** @brief Whether _target has been created. */
+    bool _hasTarget;
+    /** @brief Whether _target's depth is a samplable texture (required for the AO pre-pass). */
+    bool _isDepthSamplable;
+    /** @brief Set once a target creation failure has been logged. */
+    bool _isTargetFailureReported;
+} WorldRendererGBufferState;
+
+/** @brief The screen-space ambient-occlusion pre-pass. */
+typedef struct WorldRendererAoStateStruct
+{
+    /** @brief The AO shader (SSAO from the G-buffer -> AO-multiplier texture); NULL = no AO. Its uniform
+     *  locations follow. */
+    GameShader* _shader;
+    int _locResolution;
+    int _locInvProjection;
+    int _locProjection;
+    int _locDepthTexture;
+    int _locNormalTexture;
+    int _locStrength;
+    /** @brief The low-res AO-multiplier target (R = 1 open .. <1 occluded) the PBR pass samples for its ambient
+     *  term. */
+    RenderTexture2D _target;
+    /** @brief Whether _target has been created. */
+    bool _hasTarget;
+    /** @brief Set once a target creation failure has been logged. */
+    bool _isTargetFailureReported;
+} WorldRendererAoState;
+
+/** @brief The outline post pass (depth/normal-edge silhouettes and creases). */
+typedef struct WorldRendererOutlineStateStruct
+{
+    /** @brief The outline (postfx) shader; NULL = outlines unavailable. */
+    GameShader* _shader;
+    /** @brief Cached world_postfx uniform locations (-1 when absent). */
+    int _locResolution;
+    int _locInvProjection;
+    int _locProjection;
+    int _locDepthTexture;
+    int _locNormalTexture;
+    int _locSunDirectionView;
+    int _locStrength;
+    /** @brief The target the outline pass writes into (same size/format as the scene target). */
+    RenderTexture2D _target;
+    /** @brief Whether _target has been created. */
+    bool _hasTarget;
+    /** @brief Whether outlines are drawn (code-configurable per spec; on by default). */
+    bool _isEnabled;
+    /** @brief Set once a target creation failure has been logged. */
+    bool _isTargetFailureReported;
+} WorldRendererOutlineState;
+
+/** @brief The bloom pass (bright-pass prefilter + separable blur). */
+typedef struct WorldRendererBloomStateStruct
+{
+    /** @brief The two bloom shaders; either NULL = bloom unavailable. */
+    GameShader* _prefilterShader;
+    GameShader* _blurShader;
+    /** @brief Cached bloom-prefilter uniform locations (-1 when absent). */
+    int _prefilterLocResolution;
+    int _prefilterLocThreshold;
+    int _prefilterLocSoftKnee;
+    int _prefilterLocDepthTexture;
+    int _prefilterLocDepthMask;
+    /** @brief Cached bloom-blur uniform locations (-1 when absent). */
+    int _blurLocResolution;
+    int _blurLocDirection;
+    /** @brief Whether bloom is drawn (code toggle for A/B testing; on by default). */
+    bool _isEnabled;
+    /** @brief Ping-pong bloom buffers (colour-only HDR, reduced resolution, BILINEAR): the prefilter writes A,
+     *  then the separable blur ping-pongs A<->B, leaving the final bloom in A. */
+    RenderTexture2D _targetA;
+    RenderTexture2D _targetB;
+    /** @brief Whether the bloom targets have been created. */
+    bool _hasTargets;
+    /** @brief Size of the bloom buffers, in pixels. */
+    int _width;
+    int _height;
+    /** @brief Set once a target creation failure has been logged. */
+    bool _isTargetFailureReported;
+} WorldRendererBloomState;
+
+/** @brief The sun-shaft (god ray) pass. */
+typedef struct WorldRendererSunshaftStateStruct
+{
+    /** @brief The sun-shaft shader; NULL = sun shafts unavailable. */
+    GameShader* _shader;
+    /** @brief Cached sun-shaft uniform locations (-1 when absent). */
+    int _locResolution;
+    int _locDepthTexture;
+    int _locSunScreenPos;
+    /** @brief Whether sun shafts are drawn (code toggle for A/B testing; on by default). */
+    bool _isEnabled;
+    /** @brief The sun-shaft buffer (colour-only HDR, reduced resolution, BILINEAR). */
+    RenderTexture2D _target;
+    /** @brief Whether _target has been created. */
+    bool _hasTarget;
+    /** @brief Size of the sun-shaft buffer, in pixels. */
+    int _width;
+    int _height;
+    /** @brief Set once a target creation failure has been logged. */
+    bool _isTargetFailureReported;
+} WorldRendererSunshaftState;
+
+/** @brief The crisp overlay (un-pixelated OmitPixelation objects composited over the pixelated frame). */
+typedef struct WorldRendererCrispStateStruct
+{
+    /** @brief The crisp-composite shader; NULL = unavailable (flagged objects render pixelated instead). */
+    GameShader* _compositeShader;
+    /** @brief Cached crisp-composite uniform locations (-1 when absent). */
+    int _locCrispDepth;
+    int _locSceneDepth;
+    int _locExposure;
+    /** @brief Whether the crisp overlay is drawn (code toggle for A/B testing; on by default). */
+    bool _isEnabled;
+    /** @brief The overlay target (HDR colour + samplable depth) at WINDOW resolution. */
+    RenderTexture2D _target;
+    /** @brief Whether _target has been created (it always has samplable depth). */
+    bool _hasTarget;
+    /** @brief Size of _target, in pixels (the window / frame target size). */
+    int _width;
+    int _height;
+    /** @brief Set once a target creation failure has been logged. */
+    bool _isTargetFailureReported;
+} WorldRendererCrispState;
+
+struct WorldRendererStruct
+{
+    /** @brief Asset manager used to resolve shaders and models; borrowed. */
+    AssetManager* _assetManager;
+    /** @brief Logger for diagnostics; borrowed, may be NULL. */
+    Logger* _logger;
+    /** @brief Game config supplying the config-side effect multipliers; borrowed, may be NULL (defaults to 1x). */
+    const GameConfig* _config;
+    /** @brief Holds the pass shaders for the renderer's lifetime. */
+    AssetUserID _shaderUser;
+    /** @brief Holds the world's models; replaced by a fresh user in WorldRenderer_PrepareWorld so models no
+     *  object uses any more are released. */
+    AssetUserID _modelUser;
+    /** @brief Whether the debug reference grid is drawn. */
+    bool _drawDebugGrid;
+    /** @brief Whether the debug light gizmos (wireframe spheres at light positions) are drawn. Default on. */
+    bool _lightGizmosEnabled;
+    /** @brief Whether the final pixelation pass is applied. */
+    bool _pixelationEnabled;
+    /** @brief Set once the shaders' load has been attempted (success or failure), so it is tried only once. */
+    bool _shadersLoadAttempted;
+    /** @brief Master toggle for AO + outlines; when false the scene blits straight to the tonemap. On by default. */
+    bool _postfxEnabled;
+    /** @brief The per-object render cache and this render's model/sprite/light lists. */
+    WorldRenderCache _cache;
+    /** @brief What the most recent render did (WorldRenderer_GetStatus). */
+    WorldRendererStatus _status;
+    /** @brief Set once the status has been logged after the first render. */
+    bool _isStatusReported;
+
+    /** @brief Per-pass state (shader, uniform locations, targets, toggles). */
+    WorldRendererSceneState _scene;
+    WorldRendererPbrState _pbr;
+    WorldRendererExposureState _exposure;
+    WorldRendererTonemapState _tonemap;
+    WorldRendererSkyState _sky;
+    WorldRendererSpriteState _sprites;
+    WorldRendererSunShadowState _sunShadow;
+    WorldRendererPointShadowState _pointShadow;
+    WorldRendererGBufferState _gbuffer;
+    WorldRendererAoState _ao;
+    WorldRendererOutlineState _outline;
+    WorldRendererBloomState _bloom;
+    WorldRendererSunshaftState _sunshaft;
+    WorldRendererCrispState _crisp;
+};
+
+
+// WorldRendererCommon.c
+/** @brief Config-side shadow strength multiplier (1.0 when no config is bound). */
+float WorldRendererCommon_ConfigShadowStrength(const WorldRenderer* self);
+
+/** @brief Config-side ambient-occlusion strength multiplier (1.0 when no config is bound). */
+float WorldRendererCommon_ConfigAoStrength(const WorldRenderer* self);
+
+/** @brief Config-side fog strength multiplier (1.0 when no config is bound). */
+float WorldRendererCommon_ConfigFogStrength(const WorldRenderer* self);
+
+/** @brief Config-side bloom strength multiplier (1.0 when no config is bound). */
+float WorldRendererCommon_ConfigBloomStrength(const WorldRenderer* self);
+
+/** @brief Config-side sun-shaft strength multiplier (1.0 when no config is bound). */
+float WorldRendererCommon_ConfigSunshaftStrength(const WorldRenderer* self);
+
+/**
+ * @brief Converts an 8-bit sRGB colour to linear light in [0,1]^3 (alpha ignored).
+ * @param color The sRGB colour.
+ * @param outRGB [out] Receives the linear red, green and blue.
+ */
+void WorldRendererCommon_ColorToLinear(Color color, float outRGB[3]);
+
+/**
+ * @brief Loads a shader asset by name under the renderer's shader user.
+ *
+ * A failure is logged once (warning) and the feature that needs the shader stays off.
+ * @param self The renderer.
+ * @param assetName The shader asset's name.
+ * @returns The shader (held until the renderer is destroyed), or NULL when it is unavailable.
+ */
+GameShader* WorldRendererCommon_LoadShader(WorldRenderer* self, const unsigned char* assetName);
+
+/**
+ * @brief Logs a warning (no-op without a logger). For failures that can only happen once, such as at shader load.
+ * @param self The renderer.
+ * @param message The warning.
+ */
+void WorldRendererCommon_Warn(WorldRenderer* self, const unsigned char* message);
+
+/**
+ * @brief Logs a warning the first time it is called for @p isReported, then never again for it.
+ * @param self The renderer (its logger may be NULL).
+ * @param isReported The once-flag for this message; set to true.
+ * @param message The warning.
+ */
+void WorldRendererCommon_WarnOnce(WorldRenderer* self, bool* isReported, const unsigned char* message);
+
+/**
+ * @brief Tries to create an HDR (RGBA16F) framebuffer with a depth attachment.
+ *
+ * The depth is a samplable texture when @p samplableDepth is true, or a renderbuffer otherwise (depth testing
+ * is identical either way).
+ * @returns The target, or a zero target (id 0) if the GPU cannot make the combination complete.
+ */
+RenderTexture2D WorldRendererCommon_TryCreateHdrTarget(int width, int height, bool samplableDepth);
+
+/**
+ * @brief Creates a colour-only HDR (RGBA16F) framebuffer, for passes that write every pixel without depth.
+ * @returns The target, or a zero target (id 0) if it could not be made complete.
+ */
+RenderTexture2D WorldRendererCommon_CreateColorTarget(int width, int height);
+
+/**
+ * @brief Unloads a render target if @p hasTarget says it exists, and clears the flag.
+ * @param target The target to unload.
+ * @param hasTarget Its existence flag; set to false.
+ */
+void WorldRendererCommon_UnloadTarget(RenderTexture2D* target, bool* hasTarget);
+
+
+// WorldRendererScene.c
+/**
+ * @brief Makes sure the scene target and every pass's resolution-dependent targets match the window size and
+ *        the pixelation setting, recreating them all when either changed.
+ *
+ * A pass whose target cannot be created logs it once and stays off; the scene target falls back from HDR with
+ * samplable depth, to HDR with a depth renderbuffer, to 8-bit.
+ * @param self The renderer.
+ * @param windowWidth The frame target width, in pixels.
+ * @param windowHeight The frame target height, in pixels.
+ * @returns Success; ErrorCode_InvalidState if not even the 8-bit scene target can be created.
+ */
+Error WorldRendererScene_EnsureTargets(WorldRenderer* self, int windowWidth, int windowHeight);
+
+/** @brief Unloads the scene target and every pass's resolution-dependent targets. */
+void WorldRendererScene_ReleaseTargets(WorldRenderer* self);
+
+/**
+ * @brief The scene pass: clears the scene target, draws the sky, then the lit models, sprites, debug grid and
+ *        light gizmos passing the frame's scene filter. Opens and closes the scene target.
+ */
+void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* frame);
+
+
+// WorldRendererGeometry.c
+/** @brief Loads the sprite shader (optional: sprites then draw with Raylib's default shader). */
+void WorldRendererGeometry_LoadShaders(WorldRenderer* self);
+
+/** @brief Whether an object with the given OmitPixelation flag passes @p filter. */
+bool WorldRendererGeometry_PassesFilter(bool omitPixelation, WorldRendererPixelFilter filter);
+
+/**
+ * @brief Draws one cached model mesh by mesh, each mesh with a material built on the stack (the asset's maps
+ *        copied, @p passShader, the object's tint applied to the copy), so nothing is written to the asset.
+ *
+ * Must run inside a 3D mode (BeginMode3D or explicit rlgl matrices).
+ * @param self The renderer.
+ * @param model The cached model; must have an asset.
+ * @param passShader The shader to draw with, or NULL to keep each material's own shader.
+ * @param isLit Whether this is the lit (PBR) pass: then the object's forward point lights and each material's
+ *        PBR factors are uploaded before its meshes.
+ */
+void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel* model, const Shader* passShader,
+    bool isLit);
+
+/** @brief Draws every cached model with an asset that passes @p filter (see WorldRendererGeometry_DrawModel). */
+void WorldRendererGeometry_DrawModels(WorldRenderer* self, const Shader* passShader, bool isLit,
+    WorldRendererPixelFilter filter);
+
+/**
+ * @brief Draws the cached sprites passing @p filter as camera-facing billboards through the sprite shader.
+ *
+ * Must run inside BeginMode3D; the billboards depth-test against the rest of the scene.
+ */
+void WorldRendererGeometry_DrawSprites(WorldRenderer* self, const WorldRenderFrame* frame,
+    WorldRendererPixelFilter filter);
+
+/** @brief Draws a small wireframe sphere at each light, tinted by its colour (a debug aid). Inside BeginMode3D. */
+void WorldRendererGeometry_DrawLightGizmos(WorldRenderer* self);
+
+
+// WorldRendererLighting.c
+/**
+ * @brief Loads the PBR shader, caches its uniform locations, builds the renderer's location table and pass
+ *        shader, points its samplers at their fixed units, and checks how many point lights it supports.
+ *
+ * Without it models draw unlit with Raylib's default shader.
+ */
+void WorldRendererLighting_LoadShader(WorldRenderer* self);
+
+/**
+ * @brief Computes the frame's lighting (sun, ambient, fog, shadow strength, scene luminance) into @p frame and
+ *        builds the forward-light candidates (every light except the frame's cube-shadow light).
+ *
+ * Needs frame->SunDirection, frame->Daylight, frame->IsPointShadowActive and frame->ShadowLightIndex.
+ */
+void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame);
+
+/**
+ * @brief Uploads the frame's lighting uniforms to the PBR shader and binds the shadow maps, the cube shadow and
+ *        (when @p applyScreenAo) the AO map to their fixed units. No-op when the PBR shader is unavailable.
+ *
+ * Call before the lit models of a pass. The crisp overlay passes false for @p applyScreenAo: it renders at
+ * window resolution, where the low-res AO map would not line up.
+ */
+void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo);
+
+/**
+ * @brief Reach-culls the frame's forward lights against a world bounding sphere and uploads the strongest few
+ *        to the PBR shader, for the object drawn next.
+ */
+void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Vector3 center, float radius);
+
+/**
+ * @brief Uploads one material's PBR scalar factors and map-presence flags, for its meshes drawn next.
+ *
+ * DrawMesh uploads colDiffuse and binds the maps itself, but not these.
+ */
+void WorldRendererLighting_UploadMaterial(WorldRenderer* self, const Material* material);
+
+/**
+ * @brief Eases the adapted luminance toward the frame's scene luminance (plus nearby point lights) and returns
+ *        the tonemap exposure.
+ * @param self The renderer.
+ * @param frame The frame (BaseSceneLuminance must be computed).
+ * @param deltaSeconds Real seconds since the previous render; 0, negative or non-finite holds the adaptation.
+ * @returns The exposure (always finite and within the adaptation clamp).
+ */
+float WorldRendererLighting_UpdateExposure(WorldRenderer* self, const WorldRenderFrame* frame, float deltaSeconds);
+
+
+// WorldRendererShadows.c
+/** @brief Loads the depth and cube-depth shaders and creates the cascade maps and the shadow cube. */
+void WorldRendererShadows_LoadShaders(WorldRenderer* self);
+
+/** @brief Unloads the cascade maps and the shadow cube. Needs a live GL context. */
+void WorldRendererShadows_Unload(WorldRenderer* self);
+
+/**
+ * @brief Picks the light that casts the cube shadow: the CastsShadows light with positive intensity and reach
+ *        nearest @p cameraPosition.
+ * @returns Its index in the render cache's lights, or SIZE_MAX when no light qualifies.
+ */
+size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self, Vector3 cameraPosition);
+
+/** @brief Renders both sun cascades (the far one only when its map exists) and stores their light matrices. */
+void WorldRendererShadows_RenderSun(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Renders the frame's shadow light into the six cube faces, drawing only models within its reach, and
+ *        stores the far range the distances were normalized by.
+ */
+void WorldRendererShadows_RenderPointLight(WorldRenderer* self, const WorldRenderFrame* frame);
+
+
+// WorldRendererGBuffer.c
+/** @brief Loads the G-buffer shaders (models, sprites) and the AO shader. */
+void WorldRendererGBuffer_LoadShaders(WorldRenderer* self);
+
+/** @brief Creates the G-buffer and AO targets for a scene of @p width x @p height (call with the scene target in
+ *  place). A failure is logged once and leaves the pass off. */
+void WorldRendererGBuffer_CreateTargets(WorldRenderer* self, int width, int height);
+
+/** @brief Unloads the G-buffer and AO targets. */
+void WorldRendererGBuffer_ReleaseTargets(WorldRenderer* self);
+
+/** @brief Draws the cached models and sprites passing the scene filter into the G-buffer (view normals + flag). */
+void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Runs the AO pre-pass from the G-buffer into the AO target, at frame->AoStrength. */
+void WorldRendererGBuffer_RenderAo(WorldRenderer* self, const WorldRenderFrame* frame);
+
+
+// WorldRendererSky.c
+/** @brief Loads the atmospheric sky shader (optional: the scene then clears to a CPU gradient colour). */
+void WorldRendererSky_LoadShader(WorldRenderer* self);
+
+/**
+ * @brief Draws the atmospheric sky as a full-screen pass into the bound scene target. Must run after the clear
+ *        and BEFORE the 3D geometry: it writes no depth, so the geometry draws over it.
+ */
+void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame);
+
+
+// WorldRendererPost.c
+/** @brief Loads the tonemap, bloom, sun-shaft and outline shaders. */
+void WorldRendererPost_LoadShaders(WorldRenderer* self);
+
+/** @brief Creates the outline, bloom and sun-shaft targets for a scene of @p width x @p height. A failure is
+ *  logged once and leaves that pass off. */
+void WorldRendererPost_CreateTargets(WorldRenderer* self, int width, int height);
+
+/** @brief Unloads the outline, bloom and sun-shaft targets. */
+void WorldRendererPost_ReleaseTargets(WorldRenderer* self);
+
+/** @brief Runs the outline pass from the scene colour + depth + G-buffer into the outline target. */
+void WorldRendererPost_RenderOutlines(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Bright-passes @p source into the bloom buffers and blurs it, leaving the bloom in the A buffer. */
+void WorldRendererPost_RenderBloom(WorldRenderer* self, RenderTexture2D source);
+
+/**
+ * @brief Projects the sun to screen UV for the sun shafts.
+ * @param frame The frame (camera matrices, sun direction).
+ * @param outUv [out] The sun's screen position in [0,1] UV (may lie a little outside the screen).
+ * @param outFade [out] A 0..1 weight fading the shafts out near the screen margin and the horizon.
+ * @returns false when the sun is too low, behind the camera or too far off-screen for shafts.
+ */
+bool WorldRendererPost_ComputeSunScreenUv(const WorldRenderFrame* frame, Vector2* outUv, float* outFade);
+
+/** @brief Radially blurs the unoccluded sky of @p source from frame->SunScreenUv into the sun-shaft buffer. */
+void WorldRendererPost_RenderSunshafts(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D source);
+
+/**
+ * @brief Blits @p source into @p target through the tonemap (exposure, bloom and sun shafts added in HDR),
+ *        point-upscaling and flipping it as render textures need.
+ */
+void WorldRendererPost_Tonemap(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D source,
+    RenderTexture2D target);
+
+
+// WorldRendererCrisp.c
+/** @brief Loads the crisp-composite shader (optional: flagged objects then render pixelated). */
+void WorldRendererCrisp_LoadShader(WorldRenderer* self);
+
+/** @brief Creates the window-resolution overlay target. A failure is logged once and leaves the overlay off. */
+void WorldRendererCrisp_CreateTargets(WorldRenderer* self, int windowWidth, int windowHeight);
+
+/** @brief Unloads the overlay target. */
+void WorldRendererCrisp_ReleaseTargets(WorldRenderer* self);
+
+/** @brief Draws the OmitPixelation models and sprites, lit, into the window-resolution overlay target. */
+void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Composites the overlay over @p target (which already holds the tonemapped pixelated frame),
+ *        tonemapped at frame->Exposure and depth-tested against the scene so occlusion stays correct.
+ */
+void WorldRendererCrisp_Composite(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D target);

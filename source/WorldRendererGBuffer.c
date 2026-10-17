@@ -1,0 +1,256 @@
+// The normal/flag G-buffer pass and the screen-space ambient-occlusion pre-pass.
+
+#include "WorldRendererInternal.h"
+#include "raylib/rlgl.h"
+
+
+// Macros.
+/** Asset name of the normal/mask G-buffer shader: writes a view-space normal (RGB) + surface/outline flag (A)
+ *  that the outline pass edge-detects and the AO pass reads. */
+#define NORMAL_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal")
+/** Asset name of the sprite normal/mask shader: writes sprites into the G-buffer with an alpha discard (so the
+ *  outline follows the sprite's shape, not its billboard rectangle) + a constant camera-facing normal. */
+#define NORMAL_SPRITE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal_sprite")
+/** Asset name of the ambient-occlusion pre-pass shader: computes SSAO from the G-buffer's depth + flag into an
+ *  AO-multiplier texture that the PBR scene pass applies to ONLY its ambient term. */
+#define AO_SHADER_ASSET_NAME ((const unsigned char*)u8"world_ao")
+
+
+// Static functions.
+/* Creates the normal/flag G-buffer target: an 8-bit RGBA colour texture + a SAMPLABLE depth texture (so the AO
+ * pre-pass can reconstruct view positions from it). Sets *outDepthSamplable true on success. Falls back to a
+ * plain LoadRenderTexture (renderbuffer depth, not samplable → AO disabled, outlines still work) if the
+ * samplable-depth framebuffer cannot be made complete. Returns a zero target only if even the fallback fails. */
+static RenderTexture2D TryCreateNormalTarget(int width, int height, bool* outDepthSamplable)
+{
+    *outDepthSamplable = false;
+
+    RenderTexture2D Target = { 0 };
+    Target.id = rlLoadFramebuffer();
+    if (Target.id != 0)
+    {
+        rlEnableFramebuffer(Target.id);
+
+        Target.texture.id = rlLoadTexture(NULL, width, height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1);
+        Target.texture.width = width;
+        Target.texture.height = height;
+        Target.texture.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+        Target.texture.mipmaps = 1;
+
+        Target.depth.id = rlLoadTextureDepth(width, height, false); // false => a samplable depth TEXTURE
+        Target.depth.width = width;
+        Target.depth.height = height;
+        Target.depth.format = SCENE_DEPTH_FORMAT;
+        Target.depth.mipmaps = 1;
+
+        rlFramebufferAttach(Target.id, Target.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
+        rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);
+
+        bool Complete = (Target.texture.id != 0) && rlFramebufferComplete(Target.id);
+        rlDisableFramebuffer();
+        if (Complete)
+        {
+            *outDepthSamplable = true;
+            return Target;
+        }
+        UnloadRenderTexture(Target);
+    }
+
+    // Fallback: a plain render texture (renderbuffer depth). Outlines still work (they read the SCENE depth);
+    // the AO pre-pass, which needs this target's depth samplable, stays off.
+    return LoadRenderTexture(width, height);
+}
+
+/* Draws the cached models (passing @p filter) into the G-buffer through the normal shader, setting the
+ * per-object outline flag uniform (1 when the object has outlines enabled, else 0) before each draw. The normal
+ * shader writes RGB=view-space normal, A=surface/outline flag (0.5 = surface, 1.0 = surface with outline);
+ * pixels the sky/grid leave untouched stay at the cleared 0 (not a surface). */
+static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter filter)
+{
+    Shader NormalShader = GameShader_GetRaylibShader(self->_gbuffer._shader);
+    size_t ModelCount = 0;
+    const WorldRenderModel* Models = WorldRenderCache_GetModels(&self->_cache, &ModelCount);
+    for (size_t Index = 0; Index < ModelCount; Index++)
+    {
+        const WorldRenderModel* Entry = &Models[Index];
+        if ((Entry->Asset == NULL) || !WorldRendererGeometry_PassesFilter(Entry->Object->OmitPixelation, filter))
+        {
+            continue;
+        }
+        float OutlineFlag = Entry->Object->HasOutline ? 1.0f : 0.0f;
+        SetShaderValue(NormalShader, self->_gbuffer._locOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
+        WorldRendererGeometry_DrawModel(self, Entry, &NormalShader, false);
+    }
+}
+
+/* Draws the cached sprites (passing @p filter) into the G-buffer through the sprite normal shader, so they get
+ * outlines too. It alpha-discards transparent texels (the outline hugs the sprite shape) and takes the per-sprite
+ * outline flag. No-op if the sprite normal shader is unavailable. Must run inside the G-buffer pass's BeginMode3D
+ * (colour blending disabled by the caller). */
+static void DrawNormalBufferSprites(WorldRenderer* self, const WorldRenderFrame* frame, WorldRendererPixelFilter filter)
+{
+    if (self->_gbuffer._spriteShader == NULL)
+    {
+        return;
+    }
+    Shader SpriteShader = GameShader_GetRaylibShader(self->_gbuffer._spriteShader);
+    BeginShaderMode(SpriteShader);
+
+    size_t SpriteCount = 0;
+    const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&self->_cache, &SpriteCount);
+    for (size_t Index = 0; Index < SpriteCount; Index++)
+    {
+        const WorldRenderSprite* Entry = &Sprites[Index];
+        if (!WorldRendererGeometry_PassesFilter(Entry->Object->OmitPixelation, filter))
+        {
+            continue;
+        }
+        // Billboards go through raylib's 2D batch, which draws at its next flush with the uniforms current then.
+        // Flush the previous sprite's quad before changing the flag, or every sprite gets the last sprite's flag.
+        rlDrawRenderBatchActive();
+        float OutlineFlag = Entry->Object->HasOutline ? 1.0f : 0.0f;
+        SetShaderValue(SpriteShader, self->_gbuffer._spriteLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
+        // Tint WHITE: the normal buffer only cares about the frame's ALPHA (for the discard), not its colour.
+        DrawBillboardRec(frame->RayCamera, Entry->Frame._texture, Entry->Frame._areaInTexture, Entry->Position,
+            Entry->Size, WHITE);
+    }
+
+    EndShaderMode();
+}
+
+
+// Internal functions (declared in WorldRendererInternal.h).
+void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
+{
+    // Sprite normal/mask shader. Optional: without it sprites are simply not drawn into the G-buffer, so they
+    // get no outlines.
+    self->_gbuffer._spriteShader = WorldRendererCommon_LoadShader(self, NORMAL_SPRITE_SHADER_ASSET_NAME);
+    if (self->_gbuffer._spriteShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_gbuffer._spriteShader);
+        self->_gbuffer._spriteLocOutlineFlag = GetShaderLocation(RayShader, "outlineFlag");
+    }
+
+    // Model normal/mask shader: without it neither outlines nor AO can run (both read the G-buffer).
+    self->_gbuffer._shader = WorldRendererCommon_LoadShader(self, NORMAL_SHADER_ASSET_NAME);
+    if (self->_gbuffer._shader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_gbuffer._shader);
+        self->_gbuffer._locOutlineFlag = GetShaderLocation(RayShader, "outlineFlag");
+    }
+
+    // AO pre-pass shader. Optional (without it, or without a samplable-depth G-buffer, AO is simply off).
+    self->_ao._shader = WorldRendererCommon_LoadShader(self, AO_SHADER_ASSET_NAME);
+    if (self->_ao._shader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_ao._shader);
+        self->_ao._locResolution = GetShaderLocation(RayShader, "resolution");
+        self->_ao._locInvProjection = GetShaderLocation(RayShader, "invProjection");
+        self->_ao._locProjection = GetShaderLocation(RayShader, "projection");
+        self->_ao._locDepthTexture = GetShaderLocation(RayShader, "depthTexture");
+        self->_ao._locNormalTexture = GetShaderLocation(RayShader, "normalTexture");
+        self->_ao._locStrength = GetShaderLocation(RayShader, "aoStrength");
+    }
+}
+
+void WorldRendererGBuffer_CreateTargets(WorldRenderer* self, int width, int height)
+{
+    // The G-buffer is read by BOTH the outline pass AND the AO pre-pass. 8-bit RGBA colour (encoded normal +
+    // flag, not HDR) + a SAMPLABLE depth texture so the AO pass can reconstruct view positions from it; its own
+    // depth also lets the nearest model's normal win per pixel. Made when its shader is present, the scene has
+    // samplable depth, and at least one consumer (outlines / AO) exists.
+    if ((self->_gbuffer._shader != NULL) && self->_scene._isDepthSamplable
+        && ((self->_outline._shader != NULL) || (self->_ao._shader != NULL)))
+    {
+        self->_gbuffer._target = TryCreateNormalTarget(width, height, &self->_gbuffer._isDepthSamplable);
+        self->_gbuffer._hasTarget = (self->_gbuffer._target.id != 0);
+        if (!self->_gbuffer._hasTarget)
+        {
+            WorldRendererCommon_WarnOnce(self, &self->_gbuffer._isTargetFailureReported, (const unsigned char*)
+                u8"WorldRenderer: could not create the normal G-buffer; outlines and AO are off.");
+        }
+        else
+        {
+            SetTextureFilter(self->_gbuffer._target.texture, TEXTURE_FILTER_POINT);
+            if (self->_gbuffer._isDepthSamplable)
+            {
+                SetTextureFilter(self->_gbuffer._target.depth, TEXTURE_FILTER_POINT);
+            }
+            else if (self->_ao._shader != NULL)
+            {
+                WorldRendererCommon_WarnOnce(self, &self->_ao._isTargetFailureReported, (const unsigned char*)
+                    u8"WorldRenderer: the normal G-buffer has no samplable depth on this GPU; AO is off.");
+            }
+        }
+    }
+
+    // AO-multiplier target (8-bit, low-res, BILINEAR so the PBR ambient reads a smooth AO term). Only when the
+    // AO shader is present and the G-buffer carries samplable depth for the AO pass to read.
+    if ((self->_ao._shader != NULL) && self->_gbuffer._hasTarget && self->_gbuffer._isDepthSamplable)
+    {
+        self->_ao._target = LoadRenderTexture(width, height);
+        self->_ao._hasTarget = (self->_ao._target.id != 0);
+        if (self->_ao._hasTarget)
+        {
+            SetTextureFilter(self->_ao._target.texture, TEXTURE_FILTER_BILINEAR);
+        }
+        else
+        {
+            WorldRendererCommon_WarnOnce(self, &self->_ao._isTargetFailureReported,
+                (const unsigned char*)u8"WorldRenderer: could not create the AO target; AO is off.");
+        }
+    }
+}
+
+void WorldRendererGBuffer_ReleaseTargets(WorldRenderer* self)
+{
+    WorldRendererCommon_UnloadTarget(&self->_gbuffer._target, &self->_gbuffer._hasTarget);
+    self->_gbuffer._isDepthSamplable = false;
+    WorldRendererCommon_UnloadTarget(&self->_ao._target, &self->_ao._hasTarget);
+}
+
+/* Uses its own depth (the nearest model's normal wins; the debug grid is intentionally not drawn here so it never
+ * gets outlined). Colour blending is DISABLED so the encoded normal (RGB) and the flag (A, which is 0.5 for
+ * non-outline surfaces) are written verbatim — with blending on, an alpha of 0.5 would blend the normal with the
+ * cleared background and corrupt it. */
+void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    BeginTextureMode(self->_gbuffer._target);
+    ClearBackground(BLANK); // RGBA (0,0,0,0): A=0 = "not a surface" everywhere the geometry does not draw
+    rlDisableColorBlend();  // write RGB (normal) + A (flag) directly; no alpha blend
+    BeginMode3D(frame->RayCamera);
+    DrawNormalBufferModels(self, frame->SceneFilter);
+    // Sprites into the same G-buffer (alpha-discarded) so they get silhouette outlines too.
+    DrawNormalBufferSprites(self, frame, frame->SceneFilter);
+    EndMode3D();
+    rlEnableColorBlend();   // restore the default blending for the following 2D passes
+    EndTextureMode();
+}
+
+/* Runs BEFORE the scene colour pass: SSAO from the G-buffer's samplable depth + surface flag into the AO target
+ * (an AO multiplier in R), which the PBR scene pass samples to darken ONLY its ambient term. Uses the scene's
+ * projection to reconstruct view positions. Opens/closes its own passes. */
+void WorldRendererGBuffer_RenderAo(WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    Shader RayShader = GameShader_GetRaylibShader(self->_ao._shader);
+    float Resolution[2] = { (float)frame->SceneWidth, (float)frame->SceneHeight };
+    float Strength = frame->AoStrength;
+
+    BeginTextureMode(self->_ao._target);
+    ClearBackground(WHITE); // AO multiplier 1 (fully open) wherever nothing draws / no occlusion
+    SetShaderValue(RayShader, self->_ao._locResolution, Resolution, SHADER_UNIFORM_VEC2);
+    SetShaderValueMatrix(RayShader, self->_ao._locProjection, frame->Projection);
+    SetShaderValueMatrix(RayShader, self->_ao._locInvProjection, frame->InvProjection);
+    SetShaderValue(RayShader, self->_ao._locStrength, &Strength, SHADER_UNIFORM_FLOAT);
+    BeginShaderMode(RayShader);
+    // Bind the G-buffer's depth (unit 1) + colour/flag (unit 2) via SetShaderValueTexture AFTER BeginShaderMode
+    // so they enter Raylib's 2D batch texture table (a manual slot bind would leave the samplers on unit 0).
+    SetShaderValueTexture(RayShader, self->_ao._locDepthTexture, self->_gbuffer._target.depth);
+    SetShaderValueTexture(RayShader, self->_ao._locNormalTexture, self->_gbuffer._target.texture);
+    Rectangle Source = { 0.0f, 0.0f, (float)self->_gbuffer._target.texture.width,
+        (float)self->_gbuffer._target.texture.height };
+    Rectangle Destination = { 0.0f, 0.0f, (float)frame->SceneWidth, (float)frame->SceneHeight };
+    DrawTexturePro(self->_gbuffer._target.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
+    EndShaderMode();
+    EndTextureMode();
+}
