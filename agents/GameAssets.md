@@ -109,7 +109,8 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   semantics), and a skipped repeat becomes an empty line, so `1(27)` / `1:27(26)` in the compiler output means line 27
   of file 1. When such a stage fails to compile, the load error lists which number is which file. A missing include
   fails with `ErrorCode_InvalidAssetData` naming the include, the including file and the line (cached like every
-  failure). Shared files today: `common/math` (`PI`) and `common/atmosphere` (the sky and the PBR fog share it).
+  failure). Shared files today: `common/math` (`PI`), `common/atmosphere` (the sky and the PBR fog share it) and
+  `common/night_sky` (air mass, extinction, the skyglow profile: the sky, the stars and the PBR fog).
 - Uniform values live in the GL program, which every holder shares: set the values you rely on before each use.
   Don't write into `locs`: copy the table if you need different entries (the WorldRenderer keeps its own copy for
   `world_pbr`, `_pbr._locs`, with the material map samplers patched).
@@ -141,4 +142,5 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   own mip levels fails the load: raylib would count a mip chain the GPU never built), then the wrap mode, then the
   filter (last, because raylib picks the mipmapped GL filter from the mip count). Unloaded with `UnloadTexture`.
 - Shipped: `sky_milky_way` (`textures/sky/milky_way.json`), a generated placeholder panorama
-  (`placeholder_milky_way.png`, 1024x512, trilinear, mipmaps) until the owner's art replaces it (T02 uses it).
+  (`placeholder_milky_way.png`, 1024x512, trilinear, mipmaps) until the owner's art replaces it; the sky pass draws it
+  ([WorldRuntime.md](WorldRuntime.md), "Night sky").

@@ -72,10 +72,18 @@ an owned name, an embedded `WorldEnvironment`, and (optionally) a borrowed asset
 
 ## Environment
 
-`WorldEnvironment` is a value type with the sky, sun, day-night, star, ambient, fog and effect settings. Its field
-comments state each value's rule; `WorldEnvironment_Validate` enforces them (finite, `TimeOfDay` in [0, 1],
-`DayLengthSeconds` and `SunSizeMultiplier` > 0, every strength/intensity/density >= 0) and names the first broken
-field. Validate anything that came from outside the program before using it. Copy with
+`WorldEnvironment` is a value type with the sky, sun, day-night, night sky, ambient, fog and effect settings. Its field
+comments state each value's rule; `WorldEnvironment_Validate` enforces them (finite, `TimeOfDay`, `LightPollution` and
+`StarTwinkle` in [0, 1], `DayLengthSeconds` and `SunSizeMultiplier` > 0, every strength/intensity/density/brightness
+>= 0) and names the first broken field.
+
+The night sky settings: `StarSeed` (which stars), `StarDensity` (1 = an Earth-like sky of about 9000 stars, the
+default; 0 none; at most 20000 stars), `StarBrightness`, `StarTwinkle` (0..1, default 0.25), `MilkyWayBrightness`
+(default 1), `LightPollution` (0 = a dark site .. 1 = a city centre, default 0.35, a small town) and
+`LightPollutionColor` (sodium orange by default). `WorldEnvironment_GetCelestialToWorld` is the sky's rotation for the
+time of day (the sun is the celestial point (1,0,0); the pole above the horizon stays at world
+(0, sin SunAngle, -cos SunAngle)); the renderer turns the stars and the Milky Way with it
+([WorldRuntime.md](WorldRuntime.md), "Night sky"). Validate anything that came from outside the program before using it. Copy with
 `WorldEnvironment_CopyTo`, never by assignment, so a future owned field cannot turn copies into double frees.
 `WorldEnvironment_Advance` ignores negative or non-finite steps and any step whose result would not be finite, so
 nothing can leave the time of day NaN.
@@ -92,8 +100,8 @@ them with their saved ids and validating transforms as it goes; sprites are boun
 `WorldEncoder_EncodeToCompound` turns a `WorldDTO` into a `GHDFCompound` tree (root + environment
 sub-compound + array of object compounds), borrowing all compounds/arrays/strings from a caller-owned
 `GHDFObjectPool`. It does **not** write bytes. The stable numeric entry ids ARE the save schema; they live
-as `WorldEncoder*Field` enums in `WorldEncoder.h` (`WORLD_ENCODER_FORMAT_VERSION` = 1). Colors are stored
-as `uint8[4]` RGBA arrays, vectors as `float[3]` arrays.
+as `WorldEncoder*Field` enums in `WorldEncoder.h` (`WORLD_ENCODER_FORMAT_VERSION` = 1; the environment's ids run to 29,
+the night sky's newest being 26-29). Colors are stored as `uint8[4]` RGBA arrays, vectors as `float[3]` arrays.
 
 Ownership note for the encoder: `GHDFCompound_SetValue` / `GHDFArray_AddValue` ADOPT the borrowed
 sub-resource, so on success it is never returned separately; on any failure the whole root is returned to
@@ -107,6 +115,6 @@ from property descriptors.
 ## Tests
 
 `tests/WorldTests.c` (object set, sprite binding and release, renames, guards), `tests/WorldEnvironmentTests.c`
-(validation, copying, advance) and `tests/WorldDTOTests.c` (World → DTO → World round trip of every persisted
+(validation, copying, advance, the celestial frame) and `tests/WorldDTOTests.c` (World → DTO → World round trip of every persisted
 field, bad-environment rejection). They run headless with `sh tests/run_linux.sh`; `tests/TestAssets.h`
 provides code-built sprite animation and model definitions that load without files or a GL context.

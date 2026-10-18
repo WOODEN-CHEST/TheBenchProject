@@ -70,7 +70,11 @@ typedef enum WorldEncoderEnvironmentFieldEnum
     WorldEncoderEnvironmentField_ShadowStrength = 22,       /**< @brief float shadow strength. */
     WorldEncoderEnvironmentField_SunAngle = 23,            /**< @brief float sun-arc tilt from zenith at noon (radians). */
     WorldEncoderEnvironmentField_IsAmbientOcclusionEnabled = 24, /**< @brief bool ambient occlusion enabled. */
-    WorldEncoderEnvironmentField_AmbientOcclusionStrength = 25  /**< @brief float ambient occlusion strength. */
+    WorldEncoderEnvironmentField_AmbientOcclusionStrength = 25, /**< @brief float ambient occlusion strength. */
+    WorldEncoderEnvironmentField_LightPollution = 26,       /**< @brief float light pollution [0;1]. */
+    WorldEncoderEnvironmentField_LightPollutionColor = 27,  /**< @brief uint8[4] RGBA light-pollution glow colour. */
+    WorldEncoderEnvironmentField_MilkyWayBrightness = 28,   /**< @brief float Milky Way brightness multiplier. */
+    WorldEncoderEnvironmentField_StarTwinkle = 29           /**< @brief float star twinkle strength [0;1]. */
 } WorldEncoderEnvironmentField;
 
 /**

@@ -1,0 +1,5 @@
+{
+    "name": "world_stars",
+    "vertex_location": "stars/vertex",
+    "fragment_location": "stars/fragment"
+}

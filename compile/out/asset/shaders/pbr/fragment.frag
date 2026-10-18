@@ -79,6 +79,7 @@ uniform float fogDensity;
 uniform float skyTurbidity;     // atmospheric haze; == WorldEnvironment.SkyTurbidity (same value the sky pass gets)
 uniform vec3  skyTint;          // linear sky tint multiplier (same value the sky pass gets)
 uniform float skySunIntensity;  // RAW sun intensity (NOT day-scaled); == WorldEnvironment.SunIntensity
+uniform vec3  skyglowRadiance;  // light pollution's glow at the horizon, linear (same value the sky pass gets)
 
 out vec4 finalColor;
 
@@ -186,9 +187,11 @@ float ComputeShadow(vec3 worldPos, float nDotL)
 // The sky pass's Rayleigh+Mie single-scattering sky, WITHOUT the sun disc and stars (distant terrain should fade
 // to the sky's colour, not sprout a second sun or stars).
 #include "common/atmosphere"
+#include "common/night_sky"
 
-// The sky colour along a world-space view ray (the sky pass's result minus the sun disc + stars). This is the
-// colour distant fogged geometry fades toward, so it matches the visible sky in that direction.
+// The sky colour along a world-space view ray (the sky pass's result minus the sun disc, the Milky Way and the stars,
+// but with light pollution's skyglow). This is the colour distant fogged geometry fades toward, so it matches the
+// visible sky in that direction.
 vec3 fogSkyColor(vec3 rayDir)
 {
     vec3 rayOrigin = vec3(0.0, ATMOSPHERE_R_PLANET + 1.0, 0.0);
@@ -199,6 +202,7 @@ vec3 fogSkyColor(vec3 rayDir)
     // Mirror the ray into the upper hemisphere and darken below the horizon, exactly like the sky pass's main.
     vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
     vec3 sky = atmosphere(skyRay, rayOrigin, sunDir, iSun, kMie);
+    sky += nightSkySkyglow(skyRay.y, skyglowRadiance);
     float belowFactor = smoothstep(0.0, -0.12, rayDir.y);
     sky *= mix(1.0, 0.5, belowFactor);
     sky *= max(skyTint, vec3(0.0));

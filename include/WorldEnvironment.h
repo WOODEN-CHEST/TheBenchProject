@@ -11,7 +11,8 @@
  * @brief Per-world, player-editable environment and graphics settings (persisted with the world).
  *
  * A world carries an environment: the settings that let each player-authored world look different — the
- * physically based sky and sun, the day-night cycle, the night star field, fog, and the world-side
+ * physically based sky and sun, the day-night cycle, the night sky (stars, Milky Way, light pollution), fog, and the
+ * world-side
  * multipliers for the post effects (bloom, sunshafts, shadows) that combine with the game config's
  * multipliers. These are DATA ONLY; the world renderer reads them, but this module has no rendering
  * logic and no dependency on the renderer.
@@ -70,13 +71,24 @@ typedef struct WorldEnvironmentStruct
     /** @brief Multiplier on the sun disc's apparent angular size. Finite and > 0. */
     float SunSizeMultiplier;
 
-    // ---- Night stars (consistent positions from a seed) ----
-    /** @brief Seed used to place the (consistent) night star field; the same seed gives the same stars. */
+    // ---- Night sky: stars, Milky Way, light pollution ----
+    /** @brief Seed of the generated star catalogue; the same seed gives the same stars. */
     uint64_t StarSeed;
-    /** @brief Relative density of stars in the night sky. Finite and >= 0. */
+    /** @brief How many stars the sky has, relative to an Earth-like sky: 1 gives about 9000 stars (what the naked eye
+     *  sees from a dark site), 0 none; the catalogue is capped at 20000 stars. Finite and >= 0. */
     float StarDensity;
-    /** @brief Brightness multiplier for stars. Finite and >= 0. */
+    /** @brief Brightness multiplier for stars (1 = their natural brightness). Finite and >= 0. */
     float StarBrightness;
+    /** @brief How strongly stars twinkle, 0 (steady) to 1; they twinkle more near the horizon. Finite and in [0, 1]. */
+    float StarTwinkle;
+    /** @brief Brightness multiplier for the Milky Way (1 = natural). Finite and >= 0. */
+    float MilkyWayBrightness;
+    /** @brief Light pollution from nearby towns, 0 (a dark site) to 1 (a city centre). It hides faint stars (at 1 only
+     *  the brightest few remain), washes out the Milky Way, adds a glow near the horizon at night and brightens the
+     *  night ambient a little. Finite and in [0, 1]. */
+    float LightPollution;
+    /** @brief Colour of the light-pollution glow (sodium orange by default). Alpha ignored. */
+    Color LightPollutionColor;
 
     // ---- Ambient / skylight ----
     /** @brief Tint on the ambient skylight applied to shaded surfaces. The renderer picks the ambient HUE from
@@ -171,6 +183,20 @@ void WorldEnvironment_Deconstruct(WorldEnvironment* self);
  * @returns The normalized direction to the sun.
  */
 Vector3 WorldEnvironment_GetSunDirection(const WorldEnvironment* self);
+
+/**
+ * @brief Returns the rotation from the celestial frame into the world for the current time of day.
+ *
+ * The celestial frame turns with the sky: the sun sits at its point (1,0,0) (so this matrix applied to (1,0,0) equals
+ * WorldEnvironment_GetSunDirection), and the daily rotation turns it around its z axis. SunAngle acts as the latitude:
+ * the celestial pole above the horizon is -z, which lies at world (0, sin SunAngle, -cos SunAngle) at every time of
+ * day, so the sky turns around a fixed point that low over the horizon toward -Z. Stars and other objects fixed among
+ * the stars are placed in this frame and turned into the world with this matrix once per frame.
+ * The matrix is R_x(SunAngle) . R_z((TimeOfDay - 0.25) . 2pi), in raymath's convention (Vector3Transform applies it).
+ * @param self The environment; must not be NULL.
+ * @returns The celestial-to-world rotation (orthonormal, no translation).
+ */
+Matrix WorldEnvironment_GetCelestialToWorld(const WorldEnvironment* self);
 
 /**
  * @brief Returns how much of the sun's light reaches the world right now: 1 in full day, 0 at night.

@@ -192,7 +192,15 @@ static Error EncodeEnvironment(GHDFObjectPool* pool, GHDFCompound* compound, con
     if (Result.Code != ErrorCode_Success) { return Result; }
     Result = PutBool(compound, WorldEncoderEnvironmentField_IsAmbientOcclusionEnabled, environment->IsAmbientOcclusionEnabled);
     if (Result.Code != ErrorCode_Success) { return Result; }
-    return PutFloat(compound, WorldEncoderEnvironmentField_AmbientOcclusionStrength, environment->AmbientOcclusionStrength);
+    Result = PutFloat(compound, WorldEncoderEnvironmentField_AmbientOcclusionStrength, environment->AmbientOcclusionStrength);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    Result = PutFloat(compound, WorldEncoderEnvironmentField_LightPollution, environment->LightPollution);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    Result = PutColor(pool, compound, WorldEncoderEnvironmentField_LightPollutionColor, environment->LightPollutionColor);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    Result = PutFloat(compound, WorldEncoderEnvironmentField_MilkyWayBrightness, environment->MilkyWayBrightness);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    return PutFloat(compound, WorldEncoderEnvironmentField_StarTwinkle, environment->StarTwinkle);
 }
 
 static Error EncodeObject(GHDFObjectPool* pool, GHDFCompound* compound, const WorldObjectDTO* record)

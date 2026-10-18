@@ -55,6 +55,8 @@
 #define TEST_SUN_ANGLE 0.4f
 /** Manual time-of-day scrub rate (fraction of a full day per second while [ or ] is held). */
 #define TIME_SCRUB_RATE 0.1f
+/** How far above the current light pollution the N key's next step must be (so 0.35 steps on to 0.7). */
+#define LIGHT_POLLUTION_STEP_EPSILON 0.001f
 /** Default font of the text sample: covers Latvian and Cyrillic. */
 #define TEXT_SAMPLE_FONT_NAME ((const unsigned char*)u8"noto_sans")
 /** Top-left corner of the text sample, in normalized-fitted units. */
@@ -111,9 +113,25 @@ typedef struct WorldTestFrameStruct
 
 // Static functions: the world-up direction for vertical movement.
 static const Vector3 FrameWorldUp = { .x = 0.0f, .y = 1.0f, .z = 0.0f };
+/* The light pollution steps the N key cycles through: a dark site, a small town (the default), a suburb, a city. */
+static const float LightPollutionSteps[] = { 0.0f, 0.35f, 0.7f, 1.0f };
 
 
 // Static functions: helpers.
+/* The next light pollution step above @p current, wrapping to the first. */
+static float NextLightPollutionStep(float current)
+{
+    size_t StepCount = sizeof(LightPollutionSteps) / sizeof(LightPollutionSteps[0]);
+    for (size_t Index = 0U; Index < StepCount; Index++)
+    {
+        if (LightPollutionSteps[Index] > (current + LIGHT_POLLUTION_STEP_EPSILON))
+        {
+            return LightPollutionSteps[Index];
+        }
+    }
+    return LightPollutionSteps[0];
+}
+
 /* Logs a time-of-day change (label + the current TimeOfDay), so debug scrubbing is observable. */
 static void LogTimeOfDay(WorldTestFrame* frame, const unsigned char* label, const WorldEnvironment* environment)
 {
@@ -199,6 +217,19 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, const GameInput* input, 
         {
             Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
                 (const unsigned char*)u8"WorldTest: crisp overlay %s.", Enabled ? "ON" : "OFF");
+            Error_Deconstruct(&LogResult);
+        }
+    }
+
+    // N cycles the light pollution: 0 shows many faint stars and a bright Milky Way, 1 only a few bright stars, no
+    // Milky Way and an orange glow along the horizon (look at night: 4, then P to let time run).
+    if (GameInput_IsKeyPressed(input, GameKey_N))
+    {
+        Environment->LightPollution = NextLightPollutionStep(Environment->LightPollution);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: light pollution %.2f.", (double)Environment->LightPollution);
             Error_Deconstruct(&LogResult);
         }
     }

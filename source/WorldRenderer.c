@@ -6,6 +6,7 @@
 #include <math.h>
 #include "WorldRendererInternal.h"
 #include "WorldLightCulling.h"
+#include "NightSky.h"
 #include "Logger.h"
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
@@ -25,6 +26,9 @@
 #define INITIAL_FORWARD_LIGHT_CAPACITY 32
 /** Initial capacity (in bytes) of the status log line. */
 #define STATUS_LINE_CAPACITY 256
+/** The render clock (WorldRenderFrame.TimeSeconds) wraps after this many seconds, so a float still resolves
+ *  milliseconds. */
+#define RENDER_TIME_WRAP_SECONDS 3600.0
 
 
 // Static functions.
@@ -44,7 +48,8 @@ static void EnsureShaders(WorldRenderer* self)
     WorldRendererGeometry_LoadShaders(self);
     WorldRendererGBuffer_LoadShaders(self);
     WorldRendererShadows_LoadShaders(self);
-    WorldRendererSky_LoadShader(self);
+    WorldRendererSky_LoadAssets(self);
+    WorldRendererStars_LoadShader(self);
 }
 
 // What each optional feature needs to be able to run at all (its shaders and targets), independent of whether it
@@ -89,6 +94,27 @@ static bool IsCrispAvailable(const WorldRenderer* self)
         && self->_scene._isDepthSamplable;
 }
 
+static bool AreStarsAvailable(const WorldRenderer* self)
+{
+    return self->_stars._shader != NULL;
+}
+
+static bool IsMilkyWayAvailable(const WorldRenderer* self)
+{
+    return (self->_sky._shader != NULL) && (self->_sky._milkyWay != NULL);
+}
+
+/* Advances the render clock behind WorldRenderFrame.TimeSeconds, wrapping it every RENDER_TIME_WRAP_SECONDS. A zero,
+ * negative or non-finite delta holds it. */
+static void AdvanceRenderTime(WorldRenderer* self, double deltaSeconds)
+{
+    if (!isfinite(deltaSeconds) || (deltaSeconds <= 0.0))
+    {
+        return;
+    }
+    self->_renderTimeSeconds = fmod(self->_renderTimeSeconds + deltaSeconds, RENDER_TIME_WRAP_SECONDS);
+}
+
 /* Fills the frame's world, camera and sun fields and the scene matrices: the projection BeginMode3D builds for
  * the scene target (the camera's vertical FOV, the scene aspect and raylib's cull distances), so every pass that
  * reconstructs positions from depth, or rays from pixels, matches the geometry exactly. */
@@ -102,6 +128,8 @@ static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera
     outFrame->RayCamera = GameCamera_ToRaylibCamera(camera);
     outFrame->SunDirection = WorldEnvironment_GetSunDirection(outFrame->Environment);
     outFrame->Daylight = WorldEnvironment_GetDaylightFactor(outFrame->Environment);
+    outFrame->CelestialToWorld = WorldEnvironment_GetCelestialToWorld(outFrame->Environment);
+    outFrame->TimeSeconds = (float)self->_renderTimeSeconds;
     outFrame->WindowWidth = target.texture.width;
     outFrame->WindowHeight = target.texture.height;
     outFrame->SceneWidth = self->_scene._width;
@@ -114,7 +142,8 @@ static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera
     outFrame->Projection = MatrixPerspective((double)outFrame->RayCamera.fovy * DEG2RAD, Aspect, SCENE_NEAR_PLANE,
         SCENE_FAR_PLANE);
     outFrame->InvProjection = MatrixInvert(outFrame->Projection);
-    outFrame->InvViewProjection = MatrixInvert(MatrixMultiply(outFrame->View, outFrame->Projection));
+    outFrame->ViewProjection = MatrixMultiply(outFrame->View, outFrame->Projection);
+    outFrame->InvViewProjection = MatrixInvert(outFrame->ViewProjection);
 }
 
 /* Decides which optional passes run this frame and with what strength: each needs to be available (its shaders
@@ -167,6 +196,12 @@ static void DecidePasses(WorldRenderer* self, WorldRenderFrame* frame)
     frame->AreSunshaftsActive = (SunshaftStrength > 0.0f) && AreSunshaftsAvailable(self)
         && WorldRendererPost_ComputeSunScreenUv(frame, &frame->SunScreenUv, &SunshaftFade);
     frame->SunshaftStrength = frame->AreSunshaftsActive ? (SunshaftStrength * SunshaftFade) : 0.0f;
+
+    // The night sky (needs WorldRendererSky_PrepareFrame first): stars while some star is bright enough for the
+    // twilight and the light pollution, the Milky Way while any of it shows.
+    frame->AreStarsActive = AreStarsAvailable(self) && self->_stars._hasMesh
+        && (frame->LimitingMagnitude > NIGHT_SKY_BRIGHTEST_MAGNITUDE);
+    frame->IsMilkyWayActive = IsMilkyWayAvailable(self) && (frame->MilkyWayRadiance > 0.0f);
 }
 
 /* A feature's state from what it needs (availability) and whether it ran. */
@@ -202,6 +237,9 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->Features[WorldRendererFeature_Bloom] = StateOf(IsBloomAvailable(self), frame->IsBloomActive);
     Status->Features[WorldRendererFeature_Sunshafts] = StateOf(AreSunshaftsAvailable(self), frame->AreSunshaftsActive);
     Status->Features[WorldRendererFeature_CrispOverlay] = StateOf(IsCrispAvailable(self), frame->IsCrispActive);
+    Status->Features[WorldRendererFeature_Stars] = StateOf(AreStarsAvailable(self), frame->AreStarsActive);
+    Status->Features[WorldRendererFeature_MilkyWay] = StateOf(IsMilkyWayAvailable(self), frame->IsMilkyWayActive);
+    Status->StarCount = self->_stars._starCount;
 
     size_t ModelCount = 0;
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&self->_cache, &ModelCount);
@@ -314,6 +352,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
 
     WorldRendererScene_ReleaseTargets(self);
     WorldRendererShadows_Unload(self);
+    WorldRendererStars_Unload(self);
 
     // The cache's asset pointers die with the model user, so the cache goes first.
     WorldRenderCache_Deconstruct(&self->_cache);
@@ -394,8 +433,12 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
         return TargetResult;
     }
 
+    AdvanceRenderTime(self, deltaSeconds);
     WorldRenderFrame Frame;
     BuildFrame(self, world, camera, target, &Frame);
+    // The star catalogue follows the world's seed and density (rebuilt only when they change).
+    WorldRendererStars_SyncCatalogue(self, Frame.Environment);
+    WorldRendererSky_PrepareFrame(&Frame);
     DecidePasses(self, &Frame);
     WorldRendererLighting_PrepareFrame(self, &Frame);
 
@@ -483,6 +526,8 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_Bloom:            return (const unsigned char*)u8"bloom";
         case WorldRendererFeature_Sunshafts:        return (const unsigned char*)u8"sun shafts";
         case WorldRendererFeature_CrispOverlay:     return (const unsigned char*)u8"crisp overlay";
+        case WorldRendererFeature_Stars:            return (const unsigned char*)u8"stars";
+        case WorldRendererFeature_MilkyWay:         return (const unsigned char*)u8"Milky Way";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -509,9 +554,10 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
         : (Status->IsSceneDepthSamplable ? "HDR with samplable depth" : "HDR without samplable depth");
     Error LogResult = Logger_LogInfoFormatted(self->_logger,
         (const unsigned char*)u8"WorldRenderer: %s scene; %" PRIu64 u8" models (%" PRIu64 u8" without a model), %"
-        PRIu64 u8" sprites, %" PRIu64 u8" lights; %s.",
+        PRIu64 u8" sprites, %" PRIu64 u8" lights, %" PRIu64 u8" stars; %s.",
         Tier, (uint64_t)Status->ModelCount, (uint64_t)Status->ModelWithoutAssetCount, (uint64_t)Status->SpriteCount,
-        (uint64_t)Status->LightCount, IsBuilt ? (const char*)Lists._data : "feature list unavailable");
+        (uint64_t)Status->LightCount, (uint64_t)Status->StarCount,
+        IsBuilt ? (const char*)Lists._data : "feature list unavailable");
     Error_Deconstruct(&LogResult);
     Memory_Free(Lists._data);
 }

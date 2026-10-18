@@ -2,6 +2,7 @@
 #include <math.h>
 #include "WorldEnvironment.h"
 #include "WorldShared.h"
+#include "raylib/raymath.h"
 #include "wr/WRCompile.h"
 
 
@@ -18,10 +19,16 @@
 #define DEFAULT_SUN_INTENSITY 1.0f
 /** Default sun disc size multiplier. */
 #define DEFAULT_SUN_SIZE_MULTIPLIER 1.0f
-/** Default star field density. */
-#define DEFAULT_STAR_DENSITY 0.1f
+/** Default star density: 1 is an Earth-like sky (about 9000 stars, the naked-eye count from a dark site). */
+#define DEFAULT_STAR_DENSITY 1.0f
 /** Default star brightness multiplier. */
 #define DEFAULT_STAR_BRIGHTNESS 1.0f
+/** Default star twinkle strength (gentle). */
+#define DEFAULT_STAR_TWINKLE 0.25f
+/** Default Milky Way brightness multiplier. */
+#define DEFAULT_MILKY_WAY_BRIGHTNESS 1.0f
+/** Default light pollution: a small town nearby. */
+#define DEFAULT_LIGHT_POLLUTION 0.35f
 /** Default ambient skylight intensity multiplier. */
 #define DEFAULT_AMBIENT_INTENSITY 1.0f
 /** Default fog strength multiplier. */
@@ -69,6 +76,10 @@ void WorldEnvironment_SetDefaults(WorldEnvironment* self)
     self->StarSeed = 0;
     self->StarDensity = DEFAULT_STAR_DENSITY;
     self->StarBrightness = DEFAULT_STAR_BRIGHTNESS;
+    self->StarTwinkle = DEFAULT_STAR_TWINKLE;
+    self->MilkyWayBrightness = DEFAULT_MILKY_WAY_BRIGHTNESS;
+    self->LightPollution = DEFAULT_LIGHT_POLLUTION;
+    self->LightPollutionColor = (Color){ .r = 255, .g = 160, .b = 90, .a = 255 }; // sodium street lamps
 
     // Neutral (white) by default: the renderer derives the ambient HUE from the sky colour, so this acts as a
     // tint on top of it (white = pure sky-driven ambient). A world can push it to warm/cool its fill light.
@@ -107,6 +118,16 @@ Error WorldEnvironment_Validate(const WorldEnvironment* self)
     {
         return Error_Construct2(ErrorCode_ArgumentOutOfRange, "WorldEnvironment: SunAngle must be finite.");
     }
+    if (!WorldShared_IsFloatFinite(self->StarTwinkle) || (self->StarTwinkle < 0.0f) || (self->StarTwinkle > 1.0f))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
+            "WorldEnvironment: StarTwinkle must be finite and in [0, 1].");
+    }
+    if (!WorldShared_IsFloatFinite(self->LightPollution) || (self->LightPollution < 0.0f) || (self->LightPollution > 1.0f))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
+            "WorldEnvironment: LightPollution must be finite and in [0, 1].");
+    }
 
     // Every other float has a lower bound: a minimum, or a strict minimum where 0 itself breaks the maths.
     const FloatRule Rules[] =
@@ -117,6 +138,7 @@ Error WorldEnvironment_Validate(const WorldEnvironment* self)
         { "SunSizeMultiplier", self->SunSizeMultiplier, true },
         { "StarDensity", self->StarDensity, false },
         { "StarBrightness", self->StarBrightness, false },
+        { "MilkyWayBrightness", self->MilkyWayBrightness, false },
         { "AmbientSkylightIntensity", self->AmbientSkylightIntensity, false },
         { "FogStrength", self->FogStrength, false },
         { "BloomStrength", self->BloomStrength, false },
@@ -212,6 +234,16 @@ Vector3 WorldEnvironment_GetSunDirection(const WorldEnvironment* self)
         .y = BaseY * cosf(Tilt),
         .z = BaseY * sinf(Tilt)
     };
+}
+
+Matrix WorldEnvironment_GetCelestialToWorld(const WorldEnvironment* self)
+{
+    // The same angle as GetSunDirection: R_z turns the sky through the day, R_x tilts its pole down to SunAngle.
+    // raymath's MatrixMultiply(a, b) applies a first, so this is R_x(SunAngle) . R_z(Angle).
+    // TODO: the stars should also drift about 1 degree a day against the sun (sidereal time), which needs the
+    // in-game date: T03 adds it once the game clock and calendar (T23) exist.
+    float Angle = (self->TimeOfDay - 0.25f) * 2.0f * ENVIRONMENT_PI;
+    return MatrixMultiply(MatrixRotateZ(Angle), MatrixRotateX(self->SunAngle));
 }
 
 float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self)

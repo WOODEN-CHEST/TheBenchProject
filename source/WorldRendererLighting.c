@@ -30,6 +30,10 @@
 #define NIGHT_AMBIENT_R 0.004f
 #define NIGHT_AMBIENT_G 0.005f
 #define NIGHT_AMBIENT_B 0.011f
+/** Light pollution's share of the night ambient: at LightPollution 1 the night floor gains this much of the (linear)
+ *  LightPollutionColor, so towns light the night a little in their glow's colour. The NIGHT_AMBIENT_* floor above
+ *  stays the look of a dark site (LightPollution 0). */
+#define NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE 0.004f
 /** Overall scale on the daytime ambient skylight (before the night floor). Tempers the fill-light magnitude so
  *  daytime sits at a natural level; the day/night fade and the warm twilight tint are applied on top. */
 #define AMBIENT_SKY_STRENGTH 0.85f
@@ -149,6 +153,7 @@ static void CacheLocations(WorldRendererPbrState* pbr, Shader shader)
     pbr->_locFogTurbidity = GetShaderLocation(shader, "skyTurbidity");
     pbr->_locFogSkyTint = GetShaderLocation(shader, "skyTint");
     pbr->_locFogSunIntensity = GetShaderLocation(shader, "skySunIntensity");
+    pbr->_locFogSkyglow = GetShaderLocation(shader, "skyglowRadiance");
 
     // Per-material scalar-factor + map-presence uniforms, uploaded per material by the mesh draw loop.
     pbr->_locMetallic = GetShaderLocation(shader, "metallic");
@@ -174,7 +179,8 @@ static void CacheLocations(WorldRendererPbrState* pbr, Shader shader)
  * elevation) AND the daylight factor, so it can neither appear while the sun is still high (sky still blue) nor
  * linger once the sun has set — the two bugs the flat sky-colour gradient produced. The hues are authored
  * (AMBIENT_DAY_* / AMBIENT_SUNSET_*), tinted by AmbientSkylightColor (WHITE = neutral) and scaled by
- * AmbientSkylightIntensity x AMBIENT_SKY_STRENGTH; the whole fill fades with the daylight factor. */
+ * AmbientSkylightIntensity x AMBIENT_SKY_STRENGTH; the whole fill fades with the daylight factor. Light pollution
+ * raises the night floor a little in its glow's colour (NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE). */
 static void ComputeAmbientColor(const WorldEnvironment* environment, float sunElevation, float daylight,
     float outRGB[3])
 {
@@ -188,6 +194,13 @@ static void ComputeAmbientColor(const WorldEnvironment* environment, float sunEl
     float AmbientTint[3];
     WorldRendererCommon_ColorToLinear(environment->AmbientSkylightColor, AmbientTint);
     float NightAmbient[3] = { NIGHT_AMBIENT_R, NIGHT_AMBIENT_G, NIGHT_AMBIENT_B };
+    float PollutionColor[3];
+    WorldRendererCommon_ColorToLinear(environment->LightPollutionColor, PollutionColor);
+    float Pollution = fminf(fmaxf(environment->LightPollution, 0.0f), 1.0f); // fmaxf drops a NaN
+    for (int Channel = 0; Channel < 3; Channel++)
+    {
+        NightAmbient[Channel] += PollutionColor[Channel] * Pollution * NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE;
+    }
     float AmbientMagnitude = daylight * environment->AmbientSkylightIntensity * AMBIENT_SKY_STRENGTH;
 
     for (int Channel = 0; Channel < 3; Channel++)
@@ -386,6 +399,7 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
     WorldRendererCommon_ColorToLinear(Environment->SkyTint, FogSkyTint);
     SetShaderValue(RayShader, self->_pbr._locFogSkyTint, FogSkyTint, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, self->_pbr._locFogSunIntensity, &Environment->SunIntensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_pbr._locFogSkyglow, frame->SkyglowRadiance, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, self->_pbr._locFogDensity, &frame->FogDensity, SHADER_UNIFORM_FLOAT);
 
     // Sun shadow: upload the light matrices and bind the cascade depth maps to their fixed units (the samplers

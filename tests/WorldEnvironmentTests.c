@@ -1,7 +1,13 @@
 #include "TestSuites.h"
 #include "WorldEnvironment.h"
+#include "raylib/raymath.h"
 #include <math.h>
 #include <string.h>
+
+
+// Macros.
+/** Tolerance for comparing unit vectors and matrix entries computed in float. */
+#define CELESTIAL_TOLERANCE 1e-5f
 
 
 // Static functions.
@@ -58,10 +64,37 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.AmbientOcclusionStrength = NAN;
     CheckRejected(run, &Environment, "AmbientOcclusionStrength");
 
-    // Zero is allowed where the rule is ">= 0" (an effect switched off).
+    WorldEnvironment_SetDefaults(&Environment);
+    Environment.LightPollution = 1.01f;
+    CheckRejected(run, &Environment, "LightPollution");
+
+    WorldEnvironment_SetDefaults(&Environment);
+    Environment.LightPollution = -0.01f;
+    CheckRejected(run, &Environment, "LightPollution");
+
+    WorldEnvironment_SetDefaults(&Environment);
+    Environment.LightPollution = NAN;
+    CheckRejected(run, &Environment, "LightPollution");
+
+    WorldEnvironment_SetDefaults(&Environment);
+    Environment.StarTwinkle = 1.5f;
+    CheckRejected(run, &Environment, "StarTwinkle");
+
+    WorldEnvironment_SetDefaults(&Environment);
+    Environment.StarTwinkle = -INFINITY;
+    CheckRejected(run, &Environment, "StarTwinkle");
+
+    WorldEnvironment_SetDefaults(&Environment);
+    Environment.MilkyWayBrightness = -1.0f;
+    CheckRejected(run, &Environment, "MilkyWayBrightness");
+
+    // Zero is allowed where the rule is ">= 0" (an effect switched off), and the [0, 1] ranges include both ends.
     WorldEnvironment_SetDefaults(&Environment);
     Environment.BloomStrength = 0.0f;
     Environment.SkyTurbidity = 0.0f;
+    Environment.MilkyWayBrightness = 0.0f;
+    Environment.LightPollution = 1.0f;
+    Environment.StarTwinkle = 0.0f;
     TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
 }
 
@@ -75,6 +108,10 @@ static void CopyToCopiesEverySetting(TestRun* run)
     Source.StarSeed = 123456789u;
     Source.IsBloomEnabled = false;
     Source.AmbientOcclusionStrength = 0.25f;
+    Source.LightPollution = 0.8f;
+    Source.LightPollutionColor = (Color){ 5, 6, 7, 8 };
+    Source.MilkyWayBrightness = 2.5f;
+    Source.StarTwinkle = 0.75f;
 
     WorldEnvironment Destination;
     WorldEnvironment_SetDefaults(&Destination);
@@ -85,6 +122,10 @@ static void CopyToCopiesEverySetting(TestRun* run)
     TEST_CHECK(run, Destination.StarSeed == 123456789u);
     TEST_CHECK(run, !Destination.IsBloomEnabled);
     TEST_CHECK(run, Destination.AmbientOcclusionStrength == 0.25f);
+    TEST_CHECK(run, Destination.LightPollution == 0.8f);
+    TEST_CHECK(run, (Destination.LightPollutionColor.r == 5) && (Destination.LightPollutionColor.a == 8));
+    TEST_CHECK(run, Destination.MilkyWayBrightness == 2.5f);
+    TEST_CHECK(run, Destination.StarTwinkle == 0.75f);
     TEST_CHECK_SUCCESS(run, WorldEnvironment_CopyTo(&Destination, &Destination));
     TEST_CHECK_ERROR(run, WorldEnvironment_CopyTo(NULL, &Destination), ErrorCode_IllegalArgument);
 }
@@ -118,6 +159,47 @@ static void AdvanceWrapsAndIgnoresBadSteps(TestRun* run)
 }
 
 
+static bool AreVectorsClose(Vector3 a, Vector3 b)
+{
+    return (fabsf(a.x - b.x) < CELESTIAL_TOLERANCE) && (fabsf(a.y - b.y) < CELESTIAL_TOLERANCE)
+        && (fabsf(a.z - b.z) < CELESTIAL_TOLERANCE);
+}
+
+/* The matrix maps the celestial (1,0,0) to the sun at every time of day and several latitudes, is a rotation
+ * (orthonormal, no mirror, no translation), and turns the sky around a pole that stays put all day. */
+static void CelestialFrameFollowsTheSun(TestRun* run)
+{
+    const float SunAngles[] = { 0.0f, 0.4f, 0.9f, 1.3f };
+    for (size_t AngleIndex = 0U; AngleIndex < (sizeof(SunAngles) / sizeof(SunAngles[0])); AngleIndex++)
+    {
+        WorldEnvironment Environment;
+        WorldEnvironment_SetDefaults(&Environment);
+        Environment.SunAngle = SunAngles[AngleIndex];
+        Vector3 VisiblePole = { 0.0f, sinf(Environment.SunAngle), -cosf(Environment.SunAngle) };
+        for (int Step = 0; Step <= 10; Step++)
+        {
+            Environment.TimeOfDay = (float)Step * 0.1f;
+            Matrix CelestialToWorld = WorldEnvironment_GetCelestialToWorld(&Environment);
+
+            Vector3 Sun = Vector3Transform((Vector3){ 1.0f, 0.0f, 0.0f }, CelestialToWorld);
+            TEST_CHECK(run, AreVectorsClose(Sun, WorldEnvironment_GetSunDirection(&Environment)));
+            TEST_CHECK(run, AreVectorsClose(Vector3Transform((Vector3){ 0.0f, 0.0f, -1.0f }, CelestialToWorld),
+                VisiblePole));
+
+            Vector3 X = Vector3Transform((Vector3){ 1.0f, 0.0f, 0.0f }, CelestialToWorld);
+            Vector3 Y = Vector3Transform((Vector3){ 0.0f, 1.0f, 0.0f }, CelestialToWorld);
+            Vector3 Z = Vector3Transform((Vector3){ 0.0f, 0.0f, 1.0f }, CelestialToWorld);
+            TEST_CHECK(run, fabsf(Vector3Length(X) - 1.0f) < CELESTIAL_TOLERANCE);
+            TEST_CHECK(run, fabsf(Vector3Length(Y) - 1.0f) < CELESTIAL_TOLERANCE);
+            TEST_CHECK(run, fabsf(Vector3DotProduct(X, Y)) < CELESTIAL_TOLERANCE);
+            TEST_CHECK(run, fabsf(Vector3DotProduct(Y, Z)) < CELESTIAL_TOLERANCE);
+            TEST_CHECK(run, AreVectorsClose(Vector3CrossProduct(X, Y), Z)); // right-handed: no mirror image
+            TEST_CHECK(run, AreVectorsClose(Vector3Transform(Vector3Zero(), CelestialToWorld), Vector3Zero()));
+        }
+    }
+}
+
+
 // Public functions.
 void WorldEnvironmentTests_Run(TestRun* run)
 {
@@ -127,6 +209,7 @@ void WorldEnvironmentTests_Run(TestRun* run)
         { "validate_names_the_broken_field", ValidateNamesTheBrokenField },
         { "copy_to_copies_every_setting", CopyToCopiesEverySetting },
         { "advance_wraps_and_ignores_bad_steps", AdvanceWrapsAndIgnoresBadSteps },
+        { "celestial_frame_follows_the_sun", CelestialFrameFollowsTheSun },
     };
     TestRun_RunSuite(run, "WorldEnvironment", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

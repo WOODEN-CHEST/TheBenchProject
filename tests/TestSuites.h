@@ -31,8 +31,12 @@ void WorldLightCullingTests_Run(TestRun* run);
 /** @brief World object set, sprite binding under the world's asset user, renames (WorldTests.c). */
 void WorldTests_Run(TestRun* run);
 
-/** @brief Environment validation, copying and the day-night advance (WorldEnvironmentTests.c). */
+/** @brief Environment validation, copying, the day-night advance and the celestial frame (WorldEnvironmentTests.c). */
 void WorldEnvironmentTests_Run(TestRun* run);
+
+/** @brief The night sky's maths: the star catalogue, limiting magnitude, air mass, star colours and the galaxy's
+ *  orientation (NightSkyTests.c; a private module of source/). */
+void NightSkyTests_Run(TestRun* run);
 
 /** @brief World <-> DTO round trip and snapshot validation (WorldDTOTests.c). */
 void WorldDTOTests_Run(TestRun* run);

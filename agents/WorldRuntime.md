@@ -72,14 +72,17 @@ definitions change).
    (`WorldRendererScene_EnsureTargets`).
 2. Build the frame context (`WorldRenderFrame`): camera, the scene's view/projection matrices (the projection
    `BeginMode3D` builds for the scene target, shared by every pass that reconstructs positions or rays), sun
-   direction and daylight, sizes, and every pass decision.
+   direction and daylight, the sky's rotation (`CelestialToWorld`), the render clock (`TimeSeconds`), sizes, the
+   night sky values (`WorldRendererSky_PrepareFrame`: limiting magnitude, Milky Way radiance, skyglow; the star
+   catalogue is rebuilt first if the world's seed or density changed), and every pass decision.
 3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): linear sun colour and daylight-scaled
    intensity, the ambient colour, the scene luminance for eye adaptation, fog density, shadow strength, and the
    forward-light candidates (every light except the cube-shadow light) with their linear radiance.
 4. Sun shadow cascades, then the point-light cube shadow (only casters within the light's reach).
 5. The normal/flag G-buffer and the AO pre-pass, when AO or outlines run.
-6. The scene pass: clear, atmospheric sky, PBR models (per object: up to `WORLD_MAX_FORWARD_LIGHTS` reach-culled
-   point lights; per material: PBR factors and map flags), sprites, debug grid and light gizmos.
+6. The scene pass: clear, atmospheric sky (with the Milky Way and light pollution's skyglow), the stars, PBR models
+   (per object: up to `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags),
+   sprites, debug grid and light gizmos.
 7. Outlines, then bloom and sun shafts from the (outlined) HDR scene.
 8. Eye adaptation, then the tonemapped point-upscale into the frame target.
 9. The crisp overlay for OmitPixelation objects, composited over the finished image.
@@ -105,9 +108,46 @@ the sky pass draws (both shaders `#include "common/atmosphere"`, so the atmosphe
 below-horizon mirror is still repeated in the PBR shader's `fogSkyColor`). Without it models draw unlit with raylib's
 default shader.
 
-**Sky.** `world_sky`: Rayleigh + Mie single scattering, sun disc and a seeded star field, drawn as a full-screen
-pass before the geometry (it writes no depth). Each pixel's ray comes from the inverse of the frame's
-view-projection, so the sky lines up with the 3D camera. Falls back to a CPU gradient clear.
+**Sky.** `world_sky`: Rayleigh + Mie single scattering (`shaders/common/atmosphere.glsl`), the sun disc, the Milky Way
+and light pollution's skyglow, drawn as a full-screen pass before the geometry (it writes no depth). Each pixel's ray
+comes from the inverse of the frame's view-projection, so the sky lines up with the 3D camera. Falls back to a CPU
+gradient clear.
+
+**Night sky.** The pure maths is in the private `source/NightSky.{h,c}` (tested in `tests/NightSkyTests.c`); the GLSL
+the passes share is `shaders/common/night_sky.glsl`.
+- **The sky turns.** `WorldEnvironment_GetCelestialToWorld` (R_x(SunAngle) . R_z(day angle)) turns everything fixed
+  among the stars once a day around the celestial pole, which stays at world (0, sin SunAngle, -cos SunAngle): low
+  toward -Z, at the height SunAngle (the latitude). The sun is the celestial point (1,0,0). The stars do not yet drift
+  against the sun through the year; that needs the date (T03, a `// TODO:` in `WorldEnvironment.c`).
+- **Stars** (`WorldRendererStars.c`, shader `world_stars`). A catalogue generated from `StarSeed`: `StarDensity` 1 is
+  an Earth-like sky (about 9000 stars, at most 20000), magnitudes -1..7 by the real count law (2.8 times as many per
+  magnitude), B-V colours (mostly white to yellow, some blue and orange), up to twice as dense along the galactic
+  plane. Each star has its own random stream, so a higher density only adds stars. It becomes one mesh of one-pixel
+  quads (six vertices per star, unindexed: raylib's 16-bit indices would cap an indexed mesh at 16384 stars), rebuilt
+  only when the seed or the star count changes. The vertex shader projects each star as a point at infinity just
+  inside the far plane and widens it to exactly one scene pixel, so a star lights one pixel at a steady brightness and
+  never flickers. Drawn right after the sky: additive (ONE, ONE) with alpha 0 (the scene's alpha reaches the frame
+  target), depth-tested, writing no depth (the bloom prefilter and the sun shafts read far depth as sky), culling off.
+- **What shows.** The limiting magnitude (`NightSky_GetLimitingMagnitude`, one value per frame): 6.5 at a dark site,
+  minus 3.5 x `LightPollution`, and in twilight -1.5 with the sun up, rising 0.5 per degree below the horizon
+  (magnitude 1.5 at -6 degrees, full night at -18); stars fade out over the last 0.5 magnitude, so at dusk the
+  brightest appear first. Near the horizon stars and the Milky Way dim by extinction (Kasten-Young air mass, 0.25
+  magnitudes per air mass); below it nothing is drawn. Stars twinkle by `StarTwinkle` x noise, more near the horizon,
+  on `WorldRenderFrame.TimeSeconds` (the renderer's own clock, wrapped hourly).
+- **Milky Way.** The `sky_milky_way` texture (sRGB, trilinear with mipmaps), sampled once per pixel in galactic
+  coordinates: `NightSky_GetCelestialToGalactic` places the galaxy as on Earth (plane 62.9 degrees to the equator,
+  centre at declination -29) in a June night sky (the centre crosses the meridian at midnight). The panorama's
+  longitude grows to the left, as in astronomical all-sky maps. Explicit mip level from the pixel's angular size
+  (automatic derivatives would draw a seam line where the longitude wraps). Brightness: `MilkyWayBrightness` x full
+  at a limiting magnitude of 6 or more, gone at 4.5 or less x extinction. A missing texture is logged once and the
+  sky draws no Milky Way.
+- **Light pollution.** At night the sky adds a skyglow of `LightPollutionColor` x `LightPollution`, strongest at the
+  horizon and fading to 6% of that overhead, faded out by daylight. The PBR fog adds the same glow, so fogged
+  silhouettes match the glowing sky behind them. The night ambient gains a small share of the colour
+  (`NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE`); the `NIGHT_AMBIENT_*` floor stays the dark-site look.
+- **Brightness knobs** (tuned for the night exposure, the eye adaptation's maximum of 24): `STAR_RADIANCE_SCALE` in
+  `WorldRendererStars.c`, `MILKY_WAY_BASE_RADIANCE` and `SKYGLOW_BASE_RADIANCE` in `WorldRendererSky.c`; per world
+  `StarBrightness` and `MilkyWayBrightness` scale them.
 
 **Sun shadows.** Two camera-centred orthographic cascades (2048² depth textures): NEAR (small extent, sharp) and
 FAR (large extent, coarse, optional). Each model object's `WorldShadowTier` (Both / Near / Far) routes which
@@ -144,8 +184,10 @@ get no AO and no outlines.
   created is logged once and switches its pass off. The only fatal failure is a scene target that cannot be
   created at all: `WorldRenderer_RenderToTarget` returns `ErrorCode_InvalidState`.
 - `WorldRenderer_GetStatus` reports the scene tier, each feature as active / inactive (switched off or not
-  applicable this frame) / unavailable (missing shader or target), and object counts. The renderer logs it once
-  after its first render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame).
+  applicable this frame) / unavailable (missing shader or target), and object counts (the star count included). The
+  "stars" feature is inactive by day, while twilight and light pollution hide every star, and at density 0; the
+  "Milky Way" is unavailable without its texture and inactive while it cannot be seen. The renderer logs the status
+  once after its first render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame).
 
 ### Renderer structure (keep it clean)
 
@@ -159,7 +201,8 @@ get no AO and no outlines.
 | `WorldRendererLighting.c` | The PBR shader, its location table and uniforms, forward point lights, per-material factors, eye adaptation. |
 | `WorldRendererShadows.c` | Sun cascades and the point-light cube shadow. |
 | `WorldRendererGBuffer.c` | The normal/flag G-buffer and the AO pre-pass. |
-| `WorldRendererSky.c` | The atmospheric sky. |
+| `WorldRendererSky.c` | The atmospheric sky with the Milky Way and light pollution's skyglow; the night sky values of the frame. |
+| `WorldRendererStars.c` | The star field: the catalogue's mesh (rebuilt when the seed or density changes) and its draw. |
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
 | `WorldRendererCrisp.c` | The crisp overlay. |
 
@@ -196,8 +239,9 @@ so a paired shader's two source files need DISTINCT stems: `world_pbr` uses `sha
 `shaders/pbr/fragment.frag`, referenced as `"pbr/vertex"` and `"pbr/fragment"`. The `world_normal` G-buffer shader
 is a second such pair. Each renderer shader lives in its own directory under `asset/shaders/`. GLSL shared between
 shaders lives in `asset/shaders/common/` and is pulled in with `#include "common/<name>"` (no `#version` in shared
-files; rules in GameAssets.md, "GameShader"): `common/math` (`PI`) and `common/atmosphere` (Rayleigh + Mie single
-scattering, used by `world_sky` and the PBR fog). Put new shared lighting, dithering or noise code there instead of
+files; rules in GameAssets.md, "GameShader"): `common/math` (`PI`), `common/atmosphere` (Rayleigh + Mie single
+scattering, used by `world_sky` and the PBR fog) and `common/night_sky` (air mass, extinction and the skyglow profile,
+used by `world_sky`, `world_stars` and the PBR fog). Put new shared lighting, dithering or noise code there instead of
 copying it between shaders.
 
 ## WorldTestFrame
@@ -208,7 +252,8 @@ timestep and comes from `Services.Input` ([GameInput.md](GameInput.md)), after t
 refusal: movement through the actions (`move_*`, default WASD + SPACE/CTRL, `sprint` default SHIFT), mouse-look
 (`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured) and the debug keys as raw keys: P
 pause/resume the day-night cycle, 1–4 jump to dawn/noon/dusk/midnight, `[` `]` scrub the time, O post effects, B bloom,
-G sun shafts, C crisp overlay, L light gizmos, I log the renderer status, T toggle the text sample. M frees the cursor
+G sun shafts, C crisp overlay, L light gizmos, I log the renderer status, T toggle the text sample, N cycle the light
+pollution (0, 0.35, 0.7, 1; logged). M frees the cursor
 for the UI (and captures it again); a left click the UI did not take captures it again. An unconsumed `pause` (Escape
 once the UI is not using it) quits through `GameFrameManager_RequestStop`. `Render` handles no input. Captures the cursor
 in `Start`, releases it in `End`/`Destroy`. The world is built in `Create`; `BeginLoad` calls

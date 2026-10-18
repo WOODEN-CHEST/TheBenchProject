@@ -1,7 +1,8 @@
 #version 330
 
 // Full-screen atmospheric sky: Rayleigh + Mie single-scattering (shaders/common/atmosphere.glsl, which the PBR
-// shader's distance fog shares), plus a sun disc and a night star field.
+// shader's distance fog shares), light pollution's skyglow, a sun disc and the Milky Way. The stars are a separate
+// pass drawn over this one (shaders/stars).
 // Drawn behind the 3D geometry into the linear-HDR scene buffer; the tonemap post-pass maps it to display.
 // The per-pixel world ray is reconstructed from the inverse view-projection so the sky lines up exactly with
 // the 3D camera. Everything is world space with +Y up, matching WorldEnvironment_GetSunDirection.
@@ -20,32 +21,29 @@ uniform float sunSize;         // angular-size multiplier for the sun disc
 uniform float turbidity;       // atmospheric haze (default ~3)
 uniform vec3 skyTint;          // linear multiplier, for alien skies
 
-uniform float starSeed;        // seed offsetting the star field
-uniform float starDensity;     // relative star density
-uniform float starBrightness;  // star brightness multiplier
+uniform vec3 skyglowRadiance;      // light pollution's glow at the horizon, linear (0 by day)
+uniform sampler2D milkyWayTexture; // sky_milky_way: an equirectangular panorama in galactic coordinates (sRGB)
+uniform mat4 worldToGalactic;      // world direction -> galactic (x toward the galactic centre, z its north pole)
+uniform float milkyWayRadiance;    // linear radiance of a white texel; 0 draws no Milky Way (and samples nothing)
+uniform float milkyWayLod;         // mip level matching the pixel's angular size (explicit: see milkyWay)
 
 out vec4 finalColor;
 
 #include "common/atmosphere"
+#include "common/night_sky"
 
-float hash13(vec3 p)
+// The Milky Way toward a world direction. The panorama is in galactic coordinates: the galactic centre in the middle,
+// longitude growing to the left (the view from inside the sky, as astronomical all-sky maps show it) and the north
+// galactic pole at the top (v = 0 is the image's top row as raylib loads it). The mip level is explicit because
+// automatic derivatives jump where the longitude wraps around and would draw a one-pixel seam line.
+vec3 milkyWay(vec3 rayDir)
 {
-    p = fract(p*0.1031);
-    p += dot(p, p.zyx + 31.32);
-    return fract((p.x + p.y)*p.z);
-}
-
-// Sparse star field hashed directly from the 3D view ray, so stars are spread uniformly across the whole
-// dome (the previous atan/asin mapping was singular at the zenith and clustered every star near the horizon).
-// No horizon gate: stars cover the entire sphere so the sky reads as an infinite starfield.
-vec3 stars(vec3 rayDir, float seed, float density, float brightness)
-{
-    vec3 cell = floor(rayDir*300.0 + seed);
-    float present = hash13(cell);
-    float threshold = 1.0 - clamp(density, 0.0, 1.0)*0.02;
-    if (present < threshold) return vec3(0.0);
-    float bright = hash13(cell + 3.7);
-    return vec3(max(brightness, 0.0)*2.0*(0.4 + 0.6*bright));
+    vec3 galactic = mat3(worldToGalactic)*rayDir;
+    float longitude = atan(galactic.y, galactic.x);
+    float latitude = asin(clamp(galactic.z, -1.0, 1.0));
+    vec2 uv = vec2(0.5 - longitude/(2.0*PI), 0.5 - latitude/PI);
+    vec3 texel = textureLod(milkyWayTexture, uv, milkyWayLod).rgb;
+    return pow(max(texel, vec3(0.0)), vec3(2.2))*milkyWayRadiance; // sRGB -> linear
 }
 
 void main()
@@ -62,11 +60,12 @@ void main()
     float kMie = ATMOSPHERE_K_MIE_BASE*max(turbidity, 0.0)/3.0;
     float iSun = ATMOSPHERE_SUN_RADIANCE*max(sunIntensity, 0.0);
 
-    // Infinite-skybox look: there is no ground. Compute the atmosphere with the ray mirrored into the upper
-    // hemisphere (abs(y)) so every direction gets a sky colour, then darken below the horizon so it still
-    // reads as "down" instead of a mirror-bright ground. The PBR shader's fogSkyColor repeats these steps.
+    // Infinite-skybox look: there is no ground. Compute the atmosphere (and the skyglow it scatters) with the ray
+    // mirrored into the upper hemisphere (abs(y)) so every direction gets a sky colour, then darken below the horizon
+    // so it still reads as "down" instead of a mirror-bright ground. The PBR shader's fogSkyColor repeats these steps.
     vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
     vec3 sky = atmosphere(skyRay, rayOrigin, sunDir, iSun, kMie);
+    sky += nightSkySkyglow(skyRay.y, skyglowRadiance);
     float belowFactor = smoothstep(0.0, -0.12, rayDir.y); // 0 above the horizon, 1 below
     sky *= mix(1.0, 0.5, belowFactor);
 
@@ -77,9 +76,12 @@ void main()
         sky += max(sunColor, vec3(0.0))*iSun;
     }
 
-    // Stars cover the whole dome (above and below the horizon), fading in as the sun drops below the horizon.
-    float night = clamp(-sunDir.y*4.0, 0.0, 1.0);
-    sky += stars(rayDir, starSeed, starDensity, starBrightness)*night;
+    // The Milky Way, above the horizon only, dimmed near it like the stars. milkyWayRadiance already holds its
+    // brightness, the light pollution and the twilight.
+    if ((milkyWayRadiance > 0.0) && (rayDir.y > 0.0))
+    {
+        sky += milkyWay(rayDir)*nightSkyExtinction(nightSkyAirmass(rayDir.y));
+    }
 
     sky *= max(skyTint, vec3(0.0));
     finalColor = vec4(sky, 1.0); // linear HDR; tonemap post-pass maps to display

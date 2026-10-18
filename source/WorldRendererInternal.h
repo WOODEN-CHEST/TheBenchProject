@@ -6,6 +6,7 @@
 #include "AssetManager.h"
 #include "GameShader.h"
 #include "GameModel.h"
+#include "GameTexture.h"
 #include "GameCamera.h"
 #include "World.h"
 #include "WorldEnvironment.h"
@@ -26,7 +27,8 @@
  *   WorldRendererLighting.c  the PBR shader and its uniforms, forward point lights, eye adaptation
  *   WorldRendererShadows.c   the sun shadow cascades and the point-light cube shadow
  *   WorldRendererGBuffer.c   the normal/flag G-buffer and the ambient-occlusion pre-pass
- *   WorldRendererSky.c       the atmospheric sky
+ *   WorldRendererSky.c       the atmospheric sky with the Milky Way and light pollution's skyglow
+ *   WorldRendererStars.c     the star field (the seeded catalogue as one-pixel quads)
  *   WorldRendererPost.c      outlines, bloom, sun shafts and the tonemap
  *   WorldRendererCrisp.c     the crisp overlay for OmitPixelation objects
  * plus the per-object render cache (WorldRenderCache.h). Each pass keeps its shader, uniform locations, targets
@@ -113,9 +115,24 @@ typedef struct WorldRenderFrameStruct
     Matrix Projection;
     Matrix InvProjection;
     Matrix InvViewProjection;
+    /** @brief View x projection (raymath order: MatrixMultiply(View, Projection)). */
+    Matrix ViewProjection;
     /** @brief Unit direction to the sun, and how much daylight there is (1 day .. 0 night). */
     Vector3 SunDirection;
     float Daylight;
+    /** @brief The sky's rotation for the time of day (WorldEnvironment_GetCelestialToWorld): turns the stars and the
+     *  Milky Way. */
+    Matrix CelestialToWorld;
+    /** @brief Render time in seconds, accumulated by the renderer and wrapped every hour (float precision), for
+     *  animated effects such as twinkling. Renderer-side state, not world time. */
+    float TimeSeconds;
+    /** @brief Night sky values (WorldRendererSky_PrepareFrame): the faintest magnitude visible overhead (light
+     *  pollution and twilight), the Milky Way's linear radiance per white texel (brightness, light pollution and
+     *  twilight included), and light pollution's skyglow at the horizon (linear; 0 by day), which the sky and the PBR
+     *  fog both add. */
+    float LimitingMagnitude;
+    float MilkyWayRadiance;
+    float SkyglowRadiance[3];
     /** @brief The frame target (window) size and the scene target size, in pixels. */
     int WindowWidth;
     int WindowHeight;
@@ -143,6 +160,8 @@ typedef struct WorldRenderFrameStruct
     bool IsBloomActive;
     bool AreSunshaftsActive;
     bool IsCrispActive;
+    bool AreStarsActive;
+    bool IsMilkyWayActive;
     /** @brief Index (into the render cache's lights) of the light casting the cube shadow; valid when
      *  IsPointShadowActive. */
     size_t ShadowLightIndex;
@@ -241,6 +260,7 @@ typedef struct WorldRendererPbrStateStruct
     int _locFogTurbidity;
     int _locFogSkyTint;
     int _locFogSunIntensity;
+    int _locFogSkyglow;
     /** @brief This render's forward-light candidates (WorldCullingLight): every light of the render cache except
      *  the cube-shadow light, which is shaded on its own. */
     GenericBuffer _forwardLights;
@@ -270,11 +290,13 @@ typedef struct WorldRendererTonemapStateStruct
     int _locSunshaftStrength;
 } WorldRendererTonemapState;
 
-/** @brief The atmospheric sky pass. */
+/** @brief The atmospheric sky pass, with the Milky Way and light pollution's skyglow. */
 typedef struct WorldRendererSkyStateStruct
 {
     /** @brief The atmospheric sky shader drawn behind the geometry; NULL = fall back to the gradient clear. */
     GameShader* _shader;
+    /** @brief The Milky Way panorama (held under the shader user); NULL = no Milky Way. */
+    GameTexture* _milkyWay;
     /** @brief Cached world_sky uniform locations (-1 when absent). */
     int _locResolution;
     int _locInvViewProj;
@@ -285,10 +307,41 @@ typedef struct WorldRendererSkyStateStruct
     int _locSunSize;
     int _locTurbidity;
     int _locSkyTint;
-    int _locStarSeed;
-    int _locStarDensity;
-    int _locStarBrightness;
+    int _locSkyglowRadiance;
+    int _locMilkyWayTexture;
+    int _locWorldToGalactic;
+    int _locMilkyWayRadiance;
+    int _locMilkyWayLod;
 } WorldRendererSkyState;
+
+/** @brief The star field: the seeded star catalogue as one mesh of one-pixel quads, drawn right after the sky. */
+typedef struct WorldRendererStarStateStruct
+{
+    /** @brief The star shader; NULL = no stars. */
+    GameShader* _shader;
+    /** @brief Cached world_stars uniform locations (-1 when absent). */
+    int _locCelestialToWorld;
+    int _locViewProjection;
+    int _locResolution;
+    int _locLimitingMagnitude;
+    int _locRadianceScale;
+    int _locTwinkleStrength;
+    int _locTimeSeconds;
+    /** @brief The catalogue's mesh, uploaded once per catalogue: six vertices per star and no index buffer (raylib's
+     *  16-bit indices would cap an indexed mesh at 16384 four-vertex stars). Its CPU arrays are freed after the
+     *  upload. Valid while _hasMesh. */
+    Mesh _mesh;
+    bool _hasMesh;
+    /** @brief The seed and star count the current catalogue was built for, and whether one was built at all. The
+     *  catalogue depends on the density only through the count. */
+    uint64_t _builtSeed;
+    size_t _builtCount;
+    bool _isBuilt;
+    /** @brief Stars in the current mesh (0 = none). */
+    size_t _starCount;
+    /** @brief Set once a catalogue that could not be built has been logged. */
+    bool _isBuildFailureReported;
+} WorldRendererStarState;
 
 /** @brief The sprite colour pass (billboards in the scene and crisp passes). */
 typedef struct WorldRendererSpriteStateStruct
@@ -504,6 +557,8 @@ struct WorldRendererStruct
     WorldRendererStatus _status;
     /** @brief Set once the status has been logged after the first render. */
     bool _isStatusReported;
+    /** @brief The render clock behind WorldRenderFrame.TimeSeconds: seconds of render time, wrapped every hour. */
+    double _renderTimeSeconds;
 
     /** @brief Per-pass state (shader, uniform locations, targets, toggles). */
     WorldRendererSceneState _scene;
@@ -511,6 +566,7 @@ struct WorldRendererStruct
     WorldRendererExposureState _exposure;
     WorldRendererTonemapState _tonemap;
     WorldRendererSkyState _sky;
+    WorldRendererStarState _stars;
     WorldRendererSpriteState _sprites;
     WorldRendererSunShadowState _sunShadow;
     WorldRendererPointShadowState _pointShadow;
@@ -555,6 +611,18 @@ void WorldRendererCommon_ColorToLinear(Color color, float outRGB[3]);
  * @returns The shader (held until the renderer is destroyed), or NULL when it is unavailable.
  */
 GameShader* WorldRendererCommon_LoadShader(WorldRenderer* self, const unsigned char* assetName);
+
+/**
+ * @brief Loads a texture asset by name under the renderer's shader user.
+ *
+ * A failure is logged once (warning) and the feature that needs the texture stays off.
+ * @param self The renderer.
+ * @param assetName The texture asset's name.
+ * @param featureName What goes without it, for the warning (e.g. u8"the Milky Way").
+ * @returns The texture (held until the renderer is destroyed), or NULL when it is unavailable.
+ */
+GameTexture* WorldRendererCommon_LoadTexture(WorldRenderer* self, const unsigned char* assetName,
+    const unsigned char* featureName);
 
 /**
  * @brief Logs a warning (no-op without a logger). For failures that can only happen once, such as at shader load.
@@ -748,14 +816,44 @@ void WorldRendererGBuffer_RenderAo(WorldRenderer* self, const WorldRenderFrame* 
 
 
 // WorldRendererSky.c
-/** @brief Loads the atmospheric sky shader (optional: the scene then clears to a CPU gradient colour). */
-void WorldRendererSky_LoadShader(WorldRenderer* self);
+/** @brief Loads the atmospheric sky shader (optional: the scene then clears to a CPU gradient colour) and the Milky Way
+ *  texture (optional: the sky then draws no Milky Way). */
+void WorldRendererSky_LoadAssets(WorldRenderer* self);
 
 /**
- * @brief Draws the atmospheric sky as a full-screen pass into the bound scene target. Must run after the clear
- *        and BEFORE the 3D geometry: it writes no depth, so the geometry draws over it.
+ * @brief Computes the frame's night sky values: the limiting magnitude, the Milky Way's radiance and the skyglow.
+ *
+ * Needs frame->Environment, frame->SunDirection and frame->Daylight.
+ */
+void WorldRendererSky_PrepareFrame(WorldRenderFrame* frame);
+
+/**
+ * @brief Draws the atmospheric sky (with the skyglow, and the Milky Way when frame->IsMilkyWayActive) as a full-screen
+ *        pass into the bound scene target. Must run after the clear and BEFORE the 3D geometry: it writes no depth,
+ *        so the geometry draws over it.
  */
 void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame);
+
+
+// WorldRendererStars.c
+/** @brief Loads the star shader (optional: no stars without it). */
+void WorldRendererStars_LoadShader(WorldRenderer* self);
+
+/** @brief Unloads the star mesh. Needs a live GL context. */
+void WorldRendererStars_Unload(WorldRenderer* self);
+
+/**
+ * @brief Rebuilds the star catalogue and its mesh when the environment's StarSeed or star count (from StarDensity)
+ *        differs from the current one. Cheap when nothing changed; needs a live GL context when something did.
+ *        A catalogue that cannot be built is logged once and leaves no stars.
+ */
+void WorldRendererStars_SyncCatalogue(WorldRenderer* self, const WorldEnvironment* environment);
+
+/**
+ * @brief Draws the star field into the bound scene target, right after the sky and before the geometry: additive,
+ *        depth-tested, writing no depth (the post passes treat far depth as sky). Only while frame->AreStarsActive.
+ */
+void WorldRendererStars_Draw(WorldRenderer* self, const WorldRenderFrame* frame);
 
 
 // WorldRendererPost.c

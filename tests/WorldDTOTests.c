@@ -45,6 +45,10 @@ static bool BuildSourceWorld(TestRun* run, World* world)
     Environment->StarSeed = 42;
     Environment->FogStrength = 0.5f;
     Environment->IsBloomEnabled = false;
+    Environment->LightPollution = 0.9f;
+    Environment->LightPollutionColor = (Color){ 200, 100, 50, 255 };
+    Environment->MilkyWayBrightness = 1.5f;
+    Environment->StarTwinkle = 0.4f;
 
     WorldModelObject* ModelObject = NULL;
     IsBuilt = IsBuilt && TEST_CHECK_SUCCESS(run, WorldModelObject_Create((const unsigned char*)u8"desk",
@@ -106,6 +110,10 @@ static void RoundTripKeepsEveryPersistentField(TestRun* run)
         TEST_CHECK(run, World_GetEnvironment(&Restored)->StarSeed == 42);
         TEST_CHECK(run, World_GetEnvironment(&Restored)->FogStrength == 0.5f);
         TEST_CHECK(run, !World_GetEnvironment(&Restored)->IsBloomEnabled);
+        TEST_CHECK(run, World_GetEnvironment(&Restored)->LightPollution == 0.9f);
+        TEST_CHECK(run, AreColorsEqual(World_GetEnvironment(&Restored)->LightPollutionColor, (Color){ 200, 100, 50, 255 }));
+        TEST_CHECK(run, World_GetEnvironment(&Restored)->MilkyWayBrightness == 1.5f);
+        TEST_CHECK(run, World_GetEnvironment(&Restored)->StarTwinkle == 0.4f);
 
         if (TEST_CHECK(run, World_GetObjectCount(&Restored) == World_GetObjectCount(&Source)))
         {

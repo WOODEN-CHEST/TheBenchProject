@@ -187,10 +187,15 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
         : LinearizeColorBytes(WorldEnvironment_ComputeSkyColor(frame->Environment));
     ClearBackground(ClearColor);
 
-    // Atmospheric sky behind the geometry (full-screen linear-HDR pass; writes no depth).
+    // Atmospheric sky behind the geometry (full-screen linear-HDR pass; writes no depth), then the stars over it
+    // (one pixel each, additive, writing no depth either).
     if (self->_sky._shader != NULL)
     {
         WorldRendererSky_Draw(self, frame);
+    }
+    if (frame->AreStarsActive)
+    {
+        WorldRendererStars_Draw(self, frame);
     }
 
     // Feed the sun/ambient/camera into the PBR shader before drawing any lit geometry (no-op if unavailable).

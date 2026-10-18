@@ -21,8 +21,9 @@
  * caller's frame target. With pixelation enabled (default) the scene target is sized to the low pixel
  * resolution (~640 on the long axis, square pixels) and point-upscaled, giving the game's chunky pixel look.
  * In order: sun shadow cascades and the point-light cube shadow; a normal/flag G-buffer and screen-space
- * ambient occlusion (applied to the ambient term only); the scene pass (atmospheric sky, PBR-lit models with
- * forward-shaded point lights and distance fog, sprite billboards, debug grid and light gizmos);
+ * ambient occlusion (applied to the ambient term only); the scene pass (atmospheric sky with the Milky Way and light
+ * pollution's skyglow, the star field, PBR-lit models with forward-shaded point lights and distance fog, sprite
+ * billboards, debug grid and light gizmos);
  * depth/normal-edge outlines; bloom and sun shafts (added in HDR); the tonemap with eye adaptation; and last
  * the crisp overlay, which draws OmitPixelation objects at window resolution over the pixelated image.
  *
@@ -81,6 +82,11 @@ typedef enum WorldRendererFeatureEnum
     WorldRendererFeature_Sunshafts,
     /** @brief The crisp overlay that draws OmitPixelation objects at window resolution. */
     WorldRendererFeature_CrispOverlay,
+    /** @brief The star field (inactive by day, while twilight and light pollution hide every star, or with a star
+     *  density of 0). */
+    WorldRendererFeature_Stars,
+    /** @brief The Milky Way in the sky (unavailable without its texture; inactive while it cannot be seen). */
+    WorldRendererFeature_MilkyWay,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -120,6 +126,8 @@ typedef struct WorldRendererStatusStruct
     size_t SpriteCount;
     /** @brief Point lights in the world. */
     size_t LightCount;
+    /** @brief Stars in the star catalogue (from the environment's StarDensity), whether or not they show now. */
+    size_t StarCount;
 } WorldRendererStatus;
 
 

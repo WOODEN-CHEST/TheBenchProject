@@ -24,6 +24,7 @@ int main(void)
     WorldLightCullingTests_Run(&Run);
     WorldTests_Run(&Run);
     WorldEnvironmentTests_Run(&Run);
+    NightSkyTests_Run(&Run);
     WorldDTOTests_Run(&Run);
     WorldRenderCacheTests_Run(&Run);
     LoggerTests_Run(&Run);

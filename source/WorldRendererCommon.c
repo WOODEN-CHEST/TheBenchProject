@@ -63,6 +63,27 @@ GameShader* WorldRendererCommon_LoadShader(WorldRenderer* self, const unsigned c
     return LoadedShader;
 }
 
+GameTexture* WorldRendererCommon_LoadTexture(WorldRenderer* self, const unsigned char* assetName,
+    const unsigned char* featureName)
+{
+    GameTexture* LoadedTexture = NULL;
+    Error LoadResult = AssetManager_LoadTexture(self->_assetManager, assetName, self->_shaderUser, &LoadedTexture);
+    if (LoadResult.Code != ErrorCode_Success)
+    {
+        if (self->_logger != NULL)
+        {
+            Error LogResult = Logger_LogWarningFormatted(self->_logger,
+                (const unsigned char*)u8"WorldRenderer: texture \"%s\" unavailable, so %s is not drawn (%s).",
+                (const char*)assetName, (const char*)featureName,
+                (LoadResult.Message != NULL) ? (const char*)LoadResult.Message : "no details");
+            Error_Deconstruct(&LogResult);
+        }
+        Error_Deconstruct(&LoadResult);
+        return NULL;
+    }
+    return LoadedTexture;
+}
+
 void WorldRendererCommon_Warn(WorldRenderer* self, const unsigned char* message)
 {
     if (self->_logger != NULL)

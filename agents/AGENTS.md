@@ -84,12 +84,15 @@ Current module list:
 * World runtime layer (WorldRuntime.md) - Camera, renderer, services bundle and bootstrap for viewing a world:
   * GameCamera - 3D camera (pos/fov/yaw/pitch/roll; +Y up, +Z forward), converted to a raylib camera at render time.
   * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, GHDF pool).
-  * WorldRenderer - Renders a World through a GameCamera (PBR, HDR, sky, shadows, AO, outlines, bloom, sun shafts,
-    crisp overlay); separate from the world data and never writes to it. Split by render pass into
+  * WorldRenderer - Renders a World through a GameCamera (PBR, HDR, sky with stars, Milky Way and light pollution,
+    shadows, AO, outlines, bloom, sun shafts, crisp overlay); separate from the world data and never writes to it. Split by render pass into
     source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
     WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
   * WorldRenderCache - The renderer's private per-object cache (source/WorldRenderCache.h): one world walk per frame
     builds the model/sprite/light lists; model assets are resolved once per object and again only on rename.
+  * NightSky - The night sky's pure maths (private, source/NightSky.h): the seeded star catalogue, the limiting
+    magnitude (light pollution, twilight), the air mass, star colours and the galaxy's place among the stars; used
+    by the sky and star passes (WorldRendererSky.c, WorldRendererStars.c).
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world, with debug keys and a text sample
     (T toggles it) drawn with TextDocument + TextLayout over the world.
 * World light culling (WorldLightCulling.md) - Reach-culls a list of point lights to the strongest few (up to WORLD_MAX_FORWARD_LIGHTS) overlapping an object's bounding sphere, ranked by influence, for the renderer's per-object forward shading.

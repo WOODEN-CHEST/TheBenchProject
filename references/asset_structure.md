@@ -397,8 +397,9 @@ A stage source may pull in shared GLSL with a line of its own:
   means line 27 of file 1, and the load error the game logs lists which number is which file. A missing include fails
   the load with an error naming the include, the including file and the line.
 
-Shared files today: `common/math` (`PI`) and `common/atmosphere` (the Rayleigh + Mie sky that the sky pass draws and
-the PBR shader's distance fog fades toward).
+Shared files today: `common/math` (`PI`), `common/atmosphere` (the Rayleigh + Mie sky that the sky pass draws and
+the PBR shader's distance fog fades toward) and `common/night_sky` (the air mass and extinction near the horizon, and
+the profile of light pollution's skyglow).
 
 
 ## Models.
