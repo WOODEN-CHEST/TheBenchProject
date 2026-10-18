@@ -23,6 +23,7 @@ int main(void)
     TextureTests_Run(&Run);
     WorldLightCullingTests_Run(&Run);
     WorldTests_Run(&Run);
+    PropertyDescriptorTests_Run(&Run);
     WorldEnvironmentTests_Run(&Run);
     NightSkyTests_Run(&Run);
     WorldDTOTests_Run(&Run);

@@ -31,6 +31,10 @@ void WorldLightCullingTests_Run(TestRun* run);
 /** @brief World object set, sprite binding under the world's asset user, renames (WorldTests.c). */
 void WorldTests_Run(TestRun* run);
 
+/** @brief Property tables: the self-check, construction, validation, copies, JSON and GHDF round trips, unknown keys,
+ *  access by key, migration, and the environment's table against the old encoder (PropertyDescriptorTests.c). */
+void PropertyDescriptorTests_Run(TestRun* run);
+
 /** @brief Environment validation, copying, the day-night advance and the celestial frame (WorldEnvironmentTests.c). */
 void WorldEnvironmentTests_Run(TestRun* run);
 

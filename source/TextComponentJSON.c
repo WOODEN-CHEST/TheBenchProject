@@ -1,7 +1,5 @@
 #include <float.h>
 #include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include "TextComponentJSON.h"
 #include "TextComponentCodec.h"
 #include "GameJSON.h"
@@ -12,16 +10,8 @@
 // Macros.
 #define KEY_TYPE (u8"type")
 #define KEY_CHILDREN (u8"children")
-#define KEY_TINT (u8"tint")
-#define KEY_BRIGHTNESS (u8"brightness")
-#define KEY_OPACITY (u8"opacity")
 /* The value of a shadow color or offset that asks for the default (derived color, the font's offset). */
 #define SHADOW_DEFAULT (u8"default")
-/* "#rrggbb" plus nothing else: a color written in hex has exactly this many bytes. */
-#define HEX_COLOR_BYTE_COUNT ((size_t)7)
-/* The %g precisions tried for a float's shortest decimal: printf's default first, FLT_DECIMAL_DIG always reads back. */
-#define SHORTEST_FLOAT_PRECISION_START 6
-#define SHORTEST_FLOAT_TEXT_SIZE 32
 
 
 // Types.
@@ -304,18 +294,6 @@ static Error SetEntry(JSONTextWriter* writer, JSONCompound* compound, const unsi
     return Result;
 }
 
-// Adds value to the array; on failure the value is returned to the pool.
-static Error AddElement(JSONTextWriter* writer, JSONArray* array, JSONObjectValue value)
-{
-    Error Result = JSONArray_Add(array, &value);
-    if (Result.Code != ErrorCode_Success)
-    {
-        Error ReturnResult = JSONObjectPool_ReturnValue(writer->Pool, &value);
-        Error_Deconstruct(&ReturnResult);
-    }
-    return Result;
-}
-
 static Error SetStringEntry(JSONTextWriter* writer, JSONCompound* compound, const unsigned char* key, const unsigned char* text)
 {
     JSONObjectValue Value;
@@ -391,92 +369,26 @@ static Error GetOrCreateArray(JSONTextWriter* writer, JSONCompound* compound, co
 }
 
 // A plain opaque color is written as "#rrggbb"; anything else as { "tint": [r, g, b], "brightness", "opacity" }.
-// A float as the decimal nearest its shortest text, so written JSON shows 0.1f as 0.1 (not 0.10000000149011612);
-// reading it back gives the same float.
-static JSONObjectValue CreateFloatValue(float value)
-{
-    char Text[SHORTEST_FLOAT_TEXT_SIZE];
-    for (int Precision = SHORTEST_FLOAT_PRECISION_START; Precision <= FLT_DECIMAL_DIG; Precision++)
-    {
-        int Count = snprintf(Text, sizeof(Text), "%.*g", Precision, (double)value);
-        if ((Count < 0) || ((size_t)Count >= sizeof(Text)))
-        {
-            break;
-        }
-        double ReadBack = strtod(Text, NULL);
-        if ((fabs(ReadBack) <= (double)FLT_MAX) && ((float)ReadBack == value))
-        {
-            return JSONObjectValue_CreateRealNumber(ReadBack);
-        }
-    }
-    return JSONObjectValue_CreateRealNumber((double)value);
-}
-
 static Error SetRenderColorEntry(JSONTextWriter* writer, JSONCompound* compound, const unsigned char* key, RenderColor color)
 {
-    if ((color.Brightness == 1.0f) && (color.Opacity == 1.0f))
-    {
-        static const unsigned char HexDigits[] = u8"0123456789abcdef";
-        unsigned char Hex[HEX_COLOR_BYTE_COUNT] =
-        {
-            (unsigned char)'#',
-            HexDigits[color.Tint.r >> 4], HexDigits[color.Tint.r & 0x0FU],
-            HexDigits[color.Tint.g >> 4], HexDigits[color.Tint.g & 0x0FU],
-            HexDigits[color.Tint.b >> 4], HexDigits[color.Tint.b & 0x0FU]
-        };
-        JSONObjectValue Value;
-        Error Result = CreateStringValue(writer, Hex, HEX_COLOR_BYTE_COUNT, &Value);
-        if (Result.Code != ErrorCode_Success)
-        {
-            return Result;
-        }
-        return SetEntry(writer, compound, key, Value);
-    }
-
-    JSONCompound* ColorCompound = NULL;
-    Error Result = GetOrCreateCompound(writer, compound, key, &ColorCompound);
+    JSONObjectValue Value;
+    Error Result = GameJSON_CreateRenderColorValue(writer->Pool, color, &Value);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
-    JSONArray* Tint = NULL;
-    Result = GetOrCreateArray(writer, ColorCompound, KEY_TINT, &Tint);
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddElement(writer, Tint, JSONObjectValue_CreateInteger((int64_t)color.Tint.r));
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddElement(writer, Tint, JSONObjectValue_CreateInteger((int64_t)color.Tint.g));
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddElement(writer, Tint, JSONObjectValue_CreateInteger((int64_t)color.Tint.b));
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = SetEntry(writer, ColorCompound, KEY_BRIGHTNESS, CreateFloatValue(color.Brightness));
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = SetEntry(writer, ColorCompound, KEY_OPACITY, CreateFloatValue(color.Opacity));
-    }
-    return Result;
+    return SetEntry(writer, compound, key, Value);
 }
 
 static Error SetVectorEntry(JSONTextWriter* writer, JSONCompound* compound, const unsigned char* key, Vector2 vector)
 {
-    JSONArray* Array = NULL;
-    Error Result = GetOrCreateArray(writer, compound, key, &Array);
-    if (Result.Code == ErrorCode_Success)
+    JSONObjectValue Value;
+    Error Result = GameJSON_CreateVector2Value(writer->Pool, vector, &Value);
+    if (Result.Code != ErrorCode_Success)
     {
-        Result = AddElement(writer, Array, CreateFloatValue(vector.x));
+        return Result;
     }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddElement(writer, Array, CreateFloatValue(vector.y));
-    }
-    return Result;
+    return SetEntry(writer, compound, key, Value);
 }
 
 static bool Writer_AreShorthandsSupported(void* self)
@@ -546,7 +458,7 @@ static Error Writer_WriteField(void* self, TextCodecNode* node, const TextCodecF
         case TextCodecValueKind_Name:
             return SetStringEntry(Writer, Target, field->JsonKey, value->Text);
         case TextCodecValueKind_Decimal:
-            return SetEntry(Writer, Target, field->JsonKey, CreateFloatValue(value->Decimal));
+            return SetEntry(Writer, Target, field->JsonKey, GameJSON_CreateFloatValue(value->Decimal));
         case TextCodecValueKind_Boolean:
             return SetEntry(Writer, Target, field->JsonKey, JSONObjectValue_CreateBoolean(value->Boolean));
         case TextCodecValueKind_RenderColor:

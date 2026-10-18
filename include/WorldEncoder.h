@@ -11,7 +11,9 @@
  * This module bridges the world persistence snapshot (WorldDTO) and the binary GHDF format. It builds a
  * GHDFCompound tree that mirrors the DTO: a root compound with the format version, the world name and id
  * counter, a nested environment compound, and an array of per-object compounds. Every field is keyed by a
- * stable numeric entry id (see the WorldEncoder*Field enums), which together define the save schema.
+ * stable numeric entry id, which together define the save schema: the WorldEncoder*Field enums below for the root
+ * and the objects, and the wire ids of the environment's property table for the environment (written with
+ * Properties_WriteGHDF, every setting including defaults).
  *
  * It does NOT write bytes to disk. Turning the returned compound into a binary document/file is a separate
  * step (GHDF_Write), left for later. All compounds, arrays and strings in the result are borrowed from the
@@ -35,47 +37,12 @@ typedef enum WorldEncoderRootFieldEnum
     WorldEncoderRootField_Name = 2,
     /** @brief uint64 saved id counter (the next object id). */
     WorldEncoderRootField_NextObjectId = 3,
-    /** @brief Compound holding the environment settings (see WorldEncoderEnvironmentField). */
+    /** @brief Compound holding the environment settings, keyed by the wire ids of the environment's property table
+     *  (WorldEnvironment_GetPropertyTable). */
     WorldEncoderRootField_Environment = 4,
     /** @brief Array of compounds, one per object (see WorldEncoderObjectField). */
     WorldEncoderRootField_Objects = 5
 } WorldEncoderRootField;
-
-/**
- * @brief Entry ids of the fields in the environment compound.
- */
-typedef enum WorldEncoderEnvironmentFieldEnum
-{
-    WorldEncoderEnvironmentField_TimeOfDay = 1,             /**< @brief float time of day [0;1]. */
-    WorldEncoderEnvironmentField_IsDayNightCycleEnabled = 2,/**< @brief bool day-night cycle enabled. */
-    WorldEncoderEnvironmentField_DayLengthSeconds = 3,      /**< @brief float day length in seconds. */
-    WorldEncoderEnvironmentField_SkyTurbidity = 4,          /**< @brief float atmospheric turbidity. */
-    WorldEncoderEnvironmentField_SkyGroundAlbedo = 5,       /**< @brief uint8[4] RGBA ground albedo. */
-    WorldEncoderEnvironmentField_SkyTint = 6,               /**< @brief uint8[4] RGBA sky tint. */
-    WorldEncoderEnvironmentField_SunColor = 7,              /**< @brief uint8[4] RGBA sun color. */
-    WorldEncoderEnvironmentField_SunIntensity = 8,          /**< @brief float sun intensity. */
-    WorldEncoderEnvironmentField_SunSizeMultiplier = 9,     /**< @brief float sun size multiplier. */
-    WorldEncoderEnvironmentField_StarSeed = 10,             /**< @brief uint64 star seed. */
-    WorldEncoderEnvironmentField_StarDensity = 11,          /**< @brief float star density. */
-    WorldEncoderEnvironmentField_StarBrightness = 12,       /**< @brief float star brightness. */
-    WorldEncoderEnvironmentField_AmbientSkylightColor = 13, /**< @brief uint8[4] RGBA ambient color. */
-    WorldEncoderEnvironmentField_AmbientSkylightIntensity = 14, /**< @brief float ambient intensity. */
-    WorldEncoderEnvironmentField_FogColor = 15,            /**< @brief uint8[4] RGBA fog color. */
-    WorldEncoderEnvironmentField_FogStrength = 16,          /**< @brief float fog strength. */
-    WorldEncoderEnvironmentField_IsBloomEnabled = 17,       /**< @brief bool bloom enabled. */
-    WorldEncoderEnvironmentField_BloomStrength = 18,        /**< @brief float bloom strength. */
-    WorldEncoderEnvironmentField_AreSunshaftsEnabled = 19,  /**< @brief bool sunshafts enabled. */
-    WorldEncoderEnvironmentField_SunshaftStrength = 20,     /**< @brief float sunshaft strength. */
-    WorldEncoderEnvironmentField_AreShadowsEnabled = 21,    /**< @brief bool shadows enabled. */
-    WorldEncoderEnvironmentField_ShadowStrength = 22,       /**< @brief float shadow strength. */
-    WorldEncoderEnvironmentField_SunAngle = 23,            /**< @brief float sun-arc tilt from zenith at noon (radians). */
-    WorldEncoderEnvironmentField_IsAmbientOcclusionEnabled = 24, /**< @brief bool ambient occlusion enabled. */
-    WorldEncoderEnvironmentField_AmbientOcclusionStrength = 25, /**< @brief float ambient occlusion strength. */
-    WorldEncoderEnvironmentField_LightPollution = 26,       /**< @brief float light pollution [0;1]. */
-    WorldEncoderEnvironmentField_LightPollutionColor = 27,  /**< @brief uint8[4] RGBA light-pollution glow colour. */
-    WorldEncoderEnvironmentField_MilkyWayBrightness = 28,   /**< @brief float Milky Way brightness multiplier. */
-    WorldEncoderEnvironmentField_StarTwinkle = 29           /**< @brief float star twinkle strength [0;1]. */
-} WorldEncoderEnvironmentField;
 
 /**
  * @brief Entry ids of the fields in a per-object compound.

@@ -76,7 +76,8 @@ Current module list:
   * WorldSpriteObject - 2D sprite object referencing a sprite animation by name, owning its playback instance
     (+ outline / pixelation toggles); the World binds its animation.
   * WorldLight - Point light (color, intensity, size, casts-shadows toggle).
-  * WorldEnvironment - Per-world sky/sun/fog/effect settings (expandable data; Validate, CopyTo).
+  * WorldEnvironment - Per-world sky/sun/fog/effect settings, described by its property table (defaults,
+    validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md).
   * World - Owns the objects, mints the shared uint64 id counter, holds the environment; with an asset manager
     (World_Construct2) it owns an asset user and binds its sprites' animations; an object-set version.
   * WorldDTO - Flat persistent snapshot of a world + World<->DTO conversions.
@@ -95,6 +96,11 @@ Current module list:
     by the sky and star passes (WorldRendererSky.c, WorldRendererStars.c).
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world, with debug keys and a text sample
     (T toggles it) drawn with TextDocument + TextLayout over the world.
+* PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
+  once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
+  validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
+  keys by mode, migration hook) and write (defaults left out by default), and get/set by key. The one module allowed to
+  write `_` fields by offset. WorldEnvironment is the first client; new data types get a table, not hand-written codecs.
 * World light culling (WorldLightCulling.md) - Reach-culls a list of point lights to the strongest few (up to WORLD_MAX_FORWARD_LIGHTS) overlapping an object's bounding sphere, ranked by influence, for the renderer's per-object forward shading.
 * UI framework (UIFramework.md) - The in-game UI, on any surface (the window or a texture in the world: the host passes
   the pointer, the keyboard and the viewport). A screen holds a tree of widgets with slot + generation ids, routes the
@@ -132,9 +138,9 @@ Current module list:
   * TextLayout - Measures and arranges a document once (lines, wrap at spaces, shrink to width, alignment,
     bottom-aligned runs, tabs) into cached glyph and sprite runs; TextLayout_Refresh rebuilds only when the document,
     its tree or the options changed; TextLayout_Draw draws the runs (shadows first) through RenderContext_RenderGlyph.
-* GameJSON (GameJSON.md) - Shared parsers for the game's common JSON value shapes (numbers, booleans,
-  strings, colors, render colors, vectors); the asset-definition helpers and the text component codec
-  both use it so the value conventions live in one place. Raises ErrorCode_InvalidJSON for every bad value.
+* GameJSON (GameJSON.md) - Shared parsers and writers for the game's common JSON value shapes (numbers, booleans,
+  strings, colors, render colors, vectors); the asset-definition helpers, the text component codec and the property
+  tables all use it so the value conventions live in one place. Raises ErrorCode_InvalidJSON for every bad value.
 * Text component serialization (TextComponentSerialization.md) - Text component trees to and from the game's three
   formats. JSON (references/text_component_structure.md) and GHDF share ONE codec (source/TextComponentCodec.c,
   private) that lists every type's fields once, validates every value, names the key and the component's path in

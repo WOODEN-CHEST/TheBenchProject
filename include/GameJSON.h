@@ -10,13 +10,14 @@
 
 /**
  * @file GameJSON.h
- * @brief Shared parsers for the game's common JSON value shapes (numbers, booleans, strings, colors,
+ * @brief Shared parsers and writers for the game's common JSON value shapes (numbers, booleans, strings, colors,
  *        render colors, vectors).
  *
  * These implement the value conventions documented in references/asset_structure.md (and the render color
- * shape in references/text_component_structure.md) in one place, so asset-definition parsing and text
- * component parsing share the exact same logic instead of duplicating it. The functions operate on a
- * WRJSON value tree (produced by a shared JSONObjectPool); they do not consult the pool or the parser.
+ * shape in references/text_component_structure.md) in one place, so asset-definition parsing, text component
+ * parsing and the property tables share the exact same logic instead of duplicating it. The parsers operate on a
+ * WRJSON value tree (produced by a shared JSONObjectPool); they do not consult the pool or the parser. The writers
+ * (GameJSON_Create*Value) build values in the same conventions, so whatever they write the parsers read back exactly.
  *
  * Errors: every value that is present but bad (wrong shape, unparsable numeric string, non-finite or out-of-range
  * number) raises ErrorCode_InvalidJSON, whatever the underlying parser reported. Owned strings the helpers produce
@@ -40,6 +41,21 @@
  *       full set.
  */
 Error GameJSON_ValueToInt64(const JSONObjectValue* value, int64_t* outValue);
+
+/**
+ * @brief Converts a JSON value to a uint64 (accepts a non-negative integer, a whole real number within the uint64
+ *        range, or a numeric string with optional 0x/0b base prefix).
+ *
+ * JSON integers only reach INT64_MAX, so values above it are written as strings (see GameJSON_CreateUInt64Value),
+ * which this accepts up to UINT64_MAX. Negative values, fractions, infinities and NaN are rejected.
+ * @param value The value to convert; must not be NULL.
+ * @param outValue [out] Receives the integer. Must not be NULL. Unchanged on failure.
+ * @returns Success; ErrorCode_InvalidJSON if the value is not a non-negative integer, a whole in-range real number
+ *          or a parsable string (a parse failure keeps the parser's message).
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error GameJSON_ValueToUInt64(const JSONObjectValue* value, uint64_t* outValue);
 
 /**
  * @brief Converts a JSON value to a finite double (accepts a real number, an integer, or a numeric string).
@@ -110,6 +126,20 @@ Error GameJSON_ParseRenderColor(const JSONObjectValue* value, RenderColor* outCo
 Error GameJSON_ParseVector2(const JSONObjectValue* value, Vector2* outVector);
 
 /**
+ * @brief Parses a decimal 3D vector from a JSON value (compound {x,y,z} or array [x,y,z]).
+ *
+ * Unlike GameJSON_ParseVector2, an array must have exactly three elements, so a color or a 4D value given by
+ * mistake is rejected instead of half-read.
+ * @param value The JSON value; must not be NULL.
+ * @param outVector [out] Receives the vector. Must not be NULL. Unchanged on failure.
+ * @returns Success; ErrorCode_InvalidJSON on a malformed vector, or a component that is not finite or does not fit
+ *          a float.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error GameJSON_ParseVector3(const JSONObjectValue* value, Vector3* outVector);
+
+/**
  * @brief Parses an integer 2D vector from a JSON value (compound {x,y} or array [x,y]).
  * @param value The JSON value; must not be NULL.
  * @param outX [out] Receives x. Must not be NULL.
@@ -175,3 +205,96 @@ Error GameJSON_ReadOptionalBoolean(JSONCompound* compound, const unsigned char* 
  */
 Error GameJSON_ReadOptionalVector2Int(JSONCompound* compound, const unsigned char* key,
     int64_t defaultX, int64_t defaultY, int64_t* outX, int64_t* outY);
+
+
+// Value writers (the parsers above read every value they build back exactly).
+/**
+ * @brief Makes a JSON number for a float, written as the shortest decimal that reads back to the same float.
+ *
+ * So 0.1f is written as 0.1, not 0.10000000149011612. A non-finite float stays non-finite, which JSON_Serialize
+ * refuses; check values before writing them.
+ * @param value The float.
+ * @returns A real-number value; it borrows nothing from a pool.
+ */
+JSONObjectValue GameJSON_CreateFloatValue(float value);
+
+/**
+ * @brief Makes a JSON string holding a copy of a NUL-terminated UTF-8 string (without the terminator, like every
+ *        WRJSON string).
+ * @param pool The pool to borrow the string from; must not be NULL.
+ * @param text The string; must not be NULL.
+ * @param outValue [out] Receives the string value, owned by the caller (store it in a container or return it to
+ *        @p pool). Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if an argument is NULL; ErrorCode_BufferTooLarge if the string could
+ *          not be built.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error GameJSON_CreateStringValue(JSONObjectPool* pool, const unsigned char* text, JSONObjectValue* outValue);
+
+/**
+ * @brief Makes a JSON value for a uint64: an integer when it fits the JSON integer range (up to INT64_MAX), a
+ *        decimal string otherwise (GameJSON_ValueToUInt64 reads both).
+ * @param pool The pool to borrow the string from, when one is needed; must not be NULL.
+ * @param value The integer.
+ * @param outValue [out] Receives the value, owned by the caller (store it in a container or return it to
+ *        @p pool). Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p pool or @p outValue is NULL; ErrorCode_BufferTooLarge if the
+ *          string could not be built.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error GameJSON_CreateUInt64Value(JSONObjectPool* pool, uint64_t value, JSONObjectValue* outValue);
+
+/**
+ * @brief Makes a JSON string for a color: "#rrggbb" when it is opaque (alpha 255), "#rrggbbaa" otherwise.
+ * @param pool The pool to borrow the string from; must not be NULL.
+ * @param color The color.
+ * @param outValue [out] Receives the string value, owned by the caller (store it in a container or return it to
+ *        @p pool). Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p pool or @p outValue is NULL; ErrorCode_BufferTooLarge if the
+ *          string could not be built.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error GameJSON_CreateColorValue(JSONObjectPool* pool, Color color, JSONObjectValue* outValue);
+
+/**
+ * @brief Makes a JSON value for a render color: "#rrggbb" when brightness and opacity are both 1, otherwise
+ *        { "tint": [r, g, b], "brightness": number, "opacity": number }.
+ *
+ * The tint's alpha is not written: a render color ignores it (the opacity carries the alpha).
+ * @param pool The pool to borrow the string or compound from; must not be NULL.
+ * @param color The render color.
+ * @param outValue [out] Receives the value, owned by the caller (store it in a container or return it to
+ *        @p pool). Must not be NULL. Nothing stays borrowed on failure.
+ * @returns Success; ErrorCode_IllegalArgument if @p pool or @p outValue is NULL; ErrorCode_BufferTooLarge if a
+ *          string could not be built.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error GameJSON_CreateRenderColorValue(JSONObjectPool* pool, RenderColor color, JSONObjectValue* outValue);
+
+/**
+ * @brief Makes a JSON array [x, y] for a 2D vector (components written as by GameJSON_CreateFloatValue).
+ * @param pool The pool to borrow the array from; must not be NULL.
+ * @param vector The vector.
+ * @param outValue [out] Receives the array value, owned by the caller (store it in a container or return it to
+ *        @p pool). Must not be NULL. Nothing stays borrowed on failure.
+ * @returns Success; ErrorCode_IllegalArgument if @p pool or @p outValue is NULL.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error GameJSON_CreateVector2Value(JSONObjectPool* pool, Vector2 vector, JSONObjectValue* outValue);
+
+/**
+ * @brief Makes a JSON array [x, y, z] for a 3D vector (components written as by GameJSON_CreateFloatValue).
+ * @param pool The pool to borrow the array from; must not be NULL.
+ * @param vector The vector.
+ * @param outValue [out] Receives the array value, owned by the caller (store it in a container or return it to
+ *        @p pool). Must not be NULL. Nothing stays borrowed on failure.
+ * @returns Success; ErrorCode_IllegalArgument if @p pool or @p outValue is NULL.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error GameJSON_CreateVector3Value(JSONObjectPool* pool, Vector3 vector, JSONObjectValue* outValue);

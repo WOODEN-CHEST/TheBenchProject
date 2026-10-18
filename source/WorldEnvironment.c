@@ -3,7 +3,6 @@
 #include "WorldEnvironment.h"
 #include "WorldShared.h"
 #include "raylib/raymath.h"
-#include "wr/WRCompile.h"
 
 
 // Macros.
@@ -39,148 +38,230 @@
 #define DAYLIGHT_SET_ELEVATION (-0.12f)
 /** Sun elevation at/above which daylight is at full strength (day). Twilight ramps between the two. */
 #define DAYLIGHT_RISE_ELEVATION (0.10f)
+/** The format version of the environment's property table. */
+#define ENVIRONMENT_TABLE_VERSION 1U
+
+/* The inspector's categories. */
+#define CATEGORY_TIME ((const unsigned char*)u8"Time of day")
+#define CATEGORY_SKY ((const unsigned char*)u8"Sky and sun")
+#define CATEGORY_NIGHT_SKY ((const unsigned char*)u8"Night sky")
+#define CATEGORY_AMBIENT ((const unsigned char*)u8"Ambient light")
+#define CATEGORY_FOG ((const unsigned char*)u8"Fog")
+#define CATEGORY_EFFECTS ((const unsigned char*)u8"Effects")
 
 
-// Types.
-/* A float field with a lower bound of 0, for WorldEnvironment_Validate: inclusive, or exclusive when 0 itself
- * breaks the maths (a zero day length or sun size). */
-typedef struct FloatRuleStruct
+// Fields.
+/* Every setting, in inspector order. The wire ids are the save schema (the GHDF entry ids the world encoder has always
+ * written): never renumber or reuse one; a removed setting's id goes into the table's retired list. */
+static const PropertyDescriptor EnvironmentProperties[] =
 {
-    const char* Name;
-    float Value;
-    bool IsZeroExcluded;
-} FloatRule;
+    {
+        .Key = u8"time_of_day", .WireId = 1U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, TimeOfDay),
+        .Default.FloatValue = WORLD_ENVIRONMENT_TIME_OF_DAY_NOON, .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_TIME, .DisplayName = u8"Time of day",
+        .Description = u8"The time of day as a fraction of the day: 0 is midnight, 0.5 noon. It places the sun.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"is_day_night_cycle_enabled", .WireId = 2U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldEnvironment, IsDayNightCycleEnabled), .Default.BoolValue = true,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_TIME, .DisplayName = u8"Day-night cycle",
+        .Description = u8"When on, the time of day advances by itself; when off, it stays where it is.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"day_length_seconds", .WireId = 3U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, DayLengthSeconds), .Default.FloatValue = DEFAULT_DAY_LENGTH_SECONDS,
+        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_TIME,
+        .DisplayName = u8"Day length", .Description = u8"Real seconds one full day-night cycle takes.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"sun_angle", .WireId = 23U, .Type = PropertyType_Angle, PROPERTY_MEMBER(WorldEnvironment, SunAngle),
+        .Default.FloatValue = DEFAULT_SUN_ANGLE, .Rules = PROPERTY_RULES_NONE, .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_SKY, .DisplayName = u8"Sun angle",
+        .Description = u8"How far the noon sun leans from straight overhead (0 = overhead). It also sets how high the "
+            u8"sky's pole stands, like a latitude.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"sky_turbidity", .WireId = 4U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, SkyTurbidity),
+        .Default.FloatValue = DEFAULT_SKY_TURBIDITY, .Rules = PROPERTY_RULES_AT_LEAST(0.0),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Haze",
+        .Description = u8"Atmospheric turbidity: higher values give a hazier, whiter sky.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"sky_ground_albedo", .WireId = 5U, .Type = PropertyType_Color,
+        PROPERTY_MEMBER(WorldEnvironment, SkyGroundAlbedo), .Default.ColorValue = { 90, 90, 90, 255 },
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Ground albedo",
+        .Description = u8"The ground's colour as the atmosphere sees it; it tints the horizon.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"sky_tint", .WireId = 6U, .Type = PropertyType_Color, PROPERTY_MEMBER(WorldEnvironment, SkyTint),
+        .Default.ColorValue = { 255, 255, 255, 255 }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY,
+        .DisplayName = u8"Sky tint", .Description = u8"Multiplies the sky's colour, for alien skies.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"sun_color", .WireId = 7U, .Type = PropertyType_Color, PROPERTY_MEMBER(WorldEnvironment, SunColor),
+        .Default.ColorValue = { 255, 244, 214, 255 }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY,
+        .DisplayName = u8"Sun colour", .Description = u8"The colour of the sun's disc and light.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"sun_intensity", .WireId = 8U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, SunIntensity),
+        .Default.FloatValue = DEFAULT_SUN_INTENSITY, .Rules = PROPERTY_RULES_AT_LEAST(0.0),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Sun intensity",
+        .Description = u8"Multiplies the sun's brightness.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"sun_size_multiplier", .WireId = 9U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, SunSizeMultiplier), .Default.FloatValue = DEFAULT_SUN_SIZE_MULTIPLIER,
+        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY,
+        .DisplayName = u8"Sun size", .Description = u8"Multiplies the sun disc's apparent size.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"star_seed", .WireId = 10U, .Type = PropertyType_UInt64, PROPERTY_MEMBER(WorldEnvironment, StarSeed),
+        .Default.UInt64Value = 0U, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_NIGHT_SKY,
+        .DisplayName = u8"Star seed", .Description = u8"Which stars the sky has: the same seed gives the same stars.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"star_density", .WireId = 11U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, StarDensity),
+        .Default.FloatValue = DEFAULT_STAR_DENSITY, .Rules = PROPERTY_RULES_AT_LEAST(0.0),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_NIGHT_SKY, .DisplayName = u8"Star density",
+        .Description = u8"How many stars there are: 1 is an Earth-like sky (about 9000), 0 none; at most 20000.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"star_brightness", .WireId = 12U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, StarBrightness), .Default.FloatValue = DEFAULT_STAR_BRIGHTNESS,
+        .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_NIGHT_SKY,
+        .DisplayName = u8"Star brightness", .Description = u8"Multiplies the stars' natural brightness.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"star_twinkle", .WireId = 29U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, StarTwinkle),
+        .Default.FloatValue = DEFAULT_STAR_TWINKLE, .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_NIGHT_SKY, .DisplayName = u8"Star twinkle",
+        .Description = u8"How strongly stars twinkle, 0 (steady) to 1; more near the horizon.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"milky_way_brightness", .WireId = 28U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, MilkyWayBrightness), .Default.FloatValue = DEFAULT_MILKY_WAY_BRIGHTNESS,
+        .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_NIGHT_SKY,
+        .DisplayName = u8"Milky Way brightness", .Description = u8"Multiplies the Milky Way's natural brightness.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"light_pollution", .WireId = 26U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, LightPollution), .Default.FloatValue = DEFAULT_LIGHT_POLLUTION,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_NIGHT_SKY,
+        .DisplayName = u8"Light pollution",
+        .Description = u8"Light from nearby towns, 0 (a dark site) to 1 (a city centre): it hides faint stars, washes "
+            u8"out the Milky Way and makes the horizon glow at night.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"light_pollution_color", .WireId = 27U, .Type = PropertyType_Color,
+        PROPERTY_MEMBER(WorldEnvironment, LightPollutionColor), .Default.ColorValue = { 255, 160, 90, 255 },
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_NIGHT_SKY, .DisplayName = u8"Light pollution colour",
+        .Description = u8"The colour of the light-pollution glow (sodium street lamps by default).", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"ambient_skylight_color", .WireId = 13U, .Type = PropertyType_Color,
+        PROPERTY_MEMBER(WorldEnvironment, AmbientSkylightColor), .Default.ColorValue = { 255, 255, 255, 255 },
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_AMBIENT, .DisplayName = u8"Ambient tint",
+        .Description = u8"Tints the ambient light, whose hue follows the sky; white leaves it as it is.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"ambient_skylight_intensity", .WireId = 14U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, AmbientSkylightIntensity), .Default.FloatValue = DEFAULT_AMBIENT_INTENSITY,
+        .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_AMBIENT,
+        .DisplayName = u8"Ambient intensity", .Description = u8"Multiplies the ambient light.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"fog_color", .WireId = 15U, .Type = PropertyType_Color, PROPERTY_MEMBER(WorldEnvironment, FogColor),
+        .Default.ColorValue = { 170, 190, 220, 255 }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_FOG,
+        .DisplayName = u8"Fog colour",
+        .Description = u8"Not used by the renderer: distant objects fade into the sky's own colour. Kept for saved data.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"fog_strength", .WireId = 16U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, FogStrength),
+        .Default.FloatValue = DEFAULT_FOG_STRENGTH, .Rules = PROPERTY_RULES_AT_LEAST(0.0),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_FOG, .DisplayName = u8"Fog strength",
+        .Description = u8"Multiplies the distance fog (with the player's own fog setting).", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"is_bloom_enabled", .WireId = 17U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldEnvironment, IsBloomEnabled), .Default.BoolValue = true, .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_EFFECTS, .DisplayName = u8"Bloom",
+        .Description = u8"When off, this world has no bloom whatever the player's settings.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"bloom_strength", .WireId = 18U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, BloomStrength), .Default.FloatValue = DEFAULT_EFFECT_STRENGTH,
+        .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_EFFECTS,
+        .DisplayName = u8"Bloom strength", .Description = u8"Multiplies the bloom (with the player's own setting).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"are_sunshafts_enabled", .WireId = 19U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldEnvironment, AreSunshaftsEnabled), .Default.BoolValue = true,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_EFFECTS, .DisplayName = u8"Sun shafts",
+        .Description = u8"When off, this world has no sun shafts whatever the player's settings.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"sunshaft_strength", .WireId = 20U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, SunshaftStrength), .Default.FloatValue = DEFAULT_EFFECT_STRENGTH,
+        .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_EFFECTS,
+        .DisplayName = u8"Sun shaft strength",
+        .Description = u8"Multiplies the sun shafts (with the player's own setting).", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"are_shadows_enabled", .WireId = 21U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldEnvironment, AreShadowsEnabled), .Default.BoolValue = true,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_EFFECTS, .DisplayName = u8"Shadows",
+        .Description = u8"When off, objects in this world cast no shadows whatever the player's settings.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"shadow_strength", .WireId = 22U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, ShadowStrength), .Default.FloatValue = DEFAULT_EFFECT_STRENGTH,
+        .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_EFFECTS,
+        .DisplayName = u8"Shadow strength",
+        .Description = u8"Multiplies how dark shadows are (with the player's own setting).", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"is_ambient_occlusion_enabled", .WireId = 24U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldEnvironment, IsAmbientOcclusionEnabled), .Default.BoolValue = true,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_EFFECTS, .DisplayName = u8"Ambient occlusion",
+        .Description = u8"When off, this world has no ambient occlusion whatever the player's settings.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"ambient_occlusion_strength", .WireId = 25U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, AmbientOcclusionStrength), .Default.FloatValue = DEFAULT_EFFECT_STRENGTH,
+        .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_EFFECTS,
+        .DisplayName = u8"Ambient occlusion strength",
+        .Description = u8"Multiplies how much ambient occlusion darkens creases and contacts (with the player's own "
+            u8"setting).",
+        .SinceVersion = 1U
+    },
+};
 
-
-// Public functions.
-void WorldEnvironment_SetDefaults(WorldEnvironment* self)
+static const PropertyTable EnvironmentTable =
 {
-    if (self == NULL)
-    {
-        return;
-    }
-
-    self->TimeOfDay = WORLD_ENVIRONMENT_TIME_OF_DAY_NOON;
-    self->IsDayNightCycleEnabled = true;
-    self->DayLengthSeconds = DEFAULT_DAY_LENGTH_SECONDS;
-    self->SunAngle = DEFAULT_SUN_ANGLE;
-
-    self->SkyTurbidity = DEFAULT_SKY_TURBIDITY;
-    self->SkyGroundAlbedo = (Color){ .r = 90, .g = 90, .b = 90, .a = 255 };
-    self->SkyTint = WHITE;
-
-    self->SunColor = (Color){ .r = 255, .g = 244, .b = 214, .a = 255 };
-    self->SunIntensity = DEFAULT_SUN_INTENSITY;
-    self->SunSizeMultiplier = DEFAULT_SUN_SIZE_MULTIPLIER;
-
-    self->StarSeed = 0;
-    self->StarDensity = DEFAULT_STAR_DENSITY;
-    self->StarBrightness = DEFAULT_STAR_BRIGHTNESS;
-    self->StarTwinkle = DEFAULT_STAR_TWINKLE;
-    self->MilkyWayBrightness = DEFAULT_MILKY_WAY_BRIGHTNESS;
-    self->LightPollution = DEFAULT_LIGHT_POLLUTION;
-    self->LightPollutionColor = (Color){ .r = 255, .g = 160, .b = 90, .a = 255 }; // sodium street lamps
-
-    // Neutral (white) by default: the renderer derives the ambient HUE from the sky colour, so this acts as a
-    // tint on top of it (white = pure sky-driven ambient). A world can push it to warm/cool its fill light.
-    self->AmbientSkylightColor = WHITE;
-    self->AmbientSkylightIntensity = DEFAULT_AMBIENT_INTENSITY;
-
-    self->FogColor = (Color){ .r = 170, .g = 190, .b = 220, .a = 255 };
-    self->FogStrength = DEFAULT_FOG_STRENGTH;
-
-    self->IsBloomEnabled = true;
-    self->BloomStrength = DEFAULT_EFFECT_STRENGTH;
-
-    self->AreSunshaftsEnabled = true;
-    self->SunshaftStrength = DEFAULT_EFFECT_STRENGTH;
-
-    self->AreShadowsEnabled = true;
-    self->ShadowStrength = DEFAULT_EFFECT_STRENGTH;
-
-    self->IsAmbientOcclusionEnabled = true;
-    self->AmbientOcclusionStrength = DEFAULT_EFFECT_STRENGTH;
-}
-
-Error WorldEnvironment_Validate(const WorldEnvironment* self)
-{
-    if (self == NULL)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "WorldEnvironment_Validate: self must not be NULL.");
-    }
-
-    if (!WorldShared_IsFloatFinite(self->TimeOfDay) || (self->TimeOfDay < 0.0f) || (self->TimeOfDay > 1.0f))
-    {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
-            "WorldEnvironment: TimeOfDay must be finite and in [0, 1].");
-    }
-    if (!WorldShared_IsFloatFinite(self->SunAngle))
-    {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "WorldEnvironment: SunAngle must be finite.");
-    }
-    if (!WorldShared_IsFloatFinite(self->StarTwinkle) || (self->StarTwinkle < 0.0f) || (self->StarTwinkle > 1.0f))
-    {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
-            "WorldEnvironment: StarTwinkle must be finite and in [0, 1].");
-    }
-    if (!WorldShared_IsFloatFinite(self->LightPollution) || (self->LightPollution < 0.0f) || (self->LightPollution > 1.0f))
-    {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
-            "WorldEnvironment: LightPollution must be finite and in [0, 1].");
-    }
-
-    // Every other float has a lower bound: a minimum, or a strict minimum where 0 itself breaks the maths.
-    const FloatRule Rules[] =
-    {
-        { "DayLengthSeconds", self->DayLengthSeconds, true },
-        { "SkyTurbidity", self->SkyTurbidity, false },
-        { "SunIntensity", self->SunIntensity, false },
-        { "SunSizeMultiplier", self->SunSizeMultiplier, true },
-        { "StarDensity", self->StarDensity, false },
-        { "StarBrightness", self->StarBrightness, false },
-        { "MilkyWayBrightness", self->MilkyWayBrightness, false },
-        { "AmbientSkylightIntensity", self->AmbientSkylightIntensity, false },
-        { "FogStrength", self->FogStrength, false },
-        { "BloomStrength", self->BloomStrength, false },
-        { "SunshaftStrength", self->SunshaftStrength, false },
-        { "ShadowStrength", self->ShadowStrength, false },
-        { "AmbientOcclusionStrength", self->AmbientOcclusionStrength, false },
-    };
-    for (size_t Index = 0; Index < sizeof(Rules) / sizeof(Rules[0]); Index++)
-    {
-        const FloatRule* Rule = &Rules[Index];
-        bool IsAboveMinimum = Rule->IsZeroExcluded ? (Rule->Value > 0.0f) : (Rule->Value >= 0.0f);
-        if (!WorldShared_IsFloatFinite(Rule->Value) || !IsAboveMinimum)
-        {
-            return Error_Construct4(ErrorCode_ArgumentOutOfRange, "WorldEnvironment: %s must be finite and %s.",
-                Rule->Name, Rule->IsZeroExcluded ? "> 0" : ">= 0");
-        }
-    }
-    return Error_CreateSuccess();
-}
-
-Error WorldEnvironment_CopyTo(const WorldEnvironment* self, WorldEnvironment* destination)
-{
-    if ((self == NULL) || (destination == NULL))
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument,
-            "WorldEnvironment_CopyTo: self and destination must not be NULL.");
-    }
-    if (self == destination)
-    {
-        return Error_CreateSuccess();
-    }
-
-    // No owned fields yet, so a plain copy is a full copy. Once one exists: release the destination's, copy the
-    // plain fields, then clone the owned ones.
-    *destination = *self;
-    return Error_CreateSuccess();
-}
-
-void WorldEnvironment_Deconstruct(WorldEnvironment* self)
-{
-    UNUSED(self);
-}
+    .Name = u8"world_environment",
+    .Version = ENVIRONMENT_TABLE_VERSION,
+    .StructSize = sizeof(WorldEnvironment),
+    .Descriptors = EnvironmentProperties,
+    .DescriptorCount = sizeof(EnvironmentProperties) / sizeof(EnvironmentProperties[0]),
+    .RetiredWireIds = NULL,
+    .RetiredWireIdCount = 0U,
+    .AfterSet = NULL,
+    .Migrate = NULL
+};
 
 
 // Static functions.
@@ -219,6 +300,65 @@ static Color TintColor(Color base, Color tint)
 
 
 // Public functions.
+const PropertyTable* WorldEnvironment_GetPropertyTable(void)
+{
+    return &EnvironmentTable;
+}
+
+void WorldEnvironment_SetDefaults(WorldEnvironment* self)
+{
+    if (self == NULL)
+    {
+        return;
+    }
+    Error Result = Properties_Construct(&EnvironmentTable, self); // fails only for NULL arguments
+    Error_Deconstruct(&Result);
+}
+
+Error WorldEnvironment_Validate(const WorldEnvironment* self)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldEnvironment_Validate: self must not be NULL.");
+    }
+    return Properties_Validate(&EnvironmentTable, self);
+}
+
+Error WorldEnvironment_CopyTo(const WorldEnvironment* self, WorldEnvironment* destination)
+{
+    if ((self == NULL) || (destination == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "WorldEnvironment_CopyTo: self and destination must not be NULL.");
+    }
+    return Properties_CopyTo(&EnvironmentTable, self, destination);
+}
+
+void WorldEnvironment_Deconstruct(WorldEnvironment* self)
+{
+    Properties_Deconstruct(&EnvironmentTable, self);
+}
+
+Error WorldEnvironment_ReadJSON(WorldEnvironment* self, JSONCompound* compound, const PropertyReadOptions* options)
+{
+    if ((self == NULL) || (compound == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldEnvironment_ReadJSON: self and compound must not be NULL.");
+    }
+    return Properties_ReadJSON(&EnvironmentTable, compound, self, options);
+}
+
+Error WorldEnvironment_WriteJSON(const WorldEnvironment* self, JSONObjectPool* pool, JSONCompound* compound,
+    const PropertyWriteOptions* options)
+{
+    if ((self == NULL) || (pool == NULL) || (compound == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "WorldEnvironment_WriteJSON: self, pool and compound must not be NULL.");
+    }
+    return Properties_WriteJSON(&EnvironmentTable, self, pool, compound, options);
+}
+
 Vector3 WorldEnvironment_GetSunDirection(const WorldEnvironment* self)
 {
     // Angle sweeps so that dawn (0.25)/dusk (0.75) are on the horizon and the arc peaks at noon (0.5).

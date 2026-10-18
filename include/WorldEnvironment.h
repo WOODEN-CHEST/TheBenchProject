@@ -4,6 +4,8 @@
 // Color is a Raylib type used for the sky/fog/light colors stored here, so this include is unavoidable.
 #include "raylib/raylib.h"
 #include "wr/WRError.h"
+#include "wr/WRJSON.h"
+#include "PropertyDescriptor.h"
 
 
 /**
@@ -17,15 +19,20 @@
  * multipliers. These are DATA ONLY; the world renderer reads them, but this module has no rendering
  * logic and no dependency on the renderer.
  *
- * The struct is a value type that currently owns no heap memory. Copy it with WorldEnvironment_CopyTo rather
- * than by assignment, so a future owned field (a skybox name, a LUT path) cannot turn copies into double
- * frees. It is deliberately expandable: to add a setting, add a field, give it a default in
- * WorldEnvironment_SetDefaults, a rule in WorldEnvironment_Validate (if it has one) and copy it in
- * WorldEnvironment_CopyTo. Effect strengths are stored as multipliers so a world can dial an effect down to 0
- * or boost it; the renderer multiplies them with the game config's own multipliers.
+ * Every field is described once in the environment's property table (WorldEnvironment_GetPropertyTable, in
+ * source/WorldEnvironment.c): its key (the field name in snake_case, e.g. "light_pollution"), its GHDF wire id, its
+ * default and its rules. The functions below are thin wrappers over the generic property functions
+ * (PropertyDescriptor.h), so defaults, validation, copying, JSON and GHDF all come from that one table. To add a
+ * setting, add the field and one table row with a new, never used wire id. Effect strengths are stored as
+ * multipliers so a world can dial an effect down to 0 or boost it; the renderer multiplies them with the game
+ * config's own multipliers.
+ *
+ * The struct currently owns no heap memory, but treat it as if it did: construct it with WorldEnvironment_SetDefaults,
+ * copy it with WorldEnvironment_CopyTo rather than by assignment, and release it with WorldEnvironment_Deconstruct,
+ * so an owned field (a texture name) can be added without turning copies into double frees.
  *
  * Data from outside the program (a save, an editor, a downloaded story) must pass WorldEnvironment_Validate
- * before it is used: the field comments below state the rules it enforces.
+ * before it is used (the readers do it themselves): the field comments below state the rules it enforces.
  */
 
 
@@ -38,9 +45,8 @@
 /**
  * @brief The environment/graphics settings of a single world.
  *
- * A value type; populate with WorldEnvironment_SetDefaults, then adjust individual fields. Copy with
- * WorldEnvironment_CopyTo. Release with WorldEnvironment_Deconstruct (currently a no-op, present for
- * future-proofing).
+ * Populate with WorldEnvironment_SetDefaults, then adjust individual fields. Copy with WorldEnvironment_CopyTo.
+ * Release with WorldEnvironment_Deconstruct (nothing to free yet, but pair it with every SetDefaults).
  */
 typedef struct WorldEnvironmentStruct
 {
@@ -134,28 +140,42 @@ typedef struct WorldEnvironmentStruct
 
 // Functions.
 /**
- * @brief Resets an environment to its built-in defaults (a clear daytime sky, gentle effects).
+ * @brief Returns the environment's property table: every field's key, wire id, type, default, rules and flags.
+ *
+ * Generic code (the world encoder, the editor's inspector, scripts, tests) works on environments through it with the
+ * Properties_* functions.
+ * @returns The table; static, never NULL.
+ */
+const PropertyTable* WorldEnvironment_GetPropertyTable(void);
+
+/**
+ * @brief Constructs an environment with its built-in defaults (a clear daytime sky, gentle effects): the table's
+ *        Properties_Construct.
+ *
+ * Call it on a new environment and pair it with WorldEnvironment_Deconstruct; on one that holds owned data, release
+ * that first.
  * @param self The environment to populate. May be NULL, in which case the call does nothing.
  */
 void WorldEnvironment_SetDefaults(WorldEnvironment* self);
 
 /**
- * @brief Checks every field against the rules stated in the field comments.
+ * @brief Checks every field against the rules stated in the field comments (the table's Properties_Validate).
  *
  * Use it on any environment that came from outside the program (a save file, an editor, downloaded content)
  * before applying it to a world: a NaN or infinite value would otherwise poison the time of day, the sun
  * direction and the lighting permanently. Colors, booleans and the star seed accept every value.
  * @param self The environment to check; must not be NULL.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange naming the
- *          first field that breaks its rule.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange naming the first field
+ *          that breaks its rule, by key and by C name, e.g. "world_environment.light_pollution (LightPollution) must
+ *          be finite and in [0, 1]."
  */
 Error WorldEnvironment_Validate(const WorldEnvironment* self);
 
 /**
- * @brief Copies an environment into another one, replacing the destination's settings.
+ * @brief Copies an environment into another one, replacing the destination's settings (a deep copy, the table's
+ *        Properties_CopyTo).
  *
- * Use this instead of struct assignment. Today it is a plain copy; when the environment gains owned fields,
- * this is the one place that deep-copies them and releases what the destination held.
+ * Use this instead of struct assignment, so owned fields are cloned and what the destination held is released.
  * @param self The environment to copy; must not be NULL.
  * @param destination The environment to overwrite (populated with WorldEnvironment_SetDefaults or an earlier
  *        copy); must not be NULL. May equal @p self (then nothing changes).
@@ -164,13 +184,46 @@ Error WorldEnvironment_Validate(const WorldEnvironment* self);
 Error WorldEnvironment_CopyTo(const WorldEnvironment* self, WorldEnvironment* destination);
 
 /**
- * @brief Releases any resources owned by an environment.
+ * @brief Releases any resources owned by an environment (the table's Properties_Deconstruct).
  *
- * Present for symmetry and future-proofing; a WorldEnvironment currently owns nothing, so this is a
- * no-op. Safe to call on any environment, including NULL.
+ * An environment owns nothing yet; call it anyway, so owned fields can be added. Safe to call on any constructed
+ * environment, also more than once, and on NULL.
  * @param self The environment to release, or NULL.
  */
 void WorldEnvironment_Deconstruct(WorldEnvironment* self);
+
+/**
+ * @brief Reads an environment from a JSON compound (the table's Properties_ReadJSON): all or nothing.
+ *
+ * Keys are the fields' snake_case names; absent keys give the defaults; colors are "#rrggbb[aa]" (or any GameJSON
+ * color form) and the sun angle is in degrees. Everything is validated before @p self changes; on failure it is
+ * unchanged.
+ * @param self A constructed environment to fill; must not be NULL.
+ * @param compound The JSON data; must not be NULL. A migration for older data may change it in place.
+ * @param options The read options (unknown keys, data version), or NULL for PropertyReadOptions_CreateDefault (unknown
+ *        keys fail the read).
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p compound is NULL; ErrorCode_InvalidJSON naming the
+ *          key of a bad or unknown value.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error WorldEnvironment_ReadJSON(WorldEnvironment* self, JSONCompound* compound, const PropertyReadOptions* options);
+
+/**
+ * @brief Writes an environment into a JSON compound (the table's Properties_WriteJSON).
+ *
+ * By default only settings that differ from their defaults are written, so world files stay short.
+ * @param self The environment; must not be NULL. It is validated first.
+ * @param pool The pool owning @p compound; must not be NULL.
+ * @param compound The compound to write into; must not be NULL.
+ * @param options The write options, or NULL for PropertyWriteOptions_CreateDefault.
+ * @returns Success; ErrorCode_IllegalArgument if an argument is NULL; ErrorCode_ArgumentOutOfRange for an invalid
+ *          environment.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error WorldEnvironment_WriteJSON(const WorldEnvironment* self, JSONObjectPool* pool, JSONCompound* compound,
+    const PropertyWriteOptions* options);
 
 /**
  * @brief Returns the unit direction pointing TO the sun for the current time of day.

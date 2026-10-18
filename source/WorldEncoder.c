@@ -1,7 +1,6 @@
-// TODO: Saves are write-only so far: there is no decoder (GHDF -> WorldDTO) and no stream read/write, so the
-// save schema has never been round-tripped. The hand-written WorldDecoder of FIX_PLAN Phase 3 waits for the
-// owner's architecture decisions A1/A5 (handoff/2026-10_code_review/ARCHITECTURE_PROPOSAL.md): worlds may
-// become JSON with codecs generated from property descriptors.
+// TODO: Saves are write-only so far: there is no decoder (GHDF -> WorldDTO) and no stream read/write. The environment
+// already reads back through its property table (Properties_ReadGHDF); the objects move onto tables in T05, and the
+// world files (JSON and GHDF load and save) come with T09.
 #include "WorldEncoder.h"
 #include "wr/WRMemory.h"
 
@@ -142,67 +141,6 @@ static Error PutColor(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID 
 
 
 // Static functions: sub-tree encoders.
-static Error EncodeEnvironment(GHDFObjectPool* pool, GHDFCompound* compound, const WorldEnvironment* environment)
-{
-    Error Result = PutFloat(compound, WorldEncoderEnvironmentField_TimeOfDay, environment->TimeOfDay);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutBool(compound, WorldEncoderEnvironmentField_IsDayNightCycleEnabled, environment->IsDayNightCycleEnabled);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_DayLengthSeconds, environment->DayLengthSeconds);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_SunAngle, environment->SunAngle);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_SkyTurbidity, environment->SkyTurbidity);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutColor(pool, compound, WorldEncoderEnvironmentField_SkyGroundAlbedo, environment->SkyGroundAlbedo);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutColor(pool, compound, WorldEncoderEnvironmentField_SkyTint, environment->SkyTint);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutColor(pool, compound, WorldEncoderEnvironmentField_SunColor, environment->SunColor);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_SunIntensity, environment->SunIntensity);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_SunSizeMultiplier, environment->SunSizeMultiplier);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutUInt64(compound, WorldEncoderEnvironmentField_StarSeed, environment->StarSeed);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_StarDensity, environment->StarDensity);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_StarBrightness, environment->StarBrightness);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutColor(pool, compound, WorldEncoderEnvironmentField_AmbientSkylightColor, environment->AmbientSkylightColor);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_AmbientSkylightIntensity, environment->AmbientSkylightIntensity);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutColor(pool, compound, WorldEncoderEnvironmentField_FogColor, environment->FogColor);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_FogStrength, environment->FogStrength);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutBool(compound, WorldEncoderEnvironmentField_IsBloomEnabled, environment->IsBloomEnabled);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_BloomStrength, environment->BloomStrength);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutBool(compound, WorldEncoderEnvironmentField_AreSunshaftsEnabled, environment->AreSunshaftsEnabled);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_SunshaftStrength, environment->SunshaftStrength);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutBool(compound, WorldEncoderEnvironmentField_AreShadowsEnabled, environment->AreShadowsEnabled);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_ShadowStrength, environment->ShadowStrength);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutBool(compound, WorldEncoderEnvironmentField_IsAmbientOcclusionEnabled, environment->IsAmbientOcclusionEnabled);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_AmbientOcclusionStrength, environment->AmbientOcclusionStrength);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_LightPollution, environment->LightPollution);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutColor(pool, compound, WorldEncoderEnvironmentField_LightPollutionColor, environment->LightPollutionColor);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = PutFloat(compound, WorldEncoderEnvironmentField_MilkyWayBrightness, environment->MilkyWayBrightness);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    return PutFloat(compound, WorldEncoderEnvironmentField_StarTwinkle, environment->StarTwinkle);
-}
-
 static Error EncodeObject(GHDFObjectPool* pool, GHDFCompound* compound, const WorldObjectDTO* record)
 {
     Error Result = PutUInt8(compound, WorldEncoderObjectField_Type, (uint8_t)record->Type);
@@ -302,7 +240,11 @@ static Error EncodeRoot(GHDFObjectPool* pool, GHDFCompound* root, const WorldDTO
     GHDFCompound* EnvironmentCompound = NULL;
     Result = GHDFObjectPool_BorrowCompound(pool, &EnvironmentCompound);
     if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = EncodeEnvironment(pool, EnvironmentCompound, &dto->Environment);
+    // Every setting, defaults included, under the table's wire ids: the same entries the hand-written encoder wrote.
+    PropertyWriteOptions EnvironmentOptions = PropertyWriteOptions_CreateDefault();
+    EnvironmentOptions.AreDefaultsWritten = true;
+    Result = Properties_WriteGHDF(WorldEnvironment_GetPropertyTable(), &dto->Environment, pool, EnvironmentCompound,
+        &EnvironmentOptions);
     if (Result.Code != ErrorCode_Success)
     {
         Error ReturnResult = GHDFObjectPool_ReturnCompound(pool, EnvironmentCompound, true);

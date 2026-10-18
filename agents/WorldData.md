@@ -14,7 +14,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldModelObject | `include/WorldModelObject.h`, `source/WorldModelObject.c` | 3D model object (references a model asset by name). |
 | WorldSpriteObject | `include/WorldSpriteObject.h`, `source/WorldSpriteObject.c` | 2D sprite object (references a sprite animation by name, owns its playback instance). |
 | WorldLight | `include/WorldLight.h`, `source/WorldLight.c` | Point light (color/intensity/size/shadow toggle). |
-| WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/fog/effect settings, with validation and copying. |
+| WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF). |
 | World | `include/World.h`, `source/World.c` | Owns the objects, mints ids, holds the environment and its own asset user. |
 | WorldDTO | `include/WorldDTO.h`, `source/WorldDTO.c` | Flat persistent snapshot + World<->DTO conversions. |
 | WorldEncoder | `include/WorldEncoder.h`, `source/WorldEncoder.c` | Encodes a WorldDTO into a GHDF compound tree. |
@@ -72,10 +72,23 @@ an owned name, an embedded `WorldEnvironment`, and (optionally) a borrowed asset
 
 ## Environment
 
-`WorldEnvironment` is a value type with the sky, sun, day-night, night sky, ambient, fog and effect settings. Its field
-comments state each value's rule; `WorldEnvironment_Validate` enforces them (finite, `TimeOfDay`, `LightPollution` and
-`StarTwinkle` in [0, 1], `DayLengthSeconds` and `SunSizeMultiplier` > 0, every strength/intensity/density/brightness
->= 0) and names the first broken field.
+`WorldEnvironment` is a struct with the sky, sun, day-night, night sky, ambient, fog and effect settings. **Every field
+is one row of its property table** (`WorldEnvironment_GetPropertyTable`, in `source/WorldEnvironment.c`; module doc
+[PropertyDescriptors.md](PropertyDescriptors.md)): the key (the field name in snake_case, e.g. `light_pollution`), the
+GHDF wire id, the type, the default, the rules, the inspector text. `WorldEnvironment_SetDefaults`, `_Validate`,
+`_CopyTo` and `_Deconstruct` are thin wrappers over the table, and `WorldEnvironment_ReadJSON` / `_WriteJSON` are the
+JSON entry points for the world files (T09). **To add a setting, add the field and one table row** with a new,
+never-used wire id (the next free one is 30); nothing else needs writing. The field comments state each value's rule;
+validation enforces them (finite, `TimeOfDay`, `LightPollution` and `StarTwinkle` in [0, 1], `DayLengthSeconds` and
+`SunSizeMultiplier` > 0, every strength/intensity/density/brightness >= 0) and names the first broken field by key and
+C name: `world_environment.light_pollution (LightPollution) must be finite and in [0, 1].` `SunAngle` is an `Angle`:
+radians in memory and GHDF, degrees in JSON.
+
+The environment owns no heap memory yet, but treat it as if it did: `WorldEnvironment_SetDefaults` constructs (call it
+on a new environment only) and pairs with `WorldEnvironment_Deconstruct`; copies go through `CopyTo`. `World` and
+`WorldDTO` already pair them; the environment tests call `SetDefaults` again on the same struct to reset it, which
+must change (to Deconstruct + SetDefaults) once the first owned string arrives (the per-world Milky Way and moon
+texture names).
 
 The night sky settings: `StarSeed` (which stars), `StarDensity` (1 = an Earth-like sky of about 9000 stars, the
 default; 0 none; at most 20000 stars), `StarBrightness`, `StarTwinkle` (0..1, default 0.25), `MilkyWayBrightness`
@@ -99,22 +112,24 @@ them with their saved ids and validating transforms as it goes; sprites are boun
 
 `WorldEncoder_EncodeToCompound` turns a `WorldDTO` into a `GHDFCompound` tree (root + environment
 sub-compound + array of object compounds), borrowing all compounds/arrays/strings from a caller-owned
-`GHDFObjectPool`. It does **not** write bytes. The stable numeric entry ids ARE the save schema; they live
-as `WorldEncoder*Field` enums in `WorldEncoder.h` (`WORLD_ENCODER_FORMAT_VERSION` = 1; the environment's ids run to 29,
-the night sky's newest being 26-29). Colors are stored as `uint8[4]` RGBA arrays, vectors as `float[3]` arrays.
+`GHDFObjectPool`. It does **not** write bytes. The stable numeric entry ids ARE the save schema: the root and object
+ids are `WorldEncoder*Field` enums in `WorldEncoder.h` (`WORLD_ENCODER_FORMAT_VERSION` = 1); the environment compound
+is written by `Properties_WriteGHDF` from the environment's table, every setting including defaults, under the table's
+wire ids (1-29, the same entries the hand-written encoder wrote; a test compares the trees). Colors are stored as
+`uint8[4]` RGBA arrays, vectors as `float[3]` arrays.
 
 Ownership note for the encoder: `GHDFCompound_SetValue` / `GHDFArray_AddValue` ADOPT the borrowed
 sub-resource, so on success it is never returned separately; on any failure the whole root is returned to
 the pool (which recursively frees everything already adopted).
 
-**There is no decoder yet** (no GHDF → DTO, no stream read/write): marked `// TODO:` in `WorldEncoder.c`. The
-hand-written decoder is deferred until the owner decides architecture A1/A5
-(`handoff/2026-10_code_review/ARCHITECTURE_PROPOSAL.md`), because worlds may become JSON with codecs generated
-from property descriptors.
+**There is no world decoder yet** (no GHDF → DTO, no stream read/write): marked `// TODO:` in `WorldEncoder.c`. The
+environment compound already reads back with `Properties_ReadGHDF(WorldEnvironment_GetPropertyTable(), ...)`; the
+objects move onto property tables in T05, and the world files (JSON and GHDF load and save) come with T09.
 
 ## Tests
 
 `tests/WorldTests.c` (object set, sprite binding and release, renames, guards), `tests/WorldEnvironmentTests.c`
-(validation, copying, advance, the celestial frame) and `tests/WorldDTOTests.c` (World → DTO → World round trip of every persisted
-field, bad-environment rejection). They run headless with `sh tests/run_linux.sh`; `tests/TestAssets.h`
+(validation, copying, advance, the celestial frame), `tests/WorldDTOTests.c` (World → DTO → World round trip of every persisted
+field, bad-environment rejection) and `tests/PropertyDescriptorTests.c` (the environment's table passes its check, its
+GHDF tree matches the old encoder's, its JSON round trip). They run headless with `sh tests/run_linux.sh`; `tests/TestAssets.h`
 provides code-built sprite animation and model definitions that load without files or a GL context.

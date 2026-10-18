@@ -11,8 +11,9 @@
 /** Asset name of the atmospheric sky shader (full-screen Rayleigh/Mie sky, sun disc, Milky Way, skyglow). */
 #define SKY_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sky")
 /** Asset name of the Milky Way panorama; a resource pack can override it. */
-// TODO: a per-world Milky Way texture needs an owned string in WorldEnvironment, which is easier after the property
-// descriptors (T04).
+// TODO: a per-world Milky Way texture: a `milky_way_texture` AssetName row in the environment's property table (T04
+// made owned strings cheap), loaded here by that name and reloaded when it changes. The environment tests must first
+// pair every WorldEnvironment_SetDefaults with WorldEnvironment_Deconstruct (see T04's status block).
 #define SKY_MILKY_WAY_ASSET_NAME ((const unsigned char*)u8"sky_milky_way")
 /** Linear radiance of a white Milky Way texel at MilkyWayBrightness 1, in full darkness without light pollution. At
  *  the night exposure the bright core reads as a soft glow and the outer band as a faint one. */
