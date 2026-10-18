@@ -1306,9 +1306,10 @@ static Error BuildTempFilePath(AssetManager* self, const unsigned char* extensio
     GenericBuffer FileName;
     GenericBuffer_AllocateVariable(&FileName, 0U, 1U);
 
-    // The number writer appends raw digits and then a NUL, so the prefix must not be NUL-terminated, and the
-    // pieces after the number go through StringUTF8_CopyTo, which drops that NUL first. (Appending raw after
-    // the number placed the extension behind the NUL and silently cut the name to "temp_<n>".)
+    // The prefix must not be NUL-terminated (the number would land behind the NUL), and the pieces after the number
+    // go through StringUTF8_CopyTo, which drops a trailing NUL first: the number writer leaves its NUL past the count,
+    // but libwr builds from WRFramework d15d052 and older counted it. (Appending raw after the number used to place the
+    // extension behind that NUL and silently cut the name to "temp_<n>".)
     Error Result = Error_CreateSuccess();
     if (!GenericBuffer_AppendString(&FileName, ASSET_MANAGER_TEMP_FILE_PREFIX))
     {

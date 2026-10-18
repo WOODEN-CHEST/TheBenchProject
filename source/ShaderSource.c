@@ -265,8 +265,9 @@ static Error AppendOutputString(ShaderExpansion* self, const unsigned char* text
     return Error_CreateSuccess();
 }
 
-/* Appends the decimal digits of @p value. The WRNumber writer appends a NUL after the digits and counts it (its
- * header says it does not count it), so a trailing NUL is dropped again. */
+/* Appends the decimal digits of @p value. WRNumber writes its NUL past the count, as its header says; libwr builds from
+ * WRFramework d15d052 and older counted it, which the trailing-NUL check undoes. */
+// TODO: drop the trailing-NUL check once lib/libwr.a is built from a WRFramework that has the WRNumber terminator fix.
 static bool AppendDecimal(GenericBuffer* buffer, size_t value)
 {
     Error Result = Number_UInt64ToString((uint64_t)value, NUMBER_BASE_10, false, buffer);
