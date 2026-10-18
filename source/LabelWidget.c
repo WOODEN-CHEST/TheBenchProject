@@ -88,39 +88,8 @@ static Vector2 FittedToScreenRel(RenderContext* context, Vector2 fitted)
     return RenderContext_VectorPixelToRelative(context, (Vector2){ .x = PixelX, .y = PixelY });
 }
 
-/* Product of the widget's ancestor sizes (its parent's absolute screen size); {1,1} for a root. */
-static Vector2 ComputeParentAbsoluteSize(Widget* widget)
-{
-    Vector2 Size = { .x = 1.0f, .y = 1.0f };
-    Widget* Parent = Widget_GetParent(widget);
-    while (Parent != NULL)
-    {
-        Vector2 ParentSize = Widget_GetSize(Parent);
-        Size.x *= ParentSize.x;
-        Size.y *= ParentSize.y;
-        Parent = Widget_GetParent(Parent);
-    }
-    return Size;
-}
-
 
 // Static functions: the widget hooks.
-/* Writes the label's widget box size to match the drawn text block (auto-fit), so hit-testing and the
- * keyboard-navigation outline wrap the text. Position (the anchor) is left untouched. */
-// TODO: this writes widget state during render (AGENTS.md rule 3) because only the render context knows the
-// target's aspect ratio. FIX_PLAN Phase 5 adds a Layout vtable slot for it.
-static Error AutoFitBox(LabelWidget* self, RenderContext* context, Vector2 drawSizeFitted)
-{
-    Vector2 BoxScreen = FittedToScreenRel(context, drawSizeFitted);
-    Vector2 ParentAbsolute = ComputeParentAbsoluteSize(&self->Base);
-    if ((ParentAbsolute.x <= 0.0f) || (ParentAbsolute.y <= 0.0f))
-    {
-        return Error_CreateSuccess();
-    }
-    Vector2 RelativeSize = { .x = BoxScreen.x / ParentAbsolute.x, .y = BoxScreen.y / ParentAbsolute.y };
-    return Widget_SetSize(&self->Base, RelativeSize);
-}
-
 static Error LabelWidget_UpdateVT(void* self, ProgramTime time)
 {
     LabelWidget* Label = self;
@@ -158,12 +127,28 @@ static Error LabelWidget_RenderVT(void* self, UIRenderContext* context)
             .height = BoundsScreen.y };
     }
 
-    Error DrawResult = TextLayout_Draw(&Label->_layout, Context, &Arguments);
-    if (DrawResult.Code != ErrorCode_Success)
+    return TextLayout_Draw(&Label->_layout, Context, &Arguments);
+}
+
+/* Sizes the label's widget box to the laid-out text block (auto-fit), so hit testing and the keyboard-navigation
+ * outline wrap the text; the position (the anchor) stays. The size is written only when it changes, so an idle label
+ * does not make the screen hit-test again every tick. */
+static Error LabelWidget_LayoutVT(void* self, const UILayoutContext* context)
+{
+    LabelWidget* Label = self;
+    Vector2 ParentSize = context->ParentAbsoluteSize;
+    if ((ParentSize.x <= 0.0f) || (ParentSize.y <= 0.0f))
     {
-        return DrawResult;
+        return Error_CreateSuccess();
     }
-    return AutoFitBox(Label, Context, DrawSize);
+    Vector2 BoxScreen = FittedToScreenRel(context->Measure, TextLayout_GetSize(&Label->_layout));
+    Vector2 Size = { .x = BoxScreen.x / ParentSize.x, .y = BoxScreen.y / ParentSize.y };
+    Vector2 CurrentSize = Widget_GetSize(&Label->Base);
+    if ((Size.x == CurrentSize.x) && (Size.y == CurrentSize.y))
+    {
+        return Error_CreateSuccess();
+    }
+    return Widget_SetSize(&Label->Base, Size);
 }
 
 static Error LabelWidget_OnDeconstructVT(void* self)
@@ -182,29 +167,30 @@ static Error LabelWidget_OnDeconstructVT(void* self)
     return First;
 }
 
-static Error LabelWidget_GetPropertyVT(void* self, int32_t propertyId, void* outValue)
+// The base checked the id and the value type against LabelProperties, so the switches only see declared ids.
+static Error LabelWidget_GetPropertyVT(void* self, int32_t propertyId, UIPropertyValue* outValue)
 {
     LabelWidget* Label = self;
     switch (propertyId)
     {
-        case LabelProperty_Size:     *(float*)outValue = Label->_size; return Error_CreateSuccess();
-        case LabelProperty_Rotation: *(float*)outValue = Label->_rotation; return Error_CreateSuccess();
-        case LabelProperty_Tint:     *(RenderColor*)outValue = Label->_tint; return Error_CreateSuccess();
-        case LabelProperty_Origin:   *(Vector2*)outValue = Label->_origin; return Error_CreateSuccess();
+        case LabelProperty_Size:     outValue->Data.FloatValue = Label->_size; return Error_CreateSuccess();
+        case LabelProperty_Rotation: outValue->Data.FloatValue = Label->_rotation; return Error_CreateSuccess();
+        case LabelProperty_Tint:     outValue->Data.RenderColorValue = Label->_tint; return Error_CreateSuccess();
+        case LabelProperty_Origin:   outValue->Data.Vector2Value = Label->_origin; return Error_CreateSuccess();
         default:
             return Error_Construct2(ErrorCode_InvalidOperation, "LabelWidget_GetProperty: unknown property id.");
     }
 }
 
-static Error LabelWidget_SetPropertyVT(void* self, int32_t propertyId, const void* value)
+static Error LabelWidget_SetPropertyVT(void* self, int32_t propertyId, const UIPropertyValue* value)
 {
     LabelWidget* Label = self;
     switch (propertyId)
     {
-        case LabelProperty_Size:     return LabelWidget_SetSize(Label, *(const float*)value);
-        case LabelProperty_Rotation: return LabelWidget_SetRotation(Label, *(const float*)value);
-        case LabelProperty_Tint:     return LabelWidget_SetTint(Label, *(const RenderColor*)value);
-        case LabelProperty_Origin:   return LabelWidget_SetOrigin(Label, *(const Vector2*)value);
+        case LabelProperty_Size:     return LabelWidget_SetSize(Label, value->Data.FloatValue);
+        case LabelProperty_Rotation: return LabelWidget_SetRotation(Label, value->Data.FloatValue);
+        case LabelProperty_Tint:     return LabelWidget_SetTint(Label, value->Data.RenderColorValue);
+        case LabelProperty_Origin:   return LabelWidget_SetOrigin(Label, value->Data.Vector2Value);
         default:
             return Error_Construct2(ErrorCode_InvalidOperation, "LabelWidget_SetProperty: unknown property id.");
     }
@@ -215,19 +201,29 @@ static Error LabelWidget_SetPropertyVT(void* self, int32_t propertyId, const voi
 static const WidgetVTable LabelWidgetVTable =
 {
     .Update = LabelWidget_UpdateVT,
+    .Layout = LabelWidget_LayoutVT,
     .Render = LabelWidget_RenderVT,
     .OnDeconstruct = LabelWidget_OnDeconstructVT,
     .GetProperty = LabelWidget_GetPropertyVT,
     .SetProperty = LabelWidget_SetPropertyVT
 };
 
+/* The label's typed properties (animatable through UIScreen_StartAnimation). */
+static const WidgetPropertyDescriptor LabelProperties[] =
+{
+    { .Id = LabelProperty_Size, .Type = UIPropertyType_Float, .Name = u8"size" },
+    { .Id = LabelProperty_Rotation, .Type = UIPropertyType_Float, .Name = u8"rotation" },
+    { .Id = LabelProperty_Tint, .Type = UIPropertyType_RenderColor, .Name = u8"tint" },
+    { .Id = LabelProperty_Origin, .Type = UIPropertyType_Vector2, .Name = u8"origin" },
+};
+
 
 // Static functions: the widget constructor (registered with the factory).
-// Everything that can fail happens before Widget_Construct, which registers the widget with its screen: a
-// constructor failing after it would leave the screen pointing at a slot the factory frees.
-static Error LabelWidget_ConstructVT(void* memory, UIScreen* screen, uint64_t typeId, void* args)
+// The factory built the base and only makes the label alive once this succeeds, so a failure here releases only what
+// this function acquired.
+static Error LabelWidget_ConstructVT(void* widget, void* args)
 {
-    LabelWidget* Label = memory;
+    LabelWidget* Label = widget;
     LabelWidgetArgs* Arguments = args;
     if ((Arguments == NULL) || (Arguments->ComponentFactory == NULL))
     {
@@ -248,18 +244,8 @@ static Error LabelWidget_ConstructVT(void* memory, UIScreen* screen, uint64_t ty
     }
     if (Arguments->Text != NULL)
     {
+        // On failure the text stays where it was (the caller's).
         Result = TextDocument_SetRoot(&Label->_document, Arguments->Text);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = Widget_Construct(&Label->Base, &LabelWidgetVTable, screen, typeId);
-        if (Result.Code != ErrorCode_Success)
-        {
-            // The caller keeps the text when the label is not created.
-            TextComponent* Returned = NULL;
-            Error TakeResult = TextDocument_TakeRoot(&Label->_document, &Returned);
-            Error_Deconstruct(&TakeResult);
-        }
     }
     if (Result.Code != ErrorCode_Success)
     {
@@ -289,7 +275,19 @@ Error LabelWidget_RegisterType(UIWidgetFactory* factory, uint64_t* outTypeId)
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "LabelWidget_RegisterType: factory and outTypeId must not be NULL.");
     }
-    return UIWidgetFactory_RegisterType(factory, sizeof(LabelWidget), LabelWidget_ConstructVT, NULL, 0, outTypeId);
+    WidgetTypeDescriptor Descriptor =
+    {
+        .Name = u8"Label",
+        .StructSize = sizeof(LabelWidget),
+        .VTable = &LabelWidgetVTable,
+        .Constructor = LabelWidget_ConstructVT,
+        .Capabilities = NULL,
+        .CapabilityCount = 0U,
+        .Properties = LabelProperties,
+        .PropertyCount = sizeof(LabelProperties) / sizeof(LabelProperties[0]),
+        .IsFocusable = false
+    };
+    return UIWidgetFactory_RegisterType(factory, &Descriptor, outTypeId);
 }
 
 Error LabelWidget_Create(UIScreen* screen,
@@ -309,7 +307,7 @@ Error LabelWidget_Create(UIScreen* screen,
 
     LabelWidgetArgs Arguments = { .ComponentFactory = componentFactory, .Assets = assets, .Logger = logger, .Text = text };
     Widget* Created = NULL;
-    Error Result = UIWidgetFactory_ConstructWidget(UIScreen_GetFactory(screen), screen, typeId, &Arguments, &Created);
+    Error Result = UIWidgetFactory_CreateWidget(UIScreen_GetFactory(screen), screen, typeId, &Arguments, &Created);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;

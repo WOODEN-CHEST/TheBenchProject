@@ -43,6 +43,14 @@
  */
 
 
+/** @brief How many clip rectangles can be nested (RenderContext_PushClip); deeper pushes do not narrow the clip. */
+#define RENDER_CONTEXT_MAX_CLIP_DEPTH ((size_t)32)
+/** @brief Number of maps in a raylib Material (raylib's private MAX_MATERIAL_MAPS: 12 in the pinned build, see
+ *  BUILDING.md; raylib.h does not export it). DrawMesh reads, and binds textures from, exactly this many entries of
+ *  Material.maps, so a per-draw material copy must have this many. Rebuilding raylib with another value means
+ *  changing this (and checking the world renderer's texture units). */
+#define RENDERER_MATERIAL_MAP_COUNT 12
+
 /** @brief Minimum accepted render color opacity (fully transparent). */
 #define RENDER_COLOR_OPACITY_MIN 0.0f
 /** @brief Maximum accepted render color opacity (fully opaque). */
@@ -90,6 +98,12 @@ typedef struct RenderContextStruct
     size_t _meshDrawCount;
     /** @brief Number of 2D primitives (rectangles, outlines, lines) drawn through this context since it was created. */
     size_t _primitiveDrawCount;
+
+    /** @brief The pushed clips in render-buffer pixels, each already intersected with the one below; the entry at
+     *  min(_clipDepth, RENDER_CONTEXT_MAX_CLIP_DEPTH) - 1 is the active clip. */
+    Rectangle _clipStack[RENDER_CONTEXT_MAX_CLIP_DEPTH];
+    /** @brief Number of pushed clips not yet popped; may exceed RENDER_CONTEXT_MAX_CLIP_DEPTH (see RenderContext_PushClip). */
+    size_t _clipDepth;
 } RenderContext;
 
 /**
@@ -506,12 +520,50 @@ void RenderContext_Create(RenderContext* self,
     Vector2 targetRelativePosition);
 
 /**
+ * @brief Initializes a render context for coordinate conversions only, for a render buffer of a known size.
+ *
+ * Code that lays things out outside rendering (in update, where no target is bound) uses it to convert between
+ * pixel, relative and fitted units exactly as a real context for a buffer of that size would. Never begin
+ * rendering or draw through it: it has no target.
+ * @param self The render context to initialize; must not be NULL.
+ * @param renderBufferSizePixels The buffer's size in pixels; a component that is not a positive finite number is
+ *        treated as 1.
+ * @param targetAspectRatio The aspect ratio (width / height) the game is designed for.
+ * @param targetRelativePosition Normalized [0;1] placement of the target area within the render buffer.
+ */
+void RenderContext_CreateMeasuring(RenderContext* self,
+    Vector2 renderBufferSizePixels,
+    float targetAspectRatio,
+    Vector2 targetRelativePosition);
+
+/**
  * @brief Releases a render context without freeing its borrowed render buffer.
  *
  * Clears the context's fields. Any custom render buffer it referenced is left untouched.
  * @param self The render context to deconstruct; must not be NULL.
  */
 void RenderContext_Deconstruct(RenderContext* self);
+
+/**
+ * @brief Restricts drawing to a rectangle, intersected with the current clip, until the matching
+ *        RenderContext_PopClip.
+ *
+ * Clips nest: an inner clip never draws outside an outer one, and popping restores the outer clip (raylib's own
+ * scissor does not nest, so drawing code must clip through here, never with BeginScissorMode). The rectangle is
+ * rounded outwards to whole pixels and limited to the render buffer when applied (a NaN edge counts as 0). Pushes
+ * beyond RENDER_CONTEXT_MAX_CLIP_DEPTH keep the clip of the deepest stored push (they are counted, so pops stay
+ * balanced). Must be called inside a rendering pass, and every push popped before it ends.
+ * @param self The render context; must not be NULL.
+ * @param pixelRectangle The clip in render-buffer pixels (x, y, width, height); a negative size counts as empty.
+ */
+void RenderContext_PushClip(RenderContext* self, Rectangle pixelRectangle);
+
+/**
+ * @brief Undoes the latest RenderContext_PushClip: restores the clip below it, or turns clipping off when none is
+ *        left. Does nothing when no clip is pushed.
+ * @param self The render context; must not be NULL.
+ */
+void RenderContext_PopClip(RenderContext* self);
 
 /**
  * @brief Returns the target-area placement that centers it within the render buffer.
@@ -559,9 +611,11 @@ void RenderContext_RenderGlyph(RenderContext* self, const GlyphRenderArguments* 
 /**
  * @brief Draws a 3D model through the render context using the given arguments.
  *
- * Resolves the argument color, converts the rotation from radians to degrees, draws the model at the
- * requested world-space position/rotation/scale, and increments the model draw counter. Must be called
- * within a 3D pass opened by RenderContext_Begin3DMode.
+ * Draws mesh by mesh at the requested world-space position/rotation/scale (inside the model's own transform, as
+ * raylib's DrawModelEx does), each with a per-draw copy of its material whose albedo color is multiplied by the
+ * resolved argument color: nothing is written to the shared model asset. Like DrawModelEx, it uploads the model's
+ * bone matrices for GPU skinning when the material's shader has a bone-transforms location and the model has bone
+ * matrices. Increments the model draw counter. Must be called within a 3D pass opened by RenderContext_Begin3DMode.
  * @param self The render context to draw with; must not be NULL.
  * @param args The model draw parameters; must not be NULL.
  */

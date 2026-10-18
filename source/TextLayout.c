@@ -1091,20 +1091,14 @@ Error TextLayout_Draw(const TextLayout* self, RenderContext* context, const Text
         .Tint = args->Tint
     };
 
-    // Raylib's scissor does not nest, so this replaces (then disables) any outer clip. Rounded outwards, so the clip
-    // never cuts into a pixel the text box covers.
+    // Through the context's clip stack, so the cut nests inside any outer clip (a parent widget's) and restores it.
     if (args->HasScissor)
     {
         Vector2 Start = RenderContext_VectorRelativeToPixel(context,
             (Vector2){ .x = args->ScissorRelative.x, .y = args->ScissorRelative.y });
-        Vector2 End = RenderContext_VectorRelativeToPixel(context, (Vector2)
-        {
-            .x = args->ScissorRelative.x + args->ScissorRelative.width,
-            .y = args->ScissorRelative.y + args->ScissorRelative.height
-        });
-        int Left = (int)floorf(Start.x);
-        int Top = (int)floorf(Start.y);
-        BeginScissorMode(Left, Top, (int)ceilf(End.x) - Left, (int)ceilf(End.y) - Top);
+        Vector2 Size = RenderContext_VectorRelativeToPixel(context,
+            (Vector2){ .x = args->ScissorRelative.width, .y = args->ScissorRelative.height });
+        RenderContext_PushClip(context, (Rectangle){ .x = Start.x, .y = Start.y, .width = Size.x, .height = Size.y });
     }
 
     const TextLayoutRun* Runs = GetRuns(self);
@@ -1141,7 +1135,7 @@ Error TextLayout_Draw(const TextLayout* self, RenderContext* context, const Text
 
     if (args->HasScissor)
     {
-        EndScissorMode();
+        RenderContext_PopClip(context);
     }
     return Error_CreateSuccess();
 }

@@ -1,11 +1,87 @@
 #include "Renderer.h"
 #include <limits.h>
+#include <math.h>
 #include <stdint.h>
 #include "wr/WRMemory.h"
 #include "wr/WRMath.h"
+#include "raylib/raymath.h"
+#include "raylib/rlgl.h"
 
 
 // Static functions.
+/* Sets the size-derived fields and resets the counters and the clip stack. */
+static void InitializeContext(RenderContext* self, Vector2 renderBufferSize, float targetAspectRatio,
+    Vector2 targetRelativePosition)
+{
+    self->_renderBufferSizePixels = renderBufferSize;
+    self->_renderBufferAspectRatio = renderBufferSize.x / renderBufferSize.y;
+
+    self->_targetAspectRatio = targetAspectRatio;
+    self->_targetRelativePosition = targetRelativePosition;
+
+    self->_textureDrawCount = 0;
+    self->_stringDrawCount = 0;
+    self->_glyphDrawCount = 0;
+    self->_modelDrawCount = 0;
+    self->_meshDrawCount = 0;
+    self->_primitiveDrawCount = 0;
+
+    Memory_Zero(self->_clipStack, sizeof(self->_clipStack));
+    self->_clipDepth = 0;
+}
+
+/* Clamps a pixel coordinate into [0; limit], so the int conversions in ApplyClip stay defined; NaN becomes 0. */
+static float ClampToBuffer(float value, float limit)
+{
+    // The !(> 0) form also catches NaN.
+    if (!(value > 0.0f))
+    {
+        return 0.0f;
+    }
+    return (value < limit) ? value : limit;
+}
+
+/* Applies the active clip to raylib's scissor, rounded outwards so it never cuts into a covered pixel. */
+static void ApplyClip(const RenderContext* self)
+{
+    size_t StoredDepth = (self->_clipDepth < RENDER_CONTEXT_MAX_CLIP_DEPTH) ? self->_clipDepth : RENDER_CONTEXT_MAX_CLIP_DEPTH;
+    Rectangle Clip = self->_clipStack[StoredDepth - 1U];
+    Vector2 BufferSize = self->_renderBufferSizePixels;
+    int Left = (int)floorf(ClampToBuffer(Clip.x, BufferSize.x));
+    int Top = (int)floorf(ClampToBuffer(Clip.y, BufferSize.y));
+    int Right = (int)ceilf(ClampToBuffer(Clip.x + Clip.width, BufferSize.x));
+    int Bottom = (int)ceilf(ClampToBuffer(Clip.y + Clip.height, BufferSize.y));
+    BeginScissorMode(Left, Top, (Right > Left) ? (Right - Left) : 0, (Bottom > Top) ? (Bottom - Top) : 0);
+}
+
+/* The overlap of two rectangles; an empty overlap has zero size. */
+static Rectangle IntersectRectangles(Rectangle a, Rectangle b)
+{
+    float Left = Math_MaxFloat(a.x, b.x);
+    float Top = Math_MaxFloat(a.y, b.y);
+    float Right = Math_MinFloat(a.x + a.width, b.x + b.width);
+    float Bottom = Math_MinFloat(a.y + a.height, b.y + b.height);
+    return (Rectangle)
+    {
+        .x = Left,
+        .y = Top,
+        .width = Math_MaxFloat(0.0f, Right - Left),
+        .height = Math_MaxFloat(0.0f, Bottom - Top)
+    };
+}
+
+/* Componentwise color product, as raylib's DrawModelEx tints a material's albedo. */
+static Color MultiplyColors(Color a, Color b)
+{
+    return (Color)
+    {
+        .r = (unsigned char)(((int)a.r * (int)b.r) / 255),
+        .g = (unsigned char)(((int)a.g * (int)b.g) / 255),
+        .b = (unsigned char)(((int)a.b * (int)b.b) / 255),
+        .a = (unsigned char)(((int)a.a * (int)b.a) / 255)
+    };
+}
+
 static inline Vector2 RenderContext_GetPixelVector(RenderContext* self, RenderVector2D vector, bool isOffsetIncluded)
 {
     if (vector.Type == RenderValueType_NormalizedFitted)
@@ -83,18 +159,67 @@ void RenderContext_Create(RenderContext* self,
         };
     }
 
-    self->_renderBufferSizePixels = RenderBufferSize;
-    self->_renderBufferAspectRatio = RenderBufferSize.x / RenderBufferSize.y;
+    InitializeContext(self, RenderBufferSize, targetAspectRatio, targetRelativePosition);
+}
 
-    self->_targetAspectRatio = targetAspectRatio; 
-    self->_targetRelativePosition = targetRelativePosition;
+void RenderContext_CreateMeasuring(RenderContext* self,
+    Vector2 renderBufferSizePixels,
+    float targetAspectRatio,
+    Vector2 targetRelativePosition)
+{
+    Memory_Zero(&self->_renderBuffer, sizeof(self->_renderBuffer));
+    self->_hasCustomRenderBuffer = false;
 
-    self->_textureDrawCount = 0;
-    self->_stringDrawCount = 0;
-    self->_glyphDrawCount = 0;
-    self->_modelDrawCount = 0;
-    self->_meshDrawCount = 0;
-    self->_primitiveDrawCount = 0;
+    // The !(> 0) form also rejects NaN.
+    Vector2 Size = renderBufferSizePixels;
+    if (!(Size.x > 0.0f) || Math_IsInfinityFloat(Size.x))
+    {
+        Size.x = 1.0f;
+    }
+    if (!(Size.y > 0.0f) || Math_IsInfinityFloat(Size.y))
+    {
+        Size.y = 1.0f;
+    }
+    InitializeContext(self, Size, targetAspectRatio, targetRelativePosition);
+}
+
+void RenderContext_PushClip(RenderContext* self, Rectangle pixelRectangle)
+{
+    if (self->_clipDepth >= RENDER_CONTEXT_MAX_CLIP_DEPTH)
+    {
+        self->_clipDepth++; // Too deep to store: counted so the pops stay balanced, the clip stays as it is.
+        return;
+    }
+
+    Rectangle Clip = pixelRectangle;
+    Clip.width = Math_MaxFloat(0.0f, Clip.width);
+    Clip.height = Math_MaxFloat(0.0f, Clip.height);
+    if (self->_clipDepth > 0U)
+    {
+        Clip = IntersectRectangles(self->_clipStack[self->_clipDepth - 1U], Clip);
+    }
+    self->_clipStack[self->_clipDepth] = Clip;
+    self->_clipDepth++;
+    ApplyClip(self);
+}
+
+void RenderContext_PopClip(RenderContext* self)
+{
+    if (self->_clipDepth == 0U)
+    {
+        return;
+    }
+    self->_clipDepth--;
+    if (self->_clipDepth >= RENDER_CONTEXT_MAX_CLIP_DEPTH)
+    {
+        return; // Still beyond the stored pushes: the clip did not change for this one.
+    }
+    if (self->_clipDepth == 0U)
+    {
+        EndScissorMode();
+        return;
+    }
+    ApplyClip(self);
 }
 
 void RenderContext_RenderTexture2D(RenderContext* self, const TextureRenderArguments* args)
@@ -211,19 +336,35 @@ void RenderContext_RenderGlyph(RenderContext* self, const GlyphRenderArguments* 
     self->_glyphDrawCount++;
 }
 
-// TODO: DrawModelEx writes the tint into the shared asset's material maps for the duration of the draw (and the
-// materials' own shaders are used). Draw mesh by mesh with a per-draw Material copy, like WorldRendererGeometry,
-// before the UI (its only caller, through UIRenderContext_RenderModel) draws models.
 void RenderContext_RenderModel(RenderContext* self, const ModelRenderArguments* args)
 {
+    // DrawModelEx's transform order (scale, rotate, translate, inside the model's own transform) and GPU skinning, but
+    // each mesh draws with a material copied on the stack: DrawModelEx writes the tint into the shared asset's maps.
     Color FinalTint = RenderColor_GetFinalColor(args->TargetColor);
-    float RotationDeg = Math_RadToDegFloat(args->RotationAngleRad);
-    DrawModelEx(args->TargetModel,
-        args->Position,
-        args->RotationAxis,
-        RotationDeg,
-        args->Scale,
-        FinalTint);
+    Model TargetModel = args->TargetModel;
+    Matrix Placement = MatrixMultiply(MatrixMultiply(MatrixScale(args->Scale.x, args->Scale.y, args->Scale.z),
+        MatrixRotate(args->RotationAxis, args->RotationAngleRad)),
+        MatrixTranslate(args->Position.x, args->Position.y, args->Position.z));
+    Matrix MeshTransform = MatrixMultiply(TargetModel.transform, Placement);
+
+    for (int MeshIndex = 0; MeshIndex < TargetModel.meshCount; MeshIndex++)
+    {
+        const Material* AssetMaterial = &TargetModel.materials[TargetModel.meshMaterial[MeshIndex]];
+        MaterialMap Maps[RENDERER_MATERIAL_MAP_COUNT];
+        Memory_Copy(AssetMaterial->maps, Maps, sizeof(Maps));
+        Maps[MATERIAL_MAP_ALBEDO].color = MultiplyColors(Maps[MATERIAL_MAP_ALBEDO].color, FinalTint);
+
+        Material DrawMaterial = *AssetMaterial;
+        DrawMaterial.maps = Maps;
+        if ((DrawMaterial.shader.locs != NULL) && (DrawMaterial.shader.locs[SHADER_LOC_MATRIX_BONETRANSFORMS] != -1)
+            && (TargetModel.boneMatrices != NULL))
+        {
+            rlEnableShader(DrawMaterial.shader.id);
+            rlSetUniformMatrices(DrawMaterial.shader.locs[SHADER_LOC_MATRIX_BONETRANSFORMS], TargetModel.boneMatrices,
+                TargetModel.skeleton.boneCount);
+        }
+        DrawMesh(TargetModel.meshes[MeshIndex], DrawMaterial, MeshTransform);
+    }
     self->_modelDrawCount++;
 }
 
@@ -319,6 +460,12 @@ void RenderContext_BeginRendering(RenderContext* self)
 
 void RenderContext_EndRendering(RenderContext* self)
 {
+    // An unbalanced push would leave raylib's scissor on for whatever draws next.
+    if (self->_clipDepth > 0U)
+    {
+        EndScissorMode();
+        self->_clipDepth = 0;
+    }
     if (self->_hasCustomRenderBuffer)
     {
         EndTextureMode();

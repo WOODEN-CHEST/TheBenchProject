@@ -52,3 +52,16 @@ void FontTests_Run(TestRun* run);
 
 /** @brief The label widget's text, layout properties and construction (LabelWidgetTests.c). */
 void LabelWidgetTests_Run(TestRun* run);
+
+/** @brief Keys, the per-tick input with consumption, actions and controls files (GameInputTests.c). */
+void GameInputTests_Run(TestRun* run);
+
+/** @brief Easing, keyframe validation and evaluation of typed values (UIAnimationTests.c). */
+void UIAnimationTests_Run(TestRun* run);
+
+/** @brief The UI screen: ids, deferred destruction, focus, navigation, input routing, drawing order, animations and
+ *  notifications (UIScreenTests.c). */
+void UIScreenTests_Run(TestRun* run);
+
+/** @brief The UI test frame run headless: how its menu shares input with the world below (UITestFrameTests.c). */
+void UITestFrameTests_Run(TestRun* run);

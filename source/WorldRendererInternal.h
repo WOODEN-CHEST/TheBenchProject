@@ -50,11 +50,11 @@
 #define SCENE_FAR_PLANE ((double)RL_CULL_DISTANCE_FAR)
 /** Resolution (square) of each sun shadow-map cascade, in texels. The PBR shader's PCF needs its texel size. */
 #define SHADOW_MAP_SIZE 2048
-/** Number of maps in a raylib Material (raylib's MAX_MATERIAL_MAPS: 12 in the pinned build, see BUILDING.md,
- *  and not exported by raylib.h). DrawMesh reads, and binds textures from, exactly this many entries of
- *  Material.maps, so a per-draw material copy must have this many. Rebuilding raylib with another value means
- *  changing this and checking WorldRendererTextureUnit. */
-#define WORLD_RENDERER_MATERIAL_MAP_COUNT 12
+/** Number of maps in a raylib Material: the renderer module's RENDERER_MATERIAL_MAP_COUNT (raylib's private
+ *  MAX_MATERIAL_MAPS, see BUILDING.md). DrawMesh reads, and binds textures from, exactly this many entries of
+ *  Material.maps, so a per-draw material copy must have this many. Changing it means checking
+ *  WorldRendererTextureUnit. */
+#define WORLD_RENDERER_MATERIAL_MAP_COUNT RENDERER_MATERIAL_MAP_COUNT
 
 
 // Types.

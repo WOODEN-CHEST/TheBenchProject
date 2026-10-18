@@ -124,25 +124,122 @@ static Error FailFatally(GameFrameManager* self, GameFrame* frame, const char* p
     return error;
 }
 
-/* Three-way ordering of record pointers by ZOrder, for the render composite order. */
-static ComparisonResult CompareRecordsByZOrder(GenericBuffer* buffer, GenericBufferElementData a,
-    GenericBufferElementData b, const UserData* userData)
+/* Removes a record pointer from the record list (the record itself is not freed). */
+static void RemoveRecordPointer(GameFrameManager* self, GameFrameRecord* record)
 {
-    UNUSED(buffer);
-    UNUSED(userData);
-
-    GameFrameRecord* RecordA = *(GameFrameRecord**)a._element;
-    GameFrameRecord* RecordB = *(GameFrameRecord**)b._element;
-
-    if (RecordA->ZOrder < RecordB->ZOrder)
+    for (size_t i = 0; i < self->_records._count; i++)
     {
-        return ComparisonResult_ALessThanB;
+        if (RecordAt(self, i) == record)
+        {
+            GenericBuffer_RemoveAt(&self->_records, i);
+            return;
+        }
     }
-    if (RecordA->ZOrder > RecordB->ZOrder)
+}
+
+/* Performs one tick's lifecycle action for a record (an Unloaded record is destroyed: it must not be used again). */
+static Error StepRecord(GameFrameManager* self, GameFrameRecord* record, ProgramTime time)
+{
+    GameFrame* Frame = record->Frame;
+
+    // Teardown initiation takes priority over the normal state action.
+    if (record->RemovalRequested
+        && (record->State != GameFrameState_Unloading)
+        && (record->State != GameFrameState_Unloaded))
     {
-        return ComparisonResult_AGreaterThanB;
+        record->RemovalRequested = false;
+        if (record->State == GameFrameState_Active)
+        {
+            Error EndResult = GameFrame_End(Frame, time);
+            if (EndResult.Code != ErrorCode_Success)
+            {
+                return FailFatally(self, Frame, "end", EndResult);
+            }
+        }
+        Error BeginUnloadResult = GameFrame_BeginUnload(Frame);
+        if (BeginUnloadResult.Code != ErrorCode_Success)
+        {
+            return FailFatally(self, Frame, "begin unload", BeginUnloadResult);
+        }
+        record->State = GameFrameState_Unloading;
+        return Error_CreateSuccess();
     }
-    return ComparisonResult_AEqualsB;
+
+    switch (record->State)
+    {
+        case GameFrameState_Loading:
+        {
+            Error StepResult = GameFrame_LoadStep(Frame);
+            if (StepResult.Code != ErrorCode_Success)
+            {
+                return FailFatally(self, Frame, "load step", StepResult);
+            }
+            if (GameFrame_IsLoaded(Frame))
+            {
+                Error RaiseResult = WREvent_Raise(&Frame->OnLoad, Frame);
+                if (RaiseResult.Code != ErrorCode_Success)
+                {
+                    return FailFatally(self, Frame, "OnLoad event", RaiseResult);
+                }
+                record->State = GameFrameState_Loaded;
+            }
+            return Error_CreateSuccess();
+        }
+
+        case GameFrameState_Loaded:
+        {
+            if (record->StartRequested)
+            {
+                Error StartResult = GameFrame_Start(Frame, time);
+                if (StartResult.Code != ErrorCode_Success)
+                {
+                    return FailFatally(self, Frame, "start", StartResult);
+                }
+                record->State = GameFrameState_Active;
+            }
+            return Error_CreateSuccess();
+        }
+
+        case GameFrameState_Active:
+        {
+            if (Frame->IsUpdated)
+            {
+                Error UpdateResult = GameFrame_Update(Frame, time);
+                if (UpdateResult.Code != ErrorCode_Success)
+                {
+                    return FailFatally(self, Frame, "update", UpdateResult);
+                }
+            }
+            return Error_CreateSuccess();
+        }
+
+        case GameFrameState_Unloading:
+        {
+            Error StepResult = GameFrame_UnloadStep(Frame);
+            if (StepResult.Code != ErrorCode_Success)
+            {
+                return FailFatally(self, Frame, "unload step", StepResult);
+            }
+            if (GameFrame_IsUnloaded(Frame))
+            {
+                Error RaiseResult = WREvent_Raise(&Frame->OnUnload, Frame);
+                if (RaiseResult.Code != ErrorCode_Success)
+                {
+                    return FailFatally(self, Frame, "OnUnload event", RaiseResult);
+                }
+                record->State = GameFrameState_Unloaded;
+            }
+            return Error_CreateSuccess();
+        }
+
+        case GameFrameState_Unloaded:
+        {
+            RemoveRecordPointer(self, record);
+            DestroyRecord(record);
+            return Error_CreateSuccess();
+        }
+    }
+    return Error_CreateSuccess();
 }
 
 /* Recreates render targets at the new size and notifies frames when the window size changed. */
@@ -195,7 +292,7 @@ GameFrameAddOptions GameFrameAddOptions_Default(void)
     };
 }
 
-Error GameFrameManager_Construct(GameFrameManager* self, Logger* logger, float targetAspectRatio,
+Error GameFrameManager_Construct(GameFrameManager* self, Logger* logger, GameInput* input, float targetAspectRatio,
     Vector2 targetAreaPosition)
 {
     if ((self == NULL) || (logger == NULL))
@@ -208,7 +305,9 @@ Error GameFrameManager_Construct(GameFrameManager* self, Logger* logger, float t
     }
 
     self->_logger = logger;
+    self->_input = input;
     GenericBuffer_AllocateVariable(&self->_records, INITIAL_RECORD_CAPACITY, sizeof(GameFrameRecord*));
+    GenericBuffer_AllocateVariable(&self->_updateOrder, INITIAL_RECORD_CAPACITY, sizeof(GameFrameRecord*));
     self->_targetAspectRatio = targetAspectRatio;
     self->_targetAreaPosition = targetAreaPosition;
     self->_targetWidth = 0;
@@ -257,6 +356,8 @@ Error GameFrameManager_Deconstruct(GameFrameManager* self)
 
     Memory_Free(self->_records._data);
     Memory_Zero(&self->_records, sizeof(self->_records));
+    Memory_Free(self->_updateOrder._data);
+    Memory_Zero(&self->_updateOrder, sizeof(self->_updateOrder));
 
     return FirstError;
 }
@@ -281,7 +382,10 @@ Error GameFrameManager_AddFrame(GameFrameManager* self, GameFrame* frame, GameFr
     Record->RemovalRequested = false;
     Record->HasTarget = false;
 
-    if (!GenericBuffer_AddLast(&self->_records, &Record))
+    // The list stays in ascending z: a new top frame goes last, a new bottom frame first.
+    bool IsStored = options.AddToTop ? GenericBuffer_AddLast(&self->_records, &Record)
+        : GenericBuffer_Insert(&self->_records, &Record, 0U);
+    if (!IsStored)
     {
         Memory_Free(Record);
         return Error_Construct2(ErrorCode_BufferTooSmall, "GameFrameManager_AddFrame: could not store the frame record.");
@@ -350,122 +454,31 @@ Error GameFrameManager_Update(GameFrameManager* self, ProgramTime time)
     // Poll input once here, before any frame's update, so frames read fresh input this tick. This is the
     // program's ONLY input poll: raylib is built with SUPPORT_CUSTOM_FRAME_CONTROL (see BUILDING.md), so
     // EndDrawing does not poll (nor swap; GameFrameManager_Render swaps manually). Polling per update tick,
-    // not per render, is what keeps edge-triggered input (IsKeyPressed) reliable in frame updates.
+    // not per render, is what keeps edge-triggered input reliable in frame updates. The tick's GameInput snapshot
+    // is taken right after.
     PollInputEvents();
-
-    size_t i = 0;
-    while (i < self->_records._count)
+    if (self->_input != NULL)
     {
-        GameFrameRecord* Record = RecordAt(self, i);
-        if (Record == NULL)
-        {
-            i++;
-            continue;
-        }
-        GameFrame* Frame = Record->Frame;
-
-        // Teardown initiation takes priority over the normal state action.
-        if (Record->RemovalRequested
-            && (Record->State != GameFrameState_Unloading)
-            && (Record->State != GameFrameState_Unloaded))
-        {
-            Record->RemovalRequested = false;
-            if (Record->State == GameFrameState_Active)
-            {
-                Error EndResult = GameFrame_End(Frame, time);
-                if (EndResult.Code != ErrorCode_Success)
-                {
-                    return FailFatally(self, Frame, "end", EndResult);
-                }
-            }
-            Error BeginUnloadResult = GameFrame_BeginUnload(Frame);
-            if (BeginUnloadResult.Code != ErrorCode_Success)
-            {
-                return FailFatally(self, Frame, "begin unload", BeginUnloadResult);
-            }
-            Record->State = GameFrameState_Unloading;
-            i++;
-            continue;
-        }
-
-        switch (Record->State)
-        {
-            case GameFrameState_Loading:
-            {
-                Error StepResult = GameFrame_LoadStep(Frame);
-                if (StepResult.Code != ErrorCode_Success)
-                {
-                    return FailFatally(self, Frame, "load step", StepResult);
-                }
-                if (GameFrame_IsLoaded(Frame))
-                {
-                    Error RaiseResult = WREvent_Raise(&Frame->OnLoad, Frame);
-                    if (RaiseResult.Code != ErrorCode_Success)
-                    {
-                        return FailFatally(self, Frame, "OnLoad event", RaiseResult);
-                    }
-                    Record->State = GameFrameState_Loaded;
-                }
-                break;
-            }
-
-            case GameFrameState_Loaded:
-            {
-                if (Record->StartRequested)
-                {
-                    Error StartResult = GameFrame_Start(Frame, time);
-                    if (StartResult.Code != ErrorCode_Success)
-                    {
-                        return FailFatally(self, Frame, "start", StartResult);
-                    }
-                    Record->State = GameFrameState_Active;
-                }
-                break;
-            }
-
-            case GameFrameState_Active:
-            {
-                if (Frame->IsUpdated)
-                {
-                    Error UpdateResult = GameFrame_Update(Frame, time);
-                    if (UpdateResult.Code != ErrorCode_Success)
-                    {
-                        return FailFatally(self, Frame, "update", UpdateResult);
-                    }
-                }
-                break;
-            }
-
-            case GameFrameState_Unloading:
-            {
-                Error StepResult = GameFrame_UnloadStep(Frame);
-                if (StepResult.Code != ErrorCode_Success)
-                {
-                    return FailFatally(self, Frame, "unload step", StepResult);
-                }
-                if (GameFrame_IsUnloaded(Frame))
-                {
-                    Error RaiseResult = WREvent_Raise(&Frame->OnUnload, Frame);
-                    if (RaiseResult.Code != ErrorCode_Success)
-                    {
-                        return FailFatally(self, Frame, "OnUnload event", RaiseResult);
-                    }
-                    Record->State = GameFrameState_Unloaded;
-                }
-                break;
-            }
-
-            case GameFrameState_Unloaded:
-            {
-                DestroyRecord(Record);
-                GenericBuffer_RemoveAt(&self->_records, i);
-                continue; // Next record shifted into slot i; do not advance.
-            }
-        }
-
-        i++;
+        GameInput_Poll(self->_input);
     }
 
+    // Top-down (the list is in ascending z), so the frame on top gets first refusal on input. The order is fixed for
+    // the tick: a frame added during it waits for the next tick, and only this loop destroys records.
+    GenericBuffer_Clear(&self->_updateOrder);
+    if ((self->_records._count > 0U)
+        && !GenericBuffer_AddLastRange(&self->_updateOrder, self->_records._data, self->_records._count))
+    {
+        return Error_Construct2(ErrorCode_BufferTooSmall, "GameFrameManager_Update: could not order the frames.");
+    }
+    for (size_t i = self->_updateOrder._count; i-- > 0U;)
+    {
+        GameFrameRecord* Record = *(GameFrameRecord**)GenericBuffer_GetPointerToElement(&self->_updateOrder, i);
+        Error StepResult = StepRecord(self, Record, time);
+        if (StepResult.Code != ErrorCode_Success)
+        {
+            return StepResult;
+        }
+    }
     return Error_CreateSuccess();
 }
 
@@ -487,10 +500,7 @@ Error GameFrameManager_Render(GameFrameManager* self, ProgramTime time)
         }
     }
 
-    // Draw and composite bottom-to-top.
-    unsigned char SortScratch[sizeof(GameFrameRecord*) * 2];
-    GenericBuffer_SortAscending(&self->_records, CompareRecordsByZOrder, NULL, SortScratch);
-
+    // Draw and composite bottom-to-top (the record list is kept in ascending z).
     // Pass 1: each active, rendered frame draws into its own target.
     FrameRenderContext Context =
     {
@@ -520,6 +530,9 @@ Error GameFrameManager_Render(GameFrameManager* self, ProgramTime time)
     // Pass 2: composite every rendered target onto the backbuffer. This is a straight 1:1 blit (with the
     // vertical flip Raylib render textures need), tinted by the frame's CompositeColor, so it deliberately
     // uses Raylib directly rather than the aspect-fitting renderer path.
+    // TODO: plain alpha blending, here and when a frame draws into its transparent target, thins the antialiased edges
+    // of overlay frames (UI over the world); rendering premultiplied and compositing with (ONE, ONE_MINUS_SRC_ALPHA)
+    // fixes it.
     BeginDrawing();
     ClearBackground(BLACK);
     for (size_t i = 0; i < self->_records._count; i++)
@@ -547,6 +560,14 @@ Error GameFrameManager_Render(GameFrameManager* self, ProgramTime time)
 bool GameFrameManager_ShouldStop(GameFrameManager* self)
 {
     return (self == NULL) ? true : self->_shouldStop;
+}
+
+void GameFrameManager_RequestStop(GameFrameManager* self)
+{
+    if (self != NULL)
+    {
+        self->_shouldStop = true;
+    }
 }
 
 size_t GameFrameManager_GetFrameCount(GameFrameManager* self)

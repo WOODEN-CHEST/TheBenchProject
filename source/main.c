@@ -9,6 +9,7 @@
 #include "wr/WRGHDF.h"
 #include "wr/WRJSON.h"
 #include "Config.h"
+#include "GameInput.h"
 #include "Logger.h"
 #include "ProgramTime.h"
 #include "GameFrameManager.h"
@@ -16,6 +17,7 @@
 #include "AssetManager.h"
 #include "Services.h"
 #include "WorldTestFrame.h"
+#include "UITestFrame.h"
 #include "raylib/raylib.h"
 #include "wr/WRStopwatch.h"
 #include "wr/WRThread.h"
@@ -24,6 +26,8 @@
 // Macros.
 /** File name (resolved against the base directory) of the game configuration file. */
 #define CONFIG_FILE_NAME ((const unsigned char*)u8"config.json")
+/** File name (resolved against the base directory) of the player's controls (rebound actions); optional. */
+#define CONTROLS_FILE_NAME ((const unsigned char*)u8"controls.json")
 /** Relative path (under the base directory) of the root asset directory. */
 #define ASSET_ROOT_RELATIVE ((const unsigned char*)u8"asset")
 /** Relative path (under the base directory) of the Unicode database. */
@@ -225,6 +229,37 @@ static void LoadConfig(Logger* logger, const unsigned char* baseDirectory, GameC
     Memory_Free(ConfigPath._data);
 }
 
+/* Loads the player's controls over the default bindings. Without a controls file the defaults are used; a bad file is
+ * warned about and ignored as a whole. */
+// TODO: nothing writes the file yet; the controls menu will save rebound controls with GameInput_SaveBindingsToFile.
+static void LoadControls(Logger* logger, const unsigned char* baseDirectory, GameInput* input)
+{
+    GenericBuffer ControlsPath;
+    Error PathResult = BuildAbsolutePath(baseDirectory, CONTROLS_FILE_NAME, &ControlsPath);
+    if (PathResult.Code != ErrorCode_Success)
+    {
+        LogWarningAndRelease(logger, (const unsigned char*)u8"Failed to build the controls path: %s", &PathResult);
+        Memory_Free(ControlsPath._data);
+        return;
+    }
+
+    Error LoadResult = GameInput_LoadBindingsFromFile(input, ControlsPath._data);
+    Memory_Free(ControlsPath._data);
+    if ((LoadResult.Code == ErrorCode_FileNotFound) || (LoadResult.Code == ErrorCode_DirectoryNotFound))
+    {
+        Error_Deconstruct(&LoadResult);
+        return;
+    }
+    if (LoadResult.Code != ErrorCode_Success)
+    {
+        LogWarningAndRelease(logger, (const unsigned char*)u8"Failed to load the controls file, using the default controls: %s",
+            &LoadResult);
+        return;
+    }
+    Error LogResult = Logger_LogInfo(logger, (const unsigned char*)u8"Loaded the controls file.");
+    Error_Deconstruct(&LogResult);
+}
+
 /* Loads the Unicode database from disk, falling back to an empty (valid) database on failure. */
 static void LoadUnicodeData(Logger* logger, const unsigned char* baseDirectory, UnicodeData* outData)
 {
@@ -384,8 +419,9 @@ int main(int argc, char** argv)
         Error_Deconstruct(&CloseLog);
         return 1;
     }
-    // For this test milestone ESC quits the window (the world-test frame captures the cursor).
-    SetExitKey(KEY_ESCAPE);
+    // ESC does not quit through raylib: it is the UI's ui_back and the game's pause action, read through GameInput after
+    // the UI had first refusal (the world-test frame quits on an unconsumed pause).
+    SetExitKey(KEY_NULL);
     Error WindowLogResult = Logger_LogInfo(&Log, u8"Window initialized.");
     Error_Deconstruct(&WindowLogResult);
 
@@ -406,10 +442,17 @@ int main(int argc, char** argv)
         LogWarningAndRelease(&Log, (const unsigned char*)u8"Failed to create the GHDF object pool: %s", &GhdfPoolResult);
     }
 
+    // The input: default bindings, then the player's controls file over them. The frame manager polls it every update
+    // tick.
+    GameInput Input;
+    Error InputResult = GameInput_Construct(&Input);
+    Error_Deconstruct(&InputResult); // Only fails for a NULL argument.
+    LoadControls(&Log, BaseDirectory._data, &Input);
+
     // The frame manager owns the scenes and the per-frame update/render logic. The window (GL context)
     // exists by now, which is what its render targets need.
     GameFrameManager FrameManager;
-    Error ManagerResult = GameFrameManager_Construct(&FrameManager, &Log, TARGET_ASPECT_RATIO,
+    Error ManagerResult = GameFrameManager_Construct(&FrameManager, &Log, &Input, TARGET_ASPECT_RATIO,
         RenderTargetPosition_Centered());
     if (ManagerResult.Code != ErrorCode_Success)
     {
@@ -422,6 +465,8 @@ int main(int argc, char** argv)
         if (JsonPool != NULL) { Error e = JSONObjectPool_Deconstruct(JsonPool); Error_Deconstruct(&e); }
         if (GhdfPool != NULL) { Error e = GHDFObjectPool_Deconstruct(GhdfPool); Error_Deconstruct(&e); }
         CloseWindow();
+        Error InputCloseResult = GameInput_Deconstruct(&Input);
+        Error_Deconstruct(&InputCloseResult);
         UnicodeData_Deconstruct(&Unicode);
         GameConfig_Deconstruct(&Config);
         Memory_Free(BaseDirectory._data);
@@ -439,6 +484,7 @@ int main(int argc, char** argv)
     GameServices.Assets = Assets;
     GameServices.AssetTypes = AssetTypes;
     GameServices.FrameManager = &FrameManager;
+    GameServices.Input = &Input;
     GameServices.GHDFPool = GhdfPool;
     GameServices.BaseDirectory = BaseDirectory._data;
 
@@ -458,6 +504,23 @@ int main(int argc, char** argv)
             {
                 LogWarningAndRelease(&Log, (const unsigned char*)u8"Failed to add the world-test frame: %s", &AddResult);
                 GameFrame_Destroy(TestFrame);
+            }
+        }
+
+        // The UI test runs in its own frame on top of the world, so it gets the input first (frames update top-down).
+        GameFrame* UIFrame = NULL;
+        Error UIFrameResult = UITestFrame_Create(&GameServices, &UIFrame);
+        if (UIFrameResult.Code != ErrorCode_Success)
+        {
+            LogWarningAndRelease(&Log, (const unsigned char*)u8"Failed to create the UI test frame: %s", &UIFrameResult);
+        }
+        else
+        {
+            Error AddResult = GameFrameManager_AddFrame(&FrameManager, UIFrame, GameFrameAddOptions_Default());
+            if (AddResult.Code != ErrorCode_Success)
+            {
+                LogWarningAndRelease(&Log, (const unsigned char*)u8"Failed to add the UI test frame: %s", &AddResult);
+                GameFrame_Destroy(UIFrame);
             }
         }
     }
@@ -498,6 +561,8 @@ int main(int argc, char** argv)
     CloseWindow();
 
     Services_Deconstruct(&GameServices);
+    Error InputCloseResult = GameInput_Deconstruct(&Input);
+    Error_Deconstruct(&InputCloseResult);
     UnicodeData_Deconstruct(&Unicode);
     GameConfig_Deconstruct(&Config);
     Memory_Free(BaseDirectory._data);

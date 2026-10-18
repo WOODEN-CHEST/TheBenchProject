@@ -3,43 +3,44 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "wr/WRError.h"
-#include "wr/WREvent.h"
-// GenericBuffer backs the subwidget list and the id output of GetSubWidgets; Vector2/Rectangle (geometry),
-// RenderColor (tint), ProgramTime (update time) and the UI input/render types are all part of this public
-// API, so these includes are unavoidable.
+// GenericBuffer backs the subwidget lists and the id output of GetSubWidgets; Vector2/Rectangle (geometry),
+// RenderColor (tint), ProgramTime (update time), the UI input/animation/render types and RenderContext (layout
+// measuring) are all part of this public API, so these includes are unavoidable.
 #include "wr/WRMemory.h"
 #include "raylib/raylib.h"
 #include "Renderer.h"
 #include "ProgramTime.h"
 #include "UIInput.h"
+#include "UIAnimation.h"
 #include "UIRenderContext.h"
 
 
 /**
  * @file UIWidget.h
- * @brief The abstract base every UI widget derives from: identity, geometry, state, subwidgets,
- *        capabilities, events, and the lifecycle the screen drives.
+ * @brief The abstract base every UI widget derives from: identity, geometry, flags, state, subwidgets, capabilities,
+ *        typed properties, and the lifecycle the screen drives.
  *
- * A widget is one thing in the UI. Concrete widgets embed a Widget as their FIRST member and supply a
- * WidgetVTable of behavior; because the base is first, a pointer to any concrete widget is also a valid
- * Widget*. Widgets are produced by a screen's factory (which pools their storage), so a concrete widget
- * is never constructed or freed directly — UIWidgetFactory_ConstructWidget builds it and Widget_Deconstruct
- * tears it down and returns its storage to the pool.
+ * A widget is one thing in the UI. Concrete widgets embed a Widget as their FIRST member and register a widget type
+ * (a WidgetTypeDescriptor with a WidgetVTable of behavior) with the program-wide UIWidgetFactory. A concrete widget is
+ * never constructed or freed directly: UIWidgetFactory_CreateWidget builds it (the base first, then the type's
+ * constructor, then it is registered with its screen) and Widget_Destroy tears it down.
  *
- * Geometry is normalized [0;1] and RELATIVE TO THE PARENT (or the screen for a root): a widget has a
- * Position and a Size, and a child at position p with a parent at position P and size S sits at absolute
- * P + p*S. Estimated bounds (a cached box that also encloses all subwidgets) drive keyboard-navigation
- * distances and hit testing.
+ * Geometry is normalized [0;1] and RELATIVE TO THE PARENT (or the screen for a root): a child at position p with a
+ * parent at position P and size S sits at absolute P + p*S. Estimated bounds (a cached box that also encloses all
+ * subwidgets) drive keyboard-navigation distances and outlines.
  *
- * A widget exposes no public fields — everything is reached through getters/setters, and setters that can
- * fail (or that fire behavior) return an Error, propagated by the screen. Underscore-prefixed struct
- * fields are read-only to code outside this module.
+ * LIFECYCLE. create -> (configure) -> Widget_InitializeWidget -> add to the screen or a parent -> ... ->
+ * Widget_Destroy. A widget must be initialized before it is added. Widget_Destroy is always deferred and takes the
+ * whole subtree: the subtree is unlinked and its ids stop resolving at once, but its hooks (disable, Deinitialize,
+ * OnDeconstruct) run and its memory is freed only at the end of the screen's next UIScreen_Update (or in
+ * UIScreen_Deconstruct), children before their parents. So a widget may destroy itself or anything else from any hook
+ * or event handler: no memory is freed while a callback is running.
  *
- * LIFECYCLE. construct -> initialize -> (update/render enable) -> ... -> (disable) -> deinitialize ->
- * deconstruct. Use Widget_InitializeWidget after construction and Widget_DeinitializeWidget before
- * Widget_Deconstruct so the ordering is applied in one place rather than copied around. A widget's
- * lifecycle is not restartable: once deinitialized it is done for good (though it may be added to and
- * removed from screens/parents any number of times between initialize and deinitialize).
+ * IDS, NOT POINTERS. Widget ids encode a registry slot and a generation: a stale id never resolves, not even to a newer
+ * widget in the same slot. Never hold a Widget* across anything that can run hooks or event handlers; keep the id and
+ * re-resolve it (UIScreen_TryGetWidgetById / UIScreen_IsWidgetAlive).
+ *
+ * Underscore-prefixed struct fields are read-only to code outside the UI framework; use the functions below.
  */
 
 
@@ -51,55 +52,81 @@ typedef struct WidgetStruct Widget;
 
 
 // Macros.
-/** @brief Invalid widget id (a real id is >= 1). */
+/** @brief Invalid widget id (a real id is never 0). */
 #define WIDGET_ID_INVALID ((uint64_t)0)
 /** @brief Passed as the depth to Widget_GetSubWidgets to collect all descendants regardless of nesting. */
 #define WIDGET_SUBWIDGET_DEPTH_ALL (~((size_t)0))
-/** @brief First property id reserved for base properties; concrete property ids must be below this. */
+/** @brief First property id reserved for base properties; concrete property ids must be below this (and >= 0). */
 #define WIDGET_BASE_PROPERTY_START ((int32_t)0x40000000)
+/** @brief The most levels a widget tree may have (a root alone is one level); Widget_AddSubWidget enforces it, so
+ *  every walk of a tree is bounded. */
+#define WIDGET_MAX_TREE_DEPTH ((size_t)64)
 
 
 // Types.
 /**
- * @brief Base widget properties addressable through the generic property get/set (e.g. for animation).
+ * @brief Base widget properties addressable through the typed property get/set (e.g. for animation).
  *
- * These ids live in a reserved high range (see WIDGET_BASE_PROPERTY_START) so they never collide with a
- * concrete widget's own property ids (which start at 0). Widget_GetProperty / Widget_SetProperty handle
- * them directly; unknown lower ids are forwarded to the concrete vtable.
+ * These ids live in a reserved high range (see WIDGET_BASE_PROPERTY_START) so they never collide with a concrete
+ * widget's own property ids. Every widget has them.
  */
 typedef enum WidgetBasePropertyEnum
 {
-    /** @brief The widget's parent-relative position; value type Vector2. */
+    /** @brief The widget's parent-relative position; UIPropertyType_Vector2. */
     WidgetBaseProperty_Position = WIDGET_BASE_PROPERTY_START,
-    /** @brief The widget's parent-relative size; value type Vector2. */
+    /** @brief The widget's parent-relative size; UIPropertyType_Vector2. */
     WidgetBaseProperty_Size,
-    /** @brief The widget's z layer; value type float. */
+    /** @brief The widget's z layer; UIPropertyType_Float. */
     WidgetBaseProperty_ZLayer,
-    /** @brief The widget's render tint; value type RenderColor. */
+    /** @brief The widget's render tint; UIPropertyType_RenderColor. */
     WidgetBaseProperty_RenderTint
 } WidgetBaseProperty;
 
 /**
- * @brief Virtual table of behavior for a concrete widget.
+ * @brief What a widget's Layout hook gets: a way to convert units for the screen's viewport, and where its parent is.
  *
- * A concrete type supplies one static instance. Every slot receives the widget's own object as @c self
- * (a @c void* recovered without a cast). Every slot is OPTIONAL: a NULL slot means "no behavior" — the
- * corresponding Widget_* wrapper does nothing and succeeds (for property slots, the property is treated
- * as unhandled). A slot returning a non-success Error aborts the operation, and the screen propagates it.
+ * Built by the screen on the stack for each call; owns nothing.
+ */
+typedef struct UILayoutContextStruct
+{
+    /** @brief A measuring-only render context for the screen's viewport (RenderContext_CreateMeasuring), for converting
+     *  between pixel, relative and fitted units. Borrowed for the call; never draw through it. */
+    RenderContext* Measure;
+    /** @brief The parent's box size in screen-normalized units ({1, 1} for a root). */
+    Vector2 ParentAbsoluteSize;
+} UILayoutContext;
+
+/**
+ * @brief Virtual table of behavior for a concrete widget type.
+ *
+ * A concrete type supplies one static instance through its WidgetTypeDescriptor. Every slot receives the widget's own
+ * object as @c self (a @c void* recovered without a cast). Every slot is OPTIONAL: a NULL slot means "no behavior".
+ * A slot returning a non-success Error is treated as a broken invariant: the screen stops and propagates it (a frame
+ * then shuts the game down), so recoverable problems must be handled inside the widget.
+ *
+ * Hooks may destroy widgets (including their own) and change focus: the screen re-resolves every widget by id after
+ * each call. Render may not change any state.
  */
 typedef struct WidgetVTableStruct
 {
-    /** @brief Initializes the concrete widget after construction (called by Widget_InitializeWidget). Optional. */
+    /** @brief Initializes the widget after construction (Widget_InitializeWidget); create child widgets here, not in
+     *  the constructor. Optional. */
     Error (*Initialize)(void* self);
-    /** @brief Deinitializes the concrete widget before deconstruction (called by Widget_DeinitializeWidget). Optional. */
+    /** @brief Deinitializes the widget during its destruction, before OnDeconstruct (only if it was initialized). Its
+     *  children are already gone. Optional. */
     Error (*Deinitialize)(void* self);
-    /** @brief Releases the concrete widget's own resources during Widget_Deconstruct. Must NOT free the widget
-     *         or touch the base (the framework does that). Optional. */
+    /** @brief Releases the concrete widget's own resources during its destruction. Must NOT free the widget or touch
+     *  the base (the framework does that). Optional. */
     Error (*OnDeconstruct)(void* self);
 
     /** @brief Advances the widget's logic by one update tick. Optional. */
     Error (*Update)(void* self, ProgramTime time);
-    /** @brief Draws the widget through its widget-local render context. Optional. */
+    /** @brief Fits the widget's geometry after the tick's updates (e.g. a label sizing its box to its text). Called
+     *  once per tick, parents before children, for every attached widget that was in the tree when the tick began (a
+     *  widget attached during the tick is laid out from the next tick on). May change the widget's own geometry.
+     *  Optional. */
+    Error (*Layout)(void* self, const UILayoutContext* context);
+    /** @brief Draws the widget through its widget-local render context; reads state, never writes it. Optional. */
     Error (*Render)(void* self, UIRenderContext* context);
 
     /** @brief Called when the widget's update flag becomes enabled. Optional. */
@@ -119,55 +146,65 @@ typedef struct WidgetVTableStruct
     Error (*OnHoverStart)(void* self, const WidgetHoverArgs* args);
     /** @brief Called when the widget stops being hovered. Optional. */
     Error (*OnHoverEnd)(void* self);
-    /** @brief Called when any mouse input is directed at the widget (click, drag, scroll). Optional. */
+    /** @brief Called for a mouse press on the widget, and the release and drags of that press, and a scroll over it.
+     *  A press on an input-enabled widget is always consumed (the game does not see it). Optional. */
     Error (*OnMouseInput)(void* self, const WidgetMouseInputArgs* args);
-    /** @brief Called when any keyboard input is directed at the widget. Optional. */
-    Error (*OnKeyboardInput)(void* self, const WidgetKeyboardInputArgs* args);
+    /** @brief Called with a key event or typed text while the widget is focused or contains the focused widget (the
+     *  focused widget first, then its input-enabled ancestors; input-disabled ones are skipped). Set @p outIsHandled to
+     *  true to consume it and stop it there; an unhandled key goes on to the next ancestor, then to keyboard
+     *  navigation, then to the game. A widget that handles a key's press owns the key until it is released: the key's
+     *  repeats and release then come to it alone (even after focus moved, while it stays attached and input-enabled),
+     *  and its answer to them changes nothing. @p outIsHandled starts false. Optional (a NULL slot handles nothing). */
+    Error (*OnKeyboardInput)(void* self, const WidgetKeyboardInputArgs* args, bool* outIsHandled);
     /** @brief Called when the widget becomes focused in its screen. Optional. */
     Error (*OnFocusEnable)(void* self);
     /** @brief Called when the widget stops being focused. Optional. */
     Error (*OnFocusDisable)(void* self);
-    /** @brief Called when the widget becomes tabbed (keyboard-selected). Optional. */
+    /** @brief Called when keyboard navigation enters the widget (it becomes tabbed). Optional. */
     Error (*OnTabbedEnable)(void* self);
-    /** @brief Called when the widget stops being tabbed. Optional. */
+    /** @brief Called when keyboard navigation leaves the widget (it stops being tabbed). Optional. */
     Error (*OnTabbedDisable)(void* self);
     /** @brief Called when the widget becomes active (hovered or tabbed). Optional. */
     Error (*OnActiveEnable)(void* self);
     /** @brief Called when the widget stops being active. Optional. */
     Error (*OnActiveDisable)(void* self);
 
-    /** @brief Reads a concrete property (id < WIDGET_BASE_PROPERTY_START) into @p outValue. Optional. */
-    Error (*GetProperty)(void* self, int32_t propertyId, void* outValue);
-    /** @brief Writes a concrete property (id < WIDGET_BASE_PROPERTY_START) from @p value. Optional. */
-    Error (*SetProperty)(void* self, int32_t propertyId, const void* value);
+    /** @brief Reads a concrete property declared by the type (the base has checked the id; @p outValue->Type is already
+     *  set to the declared type). Optional. */
+    Error (*GetProperty)(void* self, int32_t propertyId, UIPropertyValue* outValue);
+    /** @brief Writes a concrete property declared by the type (the base has checked the id and that @p value has the
+     *  declared type). Optional. */
+    Error (*SetProperty)(void* self, int32_t propertyId, const UIPropertyValue* value);
 } WidgetVTable;
 
 /**
  * @brief Abstract base of every widget: its vtable plus identity, geometry, flags, state and subwidgets.
  *
  * Embed as the FIRST member of a concrete widget. All fields are managed through the Widget_* functions;
- * underscore-prefixed fields are read-only to code outside this module. Initialize with Widget_Construct
- * (from the type's constructor) and release with Widget_Deconstruct.
+ * underscore-prefixed fields are read-only to code outside the UI framework.
  */
 typedef struct WidgetStruct
 {
-    /** @brief Behavior table for this widget; set by Widget_Construct. Never NULL after construction. */
+    /** @brief Behavior table of the widget's type; set at creation. Never NULL. */
     const WidgetVTable* VTable;
 
-    /** @brief The screen this widget belongs to; borrowed, set at construction, read-only thereafter. */
+    /** @brief The screen this widget belongs to; borrowed, set at creation. */
     UIScreen* _screen;
-    /** @brief The parent widget, or NULL if this is a root / detached. */
+    /** @brief The parent widget, or NULL if this is a root or detached. */
     Widget* _parent;
-    /** @brief Unique widget id within the screen; minted at construction, read-only. 0 is invalid. */
+    /** @brief The widget's id (registry slot + generation); minted at creation. */
     uint64_t _id;
-    /** @brief The widget's registered factory type id; set at construction, read-only. */
+    /** @brief The widget's registered factory type id. */
     uint64_t _typeId;
+    /** @brief When the widget was last added to its parent or the roots (screen-wide counter): orders siblings of equal
+     *  z by insertion. */
+    uint64_t _sequence;
 
     /** @brief Parent-relative position, normalized [0;1]. */
     Vector2 _position;
     /** @brief Parent-relative size, normalized [0;1]. */
     Vector2 _size;
-    /** @brief Z layer relative to the parent/screen; higher renders on top. */
+    /** @brief Z layer relative to the siblings; higher draws on top. */
     float _zLayer;
     /** @brief Render tint multiplied into this widget's (and its subtree's) drawing; defaults to white. */
     RenderColor _renderTint;
@@ -176,102 +213,74 @@ typedef struct WidgetStruct
     bool _isRendered;
     /** @brief When true (default) the widget receives update ticks. */
     bool _isUpdated;
-    /** @brief When true (default) the widget receives input and participates in hit testing. */
+    /** @brief When true (default) the widget receives input and is hit by the pointer. */
     bool _isInputEnabled;
-    /** @brief When true, subwidget rendering and input are clipped to this widget's box. */
+    /** @brief When true, subwidget rendering and hit testing are clipped to this widget's box. */
     bool _areSubWidgetsCut;
-    /** @brief True while this widget is a top-level widget of its screen (set by the screen). */
+    /** @brief True while this widget is a root of its screen. */
     bool _isScreenRoot;
+    /** @brief When true the widget can take keyboard focus (clicks and keyboard navigation); the type sets the default. */
+    bool _isFocusable;
 
-    /** @brief True while the mouse hovers the widget. */
+    /** @brief True while the pointer hovers the widget. */
     bool _isHovered;
-    /** @brief True while the widget is the focused (front-most) widget of its screen. */
+    /** @brief True while the widget is its screen's focused widget. */
     bool _isFocused;
-    /** @brief True while the widget is tabbed (keyboard-selected). */
+    /** @brief True while keyboard navigation has entered the widget. */
     bool _isTabbed;
-    /** @brief True while the widget is active (hovered or tabbed); derived from the two. */
+    /** @brief True while the widget is active (hovered or tabbed). */
     bool _isActive;
+
+    /** @brief True once Widget_InitializeWidget succeeded. */
+    bool _isInitialized;
+    /** @brief True once Widget_Destroy took the widget (or an ancestor): its id no longer resolves and its memory is
+     *  freed at the screen's next flush. */
+    bool _isDying;
 
     /** @brief Cached estimated bounds (parent space), valid only when _areBoundsValid is true. */
     Rectangle _cachedBounds;
     /** @brief True when _cachedBounds is up to date. */
     bool _areBoundsValid;
 
-    /** @brief Owned buffer of Widget* subwidgets (child pointers are borrowed, not owned). */
+    /** @brief Owned buffer of the children (Widget*, borrowed) in insertion order. */
     GenericBuffer _subWidgets;
-
-    /** @brief Raised when the hover state changes; payload is this Widget*. */
-    WREvent _onHoverStateChange;
-    /** @brief Raised when the focus state changes; payload is this Widget*. */
-    WREvent _onFocusStateChange;
-    /** @brief Raised when the tab state changes; payload is this Widget*. */
-    WREvent _onTabStateChange;
-    /** @brief Raised when the active state changes; payload is this Widget*. */
-    WREvent _onActiveStateChange;
+    /** @brief Owned buffer of the same children (Widget*) in drawing order: ascending z, then insertion. */
+    GenericBuffer _drawOrder;
 } Widget;
 
 
-// Lifecycle (called by concrete types and the framework, not end users directly).
+// Lifecycle.
 /**
- * @brief Initializes the abstract base of a widget, minting its id and registering it with the screen.
+ * @brief Runs the widget's Initialize hook, then the update, render and input enable hooks (the flags start enabled).
  *
- * Sets the vtable, screen and type id; defaults geometry (position 0, size 0), z 0, tint white, the
- * render/update/input flags to true (without firing the enable hooks — that happens in
- * Widget_InitializeWidget) and all state flags to false; constructs the four state-change events; and
- * asks the screen for the next unique id, registering the widget. Call first inside a type's constructor,
- * then fill concrete fields.
- * @param self The base to initialize (usually &concrete->Base); must not be NULL.
- * @param vtable The concrete type's behavior table; must not be NULL.
- * @param screen The owning screen; must not be NULL.
- * @param typeId The widget's registered type id; must not be 0.
- * @returns Success; ErrorCode_IllegalArgument if @p self, @p vtable or @p screen is NULL or @p typeId is 0;
- *          propagates event-construction and screen-registration errors.
- * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
- */
-Error Widget_Construct(Widget* self, const WidgetVTable* vtable, UIScreen* screen, uint64_t typeId);
-
-/**
- * @brief Deconstructs a widget: releases concrete + base resources and returns its storage to the pool.
- *
- * Runs the concrete OnDeconstruct hook, detaches the widget from its parent (if any), unregisters it from
- * the screen (clearing focus/tab/animations that referenced it), deconstructs the state-change events and
- * the subwidget buffer, then returns the widget's storage to its type's pool via the factory. After this
- * the widget must not be used. Deinitialize the widget (Widget_DeinitializeWidget) before calling this.
- * Best-effort: the first error is returned and later ones are released. Safe on NULL.
- * @param self The widget to deconstruct, or NULL.
- * @returns Success (including the NULL case), or the first non-success Error encountered.
- * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
- */
-Error Widget_Deconstruct(Widget* self);
-
-/**
- * @brief Runs the widget's initialize step and enables update, render and input (firing their enable hooks).
- *
- * The non-instance half of the lifecycle: calls Initialize, then the OnUpdateEnable, OnRenderEnable and
- * OnInputEnable hooks (the flags are enabled by default). Call once after construction, before the widget
- * is first added to a screen or parent.
+ * Call once after creation and configuration, before the widget is first added to a screen or parent.
  * @param self The widget; must not be NULL.
- * @returns Success, or the first non-success Error from a hook.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_InvalidOperation if the widget is already
+ *          initialized or is being destroyed; otherwise the first error from a hook.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
  */
 Error Widget_InitializeWidget(Widget* self);
 
 /**
- * @brief The inverse of Widget_InitializeWidget: disables input/render/update then runs deinitialize.
+ * @brief Destroys the widget and its whole subtree, deferred.
  *
- * Fires the disable hooks for whichever of input/render/update are still enabled (in reverse of the enable
- * order), clearing those flags, then calls Deinitialize. Call once when the widget's use has ended, before
- * Widget_Deconstruct. The lifecycle does not restart afterwards.
- * @param self The widget; must not be NULL.
- * @returns Success, or the first non-success Error from a hook.
- * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ * At once: the widget is unlinked from its parent (or the roots), every widget of the subtree stops resolving by id,
+ * and the screen forgets them (hover, focus, keyboard navigation, mouse presses, animations); no hook runs. At the end
+ * of the screen's next UIScreen_Update (or in UIScreen_Deconstruct), the subtree is torn down children first: each
+ * widget's disable hooks and Deinitialize (if it was initialized), then OnDeconstruct, then its storage returns to the
+ * factory. Safe to call from any hook or event handler, on the widget being called back included. Destroying a widget
+ * that is already being destroyed does nothing.
+ * @param self The widget, or NULL (nothing happens).
+ * @returns Success (also for NULL and a widget already being destroyed); ErrorCode_InvalidOperation if the widget is
+ *          not alive in its screen (still being constructed); ErrorCode_BufferTooLarge if the screen could not record it
+ *          (nothing changed then).
  */
-Error Widget_DeinitializeWidget(Widget* self);
+Error Widget_Destroy(Widget* self);
 
 
-// Framework-driven wrappers (the screen calls these; call sites go through them, not the vtable directly).
+// Framework-driven wrappers (the screen calls these; they call the vtable slot when present).
 /**
- * @brief Updates the widget (calls the Update vtable slot if present).
+ * @brief Updates the widget (calls the Update slot if present).
  * @param self The widget; must not be NULL.
  * @param time The update-tick time.
  * @returns The slot's result, or success if there is no Update slot.
@@ -279,7 +288,15 @@ Error Widget_DeinitializeWidget(Widget* self);
 Error Widget_Update(Widget* self, ProgramTime time);
 
 /**
- * @brief Renders the widget (calls the Render vtable slot if present).
+ * @brief Lays the widget out (calls the Layout slot if present).
+ * @param self The widget; must not be NULL.
+ * @param context The layout context; must not be NULL.
+ * @returns The slot's result, or success if there is no Layout slot.
+ */
+Error Widget_Layout(Widget* self, const UILayoutContext* context);
+
+/**
+ * @brief Renders the widget (calls the Render slot if present).
  * @param self The widget; must not be NULL.
  * @param context The widget-local render context; must not be NULL.
  * @returns The slot's result, or success if there is no Render slot.
@@ -298,14 +315,15 @@ Error Widget_OnMouseInput(Widget* self, const WidgetMouseInputArgs* args);
  * @brief Delivers keyboard input to the widget (calls the OnKeyboardInput slot if present).
  * @param self The widget; must not be NULL.
  * @param args The keyboard input arguments; must not be NULL.
+ * @param outIsHandled [out] Receives whether the widget handled the input; false without a slot. Must not be NULL.
  * @returns The slot's result, or success if there is no OnKeyboardInput slot.
  */
-Error Widget_OnKeyboardInput(Widget* self, const WidgetKeyboardInputArgs* args);
+Error Widget_OnKeyboardInput(Widget* self, const WidgetKeyboardInputArgs* args, bool* outIsHandled);
 
 
 // Identity and references (never fail).
 /**
- * @brief Returns the widget's unique id (0 if unconstructed).
+ * @brief Returns the widget's id.
  * @param self The widget; must not be NULL.
  * @returns The id.
  */
@@ -345,13 +363,23 @@ static inline Widget* Widget_GetParent(const Widget* self)
 }
 
 /**
- * @brief Returns whether the widget is currently a top-level widget of its screen.
+ * @brief Returns whether the widget is currently a root of its screen.
  * @param self The widget; must not be NULL.
  * @returns true if the widget is a screen root.
  */
 static inline bool Widget_IsScreenRoot(const Widget* self)
 {
     return self->_isScreenRoot;
+}
+
+/**
+ * @brief Returns whether Widget_InitializeWidget has succeeded on the widget.
+ * @param self The widget; must not be NULL.
+ * @returns true once initialized.
+ */
+static inline bool Widget_IsInitialized(const Widget* self)
+{
+    return self->_isInitialized;
 }
 
 
@@ -370,8 +398,8 @@ static inline Vector2 Widget_GetPosition(const Widget* self)
  * @brief Sets the widget's parent-relative position (invalidates cached bounds up the tree).
  * @param self The widget; must not be NULL.
  * @param position The new position; both components must be finite.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if a
- *          component is NaN or infinite.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if a component is NaN
+ *          or infinite.
  */
 Error Widget_SetPosition(Widget* self, Vector2 position);
 
@@ -389,8 +417,8 @@ static inline Vector2 Widget_GetSize(const Widget* self)
  * @brief Sets the widget's parent-relative size (invalidates cached bounds up the tree).
  * @param self The widget; must not be NULL.
  * @param size The new size; both components must be finite.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if a
- *          component is NaN or infinite.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if a component is NaN
+ *          or infinite.
  */
 Error Widget_SetSize(Widget* self, Vector2 size);
 
@@ -405,19 +433,19 @@ static inline float Widget_GetZLayer(const Widget* self)
 }
 
 /**
- * @brief Sets the widget's z layer (higher renders on top; relative to the parent/screen).
+ * @brief Sets the widget's z layer (higher draws on top of its siblings; siblings of equal z keep insertion order).
  * @param self The widget; must not be NULL.
  * @param zLayer The new z layer; must be finite.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if
- *          @p zLayer is NaN or infinite.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if @p zLayer is NaN or
+ *          infinite.
  */
 Error Widget_SetZLayer(Widget* self, float zLayer);
 
 /**
  * @brief Returns the widget's estimated bounds (parent space), enclosing the widget and all subwidgets.
  *
- * The bounds are cached and lazily recomputed when invalidated (by a geometry or subwidget change on this
- * widget or a descendant), which is why @p self is non-const.
+ * The bounds are cached and lazily recomputed when invalidated (by a geometry or subwidget change on this widget or a
+ * descendant), which is why @p self is non-const.
  * @param self The widget; must not be NULL.
  * @returns The estimated bounds as a Rectangle in the widget's parent coordinate space.
  */
@@ -439,8 +467,8 @@ static inline RenderColor Widget_GetRenderTint(const Widget* self)
  * @brief Sets the widget's render tint (multiplied into the widget and its subtree while drawing).
  * @param self The widget; must not be NULL.
  * @param tint The new tint; its Brightness and Opacity must be finite.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if
- *          Brightness or Opacity is NaN or infinite.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if Brightness or
+ *          Opacity is NaN or infinite.
  */
 Error Widget_SetRenderTint(Widget* self, RenderColor tint);
 
@@ -481,7 +509,7 @@ static inline bool Widget_IsUpdated(const Widget* self)
 Error Widget_SetIsUpdated(Widget* self, bool isUpdated);
 
 /**
- * @brief Returns whether the widget receives input and participates in hit testing.
+ * @brief Returns whether the widget receives input and is hit by the pointer.
  * @param self The widget; must not be NULL.
  * @returns true if input-enabled.
  */
@@ -493,16 +521,17 @@ static inline bool Widget_IsInputEnabled(const Widget* self)
 /**
  * @brief Enables or disables input, firing OnInputEnable / OnInputDisable on a change.
  *
- * A disabled widget receives no hover/click/keyboard input and is skipped when the screen searches for the
- * top-most widget at a position (input passes through it).
+ * A disabled widget receives no input, is transparent to the pointer (whatever is behind it is hit) and cannot keep
+ * focus: disabling the focused widget clears the screen's focus.
  * @param self The widget; must not be NULL.
  * @param isInputEnabled The new input flag.
- * @returns Success, or a non-success Error propagated from the fired hook.
+ * @returns Success, or a non-success Error propagated from a fired hook.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
  */
 Error Widget_SetIsInputEnabled(Widget* self, bool isInputEnabled);
 
 /**
- * @brief Returns whether subwidgets are clipped to this widget's box (for rendering and input).
+ * @brief Returns whether subwidgets are clipped to this widget's box (for rendering and hit testing).
  * @param self The widget; must not be NULL.
  * @returns true if subwidgets are cut.
  */
@@ -512,17 +541,38 @@ static inline bool Widget_AreSubWidgetsCut(const Widget* self)
 }
 
 /**
- * @brief Sets whether subwidgets are clipped to this widget's box (affects rendering and input).
+ * @brief Sets whether subwidgets are clipped to this widget's box (affects rendering and hit testing).
  * @param self The widget; must not be NULL.
  * @param areSubWidgetsCut The new clip flag.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  */
 Error Widget_SetAreSubWidgetsCut(Widget* self, bool areSubWidgetsCut);
 
-
-// Interaction state (getters; the setters below are driven by the screen).
 /**
- * @brief Returns whether the widget is hovered by the mouse.
+ * @brief Returns whether the widget can take keyboard focus.
+ * @param self The widget; must not be NULL.
+ * @returns true if focusable.
+ */
+static inline bool Widget_IsFocusable(const Widget* self)
+{
+    return self->_isFocusable;
+}
+
+/**
+ * @brief Sets whether the widget can take keyboard focus (a click on it, or keyboard navigation). Making the focused
+ *        widget unfocusable clears the screen's focus. Non-focusable widgets are transparent to navigation: their
+ *        focusable descendants are navigated as if they were siblings.
+ * @param self The widget; must not be NULL.
+ * @param isFocusable The new flag.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; otherwise an error from the focus hooks.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error Widget_SetIsFocusable(Widget* self, bool isFocusable);
+
+
+// Interaction state (driven by the screen).
+/**
+ * @brief Returns whether the pointer hovers the widget.
  * @param self The widget; must not be NULL.
  * @returns true if hovered.
  */
@@ -532,7 +582,7 @@ static inline bool Widget_IsHovered(const Widget* self)
 }
 
 /**
- * @brief Returns whether the widget is focused (the front-most widget of its screen).
+ * @brief Returns whether the widget is its screen's focused widget.
  * @param self The widget; must not be NULL.
  * @returns true if focused.
  */
@@ -542,7 +592,7 @@ static inline bool Widget_IsFocused(const Widget* self)
 }
 
 /**
- * @brief Returns whether the widget is tabbed (keyboard-selected).
+ * @brief Returns whether keyboard navigation has entered the widget.
  * @param self The widget; must not be NULL.
  * @returns true if tabbed.
  */
@@ -562,68 +612,32 @@ static inline bool Widget_IsActive(const Widget* self)
 }
 
 
-// Screen-driven state changes (intended for the owning screen; not general-purpose setters).
-/**
- * @brief Sets the widget's hover state, firing OnHoverStart/OnHoverEnd, raising OnHoverStateChange, and
- *        recomputing the active state. Intended for the screen.
- * @param self The widget; must not be NULL.
- * @param isHovered The new hover state.
- * @param args The hover arguments (position) used when @p isHovered is true; may be NULL when false.
- * @returns Success, or the first non-success Error from a hook/event.
- * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
- */
-Error Widget_SetHovered(Widget* self, bool isHovered, const WidgetHoverArgs* args);
-
-/**
- * @brief Sets the widget's focus state, firing OnFocusEnable/OnFocusDisable and raising OnFocusStateChange.
- *        Intended for the screen.
- * @param self The widget; must not be NULL.
- * @param isFocused The new focus state.
- * @returns Success, or the first non-success Error from a hook/event.
- * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
- */
-Error Widget_SetFocused(Widget* self, bool isFocused);
-
-/**
- * @brief Sets the widget's tab state, firing OnTabbedEnable/OnTabbedDisable, raising OnTabStateChange, and
- *        recomputing the active state. Intended for the screen.
- * @param self The widget; must not be NULL.
- * @param isTabbed The new tab state.
- * @returns Success, or the first non-success Error from a hook/event.
- * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
- */
-Error Widget_SetTabbed(Widget* self, bool isTabbed);
-
-/**
- * @brief Marks the widget as a screen root or not. Intended for the screen's add/remove functions.
- * @param self The widget; must not be NULL.
- * @param isScreenRoot The new root flag.
- */
-void Widget_SetScreenRoot(Widget* self, bool isScreenRoot);
-
-
 // Subwidgets.
 /**
- * @brief Adds a subwidget (child) to this widget.
+ * @brief Adds a subwidget (child) to this widget, on top of its siblings of equal z.
  *
- * The child must belong to the same screen, must not be this widget or any of its ancestors (no cycles),
- * and must not already be attached (no parent and not a screen root). The child is borrowed, not owned.
- * Invalidates cached bounds up the tree.
+ * Both widgets must belong to the same screen, be initialized and not being destroyed; the child must be detached (no
+ * parent, not a root) and must not be this widget or one of its ancestors; and the tree may not get deeper than
+ * WIDGET_MAX_TREE_DEPTH levels. The child is borrowed, not owned. Invalidates cached bounds up the tree.
  * @param self The widget; must not be NULL.
  * @param child The subwidget to add; must not be NULL.
- * @returns Success; ErrorCode_IllegalArgument if @p self or @p child is NULL, they differ in screen, or
- *          @p child is this widget or an ancestor; ErrorCode_InvalidOperation if @p child is already
- *          attached or could not be stored.
- * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ * @returns Success; ErrorCode_IllegalArgument if a widget is NULL, they belong to different screens, or @p child is
+ *          this widget or an ancestor; ErrorCode_InvalidOperation if either is not initialized or is being destroyed,
+ *          or @p child is attached; ErrorCode_ArgumentOutOfRange if the tree would get too deep;
+ *          ErrorCode_BufferTooLarge if the child could not be stored.
  */
 Error Widget_AddSubWidget(Widget* self, Widget* child);
 
 /**
- * @brief Removes a subwidget (child) from this widget. Does not deconstruct the child.
+ * @brief Removes a subwidget (child) from this widget without destroying it (it can be added again).
+ *
+ * The screen forgets what pointed into the removed subtree: a hovered widget gets OnHoverEnd, the focused widget loses
+ * focus, keyboard navigation leaves it and a mouse press on it ends (its release goes nowhere). Its animations keep
+ * running.
  * @param self The widget; must not be NULL.
  * @param child The subwidget to remove; must not be NULL and must be a current child.
- * @returns Success; ErrorCode_IllegalArgument if @p self or @p child is NULL; ErrorCode_InvalidOperation if
- *          @p child is not a current subwidget.
+ * @returns Success; ErrorCode_IllegalArgument if a widget is NULL; ErrorCode_InvalidOperation if @p child is not a
+ *          current subwidget or is being destroyed; otherwise the first error from a fired hook.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
  */
 Error Widget_RemoveSubWidget(Widget* self, Widget* child);
@@ -631,9 +645,9 @@ Error Widget_RemoveSubWidget(Widget* self, Widget* child);
 /**
  * @brief Appends the ids of this widget's descendants to a buffer, down to a given depth.
  *
- * Depth 0 appends only the immediate children; depth N appends descendants up to N levels below the
- * immediate children; WIDGET_SUBWIDGET_DEPTH_ALL appends all descendants. Does not clear the buffer first
- * (append semantics).
+ * Depth 0 appends only the immediate children; depth N appends descendants up to N levels below the immediate
+ * children; WIDGET_SUBWIDGET_DEPTH_ALL appends all descendants. Children appear in insertion order. Does not clear the
+ * buffer first (append semantics).
  * @param self The widget; must not be NULL.
  * @param outIds [out] A uint64_t buffer to append ids to; must not be NULL with element size sizeof(uint64_t).
  * @param depth The nesting depth (0 = immediate children, WIDGET_SUBWIDGET_DEPTH_ALL = all descendants).
@@ -650,21 +664,12 @@ Error Widget_GetSubWidgets(const Widget* self, GenericBuffer* outIds, size_t dep
 size_t Widget_GetSubWidgetCount(const Widget* self);
 
 /**
- * @brief Returns the immediate subwidget at a given index (for traversal).
+ * @brief Returns the immediate subwidget at a given index, in insertion order (z never reorders this list).
  * @param self The widget; must not be NULL.
  * @param index Index in [0, Widget_GetSubWidgetCount).
  * @returns The borrowed subwidget, or NULL if @p index is out of range.
  */
 Widget* Widget_GetSubWidgetAt(const Widget* self, size_t index);
-
-/**
- * @brief Sorts this widget's immediate subwidgets into ascending z order, in place.
- *
- * Used by the screen for z-ordered rendering and hit testing. The relative order of subwidgets is only
- * meaningful by z (ties are unspecified), so this reorder is semantically neutral and cannot fail.
- * @param self The widget; must not be NULL.
- */
-void Widget_SortSubWidgetsByZ(Widget* self);
 
 
 // Capabilities.
@@ -696,72 +701,35 @@ Error Widget_GetSupportedCapabilities(const Widget* self, GenericBuffer* outCapa
 void* Widget_GetCapability(Widget* self, uint64_t capabilityId);
 
 
-// Generic property access (used by animation and generic tooling).
+// Typed properties (used by animation and generic tooling).
 /**
- * @brief Reads a property value into @p outValue.
- *
- * Ids at or above WIDGET_BASE_PROPERTY_START are handled by the base (see WidgetBaseProperty); lower ids
- * are forwarded to the concrete GetProperty slot. @p outValue must be large enough for the property's type.
+ * @brief Looks up the type of one of the widget's properties: a WidgetBaseProperty, or a property its type declares.
  * @param self The widget; must not be NULL.
  * @param propertyId The property id.
- * @param outValue [out] Destination for the value; must not be NULL and large enough for the property type.
- * @returns Success; ErrorCode_IllegalArgument if @p self or @p outValue is NULL; ErrorCode_InvalidOperation
- *          if the id is unknown / unhandled.
+ * @param outType [out] Receives the type when found; must not be NULL.
+ * @returns true if the widget has the property.
  */
-Error Widget_GetProperty(Widget* self, int32_t propertyId, void* outValue);
+bool Widget_TryGetPropertyType(const Widget* self, int32_t propertyId, UIPropertyType* outType);
 
 /**
- * @brief Writes a property value from @p value.
- *
- * Ids at or above WIDGET_BASE_PROPERTY_START are handled by the base (see WidgetBaseProperty) through the
- * validating base setters; lower ids are forwarded to the concrete SetProperty slot.
+ * @brief Reads a property value.
  * @param self The widget; must not be NULL.
- * @param propertyId The property id.
- * @param value The value to write; must not be NULL and must point to the property's type.
- * @returns Success; ErrorCode_IllegalArgument if @p self or @p value is NULL; ErrorCode_InvalidOperation if
- *          the id is unknown / unhandled; propagates validation errors from the base setters.
+ * @param propertyId The property id (a WidgetBaseProperty or one the type declares).
+ * @param outValue [out] Receives the typed value; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p outValue is NULL; ErrorCode_InvalidOperation if the
+ *          widget has no such property or its type declares it without a GetProperty slot.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
  */
-Error Widget_SetProperty(Widget* self, int32_t propertyId, const void* value);
-
-
-// Events.
-/**
- * @brief Returns the widget's hover-state-change event (subscribe to observe hover transitions).
- * @param self The widget; must not be NULL.
- * @returns A pointer to the event; payload on raise is this Widget*.
- */
-static inline WREvent* Widget_GetOnHoverStateChange(Widget* self)
-{
-    return &self->_onHoverStateChange;
-}
+Error Widget_GetProperty(Widget* self, int32_t propertyId, UIPropertyValue* outValue);
 
 /**
- * @brief Returns the widget's focus-state-change event.
+ * @brief Writes a property value through the widget's validating setter.
  * @param self The widget; must not be NULL.
- * @returns A pointer to the event; payload on raise is this Widget*.
+ * @param propertyId The property id (a WidgetBaseProperty or one the type declares).
+ * @param value The typed value; must not be NULL and must have the property's type.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p value is NULL or @p value's type is not the property's;
+ *          ErrorCode_InvalidOperation if the widget has no such property or its type declares it without a SetProperty
+ *          slot; otherwise the setter's validation error.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
  */
-static inline WREvent* Widget_GetOnFocusStateChange(Widget* self)
-{
-    return &self->_onFocusStateChange;
-}
-
-/**
- * @brief Returns the widget's tab-state-change event.
- * @param self The widget; must not be NULL.
- * @returns A pointer to the event; payload on raise is this Widget*.
- */
-static inline WREvent* Widget_GetOnTabStateChange(Widget* self)
-{
-    return &self->_onTabStateChange;
-}
-
-/**
- * @brief Returns the widget's active-state-change event.
- * @param self The widget; must not be NULL.
- * @returns A pointer to the event; payload on raise is this Widget*.
- */
-static inline WREvent* Widget_GetOnActiveStateChange(Widget* self)
-{
-    return &self->_onActiveStateChange;
-}
+Error Widget_SetProperty(Widget* self, int32_t propertyId, const UIPropertyValue* value);

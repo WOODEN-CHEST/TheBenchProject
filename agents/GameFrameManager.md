@@ -32,6 +32,20 @@ Loading → Loaded → Active → Unloading → Unloaded
   `Update`.
 - `GameFrameManager_TryGetFrameState` reads a frame's current state (e.g. "is the next scene loaded yet?").
 
+## Input and update order
+
+Each `GameFrameManager_Update` first polls input: raylib's `PollInputEvents` (the program's only poll), then
+`GameInput_Poll` on the manager's borrowed `GameInput` (passed to `GameFrameManager_Construct`, may be NULL; frames
+read it through `Services.Input`, see [GameInput.md](GameInput.md)). Frames are then handled **top-down** (highest z
+first), so the frame on top (a menu, a UI overlay) gets first refusal on input and consumes what it handles; frames below
+read what is left (consumed input reads as not pressed). The order is fixed at the start of the tick: a frame added
+during it is first handled on the next tick. The record list is kept in ascending z (a new top frame goes last, a new
+bottom frame first), so neither update nor render sorts.
+
+`GameFrameManager_RequestStop` asks the loop to stop normally (e.g. the player quits); `GameFrameManager_ShouldStop`
+then reports true, as after a fatal error. `GameFrameManager_GetTargetAspectRatio` / `GetTargetAreaPosition` give frames
+the fitted-area settings outside rendering (a UI frame sets its screen's viewport from them in `Update`).
+
 ## Multiple active frames & transitions
 
 Frames live in an ordered **z-stack** (add to top or bottom via `GameFrameAddOptions`). Several can be
@@ -69,8 +83,10 @@ The caller owns the loop and timing (a single-threaded fixed-timestep accumulato
 the AssetManager are both main-thread-only). Update runs at a fixed rate, render at the frame rate:
 
 ```c
+GameInput Input;
+GameInput_Construct(&Input);                            // the manager polls it every update tick
 GameFrameManager Manager;
-GameFrameManager_Construct(&Manager, &Log, 16.0f / 9.0f, RenderTargetPosition_Centered());
+GameFrameManager_Construct(&Manager, &Log, &Input, 16.0f / 9.0f, RenderTargetPosition_Centered());
 // ... add initial frames ...
 
 const double UpdateDelta = 1.0 / 480.0;                 // UPDATE_RATE_HZ is a code constant
@@ -106,8 +122,8 @@ CloseWindow();
 
 - All manager calls must be on the **main thread** (they drive Raylib and, via frames, the AssetManager).
 - `GameFrameManager` is a value type the caller holds (like `Logger`/`GameConfig`); it stores a borrowed
-  `Logger*` that must outlive it.
+  `Logger*` and `GameInput*` that must outlive it.
 - `GameFrameManager_Deconstruct` must run while the window/GL context still exists (it unloads render
   targets); it ends still-active frames and destroys all of them best-effort.
-- The render composite order is the z-stack order; update order is unspecified (input routing is not
-  modelled yet — a future addition would poll input on the main thread and expose it to `Update`).
+- The render composite order is the z-stack order (bottom first); the update order is the reverse (top first), for
+  input. Frames never read raylib input themselves.

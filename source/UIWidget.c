@@ -1,25 +1,36 @@
 #include "UIWidget.h"
+#include "UIInternal.h"
 #include "UIScreen.h"
 #include "UIWidgetFactory.h"
+#include <inttypes.h>
 #include "wr/WRMemory.h"
 #include "wr/WRMath.h"
 #include "wr/WRCompile.h"
 
 
-// Static functions.
-/* Returns true if @p value is a real, finite float (not NaN and not +/- infinity). */
+// Fields.
+/* The properties every widget has. */
+static const WidgetPropertyDescriptor BaseProperties[] =
+{
+    { .Id = WidgetBaseProperty_Position, .Type = UIPropertyType_Vector2, .Name = u8"position" },
+    { .Id = WidgetBaseProperty_Size, .Type = UIPropertyType_Vector2, .Name = u8"size" },
+    { .Id = WidgetBaseProperty_ZLayer, .Type = UIPropertyType_Float, .Name = u8"z_layer" },
+    { .Id = WidgetBaseProperty_RenderTint, .Type = UIPropertyType_RenderColor, .Name = u8"render_tint" },
+};
+
+
+// Static functions: helpers.
 static bool IsFloatFinite(float value)
 {
     return !Math_IsNaNFloat(value) && !Math_IsInfinityFloat(value);
 }
 
-/* Returns true if both components of @p value are finite. */
 static bool IsVector2Finite(Vector2 value)
 {
     return IsFloatFinite(value.x) && IsFloatFinite(value.y);
 }
 
-/* Keeps the first non-success error and releases any later one, for best-effort teardown loops. */
+/* Keeps the first non-success error and releases any later one, for best-effort teardown. */
 static void KeepFirstError(Error* first, Error* candidate)
 {
     if ((candidate->Code != ErrorCode_Success) && (first->Code == ErrorCode_Success))
@@ -32,24 +43,20 @@ static void KeepFirstError(Error* first, Error* candidate)
     }
 }
 
-/* Returns the child widget stored at @p index in @p widget's subwidget buffer. */
 static Widget* GetChildAt(const Widget* widget, size_t index)
 {
-    Widget** Slot = GenericBuffer_GetPointerToElement((GenericBuffer*)&widget->_subWidgets, index);
-    return (Slot != NULL) ? *Slot : NULL;
+    return *(Widget**)GenericBuffer_GetPointerToElement((GenericBuffer*)&widget->_subWidgets, index);
 }
 
-/* Returns true if @p candidate is @p widget itself or any of its ancestors (used to reject cycles). */
+/* Returns true if @p candidate is @p widget itself or one of its ancestors (used to reject cycles). */
 static bool IsSelfOrAncestor(const Widget* candidate, const Widget* widget)
 {
-    const Widget* Current = widget;
-    while (Current != NULL)
+    for (const Widget* Current = widget; Current != NULL; Current = Current->_parent)
     {
         if (Current == candidate)
         {
             return true;
         }
-        Current = Current->_parent;
     }
     return false;
 }
@@ -57,15 +64,12 @@ static bool IsSelfOrAncestor(const Widget* candidate, const Widget* widget)
 /* Marks this widget's cached bounds and every ancestor's as stale. */
 static void InvalidateBoundsUpTree(Widget* widget)
 {
-    Widget* Current = widget;
-    while (Current != NULL)
+    for (Widget* Current = widget; Current != NULL; Current = Current->_parent)
     {
         Current->_areBoundsValid = false;
-        Current = Current->_parent;
     }
 }
 
-/* Returns the axis-aligned union of two rectangles. */
 static Rectangle UnionRectangle(Rectangle a, Rectangle b)
 {
     float MinX = Math_MinFloat(a.x, b.x);
@@ -75,73 +79,81 @@ static Rectangle UnionRectangle(Rectangle a, Rectangle b)
     return (Rectangle){ .x = MinX, .y = MinY, .width = MaxX - MinX, .height = MaxY - MinY };
 }
 
-/* Recomputes and caches this widget's estimated bounds (parent space), enclosing self and all subwidgets. */
+/* The widget's own box, in its parent's space. */
+static Rectangle GetOwnBox(const Widget* self)
+{
+    return (Rectangle){ .x = self->_position.x, .y = self->_position.y, .width = self->_size.x, .height = self->_size.y };
+}
+
+/* Grows @p bounds (parent space) to enclose a child's bounds, given in this widget's local space. */
+static Rectangle AddChildBounds(const Widget* self, Rectangle bounds, Rectangle childBounds)
+{
+    Rectangle Mapped =
+    {
+        .x = self->_position.x + (childBounds.x * self->_size.x),
+        .y = self->_position.y + (childBounds.y * self->_size.y),
+        .width = childBounds.width * self->_size.x,
+        .height = childBounds.height * self->_size.y
+    };
+    return UnionRectangle(bounds, Mapped);
+}
+
+/* Recomputes and caches this widget's estimated bounds (parent space), enclosing it and all subwidgets. Recursion is
+ * bounded by WIDGET_MAX_TREE_DEPTH. */
 static void ComputeBounds(Widget* self)
 {
-    Rectangle Bounds =
-    {
-        .x = self->_position.x,
-        .y = self->_position.y,
-        .width = self->_size.x,
-        .height = self->_size.y
-    };
-
+    Rectangle Bounds = GetOwnBox(self);
     for (size_t Index = 0; Index < self->_subWidgets._count; Index++)
     {
-        Widget* Child = GetChildAt(self, Index);
-        Rectangle ChildBounds = Widget_GetEstimatedBounds(Child); // in this widget's local space
-        // Map from this widget's local space into its parent space: origin + value * size.
-        Rectangle Mapped =
-        {
-            .x = self->_position.x + (ChildBounds.x * self->_size.x),
-            .y = self->_position.y + (ChildBounds.y * self->_size.y),
-            .width = ChildBounds.width * self->_size.x,
-            .height = ChildBounds.height * self->_size.y
-        };
-        Bounds = UnionRectangle(Bounds, Mapped);
+        Bounds = AddChildBounds(self, Bounds, Widget_GetEstimatedBounds(GetChildAt(self, Index)));
     }
-
     self->_cachedBounds = Bounds;
     self->_areBoundsValid = true;
 }
 
-/* Recomputes the derived active state (hovered or tabbed) and fires its hooks/event on a change. */
+/* Queues a state change. Always called right after the field changes and before the hook runs: a hook that changes the
+ * state again queues its own change after this one, so the last notification always tells the final state. */
+static void PostStateEvent(Widget* self, UIEventKind kind, bool isSet)
+{
+    UIEvent Event =
+    {
+        .Kind = kind,
+        .WidgetId = self->_id,
+        .WidgetTypeId = self->_typeId,
+        .IsSet = isSet,
+        .WidgetEventId = 0,
+        .HasValue = false
+    };
+    UIScreen_InternalPostEvent(self->_screen, &Event); // Fails only when memory runs out; the state is set either way.
+}
+
+/* Recomputes the derived active state (hovered or tabbed) and fires its hook and notification on a change. */
 static Error UpdateActive(Widget* self)
 {
-    bool NewActive = self->_isHovered || self->_isTabbed;
-    if (NewActive == self->_isActive)
+    bool IsActiveNow = self->_isHovered || self->_isTabbed;
+    if ((IsActiveNow == self->_isActive) || self->_isDying)
     {
         return Error_CreateSuccess();
     }
 
-    self->_isActive = NewActive;
-    if (NewActive)
-    {
-        if (self->VTable->OnActiveEnable != NULL)
-        {
-            Error HookResult = self->VTable->OnActiveEnable(self);
-            if (HookResult.Code != ErrorCode_Success)
-            {
-                return HookResult;
-            }
-        }
-    }
-    else
-    {
-        if (self->VTable->OnActiveDisable != NULL)
-        {
-            Error HookResult = self->VTable->OnActiveDisable(self);
-            if (HookResult.Code != ErrorCode_Success)
-            {
-                return HookResult;
-            }
-        }
-    }
-
-    return WREvent_Raise(&self->_onActiveStateChange, self);
+    self->_isActive = IsActiveNow;
+    PostStateEvent(self, UIEventKind_ActiveChanged, IsActiveNow);
+    Error (*Hook)(void*) = IsActiveNow ? self->VTable->OnActiveEnable : self->VTable->OnActiveDisable;
+    return (Hook != NULL) ? Hook(self) : Error_CreateSuccess();
 }
 
-/* Recursively appends a widget's descendant ids to @p out, down to @p depth levels below immediate children. */
+/* Runs a flag's enable or disable hook, if the widget is initialized (before that the flags are just set). */
+static Error RunFlagHook(Widget* self, bool isEnabled, Error (*enableHook)(void*), Error (*disableHook)(void*))
+{
+    Error (*Hook)(void*) = isEnabled ? enableHook : disableHook;
+    if (!self->_isInitialized || (Hook == NULL))
+    {
+        return Error_CreateSuccess();
+    }
+    return Hook(self);
+}
+
+/* Recursively appends a widget's descendant ids to @p out, down to @p depth levels below the immediate children. */
 static Error AppendDescendants(const Widget* widget, GenericBuffer* out, size_t depth)
 {
     for (size_t Index = 0; Index < widget->_subWidgets._count; Index++)
@@ -152,12 +164,10 @@ static Error AppendDescendants(const Widget* widget, GenericBuffer* out, size_t 
         {
             return Error_Construct2(ErrorCode_BufferTooLarge, "Widget_GetSubWidgets: output buffer could not grow.");
         }
-
-        bool ShouldRecurse = (depth == WIDGET_SUBWIDGET_DEPTH_ALL) || (depth > 0);
-        if (ShouldRecurse)
+        if ((depth == WIDGET_SUBWIDGET_DEPTH_ALL) || (depth > 0U))
         {
-            size_t ChildDepth = (depth == WIDGET_SUBWIDGET_DEPTH_ALL) ? WIDGET_SUBWIDGET_DEPTH_ALL : (depth - 1);
-            Error RecurseResult = AppendDescendants(Child, out, ChildDepth);
+            Error RecurseResult = AppendDescendants(Child, out,
+                (depth == WIDGET_SUBWIDGET_DEPTH_ALL) ? WIDGET_SUBWIDGET_DEPTH_ALL : (depth - 1U));
             if (RecurseResult.Code != ErrorCode_Success)
             {
                 return RecurseResult;
@@ -167,24 +177,79 @@ static Error AppendDescendants(const Widget* widget, GenericBuffer* out, size_t 
     return Error_CreateSuccess();
 }
 
-
-// Public functions: lifecycle.
-Error Widget_Construct(Widget* self, const WidgetVTable* vtable, UIScreen* screen, uint64_t typeId)
+/* Levels from the widget up to its top-most ancestor; 1 for a root or a detached widget. */
+static size_t GetDepth(const Widget* widget)
 {
-    if ((self == NULL) || (vtable == NULL) || (screen == NULL))
+    size_t Depth = 0;
+    for (const Widget* Current = widget; Current != NULL; Current = Current->_parent)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_Construct: self, vtable and screen must not be NULL.");
+        Depth++;
     }
-    if (typeId == WIDGET_TYPE_ID_INVALID)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_Construct: typeId must not be 0.");
-    }
+    return Depth;
+}
 
+/* Levels of the subtree under the widget, itself included. Recursion is bounded because every tree already respects
+ * WIDGET_MAX_TREE_DEPTH. */
+static size_t GetSubtreeHeight(const Widget* widget)
+{
+    size_t Highest = 0;
+    for (size_t Index = 0; Index < widget->_subWidgets._count; Index++)
+    {
+        size_t ChildHeight = GetSubtreeHeight(GetChildAt(widget, Index));
+        Highest = (ChildHeight > Highest) ? ChildHeight : Highest;
+    }
+    return Highest + 1U;
+}
+
+/* Whether @p a is drawn before @p b among siblings: lower z first, then earlier insertion. */
+static bool IsDrawnBefore(const Widget* a, const Widget* b)
+{
+    if (a->_zLayer < b->_zLayer)
+    {
+        return true;
+    }
+    if (a->_zLayer > b->_zLayer)
+    {
+        return false;
+    }
+    return a->_sequence < b->_sequence;
+}
+
+static bool TryGetBasePropertyType(int32_t propertyId, UIPropertyType* outType)
+{
+    for (size_t Index = 0; Index < (sizeof(BaseProperties) / sizeof(BaseProperties[0])); Index++)
+    {
+        if (BaseProperties[Index].Id == propertyId)
+        {
+            *outType = BaseProperties[Index].Type;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Clears the screen's focus when this widget holds it but can no longer take it. */
+static Error ReleaseFocusIfIneligible(Widget* self)
+{
+    bool IsFocusedWidget = (UIScreen_GetFocusedWidgetId(self->_screen) == self->_id) && (self->_id != WIDGET_ID_INVALID);
+    if (!IsFocusedWidget || self->_isDying || UIScreen_InternalCanFocus(self))
+    {
+        return Error_CreateSuccess();
+    }
+    return UIScreen_InternalSetFocus(self->_screen, WIDGET_ID_INVALID);
+}
+
+
+// Internal functions (declared in UIInternal.h).
+void Widget_InternalInitializeBase(Widget* self, const WidgetVTable* vtable, UIScreen* screen, uint64_t typeId,
+    bool isFocusable)
+{
     self->VTable = vtable;
     self->_screen = screen;
     self->_parent = NULL;
     self->_id = WIDGET_ID_INVALID;
     self->_typeId = typeId;
+    self->_sequence = 0;
 
     self->_position = (Vector2){ .x = 0.0f, .y = 0.0f };
     self->_size = (Vector2){ .x = 0.0f, .y = 0.0f };
@@ -196,124 +261,230 @@ Error Widget_Construct(Widget* self, const WidgetVTable* vtable, UIScreen* scree
     self->_isInputEnabled = true;
     self->_areSubWidgetsCut = false;
     self->_isScreenRoot = false;
+    self->_isFocusable = isFocusable;
 
     self->_isHovered = false;
     self->_isFocused = false;
     self->_isTabbed = false;
     self->_isActive = false;
 
+    self->_isInitialized = false;
+    self->_isDying = false;
+
     self->_cachedBounds = (Rectangle){ .x = 0.0f, .y = 0.0f, .width = 0.0f, .height = 0.0f };
     self->_areBoundsValid = false;
 
-    GenericBuffer_AllocateVariable(&self->_subWidgets, 4U, sizeof(Widget*));
-
-    Error HoverEventResult = WREvent_Construct1(&self->_onHoverStateChange);
-    if (HoverEventResult.Code != ErrorCode_Success)
-    {
-        Memory_Free(self->_subWidgets._data);
-        return HoverEventResult;
-    }
-    Error FocusEventResult = WREvent_Construct1(&self->_onFocusStateChange);
-    if (FocusEventResult.Code != ErrorCode_Success)
-    {
-        WREvent_Deconstruct(&self->_onHoverStateChange);
-        Memory_Free(self->_subWidgets._data);
-        return FocusEventResult;
-    }
-    Error TabEventResult = WREvent_Construct1(&self->_onTabStateChange);
-    if (TabEventResult.Code != ErrorCode_Success)
-    {
-        WREvent_Deconstruct(&self->_onFocusStateChange);
-        WREvent_Deconstruct(&self->_onHoverStateChange);
-        Memory_Free(self->_subWidgets._data);
-        return TabEventResult;
-    }
-    Error ActiveEventResult = WREvent_Construct1(&self->_onActiveStateChange);
-    if (ActiveEventResult.Code != ErrorCode_Success)
-    {
-        WREvent_Deconstruct(&self->_onTabStateChange);
-        WREvent_Deconstruct(&self->_onFocusStateChange);
-        WREvent_Deconstruct(&self->_onHoverStateChange);
-        Memory_Free(self->_subWidgets._data);
-        return ActiveEventResult;
-    }
-
-    uint64_t Id = WIDGET_ID_INVALID;
-    Error RegisterResult = UIScreen_RegisterWidget(screen, self, &Id);
-    if (RegisterResult.Code != ErrorCode_Success)
-    {
-        WREvent_Deconstruct(&self->_onActiveStateChange);
-        WREvent_Deconstruct(&self->_onTabStateChange);
-        WREvent_Deconstruct(&self->_onFocusStateChange);
-        WREvent_Deconstruct(&self->_onHoverStateChange);
-        Memory_Free(self->_subWidgets._data);
-        return RegisterResult;
-    }
-
-    self->_id = Id;
-    return Error_CreateSuccess();
+    // Capacity 0: most widgets never get children, and these allocate on the first one.
+    GenericBuffer_AllocateVariable(&self->_subWidgets, 0U, sizeof(Widget*));
+    GenericBuffer_AllocateVariable(&self->_drawOrder, 0U, sizeof(Widget*));
 }
 
-Error Widget_Deconstruct(Widget* self)
+void Widget_InternalReleaseBase(Widget* self)
 {
-    if (self == NULL)
+    Memory_Free(self->_subWidgets._data);
+    Memory_Free(self->_drawOrder._data);
+    Memory_Zero(&self->_subWidgets, sizeof(self->_subWidgets));
+    Memory_Zero(&self->_drawOrder, sizeof(self->_drawOrder));
+}
+
+Error Widget_InternalRunTeardownHooks(Widget* self)
+{
+    Error FirstError = Error_CreateSuccess();
+    if (self->_isInitialized)
+    {
+        // The reverse of the enable order in Widget_InitializeWidget.
+        if (self->_isInputEnabled && (self->VTable->OnInputDisable != NULL))
+        {
+            Error HookResult = self->VTable->OnInputDisable(self);
+            KeepFirstError(&FirstError, &HookResult);
+        }
+        if (self->_isRendered && (self->VTable->OnRenderDisable != NULL))
+        {
+            Error HookResult = self->VTable->OnRenderDisable(self);
+            KeepFirstError(&FirstError, &HookResult);
+        }
+        if (self->_isUpdated && (self->VTable->OnUpdateDisable != NULL))
+        {
+            Error HookResult = self->VTable->OnUpdateDisable(self);
+            KeepFirstError(&FirstError, &HookResult);
+        }
+        self->_isInputEnabled = false;
+        self->_isRendered = false;
+        self->_isUpdated = false;
+        if (self->VTable->Deinitialize != NULL)
+        {
+            Error HookResult = self->VTable->Deinitialize(self);
+            KeepFirstError(&FirstError, &HookResult);
+        }
+        self->_isInitialized = false;
+    }
+    if (self->VTable->OnDeconstruct != NULL)
+    {
+        Error HookResult = self->VTable->OnDeconstruct(self);
+        KeepFirstError(&FirstError, &HookResult);
+    }
+    return FirstError;
+}
+
+Error Widget_InternalSetHovered(Widget* self, bool isHovered, const WidgetHoverArgs* args)
+{
+    if ((isHovered == self->_isHovered) || self->_isDying)
     {
         return Error_CreateSuccess();
     }
 
-    Error FirstError = Error_CreateSuccess();
-
-    // Release the concrete widget's own resources while it is still valid.
-    if (self->VTable->OnDeconstruct != NULL)
+    self->_isHovered = isHovered;
+    PostStateEvent(self, UIEventKind_HoverChanged, isHovered);
+    Error HookResult = Error_CreateSuccess();
+    if (isHovered && (self->VTable->OnHoverStart != NULL))
     {
-        Error DeconstructResult = self->VTable->OnDeconstruct(self);
-        KeepFirstError(&FirstError, &DeconstructResult);
+        HookResult = self->VTable->OnHoverStart(self, args);
     }
-
-    // Detach from a parent (so the parent does not keep a dangling child pointer).
-    if (self->_parent != NULL)
+    else if (!isHovered && (self->VTable->OnHoverEnd != NULL))
     {
-        Error DetachResult = Widget_RemoveSubWidget(self->_parent, self);
-        KeepFirstError(&FirstError, &DetachResult);
+        HookResult = self->VTable->OnHoverEnd(self);
     }
-
-    // Orphan any remaining children so they do not keep a dangling parent pointer.
-    for (size_t Index = 0; Index < self->_subWidgets._count; Index++)
+    if (HookResult.Code != ErrorCode_Success)
     {
-        Widget* Child = GetChildAt(self, Index);
-        if (Child != NULL)
-        {
-            Child->_parent = NULL;
-        }
+        return HookResult;
     }
-
-    // Capture identity before unregistering / returning to the pool (the storage is reset afterwards).
-    uint64_t TypeId = self->_typeId;
-    UIScreen* Screen = self->_screen;
-    uint64_t Id = self->_id;
-
-    Error UnregisterResult = UIScreen_UnregisterWidget(Screen, Id);
-    KeepFirstError(&FirstError, &UnregisterResult);
-
-    WREvent_Deconstruct(&self->_onHoverStateChange);
-    WREvent_Deconstruct(&self->_onFocusStateChange);
-    WREvent_Deconstruct(&self->_onTabStateChange);
-    WREvent_Deconstruct(&self->_onActiveStateChange);
-    Memory_Free(self->_subWidgets._data);
-
-    // Return the widget's storage to its type's pool (must be last: self is invalid afterwards).
-    UIWidgetFactory* Factory = UIScreen_GetFactory(Screen);
-    Error ReturnResult = UIWidgetFactory_ReturnWidget(Factory, TypeId, self);
-    KeepFirstError(&FirstError, &ReturnResult);
-
-    return FirstError;
+    return UpdateActive(self);
 }
 
+Error Widget_InternalSetFocused(Widget* self, bool isFocused)
+{
+    if ((isFocused == self->_isFocused) || self->_isDying)
+    {
+        return Error_CreateSuccess();
+    }
+
+    self->_isFocused = isFocused;
+    PostStateEvent(self, UIEventKind_FocusChanged, isFocused);
+    Error (*Hook)(void*) = isFocused ? self->VTable->OnFocusEnable : self->VTable->OnFocusDisable;
+    return (Hook != NULL) ? Hook(self) : Error_CreateSuccess();
+}
+
+Error Widget_InternalSetTabbed(Widget* self, bool isTabbed)
+{
+    if ((isTabbed == self->_isTabbed) || self->_isDying)
+    {
+        return Error_CreateSuccess();
+    }
+
+    self->_isTabbed = isTabbed;
+    PostStateEvent(self, UIEventKind_TabChanged, isTabbed);
+    Error (*Hook)(void*) = isTabbed ? self->VTable->OnTabbedEnable : self->VTable->OnTabbedDisable;
+    if (Hook != NULL)
+    {
+        Error HookResult = Hook(self);
+        if (HookResult.Code != ErrorCode_Success)
+        {
+            return HookResult;
+        }
+    }
+    return UpdateActive(self);
+}
+
+void Widget_InternalSetScreenRoot(Widget* self, bool isScreenRoot, uint64_t sequence)
+{
+    self->_isScreenRoot = isScreenRoot;
+    if (isScreenRoot)
+    {
+        self->_sequence = sequence;
+    }
+}
+
+void Widget_InternalUnlinkFromParent(Widget* child)
+{
+    Widget* Parent = child->_parent;
+    if (Parent == NULL)
+    {
+        return;
+    }
+    // From the back: a dying subtree is torn down last child first.
+    for (size_t Index = Parent->_subWidgets._count; Index-- > 0U;)
+    {
+        if (GetChildAt(Parent, Index) == child)
+        {
+            GenericBuffer_RemoveAt(&Parent->_subWidgets, Index);
+            break;
+        }
+    }
+    Widget_InternalRemoveFromDrawOrder(&Parent->_drawOrder, child);
+    child->_parent = NULL;
+    InvalidateBoundsUpTree(Parent);
+}
+
+bool Widget_InternalInsertIntoDrawOrder(GenericBuffer* drawOrder, Widget* widget)
+{
+    // Binary search for the first widget drawn after this one, so the list stays sorted without re-sorting.
+    size_t Low = 0;
+    size_t High = drawOrder->_count;
+    while (Low < High)
+    {
+        size_t Middle = Low + ((High - Low) / 2U);
+        if (IsDrawnBefore(widget, Widget_InternalGetDrawOrderAt(drawOrder, Middle)))
+        {
+            High = Middle;
+        }
+        else
+        {
+            Low = Middle + 1U;
+        }
+    }
+    return GenericBuffer_Insert(drawOrder, &widget, Low);
+}
+
+void Widget_InternalRemoveFromDrawOrder(GenericBuffer* drawOrder, const Widget* widget)
+{
+    for (size_t Index = 0; Index < drawOrder->_count; Index++)
+    {
+        if (Widget_InternalGetDrawOrderAt(drawOrder, Index) == widget)
+        {
+            GenericBuffer_RemoveAt(drawOrder, Index);
+            return;
+        }
+    }
+}
+
+void Widget_InternalResortInDrawOrder(GenericBuffer* drawOrder, Widget* widget)
+{
+    Widget_InternalRemoveFromDrawOrder(drawOrder, widget);
+    // Cannot fail: the removal left room for the widget.
+    Widget_InternalInsertIntoDrawOrder(drawOrder, widget);
+}
+
+Widget* Widget_InternalGetDrawOrderAt(const GenericBuffer* drawOrder, size_t index)
+{
+    return *(Widget**)GenericBuffer_GetPointerToElement((GenericBuffer*)drawOrder, index);
+}
+
+Rectangle Widget_InternalPeekEstimatedBounds(const Widget* self)
+{
+    if (self->_areBoundsValid)
+    {
+        return self->_cachedBounds;
+    }
+    Rectangle Bounds = GetOwnBox(self);
+    for (size_t Index = 0; Index < self->_subWidgets._count; Index++)
+    {
+        Bounds = AddChildBounds(self, Bounds, Widget_InternalPeekEstimatedBounds(GetChildAt(self, Index))); // Bounded by the tree depth.
+    }
+    return Bounds;
+}
+
+
+// Public functions: lifecycle.
 Error Widget_InitializeWidget(Widget* self)
 {
     if (self == NULL)
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_InitializeWidget: self must not be NULL.");
+    }
+    if (self->_isInitialized || self->_isDying)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation,
+            "Widget_InitializeWidget: the widget is already initialized or is being destroyed.");
     }
 
     if (self->VTable->Initialize != NULL)
@@ -324,7 +495,9 @@ Error Widget_InitializeWidget(Widget* self)
             return InitializeResult;
         }
     }
-    if (self->VTable->OnUpdateEnable != NULL)
+    self->_isInitialized = true;
+
+    if (self->_isUpdated && (self->VTable->OnUpdateEnable != NULL))
     {
         Error HookResult = self->VTable->OnUpdateEnable(self);
         if (HookResult.Code != ErrorCode_Success)
@@ -332,7 +505,7 @@ Error Widget_InitializeWidget(Widget* self)
             return HookResult;
         }
     }
-    if (self->VTable->OnRenderEnable != NULL)
+    if (self->_isRendered && (self->VTable->OnRenderEnable != NULL))
     {
         Error HookResult = self->VTable->OnRenderEnable(self);
         if (HookResult.Code != ErrorCode_Success)
@@ -340,7 +513,7 @@ Error Widget_InitializeWidget(Widget* self)
             return HookResult;
         }
     }
-    if (self->VTable->OnInputEnable != NULL)
+    if (self->_isInputEnabled && (self->VTable->OnInputEnable != NULL))
     {
         Error HookResult = self->VTable->OnInputEnable(self);
         if (HookResult.Code != ErrorCode_Success)
@@ -351,43 +524,13 @@ Error Widget_InitializeWidget(Widget* self)
     return Error_CreateSuccess();
 }
 
-Error Widget_DeinitializeWidget(Widget* self)
+Error Widget_Destroy(Widget* self)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_DeinitializeWidget: self must not be NULL.");
+        return Error_CreateSuccess();
     }
-
-    Error FirstError = Error_CreateSuccess();
-
-    if (self->_isInputEnabled && (self->VTable->OnInputDisable != NULL))
-    {
-        Error HookResult = self->VTable->OnInputDisable(self);
-        KeepFirstError(&FirstError, &HookResult);
-    }
-    self->_isInputEnabled = false;
-
-    if (self->_isRendered && (self->VTable->OnRenderDisable != NULL))
-    {
-        Error HookResult = self->VTable->OnRenderDisable(self);
-        KeepFirstError(&FirstError, &HookResult);
-    }
-    self->_isRendered = false;
-
-    if (self->_isUpdated && (self->VTable->OnUpdateDisable != NULL))
-    {
-        Error HookResult = self->VTable->OnUpdateDisable(self);
-        KeepFirstError(&FirstError, &HookResult);
-    }
-    self->_isUpdated = false;
-
-    if (self->VTable->Deinitialize != NULL)
-    {
-        Error DeinitializeResult = self->VTable->Deinitialize(self);
-        KeepFirstError(&FirstError, &DeinitializeResult);
-    }
-
-    return FirstError;
+    return UIScreen_InternalDestroyWidget(self->_screen, self);
 }
 
 
@@ -398,11 +541,16 @@ Error Widget_Update(Widget* self, ProgramTime time)
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_Update: self must not be NULL.");
     }
-    if (self->VTable->Update == NULL)
+    return (self->VTable->Update != NULL) ? self->VTable->Update(self, time) : Error_CreateSuccess();
+}
+
+Error Widget_Layout(Widget* self, const UILayoutContext* context)
+{
+    if ((self == NULL) || (context == NULL))
     {
-        return Error_CreateSuccess();
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_Layout: self and context must not be NULL.");
     }
-    return self->VTable->Update(self, time);
+    return (self->VTable->Layout != NULL) ? self->VTable->Layout(self, context) : Error_CreateSuccess();
 }
 
 Error Widget_Render(Widget* self, UIRenderContext* context)
@@ -411,11 +559,7 @@ Error Widget_Render(Widget* self, UIRenderContext* context)
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_Render: self and context must not be NULL.");
     }
-    if (self->VTable->Render == NULL)
-    {
-        return Error_CreateSuccess();
-    }
-    return self->VTable->Render(self, context);
+    return (self->VTable->Render != NULL) ? self->VTable->Render(self, context) : Error_CreateSuccess();
 }
 
 Error Widget_OnMouseInput(Widget* self, const WidgetMouseInputArgs* args)
@@ -424,24 +568,18 @@ Error Widget_OnMouseInput(Widget* self, const WidgetMouseInputArgs* args)
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_OnMouseInput: self and args must not be NULL.");
     }
-    if (self->VTable->OnMouseInput == NULL)
-    {
-        return Error_CreateSuccess();
-    }
-    return self->VTable->OnMouseInput(self, args);
+    return (self->VTable->OnMouseInput != NULL) ? self->VTable->OnMouseInput(self, args) : Error_CreateSuccess();
 }
 
-Error Widget_OnKeyboardInput(Widget* self, const WidgetKeyboardInputArgs* args)
+Error Widget_OnKeyboardInput(Widget* self, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
 {
-    if ((self == NULL) || (args == NULL))
+    if ((self == NULL) || (args == NULL) || (outIsHandled == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_OnKeyboardInput: self and args must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_OnKeyboardInput: self, args and outIsHandled must not be NULL.");
     }
-    if (self->VTable->OnKeyboardInput == NULL)
-    {
-        return Error_CreateSuccess();
-    }
-    return self->VTable->OnKeyboardInput(self, args);
+    *outIsHandled = false;
+    return (self->VTable->OnKeyboardInput != NULL) ? self->VTable->OnKeyboardInput(self, args, outIsHandled)
+        : Error_CreateSuccess();
 }
 
 
@@ -456,9 +594,9 @@ Error Widget_SetPosition(Widget* self, Vector2 position)
     {
         return Error_Construct2(ErrorCode_ArgumentOutOfRange, "Widget_SetPosition: position components must be finite.");
     }
-
     self->_position = position;
     InvalidateBoundsUpTree(self);
+    UIScreen_InternalInvalidateHitTest(self->_screen);
     return Error_CreateSuccess();
 }
 
@@ -472,9 +610,9 @@ Error Widget_SetSize(Widget* self, Vector2 size)
     {
         return Error_Construct2(ErrorCode_ArgumentOutOfRange, "Widget_SetSize: size components must be finite.");
     }
-
     self->_size = size;
     InvalidateBoundsUpTree(self);
+    UIScreen_InternalInvalidateHitTest(self->_screen);
     return Error_CreateSuccess();
 }
 
@@ -488,8 +626,12 @@ Error Widget_SetZLayer(Widget* self, float zLayer)
     {
         return Error_Construct2(ErrorCode_ArgumentOutOfRange, "Widget_SetZLayer: zLayer must be finite.");
     }
-
+    if (zLayer == self->_zLayer)
+    {
+        return Error_CreateSuccess();
+    }
     self->_zLayer = zLayer;
+    UIScreen_InternalOnZChanged(self->_screen, self);
     return Error_CreateSuccess();
 }
 
@@ -514,7 +656,6 @@ Error Widget_SetRenderTint(Widget* self, RenderColor tint)
     {
         return Error_Construct2(ErrorCode_ArgumentOutOfRange, "Widget_SetRenderTint: brightness and opacity must be finite.");
     }
-
     self->_renderTint = tint;
     return Error_CreateSuccess();
 }
@@ -529,20 +670,8 @@ Error Widget_SetIsRendered(Widget* self, bool isRendered)
     {
         return Error_CreateSuccess();
     }
-
     self->_isRendered = isRendered;
-    if (isRendered)
-    {
-        if (self->VTable->OnRenderEnable != NULL)
-        {
-            return self->VTable->OnRenderEnable(self);
-        }
-    }
-    else if (self->VTable->OnRenderDisable != NULL)
-    {
-        return self->VTable->OnRenderDisable(self);
-    }
-    return Error_CreateSuccess();
+    return RunFlagHook(self, isRendered, self->VTable->OnRenderEnable, self->VTable->OnRenderDisable);
 }
 
 Error Widget_SetIsUpdated(Widget* self, bool isUpdated)
@@ -555,20 +684,8 @@ Error Widget_SetIsUpdated(Widget* self, bool isUpdated)
     {
         return Error_CreateSuccess();
     }
-
     self->_isUpdated = isUpdated;
-    if (isUpdated)
-    {
-        if (self->VTable->OnUpdateEnable != NULL)
-        {
-            return self->VTable->OnUpdateEnable(self);
-        }
-    }
-    else if (self->VTable->OnUpdateDisable != NULL)
-    {
-        return self->VTable->OnUpdateDisable(self);
-    }
-    return Error_CreateSuccess();
+    return RunFlagHook(self, isUpdated, self->VTable->OnUpdateEnable, self->VTable->OnUpdateDisable);
 }
 
 Error Widget_SetIsInputEnabled(Widget* self, bool isInputEnabled)
@@ -581,20 +698,14 @@ Error Widget_SetIsInputEnabled(Widget* self, bool isInputEnabled)
     {
         return Error_CreateSuccess();
     }
-
     self->_isInputEnabled = isInputEnabled;
-    if (isInputEnabled)
+    UIScreen_InternalInvalidateHitTest(self->_screen);
+    Error HookResult = RunFlagHook(self, isInputEnabled, self->VTable->OnInputEnable, self->VTable->OnInputDisable);
+    if (HookResult.Code != ErrorCode_Success)
     {
-        if (self->VTable->OnInputEnable != NULL)
-        {
-            return self->VTable->OnInputEnable(self);
-        }
+        return HookResult;
     }
-    else if (self->VTable->OnInputDisable != NULL)
-    {
-        return self->VTable->OnInputDisable(self);
-    }
-    return Error_CreateSuccess();
+    return ReleaseFocusIfIneligible(self);
 }
 
 Error Widget_SetAreSubWidgetsCut(Widget* self, bool areSubWidgetsCut)
@@ -604,129 +715,18 @@ Error Widget_SetAreSubWidgetsCut(Widget* self, bool areSubWidgetsCut)
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetAreSubWidgetsCut: self must not be NULL.");
     }
     self->_areSubWidgetsCut = areSubWidgetsCut;
+    UIScreen_InternalInvalidateHitTest(self->_screen);
     return Error_CreateSuccess();
 }
 
-
-// Public functions: screen-driven state changes.
-Error Widget_SetHovered(Widget* self, bool isHovered, const WidgetHoverArgs* args)
+Error Widget_SetIsFocusable(Widget* self, bool isFocusable)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetHovered: self must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetIsFocusable: self must not be NULL.");
     }
-    if (isHovered == self->_isHovered)
-    {
-        return Error_CreateSuccess();
-    }
-
-    self->_isHovered = isHovered;
-    if (isHovered)
-    {
-        if (self->VTable->OnHoverStart != NULL)
-        {
-            Error HookResult = self->VTable->OnHoverStart(self, args);
-            if (HookResult.Code != ErrorCode_Success)
-            {
-                return HookResult;
-            }
-        }
-    }
-    else if (self->VTable->OnHoverEnd != NULL)
-    {
-        Error HookResult = self->VTable->OnHoverEnd(self);
-        if (HookResult.Code != ErrorCode_Success)
-        {
-            return HookResult;
-        }
-    }
-
-    Error RaiseResult = WREvent_Raise(&self->_onHoverStateChange, self);
-    if (RaiseResult.Code != ErrorCode_Success)
-    {
-        return RaiseResult;
-    }
-    return UpdateActive(self);
-}
-
-Error Widget_SetFocused(Widget* self, bool isFocused)
-{
-    if (self == NULL)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetFocused: self must not be NULL.");
-    }
-    if (isFocused == self->_isFocused)
-    {
-        return Error_CreateSuccess();
-    }
-
-    self->_isFocused = isFocused;
-    if (isFocused)
-    {
-        if (self->VTable->OnFocusEnable != NULL)
-        {
-            Error HookResult = self->VTable->OnFocusEnable(self);
-            if (HookResult.Code != ErrorCode_Success)
-            {
-                return HookResult;
-            }
-        }
-    }
-    else if (self->VTable->OnFocusDisable != NULL)
-    {
-        Error HookResult = self->VTable->OnFocusDisable(self);
-        if (HookResult.Code != ErrorCode_Success)
-        {
-            return HookResult;
-        }
-    }
-
-    return WREvent_Raise(&self->_onFocusStateChange, self);
-}
-
-Error Widget_SetTabbed(Widget* self, bool isTabbed)
-{
-    if (self == NULL)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetTabbed: self must not be NULL.");
-    }
-    if (isTabbed == self->_isTabbed)
-    {
-        return Error_CreateSuccess();
-    }
-
-    self->_isTabbed = isTabbed;
-    if (isTabbed)
-    {
-        if (self->VTable->OnTabbedEnable != NULL)
-        {
-            Error HookResult = self->VTable->OnTabbedEnable(self);
-            if (HookResult.Code != ErrorCode_Success)
-            {
-                return HookResult;
-            }
-        }
-    }
-    else if (self->VTable->OnTabbedDisable != NULL)
-    {
-        Error HookResult = self->VTable->OnTabbedDisable(self);
-        if (HookResult.Code != ErrorCode_Success)
-        {
-            return HookResult;
-        }
-    }
-
-    Error RaiseResult = WREvent_Raise(&self->_onTabStateChange, self);
-    if (RaiseResult.Code != ErrorCode_Success)
-    {
-        return RaiseResult;
-    }
-    return UpdateActive(self);
-}
-
-void Widget_SetScreenRoot(Widget* self, bool isScreenRoot)
-{
-    self->_isScreenRoot = isScreenRoot;
+    self->_isFocusable = isFocusable;
+    return ReleaseFocusIfIneligible(self);
 }
 
 
@@ -741,23 +741,38 @@ Error Widget_AddSubWidget(Widget* self, Widget* child)
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_AddSubWidget: child must belong to the same screen.");
     }
-    if (IsSelfOrAncestor(child, self))
+    if (self->_isDying || child->_isDying || !self->_isInitialized || !child->_isInitialized)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_AddSubWidget: cannot add the widget itself or an ancestor.");
+        return Error_Construct2(ErrorCode_InvalidOperation,
+            "Widget_AddSubWidget: both widgets must be initialized and not being destroyed.");
     }
     if ((child->_parent != NULL) || child->_isScreenRoot)
     {
         return Error_Construct2(ErrorCode_InvalidOperation, "Widget_AddSubWidget: child is already attached.");
     }
-
-    child->_parent = self;
-    if (!GenericBuffer_AddLast(&self->_subWidgets, &child))
+    if (IsSelfOrAncestor(child, self))
     {
-        child->_parent = NULL;
-        return Error_Construct2(ErrorCode_InvalidOperation, "Widget_AddSubWidget: subwidget could not be stored.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_AddSubWidget: cannot add the widget itself or an ancestor.");
+    }
+    if ((GetDepth(self) + GetSubtreeHeight(child)) > WIDGET_MAX_TREE_DEPTH)
+    {
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange, "Widget_AddSubWidget: the widget tree would be deeper than %"
+            PRIu64 " levels.", (uint64_t)WIDGET_MAX_TREE_DEPTH);
     }
 
+    if (!GenericBuffer_AddLast(&self->_subWidgets, &child))
+    {
+        return Error_Construct2(ErrorCode_BufferTooLarge, "Widget_AddSubWidget: subwidget could not be stored.");
+    }
+    child->_sequence = UIScreen_InternalNextSequence(self->_screen);
+    if (!Widget_InternalInsertIntoDrawOrder(&self->_drawOrder, child))
+    {
+        GenericBuffer_RemoveLast(&self->_subWidgets);
+        return Error_Construct2(ErrorCode_BufferTooLarge, "Widget_AddSubWidget: subwidget could not be stored.");
+    }
+    child->_parent = self;
     InvalidateBoundsUpTree(self);
+    UIScreen_InternalInvalidateHitTest(self->_screen);
     return Error_CreateSuccess();
 }
 
@@ -767,22 +782,12 @@ Error Widget_RemoveSubWidget(Widget* self, Widget* child)
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_RemoveSubWidget: self and child must not be NULL.");
     }
-
-    for (size_t Index = 0; Index < self->_subWidgets._count; Index++)
+    if ((child->_parent != self) || child->_isDying)
     {
-        if (GetChildAt(self, Index) == child)
-        {
-            if (!GenericBuffer_RemoveAt(&self->_subWidgets, Index))
-            {
-                return Error_Construct2(ErrorCode_InvalidOperation, "Widget_RemoveSubWidget: subwidget could not be removed.");
-            }
-            child->_parent = NULL;
-            InvalidateBoundsUpTree(self);
-            return Error_CreateSuccess();
-        }
+        return Error_Construct2(ErrorCode_InvalidOperation,
+            "Widget_RemoveSubWidget: child is not a subwidget of this widget, or is being destroyed.");
     }
-
-    return Error_Construct2(ErrorCode_InvalidOperation, "Widget_RemoveSubWidget: child is not a subwidget of this widget.");
+    return UIScreen_InternalDetachWidget(self->_screen, child);
 }
 
 Error Widget_GetSubWidgets(const Widget* self, GenericBuffer* outIds, size_t depth)
@@ -795,7 +800,6 @@ Error Widget_GetSubWidgets(const Widget* self, GenericBuffer* outIds, size_t dep
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_GetSubWidgets: outIds must be a uint64_t buffer.");
     }
-
     return AppendDescendants(self, outIds, depth);
 }
 
@@ -806,132 +810,108 @@ size_t Widget_GetSubWidgetCount(const Widget* self)
 
 Widget* Widget_GetSubWidgetAt(const Widget* self, size_t index)
 {
-    if (index >= self->_subWidgets._count)
-    {
-        return NULL;
-    }
-    return GetChildAt(self, index);
-}
-
-/* Three-way comparison of two child widgets by ascending z layer. */
-static ComparisonResult CompareChildZ(GenericBuffer* buffer, GenericBufferElementData a, GenericBufferElementData b, const UserData* userData)
-{
-    UNUSED(buffer);
-    UNUSED(userData);
-    Widget* WidgetA = *(Widget**)a._element;
-    Widget* WidgetB = *(Widget**)b._element;
-    if (WidgetA->_zLayer < WidgetB->_zLayer)
-    {
-        return ComparisonResult_ALessThanB;
-    }
-    if (WidgetA->_zLayer > WidgetB->_zLayer)
-    {
-        return ComparisonResult_AGreaterThanB;
-    }
-    return ComparisonResult_AEqualsB;
-}
-
-void Widget_SortSubWidgetsByZ(Widget* self)
-{
-    unsigned char Scratch[2 * sizeof(Widget*)];
-    GenericBuffer_SortAscending(&self->_subWidgets, CompareChildZ, NULL, Scratch);
+    return (index < self->_subWidgets._count) ? GetChildAt(self, index) : NULL;
 }
 
 
 // Public functions: capabilities.
 bool Widget_IsCapabilitySupported(const Widget* self, uint64_t capabilityId)
 {
-    UIWidgetFactory* Factory = UIScreen_GetFactory(self->_screen);
-    return UIWidgetFactory_IsCapabilitySupported(Factory, self->_typeId, capabilityId);
+    return UIWidgetFactory_IsCapabilitySupported(UIScreen_GetFactory(self->_screen), self->_typeId, capabilityId);
 }
 
 Error Widget_GetSupportedCapabilities(const Widget* self, GenericBuffer* outCapabilityIds)
 {
     if ((self == NULL) || (outCapabilityIds == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_GetSupportedCapabilities: self and outCapabilityIds must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "Widget_GetSupportedCapabilities: self and outCapabilityIds must not be NULL.");
     }
-    UIWidgetFactory* Factory = UIScreen_GetFactory(self->_screen);
-    return UIWidgetFactory_GetSupportedCapabilities(Factory, self->_typeId, outCapabilityIds);
+    return UIWidgetFactory_GetSupportedCapabilities(UIScreen_GetFactory(self->_screen), self->_typeId, outCapabilityIds);
 }
 
 void* Widget_GetCapability(Widget* self, uint64_t capabilityId)
 {
-    UIWidgetFactory* Factory = UIScreen_GetFactory(self->_screen);
-    return UIWidgetFactory_ResolveCapability(Factory, self->_typeId, capabilityId, self);
+    return UIWidgetFactory_ResolveCapability(UIScreen_GetFactory(self->_screen), self->_typeId, capabilityId, self);
 }
 
 
-// Public functions: generic property access.
-Error Widget_GetProperty(Widget* self, int32_t propertyId, void* outValue)
+// Public functions: typed properties.
+bool Widget_TryGetPropertyType(const Widget* self, int32_t propertyId, UIPropertyType* outType)
+{
+    if (propertyId >= WIDGET_BASE_PROPERTY_START)
+    {
+        return TryGetBasePropertyType(propertyId, outType);
+    }
+    WidgetPropertyDescriptor Descriptor;
+    if (!UIWidgetFactory_TryGetPropertyDescriptor(UIScreen_GetFactory(self->_screen), self->_typeId, propertyId, &Descriptor))
+    {
+        return false;
+    }
+    *outType = Descriptor.Type;
+    return true;
+}
+
+Error Widget_GetProperty(Widget* self, int32_t propertyId, UIPropertyValue* outValue)
 {
     if ((self == NULL) || (outValue == NULL))
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_GetProperty: self and outValue must not be NULL.");
     }
-
-    if (propertyId >= WIDGET_BASE_PROPERTY_START)
+    UIPropertyType Type = UIPropertyType_Float;
+    if (!Widget_TryGetPropertyType(self, propertyId, &Type))
     {
-        switch (propertyId)
-        {
-            case WidgetBaseProperty_Position:   Memory_Copy(&self->_position, outValue, sizeof(Vector2)); return Error_CreateSuccess();
-            case WidgetBaseProperty_Size:       Memory_Copy(&self->_size, outValue, sizeof(Vector2)); return Error_CreateSuccess();
-            case WidgetBaseProperty_ZLayer:     Memory_Copy(&self->_zLayer, outValue, sizeof(float)); return Error_CreateSuccess();
-            case WidgetBaseProperty_RenderTint: Memory_Copy(&self->_renderTint, outValue, sizeof(RenderColor)); return Error_CreateSuccess();
-            default:                            return Error_Construct2(ErrorCode_InvalidOperation, "Widget_GetProperty: unknown base property id.");
-        }
+        return Error_Construct4(ErrorCode_InvalidOperation, "Widget_GetProperty: the widget has no property %" PRId32 ".",
+            propertyId);
     }
 
-    if (self->VTable->GetProperty != NULL)
+    outValue->Type = Type;
+    switch (propertyId)
     {
-        return self->VTable->GetProperty(self, propertyId, outValue);
+        case WidgetBaseProperty_Position:   outValue->Data.Vector2Value = self->_position; return Error_CreateSuccess();
+        case WidgetBaseProperty_Size:       outValue->Data.Vector2Value = self->_size; return Error_CreateSuccess();
+        case WidgetBaseProperty_ZLayer:     outValue->Data.FloatValue = self->_zLayer; return Error_CreateSuccess();
+        case WidgetBaseProperty_RenderTint: outValue->Data.RenderColorValue = self->_renderTint; return Error_CreateSuccess();
+        default:                            break; // A property the type declares.
     }
-    return Error_Construct2(ErrorCode_InvalidOperation, "Widget_GetProperty: property id is not handled by this widget.");
+    if (self->VTable->GetProperty == NULL)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "Widget_GetProperty: the widget's type has no GetProperty slot.");
+    }
+    Error Result = self->VTable->GetProperty(self, propertyId, outValue);
+    outValue->Type = Type;
+    return Result;
 }
 
-Error Widget_SetProperty(Widget* self, int32_t propertyId, const void* value)
+Error Widget_SetProperty(Widget* self, int32_t propertyId, const UIPropertyValue* value)
 {
     if ((self == NULL) || (value == NULL))
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetProperty: self and value must not be NULL.");
     }
-
-    if (propertyId >= WIDGET_BASE_PROPERTY_START)
+    UIPropertyType Type = UIPropertyType_Float;
+    if (!Widget_TryGetPropertyType(self, propertyId, &Type))
     {
-        switch (propertyId)
-        {
-            case WidgetBaseProperty_Position:
-            {
-                Vector2 Position;
-                Memory_Copy(value, &Position, sizeof(Vector2));
-                return Widget_SetPosition(self, Position);
-            }
-            case WidgetBaseProperty_Size:
-            {
-                Vector2 Size;
-                Memory_Copy(value, &Size, sizeof(Vector2));
-                return Widget_SetSize(self, Size);
-            }
-            case WidgetBaseProperty_ZLayer:
-            {
-                float ZLayer;
-                Memory_Copy(value, &ZLayer, sizeof(float));
-                return Widget_SetZLayer(self, ZLayer);
-            }
-            case WidgetBaseProperty_RenderTint:
-            {
-                RenderColor Tint;
-                Memory_Copy(value, &Tint, sizeof(RenderColor));
-                return Widget_SetRenderTint(self, Tint);
-            }
-            default:
-                return Error_Construct2(ErrorCode_InvalidOperation, "Widget_SetProperty: unknown base property id.");
-        }
+        return Error_Construct4(ErrorCode_InvalidOperation, "Widget_SetProperty: the widget has no property %" PRId32 ".",
+            propertyId);
+    }
+    if (value->Type != Type)
+    {
+        return Error_Construct4(ErrorCode_IllegalArgument, "Widget_SetProperty: property %" PRId32
+            " has another value type.", propertyId);
     }
 
-    if (self->VTable->SetProperty != NULL)
+    switch (propertyId)
     {
-        return self->VTable->SetProperty(self, propertyId, value);
+        case WidgetBaseProperty_Position:   return Widget_SetPosition(self, value->Data.Vector2Value);
+        case WidgetBaseProperty_Size:       return Widget_SetSize(self, value->Data.Vector2Value);
+        case WidgetBaseProperty_ZLayer:     return Widget_SetZLayer(self, value->Data.FloatValue);
+        case WidgetBaseProperty_RenderTint: return Widget_SetRenderTint(self, value->Data.RenderColorValue);
+        default:                            break; // A property the type declares.
     }
-    return Error_Construct2(ErrorCode_InvalidOperation, "Widget_SetProperty: property id is not handled by this widget.");
+    if (self->VTable->SetProperty == NULL)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "Widget_SetProperty: the widget's type has no SetProperty slot.");
+    }
+    return self->VTable->SetProperty(self, propertyId, value);
 }

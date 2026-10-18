@@ -23,18 +23,20 @@
  *
  * UNITS AND PLACEMENT. Text is measured and drawn in normalized-fitted units (1.0 = the target-area height) scaled
  * by the label's Size, exactly like the text component system. The text block's top-left is placed at the label
- * widget's box top-left (its Position), and the label writes its own base widget Size each render so the widget box
- * (hit-testing and the keyboard-navigation outline) hugs the rendered text. Origin is the block's rotation pivot and
- * the reference point of the reported DrawSize.
+ * widget's box top-left (its Position), and the label's Layout step (every update tick, after the updates) writes its
+ * own base widget Size so the widget box (hit testing and the keyboard-navigation outline) hugs the text. Origin is the
+ * block's rotation pivot and the reference point of the reported DrawSize.
  *
  * UPDATE, THEN RENDER. Each update tick the label advances its document's sprite animations and lays its text out
- * again when the text (any edit inside the tree) or a layout property changed; render only draws that layout. A
- * label whose update flag is off keeps showing the text of its last update (nothing before its first one).
+ * again when the text (any edit inside the tree) or a layout property changed, then sizes its widget box in its Layout
+ * step; render only draws that layout. A label whose update flag is off keeps showing the text of its last update
+ * (nothing before its first one).
  *
  * OWNERSHIP. The text component factory and the asset manager are borrowed (passed at construction) and must
  * outlive the label. The label owns its text tree (through its document): give it a root with LabelWidget_SetText,
  * or edit the tree in place through LabelWidget_GetText / LabelWidget_GetDocument. Build labels through the
- * UIWidgetFactory like any widget (see LabelWidget_RegisterType / LabelWidget_Create).
+ * UIWidgetFactory like any widget (see LabelWidget_RegisterType / LabelWidget_Create). Labels are not focusable by default
+ * (Widget_SetIsFocusable makes one a keyboard-navigation stop).
  */
 
 
@@ -62,7 +64,7 @@ typedef enum LabelAlignmentEnum
  */
 typedef enum LabelBoundHandlingEnum
 {
-    /** @brief Clip the text to the bounds rectangle (GPU scissor); nothing is reflowed. */
+    /** @brief Clip the text to the bounds rectangle (nested inside any clip of its ancestors); nothing is reflowed. */
     LabelBoundHandling_Cut,
     /** @brief Wrap lines on spaces where a line would exceed the bounds width; an unbreakable word overflows. */
     LabelBoundHandling_Wrap,
@@ -104,10 +106,10 @@ typedef enum LabelOriginPositionEnum
 } LabelOriginPosition;
 
 /**
- * @brief The label's concrete animatable property ids (for UIScreen_StartAnimation).
+ * @brief The label's typed property ids (for Widget_GetProperty / Widget_SetProperty and UIScreen_StartAnimation).
  *
- * Each is below WIDGET_BASE_PROPERTY_START so it does not collide with the base widget properties. The
- * comment states the UIPropertyType the animation must use.
+ * Each is below WIDGET_BASE_PROPERTY_START so it does not collide with the base widget properties. The comment
+ * states the property's UIPropertyType; values of another type are rejected.
  */
 typedef enum LabelPropertyEnum
 {
@@ -144,7 +146,7 @@ typedef struct LabelWidgetArgsStruct
 /**
  * @brief A text-displaying widget. Embeds the Widget base first; underscore-prefixed fields are internal.
  *
- * Create through the widget factory (LabelWidget_Create / UIWidgetFactory_ConstructWidget) and access via
+ * Create through the widget factory (LabelWidget_Create / UIWidgetFactory_CreateWidget) and access via
  * the LabelWidget_* getters/setters. The widget storage is pooled and never moves, which the embedded document
  * requires.
  */
@@ -183,8 +185,8 @@ typedef struct LabelWidgetStruct
 /**
  * @brief Registers the label widget type with a widget factory, minting its type id.
  *
- * Registers the label's struct size and constructor with no capabilities. Call once per program (the
- * factory is program-wide); reuse the returned type id for every label.
+ * Registers the label's struct size, constructor and typed properties (LabelProperty), with no capabilities and not
+ * focusable. Call once per program (the factory is program-wide); reuse the returned type id for every label.
  * @param factory The widget factory to register with; must not be NULL.
  * @param outTypeId [out] Receives the label type id; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p factory or @p outTypeId is NULL; otherwise a
@@ -197,9 +199,9 @@ Error LabelWidget_RegisterType(UIWidgetFactory* factory, uint64_t* outTypeId);
 /**
  * @brief Creates a label in a screen through the widget factory.
  *
- * Convenience wrapper over UIWidgetFactory_ConstructWidget that fills a LabelWidgetArgs. The label is
- * constructed (not yet initialized or added); initialize it with Widget_InitializeWidget and add it as a
- * root or subwidget as usual.
+ * Convenience wrapper over UIWidgetFactory_CreateWidget that fills a LabelWidgetArgs. The label is created detached
+ * and uninitialized; initialize it with Widget_InitializeWidget and add it as a root or subwidget as usual, and end
+ * it with Widget_Destroy.
  * @param screen The screen to build the label into; must not be NULL.
  * @param typeId The label type id from LabelWidget_RegisterType.
  * @param componentFactory The text component factory; borrowed, required, must outlive the label.

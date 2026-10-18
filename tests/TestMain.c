@@ -31,6 +31,10 @@ int main(void)
     TextLayoutTests_Run(&Run);
     FontTests_Run(&Run);
     LabelWidgetTests_Run(&Run);
+    GameInputTests_Run(&Run);
+    UIAnimationTests_Run(&Run);
+    UIScreenTests_Run(&Run);
+    UITestFrameTests_Run(&Run);
 
     int ExitCode = TestRun_Finish(&Run);
     TestRun_Deconstruct(&Run);

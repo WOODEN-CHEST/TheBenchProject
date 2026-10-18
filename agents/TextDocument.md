@@ -82,8 +82,8 @@ nothing (AGENTS.md rule 3). A layout must not be drawn after its document is des
 ### Drawing
 `TextLayoutDrawArguments` (from `TextLayoutDrawArguments_Create(position)`): the position of the block's origin, the
 origin within the block (normalized; also the rotation pivot), a rotation of the whole block, a tint multiplied into
-every color, and an optional scissor (screen-relative; it replaces any outer clip, since raylib's scissor does not
-nest). All shadows are drawn first, then text, underlines and strikethroughs, and sprites. Glyphs are drawn one quad
+every color, and an optional scissor (screen-relative; pushed on the render context's clip stack, so it nests inside
+any outer clip, e.g. a parent widget's). All shadows are drawn first, then text, underlines and strikethroughs, and sprites. Glyphs are drawn one quad
 each through `RenderContext_RenderGlyph` (Renderer.md) with the indices cached at build time, so drawing does no
 codepoint lookups.
 

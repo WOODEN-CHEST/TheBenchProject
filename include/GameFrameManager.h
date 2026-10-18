@@ -6,6 +6,7 @@
 #include "wr/WRMemory.h"
 #include "ProgramTime.h"
 #include "GameFrame.h"
+#include "GameInput.h"
 
 
 /**
@@ -23,6 +24,11 @@
  * active at once — a menu on top of a frozen game, a loading screen while the next scene loads, or two
  * scenes mid-cross-fade. Toggle a frame's GameFrame.IsUpdated / GameFrame.IsRendered to freeze or hide
  * it without removing it.
+ *
+ * INPUT. Each update tick starts by polling input (raylib's PollInputEvents, the program's only poll) and taking
+ * the tick's GameInput snapshot. Frames are then updated TOP-DOWN (highest z first), so a frame on top (a menu,
+ * the UI) gets first refusal on input and consumes what it handles; frames below read what is left through the
+ * same GameInput (consumed input reads as not pressed).
  *
  * RENDERING. Each active, rendered frame draws into its own render target; the manager then composites
  * every target onto the screen bottom-to-top, tinted by each frame's GameFrame.CompositeColor. Animate a
@@ -88,8 +94,13 @@ typedef struct GameFrameManagerStruct
 {
     /** @brief Borrowed logger used for CRITICAL crash diagnostics; not owned. */
     Logger* _logger;
-    /** @brief Owned buffer of internal frame records (one heap record pointer per resident frame). */
+    /** @brief Borrowed input polled at the start of every update tick; NULL for none. */
+    GameInput* _input;
+    /** @brief Owned buffer of internal frame records (one heap record pointer per resident frame), kept in ascending
+     *  z order (bottom first). */
     GenericBuffer _records;
+    /** @brief Reused scratch: the record pointers in the order of the running update tick. */
+    GenericBuffer _updateOrder;
     /** @brief Aspect ratio (width / height) every frame renders its content fitted to. */
     float _targetAspectRatio;
     /** @brief Normalized [0;1] placement of the target area within each render target. */
@@ -98,7 +109,7 @@ typedef struct GameFrameManagerStruct
     int32_t _targetWidth;
     /** @brief Current render-target height in pixels (tracks the window; 0 until the first render). */
     int32_t _targetHeight;
-    /** @brief Set true when a frame method failed fatally; the loop should stop and shut down. */
+    /** @brief Set true when a frame method failed fatally or a stop was requested; the loop should stop. */
     bool _shouldStop;
 } GameFrameManager;
 
@@ -113,10 +124,12 @@ GameFrameAddOptions GameFrameAddOptions_Default(void);
 /**
  * @brief Initializes an empty game frame manager.
  *
- * The manager starts with no frames. @p logger is borrowed and must outlive the manager. The render
- * target size is discovered from the window on the first render, so the window need not exist yet.
+ * The manager starts with no frames. @p logger and @p input are borrowed and must outlive the manager. The
+ * render target size is discovered from the window on the first render, so the window need not exist yet.
  * @param self The manager to initialize. Must not be NULL.
  * @param logger Borrowed logger for crash diagnostics. Must not be NULL and must outlive the manager.
+ * @param input Borrowed input the manager polls (GameInput_Poll) at the start of every update tick, right after
+ *        PollInputEvents; frames read it (usually through Services.Input). May be NULL (no input snapshot is taken).
  * @param targetAspectRatio Aspect ratio (width / height) frames render fitted to; must be > 0.
  * @param targetAreaPosition Normalized [0;1] placement of the target area within each render target
  *        (e.g. (0.5, 0.5) to center it).
@@ -125,7 +138,7 @@ GameFrameAddOptions GameFrameAddOptions_Default(void);
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
-Error GameFrameManager_Construct(GameFrameManager* self, Logger* logger, float targetAspectRatio,
+Error GameFrameManager_Construct(GameFrameManager* self, Logger* logger, GameInput* input, float targetAspectRatio,
     Vector2 targetAreaPosition);
 
 /**
@@ -191,9 +204,10 @@ Error GameFrameManager_ActivateFrame(GameFrameManager* self, GameFrame* frame);
 /**
  * @brief Advances every frame by one update tick, driving lifecycle transitions and updates.
  *
- * For each frame the manager performs one lifecycle action this tick: a load step, a start, an update
- * (active frames whose IsUpdated is set), an unload step, or destruction once unloaded. Call once per
- * fixed update tick with @p time.PassedTime equal to the fixed update delta.
+ * First polls input (PollInputEvents, then GameInput_Poll on the manager's input). Then, frame by frame from the
+ * top of the z-stack down, performs one lifecycle action this tick: a load step, a start, an update (active frames
+ * whose IsUpdated is set), an unload step, or destruction once unloaded. A frame added during the tick is first
+ * handled on the next tick. Call once per fixed update tick with @p time.PassedTime equal to the fixed update delta.
  * @param self The manager. Must not be NULL.
  * @param time The update-tick time (fixed delta).
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL. If a frame method fails, the manager
@@ -220,11 +234,47 @@ Error GameFrameManager_Update(GameFrameManager* self, ProgramTime time);
 Error GameFrameManager_Render(GameFrameManager* self, ProgramTime time);
 
 /**
- * @brief Reports whether a fatal frame error has asked the loop to stop.
+ * @brief Reports whether the loop should stop: a fatal frame error happened or a stop was requested.
  * @param self The manager; may be NULL (returns true, i.e. "stop").
  * @returns true if the manager wants the loop to stop and shut down, false to keep running.
  */
 bool GameFrameManager_ShouldStop(GameFrameManager* self);
+
+/**
+ * @brief Asks the loop to stop and shut the game down normally (e.g. the player chose to quit). Not an error.
+ * @param self The manager; may be NULL (nothing happens).
+ */
+void GameFrameManager_RequestStop(GameFrameManager* self);
+
+/**
+ * @brief Returns the input the manager polls every update tick.
+ * @param self The manager; must not be NULL.
+ * @returns The borrowed input, or NULL if the manager has none.
+ */
+static inline GameInput* GameFrameManager_GetInput(const GameFrameManager* self)
+{
+    return self->_input;
+}
+
+/**
+ * @brief Returns the aspect ratio (width / height) frames render their content fitted to.
+ * @param self The manager; must not be NULL.
+ * @returns The target aspect ratio.
+ */
+static inline float GameFrameManager_GetTargetAspectRatio(const GameFrameManager* self)
+{
+    return self->_targetAspectRatio;
+}
+
+/**
+ * @brief Returns the normalized [0;1] placement of the target area within each render target.
+ * @param self The manager; must not be NULL.
+ * @returns The placement.
+ */
+static inline Vector2 GameFrameManager_GetTargetAreaPosition(const GameFrameManager* self)
+{
+    return self->_targetAreaPosition;
+}
 
 /**
  * @brief Returns the number of frames currently resident in the manager.

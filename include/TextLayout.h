@@ -109,8 +109,8 @@ typedef struct TextLayoutDrawArgumentsStruct
     RenderColor Tint;
     /** @brief true to clip drawing to @c ScissorRelative. */
     bool HasScissor;
-    /** @brief Clip rectangle in screen-relative [0;1] coordinates (x, y, width, height); used when @c HasScissor. The
-     *         GPU scissor does not nest, so it replaces (then disables) any outer clip for this draw. */
+    /** @brief Clip rectangle in screen-relative [0;1] coordinates (x, y, width, height); used when @c HasScissor. It
+     *         is pushed on the render context's clip stack, so it nests inside any outer clip (RenderContext_PushClip). */
     Rectangle ScissorRelative;
 } TextLayoutDrawArguments;
 

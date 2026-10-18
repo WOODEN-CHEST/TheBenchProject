@@ -11,7 +11,7 @@
  *
  * As the game grows, most subsystems need the same handful of long-lived services: the logger, the loaded
  * Unicode database, the asset manager (and the standard asset-type ids), the game-frame manager, the game
- * config, and a GHDF object pool for world save/load. Services aggregates BORROWED pointers to them so a
+ * config, the per-tick input, and a GHDF object pool for world save/load. Services aggregates BORROWED pointers to them so a
  * frame or subsystem can be handed one Services* rather than a growing argument list.
  *
  * OWNERSHIP. Services owns NONE of what it points to. The composition root (main) constructs each service,
@@ -34,6 +34,8 @@ typedef struct UnicodeDataStruct UnicodeData;
 typedef struct GameFrameManagerStruct GameFrameManager;
 /** @brief A GHDF object pool (for world save/load); full type in wr/WRGHDF.h. Borrowed. */
 typedef struct GHDFObjectPoolStruct GHDFObjectPool;
+/** @brief The per-tick input; full type in GameInput.h. Borrowed. */
+typedef struct GameInputStruct GameInput;
 
 
 // Types.
@@ -57,6 +59,10 @@ typedef struct ServicesStruct
     StandardAssetTypes AssetTypes;
     /** @brief The game-frame manager. Borrowed. */
     GameFrameManager* FrameManager;
+    /** @brief The input, polled by the frame manager at the start of every update tick. Frames read keys, actions,
+     *  the mouse and typed text through it (never through raylib), after the frames above them had first refusal.
+     *  Borrowed. */
+    GameInput* Input;
     /** @brief A GHDF object pool for encoding/decoding world documents. Borrowed. */
     GHDFObjectPool* GHDFPool;
     /** @brief Absolute UTF-8 directory that game files (config, assets, logs, the asset cache) are resolved

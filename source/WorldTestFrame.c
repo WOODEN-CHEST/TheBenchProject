@@ -10,6 +10,8 @@
 #include "WorldRenderer.h"
 #include "Renderer.h"
 #include "Logger.h"
+#include "GameFrameManager.h"
+#include "GameInput.h"
 #include "TextComponentFactory.h"
 #include "TextComponentJSON.h"
 #include "TextDocument.h"
@@ -124,33 +126,33 @@ static void LogTimeOfDay(WorldTestFrame* frame, const unsigned char* label, cons
     Error_Deconstruct(&LogResult);
 }
 
-/* Applies the debug time-of-day controls (pause/resume, phase presets, manual scrub). Called from Update:
- * the frame manager polls input once per update tick, so edge-triggered keys (IsKeyPressed) register
- * reliably here. @p deltaSeconds is the fixed-step delta, used to pace the manual scrub. */
-static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
+/* Applies the debug time-of-day controls (pause/resume, phase presets, manual scrub). Called from Update with the
+ * tick's input (what the UI above did not consume). @p deltaSeconds is the fixed-step delta, used to pace the manual
+ * scrub. */
+static void HandleDebugTimeInput(WorldTestFrame* frame, const GameInput* input, float deltaSeconds)
 {
     WorldEnvironment* Environment = World_GetEnvironment(&frame->_world);
 
-    if (IsKeyPressed(KEY_P))
+    if (GameInput_IsKeyPressed(input, GameKey_P))
     {
         Environment->IsDayNightCycleEnabled = !Environment->IsDayNightCycleEnabled;
         LogTimeOfDay(frame, Environment->IsDayNightCycleEnabled
             ? (const unsigned char*)u8"cycle resumed" : (const unsigned char*)u8"cycle paused", Environment);
     }
     // Number keys jump to a phase and freeze the clock there.
-    if (IsKeyPressed(KEY_ONE))   { Environment->TimeOfDay = 0.25f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"dawn (frozen)", Environment); }
-    if (IsKeyPressed(KEY_TWO))   { Environment->TimeOfDay = 0.50f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"noon (frozen)", Environment); }
-    if (IsKeyPressed(KEY_THREE)) { Environment->TimeOfDay = 0.75f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"dusk (frozen)", Environment); }
-    if (IsKeyPressed(KEY_FOUR))  { Environment->TimeOfDay = 0.00f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"midnight (frozen)", Environment); }
+    if (GameInput_IsKeyPressed(input, GameKey_1)) { Environment->TimeOfDay = 0.25f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"dawn (frozen)", Environment); }
+    if (GameInput_IsKeyPressed(input, GameKey_2)) { Environment->TimeOfDay = 0.50f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"noon (frozen)", Environment); }
+    if (GameInput_IsKeyPressed(input, GameKey_3)) { Environment->TimeOfDay = 0.75f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"dusk (frozen)", Environment); }
+    if (GameInput_IsKeyPressed(input, GameKey_4)) { Environment->TimeOfDay = 0.00f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"midnight (frozen)", Environment); }
 
     // [ and ] scrub the time of day manually (wraps into [0,1)).
     float ScrubStep = TIME_SCRUB_RATE * deltaSeconds;
-    if (IsKeyDown(KEY_LEFT_BRACKET))  { Environment->TimeOfDay -= ScrubStep; if (Environment->TimeOfDay < 0.0f) { Environment->TimeOfDay += 1.0f; } }
-    if (IsKeyDown(KEY_RIGHT_BRACKET)) { Environment->TimeOfDay += ScrubStep; if (Environment->TimeOfDay >= 1.0f) { Environment->TimeOfDay -= 1.0f; } }
+    if (GameInput_IsKeyDown(input, GameKey_LeftBracket))  { Environment->TimeOfDay -= ScrubStep; if (Environment->TimeOfDay < 0.0f) { Environment->TimeOfDay += 1.0f; } }
+    if (GameInput_IsKeyDown(input, GameKey_RightBracket)) { Environment->TimeOfDay += ScrubStep; if (Environment->TimeOfDay >= 1.0f) { Environment->TimeOfDay -= 1.0f; } }
 
     // O toggles the whole post-effects pass (AO + outlines) for A/B-ing whether an artifact comes from it;
     // off = the scene blits straight to the tonemap, bit-exact with the pre-postfx pipeline.
-    if (IsKeyPressed(KEY_O))
+    if (GameInput_IsKeyPressed(input, GameKey_O))
     {
         bool Enabled = !WorldRenderer_ArePostEffectsEnabled(frame->_renderer);
         WorldRenderer_SetPostEffectsEnabled(frame->_renderer, Enabled);
@@ -163,7 +165,7 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
     }
 
     // B toggles bloom independently (for A/B-ing the glow).
-    if (IsKeyPressed(KEY_B))
+    if (GameInput_IsKeyPressed(input, GameKey_B))
     {
         bool Enabled = !WorldRenderer_IsBloomEnabled(frame->_renderer);
         WorldRenderer_SetBloomEnabled(frame->_renderer, Enabled);
@@ -176,7 +178,7 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
     }
 
     // G toggles the sun shafts (god rays) independently.
-    if (IsKeyPressed(KEY_G))
+    if (GameInput_IsKeyPressed(input, GameKey_G))
     {
         bool Enabled = !WorldRenderer_AreSunshaftsEnabled(frame->_renderer);
         WorldRenderer_SetSunshaftsEnabled(frame->_renderer, Enabled);
@@ -189,7 +191,7 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
     }
 
     // C toggles the crisp overlay (OmitPixelation objects rendered un-pixelated); off = they render pixelated.
-    if (IsKeyPressed(KEY_C))
+    if (GameInput_IsKeyPressed(input, GameKey_C))
     {
         bool Enabled = !WorldRenderer_IsCrispOverlayEnabled(frame->_renderer);
         WorldRenderer_SetCrispOverlayEnabled(frame->_renderer, Enabled);
@@ -203,13 +205,13 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
 
     // I logs what the renderer did in its last render (active / inactive / unavailable features, object counts),
     // e.g. to check on a new GPU which effects actually run.
-    if (IsKeyPressed(KEY_I))
+    if (GameInput_IsKeyPressed(input, GameKey_I))
     {
         WorldRenderer_LogStatus(frame->_renderer);
     }
 
     // T toggles the text sample (checks font drawing, Latvian and Cyrillic glyphs, decorations, inline sprites).
-    if (IsKeyPressed(KEY_T))
+    if (GameInput_IsKeyPressed(input, GameKey_T))
     {
         frame->_isTextSampleShown = !frame->_isTextSampleShown;
         if (frame->_services->Logger != NULL)
@@ -221,7 +223,7 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
     }
 
     // L toggles the debug light gizmos (wireframe spheres at light positions).
-    if (IsKeyPressed(KEY_L))
+    if (GameInput_IsKeyPressed(input, GameKey_L))
     {
         bool Enabled = !WorldRenderer_AreLightGizmosEnabled(frame->_renderer);
         WorldRenderer_SetLightGizmosEnabled(frame->_renderer, Enabled);
@@ -362,21 +364,97 @@ static Error ConstructTextSample(WorldTestFrame* frame, Services* services)
 }
 
 
+// Static functions: controls.
+/* Captures or frees the mouse cursor (mouse look needs it captured; the UI above needs it free). */
+static void SetCursorCaptured(WorldTestFrame* frame, bool isCaptured)
+{
+    if (isCaptured == frame->_cursorCaptured)
+    {
+        return;
+    }
+    if (isCaptured)
+    {
+        DisableCursor();
+    }
+    else
+    {
+        EnableCursor();
+    }
+    frame->_cursorCaptured = isCaptured;
+}
+
+/* The frame's own controls, from what the UI above left unconsumed: quitting, the mouse, the flycam. */
+static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaSeconds)
+{
+    // An unconsumed pause (Escape when the UI is not using it) quits this test.
+    if (GameInput_IsActionPressed(input, GameAction_Pause))
+    {
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfo(frame->_services->Logger, (const unsigned char*)u8"WorldTest: quitting.");
+            Error_Deconstruct(&LogResult);
+        }
+        GameFrameManager_RequestStop(frame->_services->FrameManager);
+    }
+
+    // M frees the mouse for the UI; a click the UI did not take captures it again.
+    if (GameInput_IsKeyPressed(input, GameKey_M))
+    {
+        SetCursorCaptured(frame, !frame->_cursorCaptured);
+    }
+    else if (!frame->_cursorCaptured && GameInput_IsKeyPressed(input, GameKey_MouseLeft))
+    {
+        GameInput_ConsumeKey(input, GameKey_MouseLeft);
+        SetCursorCaptured(frame, true);
+    }
+
+    // Mouse look (only while captured). Input is polled once per update tick, so this is the tick's movement.
+    if (frame->_cursorCaptured)
+    {
+        Vector2 MouseDelta = GameInput_GetMouseDelta(input);
+        // Mouse-right must turn the view right: increasing yaw rotates forward toward +X, which renders on
+        // the screen's left under the right-handed view, so a rightward mouse delta lowers yaw.
+        frame->_camera.Yaw -= MouseDelta.x * MOUSE_SENSITIVITY;
+        frame->_camera.Pitch -= MouseDelta.y * MOUSE_SENSITIVITY;
+        frame->_camera.Pitch = Clamp(frame->_camera.Pitch, -GAME_CAMERA_MAX_PITCH, GAME_CAMERA_MAX_PITCH);
+    }
+
+    float Speed = GameInput_IsActionDown(input, GameAction_Sprint) ? (MOVE_SPEED * SPRINT_MULTIPLIER) : MOVE_SPEED;
+    Vector3 Forward = GameCamera_GetForward(&frame->_camera);
+    Vector3 Right = GameCamera_GetRight(&frame->_camera);
+    Vector3 Movement = { .x = 0.0f, .y = 0.0f, .z = 0.0f };
+    if (GameInput_IsActionDown(input, GameAction_MoveForward)) { Movement = Vector3Add(Movement, Forward); }
+    if (GameInput_IsActionDown(input, GameAction_MoveBack)) { Movement = Vector3Subtract(Movement, Forward); }
+    if (GameInput_IsActionDown(input, GameAction_MoveRight)) { Movement = Vector3Add(Movement, Right); }
+    if (GameInput_IsActionDown(input, GameAction_MoveLeft)) { Movement = Vector3Subtract(Movement, Right); }
+    if (GameInput_IsActionDown(input, GameAction_MoveUp)) { Movement = Vector3Add(Movement, FrameWorldUp); }
+    if (GameInput_IsActionDown(input, GameAction_MoveDown)) { Movement = Vector3Subtract(Movement, FrameWorldUp); }
+    if ((Movement.x != 0.0f) || (Movement.y != 0.0f) || (Movement.z != 0.0f))
+    {
+        Movement = Vector3Scale(Vector3Normalize(Movement), Speed * deltaSeconds);
+        frame->_camera.Position = Vector3Add(frame->_camera.Position, Movement);
+    }
+
+    // Debug controls (edge-triggered keys are reliable here: input is polled per update tick).
+    HandleDebugTimeInput(frame, input, deltaSeconds);
+}
+
+
 // Static functions: vtable behavior.
 static Error WorldTestFrame_Start(void* self, ProgramTime time)
 {
     UNUSED(time);
     WorldTestFrame* Frame = self;
 
-    DisableCursor();
-    Frame->_cursorCaptured = true;
+    SetCursorCaptured(Frame, true);
 
     if (Frame->_services->Logger != NULL)
     {
         Error LogResult = Logger_LogInfo(Frame->_services->Logger,
             (const unsigned char*)u8"WorldTest: entered the world. WASD+SPACE/CTRL move, SHIFT sprint, mouse look; "
             u8"P pause/resume day-night, 1-4 = dawn/noon/dusk/midnight (frozen), [ ] scrub time; O post effects, "
-            u8"B bloom, G sun shafts, C crisp overlay, L light gizmos, I renderer status, T text sample; ESC quit.");
+            u8"B bloom, G sun shafts, C crisp overlay, L light gizmos, I renderer status, T text sample; M frees the "
+            u8"mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");
         Error_Deconstruct(&LogResult);
     }
     return Error_CreateSuccess();
@@ -385,58 +463,19 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
 static Error WorldTestFrame_End(void* self, ProgramTime time)
 {
     UNUSED(time);
-    WorldTestFrame* Frame = self;
-    if (Frame->_cursorCaptured)
-    {
-        EnableCursor();
-        Frame->_cursorCaptured = false;
-    }
+    SetCursorCaptured(self, false);
     return Error_CreateSuccess();
 }
 
 static Error WorldTestFrame_Update(void* self, ProgramTime time)
 {
     WorldTestFrame* Frame = self;
-
     float Delta = (float)time.PassedTime;
 
-    // Mouse look. Input is polled once per update tick (by the frame manager), so GetMouseDelta returns this
-    // tick's incremental movement; summed across the tick(s) in a frame it equals the full frame delta.
-    if (Frame->_cursorCaptured)
+    if (Frame->_services->Input != NULL)
     {
-        Vector2 MouseDelta = GetMouseDelta();
-        // Mouse-right must turn the view right: increasing yaw rotates forward toward +X, which renders on
-        // the screen's left under the right-handed view, so a rightward mouse delta lowers yaw.
-        Frame->_camera.Yaw -= MouseDelta.x * MOUSE_SENSITIVITY;
-        Frame->_camera.Pitch -= MouseDelta.y * MOUSE_SENSITIVITY;
-        Frame->_camera.Pitch = Clamp(Frame->_camera.Pitch, -GAME_CAMERA_MAX_PITCH, GAME_CAMERA_MAX_PITCH);
+        HandleControls(Frame, Frame->_services->Input, Delta);
     }
-
-    float Speed = MOVE_SPEED;
-    if (IsKeyDown(KEY_LEFT_SHIFT))
-    {
-        Speed *= SPRINT_MULTIPLIER;
-    }
-
-    Vector3 Forward = GameCamera_GetForward(&Frame->_camera);
-    Vector3 Right = GameCamera_GetRight(&Frame->_camera);
-    Vector3 Movement = { .x = 0.0f, .y = 0.0f, .z = 0.0f };
-
-    if (IsKeyDown(KEY_W)) { Movement = Vector3Add(Movement, Forward); }
-    if (IsKeyDown(KEY_S)) { Movement = Vector3Subtract(Movement, Forward); }
-    if (IsKeyDown(KEY_D)) { Movement = Vector3Add(Movement, Right); }
-    if (IsKeyDown(KEY_A)) { Movement = Vector3Subtract(Movement, Right); }
-    if (IsKeyDown(KEY_SPACE)) { Movement = Vector3Add(Movement, FrameWorldUp); }
-    if (IsKeyDown(KEY_LEFT_CONTROL)) { Movement = Vector3Subtract(Movement, FrameWorldUp); }
-
-    if ((Movement.x != 0.0f) || (Movement.y != 0.0f) || (Movement.z != 0.0f))
-    {
-        Movement = Vector3Scale(Vector3Normalize(Movement), Speed * Delta);
-        Frame->_camera.Position = Vector3Add(Frame->_camera.Position, Movement);
-    }
-
-    // Debug time-of-day controls (edge-triggered; reliable here now that input is polled per update tick).
-    HandleDebugTimeInput(Frame, Delta);
 
     // Advance the world's day-night cycle (a no-op while paused).
     WorldEnvironment_Advance(World_GetEnvironment(&Frame->_world), Delta);
@@ -521,11 +560,7 @@ static void WorldTestFrame_Destroy(void* self)
 {
     WorldTestFrame* Frame = self;
 
-    if (Frame->_cursorCaptured)
-    {
-        EnableCursor();
-        Frame->_cursorCaptured = false;
-    }
+    SetCursorCaptured(Frame, false);
 
     if (Frame->_renderer != NULL)
     {

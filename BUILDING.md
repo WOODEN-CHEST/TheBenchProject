@@ -32,8 +32,8 @@ To update WRFramework: build it with its own script, then copy its `include/*.h`
 ## raylib: required configuration
 
 1. **`SUPPORT_CUSTOM_FRAME_CONTROL` must be enabled.**
-   The game polls input once per update tick (`GameFrameManager_Update`) and swaps buffers itself after
-   `EndDrawing` (`GameFrameManager_Render`). A stock raylib's `EndDrawing` also swaps and polls, which gives
+   The game polls input once per update tick (`GameFrameManager_Update`, which then takes the tick's `GameInput`
+   snapshot) and swaps buffers itself after `EndDrawing` (`GameFrameManager_Render`). A stock raylib's `EndDrawing` also swaps and polls, which gives
    double swaps (flicker, roughly half the frame rate with vsync) and double polls (key presses and mouse
    movement arriving during the second poll are lost). Either:
    - edit `src/config.h`: `#define SUPPORT_CUSTOM_FRAME_CONTROL 1` (what the current library was built

@@ -1,81 +1,55 @@
-// TODO: The UI framework has never run in the game and has known lifetime bugs (widgets destroyed inside
-// callbacks crash or alias new widgets, children leak). Land deferred destruction, slot+generation ids and the
-// GameInput routing before any frame uses it (handoff/2026-10_code_review/FIX_PLAN.md, Phase 5; review section 2.2).
 #include "UIScreen.h"
+#include "UIInternal.h"
 #include "UIWidget.h"
 #include "UIWidgetFactory.h"
 #include "UIRenderContext.h"
-#include "UIAnimation.h"
-#include "UIInput.h"
 #include "Renderer.h"
-#include "raylib/raylib.h"
 #include "wr/WRMemory.h"
 #include "wr/WRMath.h"
 #include "wr/WRCompile.h"
 
 
 // Macros.
-/** Navigation outline thickness, as a fraction of the render buffer height (constant relative size). */
+/** Navigation outline thickness, as a fraction of the render buffer height (a constant relative size). */
 #define OUTLINE_THICKNESS_RELATIVE 0.0035f
 /** How far above the highest sibling z a widget is placed when brought to the top. */
 #define BRING_TO_TOP_Z_STEP 1.0f
-/** Perpendicular-distance penalty when picking the nearest widget for arrow navigation. */
-#define NAV_PERPENDICULAR_PENALTY 2.0f
+/** The viewport a screen starts with, until its host sets the real one. */
+#define DEFAULT_VIEWPORT_WIDTH 1280.0f
+#define DEFAULT_VIEWPORT_HEIGHT 720.0f
+#define DEFAULT_VIEWPORT_ASPECT_RATIO (16.0f / 9.0f)
+/** Bits of an id holding the registry slot index + 1; the generation is above them. */
+#define ID_SLOT_BITS 32U
+#define ID_SLOT_MASK ((uint64_t)0xFFFFFFFFU)
+/** Most registry slots (the slot index + 1 must fit in ID_SLOT_BITS). */
+#define MAX_SLOT_COUNT ((size_t)UINT32_MAX - 1U)
 
 
 // Types.
-/* One widget-registry slot: an id and the widget it maps to. */
-typedef struct RegistryEntryStruct
+/* The state of one registry slot. */
+typedef enum SlotStateEnum
 {
-    uint64_t Id;
+    SlotState_Free,
+    /* Created but its constructor has not finished: the id does not resolve yet. */
+    SlotState_Reserved,
+    SlotState_Alive,
+    /* Destroyed, waiting for the flush: the id no longer resolves but the memory is still valid. */
+    SlotState_Dying
+} SlotState;
+
+/* One registry slot. An id is (Generation << 32) | (slot index + 1); freeing a slot bumps its generation, so old ids
+ * never resolve to a newer widget. */
+typedef struct RegistrySlotStruct
+{
     Widget* Widget;
-} RegistryEntry;
-
-/* Storage large enough for any animatable property value. */
-typedef union AnimationValueUnion
-{
-    float FloatValue;
-    Vector2 Vector2Value;
-    Color ColorValue;
-    RenderColor RenderColorValue;
-} AnimationValue;
-
-/* One running animation on a widget property. */
-typedef struct AnimationRecordStruct
-{
-    uint64_t Id;
-    uint64_t WidgetId;
-    int32_t PropertyId;
-    UIPropertyType Type;
-    UIAnimationOptions Options;
-    double Elapsed;
-    bool IsPendingRemoval;
-    GenericBuffer Keyframes; // of UIKeyframe
-} AnimationRecord;
-
-/* An arrow-navigation direction. */
-typedef enum NavDirectionEnum
-{
-    NavDirection_Up,
-    NavDirection_Down,
-    NavDirection_Left,
-    NavDirection_Right
-} NavDirection;
+    uint32_t Generation;
+    SlotState State;
+    /* Index + 1 of the next free slot (0: none), while this slot is on the free list. */
+    uint32_t NextFree;
+} RegistrySlot;
 
 
-// Static function forward declarations (recursive or used before definition).
-static void GetWidgetAbsoluteBox(const Widget* widget, Vector2* outPos, Vector2* outSize);
-static Widget* HitTestNode(Widget* widget, Vector2 screenPos, Vector2 parentPos, Vector2 parentSize);
-static Error RenderNode(UIScreen* self, RenderContext* renderContext, Widget* widget,
-    Vector2 parentPos, Vector2 parentSize, RenderColor parentTint, Rectangle clip, bool hasClip);
-static Error SnapshotWidget(Widget* widget, GenericBuffer* out);
-static void GatherNavCandidates(UIScreen* self);
-static Error StartNavigation(UIScreen* self);
-static Error StopNavigation(UIScreen* self);
-
-
-// Static functions: small helpers.
-/* Keeps the first non-success error and releases any later one, for best-effort teardown loops. */
+// Static functions: helpers.
 static void KeepFirstError(Error* first, Error* candidate)
 {
     if ((candidate->Code != ErrorCode_Success) && (first->Code == ErrorCode_Success))
@@ -88,378 +62,333 @@ static void KeepFirstError(Error* first, Error* candidate)
     }
 }
 
-/* Returns the index of a widget in the registry, or GENERIC_BUFFER_INDEX_INVALID if absent. */
-static size_t FindRegistryIndex(UIScreen* self, uint64_t id)
+static bool IsFloatFinite(float value)
 {
-    for (size_t Index = 0; Index < self->_widgets._count; Index++)
-    {
-        RegistryEntry* Entry = GenericBuffer_GetPointerToElement(&self->_widgets, Index);
-        if (Entry->Id == id)
-        {
-            return Index;
-        }
-    }
-    return GENERIC_BUFFER_INDEX_INVALID;
+    return !Math_IsNaNFloat(value) && !Math_IsInfinityFloat(value);
 }
 
-/* Looks up a widget by id, or NULL if not found (id 0 is never found). */
-static Widget* LookupWidget(UIScreen* self, uint64_t id)
+static uint64_t MakeId(size_t slotIndex, uint32_t generation)
 {
-    if (id == 0)
+    return ((uint64_t)generation << ID_SLOT_BITS) | (uint64_t)(slotIndex + 1U);
+}
+
+/* The slot an id names when its generation still matches, NULL otherwise. */
+static RegistrySlot* FindSlot(const UIScreen* self, uint64_t widgetId, size_t* outIndex)
+{
+    uint64_t SlotNumber = widgetId & ID_SLOT_MASK;
+    if ((SlotNumber == 0U) || (SlotNumber > self->_slots._count))
     {
         return NULL;
     }
-    size_t Index = FindRegistryIndex(self, id);
-    if (Index == GENERIC_BUFFER_INDEX_INVALID)
+    size_t Index = (size_t)(SlotNumber - 1U);
+    RegistrySlot* Slot = GenericBuffer_GetPointerToElement((GenericBuffer*)&self->_slots, Index);
+    if (Slot->Generation != (uint32_t)(widgetId >> ID_SLOT_BITS))
     {
         return NULL;
     }
-    RegistryEntry* Entry = GenericBuffer_GetPointerToElement(&self->_widgets, Index);
-    return Entry->Widget;
-}
-
-/* Returns the top-most ancestor (root) of a widget. */
-static Widget* GetRoot(Widget* widget)
-{
-    Widget* Current = widget;
-    while (Widget_GetParent(Current) != NULL)
+    if (outIndex != NULL)
     {
-        Current = Widget_GetParent(Current);
+        *outIndex = Index;
     }
-    return Current;
+    return Slot;
 }
 
-/* Returns true if @p node is @p ancestor or lies within its subtree. */
-static bool IsInSubtree(const Widget* node, const Widget* ancestor)
+/* Frees a slot; its generation moves on so its old ids stop resolving. A slot whose generations are used up is
+ * retired (never reused). */
+static void FreeSlot(UIScreen* self, size_t index)
 {
-    const Widget* Current = node;
-    while (Current != NULL)
+    RegistrySlot* Slot = GenericBuffer_GetPointerToElement(&self->_slots, index);
+    Slot->Widget = NULL;
+    Slot->State = SlotState_Free;
+    if (Slot->Generation == UINT32_MAX)
     {
-        if (Current == ancestor)
-        {
-            return true;
-        }
-        Current = Widget_GetParent(Current);
-    }
-    return false;
-}
-
-/* Returns true if the point lies within the axis-aligned box [pos, pos+size]. */
-static bool PointInBox(Vector2 point, Vector2 pos, Vector2 size)
-{
-    return (point.x >= pos.x) && (point.x <= (pos.x + size.x))
-        && (point.y >= pos.y) && (point.y <= (pos.y + size.y));
-}
-
-/* Returns true if a widget is reachable from a screen root (and so is updated/rendered). */
-static bool IsWidgetLive(const Widget* widget)
-{
-    const Widget* Current = widget;
-    while (Current != NULL)
-    {
-        if (Widget_IsScreenRoot(Current))
-        {
-            return true;
-        }
-        Current = Widget_GetParent(Current);
-    }
-    return false;
-}
-
-/* Recursively composes a widget's absolute screen box from its parent chain. */
-static void GetWidgetAbsoluteBox(const Widget* widget, Vector2* outPos, Vector2* outSize)
-{
-    Widget* Parent = Widget_GetParent(widget);
-    Vector2 Position = Widget_GetPosition(widget);
-    Vector2 Size = Widget_GetSize(widget);
-
-    if (Parent == NULL)
-    {
-        *outPos = Position;
-        *outSize = Size;
         return;
     }
-
-    Vector2 ParentPos;
-    Vector2 ParentSize;
-    GetWidgetAbsoluteBox(Parent, &ParentPos, &ParentSize);
-    outPos->x = ParentPos.x + (Position.x * ParentSize.x);
-    outPos->y = ParentPos.y + (Position.y * ParentSize.y);
-    outSize->x = Size.x * ParentSize.x;
-    outSize->y = Size.y * ParentSize.y;
+    Slot->Generation++;
+    Slot->NextFree = self->_freeSlotHead;
+    self->_freeSlotHead = (uint32_t)(index + 1U);
 }
 
-/* Computes a widget's estimated bounds (including subwidgets) mapped into absolute screen coordinates. */
-static void GetWidgetEstimatedScreenBox(Widget* widget, Vector2* outPos, Vector2* outSize)
+static bool IsIdDying(const UIScreen* self, uint64_t widgetId)
 {
-    Rectangle Bounds = Widget_GetEstimatedBounds(widget); // in the widget's parent space
-    Vector2 ParentPos = { .x = 0.0f, .y = 0.0f };
+    const RegistrySlot* Slot = FindSlot(self, widgetId, NULL);
+    return (Slot != NULL) && (Slot->State == SlotState_Dying);
+}
+
+/* Maps bounds given in a widget's parent space to absolute screen coordinates. */
+static Rectangle ParentSpaceToScreen(const Widget* widget, Rectangle bounds)
+{
+    Vector2 ParentPosition = { .x = 0.0f, .y = 0.0f };
     Vector2 ParentSize = { .x = 1.0f, .y = 1.0f };
-    Widget* Parent = Widget_GetParent(widget);
-    if (Parent != NULL)
+    if (widget->_parent != NULL)
     {
-        GetWidgetAbsoluteBox(Parent, &ParentPos, &ParentSize);
+        UIScreen_InternalGetAbsoluteBox(widget->_parent, &ParentPosition, &ParentSize);
     }
-    outPos->x = ParentPos.x + (Bounds.x * ParentSize.x);
-    outPos->y = ParentPos.y + (Bounds.y * ParentSize.y);
-    outSize->x = Bounds.width * ParentSize.x;
-    outSize->y = Bounds.height * ParentSize.y;
-}
-
-/* Returns the geometric center of a rectangle. */
-static Vector2 RectangleCenter(Rectangle rectangle)
-{
-    return (Vector2)
+    return (Rectangle)
     {
-        .x = rectangle.x + (rectangle.width * 0.5f),
-        .y = rectangle.y + (rectangle.height * 0.5f)
+        .x = ParentPosition.x + (bounds.x * ParentSize.x),
+        .y = ParentPosition.y + (bounds.y * ParentSize.y),
+        .width = bounds.width * ParentSize.x,
+        .height = bounds.height * ParentSize.y
     };
 }
 
-
-// Static functions: z ordering.
-/* Three-way comparison of two widgets by ascending z layer. */
-static ComparisonResult CompareWidgetZ(GenericBuffer* buffer, GenericBufferElementData a, GenericBufferElementData b, const UserData* userData)
+static void RemoveRoot(UIScreen* self, Widget* widget)
 {
-    UNUSED(buffer);
-    UNUSED(userData);
-    Widget* WidgetA = *(Widget**)a._element;
-    Widget* WidgetB = *(Widget**)b._element;
-    float ZA = Widget_GetZLayer(WidgetA);
-    float ZB = Widget_GetZLayer(WidgetB);
-    if (ZA < ZB)
+    for (size_t Index = 0; Index < self->_roots._count; Index++)
     {
-        return ComparisonResult_ALessThanB;
+        if (*(Widget**)GenericBuffer_GetPointerToElement(&self->_roots, Index) == widget)
+        {
+            GenericBuffer_RemoveAt(&self->_roots, Index);
+            break;
+        }
     }
-    if (ZA > ZB)
-    {
-        return ComparisonResult_AGreaterThanB;
-    }
-    return ComparisonResult_AEqualsB;
+    Widget_InternalRemoveFromDrawOrder(&self->_rootDrawOrder, widget);
+    Widget_InternalSetScreenRoot(widget, false, 0U);
 }
 
-/* Three-way comparison of two widgets by reading order (top row first, then left) of their bounds. */
-static ComparisonResult CompareReadingOrder(GenericBuffer* buffer, GenericBufferElementData a, GenericBufferElementData b, const UserData* userData)
+/* Unlinks a widget from its parent or from the roots. */
+static void UnlinkWidget(UIScreen* self, Widget* widget)
 {
-    UNUSED(buffer);
-    UNUSED(userData);
-    Widget* WidgetA = *(Widget**)a._element;
-    Widget* WidgetB = *(Widget**)b._element;
-    Rectangle BoundsA = Widget_GetEstimatedBounds(WidgetA);
-    Rectangle BoundsB = Widget_GetEstimatedBounds(WidgetB);
-    if (BoundsA.y < BoundsB.y)
+    if (widget->_isScreenRoot)
     {
-        return ComparisonResult_ALessThanB;
+        RemoveRoot(self, widget);
     }
-    if (BoundsA.y > BoundsB.y)
+    else
     {
-        return ComparisonResult_AGreaterThanB;
+        Widget_InternalUnlinkFromParent(widget);
     }
-    if (BoundsA.x < BoundsB.x)
-    {
-        return ComparisonResult_ALessThanB;
-    }
-    if (BoundsA.x > BoundsB.x)
-    {
-        return ComparisonResult_AGreaterThanB;
-    }
-    return ComparisonResult_AEqualsB;
-}
-
-/* Sorts the screen's root widgets into ascending z order (in place). */
-static void SortRootsByZ(UIScreen* self)
-{
-    GenericBuffer_SortAscending(&self->_roots, CompareWidgetZ, NULL, self->_sortScratch);
+    self->_isHitTestDirty = true;
 }
 
 
-// Static functions: hit testing.
-static Widget* HitTestNode(Widget* widget, Vector2 screenPos, Vector2 parentPos, Vector2 parentSize)
+// Static functions: destruction.
+/* Marks a subtree dying: its ids stop resolving. Recursion is bounded by WIDGET_MAX_TREE_DEPTH. */
+static void MarkSubtreeDying(UIScreen* self, Widget* widget)
+{
+    size_t Index = 0;
+    RegistrySlot* Slot = FindSlot(self, widget->_id, &Index);
+    if ((Slot != NULL) && (Slot->State == SlotState_Alive))
+    {
+        Slot->State = SlotState_Dying;
+        self->_aliveWidgetCount--;
+    }
+    widget->_isDying = true;
+    for (size_t ChildIndex = 0; ChildIndex < widget->_subWidgets._count; ChildIndex++)
+    {
+        MarkSubtreeDying(self, Widget_GetSubWidgetAt(widget, ChildIndex));
+    }
+}
+
+/* Forgets every reference into dying subtrees, without running hooks (the widgets are being destroyed). */
+static void ForgetDyingReferences(UIScreen* self)
+{
+    if (IsIdDying(self, self->_hoveredWidgetId))
+    {
+        self->_hoveredWidgetId = WIDGET_ID_INVALID;
+    }
+    if (IsIdDying(self, self->_focusedWidgetId))
+    {
+        self->_focusedWidgetId = WIDGET_ID_INVALID;
+    }
+    // The stack is a path into the tree: everything after the first dying entry lies inside it.
+    for (size_t Index = 0; Index < self->_navStack._count; Index++)
+    {
+        if (IsIdDying(self, *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_navStack, Index)))
+        {
+            GenericBuffer_SetCount(&self->_navStack, Index);
+            break;
+        }
+    }
+    for (size_t Index = 0; Index < UI_SCREEN_MOUSE_BUTTON_COUNT; Index++)
+    {
+        if (self->_buttons[Index].IsPressed && IsIdDying(self, self->_buttons[Index].TargetWidgetId))
+        {
+            self->_buttons[Index].IsPressed = false;
+            self->_buttons[Index].TargetWidgetId = WIDGET_ID_INVALID;
+        }
+    }
+    UIScreen_InternalStopDyingAnimations(self);
+}
+
+/* Tears down a dying subtree, children first: hooks, subscriptions, registry slot, storage. Recursion is bounded by
+ * WIDGET_MAX_TREE_DEPTH. */
+static Error TeardownSubtree(UIScreen* self, Widget* widget)
+{
+    Error FirstError = Error_CreateSuccess();
+    // The widget is never drawn again: emptying its draw order spares each child's unlink a search in it.
+    GenericBuffer_Clear(&widget->_drawOrder);
+    // Each child's teardown unlinks it, and nothing can be added to a dying widget, so this ends.
+    while (widget->_subWidgets._count > 0U)
+    {
+        Error ChildResult = TeardownSubtree(self, Widget_GetSubWidgetAt(widget, widget->_subWidgets._count - 1U));
+        KeepFirstError(&FirstError, &ChildResult);
+    }
+
+    Error HookResult = Widget_InternalRunTeardownHooks(widget);
+    KeepFirstError(&FirstError, &HookResult);
+    Widget_InternalUnlinkFromParent(widget);
+
+    uint64_t Id = widget->_id;
+    UIScreen_InternalRemoveWidgetSubscriptions(self, Id);
+    size_t SlotIndex = 0;
+    if (FindSlot(self, Id, &SlotIndex) != NULL)
+    {
+        FreeSlot(self, SlotIndex);
+    }
+    Widget_InternalReleaseBase(widget);
+    Error ReturnResult = UIWidgetFactory_InternalReturnWidget(self->_factory, widget);
+    KeepFirstError(&FirstError, &ReturnResult);
+    return FirstError;
+}
+
+/* Tears down every destroyed subtree, in the order they were destroyed. Subtrees that teardown hooks destroy are
+ * appended and torn down in the same pass. */
+static Error FlushDestroyedWidgets(UIScreen* self)
+{
+    Error FirstError = Error_CreateSuccess();
+    for (size_t Index = 0; Index < self->_pendingDestroy._count; Index++)
+    {
+        Widget* Root = *(Widget**)GenericBuffer_GetPointerToElement(&self->_pendingDestroy, Index);
+        Error TeardownResult = TeardownSubtree(self, Root);
+        KeepFirstError(&FirstError, &TeardownResult);
+    }
+    GenericBuffer_Clear(&self->_pendingDestroy);
+    return FirstError;
+}
+
+
+// Static functions: hit testing and rendering.
+static bool PointInBox(Vector2 point, Vector2 position, Vector2 size)
+{
+    return (point.x >= position.x) && (point.x <= (position.x + size.x))
+        && (point.y >= position.y) && (point.y <= (position.y + size.y));
+}
+
+/* The top-most input-enabled widget of a subtree at a point; recursion is bounded by WIDGET_MAX_TREE_DEPTH. */
+static Widget* HitTestNode(Widget* widget, Vector2 screenPosition, Vector2 parentPosition, Vector2 parentSize)
 {
     Vector2 Position = Widget_GetPosition(widget);
     Vector2 Size = Widget_GetSize(widget);
-    Vector2 AbsolutePos = { .x = parentPos.x + (Position.x * parentSize.x), .y = parentPos.y + (Position.y * parentSize.y) };
+    Vector2 AbsolutePosition = { .x = parentPosition.x + (Position.x * parentSize.x), .y = parentPosition.y + (Position.y * parentSize.y) };
     Vector2 AbsoluteSize = { .x = Size.x * parentSize.x, .y = Size.y * parentSize.y };
 
-    bool IsInside = PointInBox(screenPos, AbsolutePos, AbsoluteSize);
+    bool IsInside = PointInBox(screenPosition, AbsolutePosition, AbsoluteSize);
     if (Widget_AreSubWidgetsCut(widget) && !IsInside)
     {
-        return NULL; // clipped: neither this widget nor its (clipped) children can be hit here
+        return NULL; // Clipped: neither the widget nor its (clipped) children can be hit here.
     }
-
-    // Test children front-first (descending z).
-    Widget_SortSubWidgetsByZ(widget);
-    size_t Count = Widget_GetSubWidgetCount(widget);
-    for (size_t Index = Count; Index-- > 0;)
+    for (size_t Index = widget->_drawOrder._count; Index-- > 0U;)
     {
-        Widget* Child = Widget_GetSubWidgetAt(widget, Index);
-        Widget* Hit = HitTestNode(Child, screenPos, AbsolutePos, AbsoluteSize);
+        Widget* Hit = HitTestNode(Widget_InternalGetDrawOrderAt(&widget->_drawOrder, Index), screenPosition,
+            AbsolutePosition, AbsoluteSize);
         if (Hit != NULL)
         {
             return Hit;
         }
     }
-
-    if (Widget_IsInputEnabled(widget) && IsInside)
-    {
-        return widget;
-    }
-    return NULL;
+    return (Widget_IsInputEnabled(widget) && IsInside) ? widget : NULL;
 }
 
-
-// Static functions: rendering.
-/* Converts a normalized screen box to a pixel-space rectangle in the render buffer. */
-static Rectangle ScreenBoxToPixels(RenderContext* renderContext, Vector2 pos, Vector2 size)
+static Rectangle ScreenBoxToPixels(RenderContext* renderContext, Vector2 position, Vector2 size)
 {
-    Vector2 PixelPos = RenderContext_VectorRelativeToPixel(renderContext, pos);
+    Vector2 PixelPosition = RenderContext_VectorRelativeToPixel(renderContext, position);
     Vector2 PixelSize = RenderContext_VectorRelativeToPixel(renderContext, size);
-    return (Rectangle){ .x = PixelPos.x, .y = PixelPos.y, .width = PixelSize.x, .height = PixelSize.y };
+    return (Rectangle){ .x = PixelPosition.x, .y = PixelPosition.y, .width = PixelSize.x, .height = PixelSize.y };
 }
 
-/* Returns the axis-aligned intersection of two rectangles (clamped to non-negative size). */
-static Rectangle IntersectRectangle(Rectangle a, Rectangle b)
-{
-    float X1 = Math_MaxFloat(a.x, b.x);
-    float Y1 = Math_MaxFloat(a.y, b.y);
-    float X2 = Math_MinFloat(a.x + a.width, b.x + b.width);
-    float Y2 = Math_MinFloat(a.y + a.height, b.y + b.height);
-    return (Rectangle)
-    {
-        .x = X1,
-        .y = Y1,
-        .width = Math_MaxFloat(0.0f, X2 - X1),
-        .height = Math_MaxFloat(0.0f, Y2 - Y1)
-    };
-}
-
-/* Enables the GPU scissor to a pixel rectangle. */
-static void BeginScissorRectangle(Rectangle rectangle)
-{
-    BeginScissorMode((int)rectangle.x, (int)rectangle.y, (int)rectangle.width, (int)rectangle.height);
-}
-
-static Error RenderNode(UIScreen* self, RenderContext* renderContext, Widget* widget,
-    Vector2 parentPos, Vector2 parentSize, RenderColor parentTint, Rectangle clip, bool hasClip)
+/* Draws a subtree: the widget, then its children by draw order; recursion is bounded by WIDGET_MAX_TREE_DEPTH. */
+static Error RenderNode(RenderContext* renderContext, Widget* widget, Vector2 parentPosition, Vector2 parentSize,
+    RenderColor parentTint)
 {
     Vector2 Position = Widget_GetPosition(widget);
     Vector2 Size = Widget_GetSize(widget);
-    Vector2 AbsolutePos = { .x = parentPos.x + (Position.x * parentSize.x), .y = parentPos.y + (Position.y * parentSize.y) };
+    Vector2 AbsolutePosition = { .x = parentPosition.x + (Position.x * parentSize.x), .y = parentPosition.y + (Position.y * parentSize.y) };
     Vector2 AbsoluteSize = { .x = Size.x * parentSize.x, .y = Size.y * parentSize.y };
     RenderColor Tint = UIRenderColor_Multiply(parentTint, Widget_GetRenderTint(widget));
 
     if (Widget_IsRendered(widget))
     {
         UIRenderContext Context;
-        UIRenderContext_Create(&Context, renderContext, AbsolutePos, AbsoluteSize, Tint);
+        UIRenderContext_Create(&Context, renderContext, AbsolutePosition, AbsoluteSize, Tint);
         Error RenderResult = Widget_Render(widget, &Context);
         if (RenderResult.Code != ErrorCode_Success)
         {
             return RenderResult;
         }
     }
-
-    Rectangle ChildClip = clip;
-    bool ChildHasClip = hasClip;
-    bool StartedScissor = false;
-    if (Widget_AreSubWidgetsCut(widget))
+    if (widget->_drawOrder._count == 0U)
     {
-        Rectangle Box = ScreenBoxToPixels(renderContext, AbsolutePos, AbsoluteSize);
-        ChildClip = hasClip ? IntersectRectangle(clip, Box) : Box;
-        ChildHasClip = true;
-        BeginScissorRectangle(ChildClip);
-        StartedScissor = true;
+        return Error_CreateSuccess();
     }
 
-    Widget_SortSubWidgetsByZ(widget);
+    bool IsClipped = Widget_AreSubWidgetsCut(widget);
+    if (IsClipped)
+    {
+        RenderContext_PushClip(renderContext, ScreenBoxToPixels(renderContext, AbsolutePosition, AbsoluteSize));
+    }
     Error Result = Error_CreateSuccess();
-    size_t Count = Widget_GetSubWidgetCount(widget);
-    for (size_t Index = 0; Index < Count; Index++)
+    for (size_t Index = 0; (Index < widget->_drawOrder._count) && (Result.Code == ErrorCode_Success); Index++)
     {
-        Widget* Child = Widget_GetSubWidgetAt(widget, Index);
-        Result = RenderNode(self, renderContext, Child, AbsolutePos, AbsoluteSize, Tint, ChildClip, ChildHasClip);
-        if (Result.Code != ErrorCode_Success)
-        {
-            break;
-        }
+        Result = RenderNode(renderContext, Widget_InternalGetDrawOrderAt(&widget->_drawOrder, Index), AbsolutePosition,
+            AbsoluteSize, Tint);
     }
-
-    if (StartedScissor)
+    if (IsClipped)
     {
-        if (hasClip)
-        {
-            BeginScissorRectangle(clip);
-        }
-        else
-        {
-            EndScissorMode();
-        }
+        RenderContext_PopClip(renderContext);
     }
     return Result;
 }
 
-/* Draws a navigation outline (estimated bounds, on top) around a widget in the given color. */
-static void DrawOutlineForWidget(RenderContext* renderContext, Widget* widget, RenderColor color)
+static void DrawOutline(RenderContext* renderContext, const Widget* widget, RenderColor color)
 {
-    Vector2 BoxPos;
-    Vector2 BoxSize;
-    GetWidgetEstimatedScreenBox(widget, &BoxPos, &BoxSize);
+    Rectangle Box = UIScreen_InternalPeekEstimatedScreenBox(widget);
     RectangleOutlineRenderArguments Arguments =
     {
-        .Position = RenderVector2D_Relative(BoxPos),
-        .Size = RenderVector2D_Relative(BoxSize),
+        .Position = RenderVector2D_Relative((Vector2){ .x = Box.x, .y = Box.y }),
+        .Size = RenderVector2D_Relative((Vector2){ .x = Box.width, .y = Box.height }),
         .Thickness = RenderFloat_Relative(OUTLINE_THICKNESS_RELATIVE),
         .TargetColor = color
     };
     RenderContext_RenderRectangleOutline(renderContext, &Arguments);
 }
 
-/* Draws the keyboard-navigation outlines: green around each tabbed widget, white around the target. */
+/* Draws the keyboard-navigation outlines: green around each entered widget, white around the focused one. */
 static void DrawNavigationOutlines(UIScreen* self, RenderContext* renderContext)
 {
     if (!self->_isNavigating)
     {
         return;
     }
-
     RenderColor Green = { .Tint = GREEN, .Brightness = 1.0f, .Opacity = 1.0f };
-    RenderColor White = RenderColor_White();
-
     for (size_t Index = 0; Index < self->_navStack._count; Index++)
     {
-        uint64_t Id = *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_navStack, Index);
-        Widget* TabbedWidget = LookupWidget(self, Id);
-        if (TabbedWidget != NULL)
+        Widget* Entered = UIScreen_InternalResolve(self, *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_navStack, Index));
+        if (Entered != NULL)
         {
-            DrawOutlineForWidget(renderContext, TabbedWidget, Green);
+            DrawOutline(renderContext, Entered, Green);
         }
     }
-
-    if (self->_navTargetId != 0)
+    Widget* Focused = UIScreen_InternalResolve(self, self->_focusedWidgetId);
+    if (Focused != NULL)
     {
-        Widget* Target = LookupWidget(self, self->_navTargetId);
-        if (Target != NULL)
-        {
-            DrawOutlineForWidget(renderContext, Target, White);
-        }
+        DrawOutline(renderContext, Focused, RenderColor_White());
     }
 }
 
 
-// Static functions: update snapshot.
-static Error SnapshotWidget(Widget* widget, GenericBuffer* out)
+// Static functions: update.
+/* Appends the ids of a subtree in pre-order (parents before children); recursion is bounded by WIDGET_MAX_TREE_DEPTH. */
+static Error SnapshotSubtree(Widget* widget, GenericBuffer* out)
 {
     uint64_t Id = Widget_GetId(widget);
     if (!GenericBuffer_AddLast(out, &Id))
     {
-        return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen_Update: update snapshot could not grow.");
+        return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen_Update: the update snapshot could not grow.");
     }
-
-    size_t Count = Widget_GetSubWidgetCount(widget);
-    for (size_t Index = 0; Index < Count; Index++)
+    for (size_t Index = 0; Index < Widget_GetSubWidgetCount(widget); Index++)
     {
-        Widget* Child = Widget_GetSubWidgetAt(widget, Index);
-        Error ChildResult = SnapshotWidget(Child, out);
+        Error ChildResult = SnapshotSubtree(Widget_GetSubWidgetAt(widget, Index), out);
         if (ChildResult.Code != ErrorCode_Success)
         {
             return ChildResult;
@@ -468,672 +397,322 @@ static Error SnapshotWidget(Widget* widget, GenericBuffer* out)
     return Error_CreateSuccess();
 }
 
-
-// Static functions: input mapping.
-/* Maps a UIMouseButton to its raylib button code. */
-static int MapButtonToRaylib(UIMouseButton button)
+static Error TakeSnapshot(UIScreen* self)
 {
-    switch (button)
+    GenericBuffer_Clear(&self->_updateSnapshot);
+    for (size_t Index = 0; Index < self->_roots._count; Index++)
     {
-        case UIMouseButton_Left:    return MOUSE_BUTTON_LEFT;
-        case UIMouseButton_Right:   return MOUSE_BUTTON_RIGHT;
-        case UIMouseButton_Middle:  return MOUSE_BUTTON_MIDDLE;
-        case UIMouseButton_Side:    return MOUSE_BUTTON_SIDE;
-        case UIMouseButton_Extra:   return MOUSE_BUTTON_EXTRA;
-        case UIMouseButton_Forward: return MOUSE_BUTTON_FORWARD;
-        case UIMouseButton_Back:    return MOUSE_BUTTON_BACK;
-        default:                    return MOUSE_BUTTON_LEFT;
-    }
-}
-
-/* Maps a UIKey to its raylib key code, or KEY_NULL if unmapped. */
-static int MapUIKeyToRaylib(UIKey key)
-{
-    if ((key >= UIKey_A) && (key <= UIKey_Z))
-    {
-        return KEY_A + (int)(key - UIKey_A);
-    }
-    if ((key >= UIKey_0) && (key <= UIKey_9))
-    {
-        return KEY_ZERO + (int)(key - UIKey_0);
-    }
-    if ((key >= UIKey_F1) && (key <= UIKey_F12))
-    {
-        return KEY_F1 + (int)(key - UIKey_F1);
-    }
-
-    switch (key)
-    {
-        case UIKey_Tab:          return KEY_TAB;
-        case UIKey_Enter:        return KEY_ENTER;
-        case UIKey_Escape:       return KEY_ESCAPE;
-        case UIKey_Space:        return KEY_SPACE;
-        case UIKey_Backspace:    return KEY_BACKSPACE;
-        case UIKey_Delete:       return KEY_DELETE;
-        case UIKey_Up:           return KEY_UP;
-        case UIKey_Down:         return KEY_DOWN;
-        case UIKey_Left:         return KEY_LEFT;
-        case UIKey_Right:        return KEY_RIGHT;
-        case UIKey_Home:         return KEY_HOME;
-        case UIKey_End:          return KEY_END;
-        case UIKey_PageUp:       return KEY_PAGE_UP;
-        case UIKey_PageDown:     return KEY_PAGE_DOWN;
-        case UIKey_Insert:       return KEY_INSERT;
-        case UIKey_LeftShift:    return KEY_LEFT_SHIFT;
-        case UIKey_RightShift:   return KEY_RIGHT_SHIFT;
-        case UIKey_LeftControl:  return KEY_LEFT_CONTROL;
-        case UIKey_RightControl: return KEY_RIGHT_CONTROL;
-        case UIKey_LeftAlt:      return KEY_LEFT_ALT;
-        case UIKey_RightAlt:     return KEY_RIGHT_ALT;
-        default:                 return KEY_NULL;
-    }
-}
-
-/* Returns true if a key drives keyboard navigation (and so is not forwarded to widgets). */
-static bool IsNavigationKey(UIKey key)
-{
-    switch (key)
-    {
-        case UIKey_Tab:
-        case UIKey_Enter:
-        case UIKey_Escape:
-        case UIKey_Up:
-        case UIKey_Down:
-        case UIKey_Left:
-        case UIKey_Right:
-            return true;
-        default:
-            return false;
-    }
-}
-
-
-// Static functions: input argument builders.
-static WidgetMouseInputArgs MakeMouseArgs(UIScreen* self, UIMouseInputType type, UIMouseButton button,
-    const Widget* widget, Vector2 screenPos, Vector2 startScreen, double duration, Vector2 scrollDelta)
-{
-    WidgetMouseInputArgs Arguments;
-    Arguments.Type = type;
-    Arguments.Button = button;
-    Arguments.ScreenPosition = screenPos;
-    Arguments.WidgetPosition = UIScreen_ScreenToWidget(self, widget, screenPos);
-    Arguments.ClickStartScreenPosition = startScreen;
-    Arguments.ClickStartWidgetPosition = UIScreen_ScreenToWidget(self, widget, startScreen);
-    Arguments.DurationSeconds = duration;
-    Arguments.ScrollDelta = scrollDelta;
-    return Arguments;
-}
-
-static WidgetKeyboardInputArgs MakeKeyboardArgs(UIKeyboardInputType type, UIKey key, uint32_t codepoint)
-{
-    return (WidgetKeyboardInputArgs)
-    {
-        .Type = type,
-        .Key = key,
-        .Codepoint = codepoint
-    };
-}
-
-
-// Static functions: keyboard navigation.
-/* Gathers the current navigation level's candidate widgets into _navCandidates (reading order). */
-static void GatherNavCandidates(UIScreen* self)
-{
-    GenericBuffer_Clear(&self->_navCandidates);
-
-    if (self->_navStack._count == 0)
-    {
-        for (size_t Index = 0; Index < self->_roots._count; Index++)
+        Error Result = SnapshotSubtree(*(Widget**)GenericBuffer_GetPointerToElement(&self->_roots, Index), &self->_updateSnapshot);
+        if (Result.Code != ErrorCode_Success)
         {
-            Widget* Root = *(Widget**)GenericBuffer_GetPointerToElement(&self->_roots, Index);
-            GenericBuffer_AddLast(&self->_navCandidates, &Root);
+            return Result;
         }
+    }
+    return Error_CreateSuccess();
+}
+
+/* Updates every snapshot widget that is still alive, attached and updated (widgets added this tick start next tick). */
+static Error UpdateWidgets(UIScreen* self, ProgramTime time)
+{
+    for (size_t Index = 0; Index < self->_updateSnapshot._count; Index++)
+    {
+        Widget* Target = UIScreen_InternalResolve(self, *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_updateSnapshot, Index));
+        if ((Target == NULL) || !Widget_IsUpdated(Target) || !UIScreen_InternalIsAttached(Target))
+        {
+            continue;
+        }
+        Error Result = Widget_Update(Target, time);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+    return Error_CreateSuccess();
+}
+
+/* Lays out every snapshot widget that is still alive and attached, parents first (the snapshot is in pre-order). */
+static Error LayoutWidgets(UIScreen* self)
+{
+    RenderContext Measure;
+    RenderContext_CreateMeasuring(&Measure, self->_viewport.SizePixels, self->_viewport.TargetAspectRatio,
+        self->_viewport.TargetRelativePosition);
+    for (size_t Index = 0; Index < self->_updateSnapshot._count; Index++)
+    {
+        Widget* Target = UIScreen_InternalResolve(self, *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_updateSnapshot, Index));
+        if ((Target == NULL) || !UIScreen_InternalIsAttached(Target))
+        {
+            continue;
+        }
+        Vector2 ParentPosition = { .x = 0.0f, .y = 0.0f };
+        Vector2 ParentSize = { .x = 1.0f, .y = 1.0f };
+        if (Widget_GetParent(Target) != NULL)
+        {
+            UIScreen_InternalGetAbsoluteBox(Widget_GetParent(Target), &ParentPosition, &ParentSize);
+        }
+        UILayoutContext Context = { .Measure = &Measure, .ParentAbsoluteSize = ParentSize };
+        Error Result = Widget_Layout(Target, &Context);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+    return Error_CreateSuccess();
+}
+
+static Error RunUpdate(UIScreen* self, ProgramTime time, const UIScreenInput* input)
+{
+    Error Result = TakeSnapshot(self);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIScreen_InternalRouteInput(self, time, input);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIScreen_InternalAdvanceAnimations(self, time);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UpdateWidgets(self, time);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = LayoutWidgets(self);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIScreen_InternalDispatchEvents(self);
+    }
+    return Result;
+}
+
+
+// Internal functions (declared in UIInternal.h).
+Error UIScreen_InternalReserveWidget(UIScreen* self, Widget* widget)
+{
+    if (self->_isTearingDown)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen: no widget can be created while the screen is torn down.");
+    }
+
+    size_t Index = 0;
+    if (self->_freeSlotHead != 0U)
+    {
+        Index = (size_t)(self->_freeSlotHead - 1U);
+        RegistrySlot* FreeSlotEntry = GenericBuffer_GetPointerToElement(&self->_slots, Index);
+        self->_freeSlotHead = FreeSlotEntry->NextFree;
     }
     else
     {
-        uint64_t ParentId = *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_navStack, self->_navStack._count - 1);
-        Widget* Parent = LookupWidget(self, ParentId);
-        if (Parent != NULL)
+        RegistrySlot NewSlot = { .Widget = NULL, .Generation = 1U, .State = SlotState_Free, .NextFree = 0U };
+        if ((self->_slots._count >= MAX_SLOT_COUNT) || !GenericBuffer_AddLast(&self->_slots, &NewSlot))
         {
-            size_t Count = Widget_GetSubWidgetCount(Parent);
-            for (size_t Index = 0; Index < Count; Index++)
-            {
-                Widget* Child = Widget_GetSubWidgetAt(Parent, Index);
-                GenericBuffer_AddLast(&self->_navCandidates, &Child);
-            }
+            return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen: the widget registry could not grow.");
         }
+        Index = self->_slots._count - 1U;
     }
 
-    GenericBuffer_SortAscending(&self->_navCandidates, CompareReadingOrder, NULL, self->_sortScratch);
-}
-
-/* Returns the id of the first (top-left-most) navigation candidate, or 0 if there are none. */
-static uint64_t FirstNavCandidateId(UIScreen* self)
-{
-    if (self->_navCandidates._count == 0)
-    {
-        return 0;
-    }
-    Widget* First = *(Widget**)GenericBuffer_GetPointerToElement(&self->_navCandidates, 0);
-    return Widget_GetId(First);
-}
-
-static Error StartNavigation(UIScreen* self)
-{
-    self->_isNavigating = true;
-    GenericBuffer_Clear(&self->_navStack);
-    GatherNavCandidates(self);
-    self->_navTargetId = FirstNavCandidateId(self);
+    RegistrySlot* Slot = GenericBuffer_GetPointerToElement(&self->_slots, Index);
+    Slot->Widget = widget;
+    Slot->State = SlotState_Reserved;
+    Slot->NextFree = 0U;
+    widget->_id = MakeId(Index, Slot->Generation);
     return Error_CreateSuccess();
 }
 
-static Error StopNavigation(UIScreen* self)
+void UIScreen_InternalCancelWidget(UIScreen* self, uint64_t widgetId)
 {
-    Error FirstError = Error_CreateSuccess();
-    for (size_t Index = 0; Index < self->_navStack._count; Index++)
+    size_t Index = 0;
+    RegistrySlot* Slot = FindSlot(self, widgetId, &Index);
+    if ((Slot != NULL) && (Slot->State == SlotState_Reserved))
     {
-        uint64_t Id = *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_navStack, Index);
-        Widget* TabbedWidget = LookupWidget(self, Id);
-        if (TabbedWidget != NULL)
-        {
-            Error TabResult = Widget_SetTabbed(TabbedWidget, false);
-            KeepFirstError(&FirstError, &TabResult);
-        }
+        FreeSlot(self, Index);
     }
-    GenericBuffer_Clear(&self->_navStack);
-    self->_isNavigating = false;
-    self->_navTargetId = 0;
-    return FirstError;
 }
 
-static Error NavigateNext(UIScreen* self)
+void UIScreen_InternalActivateWidget(UIScreen* self, uint64_t widgetId)
 {
-    if (!self->_isNavigating)
+    RegistrySlot* Slot = FindSlot(self, widgetId, NULL);
+    if ((Slot != NULL) && (Slot->State == SlotState_Reserved))
     {
-        return StartNavigation(self);
+        Slot->State = SlotState_Alive;
+        self->_aliveWidgetCount++;
     }
+}
 
-    GatherNavCandidates(self);
-    size_t Count = self->_navCandidates._count;
-    if (Count == 0)
+Widget* UIScreen_InternalResolve(const UIScreen* self, uint64_t widgetId)
+{
+    const RegistrySlot* Slot = FindSlot(self, widgetId, NULL);
+    return ((Slot != NULL) && (Slot->State == SlotState_Alive)) ? Slot->Widget : NULL;
+}
+
+uint64_t UIScreen_InternalNextSequence(UIScreen* self)
+{
+    return self->_nextSequence++;
+}
+
+void UIScreen_InternalInvalidateHitTest(UIScreen* self)
+{
+    self->_isHitTestDirty = true;
+}
+
+void UIScreen_InternalOnZChanged(UIScreen* self, Widget* widget)
+{
+    if (widget->_isScreenRoot)
     {
-        return Error_CreateSuccess();
+        Widget_InternalResortInDrawOrder(&self->_rootDrawOrder, widget);
     }
-
-    size_t CurrentIndex = GENERIC_BUFFER_INDEX_INVALID;
-    for (size_t Index = 0; Index < Count; Index++)
+    else if (widget->_parent != NULL)
     {
-        Widget* Candidate = *(Widget**)GenericBuffer_GetPointerToElement(&self->_navCandidates, Index);
-        if (Widget_GetId(Candidate) == self->_navTargetId)
+        Widget_InternalResortInDrawOrder(&widget->_parent->_drawOrder, widget);
+    }
+    self->_isHitTestDirty = true;
+}
+
+Error UIScreen_InternalDetachWidget(UIScreen* self, Widget* widget)
+{
+    UnlinkWidget(self, widget);
+
+    // Decide everything first (the widget is detached, so its subtree is what still has it as an ancestor), then run
+    // the hooks last, re-resolving each widget by id: a hook may destroy or move anything.
+    uint64_t UnhoveredId = WIDGET_ID_INVALID;
+    Widget* Hovered = UIScreen_InternalResolve(self, self->_hoveredWidgetId);
+    if ((Hovered != NULL) && UIScreen_InternalIsInSubtree(Hovered, widget))
+    {
+        UnhoveredId = self->_hoveredWidgetId;
+        self->_hoveredWidgetId = WIDGET_ID_INVALID;
+    }
+    uint64_t UnfocusedId = WIDGET_ID_INVALID;
+    Widget* Focused = UIScreen_InternalResolve(self, self->_focusedWidgetId);
+    if ((Focused != NULL) && UIScreen_InternalIsInSubtree(Focused, widget))
+    {
+        UnfocusedId = self->_focusedWidgetId;
+        self->_focusedWidgetId = WIDGET_ID_INVALID;
+    }
+    uint64_t LeftIds[WIDGET_MAX_TREE_DEPTH];
+    size_t LeftCount = 0;
+    for (size_t Index = 0; Index < self->_navStack._count; Index++)
+    {
+        uint64_t EnteredId = *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_navStack, Index);
+        Widget* Entered = UIScreen_InternalResolve(self, EnteredId);
+        if ((Entered != NULL) && UIScreen_InternalIsInSubtree(Entered, widget))
         {
-            CurrentIndex = Index;
+            // The stack is a path: this entry and every one after it are inside the detached subtree.
+            for (size_t Inner = Index; (Inner < self->_navStack._count) && (LeftCount < WIDGET_MAX_TREE_DEPTH); Inner++)
+            {
+                LeftIds[LeftCount++] = *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_navStack, Inner);
+            }
+            GenericBuffer_SetCount(&self->_navStack, Index);
             break;
         }
     }
+    for (size_t Index = 0; Index < UI_SCREEN_MOUSE_BUTTON_COUNT; Index++)
+    {
+        Widget* Target = UIScreen_InternalResolve(self, self->_buttons[Index].TargetWidgetId);
+        if (self->_buttons[Index].IsPressed && (Target != NULL) && UIScreen_InternalIsInSubtree(Target, widget))
+        {
+            self->_buttons[Index].IsPressed = false;
+            self->_buttons[Index].TargetWidgetId = WIDGET_ID_INVALID;
+        }
+    }
 
-    size_t NextIndex = (CurrentIndex == GENERIC_BUFFER_INDEX_INVALID) ? 0 : ((CurrentIndex + 1) % Count);
-    Widget* Next = *(Widget**)GenericBuffer_GetPointerToElement(&self->_navCandidates, NextIndex);
-    self->_navTargetId = Widget_GetId(Next);
-    return Error_CreateSuccess();
+    Error FirstError = Error_CreateSuccess();
+    Widget* Unhovered = UIScreen_InternalResolve(self, UnhoveredId);
+    if (Unhovered != NULL)
+    {
+        Error Result = Widget_InternalSetHovered(Unhovered, false, NULL);
+        KeepFirstError(&FirstError, &Result);
+    }
+    Widget* Unfocused = UIScreen_InternalResolve(self, UnfocusedId);
+    if (Unfocused != NULL)
+    {
+        Error Result = Widget_InternalSetFocused(Unfocused, false);
+        KeepFirstError(&FirstError, &Result);
+    }
+    for (size_t Index = LeftCount; Index-- > 0U;)
+    {
+        Widget* Left = UIScreen_InternalResolve(self, LeftIds[Index]);
+        if (Left != NULL)
+        {
+            Error Result = Widget_InternalSetTabbed(Left, false);
+            KeepFirstError(&FirstError, &Result);
+        }
+    }
+    return FirstError;
 }
 
-static Error NavigateArrow(UIScreen* self, NavDirection direction)
+Error UIScreen_InternalDestroyWidget(UIScreen* self, Widget* widget)
 {
-    if (!self->_isNavigating)
-    {
-        return StartNavigation(self);
-    }
-
-    GatherNavCandidates(self);
-    Widget* From = LookupWidget(self, self->_navTargetId);
-    if (From == NULL)
-    {
-        self->_navTargetId = FirstNavCandidateId(self);
-        return Error_CreateSuccess();
-    }
-
-    Vector2 FromCenter = RectangleCenter(Widget_GetEstimatedBounds(From));
-    Widget* Best = NULL;
-    float BestDistance = 0.0f;
-
-    for (size_t Index = 0; Index < self->_navCandidates._count; Index++)
-    {
-        Widget* Candidate = *(Widget**)GenericBuffer_GetPointerToElement(&self->_navCandidates, Index);
-        if (Candidate == From)
-        {
-            continue;
-        }
-
-        Vector2 CandidateCenter = RectangleCenter(Widget_GetEstimatedBounds(Candidate));
-        float DeltaX = CandidateCenter.x - FromCenter.x;
-        float DeltaY = CandidateCenter.y - FromCenter.y;
-
-        float Primary;
-        float Perpendicular;
-        switch (direction)
-        {
-            case NavDirection_Right: if (DeltaX <= 0.0f) { continue; } Primary = DeltaX;  Perpendicular = Math_AbsFloat(DeltaY); break;
-            case NavDirection_Left:  if (DeltaX >= 0.0f) { continue; } Primary = -DeltaX; Perpendicular = Math_AbsFloat(DeltaY); break;
-            case NavDirection_Down:  if (DeltaY <= 0.0f) { continue; } Primary = DeltaY;  Perpendicular = Math_AbsFloat(DeltaX); break;
-            case NavDirection_Up:    if (DeltaY >= 0.0f) { continue; } Primary = -DeltaY; Perpendicular = Math_AbsFloat(DeltaX); break;
-            default:                 continue;
-        }
-
-        float Distance = Primary + (NAV_PERPENDICULAR_PENALTY * Perpendicular);
-        if ((Best == NULL) || (Distance < BestDistance))
-        {
-            Best = Candidate;
-            BestDistance = Distance;
-        }
-    }
-
-    if (Best != NULL)
-    {
-        self->_navTargetId = Widget_GetId(Best);
-    }
-    return Error_CreateSuccess();
-}
-
-static Error NavigateEnter(UIScreen* self)
-{
-    if (self->_navTargetId == 0)
+    if (widget->_isDying)
     {
         return Error_CreateSuccess();
     }
-    Widget* Target = LookupWidget(self, self->_navTargetId);
-    if (Target == NULL)
+    RegistrySlot* Slot = FindSlot(self, widget->_id, NULL);
+    if ((Slot == NULL) || (Slot->State != SlotState_Alive))
     {
-        return Error_CreateSuccess();
+        return Error_Construct2(ErrorCode_InvalidOperation, "Widget_Destroy: the widget is not alive in its screen.");
     }
-
-    if (!GenericBuffer_AddLast(&self->_navStack, &self->_navTargetId))
+    // Queued first, so a failure changes nothing.
+    if (!GenericBuffer_AddLast(&self->_pendingDestroy, &widget))
     {
-        return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen: navigation stack could not grow.");
+        return Error_Construct2(ErrorCode_BufferTooLarge, "Widget_Destroy: the screen could not record the widget.");
     }
-
-    Error TabResult = Widget_SetTabbed(Target, true);
-    if (TabResult.Code != ErrorCode_Success)
-    {
-        return TabResult;
-    }
-    Error TopResult = UIScreen_BringToTop(self, Target);
-    if (TopResult.Code != ErrorCode_Success)
-    {
-        return TopResult;
-    }
-
-    GatherNavCandidates(self); // now the tabbed widget's children
-    self->_navTargetId = FirstNavCandidateId(self);
+    UnlinkWidget(self, widget);
+    MarkSubtreeDying(self, widget);
+    ForgetDyingReferences(self);
     return Error_CreateSuccess();
 }
 
-static Error NavigateEscape(UIScreen* self)
+bool UIScreen_InternalIsInSubtree(const Widget* node, const Widget* ancestor)
 {
-    if (self->_navStack._count == 0)
+    for (const Widget* Current = node; Current != NULL; Current = Current->_parent)
     {
-        return StopNavigation(self);
-    }
-
-    size_t LastIndex = self->_navStack._count - 1;
-    uint64_t PoppedId = *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_navStack, LastIndex);
-    GenericBuffer_RemoveAt(&self->_navStack, LastIndex);
-
-    Widget* Popped = LookupWidget(self, PoppedId);
-    if (Popped != NULL)
-    {
-        Error TabResult = Widget_SetTabbed(Popped, false);
-        if (TabResult.Code != ErrorCode_Success)
+        if (Current == ancestor)
         {
-            return TabResult;
+            return true;
         }
     }
-    self->_navTargetId = PoppedId;
-    return Error_CreateSuccess();
+    return false;
 }
 
-
-// Static functions: input processing.
-static Error ProcessHover(UIScreen* self)
+bool UIScreen_InternalIsAttached(const Widget* widget)
 {
-    Widget* Top = NULL;
-    UIScreen_TryGetTopmostAt(self, self->_mousePosition, &Top);
-    uint64_t NewHoverId = (Top != NULL) ? Widget_GetId(Top) : 0;
-
-    if (NewHoverId == self->_hoveredWidgetId)
+    for (const Widget* Current = widget; Current != NULL; Current = Current->_parent)
     {
-        return Error_CreateSuccess();
-    }
-
-    Widget* Old = LookupWidget(self, self->_hoveredWidgetId);
-    if (Old != NULL)
-    {
-        Error EndResult = Widget_SetHovered(Old, false, NULL);
-        if (EndResult.Code != ErrorCode_Success)
+        if (Current->_isScreenRoot)
         {
-            return EndResult;
+            return true;
         }
     }
-
-    self->_hoveredWidgetId = NewHoverId;
-
-    if (Top != NULL)
-    {
-        WidgetHoverArgs HoverArgs =
-        {
-            .ScreenPosition = self->_mousePosition,
-            .WidgetPosition = UIScreen_ScreenToWidget(self, Top, self->_mousePosition)
-        };
-        Error StartResult = Widget_SetHovered(Top, true, &HoverArgs);
-        if (StartResult.Code != ErrorCode_Success)
-        {
-            return StartResult;
-        }
-    }
-    return Error_CreateSuccess();
+    return false;
 }
 
-static Error ProcessButtons(UIScreen* self, ProgramTime time, bool mouseMoved)
+void UIScreen_InternalGetAbsoluteBox(const Widget* widget, Vector2* outPosition, Vector2* outSize)
 {
-    Vector2 NoScroll = { .x = 0.0f, .y = 0.0f };
-
-    for (int ButtonIndex = 0; ButtonIndex < (int)UIMouseButton_Count; ButtonIndex++)
+    Vector2 ParentPosition = { .x = 0.0f, .y = 0.0f };
+    Vector2 ParentSize = { .x = 1.0f, .y = 1.0f };
+    if (widget->_parent != NULL)
     {
-        UIMouseButton Button = (UIMouseButton)ButtonIndex;
-        int RaylibButton = MapButtonToRaylib(Button);
-        UIScreenButtonTracking* Tracking = &self->_buttons[ButtonIndex];
-
-        if (IsMouseButtonPressed(RaylibButton))
-        {
-            Widget* Top = NULL;
-            UIScreen_TryGetTopmostAt(self, self->_mousePosition, &Top);
-
-            Tracking->IsPressed = true;
-            Tracking->TargetWidgetId = (Top != NULL) ? Widget_GetId(Top) : 0;
-            Tracking->StartScreenPosition = self->_mousePosition;
-            Tracking->StartTime = time.TotalTime;
-
-            if (self->_isNavigating)
-            {
-                Error StopResult = StopNavigation(self);
-                if (StopResult.Code != ErrorCode_Success)
-                {
-                    return StopResult;
-                }
-            }
-
-            Error FocusResult = UIScreen_SetFocusedWidget(self, Top); // NULL clears focus (empty click)
-            if (FocusResult.Code != ErrorCode_Success)
-            {
-                return FocusResult;
-            }
-
-            if (Top != NULL)
-            {
-                WidgetMouseInputArgs Arguments = MakeMouseArgs(self, UIMouseInputType_ButtonPress, Button, Top,
-                    self->_mousePosition, self->_mousePosition, 0.0, NoScroll);
-                Error InputResult = Widget_OnMouseInput(Top, &Arguments);
-                if (InputResult.Code != ErrorCode_Success)
-                {
-                    return InputResult;
-                }
-            }
-        }
-        else if (IsMouseButtonReleased(RaylibButton))
-        {
-            if (Tracking->IsPressed)
-            {
-                Widget* Target = LookupWidget(self, Tracking->TargetWidgetId);
-                if (Target != NULL)
-                {
-                    double Duration = time.TotalTime - Tracking->StartTime;
-                    WidgetMouseInputArgs Arguments = MakeMouseArgs(self, UIMouseInputType_ButtonRelease, Button, Target,
-                        self->_mousePosition, Tracking->StartScreenPosition, Duration, NoScroll);
-                    Error InputResult = Widget_OnMouseInput(Target, &Arguments);
-                    if (InputResult.Code != ErrorCode_Success)
-                    {
-                        return InputResult;
-                    }
-                }
-                Tracking->IsPressed = false;
-                Tracking->TargetWidgetId = 0;
-            }
-        }
-        else if (mouseMoved && Tracking->IsPressed && IsMouseButtonDown(RaylibButton))
-        {
-            Widget* Target = LookupWidget(self, Tracking->TargetWidgetId);
-            if (Target != NULL)
-            {
-                double Duration = time.TotalTime - Tracking->StartTime;
-                WidgetMouseInputArgs Arguments = MakeMouseArgs(self, UIMouseInputType_Move, Button, Target,
-                    self->_mousePosition, Tracking->StartScreenPosition, Duration, NoScroll);
-                Error InputResult = Widget_OnMouseInput(Target, &Arguments);
-                if (InputResult.Code != ErrorCode_Success)
-                {
-                    return InputResult;
-                }
-            }
-        }
+        UIScreen_InternalGetAbsoluteBox(widget->_parent, &ParentPosition, &ParentSize); // Bounded by the tree depth.
     }
-    return Error_CreateSuccess();
+    outPosition->x = ParentPosition.x + (widget->_position.x * ParentSize.x);
+    outPosition->y = ParentPosition.y + (widget->_position.y * ParentSize.y);
+    outSize->x = widget->_size.x * ParentSize.x;
+    outSize->y = widget->_size.y * ParentSize.y;
 }
 
-static Error ProcessScroll(UIScreen* self)
+Rectangle UIScreen_InternalGetEstimatedScreenBox(Widget* widget)
 {
-    if ((self->_scrollDelta.x == 0.0f) && (self->_scrollDelta.y == 0.0f))
-    {
-        return Error_CreateSuccess();
-    }
-
-    Widget* Top = NULL;
-    if (!UIScreen_TryGetTopmostAt(self, self->_mousePosition, &Top))
-    {
-        return Error_CreateSuccess();
-    }
-
-    WidgetMouseInputArgs Arguments = MakeMouseArgs(self, UIMouseInputType_Scroll, UIMouseButton_Left, Top,
-        self->_mousePosition, self->_mousePosition, 0.0, self->_scrollDelta);
-    return Widget_OnMouseInput(Top, &Arguments);
+    return ParentSpaceToScreen(widget, Widget_GetEstimatedBounds(widget));
 }
 
-static Error ProcessKeyboardNavigation(UIScreen* self)
+Rectangle UIScreen_InternalPeekEstimatedScreenBox(const Widget* widget)
 {
-    if (IsKeyPressed(KEY_TAB))
-    {
-        Error Result = NavigateNext(self);
-        if (Result.Code != ErrorCode_Success) { return Result; }
-    }
-    if (IsKeyPressed(KEY_UP))
-    {
-        Error Result = NavigateArrow(self, NavDirection_Up);
-        if (Result.Code != ErrorCode_Success) { return Result; }
-    }
-    if (IsKeyPressed(KEY_DOWN))
-    {
-        Error Result = NavigateArrow(self, NavDirection_Down);
-        if (Result.Code != ErrorCode_Success) { return Result; }
-    }
-    if (IsKeyPressed(KEY_LEFT))
-    {
-        Error Result = NavigateArrow(self, NavDirection_Left);
-        if (Result.Code != ErrorCode_Success) { return Result; }
-    }
-    if (IsKeyPressed(KEY_RIGHT))
-    {
-        Error Result = NavigateArrow(self, NavDirection_Right);
-        if (Result.Code != ErrorCode_Success) { return Result; }
-    }
-    if (self->_isNavigating && IsKeyPressed(KEY_ENTER))
-    {
-        Error Result = NavigateEnter(self);
-        if (Result.Code != ErrorCode_Success) { return Result; }
-    }
-    if (self->_isNavigating && IsKeyPressed(KEY_ESCAPE))
-    {
-        Error Result = NavigateEscape(self);
-        if (Result.Code != ErrorCode_Success) { return Result; }
-    }
-    return Error_CreateSuccess();
-}
-
-static Error ProcessKeyboardToFocused(UIScreen* self)
-{
-    Widget* Focused = self->_focusedWidget;
-
-    for (int KeyIndex = 1; KeyIndex < (int)UIKey_Count; KeyIndex++)
-    {
-        UIKey Key = (UIKey)KeyIndex;
-        if (IsNavigationKey(Key))
-        {
-            continue;
-        }
-        int RaylibKey = MapUIKeyToRaylib(Key);
-        if ((RaylibKey == KEY_NULL) || (Focused == NULL))
-        {
-            continue;
-        }
-
-        if (IsKeyPressed(RaylibKey))
-        {
-            WidgetKeyboardInputArgs Arguments = MakeKeyboardArgs(UIKeyboardInputType_KeyPress, Key, 0);
-            Error Result = Widget_OnKeyboardInput(Focused, &Arguments);
-            if (Result.Code != ErrorCode_Success) { return Result; }
-        }
-        if (IsKeyReleased(RaylibKey))
-        {
-            WidgetKeyboardInputArgs Arguments = MakeKeyboardArgs(UIKeyboardInputType_KeyRelease, Key, 0);
-            Error Result = Widget_OnKeyboardInput(Focused, &Arguments);
-            if (Result.Code != ErrorCode_Success) { return Result; }
-        }
-        if (IsKeyPressedRepeat(RaylibKey))
-        {
-            WidgetKeyboardInputArgs Arguments = MakeKeyboardArgs(UIKeyboardInputType_KeyRepeat, Key, 0);
-            Error Result = Widget_OnKeyboardInput(Focused, &Arguments);
-            if (Result.Code != ErrorCode_Success) { return Result; }
-        }
-    }
-
-    // Text codepoints (drain the queue regardless of focus so it does not build up).
-    int Codepoint = GetCharPressed();
-    while (Codepoint != 0)
-    {
-        if (Focused != NULL)
-        {
-            WidgetKeyboardInputArgs Arguments = MakeKeyboardArgs(UIKeyboardInputType_Text, UIKey_Unknown, (uint32_t)Codepoint);
-            Error Result = Widget_OnKeyboardInput(Focused, &Arguments);
-            if (Result.Code != ErrorCode_Success) { return Result; }
-        }
-        Codepoint = GetCharPressed();
-    }
-    return Error_CreateSuccess();
-}
-
-static Error ProcessInput(UIScreen* self, ProgramTime time)
-{
-    Vector2 CurrentPixel = GetMousePosition();
-    bool MouseMoved = (CurrentPixel.x != self->_previousMousePixel.x) || (CurrentPixel.y != self->_previousMousePixel.y);
-    self->_previousMousePixel = CurrentPixel;
-
-    float ScreenWidth = (float)GetScreenWidth();
-    float ScreenHeight = (float)GetScreenHeight();
-    self->_mousePosition.x = (ScreenWidth > 0.0f) ? (CurrentPixel.x / ScreenWidth) : 0.0f;
-    self->_mousePosition.y = (ScreenHeight > 0.0f) ? (CurrentPixel.y / ScreenHeight) : 0.0f;
-    self->_scrollDelta = GetMouseWheelMoveV();
-
-    if (MouseMoved && self->_isNavigating)
-    {
-        Error StopResult = StopNavigation(self);
-        if (StopResult.Code != ErrorCode_Success) { return StopResult; }
-    }
-
-    Error Result = ProcessHover(self);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = ProcessButtons(self, time, MouseMoved);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = ProcessScroll(self);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = ProcessKeyboardNavigation(self);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = ProcessKeyboardToFocused(self);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    return Error_CreateSuccess();
-}
-
-
-// Static functions: animation advancing.
-/* Wraps a looping animation's elapsed time into [0, cycleLength). */
-static double WrapLoopTime(double elapsed, double cycleLength)
-{
-    if (cycleLength <= 0.0)
-    {
-        return 0.0;
-    }
-    double Cycles = Math_FloorDouble(elapsed / cycleLength);
-    return elapsed - (Cycles * cycleLength);
-}
-
-static Error AdvanceAnimations(UIScreen* self, ProgramTime time)
-{
-    for (size_t Index = 0; Index < self->_animations._count; Index++)
-    {
-        AnimationRecord* Record = GenericBuffer_GetPointerToElement(&self->_animations, Index);
-        Record->Elapsed += time.PassedTime;
-
-        size_t KeyframeCount = Record->Keyframes._count;
-        if (KeyframeCount == 0)
-        {
-            continue;
-        }
-
-        UIKeyframe* Keyframes = (UIKeyframe*)Record->Keyframes._data;
-        double LastTime = Keyframes[KeyframeCount - 1].Time;
-        double EvalTime = Record->Elapsed;
-        if (Record->Options.IsLooping)
-        {
-            EvalTime = WrapLoopTime(Record->Elapsed, LastTime);
-        }
-
-        AnimationValue Value;
-        Memory_Zero(&Value, sizeof(Value));
-        Error EvalResult = UIAnimation_EvaluateKeyframes(Keyframes, KeyframeCount, Record->Type, EvalTime, &Value);
-        if (EvalResult.Code != ErrorCode_Success)
-        {
-            return EvalResult;
-        }
-
-        Widget* Target = LookupWidget(self, Record->WidgetId);
-        if (Target != NULL)
-        {
-            Error SetResult = Widget_SetProperty(Target, Record->PropertyId, &Value);
-            if (SetResult.Code != ErrorCode_Success)
-            {
-                return SetResult;
-            }
-        }
-
-        if (!Record->Options.IsLooping && (Record->Elapsed >= LastTime) && Record->Options.IsRemovedOnFinish)
-        {
-            Record->IsPendingRemoval = true;
-        }
-    }
-
-    // Remove finished animations (backwards so indices stay valid).
-    size_t Cursor = self->_animations._count;
-    while (Cursor > 0)
-    {
-        Cursor--;
-        AnimationRecord* Record = GenericBuffer_GetPointerToElement(&self->_animations, Cursor);
-        if (Record->IsPendingRemoval)
-        {
-            Memory_Free(Record->Keyframes._data);
-            GenericBuffer_RemoveAt(&self->_animations, Cursor);
-        }
-    }
-    return Error_CreateSuccess();
+    return ParentSpaceToScreen(widget, Widget_InternalPeekEstimatedBounds(widget));
 }
 
 
 // Public functions: lifecycle.
-Error UIScreen_Construct(UIScreen* self, UIWidgetFactory* factory)
+Error UIScreen_Construct(UIScreen* self, UIWidgetFactory* factory, Logger* logger)
 {
     if ((self == NULL) || (factory == NULL))
     {
@@ -1142,16 +721,24 @@ Error UIScreen_Construct(UIScreen* self, UIWidgetFactory* factory)
 
     Memory_Zero(self, sizeof(*self));
     self->_factory = factory;
+    self->_logger = logger;
+    self->_viewport = UIViewport_Create((Vector2){ .x = DEFAULT_VIEWPORT_WIDTH, .y = DEFAULT_VIEWPORT_HEIGHT },
+        DEFAULT_VIEWPORT_ASPECT_RATIO, RenderTargetPosition_Centered());
 
-    GenericBuffer_AllocateVariable(&self->_widgets, 8U, sizeof(RegistryEntry));
+    Error AnimationResult = UIScreen_InternalInitializeAnimations(self);
+    if (AnimationResult.Code != ErrorCode_Success)
+    {
+        return AnimationResult;
+    }
+    GenericBuffer_AllocateVariable(&self->_slots, 16U, sizeof(RegistrySlot));
     GenericBuffer_AllocateVariable(&self->_roots, 4U, sizeof(Widget*));
-    GenericBuffer_AllocateVariable(&self->_navStack, 4U, sizeof(uint64_t));
-    GenericBuffer_AllocateVariable(&self->_animations, 4U, sizeof(AnimationRecord));
+    GenericBuffer_AllocateVariable(&self->_rootDrawOrder, 4U, sizeof(Widget*));
+    GenericBuffer_AllocateVariable(&self->_pendingDestroy, 4U, sizeof(Widget*));
     GenericBuffer_AllocateVariable(&self->_updateSnapshot, 16U, sizeof(uint64_t));
-    GenericBuffer_AllocateVariable(&self->_navCandidates, 8U, sizeof(Widget*));
+    UIScreen_InternalInitializeNavigation(self);
+    UIScreen_InternalInitializeEvents(self);
 
-    self->_nextWidgetId = 1;
-    self->_nextAnimationId = 1;
+    self->_nextSequence = 1U;
     return Error_CreateSuccess();
 }
 
@@ -1161,116 +748,78 @@ Error UIScreen_Deconstruct(UIScreen* self)
     {
         return Error_CreateSuccess();
     }
-
-    for (size_t Index = 0; Index < self->_animations._count; Index++)
+    if (self->_isUpdating || self->_isTearingDown)
     {
-        AnimationRecord* Record = GenericBuffer_GetPointerToElement(&self->_animations, Index);
-        Memory_Free(Record->Keyframes._data);
+        return Error_Construct2(ErrorCode_InvalidOperation,
+            "UIScreen_Deconstruct: called from inside UIScreen_Update or UIScreen_Deconstruct.");
     }
 
-    Memory_Free(self->_animations._data);
-    Memory_Free(self->_updateSnapshot._data);
-    Memory_Free(self->_navCandidates._data);
-    Memory_Free(self->_navStack._data);
+    // Destroy every top-most alive widget (roots and detached ones); that covers every alive widget.
+    self->_isTearingDown = true;
+    Error FirstError = Error_CreateSuccess();
+    for (size_t Index = 0; Index < self->_slots._count; Index++)
+    {
+        RegistrySlot* Slot = GenericBuffer_GetPointerToElement(&self->_slots, Index);
+        if ((Slot->State == SlotState_Alive) && (Slot->Widget->_parent == NULL))
+        {
+            Error DestroyResult = UIScreen_InternalDestroyWidget(self, Slot->Widget);
+            KeepFirstError(&FirstError, &DestroyResult);
+        }
+    }
+    Error FlushResult = FlushDestroyedWidgets(self);
+    KeepFirstError(&FirstError, &FlushResult);
+
+    Error AnimationResult = UIScreen_InternalReleaseAnimations(self);
+    KeepFirstError(&FirstError, &AnimationResult);
+    UIScreen_InternalReleaseEvents(self);
+    UIScreen_InternalReleaseNavigation(self);
+    Memory_Free(self->_slots._data);
     Memory_Free(self->_roots._data);
-    Memory_Free(self->_widgets._data);
+    Memory_Free(self->_rootDrawOrder._data);
+    Memory_Free(self->_pendingDestroy._data);
+    Memory_Free(self->_updateSnapshot._data);
 
     // The factory is borrowed (program-wide); the screen does not deconstruct it.
     Memory_Zero(self, sizeof(*self));
-    return Error_CreateSuccess();
+    return FirstError;
 }
 
 
-// Public functions: widget registration.
-Error UIScreen_RegisterWidget(UIScreen* self, Widget* widget, uint64_t* outId)
+// Public functions: viewport.
+Error UIScreen_SetViewport(UIScreen* self, const UIViewport* viewport)
 {
-    if ((self == NULL) || (widget == NULL) || (outId == NULL))
+    if ((self == NULL) || (viewport == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_RegisterWidget: self, widget and outId must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_SetViewport: self and viewport must not be NULL.");
     }
-
-    RegistryEntry Entry = { .Id = self->_nextWidgetId, .Widget = widget };
-    if (!GenericBuffer_AddLast(&self->_widgets, &Entry))
+    bool IsSizeValid = IsFloatFinite(viewport->SizePixels.x) && IsFloatFinite(viewport->SizePixels.y)
+        && (viewport->SizePixels.x > 0.0f) && (viewport->SizePixels.y > 0.0f);
+    bool IsAspectValid = IsFloatFinite(viewport->TargetAspectRatio) && (viewport->TargetAspectRatio > 0.0f);
+    bool IsPlacementValid = IsFloatFinite(viewport->TargetRelativePosition.x) && IsFloatFinite(viewport->TargetRelativePosition.y);
+    if (!IsSizeValid || !IsAspectValid || !IsPlacementValid)
     {
-        return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen_RegisterWidget: widget registry could not grow.");
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
+            "UIScreen_SetViewport: the size and aspect ratio must be finite and positive, the placement finite.");
     }
-
-    *outId = Entry.Id;
-    self->_nextWidgetId++;
+    self->_viewport = *viewport;
     return Error_CreateSuccess();
 }
 
-Error UIScreen_UnregisterWidget(UIScreen* self, uint64_t widgetId)
-{
-    if (self == NULL)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_UnregisterWidget: self must not be NULL.");
-    }
 
-    // Purge the widget's animations.
-    Error AnimationResult = UIScreen_StopWidgetAnimations(self, widgetId);
-    Error_Deconstruct(&AnimationResult);
-
-    // Clear screen references to the widget without firing its hooks (it is being torn down).
-    if ((self->_focusedWidget != NULL) && (Widget_GetId(self->_focusedWidget) == widgetId))
-    {
-        self->_focusedWidget = NULL;
-    }
-    if (self->_hoveredWidgetId == widgetId)
-    {
-        self->_hoveredWidgetId = 0;
-    }
-    if (self->_navTargetId == widgetId)
-    {
-        self->_navTargetId = 0;
-    }
-    for (size_t Index = 0; Index < self->_navStack._count; Index++)
-    {
-        uint64_t Id = *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_navStack, Index);
-        if (Id == widgetId)
-        {
-            GenericBuffer_RemoveAt(&self->_navStack, Index);
-            break;
-        }
-    }
-    for (int ButtonIndex = 0; ButtonIndex < (int)UIMouseButton_Count; ButtonIndex++)
-    {
-        if (self->_buttons[ButtonIndex].TargetWidgetId == widgetId)
-        {
-            self->_buttons[ButtonIndex].IsPressed = false;
-            self->_buttons[ButtonIndex].TargetWidgetId = 0;
-        }
-    }
-
-    // Remove from roots if present.
-    for (size_t Index = 0; Index < self->_roots._count; Index++)
-    {
-        Widget* Root = *(Widget**)GenericBuffer_GetPointerToElement(&self->_roots, Index);
-        if (Widget_GetId(Root) == widgetId)
-        {
-            GenericBuffer_RemoveAt(&self->_roots, Index);
-            break;
-        }
-    }
-
-    // Remove from the registry.
-    size_t RegistryIndex = FindRegistryIndex(self, widgetId);
-    if (RegistryIndex != GENERIC_BUFFER_INDEX_INVALID)
-    {
-        GenericBuffer_RemoveAt(&self->_widgets, RegistryIndex);
-    }
-    return Error_CreateSuccess();
-}
-
-bool UIScreen_TryGetWidgetById(UIScreen* self, uint64_t widgetId, Widget** outWidget)
+// Public functions: widgets by id.
+bool UIScreen_TryGetWidgetById(const UIScreen* self, uint64_t widgetId, Widget** outWidget)
 {
     if ((self == NULL) || (outWidget == NULL))
     {
         return false;
     }
-    Widget* Found = LookupWidget(self, widgetId);
-    *outWidget = Found;
-    return Found != NULL;
+    *outWidget = UIScreen_InternalResolve(self, widgetId);
+    return *outWidget != NULL;
+}
+
+bool UIScreen_IsWidgetAlive(const UIScreen* self, uint64_t widgetId)
+{
+    return (self != NULL) && (UIScreen_InternalResolve(self, widgetId) != NULL);
 }
 
 
@@ -1283,18 +832,29 @@ Error UIScreen_AddWidget(UIScreen* self, Widget* widget)
     }
     if (Widget_GetScreen(widget) != self)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_AddWidget: widget belongs to a different screen.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_AddWidget: the widget belongs to another screen.");
     }
-    if ((Widget_GetParent(widget) != NULL) || Widget_IsScreenRoot(widget))
+    if (widget->_isDying || !widget->_isInitialized)
     {
-        return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_AddWidget: widget is already attached.");
+        return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_AddWidget: the widget must be initialized and not being destroyed.");
+    }
+    if ((widget->_parent != NULL) || widget->_isScreenRoot)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_AddWidget: the widget is already attached.");
     }
 
     if (!GenericBuffer_AddLast(&self->_roots, &widget))
     {
-        return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_AddWidget: widget could not be stored.");
+        return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen_AddWidget: the widget could not be stored.");
     }
-    Widget_SetScreenRoot(widget, true);
+    Widget_InternalSetScreenRoot(widget, true, UIScreen_InternalNextSequence(self));
+    if (!Widget_InternalInsertIntoDrawOrder(&self->_rootDrawOrder, widget))
+    {
+        GenericBuffer_RemoveLast(&self->_roots);
+        Widget_InternalSetScreenRoot(widget, false, 0U);
+        return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen_AddWidget: the widget could not be stored.");
+    }
+    self->_isHitTestDirty = true;
     return Error_CreateSuccess();
 }
 
@@ -1304,69 +864,12 @@ Error UIScreen_RemoveWidget(UIScreen* self, Widget* widget)
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_RemoveWidget: self and widget must not be NULL.");
     }
-
-    size_t RootIndex = GENERIC_BUFFER_INDEX_INVALID;
-    for (size_t Index = 0; Index < self->_roots._count; Index++)
+    if ((Widget_GetScreen(widget) != self) || !widget->_isScreenRoot || widget->_isDying)
     {
-        if (*(Widget**)GenericBuffer_GetPointerToElement(&self->_roots, Index) == widget)
-        {
-            RootIndex = Index;
-            break;
-        }
+        return Error_Construct2(ErrorCode_InvalidOperation,
+            "UIScreen_RemoveWidget: the widget is not a root of this screen, or is being destroyed.");
     }
-    if (RootIndex == GENERIC_BUFFER_INDEX_INVALID)
-    {
-        return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_RemoveWidget: widget is not a root.");
-    }
-
-    Error FirstError = Error_CreateSuccess();
-
-    if (self->_focusedWidget == widget)
-    {
-        Error FocusResult = Widget_SetFocused(widget, false);
-        KeepFirstError(&FirstError, &FocusResult);
-        self->_focusedWidget = NULL;
-    }
-    if (self->_isNavigating)
-    {
-        Error NavResult = StopNavigation(self);
-        KeepFirstError(&FirstError, &NavResult);
-    }
-
-    // Purge animations and input references for the removed subtree.
-    size_t AnimationCursor = 0;
-    while (AnimationCursor < self->_animations._count)
-    {
-        AnimationRecord* Record = GenericBuffer_GetPointerToElement(&self->_animations, AnimationCursor);
-        Widget* Target = LookupWidget(self, Record->WidgetId);
-        if ((Target != NULL) && IsInSubtree(Target, widget))
-        {
-            Memory_Free(Record->Keyframes._data);
-            GenericBuffer_RemoveAt(&self->_animations, AnimationCursor);
-        }
-        else
-        {
-            AnimationCursor++;
-        }
-    }
-    Widget* Hovered = LookupWidget(self, self->_hoveredWidgetId);
-    if ((Hovered != NULL) && IsInSubtree(Hovered, widget))
-    {
-        self->_hoveredWidgetId = 0;
-    }
-    for (int ButtonIndex = 0; ButtonIndex < (int)UIMouseButton_Count; ButtonIndex++)
-    {
-        Widget* ButtonTarget = LookupWidget(self, self->_buttons[ButtonIndex].TargetWidgetId);
-        if ((ButtonTarget != NULL) && IsInSubtree(ButtonTarget, widget))
-        {
-            self->_buttons[ButtonIndex].IsPressed = false;
-            self->_buttons[ButtonIndex].TargetWidgetId = 0;
-        }
-    }
-
-    GenericBuffer_RemoveAt(&self->_roots, RootIndex);
-    Widget_SetScreenRoot(widget, false);
-    return FirstError;
+    return UIScreen_InternalDetachWidget(self, widget);
 }
 
 size_t UIScreen_GetRootCount(const UIScreen* self)
@@ -1384,47 +887,7 @@ Widget* UIScreen_GetRootAt(const UIScreen* self, size_t index)
 }
 
 
-// Public functions: focus and z ordering.
-Error UIScreen_SetFocusedWidget(UIScreen* self, Widget* widget)
-{
-    if (self == NULL)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_SetFocusedWidget: self must not be NULL.");
-    }
-
-    Widget* NewFocus = (widget != NULL) ? GetRoot(widget) : NULL;
-    if (NewFocus == self->_focusedWidget)
-    {
-        return Error_CreateSuccess();
-    }
-
-    if (self->_focusedWidget != NULL)
-    {
-        Error DisableResult = Widget_SetFocused(self->_focusedWidget, false);
-        if (DisableResult.Code != ErrorCode_Success)
-        {
-            return DisableResult;
-        }
-    }
-
-    self->_focusedWidget = NewFocus;
-
-    if (NewFocus != NULL)
-    {
-        Error EnableResult = Widget_SetFocused(NewFocus, true);
-        if (EnableResult.Code != ErrorCode_Success)
-        {
-            return EnableResult;
-        }
-        Error TopResult = UIScreen_BringToTop(self, NewFocus);
-        if (TopResult.Code != ErrorCode_Success)
-        {
-            return TopResult;
-        }
-    }
-    return Error_CreateSuccess();
-}
-
+// Public functions: z ordering and hit testing.
 Error UIScreen_BringToTop(UIScreen* self, Widget* widget)
 {
     if ((self == NULL) || (widget == NULL))
@@ -1432,41 +895,19 @@ Error UIScreen_BringToTop(UIScreen* self, Widget* widget)
         return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_BringToTop: self and widget must not be NULL.");
     }
 
-    float MaxZ = 0.0f;
-    bool HasSibling = false;
-    Widget* Parent = Widget_GetParent(widget);
-
-    if (Parent != NULL)
+    const GenericBuffer* Siblings = (widget->_parent != NULL) ? &widget->_parent->_drawOrder : &self->_rootDrawOrder;
+    if (!widget->_isScreenRoot && (widget->_parent == NULL))
     {
-        size_t Count = Widget_GetSubWidgetCount(Parent);
-        for (size_t Index = 0; Index < Count; Index++)
-        {
-            Widget* Sibling = Widget_GetSubWidgetAt(Parent, Index);
-            if (Sibling != widget)
-            {
-                float Z = Widget_GetZLayer(Sibling);
-                if (!HasSibling || (Z > MaxZ)) { MaxZ = Z; HasSibling = true; }
-            }
-        }
+        return Error_CreateSuccess(); // Detached: no siblings.
     }
-    else
+    // The draw order is sorted, so the last other widget has the highest z. Already on top: leave the z alone, so
+    // repeated clicks do not make it grow.
+    Widget* Topmost = (Siblings->_count > 0U) ? Widget_InternalGetDrawOrderAt(Siblings, Siblings->_count - 1U) : NULL;
+    if ((Topmost == NULL) || (Topmost == widget))
     {
-        for (size_t Index = 0; Index < self->_roots._count; Index++)
-        {
-            Widget* Sibling = *(Widget**)GenericBuffer_GetPointerToElement(&self->_roots, Index);
-            if (Sibling != widget)
-            {
-                float Z = Widget_GetZLayer(Sibling);
-                if (!HasSibling || (Z > MaxZ)) { MaxZ = Z; HasSibling = true; }
-            }
-        }
+        return Error_CreateSuccess();
     }
-
-    if (HasSibling)
-    {
-        return Widget_SetZLayer(widget, MaxZ + BRING_TO_TOP_Z_STEP);
-    }
-    return Error_CreateSuccess();
+    return Widget_SetZLayer(widget, Widget_GetZLayer(Topmost) + BRING_TO_TOP_Z_STEP);
 }
 
 bool UIScreen_TryGetTopmostAt(UIScreen* self, Vector2 screenPosition, Widget** outWidget)
@@ -1476,15 +917,11 @@ bool UIScreen_TryGetTopmostAt(UIScreen* self, Vector2 screenPosition, Widget** o
         return false;
     }
     *outWidget = NULL;
-
-    Vector2 RootPos = { .x = 0.0f, .y = 0.0f };
+    Vector2 RootPosition = { .x = 0.0f, .y = 0.0f };
     Vector2 RootSize = { .x = 1.0f, .y = 1.0f };
-
-    SortRootsByZ(self);
-    for (size_t Index = self->_roots._count; Index-- > 0;)
+    for (size_t Index = self->_rootDrawOrder._count; Index-- > 0U;)
     {
-        Widget* Root = *(Widget**)GenericBuffer_GetPointerToElement(&self->_roots, Index);
-        Widget* Hit = HitTestNode(Root, screenPosition, RootPos, RootSize);
+        Widget* Hit = HitTestNode(Widget_InternalGetDrawOrderAt(&self->_rootDrawOrder, Index), screenPosition, RootPosition, RootSize);
         if (Hit != NULL)
         {
             *outWidget = Hit;
@@ -1496,80 +933,53 @@ bool UIScreen_TryGetTopmostAt(UIScreen* self, Vector2 screenPosition, Widget** o
 
 
 // Public functions: coordinate conversion.
-Vector2 UIScreen_WidgetToScreen(UIScreen* self, const Widget* widget, Vector2 widgetLocal)
+Vector2 UIScreen_WidgetToScreen(const UIScreen* self, const Widget* widget, Vector2 widgetLocal)
 {
     UNUSED(self);
-    Vector2 AbsolutePos;
+    Vector2 AbsolutePosition;
     Vector2 AbsoluteSize;
-    GetWidgetAbsoluteBox(widget, &AbsolutePos, &AbsoluteSize);
+    UIScreen_InternalGetAbsoluteBox(widget, &AbsolutePosition, &AbsoluteSize);
     return (Vector2)
     {
-        .x = AbsolutePos.x + (widgetLocal.x * AbsoluteSize.x),
-        .y = AbsolutePos.y + (widgetLocal.y * AbsoluteSize.y)
+        .x = AbsolutePosition.x + (widgetLocal.x * AbsoluteSize.x),
+        .y = AbsolutePosition.y + (widgetLocal.y * AbsoluteSize.y)
     };
 }
 
-Vector2 UIScreen_ScreenToWidget(UIScreen* self, const Widget* widget, Vector2 screenPosition)
+Vector2 UIScreen_ScreenToWidget(const UIScreen* self, const Widget* widget, Vector2 screenPosition)
 {
     UNUSED(self);
-    Vector2 AbsolutePos;
+    Vector2 AbsolutePosition;
     Vector2 AbsoluteSize;
-    GetWidgetAbsoluteBox(widget, &AbsolutePos, &AbsoluteSize);
+    UIScreen_InternalGetAbsoluteBox(widget, &AbsolutePosition, &AbsoluteSize);
     return (Vector2)
     {
-        .x = (AbsoluteSize.x != 0.0f) ? ((screenPosition.x - AbsolutePos.x) / AbsoluteSize.x) : 0.0f,
-        .y = (AbsoluteSize.y != 0.0f) ? ((screenPosition.y - AbsolutePos.y) / AbsoluteSize.y) : 0.0f
+        .x = (AbsoluteSize.x != 0.0f) ? ((screenPosition.x - AbsolutePosition.x) / AbsoluteSize.x) : 0.0f,
+        .y = (AbsoluteSize.y != 0.0f) ? ((screenPosition.y - AbsolutePosition.y) / AbsoluteSize.y) : 0.0f
     };
 }
 
 
 // Public functions: update and render.
-Error UIScreen_Update(UIScreen* self, ProgramTime time)
+Error UIScreen_Update(UIScreen* self, ProgramTime time, const UIScreenInput* input)
 {
-    if (self == NULL)
+    if ((self == NULL) || (input == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_Update: self must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_Update: self and input must not be NULL.");
+    }
+    if (self->_isUpdating || self->_isTearingDown)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_Update: the screen is already updating or is torn down.");
     }
 
-    // Snapshot the live widgets first, so widgets added this tick update next tick and removed ones are skipped.
-    GenericBuffer_Clear(&self->_updateSnapshot);
-    for (size_t Index = 0; Index < self->_roots._count; Index++)
-    {
-        Widget* Root = *(Widget**)GenericBuffer_GetPointerToElement(&self->_roots, Index);
-        Error SnapshotResult = SnapshotWidget(Root, &self->_updateSnapshot);
-        if (SnapshotResult.Code != ErrorCode_Success)
-        {
-            return SnapshotResult;
-        }
-    }
-
-    Error InputResult = ProcessInput(self, time);
-    if (InputResult.Code != ErrorCode_Success)
-    {
-        return InputResult;
-    }
-
-    Error AnimationResult = AdvanceAnimations(self, time);
-    if (AnimationResult.Code != ErrorCode_Success)
-    {
-        return AnimationResult;
-    }
-
-    for (size_t Index = 0; Index < self->_updateSnapshot._count; Index++)
-    {
-        uint64_t Id = *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_updateSnapshot, Index);
-        Widget* Target = LookupWidget(self, Id);
-        if ((Target == NULL) || !IsWidgetLive(Target) || !Widget_IsUpdated(Target))
-        {
-            continue;
-        }
-        Error UpdateResult = Widget_Update(Target, time);
-        if (UpdateResult.Code != ErrorCode_Success)
-        {
-            return UpdateResult;
-        }
-    }
-    return Error_CreateSuccess();
+    self->_isUpdating = true;
+    Error Result = RunUpdate(self, time, input);
+    // Destroyed widgets are freed even after a failure, while no callback is running.
+    Error FlushResult = FlushDestroyedWidgets(self);
+    self->_input = NULL;
+    self->_isUpdating = false;
+    KeepFirstError(&Result, &FlushResult);
+    return Result;
 }
 
 Error UIScreen_Render(UIScreen* self, RenderContext* renderContext)
@@ -1579,167 +989,17 @@ Error UIScreen_Render(UIScreen* self, RenderContext* renderContext)
         return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_Render: self and renderContext must not be NULL.");
     }
 
-    Vector2 RootPos = { .x = 0.0f, .y = 0.0f };
+    Vector2 RootPosition = { .x = 0.0f, .y = 0.0f };
     Vector2 RootSize = { .x = 1.0f, .y = 1.0f };
-    RenderColor RootTint = RenderColor_White();
-
-    SortRootsByZ(self);
-    Error Result = Error_CreateSuccess();
-    for (size_t Index = 0; Index < self->_roots._count; Index++)
+    for (size_t Index = 0; Index < self->_rootDrawOrder._count; Index++)
     {
-        Widget* Root = *(Widget**)GenericBuffer_GetPointerToElement(&self->_roots, Index);
-        Result = RenderNode(self, renderContext, Root, RootPos, RootSize, RootTint,
-            (Rectangle){ .x = 0.0f, .y = 0.0f, .width = 0.0f, .height = 0.0f }, false);
+        Error Result = RenderNode(renderContext, Widget_InternalGetDrawOrderAt(&self->_rootDrawOrder, Index), RootPosition,
+            RootSize, RenderColor_White());
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
         }
     }
-
     DrawNavigationOutlines(self, renderContext);
-    return Error_CreateSuccess();
-}
-
-
-// Public functions: input state queries.
-bool UIScreen_IsMouseButtonDown(const UIScreen* self, UIMouseButton button)
-{
-    UNUSED(self);
-    return IsMouseButtonDown(MapButtonToRaylib(button));
-}
-
-bool UIScreen_IsMouseButtonPressed(const UIScreen* self, UIMouseButton button)
-{
-    UNUSED(self);
-    return IsMouseButtonPressed(MapButtonToRaylib(button));
-}
-
-bool UIScreen_IsMouseButtonReleased(const UIScreen* self, UIMouseButton button)
-{
-    UNUSED(self);
-    return IsMouseButtonReleased(MapButtonToRaylib(button));
-}
-
-bool UIScreen_IsKeyDown(const UIScreen* self, UIKey key)
-{
-    UNUSED(self);
-    int RaylibKey = MapUIKeyToRaylib(key);
-    return (RaylibKey != KEY_NULL) && IsKeyDown(RaylibKey);
-}
-
-bool UIScreen_IsKeyPressed(const UIScreen* self, UIKey key)
-{
-    UNUSED(self);
-    int RaylibKey = MapUIKeyToRaylib(key);
-    return (RaylibKey != KEY_NULL) && IsKeyPressed(RaylibKey);
-}
-
-bool UIScreen_IsKeyReleased(const UIScreen* self, UIKey key)
-{
-    UNUSED(self);
-    int RaylibKey = MapUIKeyToRaylib(key);
-    return (RaylibKey != KEY_NULL) && IsKeyReleased(RaylibKey);
-}
-
-
-// Public functions: animation.
-Error UIScreen_StartAnimation(UIScreen* self,
-    uint64_t widgetId,
-    int32_t propertyId,
-    UIPropertyType type,
-    const UIKeyframe* keyframes,
-    size_t keyframeCount,
-    UIAnimationOptions options,
-    uint64_t* outAnimationId)
-{
-    if ((self == NULL) || (keyframes == NULL) || (outAnimationId == NULL))
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_StartAnimation: self, keyframes and outAnimationId must not be NULL.");
-    }
-    if (keyframeCount == 0)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_StartAnimation: keyframeCount must be at least 1.");
-    }
-    if (UIPropertyType_GetValueSize(type) == 0)
-    {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIScreen_StartAnimation: unrecognized property type.");
-    }
-    if (LookupWidget(self, widgetId) == NULL)
-    {
-        return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_StartAnimation: target widget does not exist.");
-    }
-
-    AnimationRecord Record;
-    Record.Id = self->_nextAnimationId;
-    Record.WidgetId = widgetId;
-    Record.PropertyId = propertyId;
-    Record.Type = type;
-    Record.Options = options;
-    Record.Elapsed = 0.0;
-    Record.IsPendingRemoval = false;
-    GenericBuffer_AllocateVariable(&Record.Keyframes, keyframeCount, sizeof(UIKeyframe));
-
-    for (size_t Index = 0; Index < keyframeCount; Index++)
-    {
-        UIKeyframe Keyframe = keyframes[Index];
-        if (!GenericBuffer_AddLast(&Record.Keyframes, &Keyframe))
-        {
-            Memory_Free(Record.Keyframes._data);
-            return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen_StartAnimation: keyframe storage could not grow.");
-        }
-    }
-
-    if (!GenericBuffer_AddLast(&self->_animations, &Record))
-    {
-        Memory_Free(Record.Keyframes._data);
-        return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen_StartAnimation: animation storage could not grow.");
-    }
-
-    *outAnimationId = Record.Id;
-    self->_nextAnimationId++;
-    return Error_CreateSuccess();
-}
-
-Error UIScreen_StopAnimation(UIScreen* self, uint64_t animationId)
-{
-    if (self == NULL)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_StopAnimation: self must not be NULL.");
-    }
-
-    for (size_t Index = 0; Index < self->_animations._count; Index++)
-    {
-        AnimationRecord* Record = GenericBuffer_GetPointerToElement(&self->_animations, Index);
-        if (Record->Id == animationId)
-        {
-            Memory_Free(Record->Keyframes._data);
-            GenericBuffer_RemoveAt(&self->_animations, Index);
-            return Error_CreateSuccess();
-        }
-    }
-    return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_StopAnimation: no animation with that id.");
-}
-
-Error UIScreen_StopWidgetAnimations(UIScreen* self, uint64_t widgetId)
-{
-    if (self == NULL)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_StopWidgetAnimations: self must not be NULL.");
-    }
-
-    size_t Index = 0;
-    while (Index < self->_animations._count)
-    {
-        AnimationRecord* Record = GenericBuffer_GetPointerToElement(&self->_animations, Index);
-        if (Record->WidgetId == widgetId)
-        {
-            Memory_Free(Record->Keyframes._data);
-            GenericBuffer_RemoveAt(&self->_animations, Index);
-        }
-        else
-        {
-            Index++;
-        }
-    }
     return Error_CreateSuccess();
 }

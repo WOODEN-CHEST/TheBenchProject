@@ -19,10 +19,13 @@
  * still accepted and multiplies with the tint, and because each child's context multiplies its own tint
  * onto the parent's, tint composes for the whole subtree.
  *
- * Clipping (AreSubWidgetsCut) is applied by the screen around a subtree via the GPU scissor, not by this
- * wrapper. Font sizes and line/border thicknesses are expressed in the underlying render context's
- * coordinate spaces (screen/buffer relative or pixels), NOT widget-local, since a constant on-screen
- * thickness or text size is almost always what is wanted; positions and box sizes are widget-local.
+ * Clipping (AreSubWidgetsCut) is applied by the screen around a subtree through the underlying render context's
+ * clip stack (RenderContext_PushClip), not by this wrapper; a widget that clips its own drawing pushes and pops on
+ * that stack too, so its clip nests inside its ancestors'.
+ *
+ * Font sizes and line/border thicknesses are expressed in the underlying render context's coordinate spaces
+ * (screen/buffer relative or pixels), NOT widget-local, since a constant on-screen thickness or text size is almost
+ * always what is wanted; positions and box sizes are widget-local.
  *
  * A UIRenderContext is a light value type owning nothing (the underlying RenderContext is borrowed). It
  * is created cheaply on the stack per widget per frame via UIRenderContext_Create.

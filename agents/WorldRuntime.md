@@ -9,7 +9,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | Module | Files | What it is |
 |---|---|---|
 | GameCamera | `include/GameCamera.h`, `source/GameCamera.c` | The 3D camera (position/fov/yaw/pitch/roll), converted to a raylib Camera3D only at render time. |
-| Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, GHDF pool, base directory). |
+| Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
 | WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-object cache and per-frame draw lists (models with resolved assets, sprites, lights). |
 | WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c` | A concrete GameFrame: a WASD + mouse-look flycam over a test world. |
@@ -199,11 +199,14 @@ is a second such pair. Each renderer shader lives in its own directory under `as
 
 Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World` built with `World_Construct2` (so it binds its
 sprites' animations itself), a `GameCamera`, and a `WorldRenderer`. All input runs in `Update` at the fixed
-timestep: movement (WASD + SPACE/CTRL, SHIFT to sprint), mouse-look (input is polled once per update tick, so
-`GetMouseDelta` is that tick's movement) and the debug keys: P pause/resume the day-night cycle, 1–4 jump to
-dawn/noon/dusk/midnight, `[` `]` scrub the time, O post effects, B bloom, G sun shafts, C crisp overlay, L light
-gizmos, I log the renderer status, T toggle the text sample. `Render` handles no input. Captures the cursor
-(`DisableCursor`) in `Start`, releases it in `End`/`Destroy`. The world is built in `Create`; `BeginLoad` calls
+timestep and comes from `Services.Input` ([GameInput.md](GameInput.md)), after the UI test frame above had first
+refusal: movement through the actions (`move_*`, default WASD + SPACE/CTRL, `sprint` default SHIFT), mouse-look
+(`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured) and the debug keys as raw keys: P
+pause/resume the day-night cycle, 1–4 jump to dawn/noon/dusk/midnight, `[` `]` scrub the time, O post effects, B bloom,
+G sun shafts, C crisp overlay, L light gizmos, I log the renderer status, T toggle the text sample. M frees the cursor
+for the UI (and captures it again); a left click the UI did not take captures it again. An unconsumed `pause` (Escape
+once the UI is not using it) quits through `GameFrameManager_RequestStop`. `Render` handles no input. Captures the cursor
+in `Start`, releases it in `End`/`Destroy`. The world is built in `Create`; `BeginLoad` calls
 `WorldRenderer_PrepareWorld` (shaders and models), so the stepped load/unload slots are trivial. `Create` builds
 everything up front so `Destroy` is always safe (even on forced teardown); it destroys the renderer, then the world,
 then the text sample.
@@ -215,17 +218,31 @@ shows Latvian and Cyrillic letters, colors, underline, strikethrough, a translat
 animation inline, and one line in the `test` font (its missing letters draw as `?`, and its load logs which
 codepoints the file lacks). A sample that fails to load is logged once and leaves the sample empty.
 
+## UITestFrame
+
+A debug `GameFrame` added on top of `WorldTestFrame` (`include/UITestFrame.h`, `source/UITestFrame.c`), so it gets the
+input first. It owns a widget factory, a `UIScreen` (the window's size as its viewport, `UIScreenInput_CreateFromWindow`
+as its input) and a few labels in `noto_sans`: a hint at the bottom left (input-disabled) and a focusable "menu" label at
+the top right with three focusable item labels inside it. Hover and focus notifications tint the labels (yellow /
+blue) and gaining focus plays a short size animation; Delete destroys the focused item, R rebuilds the menu. Tab or the
+arrows start keyboard navigation, Enter opens the menu, Escape closes it and then lets go of the UI, after which Escape
+reaches the world test (which quits). With the cursor captured (mouse look) the screen gets no pointer; M in the world
+test frees it. It renders into its own transparent target. Known limitation: frames are composited with plain alpha
+blending, so the antialiased edges of text on a transparent frame come out thinner than on an opaque one (fixing it
+means premultiplied compositing in the frame manager).
+
 ## Bootstrap (main.c)
 
 Order: base directory (`FileSystem_GetExecutableDirectory`) → Logger (`<base>/logs`) → if the executable's
 directory was unavailable, warn and fall back to a copy of `GetWorkingDirectory()` → load config
 (`<base>/config.json`) → load unicode DB (`<base>/asset/text/unicode_data.txt`, empty-DB fallback) →
-`InitWindow` (fullscreen/vsync flags from the config) + `SetExitKey(KEY_ESCAPE)` (so the test is quittable) →
-AssetManager (`Construct1` with the logger, `CreateStandardAssetTypes`, cache directory `<base>/.wr_asset_cache`,
-absolute `<base>/asset` search root, `ReadDefinitions`) → GHDF pool → GameFrameManager → build `Services`
-(`Services.BaseDirectory`) → create + add `WorldTestFrame` → run loop. Teardown (reverse, ordering matters):
-frame manager (releases assets + GPU targets, needs asset manager + GL alive) → asset manager → JSON pool →
-GHDF pool → `CloseWindow` → unicode → config → base-directory buffer → logger.
+`InitWindow` (fullscreen/vsync flags from the config) + `SetExitKey(KEY_NULL)` (Escape is the UI's `ui_back` and the
+game's `pause` action, never raylib's quit key) → AssetManager (`Construct1` with the logger, `CreateStandardAssetTypes`,
+cache directory `<base>/.wr_asset_cache`, absolute `<base>/asset` search root, `ReadDefinitions`) → GHDF pool →
+`GameInput` (defaults, then `<base>/controls.json` if present) → GameFrameManager (polls the input) → build `Services`
+(`Services.BaseDirectory`, `Services.Input`) → create + add `WorldTestFrame`, then `UITestFrame` on top → run loop.
+Teardown (reverse, ordering matters): frame manager (releases assets + GPU targets, needs asset manager + GL alive) →
+asset manager → JSON pool → GHDF pool → `CloseWindow` → input → unicode → config → base-directory buffer → logger.
 
 Every game file is resolved against the executable's directory (built via `Path_Append(base, relative)`), so
 the game works no matter where it is started from.

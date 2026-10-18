@@ -82,7 +82,7 @@ RenderContext_Deconstruct(&Context);
 | `RenderContext_RenderRectangle` | `RectangleRenderArguments` | Filled; origin and rotation as for textures. |
 | `RenderContext_RenderRectangleOutline` | `RectangleOutlineRenderArguments` | Axis-aligned, border drawn inside the bounds, `Thickness` is a `RenderFloat`. |
 | `RenderContext_RenderLine` | `LineRenderArguments` | `Thickness` is a `RenderFloat`. |
-| `RenderContext_RenderModel` | `ModelRenderArguments` | raylib `DrawModelEx`: world position, one rotation axis + angle in radians, per-axis scale, tint. Inside a 3D pass. |
+| `RenderContext_RenderModel` | `ModelRenderArguments` | World position, one rotation axis + angle in radians, per-axis scale, tint (raylib `DrawModelEx`'s transform order), drawn mesh by mesh with a per-draw material copy whose albedo color carries the tint: nothing is written to the shared model. Uploads the model's bone matrices for GPU skinning like `DrawModelEx` (when the shader has a bone-transforms location and the model has bone matrices). Inside a 3D pass. |
 | `RenderContext_RenderMesh` | `MeshRenderArguments` | `DrawMesh` with the given material and transform matrix (no tint). Inside a 3D pass. |
 | `RenderContext_RenderMeshInstanced` | `MeshInstancedRenderArguments` | `DrawMeshInstanced` with one shared material; does nothing for a count <= 0. Inside a 3D pass. |
 
@@ -93,22 +93,37 @@ RenderContext_Deconstruct(&Context);
   counting each instance, `_primitiveDrawCount`) are reset by `RenderContext_Create` and read directly; there are no
   getters.
 
+## Clipping
+
+`RenderContext_PushClip(context, pixelRectangle)` restricts drawing to a rectangle intersected with the current clip,
+until the matching `RenderContext_PopClip`, which restores the clip below it (or turns clipping off). Clips nest, so a
+widget's clip stays inside its ancestors' (raylib's own scissor does not nest: never call `BeginScissorMode` in drawing
+code). Rectangles are in render-buffer pixels, rounded outwards and limited to the buffer when applied (so a huge or
+NaN rectangle cannot overflow the integer scissor). The stack holds
+`RENDER_CONTEXT_MAX_CLIP_DEPTH` (32) clips; deeper pushes are counted (pops stay balanced) but keep the deepest stored
+clip. `RenderContext_EndRendering` turns off a clip left pushed. Users: the UI screen (`AreSubWidgetsCut`) and
+`TextLayout_Draw` (a label's cut).
+
+## Measuring without a target
+
+`RenderContext_CreateMeasuring(context, sizePixels, targetAspectRatio, targetRelativePosition)` builds a context for a
+buffer of a known size with no target, for unit conversions outside rendering: the UI's Layout pass (in update) uses one
+for its viewport. Never begin rendering or draw through it.
+
 ## Who uses it
 
 `TextLayout_Draw` ([TextDocument.md](TextDocument.md)), `UIRenderContext` (the per-widget wrapper, see
-[UIFramework.md](UIFramework.md)), `UIScreen_Render` (keyboard navigation outlines) and `LabelWidget`. The one running
-user is `WorldTestFrame`'s text sample, which creates a `RenderContext` on its frame target after the world is drawn.
-`WorldRenderer` and `GameFrameManager` draw with raylib directly.
+[UIFramework.md](UIFramework.md)), `UIScreen_Render` (widgets, clipping, keyboard navigation outlines) and `LabelWidget`.
+Running users: `WorldTestFrame`'s text sample (a `RenderContext` on its frame target after the world is drawn) and
+`UITestFrame` (its screen, on its own transparent target). `WorldRenderer` and `GameFrameManager` draw with raylib
+directly.
 
 ## Pitfalls
 
 - Main thread only, with the window's GL context alive.
-- There is no clip or scissor stack yet; clip push/pop in `RenderContext` is planned for the UI work (Phase 5 of
-  `handoff/2026-10_code_review/FIX_PLAN.md`).
-- `RenderContext_RenderModel` draws with raylib's `DrawModelEx`, so each mesh uses its material's own shader (the
-  WorldRenderer no longer writes its pass shaders into shared materials) and the tint is written into the shared
-  material maps for the duration of the draw, then restored. That still breaks "render never writes shared assets";
-  it is marked `// TODO:` and must move to per-draw material copies (as `WorldRendererGeometry` does) before the UI
-  draws models.
+- Clip only through `RenderContext_PushClip` / `PopClip`, balanced within one rendering pass.
+- `RenderContext_RenderModel` uses each material's own shader and copies `RENDERER_MATERIAL_MAP_COUNT` maps per mesh
+  (raylib's private `MAX_MATERIAL_MAPS`, 12 in the pinned build; see BUILDING.md). The world renderer's per-draw copies
+  use the same constant.
 - `TextRenderArguments.TargetFont` is a by-value copy of a font asset's raylib `Font`: use it for the draw, never store
   it past your asset user ([GameAssets.md](GameAssets.md)).

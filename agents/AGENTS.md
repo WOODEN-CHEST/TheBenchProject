@@ -27,6 +27,7 @@ The references/ directory contains various reference files for various things. I
 * unicode_data.txt The unicode data loaded into the game at runtime.
 * asset_structure.md - A file which describes the JSON asset structure that assets must have.
 * text_component_structure.md - The JSON structure of text components.
+* controls_structure.md - The JSON structure of the player's controls file (action bindings).
 
 BUILDING.md (repository root) records the exact raylib and WRFramework versions and the required raylib
 configuration: raylib is built with SUPPORT_CUSTOM_FRAME_CONTROL, so EndDrawing neither swaps buffers nor polls
@@ -57,8 +58,14 @@ Current module list:
   RenderColor, textures, text, primitives, model/mesh passthrough) used by the UI and text renderers; not the world
   renderer.
 * ProgramTime (ProgramTime.md) - Tiny value type carrying a tick's total time and passed (delta) time, in seconds.
+* Input (GameInput.md) - How the game reads input. Covers two modules:
+  * GameKey - The game-wide key identity (keyboard keys and mouse buttons, room for gamepad buttons) with stable id
+    strings for binding files and display names; the raylib codes stay private to the input layer.
+  * GameInput - The per-tick input snapshot (keys, mouse, wheel, typed text drained once), polled by the frame manager
+    right after PollInputEvents, with consumption (a consumed key reads as not pressed while held) and the action layer
+    (GameAction: named actions bound to keys with modifiers; JSON controls file load/save).
 * GameFrame (GameFrame.md) - Abstract base for a game "scene"/section (menu, level, loading screen), with stepped load/unload, logic lifecycle, and per-target rendering.
-* GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop, and composites them to the screen; crashes gracefully on frame errors.
+* GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop (polls the input, then updates frames top-down so the top frame gets input first), and composites them to the screen; crashes gracefully on frame errors.
 * World data layer (WorldData.md) - The rendering-independent 3D world model. Covers eight modules:
   * WorldObject - Abstract base of every world object (id, name, transform, tint; validating setters).
   * WorldModelObject - 3D model object referencing a model asset by name (+ outline / pixelation / shadow-tier
@@ -83,13 +90,24 @@ Current module list:
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world, with debug keys and a text sample
     (T toggles it) drawn with TextDocument + TextLayout over the world.
 * World light culling (WorldLightCulling.md) - Reach-culls a list of point lights to the strongest few (up to WORLD_MAX_FORWARD_LIGHTS) overlapping an object's bounding sphere, ranked by influence, for the renderer's per-object forward shading.
-* UI framework (UIFramework.md) - The in-game UI. A screen context object owns a widget factory (pooled, capability-registered widget types), routes input to the top-most/focused widget, drives keyboard navigation, hosts keyframed property animations, and renders a z-ordered tree of abstract widgets through per-widget local render contexts. Covers six modules:
-  * UIInput - Raylib-free input value types (UIKey/UIMouseButton enums, hover/mouse/keyboard argument structs) shared by widgets and the screen.
-  * UIAnimation - Keyframed interpolation of a typed property: easing methods (constant/linear/exp in-out pow 2-5/sine/custom), keyframes, and evaluation. Pure data + math.
+* UI framework (UIFramework.md) - The in-game UI, on any surface (the window or a texture in the world: the host passes
+  the pointer, the keyboard and the viewport). A screen holds a tree of widgets with slot + generation ids, routes the
+  tick's GameInput (the focused widget gets every key first, consumed input does not reach the game), drives keyboard
+  navigation through actions, runs typed property animations, queues notifications to the end of its update, lays
+  widgets out in update and draws them with nested clipping. Widget_Destroy is deferred and takes the whole subtree.
+  Covers these modules (UIScreen is split by job behind the private source/UIInternal.h):
+  * UIInput - The argument structs handed to a widget's input hooks (keys and buttons are GameKeys).
+  * UIAnimation - Typed property values (UIPropertyValue), easing methods, keyframes, keyframe validation and
+    evaluation. Pure data + math.
   * UIRenderContext - The widget-local drawing device: wraps the renderer's RenderContext with the widget's absolute box + accumulated tint, and maps widget-local [0;1] draws onto the screen.
-  * UIWidgetFactory - Registers capabilities and widget types (struct size + constructor + capability resolvers), owns per-type object pools, and constructs/recycles widget instances.
-  * UIWidget - The abstract widget base (vtable, lifecycle, geometry/flags/state, subwidgets, capabilities, state-change events, generic property get/set); concrete widgets embed it first.
-  * UIScreen - The context: widget registry, roots, focus/z-order, input routing, keyboard navigation + outlines, animation host, and the reused per-tick update snapshot. The widget factory is program-wide (one shared across all screens), passed into each screen rather than owned by it.
+  * UIWidgetFactory - Registers capabilities and widget types (a descriptor: struct size, vtable, constructor,
+    capabilities, typed properties, focusability), owns per-type pools, creates widgets (base first, id reserved,
+    constructor, then alive: a failed constructor leaves nothing) and counts live widgets. One per program.
+  * UIWidget - The abstract widget base (vtable incl. Layout and keyboard first refusal, geometry/flags/state, subwidgets
+    with a separate draw order, capabilities, typed properties, deferred destroy); concrete widgets embed it first.
+  * UIScreen - The context: id registry, roots, focus, input routing, keyboard navigation + outlines, animations,
+    notifications (subscriptions; queued, delivered at the end of UIScreen_Update), layout pass and rendering.
+  * UITestFrame - A debug game frame over the world test that exercises the UI and the input sharing.
   * LabelWidget - The first concrete widget: displays a (possibly multi-line) rich text with per-line alignment and bound handling (cut/wrap/resize/wrap-then-resize/wrap-then-cut). Embeds a TextDocument and a TextLayout (TextDocument.md), lays out in Update, draws in Render. Auto-fits its widget box to the rendered text.
   Also adds 2D rectangle/outline/line primitives to the Renderer module.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
@@ -135,8 +153,8 @@ Project rules (added after the 2026-10 code review; handoff/2026-10_code_review/
    copies (GameFont, Model, Texture2D, sprite animation sources) past that user. See AssetManager.md. Text follows it
    through TextDocument (since FIX_PLAN Phase 4 components only name their assets).
 2. Never hold a Widget* or text component pointer across a call that can run hooks, events or user callbacks;
-   re-resolve it by id afterwards. Never destroy a widget from inside its own event (until the UI's deferred
-   destruction exists).
+   re-resolve it by id afterwards (UIScreen_TryGetWidgetById). Destroying widgets from hooks and notification handlers
+   is safe: Widget_Destroy is deferred to the end of the screen's update.
 3. Render reads state, it never writes it: no mutating world objects, widgets or shared assets from render code.
    Per-object render data belongs in a renderer-side cache (the WorldRenderer's is WorldRenderCache), and meshes draw
    with per-draw Material copies, never by writing shaders or tints into a model asset's materials.
@@ -149,6 +167,9 @@ Project rules (added after the 2026-10 code review; handoff/2026-10_code_review/
    (missing asset, bad keyframe) changes state so it is not retried every tick (mark it failed, stop the animation,
    fall back) and is logged once, when it happens.
 8. Mark every intentionally incomplete piece with `// TODO:`.
+9. Read input only through GameInput (Services.Input) and only in Update; never call raylib input functions
+   (IsKeyPressed, GetMouseDelta, GetCharPressed, ...) above the input layer. Ask for actions rather than keys for
+   anything a player could rebind, and respect consumption: frames are updated top-down and the UI reads first.
 
 Testing and tooling:
 * Unlike what WRFramework.md says, this project has a test step. `sh tests/run_linux.sh` builds and runs the headless

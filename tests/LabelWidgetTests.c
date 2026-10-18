@@ -38,7 +38,7 @@ static bool LabelFixture_Construct(TestRun* run, LabelFixture* self)
         && TEST_CHECK_SUCCESS(run, TextComponentFactory_Construct(&self->Components))
         && TEST_CHECK_SUCCESS(run, UIWidgetFactory_Construct(&self->Widgets))
         && TEST_CHECK_SUCCESS(run, LabelWidget_RegisterType(&self->Widgets, &self->LabelType));
-    self->IsScreenConstructed = IsBuilt && TEST_CHECK_SUCCESS(run, UIScreen_Construct(&self->Screen, &self->Widgets));
+    self->IsScreenConstructed = IsBuilt && TEST_CHECK_SUCCESS(run, UIScreen_Construct(&self->Screen, &self->Widgets, NULL));
     self->IsReady = self->IsScreenConstructed;
     return self->IsReady;
 }
@@ -53,6 +53,20 @@ static void LabelFixture_Deconstruct(TestRun* run, LabelFixture* self)
     TEST_CHECK(run, TextComponentFactory_GetLiveComponentCount(&self->Components) == 0U);
     TEST_CHECK_SUCCESS(run, TextComponentFactory_Deconstruct(&self->Components));
     TestAssetFixture_Deconstruct(run, &self->Assets);
+}
+
+/* Destroyed widgets are freed at the end of an update: runs one with no input. */
+static void FlushScreen(TestRun* run, LabelFixture* fixture)
+{
+    UIScreenInput NoInput = UIScreenInput_CreateEmpty();
+    TEST_CHECK_SUCCESS(run, UIScreen_Update(&fixture->Screen, ProgramTime_Create(0.0, 0.0), &NoInput));
+}
+
+/* Destroys a label and frees it at once. */
+static void DestroyLabel(TestRun* run, LabelFixture* fixture, LabelWidget* label)
+{
+    TEST_CHECK_SUCCESS(run, Widget_Destroy(LabelWidget_AsWidget(label)));
+    FlushScreen(run, fixture);
 }
 
 static TextComponent* CreateText(TestRun* run, LabelFixture* fixture, const char* text)
@@ -72,7 +86,7 @@ static LabelWidget* CreateLabel(TestRun* run, LabelFixture* fixture, TextCompone
     }
     if (!TEST_CHECK_SUCCESS(run, TextDocument_SetDefaultFontName(LabelWidget_GetDocument(Label), (const unsigned char*)u8"mono")))
     {
-        TEST_CHECK_SUCCESS(run, Widget_Deconstruct(LabelWidget_AsWidget(Label)));
+        DestroyLabel(run, fixture, Label);
         return NULL;
     }
     return Label;
@@ -122,7 +136,7 @@ static void LabelLaysOutItsTextWithItsProperties(TestRun* run)
             TEST_CHECK_SUCCESS(run, LabelWidget_GetDrawSize(Label, &Size));
             TEST_CHECK(run, IsNear(Size.x, 0.4f));
 
-            TEST_CHECK_SUCCESS(run, Widget_Deconstruct(LabelWidget_AsWidget(Label)));
+            DestroyLabel(run, &Fixture, Label);
             TEST_CHECK(run, TextComponentFactory_GetLiveComponentCount(&Fixture.Components) == 0U);
         }
         else if (Text != NULL)
@@ -175,17 +189,56 @@ static void AnotherLabelsTextIsRefused(TestRun* run)
                 NULL, Text, &Thief), ErrorCode_InvalidOperation);
             TEST_CHECK(run, Thief == NULL);
             TEST_CHECK(run, (LabelWidget_GetText(Owner) == Text) && (LabelWidget_GetText(Other) == NULL));
-            TEST_CHECK_SUCCESS(run, Widget_Deconstruct(LabelWidget_AsWidget(Other)));
+            DestroyLabel(run, &Fixture, Other);
         }
         if (Owner != NULL)
         {
-            TEST_CHECK_SUCCESS(run, Widget_Deconstruct(LabelWidget_AsWidget(Owner)));
+            DestroyLabel(run, &Fixture, Owner);
         }
         else if (Text != NULL)
         {
             TEST_CHECK_SUCCESS(run, TextComponentFactory_ReturnTree(&Fixture.Components, Text));
         }
         TEST_CHECK(run, TextComponentFactory_GetLiveComponentCount(&Fixture.Components) == 0U);
+    }
+    LabelFixture_Deconstruct(run, &Fixture);
+}
+
+
+// The label sizes its widget box to its text in update (its Layout step), not in render, using the screen's viewport.
+static void LabelBoxFitsItsTextInUpdate(TestRun* run)
+{
+    LabelFixture Fixture;
+    if (LabelFixture_Construct(run, &Fixture))
+    {
+        TextComponent* Text = CreateText(run, &Fixture, "aaa bbb");
+        LabelWidget* Label = (Text != NULL) ? CreateLabel(run, &Fixture, Text) : NULL;
+        if (Label != NULL)
+        {
+            Widget* Base = LabelWidget_AsWidget(Label);
+            TEST_CHECK_SUCCESS(run, Widget_InitializeWidget(Base));
+            TEST_CHECK_SUCCESS(run, UIScreen_AddWidget(&Fixture.Screen, Base));
+            // The default viewport is 1280x720 with a 16:9 fitted area: fitted units are relative to the height.
+            FlushScreen(run, &Fixture);
+            TEST_CHECK(run, IsNear(Widget_GetSize(Base).x, 0.35f * 720.0f / 1280.0f) && IsNear(Widget_GetSize(Base).y, 0.1f));
+
+            UIPropertyValue Double = UIPropertyValue_FromFloat(2.0f);
+            TEST_CHECK_SUCCESS(run, Widget_SetProperty(Base, LabelProperty_Size, &Double));
+            UIViewport Wide = UIViewport_Create((Vector2){ .x = 2560.0f, .y = 720.0f }, 16.0f / 9.0f, (Vector2){ .x = 0.5f, .y = 0.5f });
+            TEST_CHECK_SUCCESS(run, UIScreen_SetViewport(&Fixture.Screen, &Wide));
+            FlushScreen(run, &Fixture);
+            TEST_CHECK(run, IsNear(Widget_GetSize(Base).x, 0.7f * 720.0f / 2560.0f) && IsNear(Widget_GetSize(Base).y, 0.2f));
+            UIPropertyValue Read;
+            TEST_CHECK_SUCCESS(run, Widget_GetProperty(Base, LabelProperty_Size, &Read));
+            TEST_CHECK(run, (Read.Type == UIPropertyType_Float) && IsNear(Read.Data.FloatValue, 2.0f));
+            UIPropertyValue WrongType = UIPropertyValue_FromVector2((Vector2){ .x = 1.0f, .y = 1.0f });
+            TEST_CHECK_ERROR(run, Widget_SetProperty(Base, LabelProperty_Size, &WrongType), ErrorCode_IllegalArgument);
+            DestroyLabel(run, &Fixture, Label);
+        }
+        else if (Text != NULL)
+        {
+            TEST_CHECK_SUCCESS(run, TextComponentFactory_ReturnTree(&Fixture.Components, Text));
+        }
     }
     LabelFixture_Deconstruct(run, &Fixture);
 }
@@ -199,6 +252,7 @@ void LabelWidgetTests_Run(TestRun* run)
         { "label_lays_out_its_text_with_its_properties", LabelLaysOutItsTextWithItsProperties },
         { "failed_construction_leaves_the_text_with_the_caller", FailedConstructionLeavesTheTextWithTheCaller },
         { "another_labels_text_is_refused", AnotherLabelsTextIsRefused },
+        { "label_box_fits_its_text_in_update", LabelBoxFitsItsTextInUpdate },
     };
     TestRun_RunSuite(run, "LabelWidget", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

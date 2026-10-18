@@ -30,6 +30,11 @@ BeginLoad → [LoadStep … until IsLoaded] → (OnLoad) → Start → [Update /
 `Start`/`End` are logic; `Load`/`Unload` are resources. Keeping them separate lets a frame be
 **loaded-but-not-started** (preload the next scene, then activate it instantly for a smooth transition).
 
+**Input.** `Update` is where a frame reads input, through `Services.Input` (a `GameInput`, see
+[GameInput.md](GameInput.md)); never in `Render`, never through raylib. The manager updates frames top-down, so a
+frame above has already consumed what it handled; a frame that hosts UI updates its `UIScreen` first, then reads what
+is left for its game logic.
+
 ## Base struct fields (shared, manager-visible)
 
 - `IsUpdated` (default `true`) — gate for `Update`. Set `false` to freeze a frame (e.g. the game under a
