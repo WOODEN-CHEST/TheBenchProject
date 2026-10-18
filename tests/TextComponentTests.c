@@ -72,6 +72,7 @@ static void CreatedComponentIsARootWithDefaults(TestRun* run)
         TEST_CHECK(run, StringComponent_GetFontName(String) == NULL);
         TEST_CHECK(run, StringComponent_GetSize(String) == STRING_COMPONENT_DEFAULT_SIZE);
         TEST_CHECK(run, StringComponent_IsShadowActive(String));
+        TEST_CHECK(run, StringComponent_GetShadowOffsetType(String) == TextShadowOffsetType_Default);
         TEST_CHECK(run, TextComponentFactory_GetLiveComponentCount(&Factory) == 1U);
         ReturnTree(run, &Factory, Base);
     }
@@ -390,7 +391,10 @@ static void SettersRejectInvalidValues(TestRun* run)
         TEST_CHECK_ERROR(run, StringComponent_SetSize(String, (float)NAN), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, StringComponent_SetColor(String, TooBright), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, StringComponent_SetShadowColorCustom(String, TooBright), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, StringComponent_SetShadowOffset(String, (Vector2){ 20.0f, 0.0f }), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, StringComponent_SetShadowOffsetCustom(String, (Vector2){ 20.0f, 0.0f }), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, StringComponent_SetShadowOffsetCustom(String, (Vector2){ 0.0f, (float)NAN }),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK(run, StringComponent_GetShadowOffsetType(String) == TextShadowOffsetType_Default);
         TEST_CHECK_ERROR(run, StringComponent_SetSpacing(String, -2.0f), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, SpriteComponent_SetSize(Sprite, (Vector2){ -1.0f, 1.0f }), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, SpriteComponent_SetColor(Sprite, TooBright), ErrorCode_ArgumentOutOfRange);
@@ -523,6 +527,51 @@ static void TranslateComponentsNeedAValidKey(TestRun* run)
     TEST_CHECK_SUCCESS(run, TextComponentFactory_Deconstruct(&Factory));
 }
 
+// Without an offset of its own a string uses its font's; a custom offset wins until it is set back to the default.
+static void ShadowOffsetsComeFromTheFontUnlessSet(TestRun* run)
+{
+    TextComponentFactory Factory;
+    if (!TEST_CHECK_SUCCESS(run, TextComponentFactory_Construct(&Factory)))
+    {
+        return;
+    }
+    StringComponent* String = NULL;
+    if (TEST_CHECK_SUCCESS(run, TextComponentFactory_CreateString(&Factory, (const unsigned char*)u8"x", &String)))
+    {
+        Vector2 FontOffset = { -0.05f, 0.05f };
+        Vector2 Resolved = StringComponent_ResolveShadowOffset(String, FontOffset);
+        TEST_CHECK(run, (Resolved.x == -0.05f) && (Resolved.y == 0.05f));
+
+        uint64_t Revision = TextComponent_GetRevision(StringComponent_AsComponent(String));
+        TEST_CHECK_SUCCESS(run, StringComponent_SetShadowOffsetCustom(String, (Vector2){ 0.2f, 0.3f }));
+        TEST_CHECK(run, StringComponent_GetShadowOffsetType(String) == TextShadowOffsetType_Custom);
+        TEST_CHECK(run, TextComponent_GetRevision(StringComponent_AsComponent(String)) != Revision);
+        Resolved = StringComponent_ResolveShadowOffset(String, FontOffset);
+        TEST_CHECK(run, (Resolved.x == 0.2f) && (Resolved.y == 0.3f));
+
+        Revision = TextComponent_GetRevision(StringComponent_AsComponent(String));
+        TEST_CHECK_SUCCESS(run, StringComponent_SetShadowOffsetDefault(String));
+        TEST_CHECK(run, StringComponent_GetShadowOffsetType(String) == TextShadowOffsetType_Default);
+        TEST_CHECK(run, TextComponent_GetRevision(StringComponent_AsComponent(String)) != Revision);
+        Resolved = StringComponent_ResolveShadowOffset(String, FontOffset);
+        TEST_CHECK(run, (Resolved.x == -0.05f) && (Resolved.y == 0.05f));
+
+        // A clone keeps where the offset comes from.
+        TextComponent* Copy = NULL;
+        if (TEST_CHECK_SUCCESS(run, StringComponent_SetShadowOffsetCustom(String, (Vector2){ -0.1f, 0.1f }))
+            && TEST_CHECK_SUCCESS(run, TextComponentFactory_CloneTree(&Factory, StringComponent_AsComponent(String), &Copy)))
+        {
+            const StringComponent* Cloned = TextComponent_AsConstStringComponent(Copy);
+            TEST_CHECK(run, StringComponent_GetShadowOffsetType(Cloned) == TextShadowOffsetType_Custom);
+            TEST_CHECK(run, StringComponent_GetShadowOffset(Cloned).x == -0.1f);
+            ReturnTree(run, &Factory, Copy);
+        }
+        ReturnTree(run, &Factory, StringComponent_AsComponent(String));
+    }
+    TEST_CHECK(run, TextComponentFactory_GetLiveComponentCount(&Factory) == 0U);
+    TEST_CHECK_SUCCESS(run, TextComponentFactory_Deconstruct(&Factory));
+}
+
 static void TextStyleAppliesByType(TestRun* run)
 {
     TextComponentFactory Factory;
@@ -550,6 +599,19 @@ static void TextStyleAppliesByType(TestRun* run)
         TEST_CHECK(run, StringComponent_GetSize(TextComponent_AsStringComponent(Title)) == 0.3f);
         TEST_CHECK(run, StringComponent_IsUnderlined(TextComponent_AsStringComponent(Title)));
         TEST_CHECK(run, SpriteComponent_GetSize(TextComponent_AsSpriteComponent(Coin)).x == 0.2f);
+
+        // The shadow offset directive sets a custom offset or goes back to the font's.
+        StringComponent* TitleString = TextComponent_AsStringComponent(Title);
+        TextStyle OffsetStyle;
+        TextStyle_Construct(&OffsetStyle);
+        TextStyle_SetShadowOffsetCustom(&OffsetStyle, (Vector2){ 0.5f, 0.5f });
+        TEST_CHECK_SUCCESS(run, TextStyle_ApplyToComponent(&OffsetStyle, Title));
+        TEST_CHECK(run, (StringComponent_GetShadowOffsetType(TitleString) == TextShadowOffsetType_Custom)
+            && (StringComponent_GetShadowOffset(TitleString).x == 0.5f));
+        TextStyle_SetShadowOffsetDefault(&OffsetStyle);
+        TEST_CHECK_SUCCESS(run, TextStyle_ApplyToComponent(&OffsetStyle, Title));
+        TEST_CHECK(run, StringComponent_GetShadowOffsetType(TitleString) == TextShadowOffsetType_Default);
+        TextStyle_Deconstruct(&OffsetStyle);
 
         TextStyle_SetFontName(&Style, (const unsigned char*)u8"Not A Name");
         TEST_CHECK_ERROR(run, TextStyle_ApplyToComponent(&Style, Greeting), ErrorCode_ArgumentOutOfRange);
@@ -606,6 +668,7 @@ void TextComponentTests_Run(TestRun* run)
         { "revisions_reach_the_root", RevisionsReachTheRoot },
         { "clone_tree_copies_everything", CloneTreeCopiesEverything },
         { "translate_components_need_a_valid_key", TranslateComponentsNeedAValidKey },
+        { "shadow_offsets_come_from_the_font_unless_set", ShadowOffsetsComeFromTheFontUnlessSet },
         { "text_style_applies_by_type", TextStyleAppliesByType },
         { "plain_text_shows_strings_and_translations", PlainTextShowsStringsAndTranslations },
     };

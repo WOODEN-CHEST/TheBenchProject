@@ -14,7 +14,8 @@
 #define TEXT_CODEC_WIRE_TYPE_TRANSLATE ((uint8_t)4)
 
 /* GHDF entry ids of the fields inside a component compound (ids 1 and 2, the type and the children, belong to the
- * adapter). Id 15 held the shadow color type in the first layout; a present shadow color (16) now means custom. */
+ * adapter). Id 15 held the shadow color type in the first layout; a present shadow color (16) now means custom, and
+ * likewise a present shadow offset (17). */
 #define TEXT_CODEC_GHDF_TEXT ((GHDFEntryID)10)
 #define TEXT_CODEC_GHDF_FONT ((GHDFEntryID)11)
 #define TEXT_CODEC_GHDF_COLOR ((GHDFEntryID)12)
@@ -44,7 +45,7 @@
         TEXT_CODEC_GHDF_SHADOW_ACTIVE, false, 0.0f, 0.0f }, \
     { TextCodecFieldId_ShadowColor, TextCodecValueKind_ShadowColor, TEXT_CODEC_SHADOW_GROUP, u8"color", u8"shadow.color", \
         TEXT_CODEC_GHDF_SHADOW_COLOR, false, 0.0f, 0.0f }, \
-    { TextCodecFieldId_ShadowOffset, TextCodecValueKind_Vector2, TEXT_CODEC_SHADOW_GROUP, u8"offset", u8"shadow.offset", \
+    { TextCodecFieldId_ShadowOffset, TextCodecValueKind_ShadowOffset, TEXT_CODEC_SHADOW_GROUP, u8"offset", u8"shadow.offset", \
         TEXT_CODEC_GHDF_SHADOW_OFFSET, false, -STRING_COMPONENT_SHADOW_OFFSET_LIMIT, STRING_COMPONENT_SHADOW_OFFSET_LIMIT }, \
     { TextCodecFieldId_Underline, TextCodecValueKind_Boolean, NULL, u8"underline", u8"underline", TEXT_CODEC_GHDF_UNDERLINE, \
         false, 0.0f, 0.0f }, \
@@ -234,6 +235,7 @@ static Error GetFieldValue(const TextComponent* component, TextCodecFieldId id, 
             {
                 break;
             }
+            outValue->IsCustom = (StringComponent_GetShadowOffsetType(String) == TextShadowOffsetType_Custom);
             outValue->Vector = StringComponent_GetShadowOffset(String);
             return Error_CreateSuccess();
         case TextCodecFieldId_Underline:
@@ -339,7 +341,8 @@ static Error SetFieldValue(TextComponent* component, TextCodecFieldId id, const 
             {
                 break;
             }
-            return StringComponent_SetShadowOffset(String, value->Vector);
+            return value->IsCustom ? StringComponent_SetShadowOffsetCustom(String, value->Vector)
+                : StringComponent_SetShadowOffsetDefault(String);
         case TextCodecFieldId_Underline:
             if (String == NULL)
             {
@@ -400,10 +403,8 @@ static bool IsFieldDefault(TextCodecFieldId id, const TextCodecValue* value)
         case TextCodecFieldId_ShadowActive:
             return value->Boolean == STRING_COMPONENT_DEFAULT_IS_SHADOW_ACTIVE;
         case TextCodecFieldId_ShadowColor:
-            return !value->IsCustom;
         case TextCodecFieldId_ShadowOffset:
-            return (value->Vector.x == STRING_COMPONENT_DEFAULT_SHADOW_OFFSET_X)
-                && (value->Vector.y == STRING_COMPONENT_DEFAULT_SHADOW_OFFSET_Y);
+            return !value->IsCustom;
         case TextCodecFieldId_Underline:
         case TextCodecFieldId_Strikethrough:
             return !value->Boolean;
@@ -531,6 +532,13 @@ static Error ValidateFieldValue(DecodeContext* context, const TextCodecField* fi
             if (value->IsCustom && !IsRenderColorValid(value->Color))
             {
                 return MakeNodeError(context, field, u8"brightness and opacity must be within [0, 1].");
+            }
+            return Error_CreateSuccess();
+        case TextCodecValueKind_ShadowOffset:
+            if (value->IsCustom && (!IsFloatInRange(value->Vector.x, field->Minimum, field->Maximum)
+                || !IsFloatInRange(value->Vector.y, field->Minimum, field->Maximum)))
+            {
+                return MakeRangeError(context, field, u8"must be \"default\" or two decimals, each within [%g, %g].");
             }
             return Error_CreateSuccess();
     }

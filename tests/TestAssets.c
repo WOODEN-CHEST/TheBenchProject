@@ -22,6 +22,7 @@ typedef struct TestFontDefinitionStruct
 {
     AssetDefinition Base;
     int Advance;
+    Vector2 ShadowOffset;
     TestAssetCounters* Counters;
 } TestFontDefinition;
 
@@ -173,6 +174,7 @@ static Error TestFont_LoadAsset(void* self, AssetManager* manager, AssetUserID d
     RayFont.recs = Recs;
     RayFont.glyphs = Glyphs;
     Loaded->Font = GameFont_Wrap(RayFont);
+    GameFont_SetShadowOffset(&Loaded->Font, Definition->ShadowOffset);
     Loaded->Counters = Definition->Counters;
     if (Loaded->Counters != NULL)
     {
@@ -270,8 +272,8 @@ bool TestAssets_AddPlayingSpriteAnimation(TestRun* run, TestAssetFixture* fixtur
     return AddAnimation(run, fixture, name, frameCount, fps, true, counters);
 }
 
-bool TestAssets_AddFont(TestRun* run, TestAssetFixture* fixture, const char* name, int advancePixels,
-    TestAssetCounters* counters)
+bool TestAssets_AddFontWithShadowOffset(TestRun* run, TestAssetFixture* fixture, const char* name, int advancePixels,
+    Vector2 shadowOffset, TestAssetCounters* counters)
 {
     TestFontDefinition* Definition = Memory_Allocate(sizeof(TestFontDefinition));
     Memory_Zero(Definition, sizeof(*Definition));
@@ -279,8 +281,16 @@ bool TestAssets_AddFont(TestRun* run, TestAssetFixture* fixture, const char* nam
     Definition->Base.Type = fixture->Types.Font;
     Definition->Base.Name = CloneName(name);
     Definition->Advance = advancePixels;
+    Definition->ShadowOffset = shadowOffset;
     Definition->Counters = counters;
     return TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, &Definition->Base));
+}
+
+bool TestAssets_AddFont(TestRun* run, TestAssetFixture* fixture, const char* name, int advancePixels,
+    TestAssetCounters* counters)
+{
+    Vector2 DefaultOffset = { .x = GAME_FONT_DEFAULT_SHADOW_OFFSET_X, .y = GAME_FONT_DEFAULT_SHADOW_OFFSET_Y };
+    return TestAssets_AddFontWithShadowOffset(run, fixture, name, advancePixels, DefaultOffset, counters);
 }
 
 bool TestAssets_AddModel(TestRun* run, TestAssetFixture* fixture, const char* name, BoundingBox bounds,

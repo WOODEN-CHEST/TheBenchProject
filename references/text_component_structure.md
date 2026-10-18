@@ -91,8 +91,10 @@ Every component **object** shares these fields:
         "active": boolean,          // [OPTIONAL] Default: true
         "color": "default"          // [OPTIONAL] "default" (or absent) => the text color with its brightness reduced;
                  | render color,    //            a render color => an explicit custom shadow color.
-        "offset": vector            // [OPTIONAL] decimal vector, relative to the size, each component in [-10;10].
-                                    //            Default: [-0.1, 0.1]
+        "offset": "default"         // [OPTIONAL] "default" (or absent) => the shadow offset of the text's font (its
+                 | vector           //            definition's "shadow_offset", see asset_structure.md, "Fonts");
+                                    //            a decimal vector, relative to the size, each component in [-10;10]
+                                    //            => this offset, whatever the font.
     },
 
     "underline": boolean,       // [OPTIONAL] Default: false

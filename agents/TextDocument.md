@@ -60,6 +60,8 @@ nothing (AGENTS.md rule 3). A layout must not be drawn after its document is des
 - Each glyph is resolved once, through the font's sorted glyph table (O(log n)); a codepoint the font lacks draws as
   `?`. A glyph advances by its font advance plus the component's spacing, never by less than nothing (a negative
   spacing at most stacks glyphs).
+- A shadow is drawn at the component's shadow offset, or at its font's (`GameFont_GetShadowOffset`, from the font
+  definition's `shadow_offset`) when it sets none, both times its size.
 - A line ends at its last glyph or sprite: trailing spaces and the spacing after the last glyph count neither for
   wrapping, shrinking or alignment, nor for underline and strikethrough. Spaces at the start of a line are kept (the
   old label dropped them).
@@ -74,7 +76,8 @@ nothing (AGENTS.md rule 3). A layout must not be drawn after its document is des
 - Units: normalized-fitted, where 1.0 is the height of the render target area on both axes. A string's size is its
   line height; a sprite's size is its box.
 - Queries: `TextLayout_GetSize`, `GetLineCount`, `GetLineBounds(i)`, `GetRunCount`, `GetRunBounds(i)` (block-local
-  boxes, for hit-testing or a caret later).
+  boxes, for hit-testing or a caret later), `GetRunShadowOffset(i)` (how far a run's shadow is drawn from it, so how
+  far drawn text reaches past its bounds).
 
 ### Drawing
 `TextLayoutDrawArguments` (from `TextLayoutDrawArguments_Create(position)`): the position of the block's origin, the

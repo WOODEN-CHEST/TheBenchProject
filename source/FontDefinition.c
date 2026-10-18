@@ -1,9 +1,13 @@
 #include <inttypes.h>
+#include <math.h>
 #include "AssetTypesStandard.h"
 #include "AssetDefinitionCommon.h"
 #include "FontCodepoints.h"
 #include "GameFont.h"
+#include "GameJSON.h"
 #include "Logger.h"
+// A font's shadow offset is what its text uses when the text sets none, so it has the components' range.
+#include "TextComponent.h"
 #include "wr/WRMemory.h"
 #include "wr/WRJSON.h"
 #include "wr/WRString.h"
@@ -31,6 +35,7 @@ typedef struct FontDefinitionStruct
     int* Codepoints;       // owned; ascending and unique, '?' always included (LoadFontEx takes an int array)
     int CodepointCount;
     int Filter;            // a TEXTURE_FILTER_* value
+    Vector2 ShadowOffset;  // used by text in this font that sets no shadow offset (fraction of the text size)
 } FontDefinition;
 
 typedef struct FontLoadedStruct
@@ -54,6 +59,40 @@ static Error ReadPixelSize(JSONCompound* root, int* outPixelSize)
             PixelSize, FONT_PIXEL_SIZE_MIN, FONT_PIXEL_SIZE_MAX);
     }
     *outPixelSize = (int)PixelSize;
+    return Error_CreateSuccess();
+}
+
+static Error CreateShadowOffsetError(void)
+{
+    return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+        u8"\"shadow_offset\" must be two decimals ([x, y] or {\"x\": x, \"y\": y}), each within [%g, %g].",
+        -(double)STRING_COMPONENT_SHADOW_OFFSET_LIMIT, (double)STRING_COMPONENT_SHADOW_OFFSET_LIMIT);
+}
+
+// The optional "shadow_offset"; without it the font gets GAME_FONT_DEFAULT_SHADOW_OFFSET_X/Y.
+static Error ReadShadowOffset(JSONCompound* root, Vector2* outOffset)
+{
+    *outOffset = (Vector2){ .x = GAME_FONT_DEFAULT_SHADOW_OFFSET_X, .y = GAME_FONT_DEFAULT_SHADOW_OFFSET_Y };
+    JSONObjectValue Value;
+    bool IsFound = false;
+    Error Result = JSONCompound_GetOptional(root, (const unsigned char*)u8"shadow_offset", &Value, &IsFound);
+    if ((Result.Code != ErrorCode_Success) || !IsFound)
+    {
+        return Result;
+    }
+
+    Vector2 Offset = { .x = 0.0f, .y = 0.0f };
+    Result = GameJSON_ParseVector2(&Value, &Offset);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return CreateShadowOffsetError();
+    }
+    if ((fabsf(Offset.x) > STRING_COMPONENT_SHADOW_OFFSET_LIMIT) || (fabsf(Offset.y) > STRING_COMPONENT_SHADOW_OFFSET_LIMIT))
+    {
+        return CreateShadowOffsetError();
+    }
+    *outOffset = Offset;
     return Error_CreateSuccess();
 }
 
@@ -136,6 +175,7 @@ static Error FontDefinition_LoadAsset(void* self, AssetManager* manager, AssetUs
     FontLoaded* Loaded = Memory_Allocate(sizeof(FontLoaded));
     Memory_Zero(Loaded, sizeof(*Loaded));
     Loaded->Font = GameFont_Wrap(RayFont);
+    GameFont_SetShadowOffset(&Loaded->Font, Definition->ShadowOffset);
     ReportMissingCodepoints(manager, Definition, &Loaded->Font);
 
     outLoaded->Asset = &Loaded->Font;
@@ -207,6 +247,10 @@ Error FontDefinition_Construct(AssetManager* manager, const UserData* userData, 
         TextureProperties Properties;
         Result = AssetJSON_ReadTextureProperties(RootCompound, (const unsigned char*)u8"texture_properties", &Properties);
         Definition->Filter = Properties.Filter;
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadShadowOffset(RootCompound, &Definition->ShadowOffset);
     }
 
     Error ReturnResult = JSONObjectPool_ReturnValue(Pool, &Root);

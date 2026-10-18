@@ -3,5 +3,6 @@
     "location": "noto_sans/NotoSans-Regular",
     "size": 48,
     "codepoints": [ "basic_latin", "latin_1_supplement", "latin_extended_a", "cyrillic" ],
-    "texture_properties": { "filtering": "bilinear" }
+    "texture_properties": { "filtering": "bilinear" },
+    "shadow_offset": [ -0.05, 0.05 ]
 }

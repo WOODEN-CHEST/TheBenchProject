@@ -6,8 +6,17 @@
 #include "wr/WRUnicode.h"
 
 
+// Macros.
+/** @brief Shadow offset of fonts whose definition has no "shadow_offset", and of raylib's built-in font: a fraction
+ *         of the text size (x left/right, y down/up). It suits bold fonts and pixel fonts with one-pixel strokes (the
+ *         built-in font's glyphs are 10 pixels tall); regular-weight fonts want about half of it. */
+#define GAME_FONT_DEFAULT_SHADOW_OFFSET_X (-0.1f)
+#define GAME_FONT_DEFAULT_SHADOW_OFFSET_Y (0.1f)
+
+
 /**
- * @brief A loaded font: a raylib Font (glyph atlas texture, glyph metrics and rectangles) plus lookup data.
+ * @brief A loaded font: a raylib Font (glyph atlas texture, glyph metrics and rectangles) plus lookup data and the
+ *        shadow offset that suits its stroke weight.
  *
  * Obtained from AssetManager_LoadFont and owned by the asset manager: the pointer is borrowed and stays valid only
  * while the asset user that loaded it holds the font. Releasing the last hold unloads the font (UnloadFont), which
@@ -27,18 +36,43 @@ typedef struct GameFontStruct
     bool _areGlyphsSorted;
     /** @brief Index of the '?' glyph drawn for codepoints the font lacks, or -1 when the font has none. */
     int32_t _fallbackGlyphIndex;
+    /** @brief Shadow offset of text in this font whose component sets none (TextShadowOffsetType_Default), as a
+     *         fraction of the text size: the definition's "shadow_offset", else GAME_FONT_DEFAULT_SHADOW_OFFSET_X/Y. */
+    Vector2 _shadowOffset;
 } GameFont;
 
 
 /**
- * @brief Wraps a raylib font and computes its lookup data (glyph order, fallback glyph).
+ * @brief Wraps a raylib font and computes its lookup data (glyph order, fallback glyph); the shadow offset starts at
+ *        GAME_FONT_DEFAULT_SHADOW_OFFSET_X/Y.
  *
- * The font loader uses it for every font asset; TextDocument uses it for raylib's built-in font, which is not an
- * asset (raylib owns it until CloseWindow). The wrapper does not own @p font.
+ * The font loader uses it for every font asset (then sets the definition's shadow offset); TextDocument uses it for
+ * raylib's built-in font, which is not an asset (raylib owns it until CloseWindow). The wrapper does not own @p font.
  * @param font The raylib font; may have no glyphs (raylib's built-in font before InitWindow), then every lookup fails.
  * @returns The wrapper.
  */
 GameFont GameFont_Wrap(Font font);
+
+/**
+ * @brief Returns the shadow offset of text in this font whose component sets none (TextShadowOffsetType_Default).
+ * @param self The font; must not be NULL.
+ * @returns The offset, as a fraction of the text size.
+ */
+static inline Vector2 GameFont_GetShadowOffset(const GameFont* self)
+{
+    return self->_shadowOffset;
+}
+
+/**
+ * @brief Sets the font's shadow offset (the font loader does, from the definition's "shadow_offset").
+ * @param self The font; must not be NULL.
+ * @param offset The offset, as a fraction of the text size; each component finite and within
+ *        +-STRING_COMPONENT_SHADOW_OFFSET_LIMIT (the loader validates it when reading the definition).
+ */
+static inline void GameFont_SetShadowOffset(GameFont* self, Vector2 offset)
+{
+    self->_shadowOffset = offset;
+}
 
 /**
  * @brief Reports whether the font has glyph data to measure and draw with.

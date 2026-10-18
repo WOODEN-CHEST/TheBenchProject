@@ -53,7 +53,9 @@ static Error ApplyToStringComponent(const TextStyle* self, StringComponent* comp
     }
     if (self->_hasShadowOffset)
     {
-        AccumulateError(&First, StringComponent_SetShadowOffset(component, self->_shadowOffset));
+        AccumulateError(&First, (self->_shadowOffsetType == TextShadowOffsetType_Custom)
+            ? StringComponent_SetShadowOffsetCustom(component, self->_shadowOffset)
+            : StringComponent_SetShadowOffsetDefault(component));
     }
     if (self->_hasIsUnderlined)
     {
@@ -249,18 +251,26 @@ void TextStyle_ClearShadowColor(TextStyle* self)
     self->_hasShadowColor = false;
 }
 
-void TextStyle_SetShadowOffset(TextStyle* self, Vector2 offset)
+void TextStyle_SetShadowOffsetCustom(TextStyle* self, Vector2 offset)
 {
     self->_shadowOffset = offset;
+    self->_shadowOffsetType = TextShadowOffsetType_Custom;
     self->_hasShadowOffset = true;
 }
 
-bool TextStyle_GetShadowOffset(const TextStyle* self, Vector2* outOffset)
+void TextStyle_SetShadowOffsetDefault(TextStyle* self)
+{
+    self->_shadowOffsetType = TextShadowOffsetType_Default;
+    self->_hasShadowOffset = true;
+}
+
+bool TextStyle_GetShadowOffset(const TextStyle* self, TextShadowOffsetType* outType, Vector2* outOffset)
 {
     if (!self->_hasShadowOffset)
     {
         return false;
     }
+    *outType = self->_shadowOffsetType;
     *outOffset = self->_shadowOffset;
     return true;
 }

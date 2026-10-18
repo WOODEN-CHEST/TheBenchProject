@@ -77,12 +77,19 @@ bool TestAssets_AddPlayingSpriteAnimation(TestRun* run, TestAssetFixture* fixtur
 /**
  * @brief Registers a font definition named @p name whose asset is a texture-less monospace font: every printable
  *        ASCII glyph (TEST_FONT_FIRST_CODEPOINT to TEST_FONT_LAST_CODEPOINT, '?' included) advances @p advancePixels at
- *        a base size of TEST_FONT_BASE_SIZE pixels.
+ *        a base size of TEST_FONT_BASE_SIZE pixels. Its shadow offset is the default one.
  * @param counters Counts its loads and unloads; may be NULL. Must outlive the fixture's manager.
  * @returns true when it was registered.
  */
 bool TestAssets_AddFont(TestRun* run, TestAssetFixture* fixture, const char* name, int advancePixels,
     TestAssetCounters* counters);
+
+/**
+ * @brief Like TestAssets_AddFont, but the font's shadow offset (GameFont_GetShadowOffset) is @p shadowOffset.
+ * @returns true when it was registered.
+ */
+bool TestAssets_AddFontWithShadowOffset(TestRun* run, TestAssetFixture* fixture, const char* name, int advancePixels,
+    Vector2 shadowOffset, TestAssetCounters* counters);
 
 /**
  * @brief Registers a model definition named @p name whose asset has no meshes, an identity import transform and

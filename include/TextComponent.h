@@ -55,10 +55,6 @@
 #define TEXT_COMPONENT_SIZE_MAX (100.0f)
 /** @brief Default render size (line height) of a string component (normalized-fitted units). */
 #define STRING_COMPONENT_DEFAULT_SIZE (0.1f)
-/** @brief Default relative shadow offset on the X axis (fraction of the component size). */
-#define STRING_COMPONENT_DEFAULT_SHADOW_OFFSET_X (-0.1f)
-/** @brief Default relative shadow offset on the Y axis (fraction of the component size). */
-#define STRING_COMPONENT_DEFAULT_SHADOW_OFFSET_Y (0.1f)
 /** @brief Largest accepted magnitude of each shadow offset component (fraction of the component size). */
 #define STRING_COMPONENT_SHADOW_OFFSET_LIMIT (10.0f)
 /** @brief Default character spacing of a string component (multiplier of the size). */
@@ -103,6 +99,18 @@ typedef enum TextShadowColorTypeEnum
     /** @brief Use the component's explicit shadow color. */
     TextShadowColorType_Custom
 } TextShadowColorType;
+
+/**
+ * @brief Selects where a string component's shadow offset comes from.
+ */
+typedef enum TextShadowOffsetTypeEnum
+{
+    /** @brief Use the shadow offset of the font the text is drawn in (its definition's "shadow_offset", see
+     *         GameFont_GetShadowOffset), which suits that font's stroke weight. */
+    TextShadowOffsetType_Default,
+    /** @brief Use the component's explicit shadow offset. */
+    TextShadowOffsetType_Custom
+} TextShadowOffsetType;
 
 /**
  * @brief Virtual table of a concrete component type.
@@ -172,8 +180,10 @@ typedef struct StringComponentStruct
     TextShadowColorType _shadowColorType;
     /** @brief Explicit shadow color; used only when @c _shadowColorType is TextShadowColorType_Custom. */
     RenderColor _shadowColor;
-    /** @brief Shadow offset as a fraction of the size, each component within +-STRING_COMPONENT_SHADOW_OFFSET_LIMIT;
-     *         defaults to (STRING_COMPONENT_DEFAULT_SHADOW_OFFSET_X, STRING_COMPONENT_DEFAULT_SHADOW_OFFSET_Y). */
+    /** @brief Where the shadow offset comes from; defaults to TextShadowOffsetType_Default (the font's). */
+    TextShadowOffsetType _shadowOffsetType;
+    /** @brief Explicit shadow offset as a fraction of the size, each component within
+     *         +-STRING_COMPONENT_SHADOW_OFFSET_LIMIT; used only when @c _shadowOffsetType is TextShadowOffsetType_Custom. */
     Vector2 _shadowOffset;
     /** @brief Whether the text is underlined; defaults to false. */
     bool _isUnderlined;
@@ -661,9 +671,19 @@ Error StringComponent_SetShadowColorCustom(StringComponent* self, RenderColor co
 Error StringComponent_SetShadowColorDefault(StringComponent* self);
 
 /**
- * @brief Returns the shadow offset (fraction of the component size).
+ * @brief Returns where the component's shadow offset comes from.
  * @param self The string component; must not be NULL.
- * @returns The shadow offset.
+ * @returns The shadow offset type.
+ */
+static inline TextShadowOffsetType StringComponent_GetShadowOffsetType(const StringComponent* self)
+{
+    return self->_shadowOffsetType;
+}
+
+/**
+ * @brief Returns the component's explicit shadow offset (meaningful only when the type is Custom).
+ * @param self The string component; must not be NULL.
+ * @returns The stored custom offset, as a fraction of the component size.
  */
 static inline Vector2 StringComponent_GetShadowOffset(const StringComponent* self)
 {
@@ -671,13 +691,32 @@ static inline Vector2 StringComponent_GetShadowOffset(const StringComponent* sel
 }
 
 /**
- * @brief Sets the shadow offset (fraction of the component size).
+ * @brief Returns the offset the shadow is drawn at: the component's own when the type is Custom, else @p fontOffset.
  * @param self The string component; must not be NULL.
- * @param offset The offset; each component finite and within +-STRING_COMPONENT_SHADOW_OFFSET_LIMIT.
+ * @param fontOffset The shadow offset of the font the text is drawn in (GameFont_GetShadowOffset).
+ * @returns The offset, as a fraction of the component size.
+ */
+static inline Vector2 StringComponent_ResolveShadowOffset(const StringComponent* self, Vector2 fontOffset)
+{
+    return (self->_shadowOffsetType == TextShadowOffsetType_Custom) ? self->_shadowOffset : fontOffset;
+}
+
+/**
+ * @brief Sets an explicit shadow offset and switches the shadow offset type to Custom.
+ * @param self The string component; must not be NULL.
+ * @param offset The offset, as a fraction of the component size; each component finite and within
+ *        +-STRING_COMPONENT_SHADOW_OFFSET_LIMIT.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if a component is out
  *          of range.
  */
-Error StringComponent_SetShadowOffset(StringComponent* self, Vector2 offset);
+Error StringComponent_SetShadowOffsetCustom(StringComponent* self, Vector2 offset);
+
+/**
+ * @brief Switches the shadow offset type back to Default (the offset of the font the text is drawn in).
+ * @param self The string component; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error StringComponent_SetShadowOffsetDefault(StringComponent* self);
 
 /**
  * @brief Reports whether the text is underlined.

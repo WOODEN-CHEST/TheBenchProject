@@ -48,7 +48,13 @@ static int32_t FindExactGlyph(const GameFont* self, CodePoint codepoint)
 // Public functions.
 GameFont GameFont_Wrap(Font font)
 {
-    GameFont Wrapped = { ._rayFont = font, ._areGlyphsSorted = false, ._fallbackGlyphIndex = -1 };
+    GameFont Wrapped =
+    {
+        ._rayFont = font,
+        ._areGlyphsSorted = false,
+        ._fallbackGlyphIndex = -1,
+        ._shadowOffset = (Vector2){ .x = GAME_FONT_DEFAULT_SHADOW_OFFSET_X, .y = GAME_FONT_DEFAULT_SHADOW_OFFSET_Y }
+    };
     if (!GameFont_HasGlyphs(&Wrapped))
     {
         return Wrapped;

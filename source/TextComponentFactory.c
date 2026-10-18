@@ -106,7 +106,9 @@ static Error CopyStringStyle(StringComponent* target, const StringComponent* sou
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = StringComponent_SetShadowOffset(target, StringComponent_GetShadowOffset(source));
+        Result = (StringComponent_GetShadowOffsetType(source) == TextShadowOffsetType_Custom)
+            ? StringComponent_SetShadowOffsetCustom(target, StringComponent_GetShadowOffset(source))
+            : StringComponent_SetShadowOffsetDefault(target);
     }
     if (Result.Code == ErrorCode_Success)
     {

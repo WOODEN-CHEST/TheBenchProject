@@ -337,6 +337,50 @@ static void ControlCharactersAreSkipped(TestRun* run)
     LayoutFixture_Deconstruct(run, &Fixture);
 }
 
+static bool IsNearVector(Vector2 value, float x, float y)
+{
+    return IsNear(value.x, x) && IsNear(value.y, y);
+}
+
+// A string's shadow is drawn at its own offset, or at its font's when it sets none, times its size.
+static void ShadowsUseTheFontOffsetUnlessSet(TestRun* run)
+{
+    LayoutFixture Fixture;
+    if (LayoutFixture_Construct(run, &Fixture)
+        && TestAssets_AddFontWithShadowOffset(run, &Fixture.Assets, "thin", GLYPH_ADVANCE_PIXELS, (Vector2){ -0.05f, 0.05f }, NULL))
+    {
+        // "a" in the document's default font (mono: the default offset), "b" in thin, "c" in thin with its own offset,
+        // and "d" without a shadow.
+        StringComponent* Root = SetText(run, &Fixture, "a");
+        TextComponent* RootBase = (Root != NULL) ? StringComponent_AsComponent(Root) : NULL;
+        StringComponent* Thin = (RootBase != NULL) ? TestText_AddString(run, &Fixture.Factory, RootBase, "b") : NULL;
+        StringComponent* Own = (Thin != NULL) ? TestText_AddString(run, &Fixture.Factory, RootBase, "c") : NULL;
+        StringComponent* None = (Own != NULL) ? TestText_AddString(run, &Fixture.Factory, RootBase, "d") : NULL;
+        bool IsBuilt = (None != NULL)
+            && TEST_CHECK_SUCCESS(run, StringComponent_SetFontName(Thin, (const unsigned char*)u8"thin"))
+            && TEST_CHECK_SUCCESS(run, StringComponent_SetFontName(Own, (const unsigned char*)u8"thin"))
+            && TEST_CHECK_SUCCESS(run, StringComponent_SetShadowOffsetCustom(Own, (Vector2){ 0.2f, 0.3f }))
+            && TEST_CHECK_SUCCESS(run, StringComponent_SetIsShadowActive(None, false));
+        TextLayoutOptions Options = TextLayoutOptions_CreateDefault();
+        if (IsBuilt && TEST_CHECK_SUCCESS(run, TextLayout_Build(&Fixture.Layout, &Fixture.Document, &Options)))
+        {
+            // At the default size 0.1, an offset of 0.1 moves the shadow by 0.01.
+            TEST_CHECK(run, TextLayout_GetRunCount(&Fixture.Layout) == 4U);
+            TEST_CHECK(run, IsNearVector(TextLayout_GetRunShadowOffset(&Fixture.Layout, 0U), -0.01f, 0.01f));
+            TEST_CHECK(run, IsNearVector(TextLayout_GetRunShadowOffset(&Fixture.Layout, 1U), -0.005f, 0.005f));
+            TEST_CHECK(run, IsNearVector(TextLayout_GetRunShadowOffset(&Fixture.Layout, 2U), 0.02f, 0.03f));
+            TEST_CHECK(run, IsNearVector(TextLayout_GetRunShadowOffset(&Fixture.Layout, 3U), 0.0f, 0.0f));
+            TEST_CHECK(run, IsNearVector(TextLayout_GetRunShadowOffset(&Fixture.Layout, 4U), 0.0f, 0.0f));
+
+            // Back to the font's offset: an edit like any other, so the layout rebuilds.
+            TEST_CHECK_SUCCESS(run, StringComponent_SetShadowOffsetDefault(Own));
+            TEST_CHECK_SUCCESS(run, TextLayout_Refresh(&Fixture.Layout, &Fixture.Document, &Options));
+            TEST_CHECK(run, IsNearVector(TextLayout_GetRunShadowOffset(&Fixture.Layout, 2U), -0.005f, 0.005f));
+        }
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
 // raylib's built-in font has no glyphs before InitWindow (as in these tests): a layout built with it stays out of date
 // so it is rebuilt once the font has them.
 static void BuildsWithTheEmptyBuiltInFontStayStale(TestRun* run)
@@ -431,6 +475,7 @@ void TextLayoutTests_Run(TestRun* run)
         { "refresh_rebuilds_only_when_something_changed", RefreshRebuildsOnlyWhenSomethingChanged },
         { "lines_end_at_their_last_glyph", LinesEndAtTheirLastGlyph },
         { "control_characters_are_skipped", ControlCharactersAreSkipped },
+        { "shadows_use_the_font_offset_unless_set", ShadowsUseTheFontOffsetUnlessSet },
         { "builds_with_the_empty_built_in_font_stay_stale", BuildsWithTheEmptyBuiltInFontStayStale },
     };
     TestRun_RunSuite(run, "TextLayout", Cases, sizeof(Cases) / sizeof(Cases[0]));

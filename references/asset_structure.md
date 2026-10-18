@@ -310,6 +310,9 @@ A sound is any audio played in the game. This includes music.
     "codepoints": [ entry, ... ],        // [OPTIONAL] which characters get glyphs; see below.
                                          //            Default: ["basic_latin", "latin_1_supplement", "latin_extended_a"]
     "texture_properties": texture properties // [OPTIONAL] filtering of the glyph atlas. Default: bilinear
+    "shadow_offset": vector              // [OPTIONAL] where text in this font draws its shadow when the text sets no
+                                         //            offset of its own: a decimal vector relative to the text size,
+                                         //            each component in [-10;10]. Default: [-0.1, 0.1]
 }
 ```
 
@@ -330,6 +333,11 @@ WARNING if the font file lacks some of the requested codepoints, listing the fir
 
 Memory: roughly `size`² x 2 bytes per glyph, so the default set at 32 px is about 1 MB, and four blocks at 48 px about
 4-6 MB.
+
+`shadow_offset` belongs to the font because a shadow only reads as a shadow while it overlaps the strokes: moved further
+than about one stroke width, it looks like a second copy of the text. A regular-weight font wants about
+`[-0.05, 0.05]` (Noto Sans Regular's strokes are 6.5% of the text size); the default `[-0.1, 0.1]` suits bold fonts and
+pixel fonts with one-pixel strokes. raylib's built-in font uses the default.
 
 
 ## Shaders.

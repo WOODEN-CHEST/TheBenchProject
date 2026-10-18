@@ -1,6 +1,6 @@
 #pragma once
 #include <stdbool.h>
-// Style values reuse the component property types (colors, sizes) and the shadow color enum.
+// Style values reuse the component property types (colors, sizes) and the shadow color and offset enums.
 #include "raylib/raylib.h"
 #include "Renderer.h"
 #include "TextComponent.h"
@@ -66,9 +66,11 @@ typedef struct TextStyleStruct
     /** @brief Custom shadow color to apply when the directive type is Custom. */
     RenderColor _shadowColor;
 
-    /** @brief Whether the shadow-offset property is present. */
+    /** @brief Whether the shadow-offset directive is present. */
     bool _hasShadowOffset;
-    /** @brief Shadow offset to apply (string components). */
+    /** @brief Which shadow offset mode to apply when present (Default: the font's, or Custom). */
+    TextShadowOffsetType _shadowOffsetType;
+    /** @brief Custom shadow offset to apply when the directive type is Custom (string components). */
     Vector2 _shadowOffset;
 
     /** @brief Whether the underline property is present. */
@@ -235,22 +237,28 @@ bool TextStyle_GetShadowColor(const TextStyle* self, TextShadowColorType* outTyp
 void TextStyle_ClearShadowColor(TextStyle* self);
 
 
-// Shadow offset.
+// Shadow offset directive.
 /**
- * @brief Sets the style's shadow-offset property (marks it present).
+ * @brief Sets the style to apply a custom shadow offset (marks the shadow-offset directive present).
  * @param self The style; must not be NULL.
- * @param offset The offset to store.
+ * @param offset The custom offset to store (validated when applied).
  */
-void TextStyle_SetShadowOffset(TextStyle* self, Vector2 offset);
+void TextStyle_SetShadowOffsetCustom(TextStyle* self, Vector2 offset);
 /**
- * @brief Reads the style's shadow-offset property.
+ * @brief Sets the style to apply the default shadow offset, the font's (marks the directive present).
  * @param self The style; must not be NULL.
- * @param outOffset [out] Receives the offset when present; must not be NULL.
- * @returns true if present, false otherwise.
  */
-bool TextStyle_GetShadowOffset(const TextStyle* self, Vector2* outOffset);
+void TextStyle_SetShadowOffsetDefault(TextStyle* self);
 /**
- * @brief Clears the style's shadow-offset property.
+ * @brief Reads the style's shadow-offset directive.
+ * @param self The style; must not be NULL.
+ * @param outType [out] Receives the shadow offset type when present; must not be NULL.
+ * @param outOffset [out] Receives the custom offset (valid when the type is Custom); must not be NULL.
+ * @returns true if the directive is present, false otherwise.
+ */
+bool TextStyle_GetShadowOffset(const TextStyle* self, TextShadowOffsetType* outType, Vector2* outOffset);
+/**
+ * @brief Clears the style's shadow-offset directive.
  * @param self The style; must not be NULL.
  */
 void TextStyle_ClearShadowOffset(TextStyle* self);

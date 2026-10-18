@@ -224,6 +224,10 @@ static Error Reader_ReadField(void* self, const TextCodecNode* node, const TextC
             // Only a custom shadow color is stored; its absence means the default.
             outValue->IsCustom = true;
             return ReadRenderColor(Compound, field->GhdfId, &outValue->Color, outFound);
+        case TextCodecValueKind_ShadowOffset:
+            // Likewise for the shadow offset: its absence means the font's.
+            outValue->IsCustom = true;
+            return ReadVector(Compound, field->GhdfId, &outValue->Vector, outFound);
     }
     return Error_Construct2(ErrorCode_Deserialize, "has an unknown value kind.");
 }
@@ -417,6 +421,9 @@ static Error Writer_WriteField(void* self, TextCodecNode* node, const TextCodecF
         case TextCodecValueKind_ShadowColor:
             // The default shadow color is the entry's absence.
             return value->IsCustom ? SetRenderColorEntry(Writer, Compound, field->GhdfId, value->Color) : Error_CreateSuccess();
+        case TextCodecValueKind_ShadowOffset:
+            // So is the default shadow offset.
+            return value->IsCustom ? SetVectorEntry(Writer, Compound, field->GhdfId, value->Vector) : Error_CreateSuccess();
     }
     return Error_Construct2(ErrorCode_InvalidState, "TextComponentGHDF: unknown value kind.");
 }

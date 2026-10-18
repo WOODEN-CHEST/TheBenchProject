@@ -35,7 +35,8 @@
  *
  * GLYPHS. Every glyph is resolved once, when the layout is built: through the document's font binding to a glyph
  * index (a codepoint the font lacks draws as '?'). A glyph advances by its font advance plus the component's spacing
- * (never less than nothing, so a negative spacing at most stacks glyphs).
+ * (never less than nothing, so a negative spacing at most stacks glyphs). A shadow is drawn at the component's shadow
+ * offset, or at its font's (GameFont_GetShadowOffset) when it sets none, both relative to the size.
  *
  * BUILD IN UPDATE, DRAW IN RENDER. Building resolves names through the document, which may load assets, so build in
  * update code (after the window exists) and only draw in render code. TextLayout_Refresh rebuilds only when the
@@ -283,6 +284,16 @@ static inline size_t TextLayout_GetRunCount(const TextLayout* self)
  * @returns The box, or an empty rectangle for an index out of range.
  */
 Rectangle TextLayout_GetRunBounds(const TextLayout* self, size_t index);
+
+/**
+ * @brief Returns how far run @p index's shadow is drawn from its glyphs, in normalized-fitted units: the component's
+ *        shadow offset, or its font's when it sets none, times the run's size. The shadow covers the run's box moved
+ *        by this much, so drawn text reaches beyond TextLayout_GetRunBounds by it.
+ * @param self The layout; must not be NULL.
+ * @param index The run; must be less than TextLayout_GetRunCount.
+ * @returns The offset; (0, 0) for a run without a shadow (a sprite run, an inactive shadow) or an index out of range.
+ */
+Vector2 TextLayout_GetRunShadowOffset(const TextLayout* self, size_t index);
 
 /**
  * @brief Reports whether the layout holds a build.

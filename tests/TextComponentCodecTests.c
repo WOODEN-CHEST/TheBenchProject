@@ -31,7 +31,7 @@ static TextComponent* BuildRichTree(TestRun* run, TextComponentFactory* factory)
         && TEST_CHECK_SUCCESS(run, StringComponent_SetSize(Root, 0.125f))
         && TEST_CHECK_SUCCESS(run, StringComponent_SetIsShadowActive(Root, false))
         && TEST_CHECK_SUCCESS(run, StringComponent_SetShadowColorCustom(Root, Shadow))
-        && TEST_CHECK_SUCCESS(run, StringComponent_SetShadowOffset(Root, (Vector2){ 0.25f, -0.5f }))
+        && TEST_CHECK_SUCCESS(run, StringComponent_SetShadowOffsetCustom(Root, (Vector2){ 0.25f, -0.5f }))
         && TEST_CHECK_SUCCESS(run, StringComponent_SetIsUnderlined(Root, true))
         && TEST_CHECK_SUCCESS(run, StringComponent_SetIsStrikethrough(Root, true))
         && TEST_CHECK_SUCCESS(run, StringComponent_SetSpacing(Root, 1.0f / 3.0f))
@@ -299,6 +299,102 @@ static void JSONDepthIsLimited(TestRun* run)
 }
 
 
+// Reports whether a component compound stores a shadow offset (GHDF entry 17).
+static bool HasGHDFShadowOffset(TestRun* run, GHDFCompound* compound)
+{
+    GHDFObjectValue Entry;
+    bool IsFound = false;
+    TEST_CHECK_SUCCESS(run, GHDFCompound_GetOptionalVerified(compound, (GHDFEntryID)17,
+        GHDF_CreateRegularType(GHDFValueType_Compound), &Entry, &IsFound));
+    return IsFound;
+}
+
+// Checks one string component's shadow offset through GHDF: stored only when custom, and read back the same way.
+static void CheckGHDFShadowOffset(TestRun* run, TextComponentFactory* factory, TextComponent* component, bool isCustom)
+{
+    GHDFObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&Pool)))
+    {
+        return;
+    }
+    GHDFCompound* Compound = NULL;
+    TextComponent* Decoded = NULL;
+    if (TEST_CHECK_SUCCESS(run, TextComponentGHDF_Serialize(component, Pool, &Compound)))
+    {
+        TEST_CHECK(run, HasGHDFShadowOffset(run, Compound) == isCustom);
+        if (TEST_CHECK_SUCCESS(run, TextComponentGHDF_Deserialize(Compound, factory, &Decoded)))
+        {
+            TEST_CHECK(run, TestText_AreTreesEqual(component, Decoded));
+            ReturnTree(run, factory, Decoded);
+        }
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Compound, true));
+    }
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Pool));
+}
+
+// A string without its own shadow offset uses its font's. That is the field's absence (or "default"), never a value,
+// so a custom offset equal to the usual font default is still custom, and is written.
+static void ShadowOffsetIsDefaultOrCustom(TestRun* run)
+{
+    TextComponentFactory Factory;
+    JSONObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, TextComponentFactory_Construct(&Factory)) || !TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)))
+    {
+        return;
+    }
+    const char* Json = "[\"plain\", {\"type\":\"string\",\"text\":\"a\",\"shadow\":{\"offset\":\"default\"}},"
+        "{\"type\":\"string\",\"text\":\"b\",\"shadow\":{\"offset\":[-0.1,0.1]}}]";
+    JSONObjectValue Value;
+    TextComponent* Root = NULL;
+    if (TestText_ParseJSON(run, Pool, Json, &Value) && TEST_CHECK_SUCCESS(run, TextComponentJSON_Deserialize(&Value, &Factory, &Root)))
+    {
+        const StringComponent* Plain = TextComponent_AsConstStringComponent(TextComponent_GetSubComponentAt(Root, 0U));
+        const StringComponent* Default = TextComponent_AsConstStringComponent(TextComponent_GetSubComponentAt(Root, 1U));
+        const StringComponent* Custom = TextComponent_AsConstStringComponent(TextComponent_GetSubComponentAt(Root, 2U));
+        TEST_CHECK(run, StringComponent_GetShadowOffsetType(Plain) == TextShadowOffsetType_Default);
+        TEST_CHECK(run, StringComponent_GetShadowOffsetType(Default) == TextShadowOffsetType_Default);
+        TEST_CHECK(run, (StringComponent_GetShadowOffsetType(Custom) == TextShadowOffsetType_Custom)
+            && (StringComponent_GetShadowOffset(Custom).x == -0.1f) && (StringComponent_GetShadowOffset(Custom).y == 0.1f));
+
+        // Written back, the default leaves the field out (the second string becomes a bare text) and the custom one
+        // keeps it.
+        JSONObjectValue Written = JSONObjectValue_CreateNull();
+        if (TEST_CHECK_SUCCESS(run, TextComponentJSON_Serialize(Root, Pool, &Written)))
+        {
+            JSONObjectValue Second = JSONObjectValue_CreateNull();
+            JSONObjectValue Third = JSONObjectValue_CreateNull();
+            JSONObjectValue Shadow = JSONObjectValue_CreateNull();
+            JSONObjectValue Offset = JSONObjectValue_CreateNull();
+            bool IsShaped = TEST_CHECK(run, Written.Type == JSONValueType_Array)
+                && TEST_CHECK_SUCCESS(run, JSONArray_Get(Written.Value.Array, 1U, &Second))
+                && TEST_CHECK_SUCCESS(run, JSONArray_Get(Written.Value.Array, 2U, &Third))
+                && TEST_CHECK(run, (Second.Type == JSONValueType_String) && (Third.Type == JSONValueType_Compound))
+                && TEST_CHECK_SUCCESS(run, JSONCompound_Get(Third.Value.Compound, (const unsigned char*)u8"shadow", &Shadow))
+                && TEST_CHECK(run, Shadow.Type == JSONValueType_Compound);
+            if (IsShaped)
+            {
+                TEST_CHECK_SUCCESS(run, JSONCompound_Get(Shadow.Value.Compound, (const unsigned char*)u8"offset", &Offset));
+                TEST_CHECK(run, Offset.Type == JSONValueType_Array);
+            }
+            TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Written));
+        }
+
+        CheckGHDFShadowOffset(run, &Factory, TextComponent_GetSubComponentAt(Root, 1U), false);
+        CheckGHDFShadowOffset(run, &Factory, TextComponent_GetSubComponentAt(Root, 2U), true);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+    ReturnTree(run, &Factory, Root);
+
+    static const char* const RangeFragments[] = { "\"shadow.offset\"", "\"default\" or two decimals", NULL };
+    CheckJSONFailure(run, "{\"type\":\"string\",\"text\":\"x\",\"shadow\":{\"offset\":[0,11]}}", RangeFragments);
+    static const char* const ShapeFragments[] = { "\"shadow.offset\"", NULL };
+    CheckJSONFailure(run, "{\"type\":\"string\",\"text\":\"x\",\"shadow\":{\"offset\":\"auto\"}}", ShapeFragments);
+
+    TEST_CHECK(run, TextComponentFactory_GetLiveComponentCount(&Factory) == 0U);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    TEST_CHECK_SUCCESS(run, TextComponentFactory_Deconstruct(&Factory));
+}
+
 // Tests: GHDF.
 static void GHDFRoundTripKeepsEveryField(TestRun* run)
 {
@@ -444,6 +540,7 @@ void TextComponentCodecTests_Run(TestRun* run)
         { "json_errors_name_the_field_and_path", JSONErrorsNameTheFieldAndPath },
         { "json_rejects_bad_types_names_and_missing_fields", JSONRejectsBadTypesNamesAndMissingFields },
         { "json_depth_is_limited", JSONDepthIsLimited },
+        { "shadow_offset_is_default_or_custom", ShadowOffsetIsDefaultOrCustom },
         { "ghdf_round_trip_keeps_every_field", GHDFRoundTripKeepsEveryField },
         { "ghdf_rejects_bad_values", GHDFRejectsBadValues },
     };

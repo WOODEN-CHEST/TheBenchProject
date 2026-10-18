@@ -38,7 +38,9 @@ hand-written (the owner's decision of 2026-10-18).
   anything else as `{ "tint": [r, g, b], "brightness", "opacity" }`.
 - GHDF writes every component as a compound: entry 1 is the type as an explicit wire id (1 empty, 2 string, 3 sprite,
   4 translate; independent of the C enum's values), entry 2 the children (an array of compounds), and the field ids
-  listed in `TextComponentCodec.c`. A custom shadow color is stored as entry 16; its absence means the default.
+  listed in `TextComponentCodec.c`. A custom shadow color is stored as entry 16 and a custom shadow offset as entry 17;
+  their absence means the default (a color derived from the text color, the offset of the text's font). In JSON the
+  default is the key's absence, or `"default"`.
 - Serializers borrow everything from the caller's `JSONObjectPool` / `GHDFObjectPool`; on failure everything built so
   far goes back to the pool.
 

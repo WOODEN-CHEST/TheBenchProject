@@ -26,6 +26,9 @@ static bool AreNamesEqual(const unsigned char* a, const unsigned char* b)
 
 static bool AreStringPartsEqual(const StringComponent* a, const StringComponent* b)
 {
+    bool AreShadowOffsetsEqual = (StringComponent_GetShadowOffsetType(a) == StringComponent_GetShadowOffsetType(b))
+        && ((StringComponent_GetShadowOffsetType(a) == TextShadowOffsetType_Default)
+            || AreVectorsEqual(StringComponent_GetShadowOffset(a), StringComponent_GetShadowOffset(b)));
     bool AreShadowColorsEqual = (StringComponent_GetShadowColorType(a) == StringComponent_GetShadowColorType(b))
         && ((StringComponent_GetShadowColorType(a) == TextShadowColorType_Default)
             || AreColorsEqual(StringComponent_GetShadowColor(a), StringComponent_GetShadowColor(b)));
@@ -35,7 +38,7 @@ static bool AreStringPartsEqual(const StringComponent* a, const StringComponent*
         && (StringComponent_GetSize(a) == StringComponent_GetSize(b))
         && (StringComponent_IsShadowActive(a) == StringComponent_IsShadowActive(b))
         && AreShadowColorsEqual
-        && AreVectorsEqual(StringComponent_GetShadowOffset(a), StringComponent_GetShadowOffset(b))
+        && AreShadowOffsetsEqual
         && (StringComponent_IsUnderlined(a) == StringComponent_IsUnderlined(b))
         && (StringComponent_IsStrikethrough(a) == StringComponent_IsStrikethrough(b))
         && (StringComponent_GetSpacing(a) == StringComponent_GetSpacing(b));

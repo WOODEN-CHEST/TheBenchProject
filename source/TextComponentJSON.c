@@ -15,7 +15,8 @@
 #define KEY_TINT (u8"tint")
 #define KEY_BRIGHTNESS (u8"brightness")
 #define KEY_OPACITY (u8"opacity")
-#define SHADOW_COLOR_DEFAULT (u8"default")
+/* The value of a shadow color or offset that asks for the default (derived color, the font's offset). */
+#define SHADOW_DEFAULT (u8"default")
 /* "#rrggbb" plus nothing else: a color written in hex has exactly this many bytes. */
 #define HEX_COLOR_BYTE_COUNT ((size_t)7)
 /* The %g precisions tried for a float's shortest decimal: printf's default first, FLT_DECIMAL_DIG always reads back. */
@@ -180,13 +181,21 @@ static Error ReadKindValue(JSONTextReader* reader, const TextCodecField* field, 
         case TextCodecValueKind_Vector2:
             return GameJSON_ParseVector2(raw, &outValue->Vector);
         case TextCodecValueKind_ShadowColor:
-            if ((raw->Type == JSONValueType_String) && JSONStringEquals(raw, SHADOW_COLOR_DEFAULT))
+            if ((raw->Type == JSONValueType_String) && JSONStringEquals(raw, SHADOW_DEFAULT))
             {
                 outValue->IsCustom = false;
                 return Error_CreateSuccess();
             }
             outValue->IsCustom = true;
             return GameJSON_ParseRenderColor(raw, &outValue->Color);
+        case TextCodecValueKind_ShadowOffset:
+            if ((raw->Type == JSONValueType_String) && JSONStringEquals(raw, SHADOW_DEFAULT))
+            {
+                outValue->IsCustom = false;
+                return Error_CreateSuccess();
+            }
+            outValue->IsCustom = true;
+            return GameJSON_ParseVector2(raw, &outValue->Vector);
     }
     return Error_Construct2(ErrorCode_InvalidJSON, "has an unknown value kind.");
 }
@@ -546,7 +555,10 @@ static Error Writer_WriteField(void* self, TextCodecNode* node, const TextCodecF
             return SetVectorEntry(Writer, Target, field->JsonKey, value->Vector);
         case TextCodecValueKind_ShadowColor:
             return value->IsCustom ? SetRenderColorEntry(Writer, Target, field->JsonKey, value->Color)
-                : SetStringEntry(Writer, Target, field->JsonKey, SHADOW_COLOR_DEFAULT);
+                : SetStringEntry(Writer, Target, field->JsonKey, SHADOW_DEFAULT);
+        case TextCodecValueKind_ShadowOffset:
+            return value->IsCustom ? SetVectorEntry(Writer, Target, field->JsonKey, value->Vector)
+                : SetStringEntry(Writer, Target, field->JsonKey, SHADOW_DEFAULT);
     }
     return Error_Construct2(ErrorCode_InvalidState, "TextComponentJSON: unknown value kind.");
 }

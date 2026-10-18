@@ -34,7 +34,8 @@ typedef enum TextCodecValueKindEnum
     TextCodecValueKind_Boolean,
     TextCodecValueKind_RenderColor, /* brightness and opacity within [0, 1] */
     TextCodecValueKind_Vector2,     /* two finite decimals within the field's range */
-    TextCodecValueKind_ShadowColor  /* the default shadow color, or a custom render color */
+    TextCodecValueKind_ShadowColor, /* the default shadow color, or a custom render color */
+    TextCodecValueKind_ShadowOffset /* the font's shadow offset, or a custom vector within the field's range */
 } TextCodecValueKind;
 
 /* Identifies the component property a field reads and writes. */
@@ -87,8 +88,10 @@ typedef struct TextCodecValueStruct
     bool Boolean;
     /* RenderColor; for ShadowColor the custom color (when IsCustom). */
     RenderColor Color;
+    /* Vector2; for ShadowOffset the custom offset (when IsCustom). */
     Vector2 Vector;
-    /* ShadowColor: true for a custom Color, false for the default shadow color. */
+    /* ShadowColor and ShadowOffset: true for a custom Color or Vector, false for the default (the shadow color derived
+     * from the text color, the shadow offset of the text's font). */
     bool IsCustom;
 } TextCodecValue;
 

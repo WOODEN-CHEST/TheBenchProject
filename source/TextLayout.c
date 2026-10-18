@@ -271,7 +271,7 @@ static Error AddStyle(BuildContext* context, const StringComponent* string, size
         .Spacing = StringComponent_GetSpacing(string) * FontSize,
         .Color = StringComponent_GetColor(string),
         .IsShadowActive = StringComponent_IsShadowActive(string),
-        .ShadowOffset = StringComponent_GetShadowOffset(string),
+        .ShadowOffset = StringComponent_ResolveShadowOffset(string, GameFont_GetShadowOffset(ResolvedFont)),
         .IsUnderlined = StringComponent_IsUnderlined(string),
         .IsStrikethrough = StringComponent_IsStrikethrough(string)
     };
@@ -1049,6 +1049,17 @@ Rectangle TextLayout_GetRunBounds(const TextLayout* self, size_t index)
     }
     const TextLayoutRun* Run = &GetRuns(self)[index];
     return (Rectangle){ .x = Run->X, .y = Run->Y, .width = Run->Width, .height = Run->Height };
+}
+
+Vector2 TextLayout_GetRunShadowOffset(const TextLayout* self, size_t index)
+{
+    if (index >= self->_runs._count)
+    {
+        return (Vector2){ .x = 0.0f, .y = 0.0f };
+    }
+    const TextLayoutRun* Run = &GetRuns(self)[index];
+    bool HasShadow = (Run->Type == TextLayoutRunType_Glyphs) && Run->IsShadowActive;
+    return HasShadow ? Run->ShadowOffset : (Vector2){ .x = 0.0f, .y = 0.0f };
 }
 
 

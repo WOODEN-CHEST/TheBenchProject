@@ -27,8 +27,10 @@ raylib (or audio-engine) object **by value**. Sprite sheets and sprite animation
 
 ## GameFont (`GameFont.h`, `source/GameFont.c`)
 
-- `GameFont { Font _rayFont; bool _areGlyphsSorted; int32_t _fallbackGlyphIndex; }`. Code reads `_rayFont` for the
-  raylib calls that take a font.
+- `GameFont { Font _rayFont; bool _areGlyphsSorted; int32_t _fallbackGlyphIndex; Vector2 _shadowOffset; }`. Code reads
+  `_rayFont` for the raylib calls that take a font. `GameFont_GetShadowOffset` is where text in the font draws its
+  shadow when the text sets no offset (a fraction of the text size): the definition's `shadow_offset`, else
+  `GAME_FONT_DEFAULT_SHADOW_OFFSET_X/Y` ([-0.1, 0.1], also raylib's built-in font's).
 - Lookups: `GameFont_FindGlyphIndex(font, codepoint)` returns the glyph that draws a codepoint, or the `?` glyph when
   the font lacks it (-1 without either). It binary-searches when the glyphs are sorted by codepoint, which every font
   asset's are; `GameFont_HasGlyph` tells whether the font has the codepoint itself; `GameFont_GetGlyphAdvance` is the
@@ -37,7 +39,8 @@ raylib (or audio-engine) object **by value**. Sprite sheets and sprite animation
   raylib's built-in font).
 - Loading (`FontDefinition.c`): `LoadFontEx(path, size, codepoints, count)` with the definition's `size` (default 32 px)
   and codepoint set (default: Basic Latin, Latin-1 Supplement and Latin Extended-A, `?` and the space always included; parsed by the
-  private `source/FontCodepoints.c`), then `SetTextureFilter` from its `texture_properties` (default bilinear). Files:
+  private `source/FontCodepoints.c`), then `SetTextureFilter` from its `texture_properties` (default bilinear), and the
+  definition's `shadow_offset` (validated like a component's: each part within +-10). Files:
   `ttf`, `otf`. The definition keys are in `references/asset_structure.md`. When the file lacks requested codepoints,
   the loader logs one WARNING through `AssetManager_GetLogger` naming how many and the first few (they draw as `?`).
   Unloaded with `UnloadFont`.

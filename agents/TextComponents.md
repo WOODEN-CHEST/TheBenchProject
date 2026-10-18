@@ -27,8 +27,11 @@ the revision, the subtree height), embedded as the first member of every concret
 return NULL for the wrong type; upcast with `StringComponent_AsComponent` and friends.
 
 - **StringComponent**: text, font name (NULL = the document's default font), color, size (the line height, normalized
-  fitted units), shadow (active, default or custom color, offset relative to the size), underline, strikethrough,
-  spacing (multiplier of the size).
+  fitted units), shadow (active, default or custom color, default or custom offset relative to the size), underline,
+  strikethrough, spacing (multiplier of the size). The shadow offset's default is the font's (`GameFont_GetShadowOffset`,
+  set by the font definition's `shadow_offset`), because how far a shadow can move before it looks like a second copy
+  depends on the font's stroke weight: `StringComponent_SetShadowOffsetCustom` / `SetShadowOffsetDefault`, like the
+  shadow color's `SetShadowColorCustom` / `SetShadowColorDefault`.
 - **TranslateComponent**: a key looked up in the document's translations, like Minecraft's `translate`. It embeds a
   `StringComponent` as its first member: that string part carries all the styling, and its text is the **fallback**,
   shown while the key has no translation (without a fallback the key itself is shown). The `StringComponent_*`

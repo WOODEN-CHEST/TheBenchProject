@@ -109,6 +109,9 @@ static void GlyphLookupFallsBackToQuestionMark(TestRun* run)
     TEST_CHECK(run, GameFont_HasGlyph(&Wrapped, (CodePoint)'B') && !GameFont_HasGlyph(&Wrapped, (CodePoint)'z'));
     // A glyph without an advance advances by its rectangle width plus its offset, as raylib measures it.
     TEST_CHECK(run, GameFont_GetGlyphAdvance(&Wrapped, 2) == 8.0f);
+    // A wrapped font starts with the default shadow offset; the loader replaces it with the definition's.
+    TEST_CHECK(run, (GameFont_GetShadowOffset(&Wrapped).x == GAME_FONT_DEFAULT_SHADOW_OFFSET_X)
+        && (GameFont_GetShadowOffset(&Wrapped).y == GAME_FONT_DEFAULT_SHADOW_OFFSET_Y));
 
     // Unsorted glyphs are searched linearly.
     GlyphInfo Unsorted[3] = { { .value = 'b' }, { .value = 'a' }, { .value = 'c' } };
@@ -195,7 +198,20 @@ static void FontDefinitionsValidateTheirKeys(TestRun* run)
     if (TestAssetFixture_Construct(run, &Fixture))
     {
         TEST_CHECK_SUCCESS(run, BuildFontDefinition(&Fixture, "{\"name\": \"f\", \"location\": \"f/f\", \"size\": 48, "
-            "\"codepoints\": [\"basic_latin\"], \"texture_properties\": {\"filtering\": \"point\"}}"));
+            "\"codepoints\": [\"basic_latin\"], \"texture_properties\": {\"filtering\": \"point\"}, "
+            "\"shadow_offset\": [-0.05, 0.05]}"));
+        TEST_CHECK_SUCCESS(run, BuildFontDefinition(&Fixture, "{\"name\": \"f\", \"location\": \"f/f\", "
+            "\"shadow_offset\": {\"x\": 10, \"y\": -10}}"));
+        const char* const BadShadowOffsets[] =
+        {
+            "{\"name\": \"f\", \"location\": \"f/f\", \"shadow_offset\": [0, 10.5]}",
+            "{\"name\": \"f\", \"location\": \"f/f\", \"shadow_offset\": [0.1]}",
+            "{\"name\": \"f\", \"location\": \"f/f\", \"shadow_offset\": \"default\"}"
+        };
+        for (size_t Index = 0U; Index < (sizeof(BadShadowOffsets) / sizeof(BadShadowOffsets[0])); Index++)
+        {
+            TEST_CHECK_ERROR(run, BuildFontDefinition(&Fixture, BadShadowOffsets[Index]), ErrorCode_InvalidAssetDefinition);
+        }
         TEST_CHECK_ERROR(run, BuildFontDefinition(&Fixture, "{\"name\": \"f\", \"location\": \"f/f\", \"size\": 300}"),
             ErrorCode_InvalidAssetDefinition);
         TEST_CHECK_ERROR(run, BuildFontDefinition(&Fixture, "{\"name\": \"f\", \"location\": \"f/f\", \"size\": 4}"),

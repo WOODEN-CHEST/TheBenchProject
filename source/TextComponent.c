@@ -314,7 +314,8 @@ static void InitializeStringPart(StringComponent* self)
     self->_isShadowActive = STRING_COMPONENT_DEFAULT_IS_SHADOW_ACTIVE;
     self->_shadowColorType = TextShadowColorType_Default;
     self->_shadowColor = RenderColor_White();
-    self->_shadowOffset = (Vector2){ .x = STRING_COMPONENT_DEFAULT_SHADOW_OFFSET_X, .y = STRING_COMPONENT_DEFAULT_SHADOW_OFFSET_Y };
+    self->_shadowOffsetType = TextShadowOffsetType_Default;
+    self->_shadowOffset = (Vector2){ .x = 0.0f, .y = 0.0f };
     self->_isUnderlined = false;
     self->_isStrikethrough = false;
     self->_spacing = STRING_COMPONENT_DEFAULT_SPACING;
@@ -652,20 +653,35 @@ Error StringComponent_SetShadowColorDefault(StringComponent* self)
     return Error_CreateSuccess();
 }
 
-Error StringComponent_SetShadowOffset(StringComponent* self, Vector2 offset)
+Error StringComponent_SetShadowOffsetCustom(StringComponent* self, Vector2 offset)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "StringComponent_SetShadowOffset: self must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "StringComponent_SetShadowOffsetCustom: self must not be NULL.");
     }
     if (!IsShadowOffsetValid(offset))
     {
         return Error_Construct2(ErrorCode_ArgumentOutOfRange,
-            "StringComponent_SetShadowOffset: each offset component must be finite and within "
+            "StringComponent_SetShadowOffsetCustom: each offset component must be finite and within "
             "+-STRING_COMPONENT_SHADOW_OFFSET_LIMIT.");
     }
 
     self->_shadowOffset = offset;
+    self->_shadowOffsetType = TextShadowOffsetType_Custom;
+    MarkChanged(&self->Base);
+    return Error_CreateSuccess();
+}
+
+Error StringComponent_SetShadowOffsetDefault(StringComponent* self)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "StringComponent_SetShadowOffsetDefault: self must not be NULL.");
+    }
+
+    self->_shadowOffsetType = TextShadowOffsetType_Default;
     MarkChanged(&self->Base);
     return Error_CreateSuccess();
 }
