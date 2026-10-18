@@ -2,30 +2,41 @@
 
 
 // Static functions.
+// The text a component contributes itself: a string's text, a translate component's fallback (or its key when it
+// has none, the same text a document without translations shows); nothing for sprites and empty components.
+static const unsigned char* GetOwnText(const TextComponent* component)
+{
+    switch (TextComponent_GetType(component))
+    {
+        case TextComponentType_String:
+            return StringComponent_GetText(TextComponent_AsConstStringComponent(component));
+        case TextComponentType_Translate:
+        {
+            const TranslateComponent* Translate = TextComponent_AsConstTranslateComponent(component);
+            const unsigned char* Fallback = TranslateComponent_GetFallback(Translate);
+            return (Fallback[0] != (unsigned char)0) ? Fallback : TranslateComponent_GetKey(Translate);
+        }
+        case TextComponentType_Sprite:
+        case TextComponentType_Empty:
+            return NULL;
+    }
+    return NULL;
+}
+
+// Recursion depth is bounded by the tree's depth limit (TEXT_COMPONENT_MAX_DEPTH).
 static Error AppendComponentText(const TextComponent* component, GenericBuffer* destination)
 {
-    if (component->Type == TextComponentType_String)
+    const unsigned char* OwnText = GetOwnText(component);
+    if ((OwnText != NULL) && !GenericBuffer_AppendString(destination, OwnText))
     {
-        const StringComponent* StringComp = (const StringComponent*)component;
-        if (StringComp->_text != NULL)
-        {
-            if (!GenericBuffer_AppendString(destination, StringComp->_text))
-            {
-                return Error_Construct2(ErrorCode_BufferTooLarge,
-                    "TextComponentText_Serialize: could not append text to the destination buffer.");
-            }
-        }
+        return Error_Construct2(ErrorCode_BufferTooLarge,
+            "TextComponentText_Serialize: could not append text to the destination buffer.");
     }
 
     size_t ChildCount = TextComponent_GetSubComponentCount(component);
     for (size_t Index = 0; Index < ChildCount; Index++)
     {
-        const TextComponent* Child = TextComponent_GetSubComponentAt(component, Index);
-        if (Child == NULL)
-        {
-            continue;
-        }
-        Error Result = AppendComponentText(Child, destination);
+        Error Result = AppendComponentText(TextComponent_GetSubComponentAt(component, Index), destination);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;

@@ -91,6 +91,7 @@ void RenderContext_Create(RenderContext* self,
 
     self->_textureDrawCount = 0;
     self->_stringDrawCount = 0;
+    self->_glyphDrawCount = 0;
     self->_modelDrawCount = 0;
     self->_meshDrawCount = 0;
     self->_primitiveDrawCount = 0;
@@ -167,6 +168,47 @@ void RenderContext_RenderText2D(RenderContext* self, const TextRenderArguments* 
         Spacing,
         FinalTint);
     self->_stringDrawCount++;
+}
+
+void RenderContext_RenderGlyph(RenderContext* self, const GlyphRenderArguments* args)
+{
+    const Font* TargetFont = args->TargetFont;
+    const GlyphInfo* Glyph = &TargetFont->glyphs[args->GlyphIndex];
+    Rectangle AtlasArea = TargetFont->recs[args->GlyphIndex];
+    float Padding = (float)TargetFont->glyphPadding;
+    float Scale = args->FontSizePixels / (float)TargetFont->baseSize;
+
+    // Same quad as raylib's DrawTextCodepoint: the glyph's atlas area plus its padding, offset from the pen.
+    Rectangle Source =
+    {
+        .x = AtlasArea.x - Padding,
+        .y = AtlasArea.y - Padding,
+        .width = AtlasArea.width + (2.0f * Padding),
+        .height = AtlasArea.height + (2.0f * Padding)
+    };
+    Vector2 Offset = { .x = ((float)Glyph->offsetX - Padding) * Scale, .y = ((float)Glyph->offsetY - Padding) * Scale };
+    Vector2 QuadPosition = { .x = args->PenPosition.x + Offset.x, .y = args->PenPosition.y + Offset.y };
+    if (args->RotationRad != 0.0f)
+    {
+        float CosValue = Math_CosFloat(args->RotationRad);
+        float SinValue = Math_SinFloat(args->RotationRad);
+        QuadPosition = (Vector2)
+        {
+            .x = args->PenPosition.x + ((Offset.x * CosValue) - (Offset.y * SinValue)),
+            .y = args->PenPosition.y + ((Offset.x * SinValue) + (Offset.y * CosValue))
+        };
+    }
+    Rectangle Destination =
+    {
+        .x = QuadPosition.x,
+        .y = QuadPosition.y,
+        .width = Source.width * Scale,
+        .height = Source.height * Scale
+    };
+
+    DrawTexturePro(TargetFont->texture, Source, Destination, (Vector2){ .x = 0.0f, .y = 0.0f },
+        Math_RadToDegFloat(args->RotationRad), RenderColor_GetFinalColor(args->TargetColor));
+    self->_glyphDrawCount++;
 }
 
 // TODO: DrawModelEx writes the tint into the shared asset's material maps for the duration of the draw (and the

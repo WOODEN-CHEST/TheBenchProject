@@ -114,7 +114,7 @@ NaN and infinity are rejected wherever a double is set. A setter given a bad val
 ## Drawing a frame
 
 Read the frame with `SpriteAnimationInstance_GetCurrentFrame`. `RenderContext_RenderTexture2D` takes a normalized
-source rectangle, so divide `_areaInTexture` by the texture's width and height (`TextComponentRenderer.c` does this).
+source rectangle, so divide `_areaInTexture` by the texture's width and height (`TextLayout.c` does this).
 
 ## Loaded animations (SpriteAnimationDefinition.c)
 

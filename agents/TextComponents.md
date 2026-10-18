@@ -1,107 +1,111 @@
 # Text components
 
-A renderer-independent, Minecraft-style rich text system. A **text component** is an abstract, mutable
-node that can be rendered inside text — it may carry a string, a sprite animation, or nothing, and it
-holds an ordered list of child components, so components chain into a tree. Components are **not** tied to
-the UI; they are used across the game. This layer covers creation/pooling, styling, and rendering.
+A renderer-independent, Minecraft-style rich text system. A **text component** is a node that can be rendered inside
+text: a string, a translatable string, a sprite animation, or nothing. Components form a **strict tree**: each has an
+ordered list of children it owns. Components are not tied to the UI; anything in the game that shows rich text uses
+them (labels, papers, prompts, text in the world).
 
-Every symbol has full Doxygen in its header; this doc is the map.
+This doc covers the components themselves, their factory and styles. Showing them is the job of `TextDocument` (owns
+a tree and the assets it names) and `TextLayout` (measures and draws): see [TextDocument.md](TextDocument.md).
+Serialization: [TextComponentSerialization.md](TextComponentSerialization.md). Every symbol has full Doxygen in its
+header; this doc is the map.
 
 ## Modules
 
 | Module | Files | What it is |
 |---|---|---|
-| TextComponent | `include/TextComponent.h`, `source/TextComponent.c` | Abstract base (`TextComponent`) + the three concrete types (`StringComponent`, `SpriteComponent`, `EmptyComponent`) + subcomponent management. |
-| TextComponentFactory | `include/TextComponentFactory.h`, `source/TextComponentFactory.c` | The only way to create/clone/return components; pools the structs and subcomponent buffers; number/codepoint/special-char helpers. |
-| TextStyle | `include/TextStyle.h`, `source/TextStyle.c` | Presence-guarded bundle of style properties applied onto components. |
-| TextComponentRenderer | `include/TextComponentRenderer.h`, `source/TextComponentRenderer.c` | Measures and draws component trees through a `RenderContext`. |
+| TextComponent | `include/TextComponent.h`, `source/TextComponent.c` | The base type, the four concrete types, the tree operations and every property setter. |
+| TextComponentFactory | `include/TextComponentFactory.h`, `source/TextComponentFactory.c` | The only way to create, clone and return components; pools their slots, strings and child lists. Number, codepoint and special-character shorthands. |
+| (private) | `source/TextComponentInternal.h` | Glue between the two files above (component initialization, the factory's buffer and revision services). |
+| TextStyle | `include/TextStyle.h`, `source/TextStyle.c` | A presence-guarded bundle of style properties applied onto components. |
 
-## Object model
+## The types
 
-`TextComponent` is an abstract vtable class (`Destroy` slot) embedded as the FIRST member of each concrete
-type, so any concrete pointer is a valid `TextComponent*`. A `TextComponentType` discriminator drives
-downcasting, rendering and (future) serialization. Shared state: the vtable, the type, and the borrowed
-ordered subcomponent list (`_subComponents`, element `TextComponent*`, owned by the factory).
+`TextComponent` is the abstract base (vtable with `Destroy`, the type, the owning factory, the parent, the child list,
+the revision, the subtree height), embedded as the first member of every concrete type. Downcast with
+`TextComponent_AsStringComponent` / `AsSpriteComponent` / `AsTranslateComponent` (and their `Const` variants), which
+return NULL for the wrong type; upcast with `StringComponent_AsComponent` and friends.
 
-- **StringComponent**: borrowed UTF-8 `_text` (encoding-validated on set, never owned), `_font`
-  (default raylib font), `_color` (white), `_size` (0.1), `IsShadowActive` (true), a `TextShadowColorType`
-  shadow-color mode (Default = derive from color at render time / Custom = explicit `_shadowColor`),
-  `_shadowOffset` (-0.1, 0.1, relative to the size), `IsUnderlined`/`IsStrikethrough` (false), `_spacing` (0).
-- **SpriteComponent**: borrowed `_animationInstance` (may be NULL = renders nothing), `_color`, `_size` (a
-  Vector2).
-- **EmptyComponent**: no own content (but may still hold children).
+- **StringComponent**: text, font name (NULL = the document's default font), color, size (the line height, normalized
+  fitted units), shadow (active, default or custom color, offset relative to the size), underline, strikethrough,
+  spacing (multiplier of the size).
+- **TranslateComponent**: a key looked up in the document's translations, like Minecraft's `translate`. It embeds a
+  `StringComponent` as its first member: that string part carries all the styling, and its text is the **fallback**,
+  shown while the key has no translation (without a fallback the key itself is shown). The `StringComponent_*`
+  setters work on `TranslateComponent_AsString(translate)`. There are no string tables yet (architecture decision A9
+  decides the rest later), so the fallback always shows.
+- **SpriteComponent**: a sprite-animation asset name (NULL = draws nothing), color and box size. A sprite always takes
+  up its size in the layout, even when its animation is missing; it draws its document's instance of the animation.
+- **EmptyComponent**: no content of its own; it lays out its children.
 
-For serialization/binding, `StringComponent` also carries a borrowed `_fontName` and `SpriteComponent` a
-borrowed `_animationName` (the asset reference names their live `GameFont`/`SpriteAnimationInstance` came
-from, which those handles cannot report). They are set via setters and bound by the `TextComponentResolver`
-(see `agents/TextComponentSerialization.md`).
+Defaults and valid ranges are macros in `TextComponent.h` (`STRING_COMPONENT_DEFAULT_*`, `TEXT_COMPONENT_SIZE_MAX`,
+`STRING_COMPONENT_SHADOW_OFFSET_LIMIT`, `STRING_COMPONENT_SPACING_MIN/MAX`). Every setter validates
+(`ErrorCode_ArgumentOutOfRange`, `ErrorCode_InvalidTextEncoding` for text that is not UTF-8), and the codec enforces the
+same ranges, so whatever a setter accepts survives a round trip. Render colors need brightness and opacity in [0, 1].
+Font names, animation names and translation keys follow the asset-name grammar `[a-z][a-z0-9_.-]*`.
 
-Properties are **per-component** and are NOT inherited by children. Validated numeric/color/text
-properties use validating setters + inline getters; the plain bool flags (`IsShadowActive`,
-`IsUnderlined`, `IsStrikethrough`) are public fields.
+## The strict tree
 
-**Subcomponents** (`TextComponent_Add/Insert/RemoveAt/Remove/Clear/GetCount/GetAt`): children are
-referenced, not owned. Add/insert reject cycles — a component may not be added to itself or to any
-component in its own subtree (`ErrorCode_InvalidOperation`); `TextComponent_IsInSubtree` exposes the
-reachability test. Remove/clear only drop references; they do not return children to the factory.
+- **A parent owns its children.** Destroying a component destroys its subtree. `TextComponent_AddSubComponent` and
+  `InsertSubComponent` take a **root** (no parent) from the **same factory**; anything else fails
+  (`ErrorCode_InvalidOperation` for a child that has a parent or would create a cycle, `ErrorCode_IllegalArgument` for
+  another factory), and on failure the child stays the caller's.
+- **Taking children out:** `TextComponent_DetachSubComponentAt` (or `TextComponent_Detach(child)`) hands the child back
+  to the caller as a root; `TextComponent_DestroySubComponentAt` and `TextComponent_ClearSubComponents` return the
+  children to the factory.
+- **Depth limit.** A tree has at most `TEXT_COMPONENT_MAX_DEPTH` (64) levels; a root alone is one level. An add that
+  would exceed it fails. Each component keeps its subtree height, so the check is O(depth). Both deserializers apply
+  the same limit, so every walk over a tree is bounded (AGENTS.md rule 5).
+- **Roots** are owned by whoever created or detached them: add them to a parent, hand them to a `TextDocument`
+  (`TextDocument_SetRoot`), or return them with `TextComponentFactory_ReturnTree`, which refuses a component that still
+  has a parent.
+- **Revisions.** Every change (a property, a child added, detached or destroyed) gives the component and all its
+  ancestors a new revision, unique across the factory. A changed root revision therefore means "something in the tree
+  changed"; `TextLayout` relies on it to know when to lay the text out again.
 
-## Factory, pooling and ownership
+## Strings are owned
 
-Components are created, cloned and released **only** through the `TextComponentFactory`. It owns an
-`ObjectPool` per component type (structs) and a `WRBufferPool` for the subcomponent list buffers, so
-building/tearing down is allocation-light. The concrete constructors in `TextComponent.h` are the
-factory's building blocks, not end-user API.
+Components copy every string they are given (text, font and animation names, translation keys) into buffers borrowed
+from their factory's buffer pool, and return them when they are destroyed. Callers never keep strings alive for
+components. Getters return pointers into that storage, valid until the property changes or the component is destroyed.
+`StringComponent_GetText` never returns NULL (an unset text is `""`).
 
-- **Creation**: `CreateEmpty`, `CreateString`/`CreateStringStyled`, `CreateSprite`/`CreateSpriteSized`.
-- **Special characters**: `CreateSpace`/`CreateTab`/`CreateNewline` (backed by static string literals).
-- **Numbers/codepoints**: `CreateInt64`/`CreateUInt64`/`CreateDouble` (+ `...Styled` variants with base/
-  format options and font/color/size), and `CreateCodepoint`/`CreateCodepointStyled`. These format their
-  text into a **caller-owned** byte buffer (element size 1) that the component borrows — the factory never
-  owns strings. Use one buffer per generated string and keep it alive, unreallocated, while the component
-  references it.
-- **Clone**: `CloneComponent` deep-clones the component and its whole subtree; borrowed strings/sprite
-  instances are shared (not copied).
-- **Return**: `ReturnComponent` recycles one component's struct + subcomponent buffer (NOT its children);
-  `ReturnComponentTree` returns a component and its whole subtree (children first) — only safe when the
-  caller exclusively owns that subtree.
+## Assets by name only
 
-The factory owns only component structs and subcomponent buffers. Strings, textures and sprite instances
-stay owned by the caller and must outlive the components that reference them. A component may be referenced
-from many places; the caller decides when each is returned.
+Components never hold fonts or sprite animations: they name them. The `TextDocument` that owns the tree binds the names
+to loaded assets when the text is laid out (AGENTS.md rule 1: whatever keeps asset data owns its own asset user). So a
+component can be created before the window exists, a font can be missing (it falls back), and destroying the document
+releases everything at once.
+
+## Factory
+
+`TextComponentFactory` owns one object pool per component type and one `WRBufferPool` for everything the components own
+(their strings and child lists), so building and tearing down trees allocates little once the pools are warm.
+
+- **Creation:** `CreateEmpty`, `CreateString(text)`, `CreateSprite(animationName)`, `CreateTranslate(key, fallback)`.
+- **Shorthands** (string components with default styling): `CreateSpace`, `CreateTab`, `CreateNewline`,
+  `CreateInt64` / `CreateUInt64` (+ `...Formatted` with a base and prefix), `CreateDouble` (+ `...Formatted` with
+  `DecimalFormatOptions`), `CreateCodepoint`. Each formats into a factory scratch buffer and the component copies the
+  text, so two numbers never share storage.
+- **Clone:** `TextComponentFactory_CloneTree` deep-copies a tree (also from another factory) into a new root.
+- **Return:** `TextComponentFactory_ReturnTree(root)`.
+- `TextComponentFactory_GetLiveComponentCount` counts components not yet returned (a leak check; the tests use it).
+- `TextComponentFactory_Deconstruct` releases all pooled storage, also that of components still alive.
 
 ## Styling
 
-`TextStyle` is a superset (not a union) of style-related properties, each guarded by a presence flag, with
-`Set`/`Get`/`Clear` per property. `TextStyle_ApplyToComponent` applies only the present properties that are
-relevant to the component's concrete type (e.g. string size is ignored by sprites; color applies to both),
-using the components' validating setters. The shadow-color directive is a set-Default / set-Custom / clear
-tri-state.
+`TextStyle` is a superset of the style properties (not a union), each guarded by a presence flag, with `Set` / `Get` /
+`Clear` per property. `TextStyle_ApplyToComponent` applies only the present properties that fit the component's type:
+string properties to string components and to the string part of translate components, color and sprite size to
+sprites, nothing to empty components. It uses the components' setters, so invalid values (including an invalid font
+name) surface as errors. The style **borrows** its font name (normally a string literal); the component copies it.
 
-## Rendering
+## Notes
 
-`TextComponentRenderer` is a small reusable object (owns scratch buffers; construct once, reuse across
-frames). It flattens the component + subtree into inline runs and lays them out: own content first then
-children, left to right, breaking on `\n`; within a line, shorter runs are BOTTOM-aligned.
-
-- **Units**: all component sizes and the measured size are in **normalized-fitted** units where 1.0 = the
-  full target-area height, for BOTH axes (string size = line height; sprite size = box, both as fractions
-  of target-area height), so text and sprites compose on one scale. Measurement
-  (`TextComponentRenderer_MeasureComponent`) is render-context-free; drawing converts to pixels.
-- **Draw args** (`ComponentRenderArguments`, a struct so it can grow): position, additional size
-  multiplier (multiplies component sizes), tint (multiplied into component colors), rotation and relative
-  origin (both applied to the whole composed block), an optional cached render size, and an optional
-  scissor (`HasScissor` + `ScissorRelative`, a screen-relative [0;1] rect) that clips the draw — used e.g.
-  by the label widget to cut text to its bounds. The GPU scissor does not nest, so it replaces (then
-  disables) any outer clip for that draw.
-- **Shadows**: same text drawn behind at an offset relative to the component size; excluded from
-  measurement and origin; default color = component color with brightness × 0.25.
-- Underline/strikethrough draw as line primitives. The renderer never touches the render target or
-  shaders — it is an advanced draw-text call.
-
-## Notes / conventions
-
-- Cycle violations, unknown types and "not a child" use `ErrorCode_InvalidOperation` /
-  `ErrorCode_IllegalArgument`; text encoding uses `ErrorCode_InvalidTextEncoding`.
-- More component types are expected later; each embeds the base and registers a pool/size in the factory.
-- Serialization/deserialization is planned as a follow-up (the `TextComponentType` discriminator and the
-  plain-data property layout are there to support it).
+- Switches over `TextComponentType` have no `default:` (AGENTS.md rule 4), so adding a type fails the build where it is
+  not handled yet: the factory pools, `TextComponent.c` destruction, the codec tables, the layout, the plain-text
+  serializer and `TextStyle`.
+- Not thread-safe; main thread only.
+- History: the first version (2026-07) let children be shared between parents, borrowed every string, and copied fonts
+  by value; the 2026-10 code review (`handoff/2026-10_code_review/CODE_REVIEW.md` 2.1) lists what that broke. FIX_PLAN
+  Phase 4 rebuilt it into what this doc describes.

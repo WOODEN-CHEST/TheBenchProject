@@ -25,20 +25,30 @@ raylib (or audio-engine) object **by value**. Sprite sheets and sprite animation
   shader `locs`, font glyphs) changes it for everyone.
 - Main thread only. Fonts, models and shaders need the window's GL context to load; sounds do not.
 
-## GameFont (`GameFont.h`)
+## GameFont (`GameFont.h`, `source/GameFont.c`)
 
-- `typedef struct GameFontStruct { Font _rayFont; } GameFont;`. The header has no accessor and no doc comments; code
-  reads `_rayFont` directly (for example `TextRenderArguments.TargetFont = font._rayFont`).
-- Loaded with `LoadFontEx(path, 32, NULL, 0)`: a 32 px base size and raylib's default glyph set, the 95 printable ASCII
-  codepoints (32-126). Any other character draws as `?`. Files: `ttf`, `otf`. No texture filter is set. Unloaded with
-  `UnloadFont`.
-- The text code also builds `GameFont` values around `GetFontDefault()`, raylib's built-in font, which raylib owns
-  until `CloseWindow`. Those are not assets and must not be unloaded either. Before `InitWindow`, `GetFontDefault()`
-  returns an empty font.
-- **Known problem (Phase 4):** text components keep fonts **by value**. `TextComponentResolver_ResolveTree` copies the
-  loaded font into `StringComponent._font` (`StringComponent_SetFont(component, *Loaded)`), and `TextStyle._font`
-  stores one too. These copies dangle once the resolving user releases the font. Until Phase 4 replaces them with a
-  `TextDocument` and names-only references, keep that user's holds for as long as any component or style holds a copy.
+- `GameFont { Font _rayFont; bool _areGlyphsSorted; int32_t _fallbackGlyphIndex; }`. Code reads `_rayFont` for the
+  raylib calls that take a font.
+- Lookups: `GameFont_FindGlyphIndex(font, codepoint)` returns the glyph that draws a codepoint, or the `?` glyph when
+  the font lacks it (-1 without either). It binary-searches when the glyphs are sorted by codepoint, which every font
+  asset's are; `GameFont_HasGlyph` tells whether the font has the codepoint itself; `GameFont_GetGlyphAdvance` is the
+  pen advance in font pixels, measured the way raylib measures text; `GameFont_HasGlyphs` is false for an empty font.
+  `GameFont_Wrap(font)` builds the lookup data for a raylib font (the loader uses it, and `TextDocument` uses it for
+  raylib's built-in font).
+- Loading (`FontDefinition.c`): `LoadFontEx(path, size, codepoints, count)` with the definition's `size` (default 32 px)
+  and codepoint set (default: Basic Latin, Latin-1 Supplement and Latin Extended-A, `?` and the space always included; parsed by the
+  private `source/FontCodepoints.c`), then `SetTextureFilter` from its `texture_properties` (default bilinear). Files:
+  `ttf`, `otf`. The definition keys are in `references/asset_structure.md`. When the file lacks requested codepoints,
+  the loader logs one WARNING through `AssetManager_GetLogger` naming how many and the first few (they draw as `?`).
+  Unloaded with `UnloadFont`.
+- raylib's built-in font (`GetFontDefault()`) is not an asset: raylib owns it until `CloseWindow`, it must not be
+  unloaded, and before `InitWindow` it is empty.
+- Text never holds a `GameFont`: components name fonts and their `TextDocument` holds them under its own asset user
+  ([TextDocument.md](TextDocument.md)).
+- Shipped fonts: `fonts/test/newscrash.otf` (`test`; has only `š` and `ž` of the Latvian letters and no Cyrillic) and
+  `fonts/noto_sans/NotoSans-Regular.ttf` (`noto_sans`: Noto Sans Regular from Ubuntu's fonts-noto-core 20201225, SIL
+  Open Font License 1.1, licence in `OFL.txt` next to it; 48 px with Basic Latin, Latin-1, Latin Extended-A and
+  Cyrillic). A test checks that the Noto file covers every codepoint its definition asks for.
 
 ## GameModel (`GameModel.h`)
 

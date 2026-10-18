@@ -1,9 +1,8 @@
 #pragma once
 #include <stdbool.h>
-// Style values reuse the component property types (colors, fonts, sizes) and the shadow color enum.
+// Style values reuse the component property types (colors, sizes) and the shadow color enum.
 #include "raylib/raylib.h"
 #include "Renderer.h"
-#include "GameFont.h"
 #include "TextComponent.h"
 #include "wr/WRError.h"
 
@@ -15,11 +14,14 @@
  * A TextStyle carries every style-related property a component might have (a superset across all
  * component types, NOT a union), each guarded by a presence flag. Applying a style copies only the
  * present properties onto a component, and only the ones relevant to that component's concrete type
- * (e.g. the string size is ignored by a sprite component). Absent properties leave the component
- * unchanged, so styles compose and can express partial overrides.
+ * (e.g. the string size is ignored by a sprite component). String properties apply to string components and to
+ * the string part of translate components. Absent properties leave the component unchanged, so styles compose and
+ * can express partial overrides.
  *
  * Construct with TextStyle_Construct (everything absent), configure with the Set/Clear helpers, then
- * apply with TextStyle_ApplyToComponent. The struct owns nothing and needs no deconstruction.
+ * apply with TextStyle_ApplyToComponent. The style owns nothing: the font name is BORROWED (typically a string
+ * literal) and must stay valid while the style is applied; the component copies it. TextStyle_Deconstruct exists
+ * for symmetry and releases nothing.
  */
 
 
@@ -32,10 +34,10 @@
  */
 typedef struct TextStyleStruct
 {
-    /** @brief Whether the font property is present. */
-    bool _hasFont;
-    /** @brief Font to apply (string components). */
-    GameFont _font;
+    /** @brief Whether the font-name property is present. */
+    bool _hasFontName;
+    /** @brief Borrowed font asset name to apply (string components), or NULL for the document's default font. */
+    const unsigned char* _fontName;
 
     /** @brief Whether the color property is present. */
     bool _hasColor;
@@ -93,26 +95,33 @@ typedef struct TextStyleStruct
  */
 void TextStyle_Construct(TextStyle* self);
 
-
-// Font.
 /**
- * @brief Sets the style's font property (marks it present).
- * @param self The style; must not be NULL.
- * @param font The font to store.
+ * @brief Releases a style; it owns nothing, so this only exists to pair with TextStyle_Construct.
+ * @param self The style, or NULL.
  */
-void TextStyle_SetFont(TextStyle* self, GameFont font);
+void TextStyle_Deconstruct(TextStyle* self);
+
+
+// Font name.
 /**
- * @brief Reads the style's font property.
+ * @brief Sets the style's font-name property (marks it present).
  * @param self The style; must not be NULL.
- * @param outFont [out] Receives the font when present; must not be NULL.
+ * @param fontName Borrowed font asset name, or NULL to apply the document's default font; must stay valid while
+ *        the style is applied (the component copies it). Validated when applied.
+ */
+void TextStyle_SetFontName(TextStyle* self, const unsigned char* fontName);
+/**
+ * @brief Reads the style's font-name property.
+ * @param self The style; must not be NULL.
+ * @param outFontName [out] Receives the borrowed name (possibly NULL) when present; must not be NULL.
  * @returns true if the property is present (and written), false otherwise.
  */
-bool TextStyle_GetFont(const TextStyle* self, GameFont* outFont);
+bool TextStyle_GetFontName(const TextStyle* self, const unsigned char** outFontName);
 /**
- * @brief Clears the style's font property (marks it absent).
+ * @brief Clears the style's font-name property (marks it absent).
  * @param self The style; must not be NULL.
  */
-void TextStyle_ClearFont(TextStyle* self);
+void TextStyle_ClearFontName(TextStyle* self);
 
 
 // Color (string and sprite components).
@@ -314,10 +323,11 @@ void TextStyle_ClearSpacing(TextStyle* self);
 /**
  * @brief Applies the present, type-relevant style properties onto a component.
  *
- * Properties that are absent, or that do not apply to the component's concrete type, are skipped. The
- * component's validating setters are used, so an invalid stored value (e.g. a non-finite size) surfaces
- * as an error; application is best-effort and continues past a failing property, returning the first
- * error encountered.
+ * Properties that are absent, or that do not apply to the component's concrete type, are skipped (an empty
+ * component takes none). String properties apply to string components and to the string part of translate
+ * components. The component's validating setters are used, so an invalid stored value (e.g. a non-finite size or
+ * an invalid font name) surfaces as an error; application is best-effort and continues past a failing property,
+ * returning the first error encountered.
  * @param self The style to apply; must not be NULL.
  * @param component The component to style; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self or @p component is NULL; otherwise the first

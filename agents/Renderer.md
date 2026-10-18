@@ -78,6 +78,7 @@ RenderContext_Deconstruct(&Context);
 |---|---|---|
 | `RenderContext_RenderTexture2D` | `TextureRenderArguments` | Normalized source rectangle. `Position` is where `RelativeOrigin` (normalized; also the rotation pivot) lands, `Size` the drawn size, rotation in radians. |
 | `RenderContext_RenderText2D` | `TextRenderArguments` | Raw raylib `Font` in `TargetFont` (for a `GameFont`, pass `._rayFont`), NUL-terminated UTF-8 text, `Size` = line height as a `RenderFloat`, `SizeRelativeSpacing` = character spacing as a fraction of the size, origin relative to the whole text block. |
+| `RenderContext_RenderGlyph` | `GlyphRenderArguments` | One font glyph by glyph index (no codepoint lookup), in pixels: `PenPosition` is the pen origin (left edge of the advance, top of the line box), `FontSizePixels` the line height; the quad is offset and padded as raylib's `DrawTextCodepoint` does, then rotated around the pen. To rotate a whole text block, rotate every pen position around the block's pivot and pass the same angle. `TextLayout` draws all text this way. |
 | `RenderContext_RenderRectangle` | `RectangleRenderArguments` | Filled; origin and rotation as for textures. |
 | `RenderContext_RenderRectangleOutline` | `RectangleOutlineRenderArguments` | Axis-aligned, border drawn inside the bounds, `Thickness` is a `RenderFloat`. |
 | `RenderContext_RenderLine` | `LineRenderArguments` | `Thickness` is a `RenderFloat`. |
@@ -88,14 +89,16 @@ RenderContext_Deconstruct(&Context);
 - Text measuring: `Renderer_MeasureTextNormalized(font, text, relativeSpacing)` measures at font size 1. Store the
   result in `TextRenderArguments.CachedDrawSize` with `HasCachedDrawSize = true` to skip measuring on every draw; the
   renderer scales it by the size.
-- Draw counters (`_textureDrawCount`, `_stringDrawCount`, `_modelDrawCount`, `_meshDrawCount` counting each instance,
-  `_primitiveDrawCount`) are reset by `RenderContext_Create` and read directly; there are no getters.
+- Draw counters (`_textureDrawCount`, `_stringDrawCount`, `_glyphDrawCount`, `_modelDrawCount`, `_meshDrawCount`
+  counting each instance, `_primitiveDrawCount`) are reset by `RenderContext_Create` and read directly; there are no
+  getters.
 
 ## Who uses it
 
-`UIRenderContext` (the per-widget wrapper, see [UIFramework.md](UIFramework.md)), `UIScreen_Render` (keyboard
-navigation outlines), `TextComponentRenderer` and `LabelWidget`. None of them is wired into a running frame yet:
-nothing calls `RenderContext_Create` today. `WorldRenderer` and `GameFrameManager` draw with raylib directly.
+`TextLayout_Draw` ([TextDocument.md](TextDocument.md)), `UIRenderContext` (the per-widget wrapper, see
+[UIFramework.md](UIFramework.md)), `UIScreen_Render` (keyboard navigation outlines) and `LabelWidget`. The one running
+user is `WorldTestFrame`'s text sample, which creates a `RenderContext` on its frame target after the world is drawn.
+`WorldRenderer` and `GameFrameManager` draw with raylib directly.
 
 ## Pitfalls
 

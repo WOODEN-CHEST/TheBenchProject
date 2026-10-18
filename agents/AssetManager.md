@@ -33,8 +33,8 @@ and [GameAssets.md](GameAssets.md).
 ### The project rule (handoff/2026-10_code_review/FIX_PLAN.md, decision D3)
 **Whatever keeps asset data owns its own `AssetUserID`, and nothing stores asset pointers or by-value copies
 (a `GameFont`, a raylib `Model`/`Texture2D`/`Font`/`Shader`, a `SpriteAnimationInstance` source) past that user.**
-- Give each owning object (a frame, the world renderer, a World built with an asset manager; later each
-  TextDocument and the audio engine) its own user. Mint it when the owner is created and retire it when the owner is destroyed, also on forced teardown.
+- Give each owning object (a frame, the world renderer, a World built with an asset manager, each TextDocument;
+  later the audio engine) its own user. Mint it when the owner is created and retire it when the owner is destroyed, also on forced teardown.
 - Load what you keep under your own user, even if another user already loaded it: that only adds your hold, with
   no I/O.
 - Hand an asset to another object only for the duration of a call. A receiver that keeps it must load its own hold
@@ -44,11 +44,9 @@ How the world code follows it: a `World` built with `World_Construct2` owns a us
 under it when they are added (the renderer only reads frames); the `WorldRenderer` holds its shaders under one user
 and the world's models under another, which `WorldRenderer_PrepareWorld` swaps to release unused models.
 
-One known violation, scheduled to be fixed:
-- **Text fonts (Phase 4).** `TextComponentResolver_ResolveTree` copies the loaded `GameFont` **by value** into each
-  `StringComponent` (`StringComponent_SetFont`), and `TextStyle` stores a `GameFont` by value too. The copies dangle
-  once the resolving user releases the font. Phase 4 replaces this with `TextDocument` (which owns a user) and
-  names-only font and animation references.
+Text follows it the same way: components only name fonts and sprite animations, and each `TextDocument` loads them
+under its own user and keeps them until it is destroyed ([TextDocument.md](TextDocument.md)). (Until FIX_PLAN Phase 4
+the text code copied fonts by value into components; that is gone.)
 
 ### Assets are shared and read-only
 - Never write to an asset, including through the arrays a by-value copy still points at (`Model.materials`,
@@ -306,6 +304,8 @@ Templates: `FontDefinition.c` (path-based, with `format`), `ShaderDefinition.c` 
 
 - **Logging** goes through the borrowed logger (NULL logs nothing; return values carry the same information): skipped
   definition files, their count, unscannable directories, and the first failure of each load. It never logs per frame.
+  Loaders reach the same logger through `AssetManager_GetLogger` for content problems of an asset that still loads,
+  logged once at load time (the font loader's warning about codepoints its file lacks).
 - **Buffer pools:** `AssetManager_BorrowGenericBuffer(self, elementSize, &Buffer)` lends a cleared, growable buffer;
   give it back with `AssetManager_ReturnGenericBuffer` and never free it yourself.
 - Type lookups: `AssetManager_GetAssetTypeByName` (returns `ASSET_TYPE_ID_INVALID` when unknown),

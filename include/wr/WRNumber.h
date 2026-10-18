@@ -94,7 +94,9 @@ extern const int32_t NUMBER_BASE_16;
 
 /**
  * @brief Sentinel for @c DecimalFormatOptions::_digitCountAfterSeparator requesting the shortest
- *        round-trippable representation (printf %g-style; trailing zeros trimmed).
+ *        round-trippable representation (printf %g-style; trailing zeros trimmed): %g's usual 6
+ *        significant digits, or the fewest more (at most 17) whose text parses back to exactly the
+ *        same value.
  */
 extern const int32_t DIGIT_COUNT_AFTER_SEPARATOR_SHORTEST;
 /**
@@ -348,9 +350,10 @@ Error Number_FloatFromString(const unsigned char* str,
 /**
  * @brief Formats a single-precision float as text and appends it to a byte buffer.
  *
- * Equivalent to widening to double and calling @ref Number_DoubleToString: NaN renders as "NaN",
+ * Formats like widening to double and calling @ref Number_DoubleToString: NaN renders as "NaN",
  * positive/negative infinity as "infinity"/"-infinity", and finite values per @p options (fixed,
- * scientific, shortest, or full). The chosen decimal separator is substituted into the output, and
+ * scientific, shortest, or full). The shortest form only needs to read back as the same FLOAT (at
+ * most 9 significant digits), so 0.1f renders as "0.1". The chosen decimal separator is substituted into the output, and
  * a trailing null terminator is written; the buffer count advances past the digits but not the
  * terminator so appends remain continuous.
  * @param value Value to format.
@@ -389,7 +392,8 @@ Error Number_DoubleFromString(const unsigned char* str,
  * NaN renders as "NaN", positive infinity as "infinity", and negative infinity as "-infinity".
  * Finite values are rendered according to @p options: a non-negative fractional digit count
  * produces fixed-point with exactly that many fractional digits; @c DIGIT_COUNT_AFTER_SEPARATOR_SHORTEST
- * produces the shortest %g-style form; @c DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED produces the full
+ * produces the %g-style form with 6 significant digits, or the fewest more (at most 17) that parse
+ * back to exactly @p value; @c DIGIT_COUNT_AFTER_SEPARATOR_UNLIMITED produces the full
  * %f-style form; and scientific notation is used when requested. The selected separator character
  * is substituted, and a trailing null terminator is written (the count advances past the digits
  * only, so consecutive appends concatenate cleanly).

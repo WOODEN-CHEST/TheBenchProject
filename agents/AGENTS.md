@@ -45,7 +45,9 @@ Current module list:
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
   caches failed loads, and registers the six standard types. Read its lifetime rules before touching assets.
 * Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader and GameSound: the manager-owned wrappers for
-  the standard font, model, shader and sound types, with their ownership rules, accessors and pitfalls.
+  the standard font, model, shader and sound types, with their ownership rules, accessors and pitfalls. GameFont
+  (source/GameFont.c) adds sorted glyph lookup with the '?' fallback; fonts load at a definition-chosen size and
+  codepoint set (source/FontCodepoints.c, private) and warn once about glyphs their file lacks.
 * SpriteSheet (SpriteSheet.md) - Texture atlas with named pixel regions; the asset loader shelf-packs padded source
   images into one texture (padding at most 64 px, atlas at most 8192 px).
 * SpriteAnimation (SpriteAnimation.md) - 2D frame animations: SpriteAnimation (shared asset data: frames plus default
@@ -78,7 +80,8 @@ Current module list:
     WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
   * WorldRenderCache - The renderer's private per-object cache (source/WorldRenderCache.h): one world walk per frame
     builds the model/sprite/light lists; model assets are resolved once per object and again only on rename.
-  * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world, with debug keys.
+  * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world, with debug keys and a text sample
+    (T toggles it) drawn with TextDocument + TextLayout over the world.
 * World light culling (WorldLightCulling.md) - Reach-culls a list of point lights to the strongest few (up to WORLD_MAX_FORWARD_LIGHTS) overlapping an object's bounding sphere, ranked by influence, for the renderer's per-object forward shading.
 * UI framework (UIFramework.md) - The in-game UI. A screen context object owns a widget factory (pooled, capability-registered widget types), routes input to the top-most/focused widget, drives keyboard navigation, hosts keyframed property animations, and renders a z-ordered tree of abstract widgets through per-widget local render contexts. Covers six modules:
   * UIInput - Raylib-free input value types (UIKey/UIMouseButton enums, hover/mouse/keyboard argument structs) shared by widgets and the screen.
@@ -87,34 +90,35 @@ Current module list:
   * UIWidgetFactory - Registers capabilities and widget types (struct size + constructor + capability resolvers), owns per-type object pools, and constructs/recycles widget instances.
   * UIWidget - The abstract widget base (vtable, lifecycle, geometry/flags/state, subwidgets, capabilities, state-change events, generic property get/set); concrete widgets embed it first.
   * UIScreen - The context: widget registry, roots, focus/z-order, input routing, keyboard navigation + outlines, animation host, and the reused per-tick update snapshot. The widget factory is program-wide (one shared across all screens), passed into each screen rather than owned by it.
-  * LabelWidget - The first concrete widget: displays a (possibly multi-line) TextComponent with per-line alignment and bound handling (cut/wrap/resize/wrap-then-resize/wrap-then-cut). Auto-fits its widget box to the rendered text. Built on the text component system (TextComponents.md); adds an optional scissor to TextComponentRenderer for cutting.
+  * LabelWidget - The first concrete widget: displays a (possibly multi-line) rich text with per-line alignment and bound handling (cut/wrap/resize/wrap-then-resize/wrap-then-cut). Embeds a TextDocument and a TextLayout (TextDocument.md), lays out in Update, draws in Render. Auto-fits its widget box to the rendered text.
   Also adds 2D rectangle/outline/line primitives to the Renderer module.
-* Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text. Abstract mutable
-  TextComponent tree (String/Sprite/Empty types) with ordered subcomponents and cycle-checked composition;
-  a pooling TextComponentFactory that is the sole creator/cloner/returner (plus number/codepoint/special-char
-  helpers over caller-owned buffers); a presence-guarded TextStyle applied onto components; and a
-  TextComponentRenderer that measures and draws component trees inline (bottom-aligned lines, shadows,
-  underline/strikethrough, sprites) through a RenderContext. Covers four modules:
-  * TextComponent - Abstract base + StringComponent/SpriteComponent/EmptyComponent + subcomponent management.
-    String/sprite components also carry a borrowed asset reference NAME (_fontName / _animationName) for
-    serialization and binding.
-  * TextComponentFactory - Pooled create/clone/return; number/codepoint/space/tab/newline shorthands.
+* Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
+  its children, a tree has at most 64 levels, components own copies of their strings, and fonts and sprite animations
+  are named, never held. Every change gives the component and its ancestors a new revision. Covers three modules (plus
+  the private source/TextComponentInternal.h):
+  * TextComponent - The base type, the four concrete types (String, Translate (a key plus a fallback, styled like a
+    string), Sprite, Empty), tree operations (add/insert a root, detach, destroy) and validating property setters.
+  * TextComponentFactory - Pooled create/clone/return of components and their strings and child lists; number,
+    codepoint and special-character shorthands.
   * TextStyle - Optional, presence-guarded style properties applied to a component by type.
-  * TextComponentRenderer - Inline layout, measuring and drawing of a component tree (normalized-fitted units).
+* Text documents and layout (TextDocument.md) - Showing a component tree. Covers two modules:
+  * TextDocument - The single owner of one rich text: the tree, its own asset user, the name->asset bindings (each
+    failing name logged once and remembered), one playback instance per sprite-animation name (TextDocument_Update
+    advances them), the default font name and the translation hook (no string tables yet).
+  * TextLayout - Measures and arranges a document once (lines, wrap at spaces, shrink to width, alignment,
+    bottom-aligned runs, tabs) into cached glyph and sprite runs; TextLayout_Refresh rebuilds only when the document,
+    its tree or the options changed; TextLayout_Draw draws the runs (shadows first) through RenderContext_RenderGlyph.
 * GameJSON (GameJSON.md) - Shared parsers for the game's common JSON value shapes (numbers, booleans,
-  strings, colors, render colors, vectors); the asset-definition helpers and the text component JSON parser
-  both use it so the value conventions live in one place. Raises ErrorCode_InvalidJSON on wrong-shape values.
-* Text component serialization (TextComponentSerialization.md) - Serializes text component trees to/from the
-  game's three formats and binds their asset references. JSON is the human-facing form
-  (references/text_component_structure.md); GHDF is compact binary storage; plain text is a lossy strings-only
-  extraction. Structured forms convert to/from the format's STRUCT tree (JSONCompound/GHDFCompound), not
-  bytes. Serializers take all working memory from the caller (object pools, factory, a WRBufferPool for
-  stable deserialized strings). Covers four modules:
+  strings, colors, render colors, vectors); the asset-definition helpers and the text component codec
+  both use it so the value conventions live in one place. Raises ErrorCode_InvalidJSON for every bad value.
+* Text component serialization (TextComponentSerialization.md) - Text component trees to and from the game's three
+  formats. JSON (references/text_component_structure.md) and GHDF share ONE codec (source/TextComponentCodec.c,
+  private) that lists every type's fields once, validates every value, names the key and the component's path in
+  errors (InvalidJSON / Deserialize) and limits nesting to 64 levels. Structured forms convert to/from the format's
+  value tree, not bytes. Covers three modules:
   * TextComponentText - Component -> plain UTF-8 string (no deserializer).
-  * TextComponentJSON - Component <-> WRJSON value tree.
-  * TextComponentGHDF - Component <-> GHDF compound tree.
-  * TextComponentResolver - Binds a parsed tree's font/animation NAMES to live GameFont/SpriteAnimationInstance
-    handles via the AssetManager (call after parsing; instances owned by a caller ObjectPool).
+  * TextComponentJSON - Component <-> WRJSON value tree (writes shorthands and only non-default keys).
+  * TextComponentGHDF - Component <-> GHDF compound tree (explicit type wire ids).
 * SoundEngine (SoundEngine.md) - Custom audio mixer (track tree, effects, scheduled commands) on raylib's audio
   stream. DISABLED: AudioEngine_Construct1 always fails until its threading redesign; SoundEngine.md lists the
   defects and is the brief for that redesign (ask the owner its open decisions before starting).
@@ -128,8 +132,8 @@ cannot be used.
 
 Project rules (added after the 2026-10 code review; handoff/2026-10_code_review/FIX_PLAN.md has the reasoning):
 1. Asset lifetime: whatever keeps asset data owns its own AssetUserID, and nothing stores asset pointers or by-value
-   copies (GameFont, Model, Texture2D, sprite animation sources) past that user. See AssetManager.md. One known
-   violation is scheduled to be fixed: text components copying fonts by value (FIX_PLAN Phase 4).
+   copies (GameFont, Model, Texture2D, sprite animation sources) past that user. See AssetManager.md. Text follows it
+   through TextDocument (since FIX_PLAN Phase 4 components only name their assets).
 2. Never hold a Widget* or text component pointer across a call that can run hooks, events or user callbacks;
    re-resolve it by id afterwards. Never destroy a widget from inside its own event (until the UI's deferred
    destruction exists).

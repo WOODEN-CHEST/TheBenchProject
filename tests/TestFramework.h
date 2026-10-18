@@ -131,6 +131,16 @@ bool TestRun_CheckErrorCode(TestRun* self, Error result, ErrorCode expected, con
 Error TestRun_CreateWorkDirectory(TestRun* self, const char* name, GenericBuffer* outPath);
 
 /**
+ * @brief Appends "<repository root>/<relativePath>", NUL-terminated, to @p outPath (the test binary runs from
+ *        tests/out, two levels below the root). For tests that check files the game ships, such as compile/out/asset.
+ * @param self The run. Must not be NULL.
+ * @param relativePath Path from the repository root using '/' separators (a string literal). Must not be NULL.
+ * @param outPath [out] Byte buffer the path is appended to. Must not be NULL.
+ * @returns Success, or a formatting error.
+ */
+Error TestRun_BuildRepositoryPath(TestRun* self, const char* relativePath, GenericBuffer* outPath);
+
+/**
  * @brief Writes @p text to "<directory>/<relativePath>", creating missing parent directories.
  * @param directory Absolute UTF-8 directory (typically a work directory). Must not be NULL.
  * @param relativePath Relative file path using '/' separators (a string literal). Must not be NULL.

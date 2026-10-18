@@ -160,6 +160,9 @@ As an array
 
 The alpha channel in all forms may optionally not be present, if it isn't then the color is fully opaque (255).
 
+Every channel is a whole number from 0 to 255. A channel outside that range is an error (it is not clamped), and so is
+a hex string with other than 6 or 8 hex digits (`0-9`, `a-f`, `A-F`; no sign, spaces or other characters).
+
 
 ### Vectors.
 Vectors have 2 forms, one a compound and one an array.
@@ -300,10 +303,33 @@ A sound is any audio played in the game. This includes music.
 
 ```
 {
-    "location": asset location, // a ttf or otf file
-    "format": "ttf"             // [OPTIONAL] see "Format"; REQUIRED when "location" is a reference
+    "location": asset location,          // a ttf or otf file
+    "format": "ttf",                     // [OPTIONAL] see "Format"; REQUIRED when "location" is a reference
+    "size": integer number,              // [OPTIONAL] pixel height the glyphs are rasterized at, in [8;256]. Text drawn
+                                         //            larger than this is upscaled (softer). Default: 32
+    "codepoints": [ entry, ... ],        // [OPTIONAL] which characters get glyphs; see below.
+                                         //            Default: ["basic_latin", "latin_1_supplement", "latin_extended_a"]
+    "texture_properties": texture properties // [OPTIONAL] filtering of the glyph atlas. Default: bilinear
 }
 ```
+
+A font only has glyphs for the codepoints its definition lists; any other character draws as `?`. Each `codepoints`
+entry is one of:
+* a **block name**: `"basic_latin"` (U+0020-U+007E), `"latin_1_supplement"` (U+00A0-U+00FF), `"latin_extended_a"`
+  (U+0100-U+017F, includes the Latvian and Lithuanian letters), `"latin_extended_b"` (U+0180-U+024F) or `"cyrillic"`
+  (U+0400-U+04FF). Only blocks in which every codepoint is assigned are named; give other ranges as numbers;
+* **one codepoint**, as a number (`8364` for the euro sign);
+* a **range** `[first, last]` (inclusive), whose bounds are numbers or numeric strings such as `"0x0370"`.
+
+Entries may overlap; they are merged. `?` (U+003F) and the space (U+0020) are always added: `?` is drawn for every
+missing character, and the space's width spaces words. Every codepoint must be within U+0020-U+10FFFF and no range may
+include the surrogates U+D800-U+DFFF. `codepoints` may have at most 1024 entries (use ranges for more), a font may have
+at most 8192 codepoints, and their count times `size` squared must fit one 8192 x 8192 atlas (for example about 4000
+codepoints at 128 px); a definition that breaks these rules is rejected when it is read. When the font loads, the game logs one
+WARNING if the font file lacks some of the requested codepoints, listing the first few; they draw as `?`.
+
+Memory: roughly `size`² x 2 bytes per glyph, so the default set at 32 px is about 1 MB, and four blocks at 48 px about
+4-6 MB.
 
 
 ## Shaders.

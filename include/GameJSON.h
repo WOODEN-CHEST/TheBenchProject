@@ -18,8 +18,9 @@
  * component parsing share the exact same logic instead of duplicating it. The functions operate on a
  * WRJSON value tree (produced by a shared JSONObjectPool); they do not consult the pool or the parser.
  *
- * Errors: a value that is present but of the wrong shape raises ErrorCode_InvalidJSON. Owned strings the
- * helpers produce are heap-allocated and released with Memory_Free.
+ * Errors: every value that is present but bad (wrong shape, unparsable numeric string, non-finite or out-of-range
+ * number) raises ErrorCode_InvalidJSON, whatever the underlying parser reported. Owned strings the helpers produce
+ * are heap-allocated and released with Memory_Free.
  */
 
 
@@ -34,17 +35,17 @@
  * @param value The value to convert; must not be NULL.
  * @param outValue [out] Receives the integer. Must not be NULL. Unchanged on failure.
  * @returns Success; ErrorCode_InvalidJSON if the value is not an integer, a whole in-range real number or
- *          a parsable string.
+ *          a parsable string (a parse failure keeps the parser's message).
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
 Error GameJSON_ValueToInt64(const JSONObjectValue* value, int64_t* outValue);
 
 /**
- * @brief Converts a JSON value to a double (accepts a real number, an integer, or a numeric string).
+ * @brief Converts a JSON value to a finite double (accepts a real number, an integer, or a numeric string).
  * @param value The value to convert; must not be NULL.
  * @param outValue [out] Receives the double. Must not be NULL.
- * @returns Success; ErrorCode_InvalidJSON if the value is not a number/parsable string.
+ * @returns Success; ErrorCode_InvalidJSON if the value is not a number or parsable string, or is infinite or NaN.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
@@ -75,7 +76,8 @@ Error GameJSON_ValueToOwnedString(const JSONObjectValue* value, unsigned char** 
  *        {r,g,b,(a)}). Missing alpha is opaque (255).
  * @param value The JSON value; must not be NULL.
  * @param outColor [out] Receives the color. Must not be NULL.
- * @returns Success; ErrorCode_InvalidJSON on a malformed color.
+ * @returns Success; ErrorCode_InvalidJSON on a malformed color: a channel that is not a whole number within [0, 255]
+ *          (never clamped), or a hex string with other than 6 or 8 hex digits (0-9, a-f, A-F; no sign or spaces).
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
@@ -90,7 +92,7 @@ Error GameJSON_ParseColor(const JSONObjectValue* value, Color* outColor);
  * defaults to the tint's alpha).
  * @param value The JSON value; must not be NULL.
  * @param outColor [out] Receives the render color. Must not be NULL.
- * @returns Success; ErrorCode_InvalidJSON on a malformed render color.
+ * @returns Success; ErrorCode_InvalidJSON on a malformed render color, or a brightness or opacity outside [0, 1].
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
@@ -100,7 +102,8 @@ Error GameJSON_ParseRenderColor(const JSONObjectValue* value, RenderColor* outCo
  * @brief Parses a decimal 2D vector from a JSON value (compound {x,y} or array [x,y]).
  * @param value The JSON value; must not be NULL.
  * @param outVector [out] Receives the vector. Must not be NULL.
- * @returns Success; ErrorCode_InvalidJSON on a malformed vector.
+ * @returns Success; ErrorCode_InvalidJSON on a malformed vector, or a component that is not finite or does not fit
+ *          a float.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */

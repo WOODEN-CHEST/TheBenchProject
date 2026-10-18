@@ -3,50 +3,44 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "wr/WRError.h"
-// GenericBuffer backs the label's cached line list; Vector2/Rectangle/Color and RenderColor are part of
-// the label's public property data; the Widget base is embedded as the first member.
-#include "wr/WRMemory.h"
+// Vector2/Rectangle/Color and RenderColor are part of the label's public property data; the Widget base, the text
+// document and the layout are embedded by value.
 #include "raylib/raylib.h"
 #include "Renderer.h"
 #include "UIWidget.h"
+#include "TextDocument.h"
+#include "TextLayout.h"
 
 
 /**
  * @file LabelWidget.h
- * @brief A widget that displays a (possibly multi-line) text component.
+ * @brief A widget that displays a (possibly multi-line) rich text.
  *
- * The label is the standard, non-special text element of the UI (for labels, buttons, textboxes, and so
- * on); heavier text (editors) uses its own systems. It renders a TextComponent tree through a shared
- * TextComponentRenderer, adding per-line horizontal alignment plus bound handling (cut / wrap / resize)
- * that the plain component renderer does not do.
+ * The label is the standard, non-special text element of the UI (for labels, buttons, textboxes, and so on);
+ * heavier text (editors) uses its own systems. It embeds a TextDocument that owns its text component tree and the
+ * fonts and sprite animations the tree names, and a TextLayout of that document, which adds per-line alignment and
+ * bound handling (cut / wrap / resize) to the text.
  *
- * UNITS AND PLACEMENT. Text is measured and drawn in normalized-fitted units (1.0 = the target-area
- * height) scaled by the label's Size, exactly like the text component system. The text block's top-left
- * is placed at the label widget's box top-left (its Position), and the label writes its own base widget
- * Size each render so the widget box (hit-testing and the keyboard-navigation outline) hugs the rendered
- * text. Origin is the block's rotation pivot and the reference point of the reported DrawSize.
+ * UNITS AND PLACEMENT. Text is measured and drawn in normalized-fitted units (1.0 = the target-area height) scaled
+ * by the label's Size, exactly like the text component system. The text block's top-left is placed at the label
+ * widget's box top-left (its Position), and the label writes its own base widget Size each render so the widget box
+ * (hit-testing and the keyboard-navigation outline) hugs the rendered text. Origin is the block's rotation pivot and
+ * the reference point of the reported DrawSize.
  *
- * TWO REPRESENTATIONS. The label holds the original, unmodified text component (borrowed) and a lazily
- * built cache: the text split into a list of line components (with any wrapping/resizing applied), backed
- * by an owned buffer of the substring bytes those lines reference. The cache is rebuilt only when needed
- * (on render or a draw-size query) so repeated property changes do not rebuild it each time.
+ * UPDATE, THEN RENDER. Each update tick the label advances its document's sprite animations and lays its text out
+ * again when the text (any edit inside the tree) or a layout property changed; render only draws that layout. A
+ * label whose update flag is off keeps showing the text of its last update (nothing before its first one).
  *
- * OWNERSHIP. The text component, the TextComponentFactory and the TextComponentRenderer are all borrowed
- * (passed at construction) and must outlive the label. The label owns only its cached line components
- * (returned to the factory on rebuild/deconstruct) and the substring byte buffer. Build labels through
- * the UIWidgetFactory like any widget (see LabelWidget_RegisterType / LabelWidget_Create).
+ * OWNERSHIP. The text component factory and the asset manager are borrowed (passed at construction) and must
+ * outlive the label. The label owns its text tree (through its document): give it a root with LabelWidget_SetText,
+ * or edit the tree in place through LabelWidget_GetText / LabelWidget_GetDocument. Build labels through the
+ * UIWidgetFactory like any widget (see LabelWidget_RegisterType / LabelWidget_Create).
  */
 
 
 // Forward declarations (borrowed; full types live in their own headers).
 /** @brief The program-wide widget factory; full type in UIWidgetFactory.h. */
 typedef struct UIWidgetFactoryStruct UIWidgetFactory;
-/** @brief The text component factory; full type in TextComponentFactory.h. Borrowed. */
-typedef struct TextComponentFactoryStruct TextComponentFactory;
-/** @brief The text component renderer; full type in TextComponentRenderer.h. Borrowed. */
-typedef struct TextComponentRendererStruct TextComponentRenderer;
-/** @brief A text component; full type in TextComponent.h. Borrowed. */
-typedef struct TextComponentStruct TextComponent;
 
 
 // Types.
@@ -72,9 +66,10 @@ typedef enum LabelBoundHandlingEnum
     LabelBoundHandling_Cut,
     /** @brief Wrap lines on spaces where a line would exceed the bounds width; an unbreakable word overflows. */
     LabelBoundHandling_Wrap,
-    /** @brief Shrink each over-wide line uniformly so it fits the bounds width (lines that fit are unchanged). */
+    /** @brief Shrink each over-wide line uniformly so it fits the bounds width (lines that fit are unchanged). A bounds
+     *         width of 0 shrinks nothing. */
     LabelBoundHandling_Resize,
-    /** @brief Wrap first; any line still over-wide is then shrunk to fit. */
+    /** @brief Wrap first; any line still over-wide is then shrunk to fit (not with a bounds width of 0). */
     LabelBoundHandling_WrapThenResize,
     /** @brief Wrap first; any line still over-wide is then clipped (scissor). */
     LabelBoundHandling_WrapThenCut
@@ -129,16 +124,20 @@ typedef enum LabelPropertyEnum
 /**
  * @brief Construction arguments for a label, passed to the widget factory.
  *
- * ComponentFactory and ComponentRenderer are required and borrowed; Text is an optional initial text
- * component (also borrowed, may be NULL for an empty label).
+ * ComponentFactory is required; Assets and Logger are optional; Text is an optional initial text tree.
  */
 typedef struct LabelWidgetArgsStruct
 {
-    /** @brief The text component factory the label builds its line cache with; borrowed, required, must outlive the label. */
+    /** @brief The factory the label's text components come from and are returned to; borrowed, required, must outlive
+     *         the label. */
     TextComponentFactory* ComponentFactory;
-    /** @brief The text component renderer the label measures/draws with; borrowed, required, must outlive the label. */
-    TextComponentRenderer* ComponentRenderer;
-    /** @brief Optional initial text component; borrowed, may be NULL. */
+    /** @brief Loads the fonts and sprite animations the text names; borrowed, may be NULL (raylib's built-in font, no
+     *         sprites). Must outlive the label. */
+    AssetManager* Assets;
+    /** @brief Reports names that fail to load, once each; borrowed, may be NULL. */
+    Logger* Logger;
+    /** @brief Optional initial text: a root from ComponentFactory, owned by the label once it is constructed (still the
+     *         caller's if construction fails); may be NULL. */
     TextComponent* Text;
 } LabelWidgetArgs;
 
@@ -146,20 +145,18 @@ typedef struct LabelWidgetArgsStruct
  * @brief A text-displaying widget. Embeds the Widget base first; underscore-prefixed fields are internal.
  *
  * Create through the widget factory (LabelWidget_Create / UIWidgetFactory_ConstructWidget) and access via
- * the LabelWidget_* getters/setters. The cached fields hold the built line representation and are managed
- * internally.
+ * the LabelWidget_* getters/setters. The widget storage is pooled and never moves, which the embedded document
+ * requires.
  */
 typedef struct LabelWidgetStruct
 {
     /** @brief Abstract widget base; must be the first member. */
     Widget Base;
 
-    /** @brief Text component factory used to build the line cache; borrowed. */
-    TextComponentFactory* _componentFactory;
-    /** @brief Text component renderer used to measure and draw; borrowed. */
-    TextComponentRenderer* _componentRenderer;
-    /** @brief The original, unmodified text; borrowed, may be NULL (no text). */
-    TextComponent* _text;
+    /** @brief Owns the label's text tree and the assets it names. */
+    TextDocument _document;
+    /** @brief The text laid out with the label's properties; refreshed in Update. */
+    TextLayout _layout;
 
     /** @brief Per-line horizontal alignment; defaults to LabelAlignment_Left. */
     LabelAlignment _alignment;
@@ -167,7 +164,8 @@ typedef struct LabelWidgetStruct
     Vector2 _origin;
     /** @brief Rotation around the origin, in radians; defaults to 0. */
     float _rotation;
-    /** @brief Size multiplier applied to the text component sizes; defaults to 1. */
+    /** @brief Size multiplier applied to the text component sizes, in [0, TEXT_LAYOUT_SIZE_MULTIPLIER_MAX]; defaults
+     *         to 1. */
     float _size;
     /** @brief Tint multiplied into the text colors; defaults to opaque white. */
     RenderColor _tint;
@@ -178,17 +176,6 @@ typedef struct LabelWidgetStruct
     Vector2 _bounds;
     /** @brief The bound handling mode; defaults to LabelBoundHandling_Cut. */
     LabelBoundHandling _boundHandling;
-
-    /** @brief true when the cached line list reflects the current text/properties. */
-    bool _isCacheValid;
-    /** @brief Cached line records (private element type); rebuilt from the text as needed. */
-    GenericBuffer _lines;
-    /** @brief Owned byte buffer holding the NUL-terminated substrings the cached lines reference. */
-    GenericBuffer _lineTextBuffer;
-    /** @brief Reusable scratch of flattened atoms used while (re)building the line cache (private element type). */
-    GenericBuffer _buildAtoms;
-    /** @brief Cached block size in normalized-fitted units, with resize applied but before the Size multiplier. */
-    Vector2 _drawSizeFitted;
 } LabelWidget;
 
 
@@ -216,17 +203,22 @@ Error LabelWidget_RegisterType(UIWidgetFactory* factory, uint64_t* outTypeId);
  * @param screen The screen to build the label into; must not be NULL.
  * @param typeId The label type id from LabelWidget_RegisterType.
  * @param componentFactory The text component factory; borrowed, required, must outlive the label.
- * @param componentRenderer The text component renderer; borrowed, required, must outlive the label.
- * @param text Optional initial text component; borrowed, may be NULL.
+ * @param assets The asset manager the text's fonts and sprite animations load through; borrowed, may be NULL.
+ * @param logger Reports names that fail to load; borrowed, may be NULL.
+ * @param text Optional initial text: a root from @p componentFactory, owned by the label on success (still the
+ *        caller's on failure); may be NULL.
  * @param outLabel [out] Receives the created label; must not be NULL.
- * @returns Success; ErrorCode_IllegalArgument if a required pointer is NULL; otherwise a construction error.
+ * @returns Success; ErrorCode_IllegalArgument if a required pointer is NULL or @p text comes from another factory;
+ *          ErrorCode_InvalidOperation if @p text has a parent or is already another label's (or document's) text;
+ *          otherwise a construction error.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
 Error LabelWidget_Create(UIScreen* screen,
     uint64_t typeId,
     TextComponentFactory* componentFactory,
-    TextComponentRenderer* componentRenderer,
+    AssetManager* assets,
+    Logger* logger,
     TextComponent* text,
     LabelWidget** outLabel);
 
@@ -243,22 +235,34 @@ static inline Widget* LabelWidget_AsWidget(LabelWidget* self)
 
 // Properties.
 /**
- * @brief Returns the label's borrowed text component (may be NULL).
+ * @brief Returns the label's text tree, to read or edit in place (edits show after the next update).
  * @param self The label; must not be NULL.
- * @returns The text component, or NULL.
+ * @returns The root owned by the label, or NULL for an empty label.
  */
 TextComponent* LabelWidget_GetText(const LabelWidget* self);
 
 /**
- * @brief Sets the label's text to a borrowed component (or NULL for none) and invalidates the cache.
- *
- * The component is not owned; the caller keeps ownership and must keep it (and everything it references)
- * alive while the label uses it.
+ * @brief Replaces the label's text; the label takes ownership of @p text and returns the previous tree to the
+ *        factory.
  * @param self The label; must not be NULL.
- * @param text Borrowed text component, or NULL to clear.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ * @param text A root from the label's component factory, or NULL to empty the label.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p text comes from another factory;
+ *          ErrorCode_InvalidOperation if @p text has a parent or is already another label's (or document's) text (it
+ *          stays where it was then).
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
  */
 Error LabelWidget_SetText(LabelWidget* self, TextComponent* text);
+
+/**
+ * @brief Returns the label's text document (its tree, default font and asset bindings).
+ * @param self The label; must not be NULL.
+ * @returns The embedded document; valid while the label lives.
+ */
+static inline TextDocument* LabelWidget_GetDocument(LabelWidget* self)
+{
+    return &self->_document;
+}
 
 /**
  * @brief Returns the per-line horizontal alignment.
@@ -268,7 +272,7 @@ Error LabelWidget_SetText(LabelWidget* self, TextComponent* text);
 LabelAlignment LabelWidget_GetAlignment(const LabelWidget* self);
 
 /**
- * @brief Sets the per-line horizontal alignment and invalidates the cache.
+ * @brief Sets the per-line horizontal alignment.
  * @param self The label; must not be NULL.
  * @param alignment The alignment.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p alignment is out of range.
@@ -322,10 +326,10 @@ Error LabelWidget_SetRotation(LabelWidget* self, float rotationRad);
 float LabelWidget_GetSize(const LabelWidget* self);
 
 /**
- * @brief Sets the text size multiplier and invalidates the cache.
+ * @brief Sets the text size multiplier.
  * @param self The label; must not be NULL.
- * @param size The size multiplier; must be finite.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if not finite.
+ * @param size The size multiplier; finite and within [0, TEXT_LAYOUT_SIZE_MULTIPLIER_MAX].
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if out of range.
  */
 Error LabelWidget_SetSize(LabelWidget* self, float size);
 
@@ -360,7 +364,7 @@ bool LabelWidget_HasBounds(const LabelWidget* self);
 Vector2 LabelWidget_GetBounds(const LabelWidget* self);
 
 /**
- * @brief Sets the bounds (a max text extent from the top-left, in fitted units) and invalidates the cache.
+ * @brief Sets the bounds (a max text extent from the top-left, in fitted units).
  * @param self The label; must not be NULL.
  * @param bounds The bounds; both components must be finite and non-negative.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if a
@@ -369,7 +373,7 @@ Vector2 LabelWidget_GetBounds(const LabelWidget* self);
 Error LabelWidget_SetBounds(LabelWidget* self, Vector2 bounds);
 
 /**
- * @brief Clears the bounds (text is drawn unconstrained) and invalidates the cache.
+ * @brief Clears the bounds (text is drawn unconstrained).
  * @param self The label; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  */
@@ -383,7 +387,7 @@ Error LabelWidget_ClearBounds(LabelWidget* self);
 LabelBoundHandling LabelWidget_GetBoundHandling(const LabelWidget* self);
 
 /**
- * @brief Sets the bound handling mode and invalidates the cache.
+ * @brief Sets the bound handling mode.
  * @param self The label; must not be NULL.
  * @param mode The mode.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p mode is out of range.
@@ -393,8 +397,8 @@ Error LabelWidget_SetBoundHandling(LabelWidget* self, LabelBoundHandling mode);
 /**
  * @brief Returns the text's draw size (includes the Size multiplier), in normalized-fitted units.
  *
- * Builds the line cache first if needed (which is why this is not a const call). Rotation does not affect
- * the reported size.
+ * Lays the text out first when it is not up to date (which is why this is not a const call; it may load the
+ * text's fonts, so call it from update code). Rotation does not affect the reported size.
  * @param self The label; must not be NULL.
  * @param outSize [out] Receives the draw size; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self or @p outSize is NULL; otherwise a build error.

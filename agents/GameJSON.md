@@ -7,7 +7,11 @@ strings, colors, render colors and vectors the exact same way instead of duplica
 on a WRJSON value tree (from a shared `JSONObjectPool`); it never touches the pool or the text parser.
 
 Implements the value conventions in `references/asset_structure.md` (and the render-color shape in
-`references/text_component_structure.md`). A present-but-wrong-shape value raises `ErrorCode_InvalidJSON`.
+`references/text_component_structure.md`). **Every bad value raises `ErrorCode_InvalidJSON`**, whatever the
+underlying parser reported: a wrong shape, an unparsable numeric string (the WRNumber error's message is kept), an
+infinite or NaN decimal, a render color with brightness or opacity outside [0, 1], or a vector component that does not
+fit a float. Messages describe the value, not the key: callers that know the key add it (the text codec reports
+`"<key>": <message>` with the component's path).
 
 ## What it provides
 
@@ -25,6 +29,7 @@ Implements the value conventions in `references/asset_structure.md` (and the ren
 - `source/AssetDefinitionCommon.c` (the asset-definition JSON helpers) delegates its generic value parsing
   to this module — the `AssetJSON_*` value/color/vector helpers are thin wrappers over `GameJSON_*`. Asset
   structural parsing (locations, `name`, texture properties) stays in the asset module.
-- `TextComponentJSON` uses the value/color/vector parsers when deserializing components.
+- The text component JSON adapter (`TextComponentJSON.c`) uses the value/color/vector parsers when deserializing
+  components, and the font loader's codepoint parser (`FontCodepoints.c`) uses `GameJSON_ValueToInt64`.
 
 Owns nothing; no lifecycle. Include and call.

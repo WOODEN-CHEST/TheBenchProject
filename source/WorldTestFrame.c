@@ -10,9 +10,14 @@
 #include "WorldRenderer.h"
 #include "Renderer.h"
 #include "Logger.h"
+#include "TextComponentFactory.h"
+#include "TextComponentJSON.h"
+#include "TextDocument.h"
+#include "TextLayout.h"
 #include "raylib/raylib.h"
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
+#include "wr/WRJSON.h"
 
 
 // Macros.
@@ -48,6 +53,32 @@
 #define TEST_SUN_ANGLE 0.4f
 /** Manual time-of-day scrub rate (fraction of a full day per second while [ or ] is held). */
 #define TIME_SCRUB_RATE 0.1f
+/** Default font of the text sample: covers Latvian and Cyrillic. */
+#define TEXT_SAMPLE_FONT_NAME ((const unsigned char*)u8"noto_sans")
+/** Top-left corner of the text sample, in normalized-fitted units. */
+#define TEXT_SAMPLE_POSITION_X 0.02f
+#define TEXT_SAMPLE_POSITION_Y 0.02f
+/** The text sample (T toggles it), as text component JSON: fonts, Latvian and Cyrillic letters, decorations, a
+ *  translate fallback and an inline sprite, to check text drawing by eye. The last line uses the test font, which
+ *  lacks most of these letters (they draw as '?', and its load logs which codepoints it misses). */
+#define TEXT_SAMPLE_JSON \
+    u8"[" \
+    u8"{\"type\": \"string\", \"text\": \"Text sample (T hides it) \", \"size\": 0.04, \"color\": \"#ffe08a\"}," \
+    u8"{\"type\": \"sprite\", \"animation\": \"test_sprite\", \"size\": [0.04, 0.04]}," \
+    u8"{\"type\": \"string\", \"text\": \"\\nLatvie\u0161u: \u0100 \u010c \u0112 \u0122 \u012a \u0136 \u013b \u0145 \u0160 \u016a \u017d  " \
+        u8"\u0101 \u010d \u0113 \u0123 \u012b \u0137 \u013c \u0146 \u0161 \u016b \u017e\\n\", \"size\": 0.035}," \
+    u8"{\"type\": \"string\", \"text\": \"\u0420\u0443\u0441\u0441\u043a\u0438\u0439: \u0421\u044a\u0435\u0448\u044c " \
+        u8"\u0436\u0435 \u0435\u0449\u0451 \u044d\u0442\u0438\u0445 \u043c\u044f\u0433\u043a\u0438\u0445 " \
+        u8"\u0444\u0440\u0430\u043d\u0446\u0443\u0437\u0441\u043a\u0438\u0445 \u0431\u0443\u043b\u043e\u043a.\\n\", \"size\": 0.035}," \
+    u8"{\"type\": \"string\", \"text\": \"underline\", \"size\": 0.035, \"underline\": true}," \
+    u8"{\"type\": \"string\", \"text\": \"  \", \"size\": 0.035}," \
+    u8"{\"type\": \"string\", \"text\": \"strikethrough\", \"size\": 0.035, \"strikethrough\": true, \"color\": \"#ff7070\"}," \
+    u8"{\"type\": \"string\", \"text\": \"  \", \"size\": 0.035}," \
+    u8"{\"type\": \"translate\", \"key\": \"test.no_such_key\", \"fallback\": \"translate fallback\\n\", \"size\": 0.035, " \
+        u8"\"color\": {\"tint\": \"#80c0ff\", \"opacity\": 0.85}}," \
+    u8"{\"type\": \"string\", \"text\": \"Test font: Latvie\u0161u \u0101 \u010d \u0113, \u0420\u0443\u0441\u0441\u043a\u0438\u0439\", " \
+        u8"\"font\": \"test\", \"size\": 0.035}" \
+    u8"]"
 
 
 // Types.
@@ -65,6 +96,14 @@ typedef struct WorldTestFrameStruct
     WorldRenderer* _renderer;
     /** Whether the mouse cursor is currently captured. */
     bool _cursorCaptured;
+    /** The text sample's components come from and go back to this factory; owned. */
+    TextComponentFactory _textFactory;
+    /** The text sample (empty if its JSON failed to load); owned. */
+    TextDocument _textSample;
+    /** The text sample laid out in Update and drawn over the world in Render; owned. */
+    TextLayout _textSampleLayout;
+    /** Whether the text sample is drawn (T toggles it). */
+    bool _isTextSampleShown;
 } WorldTestFrame;
 
 
@@ -169,6 +208,18 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, float deltaSeconds)
         WorldRenderer_LogStatus(frame->_renderer);
     }
 
+    // T toggles the text sample (checks font drawing, Latvian and Cyrillic glyphs, decorations, inline sprites).
+    if (IsKeyPressed(KEY_T))
+    {
+        frame->_isTextSampleShown = !frame->_isTextSampleShown;
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: text sample %s.", frame->_isTextSampleShown ? "ON" : "OFF");
+            Error_Deconstruct(&LogResult);
+        }
+    }
+
     // L toggles the debug light gizmos (wireframe spheres at light positions).
     if (IsKeyPressed(KEY_L))
     {
@@ -208,6 +259,109 @@ static void AdvanceSpriteAnimations(World* world, double deltaSeconds)
 }
 
 
+// Static functions: the text sample.
+/* Tears down the sample's layout, document and component factory (in that order: the layout points into the
+ * document, and the document returns its tree to the factory). */
+static void DeconstructTextSample(WorldTestFrame* frame)
+{
+    Error LayoutResult = TextLayout_Deconstruct(&frame->_textSampleLayout);
+    Error_Deconstruct(&LayoutResult);
+    Error DocumentResult = TextDocument_Deconstruct(&frame->_textSample);
+    Error_Deconstruct(&DocumentResult);
+    Error FactoryResult = TextComponentFactory_Deconstruct(&frame->_textFactory);
+    Error_Deconstruct(&FactoryResult);
+}
+
+/* Parses the sample JSON into the sample document. A failure is a content problem of a debug feature: it is logged
+ * once and the sample stays empty. */
+static void LoadTextSample(WorldTestFrame* frame, Services* services)
+{
+    JSONObjectPool* Pool = NULL;
+    GenericBuffer Source;
+    GenericBuffer_AllocateVariable(&Source, 0U, sizeof(unsigned char));
+    JSONObjectValue Value = JSONObjectValue_CreateNull();
+    TextComponent* Root = NULL;
+
+    Error Result = JSONObjectPool_Create(&Pool);
+    if ((Result.Code == ErrorCode_Success) && !GenericBuffer_AppendString(&Source, (const unsigned char*)TEXT_SAMPLE_JSON))
+    {
+        Result = Error_Construct2(ErrorCode_BufferTooLarge, "could not copy the sample text.");
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = JSON_Deserialize(Pool, &Source, &Value);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = TextComponentJSON_Deserialize(&Value, &frame->_textFactory, &Root);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = TextDocument_SetRoot(&frame->_textSample, Root);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        if ((Root != NULL) && (TextDocument_GetRoot(&frame->_textSample) != Root))
+        {
+            Error ReturnResult = TextComponentFactory_ReturnTree(&frame->_textFactory, Root);
+            Error_Deconstruct(&ReturnResult);
+        }
+        if (services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogWarningFormatted(services->Logger,
+                (const unsigned char*)u8"WorldTest: the text sample could not be loaded (%s).",
+                (Result.Message != NULL) ? (const char*)Result.Message : "no details");
+            Error_Deconstruct(&LogResult);
+        }
+        Error_Deconstruct(&Result);
+    }
+
+    if (Pool != NULL)
+    {
+        Error ReturnResult = JSONObjectPool_ReturnValue(Pool, &Value);
+        Error_Deconstruct(&ReturnResult);
+        Error PoolResult = JSONObjectPool_Deconstruct(Pool);
+        Error_Deconstruct(&PoolResult);
+    }
+    Memory_Free(Source._data);
+}
+
+/* Builds the text sample's factory, document and layout, then loads the sample. Only failing to build those is an
+ * error; a sample that does not load leaves an empty document. */
+static Error ConstructTextSample(WorldTestFrame* frame, Services* services)
+{
+    Error Result = TextComponentFactory_Construct(&frame->_textFactory);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = TextDocument_Construct(&frame->_textSample, &frame->_textFactory, services->Assets, services->Logger);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error Cleanup = TextComponentFactory_Deconstruct(&frame->_textFactory);
+        Error_Deconstruct(&Cleanup);
+        return Result;
+    }
+    Result = TextDocument_SetDefaultFontName(&frame->_textSample, TEXT_SAMPLE_FONT_NAME);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = TextLayout_Construct(&frame->_textSampleLayout);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error Cleanup = TextDocument_Deconstruct(&frame->_textSample);
+        Error_Deconstruct(&Cleanup);
+        Cleanup = TextComponentFactory_Deconstruct(&frame->_textFactory);
+        Error_Deconstruct(&Cleanup);
+        return Result;
+    }
+
+    LoadTextSample(frame, services);
+    frame->_isTextSampleShown = true;
+    return Error_CreateSuccess();
+}
+
+
 // Static functions: vtable behavior.
 static Error WorldTestFrame_Start(void* self, ProgramTime time)
 {
@@ -222,7 +376,7 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
         Error LogResult = Logger_LogInfo(Frame->_services->Logger,
             (const unsigned char*)u8"WorldTest: entered the world. WASD+SPACE/CTRL move, SHIFT sprint, mouse look; "
             u8"P pause/resume day-night, 1-4 = dawn/noon/dusk/midnight (frozen), [ ] scrub time; O post effects, "
-            u8"B bloom, G sun shafts, C crisp overlay, L light gizmos, I renderer status; ESC quit.");
+            u8"B bloom, G sun shafts, C crisp overlay, L light gizmos, I renderer status, T text sample; ESC quit.");
         Error_Deconstruct(&LogResult);
     }
     return Error_CreateSuccess();
@@ -290,7 +444,14 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     // Advance sprite animations (game logic; the renderer only reads the current frame).
     AdvanceSpriteAnimations(&Frame->_world, time.PassedTime);
 
-    return Error_CreateSuccess();
+    // The text sample animates its sprite and is laid out here (laying out loads its fonts); Render only draws it.
+    Error TextResult = TextDocument_Update(&Frame->_textSample, time);
+    if ((TextResult.Code == ErrorCode_Success) && Frame->_isTextSampleShown)
+    {
+        TextLayoutOptions Options = TextLayoutOptions_CreateDefault();
+        TextResult = TextLayout_Refresh(&Frame->_textSampleLayout, &Frame->_textSample, &Options);
+    }
+    return TextResult;
 }
 
 static Error WorldTestFrame_BeginLoad(void* self)
@@ -334,8 +495,26 @@ static Error WorldTestFrame_Render(void* self, const FrameRenderContext* context
     WorldTestFrame* Frame = self;
     // All input (movement, mouse look, debug keys) is handled in Update, where input is polled per tick.
     // The render tick's real frame delta paces the renderer's HDR eye adaptation.
-    return WorldRenderer_RenderToTarget(Frame->_renderer, &Frame->_world, &Frame->_camera,
+    Error Result = WorldRenderer_RenderToTarget(Frame->_renderer, &Frame->_world, &Frame->_camera,
         context->Time.PassedTime, target);
+    if ((Result.Code != ErrorCode_Success) || !Frame->_isTextSampleShown)
+    {
+        return Result;
+    }
+
+    // The text sample goes over the final image, at the window's resolution.
+    RenderContext TextContext;
+    RenderContext_Create(&TextContext, &target, context->TargetAspectRatio, context->TargetAreaPosition);
+    RenderContext_BeginRendering(&TextContext);
+    TextLayoutDrawArguments Arguments = TextLayoutDrawArguments_Create(RenderVector2D_Fitted((Vector2)
+    {
+        .x = TEXT_SAMPLE_POSITION_X,
+        .y = TEXT_SAMPLE_POSITION_Y
+    }));
+    Result = TextLayout_Draw(&Frame->_textSampleLayout, &TextContext, &Arguments);
+    RenderContext_EndRendering(&TextContext);
+    RenderContext_Deconstruct(&TextContext);
+    return Result;
 }
 
 static void WorldTestFrame_Destroy(void* self)
@@ -356,6 +535,7 @@ static void WorldTestFrame_Destroy(void* self)
 
     Error WorldResult = World_Deconstruct(&Frame->_world);
     Error_Deconstruct(&WorldResult);
+    DeconstructTextSample(Frame);
 
     GameFrame_Deconstruct(&Frame->Base);
     Memory_Free(Frame);
@@ -592,6 +772,18 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         GameFrame_Deconstruct(&Frame->Base);
         Memory_Free(Frame);
         return RendererResult;
+    }
+
+    Error TextResult = ConstructTextSample(Frame, services);
+    if (TextResult.Code != ErrorCode_Success)
+    {
+        Error Cleanup = WorldRenderer_Deconstruct(Frame->_renderer);
+        Error_Deconstruct(&Cleanup);
+        Cleanup = World_Deconstruct(&Frame->_world);
+        Error_Deconstruct(&Cleanup);
+        GameFrame_Deconstruct(&Frame->Base);
+        Memory_Free(Frame);
+        return TextResult;
     }
 
     Frame->_services = services;

@@ -23,7 +23,7 @@ non-default raylib configuration.
 | Library | Source | Version | Build |
 |---|---|---|---|
 | raylib | https://github.com/raysan5/raylib (local copy: `../raylib/6.0`) | commit `65abee1` (2026-07-04), reports `6.1-dev` | CMake, see below |
-| WRFramework | `../WRFramework` | commit `8bb312a` (2026-10-17, adds `FileSystem_GetExecutableDirectory`) | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
+| WRFramework | `../WRFramework` | commit `d15d052f88e0f5304a626a59c94e6fd12d7e4d1f` | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
 
 The project's `include/raylib/` and `include/wr/` headers must come from the same versions as the libraries.
 To update WRFramework: build it with its own script, then copy its `include/*.h` into `include/wr/`,

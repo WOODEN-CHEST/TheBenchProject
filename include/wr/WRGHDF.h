@@ -17,6 +17,19 @@
  */
 #define GHDF_ENTRY_ID_INVALID ((GHDFEntryID)0)
 
+/**
+ * @brief Maximum container nesting depth accepted by GHDF_Read (512).
+ *
+ * Every compound and every array is one nesting level, counting the document's root compound as depth 1.
+ * A compound or array stored as an entry of a compound at depth N is at depth N + 1, and a compound stored
+ * as an element of an array at depth N is also at depth N + 1; scalar and string values add no level. So
+ * the root alone is depth 1, root -> array of compounds -> element compound reaches depth 3, and a chain of
+ * 512 compounds nested inside each other (root included) is accepted while 513 is not. GHDF_Read rejects a
+ * document containing any compound or array deeper than this with ErrorCode_Deserialize instead of reading
+ * it, which bounds the reader's recursion so hostile input cannot overflow the stack.
+ */
+#define GHDF_MAX_NESTING_DEPTH ((size_t)512)
+
 
 // Types.
 /**
@@ -371,7 +384,10 @@ Error GHDF_Write(const GHDFCompound* root, IOStream* stream);
  * receives the root compound, which (together with everything nested under it) is OWNED BY THE
  * CALLER's responsibility to return to objectPool — return the root via
  * GHDFObjectPool_ReturnCompound(objectPool, root, true), or simply deconstruct the pool to reclaim
- * everything. The stream is read from its current position and is not closed.
+ * everything. The stream is read from its current position and is not closed. Compounds and arrays may
+ * nest at most GHDF_MAX_NESTING_DEPTH levels deep (the root compound is level 1 and every nested compound
+ * or array adds one); a deeper container is rejected before its contents are read, so the reader's
+ * recursion and stack use stay bounded.
  *
  * On any failure *outRoot is set to NULL and any partially built tree is returned to the pool, so
  * the caller never owns anything after an error.
@@ -381,8 +397,9 @@ Error GHDF_Write(const GHDFCompound* root, IOStream* stream);
  *        be NULL.
  * @returns Success with *outRoot set. Raises ErrorCode_IllegalArgument if any argument is NULL;
  *          ErrorCode_Deserialize if the signature is wrong, the version is unsupported, a type byte
- *          is invalid, or a declared length exceeds the platform range. If finalizing the underlying
- *          binary stream fails, that cleanup error is returned in preference to any read error.
+ *          is invalid, a declared length exceeds the platform range, or compounds/arrays nest deeper
+ *          than GHDF_MAX_NESTING_DEPTH (root compound = depth 1). If finalizing the underlying binary
+ *          stream fails, that cleanup error is returned in preference to any read error.
  * @note May propagate errors from internal calls; consult the documentation of called functions for
  *       the full set.
  */

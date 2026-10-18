@@ -24,9 +24,9 @@ static Error ApplyToStringComponent(const TextStyle* self, StringComponent* comp
 {
     Error First = Error_CreateSuccess();
 
-    if (self->_hasFont)
+    if (self->_hasFontName)
     {
-        AccumulateError(&First, StringComponent_SetFont(component, self->_font));
+        AccumulateError(&First, StringComponent_SetFontName(component, self->_fontName));
     }
     if (self->_hasColor)
     {
@@ -38,7 +38,7 @@ static Error ApplyToStringComponent(const TextStyle* self, StringComponent* comp
     }
     if (self->_hasIsShadowActive)
     {
-        component->IsShadowActive = self->_isShadowActive;
+        AccumulateError(&First, StringComponent_SetIsShadowActive(component, self->_isShadowActive));
     }
     if (self->_hasShadowColor)
     {
@@ -57,11 +57,11 @@ static Error ApplyToStringComponent(const TextStyle* self, StringComponent* comp
     }
     if (self->_hasIsUnderlined)
     {
-        component->IsUnderlined = self->_isUnderlined;
+        AccumulateError(&First, StringComponent_SetIsUnderlined(component, self->_isUnderlined));
     }
     if (self->_hasIsStrikethrough)
     {
-        component->IsStrikethrough = self->_isStrikethrough;
+        AccumulateError(&First, StringComponent_SetIsStrikethrough(component, self->_isStrikethrough));
     }
     if (self->_hasSpacing)
     {
@@ -96,7 +96,8 @@ void TextStyle_Construct(TextStyle* self)
         return;
     }
 
-    self->_hasFont = false;
+    self->_hasFontName = false;
+    self->_fontName = NULL;
     self->_hasColor = false;
     self->_hasStringSize = false;
     self->_hasSpriteSize = false;
@@ -108,25 +109,31 @@ void TextStyle_Construct(TextStyle* self)
     self->_hasSpacing = false;
 }
 
-void TextStyle_SetFont(TextStyle* self, GameFont font)
+void TextStyle_Deconstruct(TextStyle* self)
 {
-    self->_font = font;
-    self->_hasFont = true;
+    (void)self;
 }
 
-bool TextStyle_GetFont(const TextStyle* self, GameFont* outFont)
+void TextStyle_SetFontName(TextStyle* self, const unsigned char* fontName)
 {
-    if (!self->_hasFont)
+    self->_fontName = fontName;
+    self->_hasFontName = true;
+}
+
+bool TextStyle_GetFontName(const TextStyle* self, const unsigned char** outFontName)
+{
+    if (!self->_hasFontName)
     {
         return false;
     }
-    *outFont = self->_font;
+    *outFontName = self->_fontName;
     return true;
 }
 
-void TextStyle_ClearFont(TextStyle* self)
+void TextStyle_ClearFontName(TextStyle* self)
 {
-    self->_hasFont = false;
+    self->_hasFontName = false;
+    self->_fontName = NULL;
 }
 
 void TextStyle_SetColor(TextStyle* self, RenderColor color)
@@ -334,15 +341,15 @@ Error TextStyle_ApplyToComponent(const TextStyle* self, TextComponent* component
             "TextStyle_ApplyToComponent: self and component must not be NULL.");
     }
 
-    // The abstract base is the first member of each concrete component, so the base pointer downcasts.
-    switch (component->Type)
+    switch (TextComponent_GetType(component))
     {
         case TextComponentType_String:
-            return ApplyToStringComponent(self, (StringComponent*)component);
+        case TextComponentType_Translate:
+            return ApplyToStringComponent(self, TextComponent_AsStringComponent(component));
         case TextComponentType_Sprite:
-            return ApplyToSpriteComponent(self, (SpriteComponent*)component);
+            return ApplyToSpriteComponent(self, TextComponent_AsSpriteComponent(component));
         case TextComponentType_Empty:
-        default:
             return Error_CreateSuccess();
     }
+    return Error_Construct2(ErrorCode_InvalidState, "TextStyle_ApplyToComponent: unknown component type.");
 }

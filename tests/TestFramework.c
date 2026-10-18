@@ -1,6 +1,7 @@
 #include "TestFramework.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRPath.h"
+#include "wr/WRString.h"
 #include <stdio.h>
 #include <inttypes.h>
 
@@ -149,6 +150,12 @@ Error TestRun_CreateWorkDirectory(TestRun* self, const char* name, GenericBuffer
         return CombineResult;
     }
     return FileSystem_CreateAllDirectories(outPath->_data);
+}
+
+Error TestRun_BuildRepositoryPath(TestRun* self, const char* relativePath, GenericBuffer* outPath)
+{
+    return StringUTF8_Format((const unsigned char*)u8"%s/../../%s", outPath, (const char*)self->_executableDirectory._data,
+        relativePath);
 }
 
 Error Test_WriteTextFile(const unsigned char* directory, const char* relativePath, const char* text)

@@ -128,12 +128,12 @@ typedef struct UIScreenStruct
 Error UIScreen_Construct(UIScreen* self, UIWidgetFactory* factory);
 
 /**
- * @brief Releases the screen and everything it owns (the factory and internal storage).
+ * @brief Releases the screen and its internal storage (not the factory, which is borrowed).
  *
  * Frees the widget registry, roots, navigation, animation (including each animation's keyframes) and
- * scratch storage, and deconstructs the factory (which releases every type's pool). Widgets are pooled by
- * the factory, so any still-live widgets are released with their pools; deconstruct widgets that own
- * external resources first. Best-effort teardown. Safe on NULL.
+ * scratch storage. The program-wide widget factory is borrowed and stays alive; its pools release any
+ * widgets still borrowed when it is deconstructed, so deconstruct widgets that own resources (such as a
+ * label's text document) first. Best-effort teardown. Safe on NULL.
  * @param self The screen to deconstruct, or NULL.
  * @returns Success (including the NULL case), or the first non-success Error encountered.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.

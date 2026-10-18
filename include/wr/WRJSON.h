@@ -25,6 +25,19 @@
 
 
 
+// Macros.
+/**
+ * @brief Maximum container nesting depth accepted by JSON_Deserialize (512).
+ *
+ * Every JSON object (`{...}`) and every JSON array (`[...]`) is one nesting level: a root object or array
+ * is at depth 1, a container directly inside it is at depth 2, and so on, regardless of whether objects and
+ * arrays are mixed. Strings, numbers, booleans and null add no level. A document whose containers nest
+ * deeper than this (for example 513 arrays nested inside each other) is rejected with ErrorCode_InvalidJSON
+ * instead of being parsed, which bounds the parser's recursion so hostile input cannot overflow the stack.
+ */
+#define JSON_MAX_NESTING_DEPTH ((size_t)512)
+
+
 // Types.
 /**
  * @brief Opaque JSON object (a `{...}` map of string keys to JSON values).
@@ -249,8 +262,10 @@ Error JSON_Serialize(JSONObjectValue* value, GenericBuffer* destination, JSONSer
  * @p outValue. Every compound, array and string produced is borrowed from @p pool, so the returned tree is
  * owned by @p pool and must eventually be released back to it (e.g. via JSONObjectPool_ReturnValue, or by
  * deconstructing the pool). The whole input must be consumed apart from surrounding whitespace; trailing
- * non-whitespace content is an error. On any failure @p outValue is set to JSONValueType_None and any
- * partially built tree is returned to the pool, so the caller never owns a partial result.
+ * non-whitespace content is an error. Objects and arrays may nest at most JSON_MAX_NESTING_DEPTH levels
+ * deep (a root object or array is level 1); a deeper container is rejected before it is parsed, so the
+ * parser's recursion and stack use stay bounded. On any failure @p outValue is set to JSONValueType_None and
+ * any partially built tree is returned to the pool, so the caller never owns a partial result.
  * @param pool The object pool that will own all produced structures. Must not be NULL.
  * @param source [in] Byte buffer (element size 1) holding the JSON text to parse. Must not be NULL and must
  *        be a byte buffer; it is read, not modified. A trailing null terminator is not required.
@@ -258,7 +273,9 @@ Error JSON_Serialize(JSONObjectValue* value, GenericBuffer* destination, JSONSer
  *        Must not be NULL.
  * @returns Success when the entire input parsed to one value. Raises ErrorCode_IllegalArgument if @p pool
  *          or @p outValue is NULL or @p source is NULL/not a byte buffer; ErrorCode_InvalidJSON for
- *          malformed syntax or unexpected trailing content (the message includes the byte offset).
+ *          malformed syntax, unexpected trailing content, or objects/arrays nested deeper than
+ *          JSON_MAX_NESTING_DEPTH (the message includes the byte offset; for the depth limit it is the
+ *          offset of the first `{` or `[` that would exceed it).
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */

@@ -1,6 +1,7 @@
 #pragma once
 #include "raylib/raylib.h"
 #include <stddef.h>
+#include <stdint.h>
 #include "wr/WRCompile.h"
 
 
@@ -81,6 +82,8 @@ typedef struct RenderContextStruct
     size_t _textureDrawCount;
     /** @brief Number of text strings drawn through this context since it was created. */
     size_t _stringDrawCount;
+    /** @brief Number of single font glyphs drawn through this context since it was created (RenderContext_RenderGlyph). */
+    size_t _glyphDrawCount;
     /** @brief Number of models drawn through this context since it was created. */
     size_t _modelDrawCount;
     /** @brief Number of meshes drawn through this context since it was created; instanced draws count each instance. */
@@ -206,6 +209,29 @@ typedef struct TextRenderArgumentsStruct
     /** @brief true if @c CachedDrawSize holds a valid cached measurement to reuse. */
     bool HasCachedDrawSize;
 } TextRenderArguments;
+
+/**
+ * @brief The full set of parameters for drawing one font glyph through a render context.
+ *
+ * Used by layouts that resolve glyph indices once and draw many times (TextLayout), so drawing needs no per-glyph
+ * codepoint lookup. Positions and sizes are pixels: the caller has already placed the glyph.
+ */
+typedef struct GlyphRenderArgumentsStruct
+{
+    /** @brief The font the glyph belongs to; borrowed for the duration of the draw call. */
+    const Font* TargetFont;
+    /** @brief Index into the font's glyph and rectangle arrays; must be valid for @c TargetFont. */
+    int32_t GlyphIndex;
+    /** @brief Pixel position of the glyph's pen origin: the left edge of its advance, at the top of its line box. */
+    Vector2 PenPosition;
+    /** @brief Line height (font size) in pixels; the glyph is scaled from the font's base size to it. */
+    float FontSizePixels;
+    /** @brief Rotation of the glyph around its pen origin, in radians (rotate a whole text block by rotating every
+     *         pen position around the block's pivot and passing the same angle). */
+    float RotationRad;
+    /** @brief The glyph color. */
+    RenderColor TargetColor;
+} GlyphRenderArguments;
 
 /**
  * @brief The full set of parameters for drawing a 3D model through a render context.
@@ -521,6 +547,14 @@ void RenderContext_RenderTexture2D(RenderContext* self, const TextureRenderArgum
  * @param args The text draw parameters; must not be NULL, and @c args->Text must be a valid UTF-8 string.
  */
 void RenderContext_RenderText2D(RenderContext* self, const TextRenderArguments* args);
+
+/**
+ * @brief Draws one glyph of a font through the render context, as raylib's DrawTextCodepoint does but by glyph index
+ *        and with a rotation, and increments the glyph draw counter.
+ * @param self The render context to draw with; must not be NULL.
+ * @param args The glyph draw parameters; must not be NULL.
+ */
+void RenderContext_RenderGlyph(RenderContext* self, const GlyphRenderArguments* args);
 
 /**
  * @brief Draws a 3D model through the render context using the given arguments.

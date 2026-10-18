@@ -34,3 +34,21 @@ void WorldRenderCacheTests_Run(TestRun* run);
 
 /** @brief Log rotation, pruning and formatted output under a base directory (LoggerTests.c). */
 void LoggerTests_Run(TestRun* run);
+
+/** @brief The text component tree: ownership, depth limit, owned strings, revisions, clone, style (TextComponentTests.c). */
+void TextComponentTests_Run(TestRun* run);
+
+/** @brief The shared JSON/GHDF text codec: round trips, shorthands, errors, depth limit (TextComponentCodecTests.c). */
+void TextComponentCodecTests_Run(TestRun* run);
+
+/** @brief Text documents: tree ownership, font and animation bindings, fallbacks, ticking (TextDocumentTests.c). */
+void TextDocumentTests_Run(TestRun* run);
+
+/** @brief Text layout: lines, wrapping, shrinking, alignment, runs and staleness (TextLayoutTests.c). */
+void TextLayoutTests_Run(TestRun* run);
+
+/** @brief Fonts: glyph lookup, the "codepoints" key, font definitions and the shipped fonts (FontTests.c). */
+void FontTests_Run(TestRun* run);
+
+/** @brief The label widget's text, layout properties and construction (LabelWidgetTests.c). */
+void LabelWidgetTests_Run(TestRun* run);

@@ -393,6 +393,16 @@ Error AssetManager_Construct1(Logger* logger, AssetManager** outSelf);
  */
 Error AssetManager_Deconstruct(AssetManager* self);
 
+/**
+ * @brief Returns the logger the manager reports through (the one given to AssetManager_Construct1).
+ *
+ * For asset loaders that meet a recoverable content problem while building an asset that still loads (for example
+ * a font file lacking requested glyphs): they log one WARNING through it at load time. Never log per frame.
+ * @param self The manager; must not be NULL.
+ * @returns The borrowed logger, or NULL when the manager logs nothing.
+ */
+Logger* AssetManager_GetLogger(const AssetManager* self);
+
 
 // ---- Types ----
 /**

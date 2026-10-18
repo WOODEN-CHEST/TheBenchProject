@@ -202,10 +202,18 @@ sprites' animations itself), a `GameCamera`, and a `WorldRenderer`. All input ru
 timestep: movement (WASD + SPACE/CTRL, SHIFT to sprint), mouse-look (input is polled once per update tick, so
 `GetMouseDelta` is that tick's movement) and the debug keys: P pause/resume the day-night cycle, 1–4 jump to
 dawn/noon/dusk/midnight, `[` `]` scrub the time, O post effects, B bloom, G sun shafts, C crisp overlay, L light
-gizmos, I log the renderer status. `Render` handles no input. Captures the cursor (`DisableCursor`) in `Start`,
-releases it in `End`/`Destroy`. The world is built in `Create`; `BeginLoad` calls `WorldRenderer_PrepareWorld`
-(shaders and models), so the stepped load/unload slots are trivial. `Create` builds everything up front so
-`Destroy` is always safe (even on forced teardown); it destroys the renderer, then the world.
+gizmos, I log the renderer status, T toggle the text sample. `Render` handles no input. Captures the cursor
+(`DisableCursor`) in `Start`, releases it in `End`/`Destroy`. The world is built in `Create`; `BeginLoad` calls
+`WorldRenderer_PrepareWorld` (shaders and models), so the stepped load/unload slots are trivial. `Create` builds
+everything up front so `Destroy` is always safe (even on forced teardown); it destroys the renderer, then the world,
+then the text sample.
+
+**Text sample** (shown by default, T toggles it): a `TextDocument` built from the `TEXT_SAMPLE_JSON` text component
+JSON in `Create` (so the real game runs the codec), with `noto_sans` as its default font, laid out in `Update`
+(`TextLayout_Refresh`) and drawn in `Render` over the final image, through a `RenderContext` on the frame target. It
+shows Latvian and Cyrillic letters, colors, underline, strikethrough, a translate fallback, the `test_sprite`
+animation inline, and one line in the `test` font (its missing letters draw as `?`, and its load logs which
+codepoints the file lacks). A sample that fails to load is logged once and leaves the sample empty.
 
 ## Bootstrap (main.c)
 

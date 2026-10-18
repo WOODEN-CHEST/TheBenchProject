@@ -471,6 +471,9 @@ in usage converted to UTF-8.
   the stored copy. Never pass the 128-byte struct by value as a function argument. The `GenericBuffer`
   growth-callback context stays a plain `void*` (internal allocator plumbing embedded in every buffer, not a
   user-facing callback).
+- **Document readers cap nesting depth.** `JSON_Deserialize` and `GHDF_Read` reject documents nested deeper than
+  512 levels (`JSON_MAX_NESTING_DEPTH` / `GHDF_MAX_NESTING_DEPTH`; every object/array or compound/array is one
+  level, root = 1) with `ErrorCode_InvalidJSON` / `ErrorCode_Deserialize`, so hostile input cannot overflow the stack.
 
 
 ---

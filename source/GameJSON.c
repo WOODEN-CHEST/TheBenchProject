@@ -3,10 +3,15 @@
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
 #include "wr/WRMath.h"
+#include <float.h>
+#include <inttypes.h>
 
 
 // Macros.
 #define COLOR_CHANNEL_MAX (255)
+#define COLOR_CHANNEL_COUNT (4U)
+/** Bits per hex digit. */
+#define HEX_DIGIT_BITS (4U)
 /** 2^63 as a double: the exclusive upper bound of the int64 range. Exactly representable, so comparing
  *  against it (and against its negation, the inclusive lower bound) is exact. */
 #define INT64_RANGE_LIMIT_AS_DOUBLE (9223372036854775808.0)
@@ -40,17 +45,57 @@ static bool StringsEqual(const unsigned char* a, const unsigned char* b)
     return Equal;
 }
 
-static unsigned char ClampChannel(int64_t value)
+/* Re-raises a parse failure from WRNumber (which uses its own error codes) as ErrorCode_InvalidJSON, keeping its
+   message, so every bad JSON value fails with the same code. */
+static Error ToInvalidJSON(Error* inner, const char* expectation)
 {
-    if (value < 0)
+    Error Result = Error_Construct3(ErrorCode_InvalidJSON, u8"%s (%s)", expectation,
+        (inner->Message != NULL) ? (const char*)inner->Message : "unparsable");
+    Error_Deconstruct(inner);
+    return Result;
+}
+
+/* A decimal that is finite as a double but does not fit a float would become infinite when stored. */
+static bool IsFiniteFloatRange(double value)
+{
+    return !Math_IsNaNDouble(value) && !Math_IsInfinityDouble(value) && (Math_AbsDouble(value) <= (double)FLT_MAX);
+}
+
+/* Stores the four channels (r, g, b, a) when each is within [0, 255]; a channel outside it is a content error, not
+   clamped. */
+static Error StoreChannels(const int64_t* channels, Color* outColor)
+{
+    for (size_t Index = 0; Index < COLOR_CHANNEL_COUNT; Index++)
     {
-        return 0U;
+        if ((channels[Index] < 0) || (channels[Index] > COLOR_CHANNEL_MAX))
+        {
+            return Error_Construct3(ErrorCode_InvalidJSON, u8"Color channel %" PRId64 u8" is outside [0, %d].",
+                channels[Index], COLOR_CHANNEL_MAX);
+        }
     }
-    if (value > COLOR_CHANNEL_MAX)
+    outColor->r = (unsigned char)channels[0];
+    outColor->g = (unsigned char)channels[1];
+    outColor->b = (unsigned char)channels[2];
+    outColor->a = (unsigned char)channels[3];
+    return Error_CreateSuccess();
+}
+
+/* The value of a hex digit (0-9, a-f, A-F), or -1 for any other byte. */
+static int GetHexDigitValue(unsigned char digit)
+{
+    if ((digit >= (unsigned char)'0') && (digit <= (unsigned char)'9'))
     {
-        return (unsigned char)COLOR_CHANNEL_MAX;
+        return (int)(digit - (unsigned char)'0');
     }
-    return (unsigned char)value;
+    if ((digit >= (unsigned char)'a') && (digit <= (unsigned char)'f'))
+    {
+        return (int)(digit - (unsigned char)'a') + 10;
+    }
+    if ((digit >= (unsigned char)'A') && (digit <= (unsigned char)'F'))
+    {
+        return (int)(digit - (unsigned char)'A') + 10;
+    }
+    return -1;
 }
 
 static Error ParseColorHexString(const unsigned char* text, Color* outColor)
@@ -71,11 +116,16 @@ static Error ParseColorHexString(const unsigned char* text, Color* outColor)
         return Error_Construct2(ErrorCode_InvalidJSON, "Hex color must have 6 or 8 digits.");
     }
 
+    // Digit by digit, so a sign, a space or another prefix is rejected rather than read as part of a number.
     uint32_t Value = 0U;
-    Error ParseResult = Number_UInt32FromString(Position, NUMBER_BASE_16, &Value);
-    if (ParseResult.Code != ErrorCode_Success)
+    for (size_t Index = 0; Index < DigitCount; Index++)
     {
-        return ParseResult;
+        int Digit = GetHexDigitValue(Position[Index]);
+        if (Digit < 0)
+        {
+            return Error_Construct2(ErrorCode_InvalidJSON, "Hex color digits must be 0-9, a-f or A-F.");
+        }
+        Value = (Value << HEX_DIGIT_BITS) | (uint32_t)Digit;
     }
 
     if (DigitCount == 6U)
@@ -103,7 +153,7 @@ static Error ParseColorArray(JSONArray* array, Color* outColor)
         return Error_Construct2(ErrorCode_InvalidJSON, "Color array must have 3 or 4 elements.");
     }
 
-    int64_t Channels[4] = { 0, 0, 0, 255 };
+    int64_t Channels[COLOR_CHANNEL_COUNT] = { 0, 0, 0, COLOR_CHANNEL_MAX };
     for (size_t Index = 0; Index < Count; Index++)
     {
         JSONObjectValue Element;
@@ -118,21 +168,16 @@ static Error ParseColorArray(JSONArray* array, Color* outColor)
             return IntResult;
         }
     }
-
-    outColor->r = ClampChannel(Channels[0]);
-    outColor->g = ClampChannel(Channels[1]);
-    outColor->b = ClampChannel(Channels[2]);
-    outColor->a = ClampChannel(Channels[3]);
-    return Error_CreateSuccess();
+    return StoreChannels(Channels, outColor);
 }
 
 static Error ParseColorCompound(JSONCompound* compound, Color* outColor)
 {
-    int64_t Channels[4] = { 0, 0, 0, 255 };
-    const unsigned char* Keys[4] = { (const unsigned char*)u8"r", (const unsigned char*)u8"g",
+    int64_t Channels[COLOR_CHANNEL_COUNT] = { 0, 0, 0, COLOR_CHANNEL_MAX };
+    const unsigned char* Keys[COLOR_CHANNEL_COUNT] = { (const unsigned char*)u8"r", (const unsigned char*)u8"g",
         (const unsigned char*)u8"b", (const unsigned char*)u8"a" };
 
-    for (size_t Index = 0; Index < 4U; Index++)
+    for (size_t Index = 0; Index < COLOR_CHANNEL_COUNT; Index++)
     {
         JSONObjectValue Value;
         bool Found = false;
@@ -155,12 +200,7 @@ static Error ParseColorCompound(JSONCompound* compound, Color* outColor)
             return IntResult;
         }
     }
-
-    outColor->r = ClampChannel(Channels[0]);
-    outColor->g = ClampChannel(Channels[1]);
-    outColor->b = ClampChannel(Channels[2]);
-    outColor->a = ClampChannel(Channels[3]);
-    return Error_CreateSuccess();
+    return StoreChannels(Channels, outColor);
 }
 
 // Reports whether a compound carries any render-color-specific key (tint/brightness/opacity).
@@ -213,7 +253,7 @@ Error GameJSON_ValueToInt64(const JSONObjectValue* value, int64_t* outValue)
         Memory_Free(Text);
         if (ParseResult.Code != ErrorCode_Success)
         {
-            return ParseResult;
+            return ToInvalidJSON(&ParseResult, "Expected an integer value");
         }
         *outValue = Parsed;
         return Error_CreateSuccess();
@@ -225,6 +265,10 @@ Error GameJSON_ValueToDouble(const JSONObjectValue* value, double* outValue)
 {
     if (value->Type == JSONValueType_RealNumber)
     {
+        if (Math_IsNaNDouble(value->Value.RealNumber) || Math_IsInfinityDouble(value->Value.RealNumber))
+        {
+            return Error_Construct2(ErrorCode_InvalidJSON, "Expected a finite decimal value.");
+        }
         *outValue = value->Value.RealNumber;
         return Error_CreateSuccess();
     }
@@ -246,7 +290,11 @@ Error GameJSON_ValueToDouble(const JSONObjectValue* value, double* outValue)
         Memory_Free(Text);
         if (ParseResult.Code != ErrorCode_Success)
         {
-            return ParseResult;
+            return ToInvalidJSON(&ParseResult, "Expected a decimal value");
+        }
+        if (Math_IsNaNDouble(Parsed) || Math_IsInfinityDouble(Parsed))
+        {
+            return Error_Construct2(ErrorCode_InvalidJSON, "Expected a finite decimal value.");
         }
         *outValue = Parsed;
         return Error_CreateSuccess();
@@ -380,6 +428,12 @@ Error GameJSON_ParseRenderColor(const JSONObjectValue* value, RenderColor* outCo
                 return OpacityResult;
             }
 
+            if ((Brightness < (double)RENDER_COLOR_BRIGHTNESS_MIN) || (Brightness > (double)RENDER_COLOR_BRIGHTNESS_MAX)
+                || (Opacity < (double)RENDER_COLOR_OPACITY_MIN) || (Opacity > (double)RENDER_COLOR_OPACITY_MAX))
+            {
+                return Error_Construct2(ErrorCode_InvalidJSON, "Render color brightness and opacity must be within [0, 1].");
+            }
+
             outColor->Tint = Tint;
             outColor->Brightness = (float)Brightness;
             outColor->Opacity = (float)Opacity;
@@ -430,6 +484,10 @@ Error GameJSON_ParseVector2(const JSONObjectValue* value, Vector2* outVector)
             return YConvert;
         }
 
+        if (!IsFiniteFloatRange(X) || !IsFiniteFloatRange(Y))
+        {
+            return Error_Construct2(ErrorCode_InvalidJSON, "Vector components must be finite decimals.");
+        }
         outVector->x = (float)X;
         outVector->y = (float)Y;
         return Error_CreateSuccess();
@@ -467,6 +525,10 @@ Error GameJSON_ParseVector2(const JSONObjectValue* value, Vector2* outVector)
             return YConvert;
         }
 
+        if (!IsFiniteFloatRange(X) || !IsFiniteFloatRange(Y))
+        {
+            return Error_Construct2(ErrorCode_InvalidJSON, "Vector components must be finite decimals.");
+        }
         outVector->x = (float)X;
         outVector->y = (float)Y;
         return Error_CreateSuccess();

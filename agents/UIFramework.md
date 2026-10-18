@@ -100,19 +100,23 @@ and `Widget_Deconstruct` returns the storage to the factory pool via the widget'
 
 Concrete widget modules embed `Widget` first and register a type with the factory. The first one:
 
-- **LabelWidget** (`LabelWidget.h/.c`) — displays a (possibly multi-line) `TextComponent` for labels,
-  buttons, textboxes, etc. It renders through a shared `TextComponentRenderer`, adding per-line horizontal
-  alignment (left/center/right) and bound handling the plain component renderer lacks: **Cut** (GPU scissor
-  to the bounds), **Wrap** (break on spaces), **Resize** (shrink over-wide lines to fit), and the
-  **WrapThenResize** / **WrapThenCut** combinations. Text is measured/drawn in normalized-fitted units ×
-  the label's `Size`; the block's top-left sits at the widget box top-left, and the label writes its own
-  base `Size` each render so the box (hit-test + nav outline) hugs the text (auto-fit). `Origin` is the
-  rotation pivot / `DrawSize` reference; `Rotation`, `Tint`, `Size` and `Origin` are animatable via the
-  `LabelProperty_*` ids. The label keeps the original text plus a lazily-built cache of per-line component
-  subtrees (backed by an owned substring buffer), rebuilt only when text/size/bounds/handling change.
-  Build via `LabelWidget_RegisterType` (once) then `LabelWidget_Create` (passing a borrowed
-  `TextComponentFactory` + `TextComponentRenderer` + optional text). See `agents/TextComponents.md` for the
-  text component system it builds on.
+- **LabelWidget** (`LabelWidget.h/.c`) — displays a (possibly multi-line) rich text for labels, buttons, textboxes,
+  etc. It embeds a `TextDocument` (owns the text tree and the fonts and sprite animations it names) and a
+  `TextLayout` of it ([TextDocument.md](TextDocument.md)); its properties become the layout options: per-line
+  horizontal alignment and bound handling (Bounds plus **Cut** / **Wrap** / **Resize** / **WrapThenResize** /
+  **WrapThenCut**: wrapping and shrinking are layout options, cutting is a draw-time scissor). Text is
+  measured/drawn in normalized-fitted units × the label's `Size`; the block's top-left sits at the widget box
+  top-left, and the label writes its own base `Size` each render so the box (hit-test + nav outline) hugs the text
+  (auto-fit; a `// TODO:` for Phase 5's Layout slot, since render should not write widget state). `Origin` is the
+  rotation pivot and DrawSize reference; `Size`/`Rotation`/`Tint`/`Origin` are animatable through the
+  `LabelProperty_*` ids. Each update tick it advances the document's sprites and lays the text out again only when
+  the text (any edit inside its tree) or a property changed; render only draws. A label with its update flag off
+  shows the text of its last update. Build via `LabelWidget_RegisterType` (once) then `LabelWidget_Create`
+  (borrowed `TextComponentFactory`, optional `AssetManager` and `Logger`, optional initial text whose ownership
+  passes to the label on success). Give it text with `LabelWidget_SetText` (takes ownership) or edit the tree in
+  place through `LabelWidget_GetText` / `LabelWidget_GetDocument` (e.g. to set the default font name). Everything
+  that can fail in its constructor runs before `Widget_Construct`, so a failed label never stays registered with the
+  screen. See [TextComponents.md](TextComponents.md) for the text component system it builds on.
 
 ## Input
 

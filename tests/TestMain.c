@@ -25,6 +25,12 @@ int main(void)
     WorldDTOTests_Run(&Run);
     WorldRenderCacheTests_Run(&Run);
     LoggerTests_Run(&Run);
+    TextComponentTests_Run(&Run);
+    TextComponentCodecTests_Run(&Run);
+    TextDocumentTests_Run(&Run);
+    TextLayoutTests_Run(&Run);
+    FontTests_Run(&Run);
+    LabelWidgetTests_Run(&Run);
 
     int ExitCode = TestRun_Finish(&Run);
     TestRun_Deconstruct(&Run);

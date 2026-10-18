@@ -1454,6 +1454,11 @@ static void FreeTypeRecord(TypeRecord* record)
 
 
 // Public functions.
+Logger* AssetManager_GetLogger(const AssetManager* self)
+{
+    return self->_logger;
+}
+
 Error AssetManager_Construct1(Logger* logger, AssetManager** outSelf)
 {
     if (outSelf == NULL)
