@@ -9,7 +9,31 @@
 #define ARRAY_LENGTH(array) (sizeof(array) / sizeof((array)[0]))
 
 
+// Types.
+/* One accepted string value of a texture property and the raylib constant it stands for. */
+typedef struct TexturePropertyNameStruct
+{
+    const unsigned char* Name;
+    int Value;
+} TexturePropertyName;
+
+
 // Fields.
+static const TexturePropertyName TextureFilterNames[] =
+{
+    { u8"point", TEXTURE_FILTER_POINT },
+    { u8"bilinear", TEXTURE_FILTER_BILINEAR },
+    { u8"trilinear", TEXTURE_FILTER_TRILINEAR }
+};
+
+static const TexturePropertyName TextureWrapNames[] =
+{
+    { u8"repeat", TEXTURE_WRAP_REPEAT },
+    { u8"clamp", TEXTURE_WRAP_CLAMP },
+    { u8"mirror_repeat", TEXTURE_WRAP_MIRROR_REPEAT },
+    { u8"mirror_clamp", TEXTURE_WRAP_MIRROR_CLAMP }
+};
+
 /* The accepted extension sets (see AssetDefinitionCommon.h). Each lists exactly what the shipped raylib's
    loader for that kind decodes, so a file it cannot read is rejected with a clear message at resolution. */
 static const unsigned char* const TextureExtensionList[] = { u8"png", u8"bmp", u8"gif", u8"qoi", u8"dds" };
@@ -32,6 +56,39 @@ static bool StringsEqual(const unsigned char* a, const unsigned char* b)
     Error Result = StringUTF8_EqualsExact(a, b, &Equal);
     if (Result.Code != ErrorCode_Success) { Error_Deconstruct(&Result); return false; }
     return Equal;
+}
+
+/* Reads the optional string key @p key of a texture_properties compound, which must be one of @p names (listed in
+ * @p expected for the message). *outValue keeps its value when the key is absent. */
+static Error ReadTexturePropertyName(JSONCompound* properties, const unsigned char* key,
+    const TexturePropertyName* names, size_t nameCount, const unsigned char* expected, int* outValue)
+{
+    JSONObjectValue Value;
+    bool Found = false;
+    Error GetResult = JSONCompound_GetOptionalVerified(properties, key, JSONValueType_String, &Value, &Found);
+    if (GetResult.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&GetResult);
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"Texture \"%s\" must be %s.", key, expected);
+    }
+    if (!Found) { return Error_CreateSuccess(); }
+
+    unsigned char* Text = NULL;
+    Error TextResult = AssetJSON_ValueToOwnedString(&Value, &Text);
+    if (TextResult.Code != ErrorCode_Success) { return TextResult; }
+    for (size_t Index = 0U; Index < nameCount; Index++)
+    {
+        if (StringsEqual(Text, names[Index].Name))
+        {
+            *outValue = names[Index].Value;
+            Memory_Free(Text);
+            return Error_CreateSuccess();
+        }
+    }
+    Error Result = Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"Texture \"%s\" is \"%s\"; it must be %s.", key,
+        Text, expected);
+    Memory_Free(Text);
+    return Result;
 }
 
 
@@ -160,42 +217,75 @@ Error AssetJSON_ReadOptionalOwnedString(JSONCompound* compound, const unsigned c
     return AssetJSON_ValueToOwnedString(&Value, outString);
 }
 
-Error AssetJSON_ReadTextureProperties(JSONCompound* compound, const unsigned char* key, TextureProperties* outProps)
+Error AssetJSON_ReadTextureProperties(JSONCompound* compound, const unsigned char* key, bool areMipmapsSupported,
+    TextureProperties* outProps)
 {
     outProps->Filter = TEXTURE_FILTER_BILINEAR;
+    outProps->Wrap = TEXTURE_WRAP_REPEAT;
+    outProps->AreMipmapsEnabled = false;
 
     JSONObjectValue Value;
     bool Found = false;
     Error GetResult = JSONCompound_GetOptionalVerified(compound, key, JSONValueType_Compound, &Value, &Found);
-    if (GetResult.Code != ErrorCode_Success) { return GetResult; }
+    if (GetResult.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&GetResult);
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"\"%s\" must be a JSON object.", key);
+    }
     if (!Found) { return Error_CreateSuccess(); }
+    JSONCompound* Properties = Value.Value.Compound;
 
-    JSONObjectValue FilterValue;
-    bool FilterFound = false;
-    Error FilterResult = JSONCompound_GetOptionalVerified(Value.Value.Compound,
-        (const unsigned char*)u8"filtering", JSONValueType_String, &FilterValue, &FilterFound);
-    if (FilterResult.Code != ErrorCode_Success) { return FilterResult; }
-    if (!FilterFound) { return Error_CreateSuccess(); }
+    Error Result = ReadTexturePropertyName(Properties, u8"filtering", TextureFilterNames, ARRAY_LENGTH(TextureFilterNames),
+        u8"\"point\", \"bilinear\" or \"trilinear\"", &outProps->Filter);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    Result = ReadTexturePropertyName(Properties, u8"wrap", TextureWrapNames, ARRAY_LENGTH(TextureWrapNames),
+        u8"\"repeat\", \"clamp\", \"mirror_repeat\" or \"mirror_clamp\"", &outProps->Wrap);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    Result = AssetJSON_ReadOptionalBoolean(Properties, u8"mipmaps", false, &outProps->AreMipmapsEnabled);
+    if (Result.Code != ErrorCode_Success) { return Result; }
 
-    unsigned char* FilterText = NULL;
-    Error TextResult = AssetJSON_ValueToOwnedString(&FilterValue, &FilterText);
-    if (TextResult.Code != ErrorCode_Success) { return TextResult; }
+    if (outProps->Filter != TEXTURE_FILTER_TRILINEAR)
+    {
+        return Error_CreateSuccess();
+    }
+    if (!areMipmapsSupported)
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+            u8"Texture filtering \"trilinear\" blends mip levels, which this asset's textures do not have; use "
+            u8"\"point\" or \"bilinear\".");
+    }
+    if (!outProps->AreMipmapsEnabled)
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+            u8"Texture filtering \"trilinear\" blends mip levels, so it needs \"mipmaps\": true.");
+    }
+    return Error_CreateSuccess();
+}
 
-    Error Result = Error_CreateSuccess();
-    if (StringsEqual(FilterText, (const unsigned char*)u8"point"))
+Error TextureProperties_Apply(const TextureProperties* self, Texture2D* texture, const unsigned char* description)
+{
+    bool NeedsMipmaps = self->AreMipmapsEnabled && (texture->mipmaps <= 1)
+        && ((texture->width > 1) || (texture->height > 1));
+    if (NeedsMipmaps)
     {
-        outProps->Filter = TEXTURE_FILTER_POINT;
+        // raylib would call glGenerateMipmap on a compressed texture too, which fails, yet still count a full mip chain.
+        if (texture->format >= PIXELFORMAT_COMPRESSED_DXT1_RGB)
+        {
+            return Error_Construct3(ErrorCode_InvalidAssetData,
+                u8"Cannot generate mipmaps for the compressed texture \"%s\": store its mip levels in the file, or set "
+                u8"\"mipmaps\" to false.", description);
+        }
+        GenTextureMipmaps(texture);
+        if (texture->mipmaps <= 1)
+        {
+            return Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to generate mipmaps for the texture \"%s\".",
+                description);
+        }
     }
-    else if (StringsEqual(FilterText, (const unsigned char*)u8"bilinear"))
-    {
-        outProps->Filter = TEXTURE_FILTER_BILINEAR;
-    }
-    else
-    {
-        Result = Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"Texture filtering must be \"point\" or \"bilinear\".");
-    }
-    Memory_Free(FilterText);
-    return Result;
+    // The filter goes last: raylib picks the mipmapped GL filter from the texture's mipmap count.
+    SetTextureWrap(*texture, self->Wrap);
+    SetTextureFilter(*texture, self->Filter);
+    return Error_CreateSuccess();
 }
 
 Error AssetJSON_ReadOptionalInteger(JSONCompound* compound, const unsigned char* key,

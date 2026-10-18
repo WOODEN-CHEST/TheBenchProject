@@ -1,6 +1,7 @@
 #include "AssetTypesStandard.h"
 #include "AssetDefinitionCommon.h"
 #include "GameShader.h"
+#include "ShaderSource.h"
 // rlgl provides rlGetShaderIdDefault, needed to detect raylib's silent default-shader fallback.
 #include "raylib/rlgl.h"
 #include "wr/WRMemory.h"
@@ -15,7 +16,8 @@
  * its extension, and both stage extensions (vert, frag, vs, fs, glsl) are accepted for either stage, so the
  * two source files must have DISTINCT stems (e.g. "pbr/vertex" + "pbr/fragment"); two files sharing a stem
  * would make the location ambiguous. Shader source is loaded as text, so this loader uses the streaming
- * resource API rather than a temp file, and a reference location needs no format.
+ * resource API rather than a temp file, and a reference location needs no format. Each stage's #include lines
+ * are expanded before it is compiled (ShaderSource.h).
  */
 
 
@@ -33,6 +35,16 @@ typedef struct ShaderLoadedStruct
 {
     GameShader Shader; // Asset points here
 } ShaderLoaded;
+
+/* What one load borrows from the manager: each stage's expanded source (NULL for a stage the definition omits), and
+ * each stage's source-string numbers for the compile-failure message (empty when the stage included nothing). */
+typedef struct ShaderStageBuffersStruct
+{
+    GenericBuffer* VertexText;
+    GenericBuffer* FragmentText;
+    GenericBuffer* VertexSources;
+    GenericBuffer* FragmentSources;
+} ShaderStageBuffers;
 
 
 // Static functions.
@@ -64,21 +76,38 @@ static Error ReadOptionalLocation(JSONCompound* compound, const unsigned char* k
     return Error_CreateSuccess();
 }
 
-/* Opens a shader stage's resource, reads its source text into a freshly borrowed manager buffer and
- * NUL-terminates it. On success *outBuffer is borrowed from @p manager and the caller MUST return it with
- * AssetManager_ReturnGenericBuffer; on failure *outBuffer is NULL (nothing to return). */
-static Error ReadStageSource(AssetManager* manager, AssetTypeID type, const OwnedAssetLocation* location,
-    GenericBuffer** outBuffer)
+static void ReturnBuffer(AssetManager* manager, GenericBuffer* buffer)
 {
-    *outBuffer = NULL;
+    if (buffer == NULL) { return; }
+    Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, buffer);
+    Error_Deconstruct(&ReturnResult);
+}
+
+static void ReturnStageBuffers(AssetManager* manager, ShaderStageBuffers* buffers)
+{
+    ReturnBuffer(manager, buffers->VertexText);
+    ReturnBuffer(manager, buffers->FragmentText);
+    ReturnBuffer(manager, buffers->VertexSources);
+    ReturnBuffer(manager, buffers->FragmentSources);
+    Memory_Zero(buffers, sizeof(*buffers));
+}
+
+/* Opens a shader stage's resource, reads its source text, expands its #include lines and NUL-terminates the result.
+ * On success *outText is borrowed from @p manager and the caller MUST return it with AssetManager_ReturnGenericBuffer;
+ * on failure *outText is NULL (nothing to return). When the stage included files, their source-string numbers are
+ * appended to @p sourceList. */
+static Error ReadStageSource(AssetManager* manager, AssetTypeID type, const OwnedAssetLocation* location,
+    GenericBuffer* sourceList, GenericBuffer** outText)
+{
+    *outText = NULL;
 
     AssetLocation View = OwnedAssetLocation_View(location);
     IOStream* Stream = NULL;
     Error OpenResult = AssetManager_OpenResource(manager, type, &View, &ASSET_EXTENSIONS_SHADER_STAGE, &Stream);
     if (OpenResult.Code != ErrorCode_Success) { return OpenResult; }
 
-    GenericBuffer* Buffer = NULL;
-    Error BorrowResult = AssetManager_BorrowGenericBuffer(manager, 1U, &Buffer);
+    GenericBuffer* RawText = NULL;
+    Error BorrowResult = AssetManager_BorrowGenericBuffer(manager, 1U, &RawText);
     if (BorrowResult.Code != ErrorCode_Success)
     {
         Error CloseResult = AssetManager_CloseResource(manager, Stream);
@@ -86,71 +115,68 @@ static Error ReadStageSource(AssetManager* manager, AssetTypeID type, const Owne
         return BorrowResult;
     }
 
-    Error ReadResult = IOStream_ReadAll(Stream, Buffer);
+    Error Result = IOStream_ReadAll(Stream, RawText);
     Error CloseResult = AssetManager_CloseResource(manager, Stream);
     Error_Deconstruct(&CloseResult);
-    if (ReadResult.Code != ErrorCode_Success)
+
+    GenericBuffer* ExpandedText = NULL;
+    if (Result.Code == ErrorCode_Success)
     {
-        Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, Buffer);
-        Error_Deconstruct(&ReturnResult);
-        return ReadResult;
+        Result = AssetManager_BorrowGenericBuffer(manager, 1U, &ExpandedText);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ShaderSource_ExpandIncludes(manager, type, &View, RawText->_data, RawText->_count, ExpandedText,
+            sourceList);
+    }
+    ReturnBuffer(manager, RawText);
+    if (Result.Code != ErrorCode_Success)
+    {
+        ReturnBuffer(manager, ExpandedText);
+        return Result;
     }
 
-    if (!GenericBuffer_NullTerminate(Buffer))
-    {
-        Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, Buffer);
-        Error_Deconstruct(&ReturnResult);
-        return Error_Construct3(ErrorCode_BufferTooLarge, u8"Failed to terminate shader source.");
-    }
-
-    *outBuffer = Buffer;
+    *outText = ExpandedText;
     return Error_CreateSuccess();
 }
 
-static Error ShaderDefinition_LoadAsset(void* self, AssetManager* manager, AssetUserID dependencyUser, LoadedAsset* outLoaded)
+/* The load error for a program raylib could not compile or link. When a stage included files, the message lists which
+ * source-string number in the compiler output is which file. */
+static Error CreateCompileError(const ShaderDefinition* definition, const ShaderStageBuffers* buffers)
 {
-    (void)dependencyUser;
-    ShaderDefinition* Definition = self;
-
-    // Both stage sources must stay resident until LoadShaderFromMemory has consumed them, so read them into
-    // separate borrowed buffers and only return the buffers once the shader is compiled.
-    GenericBuffer* VertexBuffer = NULL;
-    GenericBuffer* FragmentBuffer = NULL;
-
-    if (Definition->HasVertex)
+    const unsigned char* VertexSources = (buffers->VertexSources->_count > 0U) ? buffers->VertexSources->_data : NULL;
+    const unsigned char* FragmentSources = (buffers->FragmentSources->_count > 0U) ? buffers->FragmentSources->_data : NULL;
+    if ((VertexSources == NULL) && (FragmentSources == NULL))
     {
-        Error VertexResult = ReadStageSource(manager, Definition->Base.Type, &Definition->VertexLocation, &VertexBuffer);
-        if (VertexResult.Code != ErrorCode_Success) { return VertexResult; }
+        return Error_Construct3(ErrorCode_InvalidAssetData,
+            u8"Failed to compile or link shader \"%s\" (raylib's log has the compiler output).", definition->Base.Name);
     }
-
-    if (Definition->HasFragment)
+    if (FragmentSources == NULL)
     {
-        Error FragmentResult = ReadStageSource(manager, Definition->Base.Type, &Definition->FragmentLocation, &FragmentBuffer);
-        if (FragmentResult.Code != ErrorCode_Success)
-        {
-            if (VertexBuffer != NULL)
-            {
-                Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, VertexBuffer);
-                Error_Deconstruct(&ReturnResult);
-            }
-            return FragmentResult;
-        }
+        return Error_Construct3(ErrorCode_InvalidAssetData,
+            u8"Failed to compile or link shader \"%s\". raylib's log has the compiler output, where a location such as "
+            u8"2(14) or 2:14 means line 14 of file 2; the files of the vertex stage are %s.",
+            definition->Base.Name, VertexSources);
     }
+    if (VertexSources == NULL)
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetData,
+            u8"Failed to compile or link shader \"%s\". raylib's log has the compiler output, where a location such as "
+            u8"2(14) or 2:14 means line 14 of file 2; the files of the fragment stage are %s.",
+            definition->Base.Name, FragmentSources);
+    }
+    return Error_Construct3(ErrorCode_InvalidAssetData,
+        u8"Failed to compile or link shader \"%s\". raylib's log has the compiler output, where a location such as "
+        u8"2(14) or 2:14 means line 14 of file 2; the files of the vertex stage are %s, and those of the fragment stage "
+        u8"are %s.", definition->Base.Name, VertexSources, FragmentSources);
+}
 
-    const char* VertexCode = (VertexBuffer != NULL) ? (const char*)VertexBuffer->_data : NULL;
-    const char* FragmentCode = (FragmentBuffer != NULL) ? (const char*)FragmentBuffer->_data : NULL;
+static Error CompileShader(const ShaderDefinition* definition, const ShaderStageBuffers* buffers,
+    LoadedAsset* outLoaded)
+{
+    const char* VertexCode = (buffers->VertexText != NULL) ? (const char*)buffers->VertexText->_data : NULL;
+    const char* FragmentCode = (buffers->FragmentText != NULL) ? (const char*)buffers->FragmentText->_data : NULL;
     Shader RayShader = LoadShaderFromMemory(VertexCode, FragmentCode);
-
-    if (VertexBuffer != NULL)
-    {
-        Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, VertexBuffer);
-        Error_Deconstruct(&ReturnResult);
-    }
-    if (FragmentBuffer != NULL)
-    {
-        Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, FragmentBuffer);
-        Error_Deconstruct(&ReturnResult);
-    }
 
     // raylib reports a stage that fails to compile with id 0 (still allocating the location array) and a program
     // that fails to link by silently substituting its default shader. Both are failures here, never a quiet
@@ -158,8 +184,7 @@ static Error ShaderDefinition_LoadAsset(void* self, AssetManager* manager, Asset
     if ((RayShader.id == 0) || (RayShader.id == rlGetShaderIdDefault()))
     {
         UnloadShader(RayShader);
-        return Error_Construct3(ErrorCode_InvalidAssetData,
-            u8"Failed to compile or link shader \"%s\" (raylib's log has the compiler output).", Definition->Base.Name);
+        return CreateCompileError(definition, buffers);
     }
 
     ShaderLoaded* Loaded = Memory_Allocate(sizeof(ShaderLoaded));
@@ -170,6 +195,38 @@ static Error ShaderDefinition_LoadAsset(void* self, AssetManager* manager, Asset
     outLoaded->VTable = &ShaderLoadedVTable;
     outLoaded->DestroyContext = Loaded;
     return Error_CreateSuccess();
+}
+
+static Error ShaderDefinition_LoadAsset(void* self, AssetManager* manager, AssetUserID dependencyUser, LoadedAsset* outLoaded)
+{
+    (void)dependencyUser;
+    ShaderDefinition* Definition = self;
+
+    // Both stage sources must stay resident until LoadShaderFromMemory has consumed them, so they are read into
+    // separate borrowed buffers that are only returned once the shader is compiled.
+    ShaderStageBuffers Buffers;
+    Memory_Zero(&Buffers, sizeof(Buffers));
+    Error Result = AssetManager_BorrowGenericBuffer(manager, 1U, &Buffers.VertexSources);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AssetManager_BorrowGenericBuffer(manager, 1U, &Buffers.FragmentSources);
+    }
+    if ((Result.Code == ErrorCode_Success) && Definition->HasVertex)
+    {
+        Result = ReadStageSource(manager, Definition->Base.Type, &Definition->VertexLocation, Buffers.VertexSources,
+            &Buffers.VertexText);
+    }
+    if ((Result.Code == ErrorCode_Success) && Definition->HasFragment)
+    {
+        Result = ReadStageSource(manager, Definition->Base.Type, &Definition->FragmentLocation, Buffers.FragmentSources,
+            &Buffers.FragmentText);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = CompileShader(Definition, &Buffers, outLoaded);
+    }
+    ReturnStageBuffers(manager, &Buffers);
+    return Result;
 }
 
 static void ShaderDefinition_Destroy(void* self)

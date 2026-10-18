@@ -101,8 +101,9 @@ tonemapped (ACES + gamma, `world_tonemap`) only in the final blit, after the pix
 `WorldRendererLighting.c`), forward point lights, per-material metallic/roughness/occlusion/emissive factors and
 optional albedo / normal / packed ORM (in the METALNESS slot) / emissive maps from the model definition's
 `material_overrides`, derivative-based normal mapping, and atmospheric distance fog that fades into the same sky
-the sky pass draws (the sky constants in `pbr/fragment.frag` must stay identical to `sky/fragment.frag`). Without
-it models draw unlit with raylib's default shader.
+the sky pass draws (both shaders `#include "common/atmosphere"`, so the atmosphere maths are one file; the sky pass's
+below-horizon mirror is still repeated in the PBR shader's `fogSkyColor`). Without it models draw unlit with raylib's
+default shader.
 
 **Sky.** `world_sky`: Rayleigh + Mie single scattering, sun disc and a seeded star field, drawn as a full-screen
 pass before the geometry (it writes no depth). Each pixel's ray comes from the inverse of the frame's
@@ -193,7 +194,11 @@ The renderer keeps receiving features, so:
 Either may be omitted to fall back to raylib's built-in stage. Both stages accept every shader-stage extension,
 so a paired shader's two source files need DISTINCT stems: `world_pbr` uses `shaders/pbr/vertex.vert` +
 `shaders/pbr/fragment.frag`, referenced as `"pbr/vertex"` and `"pbr/fragment"`. The `world_normal` G-buffer shader
-is a second such pair. Each renderer shader lives in its own directory under `asset/shaders/`.
+is a second such pair. Each renderer shader lives in its own directory under `asset/shaders/`. GLSL shared between
+shaders lives in `asset/shaders/common/` and is pulled in with `#include "common/<name>"` (no `#version` in shared
+files; rules in GameAssets.md, "GameShader"): `common/math` (`PI`) and `common/atmosphere` (Rayleigh + Mie single
+scattering, used by `world_sky` and the PBR fog). Put new shared lighting, dithering or noise code there instead of
+copying it between shaders.
 
 ## WorldTestFrame
 

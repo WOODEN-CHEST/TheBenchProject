@@ -17,6 +17,14 @@ void ConfigTests_Run(TestRun* run);
 /** @brief Asset definition scanning, file matching and the failed-load cache (AssetManagerTests.c). */
 void AssetManagerTests_Run(TestRun* run);
 
+/** @brief Shader #include expansion: line numbering, repeats, depth, errors, the shipped shaders (ShaderSourceTests.c;
+ *  a private module of source/). */
+void ShaderSourceTests_Run(TestRun* run);
+
+/** @brief The texture asset type and the shared texture_properties parser: keys, defaults, rejections, the size limit
+ *  and the shipped placeholder (TextureTests.c). */
+void TextureTests_Run(TestRun* run);
+
 /** @brief Point-light reach culling (WorldLightCullingTests.c). */
 void WorldLightCullingTests_Run(TestRun* run);
 

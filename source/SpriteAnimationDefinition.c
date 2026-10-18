@@ -300,7 +300,7 @@ static Error ParseFrame(JSONCompound* compound, const unsigned char* sourceDescr
         if (Result.Code != ErrorCode_Success) { return Result; }
 
         TextureProperties Properties;
-        Result = AssetJSON_ReadTextureProperties(compound, (const unsigned char*)u8"texture_properties", &Properties);
+        Result = AssetJSON_ReadTextureProperties(compound, (const unsigned char*)u8"texture_properties", false, &Properties);
         if (Result.Code != ErrorCode_Success) { return Result; }
         outFrame->Filter = Properties.Filter;
     }

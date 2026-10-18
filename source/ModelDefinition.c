@@ -63,7 +63,7 @@ typedef struct ModelMaterialOverrideStruct
     Color EmissiveColor;
     bool HasEmissiveIntensity;
     float EmissiveIntensity;
-    int Filter;
+    TextureProperties Properties; // filter, wrap and mipmaps of every map this override loads
 } ModelMaterialOverride;
 
 typedef struct ModelDefinitionStruct
@@ -260,7 +260,6 @@ static Error ParseMaterialOverride(JSONCompound* compound, ModelMaterialOverride
     Memory_Zero(outOverride, sizeof(*outOverride));
     outOverride->Tint = WHITE;
     outOverride->EmissiveColor = WHITE;
-    outOverride->Filter = TEXTURE_FILTER_BILINEAR;
 
     int64_t Slot = -1;
     Error SlotResult = AssetJSON_ReadOptionalInteger(compound, (const unsigned char*)u8"slot", -1, &Slot);
@@ -292,11 +291,8 @@ static Error ParseMaterialOverride(JSONCompound* compound, ModelMaterialOverride
     Result = ReadOptionalFloatKey(compound, (const unsigned char*)u8"emissive_intensity", &outOverride->HasEmissiveIntensity, &outOverride->EmissiveIntensity);
     if (Result.Code != ErrorCode_Success) { return Result; }
 
-    TextureProperties Properties;
-    Error PropertiesResult = AssetJSON_ReadTextureProperties(compound, (const unsigned char*)u8"texture_properties", &Properties);
-    if (PropertiesResult.Code != ErrorCode_Success) { return PropertiesResult; }
-    outOverride->Filter = Properties.Filter;
-    return Error_CreateSuccess();
+    return AssetJSON_ReadTextureProperties(compound, (const unsigned char*)u8"texture_properties", true,
+        &outOverride->Properties);
 }
 
 /* Lists @p textureId as owned by the model unless it is 0, raylib's default texture, or already listed. */
@@ -423,10 +419,11 @@ static void ModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
 static const LoadedAssetVTable ModelLoadedVTable = { ModelLoaded_Destroy };
 
 /* Loads a material-override texture (resolved against the model asset-type dir), lists it as owned by the
- * model immediately, applies @p filter and writes it to @p outTexture. On failure nothing stays loaded and
- * @p outTexture is untouched. */
+ * model immediately, applies @p properties (mipmaps, wrap, filter) and writes it to @p outTexture. On failure
+ * @p outTexture is untouched, and a texture that loaded stays listed, so the caller's failure path unloads it. */
 static Error LoadMaterialTexture(AssetManager* manager, AssetTypeID type, const OwnedAssetLocation* location,
-    int filter, const unsigned char* modelName, GenericBuffer* ownedTextureIds, Texture2D* outTexture)
+    const TextureProperties* properties, const unsigned char* modelName, GenericBuffer* ownedTextureIds,
+    Texture2D* outTexture)
 {
     AssetLocation Location = OwnedAssetLocation_View(location);
     AssetResourcePath* Handle = NULL;
@@ -447,7 +444,11 @@ static Error LoadMaterialTexture(AssetManager* manager, AssetTypeID type, const 
         UnloadTexture(MaterialTexture);
         return TrackResult;
     }
-    SetTextureFilter(MaterialTexture, filter);
+    Error PropertiesResult = TextureProperties_Apply(properties, &MaterialTexture, location->Value);
+    if (PropertiesResult.Code != ErrorCode_Success)
+    {
+        return PropertiesResult;
+    }
     *outTexture = MaterialTexture;
     return Error_CreateSuccess();
 }
@@ -475,26 +476,26 @@ static Error ApplyMaterialOverride(AssetManager* manager, AssetTypeID type, cons
 {
     if (override->HasAlbedo)
     {
-        Error Result = LoadMaterialTexture(manager, type, &override->Albedo, override->Filter, modelName,
+        Error Result = LoadMaterialTexture(manager, type, &override->Albedo, &override->Properties, modelName,
             ownedTextureIds, &material->maps[MATERIAL_MAP_ALBEDO].texture);
         if (Result.Code != ErrorCode_Success) { return Result; }
     }
     if (override->HasNormal)
     {
-        Error Result = LoadMaterialTexture(manager, type, &override->Normal, override->Filter, modelName,
+        Error Result = LoadMaterialTexture(manager, type, &override->Normal, &override->Properties, modelName,
             ownedTextureIds, &material->maps[MATERIAL_MAP_NORMAL].texture);
         if (Result.Code != ErrorCode_Success) { return Result; }
     }
     if (override->HasMra)
     {
         // The METALNESS slot carries the packed ORM map.
-        Error Result = LoadMaterialTexture(manager, type, &override->Mra, override->Filter, modelName,
+        Error Result = LoadMaterialTexture(manager, type, &override->Mra, &override->Properties, modelName,
             ownedTextureIds, &material->maps[MATERIAL_MAP_METALNESS].texture);
         if (Result.Code != ErrorCode_Success) { return Result; }
     }
     if (override->HasEmissiveMap)
     {
-        Error Result = LoadMaterialTexture(manager, type, &override->EmissiveMap, override->Filter, modelName,
+        Error Result = LoadMaterialTexture(manager, type, &override->EmissiveMap, &override->Properties, modelName,
             ownedTextureIds, &material->maps[MATERIAL_MAP_EMISSION].texture);
         if (Result.Code != ErrorCode_Success) { return Result; }
     }

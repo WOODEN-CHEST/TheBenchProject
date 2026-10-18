@@ -69,7 +69,7 @@ extension is `fragment.frag`.
 
 | Loader | Accepted extensions |
 |---|---|
-| Textures (sprite sheet images, texture animation frames, model material maps) | `png` `bmp` `gif` `qoi` `dds` |
+| Textures (standalone textures, sprite sheet images, texture animation frames, model material maps) | `png` `bmp` `gif` `qoi` `dds` |
 | Models | `obj` `gltf` `glb` `iqm` `vox` `m3d` |
 | Fonts | `ttf` `otf` |
 | Sounds | `wav` `ogg` `mp3` `qoa` |
@@ -90,9 +90,10 @@ the asset JSON definitions.
 A reference has no file extension, so loaders that need a real file must be told the format:
 * Models, fonts and sounds: a reference location REQUIRES the definition's `format` key; without it the definition
   is rejected when it is read.
-* Textures (sprite sheet images, texture animation frames, model material maps) have no `format` key, so their
-  locations must be file paths; a reference there is rejected when the definition is read.
-* Shader stages are read as text and need no format, so references work there as they are.
+* Textures (standalone textures, sprite sheet images, texture animation frames, model material maps) have no `format`
+  key, so their locations must be file paths; a reference there is rejected when the definition is read.
+* Shader stages are read as text and need no format, so references work there as they are. (A shader's `#include`
+  lines always name files.)
 
 
 **Specifying locations.**
@@ -196,9 +197,25 @@ Both forms are acceptable for both integer and decimal vectors. Integer vectors,
 ### Texture properties.
 ```
 {
-    "filtering": "point" or "bilinear" // [OPTIONAL] Defaults to bilinear.
+    "filtering": "point" or "bilinear" or "trilinear", // [OPTIONAL] Defaults to bilinear. Trilinear needs "mipmaps": true.
+    "wrap": "repeat" or "clamp" or "mirror_repeat" or "mirror_clamp", // [OPTIONAL] Defaults to repeat.
+    "mipmaps": boolean // [OPTIONAL] Defaults to false. Generates the mip levels at load (a dds file's own are kept).
 }
 ```
+
+Every key is optional, and leaving one out keeps the behaviour textures had before the key existed.
+* `filtering`: `point` keeps hard pixels, `bilinear` smooths between texels, `trilinear` also blends between mip levels
+  (the smoothest choice for textures seen at many distances, such as a sky panorama).
+* `wrap`: what texture coordinates outside 0..1 read: `repeat` tiles, `clamp` stretches the edge texels,
+  `mirror_repeat` tiles mirrored, `mirror_clamp` mirrors once and then clamps (it needs a GPU with the
+  GL_EXT_texture_mirror_clamp extension; without it the texture keeps repeating and raylib logs a warning).
+* `mipmaps`: smaller copies of the texture (half size, quarter size, ...) that the GPU uses for distant or small
+  surfaces, so a texture seen from afar does not shimmer at the game's 640x360. A mip chain costs one third more
+  memory. A compressed dds file cannot get generated mip levels: it must contain its own, or the load fails.
+
+Not every asset applies every key. Standalone textures and model material maps apply all three. Sprite sheets,
+sprite animation frames and fonts apply only `filtering`, and they reject `trilinear` (they never have mipmaps);
+`wrap` and `mipmaps` are still checked there but have no effect. A bad value of any key rejects the definition.
 
 
 ### Format.
@@ -356,6 +373,33 @@ back-compat alias for `fragment_location` (the original single-stage behavior). 
 different extensions would make the location ambiguous: give the two stage files DISTINCT names — e.g.
 `shaders/pbr/vertex.vert` and `shaders/pbr/fragment.frag`, referenced as `"pbr/vertex"` and `"pbr/fragment"`.
 
+### Shared shader code: `#include`.
+A stage source may pull in shared GLSL with a line of its own:
+```
+#include "common/atmosphere"
+```
+* The argument is a file location like every other one: relative to the `shaders/` directory, without extension,
+  found through the search roots (so a resource pack can override a shared file). `"common/atmosphere"` finds
+  `shaders/common/atmosphere.glsl`. Shared files live in `shaders/common/` and have no JSON definition: they are not
+  shader assets themselves.
+* Spaces or tabs may come before the `#`, between `#` and `include`, and before the quote; a `//` comment may follow.
+  Anything else on the line is an error.
+* Includes nest at most 8 levels deep.
+* A file included a second time in the same stage is skipped, as if every file had include guards. So a shared file
+  can include what it needs (`common/atmosphere` includes `common/math`) without clashing with the main file's own
+  includes.
+* An included file must not contain `#version`, and no `#include` may come before the main file's `#version` line,
+  which stays the first line.
+* Includes are expanded before the GLSL preprocessor runs and line by line: an `#include` inside a block comment or
+  an `#if` block that is switched off is still expanded. Keep includes out of conditional blocks.
+* Errors stay traceable. Each included file becomes a numbered GLSL source string (the main file is 0, the others
+  follow in the order they are first included), so a compiler error such as `1(27)` (NVIDIA) or `1:27(26)` (Mesa)
+  means line 27 of file 1, and the load error the game logs lists which number is which file. A missing include fails
+  the load with an error naming the include, the including file and the line.
+
+Shared files today: `common/math` (`PI`) and `common/atmosphere` (the Rayleigh + Mie sky that the sky pass draws and
+the PBR shader's distance fog fades toward).
+
 
 ## Models.
 
@@ -391,7 +435,8 @@ different extensions would make the location ambiguous: give the two stage files
             "emissive_intensity": number,// emissive multiplier (default 0; defaults to 1 when an emissive map
                                          // is present, so the map is visible without extra keys)
 
-            "texture_properties": texture properties  // [OPTIONAL] filtering, applied to all this slot's maps
+            "texture_properties": texture properties  // [OPTIONAL] filtering, wrap and mipmaps, applied to all
+                                         // this slot's maps (mipmaps keep distant textured models calm)
         }
     ],
 
@@ -404,5 +449,36 @@ different extensions would make the location ambiguous: give the two stage files
 
     "rig": "none"                        // [OPTIONAL, GLTF only] "none" (default) | "skinned"
                                          // present only if/when skeletal support lands; OBJ ignores it
+}
+```
+
+
+## Textures.
+A standalone texture: one image file uploaded to the GPU as it is, for things such as sky panoramas, the moon, noise,
+normal maps and masks. (Sprites still come from sprite sheets and sprite animations, model maps from model
+definitions.) Definitions and images live under `textures/`.
+
+```
+{
+    "name": "sky_milky_way",
+    "location": asset location,              // the image file (png / bmp / gif / qoi / dds); must be a file path
+    "texture_properties": texture properties, // [OPTIONAL] filtering, wrap and mipmaps; see "Texture properties"
+    "color_space": "srgb" or "linear"        // [OPTIONAL] Defaults to srgb.
+}
+```
+
+* `color_space` says what the texels are: `srgb` for colour painted on screen (albedo, sprites, the moon, the Milky
+  Way), `linear` for data (normal maps, masks, noise). The game tells the shader which one it gets; shaders linearize
+  sRGB textures themselves, so the file is uploaded the same way in both cases.
+* Size: at most 8192 pixels per side. A larger image fails to load with an error naming its size.
+* A gif loads its first frame only.
+
+Example (the Milky Way placeholder, `textures/sky/milky_way.json`):
+```
+{
+    "name": "sky_milky_way",
+    "location": "sky/placeholder_milky_way",
+    "texture_properties": { "filtering": "trilinear", "wrap": "repeat", "mipmaps": true },
+    "color_space": "srgb"
 }
 ```

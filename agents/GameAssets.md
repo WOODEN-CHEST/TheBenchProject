@@ -1,29 +1,31 @@
-# Game asset wrappers (GameFont, GameModel, GameShader, GameSound)
+# Game asset wrappers (GameFont, GameModel, GameShader, GameSound, GameTexture)
 
-Files: `include/GameFont.h`, `include/GameModel.h`, `include/GameShader.h`, and `GameSound` in `include/SoundEngine.h`.
-Their loaders: `source/FontDefinition.c`, `source/ModelDefinition.c`, `source/ShaderDefinition.c`,
-`source/SoundDefinition.c`.
+Files: `include/GameFont.h`, `include/GameModel.h`, `include/GameShader.h`, `include/GameTexture.h`, and `GameSound`
+in `include/SoundEngine.h`. Their loaders: `source/FontDefinition.c`, `source/ModelDefinition.c`,
+`source/ShaderDefinition.c` (with the private `#include` expander `source/ShaderSource.{h,c}`),
+`source/SoundDefinition.c`, `source/TextureDefinition.c`.
 
 ## Purpose
 
-The wrapper types the AssetManager hands out for the standard font, model, shader and sound types. Each wraps one
-raylib (or audio-engine) object **by value**. Sprite sheets and sprite animations have their own docs
+The wrapper types the AssetManager hands out for the standard font, model, shader, sound and texture types. Each wraps
+one raylib (or audio-engine) object **by value**. Sprite sheets and sprite animations have their own docs
 ([SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md)); the definition JSON is in
 `references/asset_structure.md`.
 
-## Rules for all four
+## Rules for all five
 
-- **Get one** with `AssetManager_LoadFont`, `AssetManager_LoadModel`, `AssetManager_LoadShader` or
-  `AssetManager_LoadSound`, under your own `AssetUserID` ([AssetManager.md](AssetManager.md)).
+- **Get one** with `AssetManager_LoadFont`, `AssetManager_LoadModel`, `AssetManager_LoadShader`,
+  `AssetManager_LoadSound` or `AssetManager_LoadTexture`, under your own `AssetUserID` ([AssetManager.md](AssetManager.md)).
 - **Borrowed:** the manager owns the wrapper and everything in it. The pointer is valid until the last holder releases
   the asset (or `AssetManager_Deconstruct` runs); then the wrapper memory itself is freed.
 - **Never unload or free** anything reached through a wrapper: no `UnloadFont`, `UnloadModel`, `UnloadMaterial`,
-  `UnloadTexture`, `UnloadShader`, `UnloadWaveSamples` or `GameSound_Deconstruct` on it.
+  `UnloadTexture`, `UnloadShader`, `UnloadWaveSamples` or `GameSound_Deconstruct` on it, and no `SetTextureFilter` /
+  `SetTextureWrap` on its textures (every holder shares them).
 - **Don't keep it past your user:** neither the pointer nor a by-value copy of the wrapper or of the raylib struct in
   it. A copy still uses the asset's GPU ids and heap arrays.
 - **Shared and read-only:** every holder sees the same object, so writing through a copy's pointers (material maps,
   shader `locs`, font glyphs) changes it for everyone.
-- Main thread only. Fonts, models and shaders need the window's GL context to load; sounds do not.
+- Main thread only. Fonts, models, shaders and textures need the window's GL context to load; sounds do not.
 
 ## GameFont (`GameFont.h`, `source/GameFont.c`)
 
@@ -66,7 +68,8 @@ raylib (or audio-engine) object **by value**. Sprite sheets and sprite animation
     silently. Override maps go to `albedo` -> `MATERIAL_MAP_ALBEDO`, `normal` -> `MATERIAL_MAP_NORMAL`, `mra` (packed
     occlusion/roughness/metallic) -> `MATERIAL_MAP_METALNESS`, `emissive` -> `MATERIAL_MAP_EMISSION`, loaded from the
     models directory with the texture extensions. Scalars: `tint`, `metallic`, `roughness`, `emissive_color`,
-    `emissive_intensity`.
+    `emissive_intensity`. The slot's `texture_properties` (filtering, wrap, mipmaps; `TextureProperties_Apply`) apply
+    to each of its maps, so distant textured models can use mipmaps and shimmer less.
 - **Ownership:** the asset owns the meshes, the materials and their map arrays, and every texture its materials
   referenced at load (the importer's textures plus the overrides; raylib's default texture is skipped). Importer
   textures that an override replaced are unloaded during the load. On unload each tracked texture id is unloaded
@@ -89,16 +92,27 @@ raylib (or audio-engine) object **by value**. Sprite sheets and sprite animation
   array belongs to the asset.
 - Loading (`ShaderDefinition.c`): `vertex_location` and/or `fragment_location`, at least one (a bare `location` is the
   fragment stage when `fragment_location` is absent). The sources are read as text through `AssetManager_OpenResource`
-  (stage extensions `vert` `frag` `vs` `fs` `glsl`, so the two stage files need distinct stems) and compiled with
-  `LoadShaderFromMemory`; a missing stage uses raylib's default. Unloaded with `UnloadShader`.
-- A stage that fails to compile fails the load (`ErrorCode_InvalidAssetData`). A program that compiles but fails to
-  **link** comes back from raylib as raylib's default shader, so the load succeeds and only raylib's own trace log
-  mentions it.
+  (stage extensions `vert` `frag` `vs` `fs` `glsl`, so the two stage files need distinct stems), their `#include`
+  lines are expanded (below), and they are compiled with `LoadShaderFromMemory`; a missing stage uses raylib's
+  default. Unloaded with `UnloadShader`.
+- A stage that fails to compile, and a program that fails to link (raylib would hand back its default shader), both
+  fail the load (`ErrorCode_InvalidAssetData`); the compiler output is in raylib's own log. raylib's location array is
+  freed on that path (`UnloadShader`), so a failure leaks nothing.
+- **`#include` (`source/ShaderSource.{h,c}`, private, tested in `tests/ShaderSourceTests.c`).** A line
+  `#include "common/atmosphere"` is replaced by that file's text: a file location under `shaders/` resolved like every
+  other (so packs can override it), with the stage extensions. Shared files sit in `shaders/common/` without a JSON
+  definition. Rules: at most 8 levels deep; a file included twice in one stage is skipped (implicit include guards;
+  the main file counts); no `#version` in an included file and no `#include` before the main file's `#version`;
+  every other line passes through; it works line by line before the GLSL preprocessor, so it does not see comments or
+  `#if` blocks (keep includes out of them); a NUL byte is an error. Each included file is a GLSL source string of its
+  own: the expander writes `#line 1 <n>` before its text and `#line <next line> <parent>` after it (GLSL 3.30
+  semantics), and a skipped repeat becomes an empty line, so `1(27)` / `1:27(26)` in the compiler output means line 27
+  of file 1. When such a stage fails to compile, the load error lists which number is which file. A missing include
+  fails with `ErrorCode_InvalidAssetData` naming the include, the including file and the line (cached like every
+  failure). Shared files today: `common/math` (`PI`) and `common/atmosphere` (the sky and the PBR fog share it).
 - Uniform values live in the GL program, which every holder shares: set the values you rely on before each use.
   Don't write into `locs`: copy the table if you need different entries (the WorldRenderer keeps its own copy for
   `world_pbr`, `_pbr._locs`, with the material map samplers patched).
-- Known leak: on a compile failure the loader does not call `UnloadShader`, so the small `locs` array raylib allocated
-  for the failed shader is lost (once per failure, since failures are cached).
 
 ## GameSound (`SoundEngine.h`)
 
@@ -111,3 +125,20 @@ raylib (or audio-engine) object **by value**. Sprite sheets and sprite animation
 - The audio engine is disabled (`AudioEngine_Construct1` always fails) and nothing loads sounds yet; see
   [SoundEngine.md](SoundEngine.md). Releasing a sound frees its samples immediately, which is why the planned engine
   holds sounds under its own asset user.
+
+## GameTexture (`GameTexture.h`)
+
+- `GameTexture { Texture2D _rayTexture; bool _isSrgb; }`. `GameTexture_GetRaylibTexture(self)` returns the `Texture2D`
+  by value (its id, size, mip count and format); `GameTexture_IsSrgb(self)` tells colour (`color_space` `srgb`, the
+  default) from linear data (`linear`: normal maps, masks, noise). The flag is metadata for the shader: the GPU format
+  is the same, and shaders linearize sRGB textures themselves.
+- For standalone textures: sky panoramas, the moon, noise, normal maps, masks. Sprites keep coming from sprite sheets
+  and sprite animations, model maps from model definitions.
+- Loading (`TextureDefinition.c`): the file location (`png` `bmp` `gif` `qoi` `dds`; references are rejected when the
+  definition is read) is decoded with `LoadImage` first, so an image over 8192 pixels per side fails before anything
+  reaches the GPU; then `LoadTextureFromImage` and `TextureProperties_Apply` (`source/AssetDefinitionCommon.c`):
+  mipmaps generated when `texture_properties.mipmaps` is true and the file brought none (a compressed dds without its
+  own mip levels fails the load: raylib would count a mip chain the GPU never built), then the wrap mode, then the
+  filter (last, because raylib picks the mipmapped GL filter from the mip count). Unloaded with `UnloadTexture`.
+- Shipped: `sky_milky_way` (`textures/sky/milky_way.json`), a generated placeholder panorama
+  (`placeholder_milky_way.png`, 1024x512, trilinear, mipmaps) until the owner's art replaces it (T02 uses it).

@@ -519,7 +519,7 @@ Error SpriteSheetDefinition_Construct(AssetManager* manager, const UserData* use
     if (Result.Code == ErrorCode_Success)
     {
         TextureProperties Properties;
-        Result = AssetJSON_ReadTextureProperties(RootCompound, (const unsigned char*)u8"texture_properties", &Properties);
+        Result = AssetJSON_ReadTextureProperties(RootCompound, (const unsigned char*)u8"texture_properties", false, &Properties);
         if (Result.Code == ErrorCode_Success) { Definition->Filter = Properties.Filter; }
     }
 

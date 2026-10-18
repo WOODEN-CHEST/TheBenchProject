@@ -73,8 +73,8 @@ uniform float pointShadowBias;          // world-space depth bias to combat shad
 
 // Atmospheric distance fog: distant geometry fades into the SAME sky the sky pass draws, evaluated along the
 // fragment's own view ray, so far objects dissolve seamlessly into the sky (not a flat "close but not quite"
-// colour). The sky parameters below MUST stay in sync with shaders/sky/fragment.frag (identical constants +
-// atmosphere maths) or a distant silhouette against the sky will show a seam. fogDensity 0 disables fog.
+// colour). Both shaders include shaders/common/atmosphere.glsl, and the renderer gives the uniforms below the
+// values the sky pass gets. fogDensity 0 disables fog.
 uniform float fogDensity;
 uniform float skyTurbidity;     // atmospheric haze; == WorldEnvironment.SkyTurbidity (same value the sky pass gets)
 uniform vec3  skyTint;          // linear sky tint multiplier (same value the sky pass gets)
@@ -82,7 +82,7 @@ uniform float skySunIntensity;  // RAW sun intensity (NOT day-scaled); == WorldE
 
 out vec4 finalColor;
 
-const float PI = 3.14159265358979323846;
+#include "common/math"
 
 // GGX / Trowbridge-Reitz normal distribution.
 float DistributionGGX(vec3 n, vec3 h, float rough)
@@ -183,98 +183,22 @@ float ComputeShadow(vec3 worldPos, float nDotL)
 }
 
 // ---- Atmospheric sky (distance-fog target) -----------------------------------------------------------------
-// A trimmed copy of shaders/sky/fragment.frag's Rayleigh+Mie single-scattering sky, WITHOUT the sun disc and
-// stars (distant terrain should fade to the sky's colour, not sprout a second sun or stars). KEEP THESE
-// CONSTANTS AND skyAtmosphere() BYTE-FOR-BYTE IN SYNC WITH THE SKY SHADER, or the horizon where a fogged
-// object meets the sky will not match.
-const int   SKY_PRIMARY_STEPS = 16;
-const int   SKY_LIGHT_STEPS   = 8;
-const float SKY_R_PLANET = 6371000.0;
-const float SKY_R_ATMOS  = 6471000.0;
-const vec3  SKY_K_RAYLEIGH = vec3(5.5e-6, 13.0e-6, 22.4e-6);
-const float SKY_K_MIE_BASE = 21e-6;
-const float SKY_H_RAYLEIGH = 8000.0;
-const float SKY_H_MIE      = 1200.0;
-const float SKY_MIE_G      = 0.758;
-const float SKY_SUN_RADIANCE = 22.0;
-
-vec2 skyRaySphere(vec3 origin, vec3 dir, float sr)
-{
-    float b = dot(origin, dir);
-    float c = dot(origin, origin) - sr*sr;
-    float d = b*b - c;
-    if (d < 0.0) return vec2(1e9, -1e9);
-    d = sqrt(d);
-    return vec2(-b - d, -b + d);
-}
-
-vec3 skyAtmosphere(vec3 rayDir, vec3 rayOrigin, vec3 sunDir, float iSun, float kMie)
-{
-    vec2 atmos = skyRaySphere(rayOrigin, rayDir, SKY_R_ATMOS);
-    if (atmos.y < 0.0) return vec3(0.0);
-    float tStart = max(atmos.x, 0.0);
-    float tEnd = atmos.y;
-    vec2 planet = skyRaySphere(rayOrigin, rayDir, SKY_R_PLANET);
-    if (planet.x > 0.0) tEnd = min(tEnd, planet.x);
-    float segLen = (tEnd - tStart)/float(SKY_PRIMARY_STEPS);
-    float t = tStart;
-
-    vec3 sumR = vec3(0.0);
-    vec3 sumM = vec3(0.0);
-    float odR = 0.0;
-    float odM = 0.0;
-
-    float mu = dot(rayDir, sunDir);
-    float mumu = mu*mu;
-    float gg = SKY_MIE_G*SKY_MIE_G;
-    float phaseR = 3.0/(16.0*PI)*(1.0 + mumu);
-    float phaseM = 3.0/(8.0*PI)*((1.0 - gg)*(mumu + 1.0))/(pow(1.0 + gg - 2.0*mu*SKY_MIE_G, 1.5)*(2.0 + gg));
-
-    for (int i = 0; i < SKY_PRIMARY_STEPS; i++)
-    {
-        vec3 pos = rayOrigin + rayDir*(t + segLen*0.5);
-        float h = length(pos) - SKY_R_PLANET;
-        float hr = exp(-h/SKY_H_RAYLEIGH)*segLen;
-        float hm = exp(-h/SKY_H_MIE)*segLen;
-        odR += hr;
-        odM += hm;
-
-        vec2 lightAtmos = skyRaySphere(pos, sunDir, SKY_R_ATMOS);
-        float lSeg = lightAtmos.y/float(SKY_LIGHT_STEPS);
-        float lt = 0.0;
-        float lOdR = 0.0;
-        float lOdM = 0.0;
-        for (int j = 0; j < SKY_LIGHT_STEPS; j++)
-        {
-            vec3 lpos = pos + sunDir*(lt + lSeg*0.5);
-            float lh = length(lpos) - SKY_R_PLANET;
-            lOdR += exp(-lh/SKY_H_RAYLEIGH)*lSeg;
-            lOdM += exp(-lh/SKY_H_MIE)*lSeg;
-            lt += lSeg;
-        }
-
-        vec3 tau = SKY_K_RAYLEIGH*(odR + lOdR) + kMie*1.1*(odM + lOdM);
-        vec3 attn = exp(-tau);
-        sumR += hr*attn;
-        sumM += hm*attn;
-        t += segLen;
-    }
-
-    return iSun*(phaseR*SKY_K_RAYLEIGH*sumR + phaseM*kMie*sumM);
-}
+// The sky pass's Rayleigh+Mie single-scattering sky, WITHOUT the sun disc and stars (distant terrain should fade
+// to the sky's colour, not sprout a second sun or stars).
+#include "common/atmosphere"
 
 // The sky colour along a world-space view ray (the sky pass's result minus the sun disc + stars). This is the
 // colour distant fogged geometry fades toward, so it matches the visible sky in that direction.
 vec3 fogSkyColor(vec3 rayDir)
 {
-    vec3 rayOrigin = vec3(0.0, SKY_R_PLANET + 1.0, 0.0);
+    vec3 rayOrigin = vec3(0.0, ATMOSPHERE_R_PLANET + 1.0, 0.0);
     vec3 sunDir = normalize(sunDirection);
-    float kMie = SKY_K_MIE_BASE*max(skyTurbidity, 0.0)/3.0;
-    float iSun = SKY_SUN_RADIANCE*max(skySunIntensity, 0.0);
+    float kMie = ATMOSPHERE_K_MIE_BASE*max(skyTurbidity, 0.0)/3.0;
+    float iSun = ATMOSPHERE_SUN_RADIANCE*max(skySunIntensity, 0.0);
 
-    // Mirror the ray into the upper hemisphere and darken below the horizon, exactly like the sky pass.
+    // Mirror the ray into the upper hemisphere and darken below the horizon, exactly like the sky pass's main.
     vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
-    vec3 sky = skyAtmosphere(skyRay, rayOrigin, sunDir, iSun, kMie);
+    vec3 sky = atmosphere(skyRay, rayOrigin, sunDir, iSun, kMie);
     float belowFactor = smoothstep(0.0, -0.12, rayDir.y);
     sky *= mix(1.0, 0.5, belowFactor);
     sky *= max(skyTint, vec3(0.0));

@@ -31,6 +31,9 @@
 /** @brief Standard model type name / directory. */
 #define ASSET_TYPE_NAME_MODEL      ((const unsigned char*)u8"model")
 #define ASSET_TYPE_DIRECTORY_MODEL ((const unsigned char*)u8"models")
+/** @brief Standard texture type name / directory. */
+#define ASSET_TYPE_NAME_TEXTURE      ((const unsigned char*)u8"texture")
+#define ASSET_TYPE_DIRECTORY_TEXTURE ((const unsigned char*)u8"textures")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -59,4 +62,8 @@ Error ShaderDefinition_Construct(AssetManager* manager, const UserData* userData
 
 /** @brief Builds a model definition from a JSON blob. See AssetDefinitionConstructor. */
 Error ModelDefinition_Construct(AssetManager* manager, const UserData* userData,
+    const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+
+/** @brief Builds a texture definition from a JSON blob. See AssetDefinitionConstructor. */
+Error TextureDefinition_Construct(AssetManager* manager, const UserData* userData,
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);

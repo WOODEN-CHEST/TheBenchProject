@@ -101,6 +101,7 @@ typedef struct GameSoundStruct GameSound;
 typedef struct GameFontStruct GameFont;
 typedef struct GameShaderStruct GameShader;
 typedef struct GameModelStruct GameModel;
+typedef struct GameTextureStruct GameTexture;
 
 
 // Core identifier types.
@@ -345,6 +346,8 @@ typedef struct StandardAssetTypesStruct
     AssetTypeID Shader;
     /** @brief Model type id (static meshes; see the model module for the current feature scope). */
     AssetTypeID Model;
+    /** @brief Standalone texture type id (sky panoramas, the moon, noise, normal maps, masks). */
+    AssetTypeID Texture;
 } StandardAssetTypes;
 
 
@@ -424,8 +427,8 @@ Error AssetManager_CreateAssetType(AssetManager* self, const AssetTypeInfo* info
 /**
  * @brief Registers all standard asset types and a shared JSON pool used to parse their definitions.
  *
- * Registers the sprite sheet, sprite animation, sound, font, shader, and model types, writing their ids
- * into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's ConstructorUserData
+ * Registers the seven standard types (sprite sheet, sprite animation, sound, font, shader, model and texture),
+ * writing their ids into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's ConstructorUserData
  * so all standard definition parsing recycles JSON compounds/arrays/strings instead of reallocating. The
  * caller OWNS @p *outDefinitionPool and must free it with JSONObjectPool_Deconstruct after (or alongside)
  * the manager. The same pool may be reused as the ConstructorUserData of a custom JSON-based type to
@@ -959,6 +962,11 @@ Error AssetManager_LoadShader(AssetManager* self, const unsigned char* name, Ass
  * @brief Loads a model by name. See AssetManager_LoadSpriteSheet for semantics.
  */
 Error AssetManager_LoadModel(AssetManager* self, const unsigned char* name, AssetUserID user, GameModel** outAsset);
+
+/**
+ * @brief Loads a standalone texture by name. See AssetManager_LoadSpriteSheet for semantics.
+ */
+Error AssetManager_LoadTexture(AssetManager* self, const unsigned char* name, AssetUserID user, GameTexture** outAsset);
 
 
 // ---- Bulk load (stepped, main thread) ----

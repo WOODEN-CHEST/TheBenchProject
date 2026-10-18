@@ -22,11 +22,24 @@ typedef struct OwnedAssetLocationStruct
     unsigned char* Value;
 } OwnedAssetLocation;
 
-/** @brief Parsed texture properties (currently just the scaling filter). */
+/**
+ * @brief Parsed "texture_properties": the scaling filter, the wrap mode and whether the texture has mipmaps.
+ *
+ * Every field defaults to what a texture got before the keys existed, so a definition without them loads unchanged.
+ * Not every loader applies every field: sprite sheets, sprite animation frames and fonts apply only Filter (and their
+ * definitions reject trilinear filtering); the texture type and model material maps apply all three, through
+ * TextureProperties_Apply.
+ */
 typedef struct TexturePropertiesStruct
 {
-    /** @brief A Raylib TEXTURE_FILTER_* value; defaults to TEXTURE_FILTER_BILINEAR. */
+    /** @brief A raylib TEXTURE_FILTER_* value: TEXTURE_FILTER_POINT, TEXTURE_FILTER_BILINEAR (the default) or
+     *         TEXTURE_FILTER_TRILINEAR (only with AreMipmapsEnabled). */
     int Filter;
+    /** @brief A raylib TEXTURE_WRAP_* value; defaults to TEXTURE_WRAP_REPEAT, raylib's own default. */
+    int Wrap;
+    /** @brief Whether the texture gets a mipmap chain: generated at load unless its file brings mip levels (a dds).
+     *         Defaults to false. */
+    bool AreMipmapsEnabled;
 } TextureProperties;
 
 
@@ -117,13 +130,37 @@ Error AssetJSON_ReadOptionalOwnedString(JSONCompound* compound, const unsigned c
     unsigned char** outString, bool* outFound);
 
 /**
- * @brief Reads an optional texture_properties compound into @p outProps (filter defaults to bilinear).
+ * @brief Reads an optional texture_properties compound into @p outProps.
+ *
+ * Its keys are all optional: "filtering" ("point", "bilinear" (default) or "trilinear"), "wrap" ("repeat" (default),
+ * "clamp", "mirror_repeat" or "mirror_clamp") and "mipmaps" (a boolean, default false). Trilinear filtering blends
+ * mip levels, so it needs "mipmaps": true, and a caller whose textures never have mipmaps rejects it outright. Every
+ * key is validated whatever the caller applies (see TextureProperties).
  * @param compound The compound to read from.
  * @param key The texture-properties key.
- * @param outProps [out] Receives the parsed properties. Must not be NULL.
- * @returns Success; ErrorCode_InvalidAssetDefinition if present but malformed.
+ * @param areMipmapsSupported Whether the caller can give its textures mipmaps (the texture type and model material
+ *        maps can; sprite sheets, sprite animation frames and fonts cannot).
+ * @param outProps [out] Receives the parsed properties, or the defaults when the key is absent. Must not be NULL.
+ * @returns Success; ErrorCode_InvalidAssetDefinition if present but not a compound, for a filtering or wrap value
+ *          that is not a known string, or for trilinear filtering without mipmaps; ErrorCode_InvalidJSON (from
+ *          GameJSON) for a "mipmaps" value that is not a boolean.
  */
-Error AssetJSON_ReadTextureProperties(JSONCompound* compound, const unsigned char* key, TextureProperties* outProps);
+Error AssetJSON_ReadTextureProperties(JSONCompound* compound, const unsigned char* key, bool areMipmapsSupported,
+    TextureProperties* outProps);
+
+/**
+ * @brief Applies texture properties to a texture that was just loaded: generates its mipmaps when they are enabled
+ *        and the file brought none, then sets its filter and wrap mode.
+ *
+ * Needs the GL context (main thread). A "mirror_clamp" wrap needs the GL_EXT_texture_mirror_clamp extension;
+ * without it raylib keeps the previous wrap mode (repeat) and logs a warning.
+ * @param self The parsed properties; must not be NULL.
+ * @param texture [in,out] The texture; its mipmap count is updated when mipmaps are generated. Must not be NULL.
+ * @param description What the texture is, for messages (e.g. its location); must not be NULL.
+ * @returns Success; ErrorCode_InvalidAssetData when mipmaps are enabled but cannot be generated: a compressed texture
+ *          (dds) without its own mip levels, or a GPU that refuses (the texture is left as it was).
+ */
+Error TextureProperties_Apply(const TextureProperties* self, Texture2D* texture, const unsigned char* description);
 
 /**
  * @brief Reads an optional integer that may be a JSON number or a whitespace-trimmed string (0x/0b bases).

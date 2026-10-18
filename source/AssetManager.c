@@ -1722,6 +1722,7 @@ Error AssetManager_CreateStandardAssetTypes(AssetManager* self, StandardAssetTyp
         { ASSET_TYPE_NAME_FONT, ASSET_TYPE_DIRECTORY_FONT, FontDefinition_Construct, &outTypes->Font },
         { ASSET_TYPE_NAME_SHADER, ASSET_TYPE_DIRECTORY_SHADER, ShaderDefinition_Construct, &outTypes->Shader },
         { ASSET_TYPE_NAME_MODEL, ASSET_TYPE_DIRECTORY_MODEL, ModelDefinition_Construct, &outTypes->Model },
+        { ASSET_TYPE_NAME_TEXTURE, ASSET_TYPE_DIRECTORY_TEXTURE, TextureDefinition_Construct, &outTypes->Texture },
     };
 
     for (size_t i = 0; i < (sizeof(Standard) / sizeof(Standard[0])); i++)
@@ -2555,6 +2556,11 @@ Error AssetManager_LoadShader(AssetManager* self, const unsigned char* name, Ass
 Error AssetManager_LoadModel(AssetManager* self, const unsigned char* name, AssetUserID user, GameModel** outAsset)
 {
     return LoadStandard(self, (self != NULL) ? self->_standardTypes.Model : ASSET_TYPE_ID_INVALID, name, user, (void**)outAsset);
+}
+
+Error AssetManager_LoadTexture(AssetManager* self, const unsigned char* name, AssetUserID user, GameTexture** outAsset)
+{
+    return LoadStandard(self, (self != NULL) ? self->_standardTypes.Texture : ASSET_TYPE_ID_INVALID, name, user, (void**)outAsset);
 }
 
 // TODO: Bulk operations are complete but unused: no frame drives them from its stepped load yet (GameFrame's

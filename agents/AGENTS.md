@@ -44,11 +44,14 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, and registers the six standard types. Read its lifetime rules before touching assets.
-* Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader and GameSound: the manager-owned wrappers for
-  the standard font, model, shader and sound types, with their ownership rules, accessors and pitfalls. GameFont
-  (source/GameFont.c) adds sorted glyph lookup with the '?' fallback; fonts load at a definition-chosen size and
-  codepoint set (source/FontCodepoints.c, private) and warn once about glyphs their file lacks.
+  caches failed loads, and registers the seven standard types. Read its lifetime rules before touching assets.
+* Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader, GameSound and GameTexture: the manager-owned
+  wrappers for the standard font, model, shader, sound and texture types, with their ownership rules, accessors and
+  pitfalls. GameFont (source/GameFont.c) adds sorted glyph lookup with the '?' fallback; fonts load at a
+  definition-chosen size and codepoint set (source/FontCodepoints.c, private) and warn once about glyphs their file
+  lacks. Shader stages may `#include "common/..."` shared GLSL from shaders/common/, expanded with #line directives so
+  compiler errors name the right file (source/ShaderSource.c, private). GameTexture is a standalone texture (sky
+  panoramas, the moon, noise, masks) with filtering, wrap, optional mipmaps and an sRGB/linear flag.
 * SpriteSheet (SpriteSheet.md) - Texture atlas with named pixel regions; the asset loader shelf-packs padded source
   images into one texture (padding at most 64 px, atlas at most 8192 px).
 * SpriteAnimation (SpriteAnimation.md) - 2D frame animations: SpriteAnimation (shared asset data: frames plus default

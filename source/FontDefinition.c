@@ -245,7 +245,7 @@ Error FontDefinition_Construct(AssetManager* manager, const UserData* userData, 
     if (Result.Code == ErrorCode_Success)
     {
         TextureProperties Properties;
-        Result = AssetJSON_ReadTextureProperties(RootCompound, (const unsigned char*)u8"texture_properties", &Properties);
+        Result = AssetJSON_ReadTextureProperties(RootCompound, (const unsigned char*)u8"texture_properties", false, &Properties);
         Definition->Filter = Properties.Filter;
     }
     if (Result.Code == ErrorCode_Success)

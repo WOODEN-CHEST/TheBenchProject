@@ -3,15 +3,16 @@
 Files: `include/AssetManager.h`, `source/AssetManager.c`. Standard asset types: `source/AssetTypesStandard.h`
 (type names and directories), `source/AssetDefinitionCommon.h/.c` (shared JSON helpers and the accepted extension
 sets), and one loader per type: `source/SpriteSheetDefinition.c`, `source/SpriteAnimationDefinition.c`,
-`source/SoundDefinition.c`, `source/FontDefinition.c`, `source/ShaderDefinition.c`, `source/ModelDefinition.c`.
+`source/SoundDefinition.c`, `source/FontDefinition.c`, `source/ShaderDefinition.c` (with its `#include` expander
+`source/ShaderSource.{h,c}`), `source/ModelDefinition.c`, `source/TextureDefinition.c`.
 The definition JSON format is specified in `references/asset_structure.md`.
 
 ## Purpose
 
 Loads, shares and unloads game assets. The manager stores **definitions** (named recipes, normally JSON files
 under the asset search roots) and builds an asset from its definition the first time someone loads it. Asset
-types are registered at runtime (`AssetManager_CreateAssetType`); the six standard types (sprite sheet, sprite
-animation, sound, font, shader, model) are registered together by `AssetManager_CreateStandardAssetTypes`. The
+types are registered at runtime (`AssetManager_CreateAssetType`); the seven standard types (sprite sheet, sprite
+animation, sound, font, shader, model, texture) are registered together by `AssetManager_CreateStandardAssetTypes`. The
 wrappers it hands out are documented in [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md)
 and [GameAssets.md](GameAssets.md).
 
@@ -58,7 +59,7 @@ the text code copied fonts by value into components; that is gone.)
 
 ### Threading
 - **Main thread only.** The manager does no locking, and raylib loading must run on the GL thread.
-- Loading sprite sheets, sprite animations, fonts, shaders and models needs the window (GL context); reading
+- Loading sprite sheets, sprite animations, fonts, shaders, models and textures needs the window (GL context); reading
   definitions does not. Sounds decode without the GL context or the audio device.
 
 ## Users
@@ -116,7 +117,7 @@ Error_Deconstruct(&RetireResult);
 ```
 
 The typed loaders (`AssetManager_LoadSpriteSheet`, `LoadSpriteAnimation`, `LoadSound`, `LoadFont`, `LoadShader`,
-`LoadModel`) return `ErrorCode_InvalidState` if the standard types were never registered. Custom types use
+`LoadModel`, `LoadTexture`) return `ErrorCode_InvalidState` if the standard types were never registered. Custom types use
 `AssetManager_LoadAssetSingle(self, typeId, name, user, &AssetPointer)` with a `void*` result.
 
 ## Definitions
@@ -180,11 +181,11 @@ Accepted extensions (`source/AssetDefinitionCommon.c`):
 
 | Filter | Used for | Extensions |
 |---|---|---|
-| `ASSET_EXTENSIONS_TEXTURE` | sprite sheet images, texture animation frames, model material override maps | `png` `bmp` `gif` `qoi` `dds` |
+| `ASSET_EXTENSIONS_TEXTURE` | standalone textures, sprite sheet images, texture animation frames, model material override maps | `png` `bmp` `gif` `qoi` `dds` |
 | `ASSET_EXTENSIONS_MODEL` | models | `obj` `gltf` `glb` `iqm` `vox` `m3d` |
 | `ASSET_EXTENSIONS_FONT` | fonts | `ttf` `otf` |
 | `ASSET_EXTENSIONS_SOUND` | sounds | `wav` `ogg` `mp3` `qoa` |
-| `ASSET_EXTENSIONS_SHADER_STAGE` | both shader stages | `vert` `frag` `vs` `fs` `glsl` |
+| `ASSET_EXTENSIONS_SHADER_STAGE` | both shader stages and the files they `#include` | `vert` `frag` `vs` `fs` `glsl` |
 
 These are what the shipped raylib decodes through each loader's call (it has no jpg, tga, psd or hdr readers; `.fnt`
 and `xm`/`mod` are only read by raylib functions the loaders do not use). Both shader stages accept every stage
@@ -205,8 +206,8 @@ the resolver set with `AssetManager_SetReferenceResolver`, otherwise `ErrorCode_
   deletes the file. The data must be one self-contained file (a temp
   file cannot find siblings such as `.mtl` or `.bin`). Models, fonts and sounds load this way, so a reference there
   needs `format`, which is checked when the definition is read.
-- Texture locations (sheet images, texture frames, material override maps) have no `format` key, so they must be file
-  paths; a reference is rejected when the definition is read.
+- Texture locations (standalone textures, sheet images, texture frames, material override maps) have no `format` key,
+  so they must be file paths; a reference is rejected when the definition is read.
 
 ## Failed-load cache
 
@@ -242,8 +243,11 @@ Only reference resources loaded through `AssetManager_AcquireResourcePath` use i
 
 ## Standard types
 
-All six read JSON definitions (`.json`) and parse them with the shared `JSONObjectPool` from
-`AssetManager_CreateStandardAssetTypes`.
+All seven read JSON definitions (`.json`) and parse them with the shared `JSONObjectPool` from
+`AssetManager_CreateStandardAssetTypes`. Every `texture_properties` key goes through one parser,
+`AssetJSON_ReadTextureProperties` (filtering, wrap, mipmaps); the texture type and model material maps apply all three
+with `TextureProperties_Apply`, the sprite sheet, sprite animation and font loaders only the filter (and reject
+`trilinear`).
 
 | Type (directory) | Typed loader | Wrapper | The loaded asset owns, and frees on unload |
 |---|---|---|---|
@@ -251,8 +255,9 @@ All six read JSON definitions (`.json`) and parse them with the shared `JSONObje
 | `sprite_animation` (`sprite_animations`) | `AssetManager_LoadSpriteAnimation` | `SpriteAnimation` | Its standalone frame textures (`UnloadTexture` each) and the frame buffer (pool, returned). Sheet frames borrow the sheet's atlas; the sheet is held under the animation's dependency user. |
 | `sound` (`sounds`) | `AssetManager_LoadSound` | `GameSound` | The decoded float samples (`UnloadWaveSamples`); the `GameSound` borrows them. |
 | `font` (`fonts`) | `AssetManager_LoadFont` | `GameFont` | The raylib `Font` (`UnloadFont`). |
-| `shader` (`shaders`) | `AssetManager_LoadShader` | `GameShader` | The raylib `Shader` (`UnloadShader`). |
+| `shader` (`shaders`) | `AssetManager_LoadShader` | `GameShader` | The raylib `Shader` (`UnloadShader`). Each stage's `#include` lines are expanded first (shared files in `shaders/common/`, no definitions). |
 | `model` (`models`) | `AssetManager_LoadModel` | `GameModel` | Meshes, materials and map arrays (`UnloadModel`), plus every texture its materials referenced at load, tracked by id and unloaded first (`rlUnloadTexture`). Never `UnloadMaterial`: it would also unload the material's shader, and a texture shared by two materials twice. |
+| `texture` (`textures`) | `AssetManager_LoadTexture` | `GameTexture` | One GPU texture (`UnloadTexture`), at most 8192 px per side, with its filtering, wrap and optional mipmaps applied, and its `color_space` flag. |
 
 Details per type: [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md).
 
@@ -296,7 +301,8 @@ once or a few times per frame until `AssetBulkOperation_IsComplete`, then `Promi
    everything in no particular order, so a dependency may already be gone.
 5. **`AssetDefinitionVTable.Destroy`**: free the definition object only, never an asset built from it.
 
-Templates: `FontDefinition.c` (path-based, with `format`), `ShaderDefinition.c` (stream-based, pooled buffers),
+Templates: `TextureDefinition.c` (the smallest: path-based, one GPU object), `FontDefinition.c` (path-based, with
+`format`), `ShaderDefinition.c` (stream-based, pooled buffers),
 `SpriteAnimationDefinition.c` (dependencies), `ModelDefinition.c` (tracking GPU objects to unload).
 `AssetManager_RemoveAssetType` refuses while definitions or loaded assets of the type remain.
 
@@ -315,3 +321,5 @@ Templates: `FontDefinition.c` (path-based, with `format`), `ShaderDefinition.c` 
 - **Tests:** `tests/AssetManagerTests.c` (run with `sh tests/run_linux.sh`) covers skipped and counted definition
   files, name validation, same-root duplicates, file matching (material libraries, ambiguity, the whole last name,
   unsupported extensions) and the failed-load cache, all without a window. Extend it when you change that logic.
+  `tests/TextureTests.c` covers the texture type and the `texture_properties` parser (including the size limit, which
+  fails before the GPU upload), `tests/ShaderSourceTests.c` the shader `#include` expander.

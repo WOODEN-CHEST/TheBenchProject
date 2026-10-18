@@ -19,6 +19,8 @@ int main(void)
     GameJSONTests_Run(&Run);
     ConfigTests_Run(&Run);
     AssetManagerTests_Run(&Run);
+    ShaderSourceTests_Run(&Run);
+    TextureTests_Run(&Run);
     WorldLightCullingTests_Run(&Run);
     WorldTests_Run(&Run);
     WorldEnvironmentTests_Run(&Run);
