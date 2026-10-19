@@ -314,6 +314,35 @@ static void ShippedMilkyWayDefinitionResolves(TestRun* run)
 }
 
 
+/* The moon's definition ships, and its placeholder image resolves to exactly one file the texture loader can read. */
+static void ShippedMoonDefinitionResolves(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    GenericBuffer Root;
+    GenericBuffer_AllocateVariable(&Root, 0U, sizeof(unsigned char));
+    if (TestAssetFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Root._data))
+        && TEST_CHECK_SUCCESS(run, AssetManager_ReadDefinitions(Fixture.Manager, NULL)))
+    {
+        bool HasMoon = false;
+        TEST_CHECK_SUCCESS(run, AssetManager_HasDefinition(Fixture.Manager, Fixture.Types.Texture,
+            (const unsigned char*)u8"sky_moon", &HasMoon));
+        TEST_CHECK(run, HasMoon);
+
+        AssetLocation Location = { AssetLocationType_File, (const unsigned char*)u8"sky/placeholder_moon" };
+        IOStream* Stream = NULL;
+        if (TEST_CHECK_SUCCESS(run, AssetManager_OpenResource(Fixture.Manager, Fixture.Types.Texture, &Location,
+            &ASSET_EXTENSIONS_TEXTURE, &Stream)))
+        {
+            TEST_CHECK_SUCCESS(run, AssetManager_CloseResource(Fixture.Manager, Stream));
+        }
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+    Memory_Free(Root._data);
+}
+
+
 // Public functions.
 void TextureTests_Run(TestRun* run)
 {
@@ -328,6 +357,7 @@ void TextureTests_Run(TestRun* run)
         { "sprite_sheets_and_fonts_reject_trilinear", SpriteSheetsAndFontsRejectTrilinear },
         { "oversized_texture_fails_before_upload", OversizedTextureFailsBeforeUpload },
         { "shipped_milky_way_definition_resolves", ShippedMilkyWayDefinitionResolves },
+        { "shipped_moon_definition_resolves", ShippedMoonDefinitionResolves },
     };
     TestRun_RunSuite(run, "Texture", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

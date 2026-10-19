@@ -6,10 +6,13 @@
 
 // Macros.
 #define NIGHT_SKY_PI 3.14159265358979323846
-/** The sun's right ascension, in degrees, that sets the season of the sky: 90 is a June night, with the galactic
- *  centre on the meridian at midnight. */
-// TODO: T03 derives the season from the in-game date (T23) once the calendar exists.
+/** The sun's right ascension, in degrees, at which the star frame equals the celestial frame: 90, the June solstice.
+ *  WorldEnvironment_GetStarsToWorld drifts the star frame from there through the year (its
+ *  STAR_FRAME_SUN_RIGHT_ASCENSION_TURNS in source/WorldEnvironment.c is the same angle and must stay so). */
 #define NIGHT_SKY_SUN_RIGHT_ASCENSION_DEGREES 90.0f
+/** How steeply the moon's share of the limit grows with the moonlit sky (log10(1 + scale x m)): with 20, a tenth of a
+ *  full moon's light still takes a third of its magnitudes. */
+#define NIGHT_SKY_MOONLIT_SKY_SCALE 20.0
 /** Width of the band in which stars crowd the galactic plane, as the sine of the galactic latitude (about 15 deg). */
 #define NIGHT_SKY_GALACTIC_CROWDING_WIDTH 0.26
 /** Most direction draws one star takes before its last draw is kept regardless of the crowding test. */
@@ -193,10 +196,14 @@ Error NightSky_GenerateStars(uint64_t seed, float density, GenericBuffer* outSta
     return Error_CreateSuccess();
 }
 
-float NightSky_GetLimitingMagnitude(float lightPollution, float sunElevationDegrees)
+float NightSky_GetLimitingMagnitude(float lightPollution, float moonlitSky, float sunElevationDegrees)
 {
     double Pollution = ClampDouble((double)lightPollution, 0.0, 1.0);
-    double NightLimit = (double)NIGHT_SKY_DARK_SITE_LIMITING_MAGNITUDE - (double)NIGHT_SKY_LIGHT_POLLUTION_MAGNITUDES * Pollution;
+    double Moonlight = ClampDouble((double)moonlitSky, 0.0, (double)NIGHT_SKY_MAX_MOONLIT_SKY);
+    double MoonMagnitudes = (double)NIGHT_SKY_FULL_MOON_MAGNITUDES * log10(1.0 + NIGHT_SKY_MOONLIT_SKY_SCALE * Moonlight)
+        / log10(1.0 + NIGHT_SKY_MOONLIT_SKY_SCALE);
+    double NightLimit = (double)NIGHT_SKY_DARK_SITE_LIMITING_MAGNITUDE - (double)NIGHT_SKY_LIGHT_POLLUTION_MAGNITUDES * Pollution
+        - MoonMagnitudes * (1.0 - Pollution);
     if (!isfinite(sunElevationDegrees))
     {
         return NIGHT_SKY_DAYTIME_LIMITING_MAGNITUDE;

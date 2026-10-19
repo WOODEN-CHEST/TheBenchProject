@@ -1,4 +1,5 @@
-// The sun shadow cascades and the point-light cube shadow.
+// The shadow cascades of the sky's shadow light (the sun by day, the moon on bright nights) and the point-light cube
+// shadow.
 
 #include <math.h>
 #include "WorldRendererInternal.h"
@@ -7,17 +8,17 @@
 
 
 // Macros.
-/** Asset name of the depth-only shader used for the sun shadow cascades. */
+/** Asset name of the depth-only shader used for the shadow cascades. */
 #define DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_depth")
 /** Asset name of the point-light omnidirectional (cube) shadow depth shader (stores packed linear distance). */
 #define CUBE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_cube_depth")
-/** The sun casts TWO cascaded orthographic shadow maps, both centred on the camera: a NEAR cascade with a small
- *  extent (sharp shadows for close detail) and a FAR cascade with a large extent (coarse shadows for big /
- *  distant casters). Per-object WorldShadowTier routes which cascade(s) each object casts into. World-space
- *  width/height of each cascade's frustum: */
+/** The shadow light (the sun or the moon) casts TWO cascaded orthographic shadow maps, both centred on the camera: a
+ *  NEAR cascade with a small extent (sharp shadows for close detail) and a FAR cascade with a large extent (coarse
+ *  shadows for big / distant casters). Per-object WorldShadowTier routes which cascade(s) each object casts into.
+ *  World-space width/height of each cascade's frustum: */
 #define SHADOW_NEAR_ORTHO_SIZE 32.0f
 #define SHADOW_FAR_ORTHO_SIZE 160.0f
-/** Distance the shadow light camera is placed from its focus, along the sun direction. */
+/** Distance the shadow light camera is placed from its focus, along the shadow light's direction. */
 #define SHADOW_DISTANCE 120.0f
 /** Near plane of the shadow orthographic frustum (shared by both cascades). */
 #define SHADOW_NEAR 1.0f
@@ -30,7 +31,7 @@
 
 
 // Static functions.
-/* Creates a depth-only framebuffer whose depth attachment is a samplable texture, for a sun shadow cascade (the
+/* Creates a depth-only framebuffer whose depth attachment is a samplable texture, for a shadow cascade (the
  * depth texture lives in .depth). Returns a zero target (id 0) if the framebuffer could not be made complete. */
 static RenderTexture2D LoadShadowMap(int width, int height)
 {
@@ -105,7 +106,7 @@ static void LoadPointShadowCube(WorldRenderer* self)
     self->_pointShadow._hasCube = true;
 }
 
-/* Whether a model object casts into the given sun shadow cascade, per its WorldShadowTier: Both casts into
+/* Whether a model object casts into the given shadow cascade, per its WorldShadowTier: Both casts into
  * either; Near casts only into the near cascade; Far casts only into the far cascade. */
 static bool ModelCastsIntoCascade(const WorldModelObject* modelObject, bool isNearCascade)
 {
@@ -119,8 +120,8 @@ static bool ModelCastsIntoCascade(const WorldModelObject* modelObject, bool isNe
     return true;
 }
 
-/* Draws the depth of the cached models that cast into the given sun shadow cascade (per WorldShadowTier) through
- * @p shader. Ignores the pixelation filter (every pixelation state casts). Sprites do not cast the sun shadow
+/* Draws the depth of the cached models that cast into the given shadow cascade (per WorldShadowTier) through
+ * @p shader. Ignores the pixelation filter (every pixelation state casts). Sprites do not cast cascade shadows
  * (billboards are not in the shadow passes). */
 static void DrawShadowCasters(WorldRenderer* self, const Shader* shader, bool isNearCascade)
 {
@@ -152,17 +153,17 @@ static void DrawCastersInReach(WorldRenderer* self, const Shader* shader, Vector
     }
 }
 
-/* Renders one sun shadow cascade: the depth of the casters assigned to this cascade (per WorldShadowTier), from
- * the sun into @p map, using a camera-centred orthographic frustum of the given world-space extent. Stores the
- * world->light-clip matrix in @p outLightVP. Opens/closes its own texture + 3D passes. */
+/* Renders one shadow cascade: the depth of the casters assigned to this cascade (per WorldShadowTier), from
+ * the frame's shadow light into @p map, using a camera-centred orthographic frustum of the given world-space extent.
+ * Stores the world->light-clip matrix in @p outLightVP. Opens/closes its own texture + 3D passes. */
 static void RenderShadowCascade(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D map,
     float orthoSize, bool isNearCascade, Matrix* outLightVP)
 {
-    Vector3 SunDirection = frame->SunDirection;
+    Vector3 LightDirection = frame->ShadowDirection;
     Vector3 Focus = frame->Camera->Position;
-    Vector3 LightPos = Vector3Add(Focus, Vector3Scale(SunDirection, SHADOW_DISTANCE));
-    // Avoid a degenerate look-at when the sun is near straight up.
-    Vector3 Up = (fabsf(SunDirection.y) > 0.99f) ? (Vector3){ 0.0f, 0.0f, 1.0f } : (Vector3){ 0.0f, 1.0f, 0.0f };
+    Vector3 LightPos = Vector3Add(Focus, Vector3Scale(LightDirection, SHADOW_DISTANCE));
+    // Avoid a degenerate look-at when the light is near straight up.
+    Vector3 Up = (fabsf(LightDirection.y) > 0.99f) ? (Vector3){ 0.0f, 0.0f, 1.0f } : (Vector3){ 0.0f, 1.0f, 0.0f };
 
     // Explicit tight orthographic frustum around the focus (rather than BeginMode3D, which would force
     // Raylib's global cull distances and make the depth bias unintuitive). Depth is linear across
@@ -170,7 +171,7 @@ static void RenderShadowCascade(WorldRenderer* self, const WorldRenderFrame* fra
     Matrix LightView = MatrixLookAt(LightPos, Focus, Up);
     float HalfExtent = orthoSize*0.5f;
     Matrix LightProj = MatrixOrtho(-HalfExtent, HalfExtent, -HalfExtent, HalfExtent, SHADOW_NEAR, SHADOW_FAR);
-    Shader DepthShader = GameShader_GetRaylibShader(self->_sunShadow._depthShader);
+    Shader DepthShader = GameShader_GetRaylibShader(self->_cascades._depthShader);
 
     BeginTextureMode(map);
     ClearBackground(WHITE); // clears depth to the far plane (colour is irrelevant on the depth-only target)
@@ -193,28 +194,28 @@ static void RenderShadowCascade(WorldRenderer* self, const WorldRenderFrame* fra
  * the near cascade only). Each failure is logged; this runs once, at shader load. */
 static void CreateCascadeMaps(WorldRenderer* self)
 {
-    self->_sunShadow._nearMap = LoadShadowMap(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
-    self->_sunShadow._hasNearMap = (self->_sunShadow._nearMap.id != 0);
-    if (!self->_sunShadow._hasNearMap)
+    self->_cascades._nearMap = LoadShadowMap(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    self->_cascades._hasNearMap = (self->_cascades._nearMap.id != 0);
+    if (!self->_cascades._hasNearMap)
     {
         WorldRendererCommon_Warn(self,
-            (const unsigned char*)u8"WorldRenderer: could not create the sun shadow map; sun shadows are off.");
+            (const unsigned char*)u8"WorldRenderer: could not create the shadow map; sun and moon shadows are off.");
         return;
     }
     // Manual PCF compares raw depth texels, so nearest (point) sampling is required; linear filtering would
     // interpolate depths and corrupt the comparison.
-    SetTextureFilter(self->_sunShadow._nearMap.depth, TEXTURE_FILTER_POINT);
+    SetTextureFilter(self->_cascades._nearMap.depth, TEXTURE_FILTER_POINT);
 
-    self->_sunShadow._farMap = LoadShadowMap(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
-    self->_sunShadow._hasFarMap = (self->_sunShadow._farMap.id != 0);
-    if (self->_sunShadow._hasFarMap)
+    self->_cascades._farMap = LoadShadowMap(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    self->_cascades._hasFarMap = (self->_cascades._farMap.id != 0);
+    if (self->_cascades._hasFarMap)
     {
-        SetTextureFilter(self->_sunShadow._farMap.depth, TEXTURE_FILTER_POINT);
+        SetTextureFilter(self->_cascades._farMap.depth, TEXTURE_FILTER_POINT);
     }
     else
     {
-        WorldRendererCommon_Warn(self, (const unsigned char*)u8"WorldRenderer: could not create the far sun shadow "
-            u8"cascade; distant objects cast no sun shadow.");
+        WorldRendererCommon_Warn(self, (const unsigned char*)u8"WorldRenderer: could not create the far shadow "
+            u8"cascade; distant objects cast no sun or moon shadow.");
     }
 }
 
@@ -222,9 +223,9 @@ static void CreateCascadeMaps(WorldRenderer* self)
 // Internal functions (declared in WorldRendererInternal.h).
 void WorldRendererShadows_LoadShaders(WorldRenderer* self)
 {
-    // Depth shader + cascade maps for the sun shadows (optional; models draw unshadowed without them).
-    self->_sunShadow._depthShader = WorldRendererCommon_LoadShader(self, DEPTH_SHADER_ASSET_NAME);
-    if ((self->_sunShadow._depthShader != NULL) && !self->_sunShadow._hasNearMap)
+    // Depth shader + cascade maps for the sun's and the moon's shadows (optional; models draw unshadowed without them).
+    self->_cascades._depthShader = WorldRendererCommon_LoadShader(self, DEPTH_SHADER_ASSET_NAME);
+    if ((self->_cascades._depthShader != NULL) && !self->_cascades._hasNearMap)
     {
         CreateCascadeMaps(self);
     }
@@ -250,16 +251,16 @@ void WorldRendererShadows_LoadShaders(WorldRenderer* self)
 
 void WorldRendererShadows_Unload(WorldRenderer* self)
 {
-    if (self->_sunShadow._hasNearMap)
+    if (self->_cascades._hasNearMap)
     {
         // Frees the framebuffer and its depth-texture attachment (Raylib queries + deletes attachments).
-        rlUnloadFramebuffer(self->_sunShadow._nearMap.id);
-        self->_sunShadow._hasNearMap = false;
+        rlUnloadFramebuffer(self->_cascades._nearMap.id);
+        self->_cascades._hasNearMap = false;
     }
-    if (self->_sunShadow._hasFarMap)
+    if (self->_cascades._hasFarMap)
     {
-        rlUnloadFramebuffer(self->_sunShadow._farMap.id);
-        self->_sunShadow._hasFarMap = false;
+        rlUnloadFramebuffer(self->_cascades._farMap.id);
+        self->_cascades._hasFarMap = false;
     }
     if (self->_pointShadow._hasCube)
     {
@@ -292,14 +293,14 @@ size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self, Vector3 
     return Best;
 }
 
-void WorldRendererShadows_RenderSun(WorldRenderer* self, const WorldRenderFrame* frame)
+void WorldRendererShadows_RenderCascades(WorldRenderer* self, const WorldRenderFrame* frame)
 {
-    RenderShadowCascade(self, frame, self->_sunShadow._nearMap, SHADOW_NEAR_ORTHO_SIZE, true,
-        &self->_sunShadow._nearLightVP);
-    if (self->_sunShadow._hasFarMap)
+    RenderShadowCascade(self, frame, self->_cascades._nearMap, SHADOW_NEAR_ORTHO_SIZE, true,
+        &self->_cascades._nearLightVP);
+    if (self->_cascades._hasFarMap)
     {
-        RenderShadowCascade(self, frame, self->_sunShadow._farMap, SHADOW_FAR_ORTHO_SIZE, false,
-            &self->_sunShadow._farLightVP);
+        RenderShadowCascade(self, frame, self->_cascades._farMap, SHADOW_FAR_ORTHO_SIZE, false,
+            &self->_cascades._farLightVP);
     }
 }
 

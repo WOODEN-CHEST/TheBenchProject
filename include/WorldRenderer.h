@@ -20,9 +20,10 @@
  * PIPELINE. The world is drawn into an internal floating-point (HDR) "scene" target, then tonemapped into the
  * caller's frame target. With pixelation enabled (default) the scene target is sized to the low pixel
  * resolution (~640 on the long axis, square pixels) and point-upscaled, giving the game's chunky pixel look.
- * In order: sun shadow cascades and the point-light cube shadow; a normal/flag G-buffer and screen-space
- * ambient occlusion (applied to the ambient term only); the scene pass (atmospheric sky with the Milky Way and light
- * pollution's skyglow, the star field, PBR-lit models with forward-shaded point lights and distance fog, sprite
+ * In order: the shadow cascades of the sky's shadow light (the sun by day, the moon on bright nights) and the
+ * point-light cube shadow; a normal/flag G-buffer and screen-space ambient occlusion (applied to the ambient term
+ * only); the scene pass (atmospheric sky with the moon, the moonlit sky, the Milky Way and light pollution's skyglow,
+ * the star field, PBR-lit models with the sun, the moon and forward-shaded point lights and distance fog, sprite
  * billboards, debug grid and light gizmos);
  * depth/normal-edge outlines; bloom and sun shafts (added in HDR); the tonemap with eye adaptation; and last
  * the crisp overlay, which draws OmitPixelation objects at window resolution over the pixelated image.
@@ -30,6 +31,9 @@
  * FAILURES. A missing shader or a GPU target that cannot be created disables the feature that needs it, with
  * one log line when it happens; WorldRenderer_GetStatus reports what ran. The only fatal failure is a scene
  * target that cannot be created at all.
+ *
+ * The sky's textures (the Milky Way, the moon's face) are the ones the world's environment names, loaded when it names
+ * them (PrepareWorld, or the first render after a change) and released when it names others.
  *
  * USAGE. Create one renderer, call WorldRenderer_PrepareWorld once the world is built, then call
  * WorldRenderer_RenderToTarget each frame from a game frame's Render with the frame's target. Objects added
@@ -68,7 +72,7 @@ typedef enum WorldRendererFeatureEnum
     WorldRendererFeature_Tonemap,
     /** @brief The sprite shader. Without it sprites draw with raylib's default shader (slightly too bright). */
     WorldRendererFeature_SpriteShading,
-    /** @brief The two sun shadow cascades. */
+    /** @brief The two shadow cascades, cast by the sun (inactive while the moon casts them, or neither). */
     WorldRendererFeature_SunShadows,
     /** @brief The cube shadow of the shadow-casting point light nearest the camera. */
     WorldRendererFeature_PointLightShadow,
@@ -87,6 +91,14 @@ typedef enum WorldRendererFeatureEnum
     WorldRendererFeature_Stars,
     /** @brief The Milky Way in the sky (unavailable without its texture; inactive while it cannot be seen). */
     WorldRendererFeature_MilkyWay,
+    /** @brief The two shadow cascades, cast by the moon (on bright nights, once it is the brighter light and high
+     *  enough). */
+    WorldRendererFeature_MoonShadows,
+    /** @brief The moon's disc in the sky (inactive while it is below the horizon, near the sun, or switched off; drawn
+     *  flat grey without its texture). */
+    WorldRendererFeature_Moon,
+    /** @brief The moon's light on the world (inactive while the moon is down, by day, or without moonlight). */
+    WorldRendererFeature_Moonlight,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -97,7 +109,7 @@ typedef enum WorldRendererFeatureStateEnum
     /** @brief The feature ran. */
     WorldRendererFeatureState_Active,
     /** @brief The feature can run but did not: it is switched off (renderer toggle, world or config strength 0),
-     *  it does not apply (the sun is down, nothing to draw), or nothing has been rendered yet. */
+     *  it does not apply (the sun or the moon is down, nothing to draw), or nothing has been rendered yet. */
     WorldRendererFeatureState_Inactive,
     /** @brief The feature cannot run: a shader it needs failed to load, a GPU target could not be created, or a
      *  feature it builds on is unavailable. The cause was logged once when it happened. */
@@ -156,7 +168,8 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
 Error WorldRenderer_Deconstruct(WorldRenderer* self);
 
 /**
- * @brief Loads the shaders and the models of the world's objects, so the first frames do not stall on them.
+ * @brief Loads the shaders, the sky textures the world's environment names and the models of the world's objects, so
+ *        the first frames do not stall on them.
  *
  * Resolves every model object's model under a fresh asset user and then retires the previous one, so models
  * that no world object uses any more are released (asset holds are not counted, so this swap is how unused

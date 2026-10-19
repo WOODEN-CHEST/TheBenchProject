@@ -13,8 +13,6 @@
 
 
 // Macros.
-/** Minimum sun elevation (sunDir.y) for sun shadows to be cast; below this the sun is too low / set. */
-#define SHADOW_MIN_SUN_ELEVATION 0.05f
 /** Base bloom intensity at world+config bloom strength 1.0 (how strongly the blurred bright-pass is added back
  *  in linear HDR); the world and config bloom-strength multipliers scale this. */
 #define BLOOM_BASE_INTENSITY 0.75f
@@ -48,15 +46,15 @@ static void EnsureShaders(WorldRenderer* self)
     WorldRendererGeometry_LoadShaders(self);
     WorldRendererGBuffer_LoadShaders(self);
     WorldRendererShadows_LoadShaders(self);
-    WorldRendererSky_LoadAssets(self);
+    WorldRendererSky_LoadShader(self);
     WorldRendererStars_LoadShader(self);
 }
 
 // What each optional feature needs to be able to run at all (its shaders and targets), independent of whether it
 // is wanted this frame.
-static bool IsSunShadowAvailable(const WorldRenderer* self)
+static bool IsCascadeShadowAvailable(const WorldRenderer* self)
 {
-    return self->_sunShadow._hasNearMap && (self->_sunShadow._depthShader != NULL) && (self->_pbr._shader != NULL);
+    return self->_cascades._hasNearMap && (self->_cascades._depthShader != NULL) && (self->_pbr._shader != NULL);
 }
 
 static bool IsPointShadowAvailable(const WorldRenderer* self)
@@ -101,7 +99,17 @@ static bool AreStarsAvailable(const WorldRenderer* self)
 
 static bool IsMilkyWayAvailable(const WorldRenderer* self)
 {
-    return (self->_sky._shader != NULL) && (self->_sky._milkyWay != NULL);
+    return (self->_sky._shader != NULL) && (self->_sky._milkyWay._texture != NULL);
+}
+
+static bool IsMoonAvailable(const WorldRenderer* self)
+{
+    return self->_sky._shader != NULL; // without its texture the disc is a flat grey
+}
+
+static bool IsMoonlightAvailable(const WorldRenderer* self)
+{
+    return self->_pbr._shader != NULL;
 }
 
 /* Advances the render clock behind WorldRenderFrame.TimeSeconds, wrapping it every RENDER_TIME_WRAP_SECONDS. A zero,
@@ -115,7 +123,28 @@ static void AdvanceRenderTime(WorldRenderer* self, double deltaSeconds)
     self->_renderTimeSeconds = fmod(self->_renderTimeSeconds + deltaSeconds, RENDER_TIME_WRAP_SECONDS);
 }
 
-/* Fills the frame's world, camera and sun fields and the scene matrices: the projection BeginMode3D builds for
+/* Fills the frame's sky from the environment's model: the sun, the moon, the two lights (their colours come with the
+ * lighting) and which of them casts the shadows, and the stars' rotation. */
+static void BuildSky(WorldRenderFrame* frame)
+{
+    WorldSkyLights Lights;
+    WorldEnvironment_GetSkyLights(frame->Environment, &Lights);
+    frame->SunDirection = Lights.SunDirection;
+    frame->Daylight = Lights.Daylight;
+    frame->MoonDirection = Lights.MoonDirection;
+    frame->MoonPhase = Lights.MoonPhase;
+    frame->MoonIllumination = Lights.MoonIllumination;
+    frame->SunLight.Direction = Lights.SunDirection;
+    frame->SunLight.Intensity = Lights.SunIntensity;
+    frame->MoonLight.Direction = Lights.MoonDirection;
+    frame->MoonLight.Intensity = Lights.MoonIntensity;
+    frame->ShadowLight = Lights.ShadowLight;
+    frame->ShadowDirection = Lights.ShadowDirection;
+    frame->ShadowFade = Lights.ShadowFade;
+    frame->StarsToWorld = WorldEnvironment_GetStarsToWorld(frame->Environment);
+}
+
+/* Fills the frame's world, camera and sky fields and the scene matrices: the projection BeginMode3D builds for
  * the scene target (the camera's vertical FOV, the scene aspect and raylib's cull distances), so every pass that
  * reconstructs positions from depth, or rays from pixels, matches the geometry exactly. */
 static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera* camera, RenderTexture2D target,
@@ -126,9 +155,7 @@ static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera
     outFrame->Environment = World_GetEnvironment(world);
     outFrame->Camera = camera;
     outFrame->RayCamera = GameCamera_ToRaylibCamera(camera);
-    outFrame->SunDirection = WorldEnvironment_GetSunDirection(outFrame->Environment);
-    outFrame->Daylight = WorldEnvironment_GetDaylightFactor(outFrame->Environment);
-    outFrame->CelestialToWorld = WorldEnvironment_GetCelestialToWorld(outFrame->Environment);
+    BuildSky(outFrame);
     outFrame->TimeSeconds = (float)self->_renderTimeSeconds;
     outFrame->WindowWidth = target.texture.width;
     outFrame->WindowHeight = target.texture.height;
@@ -147,7 +174,7 @@ static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera
 }
 
 /* Decides which optional passes run this frame and with what strength: each needs to be available (its shaders
- * and targets), wanted (renderer toggle, world flag, world x config strength above 0) and applicable (the sun
+ * and targets), wanted (renderer toggle, world flag, world x config strength above 0) and applicable (a shadow light
  * high enough, something to draw). */
 static void DecidePasses(WorldRenderer* self, WorldRenderFrame* frame)
 {
@@ -155,10 +182,11 @@ static void DecidePasses(WorldRenderer* self, WorldRenderFrame* frame)
     bool AreShadowsWanted = Environment->AreShadowsEnabled
         && ((Environment->ShadowStrength * WorldRendererCommon_ConfigShadowStrength(self)) > 0.0f);
 
-    // Sun shadows need the sun high enough; the point-light shadow is independent of the sun (shadows at night),
-    // cast by the nearest shadow-casting light. Both are rendered before the scene pass.
-    frame->IsSunShadowActive = IsSunShadowAvailable(self) && AreShadowsWanted
-        && (frame->SunDirection.y > SHADOW_MIN_SUN_ELEVATION);
+    // The cascades follow the sky's shadow light (the sun by day, the moon on bright nights, none while both are low or
+    // handing over: WorldEnvironment_GetSkyLights decides); the point-light shadow is independent of the sky (shadows
+    // at night), cast by the nearest shadow-casting light. Both are rendered before the scene pass.
+    frame->IsCascadeShadowActive = IsCascadeShadowAvailable(self) && AreShadowsWanted
+        && (frame->ShadowLight != WorldShadowLight_None) && (frame->ShadowFade > 0.0f);
     if (IsPointShadowAvailable(self) && AreShadowsWanted)
     {
         frame->ShadowLightIndex = WorldRendererShadows_SelectPointLight(self, frame->Camera->Position);
@@ -202,6 +230,7 @@ static void DecidePasses(WorldRenderer* self, WorldRenderFrame* frame)
     frame->AreStarsActive = AreStarsAvailable(self) && self->_stars._hasMesh
         && (frame->LimitingMagnitude > NIGHT_SKY_BRIGHTEST_MAGNITUDE);
     frame->IsMilkyWayActive = IsMilkyWayAvailable(self) && (frame->MilkyWayRadiance > 0.0f);
+    frame->IsMoonActive = IsMoonAvailable(self) && WorldRendererSky_IsMoonVisible(frame);
 }
 
 /* A feature's state from what it needs (availability) and whether it ran. */
@@ -229,7 +258,10 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->Features[WorldRendererFeature_Sky] = StateOf(HasSky, HasSky);
     Status->Features[WorldRendererFeature_Tonemap] = StateOf(HasTonemap, HasTonemap);
     Status->Features[WorldRendererFeature_SpriteShading] = StateOf(HasSpriteShader, HasSpriteShader);
-    Status->Features[WorldRendererFeature_SunShadows] = StateOf(IsSunShadowAvailable(self), frame->IsSunShadowActive);
+    Status->Features[WorldRendererFeature_SunShadows] = StateOf(IsCascadeShadowAvailable(self),
+        frame->IsCascadeShadowActive && (frame->ShadowLight == WorldShadowLight_Sun));
+    Status->Features[WorldRendererFeature_MoonShadows] = StateOf(IsCascadeShadowAvailable(self),
+        frame->IsCascadeShadowActive && (frame->ShadowLight == WorldShadowLight_Moon));
     Status->Features[WorldRendererFeature_PointLightShadow] = StateOf(IsPointShadowAvailable(self),
         frame->IsPointShadowActive);
     Status->Features[WorldRendererFeature_AmbientOcclusion] = StateOf(IsAoAvailable(self), frame->IsAoActive);
@@ -239,6 +271,9 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->Features[WorldRendererFeature_CrispOverlay] = StateOf(IsCrispAvailable(self), frame->IsCrispActive);
     Status->Features[WorldRendererFeature_Stars] = StateOf(AreStarsAvailable(self), frame->AreStarsActive);
     Status->Features[WorldRendererFeature_MilkyWay] = StateOf(IsMilkyWayAvailable(self), frame->IsMilkyWayActive);
+    Status->Features[WorldRendererFeature_Moon] = StateOf(IsMoonAvailable(self), frame->IsMoonActive);
+    Status->Features[WorldRendererFeature_Moonlight] = StateOf(IsMoonlightAvailable(self),
+        frame->MoonLight.Intensity > 0.0f);
     Status->StarCount = self->_stars._starCount;
 
     size_t ModelCount = 0;
@@ -330,6 +365,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_sunshaft._isEnabled = true;
     Renderer->_crisp._isEnabled = true;
     WorldRenderCache_Construct(&Renderer->_cache);
+    WorldRendererSky_Construct(Renderer);
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardLights, INITIAL_FORWARD_LIGHT_CAPACITY,
         sizeof(WorldCullingLight));
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardRadiances, INITIAL_FORWARD_LIGHT_CAPACITY,
@@ -353,6 +389,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     WorldRendererScene_ReleaseTargets(self);
     WorldRendererShadows_Unload(self);
     WorldRendererStars_Unload(self);
+    WorldRendererSky_Deconstruct(self); // retires the sky textures' own asset users
 
     // The cache's asset pointers die with the model user, so the cache goes first.
     WorldRenderCache_Deconstruct(&self->_cache);
@@ -382,8 +419,10 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
             "WorldRenderer_PrepareWorld: self and world must not be NULL.");
     }
 
-    // Preload the shaders so the first frame does not stall compiling them (idempotent, logged on failure).
+    // Preload the shaders and the sky textures the world names, so the first frame does not stall on them (idempotent,
+    // logged on failure).
     EnsureShaders(self);
+    WorldRendererSky_SyncTextures(self, World_GetEnvironment(world));
 
     // Asset holds are not counted, so the models no object uses any more are released by resolving every model
     // the world uses under a fresh user and then retiring the old one: models both users hold stay loaded (no
@@ -436,16 +475,18 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     AdvanceRenderTime(self, deltaSeconds);
     WorldRenderFrame Frame;
     BuildFrame(self, world, camera, target, &Frame);
-    // The star catalogue follows the world's seed and density (rebuilt only when they change).
+    // The star catalogue follows the world's seed and density, the sky textures its names (each rebuilt or reloaded
+    // only when they change).
     WorldRendererStars_SyncCatalogue(self, Frame.Environment);
+    WorldRendererSky_SyncTextures(self, Frame.Environment);
     WorldRendererSky_PrepareFrame(&Frame);
     DecidePasses(self, &Frame);
     WorldRendererLighting_PrepareFrame(self, &Frame);
 
     // Shadow maps first: the scene and crisp passes sample them.
-    if (Frame.IsSunShadowActive)
+    if (Frame.IsCascadeShadowActive)
     {
-        WorldRendererShadows_RenderSun(self, &Frame);
+        WorldRendererShadows_RenderCascades(self, &Frame);
     }
     if (Frame.IsPointShadowActive)
     {
@@ -528,6 +569,9 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_CrispOverlay:     return (const unsigned char*)u8"crisp overlay";
         case WorldRendererFeature_Stars:            return (const unsigned char*)u8"stars";
         case WorldRendererFeature_MilkyWay:         return (const unsigned char*)u8"Milky Way";
+        case WorldRendererFeature_MoonShadows:      return (const unsigned char*)u8"moon shadows";
+        case WorldRendererFeature_Moon:             return (const unsigned char*)u8"moon";
+        case WorldRendererFeature_Moonlight:        return (const unsigned char*)u8"moonlight";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";

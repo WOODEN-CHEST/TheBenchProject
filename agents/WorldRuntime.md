@@ -71,18 +71,22 @@ definitions change).
 1. Sync the cache; make sure the targets match the window size and pixelation setting
    (`WorldRendererScene_EnsureTargets`).
 2. Build the frame context (`WorldRenderFrame`): camera, the scene's view/projection matrices (the projection
-   `BeginMode3D` builds for the scene target, shared by every pass that reconstructs positions or rays), sun
-   direction and daylight, the sky's rotation (`CelestialToWorld`), the render clock (`TimeSeconds`), sizes, the
-   night sky values (`WorldRendererSky_PrepareFrame`: limiting magnitude, Milky Way radiance, skyglow; the star
-   catalogue is rebuilt first if the world's seed or density changed), and every pass decision.
-3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): linear sun colour and daylight-scaled
-   intensity, the ambient colour, the scene luminance for eye adaptation, fog density, shadow strength, and the
-   forward-light candidates (every light except the cube-shadow light) with their linear radiance.
-4. Sun shadow cascades, then the point-light cube shadow (only casters within the light's reach).
+   `BeginMode3D` builds for the scene target, shared by every pass that reconstructs positions or rays), the sky
+   (`WorldEnvironment_GetSkyLights`: the sun's and the moon's directions, daylight, the moon's phase and lit fraction,
+   the two lights' intensities and the shadow light with its fade), the stars' rotation (`StarsToWorld`), the render
+   clock (`TimeSeconds`), sizes, the night sky values (`WorldRendererSky_PrepareFrame`: limiting magnitude, Milky Way
+   radiance, skyglow, the moonlit sky's strength and the moon's disc; first the star catalogue is rebuilt if the
+   world's seed or density changed, and the sky textures reloaded if the world names others), and every pass decision.
+3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the sun's and the moon's linear colours,
+   the ambient colour (with the moonlit sky's fill), the scene luminance for eye adaptation, fog density, shadow
+   strength, and the forward-light candidates (every light except the cube-shadow light) with their linear radiance.
+4. The shadow cascades of the shadow light (the sun or the moon), then the point-light cube shadow (only casters
+   within the light's reach).
 5. The normal/flag G-buffer and the AO pre-pass, when AO or outlines run.
-6. The scene pass: clear, atmospheric sky (with the Milky Way and light pollution's skyglow), the stars, PBR models
-   (per object: up to `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags),
-   sprites, debug grid and light gizmos.
+6. The scene pass: clear, atmospheric sky (with the moonlit sky, the moon's disc, the Milky Way and light pollution's
+   skyglow), the stars (none behind the moon), PBR models (the sun and the moon; per object: up to
+   `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), sprites, debug grid
+   and light gizmos.
 7. Outlines, then bloom and sun shafts from the (outlined) HDR scene.
 8. Eye adaptation, then the tonemapped point-upscale into the frame target.
 9. The crisp overlay for OmitPixelation objects, composited over the finished image.
@@ -99,26 +103,35 @@ HDR + samplable depth (everything available), HDR + depth renderbuffer (AO, outl
 overlay unavailable), 8-bit (last resort). The tier is logged once. Everything is composited in linear HDR and
 tonemapped (ACES + gamma, `world_tonemap`) only in the final blit, after the pixelation upscale.
 
-**PBR.** `world_pbr` (vertex + fragment pair): Cook-Torrance GGX with a directional sun, a sky-tracking ambient
-(blue by day, warm near the horizon, a dim cool floor at night; the `NIGHT DARKNESS KNOB`s in
-`WorldRendererLighting.c`), forward point lights, per-material metallic/roughness/occlusion/emissive factors and
+**PBR.** `world_pbr` (vertex + fragment pair): Cook-Torrance GGX with two directional lights, the sun and the moon
+(one `DirectionalLight` function; see "Moon" for the moonlight), a sky-tracking ambient (blue by day, warm near the
+horizon, a dim cool floor at night, the `NIGHT DARKNESS KNOB`s in `WorldRendererLighting.c`, raised by the moonlit
+sky's fill), forward point lights, per-material metallic/roughness/occlusion/emissive factors and
 optional albedo / normal / packed ORM (in the METALNESS slot) / emissive maps from the model definition's
 `material_overrides`, derivative-based normal mapping, and atmospheric distance fog that fades into the same sky
 the sky pass draws (both shaders `#include "common/atmosphere"`, so the atmosphere maths are one file; the sky pass's
 below-horizon mirror is still repeated in the PBR shader's `fogSkyColor`). Without it models draw unlit with raylib's
 default shader.
 
-**Sky.** `world_sky`: Rayleigh + Mie single scattering (`shaders/common/atmosphere.glsl`), the sun disc, the Milky Way
-and light pollution's skyglow, drawn as a full-screen pass before the geometry (it writes no depth). Each pixel's ray
-comes from the inverse of the frame's view-projection, so the sky lines up with the 3D camera. Falls back to a CPU
-gradient clear.
+**Sky.** `world_sky`: Rayleigh + Mie single scattering (`shaders/common/atmosphere.glsl`) lit by the sun and, at
+night, by the moon; the sun disc, the moon's disc, the Milky Way and light pollution's skyglow, drawn as a full-screen
+pass before the geometry (it writes no depth). Each pixel's ray comes from the inverse of the frame's view-projection,
+so the sky lines up with the 3D camera. Falls back to a CPU gradient clear. Its textures are the ones the world's
+environment names (`MilkyWayTexture`, default `sky_milky_way`; `MoonTexture`, default `sky_moon`): each sky texture
+slot holds its texture under its own asset user, loads it when the environment names it (at `PrepareWorld` or the
+first render after a change) and releases it when the environment names another; a name that fails is logged once
+and not retried until the name changes (`WorldRendererSky_SyncTextures`).
 
 **Night sky.** The pure maths is in the private `source/NightSky.{h,c}` (tested in `tests/NightSkyTests.c`); the GLSL
 the passes share is `shaders/common/night_sky.glsl`.
-- **The sky turns.** `WorldEnvironment_GetCelestialToWorld` (R_x(SunAngle) . R_z(day angle)) turns everything fixed
-  among the stars once a day around the celestial pole, which stays at world (0, sin SunAngle, -cos SunAngle): low
-  toward -Z, at the height SunAngle (the latitude). The sun is the celestial point (1,0,0). The stars do not yet drift
-  against the sun through the year; T03 adds that from the environment's `Date` (a `// TODO:` in `WorldEnvironment.c`).
+- **The sky turns.** `WorldEnvironment_GetStarsToWorld` turns everything fixed among the stars once a day around the
+  celestial pole, which stays at world (0, sin SunAngle, -cos SunAngle): low toward -Z, at the height SunAngle (the
+  latitude). The stars also drift through the year: the star frame is the celestial frame of the June solstice (where
+  `NightSky_GetCelestialToGalactic` places the galaxy), turned ahead of the sun's frame by the sun's progress through
+  the tropical year (continuous, no jump at New Year). So at the same time of day the stars stand about 0.99 degrees
+  further along each day and rise about 4 minutes earlier: the galactic centre is high at midnight in June, set by
+  midnight in late September, below the horizon all night in December. `WorldEnvironment_GetCelestialToWorld` is the
+  sun's own frame (the sun at (1,0,0)), which the moon is placed in.
 - **Stars** (`WorldRendererStars.c`, shader `world_stars`). A catalogue generated from `StarSeed`: `StarDensity` 1 is
   an Earth-like sky (about 9000 stars, at most 20000), magnitudes -1..7 by the real count law (2.8 times as many per
   magnitude), B-V colours (mostly white to yellow, some blue and orange), up to twice as dense along the galactic
@@ -129,15 +142,18 @@ the passes share is `shaders/common/night_sky.glsl`.
   never flickers. Drawn right after the sky: additive (ONE, ONE) with alpha 0 (the scene's alpha reaches the frame
   target), depth-tested, writing no depth (the bloom prefilter and the sun shafts read far depth as sky), culling off.
 - **What shows.** The limiting magnitude (`NightSky_GetLimitingMagnitude`, one value per frame): 6.5 at a dark site,
-  minus 3.5 x `LightPollution`, and in twilight -1.5 with the sun up, rising 0.5 per degree below the horizon
-  (magnitude 1.5 at -6 degrees, full night at -18); stars fade out over the last 0.5 magnitude, so at dusk the
-  brightest appear first. Near the horizon stars and the Milky Way dim by extinction (Kasten-Young air mass, 0.25
+  minus 3.5 x `LightPollution`, minus the moonlit sky's share (a high full moon at the default moonlight takes 1.75,
+  so the faint stars and most of the Milky Way go; it grows with the logarithm of the moon's light, so a quarter moon
+  still takes about 0.6, and it shrinks with light pollution, which already brightened the sky), and in twilight -1.5
+  with the sun up, rising 0.5 per degree below the horizon (magnitude 1.5 at -6 degrees, full night at -18); stars fade
+  out over the last 0.5 magnitude, so at dusk the brightest appear first. The moon's disc hides the stars behind it
+  (the star shader drops them). Near the horizon stars and the Milky Way dim by extinction (Kasten-Young air mass, 0.25
   magnitudes per air mass); below it nothing is drawn. Stars twinkle by `StarTwinkle` x noise, more near the horizon,
   on `WorldRenderFrame.TimeSeconds` (the renderer's own clock, wrapped hourly).
-- **Milky Way.** The `sky_milky_way` texture (sRGB, trilinear with mipmaps), sampled once per pixel in galactic
-  coordinates: `NightSky_GetCelestialToGalactic` places the galaxy as on Earth (plane 62.9 degrees to the equator,
-  centre at declination -29) in a June night sky (the centre crosses the meridian at midnight). The panorama's
-  longitude grows to the left, as in astronomical all-sky maps. Explicit mip level from the pixel's angular size
+- **Milky Way.** The texture the world names (`MilkyWayTexture`, default `sky_milky_way`: sRGB, trilinear with
+  mipmaps), sampled once per pixel in galactic coordinates: `NightSky_GetCelestialToGalactic` places the galaxy as on
+  Earth (plane 62.9 degrees to the equator, centre at declination -29) in the star frame, which the date turns (above).
+  The panorama's longitude grows to the left, as in astronomical all-sky maps. Explicit mip level from the pixel's angular size
   (automatic derivatives would draw a seam line where the longitude wraps). Brightness: `MilkyWayBrightness` x full
   at a limiting magnitude of 6 or more, gone at 4.5 or less x extinction. A missing texture is logged once and the
   sky draws no Milky Way.
@@ -149,11 +165,44 @@ the passes share is `shaders/common/night_sky.glsl`.
   `WorldRendererStars.c`, `MILKY_WAY_BASE_RADIANCE` and `SKYGLOW_BASE_RADIANCE` in `WorldRendererSky.c`; per world
   `StarBrightness` and `MilkyWayBrightness` scale them.
 
-**Sun shadows.** Two camera-centred orthographic cascades (2048² depth textures): NEAR (small extent, sharp) and
-FAR (large extent, coarse, optional). Each model object's `WorldShadowTier` (Both / Near / Far) routes which
-cascade(s) it casts into. The PBR shader samples near first, then far, with 2×2 PCF and a slope-scaled bias,
-darkening only the sun's direct term. Active when shadows are enabled, the strength is above 0 and the sun is
-above the horizon.
+**Moon.** The sky's model is pure maths in `WorldEnvironment` (`agents/WorldData.md`); the renderer draws it.
+- **Phase and position.** The phase comes from the date (`WorldEnvironment_GetMoonPhase`: the real moon's by default,
+  shifted by `MoonPhaseOffsetDays`, cycling every `MoonCycleDays`) or is fixed (`MoonPhaseSource`). The moon stands on
+  the sun's path, east of it by 2pi x phase and `MoonOrbitTilt` x sin(2pi x phase) north of it, so the new moon is with
+  the sun, the full moon opposite, the first quarter rises at noon, and it rises about 50 minutes later each day.
+- **The disc** (`world_sky`, `WorldRendererMoonDisc` from `WorldRendererSky_PrepareFrame`): angular radius 0.26 degrees
+  x `MoonSizeMultiplier` (at most 45 degrees), its axes toward the sky's pole (the face turns as it crosses the sky),
+  shaded as a sphere lit by the sun with Lommel-Seeliger (normalized to 1 at full moon, which looks flat as the real one
+  does; the terminator and the crescent face the sun), plus earthshine on the dark side (`MOON_EARTHSHINE_SHARE` x
+  (1 - illumination)). The face is the texture the world names (`MoonTexture`, default `sky_moon`, point-filtered for
+  crisp pixel art; a flat grey without it), tinted by `MoonColor`, at `MOON_DISC_BASE_RADIANCE` (the "MOON DISC KNOB") x
+  `MoonBrightness`. The disc covers what lies behind it (the sun disc, the Milky Way, the stars) and is dimmed by the
+  view ray's transmittance (an out parameter of the shared `atmosphere()`), with the sky's in-scatter added in front: so
+  by day it is pale (a quarter moon is findable in the afternoon), at night bright, and reddened low over the horizon.
+  It fades out within 6 to 12 degrees of the sun (lost in the glare; this also keeps the virtual moon from eclipsing
+  the sun) and is skipped once below the horizon.
+- **The moonlit sky.** The same atmosphere lit by the moon: x `MoonIntensity` x the phase's brightness x
+  `MOON_SKY_SHARE` (the "MOONLIT SKY KNOB", 0.3: a dark slate-blue sky with a soft halo at full moon), faded out while
+  the sun is above about 3 degrees and the moon below about -3 to -6 (outside that its raymarch is skipped). The PBR fog
+  adds the same moonlit sky, so fogged silhouettes match the sky behind them.
+- **Moonlight.** The second directional light of the PBR shader, with the sun's BRDF: `MoonIntensity` (default 0.02 of
+  the sun, `WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY`: tuned on rendered frames so a full-moon night is clearly lighter
+  than a new-moon one and still reads as night; 8% lit the test world nearly like day at the night exposure) x the
+  phase's brightness (`WorldEnvironment_GetMoonBrightness`, the opposition-surge fit of Krisciunas and Schaefer: a half
+  moon gives about a tenth of the full moon's light) x its height (full from about 11 degrees) x (1 - daylight), in
+  `MoonColor`. The ambient gains the moonlit sky's fill (`MOON_AMBIENT_SHARE` 0.3 of the moonlight), the eye
+  adaptation counts the moonlight like the sunlight. New-moon nights look as before.
+
+**Sun and moon shadows.** Two camera-centred orthographic cascades (2048² depth textures): NEAR (small extent, sharp)
+and FAR (large extent, coarse, optional). Each model object's `WorldShadowTier` (Both / Near / Far) routes which
+cascade(s) it casts into. They are rendered from the frame's shadow light (`WorldEnvironment_GetSkyLights`): the
+brighter of the sun and the moon by luminance, once it stands above 0.05 (the sine of its elevation; full shadows from
+0.15), faded out while the two are about as bright (0 where they are equal, full once one is 4 times the other) and for
+a light too dim for a shadow to show (a thin crescent). So dusk with the moon up goes from sun shadows through none to
+moon shadows without a jump. The PBR shader samples near first, then far, with 2×2 PCF and a slope-scaled bias along
+the shadow light, darkening only that light's direct term (`sunShadowFade` / `moonShadowFade`; both 0, and no map
+sampled, while the cascades do not run). Active when shadows are enabled, the strength is above 0 and there is a
+shadow light.
 
 **Point-light shadow.** One cube shadow for the shadow-casting light nearest the camera (`CastsShadows`): six
 90° faces of packed linear distance (RGBA8 cube), sampled with 20-tap PCF. That light is shaded separately and is
@@ -185,8 +234,10 @@ get no AO and no outlines.
   created at all: `WorldRenderer_RenderToTarget` returns `ErrorCode_InvalidState`.
 - `WorldRenderer_GetStatus` reports the scene tier, each feature as active / inactive (switched off or not
   applicable this frame) / unavailable (missing shader or target), and object counts (the star count included). The
-  "stars" feature is inactive by day, while twilight and light pollution hide every star, and at density 0; the
-  "Milky Way" is unavailable without its texture and inactive while it cannot be seen. The renderer logs the status
+  "stars" feature is inactive by day, while twilight, light pollution and the moonlit sky hide every star, and at
+  density 0; the "Milky Way" is unavailable without its texture and inactive while it cannot be seen; "sun shadows" and
+  "moon shadows" are the cascades cast by either light; "moon" is the disc (inactive below the horizon, near the sun or
+  switched off; drawn flat grey without its texture), "moonlight" the moon's light on the world. The renderer logs the status
   once after its first render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame).
 
 ### Renderer structure (keep it clean)
@@ -199,10 +250,10 @@ get no AO and no outlines.
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
 | `WorldRendererGeometry.c` | Model meshes with per-draw materials, sprite billboards, light gizmos, the pixelation filter. |
 | `WorldRendererLighting.c` | The PBR shader, its location table and uniforms, forward point lights, per-material factors, eye adaptation. |
-| `WorldRendererShadows.c` | Sun cascades and the point-light cube shadow. |
+| `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow. |
 | `WorldRendererGBuffer.c` | The normal/flag G-buffer and the AO pre-pass. |
-| `WorldRendererSky.c` | The atmospheric sky with the Milky Way and light pollution's skyglow; the night sky values of the frame. |
-| `WorldRendererStars.c` | The star field: the catalogue's mesh (rebuilt when the seed or density changes) and its draw. |
+| `WorldRendererSky.c` | The atmospheric sky with the moon, the moonlit sky, the Milky Way and light pollution's skyglow; the sky textures the world names; the night sky values and the moon's disc for the frame. |
+| `WorldRendererStars.c` | The star field: the catalogue's mesh (rebuilt when the seed or density changes) and its draw (none behind the moon). |
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
 | `WorldRendererCrisp.c` | The crisp overlay. |
 
@@ -240,7 +291,8 @@ so a paired shader's two source files need DISTINCT stems: `world_pbr` uses `sha
 is a second such pair. Each renderer shader lives in its own directory under `asset/shaders/`. GLSL shared between
 shaders lives in `asset/shaders/common/` and is pulled in with `#include "common/<name>"` (no `#version` in shared
 files; rules in GameAssets.md, "GameShader"): `common/math` (`PI`), `common/atmosphere` (Rayleigh + Mie single
-scattering, used by `world_sky` and the PBR fog) and `common/night_sky` (air mass, extinction and the skyglow profile,
+scattering lit by the sun or the moon, with an overload that also gives the view ray's transmittance; used by
+`world_sky` and the PBR fog) and `common/night_sky` (air mass, extinction and the skyglow profile,
 used by `world_sky`, `world_stars` and the PBR fog). Put new shared lighting, dithering or noise code there instead of
 copying it between shaders.
 
@@ -261,9 +313,13 @@ debug keys as raw keys:
   06:00:00.`): P pause/resume the clock; 1–4 jump to dawn/noon/dusk/midnight of the clock's day (06:00, 12:00, 18:00,
   00:00) and pause; `[` `]` scrub the time while held (a tenth of a day per real second, across midnights, logged when
   let go); `,` and `.` the previous and next day, `/` a week ahead (the day keys keep the time of day);
+- **the moon and the seasons:** F pins the moon full (`MoonPhaseSource` fixed at 0.5) and gives it back to the
+  calendar; Y switches the seasons (`AreSeasonsEnabled`). Every clock and moon log line carries the moon: `WorldTest:
+  next day: Mon 2026-10-19 12:00:00; first quarter (phase 0.27, 59% lit, from the calendar).`;
 - **the renderer and the sky:** O post effects, B bloom, G sun shafts, C crisp overlay, L light gizmos, N cycle the
-  light pollution (0, 0.35, 0.7, 1; logged), I log the renderer status and then the game time (`WorldTest: game time
-  Sun 2026-10-18 12:00:00, running, 720 game seconds per real second (a day takes 2 real minutes).`);
+  light pollution (0, 0.35, 0.7, 1; logged), I log the renderer status, then the game time (`WorldTest: game time
+  Sun 2026-10-18 12:00:00, running, 720 game seconds per real second (a day takes 2 real minutes); seasons off.`) and
+  the moon;
 - T toggles the text sample.
 
 M frees the cursor for the UI (and captures it again); a left click the UI did not take captures it again. An

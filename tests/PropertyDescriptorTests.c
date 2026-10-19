@@ -492,6 +492,30 @@ static void FillEnvironment(WorldEnvironment* environment)
     environment->AmbientOcclusionStrength = 16.0f;
 }
 
+/* The settings T03 added (the moon, the seasons, the sky texture names), ids 31 to 43: every one off its default.
+ * The names go through the table, which clones them and frees the old ones. */
+static const uint16_t MoonSettingWireIds[] = { 31U, 32U, 33U, 34U, 35U, 36U, 37U, 38U, 39U, 40U, 41U, 42U, 43U };
+
+static void FillMoonSettings(TestRun* run, WorldEnvironment* environment)
+{
+    environment->IsMoonEnabled = false;
+    environment->MoonPhaseSource = WorldMoonPhaseSource_Fixed;
+    environment->MoonPhase = 0.125f;
+    environment->MoonPhaseOffsetDays = -3.5f;
+    environment->MoonCycleDays = 27.25f;
+    environment->MoonOrbitTilt = 0.2f;
+    environment->MoonSizeMultiplier = 8.0f;
+    environment->MoonBrightness = 0.5f;
+    environment->MoonIntensity = 0.03f;
+    environment->MoonColor = (Color){ 255, 200, 150, 255 };
+    environment->AreSeasonsEnabled = true;
+    const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
+    TEST_CHECK_SUCCESS(run, Properties_Set(Table, environment, u8"moon_texture",
+        &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"pack.red_moon" }));
+    TEST_CHECK_SUCCESS(run, Properties_Set(Table, environment, u8"milky_way_texture",
+        &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"alien_galaxy" }));
+}
+
 
 // Static functions: tests.
 static void TablesPassTheirCheck(TestRun* run)
@@ -1244,7 +1268,8 @@ static void MigrationRunsForOlderData(TestRun* run)
 }
 
 /* The table-driven encoder writes the same GHDF tree as the hand-written one did, for defaults and for changed values,
- * except for T23's changes: no retired ids 2 and 3, and the date as id 30. Data written before T23 still reads. */
+ * except for T23's changes (no retired ids 2 and 3, the date as id 30) and T03's added settings (ids 31 to 43, left out
+ * of the comparison here; environment_ghdf_round_trip covers them). Data written before T23 still reads. */
 static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
 {
     GHDFObjectPool* Pool = NULL;
@@ -1286,7 +1311,11 @@ static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
             TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Expected, 30U,
                 GHDF_CreateRegularType(GHDFValueType_EncodedInteger), &Date));
             TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Environment, Pool, Actual, &Everything));
-            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 28U);
+            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 41U);
+            for (size_t Index = 0U; Index < (sizeof(MoonSettingWireIds) / sizeof(MoonSettingWireIds[0])); Index++)
+            {
+                TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Actual, MoonSettingWireIds[Index]));
+            }
             TEST_CHECK(run, AreGHDFCompoundsEqual(Expected, Actual, 0U));
         }
         TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Expected, true));
@@ -1308,11 +1337,12 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
     WorldEnvironment_SetDefaults(&Source);
     WorldEnvironment_SetDefaults(&Restored);
     FillEnvironment(&Source);
+    FillMoonSettings(run, &Source);
     JSONCompound* Compound = NULL;
     if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
     {
         TEST_CHECK_SUCCESS(run, WorldEnvironment_WriteJSON(&Source, Pool, Compound, NULL));
-        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 28U);
+        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 41U);
         JSONObjectValue Parsed;
         if (ReparseCompound(run, Pool, Compound, &Parsed))
         {
@@ -1351,9 +1381,67 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
         TEST_CHECK(run, Restored.LightPollution == 0.5f);
         TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
     }
+
+    // The moon's settings as a creator writes them: the phase source by name, the tilt in degrees, a texture by name.
+    if (TestText_ParseJSON(run, Pool, "{\"moon_phase_source\": \"fixed\", \"moon_phase\": 0.5, \"moon_orbit_tilt\": 5, "
+        "\"moon_texture\": \"stories.harvest_moon\", \"are_seasons_enabled\": true}", &Value))
+    {
+        TEST_CHECK_SUCCESS(run, WorldEnvironment_ReadJSON(&Restored, Value.Value.Compound, NULL));
+        TEST_CHECK(run, (Restored.MoonPhaseSource == WorldMoonPhaseSource_Fixed) && (Restored.MoonPhase == 0.5f));
+        TEST_CHECK(run, fabsf(Restored.MoonOrbitTilt - (float)(5.0 * TEST_PI / 180.0)) < 1e-6f);
+        TEST_CHECK(run, AreStringsEqual(Restored.MoonTexture, u8"stories.harvest_moon") && Restored.AreSeasonsEnabled);
+        TEST_CHECK(run, AreStringsEqual(Restored.MilkyWayTexture, u8"sky_milky_way")); // absent: the default
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+    if (TestText_ParseJSON(run, Pool, "{\"moon_phase_source\": \"always\"}", &Value))
+    {
+        const char* const Fragments[] = { "moon_phase_source", "\"calendar\"", "\"fixed\"", NULL };
+        TestText_CheckErrorMessage(run, WorldEnvironment_ReadJSON(&Restored, Value.Value.Compound, NULL),
+            ErrorCode_InvalidJSON, Fragments);
+        TEST_CHECK(run, Restored.MoonPhaseSource == WorldMoonPhaseSource_Fixed);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+    if (TestText_ParseJSON(run, Pool, "{\"moon_texture\": \"Moon.png\"}", &Value))
+    {
+        const char* const Fragments[] = { "world_environment.moon_texture (MoonTexture) must be an asset name", NULL };
+        TestText_CheckErrorMessage(run, WorldEnvironment_ReadJSON(&Restored, Value.Value.Compound, NULL),
+            ErrorCode_InvalidJSON, Fragments);
+        TEST_CHECK(run, AreStringsEqual(Restored.MoonTexture, u8"stories.harvest_moon"));
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
     WorldEnvironment_Deconstruct(&Source);
     WorldEnvironment_Deconstruct(&Restored);
     TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+}
+
+/* Every setting, the moon's and the texture names included, survives GHDF. */
+static void EnvironmentGHDFRoundTrip(TestRun* run)
+{
+    GHDFObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&Pool)))
+    {
+        return;
+    }
+    const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
+    WorldEnvironment Source;
+    WorldEnvironment Restored;
+    WorldEnvironment_SetDefaults(&Source);
+    WorldEnvironment_SetDefaults(&Restored);
+    FillEnvironment(&Source);
+    FillMoonSettings(run, &Source);
+    GHDFCompound* Compound = NULL;
+    if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Pool, &Compound)))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Source, Pool, Compound, NULL));
+        TEST_CHECK(run, GHDFCompound_GetEntryCount(Compound) == 41U);
+        TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(Table, Compound, &Restored, NULL));
+        TEST_CHECK(run, Properties_Equals(Table, &Source, &Restored));
+        TEST_CHECK(run, (Restored.MoonTexture != Source.MoonTexture) && AreStringsEqual(Restored.MoonTexture, u8"pack.red_moon"));
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Compound, true));
+    }
+    WorldEnvironment_Deconstruct(&Source);
+    WorldEnvironment_Deconstruct(&Restored);
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Pool));
 }
 
 
@@ -1380,6 +1468,7 @@ void PropertyDescriptorTests_Run(TestRun* run)
         { "migration_runs_for_older_data", MigrationRunsForOlderData },
         { "environment_ghdf_matches_the_old_encoder", EnvironmentGHDFMatchesTheOldEncoder },
         { "environment_json_round_trip", EnvironmentJSONRoundTrip },
+        { "environment_ghdf_round_trip", EnvironmentGHDFRoundTrip },
     };
     TestRun_RunSuite(run, "PropertyDescriptor", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

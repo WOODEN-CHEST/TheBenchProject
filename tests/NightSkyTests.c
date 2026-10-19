@@ -1,6 +1,7 @@
 #include "TestSuites.h"
 #include "NightSky.h"
 #include "WorldEnvironment.h"
+#include "GameCalendar.h"
 #include "raylib/raymath.h"
 #include <math.h>
 
@@ -198,20 +199,45 @@ static void ColorsAreMostlyWhiteToYellow(TestRun* run)
 // Tests: visibility.
 static void LimitingMagnitudeFollowsPollutionAndTwilight(TestRun* run)
 {
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, -30.0f) - 6.5f) < 1e-4f);
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(1.0f, -30.0f) - 3.0f) < 1e-4f);
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.5f, -30.0f) - 4.75f) < 1e-4f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, 0.0f, -30.0f) - 6.5f) < 1e-4f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(1.0f, 0.0f, -30.0f) - 3.0f) < 1e-4f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.5f, 0.0f, -30.0f) - 4.75f) < 1e-4f);
     // Twilight: only the brightest stars at -6 degrees, none with the sun up.
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, -6.0f) - 1.5f) < 1e-4f);
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, -12.0f) - 4.5f) < 1e-4f);
-    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 0.0f) < NIGHT_SKY_BRIGHTEST_MAGNITUDE);
-    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 20.0f) < NIGHT_SKY_BRIGHTEST_MAGNITUDE);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, 0.0f, -6.0f) - 1.5f) < 1e-4f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, 0.0f, -12.0f) - 4.5f) < 1e-4f);
+    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 0.0f, 0.0f) < NIGHT_SKY_BRIGHTEST_MAGNITUDE);
+    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 0.0f, 20.0f) < NIGHT_SKY_BRIGHTEST_MAGNITUDE);
     // The lower of the two limits wins.
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(1.0f, -12.0f) - 3.0f) < 1e-4f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(1.0f, 0.0f, -12.0f) - 3.0f) < 1e-4f);
     // Bad inputs: pollution clamps, NaN pollution counts as none, a NaN sun counts as day.
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(2.0f, -30.0f) - 3.0f) < 1e-4f);
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(NAN, -30.0f) - 6.5f) < 1e-4f);
-    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, NAN) < NIGHT_SKY_BRIGHTEST_MAGNITUDE);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(2.0f, 0.0f, -30.0f) - 3.0f) < 1e-4f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(NAN, 0.0f, -30.0f) - 6.5f) < 1e-4f);
+    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 0.0f, NAN) < NIGHT_SKY_BRIGHTEST_MAGNITUDE);
+}
+
+/* A high full moon hides the faint stars and most of the Milky Way; a quarter moon (a tenth of its light) still dims the
+ * sky noticeably; a city sky has little left for the moon to take. */
+static void MoonlightHidesFaintStars(TestRun* run)
+{
+    float FullMoon = NightSky_GetLimitingMagnitude(0.0f, 1.0f, -30.0f);
+    TEST_CHECK(run, fabsf(FullMoon - (NIGHT_SKY_DARK_SITE_LIMITING_MAGNITUDE - NIGHT_SKY_FULL_MOON_MAGNITUDES)) < 1e-4f);
+    TEST_CHECK(run, NightSky_GetMilkyWayVisibility(FullMoon) < 0.1f);
+    float QuarterMoon = NightSky_GetLimitingMagnitude(0.0f, 0.09f, -30.0f);
+    TEST_CHECK(run, (QuarterMoon < 6.0f) && (QuarterMoon > 5.8f));
+    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 0.001f, -30.0f) > 6.45f);
+
+    // Light pollution and the moon both brighten the sky, but the moon takes less from an already bright one.
+    float SmallTown = NightSky_GetLimitingMagnitude(0.35f, 1.0f, -30.0f);
+    TEST_CHECK(run, (SmallTown < NightSky_GetLimitingMagnitude(0.35f, 0.0f, -30.0f)) && (SmallTown < FullMoon));
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(1.0f, 1.0f, -30.0f) - 3.0f) < 1e-4f);
+
+    // Brighter moonlight takes more, up to a limit; bad values count as no moon; twilight still wins by day.
+    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 4.0f, -30.0f) < FullMoon);
+    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 1000.0f, -30.0f)
+        == NightSky_GetLimitingMagnitude(0.0f, NIGHT_SKY_MAX_MOONLIT_SKY, -30.0f));
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, NAN, -30.0f) - 6.5f) < 1e-4f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, -1.0f, -30.0f) - 6.5f) < 1e-4f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, 1.0f, -6.0f) - 1.5f) < 1e-4f);
 }
 
 static void MilkyWayFadesWithTheLimit(TestRun* run)
@@ -257,13 +283,25 @@ static void GalaxySitsWhereItDoesOnEarth(TestRun* run)
     TEST_CHECK(run, fabsf(Vector3Length(Centre) - 1.0f) < 1e-5f);
     TEST_CHECK(run, fabsf(Vector3DotProduct(Centre, GalacticPole)) < 1e-5f);
 
-    // A June night: at midnight the galactic centre stands above the horizon on the side where the sun passes at noon.
+    // The seasons of the sky, at midnight (+X is east, +Z the side where the sun passes at noon):
+    // - a June night: the galactic centre stands high in the south;
+    // - late September: it has set in the west by midnight (in March it would be about to rise in the east instead,
+    //   so this also checks which way the stars drift through the year);
+    // - December: it stays below the horizon all night, near the sun.
     WorldEnvironment Environment;
     WorldEnvironment_SetDefaults(&Environment);
     Environment.TimeOfDay = 0.0f;
     Environment.SunAngle = 0.4f;
-    Vector3 CentreInWorld = Vector3Transform(Centre, WorldEnvironment_GetCelestialToWorld(&Environment));
-    TEST_CHECK(run, (CentreInWorld.y > 0.5f) && (CentreInWorld.z > 0.5f));
+    TEST_CHECK(run, GameCalendar_TryGetDayNumber((GameDate){ .Year = 2026, .Month = 6, .Day = 21 }, &Environment.Date));
+    Vector3 June = Vector3Transform(Centre, WorldEnvironment_GetStarsToWorld(&Environment));
+    TEST_CHECK(run, (June.y > 0.5f) && (June.z > 0.5f));
+    TEST_CHECK(run, GameCalendar_TryGetDayNumber((GameDate){ .Year = 2026, .Month = 9, .Day = 23 }, &Environment.Date));
+    Vector3 September = Vector3Transform(Centre, WorldEnvironment_GetStarsToWorld(&Environment));
+    TEST_CHECK(run, (September.y < 0.0f) && (September.x < -0.5f));
+    TEST_CHECK(run, GameCalendar_TryGetDayNumber((GameDate){ .Year = 2026, .Month = 12, .Day = 21 }, &Environment.Date));
+    Vector3 December = Vector3Transform(Centre, WorldEnvironment_GetStarsToWorld(&Environment));
+    TEST_CHECK(run, December.y < -0.5f);
+    WorldEnvironment_Deconstruct(&Environment);
 }
 
 
@@ -280,6 +318,7 @@ void NightSkyTests_Run(TestRun* run)
         { "stars_crowd_the_galactic_plane", StarsCrowdTheGalacticPlane },
         { "colors_are_mostly_white_to_yellow", ColorsAreMostlyWhiteToYellow },
         { "limiting_magnitude_follows_pollution_and_twilight", LimitingMagnitudeFollowsPollutionAndTwilight },
+        { "moonlight_hides_faint_stars", MoonlightHidesFaintStars },
         { "milky_way_fades_with_the_limit", MilkyWayFadesWithTheLimit },
         { "airmass_grows_toward_the_horizon", AirmassGrowsTowardTheHorizon },
         { "galaxy_sits_where_it_does_on_earth", GalaxySitsWhereItDoesOnEarth },

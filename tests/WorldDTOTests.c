@@ -49,6 +49,12 @@ static bool BuildSourceWorld(TestRun* run, World* world)
     Environment->LightPollutionColor = (Color){ 200, 100, 50, 255 };
     Environment->MilkyWayBrightness = 1.5f;
     Environment->StarTwinkle = 0.4f;
+    Environment->AreSeasonsEnabled = true;
+    Environment->MoonPhaseSource = WorldMoonPhaseSource_Fixed;
+    Environment->MoonPhase = 0.75f;
+    Environment->MoonIntensity = 0.04f;
+    IsBuilt = IsBuilt && TEST_CHECK_SUCCESS(run, Properties_Set(WorldEnvironment_GetPropertyTable(), Environment,
+        u8"moon_texture", &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"office_moon" }));
 
     WorldModelObject* ModelObject = NULL;
     IsBuilt = IsBuilt && TEST_CHECK_SUCCESS(run, WorldModelObject_Create((const unsigned char*)u8"desk",
@@ -114,6 +120,11 @@ static void RoundTripKeepsEveryPersistentField(TestRun* run)
         TEST_CHECK(run, AreColorsEqual(World_GetEnvironment(&Restored)->LightPollutionColor, (Color){ 200, 100, 50, 255 }));
         TEST_CHECK(run, World_GetEnvironment(&Restored)->MilkyWayBrightness == 1.5f);
         TEST_CHECK(run, World_GetEnvironment(&Restored)->StarTwinkle == 0.4f);
+        TEST_CHECK(run, World_GetEnvironment(&Restored)->AreSeasonsEnabled);
+        TEST_CHECK(run, World_GetEnvironment(&Restored)->MoonPhaseSource == WorldMoonPhaseSource_Fixed);
+        TEST_CHECK(run, World_GetEnvironment(&Restored)->MoonPhase == 0.75f);
+        TEST_CHECK(run, World_GetEnvironment(&Restored)->MoonIntensity == 0.04f);
+        TEST_CHECK(run, AreStringsEqual(World_GetEnvironment(&Restored)->MoonTexture, (const unsigned char*)u8"office_moon"));
 
         if (TEST_CHECK(run, World_GetObjectCount(&Restored) == World_GetObjectCount(&Source)))
         {

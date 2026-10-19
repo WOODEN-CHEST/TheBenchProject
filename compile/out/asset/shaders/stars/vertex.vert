@@ -5,18 +5,20 @@
 // always covers exactly one pixel centre, so each star lights one pixel at a steady brightness (no flicker) and steps
 // from pixel to pixel as the sky turns, like everything else in the pixelated world.
 
-in vec3 vertexPosition;   // the star's unit direction in the celestial frame
+in vec3 vertexPosition;   // the star's unit direction in the star frame
 in vec2 vertexTexCoord;   // corner offset in pixels (+-0.5, +-0.5)
 in vec2 vertexTexCoord2;  // x = catalogue magnitude, y = twinkle seed in [0, 1)
 in vec4 vertexColor;      // sRGB colour of the star's temperature (brightest channel 1)
 
-uniform mat4 celestialToWorld;   // turns the sky through the day (WorldEnvironment_GetCelestialToWorld)
+uniform mat4 starsToWorld;       // turns the stars through the day and the year (WorldEnvironment_GetStarsToWorld)
 uniform mat4 viewProjection;     // the frame's view x projection
 uniform vec2 resolution;         // scene target size in pixels
 uniform float limitingMagnitude; // faintest magnitude visible overhead (light pollution, twilight)
 uniform float radianceScale;     // linear radiance of a magnitude-0 star, StarBrightness included
 uniform float twinkleStrength;   // StarTwinkle, 0..1
 uniform float timeSeconds;       // render time, for the twinkling
+uniform vec3 moonDirection;      // the moon's direction: its disc hides the stars behind it
+uniform float moonCosRadius;     // cosine of the disc's angular radius; above 1 while no disc is drawn
 
 flat out vec3 fragRadiance;
 
@@ -48,13 +50,14 @@ float noise11(float x)
 
 void main()
 {
-    vec3 direction = normalize(mat3(celestialToWorld)*vertexPosition);
+    vec3 direction = normalize(mat3(starsToWorld)*vertexPosition);
     float airmass = nightSkyAirmass(direction.y);
     float magnitude = vertexTexCoord2.x + NIGHT_SKY_EXTINCTION_PER_AIRMASS*(airmass - 1.0);
     float visibility = clamp((limitingMagnitude - magnitude)/STAR_FADE_MAGNITUDES, 0.0, 1.0);
-    if ((direction.y <= 0.0) || (visibility <= 0.0))
+    if ((direction.y <= 0.0) || (visibility <= 0.0) || (dot(direction, moonDirection) > moonCosRadius))
     {
-        // Below the horizon or too faint: the quad goes outside the clip volume, so nothing is rasterized.
+        // Below the horizon, too faint or behind the moon: the quad goes outside the clip volume, so nothing is
+        // rasterized.
         fragRadiance = vec3(0.0);
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         return;

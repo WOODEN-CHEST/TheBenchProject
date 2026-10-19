@@ -365,7 +365,9 @@ static void ShippedSkyAndPbrShareOneAtmosphere(TestRun* run)
             if (ExpandShippedStage(run, &Fixture, Stages[Index]))
             {
                 TEST_CHECK(run, strncmp((const char*)Fixture.Text._data, "#version 330\n", 13U) == 0);
-                TEST_CHECK(run, CountOccurrences(&Fixture.Text, "vec3 atmosphere(") == 1U);
+                // Once from the shared file: the function, and its overload without the transmittance.
+                TEST_CHECK(run, CountOccurrences(&Fixture.Text, "vec3 atmosphere(") == 2U);
+                TEST_CHECK(run, CountOccurrences(&Fixture.Text, "vec2 raySphere(") == 1U);
                 TEST_CHECK(run, CountOccurrences(&Fixture.Text, "const float PI ") == 1U);
                 TEST_CHECK(run, BufferContains(&Fixture.SourceList, "\"common/atmosphere\""));
             }

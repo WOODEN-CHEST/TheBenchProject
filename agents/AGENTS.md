@@ -76,9 +76,12 @@ Current module list:
   * WorldSpriteObject - 2D sprite object referencing a sprite animation by name, owning its playback instance
     (+ outline / pixelation toggles); the World binds its animation.
   * WorldLight - Point light (color, intensity, size, casts-shadows toggle).
-  * WorldEnvironment - Per-world sky/sun/fog/effect settings, described by its property table (defaults,
-    validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md). Its date and time of day are what
-    the sky shows: the game clock writes them every tick, the environment never advances time itself.
+  * WorldEnvironment - Per-world sky/sun/moon/night-sky/fog/effect settings, described by its property table
+    (defaults, validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md; it owns its sky texture
+    names). Its date and time of day are what the sky shows: the game clock writes them every tick, the environment
+    never advances time itself. Pure functions turn them into the sky: the sun (optionally following the seasons), the
+    moon (phase from the calendar, position, lit fraction, moonlight), the stars' daily turn and yearly drift, and
+    which of the sun and the moon casts the shadows (WorldEnvironment_GetSkyLights).
   * World - Owns the objects, mints the shared uint64 id counter, holds the environment; with an asset manager
     (World_Construct2) it owns an asset user and binds its sprites' animations; an object-set version.
   * WorldDTO - Flat persistent snapshot of a world + World<->DTO conversions.
@@ -86,15 +89,16 @@ Current module list:
 * World runtime layer (WorldRuntime.md) - Camera, renderer, services bundle and bootstrap for viewing a world:
   * GameCamera - 3D camera (pos/fov/yaw/pitch/roll; +Y up, +Z forward), converted to a raylib camera at render time.
   * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, GHDF pool).
-  * WorldRenderer - Renders a World through a GameCamera (PBR, HDR, sky with stars, Milky Way and light pollution,
-    shadows, AO, outlines, bloom, sun shafts, crisp overlay); separate from the world data and never writes to it. Split by render pass into
+  * WorldRenderer - Renders a World through a GameCamera (PBR lit by the sun and the moon, HDR, sky with the moon,
+    stars, Milky Way and light pollution, sun and moon shadows, AO, outlines, bloom, sun shafts, crisp overlay);
+    separate from the world data and never writes to it. Split by render pass into
     source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
     WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
   * WorldRenderCache - The renderer's private per-object cache (source/WorldRenderCache.h): one world walk per frame
     builds the model/sprite/light lists; model assets are resolved once per object and again only on rename.
   * NightSky - The night sky's pure maths (private, source/NightSky.h): the seeded star catalogue, the limiting
-    magnitude (light pollution, twilight), the air mass, star colours and the galaxy's place among the stars; used
-    by the sky and star passes (WorldRendererSky.c, WorldRendererStars.c).
+    magnitude (light pollution, the moonlit sky, twilight), the air mass, star colours and the galaxy's place among
+    the stars; used by the sky and star passes (WorldRendererSky.c, WorldRendererStars.c).
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world whose sky follows the frame's game
     clock, with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field

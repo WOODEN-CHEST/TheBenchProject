@@ -9,16 +9,20 @@ in vec4 fragColor;
 uniform sampler2D texture0;    // MATERIAL_MAP_ALBEDO texture (a 1x1 white texture when the model has none)
 uniform vec4 colDiffuse;       // material albedo colour * object tint, sRGB in 0..1
 
-// Camera and lighting, set by WorldRenderer each frame. Light colours are LINEAR.
+// Camera and lighting, set by WorldRenderer each frame. Light colours are LINEAR. The sky's two directional lights, the
+// sun and the moon, share one BRDF (DirectionalLight).
 uniform vec3 viewPos;          // camera world position
-uniform vec3 sunDirection;     // unit direction TO the sun, world space
+uniform vec3 sunDirection;     // unit direction TO the sun, world space (also the fog sky's sun)
 uniform vec3 sunColor;         // linear
-uniform float sunIntensity;
+uniform float sunIntensity;    // the sun's light: daylight included, 0 at night
+uniform vec3 moonDirection;    // unit direction TO the moon, world space (also the fog sky's moon)
+uniform vec3 moonColor;        // linear
+uniform float moonIntensity;   // the moon's light: phase, height and night included, 0 by day or without a moon
 uniform vec3 ambientColor;     // linear
 uniform float ambientIntensity;
 
-// Sun shadow map — TWO cascades. shadowStrength 0 disables shadows (night, disabled, or shader unavailable).
-// The NEAR cascade is a small, sharp map for close detail; the FAR cascade is a large, coarse map for distant /
+// Shadow map — TWO cascades, rendered from the sky's shadow light: the sun by day, the moon on bright nights. The
+// NEAR cascade is a small, sharp map for close detail; the FAR cascade is a large, coarse map for distant /
 // large casters (each object's WorldShadowTier decides which cascade(s) it was rendered into). A fragment
 // samples the near cascade first and falls back to the far cascade when it lies beyond the near frustum.
 uniform mat4 lightVP;          // world -> near-cascade light-clip space
@@ -26,9 +30,12 @@ uniform sampler2D shadowMap;   // near-cascade directional depth map
 uniform mat4 lightVPFar;       // world -> far-cascade light-clip space
 uniform sampler2D shadowMapFar;// far-cascade directional depth map
 uniform bool shadowFarActive;  // whether the far cascade is available this frame
-uniform float shadowStrength;  // 0..1, how much the sun contribution is darkened in shadow
+uniform float shadowStrength;  // 0..1, how much a shadowed light is darkened (the cascades and the point shadow)
 uniform float shadowBias;      // base depth bias to combat shadow acne
 uniform float shadowTexelSize; // 1.0 / shadow-map resolution, for PCF tap offsets
+uniform vec3 shadowLightDirection; // unit direction TO the light the cascades were rendered from (for the slope bias)
+uniform float sunShadowFade;   // 0..1, how much the cascades shadow the sun: 0 while the moon casts them or neither
+uniform float moonShadowFade;  // 0..1, how much they shadow the moon. Both 0: the cascades are not sampled at all
 
 // Surface material parameters, uploaded PER MATERIAL by the renderer's custom mesh draw loop. The scalar
 // values are the material's base factors; the optional maps modulate them. A map is only sampled when its
@@ -80,6 +87,7 @@ uniform float skyTurbidity;     // atmospheric haze; == WorldEnvironment.SkyTurb
 uniform vec3  skyTint;          // linear sky tint multiplier (same value the sky pass gets)
 uniform float skySunIntensity;  // RAW sun intensity (NOT day-scaled); == WorldEnvironment.SunIntensity
 uniform vec3  skyglowRadiance;  // light pollution's glow at the horizon, linear (same value the sky pass gets)
+uniform float skyMoonIntensity; // the moonlit sky's light relative to the sun's (same value the sky pass gets); 0 = none
 
 out vec4 finalColor;
 
@@ -114,6 +122,26 @@ float GeometrySmith(vec3 n, vec3 v, vec3 l, float rough)
 vec3 FresnelSchlick(float cosTheta, vec3 f0)
 {
     return f0 + (1.0 - f0)*pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// One directional light (the sun or the moon) through the Cook-Torrance BRDF: light from direction l (unit, toward the
+// light) with the given radiance, times its visibility (1 = unshadowed).
+vec3 DirectionalLight(vec3 n, vec3 v, vec3 l, vec3 radiance, float visibility, vec3 albedo, vec3 f0, float rough,
+    float metal)
+{
+    vec3 h = normalize(v + l);
+    float ndf = DistributionGGX(n, h, rough);
+    float g = GeometrySmith(n, v, l, rough);
+    vec3 f = FresnelSchlick(max(dot(h, v), 0.0), f0);
+
+    vec3 numerator = ndf*g*f;
+    float denom = 4.0*max(dot(n, v), 0.0)*max(dot(n, l), 0.0) + 1e-4;
+    vec3 specular = numerator/denom;
+
+    // Diffuse energy is what is not reflected specularly; metals have no diffuse.
+    vec3 kD = (vec3(1.0) - f)*(1.0 - metal);
+    float nDotL = max(dot(n, l), 0.0);
+    return (kD*albedo/PI + specular)*radiance*nDotL*visibility;
 }
 
 // Perturbs the geometric normal by a tangent-space normal map WITHOUT needing per-vertex tangents: it rebuilds
@@ -168,10 +196,11 @@ float SampleShadowCascade(sampler2D map, mat4 vp, vec3 worldPos, float nDotL, fl
 }
 
 // Returns 0 (lit) .. 1 (shadowed) for the fragment, sampling the NEAR cascade first (sharp) and falling back to
-// the FAR cascade (coarse, long-range) when the fragment lies beyond the near frustum. Outside both = lit.
+// the FAR cascade (coarse, long-range) when the fragment lies beyond the near frustum. Outside both = lit. Samples
+// nothing while the cascades shadow neither light (they did not run this frame).
 float ComputeShadow(vec3 worldPos, float nDotL)
 {
-    if (shadowStrength <= 0.0)
+    if ((shadowStrength <= 0.0) || ((sunShadowFade <= 0.0) && (moonShadowFade <= 0.0)))
     {
         return 0.0;
     }
@@ -189,9 +218,9 @@ float ComputeShadow(vec3 worldPos, float nDotL)
 #include "common/atmosphere"
 #include "common/night_sky"
 
-// The sky colour along a world-space view ray (the sky pass's result minus the sun disc, the Milky Way and the stars,
-// but with light pollution's skyglow). This is the colour distant fogged geometry fades toward, so it matches the
-// visible sky in that direction.
+// The sky colour along a world-space view ray (the sky pass's result minus the sun and moon discs, the Milky Way and
+// the stars, but with the moonlit sky and light pollution's skyglow). This is the colour distant fogged geometry fades
+// toward, so it matches the visible sky in that direction.
 vec3 fogSkyColor(vec3 rayDir)
 {
     vec3 rayOrigin = vec3(0.0, ATMOSPHERE_R_PLANET + 1.0, 0.0);
@@ -202,6 +231,10 @@ vec3 fogSkyColor(vec3 rayDir)
     // Mirror the ray into the upper hemisphere and darken below the horizon, exactly like the sky pass's main.
     vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
     vec3 sky = atmosphere(skyRay, rayOrigin, sunDir, iSun, kMie);
+    if (skyMoonIntensity > 0.0)
+    {
+        sky += atmosphere(skyRay, rayOrigin, normalize(moonDirection), ATMOSPHERE_SUN_RADIANCE*skyMoonIntensity, kMie);
+    }
     sky += nightSkySkyglow(skyRay.y, skyglowRadiance);
     float belowFactor = smoothstep(0.0, -0.12, rayDir.y);
     sky *= mix(1.0, 0.5, belowFactor);
@@ -278,30 +311,23 @@ void main()
         n = PerturbNormal(n, fragPosition, fragTexCoord, mapN);
     }
     vec3 v = normalize(viewPos - fragPosition);
-    vec3 l = normalize(sunDirection);
-    vec3 h = normalize(v + l);
 
     // Base reflectance: 0.04 for dielectrics, the albedo for metals.
     vec3 f0 = mix(vec3(0.04), albedo, metal);
 
-    // Cook-Torrance specular for the single directional sun.
-    float ndf = DistributionGGX(n, h, rough);
-    float g = GeometrySmith(n, v, l, rough);
-    vec3 f = FresnelSchlick(max(dot(h, v), 0.0), f0);
+    // The cascades' shadow darkens the direct term of the light that cast it (by its fade), never the ambient. The
+    // slope bias follows that light's angle.
+    float shadow = ComputeShadow(fragPosition, max(dot(n, normalize(shadowLightDirection)), 0.0));
+    float shadowAmount = shadow*clamp(shadowStrength, 0.0, 1.0);
 
-    vec3 numerator = ndf*g*f;
-    float denom = 4.0*max(dot(n, v), 0.0)*max(dot(n, l), 0.0) + 1e-4;
-    vec3 specular = numerator/denom;
-
-    // Diffuse energy is what is not reflected specularly; metals have no diffuse.
-    vec3 kD = (vec3(1.0) - f)*(1.0 - metal);
-
-    float nDotL = max(dot(n, l), 0.0);
-    vec3 radiance = sunColor*sunIntensity;
-    // Sun shadow: darken the direct (sun) term only; ambient still lights shadowed surfaces.
-    float shadow = ComputeShadow(fragPosition, nDotL);
-    float sunVisibility = 1.0 - shadow*clamp(shadowStrength, 0.0, 1.0);
-    vec3 direct = (kD*albedo/PI + specular)*radiance*nDotL*sunVisibility;
+    // The sun, then (at night) the moon, through the same Cook-Torrance BRDF.
+    vec3 direct = DirectionalLight(n, v, normalize(sunDirection), sunColor*sunIntensity,
+        1.0 - shadowAmount*sunShadowFade, albedo, f0, rough, metal);
+    if (moonIntensity > 0.0)
+    {
+        direct += DirectionalLight(n, v, normalize(moonDirection), moonColor*moonIntensity,
+            1.0 - shadowAmount*moonShadowFade, albedo, f0, rough, metal);
+    }
 
     // Point lights: same Cook-Torrance BRDF per light, with a windowed inverse-square falloff (the cube-shadow
     // light is shaded separately). The count + arrays are the reach-culled set the renderer chose for this object;

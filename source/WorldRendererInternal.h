@@ -25,9 +25,9 @@
  *   WorldRendererScene.c     the scene target (size, HDR tiers, recreation on resize) and the scene pass
  *   WorldRendererGeometry.c  model meshes (with per-draw materials), sprite billboards and light gizmos
  *   WorldRendererLighting.c  the PBR shader and its uniforms, forward point lights, eye adaptation
- *   WorldRendererShadows.c   the sun shadow cascades and the point-light cube shadow
+ *   WorldRendererShadows.c   the shadow cascades of the sun or the moon, and the point-light cube shadow
  *   WorldRendererGBuffer.c   the normal/flag G-buffer and the ambient-occlusion pre-pass
- *   WorldRendererSky.c       the atmospheric sky with the Milky Way and light pollution's skyglow
+ *   WorldRendererSky.c       the atmospheric sky with the moon, the Milky Way and light pollution's skyglow
  *   WorldRendererStars.c     the star field (the seeded catalogue as one-pixel quads)
  *   WorldRendererPost.c      outlines, bloom, sun shafts and the tonemap
  *   WorldRendererCrisp.c     the crisp overlay for OmitPixelation objects
@@ -94,6 +94,38 @@ typedef struct WorldRendererRadianceStruct
     float Rgb[3];
 } WorldRendererRadiance;
 
+/** @brief One of the sky's directional lights (the sun or the moon) as the PBR shader takes it. */
+typedef struct WorldRendererDirectionalLightStruct
+{
+    /** @brief Unit direction TO the light. */
+    Vector3 Direction;
+    /** @brief Linear colour. */
+    float Color[3];
+    /** @brief Intensity on that colour, with daylight (the sun) or phase, height and night (the moon) already in; 0 =
+     *  the light is off. */
+    float Intensity;
+} WorldRendererDirectionalLight;
+
+/** @brief The moon's disc in the sky for one frame (WorldRendererSky_PrepareFrame), as the sky shader draws it. */
+typedef struct WorldRendererMoonDiscStruct
+{
+    /** @brief The disc's axes on the sky, both perpendicular to the moon's direction: Right to the right of the face as
+     *  seen from the ground with its north toward the sky's pole, Up toward that pole. The face therefore turns as the
+     *  moon crosses the sky, like the real one. */
+    Vector3 Right;
+    Vector3 Up;
+    /** @brief Cosine and sine of the disc's angular radius. */
+    float CosRadius;
+    float SinRadius;
+    /** @brief Linear radiance of a white texel lit head-on (MoonBrightness included); the shader shades the phase. */
+    float Radiance;
+    /** @brief The dark side's glow (earthshine) as a share of Radiance, already x (1 - illumination). */
+    float Earthshine;
+    /** @brief How opaque the disc is, 0..1: it fades out within about 12 degrees of the sun (where the real moon is
+     *  lost in the glare), which also keeps the virtual moon from eclipsing the sun every new moon. */
+    float Opacity;
+} WorldRendererMoonDisc;
+
 /**
  * @brief Everything one render decides up front and shares between its passes.
  *
@@ -117,22 +149,32 @@ typedef struct WorldRenderFrameStruct
     Matrix InvViewProjection;
     /** @brief View x projection (raymath order: MatrixMultiply(View, Projection)). */
     Matrix ViewProjection;
-    /** @brief Unit direction to the sun, and how much daylight there is (1 day .. 0 night). */
+    /** @brief The sky's sun: unit direction to it (the sky, the fog, the sun shafts and the outlines' creases use it),
+     *  and how much daylight there is (1 day .. 0 night). */
     Vector3 SunDirection;
     float Daylight;
-    /** @brief The sky's rotation for the time of day (WorldEnvironment_GetCelestialToWorld): turns the stars and the
-     *  Milky Way. */
-    Matrix CelestialToWorld;
+    /** @brief The sky's moon: unit direction to it, its phase in [0, 1) and its lit fraction. */
+    Vector3 MoonDirection;
+    float MoonPhase;
+    float MoonIllumination;
+    /** @brief The stars' rotation for the date and the time of day (WorldEnvironment_GetStarsToWorld): turns the star
+     *  catalogue and the Milky Way. */
+    Matrix StarsToWorld;
     /** @brief Render time in seconds, accumulated by the renderer and wrapped every hour (float precision), for
      *  animated effects such as twinkling. Renderer-side state, not world time. */
     float TimeSeconds;
     /** @brief Night sky values (WorldRendererSky_PrepareFrame): the faintest magnitude visible overhead (light
-     *  pollution and twilight), the Milky Way's linear radiance per white texel (brightness, light pollution and
-     *  twilight included), and light pollution's skyglow at the horizon (linear; 0 by day), which the sky and the PBR
-     *  fog both add. */
+     *  pollution, the moonlit sky and twilight), the Milky Way's linear radiance per white texel (brightness, light
+     *  pollution and twilight included), and light pollution's skyglow at the horizon (linear; 0 by day), which the sky
+     *  and the PBR fog both add. */
     float LimitingMagnitude;
     float MilkyWayRadiance;
     float SkyglowRadiance[3];
+    /** @brief The moon's light on the atmosphere, relative to the sun's (the moonlit sky the sky pass and the PBR fog
+     *  add); 0 by day, without a moon, or while the moon is far below the horizon. */
+    float MoonSkyIntensity;
+    /** @brief The moon's disc, valid while IsMoonActive. */
+    WorldRendererMoonDisc MoonDisc;
     /** @brief The frame target (window) size and the scene target size, in pixels. */
     int WindowWidth;
     int WindowHeight;
@@ -142,18 +184,25 @@ typedef struct WorldRenderFrameStruct
      *  runs, All otherwise. */
     WorldRendererPixelFilter SceneFilter;
 
-    /** @brief Lighting shared by the scene and crisp passes (computed once per render): linear sun colour and
-     *  daylight-scaled intensity, linear ambient colour, the scene luminance estimate eye adaptation starts
-     *  from, the fog density, and the shadow strength. */
-    float SunColor[3];
-    float SunIntensity;
+    /** @brief The sky's two directional lights (directions and intensities from WorldEnvironment_GetSkyLights, linear
+     *  colours from WorldRendererLighting_PrepareFrame), shared by the scene and crisp passes. */
+    WorldRendererDirectionalLight SunLight;
+    WorldRendererDirectionalLight MoonLight;
+    /** @brief The light the shadow cascades are rendered from this frame (the brighter one once it stands high
+     *  enough), its unit direction, and how strong its shadows are (0..1: faded near the horizon and while the lights
+     *  hand over). The cascades only run while ShadowLight is not None (IsCascadeShadowActive). */
+    WorldShadowLight ShadowLight;
+    Vector3 ShadowDirection;
+    float ShadowFade;
+    /** @brief Lighting shared by the scene and crisp passes (computed once per render): linear ambient colour, the
+     *  scene luminance estimate eye adaptation starts from, the fog density, and the shadow strength. */
     float AmbientColor[3];
     float BaseSceneLuminance;
     float FogDensity;
     float ShadowStrength;
 
     /** @brief Whether each optional pass runs this render. */
-    bool IsSunShadowActive;
+    bool IsCascadeShadowActive;
     bool IsPointShadowActive;
     bool IsAoActive;
     bool AreOutlinesActive;
@@ -162,6 +211,8 @@ typedef struct WorldRenderFrameStruct
     bool IsCrispActive;
     bool AreStarsActive;
     bool IsMilkyWayActive;
+    /** @brief Whether the moon's disc is drawn (the sky pass draws it, the star pass hides the stars behind it). */
+    bool IsMoonActive;
     /** @brief Index (into the render cache's lights) of the light casting the cube shadow; valid when
      *  IsPointShadowActive. */
     size_t ShadowLightIndex;
@@ -210,11 +261,15 @@ typedef struct WorldRendererPbrStateStruct
     /** @brief How many point lights the shader's uniform arrays hold, capped at WORLD_MAX_FORWARD_LIGHTS
      *  (checked at load; uploads never exceed it). */
     int _maxPointLights;
-    /** @brief Cached uniform locations set every render (-1 when absent/optimized out). */
+    /** @brief Cached uniform locations set every render (-1 when absent/optimized out): the camera, the two directional
+     *  lights (the sun's direction is also the fog sky's), the ambient. */
     int _locViewPos;
     int _locSunDirection;
     int _locSunColor;
     int _locSunIntensity;
+    int _locMoonDirection;
+    int _locMoonColor;
+    int _locMoonIntensity;
     int _locAmbientColor;
     int _locAmbientIntensity;
     /** @brief Cached per-material scalar-factor and map-presence uniform locations (-1 when absent), uploaded
@@ -232,7 +287,8 @@ typedef struct WorldRendererPbrStateStruct
     int _locAmbientOcclusionMap;
     int _locAoMapActive;
     int _locAoResolution;
-    /** @brief Cached sun shadow uniform locations (-1 when absent). */
+    /** @brief Cached cascade shadow uniform locations (-1 when absent): the cascades, the light they were rendered from
+     *  and how much they shadow the sun and the moon. */
     int _locLightVP;
     int _locShadowMap;
     int _locLightVPFar;
@@ -241,6 +297,9 @@ typedef struct WorldRendererPbrStateStruct
     int _locShadowStrength;
     int _locShadowBias;
     int _locShadowTexelSize;
+    int _locShadowLightDirection;
+    int _locSunShadowFade;
+    int _locMoonShadowFade;
     /** @brief Cached point-light (cube) shadow uniform locations (-1 when absent). */
     int _locPointShadowActive;
     int _locPointShadowLightPos;
@@ -261,6 +320,7 @@ typedef struct WorldRendererPbrStateStruct
     int _locFogSkyTint;
     int _locFogSunIntensity;
     int _locFogSkyglow;
+    int _locFogMoonIntensity;
     /** @brief This render's forward-light candidates (WorldCullingLight): every light of the render cache except
      *  the cube-shadow light, which is shaded on its own. */
     GenericBuffer _forwardLights;
@@ -290,13 +350,34 @@ typedef struct WorldRendererTonemapStateStruct
     int _locSunshaftStrength;
 } WorldRendererTonemapState;
 
-/** @brief The atmospheric sky pass, with the Milky Way and light pollution's skyglow. */
+/**
+ * @brief A sky texture the world's environment names (the Milky Way, the moon's face).
+ *
+ * Each slot holds its texture under its own asset user, so replacing one slot's texture can never release another's
+ * (two slots may name the same asset), and loads only when the environment names another texture: a failed name is
+ * logged once and not retried until the name changes.
+ */
+typedef struct WorldRendererSkyTextureStruct
+{
+    /** @brief The texture, held under _user; NULL = unavailable (not loaded yet, or the name failed). */
+    GameTexture* _texture;
+    /** @brief The asset user holding _texture; minted on the first load, retired with the renderer. */
+    AssetUserID _user;
+    /** @brief The name _texture was loaded (or tried) for, NUL-terminated (unsigned char); valid while _isSynced. */
+    GenericBuffer _name;
+    /** @brief Whether a name has been tried. */
+    bool _isSynced;
+} WorldRendererSkyTexture;
+
+/** @brief The atmospheric sky pass, with the moon, the Milky Way and light pollution's skyglow. */
 typedef struct WorldRendererSkyStateStruct
 {
     /** @brief The atmospheric sky shader drawn behind the geometry; NULL = fall back to the gradient clear. */
     GameShader* _shader;
-    /** @brief The Milky Way panorama (held under the shader user); NULL = no Milky Way. */
-    GameTexture* _milkyWay;
+    /** @brief The Milky Way panorama the world names (MilkyWayTexture); without it, no Milky Way. */
+    WorldRendererSkyTexture _milkyWay;
+    /** @brief The moon's face the world names (MoonTexture); without it the disc is a flat grey. */
+    WorldRendererSkyTexture _moon;
     /** @brief Cached world_sky uniform locations (-1 when absent). */
     int _locResolution;
     int _locInvViewProj;
@@ -312,6 +393,18 @@ typedef struct WorldRendererSkyStateStruct
     int _locWorldToGalactic;
     int _locMilkyWayRadiance;
     int _locMilkyWayLod;
+    int _locMoonDirection;
+    int _locMoonRight;
+    int _locMoonUp;
+    int _locMoonCosRadius;
+    int _locMoonSinRadius;
+    int _locMoonColor;
+    int _locMoonDiscRadiance;
+    int _locMoonEarthshine;
+    int _locMoonOpacity;
+    int _locMoonSkyIntensity;
+    int _locHasMoonTexture;
+    int _locMoonTexture;
 } WorldRendererSkyState;
 
 /** @brief The star field: the seeded star catalogue as one mesh of one-pixel quads, drawn right after the sky. */
@@ -320,13 +413,15 @@ typedef struct WorldRendererStarStateStruct
     /** @brief The star shader; NULL = no stars. */
     GameShader* _shader;
     /** @brief Cached world_stars uniform locations (-1 when absent). */
-    int _locCelestialToWorld;
+    int _locStarsToWorld;
     int _locViewProjection;
     int _locResolution;
     int _locLimitingMagnitude;
     int _locRadianceScale;
     int _locTwinkleStrength;
     int _locTimeSeconds;
+    int _locMoonDirection;
+    int _locMoonCosRadius;
     /** @brief The catalogue's mesh, uploaded once per catalogue: six vertices per star and no index buffer (raylib's
      *  16-bit indices would cap an indexed mesh at 16384 four-vertex stars). Its CPU arrays are freed after the
      *  upload. Valid while _hasMesh. */
@@ -351,23 +446,23 @@ typedef struct WorldRendererSpriteStateStruct
     GameShader* _shader;
 } WorldRendererSpriteState;
 
-/** @brief The two sun shadow cascades. */
-typedef struct WorldRendererSunShadowStateStruct
+/** @brief The two shadow cascades of the sky's shadow light (the sun by day, the moon on bright nights). */
+typedef struct WorldRendererCascadeStateStruct
 {
-    /** @brief The depth-only shader used for the cascades; NULL = no sun shadows. */
+    /** @brief The depth-only shader used for the cascades; NULL = no sun or moon shadows. */
     GameShader* _depthShader;
     /** @brief The NEAR cascade (small extent, sharp); its samplable depth texture is in .depth. */
     RenderTexture2D _nearMap;
     /** @brief Whether _nearMap has been created (and its framebuffer is complete). */
     bool _hasNearMap;
-    /** @brief World -> sun light-clip matrix of the near cascade's most recent pass. */
+    /** @brief World -> shadow-light clip matrix of the near cascade's most recent pass. */
     Matrix _nearLightVP;
     /** @brief The FAR cascade (large extent, coarse) + its creation flag + light-clip matrix. Sampled by the PBR
      *  shader outside the near cascade so big / distant casters still shadow at range. Optional. */
     RenderTexture2D _farMap;
     bool _hasFarMap;
     Matrix _farLightVP;
-} WorldRendererSunShadowState;
+} WorldRendererCascadeState;
 
 /** @brief The cube shadow of the shadow-casting point light. */
 typedef struct WorldRendererPointShadowStateStruct
@@ -568,7 +663,7 @@ struct WorldRendererStruct
     WorldRendererSkyState _sky;
     WorldRendererStarState _stars;
     WorldRendererSpriteState _sprites;
-    WorldRendererSunShadowState _sunShadow;
+    WorldRendererCascadeState _cascades;
     WorldRendererPointShadowState _pointShadow;
     WorldRendererGBufferState _gbuffer;
     WorldRendererAoState _ao;
@@ -613,15 +708,17 @@ void WorldRendererCommon_ColorToLinear(Color color, float outRGB[3]);
 GameShader* WorldRendererCommon_LoadShader(WorldRenderer* self, const unsigned char* assetName);
 
 /**
- * @brief Loads a texture asset by name under the renderer's shader user.
+ * @brief Loads a texture asset by name under @p user.
  *
- * A failure is logged once (warning) and the feature that needs the texture stays off.
+ * A failure is logged (warning); callers load each name once, so it is logged once, and the feature that needs the
+ * texture goes without it.
  * @param self The renderer.
+ * @param user The asset user to hold the texture.
  * @param assetName The texture asset's name.
- * @param featureName What goes without it, for the warning (e.g. u8"the Milky Way").
- * @returns The texture (held until the renderer is destroyed), or NULL when it is unavailable.
+ * @param featureName What goes without it, for the warning (e.g. u8"the Milky Way is not drawn").
+ * @returns The texture (held until @p user releases it), or NULL when it is unavailable.
  */
-GameTexture* WorldRendererCommon_LoadTexture(WorldRenderer* self, const unsigned char* assetName,
+GameTexture* WorldRendererCommon_LoadTexture(WorldRenderer* self, AssetUserID user, const unsigned char* assetName,
     const unsigned char* featureName);
 
 /**
@@ -733,10 +830,12 @@ void WorldRendererGeometry_DrawLightGizmos(WorldRenderer* self);
 void WorldRendererLighting_LoadShader(WorldRenderer* self);
 
 /**
- * @brief Computes the frame's lighting (sun, ambient, fog, shadow strength, scene luminance) into @p frame and
- *        builds the forward-light candidates (every light except the frame's cube-shadow light).
+ * @brief Computes the frame's lighting (the sun's and the moon's colours, the ambient with its moonlit share, fog,
+ *        shadow strength, scene luminance) into @p frame and builds the forward-light candidates (every light except
+ *        the frame's cube-shadow light).
  *
- * Needs frame->SunDirection, frame->Daylight, frame->IsPointShadowActive and frame->ShadowLightIndex.
+ * Needs the frame's sky lights (SunLight and MoonLight directions and intensities, Daylight), IsPointShadowActive and
+ * ShadowLightIndex.
  */
 void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame);
 
@@ -787,8 +886,9 @@ void WorldRendererShadows_Unload(WorldRenderer* self);
  */
 size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self, Vector3 cameraPosition);
 
-/** @brief Renders both sun cascades (the far one only when its map exists) and stores their light matrices. */
-void WorldRendererShadows_RenderSun(WorldRenderer* self, const WorldRenderFrame* frame);
+/** @brief Renders both cascades (the far one only when its map exists) from the frame's shadow light
+ *  (frame->ShadowDirection: the sun or the moon) and stores their light matrices. */
+void WorldRendererShadows_RenderCascades(WorldRenderer* self, const WorldRenderFrame* frame);
 
 /**
  * @brief Renders the frame's shadow light into the six cube faces, drawing only models within its reach, and
@@ -816,21 +916,43 @@ void WorldRendererGBuffer_RenderAo(WorldRenderer* self, const WorldRenderFrame* 
 
 
 // WorldRendererSky.c
-/** @brief Loads the atmospheric sky shader (optional: the scene then clears to a CPU gradient colour) and the Milky Way
- *  texture (optional: the sky then draws no Milky Way). */
-void WorldRendererSky_LoadAssets(WorldRenderer* self);
+/** @brief Constructs the sky pass's CPU state (the sky texture slots' name buffers). Called once by
+ *  WorldRenderer_Create; pair with WorldRendererSky_Deconstruct. */
+void WorldRendererSky_Construct(WorldRenderer* self);
+
+/** @brief Releases the sky textures (retires their asset users) and frees the slots' name buffers. Called once by
+ *  WorldRenderer_Deconstruct, before the shader user is retired. */
+void WorldRendererSky_Deconstruct(WorldRenderer* self);
+
+/** @brief Loads the atmospheric sky shader (optional: the scene then clears to a CPU gradient colour). */
+void WorldRendererSky_LoadShader(WorldRenderer* self);
 
 /**
- * @brief Computes the frame's night sky values: the limiting magnitude, the Milky Way's radiance and the skyglow.
+ * @brief Loads the sky textures the environment names (MilkyWayTexture, MoonTexture) when they differ from the loaded
+ *        ones, each under its own asset user. Cheap when nothing changed; needs a live GL context when something did.
+ *        A name that fails is logged once and not retried until the environment names another: without the Milky Way
+ *        texture the sky draws no Milky Way, without the moon's the disc is a flat grey.
+ */
+void WorldRendererSky_SyncTextures(WorldRenderer* self, const WorldEnvironment* environment);
+
+/**
+ * @brief Computes the frame's night sky values: the limiting magnitude (light pollution, the moonlit sky, twilight),
+ *        the Milky Way's radiance, the skyglow, the moon's light on the atmosphere and its disc.
  *
- * Needs frame->Environment, frame->SunDirection and frame->Daylight.
+ * Needs frame->Environment, the sun's and the moon's directions, Daylight and MoonIllumination.
  */
 void WorldRendererSky_PrepareFrame(WorldRenderFrame* frame);
 
 /**
- * @brief Draws the atmospheric sky (with the skyglow, and the Milky Way when frame->IsMilkyWayActive) as a full-screen
- *        pass into the bound scene target. Must run after the clear and BEFORE the 3D geometry: it writes no depth,
- *        so the geometry draws over it.
+ * @brief Whether the moon's disc shows this frame: the moon is on, above the horizon and far enough from the sun
+ *        (frame->MoonDisc.Opacity > 0). Needs WorldRendererSky_PrepareFrame first.
+ */
+bool WorldRendererSky_IsMoonVisible(const WorldRenderFrame* frame);
+
+/**
+ * @brief Draws the atmospheric sky (with the moonlit sky, the skyglow, the moon's disc when frame->IsMoonActive, and the
+ *        Milky Way when frame->IsMilkyWayActive) as a full-screen pass into the bound scene target. Must run after the
+ *        clear and BEFORE the 3D geometry: it writes no depth, so the geometry draws over it.
  */
 void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame);
 
@@ -851,7 +973,8 @@ void WorldRendererStars_SyncCatalogue(WorldRenderer* self, const WorldEnvironmen
 
 /**
  * @brief Draws the star field into the bound scene target, right after the sky and before the geometry: additive,
- *        depth-tested, writing no depth (the post passes treat far depth as sky). Only while frame->AreStarsActive.
+ *        depth-tested, writing no depth (the post passes treat far depth as sky), and none behind the moon's disc.
+ *        Only while frame->AreStarsActive.
  */
 void WorldRendererStars_Draw(WorldRenderer* self, const WorldRenderFrame* frame);
 

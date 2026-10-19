@@ -219,6 +219,8 @@ void WorldRendererPost_RenderOutlines(WorldRenderer* self, const WorldRenderFram
     // so transforming the (world-space) sun direction by the same view matrix's rotation makes the shader's
     // sun test a plain dot product. Subtract the transformed origin to drop the translation (a direction, not
     // a point).
+    // TODO: on moonlit nights the moon is the key light, so the creases could follow the frame's shadow light; that
+    // needs a smooth hand-over (the switch would flip which side of a crease darkens), so they stay on the sun for now.
     Vector3 ViewSun = Vector3Normalize(Vector3Subtract(Vector3Transform(frame->SunDirection, frame->View),
         Vector3Transform((Vector3){ 0.0f, 0.0f, 0.0f }, frame->View)));
     float SunDirView[3] = { ViewSun.x, ViewSun.y, ViewSun.z };

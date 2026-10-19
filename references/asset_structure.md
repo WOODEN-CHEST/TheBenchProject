@@ -483,3 +483,16 @@ Example (the Milky Way placeholder, `textures/sky/milky_way.json`):
     "color_space": "srgb"
 }
 ```
+
+The moon's face (`textures/sky/moon.json`) is pixel art seen at about its own size, so it keeps hard pixels and no
+mip levels:
+```
+{
+    "name": "sky_moon",
+    "location": "sky/placeholder_moon",
+    "texture_properties": { "filtering": "point", "wrap": "clamp", "mipmaps": false },
+    "color_space": "srgb"
+}
+```
+These two are the defaults of a world's `milky_way_texture` and `moon_texture` settings; a world can name other
+textures.

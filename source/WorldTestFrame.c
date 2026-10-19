@@ -67,6 +67,10 @@
 #define DAYS_PER_WEEK 7
 /** Room for the clock's debug text ("Sun 2026-10-18 09:30:00") and its terminator. */
 #define CLOCK_TEXT_CAPACITY ((size_t)64)
+/** The phase the F key pins the moon at: full. */
+#define FIXED_MOON_PHASE 0.5f
+/** The moon's eight named phases split the cycle into eighths, each centred on its phase. */
+#define MOON_PHASE_NAME_COUNT 8
 /** Real seconds in a minute, for the I key's day length. */
 #define SECONDS_PER_REAL_MINUTE 60.0
 /** How far above the current light pollution the N key's next step must be (so 0.35 steps on to 0.7). */
@@ -131,6 +135,12 @@ typedef struct WorldTestFrameStruct
 static const Vector3 FrameWorldUp = { .x = 0.0f, .y = 1.0f, .z = 0.0f };
 /* The light pollution steps the N key cycles through: a dark site, a small town (the default), a suburb, a city. */
 static const float LightPollutionSteps[] = { 0.0f, 0.35f, 0.7f, 1.0f };
+/* The moon's phases by name, from new moon (phase 0) in eighths of the cycle. */
+static const char* const MoonPhaseNames[MOON_PHASE_NAME_COUNT] =
+{
+    "new moon", "waxing crescent", "first quarter", "waxing gibbous", "full moon", "waning gibbous", "last quarter",
+    "waning crescent"
+};
 
 
 // Static functions: helpers.
@@ -159,21 +169,53 @@ static const char* FormatClock(const GameClock* clock, unsigned char* storage, s
     return IsFormatted ? (const char*)storage : "?";
 }
 
-/* Logs a change of the game time, "WorldTest: <what>: Sun 2026-10-18 06:00:00.": on key presses and new days, never
- * per tick. */
+/* The sky shows the clock's time: its time of day and date go into the world's environment every tick. */
+static void ApplyClockToEnvironment(WorldTestFrame* frame)
+{
+    WorldEnvironment* Environment = World_GetEnvironment(&frame->_world);
+    Environment->TimeOfDay = GameClock_GetTimeOfDay(&frame->_clock);
+    Environment->Date = GameClock_GetDay(&frame->_clock);
+}
+
+/* The name of the moon's phase, e.g. "waxing gibbous". */
+static const char* GetMoonPhaseName(float phase)
+{
+    size_t Index = (size_t)floorf(fminf(fmaxf(phase, 0.0f), 1.0f) * (float)MOON_PHASE_NAME_COUNT + 0.5f);
+    return MoonPhaseNames[Index % MOON_PHASE_NAME_COUNT];
+}
+
+/* Logs a change of the game time with the moon it brings, "WorldTest: <what>: Sun 2026-10-18 06:00:00; first quarter
+ * (phase 0.24, 49% lit, from the calendar).": on key presses and new days, never per tick. The environment is brought
+ * up to the clock first, so the moon is the new time's. */
 static void LogClock(WorldTestFrame* frame, const char* what)
 {
     if (frame->_services->Logger == NULL)
     {
         return;
     }
+    ApplyClockToEnvironment(frame);
+    const WorldEnvironment* Environment = World_GetEnvironment(&frame->_world);
     unsigned char Storage[CLOCK_TEXT_CAPACITY];
-    Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger, (const unsigned char*)u8"WorldTest: %s: %s.",
-        what, FormatClock(&frame->_clock, Storage, sizeof(Storage)));
+    const char* Clock = FormatClock(&frame->_clock, Storage, sizeof(Storage));
+    Error LogResult;
+    if (!Environment->IsMoonEnabled)
+    {
+        LogResult = Logger_LogInfoFormatted(frame->_services->Logger, (const unsigned char*)u8"WorldTest: %s: %s; no moon.",
+            what, Clock);
+    }
+    else
+    {
+        float Phase = WorldEnvironment_GetMoonPhase(Environment);
+        float Illumination = WorldEnvironment_GetMoonIllumination(Environment);
+        LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+            (const unsigned char*)u8"WorldTest: %s: %s; %s (phase %.2f, %.0f%% lit, %s).", what, Clock,
+            GetMoonPhaseName(Phase), (double)Phase, (double)Illumination * 100.0,
+            (Environment->MoonPhaseSource == WorldMoonPhaseSource_Fixed) ? "fixed" : "from the calendar");
+    }
     Error_Deconstruct(&LogResult);
 }
 
-/* The I key's line about the game time: the date and time, whether the clock runs, and its speed. */
+/* The I key's line about the game time: the date and time, whether the clock runs, and its speed; then the moon. */
 static void LogClockStatus(WorldTestFrame* frame)
 {
     if (frame->_services->Logger == NULL)
@@ -184,18 +226,12 @@ static void LogClockStatus(WorldTestFrame* frame)
     double TimeScale = GameClock_GetTimeScale(&frame->_clock);
     Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
         (const unsigned char*)u8"WorldTest: game time %s, %s, %g game seconds per real second (a day takes %g real "
-        u8"minutes).", FormatClock(&frame->_clock, Storage, sizeof(Storage)),
+        u8"minutes); seasons %s.", FormatClock(&frame->_clock, Storage, sizeof(Storage)),
         frame->_clock.IsPaused ? "paused" : "running", TimeScale,
-        GAME_CLOCK_SECONDS_PER_DAY / TimeScale / SECONDS_PER_REAL_MINUTE);
+        GAME_CLOCK_SECONDS_PER_DAY / TimeScale / SECONDS_PER_REAL_MINUTE,
+        World_GetEnvironment(&frame->_world)->AreSeasonsEnabled ? "on" : "off");
     Error_Deconstruct(&LogResult);
-}
-
-/* The sky shows the clock's time: its time of day and date go into the world's environment every tick. */
-static void ApplyClockToEnvironment(WorldTestFrame* frame)
-{
-    WorldEnvironment* Environment = World_GetEnvironment(&frame->_world);
-    Environment->TimeOfDay = GameClock_GetTimeOfDay(&frame->_clock);
-    Environment->Date = GameClock_GetDay(&frame->_clock);
+    LogClock(frame, "the moon now");
 }
 
 /* Starts the clock at the test speed, where the world's sky starts: the environment's date and time of day. */
@@ -291,10 +327,29 @@ static void HandleDebugClockInput(WorldTestFrame* frame, const GameInput* input,
         LogClock(frame, "time scrubbed");
     }
 
-    // , and . step the date (the moon in T03 changes from night to night), / jumps a week ahead.
+    // , and . step the date (the moon changes from night to night), / jumps a week ahead (about a quarter phase).
     if (GameInput_IsKeyPressed(input, GameKey_Comma)) { ShiftDays(frame, -1, "previous day"); }
     if (GameInput_IsKeyPressed(input, GameKey_Period)) { ShiftDays(frame, 1, "next day"); }
     if (GameInput_IsKeyPressed(input, GameKey_Slash)) { ShiftDays(frame, DAYS_PER_WEEK, "a week ahead"); }
+}
+
+/* The moon's and the seasons' debug keys: F pins the moon full (a story's fixed phase) or gives it back to the
+ * calendar, Y switches the seasons. Each change is logged with the date, time and moon. */
+static void HandleDebugSkyInput(WorldTestFrame* frame, const GameInput* input)
+{
+    WorldEnvironment* Environment = World_GetEnvironment(&frame->_world);
+    if (GameInput_IsKeyPressed(input, GameKey_F))
+    {
+        bool IsFixed = (Environment->MoonPhaseSource == WorldMoonPhaseSource_Calendar);
+        Environment->MoonPhaseSource = IsFixed ? WorldMoonPhaseSource_Fixed : WorldMoonPhaseSource_Calendar;
+        Environment->MoonPhase = FIXED_MOON_PHASE;
+        LogClock(frame, IsFixed ? "moon pinned full" : "moon back on the calendar");
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_Y))
+    {
+        Environment->AreSeasonsEnabled = !Environment->AreSeasonsEnabled;
+        LogClock(frame, Environment->AreSeasonsEnabled ? "seasons ON (the sun follows the date)" : "seasons OFF");
+    }
 }
 
 /* The renderer's and the sky's debug keys (A/B toggles, the light pollution steps, status lines). Called from Update
@@ -604,6 +659,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
 
     // Debug controls (edge-triggered keys are reliable here: input is polled per update tick).
     HandleDebugClockInput(frame, input, deltaSeconds);
+    HandleDebugSkyInput(frame, input);
     HandleDebugInput(frame, input);
 }
 
@@ -621,9 +677,9 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
         Error LogResult = Logger_LogInfo(Frame->_services->Logger,
             (const unsigned char*)u8"WorldTest: entered the world. WASD+SPACE/CTRL move, SHIFT sprint, mouse look; "
             u8"P pause/resume the clock, 1-4 = dawn/noon/dusk/midnight (paused), [ ] scrub time, , . previous/next "
-            u8"day, / a week ahead; O post effects, B bloom, G sun shafts, C crisp overlay, L light gizmos, "
-            u8"N light pollution, I renderer status and game time, T text sample; M frees the mouse for the UI "
-            u8"(click the world to capture it again); ESC quits (once the UI lets go of it).");
+            u8"day, / a week ahead; F full moon / calendar moon, Y seasons; O post effects, B bloom, G sun shafts, "
+            u8"C crisp overlay, L light gizmos, N light pollution, I renderer status and game time, T text sample; M "
+            u8"frees the mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");
         Error_Deconstruct(&LogResult);
     }
     return Error_CreateSuccess();

@@ -68,7 +68,8 @@ The scheduler of the game-core round (events at dates and times, architecture A4
 - **The sky.** `WorldEnvironment` no longer advances time ([WorldData.md](WorldData.md), "Environment"): its
   `time_of_day` and `date` are what the sky shows. Whoever runs the game writes them from the clock every tick
   (`TimeOfDay = GameClock_GetTimeOfDay`, `Date = GameClock_GetDay`); in a world file they are the sky's starting
-  point. The moon (T03) and the stars' drift read the environment's date and time, i.e. the clock.
+  point. The moon's phase and position, the stars' drift and the seasons (T03) read the environment's date and time,
+  i.e. the clock.
 - **The weather (T16)** moves by the game seconds the clock moved: `Crossings.GameSeconds` of each Advance and each
   fast-forward (`WeatherSystem_Update(..., clock, gameSecondsElapsed)` in its task file). A paused clock pauses the
   weather; sleeping moves it.
@@ -84,7 +85,8 @@ until stories have a manifest, architecture A5).
 
 - The scheduler (events at dates and times): the game-core round.
 - Time zones and daylight saving: never planned.
-- Seasons for the sun: an option in T03.
+- Seasons for the sun: `WorldEnvironment.AreSeasonsEnabled` (T03, off by default), which reads the environment's date
+  ([WorldData.md](WorldData.md), "Environment").
 - Custom calendars: see [GameCalendar.md](GameCalendar.md).
 
 Not thread-safe.

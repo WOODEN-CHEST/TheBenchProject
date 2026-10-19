@@ -38,17 +38,74 @@
 #define DAYLIGHT_RISE_ELEVATION (0.10f)
 /** The format version of the environment's property table. */
 #define ENVIRONMENT_TABLE_VERSION 1U
+/** Pi in double precision, for the calendar maths. */
+#define ENVIRONMENT_PI_DOUBLE 3.14159265358979323846
+
+/** Default moon phase while the phase source is Fixed: a full moon. */
+#define DEFAULT_MOON_PHASE 0.5f
+/** Default tilt of the moon's path against the sun's, in radians (the real moon's is 5.1 degrees). */
+#define DEFAULT_MOON_ORBIT_TILT 0.09f
+/** Default moon disc size: 5 times the real moon's 0.52 degrees, about 16 pixels wide at 640x360. */
+#define DEFAULT_MOON_SIZE_MULTIPLIER 5.0f
+/** Default moon disc brightness multiplier. */
+#define DEFAULT_MOON_BRIGHTNESS 1.0f
+/** The moon's light fades in from the horizon and is full from this elevation (the sine; about 11.5 degrees), where
+ *  the air it crosses stops dimming it much. */
+#define MOONLIGHT_FULL_ELEVATION 0.2f
+/** The lunar phase law (Krisciunas and Schaefer 1991, after Allen): how many magnitudes fainter than full the moon is
+ *  per degree of phase angle, and per degree to the fourth power. */
+#define MOON_MAGNITUDES_PER_DEGREE 0.026
+#define MOON_MAGNITUDES_PER_DEGREE_TO_THE_FOURTH 4.0e-9
+/** Days in a tropical year: the sun's year through the seasons and among the stars. */
+#define TROPICAL_YEAR_DAYS 365.2422
+/** Day number (GameCalendar.h) of the March equinox of 2000, 2000-03-20 07:35 UTC: the sun's mean right ascension and
+ *  its seasonal declination are 0 there and a whole number of tropical years later. */
+#define MARCH_EQUINOX_DAY 730198.316
+/** The sun's right ascension, in turns, at which the star frame equals the celestial frame: 0.25 (90 degrees, the
+ *  June solstice). NightSky_GetCelestialToGalactic (source/NightSky.c) places the galaxy in that frame, with the same
+ *  right ascension: the two must agree. */
+#define STAR_FRAME_SUN_RIGHT_ASCENSION_TURNS 0.25
+/** The Earth's axial tilt, 23.44 degrees in radians: how far the seasons move the sun north and south. */
+#define AXIAL_TILT_RADIANS 0.40910518f
+/** The shadow light casts no shadows below this elevation (the sine; about 3 degrees: shadows that long only streak),
+ *  and full shadows from SHADOW_LIGHT_FULL_ELEVATION (about 8.6 degrees), fading in between. */
+#define SHADOW_LIGHT_MIN_ELEVATION 0.05f
+#define SHADOW_LIGHT_FULL_ELEVATION 0.15f
+/** The shadows reach full strength once the brighter light is this many times the other's luminance, and fade to 0
+ *  where the two are equal (smoothly in the logarithm of their ratio), so the switch from one light to the other never
+ *  jumps. A ratio rather than a difference: the sun's twilight light falls off steeply at its end, where the moon
+ *  takes over, and a band over the ratio's logarithm keeps the fade from being squeezed into a few game seconds. */
+#define SHADOW_LIGHT_HANDOVER_RATIO 4.0f
+/** A shadow light dimmer than this luminance (relative: the sun at noon is about 0.9, the default full moon about 0.014)
+ *  casts no shadows, fading in to full at twice it: a thin crescent's shadow could not show against the night's ambient
+ *  light, and skipping it saves the cascade pass. */
+#define SHADOW_LIGHT_MIN_LUMINANCE 0.0006f
+/** sRGB gamma, for weighing the lights by the luminance of their linear colour. */
+#define ENVIRONMENT_SRGB_GAMMA 2.2f
 
 /* The inspector's categories. */
 #define CATEGORY_TIME ((const unsigned char*)u8"Date and time")
 #define CATEGORY_SKY ((const unsigned char*)u8"Sky and sun")
 #define CATEGORY_NIGHT_SKY ((const unsigned char*)u8"Night sky")
+#define CATEGORY_MOON ((const unsigned char*)u8"Moon")
 #define CATEGORY_AMBIENT ((const unsigned char*)u8"Ambient light")
 #define CATEGORY_FOG ((const unsigned char*)u8"Fog")
 #define CATEGORY_EFFECTS ((const unsigned char*)u8"Effects")
 
 
 // Fields.
+static const PropertyEnumEntry MoonPhaseSourceEntries[] =
+{
+    { .Name = u8"calendar", .Value = WorldMoonPhaseSource_Calendar },
+    { .Name = u8"fixed", .Value = WorldMoonPhaseSource_Fixed },
+};
+
+static const PropertyEnumTable MoonPhaseSourceEnum =
+{
+    .Name = u8"moon_phase_source", .Entries = MoonPhaseSourceEntries,
+    .EntryCount = sizeof(MoonPhaseSourceEntries) / sizeof(MoonPhaseSourceEntries[0])
+};
+
 /* Every setting, in inspector order. The wire ids are the save schema (the GHDF entry ids the world encoder has always
  * written): never renumber or reuse one; a removed setting's id goes into the table's retired list. */
 static const PropertyDescriptor EnvironmentProperties[] =
@@ -75,6 +132,15 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .Category = CATEGORY_SKY, .DisplayName = u8"Sun angle",
         .Description = u8"How far the noon sun leans from straight overhead (0 = overhead). It also sets how high the "
             u8"sky's pole stands, like a latitude.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"are_seasons_enabled", .WireId = 43U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldEnvironment, AreSeasonsEnabled), .Default.BoolValue = false,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Seasons",
+        .Description = u8"When on, the sun follows the seasons: longer days and a higher noon sun in summer, shorter and "
+            u8"lower in winter (with a sun angle above 0). Off by default: it changes how much daylight the working "
+            u8"hours get.",
         .SinceVersion = 1U
     },
     {
@@ -145,6 +211,14 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .SinceVersion = 1U
     },
     {
+        .Key = u8"milky_way_texture", .WireId = 42U, .Type = PropertyType_AssetName,
+        PROPERTY_MEMBER(WorldEnvironment, MilkyWayTexture), .Default.StringValue = u8"sky_milky_way",
+        .Rules = PROPERTY_RULES_STRING(WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH, false), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_NIGHT_SKY, .DisplayName = u8"Milky Way texture",
+        .Description = u8"The texture the Milky Way is drawn from: a panorama in galactic coordinates.",
+        .SinceVersion = 1U
+    },
+    {
         .Key = u8"light_pollution", .WireId = 26U, .Type = PropertyType_Float,
         PROPERTY_MEMBER(WorldEnvironment, LightPollution), .Default.FloatValue = DEFAULT_LIGHT_POLLUTION,
         .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_NIGHT_SKY,
@@ -158,6 +232,94 @@ static const PropertyDescriptor EnvironmentProperties[] =
         PROPERTY_MEMBER(WorldEnvironment, LightPollutionColor), .Default.ColorValue = { 255, 160, 90, 255 },
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_NIGHT_SKY, .DisplayName = u8"Light pollution colour",
         .Description = u8"The colour of the light-pollution glow (sodium street lamps by default).", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"is_moon_enabled", .WireId = 31U, .Type = PropertyType_Bool, PROPERTY_MEMBER(WorldEnvironment, IsMoonEnabled),
+        .Default.BoolValue = true, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOON, .DisplayName = u8"Moon",
+        .Description = u8"When off, the world has no moon: no disc, no moonlight, no moonlit sky.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"moon_phase_source", .WireId = 32U, .Type = PropertyType_Enum,
+        PROPERTY_MEMBER(WorldEnvironment, MoonPhaseSource), .Default.EnumValue = WorldMoonPhaseSource_Calendar,
+        .EnumTable = &MoonPhaseSourceEnum, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOON,
+        .DisplayName = u8"Moon phase source",
+        .Description = u8"Where the moon's phase comes from: \"calendar\" follows the date (the real moon's phase by "
+            u8"default), \"fixed\" always shows the moon phase below.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"moon_phase", .WireId = 33U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, MoonPhase),
+        .Default.FloatValue = DEFAULT_MOON_PHASE, .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOON, .DisplayName = u8"Fixed moon phase",
+        .Description = u8"The phase shown while the source is \"fixed\": 0 new, 0.25 first quarter, 0.5 full, 0.75 last "
+            u8"quarter, 1 new again.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"moon_phase_offset_days", .WireId = 34U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, MoonPhaseOffsetDays), .Default.FloatValue = 0.0f, .Rules = PROPERTY_RULES_NONE,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOON, .DisplayName = u8"Moon phase offset",
+        .Description = u8"Days added to the date before the moon's phase is taken from it: shifts this world's moon "
+            u8"against the real one (about 7.4 days is a quarter phase).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"moon_cycle_days", .WireId = 35U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, MoonCycleDays), .Default.FloatValue = WORLD_ENVIRONMENT_MOON_CYCLE_DAYS,
+        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOON,
+        .DisplayName = u8"Moon cycle",
+        .Description = u8"Days from one new moon to the next (the real moon's 29.53 by default).", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"moon_orbit_tilt", .WireId = 36U, .Type = PropertyType_Angle,
+        PROPERTY_MEMBER(WorldEnvironment, MoonOrbitTilt), .Default.FloatValue = DEFAULT_MOON_ORBIT_TILT,
+        .Rules = PROPERTY_RULES_NONE, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOON,
+        .DisplayName = u8"Moon orbit tilt",
+        .Description = u8"How far the moon's path strays north and south of the sun's (about the real moon's 5 degrees "
+            u8"by default).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"moon_size_multiplier", .WireId = 37U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, MoonSizeMultiplier), .Default.FloatValue = DEFAULT_MOON_SIZE_MULTIPLIER,
+        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOON,
+        .DisplayName = u8"Moon size",
+        .Description = u8"The disc's size as a multiple of the real moon's (5 by default, so it shows at the game's "
+            u8"resolution).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"moon_brightness", .WireId = 38U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, MoonBrightness), .Default.FloatValue = DEFAULT_MOON_BRIGHTNESS,
+        .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOON,
+        .DisplayName = u8"Moon brightness",
+        .Description = u8"Multiplies the brightness of the moon's disc in the sky (not its light: that is the moonlight "
+            u8"below).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"moon_intensity", .WireId = 39U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, MoonIntensity), .Default.FloatValue = WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY,
+        .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOON,
+        .DisplayName = u8"Moonlight",
+        .Description = u8"The light of a full moon high in the sky, relative to the sun's; the phase and the moon's height "
+            u8"scale it, and the moonlit sky follows it. 0 gives a moon that lights nothing.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"moon_color", .WireId = 40U, .Type = PropertyType_Color, PROPERTY_MEMBER(WorldEnvironment, MoonColor),
+        .Default.ColorValue = { 200, 214, 255, 255 }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOON,
+        .DisplayName = u8"Moon colour",
+        .Description = u8"The colour of the moonlight and the moon's disc; blue-white gives the night look.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"moon_texture", .WireId = 41U, .Type = PropertyType_AssetName,
+        PROPERTY_MEMBER(WorldEnvironment, MoonTexture), .Default.StringValue = u8"sky_moon",
+        .Rules = PROPERTY_RULES_STRING(WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH, false), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_MOON, .DisplayName = u8"Moon texture",
+        .Description = u8"The texture of the moon's face: the full moon, flat-lit (the game shades the phases).",
+        .SinceVersion = 1U
     },
     {
         .Key = u8"ambient_skylight_color", .WireId = 13U, .Type = PropertyType_Color,
@@ -295,6 +457,153 @@ static Color TintColor(Color base, Color tint)
     };
 }
 
+/* Hermite smoothstep: 0 at or below edge0, 1 at or above edge1 (edge0 < edge1); NaN gives 0. */
+static float SmoothStep(float edge0, float edge1, float value)
+{
+    float T = (value - edge0) / (edge1 - edge0);
+    T = fminf(fmaxf(T, 0.0f), 1.0f); // fmaxf drops a NaN
+    return T * T * (3.0f - 2.0f * T);
+}
+
+/* The relative luminance of a colour's linear (sRGB-decoded) value: how bright a light of that colour looks. */
+static float GetLinearLuminance(Color color)
+{
+    return 0.2126f * powf((float)color.r / 255.0f, ENVIRONMENT_SRGB_GAMMA)
+        + 0.7152f * powf((float)color.g / 255.0f, ENVIRONMENT_SRGB_GAMMA)
+        + 0.0722f * powf((float)color.b / 255.0f, ENVIRONMENT_SRGB_GAMMA);
+}
+
+/* The daylight factor for a sun elevation (the sine): see WorldEnvironment_GetDaylightFactor. */
+static float GetDaylightForElevation(float elevation)
+{
+    return SmoothStep(DAYLIGHT_SET_ELEVATION, DAYLIGHT_RISE_ELEVATION, elevation);
+}
+
+/* The sky's daily angle: 0 at dawn, pi/2 at noon (the sun's angle along its path). */
+static float GetDayAngle(const WorldEnvironment* self)
+{
+    return (self->TimeOfDay - 0.25f) * 2.0f * ENVIRONMENT_PI;
+}
+
+/* The date and time of day as one number of days since 0001-01-01 (in double, so a fraction of a minute survives). */
+static double GetTotalDays(const WorldEnvironment* self)
+{
+    return (double)self->Date + (double)self->TimeOfDay;
+}
+
+/* The sun's progress through the tropical year since the March equinox, in turns in [0, 1): its mean right ascension
+ * and its place in the seasons. Continuous across days and New Year. */
+static double GetYearTurns(const WorldEnvironment* self)
+{
+    double Years = (GetTotalDays(self) - MARCH_EQUINOX_DAY) / TROPICAL_YEAR_DAYS;
+    double Turns = Years - floor(Years);
+    return isfinite(Turns) ? Turns : 0.0;
+}
+
+/* The declination the seasons give a point of the sun's yearly path that is @p turnsAhead of the sun (radians): the
+ * sun's own for 0, the moon's ecliptic share for its elongation. 23.44 degrees x sin(longitude), 0 at the March
+ * equinox. */
+static float GetSeasonalDeclination(const WorldEnvironment* self, double turnsAhead)
+{
+    return AXIAL_TILT_RADIANS * (float)sin(2.0 * ENVIRONMENT_PI_DOUBLE * (GetYearTurns(self) + turnsAhead));
+}
+
+/* A direction of the celestial frame: @p angle along the sun's path (0 at the sun, negative east of it, as the daily
+ * rotation carries the sky west) and @p declination toward the pole above the horizon (celestial -z). */
+static Vector3 GetCelestialPoint(float angle, float declination)
+{
+    return (Vector3)
+    {
+        .x = cosf(angle) * cosf(declination),
+        .y = sinf(angle) * cosf(declination),
+        .z = -sinf(declination)
+    };
+}
+
+/* Wraps a number of cycles to a phase in [0, 1): NaN, infinities and a fraction that rounds up to 1 give 0. */
+static float WrapPhase(double cycles)
+{
+    double Fraction = cycles - floor(cycles);
+    float Phase = (float)Fraction;
+    return ((Phase >= 0.0f) && (Phase < 1.0f)) ? Phase : 0.0f;
+}
+
+/* The calendar phase as a number of cycles since the epoch new moon (not yet wrapped). */
+static double GetCalendarMoonCycles(const WorldEnvironment* self)
+{
+    double Cycle = (isfinite(self->MoonCycleDays) && (self->MoonCycleDays > 0.0f))
+        ? (double)self->MoonCycleDays : (double)WORLD_ENVIRONMENT_MOON_CYCLE_DAYS;
+    double Offset = isfinite(self->MoonPhaseOffsetDays) ? (double)self->MoonPhaseOffsetDays : 0.0;
+    return (GetTotalDays(self) - WORLD_ENVIRONMENT_MOON_EPOCH_DAY + Offset) / Cycle;
+}
+
+/* The moon's direction for a phase (see WorldEnvironment_GetMoonDirection). */
+static Vector3 GetMoonDirectionForPhase(const WorldEnvironment* self, float phase)
+{
+    float Elongation = 2.0f * ENVIRONMENT_PI * phase;
+    float Tilt = isfinite(self->MoonOrbitTilt) ? self->MoonOrbitTilt : 0.0f;
+    float Declination = Tilt * sinf(Elongation);
+    if (self->AreSeasonsEnabled)
+    {
+        // On the ecliptic: the seasons' declination of the moon's place in the year, which is the sun's plus the
+        // elongation (a full moon stands where the sun stands half a year later: low in summer, high in winter).
+        Declination += GetSeasonalDeclination(self, (double)phase);
+    }
+    Vector3 Celestial = GetCelestialPoint(-Elongation, Declination);
+    return Vector3Normalize(Vector3Transform(Celestial, WorldEnvironment_GetCelestialToWorld(self)));
+}
+
+/* The lit fraction of the moon for the two directions: (1 - cos(elongation)) / 2. */
+static float GetIlluminationFor(Vector3 sunDirection, Vector3 moonDirection)
+{
+    float Illumination = 0.5f * (1.0f - Vector3DotProduct(sunDirection, moonDirection));
+    return fminf(fmaxf(Illumination, 0.0f), 1.0f);
+}
+
+/* The moonlight factor (see WorldEnvironment_GetMoonlightFactor) from values the caller already has. */
+static float GetMoonlightFactorFor(const WorldEnvironment* self, float moonElevation, float illumination, float daylight)
+{
+    if (!self->IsMoonEnabled)
+    {
+        return 0.0f;
+    }
+    float Height = SmoothStep(0.0f, MOONLIGHT_FULL_ELEVATION, moonElevation);
+    float Factor = WorldEnvironment_GetMoonBrightness(illumination) * Height * (1.0f - daylight);
+    return fminf(fmaxf(Factor, 0.0f), 1.0f);
+}
+
+/* Picks the light that casts the shadows (see WorldEnvironment_GetSkyLights) into @p lights, whose light values are
+ * filled in. */
+static void ChooseShadowLight(const WorldEnvironment* self, WorldSkyLights* lights)
+{
+    lights->ShadowLight = WorldShadowLight_None;
+    lights->ShadowDirection = lights->SunDirection;
+    lights->ShadowFade = 0.0f;
+
+    float SunLuminance = lights->SunIntensity * GetLinearLuminance(self->SunColor);
+    float MoonLuminance = lights->MoonIntensity * GetLinearLuminance(self->MoonColor);
+    float Brighter = fmaxf(SunLuminance, MoonLuminance);
+    float Dimmer = fminf(SunLuminance, MoonLuminance);
+    if (!(Brighter > 0.0f))
+    {
+        return; // both dark (or broken values)
+    }
+    bool IsSunBrighter = SunLuminance >= MoonLuminance;
+    Vector3 Direction = IsSunBrighter ? lights->SunDirection : lights->MoonDirection;
+    float Rise = SmoothStep(SHADOW_LIGHT_MIN_ELEVATION, SHADOW_LIGHT_FULL_ELEVATION, Direction.y);
+    float HandOver = (Dimmer > 0.0f)
+        ? SmoothStep(0.0f, logf(SHADOW_LIGHT_HANDOVER_RATIO), logf(Brighter / Dimmer)) : 1.0f;
+    float Strength = SmoothStep(SHADOW_LIGHT_MIN_LUMINANCE, 2.0f * SHADOW_LIGHT_MIN_LUMINANCE, Brighter);
+    float Fade = Rise * HandOver * Strength;
+    if (!(Fade > 0.0f))
+    {
+        return;
+    }
+    lights->ShadowLight = IsSunBrighter ? WorldShadowLight_Sun : WorldShadowLight_Moon;
+    lights->ShadowDirection = Direction;
+    lights->ShadowFade = Fade;
+}
+
 
 // Public functions.
 const PropertyTable* WorldEnvironment_GetPropertyTable(void)
@@ -358,8 +667,15 @@ Error WorldEnvironment_WriteJSON(const WorldEnvironment* self, JSONObjectPool* p
 
 Vector3 WorldEnvironment_GetSunDirection(const WorldEnvironment* self)
 {
+    if (self->AreSeasonsEnabled)
+    {
+        // Off the celestial equator by the seasons' declination: the same frame, a point north or south of (1,0,0).
+        Vector3 Celestial = GetCelestialPoint(0.0f, GetSeasonalDeclination(self, 0.0));
+        return Vector3Normalize(Vector3Transform(Celestial, WorldEnvironment_GetCelestialToWorld(self)));
+    }
+
     // Angle sweeps so that dawn (0.25)/dusk (0.75) are on the horizon and the arc peaks at noon (0.5).
-    float Angle = (self->TimeOfDay - 0.25f) * 2.0f * ENVIRONMENT_PI;
+    float Angle = GetDayAngle(self);
     float BaseX = cosf(Angle);
     float BaseY = sinf(Angle);
     // Tilt the arc out of vertical by SunAngle (rotation about the X axis, into Z), so the noon sun sits at
@@ -377,21 +693,75 @@ Matrix WorldEnvironment_GetCelestialToWorld(const WorldEnvironment* self)
 {
     // The same angle as GetSunDirection: R_z turns the sky through the day, R_x tilts its pole down to SunAngle.
     // raymath's MatrixMultiply(a, b) applies a first, so this is R_x(SunAngle) . R_z(Angle).
-    // TODO: the stars should also drift about 1 degree a day against the sun (sidereal time), from the environment's
-    // Date: T03 adds it.
-    float Angle = (self->TimeOfDay - 0.25f) * 2.0f * ENVIRONMENT_PI;
+    return MatrixMultiply(MatrixRotateZ(GetDayAngle(self)), MatrixRotateX(self->SunAngle));
+}
+
+Matrix WorldEnvironment_GetStarsToWorld(const WorldEnvironment* self)
+{
+    // The sun moves east among the stars one turn a year, so the stars gain one turn a year on the sun's daily motion:
+    // the star frame turns ahead of the celestial frame by the sun's right ascension since the star frame's own (the
+    // June solstice's). The tests check the direction of the drift by its effect: the stars rise earlier every day.
+    double DriftTurns = GetYearTurns(self) - STAR_FRAME_SUN_RIGHT_ASCENSION_TURNS;
+    DriftTurns -= floor(DriftTurns);
+    float Angle = GetDayAngle(self) + (float)(2.0 * ENVIRONMENT_PI_DOUBLE * DriftTurns);
     return MatrixMultiply(MatrixRotateZ(Angle), MatrixRotateX(self->SunAngle));
 }
 
 float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self)
 {
-    float Elevation = WorldEnvironment_GetSunDirection(self).y; // [-1, 1]
     // Smoothstep from "set" to "rise": 0 below the horizon band, 1 above it, a smooth twilight in between.
-    float Range = DAYLIGHT_RISE_ELEVATION - DAYLIGHT_SET_ELEVATION;
-    float T = (Elevation - DAYLIGHT_SET_ELEVATION) / Range;
-    if (T < 0.0f) { T = 0.0f; }
-    if (T > 1.0f) { T = 1.0f; }
-    return T * T * (3.0f - 2.0f * T);
+    return GetDaylightForElevation(WorldEnvironment_GetSunDirection(self).y);
+}
+
+float WorldEnvironment_GetMoonPhase(const WorldEnvironment* self)
+{
+    switch (self->MoonPhaseSource)
+    {
+        case WorldMoonPhaseSource_Fixed:    return WrapPhase((double)self->MoonPhase);
+        case WorldMoonPhaseSource_Calendar: return WrapPhase(GetCalendarMoonCycles(self));
+    }
+    return WrapPhase(GetCalendarMoonCycles(self)); // only a corrupted source gets here: the calendar is the default
+}
+
+Vector3 WorldEnvironment_GetMoonDirection(const WorldEnvironment* self)
+{
+    return GetMoonDirectionForPhase(self, WorldEnvironment_GetMoonPhase(self));
+}
+
+float WorldEnvironment_GetMoonIllumination(const WorldEnvironment* self)
+{
+    return GetIlluminationFor(WorldEnvironment_GetSunDirection(self), WorldEnvironment_GetMoonDirection(self));
+}
+
+float WorldEnvironment_GetMoonBrightness(float illumination)
+{
+    double Illumination = (double)fminf(fmaxf(illumination, 0.0f), 1.0f); // fmaxf drops a NaN
+    double PhaseAngle = acos(2.0 * Illumination - 1.0) * 180.0 / ENVIRONMENT_PI_DOUBLE; // degrees, 0 at full moon
+    double Squared = PhaseAngle * PhaseAngle;
+    double Magnitudes = MOON_MAGNITUDES_PER_DEGREE * PhaseAngle + MOON_MAGNITUDES_PER_DEGREE_TO_THE_FOURTH * Squared * Squared;
+    return (float)pow(10.0, -0.4 * Magnitudes);
+}
+
+float WorldEnvironment_GetMoonlightFactor(const WorldEnvironment* self)
+{
+    Vector3 Sun = WorldEnvironment_GetSunDirection(self);
+    Vector3 Moon = WorldEnvironment_GetMoonDirection(self);
+    return GetMoonlightFactorFor(self, Moon.y, GetIlluminationFor(Sun, Moon), GetDaylightForElevation(Sun.y));
+}
+
+void WorldEnvironment_GetSkyLights(const WorldEnvironment* self, WorldSkyLights* outLights)
+{
+    WorldSkyLights Lights = { 0 };
+    Lights.SunDirection = WorldEnvironment_GetSunDirection(self);
+    Lights.Daylight = GetDaylightForElevation(Lights.SunDirection.y);
+    Lights.SunIntensity = fmaxf(self->SunIntensity, 0.0f) * Lights.Daylight; // fmaxf drops a NaN
+    Lights.MoonPhase = WorldEnvironment_GetMoonPhase(self);
+    Lights.MoonDirection = GetMoonDirectionForPhase(self, Lights.MoonPhase);
+    Lights.MoonIllumination = GetIlluminationFor(Lights.SunDirection, Lights.MoonDirection);
+    Lights.MoonIntensity = fmaxf(self->MoonIntensity, 0.0f)
+        * GetMoonlightFactorFor(self, Lights.MoonDirection.y, Lights.MoonIllumination, Lights.Daylight);
+    ChooseShadowLight(self, &Lights);
+    *outLights = Lights;
 }
 
 Color WorldEnvironment_ComputeSkyColor(const WorldEnvironment* self)

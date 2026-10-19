@@ -1,6 +1,7 @@
 // Rayleigh + Mie single-scattering atmosphere, for #include "common/atmosphere". The sky pass (shaders/sky) draws it,
 // and the PBR shader's distance fog (shaders/pbr) fades distant geometry toward it, so a fogged silhouette meets
-// exactly the sky behind it. World space, +Y up, distances in metres.
+// exactly the sky behind it. Lit by the sun by day and by the moon at night (the same model, a dimmer light). World
+// space, +Y up, distances in metres.
 
 #include "common/math"
 
@@ -27,10 +28,13 @@ vec2 raySphere(vec3 origin, vec3 dir, float sr)
     return vec2(-b - d, -b + d);
 }
 
-// Light the atmosphere scatters toward rayOrigin along rayDir, for a sun in direction sunDir with radiance iSun and
-// Mie scattering coefficient kMie (ATMOSPHERE_K_MIE_BASE scaled by the haze). No sun disc, no stars.
-vec3 atmosphere(vec3 rayDir, vec3 rayOrigin, vec3 sunDir, float iSun, float kMie)
+// Light the atmosphere scatters toward rayOrigin along rayDir, for a light (the sun, or the moon) in direction sunDir
+// with radiance iSun and Mie scattering coefficient kMie (ATMOSPHERE_K_MIE_BASE scaled by the haze). No discs, no
+// stars. Also gives the view ray's transmittance: the share of what lies beyond the air along rayDir (the moon's disc)
+// that reaches the viewer.
+vec3 atmosphere(vec3 rayDir, vec3 rayOrigin, vec3 sunDir, float iSun, float kMie, out vec3 transmittance)
 {
+    transmittance = vec3(1.0);
     vec2 atmos = raySphere(rayOrigin, rayDir, ATMOSPHERE_R_ATMOS);
     if (atmos.y < 0.0) return vec3(0.0);               // atmosphere entirely behind the viewer
     float tStart = max(atmos.x, 0.0);                  // the viewer sits inside the atmosphere
@@ -85,5 +89,13 @@ vec3 atmosphere(vec3 rayDir, vec3 rayOrigin, vec3 sunDir, float iSun, float kMie
         t += segLen;
     }
 
+    transmittance = exp(-(ATMOSPHERE_K_RAYLEIGH*odR + kMie*1.1*odM));
     return iSun*(phaseR*ATMOSPHERE_K_RAYLEIGH*sumR + phaseM*kMie*sumM);
+}
+
+// The same without the transmittance.
+vec3 atmosphere(vec3 rayDir, vec3 rayOrigin, vec3 sunDir, float iSun, float kMie)
+{
+    vec3 transmittance;
+    return atmosphere(rayDir, rayOrigin, sunDir, iSun, kMie, transmittance);
 }

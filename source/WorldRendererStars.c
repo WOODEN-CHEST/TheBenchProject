@@ -14,6 +14,8 @@
 #define STARS_SHADER_ASSET_NAME ((const unsigned char*)u8"world_stars")
 /** Vertices per star: two triangles, unindexed. */
 #define STAR_VERTICES_PER_STAR 6
+/** Cosine of an angle no disc reaches: with it, no star counts as behind the moon. */
+#define NO_MOON_COS_RADIUS 2.0f
 /** Linear radiance of a magnitude-0 star at StarBrightness 1. At the night exposure (the eye adaptation's maximum, 24)
  *  a magnitude 1 star then reads as a clearly bright pixel and a magnitude 6 star, on a dark site, as a just visible
  *  one. Raise it for brighter stars overall; StarBrightness scales it per world. */
@@ -130,13 +132,15 @@ void WorldRendererStars_LoadShader(WorldRenderer* self)
         return;
     }
     Shader RayShader = GameShader_GetRaylibShader(self->_stars._shader);
-    self->_stars._locCelestialToWorld = GetShaderLocation(RayShader, "celestialToWorld");
+    self->_stars._locStarsToWorld = GetShaderLocation(RayShader, "starsToWorld");
     self->_stars._locViewProjection = GetShaderLocation(RayShader, "viewProjection");
     self->_stars._locResolution = GetShaderLocation(RayShader, "resolution");
     self->_stars._locLimitingMagnitude = GetShaderLocation(RayShader, "limitingMagnitude");
     self->_stars._locRadianceScale = GetShaderLocation(RayShader, "radianceScale");
     self->_stars._locTwinkleStrength = GetShaderLocation(RayShader, "twinkleStrength");
     self->_stars._locTimeSeconds = GetShaderLocation(RayShader, "timeSeconds");
+    self->_stars._locMoonDirection = GetShaderLocation(RayShader, "moonDirection");
+    self->_stars._locMoonCosRadius = GetShaderLocation(RayShader, "moonCosRadius");
 }
 
 void WorldRendererStars_Unload(WorldRenderer* self)
@@ -199,7 +203,7 @@ void WorldRendererStars_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     Shader RayShader = GameShader_GetRaylibShader(self->_stars._shader);
     const WorldEnvironment* Environment = frame->Environment;
 
-    SetShaderValueMatrix(RayShader, self->_stars._locCelestialToWorld, frame->CelestialToWorld);
+    SetShaderValueMatrix(RayShader, self->_stars._locStarsToWorld, frame->StarsToWorld);
     SetShaderValueMatrix(RayShader, self->_stars._locViewProjection, frame->ViewProjection);
     float Resolution[2] = { (float)frame->SceneWidth, (float)frame->SceneHeight };
     SetShaderValue(RayShader, self->_stars._locResolution, Resolution, SHADER_UNIFORM_VEC2);
@@ -209,6 +213,11 @@ void WorldRendererStars_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     float TwinkleStrength = ClampUnit(Environment->StarTwinkle);
     SetShaderValue(RayShader, self->_stars._locTwinkleStrength, &TwinkleStrength, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_stars._locTimeSeconds, &frame->TimeSeconds, SHADER_UNIFORM_FLOAT);
+    // The moon's disc hides the stars behind it.
+    float MoonDir[3] = { frame->MoonDirection.x, frame->MoonDirection.y, frame->MoonDirection.z };
+    SetShaderValue(RayShader, self->_stars._locMoonDirection, MoonDir, SHADER_UNIFORM_VEC3);
+    float MoonCosRadius = frame->IsMoonActive ? frame->MoonDisc.CosRadius : NO_MOON_COS_RADIUS;
+    SetShaderValue(RayShader, self->_stars._locMoonCosRadius, &MoonCosRadius, SHADER_UNIFORM_FLOAT);
 
     // Added onto the sky with (ONE, ONE) blending, so the fragment's alpha of 0 leaves the scene's alpha alone.
     // Depth-tested but never written: the depth buffer must stay clear, which the bloom prefilter and the sun shafts

@@ -1,5 +1,5 @@
-// The PBR shader and its uniforms (sun, ambient, fog, shadows, per-object forward point lights, per-material
-// factors) and HDR eye adaptation.
+// The PBR shader and its uniforms (the sun and the moon, ambient, fog, shadows, per-object forward point lights,
+// per-material factors) and HDR eye adaptation.
 
 #include <math.h>
 #include <stdio.h>
@@ -22,8 +22,9 @@
  *  lower if peter-panning (the shadow detaches from its caster). */
 #define POINT_SHADOW_BIAS 0.35f
 /** ===== NIGHT DARKNESS KNOB (1 of 2) =====
- *  Dim cool night-ambient floor (LINEAR RGB): the darkest the sky-derived ambient is allowed to get at night.
- *  Kept just above 0 (a faint blue, like moonlight) so night is not pure black and the eye adaptation has a
+ *  Dim cool night-ambient floor (LINEAR RGB): the darkest the sky-derived ambient is allowed to get at night, the
+ *  look of a moonless night (the moon adds its own light on top: MoonIntensity, MOON_AMBIENT_SHARE).
+ *  Kept just above 0 (a faint blue) so night is not pure black and the eye adaptation has a
  *  little light to lift. LOWER these to make the night DARKER (and less tinted); raise them to brighten it.
  *  Works together with ADAPT_MAX_EXPOSURE below — the perceived night brightness is roughly this floor's
  *  luminance times that exposure cap. */
@@ -52,8 +53,13 @@
  *  This is the "orange comes in too early / too late" knob. The warm tint is additionally gated by the daylight
  *  factor so it can never linger once the sun has set. */
 #define AMBIENT_SUNSET_BAND 0.15f
-/** How much the (directional) sun counts toward the scene-illumination estimate driving eye adaptation. */
-#define SUN_ADAPT_WEIGHT 0.5f
+/** The moonlit sky's fill light: the share of the moonlight that comes back from the sky as ambient (in the
+ *  moonlight's colour, tinted and scaled like the day's skylight), about the day sky's share of the sunlight. It lifts
+ *  what the moon does not light directly, so moon shadows stay soft. */
+#define MOON_AMBIENT_SHARE 0.3f
+/** How much a directional light (the sun, the moon) counts toward the scene-illumination estimate driving eye
+ *  adaptation. */
+#define DIRECTIONAL_ADAPT_WEIGHT 0.5f
 /** Base exponential fog density at world+config fog strength 1.0 (per world unit). Distant geometry fades into
  *  the atmospheric sky colour; the world and config fog-strength multipliers scale this. */
 #define BASE_FOG_DENSITY 0.008f
@@ -124,6 +130,9 @@ static void CacheLocations(WorldRendererPbrState* pbr, Shader shader)
     pbr->_locSunDirection = GetShaderLocation(shader, "sunDirection");
     pbr->_locSunColor = GetShaderLocation(shader, "sunColor");
     pbr->_locSunIntensity = GetShaderLocation(shader, "sunIntensity");
+    pbr->_locMoonDirection = GetShaderLocation(shader, "moonDirection");
+    pbr->_locMoonColor = GetShaderLocation(shader, "moonColor");
+    pbr->_locMoonIntensity = GetShaderLocation(shader, "moonIntensity");
     pbr->_locAmbientColor = GetShaderLocation(shader, "ambientColor");
     pbr->_locAmbientIntensity = GetShaderLocation(shader, "ambientIntensity");
 
@@ -135,6 +144,9 @@ static void CacheLocations(WorldRendererPbrState* pbr, Shader shader)
     pbr->_locShadowStrength = GetShaderLocation(shader, "shadowStrength");
     pbr->_locShadowBias = GetShaderLocation(shader, "shadowBias");
     pbr->_locShadowTexelSize = GetShaderLocation(shader, "shadowTexelSize");
+    pbr->_locShadowLightDirection = GetShaderLocation(shader, "shadowLightDirection");
+    pbr->_locSunShadowFade = GetShaderLocation(shader, "sunShadowFade");
+    pbr->_locMoonShadowFade = GetShaderLocation(shader, "moonShadowFade");
 
     pbr->_locPointShadowActive = GetShaderLocation(shader, "pointShadowActive");
     pbr->_locPointShadowLightPos = GetShaderLocation(shader, "pointShadowLightPos");
@@ -154,6 +166,7 @@ static void CacheLocations(WorldRendererPbrState* pbr, Shader shader)
     pbr->_locFogSkyTint = GetShaderLocation(shader, "skyTint");
     pbr->_locFogSunIntensity = GetShaderLocation(shader, "skySunIntensity");
     pbr->_locFogSkyglow = GetShaderLocation(shader, "skyglowRadiance");
+    pbr->_locFogMoonIntensity = GetShaderLocation(shader, "skyMoonIntensity");
 
     // Per-material scalar-factor + map-presence uniforms, uploaded per material by the mesh draw loop.
     pbr->_locMetallic = GetShaderLocation(shader, "metallic");
@@ -180,9 +193,10 @@ static void CacheLocations(WorldRendererPbrState* pbr, Shader shader)
  * linger once the sun has set — the two bugs the flat sky-colour gradient produced. The hues are authored
  * (AMBIENT_DAY_* / AMBIENT_SUNSET_*), tinted by AmbientSkylightColor (WHITE = neutral) and scaled by
  * AmbientSkylightIntensity x AMBIENT_SKY_STRENGTH; the whole fill fades with the daylight factor. Light pollution
- * raises the night floor a little in its glow's colour (NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE). */
+ * raises the night floor a little in its glow's colour (NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE), and the moon raises it by
+ * the moonlit sky's fill (MOON_AMBIENT_SHARE of the moonlight, tinted and scaled like the day's skylight). */
 static void ComputeAmbientColor(const WorldEnvironment* environment, float sunElevation, float daylight,
-    float outRGB[3])
+    const WorldRendererDirectionalLight* moonLight, float outRGB[3])
 {
     float SunsetT = sunElevation / AMBIENT_SUNSET_BAND;
     float Sunset = expf(-(SunsetT * SunsetT)) * daylight; // warm only near the horizon AND while it is still day
@@ -197,9 +211,11 @@ static void ComputeAmbientColor(const WorldEnvironment* environment, float sunEl
     float PollutionColor[3];
     WorldRendererCommon_ColorToLinear(environment->LightPollutionColor, PollutionColor);
     float Pollution = fminf(fmaxf(environment->LightPollution, 0.0f), 1.0f); // fmaxf drops a NaN
+    float MoonFill = moonLight->Intensity * MOON_AMBIENT_SHARE * environment->AmbientSkylightIntensity;
     for (int Channel = 0; Channel < 3; Channel++)
     {
-        NightAmbient[Channel] += PollutionColor[Channel] * Pollution * NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE;
+        NightAmbient[Channel] += PollutionColor[Channel] * Pollution * NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE
+            + moonLight->Color[Channel] * AmbientTint[Channel] * MoonFill;
     }
     float AmbientMagnitude = daylight * environment->AmbientSkylightIntensity * AMBIENT_SKY_STRENGTH;
 
@@ -342,25 +358,27 @@ void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* f
 {
     const WorldEnvironment* Environment = frame->Environment;
 
-    // Day-night cycle: the sun stops lighting objects once it is below the horizon, and the ambient skylight
-    // follows the sky's timing (see ComputeAmbientColor).
-    WorldRendererCommon_ColorToLinear(Environment->SunColor, frame->SunColor);
-    frame->SunIntensity = Environment->SunIntensity * frame->Daylight;
-    ComputeAmbientColor(Environment, frame->SunDirection.y, frame->Daylight, frame->AmbientColor);
+    // Day-night cycle: the sun stops lighting objects once it is below the horizon, the moon lights the night by its
+    // phase and height (both intensities come from the environment's sky lights, in BuildSky), and the ambient
+    // skylight follows the sky's timing (see ComputeAmbientColor).
+    WorldRendererCommon_ColorToLinear(Environment->SunColor, frame->SunLight.Color);
+    WorldRendererCommon_ColorToLinear(Environment->MoonColor, frame->MoonLight.Color);
+    ComputeAmbientColor(Environment, frame->SunDirection.y, frame->Daylight, &frame->MoonLight, frame->AmbientColor);
 
-    // The base scene-illumination luminance (ambient + weighted sun) eye adaptation starts from; it adds nearby
-    // point lights and eases the exposure toward it.
+    // The base scene-illumination luminance (ambient + the weighted sun and moon) eye adaptation starts from; it adds
+    // nearby point lights and eases the exposure toward it.
     frame->BaseSceneLuminance = Luminance(frame->AmbientColor)
-        + Luminance(frame->SunColor) * frame->SunIntensity * SUN_ADAPT_WEIGHT;
+        + Luminance(frame->SunLight.Color) * frame->SunLight.Intensity * DIRECTIONAL_ADAPT_WEIGHT
+        + Luminance(frame->MoonLight.Color) * frame->MoonLight.Intensity * DIRECTIONAL_ADAPT_WEIGHT;
 
     // Atmospheric distance fog density = base x world x config fog strength.
     float FogDensity = BASE_FOG_DENSITY * Environment->FogStrength * WorldRendererCommon_ConfigFogStrength(self);
     frame->FogDensity = (FogDensity < 0.0f) ? 0.0f : FogDensity;
 
-    // shadowStrength is shared by the sun and point-shadow visibility, so it is gated on global shadow
-    // enablement (NOT the sun being up) — otherwise a point light would cast no shadow at night. The sun's own
-    // shadow term still self-gates (frustum test + the sun contributes ~0 at night, so a stale sun map cannot
-    // show).
+    // shadowStrength is shared by the cascades' and the point shadow's visibility, so it is gated on global shadow
+    // enablement (NOT the sun being up) — otherwise a point light would cast no shadow at night. Which directional
+    // light the cascades darken, and how much, is the shader's sunShadowFade / moonShadowFade (0 for both while the
+    // cascades do not run, so a stale map is never sampled).
     float EffectiveShadowStrength = Environment->ShadowStrength * WorldRendererCommon_ConfigShadowStrength(self);
     frame->ShadowStrength = (Environment->AreShadowsEnabled && (EffectiveShadowStrength > 0.0f))
         ? EffectiveShadowStrength : 0.0f;
@@ -379,10 +397,15 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
 
     float ViewPos[3] = { frame->Camera->Position.x, frame->Camera->Position.y, frame->Camera->Position.z };
     SetShaderValue(RayShader, self->_pbr._locViewPos, ViewPos, SHADER_UNIFORM_VEC3);
-    float SunDir[3] = { frame->SunDirection.x, frame->SunDirection.y, frame->SunDirection.z };
+    // The two directional lights. The sun's direction is also the fog sky's sun, the moon's the fog sky's moon.
+    float SunDir[3] = { frame->SunLight.Direction.x, frame->SunLight.Direction.y, frame->SunLight.Direction.z };
     SetShaderValue(RayShader, self->_pbr._locSunDirection, SunDir, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_pbr._locSunColor, frame->SunColor, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_pbr._locSunIntensity, &frame->SunIntensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_pbr._locSunColor, frame->SunLight.Color, SHADER_UNIFORM_VEC3);
+    SetShaderValue(RayShader, self->_pbr._locSunIntensity, &frame->SunLight.Intensity, SHADER_UNIFORM_FLOAT);
+    float MoonDir[3] = { frame->MoonLight.Direction.x, frame->MoonLight.Direction.y, frame->MoonLight.Direction.z };
+    SetShaderValue(RayShader, self->_pbr._locMoonDirection, MoonDir, SHADER_UNIFORM_VEC3);
+    SetShaderValue(RayShader, self->_pbr._locMoonColor, frame->MoonLight.Color, SHADER_UNIFORM_VEC3);
+    SetShaderValue(RayShader, self->_pbr._locMoonIntensity, &frame->MoonLight.Intensity, SHADER_UNIFORM_FLOAT);
 
     // Ambient is folded into the colour (intensity kept at 1).
     SetShaderValue(RayShader, self->_pbr._locAmbientColor, frame->AmbientColor, SHADER_UNIFORM_VEC3);
@@ -393,30 +416,45 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
     // evaluated per fragment along its view ray, so far objects dissolve seamlessly into the sky (and, because
     // the atmospheric sky is already dark at night, distant geometry fades to the dark night sky on its own).
     // Feed it the sky parameters the sky pass uses (turbidity, linear tint, RAW — not day-scaled — sun
-    // intensity); the sun direction is the one uploaded above.
+    // intensity, the moonlit sky's strength); the sun and moon directions are the ones uploaded above.
     SetShaderValue(RayShader, self->_pbr._locFogTurbidity, &Environment->SkyTurbidity, SHADER_UNIFORM_FLOAT);
     float FogSkyTint[3];
     WorldRendererCommon_ColorToLinear(Environment->SkyTint, FogSkyTint);
     SetShaderValue(RayShader, self->_pbr._locFogSkyTint, FogSkyTint, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, self->_pbr._locFogSunIntensity, &Environment->SunIntensity, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_pbr._locFogSkyglow, frame->SkyglowRadiance, SHADER_UNIFORM_VEC3);
+    SetShaderValue(RayShader, self->_pbr._locFogMoonIntensity, &frame->MoonSkyIntensity, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_pbr._locFogDensity, &frame->FogDensity, SHADER_UNIFORM_FLOAT);
 
-    // Sun shadow: upload the light matrices and bind the cascade depth maps to their fixed units (the samplers
-    // already point there) when shadows are active this frame. Near cascade always; far only when its map exists.
-    if (frame->IsSunShadowActive)
+    // The cascades darken the light they were rendered from (the sun or the moon), by the frame's shadow fade; with
+    // both fades 0 (the cascades did not run) the shader samples no shadow map at all.
+    float SunShadowFade = 0.0f;
+    float MoonShadowFade = 0.0f;
+    if (frame->IsCascadeShadowActive)
     {
-        SetShaderValueMatrix(RayShader, self->_pbr._locLightVP, self->_sunShadow._nearLightVP);
-        rlActiveTextureSlot(WorldRendererTextureUnit_ShadowNear);
-        rlEnableTexture(self->_sunShadow._nearMap.depth.id);
+        SunShadowFade = (frame->ShadowLight == WorldShadowLight_Sun) ? frame->ShadowFade : 0.0f;
+        MoonShadowFade = (frame->ShadowLight == WorldShadowLight_Moon) ? frame->ShadowFade : 0.0f;
+    }
+    SetShaderValue(RayShader, self->_pbr._locSunShadowFade, &SunShadowFade, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_pbr._locMoonShadowFade, &MoonShadowFade, SHADER_UNIFORM_FLOAT);
+    float ShadowDir[3] = { frame->ShadowDirection.x, frame->ShadowDirection.y, frame->ShadowDirection.z };
+    SetShaderValue(RayShader, self->_pbr._locShadowLightDirection, ShadowDir, SHADER_UNIFORM_VEC3);
 
-        int ShadowFarActive = self->_sunShadow._hasFarMap ? 1 : 0;
+    // Upload the cascades' light matrices and bind their depth maps to their fixed units (the samplers already point
+    // there) when they ran this frame. Near cascade always; far only when its map exists.
+    if (frame->IsCascadeShadowActive)
+    {
+        SetShaderValueMatrix(RayShader, self->_pbr._locLightVP, self->_cascades._nearLightVP);
+        rlActiveTextureSlot(WorldRendererTextureUnit_ShadowNear);
+        rlEnableTexture(self->_cascades._nearMap.depth.id);
+
+        int ShadowFarActive = self->_cascades._hasFarMap ? 1 : 0;
         SetShaderValue(RayShader, self->_pbr._locShadowFarActive, &ShadowFarActive, SHADER_UNIFORM_INT);
-        if (self->_sunShadow._hasFarMap)
+        if (self->_cascades._hasFarMap)
         {
-            SetShaderValueMatrix(RayShader, self->_pbr._locLightVPFar, self->_sunShadow._farLightVP);
+            SetShaderValueMatrix(RayShader, self->_pbr._locLightVPFar, self->_cascades._farLightVP);
             rlActiveTextureSlot(WorldRendererTextureUnit_ShadowFar);
-            rlEnableTexture(self->_sunShadow._farMap.depth.id);
+            rlEnableTexture(self->_cascades._farMap.depth.id);
         }
     }
 
