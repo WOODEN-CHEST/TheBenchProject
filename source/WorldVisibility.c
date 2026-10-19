@@ -160,8 +160,8 @@ static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, con
     WorldVisibilityFade Fade = { .Distance = 1.0f, .Combined = 1.0f };
     if (model->IsDrawn)
     {
-        // TODO: per-model draw distances (the world model's, T10) and per-object overrides (T11) replace the kind's
-        // default here.
+        // TODO: T10 replaces the kind's default with the entry's own distance (the world model's or the placement's,
+        // times its multiplier), scaled by the config unless it is fixed, against the zoom-adjusted distance (G17).
         float DrawDistance = WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Model, view->DrawDistanceScale);
         Fade = GetFade(view, model->Center, model->Radius, DrawDistance, model->Tint);
     }
@@ -193,7 +193,7 @@ static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, con
 static bool AddSprite(WorldVisibility* self, const WorldVisibilityView* view, const WorldRenderSprite* sprite,
     size_t index)
 {
-    // TODO: per-object draw distance overrides (T11) replace the kind's default here.
+    // TODO: T26 replaces the kind's default as T10 does for models, through world sprites (G17).
     WorldDrawDistanceKind Kind = sprite->IsDecal ? WorldDrawDistanceKind_Decal : WorldDrawDistanceKind_Sprite;
     float DrawDistance = WorldVisibility_GetDrawDistance(Kind, view->DrawDistanceScale);
     WorldVisibilityFade Fade = GetFade(view, sprite->Shape.Position, sprite->BoundsRadius, DrawDistance, sprite->Tint);

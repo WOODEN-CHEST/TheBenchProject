@@ -96,7 +96,9 @@ are rebuilt every frame without allocating once grown; each entry also gets its 
   A model casts when it has `casts_shadows`; a sprite when it is a cutout sprite that is not a decal and casts
   (`WorldRenderSprite_CastsShadows`).
 - **Draw distance.** Models 600 m, sprites 150 m, decals 60 m, times the config's `draw_distance_scale` (default 1,
-  [0, 16]). Per-model and per-object distances arrive with T10 and T11 (`// TODO:` where the distance is chosen). The
+  [0, 16]). Per-placement distances arrive with T10 for models and T26 for sprites (decision G17: the asset's default
+  or the placement's own, a multiplier, a flag that keeps it fixed against the quality scale, and a zoom factor;
+  `// TODO:` where the distance is chosen). The
   distance measured is the camera's to the nearest point of the entry's sphere (0 inside it), so a large object does not
   fade while its near end is close. Beyond its draw distance an entry is in no list (its shadow goes too); over the last
   stretch (10% of the distance, at least 3 m, at most all of it) its distance fade rises linearly from 0 to 1.
