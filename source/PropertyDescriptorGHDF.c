@@ -148,6 +148,11 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
         case PropertyType_Float:
         case PropertyType_Angle:
             return PutScalar(compound, Id, GHDFObjectValue_CreateFloat(data->FloatValue));
+        case PropertyType_Double:
+            return PutScalar(compound, Id, GHDFObjectValue_CreateDouble(data->DoubleValue));
+        case PropertyType_Date:
+            // Variable length: a date of this era takes three bytes instead of eight.
+            return PutScalar(compound, Id, GHDFObjectValue_CreateEncodedInteger(data->DateValue));
         case PropertyType_Vector2:
         {
             const float Components[2] = { data->Vector2Value.x, data->Vector2Value.y };
@@ -334,6 +339,15 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
         case PropertyType_Angle:
             Result = GetScalar(compound, Id, GHDFValueType_Float, &Entry, outFound);
             outData->FloatValue = *outFound ? Entry.Value.Float : 0.0f;
+            return Result;
+        case PropertyType_Double:
+            Result = GetScalar(compound, Id, GHDFValueType_Double, &Entry, outFound);
+            outData->DoubleValue = *outFound ? Entry.Value.Double : 0.0;
+            return Result;
+        case PropertyType_Date:
+            // Its range is checked when the read commits, like every rule.
+            Result = GetScalar(compound, Id, GHDFValueType_EncodedInteger, &Entry, outFound);
+            outData->DateValue = *outFound ? Entry.Value.EncodedInteger : 0;
             return Result;
         case PropertyType_Vector2:
         {

@@ -1,4 +1,6 @@
+#include <math.h>
 #include "WorldTestFrame.h"
+#include "GameClock.h"
 #include "GameFrame.h"
 #include "Services.h"
 #include "World.h"
@@ -49,12 +51,24 @@
 #define SPRINT_MULTIPLIER 3.0f
 /** Mouse look sensitivity, in radians per pixel of mouse movement. */
 #define MOUSE_SENSITIVITY 0.0025f
-/** Day-night cycle length for the test world, in seconds (short so the cycle is easy to observe). */
-#define TEST_DAY_LENGTH_SECONDS 120.0f
+/** The test world's clock speed in game seconds per real second: a 2-minute day, short so the cycle is easy to
+ *  observe (the clock's own default is 72, a 20-minute day). */
+#define TEST_TIME_SCALE 720.0
 /** Sun-arc tilt from the zenith at noon for the test world, in radians (~23 degrees). */
 #define TEST_SUN_ANGLE 0.4f
-/** Manual time-of-day scrub rate (fraction of a full day per second while [ or ] is held). */
-#define TIME_SCRUB_RATE 0.1f
+/** Manual time scrub rate (fraction of a full day per real second while [ or ] is held). */
+#define TIME_SCRUB_RATE 0.1
+/** The hours the number keys jump to: dawn, noon, dusk and midnight. */
+#define DAWN_HOUR 6
+#define NOON_HOUR 12
+#define DUSK_HOUR 18
+#define MIDNIGHT_HOUR 0
+/** How many days the week key (/) moves the date forward. */
+#define DAYS_PER_WEEK 7
+/** Room for the clock's debug text ("Sun 2026-10-18 09:30:00") and its terminator. */
+#define CLOCK_TEXT_CAPACITY ((size_t)64)
+/** Real seconds in a minute, for the I key's day length. */
+#define SECONDS_PER_REAL_MINUTE 60.0
 /** How far above the current light pollution the N key's next step must be (so 0.35 steps on to 0.7). */
 #define LIGHT_POLLUTION_STEP_EPSILON 0.001f
 /** Default font of the text sample: covers Latvian and Cyrillic. */
@@ -94,6 +108,8 @@ typedef struct WorldTestFrameStruct
     Services* _services;
     /** The world being viewed; owned. */
     World _world;
+    /** The game time: advanced every tick and written into the world's environment, so the sky shows it; owned. */
+    GameClock _clock;
     /** The free-fly camera; owned value. */
     GameCamera _camera;
     /** The world renderer; owned. */
@@ -132,41 +148,160 @@ static float NextLightPollutionStep(float current)
     return LightPollutionSteps[0];
 }
 
-/* Logs a time-of-day change (label + the current TimeOfDay), so debug scrubbing is observable. */
-static void LogTimeOfDay(WorldTestFrame* frame, const unsigned char* label, const WorldEnvironment* environment)
+/* The clock's debug text in @p storage ("Sun 2026-10-18 09:30:00"), or "?" if it could not be written. */
+static const char* FormatClock(const GameClock* clock, unsigned char* storage, size_t capacity)
+{
+    GenericBuffer Text;
+    GenericBuffer_CreateConstant(&Text, storage, capacity, sizeof(unsigned char), 0U);
+    Error Result = GameClock_FormatDebug(clock, &Text);
+    bool IsFormatted = Result.Code == ErrorCode_Success;
+    Error_Deconstruct(&Result);
+    return IsFormatted ? (const char*)storage : "?";
+}
+
+/* Logs a change of the game time, "WorldTest: <what>: Sun 2026-10-18 06:00:00.": on key presses and new days, never
+ * per tick. */
+static void LogClock(WorldTestFrame* frame, const char* what)
 {
     if (frame->_services->Logger == NULL)
     {
         return;
     }
-    Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
-        (const unsigned char*)u8"WorldTest: %s (TimeOfDay=%.3f).", (const char*)label, (double)environment->TimeOfDay);
+    unsigned char Storage[CLOCK_TEXT_CAPACITY];
+    Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger, (const unsigned char*)u8"WorldTest: %s: %s.",
+        what, FormatClock(&frame->_clock, Storage, sizeof(Storage)));
     Error_Deconstruct(&LogResult);
 }
 
-/* Applies the debug time-of-day controls (pause/resume, phase presets, manual scrub). Called from Update with the
- * tick's input (what the UI above did not consume). @p deltaSeconds is the fixed-step delta, used to pace the manual
- * scrub. */
-static void HandleDebugTimeInput(WorldTestFrame* frame, const GameInput* input, float deltaSeconds)
+/* The I key's line about the game time: the date and time, whether the clock runs, and its speed. */
+static void LogClockStatus(WorldTestFrame* frame)
+{
+    if (frame->_services->Logger == NULL)
+    {
+        return;
+    }
+    unsigned char Storage[CLOCK_TEXT_CAPACITY];
+    double TimeScale = GameClock_GetTimeScale(&frame->_clock);
+    Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+        (const unsigned char*)u8"WorldTest: game time %s, %s, %g game seconds per real second (a day takes %g real "
+        u8"minutes).", FormatClock(&frame->_clock, Storage, sizeof(Storage)),
+        frame->_clock.IsPaused ? "paused" : "running", TimeScale,
+        GAME_CLOCK_SECONDS_PER_DAY / TimeScale / SECONDS_PER_REAL_MINUTE);
+    Error_Deconstruct(&LogResult);
+}
+
+/* The sky shows the clock's time: its time of day and date go into the world's environment every tick. */
+static void ApplyClockToEnvironment(WorldTestFrame* frame)
 {
     WorldEnvironment* Environment = World_GetEnvironment(&frame->_world);
+    Environment->TimeOfDay = GameClock_GetTimeOfDay(&frame->_clock);
+    Environment->Date = GameClock_GetDay(&frame->_clock);
+}
 
+/* Starts the clock at the test speed, where the world's sky starts: the environment's date and time of day. */
+static Error StartClock(GameClock* clock, const WorldEnvironment* environment)
+{
+    // TODO: start the clock from the story's settings (its start date, time and speed) once stories have a manifest
+    // (architecture A5); until then the world's environment is the starting point.
+    Error Result = GameClock_SetTimeScale(clock, TEST_TIME_SCALE);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    int64_t Day = environment->Date;
+    double Seconds = (double)environment->TimeOfDay * GAME_CLOCK_SECONDS_PER_DAY;
+    if (Seconds >= GAME_CLOCK_SECONDS_PER_DAY)
+    {
+        Seconds -= GAME_CLOCK_SECONDS_PER_DAY; // a time of day of 1 is the next midnight
+        Day++;
+    }
+    return GameClock_SetDayAndTime(clock, Day, Seconds);
+}
+
+/* Jumps to an hour of today and pauses the clock there (the number keys). */
+static void JumpToHour(WorldTestFrame* frame, int32_t hour, const char* what)
+{
+    Error Result = GameClock_SetDayAndTime(&frame->_clock, GameClock_GetDay(&frame->_clock),
+        (double)hour * GAME_CLOCK_SECONDS_PER_HOUR);
+    Error_Deconstruct(&Result); // a whole hour of the clock's own day is always valid
+    frame->_clock.IsPaused = true;
+    LogClock(frame, what);
+}
+
+/* Jumps by a signed number of game seconds, across midnights (the scrub keys). The scrub stops at the calendar's
+ * ends. */
+static void ShiftClock(WorldTestFrame* frame, double gameSeconds)
+{
+    double Seconds = GameClock_GetSecondsOfDay(&frame->_clock) + gameSeconds;
+    double Days = floor(Seconds / GAME_CLOCK_SECONDS_PER_DAY);
+    Seconds -= Days * GAME_CLOCK_SECONDS_PER_DAY;
+    if (Seconds >= GAME_CLOCK_SECONDS_PER_DAY)
+    {
+        Seconds = 0.0; // a tiny step back from midnight rounded up to the next one
+        Days += 1.0;
+    }
+    if (Seconds < 0.0)
+    {
+        Seconds = 0.0;
+    }
+    Error Result = GameClock_SetDayAndTime(&frame->_clock, GameClock_GetDay(&frame->_clock) + (int64_t)Days, Seconds);
+    Error_Deconstruct(&Result);
+}
+
+/* Moves the date by whole days and keeps the time of day (the day keys). */
+static void ShiftDays(WorldTestFrame* frame, int64_t days, const char* what)
+{
+    Error Result = GameClock_SetDayAndTime(&frame->_clock, GameClock_GetDay(&frame->_clock) + days,
+        GameClock_GetSecondsOfDay(&frame->_clock));
+    if (Result.Code == ErrorCode_Success)
+    {
+        LogClock(frame, what);
+    }
+    else if (frame->_services->Logger != NULL)
+    {
+        Error LogResult = Logger_LogWarningFormatted(frame->_services->Logger,
+            (const unsigned char*)u8"WorldTest: the date cannot move there (%s).",
+            (Result.Message != NULL) ? (const char*)Result.Message : "outside the calendar");
+        Error_Deconstruct(&LogResult);
+    }
+    Error_Deconstruct(&Result);
+}
+
+/* The clock's debug keys: P pause, 1-4 dawn/noon/dusk/midnight (paused), [ ] scrub, , . the previous and next day,
+ * / a week ahead. Called from Update with the tick's input (what the UI above did not consume); @p deltaSeconds paces
+ * the scrub. */
+static void HandleDebugClockInput(WorldTestFrame* frame, const GameInput* input, float deltaSeconds)
+{
     if (GameInput_IsKeyPressed(input, GameKey_P))
     {
-        Environment->IsDayNightCycleEnabled = !Environment->IsDayNightCycleEnabled;
-        LogTimeOfDay(frame, Environment->IsDayNightCycleEnabled
-            ? (const unsigned char*)u8"cycle resumed" : (const unsigned char*)u8"cycle paused", Environment);
+        frame->_clock.IsPaused = !frame->_clock.IsPaused;
+        LogClock(frame, frame->_clock.IsPaused ? "clock paused" : "clock running");
     }
-    // Number keys jump to a phase and freeze the clock there.
-    if (GameInput_IsKeyPressed(input, GameKey_1)) { Environment->TimeOfDay = 0.25f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"dawn (frozen)", Environment); }
-    if (GameInput_IsKeyPressed(input, GameKey_2)) { Environment->TimeOfDay = 0.50f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"noon (frozen)", Environment); }
-    if (GameInput_IsKeyPressed(input, GameKey_3)) { Environment->TimeOfDay = 0.75f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"dusk (frozen)", Environment); }
-    if (GameInput_IsKeyPressed(input, GameKey_4)) { Environment->TimeOfDay = 0.00f; Environment->IsDayNightCycleEnabled = false; LogTimeOfDay(frame, (const unsigned char*)u8"midnight (frozen)", Environment); }
+    if (GameInput_IsKeyPressed(input, GameKey_1)) { JumpToHour(frame, DAWN_HOUR, "dawn (paused)"); }
+    if (GameInput_IsKeyPressed(input, GameKey_2)) { JumpToHour(frame, NOON_HOUR, "noon (paused)"); }
+    if (GameInput_IsKeyPressed(input, GameKey_3)) { JumpToHour(frame, DUSK_HOUR, "dusk (paused)"); }
+    if (GameInput_IsKeyPressed(input, GameKey_4)) { JumpToHour(frame, MIDNIGHT_HOUR, "midnight (paused)"); }
 
-    // [ and ] scrub the time of day manually (wraps into [0,1)).
-    float ScrubStep = TIME_SCRUB_RATE * deltaSeconds;
-    if (GameInput_IsKeyDown(input, GameKey_LeftBracket))  { Environment->TimeOfDay -= ScrubStep; if (Environment->TimeOfDay < 0.0f) { Environment->TimeOfDay += 1.0f; } }
-    if (GameInput_IsKeyDown(input, GameKey_RightBracket)) { Environment->TimeOfDay += ScrubStep; if (Environment->TimeOfDay >= 1.0f) { Environment->TimeOfDay -= 1.0f; } }
+    // [ and ] scrub the time while held, across midnights; the time is logged when the key is let go.
+    double ScrubSeconds = TIME_SCRUB_RATE * GAME_CLOCK_SECONDS_PER_DAY * (double)deltaSeconds;
+    if (GameInput_IsKeyDown(input, GameKey_LeftBracket)) { ShiftClock(frame, -ScrubSeconds); }
+    if (GameInput_IsKeyDown(input, GameKey_RightBracket)) { ShiftClock(frame, ScrubSeconds); }
+    if (GameInput_IsKeyReleased(input, GameKey_LeftBracket) || GameInput_IsKeyReleased(input, GameKey_RightBracket))
+    {
+        LogClock(frame, "time scrubbed");
+    }
+
+    // , and . step the date (the moon in T03 changes from night to night), / jumps a week ahead.
+    if (GameInput_IsKeyPressed(input, GameKey_Comma)) { ShiftDays(frame, -1, "previous day"); }
+    if (GameInput_IsKeyPressed(input, GameKey_Period)) { ShiftDays(frame, 1, "next day"); }
+    if (GameInput_IsKeyPressed(input, GameKey_Slash)) { ShiftDays(frame, DAYS_PER_WEEK, "a week ahead"); }
+}
+
+/* The renderer's and the sky's debug keys (A/B toggles, the light pollution steps, status lines). Called from Update
+ * with the tick's input (what the UI above did not consume). */
+static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
+{
+    WorldEnvironment* Environment = World_GetEnvironment(&frame->_world);
 
     // O toggles the whole post-effects pass (AO + outlines) for A/B-ing whether an artifact comes from it;
     // off = the scene blits straight to the tonemap, bit-exact with the pre-postfx pipeline.
@@ -235,10 +370,11 @@ static void HandleDebugTimeInput(WorldTestFrame* frame, const GameInput* input, 
     }
 
     // I logs what the renderer did in its last render (active / inactive / unavailable features, object counts),
-    // e.g. to check on a new GPU which effects actually run.
+    // e.g. to check on a new GPU which effects actually run, and the game time.
     if (GameInput_IsKeyPressed(input, GameKey_I))
     {
         WorldRenderer_LogStatus(frame->_renderer);
+        LogClockStatus(frame);
     }
 
     // T toggles the text sample (checks font drawing, Latvian and Cyrillic glyphs, decorations, inline sprites).
@@ -467,7 +603,8 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     }
 
     // Debug controls (edge-triggered keys are reliable here: input is polled per update tick).
-    HandleDebugTimeInput(frame, input, deltaSeconds);
+    HandleDebugClockInput(frame, input, deltaSeconds);
+    HandleDebugInput(frame, input);
 }
 
 
@@ -483,9 +620,10 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
     {
         Error LogResult = Logger_LogInfo(Frame->_services->Logger,
             (const unsigned char*)u8"WorldTest: entered the world. WASD+SPACE/CTRL move, SHIFT sprint, mouse look; "
-            u8"P pause/resume day-night, 1-4 = dawn/noon/dusk/midnight (frozen), [ ] scrub time; O post effects, "
-            u8"B bloom, G sun shafts, C crisp overlay, L light gizmos, I renderer status, T text sample; M frees the "
-            u8"mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");
+            u8"P pause/resume the clock, 1-4 = dawn/noon/dusk/midnight (paused), [ ] scrub time, , . previous/next "
+            u8"day, / a week ahead; O post effects, B bloom, G sun shafts, C crisp overlay, L light gizmos, "
+            u8"N light pollution, I renderer status and game time, T text sample; M frees the mouse for the UI "
+            u8"(click the world to capture it again); ESC quits (once the UI lets go of it).");
         Error_Deconstruct(&LogResult);
     }
     return Error_CreateSuccess();
@@ -508,8 +646,14 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
         HandleControls(Frame, Frame->_services->Input, Delta);
     }
 
-    // Advance the world's day-night cycle (a no-op while paused).
-    WorldEnvironment_Advance(World_GetEnvironment(&Frame->_world), Delta);
+    // Game time moves (unless the clock is paused), and the sky shows it.
+    GameClockCrossings Crossings;
+    GameClock_Advance(&Frame->_clock, time.PassedTime, &Crossings);
+    if (Crossings.Midnights > 0)
+    {
+        LogClock(Frame, "a new day");
+    }
+    ApplyClockToEnvironment(Frame);
 
     // Advance sprite animations (game logic; the renderer only reads the current frame).
     AdvanceSpriteAnimations(&Frame->_world, time.PassedTime);
@@ -601,6 +745,7 @@ static void WorldTestFrame_Destroy(void* self)
 
     Error WorldResult = World_Deconstruct(&Frame->_world);
     Error_Deconstruct(&WorldResult);
+    GameClock_Deconstruct(&Frame->_clock);
     DeconstructTextSample(Frame);
 
     GameFrame_Deconstruct(&Frame->Base);
@@ -735,11 +880,10 @@ static Error BuildTestWorld(World* world, Services* services)
         return ConstructResult;
     }
 
-    // Day-night cycle settings. These live on the world's WorldEnvironment and are saved WITH the world
-    // (see the WorldEncoder environment schema), so this is the place to tweak them for the test world.
+    // Where the sky starts. These live on the world's WorldEnvironment and are saved WITH the world (see the
+    // WorldEncoder environment schema); the frame's game clock starts from the time of day and the date (the
+    // environment's default, 2026-10-18) and writes them every tick from then on.
     WorldEnvironment* Environment = World_GetEnvironment(world);
-    Environment->IsDayNightCycleEnabled = true;                    // false freezes the clock at TimeOfDay
-    Environment->DayLengthSeconds = TEST_DAY_LENGTH_SECONDS;        // real seconds for one full day
     Environment->TimeOfDay = WORLD_ENVIRONMENT_TIME_OF_DAY_NOON;    // 0=midnight, 0.25=dawn, 0.5=noon, 0.75=dusk
     Environment->SunAngle = TEST_SUN_ANGLE;                        // radians the noon sun leans from straight up
 
@@ -830,9 +974,23 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         return WorldResult;
     }
 
+    GameClock_Construct(&Frame->_clock);
+    Error ClockResult = StartClock(&Frame->_clock, World_GetEnvironment(&Frame->_world));
+    if (ClockResult.Code != ErrorCode_Success)
+    {
+        GameClock_Deconstruct(&Frame->_clock);
+        Error DeconstructResult = World_Deconstruct(&Frame->_world);
+        Error_Deconstruct(&DeconstructResult);
+        GameFrame_Deconstruct(&Frame->Base);
+        Memory_Free(Frame);
+        return ClockResult;
+    }
+    ApplyClockToEnvironment(Frame);
+
     Error RendererResult = WorldRenderer_Create(services->Assets, services->Logger, services->Config, &Frame->_renderer);
     if (RendererResult.Code != ErrorCode_Success)
     {
+        GameClock_Deconstruct(&Frame->_clock);
         Error DeconstructResult = World_Deconstruct(&Frame->_world);
         Error_Deconstruct(&DeconstructResult);
         GameFrame_Deconstruct(&Frame->Base);
@@ -847,6 +1005,7 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         Error_Deconstruct(&Cleanup);
         Cleanup = World_Deconstruct(&Frame->_world);
         Error_Deconstruct(&Cleanup);
+        GameClock_Deconstruct(&Frame->_clock);
         GameFrame_Deconstruct(&Frame->Base);
         Memory_Free(Frame);
         return TextResult;

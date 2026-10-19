@@ -1,15 +1,13 @@
 #include <stddef.h>
 #include <math.h>
 #include "WorldEnvironment.h"
-#include "WorldShared.h"
+#include "GameClock.h"
 #include "raylib/raymath.h"
 
 
 // Macros.
 /** Pi as a float (M_PI is not standard C, so it is defined locally for -Wpedantic). */
 #define ENVIRONMENT_PI 3.14159265358979323846f
-/** Default real-time length of a full day-night cycle, in seconds (20 minutes). */
-#define DEFAULT_DAY_LENGTH_SECONDS 1200.0f
 /** Default sun-arc tilt from the zenith at noon, in radians (~23 degrees, so the sun is not straight up). */
 #define DEFAULT_SUN_ANGLE 0.4f
 /** Default atmospheric turbidity (a clear-ish sky). */
@@ -42,7 +40,7 @@
 #define ENVIRONMENT_TABLE_VERSION 1U
 
 /* The inspector's categories. */
-#define CATEGORY_TIME ((const unsigned char*)u8"Time of day")
+#define CATEGORY_TIME ((const unsigned char*)u8"Date and time")
 #define CATEGORY_SKY ((const unsigned char*)u8"Sky and sun")
 #define CATEGORY_NIGHT_SKY ((const unsigned char*)u8"Night sky")
 #define CATEGORY_AMBIENT ((const unsigned char*)u8"Ambient light")
@@ -59,21 +57,16 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .Key = u8"time_of_day", .WireId = 1U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, TimeOfDay),
         .Default.FloatValue = WORLD_ENVIRONMENT_TIME_OF_DAY_NOON, .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0),
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_TIME, .DisplayName = u8"Time of day",
-        .Description = u8"The time of day as a fraction of the day: 0 is midnight, 0.5 noon. It places the sun.",
+        .Description = u8"The time of day the sky shows, as a fraction of the day: 0 is midnight, 0.5 noon. A running "
+            u8"game's clock sets it; in a world file it is where the sky starts.",
         .SinceVersion = 1U
     },
     {
-        .Key = u8"is_day_night_cycle_enabled", .WireId = 2U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldEnvironment, IsDayNightCycleEnabled), .Default.BoolValue = true,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_TIME, .DisplayName = u8"Day-night cycle",
-        .Description = u8"When on, the time of day advances by itself; when off, it stays where it is.",
-        .SinceVersion = 1U
-    },
-    {
-        .Key = u8"day_length_seconds", .WireId = 3U, .Type = PropertyType_Float,
-        PROPERTY_MEMBER(WorldEnvironment, DayLengthSeconds), .Default.FloatValue = DEFAULT_DAY_LENGTH_SECONDS,
-        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_TIME,
-        .DisplayName = u8"Day length", .Description = u8"Real seconds one full day-night cycle takes.",
+        .Key = u8"date", .WireId = 30U, .Type = PropertyType_Date, PROPERTY_MEMBER(WorldEnvironment, Date),
+        .Default.DateValue = GAME_CLOCK_DEFAULT_DAY_NUMBER, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_TIME,
+        .DisplayName = u8"Date",
+        .Description = u8"The date the sky shows: the moon's phase and the stars' place in the year follow it. A "
+            u8"running game's clock sets it; in a world file it is where the sky starts.",
         .SinceVersion = 1U
     },
     {
@@ -250,6 +243,10 @@ static const PropertyDescriptor EnvironmentProperties[] =
     },
 };
 
+/* Removed settings, never to be used again: 2 is_day_night_cycle_enabled and 3 day_length_seconds, which the game
+ * clock's pause and time scale replaced (T23). */
+static const uint16_t EnvironmentRetiredWireIds[] = { 2U, 3U };
+
 static const PropertyTable EnvironmentTable =
 {
     .Name = u8"world_environment",
@@ -257,8 +254,8 @@ static const PropertyTable EnvironmentTable =
     .StructSize = sizeof(WorldEnvironment),
     .Descriptors = EnvironmentProperties,
     .DescriptorCount = sizeof(EnvironmentProperties) / sizeof(EnvironmentProperties[0]),
-    .RetiredWireIds = NULL,
-    .RetiredWireIdCount = 0U,
+    .RetiredWireIds = EnvironmentRetiredWireIds,
+    .RetiredWireIdCount = sizeof(EnvironmentRetiredWireIds) / sizeof(EnvironmentRetiredWireIds[0]),
     .AfterSet = NULL,
     .Migrate = NULL
 };
@@ -380,8 +377,8 @@ Matrix WorldEnvironment_GetCelestialToWorld(const WorldEnvironment* self)
 {
     // The same angle as GetSunDirection: R_z turns the sky through the day, R_x tilts its pole down to SunAngle.
     // raymath's MatrixMultiply(a, b) applies a first, so this is R_x(SunAngle) . R_z(Angle).
-    // TODO: the stars should also drift about 1 degree a day against the sun (sidereal time), which needs the
-    // in-game date: T03 adds it once the game clock and calendar (T23) exist.
+    // TODO: the stars should also drift about 1 degree a day against the sun (sidereal time), from the environment's
+    // Date: T03 adds it.
     float Angle = (self->TimeOfDay - 0.25f) * 2.0f * ENVIRONMENT_PI;
     return MatrixMultiply(MatrixRotateZ(Angle), MatrixRotateX(self->SunAngle));
 }
@@ -395,27 +392,6 @@ float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self)
     if (T < 0.0f) { T = 0.0f; }
     if (T > 1.0f) { T = 1.0f; }
     return T * T * (3.0f - 2.0f * T);
-}
-
-void WorldEnvironment_Advance(WorldEnvironment* self, float deltaSeconds)
-{
-    if ((self == NULL) || !self->IsDayNightCycleEnabled)
-    {
-        return;
-    }
-    if (!WorldShared_IsFloatFinite(self->DayLengthSeconds) || (self->DayLengthSeconds <= 0.0f)
-        || !WorldShared_IsFloatFinite(deltaSeconds) || (deltaSeconds < 0.0f))
-    {
-        return;
-    }
-
-    float NextTimeOfDay = self->TimeOfDay + (deltaSeconds / self->DayLengthSeconds);
-    NextTimeOfDay -= floorf(NextTimeOfDay); // wrap into [0, 1)
-    if (!WorldShared_IsFloatFinite(NextTimeOfDay))
-    {
-        return; // an overflowing step (a tiny day length) must not leave the time of day NaN
-    }
-    self->TimeOfDay = NextTimeOfDay;
 }
 
 Color WorldEnvironment_ComputeSkyColor(const WorldEnvironment* self)

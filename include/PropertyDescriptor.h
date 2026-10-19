@@ -46,6 +46,7 @@ typedef struct LoggerStruct Logger;
  * | UInt32      | uint32_t                    | integer                                | UInt32                        |
  * | UInt64      | uint64_t                    | integer (a string above INT64_MAX)     | UInt64                        |
  * | Float       | float                       | number                                 | Float                         |
+ * | Double      | double                      | number                                 | Double                        |
  * | Angle       | float, radians              | number, DEGREES                        | Float, radians                |
  * | Vector2     | Vector2                     | [x, y]                                 | Float array of 2              |
  * | Vector3     | Vector3                     | [x, y, z]                              | Float array of 3              |
@@ -55,10 +56,13 @@ typedef struct LoggerStruct Logger;
  * | AssetName   | unsigned char*, owned       | string, or null                        | String (absent when NULL)     |
  * | Enum        | integer of 1, 2 or 4 bytes  | the entry's name, e.g. "near"          | EncodedInteger (the value)    |
  * | ObjectId    | uint64_t, 0 = none          | integer (a string above INT64_MAX)     | UInt64                        |
+ * | Date        | int64_t day number          | "yyyy-mm-dd", e.g. "2026-10-18"        | EncodedInteger (the day number) |
  *
  * JSON readers accept every form the GameJSON parsers accept (colors also as arrays or {r, g, b, a} compounds,
  * vectors also as {x, y, z} compounds, numbers also as numeric strings). A RenderColor's tint alpha is not part of
- * its value (RenderColor ignores it): it is not written, reads set it to 255 and comparisons skip it.
+ * its value (RenderColor ignores it): it is not written, reads set it to 255 and comparisons skip it. A Date is a
+ * day number of the game calendar (GameCalendar.h: days since 0001-01-01), and its JSON text is only ever the
+ * "yyyy-mm-dd" form.
  *
  * Not thread-safe: tables are immutable static data, but instances are plain structs with no locking.
  */
@@ -85,6 +89,10 @@ typedef struct LoggerStruct Logger;
 /** @brief Rules for a number in [@p minimum, @p maximum] (both inclusive). */
 #define PROPERTY_RULES_BETWEEN(minimum, maximum) \
     { .HasMinimum = true, .Minimum = (minimum), .HasMaximum = true, .Maximum = (maximum) }
+/** @brief Rules for a number in [@p minimum, @p maximum): the maximum itself excluded, for values that wrap there
+ *         (seconds of a day). */
+#define PROPERTY_RULES_HALF_OPEN(minimum, maximum) \
+    { .HasMinimum = true, .Minimum = (minimum), .HasMaximum = true, .IsMaximumExclusive = true, .Maximum = (maximum) }
 /** @brief Rules for a String or AssetName: at most @p maxLength bytes (without the terminator), and whether NULL is
  *         allowed (a string that may be NULL must default to NULL). */
 #define PROPERTY_RULES_STRING(maxLength, isNullAllowed) { .MaxLength = (maxLength), .IsNullAllowed = (isNullAllowed) }
@@ -110,6 +118,9 @@ typedef enum PropertyTypeEnum
     PropertyType_UInt64,
     /** @brief A float; always finite, plus optional bounds. */
     PropertyType_Float,
+    /** @brief A double, for values that need more precision than a float (the game clock's seconds); always finite,
+     *  plus optional bounds (compared in double precision). */
+    PropertyType_Double,
     /** @brief An angle: a float in radians in memory and in GHDF, written in degrees in JSON. Always finite, plus
      *  optional bounds (in radians). */
     PropertyType_Angle,
@@ -131,7 +142,10 @@ typedef enum PropertyTypeEnum
      *  the descriptor's EnumTable, and JSON writes the entry's name. */
     PropertyType_Enum,
     /** @brief A world object id (uint64_t), 0 = none; every value is valid. */
-    PropertyType_ObjectId
+    PropertyType_ObjectId,
+    /** @brief A calendar date: an int64_t day number of the game calendar (GameCalendar.h: days since 0001-01-01),
+     *  which must lie in the calendar (years 1 to 9999). Takes no Minimum/Maximum rules. */
+    PropertyType_Date
 } PropertyType;
 
 /**
@@ -167,6 +181,8 @@ typedef union PropertyDataUnion
     uint64_t UInt64Value;
     /** @brief PropertyType_Float, and PropertyType_Angle in radians. */
     float FloatValue;
+    /** @brief PropertyType_Double. */
+    double DoubleValue;
     /** @brief PropertyType_Vector2. */
     Vector2 Vector2Value;
     /** @brief PropertyType_Vector3. */
@@ -183,6 +199,8 @@ typedef union PropertyDataUnion
     int32_t EnumValue;
     /** @brief PropertyType_ObjectId (0 = none). */
     uint64_t ObjectIdValue;
+    /** @brief PropertyType_Date: the day number (days since 0001-01-01). */
+    int64_t DateValue;
 } PropertyData;
 
 /**
@@ -201,7 +219,7 @@ typedef struct PropertyValueStruct
  * @brief The rules a property's value must follow, beyond its type's own (floats finite, render colors in range,
  *        strings valid UTF-8, asset names valid, enums in their table).
  *
- * Build with the PROPERTY_RULES_* macros. Bounds apply to Int32, UInt32, Float, Angle (radians) and to every
+ * Build with the PROPERTY_RULES_* macros. Bounds apply to Int32, UInt32, Float, Double, Angle (radians) and to every
  * component of Vector2 and Vector3; the string rules to String and AssetName. PropertyTable_Check rejects rules that
  * do not fit the type.
  */
@@ -211,7 +229,8 @@ typedef struct PropertyRulesStruct
     bool HasMinimum;
     /** @brief When true the value must be > Minimum, otherwise >= Minimum. */
     bool IsMinimumExclusive;
-    /** @brief The lower bound (finite; a whole number in range for the integer types). */
+    /** @brief The lower bound (finite; within the float range for the float types; a whole number in range for the
+     *  integer types). */
     double Minimum;
     /** @brief Whether Maximum applies. */
     bool HasMaximum;
@@ -441,6 +460,12 @@ static inline PropertyValue PropertyValue_FromFloat(float value)
     return (PropertyValue){ .Type = PropertyType_Float, .Data.FloatValue = value };
 }
 
+/** @brief Makes a Double value. @param value The value. @returns The typed value. */
+static inline PropertyValue PropertyValue_FromDouble(double value)
+{
+    return (PropertyValue){ .Type = PropertyType_Double, .Data.DoubleValue = value };
+}
+
 /** @brief Makes an Angle value. @param radians The angle in radians. @returns The typed value. */
 static inline PropertyValue PropertyValue_FromAngle(float radians)
 {
@@ -493,6 +518,12 @@ static inline PropertyValue PropertyValue_FromEnum(int32_t value)
 static inline PropertyValue PropertyValue_FromObjectId(uint64_t value)
 {
     return (PropertyValue){ .Type = PropertyType_ObjectId, .Data.ObjectIdValue = value };
+}
+
+/** @brief Makes a Date value. @param dayNumber The day number (days since 0001-01-01). @returns The typed value. */
+static inline PropertyValue PropertyValue_FromDate(int64_t dayNumber)
+{
+    return (PropertyValue){ .Type = PropertyType_Date, .Data.DateValue = dayNumber };
 }
 
 /**

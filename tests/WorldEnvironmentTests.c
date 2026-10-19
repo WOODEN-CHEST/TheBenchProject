@@ -1,5 +1,6 @@
 #include "TestSuites.h"
 #include "WorldEnvironment.h"
+#include "GameClock.h"
 #include "raylib/raymath.h"
 #include <math.h>
 #include <string.h>
@@ -33,16 +34,20 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     WorldEnvironment Environment;
 
     WorldEnvironment_SetDefaults(&Environment);
-    Environment.DayLengthSeconds = NAN;
-    CheckRejected(run, &Environment, "DayLengthSeconds");
-
-    WorldEnvironment_SetDefaults(&Environment);
-    Environment.DayLengthSeconds = 0.0f; // a zero day length cannot advance
-    CheckRejected(run, &Environment, "DayLengthSeconds");
+    Environment.TimeOfDay = NAN;
+    CheckRejected(run, &Environment, "TimeOfDay");
 
     WorldEnvironment_SetDefaults(&Environment);
     Environment.TimeOfDay = 1.5f;
     CheckRejected(run, &Environment, "TimeOfDay");
+
+    WorldEnvironment_SetDefaults(&Environment);
+    Environment.Date = GAME_CALENDAR_FIRST_DAY_NUMBER - 1; // before 0001-01-01
+    CheckRejected(run, &Environment, "date (Date) must be a date in the years 1 to 9999");
+
+    WorldEnvironment_SetDefaults(&Environment);
+    Environment.Date = GAME_CALENDAR_LAST_DAY_NUMBER + 1; // after 9999-12-31
+    CheckRejected(run, &Environment, "date (Date)");
 
     WorldEnvironment_SetDefaults(&Environment);
     Environment.SunAngle = INFINITY;
@@ -88,13 +93,18 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.MilkyWayBrightness = -1.0f;
     CheckRejected(run, &Environment, "MilkyWayBrightness");
 
-    // Zero is allowed where the rule is ">= 0" (an effect switched off), and the [0, 1] ranges include both ends.
+    // Zero is allowed where the rule is ">= 0" (an effect switched off), the [0, 1] ranges include both ends, and the
+    // calendar's first and last days are dates.
     WorldEnvironment_SetDefaults(&Environment);
     Environment.BloomStrength = 0.0f;
     Environment.SkyTurbidity = 0.0f;
     Environment.MilkyWayBrightness = 0.0f;
     Environment.LightPollution = 1.0f;
     Environment.StarTwinkle = 0.0f;
+    Environment.TimeOfDay = 1.0f;
+    Environment.Date = GAME_CALENDAR_LAST_DAY_NUMBER;
+    TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
+    Environment.Date = GAME_CALENDAR_FIRST_DAY_NUMBER;
     TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
 }
 
@@ -103,7 +113,7 @@ static void CopyToCopiesEverySetting(TestRun* run)
     WorldEnvironment Source;
     WorldEnvironment_SetDefaults(&Source);
     Source.TimeOfDay = 0.3f;
-    Source.DayLengthSeconds = 77.0f;
+    Source.Date = 740000;
     Source.SkyTint = (Color){ 1, 2, 3, 4 };
     Source.StarSeed = 123456789u;
     Source.IsBloomEnabled = false;
@@ -117,7 +127,7 @@ static void CopyToCopiesEverySetting(TestRun* run)
     WorldEnvironment_SetDefaults(&Destination);
     TEST_CHECK_SUCCESS(run, WorldEnvironment_CopyTo(&Source, &Destination));
     TEST_CHECK(run, Destination.TimeOfDay == 0.3f);
-    TEST_CHECK(run, Destination.DayLengthSeconds == 77.0f);
+    TEST_CHECK(run, Destination.Date == 740000);
     TEST_CHECK(run, (Destination.SkyTint.r == 1) && (Destination.SkyTint.a == 4));
     TEST_CHECK(run, Destination.StarSeed == 123456789u);
     TEST_CHECK(run, !Destination.IsBloomEnabled);
@@ -130,32 +140,35 @@ static void CopyToCopiesEverySetting(TestRun* run)
     TEST_CHECK_ERROR(run, WorldEnvironment_CopyTo(NULL, &Destination), ErrorCode_IllegalArgument);
 }
 
-static void AdvanceWrapsAndIgnoresBadSteps(TestRun* run)
+/* The environment no longer keeps time; its date and time of day start where a new game clock starts (noon,
+ * 2026-10-18), and the clock writes them as a game would. The removed day-night settings' wire ids stay retired. */
+static void DateAndTimeComeFromTheClock(TestRun* run)
 {
     WorldEnvironment Environment;
     WorldEnvironment_SetDefaults(&Environment);
-    Environment.TimeOfDay = 0.9f;
-    Environment.DayLengthSeconds = 10.0f;
+    GameClock Clock;
+    GameClock_Construct(&Clock);
+    TEST_CHECK(run, Environment.Date == GameClock_GetDay(&Clock));
+    TEST_CHECK(run, Environment.TimeOfDay == GameClock_GetTimeOfDay(&Clock));
+    GameDate Date = GameCalendar_GetDate(Environment.Date);
+    TEST_CHECK(run, (Date.Year == 2026) && (Date.Month == 10) && (Date.Day == 18));
 
-    WorldEnvironment_Advance(&Environment, 2.0f); // 0.9 + 0.2 wraps to ~0.1
-    TEST_CHECK(run, fabsf(Environment.TimeOfDay - 0.1f) < 1e-4f);
+    TEST_CHECK_SUCCESS(run, GameClock_SetDateTime(&Clock, 2026, 12, 24, 18, 0, 0));
+    Environment.TimeOfDay = GameClock_GetTimeOfDay(&Clock);
+    Environment.Date = GameClock_GetDay(&Clock);
+    TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
+    TEST_CHECK(run, Environment.TimeOfDay == 0.75f); // dusk: the sun sets on the horizon
+    TEST_CHECK(run, fabsf(WorldEnvironment_GetSunDirection(&Environment).y) < 1e-6f);
 
-    float Before = Environment.TimeOfDay;
-    WorldEnvironment_Advance(&Environment, NAN);
-    WorldEnvironment_Advance(&Environment, INFINITY);
-    WorldEnvironment_Advance(&Environment, -1.0f);
-    TEST_CHECK(run, Environment.TimeOfDay == Before);
-
-    // A day length so short that the step overflows must not leave the time of day NaN.
-    Environment.DayLengthSeconds = 1e-40f;
-    WorldEnvironment_Advance(&Environment, 1.0f);
-    TEST_CHECK(run, isfinite(Environment.TimeOfDay));
-
-    Environment.DayLengthSeconds = NAN;
-    WorldEnvironment_Advance(&Environment, 1.0f);
-    TEST_CHECK(run, isfinite(Environment.TimeOfDay));
-
-    WorldEnvironment_Advance(NULL, 1.0f);
+    const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
+    TEST_CHECK(run, (PropertyTable_FindByKey(Table, u8"is_day_night_cycle_enabled") == NULL)
+        && (PropertyTable_FindByKey(Table, u8"day_length_seconds") == NULL));
+    TEST_CHECK(run, (Table->RetiredWireIdCount == 2U) && (Table->RetiredWireIds[0] == 2U)
+        && (Table->RetiredWireIds[1] == 3U));
+    const PropertyDescriptor* DateRow = PropertyTable_FindByKey(Table, u8"date");
+    TEST_CHECK(run, (DateRow != NULL) && (DateRow->Type == PropertyType_Date) && (DateRow->WireId == 30U));
+    GameClock_Deconstruct(&Clock);
+    WorldEnvironment_Deconstruct(&Environment);
 }
 
 
@@ -208,7 +221,7 @@ void WorldEnvironmentTests_Run(TestRun* run)
         { "defaults_are_valid", DefaultsAreValid },
         { "validate_names_the_broken_field", ValidateNamesTheBrokenField },
         { "copy_to_copies_every_setting", CopyToCopiesEverySetting },
-        { "advance_wraps_and_ignores_bad_steps", AdvanceWrapsAndIgnoresBadSteps },
+        { "date_and_time_come_from_the_clock", DateAndTimeComeFromTheClock },
         { "celestial_frame_follows_the_sun", CelestialFrameFollowsTheSun },
     };
     TestRun_RunSuite(run, "WorldEnvironment", Cases, sizeof(Cases) / sizeof(Cases[0]));

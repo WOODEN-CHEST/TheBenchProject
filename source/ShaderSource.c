@@ -265,18 +265,13 @@ static Error AppendOutputString(ShaderExpansion* self, const unsigned char* text
     return Error_CreateSuccess();
 }
 
-/* Appends the decimal digits of @p value. WRNumber writes its NUL past the count, as its header says; libwr builds from
- * WRFramework d15d052 and older counted it, which the trailing-NUL check undoes. */
-// TODO: drop the trailing-NUL check once lib/libwr.a is built from a WRFramework that has the WRNumber terminator fix.
+/* Appends the decimal digits of @p value. WRNumber writes its NUL past the count, so the next append continues the
+ * text. */
 static bool AppendDecimal(GenericBuffer* buffer, size_t value)
 {
     Error Result = Number_UInt64ToString((uint64_t)value, NUMBER_BASE_10, false, buffer);
     bool IsAppended = (Result.Code == ErrorCode_Success);
     Error_Deconstruct(&Result);
-    if (IsAppended && (buffer->_count > 0U) && (buffer->_data[buffer->_count - 1U] == '\0'))
-    {
-        GenericBuffer_RemoveLast(buffer);
-    }
     return IsAppended;
 }
 

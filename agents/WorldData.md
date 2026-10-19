@@ -72,17 +72,26 @@ an owned name, an embedded `WorldEnvironment`, and (optionally) a borrowed asset
 
 ## Environment
 
-`WorldEnvironment` is a struct with the sky, sun, day-night, night sky, ambient, fog and effect settings. **Every field
-is one row of its property table** (`WorldEnvironment_GetPropertyTable`, in `source/WorldEnvironment.c`; module doc
+`WorldEnvironment` is a struct with the date and time of day, sky, sun, night sky, ambient, fog and effect settings.
+**Every field is one row of its property table** (`WorldEnvironment_GetPropertyTable`, in `source/WorldEnvironment.c`; module doc
 [PropertyDescriptors.md](PropertyDescriptors.md)): the key (the field name in snake_case, e.g. `light_pollution`), the
 GHDF wire id, the type, the default, the rules, the inspector text. `WorldEnvironment_SetDefaults`, `_Validate`,
 `_CopyTo` and `_Deconstruct` are thin wrappers over the table, and `WorldEnvironment_ReadJSON` / `_WriteJSON` are the
 JSON entry points for the world files (T09). **To add a setting, add the field and one table row** with a new,
-never-used wire id (the next free one is 30); nothing else needs writing. The field comments state each value's rule;
-validation enforces them (finite, `TimeOfDay`, `LightPollution` and `StarTwinkle` in [0, 1], `DayLengthSeconds` and
-`SunSizeMultiplier` > 0, every strength/intensity/density/brightness >= 0) and names the first broken field by key and
-C name: `world_environment.light_pollution (LightPollution) must be finite and in [0, 1].` `SunAngle` is an `Angle`:
-radians in memory and GHDF, degrees in JSON.
+never-used wire id (the next free one is 31; 2 and 3 are retired); nothing else needs writing. The field comments state
+each value's rule; validation enforces them (finite, `TimeOfDay`, `LightPollution` and `StarTwinkle` in [0, 1],
+`SunSizeMultiplier` > 0, every strength/intensity/density/brightness >= 0, `Date` inside the calendar) and names the
+first broken field by key and C name: `world_environment.light_pollution (LightPollution) must be finite and in [0,
+1].` `SunAngle` is an `Angle`: radians in memory and GHDF, degrees in JSON.
+
+**Date and time of day are what the sky shows, not a clock.** `TimeOfDay` (a fraction of the day) and `Date` (a day
+number of [GameCalendar.md](GameCalendar.md), a `Date` property: `"2026-10-18"` in JSON, default 2026-10-18 like a new
+game clock) never advance by themselves. While a game runs, the game clock ([GameClock.md](GameClock.md)) writes both
+every tick; in a world file they are where the sky starts (the editor's preview uses them, and the test frame starts
+its clock from them). T23 removed the old day-night timer (`is_day_night_cycle_enabled`, `day_length_seconds` and
+`WorldEnvironment_Advance`; the clock's pause and time scale replace them). Their wire ids 2 and 3 are retired, so GHDF
+written before still reads (the entries are skipped). The table stayed at version 1: no environment JSON had been
+written yet (world files come with T09), so no migration is needed.
 
 The environment owns no heap memory yet, but treat it as if it did: `WorldEnvironment_SetDefaults` constructs (call it
 on a new environment only) and pairs with `WorldEnvironment_Deconstruct`; copies go through `CopyTo`. `World` and
@@ -98,8 +107,6 @@ time of day (the sun is the celestial point (1,0,0); the pole above the horizon 
 (0, sin SunAngle, -cos SunAngle)); the renderer turns the stars and the Milky Way with it
 ([WorldRuntime.md](WorldRuntime.md), "Night sky"). Validate anything that came from outside the program before using it. Copy with
 `WorldEnvironment_CopyTo`, never by assignment, so a future owned field cannot turn copies into double frees.
-`WorldEnvironment_Advance` ignores negative or non-finite steps and any step whose result would not be finite, so
-nothing can leave the time of day NaN.
 
 ## Persistence
 
@@ -115,8 +122,9 @@ sub-compound + array of object compounds), borrowing all compounds/arrays/string
 `GHDFObjectPool`. It does **not** write bytes. The stable numeric entry ids ARE the save schema: the root and object
 ids are `WorldEncoder*Field` enums in `WorldEncoder.h` (`WORLD_ENCODER_FORMAT_VERSION` = 1); the environment compound
 is written by `Properties_WriteGHDF` from the environment's table, every setting including defaults, under the table's
-wire ids (1-29, the same entries the hand-written encoder wrote; a test compares the trees). Colors are stored as
-`uint8[4]` RGBA arrays, vectors as `float[3]` arrays.
+wire ids (1 and 4-30: the entries the hand-written encoder wrote, without the retired 2 and 3, plus T23's date as an
+encoded day number; a test compares the trees). Colors are stored as `uint8[4]` RGBA arrays, vectors as `float[3]`
+arrays.
 
 Ownership note for the encoder: `GHDFCompound_SetValue` / `GHDFArray_AddValue` ADOPT the borrowed
 sub-resource, so on success it is never returned separately; on any failure the whole root is returned to
@@ -129,7 +137,7 @@ objects move onto property tables in T05, and the world files (JSON and GHDF loa
 ## Tests
 
 `tests/WorldTests.c` (object set, sprite binding and release, renames, guards), `tests/WorldEnvironmentTests.c`
-(validation, copying, advance, the celestial frame), `tests/WorldDTOTests.c` (World → DTO → World round trip of every persisted
+(validation, copying, the date and time the clock writes, the retired ids, the celestial frame), `tests/WorldDTOTests.c` (World → DTO → World round trip of every persisted
 field, bad-environment rejection) and `tests/PropertyDescriptorTests.c` (the environment's table passes its check, its
 GHDF tree matches the old encoder's, its JSON round trip). They run headless with `sh tests/run_linux.sh`; `tests/TestAssets.h`
 provides code-built sprite animation and model definitions that load without files or a GL context.

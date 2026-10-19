@@ -77,7 +77,8 @@ Current module list:
     (+ outline / pixelation toggles); the World binds its animation.
   * WorldLight - Point light (color, intensity, size, casts-shadows toggle).
   * WorldEnvironment - Per-world sky/sun/fog/effect settings, described by its property table (defaults,
-    validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md).
+    validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md). Its date and time of day are what
+    the sky shows: the game clock writes them every tick, the environment never advances time itself.
   * World - Owns the objects, mints the shared uint64 id counter, holds the environment; with an asset manager
     (World_Construct2) it owns an asset user and binds its sprites' animations; an object-set version.
   * WorldDTO - Flat persistent snapshot of a world + World<->DTO conversions.
@@ -94,13 +95,21 @@ Current module list:
   * NightSky - The night sky's pure maths (private, source/NightSky.h): the seeded star catalogue, the limiting
     magnitude (light pollution, twilight), the air mass, star colours and the galaxy's place among the stars; used
     by the sky and star passes (WorldRendererSky.c, WorldRendererStars.c).
-  * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world, with debug keys and a text sample
-    (T toggles it) drawn with TextDocument + TextLayout over the world.
+  * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world whose sky follows the frame's game
+    clock, with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
   keys by mode, migration hook) and write (defaults left out by default), and get/set by key. The one module allowed to
   write `_` fields by offset. WorldEnvironment is the first client; new data types get a table, not hand-written codecs.
+* GameCalendar (GameCalendar.md) - The game's calendar: pure functions over day numbers (days since 0001-01-01, an
+  int64) and dates of the proleptic Gregorian calendar, years 1 to 9999: conversions, weekday (Monday = 0), day of the
+  year, leap years, month lengths, validation, English names and the "yyyy-mm-dd" text. Every calendar rule lives
+  here, so a custom calendar would replace only this module.
+* GameClock (GameClock.md) - The game's one clock: a day number plus double seconds of the day (compensated
+  summation, no drift), a time scale (default 72, a 20-minute day), pause, a largest step per tick, fast-forwards and
+  validated jumps, reports of what each move passed (game seconds, midnights, hours) for the weather and the scheduler,
+  and a property table so it saves. Everything that needs game time reads it.
 * World light culling (WorldLightCulling.md) - Reach-culls a list of point lights to the strongest few (up to WORLD_MAX_FORWARD_LIGHTS) overlapping an object's bounding sphere, ranked by influence, for the renderer's per-object forward shading.
 * UI framework (UIFramework.md) - The in-game UI, on any surface (the window or a texture in the world: the host passes
   the pointer, the keyboard and the viewport). A screen holds a tree of widgets with slot + generation ids, routes the

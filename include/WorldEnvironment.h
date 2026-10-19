@@ -13,11 +13,14 @@
  * @brief Per-world, player-editable environment and graphics settings (persisted with the world).
  *
  * A world carries an environment: the settings that let each player-authored world look different — the
- * physically based sky and sun, the day-night cycle, the night sky (stars, Milky Way, light pollution), fog, and the
- * world-side
+ * physically based sky and sun, the night sky (stars, Milky Way, light pollution), fog, and the world-side
  * multipliers for the post effects (bloom, sunshafts, shadows) that combine with the game config's
  * multipliers. These are DATA ONLY; the world renderer reads them, but this module has no rendering
  * logic and no dependency on the renderer.
+ *
+ * The date and the time of day here are what the sky SHOWS, not a clock: nothing in this module advances them.
+ * While a game runs, the game clock (GameClock.h) writes both every tick; in a world file they are where the sky
+ * starts (the editor's preview uses them, and a game may start its clock from them).
  *
  * Every field is described once in the environment's property table (WorldEnvironment_GetPropertyTable, in
  * source/WorldEnvironment.c): its key (the field name in snake_case, e.g. "light_pollution"), its GHDF wire id, its
@@ -50,14 +53,14 @@
  */
 typedef struct WorldEnvironmentStruct
 {
-    // ---- Sky, sun and day-night cycle ----
-    /** @brief Current time of day as a fraction in [0;1]: 0 = midnight, 0.5 = noon. Drives the sun position.
-     *  Finite and in [0;1]. */
+    // ---- Date, time of day, sky and sun ----
+    /** @brief The time of day the sky shows, as a fraction in [0;1]: 0 = midnight, 0.5 = noon. Drives the sun
+     *  position. A running game's clock writes it every tick (GameClock_GetTimeOfDay). Finite and in [0;1]. */
     float TimeOfDay;
-    /** @brief When true, TimeOfDay advances automatically over DayLengthSeconds; when false it is held fixed. */
-    bool IsDayNightCycleEnabled;
-    /** @brief Real-time length of a full day-night cycle, in seconds. Finite and > 0. */
-    float DayLengthSeconds;
+    /** @brief The date the sky shows, as a day number of the game calendar (GameCalendar.h: days since 0001-01-01):
+     *  the moon's phase and the stars' drift through the year follow it. A running game's clock writes it every tick
+     *  (GameClock_GetDay). Inside the calendar (years 1 to 9999). */
+    int64_t Date;
     /** @brief Tilt of the sun's arc away from the zenith at noon, in radians. 0 makes the noon sun pass
      *  straight overhead; larger values lean the noon sun toward the horizon (elevation at noon = 90deg minus
      *  this angle). Sunrise and sunset stay on the horizon regardless. Finite; typically [0, PI/2). */
@@ -163,7 +166,8 @@ void WorldEnvironment_SetDefaults(WorldEnvironment* self);
  *
  * Use it on any environment that came from outside the program (a save file, an editor, downloaded content)
  * before applying it to a world: a NaN or infinite value would otherwise poison the time of day, the sun
- * direction and the lighting permanently. Colors, booleans and the star seed accept every value.
+ * direction and the lighting permanently. Colors, booleans and the star seed accept every value; the date must lie in
+ * the calendar.
  * @param self The environment to check; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange naming the first field
  *          that breaks its rule, by key and by C name, e.g. "world_environment.light_pollution (LightPollution) must
@@ -196,8 +200,8 @@ void WorldEnvironment_Deconstruct(WorldEnvironment* self);
  * @brief Reads an environment from a JSON compound (the table's Properties_ReadJSON): all or nothing.
  *
  * Keys are the fields' snake_case names; absent keys give the defaults; colors are "#rrggbb[aa]" (or any GameJSON
- * color form) and the sun angle is in degrees. Everything is validated before @p self changes; on failure it is
- * unchanged.
+ * color form), the sun angle is in degrees and the date is "yyyy-mm-dd". Everything is validated before @p self
+ * changes; on failure it is unchanged.
  * @param self A constructed environment to fill; must not be NULL.
  * @param compound The JSON data; must not be NULL. A migration for older data may change it in place.
  * @param options The read options (unknown keys, data version), or NULL for PropertyReadOptions_CreateDefault (unknown
@@ -258,22 +262,11 @@ Matrix WorldEnvironment_GetCelestialToWorld(const WorldEnvironment* self);
  * while the sun is well above the horizon, ramps down through twilight as the sun approaches and crosses the
  * horizon, and is 0 once the sun is below it. The renderer multiplies the sun's intensity by this (so the sun
  * stops lighting objects at night) and blends the ambient skylight from its daytime color toward a dim night
- * ambient by the same factor, so the world actually darkens over the day-night cycle.
+ * ambient by the same factor, so the world actually darkens as the game clock moves the time of day.
  * @param self The environment; must not be NULL.
  * @returns The daylight factor in [0, 1].
  */
 float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self);
-
-/**
- * @brief Advances the time of day by @p deltaSeconds when the day-night cycle is enabled.
- *
- * Adds @p deltaSeconds / DayLengthSeconds to TimeOfDay and wraps the result into [0, 1). Does nothing if
- * the cycle is disabled, DayLengthSeconds is not a finite positive number, @p deltaSeconds is negative or not
- * finite, or the step would not give a finite time, so a bad input can never leave TimeOfDay NaN.
- * @param self The environment; may be NULL (no-op).
- * @param deltaSeconds Elapsed real seconds to advance by; must be finite and non-negative to have an effect.
- */
-void WorldEnvironment_Advance(WorldEnvironment* self, float deltaSeconds);
 
 /**
  * @brief Computes the sky/background color for the current time of day (a day-night gradient, tinted).

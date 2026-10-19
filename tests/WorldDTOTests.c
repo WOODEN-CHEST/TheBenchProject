@@ -39,7 +39,7 @@ static bool BuildSourceWorld(TestRun* run, World* world)
 
     WorldEnvironment* Environment = World_GetEnvironment(world);
     Environment->TimeOfDay = 0.3f;
-    Environment->DayLengthSeconds = 90.0f;
+    Environment->Date = 740000;
     Environment->SunAngle = 0.2f;
     Environment->SkyTint = (Color){ 10, 20, 30, 255 };
     Environment->StarSeed = 42;
@@ -104,7 +104,7 @@ static void RoundTripKeepsEveryPersistentField(TestRun* run)
         TEST_CHECK(run, AreStringsEqual(World_GetName(&Restored), World_GetName(&Source)));
         TEST_CHECK(run, World_GetNextObjectId(&Restored) == World_GetNextObjectId(&Source));
         TEST_CHECK(run, World_GetEnvironment(&Restored)->TimeOfDay == 0.3f);
-        TEST_CHECK(run, World_GetEnvironment(&Restored)->DayLengthSeconds == 90.0f);
+        TEST_CHECK(run, World_GetEnvironment(&Restored)->Date == 740000);
         TEST_CHECK(run, World_GetEnvironment(&Restored)->SunAngle == 0.2f);
         TEST_CHECK(run, AreColorsEqual(World_GetEnvironment(&Restored)->SkyTint, (Color){ 10, 20, 30, 255 }));
         TEST_CHECK(run, World_GetEnvironment(&Restored)->StarSeed == 42);
@@ -175,12 +175,12 @@ static void BadEnvironmentRejectsTheWholeSnapshot(TestRun* run)
     bool IsTargetBuilt = IsSnapshotTaken && TEST_CHECK_SUCCESS(run, World_Construct1(&Target));
     if (IsTargetBuilt)
     {
-        // A NaN day length from a bad save would make the time of day NaN forever.
-        Snapshot.Environment.DayLengthSeconds = NAN;
+        // A NaN time of day from a bad save would put the sun nowhere and poison the lighting.
+        Snapshot.Environment.TimeOfDay = NAN;
         TEST_CHECK_ERROR(run, WorldDTO_ApplyToWorld(&Snapshot, &Target), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK(run, World_GetObjectCount(&Target) == 0);
         TEST_CHECK(run, World_GetName(&Target) == NULL);
-        TEST_CHECK(run, isfinite(World_GetEnvironment(&Target)->DayLengthSeconds));
+        TEST_CHECK(run, isfinite(World_GetEnvironment(&Target)->TimeOfDay));
         TEST_CHECK_SUCCESS(run, World_Deconstruct(&Target));
     }
     if (IsSnapshotTaken)

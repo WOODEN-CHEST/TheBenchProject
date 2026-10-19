@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "PropertyDescriptorInternal.h"
 #include "AssetManager.h"
+#include "GameCalendar.h"
 #include "wr/WRMath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -92,6 +93,10 @@ static size_t GetStorageSize(PropertyType type)
         case PropertyType_Float:
         case PropertyType_Angle:
             return sizeof(float);
+        case PropertyType_Double:
+            return sizeof(double);
+        case PropertyType_Date:
+            return sizeof(int64_t);
         case PropertyType_Vector2:
             return sizeof(Vector2);
         case PropertyType_Vector3:
@@ -113,7 +118,8 @@ static size_t GetStorageSize(PropertyType type)
 static bool IsBoundedType(PropertyType type)
 {
     return (type == PropertyType_Int32) || (type == PropertyType_UInt32) || (type == PropertyType_Float)
-        || (type == PropertyType_Angle) || (type == PropertyType_Vector2) || (type == PropertyType_Vector3);
+        || (type == PropertyType_Double) || (type == PropertyType_Angle) || (type == PropertyType_Vector2)
+        || (type == PropertyType_Vector3);
 }
 
 static bool IsValidType(PropertyType type)
@@ -250,6 +256,19 @@ static Error CheckFloats(const PropertyTable* table, const PropertyDescriptor* d
         }
     }
     return Error_CreateSuccess();
+}
+
+static Error CheckDouble(const PropertyTable* table, const PropertyDescriptor* descriptor, double value)
+{
+    if (!Math_IsNaNDouble(value) && !Math_IsInfinityDouble(value) && IsWithinBounds(&descriptor->Rules, value))
+    {
+        return Error_CreateSuccess();
+    }
+    char Rule[PROPERTY_RULE_TEXT_SIZE];
+    char Text[PROPERTY_RULE_TEXT_SIZE + 8U];
+    FormatRuleText(&descriptor->Rules, true, Rule, sizeof(Rule));
+    snprintf(Text, sizeof(Text), "be %s", Rule);
+    return MakeRuleError(table, descriptor, Text);
 }
 
 static Error CheckInteger(const PropertyTable* table, const PropertyDescriptor* descriptor, int64_t value)
@@ -425,6 +444,10 @@ static bool IsBoundValid(PropertyType type, double bound)
     {
         return false;
     }
+    if (type == PropertyType_Double)
+    {
+        return true;
+    }
     if (type == PropertyType_Int32)
     {
         return (Math_TruncateDouble(bound) == bound) && (bound >= (double)INT32_MIN) && (bound <= (double)INT32_MAX);
@@ -587,6 +610,8 @@ bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, con
         case PropertyType_Float:
         case PropertyType_Angle:
             return a->FloatValue == b->FloatValue;
+        case PropertyType_Double:
+            return a->DoubleValue == b->DoubleValue;
         case PropertyType_Vector2:
             return (a->Vector2Value.x == b->Vector2Value.x) && (a->Vector2Value.y == b->Vector2Value.y);
         case PropertyType_Vector3:
@@ -608,6 +633,8 @@ bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, con
             return a->EnumValue == b->EnumValue;
         case PropertyType_ObjectId:
             return a->ObjectIdValue == b->ObjectIdValue;
+        case PropertyType_Date:
+            return a->DateValue == b->DateValue;
     }
     return false;
 }
@@ -672,6 +699,11 @@ Error PropertyInternal_CheckData(const PropertyTable* table, const PropertyDescr
         case PropertyType_Float:
         case PropertyType_Angle:
             return CheckFloats(table, descriptor, &data->FloatValue, 1U);
+        case PropertyType_Double:
+            return CheckDouble(table, descriptor, data->DoubleValue);
+        case PropertyType_Date:
+            return GameCalendar_IsDayNumberValid(data->DateValue) ? Error_CreateSuccess()
+                : MakeRuleError(table, descriptor, "be a date in the years 1 to 9999");
         case PropertyType_Vector2:
         {
             const float Components[2] = { data->Vector2Value.x, data->Vector2Value.y };
@@ -811,6 +843,8 @@ const unsigned char* PropertyType_GetName(PropertyType type)
             return u8"uint64";
         case PropertyType_Float:
             return u8"float";
+        case PropertyType_Double:
+            return u8"double";
         case PropertyType_Angle:
             return u8"angle";
         case PropertyType_Vector2:
@@ -829,6 +863,8 @@ const unsigned char* PropertyType_GetName(PropertyType type)
             return u8"enum";
         case PropertyType_ObjectId:
             return u8"object_id";
+        case PropertyType_Date:
+            return u8"date";
     }
     return u8"unknown";
 }

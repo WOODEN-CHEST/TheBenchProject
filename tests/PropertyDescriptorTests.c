@@ -1,6 +1,7 @@
 #include "TestSuites.h"
 #include "TestText.h"
 #include "PropertyDescriptor.h"
+#include "GameClock.h"
 #include "WorldEnvironment.h"
 #include "Logger.h"
 #include "wr/WRFileSystem.h"
@@ -17,6 +18,9 @@
 #define TEST_MODEL_MAX_LENGTH ((size_t)32)
 /** Bytes of padding that push the big record past the readers' inline scratch storage. */
 #define TEST_BIG_RECORD_PADDING ((size_t)2048)
+/** Day numbers of the record's default due date, 2026-10-18, and of a later one, 2027-01-20. */
+#define TEST_DUE_DEFAULT ((int64_t)739906)
+#define TEST_DUE_LATER ((int64_t)740000)
 /** Initial capacity of text buffers; they grow as needed. */
 #define TEST_TEXT_CAPACITY ((size_t)256)
 
@@ -50,6 +54,8 @@ typedef struct TestRecordStruct
     uint8_t SmallTier;
     uint64_t Target;
     uint64_t Serial;
+    double Elapsed;
+    int64_t Due;
     int32_t Revision;
     int32_t AfterSetCount;
     const PropertyDescriptor* LastChanged;
@@ -129,6 +135,11 @@ static const PropertyDescriptor RecordProperties[] =
         .Default.UInt64Value = 0U, .Flags = PropertyFlags_Persistent | PropertyFlags_ReadOnly, .SinceVersion = 1U },
     { .Key = u8"revision", .WireId = 18U, .Type = PropertyType_Int32, PROPERTY_MEMBER(TestRecord, Revision),
         .Default.Int32Value = 0, .Flags = PropertyFlags_None, .SinceVersion = 1U },
+    { .Key = u8"elapsed", .WireId = 19U, .Type = PropertyType_Double, PROPERTY_MEMBER(TestRecord, Elapsed),
+        .Default.DoubleValue = 0.5, .Rules = PROPERTY_RULES_HALF_OPEN(0.0, 86400.0), .Flags = PROPERTY_FLAGS_SETTING,
+        .SinceVersion = 1U },
+    { .Key = u8"due", .WireId = 20U, .Type = PropertyType_Date, PROPERTY_MEMBER(TestRecord, Due),
+        .Default.DateValue = TEST_DUE_DEFAULT, .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
 };
 
 #define RECORD_PROPERTY_COUNT (sizeof(RecordProperties) / sizeof(RecordProperties[0]))
@@ -207,6 +218,8 @@ static void FillRecord(TestRun* run, TestRecord* record)
     record->SmallTier = TestTier_Both;
     record->Target = 99U;
     record->Serial = 5U;
+    record->Elapsed = 1.0 / 3.0; // every bit of a double must survive JSON text
+    record->Due = TEST_DUE_LATER;
     record->Revision = 3;
 }
 
@@ -394,12 +407,14 @@ static Error ReferencePutColor(GHDFObjectPool* pool, GHDFCompound* compound, GHD
     return Result;
 }
 
-/* The pre-T04 EncodeEnvironment of source/WorldEncoder.c, with its field ids as literals. */
+/* The pre-T04 EncodeEnvironment of source/WorldEncoder.c, with its field ids as literals. Ids 2 and 3 held the
+ * day-night cycle switch and day length that T23 retired: they are written with their old defaults, as data saved
+ * before T23 would hold them. The old encoder had no date (T23's id 30). */
 static Error ReferenceEncodeEnvironment(GHDFObjectPool* pool, GHDFCompound* compound, const WorldEnvironment* environment)
 {
     Error Result = ReferencePutFloat(compound, 1, environment->TimeOfDay);
-    if (Result.Code == ErrorCode_Success) { Result = ReferencePutBool(compound, 2, environment->IsDayNightCycleEnabled); }
-    if (Result.Code == ErrorCode_Success) { Result = ReferencePutFloat(compound, 3, environment->DayLengthSeconds); }
+    if (Result.Code == ErrorCode_Success) { Result = ReferencePutBool(compound, 2, true); }
+    if (Result.Code == ErrorCode_Success) { Result = ReferencePutFloat(compound, 3, 1200.0f); }
     if (Result.Code == ErrorCode_Success) { Result = ReferencePutFloat(compound, 23, environment->SunAngle); }
     if (Result.Code == ErrorCode_Success) { Result = ReferencePutFloat(compound, 4, environment->SkyTurbidity); }
     if (Result.Code == ErrorCode_Success) { Result = ReferencePutColor(pool, compound, 5, environment->SkyGroundAlbedo); }
@@ -448,8 +463,7 @@ static Error ReferenceEncodeEnvironment(GHDFObjectPool* pool, GHDFCompound* comp
 static void FillEnvironment(WorldEnvironment* environment)
 {
     environment->TimeOfDay = 0.3f;
-    environment->IsDayNightCycleEnabled = false;
-    environment->DayLengthSeconds = 90.0f;
+    environment->Date = TEST_DUE_LATER;
     environment->SunAngle = 0.7f;
     environment->SkyTurbidity = 4.5f;
     environment->SkyGroundAlbedo = (Color){ 1, 2, 3, 4 };
@@ -485,6 +499,7 @@ static void TablesPassTheirCheck(TestRun* run)
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(&RecordTable));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(&BigRecordTable));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldEnvironment_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(GameClock_GetPropertyTable()));
     TEST_CHECK_ERROR(run, PropertyTable_Check(NULL), ErrorCode_IllegalArgument);
 }
 
@@ -517,6 +532,7 @@ static void BreakBoundsOnBool(PropertyDescriptor* descriptor) { descriptor->Rule
 static void BreakVersion(PropertyDescriptor* descriptor) { descriptor->SinceVersion = 2U; }
 static void BreakFlags(PropertyDescriptor* descriptor) { descriptor->Flags |= 1U << 20; }
 static void BreakEnumDefault(PropertyDescriptor* descriptor) { descriptor->Default.EnumValue = 9; }
+static void BreakDateDefault(PropertyDescriptor* descriptor) { descriptor->Default.DateValue = -1; }
 
 static void BrokenTablesFailTheirCheck(TestRun* run)
 {
@@ -536,6 +552,8 @@ static void BrokenTablesFailTheirCheck(TestRun* run)
     CheckBrokenDescriptor(run, 4U, BreakVersion, "SinceVersion");
     CheckBrokenDescriptor(run, 4U, BreakFlags, "flag bits");
     CheckBrokenDescriptor(run, 13U, BreakEnumDefault, "one of \"both\", \"near\" or \"far\"");
+    CheckBrokenDescriptor(run, 19U, BreakBoundsOnBool, "no minimum or maximum"); // a date takes no bounds
+    CheckBrokenDescriptor(run, 19U, BreakDateDefault, "due (Due) must be a date");
 
     // A table-level fault: a wire id retired twice.
     static const uint16_t Twice[] = { 40U, 40U };
@@ -560,6 +578,7 @@ static void ConstructGivesTheDefaults(TestRun* run)
     TEST_CHECK(run, AreStringsEqual(Record.Title, u8"untitled") && (Record.Title != RecordProperties[10].Default.StringValue));
     TEST_CHECK(run, (Record.Note == NULL) && (Record.Model == NULL));
     TEST_CHECK(run, (Record.Tier == TestTier_Near) && (Record.SmallTier == TestTier_Far) && (Record.Target == 0U));
+    TEST_CHECK(run, (Record.Elapsed == 0.5) && (Record.Due == TEST_DUE_DEFAULT));
     TEST_CHECK(run, (Record.AfterSetCount == 0) && (Record.LastChanged == NULL)); // undescribed fields are zeroed
     TEST_CHECK_SUCCESS(run, Properties_Validate(&RecordTable, &Record));
 
@@ -625,6 +644,21 @@ static void ValidationNamesTheKeyAndTheRule(TestRun* run)
     Record.Model = (unsigned char*)u8"Bad Name";
     CheckInvalidRecord(run, &Record, (const char* const[]){ "model (Model) must be an asset name", NULL });
     Record.Model = NULL;
+
+    Record.Elapsed = 86400.0; // the half-open range excludes its maximum
+    CheckInvalidRecord(run, &Record, (const char* const[]){ "test_record.elapsed (Elapsed) must be finite and in [0, 86400)",
+        NULL });
+    Record.Elapsed = NAN;
+    CheckInvalidRecord(run, &Record, (const char* const[]){ "elapsed", "finite", NULL });
+    Record.Elapsed = 86399.999999; // a double bound compares in double precision
+    TEST_CHECK_SUCCESS(run, Properties_Validate(&RecordTable, &Record));
+
+    Record.Due = -1;
+    CheckInvalidRecord(run, &Record, (const char* const[]){ "test_record.due (Due) must be a date in the years 1 to 9999",
+        NULL });
+    Record.Due = GAME_CALENDAR_LAST_DAY_NUMBER + 1;
+    CheckInvalidRecord(run, &Record, (const char* const[]){ "due (Due)", NULL });
+    Record.Due = GAME_CALENDAR_LAST_DAY_NUMBER;
 
     TEST_CHECK_SUCCESS(run, Properties_Validate(&RecordTable, &Record));
     TEST_CHECK_ERROR(run, Properties_Validate(&RecordTable, NULL), ErrorCode_IllegalArgument);
@@ -801,6 +835,12 @@ static void WrongValuesAreRejectedAndChangeNothing(TestRun* run)
             { "{\"count\": 1, \"seed\": -5}", "test_record.seed" },
             { "{\"count\": 1, \"weight\": 1e300}", "test_record.weight" },
             { "{\"count\": 1, \"shade\": {\"tint\": \"#ffffff\", \"opacity\": 2}}", "test_record.shade" },
+            { "{\"count\": 1, \"elapsed\": 86400}", "test_record.elapsed (Elapsed) must be finite and in [0, 86400)" },
+            { "{\"count\": 1, \"elapsed\": \"soon\"}", "test_record.elapsed" },
+            { "{\"count\": 1, \"due\": 739906}", "test_record.due: Expected a date \"yyyy-mm-dd\"" },
+            { "{\"count\": 1, \"due\": \"2026-02-29\"}", "test_record.due" },
+            { "{\"count\": 1, \"due\": \"2026-10-18T12:00\"}", "test_record.due" },
+            { "{\"count\": 1, \"due\": \"0000-12-31\"}", "test_record.due" },
         };
         for (size_t Index = 0; Index < (sizeof(BadDocuments) / sizeof(BadDocuments[0])); Index++)
         {
@@ -830,7 +870,7 @@ static void JSONValuesUseTheGameConventions(TestRun* run)
         // by name, uint64 above INT64_MAX as a string.
         const char* Text = "{\"tint\": [1, 2, 3], \"shade\": \"#102030\", \"position\": {\"x\": 1, \"y\": 2, \"z\": 3},"
             " \"count\": \"7\", \"small_tier\": \"near\", \"seed\": \"18446744073709551615\", \"note\": null,"
-            " \"heading\": 180}";
+            " \"heading\": 180, \"due\": \"2027-01-20\", \"elapsed\": 12.25}";
         if (TEST_CHECK_SUCCESS(run, ReadRecordFromText(run, Pool, Text, &Record, NULL)))
         {
             TEST_CHECK(run, (Record.Tint.r == 1) && (Record.Tint.b == 3) && (Record.Tint.a == 255));
@@ -838,6 +878,7 @@ static void JSONValuesUseTheGameConventions(TestRun* run)
             TEST_CHECK(run, (Record.Position.x == 1.0f) && (Record.Position.z == 3.0f) && (Record.Count == 7));
             TEST_CHECK(run, (Record.SmallTier == TestTier_Near) && (Record.Seed == UINT64_MAX) && (Record.Note == NULL));
             TEST_CHECK(run, fabsf(Record.Heading - (float)TEST_PI) < 1e-6f);
+            TEST_CHECK(run, (Record.Due == TEST_DUE_LATER) && (Record.Elapsed == 12.25));
         }
 
         // Written forms: hex colors (alpha only when not opaque), the enum's name, the angle in degrees, a big uint64 as
@@ -864,6 +905,10 @@ static void JSONValuesUseTheGameConventions(TestRun* run)
             if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"heading", JSONValueType_RealNumber, &Value)))
             {
                 TEST_CHECK(run, Value.Value.RealNumber == 90.0);
+            }
+            if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"due", JSONValueType_String, &Value)))
+            {
+                TEST_CHECK(run, (Value.Value.String->_count == 10U) && (memcmp(Value.Value.String->_data, "2027-01-20", 10U) == 0));
             }
             TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"seed", JSONValueType_String, &Value));
             TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Compound, true));
@@ -1198,7 +1243,8 @@ static void MigrationRunsForOlderData(TestRun* run)
     TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
 }
 
-/* The table-driven encoder writes the same GHDF tree as the hand-written one did, for defaults and for changed values. */
+/* The table-driven encoder writes the same GHDF tree as the hand-written one did, for defaults and for changed values,
+ * except for T23's changes: no retired ids 2 and 3, and the date as id 30. Data written before T23 still reads. */
 static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
 {
     GHDFObjectPool* Pool = NULL;
@@ -1206,6 +1252,7 @@ static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
     {
         return;
     }
+    const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
     WorldEnvironment Environment;
     WorldEnvironment_SetDefaults(&Environment);
     PropertyWriteOptions Everything = { .AreDefaultsWritten = true };
@@ -1221,16 +1268,26 @@ static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
             && TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Pool, &Actual)))
         {
             TEST_CHECK_SUCCESS(run, ReferenceEncodeEnvironment(Pool, Expected, &Environment));
-            TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(WorldEnvironment_GetPropertyTable(), &Environment, Pool, Actual,
-                &Everything));
             TEST_CHECK(run, GHDFCompound_GetEntryCount(Expected) == 29U);
-            TEST_CHECK(run, AreGHDFCompoundsEqual(Expected, Actual, 0U));
 
+            // Old data reads: the retired ids are skipped, and the missing date reads as its default.
             WorldEnvironment Restored;
             WorldEnvironment_SetDefaults(&Restored);
-            TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(WorldEnvironment_GetPropertyTable(), Expected, &Restored, NULL));
-            TEST_CHECK(run, Properties_Equals(WorldEnvironment_GetPropertyTable(), &Environment, &Restored));
+            TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(Table, Expected, &Restored, NULL));
+            TEST_CHECK(run, Restored.Date == GAME_CLOCK_DEFAULT_DAY_NUMBER);
+            Restored.Date = Environment.Date;
+            TEST_CHECK(run, Properties_Equals(Table, &Environment, &Restored));
             WorldEnvironment_Deconstruct(&Restored);
+
+            // The table writes the old entries without the retired ids, plus the date as an encoded day number.
+            TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Expected, 2U));
+            TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Expected, 3U));
+            GHDFObjectValue Date = GHDFObjectValue_CreateEncodedInteger(Environment.Date);
+            TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Expected, 30U,
+                GHDF_CreateRegularType(GHDFValueType_EncodedInteger), &Date));
+            TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Environment, Pool, Actual, &Everything));
+            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 28U);
+            TEST_CHECK(run, AreGHDFCompoundsEqual(Expected, Actual, 0U));
         }
         TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Expected, true));
         TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Actual, true));
@@ -1255,7 +1312,7 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
     if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
     {
         TEST_CHECK_SUCCESS(run, WorldEnvironment_WriteJSON(&Source, Pool, Compound, NULL));
-        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 29U);
+        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 28U);
         JSONObjectValue Parsed;
         if (ReparseCompound(run, Pool, Compound, &Parsed))
         {
@@ -1266,13 +1323,23 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
         TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Compound, true));
     }
 
-    // The keys are the field names in snake_case, and the sun angle is in degrees.
+    // The keys are the field names in snake_case, the sun angle is in degrees and the date is "yyyy-mm-dd".
     JSONObjectValue Value;
-    if (TestText_ParseJSON(run, Pool, "{\"sun_angle\": 30, \"light_pollution\": 0.5, \"sky_tint\": \"#ff0000\"}", &Value))
+    if (TestText_ParseJSON(run, Pool, "{\"sun_angle\": 30, \"light_pollution\": 0.5, \"sky_tint\": \"#ff0000\", "
+        "\"date\": \"2027-01-20\"}", &Value))
     {
         TEST_CHECK_SUCCESS(run, WorldEnvironment_ReadJSON(&Restored, Value.Value.Compound, NULL));
         TEST_CHECK(run, fabsf(Restored.SunAngle - (float)(TEST_PI / 6.0)) < 1e-6f);
         TEST_CHECK(run, (Restored.LightPollution == 0.5f) && (Restored.SkyTint.g == 0) && (Restored.StarTwinkle == 0.25f));
+        TEST_CHECK(run, Restored.Date == TEST_DUE_LATER);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+    // The removed day-night settings are unknown keys now (no world file was written with them).
+    if (TestText_ParseJSON(run, Pool, "{\"day_length_seconds\": 120}", &Value))
+    {
+        const char* const Fragments[] = { "world_environment: unknown key", "\"day_length_seconds\"", NULL };
+        TestText_CheckErrorMessage(run, WorldEnvironment_ReadJSON(&Restored, Value.Value.Compound, NULL),
+            ErrorCode_InvalidJSON, Fragments);
         TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
     }
     if (TestText_ParseJSON(run, Pool, "{\"light_pollution\": 2}", &Value))

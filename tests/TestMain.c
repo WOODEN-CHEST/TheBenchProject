@@ -24,6 +24,8 @@ int main(void)
     WorldLightCullingTests_Run(&Run);
     WorldTests_Run(&Run);
     PropertyDescriptorTests_Run(&Run);
+    GameCalendarTests_Run(&Run);
+    GameClockTests_Run(&Run);
     WorldEnvironmentTests_Run(&Run);
     NightSkyTests_Run(&Run);
     WorldDTOTests_Run(&Run);

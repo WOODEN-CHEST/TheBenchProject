@@ -118,7 +118,7 @@ the passes share is `shaders/common/night_sky.glsl`.
 - **The sky turns.** `WorldEnvironment_GetCelestialToWorld` (R_x(SunAngle) . R_z(day angle)) turns everything fixed
   among the stars once a day around the celestial pole, which stays at world (0, sin SunAngle, -cos SunAngle): low
   toward -Z, at the height SunAngle (the latitude). The sun is the celestial point (1,0,0). The stars do not yet drift
-  against the sun through the year; that needs the date (T03, a `// TODO:` in `WorldEnvironment.c`).
+  against the sun through the year; T03 adds that from the environment's `Date` (a `// TODO:` in `WorldEnvironment.c`).
 - **Stars** (`WorldRendererStars.c`, shader `world_stars`). A catalogue generated from `StarSeed`: `StarDensity` 1 is
   an Earth-like sky (about 9000 stars, at most 20000), magnitudes -1..7 by the real count law (2.8 times as many per
   magnitude), B-V colours (mostly white to yellow, some blue and orange), up to twice as dense along the galactic
@@ -247,19 +247,31 @@ copying it between shaders.
 ## WorldTestFrame
 
 Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World` built with `World_Construct2` (so it binds its
-sprites' animations itself), a `GameCamera`, and a `WorldRenderer`. All input runs in `Update` at the fixed
-timestep and comes from `Services.Input` ([GameInput.md](GameInput.md)), after the UI test frame above had first
-refusal: movement through the actions (`move_*`, default WASD + SPACE/CTRL, `sprint` default SHIFT), mouse-look
-(`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured) and the debug keys as raw keys: P
-pause/resume the day-night cycle, 1–4 jump to dawn/noon/dusk/midnight, `[` `]` scrub the time, O post effects, B bloom,
-G sun shafts, C crisp overlay, L light gizmos, I log the renderer status, T toggle the text sample, N cycle the light
-pollution (0, 0.35, 0.7, 1; logged). M frees the cursor
-for the UI (and captures it again); a left click the UI did not take captures it again. An unconsumed `pause` (Escape
-once the UI is not using it) quits through `GameFrameManager_RequestStop`. `Render` handles no input. Captures the cursor
-in `Start`, releases it in `End`/`Destroy`. The world is built in `Create`; `BeginLoad` calls
-`WorldRenderer_PrepareWorld` (shaders and models), so the stepped load/unload slots are trivial. `Create` builds
-everything up front so `Destroy` is always safe (even on forced teardown); it destroys the renderer, then the world,
-then the text sample.
+sprites' animations itself), a `GameClock` ([GameClock.md](GameClock.md)), a `GameCamera`, and a `WorldRenderer`.
+**Game time:** the clock starts from the world environment's date and time of day (noon, 2026-10-18) at time scale
+720 (a 2-minute day, as the test world had before T23; the clock's own default is 72). Every `Update` advances it,
+logs a new day when it crosses midnight, and writes its time of day and date into the environment, so the sky shows
+the clock.
+
+All input runs in `Update` at the fixed timestep and comes from `Services.Input` ([GameInput.md](GameInput.md)), after
+the UI test frame above had first refusal: movement through the actions (`move_*`, default WASD + SPACE/CTRL, `sprint`
+default SHIFT), mouse-look (`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured) and the
+debug keys as raw keys:
+- **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
+  06:00:00.`): P pause/resume the clock; 1–4 jump to dawn/noon/dusk/midnight of the clock's day (06:00, 12:00, 18:00,
+  00:00) and pause; `[` `]` scrub the time while held (a tenth of a day per real second, across midnights, logged when
+  let go); `,` and `.` the previous and next day, `/` a week ahead (the day keys keep the time of day);
+- **the renderer and the sky:** O post effects, B bloom, G sun shafts, C crisp overlay, L light gizmos, N cycle the
+  light pollution (0, 0.35, 0.7, 1; logged), I log the renderer status and then the game time (`WorldTest: game time
+  Sun 2026-10-18 12:00:00, running, 720 game seconds per real second (a day takes 2 real minutes).`);
+- T toggles the text sample.
+
+M frees the cursor for the UI (and captures it again); a left click the UI did not take captures it again. An
+unconsumed `pause` (Escape once the UI is not using it) quits through `GameFrameManager_RequestStop`. `Render` handles
+no input. Captures the cursor in `Start`, releases it in `End`/`Destroy`. The world and the clock are built in `Create`;
+`BeginLoad` calls `WorldRenderer_PrepareWorld` (shaders and models), so the stepped load/unload slots are trivial.
+`Create` builds everything up front so `Destroy` is always safe (even on forced teardown); it destroys the renderer,
+then the world, the clock and the text sample.
 
 **Text sample** (shown by default, T toggles it): a `TextDocument` built from the `TEXT_SAMPLE_JSON` text component
 JSON in `Create` (so the real game runs the codec), with `noto_sans` as its default font, laid out in `Update`

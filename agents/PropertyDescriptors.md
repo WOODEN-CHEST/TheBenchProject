@@ -11,8 +11,8 @@ must agree. The editor's inspector, scripts (the `Script` flag, types and descri
 checker and autocomplete, `handoff/2026-10_scripting_language/PROPOSAL.md` section 5), saves and the world files
 (T09) all read the same tables. Decided as architecture A1 / G1 (a), built in T04.
 
-**First client:** `WorldEnvironment` ([WorldData.md](WorldData.md), "Environment"). T05 moves the world objects and
-their components onto tables, T23 the game clock, T16 the weather.
+**Clients:** `WorldEnvironment` ([WorldData.md](WorldData.md), "Environment") and `GameClock` ([GameClock.md](GameClock.md),
+T23). T05 moves the world objects and their components onto tables, T16 the weather.
 
 ## Declaring a table
 
@@ -70,6 +70,7 @@ default passes its own rules**.
 | `Int32` / `UInt32` | `int32_t` / `uint32_t` | integer | Int32 / UInt32 |
 | `UInt64` | `uint64_t` | integer, a decimal string above INT64_MAX | UInt64 |
 | `Float` | `float`, always finite | number (shortest text that reads back) | Float |
+| `Double` | `double`, always finite | number (shortest text that reads back) | Double |
 | `Angle` | `float`, **radians** | number, **degrees** (shortest text that reads back to the same radians) | Float, radians |
 | `Vector2` / `Vector3` | raylib vectors | `[x, y]` / `[x, y, z]` | Float array of 2 / 3 |
 | `Color` | raylib `Color` (RGBA all data) | `"#rrggbb"`, `"#rrggbbaa"` when not opaque | UInt8 array of 4 |
@@ -78,16 +79,20 @@ default passes its own rules**.
 | `AssetName` | owned `unsigned char*`, `AssetManager_IsValidAssetName` | string or `null` | String (absent when NULL) |
 | `Enum` | integer of 1, 2 (unsigned) or 4 bytes | the entry's name, e.g. `"near"` | EncodedInteger (the value) |
 | `ObjectId` | `uint64_t`, 0 = none | like UInt64 | UInt64 |
+| `Date` | `int64_t` day number ([GameCalendar.md](GameCalendar.md)), inside the calendar (years 1 to 9999) | `"yyyy-mm-dd"` only, e.g. `"2026-10-18"` | EncodedInteger (the day number; three bytes for this era) |
 
 JSON readers go through `GameJSON` ([GameJSON.md](GameJSON.md)), so they accept every form asset definitions accept
 (colors as arrays or `{r,g,b,a}`, vectors as `{x,y,z}`, numbers as numeric strings); `Vector2` and `Vector3` arrays
 must have exactly 2 and 3 elements. A RenderColor's tint alpha is not part of its value: not written, read as 255,
 skipped by comparisons. Colors and vectors in GHDF match what the hand-written world encoder always wrote.
 
-Rules (`PROPERTY_RULES_*`): minimum/maximum, each inclusive or exclusive, for `Int32`, `UInt32`, `Float`, `Angle`
-(radians) and every vector component (floats compare in float precision, so a bound of 0.1 accepts 0.1f);
-`MaxLength` and `IsNullAllowed` for strings. Floats are always required finite. `UInt64`, `ObjectId`, `Bool` and
-`Color` accept every value.
+Rules (`PROPERTY_RULES_*`): minimum/maximum, each inclusive or exclusive, for `Int32`, `UInt32`, `Float`, `Double`,
+`Angle` (radians) and every vector component (floats compare in float precision, so a bound of 0.1 accepts 0.1f;
+doubles in double precision); `PROPERTY_RULES_HALF_OPEN(min, max)` is [min, max), for values that wrap at the maximum
+(seconds of a day). `MaxLength` and `IsNullAllowed` for strings. Floats and doubles are always required finite.
+`UInt64`, `ObjectId`, `Bool` and `Color` accept every value; a `Date` takes no bounds, its type's rule is the
+calendar's range. A JSON date must be the exact text "yyyy-mm-dd" of an existing day; a bare day number is refused, so
+files stay readable.
 
 Flags: `Persistent` (written and read by JSON and GHDF), `Editable` (inspector), `ReadOnly` (visible, refused by
 `Properties_Set`; reads from files still fill it), `Script`. `PROPERTY_FLAGS_SETTING` = Persistent | Editable | Script.
@@ -147,9 +152,10 @@ that**; everything else respects the `_` convention and goes through the type's 
 `PropertyType` switches have no `default:`, so `-Wswitch` lists every place that needs the new type:
 `GetStorageSize`, `PropertyInternal_AreDataEqual`, `PropertyInternal_CheckData` and `PropertyType_GetName`
 (`PropertyDescriptor.c`), `CreateValue` and `ParseValue` (`PropertyDescriptorJSON.c`), `PutValue` and `ParseEntry`
-(`PropertyDescriptorGHDF.c`). Also decide whether it takes bounds (`IsBoundedType`) and whether it owns memory
-(`PropertyInternal_IsStringType` today), document it in the header's type table and here, and test it in
-`tests/PropertyDescriptorTests.c`. Planned: `Date` (T23), tag sets and the `DataMap` of namespaced keys (T24).
+(`PropertyDescriptorGHDF.c`). Also decide whether it takes bounds (`IsBoundedType`, and `IsBoundValid` for their
+range) and whether it owns memory (`PropertyInternal_IsStringType` today), document it in the header's type table and
+here, and test it in `tests/PropertyDescriptorTests.c` (the test record has one field of every type). `Double` and
+`Date` were added this way in T23. Planned: tag sets and the `DataMap` of namespaced keys (T24).
 
 ## Known limits
 

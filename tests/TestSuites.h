@@ -35,7 +35,17 @@ void WorldTests_Run(TestRun* run);
  *  access by key, migration, and the environment's table against the old encoder (PropertyDescriptorTests.c). */
 void PropertyDescriptorTests_Run(TestRun* run);
 
-/** @brief Environment validation, copying, the day-night advance and the celestial frame (WorldEnvironmentTests.c). */
+/** @brief The calendar: day numbers to dates and back over eight centuries, weekdays, leap years, month lengths,
+ *  validation, names and the date text (GameCalendarTests.c). */
+void GameCalendarTests_Run(TestRun* run);
+
+/** @brief The game clock: the time scale, pausing, crossings, the largest step, fast-forwards over month and year
+ *  ends, 1000 days of 480 Hz ticks without drift, validated jumps, the calendar's end, and saving through its table
+ *  (GameClockTests.c). */
+void GameClockTests_Run(TestRun* run);
+
+/** @brief Environment validation, copying, the date and time the clock writes, and the celestial frame
+ *  (WorldEnvironmentTests.c). */
 void WorldEnvironmentTests_Run(TestRun* run);
 
 /** @brief The night sky's maths: the star catalogue, limiting magnitude, air mass, star colours and the galaxy's

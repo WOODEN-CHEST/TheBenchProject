@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "PropertyDescriptorInternal.h"
+#include "GameCalendar.h"
 #include "GameJSON.h"
 #include "Logger.h"
 #include "wr/WRCollection.h"
@@ -21,6 +22,8 @@
 /** The %g precisions tried for an angle's shortest degrees: printf's default first, DBL_DECIMAL_DIG always reads back. */
 #define PROPERTY_JSON_ANGLE_PRECISION_START 6
 #define PROPERTY_JSON_ANGLE_TEXT_SIZE 40
+/** Room for a date's text "yyyy-mm-dd" and its terminator. */
+#define PROPERTY_JSON_DATE_TEXT_CAPACITY (GAME_CALENDAR_DATE_TEXT_LENGTH + 1U)
 /** How many unknown keys one message names (the rest are counted), and how many bytes of each it prints. */
 #define PROPERTY_JSON_UNKNOWN_KEY_LIST_LIMIT ((size_t)8)
 #define PROPERTY_JSON_UNKNOWN_KEY_PRINT_LIMIT ((size_t)64)
@@ -62,6 +65,20 @@ static JSONObjectValue CreateAngleValue(float radians)
     return JSONObjectValue_CreateRealNumber(Degrees);
 }
 
+/* The date text "yyyy-mm-dd" as a JSON string, formatted on the stack. */
+static Error CreateDateValue(JSONObjectPool* pool, int64_t dayNumber, JSONObjectValue* outValue)
+{
+    unsigned char Storage[PROPERTY_JSON_DATE_TEXT_CAPACITY];
+    GenericBuffer Text;
+    GenericBuffer_CreateConstant(&Text, Storage, sizeof(Storage), sizeof(unsigned char), 0U);
+    Error Result = GameCalendar_FormatDate(dayNumber, &Text);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    return GameJSON_CreateStringValue(pool, Storage, outValue);
+}
+
 static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descriptor, const PropertyData* data,
     JSONObjectValue* outValue)
 {
@@ -82,6 +99,10 @@ static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descrip
             return GameJSON_CreateUInt64Value(pool, data->ObjectIdValue, outValue);
         case PropertyType_Float:
             *outValue = GameJSON_CreateFloatValue(data->FloatValue);
+            return Error_CreateSuccess();
+        case PropertyType_Double:
+            // JSON_Serialize writes a real number as the shortest text that reads back to the same double.
+            *outValue = JSONObjectValue_CreateRealNumber(data->DoubleValue);
             return Error_CreateSuccess();
         case PropertyType_Angle:
             *outValue = CreateAngleValue(data->FloatValue);
@@ -111,6 +132,8 @@ static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descrip
             }
             return GameJSON_CreateStringValue(pool, Entry->Name, outValue);
         }
+        case PropertyType_Date:
+            return CreateDateValue(pool, data->DateValue, outValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -192,6 +215,20 @@ static Error ReadEnum(const PropertyDescriptor* descriptor, const JSONObjectValu
     return Result;
 }
 
+/* Only the text "yyyy-mm-dd": a bare day number would be a count of days no person could check. */
+static Error ReadDate(const JSONObjectValue* value, int64_t* outDayNumber)
+{
+    if (value->Type == JSONValueType_String)
+    {
+        GenericBuffer* Buffer = value->Value.String;
+        if ((Buffer != NULL) && GameCalendar_TryParseDate(Buffer->_data, Buffer->_count, outDayNumber))
+        {
+            return Error_CreateSuccess();
+        }
+    }
+    return Error_Construct2(ErrorCode_InvalidJSON, "Expected a date \"yyyy-mm-dd\" in the years 1 to 9999.");
+}
+
 /* The scalar and structured types; strings are read by ReadString (they are owned). */
 static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectValue* value, PropertyData* outData)
 {
@@ -215,6 +252,8 @@ static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectVa
             return GameJSON_ValueToUInt64(value, &outData->ObjectIdValue);
         case PropertyType_Float:
             return ReadFloat(value, false, &outData->FloatValue);
+        case PropertyType_Double:
+            return GameJSON_ValueToDouble(value, &outData->DoubleValue);
         case PropertyType_Angle:
             return ReadFloat(value, true, &outData->FloatValue);
         case PropertyType_Vector2:
@@ -232,6 +271,8 @@ static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectVa
             return Error_Construct2(ErrorCode_InvalidState, "Strings are read separately.");
         case PropertyType_Enum:
             return ReadEnum(descriptor, value, &outData->EnumValue);
+        case PropertyType_Date:
+            return ReadDate(value, &outData->DateValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
