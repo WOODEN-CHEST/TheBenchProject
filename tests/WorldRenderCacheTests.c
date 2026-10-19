@@ -2,12 +2,14 @@
 #include "TestAssets.h"
 #include "TestWorld.h"
 #include "WorldRenderCache.h"
+#include "SpriteTransform.h"
 #include "World.h"
 #include "WorldObject.h"
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
 #include <math.h>
+#include <string.h>
 
 
 // Types.
@@ -401,6 +403,74 @@ static void EntriesCarryTheShadowSettings(TestRun* run)
     CacheFixture_Deconstruct(run, &Fixture);
 }
 
+/* A sprite entry carries its quad (the world size from the frame's pixels, the pixels per unit and the object's scale;
+ * the object's axes; the pivot and flips), the fixed matrix, its bounds and its drawing settings; a decal needs the
+ * fixed orientation, and only cutout sprites that are not decals are drawn crisp. */
+static void SpriteEntriesCarryTheirQuadAndSettings(TestRun* run)
+{
+    CacheFixture Fixture;
+    if (!CacheFixture_Construct(run, &Fixture))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+
+    WorldSpriteComponent* Sign = WorldSpriteComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+        WorldComponentType_Sprite));
+    WorldSpriteComponent* Puff = WorldSpriteComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+        WorldComponentType_Sprite));
+    bool IsBuilt = (Sign != NULL) && (Puff != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sign, (const unsigned char*)u8"walk"))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Puff, (const unsigned char*)u8"walk"))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetScale(WorldComponent_GetOwner(&Sign->Base),
+            (Vector3){ 2.0f, 3.0f, 9.0f }))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(&Sign->Base),
+            (Vector3){ 1.0f, 2.0f, 3.0f }))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(WorldComponent_GetOwner(&Sign->Base),
+            (Vector3){ 0.0f, PI / 2.0f, 0.0f }))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetPixelsPerUnit(Sign, 0.5f))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOrientation(Sign, WorldSpriteOrientation_Fixed))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetPivot(Sign, (Vector2){ 0.5f, 0.0f }))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetFlippedX(Sign, true))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDecal(Sign, true))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetAlphaMode(Sign, WorldSpriteAlphaMode_Blend))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOmitsPixelation(Sign, true))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetLit(Puff, false))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetEmission(Puff, 4.0f))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDecal(Puff, true)) // a billboard: not drawn as a decal
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOmitsPixelation(Puff, true));
+    size_t Count = 0;
+    const WorldRenderSprite* Sprites = NULL;
+    if (IsBuilt && CacheFixture_Sync(run, &Fixture))
+    {
+        Sprites = WorldRenderCache_GetSprites(&Fixture.Cache, &Count);
+    }
+    if (TEST_CHECK(run, (Sprites != NULL) && (Count == 2)))
+    {
+        // The test frame is 1x1 pixels without a texture: 1 / 0.5 pixels per unit times the X and Y scale.
+        const WorldRenderSprite* Entry = &Sprites[0];
+        TEST_CHECK(run, IsNear(Entry->Shape.Size.x, 4.0f) && IsNear(Entry->Shape.Size.y, 6.0f));
+        TEST_CHECK(run, (Entry->Shape.Orientation == WorldSpriteOrientation_Fixed) && Entry->Shape.IsFlippedX
+            && !Entry->Shape.IsFlippedY && (Entry->Shape.Pivot.y == 0.0f));
+        TEST_CHECK(run, IsNear(Entry->Shape.Position.x, 1.0f) && IsNear(Entry->Shape.Position.z, 3.0f));
+        TEST_CHECK(run, IsNear(Entry->Shape.AxisZ.x, 1.0f) && IsNear(Entry->Shape.AxisY.y, 1.0f)); // turned 90 degrees
+        TEST_CHECK(run, (Entry->UvRect[2] == 0.0f) && (Entry->UvRect[3] == 0.0f)); // no texture size: no area
+        SpriteViewer AnyViewer = SpriteViewer_FromPoint((Vector3){ 9.0f, 9.0f, 9.0f }, (Vector3){ 0.0f, 1.0f, 0.0f });
+        Matrix Expected = SpriteTransform_GetMatrix(&Entry->Shape, &AnyViewer);
+        TEST_CHECK(run, memcmp(&Expected, &Entry->FixedTransform, sizeof(Matrix)) == 0);
+        TEST_CHECK(run, IsNear(Entry->BoundsRadius, SpriteTransform_GetBoundingRadius(Entry->Shape.Size,
+            Entry->Shape.Pivot)));
+        TEST_CHECK(run, Entry->IsDecal && (Entry->AlphaMode == WorldSpriteAlphaMode_Blend) && !Entry->OmitsPixelation
+            && Entry->IsLit && Entry->CastsShadows && IsNear(Entry->DecalOffset, 0.01f));
+
+        Entry = &Sprites[1];
+        TEST_CHECK(run, !Entry->IsDecal && !Entry->IsLit && (Entry->Emission == 4.0f) && Entry->OmitsPixelation);
+        TEST_CHECK(run, IsNear(Entry->Shape.Size.x, 1.0f / 32.0f) && (Entry->Shape.Pivot.x == 0.5f));
+        TEST_CHECK(run, WorldRenderCache_HasCrispObjects(&Fixture.Cache)); // the cutout billboard
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
 static void ResetForgetsEveryEntry(TestRun* run)
 {
     CacheFixture Fixture;
@@ -435,6 +505,7 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "lists_drawable_sprites_and_every_light", ListsDrawableSpritesAndEveryLight },
         { "disabled_and_hidden_objects_are_not_drawn", DisabledAndHiddenObjectsAreNotDrawn },
         { "entries_carry_the_shadow_settings", EntriesCarryTheShadowSettings },
+        { "sprite_entries_carry_their_quad_and_settings", SpriteEntriesCarryTheirQuadAndSettings },
         { "reset_forgets_every_entry", ResetForgetsEveryEntry },
     };
     TestRun_RunSuite(run, "WorldRenderCache", Cases, sizeof(Cases) / sizeof(Cases[0]));

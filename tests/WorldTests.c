@@ -637,6 +637,125 @@ static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
 }
 
 
+/* A sprite's drawing settings start at their documented defaults, refuse what their rules refuse (changing nothing),
+ * read their enum names and the pivot from JSON, round-trip through it, and a decal needs the fixed orientation. */
+static void SpriteSettingsHaveDefaultsRulesAndNames(TestRun* run)
+{
+    World TestWorld;
+    KeyRegistry TestKeys;
+    JSONObjectPool* Pool = NULL;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
+    {
+        return;
+    }
+    WorldSpriteComponent* Sprite = WorldSpriteComponent_FromComponent(AddComponent(run, &TestWorld,
+        CreateObject(run, &TestWorld, "sprite"), WorldComponentType_Sprite));
+    WorldSpriteComponent* Copy = WorldSpriteComponent_FromComponent(AddComponent(run, &TestWorld,
+        CreateObject(run, &TestWorld, "copy"), WorldComponentType_Sprite));
+    if ((Sprite == NULL) || (Copy == NULL) || !TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)))
+    {
+        TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
+        return;
+    }
+
+    Vector2 Pivot = WorldSpriteComponent_GetPivot(Sprite);
+    TEST_CHECK(run, (WorldSpriteComponent_GetOrientation(Sprite) == WorldSpriteOrientation_Billboard)
+        && (Pivot.x == 0.5f) && (Pivot.y == 0.5f) && (WorldSpriteComponent_GetPixelsPerUnit(Sprite) == 32.0f)
+        && !WorldSpriteComponent_IsFlippedX(Sprite) && !WorldSpriteComponent_IsFlippedY(Sprite));
+    TEST_CHECK(run, (WorldSpriteComponent_GetAlphaMode(Sprite) == WorldSpriteAlphaMode_Cutout)
+        && (WorldSpriteComponent_GetAlphaCutoff(Sprite) == 0.5f) && WorldSpriteComponent_IsLit(Sprite)
+        && (WorldSpriteComponent_GetEmission(Sprite) == 1.0f) && (WorldSpriteComponent_GetLightWrap(Sprite) == 1.0f)
+        && WorldSpriteComponent_CastsShadows(Sprite));
+    TEST_CHECK(run, !WorldSpriteComponent_IsDecal(Sprite) && (WorldSpriteComponent_GetDecalOffset(Sprite) == 0.01f)
+        && WorldSpriteComponent_HasOutline(Sprite) && !WorldSpriteComponent_OmitsPixelation(Sprite));
+
+    // Every setter advances the revision once.
+    uint32_t Revision = WorldComponent_GetRevision(&Sprite->Base);
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOrientation(Sprite, WorldSpriteOrientation_AxisBillboard));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetPivot(Sprite, (Vector2){ 0.5f, 0.0f }));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetPixelsPerUnit(Sprite, 16.0f));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetFlippedX(Sprite, true));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetFlippedY(Sprite, true));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetAlphaMode(Sprite, WorldSpriteAlphaMode_Blend));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetAlphaCutoff(Sprite, 0.25f));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetLit(Sprite, false));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetEmission(Sprite, 3.0f));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetLightWrap(Sprite, 0.5f));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetCastsShadows(Sprite, false));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDecal(Sprite, true));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDecalOffset(Sprite, 0.05f));
+    TEST_CHECK(run, WorldComponent_GetRevision(&Sprite->Base) == (Revision + 13U));
+    TEST_CHECK(run, (WorldSpriteComponent_GetPixelsPerUnit(Sprite) == 16.0f)
+        && (WorldSpriteComponent_GetEmission(Sprite) == 3.0f) && WorldSpriteComponent_IsFlippedY(Sprite));
+
+    // A decal only with the fixed orientation.
+    TEST_CHECK(run, WorldSpriteComponent_IsDecal(Sprite) && !WorldSpriteComponent_IsDrawnAsDecal(Sprite));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOrientation(Sprite, WorldSpriteOrientation_Fixed));
+    TEST_CHECK(run, WorldSpriteComponent_IsDrawnAsDecal(Sprite));
+
+    // Refused values change nothing.
+    Revision = WorldComponent_GetRevision(&Sprite->Base);
+    const float BadPixelsPerUnit[3] = { 0.0f, -32.0f, NAN };
+    for (size_t Index = 0; Index < 3; Index++)
+    {
+        TEST_CHECK_ERROR(run, WorldSpriteComponent_SetPixelsPerUnit(Sprite, BadPixelsPerUnit[Index]),
+            ErrorCode_ArgumentOutOfRange);
+    }
+    TEST_CHECK_ERROR(run, WorldSpriteComponent_SetAlphaCutoff(Sprite, 1.5f), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, WorldSpriteComponent_SetAlphaCutoff(Sprite, -0.1f), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, WorldSpriteComponent_SetEmission(Sprite, -1.0f), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, WorldSpriteComponent_SetEmission(Sprite, INFINITY), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, WorldSpriteComponent_SetLightWrap(Sprite, 2.0f), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, WorldSpriteComponent_SetDecalOffset(Sprite, -0.01f), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, WorldSpriteComponent_SetPivot(Sprite, (Vector2){ NAN, 0.0f }), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, WorldSpriteComponent_SetOrientation(Sprite, (WorldSpriteOrientation)7),
+        ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, WorldSpriteComponent_SetAlphaMode(Sprite, (WorldSpriteAlphaMode)9),
+        ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK(run, (WorldComponent_GetRevision(&Sprite->Base) == Revision)
+        && (WorldSpriteComponent_GetPixelsPerUnit(Sprite) == 16.0f)
+        && (WorldSpriteComponent_GetOrientation(Sprite) == WorldSpriteOrientation_Fixed));
+
+    // JSON: the enums by name, the pivot as an array; a bad value refuses the whole read.
+    const PropertyTable* Table = WorldSpriteComponent_GetPropertyTable();
+    JSONObjectValue Value;
+    if (TestText_ParseJSON(run, Pool, "{\"orientation\": \"axis_billboard\", \"pivot\": [0.5, 0], "
+        "\"pixels_per_unit\": 64, \"flip_x\": true, \"alpha_mode\": \"additive\", \"is_lit\": false, \"emission\": 2.5, "
+        "\"light_wrap\": 0.25, \"is_decal\": true, \"decal_offset\": 0.02, \"casts_shadows\": false}", &Value))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_ReadJSON(Table, Value.Value.Compound, Sprite, NULL));
+        Pivot = WorldSpriteComponent_GetPivot(Sprite);
+        TEST_CHECK(run, (WorldSpriteComponent_GetOrientation(Sprite) == WorldSpriteOrientation_AxisBillboard)
+            && (Pivot.x == 0.5f) && (Pivot.y == 0.0f) && (WorldSpriteComponent_GetPixelsPerUnit(Sprite) == 64.0f)
+            && WorldSpriteComponent_IsFlippedX(Sprite) && !WorldSpriteComponent_IsFlippedY(Sprite));
+        TEST_CHECK(run, (WorldSpriteComponent_GetAlphaMode(Sprite) == WorldSpriteAlphaMode_Additive)
+            && !WorldSpriteComponent_IsLit(Sprite) && (WorldSpriteComponent_GetEmission(Sprite) == 2.5f)
+            && (WorldSpriteComponent_GetLightWrap(Sprite) == 0.25f) && WorldSpriteComponent_IsDecal(Sprite)
+            && !WorldSpriteComponent_IsDrawnAsDecal(Sprite) && !WorldSpriteComponent_CastsShadows(Sprite));
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+    if (TestText_ParseJSON(run, Pool, "{\"alpha_mode\": \"glow\", \"pixels_per_unit\": 8}", &Value))
+    {
+        TEST_CHECK_ERROR(run, Properties_ReadJSON(Table, Value.Value.Compound, Sprite, NULL), ErrorCode_InvalidJSON);
+        TEST_CHECK(run, WorldSpriteComponent_GetPixelsPerUnit(Sprite) == 64.0f);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+
+    // Written and read back into another sprite, every setting survives.
+    JSONCompound* Written = NULL;
+    if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Written)))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_WriteJSON(Table, Sprite, Pool, Written, NULL));
+        TEST_CHECK_SUCCESS(run, Properties_ReadJSON(Table, Written, Copy, NULL));
+        TEST_CHECK(run, Properties_Equals(Table, Sprite, Copy));
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Written, true));
+    }
+
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
+}
+
+
 // Static functions: the sprite binding.
 static void WorldWithoutAssetsLeavesSpritesEmpty(TestRun* run)
 {
@@ -941,6 +1060,7 @@ void WorldTests_Run(TestRun* run)
         { "per_type_arrays_stay_consistent", PerTypeArraysStayConsistent },
         { "component_types_are_found_by_name", ComponentTypesAreFoundByName },
         { "component_revisions_advance_on_every_change", ComponentRevisionsAdvanceOnEveryChange },
+        { "sprite_settings_have_defaults_rules_and_names", SpriteSettingsHaveDefaultsRulesAndNames },
         { "world_without_assets_leaves_sprites_empty", WorldWithoutAssetsLeavesSpritesEmpty },
         { "sprite_binds_and_the_world_releases_the_animation_last", SpriteBindsAndTheWorldReleasesTheAnimationLast },
         { "missing_animation_is_logged_once_and_leaves_the_sprite_empty",

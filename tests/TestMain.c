@@ -33,6 +33,7 @@ int main(void)
     NightSkyTests_Run(&Run);
     NightVisionTests_Run(&Run);
     WorldRenderCacheTests_Run(&Run);
+    SpriteTransformTests_Run(&Run);
     LoggerTests_Run(&Run);
     TextComponentTests_Run(&Run);
     TextComponentCodecTests_Run(&Run);

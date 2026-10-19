@@ -23,7 +23,7 @@ non-default raylib configuration.
 | Library | Source | Version | Build |
 |---|---|---|---|
 | raylib | https://github.com/raysan5/raylib (local copy: `../raylib/6.0`) | commit `65abee1` (2026-07-04), reports `6.1-dev` | CMake, see below |
-| WRFramework | `../WRFramework` | commit `37d91c9a88970f983de4e7013be89146f371c173` plus uncommitted changes (2026-10-19: `JSON_Serialize` writes whole real numbers as `2.0`, in `source/WRJSON.c` and `include/WRJSON.h`; the signed `Number_*FromString` parsers accept their most negative value, and the decimal parsers read numbers below the double range instead of refusing them, in `source/WRNumber.c` and `include/WRNumber.h`); put the new hash here once they are committed | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
+| WRFramework | `../WRFramework` | commit `37d91c9a88970f983de4e7013be89146f371c173` (2026-10-19: `JSON_Serialize` writes whole real numbers as `2.0`; the signed `Number_*FromString` parsers accept their most negative value; the decimal parsers read numbers below the double range instead of refusing them) | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
 
 The project's `include/raylib/` and `include/wr/` headers must come from the same versions as the libraries.
 To update WRFramework: build it with its own script, then copy its `include/*.h` into `include/wr/`,

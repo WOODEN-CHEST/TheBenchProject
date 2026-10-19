@@ -7,15 +7,34 @@
 // Macros.
 /** The format version of the sprite component's property table. */
 #define SPRITE_TABLE_VERSION 1U
-/** The inspector's category. */
+/** The inspector's categories. */
 #define CATEGORY_SPRITE ((const unsigned char*)u8"Sprite")
+#define CATEGORY_LIGHTING ((const unsigned char*)u8"Lighting")
+#define CATEGORY_DECAL ((const unsigned char*)u8"Decal")
+/** The defaults that are not the type's zero. */
+#define DEFAULT_ALPHA_CUTOFF 0.5f
+#define DEFAULT_DECAL_OFFSET 0.01f
 
 
 // Types.
-/* The rows of the sprite component's table, so the setters and the hook reach their descriptors without a search. */
+/* The rows of the sprite component's table, in inspector order, so the setters and the hook reach their descriptors
+ * without a search. */
 typedef enum SpritePropertyEnum
 {
     SpriteProperty_SpriteAnimation,
+    SpriteProperty_Orientation,
+    SpriteProperty_Pivot,
+    SpriteProperty_PixelsPerUnit,
+    SpriteProperty_FlipX,
+    SpriteProperty_FlipY,
+    SpriteProperty_AlphaMode,
+    SpriteProperty_AlphaCutoff,
+    SpriteProperty_IsLit,
+    SpriteProperty_Emission,
+    SpriteProperty_LightWrap,
+    SpriteProperty_CastsShadows,
+    SpriteProperty_IsDecal,
+    SpriteProperty_DecalOffset,
     SpriteProperty_HasOutline,
     SpriteProperty_OmitPixelation,
     SpriteProperty_Count
@@ -23,6 +42,32 @@ typedef enum SpritePropertyEnum
 
 
 // Fields.
+static const PropertyEnumEntry OrientationEntries[] =
+{
+    { .Name = u8"billboard", .Value = WorldSpriteOrientation_Billboard },
+    { .Name = u8"axis_billboard", .Value = WorldSpriteOrientation_AxisBillboard },
+    { .Name = u8"fixed", .Value = WorldSpriteOrientation_Fixed },
+};
+
+static const PropertyEnumTable OrientationEnum =
+{
+    .Name = u8"sprite_orientation", .Entries = OrientationEntries,
+    .EntryCount = sizeof(OrientationEntries) / sizeof(OrientationEntries[0])
+};
+
+static const PropertyEnumEntry AlphaModeEntries[] =
+{
+    { .Name = u8"cutout", .Value = WorldSpriteAlphaMode_Cutout },
+    { .Name = u8"blend", .Value = WorldSpriteAlphaMode_Blend },
+    { .Name = u8"additive", .Value = WorldSpriteAlphaMode_Additive },
+};
+
+static const PropertyEnumTable AlphaModeEnum =
+{
+    .Name = u8"sprite_alpha_mode", .Entries = AlphaModeEntries,
+    .EntryCount = sizeof(AlphaModeEntries) / sizeof(AlphaModeEntries[0])
+};
+
 /* Every property, in inspector order. The wire ids are the save schema: never renumber or reuse one; a removed
  * property's id goes into the table's retired list. */
 static const PropertyDescriptor SpriteProperties[SpriteProperty_Count] =
@@ -35,19 +80,134 @@ static const PropertyDescriptor SpriteProperties[SpriteProperty_Count] =
         .Category = CATEGORY_SPRITE, .DisplayName = u8"Animation",
         .Description = u8"The sprite animation to play; none shows nothing.", .SinceVersion = 1U
     },
+    [SpriteProperty_Orientation] =
+    {
+        .Key = u8"orientation", .WireId = 4U, .Type = PropertyType_Enum,
+        PROPERTY_MEMBER(WorldSpriteComponent, _orientation), .Default.EnumValue = WorldSpriteOrientation_Billboard,
+        .EnumTable = &OrientationEnum, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE,
+        .DisplayName = u8"Orientation",
+        .Description = u8"\"billboard\" faces the camera; \"axis_billboard\" turns only around the object's own up axis "
+            u8"to face it (trees, lamp posts); \"fixed\" keeps the object's rotation, facing its +Z (signs, decals).",
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_Pivot] =
+    {
+        .Key = u8"pivot", .WireId = 5U, .Type = PropertyType_Vector2, PROPERTY_MEMBER(WorldSpriteComponent, _pivot),
+        .Default.Vector2Value = { 0.5f, 0.5f }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE,
+        .DisplayName = u8"Pivot",
+        .Description = u8"The point of the image at the object's position: [0, 0] its bottom left, [1, 1] its top right; "
+            u8"[0.5, 0] for things standing on the ground.",
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_PixelsPerUnit] =
+    {
+        .Key = u8"pixels_per_unit", .WireId = 6U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldSpriteComponent, _pixelsPerUnit),
+        .Default.FloatValue = WORLD_SPRITE_COMPONENT_DEFAULT_PIXELS_PER_UNIT, .Rules = PROPERTY_RULES_ABOVE(0.0),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE, .DisplayName = u8"Pixels per metre",
+        .Description = u8"Image pixels per metre: the sprite's size is its frame's size divided by this, times the "
+            u8"object's X and Y scale.",
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_FlipX] =
+    {
+        .Key = u8"flip_x", .WireId = 7U, .Type = PropertyType_Bool, PROPERTY_MEMBER(WorldSpriteComponent, _isFlippedX),
+        .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE,
+        .DisplayName = u8"Flip left-right", .Description = u8"Mirrors the image left to right, about the pivot.",
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_FlipY] =
+    {
+        .Key = u8"flip_y", .WireId = 8U, .Type = PropertyType_Bool, PROPERTY_MEMBER(WorldSpriteComponent, _isFlippedY),
+        .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE,
+        .DisplayName = u8"Flip upside down", .Description = u8"Mirrors the image top to bottom, about the pivot.",
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_AlphaMode] =
+    {
+        .Key = u8"alpha_mode", .WireId = 11U, .Type = PropertyType_Enum,
+        PROPERTY_MEMBER(WorldSpriteComponent, _alphaMode), .Default.EnumValue = WorldSpriteAlphaMode_Cutout,
+        .EnumTable = &AlphaModeEnum, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE,
+        .DisplayName = u8"Transparency",
+        .Description = u8"\"cutout\": hard edges, opaque where drawn (pixel art; casts shadows); \"blend\": soft edges "
+            u8"(smoke, stains); \"additive\": adds its light (glows).",
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_AlphaCutoff] =
+    {
+        .Key = u8"alpha_cutoff", .WireId = 12U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldSpriteComponent, _alphaCutoff), .Default.FloatValue = DEFAULT_ALPHA_CUTOFF,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE,
+        .DisplayName = u8"Cutout threshold",
+        .Description = u8"With \"cutout\" transparency, texels less opaque than this are not drawn.", .SinceVersion = 1U
+    },
+    [SpriteProperty_IsLit] =
+    {
+        .Key = u8"is_lit", .WireId = 9U, .Type = PropertyType_Bool, PROPERTY_MEMBER(WorldSpriteComponent, _isLit),
+        .Default.BoolValue = true, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_LIGHTING,
+        .DisplayName = u8"Lit",
+        .Description = u8"Lit by the sun, the moon and lamps like the models around it. Off: its colours glow as they "
+            u8"are, by day and night (neon, fire).",
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_Emission] =
+    {
+        .Key = u8"emission", .WireId = 10U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldSpriteComponent, _emission),
+        .Default.FloatValue = 1.0f, .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_LIGHTING, .DisplayName = u8"Glow",
+        .Description = u8"How bright an unlit sprite glows; 1 shows its colours as they are.", .SinceVersion = 1U
+    },
+    [SpriteProperty_LightWrap] =
+    {
+        .Key = u8"light_wrap", .WireId = 16U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldSpriteComponent, _lightWrap), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_LIGHTING,
+        .DisplayName = u8"Light wrap",
+        .Description = u8"Billboards only: how far light wraps around the sprite. 0 lights it as a flat card facing you, "
+            u8"1 as a round thing, half lit from the side.",
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_CastsShadows] =
+    {
+        .Key = u8"casts_shadows", .WireId = 15U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldSpriteComponent, _castsShadows), .Default.BoolValue = true,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_LIGHTING, .DisplayName = u8"Casts shadows",
+        .Description = u8"Cutout sprites only: casts a shadow (a billboard's shadow faces the light, so it does not turn "
+            u8"with the camera). Decals and soft sprites never cast.",
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_IsDecal] =
+    {
+        .Key = u8"is_decal", .WireId = 13U, .Type = PropertyType_Bool, PROPERTY_MEMBER(WorldSpriteComponent, _isDecal),
+        .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_DECAL,
+        .DisplayName = u8"Decal",
+        .Description = u8"With the \"fixed\" orientation: lies on a surface (dirt, tire marks), drawn over it without "
+            u8"shadow or outline.",
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_DecalOffset] =
+    {
+        .Key = u8"decal_offset", .WireId = 14U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldSpriteComponent, _decalOffset), .Default.FloatValue = DEFAULT_DECAL_OFFSET,
+        .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_DECAL,
+        .DisplayName = u8"Lift",
+        .Description = u8"Metres a decal is lifted off its surface so it does not flicker against it.",
+        .SinceVersion = 1U
+    },
     [SpriteProperty_HasOutline] =
     {
         .Key = u8"has_outline", .WireId = 2U, .Type = PropertyType_Bool,
         PROPERTY_MEMBER(WorldSpriteComponent, _hasOutline), .Default.BoolValue = true, .Flags = PROPERTY_FLAGS_SETTING,
         .Category = CATEGORY_SPRITE, .DisplayName = u8"Outline",
-        .Description = u8"Draws a 1-pixel outline around the sprite's shape.", .SinceVersion = 1U
+        .Description = u8"Draws a 1-pixel outline around the sprite's shape (cutout sprites).", .SinceVersion = 1U
     },
     [SpriteProperty_OmitPixelation] =
     {
         .Key = u8"omit_pixelation", .WireId = 3U, .Type = PropertyType_Bool,
         PROPERTY_MEMBER(WorldSpriteComponent, _omitPixelation), .Default.BoolValue = false,
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE, .DisplayName = u8"Crisp",
-        .Description = u8"Draws the sprite at full resolution over the pixelated image.", .SinceVersion = 1U
+        .Description = u8"Draws the sprite at full resolution over the pixelated image (cutout sprites).",
+        .SinceVersion = 1U
     },
 };
 
@@ -199,6 +359,25 @@ static Error CheckProperty(SpriteProperty property, PropertyValue value)
     return Properties_CheckValue(&SpriteTable, &SpriteProperties[property], &value);
 }
 
+/* The typed setters' last step: the row changed, so the revision advances (and the hook runs). */
+static Error FinishSet(WorldSpriteComponent* sprite, SpriteProperty property)
+{
+    WorldInternal_ComponentAfterSet(sprite, &SpriteProperties[property]);
+    return Error_CreateSuccess();
+}
+
+/* Sets a float row after checking the value against its rules; nothing changes when it breaks them. */
+static Error SetFloatProperty(WorldSpriteComponent* sprite, SpriteProperty property, float* field, float value)
+{
+    Error CheckResult = CheckProperty(property, PropertyValue_FromFloat(value));
+    if (CheckResult.Code != ErrorCode_Success)
+    {
+        return CheckResult;
+    }
+    *field = value;
+    return FinishSet(sprite, property);
+}
+
 
 // Fields: the registry entry (it refers to the functions above).
 static const WorldComponentTypeInfo SpriteTypeInfo =
@@ -271,4 +450,149 @@ Error WorldSpriteComponent_SetOmitsPixelation(WorldSpriteComponent* self, bool o
     self->_omitPixelation = omitPixelation;
     WorldInternal_ComponentAfterSet(self, &SpriteProperties[SpriteProperty_OmitPixelation]);
     return Error_CreateSuccess();
+}
+
+Error WorldSpriteComponent_SetOrientation(WorldSpriteComponent* self, WorldSpriteOrientation orientation)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetOrientation: self must not be NULL.");
+    }
+    Error CheckResult = CheckProperty(SpriteProperty_Orientation, PropertyValue_FromEnum((int32_t)orientation));
+    if (CheckResult.Code != ErrorCode_Success)
+    {
+        return CheckResult;
+    }
+
+    self->_orientation = orientation;
+    return FinishSet(self, SpriteProperty_Orientation);
+}
+
+Error WorldSpriteComponent_SetPivot(WorldSpriteComponent* self, Vector2 pivot)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetPivot: self must not be NULL.");
+    }
+    Error CheckResult = CheckProperty(SpriteProperty_Pivot, PropertyValue_FromVector2(pivot));
+    if (CheckResult.Code != ErrorCode_Success)
+    {
+        return CheckResult;
+    }
+
+    self->_pivot = pivot;
+    return FinishSet(self, SpriteProperty_Pivot);
+}
+
+Error WorldSpriteComponent_SetPixelsPerUnit(WorldSpriteComponent* self, float pixelsPerUnit)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "WorldSpriteComponent_SetPixelsPerUnit: self must not be NULL.");
+    }
+    return SetFloatProperty(self, SpriteProperty_PixelsPerUnit, &self->_pixelsPerUnit, pixelsPerUnit);
+}
+
+Error WorldSpriteComponent_SetFlippedX(WorldSpriteComponent* self, bool isFlipped)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetFlippedX: self must not be NULL.");
+    }
+    self->_isFlippedX = isFlipped;
+    return FinishSet(self, SpriteProperty_FlipX);
+}
+
+Error WorldSpriteComponent_SetFlippedY(WorldSpriteComponent* self, bool isFlipped)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetFlippedY: self must not be NULL.");
+    }
+    self->_isFlippedY = isFlipped;
+    return FinishSet(self, SpriteProperty_FlipY);
+}
+
+Error WorldSpriteComponent_SetAlphaMode(WorldSpriteComponent* self, WorldSpriteAlphaMode alphaMode)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetAlphaMode: self must not be NULL.");
+    }
+    Error CheckResult = CheckProperty(SpriteProperty_AlphaMode, PropertyValue_FromEnum((int32_t)alphaMode));
+    if (CheckResult.Code != ErrorCode_Success)
+    {
+        return CheckResult;
+    }
+
+    self->_alphaMode = alphaMode;
+    return FinishSet(self, SpriteProperty_AlphaMode);
+}
+
+Error WorldSpriteComponent_SetAlphaCutoff(WorldSpriteComponent* self, float alphaCutoff)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetAlphaCutoff: self must not be NULL.");
+    }
+    return SetFloatProperty(self, SpriteProperty_AlphaCutoff, &self->_alphaCutoff, alphaCutoff);
+}
+
+Error WorldSpriteComponent_SetLit(WorldSpriteComponent* self, bool isLit)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetLit: self must not be NULL.");
+    }
+    self->_isLit = isLit;
+    return FinishSet(self, SpriteProperty_IsLit);
+}
+
+Error WorldSpriteComponent_SetEmission(WorldSpriteComponent* self, float emission)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetEmission: self must not be NULL.");
+    }
+    return SetFloatProperty(self, SpriteProperty_Emission, &self->_emission, emission);
+}
+
+Error WorldSpriteComponent_SetLightWrap(WorldSpriteComponent* self, float lightWrap)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetLightWrap: self must not be NULL.");
+    }
+    return SetFloatProperty(self, SpriteProperty_LightWrap, &self->_lightWrap, lightWrap);
+}
+
+Error WorldSpriteComponent_SetCastsShadows(WorldSpriteComponent* self, bool castsShadows)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "WorldSpriteComponent_SetCastsShadows: self must not be NULL.");
+    }
+    self->_castsShadows = castsShadows;
+    return FinishSet(self, SpriteProperty_CastsShadows);
+}
+
+Error WorldSpriteComponent_SetDecal(WorldSpriteComponent* self, bool isDecal)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetDecal: self must not be NULL.");
+    }
+    self->_isDecal = isDecal;
+    return FinishSet(self, SpriteProperty_IsDecal);
+}
+
+Error WorldSpriteComponent_SetDecalOffset(WorldSpriteComponent* self, float decalOffset)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetDecalOffset: self must not be NULL.");
+    }
+    return SetFloatProperty(self, SpriteProperty_DecalOffset, &self->_decalOffset, decalOffset);
 }

@@ -1,5 +1,6 @@
-// The PBR shader and its uniforms (the sun and the moon, ambient, fog, shadows, per-object forward point lights,
-// per-material factors, the eye's night vision) and HDR eye adaptation.
+// The PBR shader and the frame lighting every lit shader (models, sprites) gets through common/lighting (the sun and the
+// moon, ambient, fog, shadows, per-object forward point lights, the eye's night vision), the PBR's per-material factors,
+// and HDR eye adaptation.
 
 #include <math.h>
 #include <stdio.h>
@@ -123,58 +124,66 @@ static int CountShaderPointLights(Shader shader)
     return 0;
 }
 
-/* Caches every uniform location of the PBR shader the renderer sets. */
-static void CacheLocations(WorldRendererPbrState* pbr, Shader shader)
+/* Caches every frame-lighting uniform location of a shader that includes common/lighting. */
+static void CacheLitLocations(WorldRendererLitLocations* lit, Shader shader)
 {
-    pbr->_locViewPos = GetShaderLocation(shader, "viewPos");
-    pbr->_locSunDirection = GetShaderLocation(shader, "sunDirection");
-    pbr->_locSunColor = GetShaderLocation(shader, "sunColor");
-    pbr->_locSunIntensity = GetShaderLocation(shader, "sunIntensity");
-    pbr->_locMoonDirection = GetShaderLocation(shader, "moonDirection");
-    pbr->_locMoonColor = GetShaderLocation(shader, "moonColor");
-    pbr->_locMoonIntensity = GetShaderLocation(shader, "moonIntensity");
-    pbr->_locAmbientColor = GetShaderLocation(shader, "ambientColor");
-    pbr->_locAmbientIntensity = GetShaderLocation(shader, "ambientIntensity");
+    lit->_locViewPos = GetShaderLocation(shader, "viewPos");
+    lit->_locSunDirection = GetShaderLocation(shader, "sunDirection");
+    lit->_locSunColor = GetShaderLocation(shader, "sunColor");
+    lit->_locSunIntensity = GetShaderLocation(shader, "sunIntensity");
+    lit->_locMoonDirection = GetShaderLocation(shader, "moonDirection");
+    lit->_locMoonColor = GetShaderLocation(shader, "moonColor");
+    lit->_locMoonIntensity = GetShaderLocation(shader, "moonIntensity");
+    lit->_locAmbientColor = GetShaderLocation(shader, "ambientColor");
+    lit->_locAmbientIntensity = GetShaderLocation(shader, "ambientIntensity");
 
-    pbr->_locLightVP = GetShaderLocation(shader, "lightVP");
-    pbr->_locShadowMap = GetShaderLocation(shader, "shadowMap");
-    pbr->_locLightVPFar = GetShaderLocation(shader, "lightVPFar");
-    pbr->_locShadowMapFar = GetShaderLocation(shader, "shadowMapFar");
-    pbr->_locShadowFarActive = GetShaderLocation(shader, "shadowFarActive");
-    pbr->_locShadowStrength = GetShaderLocation(shader, "shadowStrength");
-    pbr->_locShadowBias = GetShaderLocation(shader, "shadowBias");
-    pbr->_locShadowTexelSize = GetShaderLocation(shader, "shadowTexelSize");
-    pbr->_locShadowLightDirection = GetShaderLocation(shader, "shadowLightDirection");
-    pbr->_locSunShadowFade = GetShaderLocation(shader, "sunShadowFade");
-    pbr->_locMoonShadowFade = GetShaderLocation(shader, "moonShadowFade");
+    lit->_locAmbientOcclusionMap = GetShaderLocation(shader, "ambientOcclusionMap");
+    lit->_locAoMapActive = GetShaderLocation(shader, "aoMapActive");
+    lit->_locAoResolution = GetShaderLocation(shader, "aoResolution");
 
-    pbr->_locPointShadowActive = GetShaderLocation(shader, "pointShadowActive");
-    pbr->_locPointShadowLightPos = GetShaderLocation(shader, "pointShadowLightPos");
-    pbr->_locPointShadowLightRadiance = GetShaderLocation(shader, "pointShadowLightRadiance");
-    pbr->_locPointShadowLightRange = GetShaderLocation(shader, "pointShadowLightRange");
-    pbr->_locPointShadowCube = GetShaderLocation(shader, "pointShadowCube");
-    pbr->_locPointShadowFar = GetShaderLocation(shader, "pointShadowFar");
-    pbr->_locPointShadowBias = GetShaderLocation(shader, "pointShadowBias");
+    lit->_locLightVP = GetShaderLocation(shader, "lightVP");
+    lit->_locShadowMap = GetShaderLocation(shader, "shadowMap");
+    lit->_locLightVPFar = GetShaderLocation(shader, "lightVPFar");
+    lit->_locShadowMapFar = GetShaderLocation(shader, "shadowMapFar");
+    lit->_locShadowFarActive = GetShaderLocation(shader, "shadowFarActive");
+    lit->_locShadowStrength = GetShaderLocation(shader, "shadowStrength");
+    lit->_locShadowBias = GetShaderLocation(shader, "shadowBias");
+    lit->_locShadowTexelSize = GetShaderLocation(shader, "shadowTexelSize");
+    lit->_locShadowLightDirection = GetShaderLocation(shader, "shadowLightDirection");
+    lit->_locSunShadowFade = GetShaderLocation(shader, "sunShadowFade");
+    lit->_locMoonShadowFade = GetShaderLocation(shader, "moonShadowFade");
 
-    pbr->_locPointLightCount = GetShaderLocation(shader, "pointLightCount");
-    pbr->_locPointLightPositions = GetShaderLocation(shader, "pointLightPositions");
-    pbr->_locPointLightRadiances = GetShaderLocation(shader, "pointLightRadiances");
-    pbr->_locPointLightRanges = GetShaderLocation(shader, "pointLightRanges");
+    lit->_locPointShadowActive = GetShaderLocation(shader, "pointShadowActive");
+    lit->_locPointShadowLightPos = GetShaderLocation(shader, "pointShadowLightPos");
+    lit->_locPointShadowLightRadiance = GetShaderLocation(shader, "pointShadowLightRadiance");
+    lit->_locPointShadowLightRange = GetShaderLocation(shader, "pointShadowLightRange");
+    lit->_locPointShadowCube = GetShaderLocation(shader, "pointShadowCube");
+    lit->_locPointShadowFar = GetShaderLocation(shader, "pointShadowFar");
+    lit->_locPointShadowBias = GetShaderLocation(shader, "pointShadowBias");
 
-    pbr->_locFogDensity = GetShaderLocation(shader, "fogDensity");
-    pbr->_locFogTurbidity = GetShaderLocation(shader, "skyTurbidity");
-    pbr->_locFogSkyTint = GetShaderLocation(shader, "skyTint");
-    pbr->_locFogSunIntensity = GetShaderLocation(shader, "skySunIntensity");
-    pbr->_locFogSkyglow = GetShaderLocation(shader, "skyglowRadiance");
-    pbr->_locFogMoonIntensity = GetShaderLocation(shader, "skyMoonIntensity");
+    lit->_locPointLightCount = GetShaderLocation(shader, "pointLightCount");
+    lit->_locPointLightPositions = GetShaderLocation(shader, "pointLightPositions");
+    lit->_locPointLightRadiances = GetShaderLocation(shader, "pointLightRadiances");
+    lit->_locPointLightRanges = GetShaderLocation(shader, "pointLightRanges");
 
-    pbr->_locNightVisionFieldLuminance = GetShaderLocation(shader, "nightVisionFieldLuminance");
-    pbr->_locNightVisionHalfLuminance = GetShaderLocation(shader, "nightVisionHalfLuminance");
-    pbr->_locNightVisionSteepness = GetShaderLocation(shader, "nightVisionSteepness");
-    pbr->_locNightVisionStrength = GetShaderLocation(shader, "nightVisionStrength");
-    pbr->_locNightVisionTint = GetShaderLocation(shader, "nightVisionTint");
+    lit->_locFogDensity = GetShaderLocation(shader, "fogDensity");
+    lit->_locFogTurbidity = GetShaderLocation(shader, "skyTurbidity");
+    lit->_locFogSkyTint = GetShaderLocation(shader, "skyTint");
+    lit->_locFogSunIntensity = GetShaderLocation(shader, "skySunIntensity");
+    lit->_locFogSkyglow = GetShaderLocation(shader, "skyglowRadiance");
+    lit->_locFogMoonIntensity = GetShaderLocation(shader, "skyMoonIntensity");
 
-    // Per-material scalar-factor + map-presence uniforms, uploaded per material by the mesh draw loop.
+    lit->_locNightVisionFieldLuminance = GetShaderLocation(shader, "nightVisionFieldLuminance");
+    lit->_locNightVisionHalfLuminance = GetShaderLocation(shader, "nightVisionHalfLuminance");
+    lit->_locNightVisionSteepness = GetShaderLocation(shader, "nightVisionSteepness");
+    lit->_locNightVisionStrength = GetShaderLocation(shader, "nightVisionStrength");
+    lit->_locNightVisionTint = GetShaderLocation(shader, "nightVisionTint");
+}
+
+/* Caches the PBR shader's per-material scalar-factor and map-presence locations, uploaded per material by the mesh
+ * draw loop. */
+static void CacheMaterialLocations(WorldRendererPbrState* pbr, Shader shader)
+{
     pbr->_locMetallic = GetShaderLocation(shader, "metallic");
     pbr->_locRoughness = GetShaderLocation(shader, "roughness");
     pbr->_locAo = GetShaderLocation(shader, "ao");
@@ -183,9 +192,6 @@ static void CacheLocations(WorldRendererPbrState* pbr, Shader shader)
     pbr->_locHasMraMap = GetShaderLocation(shader, "hasMraMap");
     pbr->_locHasNormalMap = GetShaderLocation(shader, "hasNormalMap");
     pbr->_locHasEmissiveMap = GetShaderLocation(shader, "hasEmissiveMap");
-    pbr->_locAmbientOcclusionMap = GetShaderLocation(shader, "ambientOcclusionMap");
-    pbr->_locAoMapActive = GetShaderLocation(shader, "aoMapActive");
-    pbr->_locAoResolution = GetShaderLocation(shader, "aoResolution");
 }
 
 /* Builds the ambient skylight colour (linear RGB) so it TRACKS the sky's timing, driven by the sun's elevation
@@ -322,7 +328,8 @@ void WorldRendererLighting_LoadShader(WorldRenderer* self)
         return;
     }
     Shader RayShader = GameShader_GetRaylibShader(self->_pbr._shader);
-    CacheLocations(&self->_pbr, RayShader);
+    WorldRendererLighting_PrepareLitShader(self, RayShader, PBR_SHADER_ASSET_NAME, &self->_pbr._lit);
+    CacheMaterialLocations(&self->_pbr, RayShader);
 
     // The renderer's own location table: the asset's, with the material map samplers pointed at the PBR
     // shader's sampler names, so DrawMesh binds each material's textures to their conventional units (albedo
@@ -333,32 +340,38 @@ void WorldRendererLighting_LoadShader(WorldRenderer* self)
     self->_pbr._locs[SHADER_LOC_MAP_NORMAL] = GetShaderLocation(RayShader, "normalMap");
     self->_pbr._locs[SHADER_LOC_MAP_EMISSION] = GetShaderLocation(RayShader, "emissiveMap");
     self->_pbr._passShader = (Shader){ .id = RayShader.id, .locs = self->_pbr._locs };
+}
 
-    // Constant shadow parameters and the night vision's calibration; upload once (material params are per-material).
+void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, const unsigned char* assetName,
+    WorldRendererLitLocations* outLocations)
+{
+    CacheLitLocations(outLocations, shader);
+
+    // Constant shadow parameters and the night vision's calibration; upload once.
     float ShadowBias = SHADOW_BIAS;
     float ShadowTexel = 1.0f / (float)SHADOW_MAP_SIZE;
-    SetShaderValue(RayShader, self->_pbr._locShadowBias, &ShadowBias, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_pbr._locShadowTexelSize, &ShadowTexel, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_pbr._locNightVisionHalfLuminance, &self->_nightVision.HalfLuminance,
+    SetShaderValue(shader, outLocations->_locShadowBias, &ShadowBias, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, outLocations->_locShadowTexelSize, &ShadowTexel, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, outLocations->_locNightVisionHalfLuminance, &self->_nightVision.HalfLuminance,
         SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_pbr._locNightVisionSteepness, &self->_nightVision.Steepness, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, outLocations->_locNightVisionSteepness, &self->_nightVision.Steepness, SHADER_UNIFORM_FLOAT);
 
     // Point the renderer-owned samplers at their fixed units once (see WorldRendererTextureUnit).
-    AssignSamplerUnit(RayShader, self->_pbr._locShadowMap, WorldRendererTextureUnit_ShadowNear);
-    AssignSamplerUnit(RayShader, self->_pbr._locShadowMapFar, WorldRendererTextureUnit_ShadowFar);
-    AssignSamplerUnit(RayShader, self->_pbr._locPointShadowCube, WorldRendererTextureUnit_PointShadowCube);
-    AssignSamplerUnit(RayShader, self->_pbr._locAmbientOcclusionMap, WorldRendererTextureUnit_AmbientOcclusion);
+    AssignSamplerUnit(shader, outLocations->_locShadowMap, WorldRendererTextureUnit_ShadowNear);
+    AssignSamplerUnit(shader, outLocations->_locShadowMapFar, WorldRendererTextureUnit_ShadowFar);
+    AssignSamplerUnit(shader, outLocations->_locPointShadowCube, WorldRendererTextureUnit_PointShadowCube);
+    AssignSamplerUnit(shader, outLocations->_locAmbientOcclusionMap, WorldRendererTextureUnit_AmbientOcclusion);
 
     // The shader's point-light arrays must hold the WORLD_MAX_FORWARD_LIGHTS the culling may select; with fewer,
     // upload only as many as fit (the shader also clamps its loop to its own array size).
-    self->_pbr._maxPointLights = CountShaderPointLights(RayShader);
-    if ((self->_pbr._maxPointLights < WORLD_MAX_FORWARD_LIGHTS) && (self->_logger != NULL))
+    outLocations->_maxPointLights = CountShaderPointLights(shader);
+    if ((outLocations->_maxPointLights < WORLD_MAX_FORWARD_LIGHTS) && (self->_logger != NULL))
     {
         Error LogResult = Logger_LogWarningFormatted(self->_logger,
             (const unsigned char*)u8"WorldRenderer: \"%s\" holds %d point lights, fewer than the %d the renderer "
             u8"selects (WORLD_MAX_FORWARD_LIGHTS); objects get at most %d.",
-            (const char*)PBR_SHADER_ASSET_NAME, self->_pbr._maxPointLights, WORLD_MAX_FORWARD_LIGHTS,
-            self->_pbr._maxPointLights);
+            (const char*)assetName, outLocations->_maxPointLights, WORLD_MAX_FORWARD_LIGHTS,
+            outLocations->_maxPointLights);
         Error_Deconstruct(&LogResult);
     }
 }
@@ -395,54 +408,62 @@ void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* f
     BuildForwardLights(self, frame);
 }
 
-void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo)
+/* The cube-shadow light of the frame, or NULL while the cube shadow does not run. */
+static const WorldRenderLight* GetPointShadowLight(const WorldRenderer* self, const WorldRenderFrame* frame)
 {
-    if (self->_pbr._shader == NULL)
-    {
-        return;
-    }
-    Shader RayShader = GameShader_GetRaylibShader(self->_pbr._shader);
+    size_t LightCount = 0;
+    const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &LightCount);
+    return (frame->IsPointShadowActive && (frame->ShadowLightIndex < LightCount)) ? &Lights[frame->ShadowLightIndex]
+        : NULL;
+}
+
+/* Uploads the frame's lighting values to one lit shader (common/lighting): the camera, the sun and the moon, the
+ * ambient, the fog and its sky, the night vision, the cascades' fades, light direction and matrices, the AO switch and
+ * the cube-shadow light. The textures are bound once for every lit shader (BindFrameTextures). */
+static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
+    const WorldRendererLitLocations* lit, bool applyScreenAo)
+{
     const WorldEnvironment* Environment = frame->Environment;
 
     float ViewPos[3] = { frame->Camera->Position.x, frame->Camera->Position.y, frame->Camera->Position.z };
-    SetShaderValue(RayShader, self->_pbr._locViewPos, ViewPos, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, lit->_locViewPos, ViewPos, SHADER_UNIFORM_VEC3);
     // The two directional lights. The sun's direction is also the fog sky's sun, the moon's the fog sky's moon.
     float SunDir[3] = { frame->SunLight.Direction.x, frame->SunLight.Direction.y, frame->SunLight.Direction.z };
-    SetShaderValue(RayShader, self->_pbr._locSunDirection, SunDir, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_pbr._locSunColor, frame->SunLight.Color, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_pbr._locSunIntensity, &frame->SunLight.Intensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locSunDirection, SunDir, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, lit->_locSunColor, frame->SunLight.Color, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, lit->_locSunIntensity, &frame->SunLight.Intensity, SHADER_UNIFORM_FLOAT);
     float MoonDir[3] = { frame->MoonLight.Direction.x, frame->MoonLight.Direction.y, frame->MoonLight.Direction.z };
-    SetShaderValue(RayShader, self->_pbr._locMoonDirection, MoonDir, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_pbr._locMoonColor, frame->MoonLight.Color, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_pbr._locMoonIntensity, &frame->MoonLight.Intensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locMoonDirection, MoonDir, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, lit->_locMoonColor, frame->MoonLight.Color, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, lit->_locMoonIntensity, &frame->MoonLight.Intensity, SHADER_UNIFORM_FLOAT);
 
     // Ambient is folded into the colour (intensity kept at 1).
-    SetShaderValue(RayShader, self->_pbr._locAmbientColor, frame->AmbientColor, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, lit->_locAmbientColor, frame->AmbientColor, SHADER_UNIFORM_VEC3);
     float AmbientIntensity = 1.0f;
-    SetShaderValue(RayShader, self->_pbr._locAmbientIntensity, &AmbientIntensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locAmbientIntensity, &AmbientIntensity, SHADER_UNIFORM_FLOAT);
 
-    // Atmospheric distance fog: the PBR shader fades distant geometry into the SAME sky the sky pass draws,
+    // Atmospheric distance fog: the lit shaders fade distant geometry into the SAME sky the sky pass draws,
     // evaluated per fragment along its view ray, so far objects dissolve seamlessly into the sky (and, because
     // the atmospheric sky is already dark at night, distant geometry fades to the dark night sky on its own).
-    // Feed it the sky parameters the sky pass uses (turbidity, linear tint, RAW — not day-scaled — sun
+    // Feed them the sky parameters the sky pass uses (turbidity, linear tint, RAW — not day-scaled — sun
     // intensity, the moonlit sky's strength); the sun and moon directions are the ones uploaded above.
-    SetShaderValue(RayShader, self->_pbr._locFogTurbidity, &Environment->SkyTurbidity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locFogTurbidity, &Environment->SkyTurbidity, SHADER_UNIFORM_FLOAT);
     float FogSkyTint[3];
     WorldRendererCommon_ColorToLinear(Environment->SkyTint, FogSkyTint);
-    SetShaderValue(RayShader, self->_pbr._locFogSkyTint, FogSkyTint, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_pbr._locFogSunIntensity, &Environment->SunIntensity, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_pbr._locFogSkyglow, frame->SkyglowRadiance, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_pbr._locFogMoonIntensity, &frame->MoonSkyIntensity, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_pbr._locFogDensity, &frame->FogDensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locFogSkyTint, FogSkyTint, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, lit->_locFogSunIntensity, &Environment->SunIntensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locFogSkyglow, frame->SkyglowRadiance, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, lit->_locFogMoonIntensity, &frame->MoonSkyIntensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locFogDensity, &frame->FogDensity, SHADER_UNIFORM_FLOAT);
 
     // The eye's night vision for the reflected light and the fog (strength 0 leaves every colour as it is).
-    SetShaderValue(RayShader, self->_pbr._locNightVisionFieldLuminance, &frame->NightVisionFieldLuminance,
-        SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_pbr._locNightVisionStrength, &frame->NightVisionStrength, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_pbr._locNightVisionTint, frame->NightVisionTint, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, lit->_locNightVisionFieldLuminance, &frame->NightVisionFieldLuminance, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locNightVisionStrength, &frame->NightVisionStrength, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locNightVisionTint, frame->NightVisionTint, SHADER_UNIFORM_VEC3);
 
     // The cascades darken the light they were rendered from (the sun or the moon), by the frame's shadow fade; with
-    // both fades 0 (the cascades did not run) the shader samples no shadow map at all.
+    // both fades 0 (the cascades did not run) the shader samples no shadow map at all. Their light matrices go up when
+    // they ran this frame: the near cascade always, the far one only when its map exists.
     float SunShadowFade = 0.0f;
     float MoonShadowFade = 0.0f;
     if (frame->IsCascadeShadowActive)
@@ -450,78 +471,107 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
         SunShadowFade = (frame->ShadowLight == WorldShadowLight_Sun) ? frame->ShadowFade : 0.0f;
         MoonShadowFade = (frame->ShadowLight == WorldShadowLight_Moon) ? frame->ShadowFade : 0.0f;
     }
-    SetShaderValue(RayShader, self->_pbr._locSunShadowFade, &SunShadowFade, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_pbr._locMoonShadowFade, &MoonShadowFade, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locSunShadowFade, &SunShadowFade, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locMoonShadowFade, &MoonShadowFade, SHADER_UNIFORM_FLOAT);
     float ShadowDir[3] = { frame->ShadowDirection.x, frame->ShadowDirection.y, frame->ShadowDirection.z };
-    SetShaderValue(RayShader, self->_pbr._locShadowLightDirection, ShadowDir, SHADER_UNIFORM_VEC3);
-
-    // Upload the cascades' light matrices and bind their depth maps to their fixed units (the samplers already point
-    // there) when they ran this frame. Near cascade always; far only when its map exists.
+    SetShaderValue(shader, lit->_locShadowLightDirection, ShadowDir, SHADER_UNIFORM_VEC3);
     if (frame->IsCascadeShadowActive)
     {
-        SetShaderValueMatrix(RayShader, self->_pbr._locLightVP, self->_cascades._nearLightVP);
-        rlActiveTextureSlot(WorldRendererTextureUnit_ShadowNear);
-        rlEnableTexture(self->_cascades._nearMap.depth.id);
-
+        SetShaderValueMatrix(shader, lit->_locLightVP, self->_cascades._nearLightVP);
         int ShadowFarActive = self->_cascades._hasFarMap ? 1 : 0;
-        SetShaderValue(RayShader, self->_pbr._locShadowFarActive, &ShadowFarActive, SHADER_UNIFORM_INT);
+        SetShaderValue(shader, lit->_locShadowFarActive, &ShadowFarActive, SHADER_UNIFORM_INT);
         if (self->_cascades._hasFarMap)
         {
-            SetShaderValueMatrix(RayShader, self->_pbr._locLightVPFar, self->_cascades._farLightVP);
+            SetShaderValueMatrix(shader, lit->_locLightVPFar, self->_cascades._farLightVP);
+        }
+    }
+
+    // Screen-space AO: the crisp overlay passes applyScreenAo=false (its full-res gl_FragCoord would mis-sample this
+    // low-res map). aoMapActive false => the shader leaves the ambient term unoccluded.
+    int AoMapActive = (applyScreenAo && frame->IsAoActive) ? 1 : 0;
+    SetShaderValue(shader, lit->_locAoMapActive, &AoMapActive, SHADER_UNIFORM_INT);
+    if (AoMapActive)
+    {
+        float AoResolution[2] = { (float)frame->SceneWidth, (float)frame->SceneHeight };
+        SetShaderValue(shader, lit->_locAoResolution, AoResolution, SHADER_UNIFORM_VEC2);
+    }
+
+    // Point-light (cube) shadow: the selected shadow light is shaded separately with its cube map. The shader gates
+    // its own sampling on pointShadowActive.
+    const WorldRenderLight* PointShadowLight = GetPointShadowLight(self, frame);
+    int PointShadowActive = (PointShadowLight != NULL) ? 1 : 0;
+    SetShaderValue(shader, lit->_locPointShadowActive, &PointShadowActive, SHADER_UNIFORM_INT);
+    if (PointShadowLight != NULL)
+    {
+        float LightPos[3] = { PointShadowLight->Position.x, PointShadowLight->Position.y, PointShadowLight->Position.z };
+        SetShaderValue(shader, lit->_locPointShadowLightPos, LightPos, SHADER_UNIFORM_VEC3);
+
+        float Radiance[3];
+        WorldRendererCommon_ColorToLinear(PointShadowLight->Color, Radiance);
+        for (int Channel = 0; Channel < 3; Channel++)
+        {
+            Radiance[Channel] *= PointShadowLight->Intensity;
+        }
+        SetShaderValue(shader, lit->_locPointShadowLightRadiance, Radiance, SHADER_UNIFORM_VEC3);
+        SetShaderValue(shader, lit->_locPointShadowLightRange, &PointShadowLight->Range, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(shader, lit->_locPointShadowFar, &self->_pointShadow._far, SHADER_UNIFORM_FLOAT);
+        float PointBias = POINT_SHADOW_BIAS;
+        SetShaderValue(shader, lit->_locPointShadowBias, &PointBias, SHADER_UNIFORM_FLOAT);
+    }
+
+    SetShaderValue(shader, lit->_locShadowStrength, &frame->ShadowStrength, SHADER_UNIFORM_FLOAT);
+}
+
+/* Binds the frame's shadow maps, AO map and shadow cube to their fixed units (the lit shaders' samplers point there),
+ * once for every lit shader: texture units are context state. Bound manually, which works because the lit passes draw
+ * with DrawMesh (a direct draw, not the 2D batch). */
+static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo)
+{
+    if (frame->IsCascadeShadowActive)
+    {
+        rlActiveTextureSlot(WorldRendererTextureUnit_ShadowNear);
+        rlEnableTexture(self->_cascades._nearMap.depth.id);
+        if (self->_cascades._hasFarMap)
+        {
             rlActiveTextureSlot(WorldRendererTextureUnit_ShadowFar);
             rlEnableTexture(self->_cascades._farMap.depth.id);
         }
     }
-
-    // Screen-space AO: bind the AO-multiplier map (computed in the pre-pass) so the PBR ambient term is occluded.
-    // Bound like the shadow maps (manual slot; the scene pass draws via DrawMesh = a direct draw, not the 2D
-    // batch). The crisp overlay passes applyScreenAo=false (its full-res gl_FragCoord would mis-sample this
-    // low-res map). aoMapActive false => the shader leaves the ambient term unoccluded.
-    int AoMapActive = (applyScreenAo && frame->IsAoActive) ? 1 : 0;
-    SetShaderValue(RayShader, self->_pbr._locAoMapActive, &AoMapActive, SHADER_UNIFORM_INT);
-    if (AoMapActive)
+    if (applyScreenAo && frame->IsAoActive)
     {
-        float AoResolution[2] = { (float)frame->SceneWidth, (float)frame->SceneHeight };
-        SetShaderValue(RayShader, self->_pbr._locAoResolution, AoResolution, SHADER_UNIFORM_VEC2);
         rlActiveTextureSlot(WorldRendererTextureUnit_AmbientOcclusion);
         rlEnableTexture(self->_ao._target.texture.id);
     }
-
-    // Point-light (cube) shadow: shade the selected shadow light separately with its cube map. Bind the cube to
-    // its own slot. The shader gates its own sampling on pointShadowActive.
-    size_t LightCount = 0;
-    const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &LightCount);
-    bool IsPointShadowActive = frame->IsPointShadowActive && (frame->ShadowLightIndex < LightCount);
-    int PointShadowActive = IsPointShadowActive ? 1 : 0;
-    SetShaderValue(RayShader, self->_pbr._locPointShadowActive, &PointShadowActive, SHADER_UNIFORM_INT);
-    if (IsPointShadowActive)
+    if (GetPointShadowLight(self, frame) != NULL)
     {
-        const WorldRenderLight* Light = &Lights[frame->ShadowLightIndex];
-        float LightPos[3] = { Light->Position.x, Light->Position.y, Light->Position.z };
-        SetShaderValue(RayShader, self->_pbr._locPointShadowLightPos, LightPos, SHADER_UNIFORM_VEC3);
-
-        float Radiance[3];
-        WorldRendererCommon_ColorToLinear(Light->Color, Radiance);
-        for (int Channel = 0; Channel < 3; Channel++)
-        {
-            Radiance[Channel] *= Light->Intensity;
-        }
-        SetShaderValue(RayShader, self->_pbr._locPointShadowLightRadiance, Radiance, SHADER_UNIFORM_VEC3);
-        SetShaderValue(RayShader, self->_pbr._locPointShadowLightRange, &Light->Range, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(RayShader, self->_pbr._locPointShadowFar, &self->_pointShadow._far, SHADER_UNIFORM_FLOAT);
-        float PointBias = POINT_SHADOW_BIAS;
-        SetShaderValue(RayShader, self->_pbr._locPointShadowBias, &PointBias, SHADER_UNIFORM_FLOAT);
-
         rlActiveTextureSlot(WorldRendererTextureUnit_PointShadowCube);
         rlEnableTextureCubemap(self->_pointShadow._cube);
     }
-
-    SetShaderValue(RayShader, self->_pbr._locShadowStrength, &frame->ShadowStrength, SHADER_UNIFORM_FLOAT);
 }
 
-void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Vector3 center, float radius)
+void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo)
 {
-    if ((self->_pbr._shader == NULL) || (self->_pbr._locPointLightCount < 0))
+    bool HasPbr = (self->_pbr._shader != NULL);
+    bool HasSprites = (self->_sprites._shader != NULL);
+    if (HasPbr)
+    {
+        UploadLitUniforms(self, frame, GameShader_GetRaylibShader(self->_pbr._shader), &self->_pbr._lit, applyScreenAo);
+    }
+    if (HasSprites)
+    {
+        UploadLitUniforms(self, frame, GameShader_GetRaylibShader(self->_sprites._shader), &self->_sprites._lit,
+            applyScreenAo);
+    }
+    if (HasPbr || HasSprites)
+    {
+        BindFrameTextures(self, frame, applyScreenAo);
+    }
+}
+
+void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader,
+    const WorldRendererLitLocations* locations, Vector3 center, float radius)
+{
+    if (locations->_locPointLightCount < 0)
     {
         return;
     }
@@ -533,7 +583,7 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Vector3 cente
 
     size_t Selected[WORLD_MAX_FORWARD_LIGHTS];
     size_t Count = WorldLightCulling_SelectForSphere(Candidates, self->_pbr._forwardLights._count, center, radius,
-        Selected, (size_t)self->_pbr._maxPointLights);
+        Selected, (size_t)locations->_maxPointLights);
 
     float Positions[WORLD_MAX_FORWARD_LIGHTS * 3];
     float RadianceValues[WORLD_MAX_FORWARD_LIGHTS * 3];
@@ -551,14 +601,13 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Vector3 cente
         Ranges[Index] = Light->Range;
     }
 
-    Shader RayShader = GameShader_GetRaylibShader(self->_pbr._shader);
     int CountInt = (int)Count;
-    SetShaderValue(RayShader, self->_pbr._locPointLightCount, &CountInt, SHADER_UNIFORM_INT);
+    SetShaderValue(shader, locations->_locPointLightCount, &CountInt, SHADER_UNIFORM_INT);
     if (Count > 0)
     {
-        SetShaderValueV(RayShader, self->_pbr._locPointLightPositions, Positions, SHADER_UNIFORM_VEC3, CountInt);
-        SetShaderValueV(RayShader, self->_pbr._locPointLightRadiances, RadianceValues, SHADER_UNIFORM_VEC3, CountInt);
-        SetShaderValueV(RayShader, self->_pbr._locPointLightRanges, Ranges, SHADER_UNIFORM_FLOAT, CountInt);
+        SetShaderValueV(shader, locations->_locPointLightPositions, Positions, SHADER_UNIFORM_VEC3, CountInt);
+        SetShaderValueV(shader, locations->_locPointLightRadiances, RadianceValues, SHADER_UNIFORM_VEC3, CountInt);
+        SetShaderValueV(shader, locations->_locPointLightRanges, Ranges, SHADER_UNIFORM_FLOAT, CountInt);
     }
 }
 

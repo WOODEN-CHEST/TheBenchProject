@@ -58,7 +58,7 @@ void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* fram
 {
     BeginTextureMode(self->_crisp._target);
     ClearBackground(BLANK); // clears colour to (0,0,0,0) and depth to the far plane: "no crisp object here"
-    // Re-upload the PBR lighting (sun/ambient/fog/shadow + re-bind the shadow map) — the crisp pass runs after
+    // Re-upload the lighting (sun/ambient/fog/shadow + re-bind the shadow map) — the crisp pass runs after
     // the bloom/shaft passes, which may have changed GL texture-slot / shader state. applyScreenAo=false: this
     // is a full-res pass, so the low-res AO map (sampled by gl_FragCoord) would mis-align; crisp objects get no AO.
     WorldRendererLighting_UploadFrame(self, frame, false);
@@ -66,8 +66,8 @@ void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* fram
     bool IsLit = (self->_pbr._shader != NULL);
     WorldRendererGeometry_DrawModels(self, IsLit ? &self->_pbr._passShader : NULL, IsLit,
         WorldRendererPixelFilter_CrispOnly);
-    // Crisp sprites (OmitPixelation) render full-res here too, so they stay sharp like crisp models.
-    WorldRendererGeometry_DrawSprites(self, frame, WorldRendererPixelFilter_CrispOnly);
+    // Crisp sprites (OmitPixelation on cutout sprites) render full-res here too, so they stay sharp like crisp models.
+    WorldRendererSprites_DrawLit(self, WorldRendererPixelFilter_CrispOnly, false);
     EndMode3D();
     EndTextureMode();
 }

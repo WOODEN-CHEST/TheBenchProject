@@ -1168,7 +1168,10 @@ static void ObjectFilesRefuseHostileData(TestRun* run)
     const char* const BadTag[] = { "world_object", "tags[1]", "uppercase", NULL };
     CheckReadRefused(run, &Fixture, "{\"tags\": [\"town:a\", \"Town:B\"]}", BadTag);
     const char* const Twice[] = { "tags[1]", "twice", NULL };
-    CheckReadRefused(run, &Fixture, "{\"tags\": [\"office\", \"game:office\"]}", Twice);
+    char TwiceText[64];
+    snprintf(TwiceText, sizeof(TwiceText), "{\"tags\": [\"office\", \"%s:office\"]}",
+        (const char*)NAMESPACED_KEY_DEFAULT_NAMESPACE); // the same tag, once without the default namespace
+    CheckReadRefused(run, &Fixture, TwiceText, Twice);
     const char* const TagAndValue[] = { "data.town:x", "twice", NULL };
     CheckReadRefused(run, &Fixture, "{\"tags\": [\"town:x\"], \"data\": {\"town:x\": 1}}", TagAndValue);
     const char* const WrongElement[] = { "data.town:list[1]", NULL };

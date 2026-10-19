@@ -1,0 +1,10 @@
+{
+    "name": "test_smoke",
+    "frames": [
+        {
+            "source": "texture",
+            "location": "test_world/placeholder_smoke",
+            "texture_properties": { "filtering": "bilinear" }
+        }
+    ]
+}

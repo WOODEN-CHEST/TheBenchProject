@@ -4,6 +4,7 @@
 #include "GameCalendar.h"
 #include "wr/WRMemoryStream.h"
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 
@@ -601,8 +602,10 @@ static void JSONNumbersKeepTheirType(TestRun* run)
     // A key without a namespace gets the default one; "$type" alone is a compound, not a wrapper.
     if (TEST_CHECK_SUCCESS(run, ReadJSONText(run, "{\"$key\": \"office\"}", &Keys, &Value)))
     {
+        char Expected[NAMESPACED_KEY_BUFFER_SIZE];
+        snprintf(Expected, sizeof(Expected), "%s:office", (const char*)NAMESPACED_KEY_DEFAULT_NAMESPACE);
         TEST_CHECK(run, (Value.Type == DataType_Key)
-            && (strcmp((const char*)KeyRegistry_GetText(&Keys, Value.KeyValue), "game:office") == 0));
+            && (strcmp((const char*)KeyRegistry_GetText(&Keys, Value.KeyValue), Expected) == 0));
     }
     if (TEST_CHECK_SUCCESS(run, ReadJSONText(run, "{\"$type\": \"town:delivery\"}", &Keys, &Value)))
     {

@@ -151,7 +151,7 @@ the scripting language, which compiles it to a `WorldQuery`.
 The object table's `data` row (wire id 11, type `DataMap`, [PropertyDescriptors.md](PropertyDescriptors.md)) saves the
 map: one row, two JSON keys. The row is `ReadOnly` for `Properties_Set` (changes go through the world, which keeps the
 index, the limits and the revision); world files and copies still fill it. Reading data needs the key registry:
-`PropertyReadOptions.Keys`, and `DefaultNamespace` for keys written without one (the story's or pack's id; `game` when
+`PropertyReadOptions.Keys`, and `DefaultNamespace` for keys written without one (the story's or pack's id; `tbp` when
 NULL).
 
 ### JSON (until T09 writes `references/world_structure.md`, this is the reference)
@@ -179,7 +179,7 @@ NULL).
 ```
 
 - **Tags** are a list of keys under `tags`; everything else is a map of key -> value under `data`. A key may leave out
-  its namespace (`"office"` reads as `game:office`, or as the reader's default namespace); the writer always writes
+  its namespace (`"office"` reads as `tbp:office`, or in the reader's default namespace); the writer always writes
   the full key. The writer lists the tags in alphabetical order; `data`'s order is WRJSON's (hash order).
 - **Plain JSON types map directly:** an integer is an `int`, a number with a fraction or an exponent (`1.5`, `2.0`,
   `3e2`) a `float`, then string, bool, an array a list (all elements of its first element's type), an object a

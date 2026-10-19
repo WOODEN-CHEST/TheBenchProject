@@ -172,8 +172,45 @@ static Error RematchModels(WorldRenderCache* self, World* world)
     return Error_CreateSuccess();
 }
 
+/* The frame's area in its texture, normalized to [0, 1] (the shader's uvRect); all zero for a texture without a size. */
+static void GetUvRect(const SpriteAnimationFrame* frame, float outRect[4])
+{
+    float Width = (float)frame->_texture.width;
+    float Height = (float)frame->_texture.height;
+    if ((Width <= 0.0f) || (Height <= 0.0f))
+    {
+        Memory_Zero(outRect, 4U * sizeof(float));
+        return;
+    }
+    outRect[0] = frame->_areaInTexture.x / Width;
+    outRect[1] = frame->_areaInTexture.y / Height;
+    outRect[2] = frame->_areaInTexture.width / Width;
+    outRect[3] = frame->_areaInTexture.height / Height;
+}
+
+/* The sprite's quad before a viewer turns it: the object's position and rotation axes, the world size from the frame's
+ * pixels, the pixels per unit and the object's scale, the pivot and the flips. */
+static SpriteShape GetShape(const WorldSpriteComponent* sprite, const WorldObject* owner, Rectangle frameArea)
+{
+    Matrix Rotation = MatrixRotateXYZ(WorldObject_GetRotation(owner));
+    return (SpriteShape)
+    {
+        .Orientation = WorldSpriteComponent_GetOrientation(sprite),
+        .Position = WorldObject_GetPosition(owner),
+        .AxisX = { Rotation.m0, Rotation.m1, Rotation.m2 },
+        .AxisY = { Rotation.m4, Rotation.m5, Rotation.m6 },
+        .AxisZ = { Rotation.m8, Rotation.m9, Rotation.m10 },
+        .Size = SpriteTransform_GetWorldSize(frameArea, WorldSpriteComponent_GetPixelsPerUnit(sprite),
+            WorldObject_GetScale(owner)),
+        .Pivot = WorldSpriteComponent_GetPivot(sprite),
+        .IsFlippedX = WorldSpriteComponent_IsFlippedX(sprite),
+        .IsFlippedY = WorldSpriteComponent_IsFlippedY(sprite)
+    };
+}
+
 /* Lists a sprite when its object is shown and its playback instance has a frame to draw (the world binds the
- * animation; a sprite without one, or whose animation failed to load, is simply not drawn). */
+ * animation; a sprite without one, or whose animation failed to load, is simply not drawn), with its quad, its frame's
+ * place in the texture and the settings the passes read. */
 static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite)
 {
     const WorldObject* Owner = WorldComponent_GetOwner(&sprite->Base);
@@ -192,13 +229,26 @@ static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite)
         return Error_CreateSuccess();
     }
 
-    Vector3 Scale = WorldObject_GetScale(Owner);
     Entry.Component = sprite;
-    Entry.Position = WorldObject_GetPosition(Owner);
-    Entry.Size = (Vector2){ Scale.x, Scale.y };
+    GetUvRect(&Entry.Frame, Entry.UvRect);
+    Entry.Shape = GetShape(sprite, Owner, Entry.Frame._areaInTexture);
+    // A fixed quad does not depend on its viewer.
+    SpriteViewer AnyViewer = SpriteViewer_FromPoint(Entry.Shape.Position, (Vector3){ 0.0f, 1.0f, 0.0f });
+    Entry.FixedTransform = (Entry.Shape.Orientation == WorldSpriteOrientation_Fixed)
+        ? SpriteTransform_GetMatrix(&Entry.Shape, &AnyViewer) : MatrixIdentity();
+    Entry.BoundsRadius = SpriteTransform_GetBoundingRadius(Entry.Shape.Size, Entry.Shape.Pivot);
     Entry.Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Owner));
+    Entry.AlphaMode = WorldSpriteComponent_GetAlphaMode(sprite);
+    Entry.AlphaCutoff = WorldSpriteComponent_GetAlphaCutoff(sprite);
+    Entry.IsLit = WorldSpriteComponent_IsLit(sprite);
+    Entry.Emission = WorldSpriteComponent_GetEmission(sprite);
+    Entry.LightWrap = WorldSpriteComponent_GetLightWrap(sprite);
+    Entry.IsDecal = WorldSpriteComponent_IsDrawnAsDecal(sprite);
+    Entry.DecalOffset = WorldSpriteComponent_GetDecalOffset(sprite);
+    Entry.CastsShadows = WorldSpriteComponent_CastsShadows(sprite);
     Entry.HasOutline = WorldSpriteComponent_HasOutline(sprite);
-    Entry.OmitsPixelation = WorldSpriteComponent_OmitsPixelation(sprite);
+    Entry.OmitsPixelation = WorldSpriteComponent_OmitsPixelation(sprite)
+        && (Entry.AlphaMode == WorldSpriteAlphaMode_Cutout) && !Entry.IsDecal;
     if (!GenericBuffer_AddLast(&self->_sprites, &Entry))
     {
         return Error_Construct2(ErrorCode_InvalidOperation, "WorldRenderCache: could not grow the sprite list.");

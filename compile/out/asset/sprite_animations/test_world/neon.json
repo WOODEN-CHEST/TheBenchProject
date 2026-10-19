@@ -1,0 +1,10 @@
+{
+    "name": "test_neon",
+    "frames": [
+        {
+            "source": "texture",
+            "location": "test_world/placeholder_neon",
+            "texture_properties": { "filtering": "point" }
+        }
+    ]
+}

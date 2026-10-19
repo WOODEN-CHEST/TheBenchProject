@@ -1,0 +1,10 @@
+{
+    "name": "test_tree",
+    "frames": [
+        {
+            "source": "texture",
+            "location": "test_world/placeholder_tree",
+            "texture_properties": { "filtering": "point" }
+        }
+    ]
+}

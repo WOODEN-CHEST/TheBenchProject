@@ -1,0 +1,5 @@
+{
+    "name": "world_sprite_cube_depth",
+    "vertex_location": "sprite/vertex",
+    "fragment_location": "sprite_cube_depth/fragment"
+}

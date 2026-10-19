@@ -74,6 +74,10 @@ void NightVisionTests_Run(TestRun* run);
 /** @brief The renderer's per-object render cache (WorldRenderCacheTests.c; a private module of source/). */
 void WorldRenderCacheTests_Run(TestRun* run);
 
+/** @brief A sprite quad's maths: billboards facing the camera, axis billboards, fixed sprites, the pivot and flips,
+ *  lights as viewers, size and bounds, the back-to-front order (SpriteTransformTests.c; a private module of source/). */
+void SpriteTransformTests_Run(TestRun* run);
+
 /** @brief Log rotation, pruning and formatted output under a base directory (LoggerTests.c). */
 void LoggerTests_Run(TestRun* run);
 

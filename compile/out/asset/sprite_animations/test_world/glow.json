@@ -1,0 +1,10 @@
+{
+    "name": "test_glow",
+    "frames": [
+        {
+            "source": "texture",
+            "location": "test_world/placeholder_glow",
+            "texture_properties": { "filtering": "bilinear" }
+        }
+    ]
+}

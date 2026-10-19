@@ -43,7 +43,7 @@ static void EnsureShaders(WorldRenderer* self)
     WorldRendererLighting_LoadShader(self);
     WorldRendererPost_LoadShaders(self);
     WorldRendererCrisp_LoadShader(self);
-    WorldRendererGeometry_LoadShaders(self);
+    WorldRendererSprites_LoadShaders(self);
     WorldRendererGBuffer_LoadShaders(self);
     WorldRendererShadows_LoadShaders(self);
     WorldRendererSky_LoadShader(self);
@@ -114,7 +114,36 @@ static bool IsMoonlightAvailable(const WorldRenderer* self)
 
 static bool IsNightVisionAvailable(const WorldRenderer* self)
 {
-    return (self->_pbr._shader != NULL) || (self->_sky._shader != NULL); // the two passes that apply it
+    return (self->_pbr._shader != NULL) || (self->_sky._shader != NULL); // the passes that apply it (sprites too)
+}
+
+static bool AreSpriteShadowsAvailable(const WorldRenderer* self)
+{
+    return WorldRendererSprites_IsAvailable(self)
+        && ((IsCascadeShadowAvailable(self) && (self->_cascades._spriteDepthShader != NULL))
+            || (IsPointShadowAvailable(self) && (self->_pointShadow._spriteShader != NULL)));
+}
+
+/* Whether any sprite drawn this frame casts a shadow: a shadow pass runs that has its sprite shader, and a sprite
+ * casts. */
+static bool DoSpritesCastShadows(const WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    bool IsCascadeCasting = frame->IsCascadeShadowActive && (self->_cascades._spriteDepthShader != NULL);
+    bool IsCubeCasting = frame->IsPointShadowActive && (self->_pointShadow._spriteShader != NULL);
+    if (!WorldRendererSprites_IsAvailable(self) || !(IsCascadeCasting || IsCubeCasting))
+    {
+        return false;
+    }
+    size_t SpriteCount = 0;
+    const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&self->_cache, &SpriteCount);
+    for (size_t Index = 0; Index < SpriteCount; Index++)
+    {
+        if (WorldRendererSprites_CastsShadows(&Sprites[Index]))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 /* The eye's night vision this frame: how strongly it applies (the renderer toggle x the world's strength), the field
@@ -274,11 +303,14 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     bool HasPbr = (self->_pbr._shader != NULL);
     bool HasSky = (self->_sky._shader != NULL);
     bool HasTonemap = (self->_tonemap._shader != NULL);
-    bool HasSpriteShader = (self->_sprites._shader != NULL);
+    bool HasSprites = WorldRendererSprites_IsAvailable(self);
     Status->Features[WorldRendererFeature_PbrLighting] = StateOf(HasPbr, HasPbr);
     Status->Features[WorldRendererFeature_Sky] = StateOf(HasSky, HasSky);
     Status->Features[WorldRendererFeature_Tonemap] = StateOf(HasTonemap, HasTonemap);
-    Status->Features[WorldRendererFeature_SpriteShading] = StateOf(HasSpriteShader, HasSpriteShader);
+    Status->Features[WorldRendererFeature_SpriteShading] = StateOf(HasSprites, HasSprites);
+    Status->Features[WorldRendererFeature_SpriteLighting] = StateOf(HasSprites, self->_isSpriteLightingEnabled);
+    Status->Features[WorldRendererFeature_SpriteShadows] = StateOf(AreSpriteShadowsAvailable(self),
+        DoSpritesCastShadows(self, frame));
     Status->Features[WorldRendererFeature_SunShadows] = StateOf(IsCascadeShadowAvailable(self),
         frame->IsCascadeShadowActive && (frame->ShadowLight == WorldShadowLight_Sun));
     Status->Features[WorldRendererFeature_MoonShadows] = StateOf(IsCascadeShadowAvailable(self),
@@ -314,7 +346,22 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
             Status->ModelWithoutAssetCount++;
         }
     }
-    WorldRenderCache_GetSprites(&self->_cache, &Status->SpriteCount);
+    size_t SpriteCount = 0;
+    const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&self->_cache, &SpriteCount);
+    Status->SpriteCount = SpriteCount;
+    Status->DecalCount = 0;
+    Status->TransparentSpriteCount = 0;
+    for (size_t Index = 0; Index < SpriteCount; Index++)
+    {
+        if (Sprites[Index].IsDecal)
+        {
+            Status->DecalCount++;
+        }
+        else if (Sprites[Index].AlphaMode != WorldSpriteAlphaMode_Cutout)
+        {
+            Status->TransparentSpriteCount++;
+        }
+    }
     WorldRenderCache_GetLights(&self->_cache, &Status->LightCount);
 }
 
@@ -384,6 +431,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_pixelationEnabled = true;
     Renderer->_postfxEnabled = true;
     Renderer->_isNightVisionEnabled = true;
+    Renderer->_isSpriteLightingEnabled = true;
     Renderer->_nightVision = NightVision_GetCalibration();
     Renderer->_outline._isEnabled = true;
     Renderer->_bloom._isEnabled = true;
@@ -391,6 +439,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_crisp._isEnabled = true;
     WorldRenderCache_Construct(&Renderer->_cache);
     WorldRendererSky_Construct(Renderer);
+    WorldRendererSprites_Construct(Renderer);
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardLights, INITIAL_FORWARD_LIGHT_CAPACITY,
         sizeof(WorldCullingLight));
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardRadiances, INITIAL_FORWARD_LIGHT_CAPACITY,
@@ -414,6 +463,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     WorldRendererScene_ReleaseTargets(self);
     WorldRendererShadows_Unload(self);
     WorldRendererStars_Unload(self);
+    WorldRendererSprites_Deconstruct(self);
     WorldRendererSky_Deconstruct(self); // retires the sky textures' own asset users
 
     // The cache's asset pointers die with the model user, so the cache goes first.
@@ -508,6 +558,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     DecidePasses(self, &Frame);
     WorldRendererLighting_PrepareFrame(self, &Frame);
     DecideNightVision(self, &Frame);
+    // Every sprite's matrices for the camera and the shadow lights, and the transparent ones' draw order.
+    WorldRendererSprites_PrepareFrame(self, &Frame);
 
     // Shadow maps first: the scene and crisp passes sample them.
     if (Frame.IsCascadeShadowActive)
@@ -599,6 +651,8 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_Moon:             return (const unsigned char*)u8"moon";
         case WorldRendererFeature_Moonlight:        return (const unsigned char*)u8"moonlight";
         case WorldRendererFeature_NightVision:      return (const unsigned char*)u8"night vision";
+        case WorldRendererFeature_SpriteLighting:   return (const unsigned char*)u8"sprite lighting";
+        case WorldRendererFeature_SpriteShadows:    return (const unsigned char*)u8"sprite shadows";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -625,10 +679,11 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
         : (Status->IsSceneDepthSamplable ? "HDR with samplable depth" : "HDR without samplable depth");
     Error LogResult = Logger_LogInfoFormatted(self->_logger,
         (const unsigned char*)u8"WorldRenderer: %s scene; %" PRIu64 u8" models (%" PRIu64 u8" without a model), %"
-        PRIu64 u8" sprites, %" PRIu64 u8" lights, %" PRIu64 u8" stars; %s.",
+        PRIu64 u8" sprites (%" PRIu64 u8" decals, %" PRIu64 u8" blended or additive), %" PRIu64 u8" lights, %" PRIu64
+        u8" stars; %s.",
         Tier, (uint64_t)Status->ModelCount, (uint64_t)Status->ModelWithoutAssetCount, (uint64_t)Status->SpriteCount,
-        (uint64_t)Status->LightCount, (uint64_t)Status->StarCount,
-        IsBuilt ? (const char*)Lists._data : "feature list unavailable");
+        (uint64_t)Status->DecalCount, (uint64_t)Status->TransparentSpriteCount, (uint64_t)Status->LightCount,
+        (uint64_t)Status->StarCount, IsBuilt ? (const char*)Lists._data : "feature list unavailable");
     Error_Deconstruct(&LogResult);
     Memory_Free(Lists._data);
 }
@@ -661,6 +716,16 @@ void WorldRenderer_SetNightVisionEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_IsNightVisionEnabled(const WorldRenderer* self)
 {
     return self->_isNightVisionEnabled;
+}
+
+void WorldRenderer_SetSpriteLightingEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_isSpriteLightingEnabled = enabled;
+}
+
+bool WorldRenderer_IsSpriteLightingEnabled(const WorldRenderer* self)
+{
+    return self->_isSpriteLightingEnabled;
 }
 
 void WorldRenderer_SetBloomEnabled(WorldRenderer* self, bool enabled)

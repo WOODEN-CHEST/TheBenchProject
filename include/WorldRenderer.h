@@ -23,9 +23,9 @@
  * In order: the shadow cascades of the sky's shadow light (the sun by day, the moon on bright nights) and the
  * point-light cube shadow; a normal/flag G-buffer and screen-space ambient occlusion (applied to the ambient term
  * only); the scene pass (atmospheric sky with the moon, the moonlit sky, the Milky Way and light pollution's skyglow,
- * the star field, PBR-lit models with the sun, the moon and forward-shaded point lights and distance fog, sprite
- * billboards, debug grid and light gizmos; the sky's dim light and the reflected light go through the eye's night
- * vision, which greys them at night as the eye does);
+ * the star field, PBR-lit models with the sun, the moon and forward-shaded point lights and distance fog, lit sprites
+ * (cutout, then decals, then blended and additive ones back to front), debug grid and light gizmos; the sky's dim light
+ * and the reflected light go through the eye's night vision, which greys them at night as the eye does);
  * depth/normal-edge outlines; bloom and sun shafts (added in HDR); the tonemap with eye adaptation; and last
  * the crisp overlay, which draws OmitPixelation objects at window resolution over the pixelated image.
  *
@@ -71,7 +71,7 @@ typedef enum WorldRendererFeatureEnum
     WorldRendererFeature_Sky,
     /** @brief The tonemap with eye adaptation. Without it the linear HDR scene is shown untonemapped. */
     WorldRendererFeature_Tonemap,
-    /** @brief The sprite shader. Without it sprites draw with raylib's default shader (slightly too bright). */
+    /** @brief The sprites: the lit sprite shader and the sprite quad. Without them sprites are not drawn at all. */
     WorldRendererFeature_SpriteShading,
     /** @brief The two shadow cascades, cast by the sun (inactive while the moon casts them, or neither). */
     WorldRendererFeature_SunShadows,
@@ -104,6 +104,11 @@ typedef enum WorldRendererFeatureEnum
      *  the eye's does when the rods take over (active at dusk and at night; inactive by day, or switched off by the
      *  renderer toggle or the world's NightVisionStrength). */
     WorldRendererFeature_NightVision,
+    /** @brief Sprite lighting: lit sprites take the sun, the moon, lamps, shadows and the night vision like models
+     *  (inactive while switched off with WorldRenderer_SetSpriteLightingEnabled: every sprite then draws unlit). */
+    WorldRendererFeature_SpriteLighting,
+    /** @brief Shadows cast by cutout sprites, facing the light (inactive while no sprite casts or no shadow runs). */
+    WorldRendererFeature_SpriteShadows,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -141,6 +146,10 @@ typedef struct WorldRendererStatusStruct
     size_t ModelWithoutAssetCount;
     /** @brief Sprite components with a frame to draw, on enabled and visible objects. */
     size_t SpriteCount;
+    /** @brief Of those, the decals. */
+    size_t DecalCount;
+    /** @brief Of those, the blended and additive sprites that are not decals (drawn sorted, back to front). */
+    size_t TransparentSpriteCount;
     /** @brief Point lights on enabled and visible objects. */
     size_t LightCount;
     /** @brief Stars in the star catalogue (from the environment's StarDensity), whether or not they show now. */
@@ -283,6 +292,25 @@ void WorldRenderer_SetNightVisionEnabled(WorldRenderer* self, bool enabled);
  * @returns true if enabled.
  */
 bool WorldRenderer_IsNightVisionEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Enables or disables sprite lighting: lit sprites taking the sun, the moon, lamps, shadows, wrap lighting and
+ *        the night vision like the models around them.
+ *
+ * A code-side toggle for A/B-ing it: when disabled every sprite draws unlit at its full colours (as sprites did before
+ * they were lit; unlit sprites keep their emission), still fogged, still casting shadows. Default enabled. Applied on
+ * the next render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to light the lit sprites, false to draw every sprite unlit.
+ */
+void WorldRenderer_SetSpriteLightingEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether sprite lighting is enabled (see WorldRenderer_SetSpriteLightingEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true if enabled.
+ */
+bool WorldRenderer_IsSpriteLightingEnabled(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables the bloom pass (a blurred bright-pass of the scene added back in HDR).

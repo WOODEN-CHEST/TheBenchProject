@@ -12,6 +12,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, the key registry, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
 | WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with resolved assets, sprites, lights), built from the world's per-type component arrays. |
+| SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
 | WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c` | A concrete GameFrame: a WASD + mouse-look flycam over a test world. |
 
@@ -59,8 +60,13 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
   and a conservative world bounding sphere from `GameModel_GetLocalBounds` (computed once at load), and `IsDrawn`:
   its model resolved and its object enabled and visible. Passes draw only the `IsDrawn` entries; a hidden object keeps
   its entry and its model.
-- **Sprites:** the sprites of enabled and visible objects whose playback instance has a frame, with their current
-  frame, position, size, tint, outline and crisp settings.
+- **Sprites:** the sprites of enabled and visible objects whose playback instance has a frame: the current frame and
+  its area in its texture (normalized: the shaders' `uvRect`), the quad before a viewer turns it (`SpriteShape`: the
+  orientation, the object's position and rotation axes, the world size from the frame's pixels, the pixels per unit and
+  the object's X and Y scale, the pivot, the flips), a fixed sprite's matrix (it needs no viewer), a sphere around the
+  pivot that holds the quad in every orientation, the tint, and the settings: alpha mode and cutoff, lit, emission,
+  light wrap, decal (marked as one and fixed) and its lift, casts shadows, outline, and crisp (only for cutout sprites
+  that are not decals: the crisp overlay composites opaque surfaces).
 - **Lights:** the lights of enabled and visible objects, with position, reach (the range), intensity, colour and
   shadow flag.
 
@@ -86,17 +92,20 @@ after asset definitions change).
 3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the sun's and the moon's linear colours,
    the ambient colour (with the moonlit sky's fill), the scene luminance for eye adaptation, fog density, shadow
    strength, and the forward-light candidates (every light except the cube-shadow light) with their linear radiance.
-   Then the eye's night vision for the frame (`DecideNightVision`: its strength, the field luminance, the rods' grey).
+   Then the eye's night vision for the frame (`DecideNightVision`: its strength, the field luminance, the rods' grey),
+   and each sprite's matrices (`WorldRendererSprites_PrepareFrame`: facing the camera, facing the cascades' light and the
+   cube shadow's lamp while those run) with the blended and additive sprites sorted back to front.
 4. The shadow cascades of the shadow light (the sun or the moon), then the point-light cube shadow (only casters
-   within the light's reach).
-5. The normal/flag G-buffer and the AO pre-pass, when AO or outlines run.
+   within the light's reach). Models and cutout sprites cast; sprites turned toward the light.
+5. The normal/flag G-buffer (models and cutout sprites) and the AO pre-pass, when AO or outlines run.
 6. The scene pass: clear, atmospheric sky (with the moonlit sky, the moon's disc, the Milky Way and light pollution's
-   skyglow), the stars (none behind the moon), PBR models (the sun and the moon; per object: up to
-   `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), sprites, debug grid
-   and light gizmos. The sky's glow and the models' reflected light go through the eye's night vision.
+   skyglow), the stars (none behind the moon), debug grid, PBR models (the sun and the moon; per object: up to
+   `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), lit sprites (the
+   cutout ones, then decals, then blended and additive ones back to front) and light gizmos. The sky's glow and the
+   models' and lit sprites' reflected light go through the eye's night vision.
 7. Outlines, then bloom and sun shafts from the (outlined) HDR scene.
 8. Eye adaptation, then the tonemapped point-upscale into the frame target.
-9. The crisp overlay for OmitPixelation objects, composited over the finished image.
+9. The crisp overlay for OmitPixelation models and cutout sprites, composited over the finished image.
 
 ### Effects
 
@@ -117,8 +126,60 @@ sky's fill), forward point lights, per-material metallic/roughness/occlusion/emi
 optional albedo / normal / packed ORM (in the METALNESS slot) / emissive maps from the model definition's
 `material_overrides`, derivative-based normal mapping, and atmospheric distance fog that fades into the same sky
 the sky pass draws (both shaders `#include "common/atmosphere"`, so the atmosphere maths are one file; the sky pass's
-below-horizon mirror is still repeated in the PBR shader's `fogSkyColor`). Without it models draw unlit with raylib's
-default shader.
+below-horizon mirror is still repeated in `fogSkyColor`). The lighting itself (the frame's uniforms, the BRDF, the sky's
+lights with the cascades' shadow, point lights with the cube shadow, the AO, the night vision and the fog) lives in
+`shaders/common/lighting.glsl`, which the sprite shader includes too: the renderer prepares and feeds every lit shader
+the same way (`WorldRendererLighting_PrepareLitShader`, `WorldRendererLighting_UploadFrame`). T06 moved it there without
+changing a bit of the PBR image (checked against the previous build on two drivers). Without it models draw unlit with
+raylib's default shader.
+
+**Sprites** (T06; the component's settings are in [WorldData.md](WorldData.md)). Every sprite is one unit quad
+(`WorldRendererSprites.c`: x and y in [0, 1] from the image's bottom left, z 0, normal +Z; six unindexed vertices,
+because raylib's `DrawMesh` draws indexed only while the CPU index array is kept) drawn with `DrawMesh` and a matrix from
+`SpriteTransform`, with a material built on the stack (the frame's texture as the albedo map, the tint as `colDiffuse`).
+- **Shape.** The frame's size in pixels divided by `pixels_per_unit`, times the object's X and Y scale; the pivot lands
+  on the object's position and the flips mirror the image about it. The frame's area in its texture reaches the vertex
+  stage as `uvRect`, so sprite-sheet frames work.
+- **Orientation.** A `billboard` faces the camera's position (its normal points at the camera, the image's top leans
+  toward the camera's up); an `axis_billboard` turns only around the object's local Y axis; a `fixed` sprite lies in the
+  object's local XY plane facing +Z. In a shadow pass the light is the viewer: billboards face the sun or the moon along
+  its rays (with world up as their up) or the cube shadow's lamp, axis billboards turn around their axis toward it, fixed
+  sprites stay as they are. So a tree's shadow does not turn with the camera. The matrices (camera, cascades' light,
+  cube's lamp) are made once per frame and shared by every pass.
+- **Lighting** (`world_sprite`, `#include "common/lighting"`): a rough dielectric (roughness 0.9, metallic 0, occlusion
+  1) lit by the sun, the moon, the forward point lights (reach-culled per sprite on the sphere around its pivot), the
+  cube-shadow lamp, the ambient and the fog, its reflected light through the eye's night vision. Fixed sprites and decals
+  are two-sided cards lit with their normal turned toward the viewer. Billboards and axis billboards face the camera
+  and stand in for round things, so their diffuse light wraps: (n.l + w) / (1 + w) with w their `light_wrap` (default 1:
+  n.l x 0.5 + 0.5), half lit from the side and dark only from straight behind; the specular keeps n.l.
+- **No self-shadowing.** A billboard's shadow-map entry faces the light while the visible quad faces the camera; the two
+  cross at the pivot, and half of the visible quad would lie in its own shadow. So the cascades and the cube are read on
+  the light-facing quad, at the point matching each fragment (`matShadowModel`, `matPointShadowModel` in the vertex
+  stage): the sprite is shadowed by everything else where its own entry stands, never by itself.
+- **Unlit** sprites (`is_lit` false) show their colours times `emission` as emitted light: no night vision, still
+  fogged.
+- **Alpha modes.** `cutout` discards texels whose alpha is below `alpha_cutoff` (the texture's alpha; the object's opacity
+  is left to T07's dither) and writes opaque colour and depth. `blend` writes premultiplied colour (blended ONE,
+  ONE_MINUS_SRC_ALPHA, so the scene's alpha stays 1) with the texture's alpha times the object's opacity. `additive`
+  writes premultiplied colour with alpha 0 (added ONE, ONE), dimmed by the fog's transmittance instead of mixed toward the
+  sky (an emitter seen through haze). Neither of the two writes depth.
+- **Order** in a lit pass (`WorldRendererSprites_DrawLit`, after the opaque models): the cutout sprites; then the decals
+  (depth tested, not written; blended as their alpha mode says; in world order); then the blended and additive sprites,
+  farthest first by view depth (equal depths keep world order), so each blends over everything behind it, the others
+  included. Culling is off for sprites (two-sided, and one flip mirrors the quad).
+- **Decals** (`is_decal` with the fixed orientation): the vertex stage lifts the quad `decal_offset` metres along its
+  normal toward the side the camera is on (raylib has no polygon offset). No shadow, no outline, not in the G-buffer;
+  the AO and the shadow they get are their surface's.
+- **Shadows.** Cutout sprites that are not decals and have `casts_shadows` draw into both cascades and the cube shadow
+  through alpha-tested depth shaders (`world_sprite_depth`, `world_sprite_cube_depth`), so the shadow has the sprite's
+  shape.
+- **G-buffer.** Cutout sprites that are not decals (`world_normal_sprite`: alpha-tested at their cutoff, their quad's
+  view normal turned toward the camera) get outlines and AO like models; decals, blended and additive sprites stay out.
+- **Crisp.** `omit_pixelation` draws a cutout sprite that is not a decal in the crisp overlay; decals and blended or
+  additive sprites stay pixelated (the overlay composites opaque surfaces with depth only).
+- **A/B.** `WorldRenderer_SetSpriteLightingEnabled` (K in the test frame) draws every sprite unlit at its full colours,
+  the look sprites had before T06. Without the sprite shader or the quad no sprite is drawn (logged once; status
+  "sprite shading" unavailable).
 
 **Sky.** `world_sky`: Rayleigh + Mie single scattering (`shaders/common/atmosphere.glsl`) lit by the sun and, at
 night, by the moon; the sun disc, the moon's disc, the Milky Way and light pollution's skyglow, drawn as a full-screen
@@ -223,14 +284,13 @@ private `source/NightVision.{h,c}` (tested in `tests/NightVisionTests.c`; its he
   before the discs are added) and the PBR shader's reflected light (ambient, the sun and the moon, point lights) and
   its fog's sky. Not the emitters: the sun's and the moon's discs, the stars and emissive materials (the game draws
   emitters far dimmer than they are, and a real emitter that bright is seen in colour: the orange rising moon, a lit
-  screen at night). Not yet the sprites (see below).
+  screen at night). Lit sprites' reflected light goes through it like the models'; unlit sprites are emitters.
 - **Switches.** The world's `NightVisionStrength` (1 the eye, 0 colourful nights: a long-exposure photo) and
   `NightVisionBlueShift`; the renderer toggle `WorldRenderer_SetNightVisionEnabled` (V in the test frame) for A/B.
   Cost: a `pow` per sky pixel and per lit fragment.
 - **Not modelled.** The rods' slow dark adaptation (minutes; the vision follows the sky's light at once), a lit
   interior at night (its dark corners would grey: its light is not part of the field; revisit with interiors), the
-  loss of sharpness in the dark. Sprites keep their colour for now: lit sprites (T06) must pass their reflected light
-  through `nightVision` too.
+  loss of sharpness in the dark.
 
 **Sun and moon shadows.** Two camera-centred orthographic cascades (2048² depth textures): NEAR (small extent, sharp)
 and FAR (large extent, coarse, optional). Each model component's `WorldShadowTier` (Both / Near / Far) routes which
@@ -244,10 +304,13 @@ sampled, while the cascades do not run). Active when shadows are enabled, the st
 shadow light.
 
 **Point-light shadow.** One cube shadow for the shadow-casting light nearest the camera (`CastsShadows`): six
-90° faces of packed linear distance (RGBA8 cube), sampled with 20-tap PCF. That light is shaded separately and is
-excluded from the forward candidates, so an object can still get eight other point lights.
+90° faces of packed linear distance (RGBA8 cube, `common/distance_packing`), sampled with 20-tap PCF. The faces are
+written with colour blending off: the packed value's alpha byte is a digit of the distance, not a coverage (until T06
+the default blending mixed every texel with the cleared "far", so casters beyond half the light's reach left no shadow
+and nearer ones were stored too far away). Models and cutout sprites (turned toward the light) cast. That light is
+shaded separately and is excluded from the forward candidates, so an object can still get eight other point lights.
 
-**G-buffer, AO and outlines.** `world_normal` (models) and `world_normal_sprite` (alpha-discarded sprites) write
+**G-buffer, AO and outlines.** `world_normal` (models) and `world_normal_sprite` (cutout sprites, alpha-tested) write
 view-space normals (RGB) and a surface/outline flag (A: 0 = nothing, 0.5 = surface, 1 = surface with outline)
 into a low-res 8-bit target with blending disabled. `world_ao` turns it into an AO multiplier that the PBR pass
 applies to its ambient term only (so AO never dims direct light). `world_postfx` draws outlines after the scene:
@@ -258,7 +321,7 @@ are under the post-effects toggle (`WorldRenderer_SetPostEffectsEnabled`, O key 
 does not bloom) with a separable blur, and a radial blur of the unoccluded sky toward the sun's screen position
 that fades as the sun nears the screen margin or the horizon.
 
-**Crisp overlay.** OmitPixelation models and sprites render lit at window resolution and are composited over the
+**Crisp overlay.** OmitPixelation models and cutout sprites render lit at window resolution and are composited over the
 pixelated image, depth-tested against the scene so they are occluded correctly (e.g. a readable in-world
 screen). When the overlay cannot run they fall back to the pixelated passes, so they never vanish. Crisp objects
 get no AO and no outlines.
@@ -272,12 +335,16 @@ get no AO and no outlines.
   created is logged once and switches its pass off. The only fatal failure is a scene target that cannot be
   created at all: `WorldRenderer_RenderToTarget` returns `ErrorCode_InvalidState`.
 - `WorldRenderer_GetStatus` reports the scene tier, each feature as active / inactive (switched off or not
-  applicable this frame) / unavailable (missing shader or target), and object counts (the star count included). The
+  applicable this frame) / unavailable (missing shader or target), and object counts (the star count included; the
+  sprites with how many are decals and how many blended or additive). The
   "stars" feature is inactive by day, while twilight, light pollution and the moonlit sky hide every star, and at
   density 0; the "Milky Way" is unavailable without its texture and inactive while it cannot be seen; "sun shadows" and
   "moon shadows" are the cascades cast by either light; "moon" is the disc (inactive below the horizon, near the sun or
   switched off; drawn flat grey without its texture), "moonlight" the moon's light on the world, "night vision" the
-  eye's night vision (active while it changes something: dusk and night, with a strength above 0). The renderer logs the status
+  eye's night vision (active while it changes something: dusk and night, with a strength above 0), "sprite shading" the
+  sprites at all (unavailable without the sprite shader or quad: then no sprite is drawn), "sprite lighting" the lit
+  sprites (inactive while switched off with the K key's toggle), "sprite shadows" the shadows of cutout sprites
+  (active while one casts into a running shadow; unavailable without the sprite depth shaders). The renderer logs the status
   once after its first render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame).
 
 ### Renderer structure (keep it clean)
@@ -288,10 +355,11 @@ get no AO and no outlines.
 | `WorldRendererInternal.h` | The renderer state (one state struct per pass), `WorldRenderFrame`, fixed texture units, shared constants, and every internal function, documented. |
 | `WorldRendererCommon.c` | Config multipliers, colour conversion, shader loading, one-time warnings, render-target constructors. |
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
-| `WorldRendererGeometry.c` | Model meshes with per-draw materials, sprite billboards, light gizmos, the pixelation filter. |
-| `WorldRendererLighting.c` | The PBR shader, its location table and uniforms (the night vision's among them), forward point lights, per-material factors, eye adaptation. |
-| `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow. |
-| `WorldRendererGBuffer.c` | The normal/flag G-buffer and the AO pre-pass. |
+| `WorldRendererGeometry.c` | Model meshes with per-draw materials, light gizmos, the pixelation filter. |
+| `WorldRendererSprites.c` | The sprites: the unit quad, the lit sprite shader, each frame's sprite matrices (camera, cascades' light, cube's lamp) and transparent draw order, the lit cutout / decal / sorted transparent draws. The G-buffer and shadow passes draw sprites with this file's quad and matrices. |
+| `WorldRendererLighting.c` | The PBR shader and its location table, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: the PBR and the sprite shader, the night vision's among them), forward point lights, per-material factors, eye adaptation. |
+| `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow (models, and cutout sprites through alpha-tested depth shaders). |
+| `WorldRendererGBuffer.c` | The normal/flag G-buffer (models and cutout sprites) and the AO pre-pass. |
 | `WorldRendererSky.c` | The atmospheric sky with the moon, the moonlit sky, the Milky Way and light pollution's skyglow; the sky textures the world names; the night sky values and the moon's disc for the frame. |
 | `WorldRendererStars.c` | The star field: the catalogue's mesh (rebuilt when the seed or density changes) and its draw (none behind the moon). |
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
@@ -328,22 +396,30 @@ The renderer keeps receiving features, so:
 Either may be omitted to fall back to raylib's built-in stage. Both stages accept every shader-stage extension,
 so a paired shader's two source files need DISTINCT stems: `world_pbr` uses `shaders/pbr/vertex.vert` +
 `shaders/pbr/fragment.frag`, referenced as `"pbr/vertex"` and `"pbr/fragment"`. The `world_normal` G-buffer shader
-is a second such pair. Each renderer shader lives in its own directory under `asset/shaders/`. GLSL shared between
+is a second such pair. The four sprite shaders (`world_sprite`, `world_normal_sprite`, `world_sprite_depth`,
+`world_sprite_cube_depth`) share one vertex stage, `sprite/vertex` (the quad, `uvRect`, a decal's lift, the shadow
+lookups' light-facing quads), each with its own fragment stage in its own directory. Each renderer shader lives in its own directory under `asset/shaders/`. GLSL shared between
 shaders lives in `asset/shaders/common/` and is pulled in with `#include "common/<name>"` (no `#version` in shared
 files; rules in GameAssets.md, "GameShader"): `common/math` (`PI`), `common/atmosphere` (Rayleigh + Mie single
 scattering lit by the sun or the moon, with an overload that also gives the view ray's transmittance; used by
 `world_sky` and the PBR fog), `common/night_sky` (air mass, extinction and the skyglow profile,
 used by `world_sky`, `world_stars` and the PBR fog) and `common/night_vision` (the eye's night vision: the rods' share
-and the blend into their grey; used by `world_sky` and `world_pbr`). Put new shared lighting, dithering or noise code there instead of
-copying it between shaders.
+and the blend into their grey; used by `world_sky` and `common/lighting`), `common/lighting` (the frame's lighting: its
+uniforms, the BRDF and its wrapped variant, the cascades' shadow, point lights and the cube shadow, the screen AO, the
+night vision and the fog; used by `world_pbr` and `world_sprite`) and `common/distance_packing` (the cube shadow's
+packed distance; used by `world_cube_depth`, `world_sprite_cube_depth` and `common/lighting`). Put new shared
+lighting, dithering or noise code there instead of copying it between shaders.
 
 ## WorldTestFrame
 
 Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World` built with `World_Construct2` on `Services.Keys` (so
 its sprite components bind their animations themselves), a `GameClock` ([GameClock.md](GameClock.md)), a `GameCamera`, and a
 `WorldRenderer`. `BuildTestWorld` builds the test world through the object API: `World_CreateObject`, the transform
-setters, `World_AddComponent` and the components' setters (a model component per cube and for the ground slab, a sprite
-component, two light components). Its `Update` runs the tick's animation step: it advances the sprites of enabled
+setters, `World_AddComponent` and the components' setters (a model component per cube and for the ground slab, two light
+components, and the sprites of its `TestSprites` table: the test image as a camera-facing billboard, 1.5 m wide at 1280
+pixels per metre, and T06's placeholders from `sprite_animations/test_world/`: a blended tire-mark decal on the ground in
+front of the camera, an axis-billboard tree that casts a shadow, a fixed sign behind it, a lit blended smoke puff in
+front of an additive, unlit glow around the warm lamp, and an unlit neon sign). Its `Update` runs the tick's animation step: it advances the sprites of enabled
 objects (`World_GetComponents(world, WorldComponentType_Sprite)`).
 **Game time:** the clock starts from the world environment's date and time of day (noon, 2026-10-18) at time scale
 720 (a 2-minute day, as the test world had before T23; the clock's own default is 72). Every `Update` advances it,
@@ -361,8 +437,8 @@ debug keys as raw keys:
 - **the moon and the seasons:** F pins the moon full (`MoonPhaseSource` fixed at 0.5) and gives it back to the
   calendar; Y switches the seasons (`AreSeasonsEnabled`). Every clock and moon log line carries the moon: `WorldTest:
   next day: Mon 2026-10-19 12:00:00; first quarter (phase 0.27, 59% lit, from the calendar).`;
-- **the renderer and the sky:** O post effects, B bloom, G sun shafts, C crisp overlay, V night vision (logged), L
-  light gizmos, N cycle the
+- **the renderer and the sky:** O post effects, B bloom, G sun shafts, C crisp overlay, V night vision (logged), K
+  sprite lighting (off draws every sprite unlit, as before T06; logged), L light gizmos, N cycle the
   light pollution (0, 0.35, 0.7, 1; logged), I log the renderer status, then the game time (`WorldTest: game time
   Sun 2026-10-18 12:00:00, running, 720 game seconds per real second (a day takes 2 real minutes); seasons off.`) and
   the moon;

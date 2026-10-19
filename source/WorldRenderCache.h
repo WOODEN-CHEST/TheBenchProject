@@ -9,6 +9,7 @@
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
 #include "SpriteAnimation.h"
+#include "SpriteTransform.h"
 #include "raylib/raylib.h"
 #include "wr/WRError.h"
 #include "wr/WRMemory.h"
@@ -76,21 +77,41 @@ typedef struct WorldRenderModelStruct
     Color Tint;
 } WorldRenderModel;
 
-/** @brief A sprite component that has a frame to draw this frame. */
+/** @brief A sprite component that has a frame to draw this frame, with everything the passes need. */
 typedef struct WorldRenderSpriteStruct
 {
     /** @brief The sprite component (borrowed); valid until the world changes. */
     const WorldSpriteComponent* Component;
     /** @brief The current frame of its playback instance (the texture is borrowed from the animation). */
     SpriteAnimationFrame Frame;
-    /** @brief World-space centre of the billboard (the object's position). */
-    Vector3 Position;
-    /** @brief Billboard width and height in world units (the object's X and Y scale). */
-    Vector2 Size;
-    /** @brief The object's final tint colour. */
+    /** @brief The frame's area in its texture, normalized: x, y of its top left, width, height (the shader's uvRect). */
+    float UvRect[4];
+    /** @brief The quad before a viewer turns it (source/SpriteTransform.h): orientation, the object's position and
+     *  axes, the world size (the frame's pixels / pixels per unit x the object's X and Y scale), the pivot, the flips. */
+    SpriteShape Shape;
+    /** @brief The fixed orientation's matrix (it does not depend on the viewer); valid when Shape.Orientation is
+     *  WorldSpriteOrientation_Fixed. */
+    Matrix FixedTransform;
+    /** @brief Radius of a sphere around Shape.Position that holds the quad in every orientation (light culling, the
+     *  cube shadow's reach). */
+    float BoundsRadius;
+    /** @brief The object's final tint colour (its alpha is the object's opacity). */
     Color Tint;
-    /** @brief The component's render settings. */
+    /** @brief The component's alpha mode, cutout threshold and lighting. */
+    WorldSpriteAlphaMode AlphaMode;
+    float AlphaCutoff;
+    bool IsLit;
+    float Emission;
+    float LightWrap;
+    /** @brief Whether it is drawn as a decal (marked as one, with the fixed orientation), and how far it is lifted. */
+    bool IsDecal;
+    float DecalOffset;
+    /** @brief The component's casts_shadows (only cutout sprites that are not decals cast). */
+    bool CastsShadows;
+    /** @brief The component's outline setting. */
     bool HasOutline;
+    /** @brief Whether it is drawn crisp: omit_pixelation on a cutout sprite that is not a decal (the crisp overlay
+     *  composites opaque surfaces only, so the others stay pixelated). */
     bool OmitsPixelation;
 } WorldRenderSprite;
 

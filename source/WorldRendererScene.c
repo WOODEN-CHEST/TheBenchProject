@@ -198,8 +198,8 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
         WorldRendererStars_Draw(self, frame);
     }
 
-    // Feed the sun/ambient/camera into the PBR shader before drawing any lit geometry (no-op if unavailable).
-    // The scene pass applies the screen-space AO map (occludes the ambient term).
+    // Feed the sun/ambient/camera into the lit shaders (models, sprites) before drawing any lit geometry. The scene pass
+    // applies the screen-space AO map (occludes the ambient term).
     WorldRendererLighting_UploadFrame(self, frame, true);
 
     BeginMode3D(frame->RayCamera);
@@ -214,8 +214,9 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
     bool IsLit = (self->_pbr._shader != NULL);
     WorldRendererGeometry_DrawModels(self, IsLit ? &self->_pbr._passShader : NULL, IsLit, frame->SceneFilter);
 
-    // Sprite objects (2D billboards). Drawn after models so they depth-test against them.
-    WorldRendererGeometry_DrawSprites(self, frame, frame->SceneFilter);
+    // Sprites, lit like the models: the cutout ones (opaque, writing depth), then the decals over the opaque world, then
+    // the blended and additive ones back to front.
+    WorldRendererSprites_DrawLit(self, frame->SceneFilter, true);
 
     // Light gizmos: a debug authoring aid so light placement is visible (lights are otherwise invisible).
     // Independent of the debug grid; a real game leaves this off so lights have no visible sphere.

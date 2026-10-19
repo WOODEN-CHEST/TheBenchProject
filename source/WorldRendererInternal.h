@@ -11,7 +11,9 @@
 #include "World.h"
 #include "WorldEnvironment.h"
 #include "WorldModelComponent.h"
+#include "WorldSpriteComponent.h"
 #include "NightVision.h"
+#include "SpriteTransform.h"
 #include "raylib/raylib.h"
 // rlgl supplies RL_MAX_SHADER_LOCATIONS and the scene near/far cull distances.
 #include "raylib/rlgl.h"
@@ -24,8 +26,10 @@
  *   WorldRenderer.c          the public API; builds the per-frame context and runs the passes in order
  *   WorldRendererCommon.c    shared helpers (config multipliers, colours, shader loading, target constructors)
  *   WorldRendererScene.c     the scene target (size, HDR tiers, recreation on resize) and the scene pass
- *   WorldRendererGeometry.c  model meshes (with per-draw materials), sprite billboards and light gizmos
- *   WorldRendererLighting.c  the PBR shader and its uniforms, forward point lights, eye adaptation
+ *   WorldRendererGeometry.c  model meshes (with per-draw materials) and light gizmos
+ *   WorldRendererSprites.c   the sprites: the quad, the lit sprite shader, each frame's sprite matrices, and the lit
+ *                            cutout, decal and sorted transparent draws
+ *   WorldRendererLighting.c  the PBR shader, the lit shaders' frame uniforms, forward point lights, eye adaptation
  *   WorldRendererShadows.c   the shadow cascades of the sun or the moon, and the point-light cube shadow
  *   WorldRendererGBuffer.c   the normal/flag G-buffer and the ambient-occlusion pre-pass
  *   WorldRendererSky.c       the atmospheric sky with the moon, the Milky Way and light pollution's skyglow
@@ -256,22 +260,18 @@ typedef struct WorldRendererSceneStateStruct
     int _windowHeight;
 } WorldRendererSceneState;
 
-/** @brief The PBR shader that shades model objects, its uniform locations, and this render's forward lights. */
-typedef struct WorldRendererPbrStateStruct
+/**
+ * @brief The uniform locations of a shader that includes shaders/common/lighting.glsl (the PBR and the sprite
+ *        shaders): the frame's lights, shadows, AO, fog and night vision, and the per-object forward point lights.
+ *
+ * Filled by WorldRendererLighting_PrepareLitShader; -1 for a uniform the shader lacks (or optimized out).
+ */
+typedef struct WorldRendererLitLocationsStruct
 {
-    /** @brief The PBR shader asset (held under the shader user); NULL = unavailable (models draw unlit). */
-    GameShader* _shader;
-    /** @brief The renderer's own copy of the shader's location table: the asset's table with the material map
-     *  samplers pointed at mraMap/normalMap/emissiveMap, so DrawMesh binds each material's maps without the
-     *  renderer writing into the shared shader asset. */
-    int _locs[RL_MAX_SHADER_LOCATIONS];
-    /** @brief The shader to draw PBR meshes with: the asset's program with _locs as its location table. */
-    Shader _passShader;
     /** @brief How many point lights the shader's uniform arrays hold, capped at WORLD_MAX_FORWARD_LIGHTS
      *  (checked at load; uploads never exceed it). */
     int _maxPointLights;
-    /** @brief Cached uniform locations set every render (-1 when absent/optimized out): the camera, the two directional
-     *  lights (the sun's direction is also the fog sky's), the ambient. */
+    /** @brief The camera, the two directional lights (the sun's direction is also the fog sky's), the ambient. */
     int _locViewPos;
     int _locSunDirection;
     int _locSunColor;
@@ -281,23 +281,12 @@ typedef struct WorldRendererPbrStateStruct
     int _locMoonIntensity;
     int _locAmbientColor;
     int _locAmbientIntensity;
-    /** @brief Cached per-material scalar-factor and map-presence uniform locations (-1 when absent), uploaded
-     *  per material by the mesh draw loop. */
-    int _locMetallic;
-    int _locRoughness;
-    int _locAo;
-    int _locEmissiveColor;
-    int _locEmissiveIntensity;
-    int _locHasMraMap;
-    int _locHasNormalMap;
-    int _locHasEmissiveMap;
-    /** @brief Cached screen-space-AO uniform locations (-1 when absent): the AO map, its active flag and the
-     *  scene resolution used to map gl_FragCoord to the AO map's UV. */
+    /** @brief Screen-space AO: the AO map, its active flag and the scene resolution used to map gl_FragCoord to the AO
+     *  map's UV. */
     int _locAmbientOcclusionMap;
     int _locAoMapActive;
     int _locAoResolution;
-    /** @brief Cached cascade shadow uniform locations (-1 when absent): the cascades, the light they were rendered from
-     *  and how much they shadow the sun and the moon. */
+    /** @brief The cascades, the light they were rendered from and how much they shadow the sun and the moon. */
     int _locLightVP;
     int _locShadowMap;
     int _locLightVPFar;
@@ -309,7 +298,7 @@ typedef struct WorldRendererPbrStateStruct
     int _locShadowLightDirection;
     int _locSunShadowFade;
     int _locMoonShadowFade;
-    /** @brief Cached point-light (cube) shadow uniform locations (-1 when absent). */
+    /** @brief The point-light (cube) shadow. */
     int _locPointShadowActive;
     int _locPointShadowLightPos;
     int _locPointShadowLightRadiance;
@@ -317,28 +306,54 @@ typedef struct WorldRendererPbrStateStruct
     int _locPointShadowCube;
     int _locPointShadowFar;
     int _locPointShadowBias;
-    /** @brief Cached forward point-light uniform locations (-1 when absent); uploaded per drawn object. */
+    /** @brief The forward point lights, uploaded per drawn object. */
     int _locPointLightCount;
     int _locPointLightPositions;
     int _locPointLightRadiances;
     int _locPointLightRanges;
-    /** @brief Cached distance-fog uniform locations (-1 when absent). The fog fades distant geometry into the
-     *  atmospheric sky colour, so it needs the sky parameters the sky pass uses plus the fog density. */
+    /** @brief The distance fog: it fades distant geometry into the atmospheric sky colour, so it needs the sky
+     *  parameters the sky pass uses plus the fog density. */
     int _locFogDensity;
     int _locFogTurbidity;
     int _locFogSkyTint;
     int _locFogSunIntensity;
     int _locFogSkyglow;
     int _locFogMoonIntensity;
-    /** @brief Cached night vision uniform locations (-1 when absent): the field luminance, the calibration (uploaded
-     *  once at load), the strength and the rods' grey. */
+    /** @brief The night vision: the field luminance, the calibration (uploaded once at load), the strength and the rods'
+     *  grey. */
     int _locNightVisionFieldLuminance;
     int _locNightVisionHalfLuminance;
     int _locNightVisionSteepness;
     int _locNightVisionStrength;
     int _locNightVisionTint;
-    /** @brief This render's forward-light candidates (WorldCullingLight): every light of the render cache except
-     *  the cube-shadow light, which is shaded on its own. */
+} WorldRendererLitLocations;
+
+/** @brief The PBR shader that shades model objects, its uniform locations, and this render's forward lights. */
+typedef struct WorldRendererPbrStateStruct
+{
+    /** @brief The PBR shader asset (held under the shader user); NULL = unavailable (models draw unlit). */
+    GameShader* _shader;
+    /** @brief The renderer's own copy of the shader's location table: the asset's table with the material map
+     *  samplers pointed at mraMap/normalMap/emissiveMap, so DrawMesh binds each material's maps without the
+     *  renderer writing into the shared shader asset. */
+    int _locs[RL_MAX_SHADER_LOCATIONS];
+    /** @brief The shader to draw PBR meshes with: the asset's program with _locs as its location table. */
+    Shader _passShader;
+    /** @brief The shader's frame-lighting uniform locations (common/lighting). */
+    WorldRendererLitLocations _lit;
+    /** @brief Cached per-material scalar-factor and map-presence uniform locations (-1 when absent), uploaded
+     *  per material by the mesh draw loop. */
+    int _locMetallic;
+    int _locRoughness;
+    int _locAo;
+    int _locEmissiveColor;
+    int _locEmissiveIntensity;
+    int _locHasMraMap;
+    int _locHasNormalMap;
+    int _locHasEmissiveMap;
+    /** @brief This render's forward-light candidates (WorldCullingLight), which every lit shader (models and sprites)
+     *  picks each object's lights from: every light of the render cache except the cube-shadow light, which is shaded on
+     *  its own. */
     GenericBuffer _forwardLights;
     /** @brief The candidates' linear radiance (WorldRendererRadiance), parallel to _forwardLights. */
     GenericBuffer _forwardRadiances;
@@ -459,12 +474,54 @@ typedef struct WorldRendererStarStateStruct
     bool _isBuildFailureReported;
 } WorldRendererStarState;
 
-/** @brief The sprite colour pass (billboards in the scene and crisp passes). */
+/** @brief One sprite's matrices and place for this frame (WorldRendererSprites_PrepareFrame), parallel to the render
+ *  cache's sprites. */
+typedef struct WorldRendererSpriteFrameStruct
+{
+    /** @brief The sprite as the camera sees it (scene, G-buffer and crisp passes): a billboard faces the camera. */
+    Matrix CameraTransform;
+    /** @brief The sprite as the cascades' light sees it (a billboard faces that light); the camera transform while the
+     *  cascades do not run or for a fixed sprite. */
+    Matrix CascadeTransform;
+    /** @brief The sprite as the cube shadow's light sees it; the camera transform while the cube shadow does not run or
+     *  for a fixed sprite. */
+    Matrix PointTransform;
+    /** @brief Its distance in front of the camera, along the view (the camera-facing quad's centre), for sorting. */
+    float Depth;
+} WorldRendererSpriteFrame;
+
+/**
+ * @brief The sprite pass: the unit quad every sprite draws with, the lit sprite shader, and each frame's sprite
+ *        matrices and transparent draw order.
+ *
+ * The G-buffer and shadow passes draw sprites too, with their own shaders (in their states) and this pass's quad and
+ * matrices.
+ */
 typedef struct WorldRendererSpriteStateStruct
 {
-    /** @brief The sprite shader (sRGB art -> linear HDR); NULL = sprites draw with Raylib's default shader (their
-     *  sRGB art then lands in the linear buffer slightly too bright, but still shows). */
+    /** @brief The lit sprite shader (world_sprite: lights, shadows, fog, night vision, alpha modes); NULL = sprites are
+     *  not drawn at all. */
     GameShader* _shader;
+    /** @brief Its frame-lighting uniform locations (common/lighting). */
+    WorldRendererLitLocations _lit;
+    /** @brief Its per-sprite uniform locations (-1 when absent). */
+    int _locUvRect;
+    int _locShadowModel;
+    int _locPointShadowModel;
+    int _locDecalOffset;
+    int _locAlphaMode;
+    int _locAlphaCutoff;
+    int _locIsLit;
+    int _locEmission;
+    int _locLightWrap;
+    int _locUseScreenAo;
+    /** @brief The unit quad (x, y in [0, 1], normal +Z, UVs with v 0 at the image's top); valid while _hasQuad. */
+    Mesh _quad;
+    bool _hasQuad;
+    /** @brief This frame's WorldRendererSpriteFrame per cached sprite. */
+    GenericBuffer _frames;
+    /** @brief This frame's blended and additive sprites that are not decals (SpriteDrawOrder), farthest first. */
+    GenericBuffer _transparentOrder;
 } WorldRendererSpriteState;
 
 /** @brief The two shadow cascades of the sky's shadow light (the sun by day, the moon on bright nights). */
@@ -472,6 +529,11 @@ typedef struct WorldRendererCascadeStateStruct
 {
     /** @brief The depth-only shader used for the cascades; NULL = no sun or moon shadows. */
     GameShader* _depthShader;
+    /** @brief The alpha-tested depth shader for cutout sprites (world_sprite_depth) and its locations; NULL = sprites
+     *  cast no sun or moon shadow. */
+    GameShader* _spriteDepthShader;
+    int _spriteLocUvRect;
+    int _spriteLocAlphaCutoff;
     /** @brief The NEAR cascade (small extent, sharp); its samplable depth texture is in .depth. */
     RenderTexture2D _nearMap;
     /** @brief Whether _nearMap has been created (and its framebuffer is complete). */
@@ -493,6 +555,13 @@ typedef struct WorldRendererPointShadowStateStruct
     GameShader* _shader;
     int _locLightPos;
     int _locLightFar;
+    /** @brief The alpha-tested cube-depth shader for cutout sprites (world_sprite_cube_depth) and its locations; NULL =
+     *  sprites cast no point-light shadow. */
+    GameShader* _spriteShader;
+    int _spriteLocUvRect;
+    int _spriteLocAlphaCutoff;
+    int _spriteLocLightPos;
+    int _spriteLocLightFar;
     /** @brief A colour CUBE (RGBA8 packed distance) + its own depth renderbuffer + framebuffer; the shadow light
      *  renders 6 faces into it each frame it is active. */
     unsigned int _cube;
@@ -511,10 +580,14 @@ typedef struct WorldRendererGBufferStateStruct
     GameShader* _shader;
     /** @brief Cached world_normal outline-flag uniform location (-1 when absent). */
     int _locOutlineFlag;
-    /** @brief The G-buffer shader for sprites (alpha-discarded); NULL = sprites get no outlines. */
+    /** @brief The G-buffer shader for cutout sprites (alpha-tested at each sprite's cutoff); NULL = sprites get no
+     *  outlines and no AO of their own. */
     GameShader* _spriteShader;
-    /** @brief Cached world_normal_sprite outline-flag uniform location (-1 when absent). */
+    /** @brief Cached world_normal_sprite uniform locations (-1 when absent): the outline flag, the frame's area and the
+     *  cutoff. */
     int _spriteLocOutlineFlag;
+    int _spriteLocUvRect;
+    int _spriteLocAlphaCutoff;
     /** @brief The low-res G-buffer target (RGB = view normal, A = surface/outline flag). Its depth is a samplable
      *  texture (for the AO pre-pass) when the driver allows. */
     RenderTexture2D _target;
@@ -669,6 +742,9 @@ struct WorldRendererStruct
     bool _postfxEnabled;
     /** @brief Toggle for the eye's night vision (A/B; on by default); the world's NightVisionStrength scales it. */
     bool _isNightVisionEnabled;
+    /** @brief Toggle for sprite lighting (A/B; on by default): off draws every sprite unlit at its full colours, as
+     *  before sprites were lit. */
+    bool _isSpriteLightingEnabled;
     /** @brief The night vision's calibration on the game's light scale (NightVision_GetCalibration), computed once. */
     NightVisionCalibration _nightVision;
     /** @brief The per-object render cache and this render's model/sprite/light lists. */
@@ -802,16 +878,14 @@ Error WorldRendererScene_EnsureTargets(WorldRenderer* self, int windowWidth, int
 void WorldRendererScene_ReleaseTargets(WorldRenderer* self);
 
 /**
- * @brief The scene pass: clears the scene target, draws the sky, then the lit models, sprites, debug grid and
- *        light gizmos passing the frame's scene filter. Opens and closes the scene target.
+ * @brief The scene pass: clears the scene target, draws the sky, then the debug grid, the lit models and sprites
+ *        (cutout, decals, then blended and additive back to front) and the light gizmos passing the frame's scene
+ *        filter. Opens and closes the scene target.
  */
 void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* frame);
 
 
 // WorldRendererGeometry.c
-/** @brief Loads the sprite shader (optional: sprites then draw with Raylib's default shader). */
-void WorldRendererGeometry_LoadShaders(WorldRenderer* self);
-
 /** @brief Whether an object with the given OmitPixelation flag passes @p filter. */
 bool WorldRendererGeometry_PassesFilter(bool omitPixelation, WorldRendererPixelFilter filter);
 
@@ -833,16 +907,74 @@ void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel
 void WorldRendererGeometry_DrawModels(WorldRenderer* self, const Shader* passShader, bool isLit,
     WorldRendererPixelFilter filter);
 
-/**
- * @brief Draws the cached sprites passing @p filter as camera-facing billboards through the sprite shader.
- *
- * Must run inside BeginMode3D; the billboards depth-test against the rest of the scene.
- */
-void WorldRendererGeometry_DrawSprites(WorldRenderer* self, const WorldRenderFrame* frame,
-    WorldRendererPixelFilter filter);
-
 /** @brief Draws a small wireframe sphere at each light, tinted by its colour (a debug aid). Inside BeginMode3D. */
 void WorldRendererGeometry_DrawLightGizmos(WorldRenderer* self);
+
+
+// WorldRendererSprites.c
+/** @brief Constructs the sprite pass's CPU state (its per-frame lists). Called once by WorldRenderer_Create; pair with
+ *  WorldRendererSprites_Deconstruct. */
+void WorldRendererSprites_Construct(WorldRenderer* self);
+
+/** @brief Unloads the quad mesh and frees the per-frame lists. Called once by WorldRenderer_Deconstruct, with the GL
+ *  context alive. */
+void WorldRendererSprites_Deconstruct(WorldRenderer* self);
+
+/**
+ * @brief Loads the lit sprite shader (and prepares its lighting uniforms) and builds the unit quad.
+ *
+ * Without either, sprites are not drawn at all (logged once): every sprite pass draws through the quad, and the
+ * G-buffer's and shadows' sprites would otherwise show where no sprite is seen.
+ */
+void WorldRendererSprites_LoadShaders(WorldRenderer* self);
+
+/** @brief Whether sprites can be drawn: the quad and the lit sprite shader are there. */
+bool WorldRendererSprites_IsAvailable(const WorldRenderer* self);
+
+/**
+ * @brief Computes each cached sprite's matrices for this frame (facing the camera; facing the cascades' light and the
+ *        cube shadow's light while those run) and the draw order of the blended and additive sprites, back to front.
+ *
+ * Needs the frame's camera, IsCascadeShadowActive / ShadowDirection and IsPointShadowActive / ShadowLightIndex. No
+ * allocation once the lists have grown to the sprite count.
+ */
+void WorldRendererSprites_PrepareFrame(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Returns a cached sprite's matrices for this frame (WorldRendererSprites_PrepareFrame).
+ * @param self The renderer.
+ * @param index The sprite's index in the render cache's sprite list.
+ * @returns The entry (borrowed until the next PrepareFrame), or NULL when this frame has none for it (sprites are
+ *          unavailable, or @p index is past the list).
+ */
+const WorldRendererSpriteFrame* WorldRendererSprites_GetFrame(const WorldRenderer* self, size_t index);
+
+/** @brief Whether a cached sprite casts shadows this frame: a cutout sprite that is not a decal, with casts_shadows. */
+bool WorldRendererSprites_CastsShadows(const WorldRenderSprite* sprite);
+
+/** @brief Whether a cached sprite is drawn into the G-buffer (it then gets outlines and AO): a cutout sprite that is
+ *  not a decal. */
+bool WorldRendererSprites_IsInGBuffer(const WorldRenderSprite* sprite);
+
+/**
+ * @brief Draws the unit quad once with @p shader (its own location table), the sprite's frame texture on the albedo
+ *        map, @p tint as colDiffuse and @p transform as the model matrix. Culling should be off (sprites are
+ *        two-sided, and a flip mirrors the quad); call inside a 3D mode.
+ */
+void WorldRendererSprites_DrawQuad(WorldRenderer* self, Shader shader, const WorldRenderSprite* sprite, Color tint,
+    Matrix transform);
+
+/**
+ * @brief The lit sprite draws of a scene or crisp pass, for the sprites passing @p filter: the cutout sprites (opaque,
+ *        writing depth), then the decals (over the opaque world, writing no depth), then the blended and additive
+ *        sprites back to front (writing no depth). Call after the opaque models, with the frame's lighting uploaded
+ *        (WorldRendererLighting_UploadFrame), inside BeginMode3D. Restores culling, the depth mask and the blend mode.
+ * @param self The renderer (its sprite matrices prepared for this frame: WorldRendererSprites_PrepareFrame).
+ * @param filter Which sprites (by their effective OmitPixelation).
+ * @param applyScreenAo Whether the pass's AO map lines up with it (the scene pass; not the window-resolution crisp
+ *        pass).
+ */
+void WorldRendererSprites_DrawLit(WorldRenderer* self, WorldRendererPixelFilter filter, bool applyScreenAo);
 
 
 // WorldRendererLighting.c
@@ -855,6 +987,19 @@ void WorldRendererGeometry_DrawLightGizmos(WorldRenderer* self);
 void WorldRendererLighting_LoadShader(WorldRenderer* self);
 
 /**
+ * @brief Prepares a shader that includes shaders/common/lighting.glsl: caches its frame-lighting uniform locations,
+ *        uploads the constants (the shadow bias and texel size, the night vision's calibration), points its shadow and
+ *        AO samplers at their fixed units, and checks how many point lights its arrays hold (logging once when fewer
+ *        than WORLD_MAX_FORWARD_LIGHTS).
+ * @param self The renderer.
+ * @param shader The shader (its program).
+ * @param assetName Its asset name, for the log line.
+ * @param outLocations [out] Receives the locations.
+ */
+void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, const unsigned char* assetName,
+    WorldRendererLitLocations* outLocations);
+
+/**
  * @brief Computes the frame's lighting (the sun's and the moon's colours, the ambient with its moonlit share, fog,
  *        shadow strength, scene luminance) into @p frame and builds the forward-light candidates (every light except
  *        the frame's cube-shadow light).
@@ -865,19 +1010,26 @@ void WorldRendererLighting_LoadShader(WorldRenderer* self);
 void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame);
 
 /**
- * @brief Uploads the frame's lighting uniforms to the PBR shader and binds the shadow maps, the cube shadow and
- *        (when @p applyScreenAo) the AO map to their fixed units. No-op when the PBR shader is unavailable.
+ * @brief Uploads the frame's lighting uniforms to every lit shader the renderer has (the PBR shader and the sprite
+ *        shader) and binds the shadow maps, the cube shadow and (when @p applyScreenAo) the AO map to their fixed
+ *        units.
  *
- * Call before the lit models of a pass. The crisp overlay passes false for @p applyScreenAo: it renders at
+ * Call before the lit models and sprites of a pass. The crisp overlay passes false for @p applyScreenAo: it renders at
  * window resolution, where the low-res AO map would not line up.
  */
 void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo);
 
 /**
- * @brief Reach-culls the frame's forward lights against a world bounding sphere and uploads the strongest few
- *        to the PBR shader, for the object drawn next.
+ * @brief Reach-culls the frame's forward lights against a world bounding sphere and uploads the strongest few to a lit
+ *        shader, for the object drawn next.
+ * @param self The renderer.
+ * @param shader The lit shader (its program).
+ * @param locations Its locations (WorldRendererLighting_PrepareLitShader).
+ * @param center The object's bounding sphere's centre.
+ * @param radius Its radius.
  */
-void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Vector3 center, float radius);
+void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader,
+    const WorldRendererLitLocations* locations, Vector3 center, float radius);
 
 /**
  * @brief Uploads one material's PBR scalar factors and map-presence flags, for its meshes drawn next.
@@ -898,7 +1050,8 @@ float WorldRendererLighting_UpdateExposure(WorldRenderer* self, const WorldRende
 
 
 // WorldRendererShadows.c
-/** @brief Loads the depth and cube-depth shaders and creates the cascade maps and the shadow cube. */
+/** @brief Loads the depth and cube-depth shaders (and their alpha-tested sprite variants) and creates the cascade maps
+ *  and the shadow cube. */
 void WorldRendererShadows_LoadShaders(WorldRenderer* self);
 
 /** @brief Unloads the cascade maps and the shadow cube. Needs a live GL context. */
@@ -912,18 +1065,19 @@ void WorldRendererShadows_Unload(WorldRenderer* self);
 size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self, Vector3 cameraPosition);
 
 /** @brief Renders both cascades (the far one only when its map exists) from the frame's shadow light
- *  (frame->ShadowDirection: the sun or the moon) and stores their light matrices. */
+ *  (frame->ShadowDirection: the sun or the moon) and stores their light matrices. Models cast per their shadow tier,
+ *  cutout sprites into both, turned toward the light (WorldRendererSprites_PrepareFrame's CascadeTransform). */
 void WorldRendererShadows_RenderCascades(WorldRenderer* self, const WorldRenderFrame* frame);
 
 /**
- * @brief Renders the frame's shadow light into the six cube faces, drawing only models within its reach, and
- *        stores the far range the distances were normalized by.
+ * @brief Renders the frame's shadow light into the six cube faces, drawing only the models and cutout sprites (turned
+ *        toward the light) within its reach, and stores the far range the distances were normalized by.
  */
 void WorldRendererShadows_RenderPointLight(WorldRenderer* self, const WorldRenderFrame* frame);
 
 
 // WorldRendererGBuffer.c
-/** @brief Loads the G-buffer shaders (models, sprites) and the AO shader. */
+/** @brief Loads the G-buffer shaders (models, cutout sprites) and the AO shader. */
 void WorldRendererGBuffer_LoadShaders(WorldRenderer* self);
 
 /** @brief Creates the G-buffer and AO targets for a scene of @p width x @p height (call with the scene target in
@@ -933,7 +1087,8 @@ void WorldRendererGBuffer_CreateTargets(WorldRenderer* self, int width, int heig
 /** @brief Unloads the G-buffer and AO targets. */
 void WorldRendererGBuffer_ReleaseTargets(WorldRenderer* self);
 
-/** @brief Draws the cached models and sprites passing the scene filter into the G-buffer (view normals + flag). */
+/** @brief Draws the cached models and cutout sprites (not decals) passing the scene filter into the G-buffer (view
+ *  normals + flag). */
 void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFrame* frame);
 
 /** @brief Runs the AO pre-pass from the G-buffer into the AO target, at frame->AoStrength. */
@@ -1051,7 +1206,7 @@ void WorldRendererCrisp_CreateTargets(WorldRenderer* self, int windowWidth, int 
 /** @brief Unloads the overlay target. */
 void WorldRendererCrisp_ReleaseTargets(WorldRenderer* self);
 
-/** @brief Draws the OmitPixelation models and sprites, lit, into the window-resolution overlay target. */
+/** @brief Draws the OmitPixelation models and cutout sprites, lit, into the window-resolution overlay target. */
 void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* frame);
 
 /**

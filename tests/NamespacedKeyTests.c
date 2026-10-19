@@ -86,17 +86,18 @@ static void KeysAreAtMost128Bytes(TestRun* run)
     TestText_CheckErrorMessage(run, NamespacedKey_Validate((const unsigned char*)Text), ErrorCode_ArgumentOutOfRange,
         Fragments);
 
-    // The default namespace counts too: a 124-byte path fits "game:" (5 bytes) only just.
+    // The default namespace counts too: a path fits only just when it, the default namespace and the colon make 128
+    // bytes.
+    size_t FittingLength = NAMESPACED_KEY_MAX_LENGTH - strlen((const char*)NAMESPACED_KEY_DEFAULT_NAMESPACE) - 1U;
     char Path[NAMESPACED_KEY_MAX_LENGTH];
     memset(Path, 'p', sizeof(Path));
-    Path[123] = '\0';
     unsigned char Storage[NAMESPACED_KEY_BUFFER_SIZE];
     GenericBuffer Key;
     GenericBuffer_CreateConstant(&Key, Storage, sizeof(Storage), sizeof(unsigned char), 0U);
-    TEST_CHECK_SUCCESS(run, NamespacedKey_Parse((const unsigned char*)Path, 123U, NULL, &Key));
+    TEST_CHECK_SUCCESS(run, NamespacedKey_Parse((const unsigned char*)Path, FittingLength, NULL, &Key));
     TEST_CHECK(run, Key._count == NAMESPACED_KEY_BUFFER_SIZE);
     GenericBuffer_CreateConstant(&Key, Storage, sizeof(Storage), sizeof(unsigned char), 0U);
-    TEST_CHECK_ERROR(run, NamespacedKey_Parse((const unsigned char*)Path, 124U, NULL, &Key),
+    TEST_CHECK_ERROR(run, NamespacedKey_Parse((const unsigned char*)Path, FittingLength + 1U, NULL, &Key),
         ErrorCode_ArgumentOutOfRange);
 }
 
@@ -104,7 +105,9 @@ static void TheDefaultNamespaceIsApplied(TestRun* run)
 {
     CheckParse(run, "a:b", NULL, "a:b");
     CheckParse(run, "a:b/c.d", NULL, "a:b/c.d");
-    CheckParse(run, "office", NULL, "game:office");
+    char Expected[NAMESPACED_KEY_BUFFER_SIZE];
+    snprintf(Expected, sizeof(Expected), "%s:office", (const char*)NAMESPACED_KEY_DEFAULT_NAMESPACE);
+    CheckParse(run, "office", NULL, Expected);
     CheckParse(run, "office", "town", "town:office");
     CheckParse(run, "town:office", "other", "town:office");
 
@@ -130,7 +133,9 @@ static void ParseAppendsToOneGrowingString(TestRun* run)
     TEST_CHECK(run, GenericBuffer_AppendString(&Key, (const unsigned char*)u8"keys: ")
         && GenericBuffer_NullTerminate(&Key));
     TEST_CHECK_SUCCESS(run, NamespacedKey_Parse((const unsigned char*)u8"lamp", 4U, NULL, &Key));
-    TEST_CHECK(run, strcmp((const char*)Key._data, "keys: game:lamp") == 0);
+    char Expected[NAMESPACED_KEY_BUFFER_SIZE + 8U];
+    snprintf(Expected, sizeof(Expected), "keys: %s:lamp", (const char*)NAMESPACED_KEY_DEFAULT_NAMESPACE);
+    TEST_CHECK(run, strcmp((const char*)Key._data, Expected) == 0);
 
     // Too small a buffer gets nothing.
     unsigned char Small[8];
@@ -180,7 +185,9 @@ static void InterningGivesOneIdPerText(TestRun* run)
     uint32_t Office = NAMESPACED_KEY_ID_NONE;
     uint32_t FullOffice = NAMESPACED_KEY_ID_NONE;
     TEST_CHECK_SUCCESS(run, KeyRegistry_InternText(&Keys, (const unsigned char*)u8"office", 6U, NULL, &Office));
-    TEST_CHECK_SUCCESS(run, KeyRegistry_Intern(&Keys, (const unsigned char*)u8"game:office", &FullOffice));
+    char FullText[NAMESPACED_KEY_BUFFER_SIZE];
+    snprintf(FullText, sizeof(FullText), "%s:office", (const char*)NAMESPACED_KEY_DEFAULT_NAMESPACE);
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Intern(&Keys, (const unsigned char*)FullText, &FullOffice));
     TEST_CHECK(run, (Office == FullOffice) && (Office == 3U));
 
     // Finding does not intern.

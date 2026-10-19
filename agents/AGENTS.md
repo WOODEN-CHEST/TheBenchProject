@@ -94,7 +94,9 @@ Current module list:
     At most one component of each type per object, at most one transform driver.
   * WorldModelComponent - A 3D model by asset name (+ outline, crisp, shadow tier, casts shadows).
   * WorldSpriteComponent - A sprite animation by asset name with its playback instance, bound under the world's asset
-    user on attach and whenever the name changes (also through the table).
+    user on attach and whenever the name changes (also through the table), and how it is drawn: orientation (billboard,
+    axis billboard, fixed), pivot, pixels per unit, flips, alpha mode (cutout, blend, additive), lit or unlit, light
+    wrap, decal, shadows.
   * WorldLightComponent - A point light (colour, intensity, range, casts shadows).
   * WorldEnvironment - Per-world sky/sun/moon/night-sky/fog/effect settings, described by its property table
     (defaults, validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md; it owns its sky texture
@@ -112,13 +114,16 @@ Current module list:
     pool, key registry).
   * WorldRenderer - Renders a World through a GameCamera (PBR lit by the sun and the moon, HDR, sky with the moon,
     stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, AO, outlines, bloom, sun
-    shafts, crisp overlay);
+    shafts, crisp overlay, lit sprites with decals, sorted transparency and shadows that face the light);
     separate from the world data and never writes to it. Split by render pass into
     source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
     WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
   * WorldRenderCache - The renderer's private per-component cache (source/WorldRenderCache.h): one walk over the
     world's model/sprite/light component arrays per frame builds the lists (disabled and hidden objects not drawn);
     model assets are resolved once per component and again only when the name changes.
+  * SpriteTransform - A sprite quad's pure maths (private, source/SpriteTransform.h): its matrix for a viewer (the
+    camera or a light; billboard, axis billboard, fixed), its world size from pixels per unit, its bounds and the
+    back-to-front order of the blended sprites; the sprite pass and the shadow passes draw with it.
   * NightSky - The night sky's pure maths (private, source/NightSky.h): the seeded star catalogue, the limiting
     magnitude (light pollution, the moonlit sky, twilight), the air mass, star colours and the galaxy's place among
     the stars; used by the sky and star passes (WorldRendererSky.c, WorldRendererStars.c).

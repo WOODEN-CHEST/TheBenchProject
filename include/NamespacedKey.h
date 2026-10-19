@@ -18,7 +18,7 @@
  * and events will use them later.
  *
  * DEFAULT NAMESPACE. A key written without a namespace (`office`) gets its context's default namespace: the story or
- * pack id once packs exist, NAMESPACED_KEY_DEFAULT_NAMESPACE (`game`) until then. NamespacedKey_Parse applies it.
+ * pack id once packs exist, NAMESPACED_KEY_DEFAULT_NAMESPACE (`tbp`, The Bench Project) until then. NamespacedKey_Parse applies it.
  * Keys are stored, compared and written always in the full form.
  *
  * INTERNING. A KeyRegistry maps key text to a small integer id and back, so code compares keys as integers and an

@@ -14,7 +14,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldObject | `include/WorldObject.h`, `source/WorldObject.c` | The one object type: id, name, transform, tint, enabled, visible, mobility, and its component slots. |
 | WorldComponent | `include/WorldComponent.h`, `source/WorldComponent.c` | The component base, the component types and the registry entry that describes each (`WorldComponentTypeInfo`). |
 | WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A 3D model by asset name, with its render settings (outline, crisp, shadow tier, casts shadows). |
-| WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A sprite animation by asset name, with its playback instance, bound by the world. |
+| WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A sprite animation by asset name, with its playback instance, bound by the world, and how it is drawn: orientation, pivot, size, flips, alpha mode, lighting, decal, shadows. |
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
 | WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
 | World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index) | Owns the objects and their components, mints ids, keeps the id map and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
@@ -103,9 +103,28 @@ The component holds no asset: the renderer resolves the model by name and resolv
 (it watches the revision, then compares the name).
 
 ### Sprite component (`sprite_component`)
-`_spriteAnimation` (an asset name, NULL plays nothing), `_hasOutline` (true), `_omitPixelation` (false), and the
-runtime `_animationInstance` (`SpriteAnimationInstance` by value: the playback state game logic advances and the
-renderer reads; `WorldSpriteComponent_GetAnimationInstance`).
+`_spriteAnimation` (an asset name, NULL plays nothing), the runtime `_animationInstance` (`SpriteAnimationInstance` by
+value: the playback state game logic advances and the renderer reads; `WorldSpriteComponent_GetAnimationInstance`), and
+how it is drawn (T06; the renderer's side is [WorldRuntime.md](WorldRuntime.md), "Sprites"):
+- **Shape:** `_orientation` (`WorldSpriteOrientation`: `billboard` faces the camera, the default; `axis_billboard` turns
+  only around the object's local Y axis; `fixed` uses the object's rotation, the image in its local XY plane facing +Z),
+  `_pivot` (the point of the image at the object's position: (0, 0) bottom left, (1, 1) top right; default the centre,
+  (0.5, 0) for things standing on the ground), `_pixelsPerUnit` (> 0, default 32: the world size is the frame's pixels
+  divided by it, times the object's X and Y scale; the Z scale does nothing), `_isFlippedX` / `_isFlippedY` (mirror the
+  image about the pivot). The image is two-sided.
+- **Transparency:** `_alphaMode` (`WorldSpriteAlphaMode`: `cutout`, the default: opaque where the texture's alpha
+  reaches `_alphaCutoff` (0.5), depth-correct, casts shadows, outlined; `blend`: soft edges, sorted, its alpha times the
+  object's opacity; `additive`: adds its light).
+- **Lighting:** `_isLit` (true: lit like the models; false: its colours glow as they are, times `_emission` (>= 0,
+  default 1), still fogged), `_lightWrap` ([0, 1], default 1: how far light wraps around a billboard or axis billboard,
+  0 a flat card, 1 a round thing half lit from the side; fixed sprites ignore it), `_castsShadows` (true; only cutout
+  sprites that are not decals cast).
+- **Decal:** `_isDecal` (false; takes effect only with the fixed orientation, `WorldSpriteComponent_IsDrawnAsDecal`:
+  drawn over the opaque world, no shadow, no outline) and `_decalOffset` (>= 0, default 0.01 metres: lifted off its
+  surface along its normal, toward the viewer's side).
+- `_hasOutline` (true) and `_omitPixelation` (false) apply to cutout sprites that are not decals.
+There are no cross-field rules in the tables, so a combination that does not apply (a "decal" billboard, crisp smoke)
+is stored as set and simply has no effect.
 
 **Binding.** The playing animation always matches the name. `OnAttach` binds it, and `OnPropertySet` binds it again
 whenever the name differs from the one it was bound for (`_boundAnimation`, an owned copy): after
@@ -209,6 +228,19 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `shadow_tier` | 4 | Enum `both` / `near` / `far` | `both` |
 | | `casts_shadows` | 5 | Bool | true |
 | `sprite_component` | `sprite_animation` | 1 | AssetName (128, null allowed) | null |
+| | `orientation` | 4 | Enum `billboard` / `axis_billboard` / `fixed` | `billboard` |
+| | `pivot` | 5 | Vector2 | (0.5, 0.5) |
+| | `pixels_per_unit` | 6 | Float > 0 | 32 |
+| | `flip_x` | 7 | Bool | false |
+| | `flip_y` | 8 | Bool | false |
+| | `alpha_mode` | 11 | Enum `cutout` / `blend` / `additive` | `cutout` |
+| | `alpha_cutoff` | 12 | Float in [0, 1] | 0.5 |
+| | `is_lit` | 9 | Bool | true |
+| | `emission` | 10 | Float >= 0 | 1 |
+| | `light_wrap` | 16 | Float in [0, 1] | 1 |
+| | `casts_shadows` | 15 | Bool | true |
+| | `is_decal` | 13 | Bool | false |
+| | `decal_offset` | 14 | Float >= 0 | 0.01 |
 | | `has_outline` | 2 | Bool | true |
 | | `omit_pixelation` | 3 | Bool | false |
 | `light_component` | `color` | 1 | Color | white |
@@ -324,7 +356,8 @@ object-set version, validated setters and table writes advancing the revision, r
 components (add, find, remove; one per type; removing an object removes its components; the per-type arrays stay in
 order across interleaved adds and removes; types by name; revisions), the sprite binding (no assets, a shared
 animation released with the world last, a missing animation logged once, renaming, the same name keeps playing, table
-writes rebind), flags, and mobility and drivers (through two test-only driver types: adding one makes the object
+writes rebind), the sprite's drawing settings (defaults, rules, enum names and the pivot in JSON, the decal needing the
+fixed orientation), flags, and mobility and drivers (through two test-only driver types: adding one makes the object
 movable, a second is refused; the test seam refuses impostors). `tests/WorldEnvironmentTests.c` (validation including
 the moon settings and texture names, copying, the date and time the clock writes, the retired ids, the celestial frame,
 the moon's phase against real dates, its motion and lit fraction, the moonlight, the stars' drift and its direction, the

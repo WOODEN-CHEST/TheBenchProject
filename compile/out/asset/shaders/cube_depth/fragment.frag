@@ -12,15 +12,7 @@ uniform float lightFar;     // the light's reach; distances are normalized by th
 
 out vec4 finalColor;
 
-// Standard 32-bit-in-RGBA8 pack (matches unpackDistance in the PBR shader).
-vec4 packDistance(float v)
-{
-    v = clamp(v, 0.0, 1.0);
-    vec4 enc = vec4(1.0, 255.0, 65025.0, 16581375.0) * v;
-    enc = fract(enc);
-    enc -= enc.yzww * vec4(1.0/255.0, 1.0/255.0, 1.0/255.0, 0.0);
-    return enc;
-}
+#include "common/distance_packing"
 
 void main()
 {

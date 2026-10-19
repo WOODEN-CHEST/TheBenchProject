@@ -1,0 +1,10 @@
+{
+    "name": "test_tire_mark",
+    "frames": [
+        {
+            "source": "texture",
+            "location": "test_world/placeholder_tire_mark",
+            "texture_properties": { "filtering": "point" }
+        }
+    ]
+}

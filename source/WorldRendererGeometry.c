@@ -1,5 +1,6 @@
-// Drawing of world model objects, sprite billboards and light gizmos for the renderer's passes, from the render
-// cache's lists. Meshes draw with materials built on the stack, so no pass writes into a shared model asset.
+// Drawing of world model objects and light gizmos for the renderer's passes, from the render cache's lists. Meshes draw
+// with materials built on the stack, so no pass writes into a shared model asset. Sprites have their own file
+// (WorldRendererSprites.c).
 
 #include "WorldRendererInternal.h"
 #include "wr/WRMemory.h"
@@ -8,8 +9,6 @@
 // Macros.
 /** Radius of the debug wireframe gizmo drawn at each light's position. */
 #define LIGHT_GIZMO_RADIUS 0.2f
-/** Asset name of the sprite shader: draws 2D sprite billboards, linearizing their sRGB art into the HDR scene. */
-#define SPRITE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sprite")
 
 
 // Static functions.
@@ -47,13 +46,6 @@ static void DrawMeshWithCopiedMaterial(Mesh mesh, const Material* assetMaterial,
 
 
 // Internal functions (declared in WorldRendererInternal.h).
-void WorldRendererGeometry_LoadShaders(WorldRenderer* self)
-{
-    // Sprite shader (linearizes sprite sRGB art into the HDR scene). Optional: without it sprites fall back to
-    // Raylib's default (unlit) shader; it needs no cached uniform locations (texture0/colDiffuse are built-in).
-    self->_sprites._shader = WorldRendererCommon_LoadShader(self, SPRITE_SHADER_ASSET_NAME);
-}
-
 bool WorldRendererGeometry_PassesFilter(bool omitPixelation, WorldRendererPixelFilter filter)
 {
     switch (filter)
@@ -73,7 +65,8 @@ void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel
     // normal passes do not light, so they skip this.
     if (isLit)
     {
-        WorldRendererLighting_UploadObjectLights(self, model->Center, model->Radius);
+        WorldRendererLighting_UploadObjectLights(self, GameShader_GetRaylibShader(self->_pbr._shader), &self->_pbr._lit,
+            model->Center, model->Radius);
     }
 
     // Mesh by mesh, so each material's PBR factors and map flags can be uploaded before its draw (raylib's
@@ -104,34 +97,6 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, const Shader* passSha
         {
             WorldRendererGeometry_DrawModel(self, Entry, passShader, isLit);
         }
-    }
-}
-
-void WorldRendererGeometry_DrawSprites(WorldRenderer* self, const WorldRenderFrame* frame,
-    WorldRendererPixelFilter filter)
-{
-    if (self->_sprites._shader != NULL)
-    {
-        BeginShaderMode(GameShader_GetRaylibShader(self->_sprites._shader));
-    }
-
-    // Each sprite draws its playback instance's CURRENT frame (advanced by game logic), sized by the object's
-    // X/Y scale and tinted by its tint.
-    size_t SpriteCount = 0;
-    const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&self->_cache, &SpriteCount);
-    for (size_t Index = 0; Index < SpriteCount; Index++)
-    {
-        const WorldRenderSprite* Entry = &Sprites[Index];
-        if (WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter))
-        {
-            DrawBillboardRec(frame->RayCamera, Entry->Frame._texture, Entry->Frame._areaInTexture, Entry->Position,
-                Entry->Size, Entry->Tint);
-        }
-    }
-
-    if (self->_sprites._shader != NULL)
-    {
-        EndShaderMode();
     }
 }
 

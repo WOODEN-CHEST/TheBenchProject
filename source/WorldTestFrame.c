@@ -35,9 +35,8 @@
 #define TEST_GROUND_OBJECT_NAME ((const unsigned char*)u8"ground")
 /** Name given to the crisp (OmitPixelation) demo object — renders un-pixelated to stand in for a screen. */
 #define TEST_CRISP_OBJECT_NAME ((const unsigned char*)u8"crisp_object")
-/** Name of the demo sprite object + the sprite-animation asset it draws (the added test image). */
-#define TEST_SPRITE_OBJECT_NAME ((const unsigned char*)u8"sprite_object")
-#define TEST_SPRITE_ASSET_NAME ((const unsigned char*)u8"test_sprite")
+/** Pixels per metre of the test image (a 1920x1080 screenshot): 1.5 metres wide, as its billboard always was. */
+#define TEST_IMAGE_PIXELS_PER_UNIT 1280.0f
 /** Demo of per-material PBR MAPS: a cube whose material carries albedo/normal/ORM/emissive textures. */
 #define TEST_PBR_DEMO_OBJECT_NAME ((const unsigned char*)u8"pbr_demo_object")
 #define TEST_PBR_DEMO_ASSET_NAME ((const unsigned char*)u8"pbr_demo")
@@ -104,6 +103,25 @@
 
 
 // Types.
+/* One sprite of the test world: its object, its animation and the settings that differ from the defaults. */
+typedef struct TestSpriteStruct
+{
+    const char* ObjectName;
+    const char* Animation;
+    Vector3 Position;
+    /** Euler rotation in degrees (X, then Y, then Z). */
+    Vector3 RotationDegrees;
+    /** The object's uniform scale. */
+    float Scale;
+    WorldSpriteOrientation Orientation;
+    WorldSpriteAlphaMode AlphaMode;
+    Vector2 Pivot;
+    float PixelsPerUnit;
+    bool IsLit;
+    float Emission;
+    bool IsDecal;
+} TestSprite;
+
 typedef struct WorldTestFrameStruct
 {
     /** Abstract base (must be first). */
@@ -129,6 +147,34 @@ typedef struct WorldTestFrameStruct
     /** Whether the text sample is drawn (T toggles it). */
     bool _isTextSampleShown;
 } WorldTestFrame;
+
+
+// Fields: the test world's sprites (T06): one of each kind, placed so the camera's start view shows them.
+static const TestSprite TestSprites[] =
+{
+    // The original test sprite: a camera-facing billboard of an opaque screenshot, 1.5 m wide.
+    { "sprite_object", "test_sprite", { -3.0f, 1.5f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 1.0f,
+        WorldSpriteOrientation_Billboard, WorldSpriteAlphaMode_Cutout, { 0.5f, 0.5f }, TEST_IMAGE_PIXELS_PER_UNIT, true,
+        1.0f, false },
+    // A blended tire-mark decal lying on the ground slab (its top is at y 0.05), turned 25 degrees.
+    { "tire_mark", "test_tire_mark", { -1.0f, 0.05f, -3.0f }, { -90.0f, 25.0f, 0.0f }, 1.0f,
+        WorldSpriteOrientation_Fixed, WorldSpriteAlphaMode_Blend, { 0.5f, 0.5f }, 32.0f, true, 1.0f, true },
+    // An axis-billboard tree standing on its bottom centre; it casts a shadow that faces the light.
+    { "tree", "test_tree", { -6.0f, 0.05f, 4.0f }, { 0.0f, 0.0f, 0.0f }, 1.0f, WorldSpriteOrientation_AxisBillboard,
+        WorldSpriteAlphaMode_Cutout, { 0.5f, 0.0f }, 32.0f, true, 1.0f, false },
+    // A fixed sign behind the tree, turned toward the start view: the tree's transparent texels show it.
+    { "sign", "test_sign", { -8.5f, 0.05f, 7.0f }, { 0.0f, 200.0f, 0.0f }, 1.0f, WorldSpriteOrientation_Fixed,
+        WorldSpriteAlphaMode_Cutout, { 0.5f, 0.0f }, 32.0f, true, 1.0f, false },
+    // A blended, lit smoke puff in front of the warm lamp's glow (the two blend over each other).
+    { "smoke", "test_smoke", { 1.5f, 1.95f, -1.3f }, { 0.0f, 0.0f, 0.0f }, 2.0f, WorldSpriteOrientation_Billboard,
+        WorldSpriteAlphaMode_Blend, { 0.5f, 0.5f }, 32.0f, true, 1.0f, false },
+    // An additive, unlit glow around the warm lamp.
+    { "lamp_glow", "test_glow", { 2.5f, 1.6f, 2.5f }, { 0.0f, 0.0f, 0.0f }, 2.0f, WorldSpriteOrientation_Billboard,
+        WorldSpriteAlphaMode_Additive, { 0.5f, 0.5f }, 32.0f, false, 2.0f, false },
+    // An unlit neon sign facing the start view: as bright at night as by day.
+    { "neon_sign", "test_neon", { 4.5f, 2.2f, 4.5f }, { 0.0f, 180.0f, 0.0f }, 1.0f, WorldSpriteOrientation_Fixed,
+        WorldSpriteAlphaMode_Cutout, { 0.5f, 0.5f }, 32.0f, false, 3.0f, false },
+};
 
 
 // Static functions: the world-up direction for vertical movement.
@@ -409,6 +455,20 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
             Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
                 (const unsigned char*)u8"WorldTest: night vision (dim light loses its colour, as for the eye) %s.",
                 Enabled ? "ON" : "OFF");
+            Error_Deconstruct(&LogResult);
+        }
+    }
+
+    // K toggles sprite lighting: off draws every sprite unlit at its full colours (the look before sprites were lit),
+    // for A/B-ing how they sit in the light at night and in shade.
+    if (GameInput_IsKeyPressed(input, GameKey_K))
+    {
+        bool Enabled = !WorldRenderer_IsSpriteLightingEnabled(frame->_renderer);
+        WorldRenderer_SetSpriteLightingEnabled(frame->_renderer, Enabled);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: sprite lighting %s.", Enabled ? "ON" : "OFF (every sprite unlit)");
             Error_Deconstruct(&LogResult);
         }
     }
@@ -888,17 +948,53 @@ static Error AddModelObject(World* world, const unsigned char* name, const unsig
     return Result;
 }
 
-/* Creates an object drawing the named sprite animation as a billboard, sized by the object's X/Y scale. */
-static Error AddSpriteObject(World* world, const unsigned char* name, const unsigned char* assetName,
-    Vector3 position, Vector3 scale)
+/* Creates an object drawing a test sprite: its animation, rotation and the settings that differ from the defaults. */
+static Error AddSpriteObject(World* world, const TestSprite* sprite)
 {
     WorldComponent* Component = NULL;
-    Error Result = AddObject(world, name, position, scale, WorldComponentType_Sprite, &Component);
+    Error Result = AddObject(world, (const unsigned char*)sprite->ObjectName, sprite->Position,
+        (Vector3){ sprite->Scale, sprite->Scale, sprite->Scale }, WorldComponentType_Sprite, &Component);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
-    return WorldSpriteComponent_SetSpriteAnimation(WorldSpriteComponent_FromComponent(Component), assetName);
+    WorldObject* Object = WorldComponent_GetOwner(Component);
+    Vector3 Rotation = Vector3Scale(sprite->RotationDegrees, DEG2RAD);
+    WorldSpriteComponent* Sprite = WorldSpriteComponent_FromComponent(Component);
+    Result = WorldObject_SetRotation(Object, Rotation);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)sprite->Animation);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldSpriteComponent_SetOrientation(Sprite, sprite->Orientation);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldSpriteComponent_SetAlphaMode(Sprite, sprite->AlphaMode);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldSpriteComponent_SetPivot(Sprite, sprite->Pivot);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldSpriteComponent_SetPixelsPerUnit(Sprite, sprite->PixelsPerUnit);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldSpriteComponent_SetLit(Sprite, sprite->IsLit);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldSpriteComponent_SetEmission(Sprite, sprite->Emission);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldSpriteComponent_SetDecal(Sprite, sprite->IsDecal);
+    }
+    return Result;
 }
 
 /* Creates an object carrying a point light with the given colour and reach. */
@@ -977,11 +1073,11 @@ static Error BuildTestWorld(World* world, Services* services)
         Result = AddPointLight(world, (const unsigned char*)u8"cool_light",
             (Vector3){ -2.5f, 1.2f, -2.0f }, (Color){ 80, 150, 255, 255 }, 6.0f, 10.0f, false);
     }
-    // A demo sprite billboard (the added test image) off to the left, raised to eye level, sized ~1.5 units.
-    if (Result.Code == ErrorCode_Success)
+    // The sprites (TestSprites): the original test image, a decal, a tree, a sign, smoke, a glow and a neon sign.
+    for (size_t Index = 0; (Index < (sizeof(TestSprites) / sizeof(TestSprites[0]))) && (Result.Code == ErrorCode_Success);
+        Index++)
     {
-        Result = AddSpriteObject(world, TEST_SPRITE_OBJECT_NAME, TEST_SPRITE_ASSET_NAME,
-            (Vector3){ -3.0f, 1.5f, 0.0f }, (Vector3){ 1.5f, 1.5f, 1.0f });
+        Result = AddSpriteObject(world, &TestSprites[Index]);
     }
     // Per-material PBR demos: a mapped cube (albedo/normal/ORM/emissive textures) on the left, and a scalar-
     // value gold metal cube (metallic 1, low roughness, no maps) on the right — A/B for the maps vs values path.

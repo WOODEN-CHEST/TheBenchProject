@@ -15,7 +15,7 @@ use them later.
   other character are refused, so a key has exactly one spelling. `NAMESPACED_KEY_BUFFER_SIZE` (129) holds any key and
   its terminator.
 - **The default namespace.** A key written without a namespace (`office`) gets its context's default namespace: the
-  story or pack id once packs exist, `NAMESPACED_KEY_DEFAULT_NAMESPACE` (`game`) until then. Keys are stored, compared
+  story or pack id once packs exist, `NAMESPACED_KEY_DEFAULT_NAMESPACE` (`tbp`, The Bench Project) until then. Keys are stored, compared
   and written always in the full form: the writers never leave the namespace out, so a file moved to another pack
   keeps its meaning.
 - **Functions.**

@@ -8,8 +8,8 @@
 /** Asset name of the normal/mask G-buffer shader: writes a view-space normal (RGB) + surface/outline flag (A)
  *  that the outline pass edge-detects and the AO pass reads. */
 #define NORMAL_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal")
-/** Asset name of the sprite normal/mask shader: writes sprites into the G-buffer with an alpha discard (so the
- *  outline follows the sprite's shape, not its billboard rectangle) + a constant camera-facing normal. */
+/** Asset name of the sprite normal/mask shader: writes cutout sprites into the G-buffer with an alpha test at their
+ *  cutoff (so the outline follows the sprite's shape, not its quad's rectangle) and their quad's view normal. */
 #define NORMAL_SPRITE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal_sprite")
 /** Asset name of the ambient-occlusion pre-pass shader: computes SSAO from the G-buffer's depth + flag into an
  *  AO-multiplier texture that the PBR scene pass applies to ONLY its ambient term. */
@@ -83,39 +83,38 @@ static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter
     }
 }
 
-/* Draws the cached sprites (passing @p filter) into the G-buffer through the sprite normal shader, so they get
- * outlines too. It alpha-discards transparent texels (the outline hugs the sprite shape) and takes the per-sprite
- * outline flag. No-op if the sprite normal shader is unavailable. Must run inside the G-buffer pass's BeginMode3D
- * (colour blending disabled by the caller). */
-static void DrawNormalBufferSprites(WorldRenderer* self, const WorldRenderFrame* frame, WorldRendererPixelFilter filter)
+/* Draws the cutout sprites that are not decals (passing @p filter) into the G-buffer through the sprite normal shader,
+ * facing the camera as in the scene pass, so they get outlines and AO too. The shader discards texels below each
+ * sprite's cutoff (the outline hugs the sprite's shape) and takes its outline flag. Decals and blended or additive
+ * sprites stay out: they are not surfaces of their own. No-op without the shader or without sprites. Must run inside
+ * the G-buffer pass's BeginMode3D (colour blending disabled by the caller). */
+static void DrawNormalBufferSprites(WorldRenderer* self, WorldRendererPixelFilter filter)
 {
-    if (self->_gbuffer._spriteShader == NULL)
+    if ((self->_gbuffer._spriteShader == NULL) || !WorldRendererSprites_IsAvailable(self))
     {
         return;
     }
     Shader SpriteShader = GameShader_GetRaylibShader(self->_gbuffer._spriteShader);
-    BeginShaderMode(SpriteShader);
-
     size_t SpriteCount = 0;
     const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&self->_cache, &SpriteCount);
+    rlDisableBackfaceCulling(); // two-sided quads, mirrored by flips
     for (size_t Index = 0; Index < SpriteCount; Index++)
     {
         const WorldRenderSprite* Entry = &Sprites[Index];
-        if (!WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter))
+        const WorldRendererSpriteFrame* Matrices = WorldRendererSprites_GetFrame(self, Index);
+        if ((Matrices == NULL) || !WorldRendererSprites_IsInGBuffer(Entry)
+            || !WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter))
         {
             continue;
         }
-        // Billboards go through raylib's 2D batch, which draws at its next flush with the uniforms current then.
-        // Flush the previous sprite's quad before changing the flag, or every sprite gets the last sprite's flag.
-        rlDrawRenderBatchActive();
         float OutlineFlag = Entry->HasOutline ? 1.0f : 0.0f;
         SetShaderValue(SpriteShader, self->_gbuffer._spriteLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
-        // Tint WHITE: the normal buffer only cares about the frame's ALPHA (for the discard), not its colour.
-        DrawBillboardRec(frame->RayCamera, Entry->Frame._texture, Entry->Frame._areaInTexture, Entry->Position,
-            Entry->Size, WHITE);
+        SetShaderValue(SpriteShader, self->_gbuffer._spriteLocUvRect, Entry->UvRect, SHADER_UNIFORM_VEC4);
+        SetShaderValue(SpriteShader, self->_gbuffer._spriteLocAlphaCutoff, &Entry->AlphaCutoff, SHADER_UNIFORM_FLOAT);
+        // Tint WHITE: the G-buffer only reads the frame's alpha (for the cutout), not its colour.
+        WorldRendererSprites_DrawQuad(self, SpriteShader, Entry, WHITE, Matrices->CameraTransform);
     }
-
-    EndShaderMode();
+    rlEnableBackfaceCulling();
 }
 
 
@@ -123,12 +122,14 @@ static void DrawNormalBufferSprites(WorldRenderer* self, const WorldRenderFrame*
 void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
 {
     // Sprite normal/mask shader. Optional: without it sprites are simply not drawn into the G-buffer, so they
-    // get no outlines.
+    // get no outlines and no AO of their own.
     self->_gbuffer._spriteShader = WorldRendererCommon_LoadShader(self, NORMAL_SPRITE_SHADER_ASSET_NAME);
     if (self->_gbuffer._spriteShader != NULL)
     {
         Shader RayShader = GameShader_GetRaylibShader(self->_gbuffer._spriteShader);
         self->_gbuffer._spriteLocOutlineFlag = GetShaderLocation(RayShader, "outlineFlag");
+        self->_gbuffer._spriteLocUvRect = GetShaderLocation(RayShader, "uvRect");
+        self->_gbuffer._spriteLocAlphaCutoff = GetShaderLocation(RayShader, "alphaCutoff");
     }
 
     // Model normal/mask shader: without it neither outlines nor AO can run (both read the G-buffer).
@@ -220,8 +221,8 @@ void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFr
     rlDisableColorBlend();  // write RGB (normal) + A (flag) directly; no alpha blend
     BeginMode3D(frame->RayCamera);
     DrawNormalBufferModels(self, frame->SceneFilter);
-    // Sprites into the same G-buffer (alpha-discarded) so they get silhouette outlines too.
-    DrawNormalBufferSprites(self, frame, frame->SceneFilter);
+    // Cutout sprites into the same G-buffer (alpha-tested) so they get silhouette outlines and AO too.
+    DrawNormalBufferSprites(self, frame->SceneFilter);
     EndMode3D();
     rlEnableColorBlend();   // restore the default blending for the following 2D passes
     EndTextureMode();

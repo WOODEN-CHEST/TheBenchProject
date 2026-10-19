@@ -1,22 +1,100 @@
 #version 330
 
-// World sprite shader: draws a 2D sprite (a billboard textured with an animation frame) into the LINEAR-HDR
-// scene buffer. Sprite art is authored in sRGB, so it is linearized here (the tonemap pass maps the linear
-// scene back to display with gamma at the end) — otherwise the sprite would be double-gamma'd and look wrong.
-// Fragment-only: Raylib's default vertex stage supplies the billboard's UVs (fragTexCoord) and tint (fragColor).
+// World sprites, lit like the models around them (common/lighting: the sun, the moon, point lights, shadows, the
+// ambient, fog, the eye's night vision) or unlit (their colours shown as emitted light, still fogged). The sprite's art
+// is sRGB and is linearized here; the scene buffer is linear HDR, tonemapped at the end.
+//
+// The surface is a rough dielectric (roughness 0.9, metallic 0, occlusion 1). A fixed sprite or decal is a two-sided
+// card: lit with its quad's normal turned toward the viewer. A billboard or axis billboard stands in for a round thing
+// seen from the front: its normal faces the camera and its light wraps around it (lightWrap), so a sprite lit from the
+// side is half lit instead of black.
+//
+// Alpha modes (WorldSpriteAlphaMode): cutout discards texels below alphaCutoff and writes the rest opaque (alpha 1, depth
+// written); blend writes premultiplied colour and alpha, blended (ONE, ONE_MINUS_SRC_ALPHA) over what is behind; additive
+// writes premultiplied colour with alpha 0, added (ONE, ONE) without touching the scene's alpha.
 
+in vec3 fragPosition;
 in vec2 fragTexCoord;
-in vec4 fragColor;
+in vec3 fragNormal;
+in vec3 fragShadowPosition;
+in vec3 fragShadowNormal;
+in vec3 fragPointShadowPosition;
+in vec3 fragPointShadowNormal;
 
-uniform sampler2D texture0;   // the animation frame's texture (source region selected by the billboard UVs)
-uniform vec4 colDiffuse;      // batch tint (WHITE under BeginShaderMode)
+uniform sampler2D texture0;   // the animation frame's texture
+uniform vec4 colDiffuse;      // the object's tint (sRGB); its alpha, the object's opacity, fades blended sprites
+uniform int alphaMode;        // 0 cutout, 1 blend, 2 additive
+uniform float alphaCutoff;    // cutout threshold on the texture's alpha
+uniform bool isLit;           // false: the colours are emitted light
+uniform float emission;       // an unlit sprite's brightness multiplier
+uniform float lightWrap;      // how far light wraps around the sprite: 0 for cards (fixed sprites, decals)
+uniform bool useScreenAo;     // whether the screen-space AO at this pixel is this sprite's (a cutout sprite, a decal)
 
 out vec4 finalColor;
 
+#include "common/lighting"
+
+const int ALPHA_MODE_CUTOUT = 0;
+const int ALPHA_MODE_BLEND = 1;
+const int ALPHA_MODE_ADDITIVE = 2;
+// The sprite surface: a rough dielectric.
+const float SPRITE_ROUGHNESS = 0.9;
+const float SPRITE_METALLIC = 0.0;
+const vec3 SPRITE_F0 = vec3(0.04);
+
+// The normal turned toward a point: a card is lit and shadowed on the side that faces it.
+vec3 FacingNormal(vec3 n, vec3 toward)
+{
+    return (dot(n, toward) < 0.0) ? -n : n;
+}
+
 void main()
 {
-    vec4 texel = texture(texture0, fragTexCoord) * fragColor * colDiffuse;
-    // sRGB sprite art -> linear light. Alpha is left as-is (not gamma-encoded) for correct blending.
-    vec3 linear = pow(max(texel.rgb, vec3(0.0)), vec3(2.2));
-    finalColor = vec4(linear, texel.a);
+    vec4 texel = texture(texture0, fragTexCoord);
+    if ((alphaMode == ALPHA_MODE_CUTOUT) && (texel.a < alphaCutoff))
+    {
+        discard;
+    }
+    vec3 albedo = pow(max(texel.rgb*colDiffuse.rgb, vec3(0.0)), vec3(2.2)); // sRGB -> linear
+    float alpha = (alphaMode == ALPHA_MODE_CUTOUT) ? 1.0 : texel.a*colDiffuse.a;
+
+    vec3 color;
+    if (isLit)
+    {
+        vec3 v = normalize(viewPos - fragPosition);
+        vec3 n = FacingNormal(normalize(fragNormal), v);
+
+        // The cascades are read on the sprite as their light sees it, with the slope bias of that quad's face toward
+        // the light; the cube shadow likewise on the quad facing its light.
+        vec3 toShadowLight = normalize(shadowLightDirection);
+        float shadowNDotL = abs(dot(normalize(fragShadowNormal), toShadowLight));
+        float shadowAmount = SkyShadowAmount(fragShadowPosition, shadowNDotL);
+        vec3 pointShadowNormal = FacingNormal(fragPointShadowNormal, pointShadowLightPos - fragPointShadowPosition);
+
+        vec3 direct = SkyLightWrapped(n, v, shadowAmount, lightWrap, albedo, SPRITE_F0, SPRITE_ROUGHNESS,
+            SPRITE_METALLIC);
+        vec3 pointTotal = PointLightsWrapped(n, v, fragPosition, fragPointShadowPosition, pointShadowNormal, lightWrap,
+            albedo, SPRITE_F0, SPRITE_ROUGHNESS, SPRITE_METALLIC);
+        vec3 ambient = ambientColor*ambientIntensity*albedo*(useScreenAo ? ScreenAo() : 1.0);
+
+        // Reflected light goes through the eye's night vision, as the models' does.
+        color = NightVisionOf(ambient + direct + pointTotal);
+    }
+    else
+    {
+        // Emitted light keeps its colour (no night vision), like the models' emissive part.
+        color = albedo*max(emission, 0.0);
+    }
+
+    if (alphaMode == ALPHA_MODE_ADDITIVE)
+    {
+        // An emitter seen through the haze: the air in front dims it, and the haze's own glow is already in what lies
+        // behind, so it is dimmed, not mixed toward the sky.
+        color *= 1.0 - FogFactor(fragPosition);
+        finalColor = vec4(color*alpha, 0.0);
+        return;
+    }
+
+    color = ApplyFog(color, fragPosition);
+    finalColor = (alphaMode == ALPHA_MODE_BLEND) ? vec4(color*alpha, alpha) : vec4(color, 1.0);
 }
