@@ -1,9 +1,10 @@
 // The sprites: the unit quad every sprite draws with, the lit sprite shader (lights, shadows, fog, night vision; cutout,
 // blended and additive alpha), each frame's sprite matrices (facing the camera, and facing each shadow light), and the
-// lit draws of the scene and crisp passes: the cutout sprites, then the decals, then the blended and additive sprites
-// back to front. The G-buffer and shadow passes draw sprites through this file's quad and matrices with their own
-// shaders.
+// lit draws of the scene and crisp passes (the sprites the camera's visibility list holds): the cutout sprites, then the
+// decals, then the blended and additive sprites back to front. The G-buffer and shadow passes draw sprites through this
+// file's quad and matrices with their own shaders.
 
+#include <math.h>
 #include "WorldRendererInternal.h"
 #include "raylib/raymath.h"
 #include "raylib/rlgl.h"
@@ -99,6 +100,7 @@ static void LoadLitShader(WorldRenderer* self)
     self->_sprites._locEmission = GetShaderLocation(RayShader, "emission");
     self->_sprites._locLightWrap = GetShaderLocation(RayShader, "lightWrap");
     self->_sprites._locUseScreenAo = GetShaderLocation(RayShader, "useScreenAo");
+    WorldRendererCommon_PrepareDither(RayShader, &self->_sprites._dither);
 }
 
 /* The cube-shadow light of the frame, or NULL while the cube shadow does not run. */
@@ -130,11 +132,28 @@ static int GetBlendMode(WorldSpriteAlphaMode alphaMode)
     return BLEND_ALPHA; // only for a corrupted mode: drawn like a cutout sprite
 }
 
-/* Uploads one sprite's settings and its forward point lights to the lit shader and draws it facing the camera. With
- * sprite lighting switched off (the A/B toggle) every sprite draws unlit at its full colours, as before sprites were
- * lit. */
+/* How a sprite shows its fades. A cutout sprite dithers by its combined fade (its draw distance, the object's opacity),
+ * like a model. A blended or additive sprite is transparent already: its draw distance fades its alpha (the object's
+ * opacity is in its alpha already) and it does not dither. */
+static void GetFadedDraw(const WorldRenderSprite* sprite, WorldVisibilityFade fade, float* outDitherFade,
+    Color* outTint)
+{
+    *outTint = sprite->Tint;
+    if (sprite->AlphaMode == WorldSpriteAlphaMode_Cutout)
+    {
+        *outDitherFade = fade.Combined;
+        return;
+    }
+    *outDitherFade = 0.0f;
+    float Alpha = (float)sprite->Tint.a * (1.0f - fminf(fmaxf(fade.Distance, 0.0f), 1.0f));
+    outTint->a = (unsigned char)lroundf(Alpha);
+}
+
+/* Uploads one sprite's settings, its fade and its forward point lights to the lit shader and draws it facing the camera.
+ * With sprite lighting switched off (the A/B toggle) every sprite draws unlit at its full colours, as before sprites
+ * were lit. */
 static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, const WorldRendererSpriteFrame* matrices,
-    bool applyScreenAo)
+    WorldVisibilityFade fade, bool applyScreenAo)
 {
     Shader RayShader = GameShader_GetRaylibShader(self->_sprites._shader);
     bool IsLit = sprite->IsLit && self->_isSpriteLightingEnabled;
@@ -147,8 +166,11 @@ static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, 
     // The AO at the pixel is the sprite's own for a cutout sprite (when the G-buffer drew it: its shader is optional) and
     // its surface's for a decal; behind a blended or additive sprite it belongs to something else.
     bool IsInAo = sprite->IsDecal
-        || (WorldRendererSprites_IsInGBuffer(sprite) && (self->_gbuffer._spriteShader != NULL));
+        || (WorldRenderSprite_IsOpaqueSurface(sprite) && (self->_gbuffer._spriteShader != NULL));
     int UseScreenAo = (applyScreenAo && IsInAo) ? 1 : 0;
+    float DitherFade = 0.0f;
+    Color Tint = sprite->Tint;
+    GetFadedDraw(sprite, fade, &DitherFade, &Tint);
 
     SetShaderValue(RayShader, self->_sprites._locUvRect, sprite->UvRect, SHADER_UNIFORM_VEC4);
     SetShaderValueMatrix(RayShader, self->_sprites._locShadowModel, matrices->CascadeTransform);
@@ -160,12 +182,13 @@ static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, 
     SetShaderValue(RayShader, self->_sprites._locEmission, &Emission, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sprites._locLightWrap, &LightWrap, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sprites._locUseScreenAo, &UseScreenAo, SHADER_UNIFORM_INT);
+    WorldRendererCommon_SetDither(RayShader, &self->_sprites._dither, DitherFade, false);
     if (IsLit)
     {
         WorldRendererLighting_UploadObjectLights(self, RayShader, &self->_sprites._lit, sprite->Shape.Position,
             sprite->BoundsRadius);
     }
-    WorldRendererSprites_DrawQuad(self, RayShader, sprite, sprite->Tint, matrices->CameraTransform);
+    WorldRendererSprites_DrawQuad(self, RayShader, sprite, Tint, matrices->CameraTransform);
 }
 
 
@@ -250,12 +273,27 @@ void WorldRendererSprites_PrepareFrame(WorldRenderer* self, const WorldRenderFra
         }
         Vector3 Center = SpriteTransform_GetCenter(Entry.CameraTransform);
         Entry.Depth = Vector3DotProduct(Vector3Subtract(Center, CameraPosition), CameraForward);
-
-        SpriteDrawOrder Order = { .Index = Index, .Depth = Entry.Depth };
-        if (!GenericBuffer_AddLast(&self->_sprites._frames, &Entry)
-            || (IsSortedTransparent(Sprite) && !GenericBuffer_AddLast(&self->_sprites._transparentOrder, &Order)))
+        if (!GenericBuffer_AddLast(&self->_sprites._frames, &Entry))
         {
             // Cannot happen short of address-space exhaustion; drawing no sprite this frame beats drawing them wrong.
+            GenericBuffer_Clear(&self->_sprites._frames);
+            return;
+        }
+    }
+
+    // The transparent draw order holds only what the camera's passes draw (the visibility's camera list, ascending, so
+    // equal depths keep the world's order).
+    size_t VisibleCount = 0;
+    const size_t* Visible = WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibilityPass_Camera,
+        &VisibleCount);
+    const void* FrameData = self->_sprites._frames._data;
+    const WorldRendererSpriteFrame* Frames = FrameData;
+    for (size_t Position = 0; Position < VisibleCount; Position++)
+    {
+        size_t Index = Visible[Position];
+        SpriteDrawOrder Order = { .Index = Index, .Depth = Frames[Index].Depth };
+        if (IsSortedTransparent(&Sprites[Index]) && !GenericBuffer_AddLast(&self->_sprites._transparentOrder, &Order))
+        {
             GenericBuffer_Clear(&self->_sprites._frames);
             GenericBuffer_Clear(&self->_sprites._transparentOrder);
             return;
@@ -273,16 +311,6 @@ const WorldRendererSpriteFrame* WorldRendererSprites_GetFrame(const WorldRendere
     const void* FrameData = self->_sprites._frames._data;
     const WorldRendererSpriteFrame* Frames = FrameData;
     return &Frames[index];
-}
-
-bool WorldRendererSprites_CastsShadows(const WorldRenderSprite* sprite)
-{
-    return sprite->CastsShadows && WorldRendererSprites_IsInGBuffer(sprite);
-}
-
-bool WorldRendererSprites_IsInGBuffer(const WorldRenderSprite* sprite)
-{
-    return !sprite->IsDecal && (sprite->AlphaMode == WorldSpriteAlphaMode_Cutout);
 }
 
 void WorldRendererSprites_DrawQuad(WorldRenderer* self, Shader shader, const WorldRenderSprite* sprite, Color tint,
@@ -306,31 +334,38 @@ void WorldRendererSprites_DrawLit(WorldRenderer* self, WorldRendererPixelFilter 
     {
         return;
     }
+    size_t VisibleCount = 0;
+    const size_t* Visible = WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibilityPass_Camera,
+        &VisibleCount);
 
     // Draw what the batch holds (the debug grid) under the state it was queued with; sprites are two-sided.
     rlDrawRenderBatchActive();
     rlDisableBackfaceCulling();
 
     // The cutout sprites: opaque where drawn, writing depth, with the models.
-    for (size_t Index = 0; Index < SpriteCount; Index++)
+    for (size_t Position = 0; Position < VisibleCount; Position++)
     {
+        size_t Index = Visible[Position];
         const WorldRenderSprite* Sprite = &Sprites[Index];
-        if (WorldRendererSprites_IsInGBuffer(Sprite)
+        if (WorldRenderSprite_IsOpaqueSurface(Sprite)
             && WorldRendererGeometry_PassesFilter(Sprite->OmitsPixelation, filter))
         {
-            DrawLitSprite(self, Sprite, WorldRendererSprites_GetFrame(self, Index), applyScreenAo);
+            DrawLitSprite(self, Sprite, WorldRendererSprites_GetFrame(self, Index),
+                WorldVisibility_GetSpriteFade(&self->_visibility, Index), applyScreenAo);
         }
     }
 
     // The decals, over the opaque world (depth tested, not written; lifted off their surface), in world order.
     rlDisableDepthMask();
-    for (size_t Index = 0; Index < SpriteCount; Index++)
+    for (size_t Position = 0; Position < VisibleCount; Position++)
     {
+        size_t Index = Visible[Position];
         const WorldRenderSprite* Sprite = &Sprites[Index];
         if (Sprite->IsDecal && WorldRendererGeometry_PassesFilter(Sprite->OmitsPixelation, filter))
         {
             BeginBlendMode(GetBlendMode(Sprite->AlphaMode));
-            DrawLitSprite(self, Sprite, WorldRendererSprites_GetFrame(self, Index), applyScreenAo);
+            DrawLitSprite(self, Sprite, WorldRendererSprites_GetFrame(self, Index),
+                WorldVisibility_GetSpriteFade(&self->_visibility, Index), applyScreenAo);
         }
     }
 
@@ -345,11 +380,13 @@ void WorldRendererSprites_DrawLit(WorldRenderer* self, WorldRendererPixelFilter 
     const SpriteDrawOrder* Order = OrderData;
     for (size_t Position = 0; Position < self->_sprites._transparentOrder._count; Position++)
     {
-        const WorldRenderSprite* Sprite = &Sprites[Order[Position].Index];
+        size_t Index = Order[Position].Index;
+        const WorldRenderSprite* Sprite = &Sprites[Index];
         if (WorldRendererGeometry_PassesFilter(Sprite->OmitsPixelation, filter))
         {
             BeginBlendMode(GetBlendMode(Sprite->AlphaMode));
-            DrawLitSprite(self, Sprite, WorldRendererSprites_GetFrame(self, Order[Position].Index), applyScreenAo);
+            DrawLitSprite(self, Sprite, WorldRendererSprites_GetFrame(self, Index),
+                WorldVisibility_GetSpriteFade(&self->_visibility, Index), applyScreenAo);
         }
     }
 

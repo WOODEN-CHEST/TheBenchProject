@@ -67,6 +67,10 @@ typedef struct GameConfigStruct
     /** @brief Config-side fog strength multiplier (times the world's FogStrength). Default 1. Scales how
      *  quickly distant geometry fades into the fog. */
     float FogStrength;
+    /** @brief Scales every draw distance (models 600 m, sprites 150 m, decals 60 m at 1): beyond its draw distance an
+     *  object is not drawn, and over the last tenth of it (at least 3 m) it dithers out. Default 1; [0, 16] like the
+     *  multipliers above (0 draws nothing). Lower it for slower machines or to see the fade sooner. */
+    float DrawDistanceScale;
 } GameConfig;
 
 

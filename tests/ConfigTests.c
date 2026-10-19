@@ -68,7 +68,8 @@ static void ReadsEveryKey(TestRun* run)
     GameConfig Config;
     TEST_CHECK_SUCCESS(run, LoadConfigText(run, "reads_every_key",
         "{ \"is_fps_unlocked\": true, \"target_fps\": 120, \"is_vsync_enabled\": true, \"is_fullscreen\": true,"
-        "  \"resolution\": [ 800, 600 ], \"shadow_strength\": 2.5, \"fog_strength\": 0 }", &Config));
+        "  \"resolution\": [ 800, 600 ], \"shadow_strength\": 2.5, \"fog_strength\": 0, \"draw_distance_scale\": 0.25 }",
+        &Config));
     TEST_CHECK(run, Config.IsFPSUnlocked);
     TEST_CHECK(run, Config.TargetFPS == 120);
     TEST_CHECK(run, Config.IsVSyncEnabled);
@@ -76,6 +77,7 @@ static void ReadsEveryKey(TestRun* run)
     TEST_CHECK(run, (Config.ResolutionWidth == 800) && (Config.ResolutionHeight == 600));
     TEST_CHECK(run, Config.ShadowStrength == 2.5f);
     TEST_CHECK(run, Config.FogStrength == 0.0f);
+    TEST_CHECK(run, Config.DrawDistanceScale == 0.25f);
 }
 
 static void WholeRealIntegersAreAccepted(TestRun* run)
@@ -98,11 +100,12 @@ static void OutOfRangeValuesFallBackToDefaults(TestRun* run)
     GameConfig_SetDefaults(&Defaults);
     GameConfig Config;
     TEST_CHECK_SUCCESS(run, LoadConfigText(run, "out_of_range_values",
-        "{ \"target_fps\": 5, \"resolution\": [ 100, 1e19 ], \"bloom_strength\": -1, \"sunshaft_strength\": 99 }",
-        &Config));
+        "{ \"target_fps\": 5, \"resolution\": [ 100, 1e19 ], \"bloom_strength\": -1, \"sunshaft_strength\": 99,"
+        "  \"draw_distance_scale\": 17 }", &Config));
     TEST_CHECK(run, HasDefaultWindowSettings(&Config));
     TEST_CHECK(run, Config.BloomStrength == Defaults.BloomStrength);
     TEST_CHECK(run, Config.SunshaftStrength == Defaults.SunshaftStrength);
+    TEST_CHECK(run, (Config.DrawDistanceScale == Defaults.DrawDistanceScale) && (Defaults.DrawDistanceScale == 1.0f));
 }
 
 static void UnknownKeysAreIgnored(TestRun* run)

@@ -1,5 +1,6 @@
 // The shadow cascades of the sky's shadow light (the sun by day, the moon on bright nights) and the point-light cube
-// shadow, cast by models and by cutout sprites (turned toward the light).
+// shadow, cast by models and by cutout sprites (turned toward the light). Each pass draws the casters the frame's
+// visibility lists for it (its box or its reach), each dithered by its fade, so a fading object's shadow thins with it.
 
 #include <math.h>
 #include "WorldRendererInternal.h"
@@ -109,60 +110,30 @@ static void LoadPointShadowCube(WorldRenderer* self)
     self->_pointShadow._hasCube = true;
 }
 
-/* Whether a model casts into the given shadow cascade, per its WorldShadowTier: Both casts into either; Near casts
- * only into the near cascade; Far casts only into the far cascade. */
-static bool ModelCastsIntoCascade(WorldShadowTier shadowTier, bool isNearCascade)
-{
-    switch (shadowTier)
-    {
-        case WorldShadowTier_Near: return isNearCascade;
-        case WorldShadowTier_Far:  return !isNearCascade;
-        case WorldShadowTier_Both: return true;
-    }
-    // Only reachable with a corrupted tier value; casting into both cascades is the safe choice.
-    return true;
-}
-
-/* Draws the depth of the drawn models that cast shadows into the given shadow cascade (per WorldShadowTier) through
- * @p shader. Ignores the pixelation filter (every pixelation state casts). The sprites are DrawSpriteCasters'. */
-static void DrawShadowCasters(WorldRenderer* self, const Shader* shader, bool isNearCascade)
+/* Draws the depth of a shadow pass's model casters (its visibility list) through @p shader, each dithered by its fade.
+ * Ignores the pixelation filter (every pixelation state casts). The sprites are DrawSpriteCasters'. */
+static void DrawShadowCasters(WorldRenderer* self, Shader shader, const WorldRendererDitherLocations* dither,
+    WorldVisibilityPass pass)
 {
     size_t ModelCount = 0;
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&self->_cache, &ModelCount);
-    for (size_t Index = 0; Index < ModelCount; Index++)
+    size_t CasterCount = 0;
+    const size_t* Casters = WorldVisibility_GetModels(&self->_visibility, &self->_cache, pass, &CasterCount);
+    for (size_t Position = 0; Position < CasterCount; Position++)
     {
-        const WorldRenderModel* Entry = &Models[Index];
-        if (Entry->IsDrawn && Entry->CastsShadows && ModelCastsIntoCascade(Entry->ShadowTier, isNearCascade))
-        {
-            WorldRendererGeometry_DrawModel(self, Entry, shader, false);
-        }
+        size_t Index = Casters[Position];
+        WorldRendererCommon_SetDither(shader, dither, WorldVisibility_GetModelFade(&self->_visibility, Index).Combined,
+            false);
+        WorldRendererGeometry_DrawModel(self, &Models[Index], &shader, false);
     }
 }
 
-/* Draws the depth of the drawn models that cast shadows and whose bounding sphere reaches into the light's reach
- * sphere: anything further cannot shadow what the light lights (its light falls to 0 at its reach). */
-static void DrawCastersInReach(WorldRenderer* self, const Shader* shader, Vector3 lightPosition, float reach)
-{
-    size_t ModelCount = 0;
-    const WorldRenderModel* Models = WorldRenderCache_GetModels(&self->_cache, &ModelCount);
-    for (size_t Index = 0; Index < ModelCount; Index++)
-    {
-        const WorldRenderModel* Entry = &Models[Index];
-        if (Entry->IsDrawn && Entry->CastsShadows
-            && (Vector3Distance(Entry->Center, lightPosition) < (Entry->Radius + reach)))
-        {
-            WorldRendererGeometry_DrawModel(self, Entry, shader, false);
-        }
-    }
-}
-
-/* Draws the cutout sprites that cast shadows (not decals, casts_shadows on) through an alpha-tested sprite depth shader,
- * each with its matrix for this light (a billboard faces it: @p isCascade picks the cascades' light, else the cube
- * shadow's), so the shadow has the sprite's shape and does not turn with the camera. With @p reach above 0 (the cube
- * shadow) only sprites within that distance of @p lightPosition are drawn; with 0 (the cascades) every caster is.
- * Two-sided: culling is off for them. Sprites cast into both cascades. No-op without sprites. */
-static void DrawSpriteCasters(WorldRenderer* self, Shader shader, int locUvRect, int locAlphaCutoff, bool isCascade,
-    Vector3 lightPosition, float reach)
+/* Draws a shadow pass's sprite casters (its visibility list: cutout sprites that are not decals, with casts_shadows)
+ * through an alpha-tested sprite depth shader, each dithered by its fade and with its matrix for this light (a billboard
+ * faces it: @p isCascade picks the cascades' light, else the cube shadow's), so the shadow has the sprite's shape and
+ * does not turn with the camera. Two-sided: culling is off for them. No-op without sprites. */
+static void DrawSpriteCasters(WorldRenderer* self, Shader shader, const WorldRendererDitherLocations* dither,
+    int locUvRect, int locAlphaCutoff, WorldVisibilityPass pass, bool isCascade)
 {
     if (!WorldRendererSprites_IsAvailable(self))
     {
@@ -170,30 +141,33 @@ static void DrawSpriteCasters(WorldRenderer* self, Shader shader, int locUvRect,
     }
     size_t SpriteCount = 0;
     const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&self->_cache, &SpriteCount);
+    size_t CasterCount = 0;
+    const size_t* Casters = WorldVisibility_GetSprites(&self->_visibility, &self->_cache, pass, &CasterCount);
     rlDisableBackfaceCulling();
-    for (size_t Index = 0; Index < SpriteCount; Index++)
+    for (size_t Position = 0; Position < CasterCount; Position++)
     {
+        size_t Index = Casters[Position];
         const WorldRenderSprite* Entry = &Sprites[Index];
         const WorldRendererSpriteFrame* Matrices = WorldRendererSprites_GetFrame(self, Index);
-        if ((Matrices == NULL) || !WorldRendererSprites_CastsShadows(Entry)
-            || ((reach > 0.0f)
-                && (Vector3Distance(Entry->Shape.Position, lightPosition) >= (Entry->BoundsRadius + reach))))
+        if (Matrices == NULL)
         {
             continue;
         }
         SetShaderValue(shader, locUvRect, Entry->UvRect, SHADER_UNIFORM_VEC4);
         SetShaderValue(shader, locAlphaCutoff, &Entry->AlphaCutoff, SHADER_UNIFORM_FLOAT);
+        WorldRendererCommon_SetDither(shader, dither, WorldVisibility_GetSpriteFade(&self->_visibility, Index).Combined,
+            false);
         WorldRendererSprites_DrawQuad(self, shader, Entry, WHITE,
             isCascade ? Matrices->CascadeTransform : Matrices->PointTransform);
     }
     rlEnableBackfaceCulling();
 }
 
-/* Renders one shadow cascade: the depth of the casters assigned to this cascade (per WorldShadowTier), from
- * the frame's shadow light into @p map, using a camera-centred orthographic frustum of the given world-space extent.
- * Stores the world->light-clip matrix in @p outLightVP. Opens/closes its own texture + 3D passes. */
-static void RenderShadowCascade(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D map,
-    float orthoSize, bool isNearCascade, Matrix* outLightVP)
+/* One cascade's light matrices and box for the frame: a camera-centred orthographic frustum of the given world-space
+ * extent, looking along the frame's shadow light. An explicit tight frustum around the focus (rather than BeginMode3D,
+ * which would force Raylib's global cull distances and make the depth bias unintuitive): depth is linear across
+ * SHADOW_NEAR..SHADOW_FAR, so the shader's bias maps to a small, world-relative offset. */
+static WorldRendererCascadeFrame GetCascadeFrame(const WorldRenderFrame* frame, float orthoSize)
 {
     Vector3 LightDirection = frame->ShadowDirection;
     Vector3 Focus = frame->Camera->Position;
@@ -201,34 +175,41 @@ static void RenderShadowCascade(WorldRenderer* self, const WorldRenderFrame* fra
     // Avoid a degenerate look-at when the light is near straight up.
     Vector3 Up = (fabsf(LightDirection.y) > 0.99f) ? (Vector3){ 0.0f, 0.0f, 1.0f } : (Vector3){ 0.0f, 1.0f, 0.0f };
 
-    // Explicit tight orthographic frustum around the focus (rather than BeginMode3D, which would force
-    // Raylib's global cull distances and make the depth bias unintuitive). Depth is linear across
-    // SHADOW_NEAR..SHADOW_FAR, so the shader's bias maps to a small, world-relative offset.
-    Matrix LightView = MatrixLookAt(LightPos, Focus, Up);
+    WorldRendererCascadeFrame Cascade;
+    Cascade.View = MatrixLookAt(LightPos, Focus, Up);
     float HalfExtent = orthoSize*0.5f;
-    Matrix LightProj = MatrixOrtho(-HalfExtent, HalfExtent, -HalfExtent, HalfExtent, SHADOW_NEAR, SHADOW_FAR);
+    Cascade.Projection = MatrixOrtho(-HalfExtent, HalfExtent, -HalfExtent, HalfExtent, SHADOW_NEAR, SHADOW_FAR);
+    Cascade.ViewProjection = MatrixMultiply(Cascade.View, Cascade.Projection);
+    Cascade.Box = WorldVisibility_ExtractFrustum(Cascade.ViewProjection);
+    return Cascade;
+}
+
+/* Renders one shadow cascade: the depth of its casters (the visibility list of @p pass) from the frame's shadow light
+ * into @p map, with the cascade's light matrices. Opens/closes its own texture + 3D passes. */
+static void RenderShadowCascade(WorldRenderer* self, RenderTexture2D map, const WorldRendererCascadeFrame* cascade,
+    WorldVisibilityPass pass)
+{
     Shader DepthShader = GameShader_GetRaylibShader(self->_cascades._depthShader);
 
     BeginTextureMode(map);
     ClearBackground(WHITE); // clears depth to the far plane (colour is irrelevant on the depth-only target)
     rlEnableDepthTest();
-    rlSetMatrixProjection(LightProj);
-    rlSetMatrixModelview(LightView);   // DrawMesh reads these to build each model's light-space MVP
+    rlSetMatrixProjection(cascade->Projection);
+    rlSetMatrixModelview(cascade->View);   // DrawMesh reads these to build each model's light-space MVP
     // Render BACK faces into the shadow map (cull front). The lit front faces then sit well in front of the
     // stored depth, which removes most self-shadowing acne without a large (peter-panning) depth bias.
     rlSetCullFace(RL_CULL_FACE_FRONT);
-    DrawShadowCasters(self, &DepthShader, isNearCascade);
+    DrawShadowCasters(self, DepthShader, &self->_cascades._dither, pass);
     rlSetCullFace(RL_CULL_FACE_BACK);  // restore the default culling for the scene pass
-    // Cutout sprites, facing the light, alpha-tested; a directional light reaches every one of them.
+    // Cutout sprites, facing the light, alpha-tested.
     if (self->_cascades._spriteDepthShader != NULL)
     {
         DrawSpriteCasters(self, GameShader_GetRaylibShader(self->_cascades._spriteDepthShader),
-            self->_cascades._spriteLocUvRect, self->_cascades._spriteLocAlphaCutoff, true, LightPos, 0.0f);
+            &self->_cascades._spriteDither, self->_cascades._spriteLocUvRect, self->_cascades._spriteLocAlphaCutoff, pass,
+            true);
     }
     rlDisableDepthTest();
     EndTextureMode();
-
-    *outLightVP = MatrixMultiply(LightView, LightProj);
 }
 
 
@@ -266,7 +247,13 @@ static void CreateCascadeMaps(WorldRenderer* self)
 void WorldRendererShadows_LoadShaders(WorldRenderer* self)
 {
     // Depth shader + cascade maps for the sun's and the moon's shadows (optional; models draw unshadowed without them).
+    // The shadow maps' dither sits on their texel grid (the default pixel scale of 1).
     self->_cascades._depthShader = WorldRendererCommon_LoadShader(self, DEPTH_SHADER_ASSET_NAME);
+    if (self->_cascades._depthShader != NULL)
+    {
+        WorldRendererCommon_PrepareDither(GameShader_GetRaylibShader(self->_cascades._depthShader),
+            &self->_cascades._dither);
+    }
     if ((self->_cascades._depthShader != NULL) && !self->_cascades._hasNearMap)
     {
         CreateCascadeMaps(self);
@@ -280,6 +267,7 @@ void WorldRendererShadows_LoadShaders(WorldRenderer* self)
         Shader RayShader = GameShader_GetRaylibShader(self->_cascades._spriteDepthShader);
         self->_cascades._spriteLocUvRect = GetShaderLocation(RayShader, "uvRect");
         self->_cascades._spriteLocAlphaCutoff = GetShaderLocation(RayShader, "alphaCutoff");
+        WorldRendererCommon_PrepareDither(RayShader, &self->_cascades._spriteDither);
     }
 
     // The cutout sprites' alpha-tested cube-depth shader (optional: without it sprites cast no point-light shadow).
@@ -291,6 +279,7 @@ void WorldRendererShadows_LoadShaders(WorldRenderer* self)
         self->_pointShadow._spriteLocAlphaCutoff = GetShaderLocation(RayShader, "alphaCutoff");
         self->_pointShadow._spriteLocLightPos = GetShaderLocation(RayShader, "lightPosition");
         self->_pointShadow._spriteLocLightFar = GetShaderLocation(RayShader, "lightFar");
+        WorldRendererCommon_PrepareDither(RayShader, &self->_pointShadow._spriteDither);
     }
 
     // Cube-depth shader + point-light shadow cube (optional; point lights cast no shadows without them).
@@ -300,6 +289,7 @@ void WorldRendererShadows_LoadShaders(WorldRenderer* self)
         Shader RayShader = GameShader_GetRaylibShader(self->_pointShadow._shader);
         self->_pointShadow._locLightPos = GetShaderLocation(RayShader, "lightPosition");
         self->_pointShadow._locLightFar = GetShaderLocation(RayShader, "lightFar");
+        WorldRendererCommon_PrepareDither(RayShader, &self->_pointShadow._dither);
         if (!self->_pointShadow._hasCube)
         {
             LoadPointShadowCube(self);
@@ -356,14 +346,35 @@ size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self, Vector3 
     return Best;
 }
 
+void WorldRendererShadows_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame)
+{
+    if (frame->IsCascadeShadowActive)
+    {
+        frame->NearCascade = GetCascadeFrame(frame, SHADOW_NEAR_ORTHO_SIZE);
+        frame->FarCascade = GetCascadeFrame(frame, SHADOW_FAR_ORTHO_SIZE);
+    }
+
+    size_t LightCount = 0;
+    const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &LightCount);
+    if (frame->IsPointShadowActive && (frame->ShadowLightIndex < LightCount))
+    {
+        // The light's reach, kept clear of the faces' near plane: the packed distances are normalized by it.
+        float Far = Lights[frame->ShadowLightIndex].Range;
+        if (Far < (float)(POINT_SHADOW_NEAR * 2.0))
+        {
+            Far = (float)(POINT_SHADOW_NEAR * 2.0);
+        }
+        frame->PointShadowPosition = Lights[frame->ShadowLightIndex].Position;
+        frame->PointShadowFar = Far;
+    }
+}
+
 void WorldRendererShadows_RenderCascades(WorldRenderer* self, const WorldRenderFrame* frame)
 {
-    RenderShadowCascade(self, frame, self->_cascades._nearMap, SHADOW_NEAR_ORTHO_SIZE, true,
-        &self->_cascades._nearLightVP);
+    RenderShadowCascade(self, self->_cascades._nearMap, &frame->NearCascade, WorldVisibilityPass_NearCascade);
     if (self->_cascades._hasFarMap)
     {
-        RenderShadowCascade(self, frame, self->_cascades._farMap, SHADOW_FAR_ORTHO_SIZE, false,
-            &self->_cascades._farLightVP);
+        RenderShadowCascade(self, self->_cascades._farMap, &frame->FarCascade, WorldVisibilityPass_FarCascade);
     }
 }
 
@@ -372,18 +383,13 @@ void WorldRendererShadows_RenderCascades(WorldRenderer* self, const WorldRenderF
 void WorldRendererShadows_RenderPointLight(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     size_t LightCount = 0;
-    const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &LightCount);
+    WorldRenderCache_GetLights(&self->_cache, &LightCount);
     if (frame->ShadowLightIndex >= LightCount)
     {
         return;
     }
-    Vector3 LightPos = Lights[frame->ShadowLightIndex].Position;
-    float Far = Lights[frame->ShadowLightIndex].Range;
-    if (Far < (float)(POINT_SHADOW_NEAR * 2.0))
-    {
-        Far = (float)(POINT_SHADOW_NEAR * 2.0);
-    }
-    self->_pointShadow._far = Far;
+    Vector3 LightPos = frame->PointShadowPosition;
+    float Far = frame->PointShadowFar;
 
     Shader CubeShader = GameShader_GetRaylibShader(self->_pointShadow._shader);
     float LightPosArr[3] = { LightPos.x, LightPos.y, LightPos.z };
@@ -433,12 +439,14 @@ void WorldRendererShadows_RenderPointLight(WorldRenderer* self, const WorldRende
         rlSetMatrixProjection(CubeProj);
         rlSetMatrixModelview(FaceView);
         // Default (back-face) culling + the PBR shader's slope-scaled bias handles acne; front-face culling
-        // here caused peter-panning + seam artifacts, so it is intentionally not used.
-        DrawCastersInReach(self, &CubeShader, LightPos, Far);
+        // here caused peter-panning + seam artifacts, so it is intentionally not used. The casters are those within the
+        // light's reach (the visibility's cube list).
+        DrawShadowCasters(self, CubeShader, &self->_pointShadow._dither, WorldVisibilityPass_PointShadow);
         if (HasSpriteShader)
         {
-            DrawSpriteCasters(self, SpriteCubeShader, self->_pointShadow._spriteLocUvRect,
-                self->_pointShadow._spriteLocAlphaCutoff, false, LightPos, Far);
+            DrawSpriteCasters(self, SpriteCubeShader, &self->_pointShadow._spriteDither,
+                self->_pointShadow._spriteLocUvRect, self->_pointShadow._spriteLocAlphaCutoff,
+                WorldVisibilityPass_PointShadow, false);
         }
         rlDisableDepthTest();
         rlEnableColorBlend(); // restore the default blending for the passes that follow

@@ -13,6 +13,10 @@
 //
 // The pass is drawn with colour blending DISABLED (see RenderNormalBuffer), so RGB and A are written verbatim;
 // with blending on, a fragment alpha of 0.5 would blend the normal with the background and corrupt it.
+//
+// It shares the geometry shaders' dither (common/dither), but the renderer leaves its fade at 0: a fading object is drawn
+// here solid until half its fade and not at all after that, so its outline and AO switch off once instead of breaking up
+// with the dither's holes.
 
 // 1.0 when this object has outlines enabled, else 0.0 (set per object before each draw).
 uniform float outlineFlag;
@@ -21,8 +25,14 @@ in vec3 fragNormalView;
 
 out vec4 finalColor;
 
+#include "common/dither"
+
 void main()
 {
+    if (DitherDiscard(ditherFade, ditherInvert))
+    {
+        discard;
+    }
     vec3 n = normalize(fragNormalView);
     float flag = (outlineFlag > 0.5) ? 1.0 : 0.5; // always a surface here (sky/grid are never drawn into this)
     finalColor = vec4(n*0.5 + 0.5, flag);

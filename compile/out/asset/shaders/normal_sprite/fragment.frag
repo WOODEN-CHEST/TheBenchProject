@@ -24,9 +24,12 @@ uniform float alphaCutoff;    // the sprite's cutout threshold
 
 out vec4 finalColor;
 
+// Shared with the other geometry shaders; the renderer leaves the fade at 0 here (see world_normal).
+#include "common/dither"
+
 void main()
 {
-    if (texture(texture0, fragTexCoord).a < alphaCutoff)
+    if ((texture(texture0, fragTexCoord).a < alphaCutoff) || DitherDiscard(ditherFade, ditherInvert))
     {
         discard; // not a surface, so the outline hugs the sprite's shape
     }

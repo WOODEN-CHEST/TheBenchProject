@@ -124,26 +124,24 @@ static bool AreSpriteShadowsAvailable(const WorldRenderer* self)
             || (IsPointShadowAvailable(self) && (self->_pointShadow._spriteShader != NULL)));
 }
 
-/* Whether any sprite drawn this frame casts a shadow: a shadow pass runs that has its sprite shader, and a sprite
- * casts. */
+/* Whether a sprite casts into a shadow pass that runs this frame with its sprite shader (the visibility's lists hold
+ * the casters each pass draws). */
 static bool DoSpritesCastShadows(const WorldRenderer* self, const WorldRenderFrame* frame)
 {
-    bool IsCascadeCasting = frame->IsCascadeShadowActive && (self->_cascades._spriteDepthShader != NULL);
-    bool IsCubeCasting = frame->IsPointShadowActive && (self->_pointShadow._spriteShader != NULL);
-    if (!WorldRendererSprites_IsAvailable(self) || !(IsCascadeCasting || IsCubeCasting))
+    if (!WorldRendererSprites_IsAvailable(self))
     {
         return false;
     }
-    size_t SpriteCount = 0;
-    const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&self->_cache, &SpriteCount);
-    for (size_t Index = 0; Index < SpriteCount; Index++)
-    {
-        if (WorldRendererSprites_CastsShadows(&Sprites[Index]))
-        {
-            return true;
-        }
-    }
-    return false;
+    size_t NearCount = 0;
+    size_t FarCount = 0;
+    size_t CubeCount = 0;
+    WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibilityPass_NearCascade, &NearCount);
+    WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibilityPass_FarCascade, &FarCount);
+    WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibilityPass_PointShadow, &CubeCount);
+    bool IsCascadeCasting = frame->IsCascadeShadowActive && (self->_cascades._spriteDepthShader != NULL)
+        && ((NearCount > 0) || (self->_cascades._hasFarMap && (FarCount > 0)));
+    bool IsCubeCasting = frame->IsPointShadowActive && (self->_pointShadow._spriteShader != NULL) && (CubeCount > 0);
+    return IsCascadeCasting || IsCubeCasting;
 }
 
 /* The eye's night vision this frame: how strongly it applies (the renderer toggle x the world's strength), the field
@@ -221,20 +219,20 @@ static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera
     outFrame->InvProjection = MatrixInvert(outFrame->Projection);
     outFrame->ViewProjection = MatrixMultiply(outFrame->View, outFrame->Projection);
     outFrame->InvViewProjection = MatrixInvert(outFrame->ViewProjection);
+    outFrame->CameraFrustum = WorldVisibility_ExtractFrustum(outFrame->ViewProjection);
 }
 
-/* Decides which optional passes run this frame and with what strength: each needs to be available (its shaders
- * and targets), wanted (renderer toggle, world flag, world x config strength above 0) and applicable (a shadow light
- * high enough, something to draw). */
-static void DecidePasses(WorldRenderer* self, WorldRenderFrame* frame)
+/* Decides which shadow passes run this frame (both are rendered before the scene pass). The cascades follow the sky's
+ * shadow light (the sun by day, the moon on bright nights, none while both are low or handing over:
+ * WorldEnvironment_GetSkyLights decides); the point-light shadow is independent of the sky (shadows at night), cast by
+ * the nearest shadow-casting light. Both need to be available and wanted (the world's switch, world x config strength
+ * above 0). */
+static void DecideShadows(WorldRenderer* self, WorldRenderFrame* frame)
 {
     const WorldEnvironment* Environment = frame->Environment;
     bool AreShadowsWanted = Environment->AreShadowsEnabled
         && ((Environment->ShadowStrength * WorldRendererCommon_ConfigShadowStrength(self)) > 0.0f);
 
-    // The cascades follow the sky's shadow light (the sun by day, the moon on bright nights, none while both are low or
-    // handing over: WorldEnvironment_GetSkyLights decides); the point-light shadow is independent of the sky (shadows
-    // at night), cast by the nearest shadow-casting light. Both are rendered before the scene pass.
     frame->IsCascadeShadowActive = IsCascadeShadowAvailable(self) && AreShadowsWanted
         && (frame->ShadowLight != WorldShadowLight_None) && (frame->ShadowFade > 0.0f);
     if (IsPointShadowAvailable(self) && AreShadowsWanted)
@@ -242,12 +240,42 @@ static void DecidePasses(WorldRenderer* self, WorldRenderFrame* frame)
         frame->ShadowLightIndex = WorldRendererShadows_SelectPointLight(self, frame->Camera->Position);
         frame->IsPointShadowActive = (frame->ShadowLightIndex != SIZE_MAX);
     }
+}
 
-    // The crisp overlay draws OmitPixelation objects at window resolution over the pixelated frame. When it runs,
-    // the pixelated passes skip those objects; when it cannot, they fall back to the pixelated passes so they
-    // never vanish.
+/* Builds the frame's visibility from the render cache: what the camera's passes draw (its frustum, the draw distances,
+ * the opacities) and which casters each shadow pass that runs draws (each cascade's box, the cube's reach). Needs the
+ * shadow decisions and WorldRendererShadows_PrepareFrame. */
+static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    WorldVisibilityView View =
+    {
+        .CameraPosition = frame->Camera->Position,
+        .CameraFrustum = frame->CameraFrustum,
+        .IsCullingEnabled = self->_isCullingEnabled,
+        .IsNearCascadeActive = frame->IsCascadeShadowActive,
+        .NearCascade = frame->NearCascade.Box,
+        .IsFarCascadeActive = frame->IsCascadeShadowActive && self->_cascades._hasFarMap,
+        .FarCascade = frame->FarCascade.Box,
+        .IsPointShadowActive = frame->IsPointShadowActive,
+        .PointShadowPosition = frame->PointShadowPosition,
+        .PointShadowReach = frame->PointShadowFar,
+        .DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self)
+    };
+    return WorldVisibility_Build(&self->_visibility, &self->_cache, &View);
+}
+
+/* Decides which of the other optional passes run this frame and with what strength: each needs to be available (its
+ * shaders and targets), wanted (renderer toggle, world flag, world x config strength above 0) and applicable (something
+ * to draw, the sun on screen). Needs the frame's visibility. */
+static void DecidePasses(WorldRenderer* self, WorldRenderFrame* frame)
+{
+    const WorldEnvironment* Environment = frame->Environment;
+
+    // The crisp overlay draws the OmitPixelation objects the camera sees at window resolution over the pixelated frame.
+    // When it runs, the pixelated passes skip those objects; when it cannot, they fall back to the pixelated passes so
+    // they never vanish.
     frame->IsCrispActive = self->_crisp._isEnabled && IsCrispAvailable(self)
-        && WorldRenderCache_HasCrispObjects(&self->_cache);
+        && WorldVisibility_HasCrispObjects(&self->_visibility);
     frame->SceneFilter = frame->IsCrispActive ? WorldRendererPixelFilter_PixelatedOnly : WorldRendererPixelFilter_All;
 
     // AO into the ambient term and the outlines both read the G-buffer; both are under the post-effects master
@@ -363,6 +391,14 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
         }
     }
     WorldRenderCache_GetLights(&self->_cache, &Status->LightCount);
+
+    WorldVisibilityCounts Counts = WorldVisibility_GetCounts(&self->_visibility);
+    Status->IsCullingEnabled = self->_isCullingEnabled;
+    Status->DrawnModelCount = Counts.DrawnModelCount;
+    Status->DrawnSpriteCount = Counts.DrawnSpriteCount;
+    Status->OutsideViewCount = Counts.OutsideViewCount;
+    Status->FadedOutCount = Counts.FadedOutCount;
+    Status->FadingCount = Counts.FadingCount;
 }
 
 /* Appends "<label>name, name" (or "<label>none") for the features in @p state to the status line. */
@@ -437,7 +473,9 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_bloom._isEnabled = true;
     Renderer->_sunshaft._isEnabled = true;
     Renderer->_crisp._isEnabled = true;
+    Renderer->_isCullingEnabled = true;
     WorldRenderCache_Construct(&Renderer->_cache);
+    WorldVisibility_Construct(&Renderer->_visibility);
     WorldRendererSky_Construct(Renderer);
     WorldRendererSprites_Construct(Renderer);
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardLights, INITIAL_FORWARD_LIGHT_CAPACITY,
@@ -467,6 +505,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     WorldRendererSky_Deconstruct(self); // retires the sky textures' own asset users
 
     // The cache's asset pointers die with the model user, so the cache goes first.
+    WorldVisibility_Deconstruct(&self->_visibility);
     WorldRenderCache_Deconstruct(&self->_cache);
     Memory_Free(self->_pbr._forwardLights._data);
     Memory_Free(self->_pbr._forwardRadiances._data);
@@ -555,6 +594,15 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     WorldRendererStars_SyncCatalogue(self, Frame.Environment);
     WorldRendererSky_SyncTextures(self, Frame.Environment);
     WorldRendererSky_PrepareFrame(&Frame);
+    // Which shadow passes run and their light matrices, then what every pass draws: the camera's frustum, each
+    // cascade's box and the cube's reach cull, the draw distances and opacities fade.
+    DecideShadows(self, &Frame);
+    WorldRendererShadows_PrepareFrame(self, &Frame);
+    Error VisibilityResult = BuildVisibility(self, &Frame);
+    if (VisibilityResult.Code != ErrorCode_Success)
+    {
+        return VisibilityResult;
+    }
     DecidePasses(self, &Frame);
     WorldRendererLighting_PrepareFrame(self, &Frame);
     DecideNightVision(self, &Frame);
@@ -680,10 +728,14 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     Error LogResult = Logger_LogInfoFormatted(self->_logger,
         (const unsigned char*)u8"WorldRenderer: %s scene; %" PRIu64 u8" models (%" PRIu64 u8" without a model), %"
         PRIu64 u8" sprites (%" PRIu64 u8" decals, %" PRIu64 u8" blended or additive), %" PRIu64 u8" lights, %" PRIu64
-        u8" stars; %s.",
+        u8" stars; drawn %" PRIu64 u8" models and %" PRIu64 u8" sprites (%" PRIu64 u8" fading), culled %" PRIu64
+        u8" outside the view%s and %" PRIu64 u8" faded out (draw distance, opacity); %s.",
         Tier, (uint64_t)Status->ModelCount, (uint64_t)Status->ModelWithoutAssetCount, (uint64_t)Status->SpriteCount,
         (uint64_t)Status->DecalCount, (uint64_t)Status->TransparentSpriteCount, (uint64_t)Status->LightCount,
-        (uint64_t)Status->StarCount, IsBuilt ? (const char*)Lists._data : "feature list unavailable");
+        (uint64_t)Status->StarCount, (uint64_t)Status->DrawnModelCount, (uint64_t)Status->DrawnSpriteCount,
+        (uint64_t)Status->FadingCount, (uint64_t)Status->OutsideViewCount,
+        Status->IsCullingEnabled ? "" : " (frustum culling off)", (uint64_t)Status->FadedOutCount,
+        IsBuilt ? (const char*)Lists._data : "feature list unavailable");
     Error_Deconstruct(&LogResult);
     Memory_Free(Lists._data);
 }
@@ -726,6 +778,16 @@ void WorldRenderer_SetSpriteLightingEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_IsSpriteLightingEnabled(const WorldRenderer* self)
 {
     return self->_isSpriteLightingEnabled;
+}
+
+void WorldRenderer_SetCullingEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_isCullingEnabled = enabled;
+}
+
+bool WorldRenderer_IsCullingEnabled(const WorldRenderer* self)
+{
+    return self->_isCullingEnabled;
 }
 
 void WorldRenderer_SetBloomEnabled(WorldRenderer* self, bool enabled)

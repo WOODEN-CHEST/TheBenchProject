@@ -199,8 +199,9 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
     }
 
     // Feed the sun/ambient/camera into the lit shaders (models, sprites) before drawing any lit geometry. The scene pass
-    // applies the screen-space AO map (occludes the ambient term).
-    WorldRendererLighting_UploadFrame(self, frame, true);
+    // applies the screen-space AO map (occludes the ambient term); it is the scene's own pixel grid, so the dither's
+    // pixel scale is 1.
+    WorldRendererLighting_UploadFrame(self, frame, true, (Vector2){ 1.0f, 1.0f });
 
     BeginMode3D(frame->RayCamera);
 

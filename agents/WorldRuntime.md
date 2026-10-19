@@ -12,6 +12,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, the key registry, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
 | WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with resolved assets, sprites, lights), built from the world's per-type component arrays. |
+| WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
 | WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c` | A concrete GameFrame: a WASD + mouse-look flycam over a test world. |
@@ -78,30 +79,106 @@ rebuilt at the same address is caught as soon as a component differs. Components
 calling `PrepareWorld`; a model that failed to load is retried only after its name changes or `PrepareWorld` (call it
 after asset definitions change).
 
+### Visibility (culling, draw distance, dithered fades and opacity)
+
+Right after the cache's sync, `WorldVisibility_Build` (private `source/WorldVisibility.{h,c}`, tested in
+`tests/WorldVisibilityTests.c`) decides what every pass draws, and every pass iterates its list instead of the cache's
+whole arrays. The lists hold indices into the cache's models and sprites, ascending (so the world's order is kept), and
+are rebuilt every frame without allocating once grown; each entry also gets its fades.
+- **Frustum culling.** The camera's frustum is extracted once per frame from its view-projection (Gribb and Hartmann, six
+  unit inward planes; `WorldVisibility_ExtractFrustum`). The scene, the G-buffer and the crisp overlay draw only what
+  touches it (`WorldVisibility_IsSphereInFrustum`). A model's sphere is its world bounding sphere; a sprite's is the
+  sphere around its pivot that holds its quad in every orientation (`BoundsRadius`: half its diagonal around its centre
+  for the default centre pivot), so one sphere serves the camera and the lights.
+- **Shadow casters are never culled by the camera:** a caster off screen can still shadow what is on it. Each cascade
+  takes the casters in its own orthographic box (its planes, from the light matrices `WorldRendererShadows_PrepareFrame`
+  builds once per frame), routed by their shadow tier; the cube shadow takes the casters touching its lamp's reach.
+  A model casts when it has `casts_shadows`; a sprite when it is a cutout sprite that is not a decal and casts
+  (`WorldRenderSprite_CastsShadows`).
+- **Draw distance.** Models 600 m, sprites 150 m, decals 60 m, times the config's `draw_distance_scale` (default 1,
+  [0, 16]). Per-model and per-object distances arrive with T10 and T11 (`// TODO:` where the distance is chosen). The
+  distance measured is the camera's to the nearest point of the entry's sphere (0 inside it), so a large object does not
+  fade while its near end is close. Beyond its draw distance an entry is in no list (its shadow goes too); over the last
+  stretch (10% of the distance, at least 3 m, at most all of it) its distance fade rises linearly from 0 to 1.
+- **Opacity.** The tint's opacity (the alpha byte of the final tint) asks for a fade of 1 - opacity, and a draw's fade is
+  the larger of that and the distance fade. An entry whose fade is 1 is in no list. Models no longer use alpha blending:
+  the PBR output alpha is 1 and their opacity is the dither (`// TODO:` in the PBR shader: alpha-tested material
+  textures, leaves on a model, need a material alpha mode).
+- **How a fade shows.** Models and cutout sprites dither by their fade, in every pass that draws them (the scene, the
+  crisp overlay, both cascades and the cube shadow), so a fading object's shadow thins with it. Blended and additive
+  sprites are transparent already: their draw-distance fade scales their alpha (their opacity is in it already) and they
+  do not dither. The G-buffer never dithers (holes would break the outline into noise and speckle the AO): it draws an
+  entry solid while its fade is below 0.5 (`WORLD_VISIBILITY_GBUFFER_FADE_LIMIT`) and skips it from there on, so the
+  outline and the AO switch off once, at mid-fade. The outline pass reads the G-buffer's depth for the same reason.
+- **The dither** (`shaders/common/dither.glsl`, included by every world geometry shader: `world_pbr`, `world_normal`,
+  `world_depth`, `world_cube_depth`, `world_sprite`, `world_normal_sprite`, `world_sprite_depth`,
+  `world_sprite_cube_depth`). Uniforms `ditherFade` (this draw's fade: 0 solid .. 1 gone), `ditherInvert` (the mirrored
+  pattern: T11's incoming LOD) and `ditherPixelScale` (the pass's pixels per scene pixel: 1 in the scene-resolution
+  passes and in the shadow maps, on their texel grid; window / scene in the crisp overlay), uploaded per draw (once per
+  object for models: their meshes share it); `WorldRendererCommon_PrepareDither` caches them and uploads the defaults at
+  load. The formula, which `WorldVisibility_GetDitherCell`, `WorldVisibility_GetDitherThreshold` and
+  `WorldVisibility_IsDitherDiscarded` mirror in C for the tests:
+
+  ```
+  BAYER (rows from the target's bottom row, gl_FragCoord's origin):
+       0  8  2 10
+      12  4 14  6
+       3 11  1  9
+      15  7 13  5
+  cell      = floor(gl_FragCoord.xy / max(ditherPixelScale, 1)), each coordinate mod 4
+  threshold = (BAYER[cell.y][cell.x] + 0.5) / 16
+  covered   = ditherInvert ? (1 - threshold >= fade) : (threshold > fade)
+  discard   = !covered
+  ```
+
+  With either pattern a fade of k/16 keeps 16 - k pixels of every 4x4 block (half a fade is a checkerboard), and a draw
+  at fade p with the normal pattern and one at fade 1 - p with the mirrored pattern keep exactly complementary pixels:
+  T11's two LODs mid cross-fade (the outgoing at its progress p, the incoming at 1 - p, inverted) cover every pixel once.
+  In the crisp overlay every window pixel of one scene pixel gets that scene pixel's cell, so its dither sits on the same
+  pixel grid as the rest.
+  Shaders that take derivatives or sample mipmapped textures test it after those (the PBR shader last), so they stay
+  defined for the pixels that are drawn.
+- **A/B.** `WorldRenderer_SetCullingEnabled` (U in the test frame) switches the camera's frustum and the cascades' boxes
+  off: everything within its draw distance is drawn, as before culling existed, and the image must not change. The
+  draw distances, fades and the cube's reach stay.
+- **Status.** The status line (after the first render, the I key) gives what the camera's passes drew (models, sprites,
+  how many of them fading), how many entries lay outside the view, and how many faded out (beyond their draw distance
+  or fully transparent).
+- **Known limits.** The cube shadow of a fading object is grainy: its 20-tap PCF spreads over about 17 texels and samples
+  the dither pattern unevenly (the cascades' 2x2 PCF always takes one texel of each quarter of the pattern, so their
+  shadows thin smoothly). The far plane is extracted from a float matrix, about 10 m uncertain at 4 km.
+
 ### Pipeline (one `WorldRenderer_RenderToTarget`)
 
 1. Sync the cache; make sure the targets match the window size and pixelation setting
    (`WorldRendererScene_EnsureTargets`).
 2. Build the frame context (`WorldRenderFrame`): camera, the scene's view/projection matrices (the projection
-   `BeginMode3D` builds for the scene target, shared by every pass that reconstructs positions or rays), the sky
+   `BeginMode3D` builds for the scene target, shared by every pass that reconstructs positions or rays) and the camera's
+   frustum from them, the sky
    (`WorldEnvironment_GetSkyLights`: the sun's and the moon's directions, daylight, the moon's phase and lit fraction,
    the two lights' intensities and the shadow light with its fade), the stars' rotation (`StarsToWorld`), the render
    clock (`TimeSeconds`), sizes, the night sky values (`WorldRendererSky_PrepareFrame`: limiting magnitude, Milky Way
    radiance, skyglow, the moonlit sky's strength and the moon's disc; first the star catalogue is rebuilt if the
-   world's seed or density changed, and the sky textures reloaded if the world names others), and every pass decision.
+   world's seed or density changed, and the sky textures reloaded if the world names others), and every pass decision:
+   first which shadow passes run (`DecideShadows`) and their light matrices (`WorldRendererShadows_PrepareFrame`: both
+   cascades' view, projection and box, the cube shadow's lamp and far range), then the frame's visibility (what every
+   pass draws, see "Visibility"), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
 3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the sun's and the moon's linear colours,
    the ambient colour (with the moonlit sky's fill), the scene luminance for eye adaptation, fog density, shadow
    strength, and the forward-light candidates (every light except the cube-shadow light) with their linear radiance.
    Then the eye's night vision for the frame (`DecideNightVision`: its strength, the field luminance, the rods' grey),
    and each sprite's matrices (`WorldRendererSprites_PrepareFrame`: facing the camera, facing the cascades' light and the
    cube shadow's lamp while those run) with the blended and additive sprites sorted back to front.
-4. The shadow cascades of the shadow light (the sun or the moon), then the point-light cube shadow (only casters
-   within the light's reach). Models and cutout sprites cast; sprites turned toward the light.
-5. The normal/flag G-buffer (models and cutout sprites) and the AO pre-pass, when AO or outlines run.
+4. The shadow cascades of the shadow light (the sun or the moon), then the point-light cube shadow, each drawing its
+   visibility list (the casters in its box; within the light's reach). Models and cutout sprites cast; sprites turned
+   toward the light; each caster dithered by its fade.
+5. The normal/flag G-buffer (the camera's models and cutout sprites, solid below half their fade) and the AO pre-pass,
+   when AO or outlines run.
 6. The scene pass: clear, atmospheric sky (with the moonlit sky, the moon's disc, the Milky Way and light pollution's
-   skyglow), the stars (none behind the moon), debug grid, PBR models (the sun and the moon; per object: up to
-   `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), lit sprites (the
-   cutout ones, then decals, then blended and additive ones back to front) and light gizmos. The sky's glow and the
+   skyglow), the stars (none behind the moon), debug grid, the camera's PBR models (each dithered by its fade; the sun and
+   the moon; per object: up to
+   `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), the camera's lit sprites
+   (the cutout ones, then decals, then blended and additive ones back to front) and light gizmos. The sky's glow and the
    models' and lit sprites' reflected light go through the eye's night vision.
 7. Outlines, then bloom and sun shafts from the (outlined) HDR scene.
 8. Eye adaptation, then the tonemapped point-upscale into the frame target.
@@ -159,7 +236,7 @@ because raylib's `DrawMesh` draws indexed only while the CPU index array is kept
 - **Unlit** sprites (`is_lit` false) show their colours times `emission` as emitted light: no night vision, still
   fogged.
 - **Alpha modes.** `cutout` discards texels whose alpha is below `alpha_cutoff` (the texture's alpha; the object's opacity
-  is left to T07's dither) and writes opaque colour and depth. `blend` writes premultiplied colour (blended ONE,
+  is the dither, see "Visibility") and writes opaque colour and depth. `blend` writes premultiplied colour (blended ONE,
   ONE_MINUS_SRC_ALPHA, so the scene's alpha stays 1) with the texture's alpha times the object's opacity. `additive`
   writes premultiplied colour with alpha 0 (added ONE, ONE), dimmed by the fog's transmittance instead of mixed toward the
   sky (an emitter seen through haze). Neither of the two writes depth.
@@ -314,7 +391,11 @@ shaded separately and is excluded from the forward candidates, so an object can 
 view-space normals (RGB) and a surface/outline flag (A: 0 = nothing, 0.5 = surface, 1 = surface with outline)
 into a low-res 8-bit target with blending disabled. `world_ao` turns it into an AO multiplier that the PBR pass
 applies to its ambient term only (so AO never dims direct light). `world_postfx` draws outlines after the scene:
-depth/surface silhouettes darken, view-normal creases are recoloured sun-aware; the sky is never outlined. Both
+depth/surface silhouettes darken, view-normal creases are recoloured sun-aware; the sky is never outlined. It reads the
+G-buffer's depth (the scene's only where the G-buffer's is not samplable), which matches its normals and flags: a fading
+object is solid in the G-buffer but has the dither's holes in the scene's depth. (Since then the debug light gizmos,
+which write the scene's depth but are not in the G-buffer, are no longer darkened as if they were the rim of the surface
+behind them.) Both
 are under the post-effects toggle (`WorldRenderer_SetPostEffectsEnabled`, O key in the test frame).
 
 **Bloom and sun shafts.** Half-resolution HDR passes added by the tonemap: a depth-masked bright pass (the sky
@@ -344,14 +425,15 @@ get no AO and no outlines.
   eye's night vision (active while it changes something: dusk and night, with a strength above 0), "sprite shading" the
   sprites at all (unavailable without the sprite shader or quad: then no sprite is drawn), "sprite lighting" the lit
   sprites (inactive while switched off with the K key's toggle), "sprite shadows" the shadows of cutout sprites
-  (active while one casts into a running shadow; unavailable without the sprite depth shaders). The renderer logs the status
-  once after its first render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame).
+  (active while one casts into a running shadow; unavailable without the sprite depth shaders). It also counts what the
+  camera's passes drew and what culling and fading removed (see "Visibility"). The renderer logs the status once after its
+  first render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame).
 
 ### Renderer structure (keep it clean)
 
 | File | What it holds |
 |---|---|
-| `WorldRenderer.c` | Public API: create/destroy, `PrepareWorld`, `RenderToTarget` (frame context, pass decisions, pass order), status. Orchestration only. |
+| `WorldRenderer.c` | Public API: create/destroy, `PrepareWorld`, `RenderToTarget` (frame context, pass decisions, the visibility build, pass order), status. Orchestration only. |
 | `WorldRendererInternal.h` | The renderer state (one state struct per pass), `WorldRenderFrame`, fixed texture units, shared constants, and every internal function, documented. |
 | `WorldRendererCommon.c` | Config multipliers, colour conversion, shader loading, one-time warnings, render-target constructors. |
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
@@ -364,6 +446,7 @@ get no AO and no outlines.
 | `WorldRendererStars.c` | The star field: the catalogue's mesh (rebuilt when the seed or density changes) and its draw (none behind the moon). |
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
 | `WorldRendererCrisp.c` | The crisp overlay. |
+| `WorldVisibility.c` (with the cache, not a pass) | The frame's visibility lists (per pass, the entries it draws, and every entry's fades) and the dither's C mirror; see "Visibility". |
 
 The renderer keeps receiving features, so:
 
@@ -373,8 +456,9 @@ The renderer keeps receiving features, so:
   `WorldRenderer.c` beyond orchestration.
 - **Decide once, read the frame.** Per-frame values and pass decisions go into `WorldRenderFrame`, built in
   `RenderToTarget`; passes read it instead of recomputing camera matrices or re-deciding.
-- **Draw from the cache.** Passes iterate the render cache's lists; never walk the world or resolve assets by
-  name in a pass.
+- **Draw from the cache.** Passes iterate their visibility list over the render cache's entries
+  (`WorldVisibility_GetModels` / `GetSprites` for their pass) and dither each draw by its fade; never walk the world or
+  resolve assets by name in a pass.
 - **Render reads, it never writes.** No writes to world objects or shared assets: per-draw material copies, the
   renderer's own location tables, and per-object render data in the cache.
 - **Fixed texture units.** Renderer-owned samplers use `WorldRendererTextureUnit` (units 12–15, above raylib's
@@ -406,9 +490,10 @@ scattering lit by the sun or the moon, with an overload that also gives the view
 used by `world_sky`, `world_stars` and the PBR fog) and `common/night_vision` (the eye's night vision: the rods' share
 and the blend into their grey; used by `world_sky` and `common/lighting`), `common/lighting` (the frame's lighting: its
 uniforms, the BRDF and its wrapped variant, the cascades' shadow, point lights and the cube shadow, the screen AO, the
-night vision and the fog; used by `world_pbr` and `world_sprite`) and `common/distance_packing` (the cube shadow's
-packed distance; used by `world_cube_depth`, `world_sprite_cube_depth` and `common/lighting`). Put new shared
-lighting, dithering or noise code there instead of copying it between shaders.
+night vision and the fog; used by `world_pbr` and `world_sprite`), `common/distance_packing` (the cube shadow's
+packed distance; used by `world_cube_depth`, `world_sprite_cube_depth` and `common/lighting`) and `common/dither` (the
+dithered fade; used by every world geometry shader, see "Visibility"). Put new shared lighting or noise code there
+instead of copying it between shaders.
 
 ## WorldTestFrame
 
@@ -439,7 +524,10 @@ debug keys as raw keys:
   next day: Mon 2026-10-19 12:00:00; first quarter (phase 0.27, 59% lit, from the calendar).`;
 - **the renderer and the sky:** O post effects, B bloom, G sun shafts, C crisp overlay, V night vision (logged), K
   sprite lighting (off draws every sprite unlit, as before T06; logged), L light gizmos, N cycle the
-  light pollution (0, 0.35, 0.7, 1; logged), I log the renderer status, then the game time (`WorldTest: game time
+  light pollution (0, 0.35, 0.7, 1; logged), X step the opacity of the centre cube (`test_object`) and the tree (1, 0.5,
+  0; logged: a 50% dither on the pixel grid, then gone, their shadows with them), U frustum culling (off draws everything
+  within its draw distance; the image must not change; logged), I log the renderer status (with the drawn, culled and
+  fading counts), then the game time (`WorldTest: game time
   Sun 2026-10-18 12:00:00, running, 720 game seconds per real second (a day takes 2 real minutes); seasons off.`) and
   the moon;
 - T toggles the text sample.

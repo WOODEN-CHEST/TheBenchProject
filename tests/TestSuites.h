@@ -78,6 +78,11 @@ void WorldRenderCacheTests_Run(TestRun* run);
  *  lights as viewers, size and bounds, the back-to-front order (SpriteTransformTests.c; a private module of source/). */
 void SpriteTransformTests_Run(TestRun* run);
 
+/** @brief What the renderer draws: frustum planes and the cascade box, draw distances and their fade band, opacity, the
+ *  dither's C mirror, and the per-pass lists built from a code-built cache (WorldVisibilityTests.c; a private module of
+ *  source/). */
+void WorldVisibilityTests_Run(TestRun* run);
+
 /** @brief Log rotation, pruning and formatted output under a base directory (LoggerTests.c). */
 void LoggerTests_Run(TestRun* run);
 

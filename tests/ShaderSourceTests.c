@@ -1,8 +1,11 @@
 #include "TestSuites.h"
 #include "AssetManager.h"
 #include "ShaderSource.h"
+#include "WorldVisibility.h"
 #include "wr/WRJSON.h"
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 
@@ -377,6 +380,71 @@ static void ShippedSkyAndPbrShareOneAtmosphere(TestRun* run)
 }
 
 
+/* Whether an expanded text's DITHER_BAYER holds the 16 values source/WorldVisibility.c mirrors in C, in its order (row
+ * by row from the target's bottom row). */
+static bool BayerMatchesTheMirror(const GenericBuffer* text)
+{
+    static const char Opening[] = "DITHER_BAYER[16] = float[16](";
+    const char* Cursor = (text->_count > 0U) ? strstr((const char*)text->_data, Opening) : NULL;
+    if (Cursor == NULL)
+    {
+        return false;
+    }
+    Cursor += strlen(Opening);
+    for (uint32_t Index = 0U; Index < WORLD_VISIBILITY_DITHER_LEVELS; Index++)
+    {
+        char* End = NULL;
+        double Value = strtod(Cursor, &End);
+        float Expected = WorldVisibility_GetDitherThreshold(Index % WORLD_VISIBILITY_DITHER_SIZE,
+            Index / WORLD_VISIBILITY_DITHER_SIZE) * (float)WORLD_VISIBILITY_DITHER_LEVELS - 0.5f;
+        if ((End == Cursor) || (fabs(Value - (double)Expected) > 1e-6))
+        {
+            return false;
+        }
+        Cursor = End;
+        while ((*Cursor == ',') || (*Cursor == ' ') || (*Cursor == '\n') || (*Cursor == '\r'))
+        {
+            Cursor++;
+        }
+    }
+    return *Cursor == ')';
+}
+
+/* Every geometry shader of the world (models and sprites; the scene, the G-buffer, the cascades and the cube shadow)
+ * dithers through the one shared include and tests it once, and the include's Bayer matrix is the one the C mirror
+ * (source/WorldVisibility.c) and the tests use. */
+static void ShippedGeometryShadersShareOneDither(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        const char* const Stages[] =
+        {
+            "pbr/fragment", "normal/fragment", "depth/fragment", "cube_depth/fragment", "sprite/fragment",
+            "normal_sprite/fragment", "sprite_depth/fragment", "sprite_cube_depth/fragment"
+        };
+        for (size_t Index = 0U; Index < (sizeof(Stages) / sizeof(Stages[0])); Index++)
+        {
+            if (ExpandShippedStage(run, &Fixture, Stages[Index]))
+            {
+                bool HasUniforms = (CountOccurrences(&Fixture.Text, "uniform float ditherFade;") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "uniform bool ditherInvert;") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "uniform vec2 ditherPixelScale;") == 1U);
+                bool IsTested = CountOccurrences(&Fixture.Text, "DitherDiscard(ditherFade, ditherInvert)") == 1U;
+                if (!TEST_CHECK(run, HasUniforms && IsTested
+                    && BufferContains(&Fixture.SourceList, "\"common/dither\"") && BayerMatchesTheMirror(&Fixture.Text)))
+                {
+                    printf("    in \"%s\"\n", Stages[Index]);
+                }
+            }
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+
 // Public functions.
 void ShaderSourceTests_Run(TestRun* run)
 {
@@ -393,6 +461,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "nul_byte_is_rejected", NulByteIsRejected },
         { "failure_leaves_the_output_as_it_was", FailureLeavesTheOutputAsItWas },
         { "shipped_sky_and_pbr_share_one_atmosphere", ShippedSkyAndPbrShareOneAtmosphere },
+        { "shipped_geometry_shaders_share_one_dither", ShippedGeometryShadersShareOneDither },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

@@ -61,19 +61,31 @@ static RenderTexture2D TryCreateNormalTarget(int width, int height, bool* outDep
     return LoadRenderTexture(width, height);
 }
 
-/* Draws the cached models (passing @p filter) into the G-buffer through the normal shader, setting the
- * per-object outline flag uniform (1 when the object has outlines enabled, else 0) before each draw. The normal
- * shader writes RGB=view-space normal, A=surface/outline flag (0.5 = surface, 1.0 = surface with outline);
- * pixels the sky/grid leave untouched stay at the cleared 0 (not a surface). */
+/* Whether the G-buffer draws an entry with this fade: solid below half its fade, not at all from there on. It never
+ * dithers: dither holes would break its outline into noise and speckle the AO, so those switch off once, at mid-fade. */
+static bool IsSolidInGBuffer(float fade)
+{
+    return fade < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT;
+}
+
+/* Draws the camera's models (passing @p filter, and solid enough: IsSolidInGBuffer) into the G-buffer through the
+ * normal shader, setting the per-object outline flag uniform (1 when the object has outlines enabled, else 0) before
+ * each draw. The normal shader writes RGB=view-space normal, A=surface/outline flag (0.5 = surface, 1.0 = surface with
+ * outline); pixels the sky/grid leave untouched stay at the cleared 0 (not a surface). */
 static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter filter)
 {
     Shader NormalShader = GameShader_GetRaylibShader(self->_gbuffer._shader);
     size_t ModelCount = 0;
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&self->_cache, &ModelCount);
-    for (size_t Index = 0; Index < ModelCount; Index++)
+    size_t VisibleCount = 0;
+    const size_t* Visible = WorldVisibility_GetModels(&self->_visibility, &self->_cache, WorldVisibilityPass_Camera,
+        &VisibleCount);
+    for (size_t Position = 0; Position < VisibleCount; Position++)
     {
+        size_t Index = Visible[Position];
         const WorldRenderModel* Entry = &Models[Index];
-        if (!Entry->IsDrawn || !WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter))
+        if (!WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter)
+            || !IsSolidInGBuffer(WorldVisibility_GetModelFade(&self->_visibility, Index).Combined))
         {
             continue;
         }
@@ -83,11 +95,11 @@ static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter
     }
 }
 
-/* Draws the cutout sprites that are not decals (passing @p filter) into the G-buffer through the sprite normal shader,
- * facing the camera as in the scene pass, so they get outlines and AO too. The shader discards texels below each
- * sprite's cutoff (the outline hugs the sprite's shape) and takes its outline flag. Decals and blended or additive
- * sprites stay out: they are not surfaces of their own. No-op without the shader or without sprites. Must run inside
- * the G-buffer pass's BeginMode3D (colour blending disabled by the caller). */
+/* Draws the camera's cutout sprites that are not decals (passing @p filter, and solid enough: IsSolidInGBuffer) into the
+ * G-buffer through the sprite normal shader, facing the camera as in the scene pass, so they get outlines and AO too.
+ * The shader discards texels below each sprite's cutoff (the outline hugs the sprite's shape) and takes its outline
+ * flag. Decals and blended or additive sprites stay out: they are not surfaces of their own. No-op without the shader or
+ * without sprites. Must run inside the G-buffer pass's BeginMode3D (colour blending disabled by the caller). */
 static void DrawNormalBufferSprites(WorldRenderer* self, WorldRendererPixelFilter filter)
 {
     if ((self->_gbuffer._spriteShader == NULL) || !WorldRendererSprites_IsAvailable(self))
@@ -97,13 +109,18 @@ static void DrawNormalBufferSprites(WorldRenderer* self, WorldRendererPixelFilte
     Shader SpriteShader = GameShader_GetRaylibShader(self->_gbuffer._spriteShader);
     size_t SpriteCount = 0;
     const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&self->_cache, &SpriteCount);
+    size_t VisibleCount = 0;
+    const size_t* Visible = WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibilityPass_Camera,
+        &VisibleCount);
     rlDisableBackfaceCulling(); // two-sided quads, mirrored by flips
-    for (size_t Index = 0; Index < SpriteCount; Index++)
+    for (size_t Position = 0; Position < VisibleCount; Position++)
     {
+        size_t Index = Visible[Position];
         const WorldRenderSprite* Entry = &Sprites[Index];
         const WorldRendererSpriteFrame* Matrices = WorldRendererSprites_GetFrame(self, Index);
-        if ((Matrices == NULL) || !WorldRendererSprites_IsInGBuffer(Entry)
-            || !WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter))
+        if ((Matrices == NULL) || !WorldRenderSprite_IsOpaqueSurface(Entry)
+            || !WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter)
+            || !IsSolidInGBuffer(WorldVisibility_GetSpriteFade(&self->_visibility, Index).Combined))
         {
             continue;
         }
@@ -130,6 +147,7 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
         self->_gbuffer._spriteLocOutlineFlag = GetShaderLocation(RayShader, "outlineFlag");
         self->_gbuffer._spriteLocUvRect = GetShaderLocation(RayShader, "uvRect");
         self->_gbuffer._spriteLocAlphaCutoff = GetShaderLocation(RayShader, "alphaCutoff");
+        WorldRendererCommon_PrepareDither(RayShader, &self->_gbuffer._spriteDither); // stays solid (IsSolidInGBuffer)
     }
 
     // Model normal/mask shader: without it neither outlines nor AO can run (both read the G-buffer).
@@ -138,6 +156,7 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
     {
         Shader RayShader = GameShader_GetRaylibShader(self->_gbuffer._shader);
         self->_gbuffer._locOutlineFlag = GetShaderLocation(RayShader, "outlineFlag");
+        WorldRendererCommon_PrepareDither(RayShader, &self->_gbuffer._dither); // stays solid (IsSolidInGBuffer)
     }
 
     // AO pre-pass shader. Optional (without it, or without a samplable-depth G-buffer, AO is simply off).

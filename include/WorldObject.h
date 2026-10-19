@@ -274,7 +274,8 @@ static inline RenderColor WorldObject_GetTint(const WorldObject* self)
 }
 
 /**
- * @brief Sets the object's render tint (its opacity is stored; drawing it comes with dithered opacity).
+ * @brief Sets the object's render tint. The renderer draws its opacity as a dither (models, cutout sprites; their
+ *        shadows thin with it) or as alpha (blended and additive sprites); at 0 the object is not drawn at all.
  * @param self The object; must not be NULL.
  * @param tint The new tint; Brightness and Opacity must be finite and in [0, 1] (the tint colour's alpha is not part
  *        of the value and is ignored).

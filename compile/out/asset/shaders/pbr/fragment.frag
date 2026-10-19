@@ -30,6 +30,8 @@ out vec4 finalColor;
 // The frame's lights, shadows, ambient, fog and night vision: shared with the sprite shader, which the renderer gives
 // the same values.
 #include "common/lighting"
+// The draw's fade (its draw distance, the object's opacity) as a dither on the scene's pixel grid.
+#include "common/dither"
 
 // Perturbs the geometric normal by a tangent-space normal map WITHOUT needing per-vertex tangents: it rebuilds
 // a cotangent frame from the screen-space derivatives of the world position and UV (Christian Schuler's
@@ -57,7 +59,6 @@ void main()
 {
     vec4 texel = texture(texture0, fragTexCoord)*colDiffuse*fragColor;
     vec3 albedo = pow(max(texel.rgb, vec3(0.0)), vec3(2.2)); // sRGB -> linear
-    float alpha = texel.a;
 
     float rough = roughness;
     float metal = metallic;
@@ -109,7 +110,17 @@ void main()
     // Distance fog toward the atmospheric sky colour along this fragment's own view ray.
     color = ApplyFog(color, fragPosition);
 
+    // The fade is tested last, after every derivative and mipmapped fetch above, so those stay defined for the pixels
+    // that are drawn.
+    if (DitherDiscard(ditherFade, ditherInvert))
+    {
+        discard;
+    }
+
     // Output LINEAR HDR. Tonemapping + gamma happen later in the tonemap post-pass (after the pixelation
-    // upscale), so the scene is composited in high dynamic range and mapped to [0,1] only for display.
-    finalColor = vec4(color, alpha);
+    // upscale), so the scene is composited in high dynamic range and mapped to [0,1] only for display. Opaque: the
+    // object's opacity is the dither above, not blending.
+    // TODO: a material alpha mode (alpha-tested textures such as leaves on a model); until then a model's texture alpha
+    // is ignored.
+    finalColor = vec4(color, 1.0);
 }

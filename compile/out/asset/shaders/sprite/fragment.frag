@@ -12,6 +12,10 @@
 // Alpha modes (WorldSpriteAlphaMode): cutout discards texels below alphaCutoff and writes the rest opaque (alpha 1, depth
 // written); blend writes premultiplied colour and alpha, blended (ONE, ONE_MINUS_SRC_ALPHA) over what is behind; additive
 // writes premultiplied colour with alpha 0, added (ONE, ONE) without touching the scene's alpha.
+//
+// Fades (common/dither): a cutout sprite dithers by its fade (its draw distance, the object's opacity), like a model. A
+// blended or additive sprite is transparent already: the renderer folds its draw-distance fade into its tint's alpha and
+// leaves its dither fade at 0.
 
 in vec3 fragPosition;
 in vec2 fragTexCoord;
@@ -33,6 +37,7 @@ uniform bool useScreenAo;     // whether the screen-space AO at this pixel is th
 out vec4 finalColor;
 
 #include "common/lighting"
+#include "common/dither"
 
 const int ALPHA_MODE_CUTOUT = 0;
 const int ALPHA_MODE_BLEND = 1;
@@ -51,7 +56,7 @@ vec3 FacingNormal(vec3 n, vec3 toward)
 void main()
 {
     vec4 texel = texture(texture0, fragTexCoord);
-    if ((alphaMode == ALPHA_MODE_CUTOUT) && (texel.a < alphaCutoff))
+    if (((alphaMode == ALPHA_MODE_CUTOUT) && (texel.a < alphaCutoff)) || DitherDiscard(ditherFade, ditherInvert))
     {
         discard;
     }

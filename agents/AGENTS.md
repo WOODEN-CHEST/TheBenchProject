@@ -114,13 +114,18 @@ Current module list:
     pool, key registry).
   * WorldRenderer - Renders a World through a GameCamera (PBR lit by the sun and the moon, HDR, sky with the moon,
     stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, AO, outlines, bloom, sun
-    shafts, crisp overlay, lit sprites with decals, sorted transparency and shadows that face the light);
+    shafts, crisp overlay, lit sprites with decals, sorted transparency and shadows that face the light; frustum
+    culling, draw distances, and dithered fades and opacity);
     separate from the world data and never writes to it. Split by render pass into
     source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
     WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
   * WorldRenderCache - The renderer's private per-component cache (source/WorldRenderCache.h): one walk over the
     world's model/sprite/light component arrays per frame builds the lists (disabled and hidden objects not drawn);
     model assets are resolved once per component and again only when the name changes.
+  * WorldVisibility - What each pass draws this frame (private, source/WorldVisibility.h): frustum planes and sphere
+    tests (the camera's frustum, each shadow cascade's box), draw distances (per kind, times the config's
+    draw_distance_scale) with their fade band, the opacity's fade, the dither's C mirror (shaders/common/dither.glsl), and
+    the per-pass lists of cache entries with their fades, built every frame from the render cache.
   * SpriteTransform - A sprite quad's pure maths (private, source/SpriteTransform.h): its matrix for a viewer (the
     camera or a light; billboard, axis billboard, fixed), its world size from pixels per unit, its bounds and the
     back-to-front order of the blended sprites; the sprite pass and the shadow passes draw with it.

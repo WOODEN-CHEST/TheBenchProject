@@ -34,6 +34,7 @@ int main(void)
     NightVisionTests_Run(&Run);
     WorldRenderCacheTests_Run(&Run);
     SpriteTransformTests_Run(&Run);
+    WorldVisibilityTests_Run(&Run);
     LoggerTests_Run(&Run);
     TextComponentTests_Run(&Run);
     TextComponentCodecTests_Run(&Run);

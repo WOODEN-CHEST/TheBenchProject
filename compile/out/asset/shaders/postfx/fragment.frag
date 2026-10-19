@@ -23,7 +23,9 @@ in vec4 fragColor;
 
 uniform sampler2D texture0;      // the linear-HDR scene colour (bound by the blit)
 uniform vec4 colDiffuse;         // blit tint (WHITE in normal use)
-uniform sampler2D depthTexture;  // the scene depth texture (bound to a spare slot via SetShaderValueTexture)
+uniform sampler2D depthTexture;  // the G-buffer's depth, matching its normals and flags (a fading object is solid there,
+                                 // dithered in the scene's depth); the scene's depth when the G-buffer's is not
+                                 // samplable. Bound to a spare slot via SetShaderValueTexture
 uniform sampler2D normalTexture; // the normal/mask G-buffer (RGB = view normal, A = surface/outline flag)
 
 uniform vec2 resolution;         // scene target size in pixels

@@ -22,6 +22,7 @@
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRJSON.h"
+#include "wr/WRString.h"
 
 
 // Macros.
@@ -74,6 +75,9 @@
 #define SECONDS_PER_REAL_MINUTE 60.0
 /** How far above the current light pollution the N key's next step must be (so 0.35 steps on to 0.7). */
 #define LIGHT_POLLUTION_STEP_EPSILON 0.001f
+/** The objects whose opacity the X key steps: the centre cube (a model) and the tree (a cutout sprite), both casting
+ *  shadows. */
+#define OPACITY_TEST_OBJECT_COUNT 2U
 /** Default font of the text sample: covers Latvian and Cyrillic. */
 #define TEXT_SAMPLE_FONT_NAME ((const unsigned char*)u8"noto_sans")
 /** Top-left corner of the text sample, in normalized-fitted units. */
@@ -146,6 +150,10 @@ typedef struct WorldTestFrameStruct
     TextLayout _textSampleLayout;
     /** Whether the text sample is drawn (T toggles it). */
     bool _isTextSampleShown;
+    /** The objects the X key fades (OPACITY_TEST_OBJECT_COUNT; 0 for one the test world lacks), and the step of
+     *  OpacitySteps they are at. */
+    uint64_t _opacityTestObjectIds[OPACITY_TEST_OBJECT_COUNT];
+    size_t _opacityStep;
 } WorldTestFrame;
 
 
@@ -181,6 +189,10 @@ static const TestSprite TestSprites[] =
 static const Vector3 FrameWorldUp = { .x = 0.0f, .y = 1.0f, .z = 0.0f };
 /* The light pollution steps the N key cycles through: a dark site, a small town (the default), a suburb, a city. */
 static const float LightPollutionSteps[] = { 0.0f, 0.35f, 0.7f, 1.0f };
+/* The opacities the X key steps through: opaque, half (a 50% dither on the pixel grid), gone. */
+static const float OpacitySteps[] = { 1.0f, 0.5f, 0.0f };
+/* The names of the X key's objects (OPACITY_TEST_OBJECT_COUNT): the centre cube and the tree sprite. */
+static const char* const OpacityTestObjectNames[OPACITY_TEST_OBJECT_COUNT] = { "test_object", "tree" };
 /* The moon's phases by name, from new moon (phase 0) in eighths of the cycle. */
 static const char* const MoonPhaseNames[MOON_PHASE_NAME_COUNT] =
 {
@@ -202,6 +214,54 @@ static float NextLightPollutionStep(float current)
         }
     }
     return LightPollutionSteps[0];
+}
+
+/* The id of the first object named @p name, or 0 when the world has none. */
+static uint64_t FindObjectId(World* world, const char* name)
+{
+    size_t Count = World_GetObjectCount(world);
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        WorldObject* Object = NULL;
+        bool IsFound = false;
+        Error Result = World_GetObjectByIndex(world, Index, &Object);
+        if ((Result.Code == ErrorCode_Success) && (WorldObject_GetName(Object) != NULL))
+        {
+            Result = StringUTF8_EqualsExact(WorldObject_GetName(Object), (const unsigned char*)name, &IsFound);
+        }
+        Error_Deconstruct(&Result);
+        if (IsFound)
+        {
+            return WorldObject_GetId(Object);
+        }
+    }
+    return 0U;
+}
+
+/* Steps the opacity of the X key's objects (1, 0.5, 0, then 1 again) and logs it. */
+static void StepTestOpacity(WorldTestFrame* frame)
+{
+    frame->_opacityStep = (frame->_opacityStep + 1U) % (sizeof(OpacitySteps) / sizeof(OpacitySteps[0]));
+    float Opacity = OpacitySteps[frame->_opacityStep];
+    for (size_t Index = 0U; Index < OPACITY_TEST_OBJECT_COUNT; Index++)
+    {
+        WorldObject* Object = NULL;
+        if ((frame->_opacityTestObjectIds[Index] == 0U)
+            || !World_TryGetObject(&frame->_world, frame->_opacityTestObjectIds[Index], &Object))
+        {
+            continue;
+        }
+        RenderColor Tint = WorldObject_GetTint(Object);
+        Tint.Opacity = Opacity;
+        Error Result = WorldObject_SetTint(Object, Tint);
+        Error_Deconstruct(&Result); // every step is a valid opacity
+    }
+    if (frame->_services->Logger != NULL)
+    {
+        Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+            (const unsigned char*)u8"WorldTest: the centre cube and the tree at opacity %.1f.", (double)Opacity);
+        Error_Deconstruct(&LogResult);
+    }
 }
 
 /* The clock's debug text in @p storage ("Sun 2026-10-18 09:30:00"), or "?" if it could not be written. */
@@ -519,6 +579,28 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         }
     }
 
+    // X steps the opacity of the centre cube and the tree: 1, 0.5 (a 50% dither on the pixel grid; their shadows thin,
+    // their outlines switch off), 0 (gone, shadows too).
+    if (GameInput_IsKeyPressed(input, GameKey_X))
+    {
+        StepTestOpacity(frame);
+    }
+
+    // U toggles frustum culling, for A/B-ing it: off draws everything within its draw distance (the image must not
+    // change, only the frame time and the I key's counts).
+    if (GameInput_IsKeyPressed(input, GameKey_U))
+    {
+        bool Enabled = !WorldRenderer_IsCullingEnabled(frame->_renderer);
+        WorldRenderer_SetCullingEnabled(frame->_renderer, Enabled);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: frustum culling %s.",
+                Enabled ? "ON" : "OFF (everything within its draw distance is drawn)");
+            Error_Deconstruct(&LogResult);
+        }
+    }
+
     // L toggles the debug light gizmos (wireframe spheres at light positions).
     if (GameInput_IsKeyPressed(input, GameKey_L))
     {
@@ -749,9 +831,9 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             (const unsigned char*)u8"WorldTest: entered the world. WASD+SPACE/CTRL move, SHIFT sprint, mouse look; "
             u8"P pause/resume the clock, 1-4 = dawn/noon/dusk/midnight (paused), [ ] scrub time, , . previous/next "
             u8"day, / a week ahead; F full moon / calendar moon, Y seasons; O post effects, B bloom, G sun shafts, "
-            u8"C crisp overlay, V night vision, L light gizmos, N light pollution, I renderer status and game time, T text "
-            u8"sample; M frees the mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go "
-            u8"of it).");
+            u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, N light pollution, X opacity of the "
+            u8"centre cube and the tree, U frustum culling, I renderer status and game time, T text sample; M frees the "
+            u8"mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");
         Error_Deconstruct(&LogResult);
     }
     return Error_CreateSuccess();
@@ -1169,6 +1251,11 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     }
 
     Frame->_services = services;
+    for (size_t Index = 0U; Index < OPACITY_TEST_OBJECT_COUNT; Index++)
+    {
+        Frame->_opacityTestObjectIds[Index] = FindObjectId(&Frame->_world, OpacityTestObjectNames[Index]);
+    }
+    Frame->_opacityStep = 0U;
     Frame->_camera = GameCamera_Create((Vector3){ .x = 0.0f, .y = 2.5f, .z = -7.0f }, GAME_CAMERA_DEFAULT_FOV_Y);
     Frame->_camera.Pitch = -0.2f;
     Frame->_cursorCaptured = false;

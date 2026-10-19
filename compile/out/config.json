@@ -21,6 +21,8 @@
     "is_fog_enabled": true,
     "fog_strength": 1.0,
 
+    "draw_distance_scale": 1.0,
+
     "global_brightness": 1.0,
     "global_saturation": 1.0,
     "global_contrast": 1.0,

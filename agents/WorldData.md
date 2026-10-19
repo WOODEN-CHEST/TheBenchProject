@@ -36,7 +36,8 @@ components). Every object has:
   `WORLD_OBJECT_NAME_MAX_LENGTH` = 256 bytes of valid UTF-8);
 - the transform: `_position`, `_rotation` (Euler XYZ in radians, degrees in JSON), `_scale` (they become local
   transforms with parenting, T08);
-- `_tint`: a `RenderColor` (brightness and opacity in [0, 1]; drawing the opacity is T07's);
+- `_tint`: a `RenderColor` (brightness and opacity in [0, 1]; the renderer draws the opacity as a dither, and blended or
+  additive sprites as alpha: WorldRuntime.md, "Visibility");
 - `_isEnabled` (default true): false makes **every system** skip the object: the renderer, later collision and
   scripts' searches;
 - `_isVisible` (default true): false makes **the renderer** skip it (its model, its sprite and its light); it still

@@ -154,8 +154,6 @@ typedef struct WorldRenderCacheStruct
     uint64_t _componentSetVersion;
     /** @brief Whether the entries were matched at least once since construction or the last reset. */
     bool _isMatched;
-    /** @brief Whether this frame has a drawn OmitPixelation (crisp) model or sprite. */
-    bool _hasCrispObjects;
 } WorldRenderCache;
 
 
@@ -243,11 +241,24 @@ static inline const WorldRenderLight* WorldRenderCache_GetLights(const WorldRend
 }
 
 /**
- * @brief Reports whether this frame has a drawn OmitPixelation model or sprite (the crisp overlay's input).
- * @param self The cache; must not be NULL.
- * @returns true if at least one drawn model, or one listed sprite, omits the pixelation.
+ * @brief Whether a cached sprite is an opaque surface: a cutout sprite that is not a decal. Such a sprite writes depth,
+ *        is drawn into the G-buffer (it gets outlines and AO) and may cast shadows; decals and blended or additive
+ *        sprites do none of that.
+ * @param sprite The sprite; must not be NULL.
+ * @returns true for an opaque surface.
  */
-static inline bool WorldRenderCache_HasCrispObjects(const WorldRenderCache* self)
+static inline bool WorldRenderSprite_IsOpaqueSurface(const WorldRenderSprite* sprite)
 {
-    return self->_hasCrispObjects;
+    return !sprite->IsDecal && (sprite->AlphaMode == WorldSpriteAlphaMode_Cutout);
+}
+
+/**
+ * @brief Whether a cached sprite casts shadows: an opaque surface (WorldRenderSprite_IsOpaqueSurface) whose component
+ *        casts them.
+ * @param sprite The sprite; must not be NULL.
+ * @returns true for a shadow caster.
+ */
+static inline bool WorldRenderSprite_CastsShadows(const WorldRenderSprite* sprite)
+{
+    return sprite->CastsShadows && WorldRenderSprite_IsOpaqueSurface(sprite);
 }

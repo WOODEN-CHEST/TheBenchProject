@@ -330,6 +330,7 @@ void WorldRendererLighting_LoadShader(WorldRenderer* self)
     Shader RayShader = GameShader_GetRaylibShader(self->_pbr._shader);
     WorldRendererLighting_PrepareLitShader(self, RayShader, PBR_SHADER_ASSET_NAME, &self->_pbr._lit);
     CacheMaterialLocations(&self->_pbr, RayShader);
+    WorldRendererCommon_PrepareDither(RayShader, &self->_pbr._dither);
 
     // The renderer's own location table: the asset's, with the material map samplers pointed at the PBR
     // shader's sampler names, so DrawMesh binds each material's textures to their conventional units (albedo
@@ -477,12 +478,12 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     SetShaderValue(shader, lit->_locShadowLightDirection, ShadowDir, SHADER_UNIFORM_VEC3);
     if (frame->IsCascadeShadowActive)
     {
-        SetShaderValueMatrix(shader, lit->_locLightVP, self->_cascades._nearLightVP);
+        SetShaderValueMatrix(shader, lit->_locLightVP, frame->NearCascade.ViewProjection);
         int ShadowFarActive = self->_cascades._hasFarMap ? 1 : 0;
         SetShaderValue(shader, lit->_locShadowFarActive, &ShadowFarActive, SHADER_UNIFORM_INT);
         if (self->_cascades._hasFarMap)
         {
-            SetShaderValueMatrix(shader, lit->_locLightVPFar, self->_cascades._farLightVP);
+            SetShaderValueMatrix(shader, lit->_locLightVPFar, frame->FarCascade.ViewProjection);
         }
     }
 
@@ -514,7 +515,7 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
         }
         SetShaderValue(shader, lit->_locPointShadowLightRadiance, Radiance, SHADER_UNIFORM_VEC3);
         SetShaderValue(shader, lit->_locPointShadowLightRange, &PointShadowLight->Range, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(shader, lit->_locPointShadowFar, &self->_pointShadow._far, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(shader, lit->_locPointShadowFar, &frame->PointShadowFar, SHADER_UNIFORM_FLOAT);
         float PointBias = POINT_SHADOW_BIAS;
         SetShaderValue(shader, lit->_locPointShadowBias, &PointBias, SHADER_UNIFORM_FLOAT);
     }
@@ -549,18 +550,22 @@ static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame
     }
 }
 
-void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo)
+void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo,
+    Vector2 ditherPixelScale)
 {
     bool HasPbr = (self->_pbr._shader != NULL);
     bool HasSprites = (self->_sprites._shader != NULL);
     if (HasPbr)
     {
-        UploadLitUniforms(self, frame, GameShader_GetRaylibShader(self->_pbr._shader), &self->_pbr._lit, applyScreenAo);
+        Shader PbrShader = GameShader_GetRaylibShader(self->_pbr._shader);
+        UploadLitUniforms(self, frame, PbrShader, &self->_pbr._lit, applyScreenAo);
+        WorldRendererCommon_SetDitherPixelScale(PbrShader, &self->_pbr._dither, ditherPixelScale);
     }
     if (HasSprites)
     {
-        UploadLitUniforms(self, frame, GameShader_GetRaylibShader(self->_sprites._shader), &self->_sprites._lit,
-            applyScreenAo);
+        Shader SpriteShader = GameShader_GetRaylibShader(self->_sprites._shader);
+        UploadLitUniforms(self, frame, SpriteShader, &self->_sprites._lit, applyScreenAo);
+        WorldRendererCommon_SetDitherPixelScale(SpriteShader, &self->_sprites._dither, ditherPixelScale);
     }
     if (HasPbr || HasSprites)
     {

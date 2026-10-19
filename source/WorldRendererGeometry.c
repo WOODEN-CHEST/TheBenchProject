@@ -90,13 +90,25 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, const Shader* passSha
 {
     size_t ModelCount = 0;
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&self->_cache, &ModelCount);
-    for (size_t Index = 0; Index < ModelCount; Index++)
+    size_t VisibleCount = 0;
+    const size_t* Visible = WorldVisibility_GetModels(&self->_visibility, &self->_cache, WorldVisibilityPass_Camera,
+        &VisibleCount);
+    for (size_t Position = 0; Position < VisibleCount; Position++)
     {
+        size_t Index = Visible[Position];
         const WorldRenderModel* Entry = &Models[Index];
-        if (Entry->IsDrawn && WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter))
+        if (!WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter))
         {
-            WorldRendererGeometry_DrawModel(self, Entry, passShader, isLit);
+            continue;
         }
+        // The lit pass dithers the model by its fade (its draw distance, its opacity); its meshes share it. Without the
+        // PBR shader the materials' own shaders draw it solid.
+        if (isLit)
+        {
+            WorldRendererCommon_SetDither(self->_pbr._passShader, &self->_pbr._dither,
+                WorldVisibility_GetModelFade(&self->_visibility, Index).Combined, false);
+        }
+        WorldRendererGeometry_DrawModel(self, Entry, passShader, isLit);
     }
 }
 

@@ -21,6 +21,7 @@ the loader, so nothing JSON-related outlives the call.
 | `IsFullscreen` (`bool`) | `is_fullscreen` | false | Create the window fullscreen. |
 | `ResolutionWidth` / `ResolutionHeight` (`int32_t`) | `resolution` (`[w, h]`) | 1280×720 | Window size in pixels; [320, 16384] × [240, 16384], otherwise the default. |
 | `ShadowStrength`, `BloomStrength`, `SunshaftStrength`, `AmbientOcclusionStrength`, `FogStrength` (`float`) | `*_strength` | 1 | Config-side multipliers on each world's effect strength; [0, 16], otherwise the default. |
+| `DrawDistanceScale` (`float`) | `draw_distance_scale` | 1 | Scales every draw distance (models 600 m, sprites 150 m, decals 60 m at 1): beyond it an object is not drawn, over its last tenth (at least 3 m) it dithers out (WorldRuntime.md, "Visibility"). [0, 16] like the multipliers (0 draws nothing), otherwise the default. Lower it for slower machines, or to see the fade sooner. |
 
 Integer settings follow GameJSON's integer rules: a JSON integer, a whole real number (`60.0`) or a numeric
 string. A fractional, out-of-range or non-finite value (`59.9`, `1e19`) is treated as malformed and keeps the

@@ -253,10 +253,6 @@ static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite)
     {
         return Error_Construct2(ErrorCode_InvalidOperation, "WorldRenderCache: could not grow the sprite list.");
     }
-    if (Entry.OmitsPixelation)
-    {
-        self->_hasCrispObjects = true;
-    }
     return Error_CreateSuccess();
 }
 
@@ -308,10 +304,6 @@ static void UpdateModels(WorldRenderCache* self, World* world, AssetManager* ass
             return;
         }
         UpdateModel(Entry, assets, modelUser, logger);
-        if (Entry->IsDrawn && Entry->OmitsPixelation)
-        {
-            self->_hasCrispObjects = true;
-        }
     }
     *outAreEntriesAligned = true;
 }
@@ -354,7 +346,6 @@ void WorldRenderCache_Construct(WorldRenderCache* self)
     self->_world = NULL;
     self->_componentSetVersion = 0;
     self->_isMatched = false;
-    self->_hasCrispObjects = false;
 }
 
 void WorldRenderCache_Deconstruct(WorldRenderCache* self)
@@ -376,7 +367,6 @@ void WorldRenderCache_Reset(WorldRenderCache* self)
     GenericBuffer_Clear(&self->_lights);
     self->_world = NULL;
     self->_isMatched = false;
-    self->_hasCrispObjects = false;
 }
 
 Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, AssetManager* assets, AssetUserID modelUser,
@@ -397,7 +387,6 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, AssetManager* 
     uint64_t Version = World_GetComponentSetVersion(world);
     bool IsMatchCurrent = self->_isMatched && (self->_componentSetVersion == Version);
     bool AreEntriesAligned = false;
-    self->_hasCrispObjects = false;
     // A fresh match always lines up with the world, so a second attempt is the most that can be needed: the first
     // only fails when the entries do not follow the world after all (a world rebuilt at the same address).
     for (int Attempt = 0; (Attempt < 2) && !AreEntriesAligned; Attempt++)
@@ -414,7 +403,6 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, AssetManager* 
             self->_componentSetVersion = Version;
             self->_isMatched = true;
         }
-        self->_hasCrispObjects = false;
         UpdateModels(self, world, assets, modelUser, logger, &AreEntriesAligned);
         IsMatchCurrent = false;
     }

@@ -29,6 +29,14 @@
  * depth/normal-edge outlines; bloom and sun shafts (added in HDR); the tonemap with eye adaptation; and last
  * the crisp overlay, which draws OmitPixelation objects at window resolution over the pixelated image.
  *
+ * VISIBILITY. Each frame the camera's passes draw only what is in the camera's view; each shadow cascade draws the
+ * casters in its own box (a caster behind the camera still shadows what is in view), the cube shadow the casters in its
+ * light's reach. Every object has a draw distance (models 600 m, sprites 150 m, decals 60 m, times the config's
+ * draw_distance_scale): beyond it the object is not drawn, and over its last tenth (at least 3 m) it fades out. An
+ * object's opacity (its tint's) fades it the same way. Models and cutout sprites show a fade as a 4x4 ordered dither on
+ * the scene's pixel grid, in every pass, so a fading object's shadow thins with it; the G-buffer draws it solid until
+ * half its fade and not after, so its outline switches off once. Blended and additive sprites fade their alpha instead.
+ *
  * FAILURES. A missing shader or a GPU target that cannot be created disables the feature that needs it, with
  * one log line when it happens; WorldRenderer_GetStatus reports what ran. The only fatal failure is a scene
  * target that cannot be created at all.
@@ -154,6 +162,19 @@ typedef struct WorldRendererStatusStruct
     size_t LightCount;
     /** @brief Stars in the star catalogue (from the environment's StarDensity), whether or not they show now. */
     size_t StarCount;
+    /** @brief Whether the camera's frustum and the cascades' boxes culled (WorldRenderer_SetCullingEnabled). */
+    bool IsCullingEnabled;
+    /** @brief Models and sprites the camera's passes drew. */
+    size_t DrawnModelCount;
+    size_t DrawnSpriteCount;
+    /** @brief Models and sprites not drawn because they lay outside the camera's view (within their draw distance and
+     *  not fully transparent). */
+    size_t OutsideViewCount;
+    /** @brief Models and sprites not drawn because they lay beyond their draw distance or were fully transparent. */
+    size_t FadedOutCount;
+    /** @brief Of the drawn models and sprites, those fading or translucent (dithered; blended and additive sprites
+     *  alpha-faded). */
+    size_t FadingCount;
 } WorldRendererStatus;
 
 
@@ -220,7 +241,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     double deltaSeconds, RenderTexture2D target);
 
 /**
- * @brief Reports what the most recent render did: the scene target tier, each feature's state, object counts.
+ * @brief Reports what the most recent render did: the scene target tier, each feature's state, object counts (what was
+ *        drawn, culled and fading).
  *
  * Before the first render every feature reads as inactive and the counts are 0.
  * @param self The renderer; must not be NULL.
@@ -311,6 +333,25 @@ void WorldRenderer_SetSpriteLightingEnabled(WorldRenderer* self, bool enabled);
  * @returns true if enabled.
  */
 bool WorldRenderer_IsSpriteLightingEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Enables or disables frustum culling: the camera's passes drawing only what is in its view, and each shadow
+ *        cascade only the casters in its box.
+ *
+ * A code-side toggle for A/B-ing it: when disabled every object within its draw distance is drawn (the GPU clips what
+ * lies outside the view), as before culling existed; the image must not change, only the frame time. Draw distances,
+ * fades, opacity and the cube shadow's reach test stay. Default enabled. Applied on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to cull, false to draw everything within its draw distance.
+ */
+void WorldRenderer_SetCullingEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether frustum culling is enabled (see WorldRenderer_SetCullingEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true if enabled.
+ */
+bool WorldRenderer_IsCullingEnabled(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables the bloom pass (a blurred bright-pass of the scene added back in HDR).

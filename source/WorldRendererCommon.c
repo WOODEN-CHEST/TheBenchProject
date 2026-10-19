@@ -34,6 +34,35 @@ float WorldRendererCommon_ConfigSunshaftStrength(const WorldRenderer* self)
     return (self->_config != NULL) ? self->_config->SunshaftStrength : 1.0f;
 }
 
+float WorldRendererCommon_ConfigDrawDistanceScale(const WorldRenderer* self)
+{
+    return (self->_config != NULL) ? self->_config->DrawDistanceScale : 1.0f;
+}
+
+void WorldRendererCommon_PrepareDither(Shader shader, WorldRendererDitherLocations* outLocations)
+{
+    outLocations->_locFade = GetShaderLocation(shader, "ditherFade");
+    outLocations->_locInvert = GetShaderLocation(shader, "ditherInvert");
+    outLocations->_locPixelScale = GetShaderLocation(shader, "ditherPixelScale");
+    WorldRendererCommon_SetDither(shader, outLocations, 0.0f, false);
+    WorldRendererCommon_SetDitherPixelScale(shader, outLocations, (Vector2){ 1.0f, 1.0f });
+}
+
+void WorldRendererCommon_SetDither(Shader shader, const WorldRendererDitherLocations* locations, float fade,
+    bool isInverted)
+{
+    int Inverted = isInverted ? 1 : 0;
+    SetShaderValue(shader, locations->_locFade, &fade, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, locations->_locInvert, &Inverted, SHADER_UNIFORM_INT);
+}
+
+void WorldRendererCommon_SetDitherPixelScale(Shader shader, const WorldRendererDitherLocations* locations,
+    Vector2 pixelScale)
+{
+    float Scale[2] = { pixelScale.x, pixelScale.y };
+    SetShaderValue(shader, locations->_locPixelScale, Scale, SHADER_UNIFORM_VEC2);
+}
+
 /* Light/ambient colours must be linear before they enter the PBR maths; the shader linearizes textured albedo
  * itself. */
 void WorldRendererCommon_ColorToLinear(Color color, float outRGB[3])

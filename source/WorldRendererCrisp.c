@@ -61,7 +61,14 @@ void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* fram
     // Re-upload the lighting (sun/ambient/fog/shadow + re-bind the shadow map) — the crisp pass runs after
     // the bloom/shaft passes, which may have changed GL texture-slot / shader state. applyScreenAo=false: this
     // is a full-res pass, so the low-res AO map (sampled by gl_FragCoord) would mis-align; crisp objects get no AO.
-    WorldRendererLighting_UploadFrame(self, frame, false);
+    // For the same reason the dither's pixel scale is window / scene: a fading crisp object dithers in scene pixels,
+    // on the same grid as everything else.
+    Vector2 DitherPixelScale =
+    {
+        (frame->SceneWidth > 0) ? ((float)frame->WindowWidth / (float)frame->SceneWidth) : 1.0f,
+        (frame->SceneHeight > 0) ? ((float)frame->WindowHeight / (float)frame->SceneHeight) : 1.0f
+    };
+    WorldRendererLighting_UploadFrame(self, frame, false, DitherPixelScale);
     BeginMode3D(frame->RayCamera);
     bool IsLit = (self->_pbr._shader != NULL);
     WorldRendererGeometry_DrawModels(self, IsLit ? &self->_pbr._passShader : NULL, IsLit,

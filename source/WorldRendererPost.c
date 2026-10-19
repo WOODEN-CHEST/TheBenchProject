@@ -204,8 +204,8 @@ void WorldRendererPost_ReleaseTargets(WorldRenderer* self)
     WorldRendererCommon_UnloadTarget(&self->_sunshaft._target, &self->_sunshaft._hasTarget);
 }
 
-/* Reads the scene colour + depth and the G-buffer, using the scene's projection to turn depth back into view
- * positions. Outputs linear HDR into the outline target; the tonemap pass maps it afterwards. */
+/* Reads the scene colour and the G-buffer (its normals, flags and depth), using the scene's projection to turn depth
+ * back into view positions. Outputs linear HDR into the outline target; the tonemap pass maps it afterwards. */
 void WorldRendererPost_RenderOutlines(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     Shader RayShader = GameShader_GetRaylibShader(self->_outline._shader);
@@ -239,7 +239,12 @@ void WorldRendererPost_RenderOutlines(WorldRenderer* self, const WorldRenderFram
     // populates) plus texture0. A manual glActiveTexture bind is NOT in that table, so the batch would leave
     // these samplers on unit 0 = the scene colour texture, making the shader read colour as depth+normal (the
     // sky-noise/ring bug). Call these AFTER BeginShaderMode (its batch flush clears the table), before the draw.
-    SetShaderValueTexture(RayShader, self->_outline._locDepthTexture, self->_scene._target.depth);
+    // The depth is the G-buffer's own, which matches its normals and flags: the G-buffer draws a fading object solid
+    // (until half its fade) where the scene's depth has the dither's holes, and those holes would read as silhouette
+    // steps all over the object. Without a samplable G-buffer depth the scene's is the fallback (fading objects then get
+    // noisy outlines until half their fade).
+    Texture2D Depth = self->_gbuffer._isDepthSamplable ? self->_gbuffer._target.depth : self->_scene._target.depth;
+    SetShaderValueTexture(RayShader, self->_outline._locDepthTexture, Depth);
     SetShaderValueTexture(RayShader, self->_outline._locNormalTexture, self->_gbuffer._target.texture);
 
     // The shader samples by gl_FragCoord (not fragTexCoord), so this straight full-screen copy needs no flip.

@@ -320,12 +320,12 @@ static void ListsDrawableSpritesAndEveryLight(TestRun* run)
         size_t LightCount = 0;
         const WorldRenderLight* Lights = WorldRenderCache_GetLights(&Fixture.Cache, &LightCount);
         TEST_CHECK(run, (LightCount == 1) && (Lights[0].Component == Light) && (Lights[0].Intensity == 0.0f));
-        TEST_CHECK(run, !WorldRenderCache_HasCrispObjects(&Fixture.Cache));
 
         TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOmitsPixelation(Bound, true));
         if (CacheFixture_Sync(run, &Fixture))
         {
-            TEST_CHECK(run, WorldRenderCache_HasCrispObjects(&Fixture.Cache));
+            Sprites = WorldRenderCache_GetSprites(&Fixture.Cache, &SpriteCount);
+            TEST_CHECK(run, (SpriteCount == 1) && Sprites[0].OmitsPixelation);
         }
     }
     CacheFixture_Deconstruct(run, &Fixture);
@@ -355,11 +355,10 @@ static void DisabledAndHiddenObjectsAreNotDrawn(TestRun* run)
         && TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(WorldComponent_GetOwner(&Light->Base), false))
         && CacheFixture_Sync(run, &Fixture))
     {
-        // The hidden model keeps its entry and its resolved model, but is not drawn (nor crisp).
+        // The hidden model keeps its entry, its resolved model and its settings, but is not drawn.
         size_t Count = 0;
         const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
-        TEST_CHECK(run, (Count == 1) && (Models[0].Asset != NULL) && !Models[0].IsDrawn);
-        TEST_CHECK(run, !WorldRenderCache_HasCrispObjects(&Fixture.Cache));
+        TEST_CHECK(run, (Count == 1) && (Models[0].Asset != NULL) && !Models[0].IsDrawn && Models[0].OmitsPixelation);
         WorldRenderCache_GetSprites(&Fixture.Cache, &Count);
         TEST_CHECK(run, Count == 0);
         WorldRenderCache_GetLights(&Fixture.Cache, &Count);
@@ -372,8 +371,7 @@ static void DisabledAndHiddenObjectsAreNotDrawn(TestRun* run)
         if (CacheFixture_Sync(run, &Fixture))
         {
             Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
-            TEST_CHECK(run, (Count == 1) && Models[0].IsDrawn);
-            TEST_CHECK(run, WorldRenderCache_HasCrispObjects(&Fixture.Cache));
+            TEST_CHECK(run, (Count == 1) && Models[0].IsDrawn && Models[0].OmitsPixelation);
             WorldRenderCache_GetSprites(&Fixture.Cache, &Count);
             TEST_CHECK(run, Count == 1);
             WorldRenderCache_GetLights(&Fixture.Cache, &Count);
@@ -464,9 +462,9 @@ static void SpriteEntriesCarryTheirQuadAndSettings(TestRun* run)
             && Entry->IsLit && Entry->CastsShadows && IsNear(Entry->DecalOffset, 0.01f));
 
         Entry = &Sprites[1];
+        // The cutout billboard is drawn crisp; the blended decal above is not.
         TEST_CHECK(run, !Entry->IsDecal && !Entry->IsLit && (Entry->Emission == 4.0f) && Entry->OmitsPixelation);
         TEST_CHECK(run, IsNear(Entry->Shape.Size.x, 1.0f / 32.0f) && (Entry->Shape.Pivot.x == 0.5f));
-        TEST_CHECK(run, WorldRenderCache_HasCrispObjects(&Fixture.Cache)); // the cutout billboard
     }
     CacheFixture_Deconstruct(run, &Fixture);
 }
