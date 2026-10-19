@@ -69,10 +69,26 @@ Current module list:
     (GameAction: named actions bound to keys with modifiers; JSON controls file load/save).
 * GameFrame (GameFrame.md) - Abstract base for a game "scene"/section (menu, level, loading screen), with stepped load/unload, logic lifecycle, and per-target rendering.
 * GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop (polls the input, then updates frames top-down so the top frame gets input first), and composites them to the screen; crashes gracefully on frame errors.
+* NamespacedKey (NamespacedKey.md) - Namespaced keys (`namespace:path`, Minecraft's character set, at most 128 bytes,
+  a default namespace for keys written without one) and the KeyRegistry that interns them to uint32 ids (one per
+  program: main creates it, Services.Keys carries it, every World borrows it), with stable texts and prefix search for
+  autocomplete.
+* Object data (ObjectData.md) - Tags and typed custom data on world objects, and queries over them. Covers:
+  * DataValue - One typed value (tag, bool, int, float, string, key, object, vector3, color, date_time, list,
+    compound) for object data, global variables, selectors, the editor and saves: the storable part of the future
+    scripting VM's values. Deep copy, equality, release, depth (16) and size limits, validation, and its JSON and GHDF
+    forms (source/DataValueJSON.c, source/DataValueGHDF.c, private source/DataValueInternal.h).
+  * DataMap - Key id -> DataValue (a tag is an entry with no value): one object's tags and data, later the global
+    variables. Byte accounting, owner-given limits, JSON (tags and values as two keys) and GHDF.
+  * World data (source/WorldData.c) - The world's data functions (World_SetData and the tag sugar), the object and
+    world limits, the data revision, and the tag index queries use.
+  * WorldQuery - Searches over a world's objects by tags, data comparisons, components, flags, distance and box, ordered
+    by id or distance, with a limit: the engine side of selectors.
 * World data layer (WorldData.md) - The rendering-independent 3D world model: one object type made of components.
   Covers seven modules (plus the private source/WorldInternal.h they share):
   * WorldObject - The one object type: id, name, transform, tint, enabled, visible, mobility (static/movable), a
-    revision, and one slot per component type; created by the World only; validating setters and a property table.
+    revision, its tags and data (a DataMap, with a data revision), and one slot per component type; created by the
+    World only; validating setters and a property table.
   * WorldComponent - The component base (type, owner, revision), the component types, and the registry entry that
     describes each (name, size, table, transform-driver flag, construct/deconstruct/attach/detach/property-set hooks).
     At most one component of each type per object, at most one transform driver.
@@ -87,11 +103,13 @@ Current module list:
     moon (phase from the calendar, position, lit fraction, moonlight), the stars' daily turn and yearly drift, and
     which of the sun and the moon casts the shadows (WorldEnvironment_GetSkyLights).
   * World - Owns the objects and their components, mints the uint64 ids (an id map for lookups), keeps a dense array
-    of components per type for systems to iterate, holds the environment; with an asset manager (World_Construct2) it
-    owns an asset user its components load under; object-set and component-set versions. Saving comes back in T09.
+    of components per type for systems to iterate, holds the environment, borrows the key registry (the keys of its
+    objects' tags and data) and keeps their tag index; with an asset manager (World_Construct2) it owns an asset user
+    its components load under; object-set and component-set versions. Saving comes back in T09.
 * World runtime layer (WorldRuntime.md) - Camera, renderer, services bundle and bootstrap for viewing a world:
   * GameCamera - 3D camera (pos/fov/yaw/pitch/roll; +Y up, +Z forward), converted to a raylib camera at render time.
-  * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, GHDF pool).
+  * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, input, GHDF
+    pool, key registry).
   * WorldRenderer - Renders a World through a GameCamera (PBR lit by the sun and the moon, HDR, sky with the moon,
     stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, AO, outlines, bloom, sun
     shafts, crisp overlay);
@@ -113,11 +131,12 @@ Current module list:
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
   keys by mode, migration hook) and write (defaults left out by default), and get/set by key. The one module allowed to
   write `_` fields by offset. Clients: WorldEnvironment, GameClock, the world objects and their components; new data
-  types get a table, not hand-written codecs.
+  types get a table, not hand-written codecs. A DataMap property (tags and typed data) is written as two JSON keys.
 * GameCalendar (GameCalendar.md) - The game's calendar: pure functions over day numbers (days since 0001-01-01, an
   int64) and dates of the proleptic Gregorian calendar, years 1 to 9999: conversions, weekday (Monday = 0), day of the
-  year, leap years, month lengths, validation, English names and the "yyyy-mm-dd" text. Every calendar rule lives
-  here, so a custom calendar would replace only this module.
+  year, leap years, month lengths, validation, English names, the "yyyy-mm-dd" text, and date-times (int64
+  microseconds, "yyyy-mm-ddThh:mm:ss[.ffffff]"). Every calendar rule lives here, so a custom calendar would replace
+  only this module.
 * GameClock (GameClock.md) - The game's one clock: a day number plus double seconds of the day (compensated
   summation, no drift), a time scale (default 72, a 20-minute day), pause, a largest step per tick, fast-forwards and
   validated jumps, reports of what each move passed (game seconds, midnights, hours) for the weather and the scheduler,

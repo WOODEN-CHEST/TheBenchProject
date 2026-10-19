@@ -14,7 +14,12 @@
  * calendar covers the years 1 to 9999, day numbers GAME_CALENDAR_FIRST_DAY_NUMBER to GAME_CALENDAR_LAST_DAY_NUMBER.
  * These functions convert between day numbers and dates (year, month, day of the month), give the weekday (Monday =
  * 0), the day of the year, leap years and month lengths, validate dates, name months and weekdays, and read and write
- * the date text "yyyy-mm-dd" that files use. The conversions are Howard Hinnant's days-from-civil and
+ * the date text "yyyy-mm-dd" that files use.
+ *
+ * A **date-time** (a moment of the calendar, for stored values: object data, saves, script values) is an int64 count of
+ * microseconds since 0001-01-01T00:00:00, from 0 to GAME_CALENDAR_LAST_DATE_TIME; its day number is the count divided
+ * by GAME_CALENDAR_MICROSECONDS_PER_DAY. Files write it as "yyyy-mm-ddThh:mm:ss", with up to six digits of fractional
+ * seconds when it has any. The conversions are Howard Hinnant's days-from-civil and
  * civil-from-days algorithms (public domain): constant time, no loops over years.
  *
  * Every calendar rule lives in this module. A custom calendar (fantasy months, other month or year lengths, perhaps
@@ -41,6 +46,15 @@
 #define GAME_CALENDAR_WEEKDAY_COUNT 7
 /** @brief The bytes of a date's text, "yyyy-mm-dd", without a terminator. */
 #define GAME_CALENDAR_DATE_TEXT_LENGTH ((size_t)10)
+/** @brief Microseconds in a second: the unit of a date-time. */
+#define GAME_CALENDAR_MICROSECONDS_PER_SECOND ((int64_t)1000000)
+/** @brief Microseconds in a day. */
+#define GAME_CALENDAR_MICROSECONDS_PER_DAY ((int64_t)86400000000)
+/** @brief The last date-time of the calendar: the last microsecond of 9999-12-31. */
+#define GAME_CALENDAR_LAST_DATE_TIME \
+    (((GAME_CALENDAR_LAST_DAY_NUMBER + 1) * GAME_CALENDAR_MICROSECONDS_PER_DAY) - 1)
+/** @brief The most bytes of a date-time's text, "yyyy-mm-ddThh:mm:ss.ffffff", without a terminator. */
+#define GAME_CALENDAR_DATE_TIME_TEXT_MAX_LENGTH ((size_t)26)
 
 
 // Types.
@@ -190,3 +204,35 @@ Error GameCalendar_FormatDate(int64_t dayNumber, GenericBuffer* destination);
  *          0000-01-01).
  */
 bool GameCalendar_TryParseDate(const unsigned char* text, size_t byteCount, int64_t* outDayNumber);
+
+/**
+ * @brief Reports whether an int64 is a date-time of the calendar (0 to GAME_CALENDAR_LAST_DATE_TIME).
+ * @param dateTime The microseconds since 0001-01-01T00:00:00.
+ * @returns true if it lies inside the calendar.
+ */
+bool GameCalendar_IsDateTimeValid(int64_t dateTime);
+
+/**
+ * @brief Appends a date-time's text, "yyyy-mm-ddThh:mm:ss" (e.g. "2026-10-18T09:30:00"), to a UTF-8 string buffer,
+ *        followed by "." and the fractional seconds (up to six digits, trailing zeros left out) when there are any.
+ *
+ * The buffer is one growing string: a trailing NUL terminator is dropped before appending, and the result is
+ * NUL-terminated.
+ * @param dateTime The date-time; must be valid (see GameCalendar_IsDateTimeValid).
+ * @param destination The byte buffer to append to; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p destination is NULL; ErrorCode_ArgumentOutOfRange if
+ *          @p dateTime is outside the calendar.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error GameCalendar_FormatDateTime(int64_t dateTime, GenericBuffer* destination);
+
+/**
+ * @brief Reads a date-time text: exactly "yyyy-mm-ddThh:mm:ss" (an uppercase T, hours 00 to 23, minutes and seconds
+ *        00 to 59), optionally followed by "." and one to six digits of fractional seconds.
+ * @param text The text; it need not be NUL-terminated. May be NULL only when @p byteCount is 0.
+ * @param byteCount The number of bytes in @p text.
+ * @param outDateTime [out] Receives the microseconds since 0001-01-01T00:00:00; unchanged on failure. Must not be NULL.
+ * @returns true on success; false for any other text, a date that does not exist or a time out of range.
+ */
+bool GameCalendar_TryParseDateTime(const unsigned char* text, size_t byteCount, int64_t* outDateTime);

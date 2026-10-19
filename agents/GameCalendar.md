@@ -36,6 +36,21 @@ through dates.
   two dashes, nothing before or after, and the date must exist. This is the form files use (the `Date` property type
   in JSON).
 
+## Date-times
+
+A **date-time** is one moment of the calendar, for stored values (object data's `date_time`, [ObjectData.md](ObjectData.md);
+later saves and script values): an `int64_t` count of **microseconds since 0001-01-01T00:00:00**, from 0 to
+`GAME_CALENDAR_LAST_DATE_TIME` (the last microsecond of 9999-12-31). Its day number is the count divided by
+`GAME_CALENDAR_MICROSECONDS_PER_DAY`. Integers keep it exact (equality, ordering, adding durations); the game clock's
+day plus double seconds converts to it by rounding to the microsecond (added with T24).
+
+- `GameCalendar_IsDateTimeValid(dateTime)`.
+- `GameCalendar_FormatDateTime(dateTime, buffer)` appends `"yyyy-mm-ddThh:mm:ss"` (e.g. `"2026-10-18T09:30:00"`), and
+  `"."` with up to six digits of fractional seconds when there are any, trailing zeros left out (`.25`). One growing
+  string, formatted on the stack.
+- `GameCalendar_TryParseDateTime(text, byteCount, &dateTime)` reads exactly that form (an uppercase `T`, hours 00 to 23,
+  minutes and seconds 00 to 59, one to six fractional digits after a `.`), and nothing else: no time zone, no bare date.
+
 ## Custom calendars
 
 Fantasy calendars (other months, other month or year lengths) are a possible later option, perhaps as a `calendar`

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "PropertyDescriptorInternal.h"
 #include "AssetManager.h"
+#include "DataMap.h"
 #include "GameCalendar.h"
 #include "wr/WRMath.h"
 #include "wr/WRMemory.h"
@@ -109,6 +110,8 @@ static size_t GetStorageSize(PropertyType type)
         case PropertyType_String:
         case PropertyType_AssetName:
             return sizeof(unsigned char*);
+        case PropertyType_DataMap:
+            return sizeof(DataMap*);
         case PropertyType_Enum:
             return 0U;
     }
@@ -128,12 +131,24 @@ static bool IsValidType(PropertyType type)
     return (type == PropertyType_Enum) || (GetStorageSize(type) != 0U);
 }
 
-/* Reads the pointer of a string field: the instance's own (owned) string. */
-static unsigned char* ReadOwnedString(const PropertyDescriptor* descriptor, const void* instance)
+/* Reads the pointer of an owned field (a string or a map): the instance's own. */
+static void* ReadOwnedPointer(const PropertyDescriptor* descriptor, const void* instance)
 {
-    unsigned char* Text = NULL;
-    Memory_Copy((const unsigned char*)instance + descriptor->Offset, &Text, sizeof(Text));
-    return Text;
+    void* Owned = NULL;
+    Memory_Copy((const unsigned char*)instance + descriptor->Offset, &Owned, sizeof(Owned));
+    return Owned;
+}
+
+/* The pointer an owned type's value holds (borrowed). */
+static const void* GetOwnedData(PropertyType type, const PropertyData* data)
+{
+    return (type == PropertyType_DataMap) ? (const void*)data->DataMapValue : (const void*)data->StringValue;
+}
+
+/* An owned copy of an owned type's value; NULL for NULL (and for an empty map). */
+static void* CloneOwned(PropertyType type, const void* value)
+{
+    return (type == PropertyType_DataMap) ? (void*)DataMap_Clone(value) : (void*)CloneString(value);
 }
 
 static int32_t ReadEnumStorage(const unsigned char* field, size_t size)
@@ -332,6 +347,23 @@ static Error CheckEnum(const PropertyTable* table, const PropertyDescriptor* des
 }
 
 
+/* "hold at most 256 entries counting at most 65536 bytes" */
+static Error CheckDataMap(const PropertyTable* table, const PropertyDescriptor* descriptor, const DataMap* map)
+{
+    DataMapLimits Limits = { .MaxEntryCount = descriptor->Rules.MaxCount, .MaxByteSize = descriptor->Rules.MaxLength };
+    Error LimitResult = DataMap_CheckLimits(map, &Limits);
+    if (LimitResult.Code == ErrorCode_Success)
+    {
+        return LimitResult;
+    }
+    Error_Deconstruct(&LimitResult);
+    char Text[PROPERTY_RULE_TEXT_SIZE];
+    snprintf(Text, sizeof(Text), "hold at most %" PRIu64 " entries counting at most %" PRIu64 " bytes",
+        (uint64_t)descriptor->Rules.MaxCount, (uint64_t)descriptor->Rules.MaxLength);
+    return MakeRuleError(table, descriptor, Text);
+}
+
+
 // Static functions: the table check.
 static Error TableError(const PropertyTable* table, const PropertyDescriptor* descriptor, const char* problem)
 {
@@ -483,17 +515,45 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
     }
 
     bool IsString = PropertyInternal_IsStringType(descriptor->Type);
+    bool IsMap = descriptor->Type == PropertyType_DataMap;
     if (IsString && (Rules->MaxLength == 0U))
     {
         return TableError(table, descriptor, "a string needs a MaxLength");
     }
-    if (!IsString && ((Rules->MaxLength != 0U) || Rules->IsNullAllowed))
+    if (IsMap && ((Rules->MaxLength == 0U) || (Rules->MaxCount == 0U)))
     {
-        return TableError(table, descriptor, "only strings take MaxLength and IsNullAllowed");
+        return TableError(table, descriptor, "a data map needs a MaxCount and a MaxLength (bytes)");
+    }
+    if ((!IsString && !IsMap && (Rules->MaxLength != 0U)) || (!IsString && Rules->IsNullAllowed))
+    {
+        return TableError(table, descriptor, "only strings take MaxLength and IsNullAllowed (and data maps MaxLength)");
+    }
+    if (!IsMap && (Rules->MaxCount != 0U))
+    {
+        return TableError(table, descriptor, "only data maps take a MaxCount");
     }
     if (IsString && Rules->IsNullAllowed && (descriptor->Default.StringValue != NULL))
     {
         return TableError(table, descriptor, "a string that may be null must default to null");
+    }
+    if (IsMap && (descriptor->Default.DataMapValue != NULL))
+    {
+        return TableError(table, descriptor, "a data map must default to empty (NULL)");
+    }
+    return Error_CreateSuccess();
+}
+
+/* A TagsKey exactly on data maps: snake_case and not the descriptor's own key. */
+static Error CheckTagsKey(const PropertyTable* table, const PropertyDescriptor* descriptor)
+{
+    if (descriptor->Type != PropertyType_DataMap)
+    {
+        return (descriptor->TagsKey == NULL) ? Error_CreateSuccess()
+            : TableError(table, descriptor, "only data maps take a TagsKey");
+    }
+    if (!IsSnakeCase(descriptor->TagsKey) || AreStringsEqual(descriptor->TagsKey, descriptor->Key))
+    {
+        return TableError(table, descriptor, "a data map needs a snake_case TagsKey other than its key");
     }
     return Error_CreateSuccess();
 }
@@ -535,11 +595,20 @@ static Error CheckEnumTable(const PropertyTable* table, const PropertyDescriptor
     return Error_CreateSuccess();
 }
 
+/* Whether two descriptors use one JSON key: their keys, or a data map's TagsKey. */
+static bool DoJSONKeysCollide(const PropertyDescriptor* first, const PropertyDescriptor* second)
+{
+    bool IsFirstTagsKeyUsed = (first->TagsKey != NULL)
+        && (AreStringsEqual(first->TagsKey, second->Key) || AreStringsEqual(first->TagsKey, second->TagsKey));
+    return AreStringsEqual(first->Key, second->Key) || IsFirstTagsKeyUsed
+        || ((second->TagsKey != NULL) && AreStringsEqual(second->TagsKey, first->Key));
+}
+
 /* Keys and wire ids unique, fields not overlapping. */
 static Error CheckDescriptorPair(const PropertyTable* table, const PropertyDescriptor* first,
     const PropertyDescriptor* second)
 {
-    if (AreStringsEqual(first->Key, second->Key))
+    if (DoJSONKeysCollide(first, second))
     {
         return TableError(table, second, "the key is used twice");
     }
@@ -559,6 +628,11 @@ static Error CheckDescriptorPair(const PropertyTable* table, const PropertyDescr
 bool PropertyInternal_IsStringType(PropertyType type)
 {
     return (type == PropertyType_String) || (type == PropertyType_AssetName);
+}
+
+bool PropertyInternal_IsOwnedType(PropertyType type)
+{
+    return PropertyInternal_IsStringType(type) || (type == PropertyType_DataMap);
 }
 
 PropertyData PropertyInternal_ReadField(const PropertyDescriptor* descriptor, const void* instance)
@@ -586,14 +660,20 @@ void PropertyInternal_WriteField(const PropertyDescriptor* descriptor, void* ins
     Memory_Copy(data, Field, descriptor->Size);
 }
 
-void PropertyInternal_AdoptString(const PropertyDescriptor* descriptor, void* instance, unsigned char* text)
+void PropertyInternal_AdoptOwned(const PropertyDescriptor* descriptor, void* instance, void* owned)
 {
-    unsigned char* Previous = ReadOwnedString(descriptor, instance);
-    Memory_Copy(&text, (unsigned char*)instance + descriptor->Offset, sizeof(text));
-    if ((Previous != NULL) && (Previous != text))
+    void* Previous = ReadOwnedPointer(descriptor, instance);
+    Memory_Copy(&owned, (unsigned char*)instance + descriptor->Offset, sizeof(owned));
+    if ((Previous == NULL) || (Previous == owned))
     {
-        Memory_Free(Previous);
+        return;
     }
+    if (descriptor->Type == PropertyType_DataMap)
+    {
+        DataMap_Destroy(Previous);
+        return;
+    }
+    Memory_Free(Previous);
 }
 
 bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, const PropertyData* b)
@@ -637,6 +717,8 @@ bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, con
             return a->ObjectIdValue == b->ObjectIdValue;
         case PropertyType_Date:
             return a->DateValue == b->DateValue;
+        case PropertyType_DataMap:
+            return DataMap_Equals(a->DataMapValue, b->DataMapValue);
     }
     return false;
 }
@@ -732,6 +814,8 @@ Error PropertyInternal_CheckData(const PropertyTable* table, const PropertyDescr
             return CheckString(table, descriptor, data->StringValue);
         case PropertyType_Enum:
             return CheckEnum(table, descriptor, data->EnumValue);
+        case PropertyType_DataMap:
+            return CheckDataMap(table, descriptor, data->DataMapValue);
     }
     return MakeRuleError(table, descriptor, "have a known property type");
 }
@@ -771,9 +855,10 @@ void PropertyScratch_Begin(PropertyScratch* self, const PropertyTable* table, co
         const PropertyDescriptor* Descriptor = &table->Descriptors[Index];
         PropertyData Data = PropertyInternal_HasFlags(Descriptor, PropertyFlags_Persistent) ? Descriptor->Default
             : PropertyInternal_ReadField(Descriptor, instance);
-        if (PropertyInternal_IsStringType(Descriptor->Type))
+        if (PropertyInternal_IsOwnedType(Descriptor->Type))
         {
-            PropertyInternal_AdoptString(Descriptor, self->_instance, CloneString(Data.StringValue));
+            PropertyInternal_AdoptOwned(Descriptor, self->_instance,
+                CloneOwned(Descriptor->Type, GetOwnedData(Descriptor->Type, &Data)));
             continue;
         }
         PropertyInternal_WriteField(Descriptor, self->_instance, &Data);
@@ -803,9 +888,9 @@ Error PropertyScratch_Commit(PropertyScratch* self, const PropertyTable* table, 
     for (size_t Index = 0; Index < table->DescriptorCount; Index++)
     {
         const PropertyDescriptor* Descriptor = &table->Descriptors[Index];
-        if (PropertyInternal_IsStringType(Descriptor->Type))
+        if (PropertyInternal_IsOwnedType(Descriptor->Type))
         {
-            PropertyInternal_AdoptString(Descriptor, instance, ReadOwnedString(Descriptor, self->_instance));
+            PropertyInternal_AdoptOwned(Descriptor, instance, ReadOwnedPointer(Descriptor, self->_instance));
             continue;
         }
         PropertyData Data = PropertyInternal_ReadField(Descriptor, self->_instance);
@@ -870,6 +955,8 @@ const unsigned char* PropertyType_GetName(PropertyType type)
             return u8"object_id";
         case PropertyType_Date:
             return u8"date";
+        case PropertyType_DataMap:
+            return u8"data_map";
     }
     return u8"unknown";
 }
@@ -893,6 +980,10 @@ Error PropertyTable_Check(const PropertyTable* table)
         if (Result.Code == ErrorCode_Success)
         {
             Result = CheckDescriptorRules(table, Descriptor);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = CheckTagsKey(table, Descriptor);
         }
         if (Result.Code == ErrorCode_Success)
         {
@@ -946,9 +1037,10 @@ Error Properties_Construct(const PropertyTable* table, void* instance)
     for (size_t Index = 0; Index < table->DescriptorCount; Index++)
     {
         const PropertyDescriptor* Descriptor = &table->Descriptors[Index];
-        if (PropertyInternal_IsStringType(Descriptor->Type))
+        if (PropertyInternal_IsOwnedType(Descriptor->Type))
         {
-            PropertyInternal_AdoptString(Descriptor, instance, CloneString(Descriptor->Default.StringValue));
+            PropertyInternal_AdoptOwned(Descriptor, instance,
+                CloneOwned(Descriptor->Type, GetOwnedData(Descriptor->Type, &Descriptor->Default)));
             continue;
         }
         PropertyInternal_WriteField(Descriptor, instance, &Descriptor->Default);
@@ -965,9 +1057,9 @@ void Properties_Deconstruct(const PropertyTable* table, void* instance)
     for (size_t Index = 0; Index < table->DescriptorCount; Index++)
     {
         const PropertyDescriptor* Descriptor = &table->Descriptors[Index];
-        if (PropertyInternal_IsStringType(Descriptor->Type))
+        if (PropertyInternal_IsOwnedType(Descriptor->Type))
         {
-            PropertyInternal_AdoptString(Descriptor, instance, NULL);
+            PropertyInternal_AdoptOwned(Descriptor, instance, NULL);
         }
     }
 }
@@ -1022,9 +1114,10 @@ Error Properties_CopyTo(const PropertyTable* table, const void* source, void* de
     for (size_t Index = 0; Index < table->DescriptorCount; Index++)
     {
         const PropertyDescriptor* Descriptor = &table->Descriptors[Index];
-        if (PropertyInternal_IsStringType(Descriptor->Type))
+        if (PropertyInternal_IsOwnedType(Descriptor->Type))
         {
-            PropertyInternal_AdoptString(Descriptor, destination, CloneString(ReadOwnedString(Descriptor, source)));
+            PropertyInternal_AdoptOwned(Descriptor, destination,
+                CloneOwned(Descriptor->Type, ReadOwnedPointer(Descriptor, source)));
             continue;
         }
         PropertyData Data = PropertyInternal_ReadField(Descriptor, source);
@@ -1099,9 +1192,10 @@ Error Properties_Set(const PropertyTable* table, void* instance, const unsigned 
         return CheckResult;
     }
 
-    if (PropertyInternal_IsStringType(Descriptor->Type))
+    if (PropertyInternal_IsOwnedType(Descriptor->Type))
     {
-        PropertyInternal_AdoptString(Descriptor, instance, CloneString(value->Data.StringValue));
+        PropertyInternal_AdoptOwned(Descriptor, instance, CloneOwned(Descriptor->Type,
+            GetOwnedData(Descriptor->Type, &value->Data)));
     }
     else
     {

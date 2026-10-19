@@ -935,7 +935,7 @@ static Error AddPointLight(World* world, const unsigned char* name, Vector3 posi
  * gets the asset manager so it loads its sprites' animations itself. */
 static Error BuildTestWorld(World* world, Services* services)
 {
-    Error ConstructResult = World_Construct2(world, services->Assets, services->Logger);
+    Error ConstructResult = World_Construct2(world, services->Keys, services->Assets, services->Logger);
     if (ConstructResult.Code != ErrorCode_Success)
     {
         return ConstructResult;

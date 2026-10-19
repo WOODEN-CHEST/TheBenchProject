@@ -1,5 +1,6 @@
 #include "TestSuites.h"
 #include "TestAssets.h"
+#include "TestWorld.h"
 #include "WorldRenderCache.h"
 #include "World.h"
 #include "WorldObject.h"
@@ -19,6 +20,7 @@ typedef struct CacheFixtureStruct
     World World;
     WorldRenderCache Cache;
     AssetUserID ModelUser;
+    KeyRegistry Keys;
     bool IsWorldConstructed;
 } CacheFixture;
 
@@ -32,7 +34,7 @@ static bool CacheFixture_Construct(TestRun* run, CacheFixture* self)
         || !TestAssets_AddModel(run, &self->Assets, "box", UnitCube, &self->BoxCounters)
         || !TestAssets_AddSpriteAnimation(run, &self->Assets, "walk", NULL)
         || !TEST_CHECK_SUCCESS(run, AssetManager_GetNewUserID(self->Assets.Manager, &self->ModelUser))
-        || !TEST_CHECK_SUCCESS(run, World_Construct2(&self->World, self->Assets.Manager, NULL)))
+        || !TestWorld_Construct(run, &self->World, &self->Keys, self->Assets.Manager, NULL))
     {
         return false;
     }
@@ -46,7 +48,7 @@ static void CacheFixture_Deconstruct(TestRun* run, CacheFixture* self)
     if (self->IsWorldConstructed)
     {
         WorldRenderCache_Deconstruct(&self->Cache);
-        TEST_CHECK_SUCCESS(run, World_Deconstruct(&self->World));
+        TestWorld_Deconstruct(run, &self->World, &self->Keys);
     }
     TestAssetFixture_Deconstruct(run, &self->Assets);
 }
@@ -258,7 +260,7 @@ static void AnotherWorldIsResolvedFromScratch(TestRun* run)
 
     // A second world whose first object has the same id (1) and revisions, but another model.
     World Other;
-    if (TEST_CHECK_SUCCESS(run, World_Construct2(&Other, Fixture.Assets.Manager, NULL)))
+    if (TEST_CHECK_SUCCESS(run, World_Construct2(&Other, &Fixture.Keys, Fixture.Assets.Manager, NULL)))
     {
         if ((AddModel(run, &Other, "crate", Origin, One) != NULL)
             && TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Other, Fixture.Assets.Manager,

@@ -12,8 +12,9 @@ checker and autocomplete, `handoff/2026-10_scripting_language/PROPOSAL.md` secti
 (T09) all read the same tables. Decided as architecture A1 / G1 (a), built in T04.
 
 **Clients:** `WorldEnvironment` ([WorldData.md](WorldData.md), "Environment"), `GameClock` ([GameClock.md](GameClock.md),
-T23), and since T05 the world objects (`world_object`) and their components (`model_component`, `sprite_component`,
-`light_component`; [WorldData.md](WorldData.md), "Property tables"). T16 adds the weather.
+T23), and since T05 the world objects (`world_object`, with T24's `data` row for tags and custom data) and their
+components (`model_component`, `sprite_component`, `light_component`; [WorldData.md](WorldData.md), "Property
+tables"). T16 adds the weather.
 
 ## Declaring a table
 
@@ -82,6 +83,7 @@ default passes its own rules**.
 | `Enum` | integer of 1, 2 (unsigned) or 4 bytes | the entry's name, e.g. `"near"` | EncodedInteger (the value) |
 | `ObjectId` | `uint64_t`, 0 = none | like UInt64 | UInt64 |
 | `Date` | `int64_t` day number ([GameCalendar.md](GameCalendar.md)), inside the calendar (years 1 to 9999) | `"yyyy-mm-dd"` only, e.g. `"2026-10-18"` | EncodedInteger (the day number; three bytes for this era) |
+| `DataMap` | owned `DataMap*` ([ObjectData.md](ObjectData.md)), NULL while empty (its only default) | two keys: the tags under the descriptor's `TagsKey` (`["town:lamp"]`), the values under its `Key` (`{"town:visits": 3}`) | Compound array of entry compounds |
 
 JSON readers go through `GameJSON` ([GameJSON.md](GameJSON.md)), so they accept every form asset definitions accept
 (colors as arrays or `{r,g,b,a}`, vectors as `{x,y,z}`, numbers as numeric strings); `Vector2` and `Vector3` arrays
@@ -94,7 +96,9 @@ doubles in double precision); `PROPERTY_RULES_HALF_OPEN(min, max)` is [min, max)
 (seconds of a day). `MaxLength` and `IsNullAllowed` for strings. Floats and doubles are always required finite.
 `UInt64`, `ObjectId`, `Bool` and `Color` accept every value; a `Date` takes no bounds, its type's rule is the
 calendar's range. A JSON date must be the exact text "yyyy-mm-dd" of an existing day; a bare day number is refused, so
-files stay readable.
+files stay readable. A `DataMap` takes `PROPERTY_RULES_DATA_MAP(maxCount, maxBytes)` (`Rules.MaxCount` entries and
+`Rules.MaxLength` bytes, both required) and a `TagsKey` (snake_case, unique among the table's keys; only data maps take
+one); its default must be NULL (empty).
 
 Flags: `Persistent` (written and read by JSON and GHDF), `Editable` (inspector), `ReadOnly` (visible, refused by
 `Properties_Set`; reads from files still fill it), `Script`. `PROPERTY_FLAGS_SETTING` = Persistent | Editable | Script.
@@ -134,6 +138,11 @@ A property without `Persistent` is runtime state the table still copies, compare
   - **Migration**: when `options.DataVersion` is older than the table's `Version`, the table's `Migrate(fromVersion,
     compound, options.Pool)` runs first and rewrites the compound in place (rename keys, convert values). No table
     has one yet; raise `Version` together with adding the first.
+  - **Data maps** are read from their two keys (both count as known keys) with `options.Keys`, the key registry their
+    keys are interned in (required when the data holds anything: the read fails without it), and
+    `options.DefaultNamespace` for keys written without one. Their errors name where in the data the problem is,
+    prefixed with the table: `world_object: data.town:list[1]: ...`. All or nothing covers the registry too: a read
+    that fails, for any reason, gives back the keys it interned (`KeyRegistry_TruncateTo`).
 - **GHDF.** `Properties_WriteGHDF` / `Properties_ReadGHDF`: the same as JSON with wire ids as entry ids. Unknown and
   retired ids are skipped (forward compatibility); a known id with the wrong type, a wrong array length or a broken
   rule fails with `Deserialize`. There is no GHDF migration slot yet (a `// TODO:` in `PropertyDescriptorGHDF.c`).
@@ -157,10 +166,11 @@ that**; everything else respects the `_` convention and goes through the type's 
 `GetStorageSize`, `PropertyInternal_AreDataEqual`, `PropertyInternal_CheckData` and `PropertyType_GetName`
 (`PropertyDescriptor.c`), `CreateValue` and `ParseValue` (`PropertyDescriptorJSON.c`), `PutValue` and `ParseEntry`
 (`PropertyDescriptorGHDF.c`). Also decide whether it takes bounds (`IsBoundedType`, and `IsBoundValid` for their
-range) and whether it owns memory (`PropertyInternal_IsStringType` today), document it in the header's type table and
-here, and test it in `tests/PropertyDescriptorTests.c` (the test record has one field of every type). `Double` and
-`Date` were added this way in T23, `AngleVector3` (an object's rotation) in T05. Planned: tag sets and the `DataMap` of
-namespaced keys (T24).
+range) and whether it owns memory (`PropertyInternal_IsOwnedType`: the strings and `DataMap`; an owned field is freed,
+cloned and handed over through `PropertyInternal_AdoptOwned` and `CloneOwned`), document it in the header's type table
+and here, and test it in `tests/PropertyDescriptorTests.c` (the test record has one field of every type but
+`DataMap`, which has its own record: it needs a key registry). `Double` and `Date` were added this way in T23,
+`AngleVector3` (an object's rotation) in T05, `DataMap` (tags and typed data) in T24.
 
 ## Known limits
 
@@ -168,6 +178,6 @@ namespaced keys (T24).
   written in a stable but not table order, and adding a key can reorder others. Diff-friendly files in table order
   need an insertion-ordered compound (or a sorted-keys serialize flag) in WRFramework.
 - No cross-field rules (each property is checked on its own) and no bounds on `UInt64`.
-- Tables are flat: no nested compounds or arrays yet, so no depth limit is needed; any later nested type needs one
-  (AGENTS.md rule 5).
+- Tables are flat: no nested property tables. The one nested value, a `DataMap`, limits its own depth (16 levels, its
+  codec; [ObjectData.md](ObjectData.md)); any later nested type needs a limit too (AGENTS.md rule 5).
 - Not thread-safe (tables are immutable, instances are plain structs).

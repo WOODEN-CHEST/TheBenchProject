@@ -28,6 +28,19 @@ void TextureTests_Run(TestRun* run);
 /** @brief Point-light reach culling (WorldLightCullingTests.c). */
 void WorldLightCullingTests_Run(TestRun* run);
 
+/** @brief Namespaced keys: the key characters, the length limit, the default namespace, interning, stable texts and
+ *  prefix search (NamespacedKeyTests.c). */
+void NamespacedKeyTests_Run(TestRun* run);
+
+/** @brief Data values: equality, deep copies, homogeneous lists, the depth and size limits, compound names, validation,
+ *  byte sizes, and the JSON and GHDF forms with hostile input (DataValueTests.c). */
+void DataValueTests_Run(TestRun* run);
+
+/** @brief Object tags and data: the data functions, tags, the data revision, the object and world limits, queries (each
+ *  filter, the order, a brute-force comparison on a seeded random world), the tag index, and saving through the object
+ *  table with hostile input (ObjectDataTests.c). */
+void ObjectDataTests_Run(TestRun* run);
+
 /** @brief The world's objects and components: ids, the per-type arrays, revisions, the sprite binding under the
  *  world's asset user, flags, and the one-transform-driver rule with test-only component types (WorldTests.c). */
 void WorldTests_Run(TestRun* run);

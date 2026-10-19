@@ -188,6 +188,56 @@ static void DateTextReadsAndWrites(TestRun* run)
 }
 
 
+/* Formats @p dateTime into a fresh buffer and compares the text. */
+static void CheckDateTimeText(TestRun* run, int64_t dateTime, const char* expected)
+{
+    GenericBuffer Text;
+    GenericBuffer_AllocateVariable(&Text, 0U, sizeof(unsigned char));
+    if (TEST_CHECK_SUCCESS(run, GameCalendar_FormatDateTime(dateTime, &Text)))
+    {
+        TEST_CHECK(run, strcmp((const char*)Text._data, expected) == 0);
+        int64_t ReadBack = -1;
+        TEST_CHECK(run, GameCalendar_TryParseDateTime(Text._data, strlen(expected), &ReadBack) && (ReadBack == dateTime));
+    }
+    Memory_Free(Text._data);
+}
+
+static void DateTimeTextReadsAndWrites(TestRun* run)
+{
+    const int64_t Second = GAME_CALENDAR_MICROSECONDS_PER_SECOND;
+    const int64_t Morning = (DAY_2026_10_18 * GAME_CALENDAR_MICROSECONDS_PER_DAY) + (((9 * 60) + 30) * 60 * Second);
+    CheckDateTimeText(run, Morning, "2026-10-18T09:30:00");
+    CheckDateTimeText(run, Morning + (Second / 2), "2026-10-18T09:30:00.5");
+    CheckDateTimeText(run, Morning + 1, "2026-10-18T09:30:00.000001");
+    CheckDateTimeText(run, 0, "0001-01-01T00:00:00");
+    CheckDateTimeText(run, GAME_CALENDAR_LAST_DATE_TIME, "9999-12-31T23:59:59.999999");
+
+    int64_t DateTime = -1;
+    TEST_CHECK(run, GameCalendar_TryParseDateTime((const unsigned char*)"2026-10-18T09:30:00.25", 22U, &DateTime)
+        && (DateTime == (Morning + (Second / 4))));
+    const char* const Rejected[] =
+    {
+        "2026-10-18", "2026-10-18 09:30:00", "2026-10-18t09:30:00", "2026-10-18T24:00:00", "2026-10-18T09:60:00",
+        "2026-10-18T09:30:60", "2026-10-18T09:30:00.", "2026-10-18T09:30:00.1234567", "2026-02-29T09:30:00",
+        "2026-10-18T9:30:00", "2026-10-18T09:30:00Z", "2026-10-18T09:30",
+    };
+    for (size_t Index = 0; Index < (sizeof(Rejected) / sizeof(Rejected[0])); Index++)
+    {
+        DateTime = 77;
+        TEST_CHECK(run, !GameCalendar_TryParseDateTime((const unsigned char*)Rejected[Index], strlen(Rejected[Index]),
+            &DateTime) && (DateTime == 77));
+    }
+
+    TEST_CHECK(run, GameCalendar_IsDateTimeValid(0) && GameCalendar_IsDateTimeValid(GAME_CALENDAR_LAST_DATE_TIME));
+    TEST_CHECK(run, !GameCalendar_IsDateTimeValid(-1) && !GameCalendar_IsDateTimeValid(GAME_CALENDAR_LAST_DATE_TIME + 1));
+    GenericBuffer Text;
+    GenericBuffer_AllocateVariable(&Text, 0U, sizeof(unsigned char));
+    TEST_CHECK_ERROR(run, GameCalendar_FormatDateTime(-1, &Text), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, GameCalendar_FormatDateTime(0, NULL), ErrorCode_IllegalArgument);
+    Memory_Free(Text._data);
+}
+
+
 // Public functions.
 void GameCalendarTests_Run(TestRun* run)
 {
@@ -199,6 +249,7 @@ void GameCalendarTests_Run(TestRun* run)
         { "invalid_dates_are_rejected", InvalidDatesAreRejected },
         { "names_are_english", NamesAreEnglish },
         { "date_text_reads_and_writes", DateTextReadsAndWrites },
+        { "date_time_text_reads_and_writes", DateTimeTextReadsAndWrites },
     };
     TestRun_RunSuite(run, "GameCalendar", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

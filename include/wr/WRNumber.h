@@ -334,7 +334,8 @@ Error Number_UInt64ToString(uint64_t value, int32_t base, bool includePrefix, Ge
  * digit is required; grouping separators, surrounding whitespace, and trailing characters are not
  * allowed. The accepted separator character is constrained by @p separator. Parsing is performed
  * in double precision and then narrowed to float; finite magnitudes exceeding the float range are
- * rejected as overflow.
+ * rejected as overflow, and magnitudes too small for a float read as the nearest float (a
+ * subnormal value, or zero).
  * @param str Null-terminated source string. Must not be NULL (a NULL @p str surfaces as an invalid
  *        decimal string error).
  * @param value [out] Receives the parsed float on success; unchanged on failure. Must not be NULL.
@@ -374,7 +375,8 @@ Error Number_FloatToString(float value,
  * Same grammar and special-token handling as @ref Number_FloatFromString, but the result is kept
  * in full double precision. A finite value that overflows the double range (reported via the C
  * library as a range error) is rejected as an invalid decimal string rather than producing
- * infinity.
+ * infinity. A value too small for a double reads as the nearest double (a subnormal value, or
+ * zero), also where the C library reports that underflow as a range error.
  * @param str Null-terminated source string. Must not be NULL.
  * @param value [out] Receives the parsed double on success; unchanged on failure. Must not be NULL.
  * @param separator Which decimal separator character(s) are accepted.

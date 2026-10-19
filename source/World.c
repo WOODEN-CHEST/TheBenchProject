@@ -25,6 +25,10 @@ static HashCode HashObjectId(IMap* map, const void* key, const UserData* userDat
 /* The object with @p id, or NULL. ContainsKey first: a miss on GetElement would build an error message. */
 static WorldObject* FindObject(World* self, uint64_t id)
 {
+    if (id == 0U)
+    {
+        return NULL;
+    }
     IMap* Map = HashMap_AsMap(&self->_objectsById);
     bool IsPresent = false;
     Error ContainsResult = IMap_ContainsKey(Map, &id, &IsPresent);
@@ -161,8 +165,8 @@ static Error StoreNewObject(World* self, const unsigned char* name, uint64_t id,
 }
 
 /* The shared body of the constructors: @p types are the world's component types (entry i of type i). */
-static Error Construct(World* self, AssetManager* assets, Logger* logger, const WorldComponentTypeInfo* const* types,
-    size_t typeCount)
+static Error Construct(World* self, KeyRegistry* keys, AssetManager* assets, Logger* logger,
+    const WorldComponentTypeInfo* const* types, size_t typeCount)
 {
     AssetUserID User = ASSET_USER_ID_INVALID;
     if (assets != NULL)
@@ -177,6 +181,15 @@ static Error Construct(World* self, AssetManager* assets, Logger* logger, const 
     HashMapConstructOptions Options = HashMapConstructOptions_CreateDefault(sizeof(uint64_t), sizeof(WorldObject*),
         HashObjectId);
     Error MapResult = HashMap_Construct1(&self->_objectsById, Options);
+    if (MapResult.Code == ErrorCode_Success)
+    {
+        MapResult = WorldInternal_ConstructData(self);
+        if (MapResult.Code != ErrorCode_Success)
+        {
+            Error DeconstructResult = HashMap_Deconstruct(&self->_objectsById);
+            Error_Deconstruct(&DeconstructResult);
+        }
+    }
     if (MapResult.Code != ErrorCode_Success)
     {
         if (assets != NULL)
@@ -200,6 +213,7 @@ static Error Construct(World* self, AssetManager* assets, Logger* logger, const 
     self->_objectSetVersion = 0;
     self->_componentSetVersion = 0;
     self->_name = NULL;
+    self->_keys = keys;
     self->_assets = assets;
     self->_logger = logger;
     self->_assetUser = User;
@@ -209,6 +223,11 @@ static Error Construct(World* self, AssetManager* assets, Logger* logger, const 
 
 
 // Internal functions (declared in WorldInternal.h).
+WorldObject* WorldInternal_FindObject(World* world, uint64_t id)
+{
+    return FindObject(world, id);
+}
+
 void WorldInternal_ComponentAfterSet(void* instance, const PropertyDescriptor* descriptor)
 {
     WorldComponent* Component = instance;
@@ -227,14 +246,14 @@ void WorldInternal_ComponentAfterSet(void* instance, const PropertyDescriptor* d
     }
 }
 
-Error WorldInternal_ConstructWithTypes(World* self, AssetManager* assets, Logger* logger,
+Error WorldInternal_ConstructWithTypes(World* self, KeyRegistry* keys, AssetManager* assets, Logger* logger,
     const WorldComponentTypeInfo* const* types, size_t typeCount)
 {
-    if ((self == NULL) || (types == NULL) || (typeCount > WORLD_MAX_COMPONENT_TYPES))
+    if ((self == NULL) || (keys == NULL) || (types == NULL) || (typeCount > WORLD_MAX_COMPONENT_TYPES))
     {
         return Error_Construct2(ErrorCode_IllegalArgument,
-            "WorldInternal_ConstructWithTypes: self and types must not be NULL, and at most WORLD_MAX_COMPONENT_TYPES "
-            "types fit.");
+            "WorldInternal_ConstructWithTypes: self, keys and types must not be NULL, and at most "
+            "WORLD_MAX_COMPONENT_TYPES types fit.");
     }
     for (size_t Type = 0; Type < typeCount; Type++)
     {
@@ -253,21 +272,21 @@ Error WorldInternal_ConstructWithTypes(World* self, AssetManager* assets, Logger
             return CheckResult;
         }
     }
-    return Construct(self, assets, logger, types, typeCount);
+    return Construct(self, keys, assets, logger, types, typeCount);
 }
 
 
 // Public functions: lifecycle.
-Error World_Construct1(World* self)
+Error World_Construct1(World* self, KeyRegistry* keys)
 {
-    return World_Construct2(self, NULL, NULL);
+    return World_Construct2(self, keys, NULL, NULL);
 }
 
-Error World_Construct2(World* self, AssetManager* assets, Logger* logger)
+Error World_Construct2(World* self, KeyRegistry* keys, AssetManager* assets, Logger* logger)
 {
-    if (self == NULL)
+    if ((self == NULL) || (keys == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_Construct2: self must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "World_Construct2: self and keys must not be NULL.");
     }
 
     const WorldComponentTypeInfo* Types[WorldComponentType_Count];
@@ -275,7 +294,7 @@ Error World_Construct2(World* self, AssetManager* assets, Logger* logger)
     {
         Types[Type] = WorldComponent_GetStandardTypeInfo((WorldComponentType)Type);
     }
-    return Construct(self, assets, logger, Types, (size_t)WorldComponentType_Count);
+    return Construct(self, keys, assets, logger, Types, (size_t)WorldComponentType_Count);
 }
 
 Error World_Deconstruct(World* self)
@@ -300,6 +319,7 @@ Error World_Deconstruct(World* self)
     {
         Memory_Free(self->_components[Type]._data);
     }
+    WorldInternal_DeconstructData(self);
     Error MapResult = HashMap_Deconstruct(&self->_objectsById);
     Error_Deconstruct(&MapResult);
     Memory_Free(self->_name);
@@ -377,8 +397,9 @@ Error World_RemoveObject(World* self, uint64_t id)
         return Error_Construct2(ErrorCode_InvalidOperation, "World_RemoveObject: no object with that id.");
     }
 
-    // Components first, while the object is still in the world.
+    // Components and the data bookkeeping first, while the object is still in the world.
     DestroyComponents(self, Object, false);
+    WorldInternal_ForgetObjectData(self, Object);
     bool WasRemoved = false;
     Error MapResult = IMap_Remove(HashMap_AsMap(&self->_objectsById), &id, &WasRemoved);
     Error_Deconstruct(&MapResult);

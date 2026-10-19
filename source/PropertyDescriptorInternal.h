@@ -42,6 +42,10 @@ typedef struct PropertyScratchStruct
 /** Returns whether values of @p type are owned strings (String, AssetName). */
 bool PropertyInternal_IsStringType(PropertyType type);
 
+/** Returns whether fields of @p type own what they point to (the strings and DataMap): the instance frees it, copies
+ *  clone it, reads hand it over. */
+bool PropertyInternal_IsOwnedType(PropertyType type);
+
 /** Returns whether @p descriptor has every flag in @p flags. */
 static inline bool PropertyInternal_HasFlags(const PropertyDescriptor* descriptor, uint32_t flags)
 {
@@ -54,8 +58,8 @@ PropertyData PropertyInternal_ReadField(const PropertyDescriptor* descriptor, co
 /** Writes a field of @p instance. A string field takes the pointer as it is: ownership is the caller's business. */
 void PropertyInternal_WriteField(const PropertyDescriptor* descriptor, void* instance, const PropertyData* data);
 
-/** Hands an owned string (or NULL) to a string field, freeing the field's previous string. */
-void PropertyInternal_AdoptString(const PropertyDescriptor* descriptor, void* instance, unsigned char* text);
+/** Hands an owned value (a string or a map, or NULL) to an owned field, releasing the field's previous value. */
+void PropertyInternal_AdoptOwned(const PropertyDescriptor* descriptor, void* instance, void* owned);
 
 /** Reports whether two values of @p type are equal (floats by value, strings by bytes, a RenderColor without its tint's
  *  alpha). */

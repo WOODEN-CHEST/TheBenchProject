@@ -9,7 +9,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | Module | Files | What it is |
 |---|---|---|
 | GameCamera | `include/GameCamera.h`, `source/GameCamera.c` | The 3D camera (position/fov/yaw/pitch/roll), converted to a raylib Camera3D only at render time. |
-| Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, base directory). |
+| Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, the key registry, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
 | WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with resolved assets, sprites, lights), built from the world's per-type component arrays. |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
@@ -339,8 +339,8 @@ copying it between shaders.
 
 ## WorldTestFrame
 
-Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World` built with `World_Construct2` (so its sprite
-components bind their animations themselves), a `GameClock` ([GameClock.md](GameClock.md)), a `GameCamera`, and a
+Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World` built with `World_Construct2` on `Services.Keys` (so
+its sprite components bind their animations themselves), a `GameClock` ([GameClock.md](GameClock.md)), a `GameCamera`, and a
 `WorldRenderer`. `BuildTestWorld` builds the test world through the object API: `World_CreateObject`, the transform
 setters, `World_AddComponent` and the components' setters (a model component per cube and for the ground slab, a sprite
 component, two light components). Its `Update` runs the tick's animation step: it advances the sprites of enabled
@@ -402,11 +402,13 @@ directory was unavailable, warn and fall back to a copy of `GetWorkingDirectory(
 (`<base>/config.json`) → load unicode DB (`<base>/asset/text/unicode_data.txt`, empty-DB fallback) →
 `InitWindow` (fullscreen/vsync flags from the config) + `SetExitKey(KEY_NULL)` (Escape is the UI's `ui_back` and the
 game's `pause` action, never raylib's quit key) → AssetManager (`Construct1` with the logger, `CreateStandardAssetTypes`,
-cache directory `<base>/.wr_asset_cache`, absolute `<base>/asset` search root, `ReadDefinitions`) → GHDF pool →
-`GameInput` (defaults, then `<base>/controls.json` if present) → GameFrameManager (polls the input) → build `Services`
-(`Services.BaseDirectory`, `Services.Input`) → create + add `WorldTestFrame`, then `UITestFrame` on top → run loop.
-Teardown (reverse, ordering matters): frame manager (releases assets + GPU targets, needs asset manager + GL alive) →
-asset manager → JSON pool → GHDF pool → `CloseWindow` → input → unicode → config → base-directory buffer → logger.
+cache directory `<base>/.wr_asset_cache`, absolute `<base>/asset` search root, `ReadDefinitions`) → GHDF pool → the
+key registry (`KeyRegistry`, [NamespacedKey.md](NamespacedKey.md)) → `GameInput` (defaults, then `<base>/controls.json`
+if present) → GameFrameManager (polls the input) → build `Services` (`Services.BaseDirectory`, `Services.Input`,
+`Services.Keys`) → create + add `WorldTestFrame`, then `UITestFrame` on top → run loop.
+Teardown (reverse, ordering matters): frame manager (releases assets + GPU targets, needs asset manager + GL alive;
+its worlds borrow the key registry) → asset manager → JSON pool → GHDF pool → `CloseWindow` → key registry → input →
+unicode → config → base-directory buffer → logger.
 
 Every game file is resolved against the executable's directory (built via `Path_Append(base, relative)`), so
 the game works no matter where it is started from.

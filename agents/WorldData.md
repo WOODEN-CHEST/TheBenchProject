@@ -1,8 +1,9 @@
 # World data layer
 
-The rendering-independent model of a 3D world: its objects, their components, and its environment settings. No
-renderer is required to build, change or tear down a world; the world renderer reads it separately and never writes to
-it. Saving and loading worlds comes back with T09 (world files), built on the property tables.
+The rendering-independent model of a 3D world: its objects, their components, their tags and data, and its
+environment settings. No renderer is required to build, change or tear down a world; the world renderer reads it
+separately and never writes to it. Saving and loading worlds comes back with T09 (world files), built on the property
+tables. Tags, typed object data and queries (T24) have their own doc: [ObjectData.md](ObjectData.md).
 
 This one doc covers the whole cohesive layer; every symbol has full Doxygen in its header.
 
@@ -16,12 +17,15 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A sprite animation by asset name, with its playback instance, bound by the world. |
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
 | WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
-| World | `include/World.h`, `source/World.c` | Owns the objects and their components, mints ids, keeps the id map and the per-type component arrays, holds the environment and its own asset user. |
+| World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index) | Owns the objects and their components, mints ids, keeps the id map and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
+| WorldQuery | `include/WorldQuery.h`, `source/WorldQuery.c` | Searches over the objects by tags, data, components, flags and place ([ObjectData.md](ObjectData.md)). |
 
 `source/WorldInternal.h` is the layer's private header: the object's construction (objects are made by the world only),
-`WorldInternal_ComponentAfterSet` (the hook every component table calls after a change), the world's asset manager,
-user and logger for components that load assets, small helpers, and `WorldInternal_ConstructWithTypes` (a test seam,
-below). Not public API.
+the object lookup (`WorldInternal_FindObject`), `WorldInternal_ComponentAfterSet` (the hook every component table calls
+after a change), the data bookkeeping (`WorldInternal_SyncObjectData` after a table write replaced an object's data,
+`_ForgetObjectData` before removal, `_GetTagMembers` for queries), the world's asset manager, user and logger for
+components that load assets, small helpers, and `WorldInternal_ConstructWithTypes` (a test seam, below). Not public
+API.
 
 ## Objects
 
@@ -39,7 +43,11 @@ components). Every object has:
   exists for collision and interaction (invisible walls, hidden triggers);
 - `_mobility`: `WorldMobility_Static` (default: scenery that does not move in play) or `WorldMobility_Movable`
   (see "Ready for things that move");
-- `_revision`: advances on every property change (runtime only);
+- `_revision`: advances on every property change (runtime only), except the tags and data;
+- `_data`: its tags and custom data, a `DataMap` (NULL while empty; `WorldObject_GetData`, `WorldObject_HasTag`),
+  changed only through the world's data functions ([ObjectData.md](ObjectData.md)); `_dataRevision` advances on every
+  change of them (`WorldObject_GetDataRevision`), so script data never makes the renderer recompute anything;
+  `_countedDataBytes` and `_indexedTagCount` are the world's bookkeeping;
 - `_components[WORLD_MAX_COMPONENT_TYPES]`: one slot per component type, NULL when absent
   (`WorldObject_GetComponent`);
 - `_world`: the world that owns it. **A World must never be moved or copied once constructed** (objects and
@@ -48,7 +56,8 @@ components). Every object has:
 Every field is reached through getters and validating setters (`WorldObject_SetPosition`, `_SetEnabled`, ...). The
 setters check through the object's property table (`Properties_CheckValue`), so the rules live in the table only, and
 `Properties_Set` / the JSON and GHDF readers / `Properties_CopyTo` work on objects too; either way the revision
-advances (the table's `AfterSet`).
+advances (the table's `AfterSet`). The `data` row is `ReadOnly` for `Properties_Set`; a read or a copy (whose
+`AfterSet` gets no row) advances both revisions and has the world recount the object's bytes and re-index its tags.
 
 ## Components
 
@@ -119,12 +128,14 @@ hidden or disabled object's light is off.
 Holds the objects in creation order (`_objects`) with an id -> object map (`_objectsById`, a `WRHashMap`), the
 registry entries of its component types, one dense array of components per type (`_components[type]`, in add order),
 the id counter (`_nextId`, starts at 1; 0 once every id was handed out), two versions, an owned name, an embedded
-`WorldEnvironment`, and (optionally) a borrowed asset manager with its own asset user.
+`WorldEnvironment`, the borrowed key registry (`World_GetKeys`), the tag index and data byte count
+([ObjectData.md](ObjectData.md)), the query scratch, and (optionally) a borrowed asset manager with its own asset user.
 
-- **Construction:** `World_Construct1(world)` makes a world without assets (tools, tests, a headless server): its
-  sprites stay empty. `World_Construct2(world, assets, logger)` makes a world whose components load their assets (the
-  sprites' animations) under its own asset user, which `World_Deconstruct` retires after destroying every object and
-  component.
+- **Construction:** every world borrows the program's key registry ([NamespacedKey.md](NamespacedKey.md);
+  `Services.Keys`). `World_Construct1(world, keys)` makes a world without assets (tools, tests, a headless server): its
+  sprites stay empty. `World_Construct2(world, keys, assets, logger)` makes a world whose components load their assets
+  (the sprites' animations) under its own asset user, which `World_Deconstruct` retires after destroying every object
+  and component. The logger also hears of each data limit once.
 - **Objects:** `World_CreateObject(world, name, &object)` (the next id) and `World_CreateObjectWithId(world, name, id,
   &object)` (the loader's version: refuses 0 and used ids, and advances the counter past the id); `World_RemoveObject
   (world, id)` (its components first, then the object; ordered removal, so the other objects keep their order);
@@ -139,7 +150,11 @@ the id counter (`_nextId`, starts at 1; 0 once every id was handed out), two ver
   `World_TryFindComponentType(world, name, &type)` (world files and the editor name types).
 - **Change tracking:** `World_GetObjectSetVersion` changes on every object creation and removal,
   `World_GetComponentSetVersion` on every component addition and removal (also with its object); property changes
-  advance the object's and the component's own revisions instead.
+  advance the object's and the component's own revisions instead, and data changes the object's data revision.
+- **Tags and data:** `World_SetData`, `World_TryGetData`, `World_RemoveData`, `World_AddTag`, `World_RemoveTag`,
+  `World_HasTag`, `World_GetDataByteSize`, with the limits `WORLD_OBJECT_DATA_MAX_ENTRIES` (256),
+  `WORLD_OBJECT_DATA_MAX_BYTES` (64 KiB) and `WORLD_DATA_MAX_BYTES` (16 MiB). **Queries:** `World_Query`,
+  `World_DoesObjectMatch` (`WorldQuery.h`). Both in [ObjectData.md](ObjectData.md).
 - **The test seam:** `WorldInternal_ConstructWithTypes` (private header) builds a world whose component types are a
   given list: the standard ones first, as their own entries, then test-only types. `tests/WorldTests.c` adds two
   transform drivers that way to test the one-driver rule before the game has a real driver.
@@ -187,6 +202,7 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `is_enabled` | 8 | Bool | true |
 | | `is_visible` | 9 | Bool | true |
 | | `mobility` | 10 | Enum `static` / `movable` | `static` |
+| | `data` (JSON: `data` and `tags`) | 11 | DataMap, ReadOnly for `Properties_Set`; 256 entries, 64 KiB | empty (NULL) |
 | `model_component` | `model` | 1 | AssetName (128, null allowed) | null |
 | | `has_outline` | 2 | Bool | true |
 | | `omit_pixelation` | 3 | Bool | false |
@@ -201,7 +217,8 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `casts_shadows` | 4 | Bool | false |
 
 The object table's wire ids start at 3: 1 and 2 are left for the world file's own entries per object (T09: the id and
-the components). T24 adds `tags` and `data` to the object table, T08 `parent`.
+the components). T24 added `data` (one row: the tags and the values are one map, written as two JSON keys, `tags` and
+`data`, and as one GHDF entry); T08's `parent` takes the next free id, 12.
 
 ## Environment
 
@@ -293,13 +310,16 @@ Validate anything that came from outside the program before using it.
 (`WorldEncoder`) together with their tests: they were written for the three object subclasses, only tests used them,
 and the property tables now describe every object and component. T09 (world files) rebuilds JSON and GHDF loading and
 saving on the tables, with the root ids the old encoder used (format version 1, name 2, next id 3, environment 4,
-objects 5). The environment's table already reads and writes itself (`WorldEnvironment_ReadJSON` / `_WriteJSON`,
+objects 5). Reading objects with tags and data needs `PropertyReadOptions.Keys` (the world's registry,
+`World_GetKeys`) and `DefaultNamespace` (the story's namespace); after reading the objects, the loader refuses a world
+whose `World_GetDataByteSize` passes `WORLD_DATA_MAX_BYTES` (the table readers count it but cannot refuse it). The environment's table already reads and writes itself (`WorldEnvironment_ReadJSON` / `_WriteJSON`,
 `Properties_ReadGHDF` / `_WriteGHDF`), and `tests/PropertyDescriptorTests.c` still compares its GHDF tree with a
 literal copy of what the old encoder wrote.
 
 ## Tests
 
-`tests/WorldTests.c`: objects (ids unique and never 0, loader ids advance the counter, an exhausted counter, the
+`tests/ObjectDataTests.c` covers tags, data and queries ([ObjectData.md](ObjectData.md)); `tests/TestWorld.h` builds a
+world with its own key registry for tests. `tests/WorldTests.c`: objects (ids unique and never 0, loader ids advance the counter, an exhausted counter, the
 object-set version, validated setters and table writes advancing the revision, rotation in degrees in JSON),
 components (add, find, remove; one per type; removing an object removes its components; the per-type arrays stay in
 order across interleaved adds and removes; types by name; revisions), the sprite binding (no assets, a shared

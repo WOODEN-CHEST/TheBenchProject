@@ -11,6 +11,7 @@
 #include "Config.h"
 #include "GameInput.h"
 #include "Logger.h"
+#include "NamespacedKey.h"
 #include "ProgramTime.h"
 #include "GameFrameManager.h"
 #include "Renderer.h"
@@ -442,6 +443,12 @@ int main(int argc, char** argv)
         LogWarningAndRelease(&Log, (const unsigned char*)u8"Failed to create the GHDF object pool: %s", &GhdfPoolResult);
     }
 
+    // The program's one key registry: tags and object data keys are interned here. Every world borrows it, so it is
+    // torn down after the frames.
+    KeyRegistry Keys;
+    Error KeysResult = KeyRegistry_Construct(&Keys);
+    Error_Deconstruct(&KeysResult); // Only fails for a NULL argument.
+
     // The input: default bindings, then the player's controls file over them. The frame manager polls it every update
     // tick.
     GameInput Input;
@@ -465,6 +472,7 @@ int main(int argc, char** argv)
         if (JsonPool != NULL) { Error e = JSONObjectPool_Deconstruct(JsonPool); Error_Deconstruct(&e); }
         if (GhdfPool != NULL) { Error e = GHDFObjectPool_Deconstruct(GhdfPool); Error_Deconstruct(&e); }
         CloseWindow();
+        KeyRegistry_Deconstruct(&Keys);
         Error InputCloseResult = GameInput_Deconstruct(&Input);
         Error_Deconstruct(&InputCloseResult);
         UnicodeData_Deconstruct(&Unicode);
@@ -486,6 +494,7 @@ int main(int argc, char** argv)
     GameServices.FrameManager = &FrameManager;
     GameServices.Input = &Input;
     GameServices.GHDFPool = GhdfPool;
+    GameServices.Keys = &Keys;
     GameServices.BaseDirectory = BaseDirectory._data;
 
     // The world-test frame needs the asset manager; only add it if the asset manager came up.
@@ -561,6 +570,7 @@ int main(int argc, char** argv)
     CloseWindow();
 
     Services_Deconstruct(&GameServices);
+    KeyRegistry_Deconstruct(&Keys);
     Error InputCloseResult = GameInput_Deconstruct(&Input);
     Error_Deconstruct(&InputCloseResult);
     UnicodeData_Deconstruct(&Unicode);

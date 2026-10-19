@@ -22,7 +22,10 @@ int main(void)
     ShaderSourceTests_Run(&Run);
     TextureTests_Run(&Run);
     WorldLightCullingTests_Run(&Run);
+    NamespacedKeyTests_Run(&Run);
+    DataValueTests_Run(&Run);
     WorldTests_Run(&Run);
+    ObjectDataTests_Run(&Run);
     PropertyDescriptorTests_Run(&Run);
     GameCalendarTests_Run(&Run);
     GameClockTests_Run(&Run);

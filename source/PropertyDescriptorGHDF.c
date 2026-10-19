@@ -3,7 +3,8 @@
 
 #include <inttypes.h>
 #include "PropertyDescriptorInternal.h"
-#include "wr/WRCompile.h"
+#include "DataMap.h"
+#include "NamespacedKey.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
 
@@ -129,6 +130,25 @@ static Error PutRenderColor(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEn
     return Result;
 }
 
+/* A Compound array of the map's entries (see DataMap.h). */
+static Error PutDataMap(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id, const DataMap* map)
+{
+    GHDFArray* Array = NULL;
+    Error Result = DataMap_WriteGHDF(map, pool, &Array);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    GHDFObjectValue Value = GHDFObjectValue_CreateArray(Array, GHDFValueType_Compound);
+    Result = GHDFCompound_SetValue(compound, id, GHDF_CreateArrayType(GHDFValueType_Compound), &Value);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = GHDFObjectPool_ReturnArray(pool, Array, true);
+        Error_Deconstruct(&ReturnResult);
+    }
+    return Result;
+}
+
 static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const PropertyDescriptor* descriptor,
     const PropertyData* data)
 {
@@ -174,6 +194,8 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
             return (data->StringValue != NULL) ? PutString(pool, compound, Id, data->StringValue) : Error_CreateSuccess();
         case PropertyType_Enum:
             return PutScalar(compound, Id, GHDFObjectValue_CreateEncodedInteger((int64_t)data->EnumValue));
+        case PropertyType_DataMap:
+            return PutDataMap(pool, compound, Id, data->DataMapValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -297,7 +319,35 @@ static Error ReadString(GHDFCompound* compound, const PropertyDescriptor* descri
     }
     unsigned char* Text = Memory_Allocate(Buffer->_count);
     Memory_Copy(Buffer->_data, Text, Buffer->_count);
-    PropertyInternal_AdoptString(descriptor, target, Text);
+    PropertyInternal_AdoptOwned(descriptor, target, Text);
+    return Error_CreateSuccess();
+}
+
+/* A data map from its Compound array, interning its keys in the options' registry. */
+static Error ReadDataMap(GHDFCompound* compound, const PropertyDescriptor* descriptor, const PropertyReadOptions* options,
+    void* target)
+{
+    GHDFObjectValue Entry;
+    bool IsFound = false;
+    Error Result = GHDFCompound_GetOptionalVerified(compound, (GHDFEntryID)descriptor->WireId,
+        GHDF_CreateArrayType(GHDFValueType_Compound), &Entry, &IsFound);
+    if ((Result.Code != ErrorCode_Success) || !IsFound)
+    {
+        return Result;
+    }
+    if (options->Keys == NULL)
+    {
+        return Error_Construct2(ErrorCode_Deserialize,
+            "Reading tags and data needs the key registry (PropertyReadOptions.Keys).");
+    }
+    DataMapLimits Limits = { .MaxEntryCount = descriptor->Rules.MaxCount, .MaxByteSize = descriptor->Rules.MaxLength };
+    DataMap* Map = NULL;
+    Result = DataMap_ReadGHDF(Entry.Value.Array, options->Keys, &Limits, &Map);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    PropertyInternal_AdoptOwned(descriptor, target, Map);
     return Error_CreateSuccess();
 }
 
@@ -381,15 +431,21 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
             }
             outData->EnumValue = *outFound ? (int32_t)Entry.Value.EncodedInteger : 0;
             return Result;
+        case PropertyType_DataMap:
+            return Error_Construct2(ErrorCode_InvalidState, "Data maps are read separately.");
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
 
 static Error ReadEntry(const PropertyTable* table, GHDFCompound* compound, const PropertyDescriptor* descriptor,
-    void* target)
+    const PropertyReadOptions* options, void* target)
 {
     Error Result = Error_CreateSuccess();
-    if (PropertyInternal_IsStringType(descriptor->Type))
+    if (descriptor->Type == PropertyType_DataMap)
+    {
+        Result = ReadDataMap(compound, descriptor, options, target);
+    }
+    else if (PropertyInternal_IsStringType(descriptor->Type))
     {
         Result = ReadString(compound, descriptor, target);
     }
@@ -448,28 +504,37 @@ Error Properties_ReadGHDF(const PropertyTable* table, GHDFCompound* compound, vo
 {
     // TODO: no GHDF migration exists yet; when a table first needs one, give PropertyTable a GHDF Migrate slot and run
     // it here for an older options->DataVersion, as Properties_ReadJSON does.
-    UNUSED(options);
     if ((table == NULL) || (compound == NULL) || (instance == NULL))
     {
         return Error_Construct2(ErrorCode_IllegalArgument,
             "Properties_ReadGHDF: table, compound and instance must not be NULL.");
     }
+    PropertyReadOptions Options = (options != NULL) ? *options : PropertyReadOptions_CreateDefault();
 
+    // All or nothing, for the key registry too: a refused read forgets the keys its data rows interned.
+    size_t KeyCheckpoint = (Options.Keys != NULL) ? KeyRegistry_GetCount(Options.Keys) : 0U;
     PropertyScratch Scratch;
     PropertyScratch_Begin(&Scratch, table, instance);
-    for (size_t Index = 0; Index < table->DescriptorCount; Index++)
+    Error Result = Error_CreateSuccess();
+    for (size_t Index = 0; (Index < table->DescriptorCount) && (Result.Code == ErrorCode_Success); Index++)
     {
         const PropertyDescriptor* Descriptor = &table->Descriptors[Index];
-        if (!PropertyInternal_HasFlags(Descriptor, PropertyFlags_Persistent))
+        if (PropertyInternal_HasFlags(Descriptor, PropertyFlags_Persistent))
         {
-            continue;
-        }
-        Error Result = ReadEntry(table, compound, Descriptor, Scratch._instance);
-        if (Result.Code != ErrorCode_Success)
-        {
-            PropertyScratch_Abort(&Scratch, table);
-            return Result;
+            Result = ReadEntry(table, compound, Descriptor, &Options, Scratch._instance);
         }
     }
-    return PropertyScratch_Commit(&Scratch, table, instance, ErrorCode_Deserialize);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = PropertyScratch_Commit(&Scratch, table, instance, ErrorCode_Deserialize);
+    }
+    else
+    {
+        PropertyScratch_Abort(&Scratch, table);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        KeyRegistry_TruncateTo(Options.Keys, KeyCheckpoint);
+    }
+    return Result;
 }

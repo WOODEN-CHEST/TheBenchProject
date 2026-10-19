@@ -9,8 +9,11 @@
 #include "wr/WRJSON.h"
 #include "wr/WRGHDF.h"
 
-// Forward declaration (Logger.h): the read options borrow a logger for warnings.
+// Forward declarations: the read options borrow a logger for warnings (Logger.h) and a key registry for data maps
+// (NamespacedKey.h); a DataMap property holds a map (DataMap.h).
 typedef struct LoggerStruct Logger;
+typedef struct KeyRegistryStruct KeyRegistry;
+typedef struct DataMapStruct DataMap;
 
 
 /**
@@ -58,12 +61,15 @@ typedef struct LoggerStruct Logger;
  * | Enum        | integer of 1, 2 or 4 bytes  | the entry's name, e.g. "near"          | EncodedInteger (the value)    |
  * | ObjectId    | uint64_t, 0 = none          | integer (a string above INT64_MAX)     | UInt64                        |
  * | Date        | int64_t day number          | "yyyy-mm-dd", e.g. "2026-10-18"        | EncodedInteger (the day number) |
+ * | DataMap     | DataMap*, owned, NULL while empty | two keys: TagsKey ["key", ...] and Key {"key": value} | Compound array of entries |
  *
  * JSON readers accept every form the GameJSON parsers accept (colors also as arrays or {r, g, b, a} compounds,
  * vectors also as {x, y, z} compounds, numbers also as numeric strings). A RenderColor's tint alpha is not part of
  * its value (RenderColor ignores it): it is not written, reads set it to 255 and comparisons skip it. A Date is a
  * day number of the game calendar (GameCalendar.h: days since 0001-01-01), and its JSON text is only ever the
- * "yyyy-mm-dd" form.
+ * "yyyy-mm-dd" form. A DataMap (tags and typed custom data, DataMap.h) is written as two JSON keys, its tags under the
+ * descriptor's TagsKey and its values under its Key; reading one needs PropertyReadOptions.Keys, the program's key
+ * registry, to intern the keys.
  *
  * Not thread-safe: tables are immutable static data, but instances are plain structs with no locking.
  */
@@ -97,6 +103,8 @@ typedef struct LoggerStruct Logger;
 /** @brief Rules for a String or AssetName: at most @p maxLength bytes (without the terminator), and whether NULL is
  *         allowed (a string that may be NULL must default to NULL). */
 #define PROPERTY_RULES_STRING(maxLength, isNullAllowed) { .MaxLength = (maxLength), .IsNullAllowed = (isNullAllowed) }
+/** @brief Rules for a DataMap: at most @p maxCount entries counting at most @p maxBytes bytes (DataMap_GetByteSize). */
+#define PROPERTY_RULES_DATA_MAP(maxCount, maxBytes) { .MaxLength = (maxBytes), .MaxCount = (maxCount) }
 
 /** @brief The flags of a creator setting: saved, shown in the editor's inspector and reachable from scripts. */
 #define PROPERTY_FLAGS_SETTING ((uint32_t)(PropertyFlags_Persistent | PropertyFlags_Editable | PropertyFlags_Script))
@@ -149,7 +157,11 @@ typedef enum PropertyTypeEnum
     PropertyType_ObjectId,
     /** @brief A calendar date: an int64_t day number of the game calendar (GameCalendar.h: days since 0001-01-01),
      *  which must lie in the calendar (years 1 to 9999). Takes no Minimum/Maximum rules. */
-    PropertyType_Date
+    PropertyType_Date,
+    /** @brief Tags and typed custom data: an owned `DataMap*` (DataMap.h), NULL while empty, which is its only default.
+     *  Rules.MaxCount and Rules.MaxLength bound its entries and bytes; the descriptor's TagsKey names the JSON key of
+     *  its tags. */
+    PropertyType_DataMap
 } PropertyType;
 
 /**
@@ -205,6 +217,10 @@ typedef union PropertyDataUnion
     uint64_t ObjectIdValue;
     /** @brief PropertyType_Date: the day number (days since 0001-01-01). */
     int64_t DateValue;
+    /** @brief PropertyType_DataMap: the map, or NULL for an empty one. Borrowed: in a default it must be NULL; from
+     *  Properties_Get it points into the instance and stays valid until that property changes; Properties_Set copies
+     *  it. */
+    const DataMap* DataMapValue;
 } PropertyData;
 
 /**
@@ -224,8 +240,8 @@ typedef struct PropertyValueStruct
  *        strings valid UTF-8, asset names valid, enums in their table).
  *
  * Build with the PROPERTY_RULES_* macros. Bounds apply to Int32, UInt32, Float, Double, Angle (radians) and to every
- * component of Vector2, Vector3 and AngleVector3 (radians); the string rules to String and AssetName.
- * PropertyTable_Check rejects rules that do not fit the type.
+ * component of Vector2, Vector3 and AngleVector3 (radians); the string rules to String and AssetName; MaxCount and
+ * MaxLength (bytes) to a DataMap. PropertyTable_Check rejects rules that do not fit the type.
  */
 typedef struct PropertyRulesStruct
 {
@@ -243,8 +259,11 @@ typedef struct PropertyRulesStruct
     /** @brief The upper bound (finite, not below Minimum; a whole number in range for the integer types). */
     double Maximum;
     /** @brief Strings: the most bytes allowed, without the terminator. Required (> 0) for String and AssetName, so
-     *  content from other players cannot grow a save without bound. */
+     *  content from other players cannot grow a save without bound. DataMap: the most bytes its entries may count
+     *  (DataMap_GetByteSize); required too. */
     size_t MaxLength;
+    /** @brief DataMap: the most entries, tags included; required (> 0). Must be 0 for every other type. */
+    size_t MaxCount;
     /** @brief Strings: whether NULL is a valid value. Such a property must default to NULL (GHDF has no null, so NULL
      *  is written as an absent entry, which reads back as the default). */
     bool IsNullAllowed;
@@ -317,6 +336,9 @@ typedef struct PropertyDescriptorStruct
     const unsigned char* Category;
     /** @brief The table Version that added the property, in [1, the table's Version]. */
     uint32_t SinceVersion;
+    /** @brief PropertyType_DataMap only (NULL for every other type): the JSON key the map's tags are written under,
+     *  next to Key, which holds its values; snake_case and unique among the table's keys, e.g. u8"tags". */
+    const unsigned char* TagsKey;
 } PropertyDescriptor;
 
 /**
@@ -395,6 +417,12 @@ typedef struct PropertyReadOptionsStruct
     uint32_t DataVersion;
     /** @brief Borrowed pool owning the JSON data, handed to Migrate; may be NULL when no migration needs one. */
     JSONObjectPool* Pool;
+    /** @brief Borrowed key registry the keys of DataMap properties are interned in; required to read a DataMap that
+     *  is not empty (the read fails without it). */
+    KeyRegistry* Keys;
+    /** @brief The namespace JSON keys written without one get (the story or pack id; NamespacedKey.h); NULL means
+     *  NAMESPACED_KEY_DEFAULT_NAMESPACE. GHDF always holds full keys. */
+    const unsigned char* DefaultNamespace;
 } PropertyReadOptions;
 
 /**
@@ -411,7 +439,8 @@ typedef struct PropertyWriteOptionsStruct
 
 // Functions: values.
 /**
- * @brief Default read options: unknown JSON keys fail the read, no logger, current data version, no pool.
+ * @brief Default read options: unknown JSON keys fail the read, no logger, current data version, no pool, no key
+ *        registry (set Keys to read data maps), the default namespace.
  * @returns The options.
  */
 static inline PropertyReadOptions PropertyReadOptions_CreateDefault(void)
@@ -421,7 +450,9 @@ static inline PropertyReadOptions PropertyReadOptions_CreateDefault(void)
         .UnknownKeyMode = PropertyUnknownKeyMode_Error,
         .Logger = NULL,
         .DataVersion = 0U,
-        .Pool = NULL
+        .Pool = NULL,
+        .Keys = NULL,
+        .DefaultNamespace = NULL
     };
 }
 
@@ -536,6 +567,13 @@ static inline PropertyValue PropertyValue_FromDate(int64_t dayNumber)
     return (PropertyValue){ .Type = PropertyType_Date, .Data.DateValue = dayNumber };
 }
 
+/** @brief Makes a DataMap value. @param map The map (borrowed; Properties_Set copies it), or NULL for an empty one.
+ *  @returns The typed value. */
+static inline PropertyValue PropertyValue_FromDataMap(const DataMap* map)
+{
+    return (PropertyValue){ .Type = PropertyType_DataMap, .Data.DataMapValue = map };
+}
+
 /**
  * @brief Returns a property type's name for messages and tooling, e.g. u8"float" or u8"render_color".
  * @param type The type.
@@ -551,10 +589,11 @@ const unsigned char* PropertyType_GetName(PropertyType type);
  * Checked: a valid name and a version of at least 1; at least one descriptor; every key snake_case and unique; every
  * wire id non-zero, unique and not retired; retired ids non-zero and unique; every field inside StructSize with the
  * size its type needs (Enum: 1, 2 or 4 bytes), and no two fields overlapping; rules that fit the type (bounds only on
- * bounded numeric types, finite and ordered, whole and in range for integers; MaxLength on every string); an enum
- * table exactly on enums, with snake_case unique names and unique values that fit the field; only known flag bits;
- * SinceVersion in [1, Version]; and every default passing its own rules. Run it from a test for every table in the
- * game.
+ * bounded numeric types, finite and ordered, whole and in range for integers; MaxLength on every string; MaxCount and
+ * MaxLength on every DataMap); a TagsKey exactly on DataMaps, snake_case and unique among the keys; an enum table
+ * exactly on enums, with snake_case unique names and unique values that fit the field; only known flag bits;
+ * SinceVersion in [1, Version]; and every default passing its own rules (a DataMap's is NULL). Run it from a test for
+ * every table in the game.
  * @param table The table; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p table is NULL or breaks a rule (the message names the table, the
  *          key and the rule).
@@ -693,10 +732,12 @@ Error Properties_WriteJSON(const PropertyTable* table, const void* instance, JSO
  * @brief Reads an instance's persistent properties from a JSON compound: all or nothing.
  *
  * Every persistent property is taken from its key, or gets its default when the key is absent; properties that are
- * not persistent keep their current values. The read works on a scratch copy: after every key parsed and the whole
+ * not persistent keep their current values. A DataMap is read from its two keys (its TagsKey and its Key) with the
+ * options' Keys and DefaultNamespace. The read works on a scratch copy: after every key parsed and the whole
  * result validated it is committed into @p instance (and the table's AfterSet called with a NULL descriptor). On any
- * failure @p instance is unchanged. Unknown keys follow the options. When the options' DataVersion is older than the
- * table's Version, the table's Migrate runs first and changes @p compound in place.
+ * failure @p instance is unchanged, and the options' Keys forget the keys the read interned (KeyRegistry_TruncateTo).
+ * Unknown keys follow the options. When the options' DataVersion is older than the table's Version, the table's
+ * Migrate runs first and changes @p compound in place.
  * @param table The table; must not be NULL.
  * @param compound The data; must not be NULL.
  * @param instance A constructed instance to fill; must not be NULL.
@@ -736,10 +777,10 @@ Error Properties_WriteGHDF(const PropertyTable* table, const void* instance, GHD
  * @brief Reads an instance's persistent properties from a GHDF compound: all or nothing.
  *
  * Like Properties_ReadJSON: absent wire ids give the defaults, non-persistent properties keep their values, the
- * result is validated before it is committed and AfterSet is called with a NULL descriptor. Entries with ids the
- * table does not know (or has retired) are skipped, for forward compatibility. The options' UnknownKeyMode, Logger
- * and Pool are JSON-only, and there is no GHDF migration yet, so DataVersion is not used either; the parameter is
- * there for when one is needed.
+ * result is validated before it is committed and AfterSet is called with a NULL descriptor, and a failure leaves the
+ * instance and the options' Keys as they were. Entries with ids the table does not know (or has retired) are skipped,
+ * for forward compatibility. The options' UnknownKeyMode, Logger and Pool are JSON-only, and there is no GHDF
+ * migration yet, so DataVersion is not used either; the parameter is there for when one is needed.
  * @param table The table; must not be NULL.
  * @param compound The data; must not be NULL.
  * @param instance A constructed instance to fill; must not be NULL.

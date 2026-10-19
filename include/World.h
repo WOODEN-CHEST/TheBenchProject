@@ -7,6 +7,9 @@
 #include "wr/WRHashMap.h"
 // AssetUserID: a world built with an asset manager holds its components' assets (sprite animations) under its own user.
 #include "AssetManager.h"
+#include "DataMap.h"
+#include "DataValue.h"
+#include "NamespacedKey.h"
 #include "WorldObject.h"
 #include "WorldComponent.h"
 #include "WorldEnvironment.h"
@@ -26,6 +29,20 @@
  * The world is data: it can be built, changed and torn down with no renderer present; the world renderer reads it and
  * never writes to it. Objects and components point back to their world, so a World must never be moved or copied once
  * constructed.
+ *
+ * KEYS. Every world borrows the program's key registry (NamespacedKey.h): the keys of its objects' tags and data are
+ * interned there, so they compare as integers.
+ *
+ * TAGS AND DATA. Every object holds a map of namespaced keys to typed values (DataValue.h); a tag is an entry with no
+ * value. Change them through World_SetData, World_RemoveData, World_AddTag and World_RemoveTag: they enforce the
+ * limits (WORLD_OBJECT_DATA_MAX_ENTRIES and WORLD_OBJECT_DATA_MAX_BYTES per object, WORLD_DATA_MAX_BYTES per world;
+ * past one the call fails with ErrorCode_InvalidOperation and the world logs it once), keep the tag index the queries
+ * use (WorldQuery.h), and advance the object's data revision, never its render revision. Global and game-state
+ * variables will use the same DataMap type, outside worlds.
+ *
+ * Values set in the editor are saved in the world file (through the object table's data row). Values scripts set at
+ * runtime will be saved in game saves as differences from the world, once the save round designs them (architecture
+ * 3.7); nothing here prevents that.
  *
  * BUILDING. World_CreateObject makes an object, World_AddComponent gives it components:
  * @code
@@ -52,6 +69,11 @@
  * (later); 5. queued events: trigger enter and exit, later contacts (later); 6. animation (sprite playback today);
  * 7. the renderer, which only reads.
  */
+
+
+// Macros.
+/** @brief The most bytes the data of all of a world's objects may count together (DataMap_GetByteSize): 16 MiB. */
+#define WORLD_DATA_MAX_BYTES ((size_t)16777216)
 
 
 // Types.
@@ -83,6 +105,18 @@ typedef struct WorldStruct
     uint64_t _componentSetVersion;
     /** @brief Owned, NUL-terminated UTF-8 world name; may be NULL. */
     unsigned char* _name;
+    /** @brief The key registry the keys of the objects' tags and data come from; borrowed, never NULL. */
+    KeyRegistry* _keys;
+    /** @brief The tag index: tag key id -> the ids of the objects carrying it, ascending (see WorldData.c). */
+    HashMap _tagIndex;
+    /** @brief The bytes the data of every object counts together (see World_GetDataByteSize). */
+    size_t _dataByteSize;
+    /** @brief The data limits already logged (one bit each), so each is logged once per world. */
+    uint32_t _loggedDataLimits;
+    /** @brief Scratch World_Query reuses: candidate object ids (uint64_t). */
+    GenericBuffer _queryCandidates;
+    /** @brief Scratch World_Query reuses: matches with their distances, for sorting. */
+    GenericBuffer _queryMatches;
     /** @brief The asset manager components load from; borrowed. NULL for a world without assets. */
     AssetManager* _assets;
     /** @brief Logger for failures components report; borrowed, may be NULL. */
@@ -101,25 +135,28 @@ typedef struct WorldStruct
  * Its sprite components never get an animation, so they draw nothing; use World_Construct2 for a world that is
  * rendered.
  * @param self The world to initialize in place; must not be NULL.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ * @param keys The program's key registry; borrowed, must outlive the world. Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p keys is NULL.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
-Error World_Construct1(World* self);
+Error World_Construct1(World* self, KeyRegistry* keys);
 
 /**
  * @brief Initializes an empty world whose components load their assets through an asset manager.
  *
  * Mints an asset user for the world (retired by World_Deconstruct).
  * @param self The world to initialize in place; must not be NULL.
+ * @param keys The program's key registry; borrowed, must outlive the world. Must not be NULL.
  * @param assets The asset manager; borrowed, must outlive the world. NULL gives a world without assets (as
  *        World_Construct1).
- * @param logger Receives one warning per asset a component fails to load; borrowed, may be NULL.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ * @param logger Receives one warning per asset a component fails to load, and one per data limit the world's objects
+ *        reach (see World_SetData); borrowed, may be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p keys is NULL.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
-Error World_Construct2(World* self, AssetManager* assets, Logger* logger);
+Error World_Construct2(World* self, KeyRegistry* keys, AssetManager* assets, Logger* logger);
 
 /**
  * @brief Destroys every object (with its components) and releases the world's storage, environment and assets.
@@ -282,7 +319,102 @@ const WorldComponentTypeInfo* World_GetComponentTypeInfo(const World* self, Worl
 bool World_TryFindComponentType(const World* self, const unsigned char* name, WorldComponentType* outType);
 
 
+// Tags and data.
+/**
+ * @brief Sets an object's data entry to a copy of a value (a tag with DataValue_CreateTag), replacing what the key
+ *        held (another type included).
+ *
+ * The value is validated first. Setting the value an entry already holds changes nothing. Otherwise the object's data
+ * revision advances (its render revision does not) and the tag index follows.
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param key The key: an id of the world's key registry (World_GetKeys, KeyRegistry_Intern).
+ * @param value The value; must not be NULL. The caller keeps it.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p value is NULL or @p key is not an id of the registry;
+ *          ErrorCode_InvalidOperation if no object has @p id, or the object (WORLD_OBJECT_DATA_MAX_ENTRIES,
+ *          WORLD_OBJECT_DATA_MAX_BYTES) or the world (WORLD_DATA_MAX_BYTES) would pass a limit (nothing changes; the
+ *          world's logger hears of each limit once); the validation error (ErrorCode_ArgumentOutOfRange).
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error World_SetData(World* self, uint64_t id, uint32_t key, const DataValue* value);
+
+/**
+ * @brief Finds an object's data entry.
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param key The key id.
+ * @param outValue [out] Receives the value (world-owned: valid until the object's data changes; a tag for a tag), or
+ *        NULL. Must not be NULL.
+ * @returns true if the object exists and holds @p key.
+ */
+bool World_TryGetData(World* self, uint64_t id, uint32_t key, const DataValue** outValue);
+
+/**
+ * @brief Removes an object's data entry (a tag or a value), if it has one.
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param key The key id.
+ * @param outWasRemoved [out] Receives whether the key was there; may be NULL.
+ * @returns Success (also when the key was not there); ErrorCode_IllegalArgument if @p self is NULL;
+ *          ErrorCode_InvalidOperation if no object has @p id.
+ */
+Error World_RemoveData(World* self, uint64_t id, uint32_t key, bool* outWasRemoved);
+
+/**
+ * @brief Tags an object: sets @p key to a tag (World_SetData with a tag, so a value under @p key is replaced).
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param key The tag's key id.
+ * @returns As World_SetData.
+ */
+Error World_AddTag(World* self, uint64_t id, uint32_t key);
+
+/**
+ * @brief Removes a tag from an object; a value under @p key is not a tag and stays.
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param key The tag's key id.
+ * @param outWasRemoved [out] Receives whether the object carried the tag; may be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_InvalidOperation if no object has @p id.
+ */
+Error World_RemoveTag(World* self, uint64_t id, uint32_t key, bool* outWasRemoved);
+
+/**
+ * @brief Reports whether an object carries a tag.
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param key The tag's key id.
+ * @returns true if the object exists and carries the tag.
+ */
+bool World_HasTag(World* self, uint64_t id, uint32_t key);
+
+/**
+ * @brief Returns the bytes the data of all of the world's objects counts together (DataMap_GetByteSize summed).
+ *
+ * The data functions keep it within WORLD_DATA_MAX_BYTES. Files and copies (the object table's readers and
+ * Properties_CopyTo) cannot see the world while they write, so they are counted but not refused: a loader checks this
+ * after reading the objects and refuses a world past the limit.
+ * @param self The world; must not be NULL.
+ * @returns The byte count.
+ */
+static inline size_t World_GetDataByteSize(const World* self)
+{
+    return self->_dataByteSize;
+}
+
+
 // World properties.
+/**
+ * @brief Returns the key registry the world borrows (the keys of its objects' tags and data).
+ * @param self The world; must not be NULL.
+ * @returns The registry (borrowed).
+ */
+static inline KeyRegistry* World_GetKeys(const World* self)
+{
+    return self->_keys;
+}
+
 /**
  * @brief Returns a mutable pointer to the world's environment settings (world-owned).
  * @param self The world; must not be NULL.

@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "PropertyDescriptorInternal.h"
+#include "DataMap.h"
+#include "NamespacedKey.h"
 #include "GameCalendar.h"
 #include "GameJSON.h"
 #include "Logger.h"
@@ -161,6 +163,8 @@ static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descrip
         }
         case PropertyType_Date:
             return CreateDateValue(pool, data->DateValue, outValue);
+        case PropertyType_DataMap:
+            return Error_Construct2(ErrorCode_InvalidState, "Data maps are written separately.");
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -325,6 +329,8 @@ static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectVa
             return ReadEnum(descriptor, value, &outData->EnumValue);
         case PropertyType_Date:
             return ReadDate(value, &outData->DateValue);
+        case PropertyType_DataMap:
+            return Error_Construct2(ErrorCode_InvalidState, "Data maps are read separately.");
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -334,7 +340,7 @@ static Error ReadString(const PropertyDescriptor* descriptor, const JSONObjectVa
 {
     if (value->Type == JSONValueType_Null)
     {
-        PropertyInternal_AdoptString(descriptor, target, NULL);
+        PropertyInternal_AdoptOwned(descriptor, target, NULL);
         return Error_CreateSuccess();
     }
     if (value->Type != JSONValueType_String)
@@ -359,7 +365,7 @@ static Error ReadString(const PropertyDescriptor* descriptor, const JSONObjectVa
         Memory_Free(Text);
         return Error_Construct2(ErrorCode_InvalidJSON, "The string must not contain NUL characters.");
     }
-    PropertyInternal_AdoptString(descriptor, target, Text);
+    PropertyInternal_AdoptOwned(descriptor, target, Text);
     return Error_CreateSuccess();
 }
 
@@ -383,6 +389,67 @@ static Error ReadValue(const PropertyTable* table, const PropertyDescriptor* des
     }
     return (Result.Code == ErrorCode_Success) ? Result
         : PropertyInternal_WrapError(ErrorCode_InvalidJSON, table, descriptor, &Result);
+}
+
+
+/* A data map from its two keys (either may be absent). The map's messages name where they are ("tags[2]: ...",
+ * "data.town:x: ..."), so they are prefixed with the table only. */
+static Error ReadDataMap(const PropertyTable* table, const PropertyDescriptor* descriptor, JSONCompound* compound,
+    const PropertyReadOptions* options, void* target, size_t* inOutFoundCount)
+{
+    if (options->Keys == NULL)
+    {
+        JSONObjectValue Ignored;
+        bool HasTags = false;
+        bool HasValues = false;
+        Error TagsResult = JSONCompound_GetOptional(compound, descriptor->TagsKey, &Ignored, &HasTags);
+        Error ValuesResult = JSONCompound_GetOptional(compound, descriptor->Key, &Ignored, &HasValues);
+        Error_Deconstruct(&TagsResult);
+        Error_Deconstruct(&ValuesResult);
+        if (HasTags || HasValues)
+        {
+            return Error_Construct4(ErrorCode_InvalidJSON,
+                "%s.%s: reading tags and data needs the key registry (PropertyReadOptions.Keys).",
+                (const char*)table->Name, (const char*)descriptor->Key);
+        }
+        return Error_CreateSuccess();
+    }
+
+    DataMapLimits Limits = { .MaxEntryCount = descriptor->Rules.MaxCount, .MaxByteSize = descriptor->Rules.MaxLength };
+    DataMap* Map = NULL;
+    size_t FoundCount = 0U;
+    Error Result = DataMap_ReadJSON(compound, descriptor->TagsKey, descriptor->Key, options->Keys,
+        options->DefaultNamespace, &Limits, &Map, &FoundCount);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return PropertyInternal_WrapError(ErrorCode_InvalidJSON, table, NULL, &Result);
+    }
+    *inOutFoundCount += FoundCount;
+    PropertyInternal_AdoptOwned(descriptor, target, Map);
+    return Error_CreateSuccess();
+}
+
+/* The persistent descriptor that reads @p key: its Key, or a data map's TagsKey; NULL for none. */
+static const PropertyDescriptor* FindPersistentByJSONKey(const PropertyTable* table, const unsigned char* key)
+{
+    for (size_t Index = 0; Index < table->DescriptorCount; Index++)
+    {
+        const PropertyDescriptor* Descriptor = &table->Descriptors[Index];
+        if (!PropertyInternal_HasFlags(Descriptor, PropertyFlags_Persistent))
+        {
+            continue;
+        }
+        bool IsTagsKey = (Descriptor->TagsKey != NULL)
+            && (StringUTF8_GetByteLength(Descriptor->TagsKey) == StringUTF8_GetByteLength(key))
+            && Memory_IsEqual(Descriptor->TagsKey, key, StringUTF8_GetByteLength(key));
+        bool IsKey = (StringUTF8_GetByteLength(Descriptor->Key) == StringUTF8_GetByteLength(key))
+            && Memory_IsEqual(Descriptor->Key, key, StringUTF8_GetByteLength(key));
+        if (IsKey || IsTagsKey)
+        {
+            return Descriptor;
+        }
+    }
+    return NULL;
 }
 
 
@@ -427,8 +494,7 @@ static Error CollectUnknownKeys(const PropertyTable* table, JSONCompound* compou
         {
             break;
         }
-        const PropertyDescriptor* Descriptor = PropertyTable_FindByKey(table, Entry.Key);
-        if ((Descriptor == NULL) || !PropertyInternal_HasFlags(Descriptor, PropertyFlags_Persistent))
+        if (FindPersistentByJSONKey(table, Entry.Key) == NULL)
         {
             if (*outCount < PROPERTY_JSON_UNKNOWN_KEY_LIST_LIMIT)
             {
@@ -512,6 +578,17 @@ Error Properties_WriteJSON(const PropertyTable* table, const void* instance, JSO
         }
 
         PropertyData Data = PropertyInternal_ReadField(Descriptor, instance);
+        if (Descriptor->Type == PropertyType_DataMap)
+        {
+            // Two keys: its tags and its values.
+            Result = DataMap_WriteJSON(Data.DataMapValue, pool, compound, Descriptor->TagsKey, Descriptor->Key,
+                Options.AreDefaultsWritten);
+            if (Result.Code != ErrorCode_Success)
+            {
+                return PropertyInternal_WrapError(Result.Code, table, NULL, &Result);
+            }
+            continue;
+        }
         JSONObjectValue Value;
         Result = CreateValue(pool, Descriptor, &Data, &Value);
         if (Result.Code != ErrorCode_Success)
@@ -547,6 +624,8 @@ Error Properties_ReadJSON(const PropertyTable* table, JSONCompound* compound, vo
         }
     }
 
+    // All or nothing, for the key registry too: a refused read forgets the keys its data rows interned.
+    size_t KeyCheckpoint = (Options.Keys != NULL) ? KeyRegistry_GetCount(Options.Keys) : 0U;
     PropertyScratch Scratch;
     PropertyScratch_Begin(&Scratch, table, instance);
     size_t FoundCount = 0U;
@@ -560,7 +639,15 @@ Error Properties_ReadJSON(const PropertyTable* table, JSONCompound* compound, vo
 
         JSONObjectValue Value;
         bool IsFound = false;
-        Error Result = JSONCompound_GetOptional(compound, Descriptor->Key, &Value, &IsFound);
+        Error Result = Error_CreateSuccess();
+        if (Descriptor->Type == PropertyType_DataMap)
+        {
+            Result = ReadDataMap(table, Descriptor, compound, &Options, Scratch._instance, &FoundCount);
+        }
+        else
+        {
+            Result = JSONCompound_GetOptional(compound, Descriptor->Key, &Value, &IsFound);
+        }
         if ((Result.Code == ErrorCode_Success) && IsFound)
         {
             FoundCount++;
@@ -569,18 +656,27 @@ Error Properties_ReadJSON(const PropertyTable* table, JSONCompound* compound, vo
         if (Result.Code != ErrorCode_Success)
         {
             PropertyScratch_Abort(&Scratch, table);
+            KeyRegistry_TruncateTo(Options.Keys, KeyCheckpoint);
             return Result;
         }
     }
 
+    Error Result = Error_CreateSuccess();
     if (JSONCompound_GetEntryCount(compound) > FoundCount)
     {
-        Error Result = HandleUnknownKeys(table, compound, &Options);
+        Result = HandleUnknownKeys(table, compound, &Options);
         if (Result.Code != ErrorCode_Success)
         {
             PropertyScratch_Abort(&Scratch, table);
-            return Result;
         }
     }
-    return PropertyScratch_Commit(&Scratch, table, instance, ErrorCode_InvalidJSON);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = PropertyScratch_Commit(&Scratch, table, instance, ErrorCode_InvalidJSON);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        KeyRegistry_TruncateTo(Options.Keys, KeyCheckpoint);
+    }
+    return Result;
 }

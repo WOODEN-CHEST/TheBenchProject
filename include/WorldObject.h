@@ -6,6 +6,7 @@
 #include "raylib/raylib.h"
 #include "Renderer.h"
 #include "wr/WRError.h"
+#include "DataMap.h"
 #include "PropertyDescriptor.h"
 #include "WorldComponent.h"
 
@@ -15,17 +16,25 @@
  * @brief A world object: one concrete type for everything placed in a 3D world.
  *
  * Every object has the same data: a unique id, a (non-unique) name, a transform (position, Euler XYZ rotation,
- * per-axis scale), a render tint, and three flags: whether it is enabled, whether it is visible, and its mobility.
- * What an object is comes from its components (WorldComponent.h): a model, a sprite, a light, at most one of each type.
+ * per-axis scale), a render tint, three flags (whether it is enabled, whether it is visible, and its mobility), and its
+ * tags and custom data. What an object is comes from its components (WorldComponent.h): a model, a sprite, a light, at
+ * most one of each type.
  *
  * LIFETIME. Objects exist only inside a world: World_CreateObject makes one (the world assigns its id) and
  * World_RemoveObject destroys it with its components. An object points back to its world, so a World must never be
  * moved or copied once constructed.
  *
  * PROPERTIES. Every property is a row of the object's property table (WorldObject_GetPropertyTable): name, position,
- * rotation, scale, tint, is_enabled, is_visible and mobility. The setters below validate through the table, so the
- * rules live there only, and the table functions (Properties_Set, the JSON and GHDF readers, Properties_CopyTo) work
- * on objects too. Every change, from either side, advances the object's revision (WorldObject_GetRevision).
+ * rotation, scale, tint, is_enabled, is_visible, mobility and data. The setters below validate through the table, so
+ * the rules live there only, and the table functions (Properties_Set, the JSON and GHDF readers, Properties_CopyTo)
+ * work on objects too. Every change, from either side, advances the object's revision (WorldObject_GetRevision); a
+ * change of the tags and data advances its data revision instead (WorldObject_GetDataRevision).
+ *
+ * TAGS AND DATA. Each object holds a DataMap (DataMap.h) of namespaced keys to typed values: a tag is an entry with no
+ * value. It is NULL while empty. Change it through the world, which keeps its tag index, its limits and the data
+ * revision: World_SetData, World_RemoveData, World_AddTag, World_RemoveTag (World.h). An object holds at most
+ * WORLD_OBJECT_DATA_MAX_ENTRIES entries counting at most WORLD_OBJECT_DATA_MAX_BYTES (DataMap_GetByteSize). The data
+ * row of the table is ReadOnly for Properties_Set; world files and copies still fill it.
  *
  * FLAGS.
  * - is_enabled (default true): false means every system skips the object: the renderer, and later collision and
@@ -44,6 +53,10 @@
 // Macros.
 /** @brief The most bytes an object's name may have (without the terminator). */
 #define WORLD_OBJECT_NAME_MAX_LENGTH ((size_t)256)
+/** @brief The most entries (tags included) an object's data may hold. */
+#define WORLD_OBJECT_DATA_MAX_ENTRIES ((size_t)256)
+/** @brief The most bytes an object's data may count (DataMap_GetByteSize): 64 KiB. */
+#define WORLD_OBJECT_DATA_MAX_BYTES ((size_t)65536)
 
 
 // Types.
@@ -89,6 +102,14 @@ typedef struct WorldObjectStruct
     uint32_t _revision;
     /** @brief One slot per component type: the object's component of that type (world-owned), or NULL. */
     WorldComponent* _components[WORLD_MAX_COMPONENT_TYPES];
+    /** @brief The object's tags and custom data (owned); NULL while it has none. */
+    DataMap* _data;
+    /** @brief Advances (wrapping) on every change of the tags and data. Runtime only. */
+    uint32_t _dataRevision;
+    /** @brief The world's bookkeeping: the data bytes its total counts for this object. */
+    size_t _countedDataBytes;
+    /** @brief The world's bookkeeping: how many of the tag index's lists hold this object. */
+    uint32_t _indexedTagCount;
 } WorldObject;
 
 
@@ -137,13 +158,50 @@ Error WorldObject_SetName(WorldObject* self, const unsigned char* name);
 /**
  * @brief Returns a number that changes whenever one of the object's properties changes.
  *
- * Covers every row of the object's table (not its components: each has its own revision). Runtime only: not saved.
+ * Covers every row of the object's table except its tags and data (WorldObject_GetDataRevision), and not its
+ * components (each has its own revision). Runtime only: not saved.
  * @param self The object; must not be NULL.
  * @returns The current revision.
  */
 static inline uint32_t WorldObject_GetRevision(const WorldObject* self)
 {
     return self->_revision;
+}
+
+
+// Functions: tags and data.
+/**
+ * @brief Returns the object's tags and custom data, for reading and iteration (DataMap_GetEntry).
+ *
+ * Change them through the world (World_SetData and the others), never through this pointer.
+ * @param self The object; must not be NULL.
+ * @returns The map (world-owned: valid until the object's data changes), or NULL while it has none.
+ */
+static inline const DataMap* WorldObject_GetData(const WorldObject* self)
+{
+    return self->_data;
+}
+
+/**
+ * @brief Returns a number that changes whenever the object's tags or data change (and only then: a script variable
+ *        changing must not make the renderer recompute anything). Runtime only: not saved.
+ * @param self The object; must not be NULL.
+ * @returns The current data revision.
+ */
+static inline uint32_t WorldObject_GetDataRevision(const WorldObject* self)
+{
+    return self->_dataRevision;
+}
+
+/**
+ * @brief Reports whether the object carries a tag (an entry of type tag; a key holding a value is not a tag).
+ * @param self The object; must not be NULL.
+ * @param key The tag's key id.
+ * @returns true if tagged.
+ */
+static inline bool WorldObject_HasTag(const WorldObject* self, uint32_t key)
+{
+    return DataMap_HasTag(self->_data, key);
 }
 
 

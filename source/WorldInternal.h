@@ -7,6 +7,7 @@
 #include "wr/WRMath.h"
 #include "wr/WRMemory.h"
 #include "AssetManager.h"
+#include "DataMap.h"
 #include "Logger.h"
 #include "PropertyDescriptor.h"
 #include "World.h"
@@ -15,11 +16,24 @@
 
 
 /**
- * Private header (source/) of the world data modules: World, WorldObject, WorldComponent and the component types
- * (WorldModelComponent, WorldSpriteComponent, WorldLightComponent). Not public API. It holds what those modules share:
- * the object's construction (objects are made by the world only), the hook every component table calls after a
- * change, the world's assets for components that load some, small helpers, and a seam for tests.
+ * Private header (source/) of the world data modules: World (World.c, WorldData.c for tags and data, WorldQuery.c),
+ * WorldObject, WorldComponent and the component types (WorldModelComponent, WorldSpriteComponent,
+ * WorldLightComponent). Not public API. It holds what those modules share: the object's construction (objects are made
+ * by the world only), the object lookup, the hook every component table calls after a change, the world's data
+ * bookkeeping (the tag index and the byte count), the world's assets for components that load some, small helpers,
+ * and a seam for tests.
  */
+
+
+// Types.
+/** One match of a query being sorted by distance: World_Query keeps them in the world's _queryMatches scratch. */
+typedef struct WorldQueryMatchStruct
+{
+    /** The object's id. */
+    uint64_t Id;
+    /** Its squared distance from the query's origin. */
+    float DistanceSquared;
+} WorldQueryMatch;
 
 
 // Functions: objects (WorldObject.c).
@@ -31,6 +45,33 @@ Error WorldObject_Construct(WorldObject* self, World* world, uint64_t id, const 
 
 /** Releases what the object owns (its name). Its components must have been destroyed first; not the memory itself. */
 void WorldObject_Deconstruct(WorldObject* self);
+
+
+// Functions: the world (World.c).
+/** The object with @p id, or NULL (a hash lookup; 0 finds nothing). */
+WorldObject* WorldInternal_FindObject(World* world, uint64_t id);
+
+
+// Functions: tags and data (WorldData.c).
+/** Sets up a new world's data bookkeeping: the empty tag index, the byte count, the query scratch. */
+Error WorldInternal_ConstructData(World* world);
+
+/** Releases the tag index and the query scratch; the objects (and their data) must be gone already. */
+void WorldInternal_DeconstructData(World* world);
+
+/**
+ * After an object's whole data was replaced behind the world's back (a table read or Properties_CopyTo, through the
+ * object table's AfterSet): recounts its bytes and indexes its tags again. Logs once when the world's data then passes
+ * WORLD_DATA_MAX_BYTES (a loader refuses such a world; World_GetDataByteSize).
+ */
+void WorldInternal_SyncObjectData(World* world, WorldObject* object);
+
+/** Before an object is removed: takes its tags out of the index and its bytes out of the world's count. */
+void WorldInternal_ForgetObjectData(World* world, WorldObject* object);
+
+/** The ids of the objects carrying @p tag, ascending (borrowed: valid until the tag index changes); NULL with a count
+ *  of 0 when none do. */
+const uint64_t* WorldInternal_GetTagMembers(World* world, uint32_t tag, size_t* outCount);
 
 
 // Functions: components (World.c).
@@ -47,7 +88,7 @@ void WorldInternal_ComponentAfterSet(void* instance, const PropertyDescriptor* d
  * and pass WorldComponentTypeInfo_Check; at most WORLD_MAX_COMPONENT_TYPES entries. The array of pointers is copied,
  * the entries are borrowed and must outlive the world.
  */
-Error WorldInternal_ConstructWithTypes(World* self, AssetManager* assets, Logger* logger,
+Error WorldInternal_ConstructWithTypes(World* self, KeyRegistry* keys, AssetManager* assets, Logger* logger,
     const WorldComponentTypeInfo* const* types, size_t typeCount);
 
 

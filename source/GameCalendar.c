@@ -36,6 +36,20 @@
 #define DATE_TEXT_SECOND_DASH 7U
 /* Room for the date text and its terminator (with spare bytes, so no compiler has to prove the fields' ranges). */
 #define DATE_TEXT_CAPACITY 32U
+/* The layout of a date-time's text, "yyyy-mm-ddThh:mm:ss[.ffffff]". */
+#define DATE_TIME_TEXT_BASE_LENGTH 19U
+#define DATE_TIME_TEXT_T 10U
+#define DATE_TIME_TEXT_HOUR 11U
+#define DATE_TIME_TEXT_FIRST_COLON 13U
+#define DATE_TIME_TEXT_MINUTE 14U
+#define DATE_TIME_TEXT_SECOND_COLON 16U
+#define DATE_TIME_TEXT_SECOND 17U
+#define DATE_TIME_TEXT_POINT 19U
+#define DATE_TIME_FRACTION_DIGITS 6U
+#define HOURS_PER_DAY 24
+#define MINUTES_PER_HOUR 60
+#define SECONDS_PER_MINUTE 60
+#define SECONDS_PER_HOUR 3600
 #define DECIMAL_BASE 10
 
 
@@ -250,4 +264,89 @@ bool GameCalendar_TryParseDate(const unsigned char* text, size_t byteCount, int6
         && TryReadDigits(text + DATE_TEXT_MONTH_OFFSET, DATE_TEXT_TWO_DIGITS, &Date.Month)
         && TryReadDigits(text + DATE_TEXT_DAY_OFFSET, DATE_TEXT_TWO_DIGITS, &Date.Day);
     return AreDigits && GameCalendar_TryGetDayNumber(Date, outDayNumber);
+}
+
+bool GameCalendar_IsDateTimeValid(int64_t dateTime)
+{
+    return (dateTime >= 0) && (dateTime <= GAME_CALENDAR_LAST_DATE_TIME);
+}
+
+Error GameCalendar_FormatDateTime(int64_t dateTime, GenericBuffer* destination)
+{
+    if (destination == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "GameCalendar_FormatDateTime: destination must not be NULL.");
+    }
+    if (!GameCalendar_IsDateTimeValid(dateTime))
+    {
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange,
+            "GameCalendar_FormatDateTime: %" PRId64 " is outside the calendar (0001-01-01T00:00:00 to "
+            "9999-12-31T23:59:59.999999).", dateTime);
+    }
+
+    GameDate Date = ToDate(dateTime / GAME_CALENDAR_MICROSECONDS_PER_DAY);
+    int64_t OfDay = dateTime % GAME_CALENDAR_MICROSECONDS_PER_DAY;
+    int64_t Seconds = OfDay / GAME_CALENDAR_MICROSECONDS_PER_SECOND;
+    int64_t Fraction = OfDay % GAME_CALENDAR_MICROSECONDS_PER_SECOND;
+    char Text[DATE_TEXT_CAPACITY + DATE_TEXT_CAPACITY];
+    int Length = snprintf(Text, sizeof(Text), "%04" PRId32 "-%02" PRId32 "-%02" PRId32 "T%02" PRId64 ":%02" PRId64
+        ":%02" PRId64, Date.Year, Date.Month, Date.Day, Seconds / SECONDS_PER_HOUR,
+        (Seconds / SECONDS_PER_MINUTE) % MINUTES_PER_HOUR, Seconds % SECONDS_PER_MINUTE);
+    if ((Fraction > 0) && (Length > 0))
+    {
+        // Six digits, then the trailing zeros left out: .5 rather than .500000.
+        int FractionLength = snprintf(Text + Length, sizeof(Text) - (size_t)Length, ".%06" PRId64, Fraction);
+        size_t End = (size_t)Length + (size_t)FractionLength;
+        while (Text[End - 1U] == '0')
+        {
+            End--;
+        }
+        Text[End] = '\0';
+    }
+    return StringUTF8_CopyTo((const unsigned char*)Text, destination);
+}
+
+bool GameCalendar_TryParseDateTime(const unsigned char* text, size_t byteCount, int64_t* outDateTime)
+{
+    if ((text == NULL) || (outDateTime == NULL) || (byteCount < DATE_TIME_TEXT_BASE_LENGTH)
+        || (byteCount > GAME_CALENDAR_DATE_TIME_TEXT_MAX_LENGTH) || (byteCount == (DATE_TIME_TEXT_BASE_LENGTH + 1U)))
+    {
+        return false;
+    }
+    int64_t DayNumber = 0;
+    if (!GameCalendar_TryParseDate(text, GAME_CALENDAR_DATE_TEXT_LENGTH, &DayNumber)
+        || (text[DATE_TIME_TEXT_T] != (unsigned char)'T') || (text[DATE_TIME_TEXT_FIRST_COLON] != (unsigned char)':')
+        || (text[DATE_TIME_TEXT_SECOND_COLON] != (unsigned char)':'))
+    {
+        return false;
+    }
+    int32_t Hour = 0;
+    int32_t Minute = 0;
+    int32_t Second = 0;
+    if (!TryReadDigits(text + DATE_TIME_TEXT_HOUR, DATE_TEXT_TWO_DIGITS, &Hour)
+        || !TryReadDigits(text + DATE_TIME_TEXT_MINUTE, DATE_TEXT_TWO_DIGITS, &Minute)
+        || !TryReadDigits(text + DATE_TIME_TEXT_SECOND, DATE_TEXT_TWO_DIGITS, &Second)
+        || (Hour >= HOURS_PER_DAY) || (Minute >= MINUTES_PER_HOUR) || (Second >= SECONDS_PER_MINUTE))
+    {
+        return false;
+    }
+
+    int32_t Fraction = 0;
+    if (byteCount > DATE_TIME_TEXT_BASE_LENGTH)
+    {
+        size_t DigitCount = byteCount - DATE_TIME_TEXT_BASE_LENGTH - 1U;
+        if ((text[DATE_TIME_TEXT_POINT] != (unsigned char)'.')
+            || !TryReadDigits(text + DATE_TIME_TEXT_POINT + 1U, DigitCount, &Fraction))
+        {
+            return false;
+        }
+        for (size_t Digit = DigitCount; Digit < DATE_TIME_FRACTION_DIGITS; Digit++)
+        {
+            Fraction *= DECIMAL_BASE;
+        }
+    }
+    int64_t Seconds = ((int64_t)Hour * SECONDS_PER_HOUR) + ((int64_t)Minute * SECONDS_PER_MINUTE) + (int64_t)Second;
+    *outDateTime = (DayNumber * GAME_CALENDAR_MICROSECONDS_PER_DAY) + (Seconds * GAME_CALENDAR_MICROSECONDS_PER_SECOND)
+        + (int64_t)Fraction;
+    return true;
 }

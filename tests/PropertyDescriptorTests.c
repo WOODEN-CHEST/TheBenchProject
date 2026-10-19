@@ -1,7 +1,9 @@
 #include "TestSuites.h"
 #include "TestText.h"
 #include "PropertyDescriptor.h"
+#include "DataMap.h"
 #include "GameClock.h"
+#include "NamespacedKey.h"
 #include "WorldEnvironment.h"
 #include "WorldObject.h"
 #include "WorldModelComponent.h"
@@ -11,6 +13,7 @@
 #include "wr/WRFileSystem.h"
 #include "wr/WRPath.h"
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 
@@ -65,6 +68,14 @@ typedef struct TestRecordStruct
     int32_t AfterSetCount;
     const PropertyDescriptor* LastChanged;
 } TestRecord;
+
+/* A record with a data map (its own record: a map needs a key registry, which the main record's tests do not have). */
+typedef struct TestMapRecordStruct
+{
+    int32_t Count;
+    DataMap* Notes;
+    int32_t AfterSetCount;
+} TestMapRecord;
 
 /* A struct bigger than the readers' inline scratch, so reads use a heap scratch. */
 typedef struct TestBigRecordStruct
@@ -165,6 +176,27 @@ static const PropertyTable RecordTable =
     .RetiredWireIdCount = sizeof(RecordRetiredWireIds) / sizeof(RecordRetiredWireIds[0]),
     .AfterSet = RecordAfterSet,
     .Migrate = NULL
+};
+
+static void MapRecordAfterSet(void* instance, const PropertyDescriptor* descriptor)
+{
+    TestMapRecord* Record = instance;
+    Record->AfterSetCount += (descriptor != NULL) ? 1 : 10;
+}
+
+static const PropertyDescriptor MapRecordProperties[] =
+{
+    { .Key = u8"count", .WireId = 1U, .Type = PropertyType_Int32, PROPERTY_MEMBER(TestMapRecord, Count),
+        .Default.Int32Value = 1, .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"notes", .TagsKey = u8"labels", .WireId = 2U, .Type = PropertyType_DataMap,
+        PROPERTY_MEMBER(TestMapRecord, Notes), .Default.DataMapValue = NULL, .Rules = PROPERTY_RULES_DATA_MAP(4U, 256U),
+        .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+};
+
+static const PropertyTable MapRecordTable =
+{
+    .Name = u8"test_map_record", .Version = 1U, .StructSize = sizeof(TestMapRecord), .Descriptors = MapRecordProperties,
+    .DescriptorCount = sizeof(MapRecordProperties) / sizeof(MapRecordProperties[0]), .AfterSet = MapRecordAfterSet
 };
 
 static const PropertyDescriptor BigRecordProperties[] =
@@ -535,6 +567,7 @@ static void TablesPassTheirCheck(TestRun* run)
 {
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(&RecordTable));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(&BigRecordTable));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(&MapRecordTable));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldEnvironment_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(GameClock_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldObject_GetPropertyTable()));
@@ -602,6 +635,202 @@ static void BrokenTablesFailTheirCheck(TestRun* run)
     Table.RetiredWireIds = Twice;
     Table.RetiredWireIdCount = 2U;
     TEST_CHECK_ERROR(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument);
+}
+
+/* Copies the map record's table, breaks the descriptor at @p index with @p breaker, and expects the check to fail with
+ * a message containing @p fragment. */
+static void CheckBrokenMapDescriptor(TestRun* run, size_t index, void (*breaker)(PropertyDescriptor*), const char* fragment)
+{
+    PropertyDescriptor Broken[2];
+    Memory_Copy(MapRecordProperties, Broken, sizeof(Broken));
+    breaker(&Broken[index]);
+    PropertyTable Table = MapRecordTable;
+    Table.Descriptors = Broken;
+    const char* const Fragments[] = { "test_map_record", fragment, NULL };
+    TestText_CheckErrorMessage(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument, Fragments);
+}
+
+static void BreakTagsKeyToNull(PropertyDescriptor* descriptor) { descriptor->TagsKey = NULL; }
+static void BreakTagsKeyToOwnKey(PropertyDescriptor* descriptor) { descriptor->TagsKey = u8"notes"; }
+static void BreakTagsKeyToOtherKey(PropertyDescriptor* descriptor) { descriptor->TagsKey = u8"count"; }
+static void BreakMapCount(PropertyDescriptor* descriptor) { descriptor->Rules.MaxCount = 0U; }
+static void BreakMapDefault(PropertyDescriptor* descriptor)
+{
+    static const int NotAMap = 0;
+    descriptor->Default.DataMapValue = (const DataMap*)(const void*)&NotAMap; // never read: the check stops first
+}
+static void BreakCountOnInteger(PropertyDescriptor* descriptor) { descriptor->Rules.MaxCount = 3U; }
+static void BreakTagsKeyOnInteger(PropertyDescriptor* descriptor) { descriptor->TagsKey = u8"labels2"; }
+
+static void DataMapRowsAreChecked(TestRun* run)
+{
+    CheckBrokenMapDescriptor(run, 1U, BreakTagsKeyToNull, "TagsKey");
+    CheckBrokenMapDescriptor(run, 1U, BreakTagsKeyToOwnKey, "TagsKey other than its key");
+    CheckBrokenMapDescriptor(run, 1U, BreakTagsKeyToOtherKey, "key is used twice");
+    CheckBrokenMapDescriptor(run, 1U, BreakMapCount, "MaxCount and a MaxLength");
+    CheckBrokenMapDescriptor(run, 1U, BreakMapDefault, "default to empty");
+    CheckBrokenMapDescriptor(run, 0U, BreakCountOnInteger, "only data maps take a MaxCount");
+    CheckBrokenMapDescriptor(run, 0U, BreakTagsKeyOnInteger, "only data maps take a TagsKey");
+}
+
+/* Writes @p record as JSON text through the map record's table. */
+static bool WriteMapRecordText(TestRun* run, const TestMapRecord* record, const PropertyWriteOptions* options,
+    GenericBuffer* outText, size_t* outKeyCount)
+{
+    JSONObjectPool* Pool = NULL;
+    JSONCompound* Compound = NULL;
+    bool IsWritten = TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool))
+        && TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound))
+        && TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&MapRecordTable, record, Pool, Compound, options));
+    if (IsWritten)
+    {
+        *outKeyCount = JSONCompound_GetEntryCount(Compound);
+        JSONObjectValue Value = JSONObjectValue_CreateCompound(Compound);
+        IsWritten = TEST_CHECK_SUCCESS(run, JSON_Serialize(&Value, outText, JSONSerializeFlags_NullTerminated));
+    }
+    if (Compound != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Compound, true));
+    }
+    if (Pool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    }
+    return IsWritten;
+}
+
+/* Reads JSON text into @p record through the map record's table (the read's error is returned). */
+static Error ReadMapRecordText(TestRun* run, const char* text, KeyRegistry* keys, TestMapRecord* record)
+{
+    JSONObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)))
+    {
+        return Error_Construct2(ErrorCode_InvalidState, "the test's pool could not be created");
+    }
+    Error Result = Error_Construct2(ErrorCode_InvalidJSON, "the test's JSON did not parse");
+    JSONObjectValue Value;
+    if (TestText_ParseJSON(run, Pool, text, &Value))
+    {
+        Error_Deconstruct(&Result);
+        PropertyReadOptions Options = PropertyReadOptions_CreateDefault();
+        Options.Keys = keys;
+        Result = Properties_ReadJSON(&MapRecordTable, Value.Value.Compound, record, &Options);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    return Result;
+}
+
+static void DataMapsGoThroughTheTables(TestRun* run)
+{
+    KeyRegistry Keys;
+    TestMapRecord Record;
+    TestMapRecord Other;
+    DataMap* Map = NULL;
+    if (!TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys)) || !TEST_CHECK_SUCCESS(run, DataMap_Create(&Keys, &Map)))
+    {
+        KeyRegistry_Deconstruct(&Keys);
+        return;
+    }
+    TEST_CHECK_SUCCESS(run, Properties_Construct(&MapRecordTable, &Record));
+    TEST_CHECK_SUCCESS(run, Properties_Construct(&MapRecordTable, &Other));
+    TEST_CHECK(run, Record.Notes == NULL); // the default: empty
+
+    uint32_t Urgent = 0U;
+    uint32_t Pages = 0U;
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Intern(&Keys, (const unsigned char*)u8"test:urgent", &Urgent));
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Intern(&Keys, (const unsigned char*)u8"test:pages", &Pages));
+    DataValue Tag = DataValue_CreateTag();
+    DataValue Count = DataValue_FromInt(12);
+    TEST_CHECK_SUCCESS(run, DataMap_Set(Map, Urgent, &Tag, NULL));
+    TEST_CHECK_SUCCESS(run, DataMap_Set(Map, Pages, &Count, NULL));
+
+    // Set copies, Get borrows, copies are deep, equality compares the maps.
+    PropertyValue Value = PropertyValue_FromDataMap(Map);
+    TEST_CHECK_SUCCESS(run, Properties_Set(&MapRecordTable, &Record, u8"notes", &Value));
+    TEST_CHECK(run, (Record.Notes != NULL) && (Record.Notes != Map) && DataMap_Equals(Record.Notes, Map));
+    TEST_CHECK(run, Record.AfterSetCount == 1);
+    PropertyValue Got;
+    TEST_CHECK(run, TEST_CHECK_SUCCESS(run, Properties_Get(&MapRecordTable, &Record, u8"notes", &Got))
+        && (Got.Data.DataMapValue == Record.Notes));
+    TEST_CHECK_SUCCESS(run, Properties_CopyTo(&MapRecordTable, &Record, &Other));
+    TEST_CHECK(run, (Other.Notes != Record.Notes) && Properties_Equals(&MapRecordTable, &Record, &Other));
+
+    // The limits are rules: five entries are too many.
+    for (int Index = 0; Index < 3; Index++)
+    {
+        char Text[32];
+        snprintf(Text, sizeof(Text), "test:extra_%d", Index);
+        uint32_t Extra = 0U;
+        TEST_CHECK_SUCCESS(run, KeyRegistry_Intern(&Keys, (const unsigned char*)Text, &Extra));
+        TEST_CHECK_SUCCESS(run, DataMap_Set(Map, Extra, &Tag, NULL));
+    }
+    const char* const TooMany[] = { "test_map_record.notes (Notes) must hold at most 4 entries", NULL };
+    TestText_CheckErrorMessage(run, Properties_Set(&MapRecordTable, &Record, u8"notes", &Value),
+        ErrorCode_ArgumentOutOfRange, TooMany);
+    TEST_CHECK(run, DataMap_GetCount(Record.Notes) == 2U);
+
+    // JSON: the tags and the values under their two keys, and back.
+    GenericBuffer Text;
+    GenericBuffer_AllocateVariable(&Text, TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    size_t KeyCount = 0U;
+    if (WriteMapRecordText(run, &Record, NULL, &Text, &KeyCount))
+    {
+        TEST_CHECK(run, (KeyCount == 2U) && (strstr((const char*)Text._data, "\"labels\":[\"test:urgent\"]") != NULL)
+            && (strstr((const char*)Text._data, "\"notes\":{\"test:pages\":12}") != NULL));
+        TestMapRecord ReadBack;
+        TEST_CHECK_SUCCESS(run, Properties_Construct(&MapRecordTable, &ReadBack));
+        TEST_CHECK_SUCCESS(run, ReadMapRecordText(run, (const char*)Text._data, &Keys, &ReadBack));
+        TEST_CHECK(run, DataMap_Equals(ReadBack.Notes, Record.Notes) && (ReadBack.AfterSetCount == 10));
+        // Without the registry the data cannot be read, and nothing changes.
+        TEST_CHECK_ERROR(run, ReadMapRecordText(run, (const char*)Text._data, NULL, &ReadBack), ErrorCode_InvalidJSON);
+        TEST_CHECK(run, DataMap_Equals(ReadBack.Notes, Record.Notes));
+        Properties_Deconstruct(&MapRecordTable, &ReadBack);
+    }
+    GenericBuffer_Clear(&Text);
+    PropertyWriteOptions Everything = { .AreDefaultsWritten = true };
+    TestMapRecord Empty;
+    TEST_CHECK_SUCCESS(run, Properties_Construct(&MapRecordTable, &Empty));
+    if (WriteMapRecordText(run, &Empty, &Everything, &Text, &KeyCount))
+    {
+        TEST_CHECK(run, (KeyCount == 3U) && (strstr((const char*)Text._data, "\"labels\":[]") != NULL)
+            && (strstr((const char*)Text._data, "\"notes\":{}") != NULL));
+    }
+    Properties_Deconstruct(&MapRecordTable, &Empty);
+
+    // GHDF: one Compound array under the wire id.
+    GHDFObjectPool* Pool = NULL;
+    GHDFCompound* Compound = NULL;
+    if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&Pool)) && TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Pool, &Compound))
+        && TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&MapRecordTable, &Record, Pool, Compound, NULL)))
+    {
+        GHDFObjectValue Entry;
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Compound, (GHDFEntryID)2,
+            GHDF_CreateArrayType(GHDFValueType_Compound), &Entry)) && (GHDFArray_GetElementCount(Entry.Value.Array) == 2U));
+        TestMapRecord ReadBack;
+        TEST_CHECK_SUCCESS(run, Properties_Construct(&MapRecordTable, &ReadBack));
+        PropertyReadOptions Options = PropertyReadOptions_CreateDefault();
+        TEST_CHECK_ERROR(run, Properties_ReadGHDF(&MapRecordTable, Compound, &ReadBack, &Options), ErrorCode_Deserialize);
+        Options.Keys = &Keys;
+        TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&MapRecordTable, Compound, &ReadBack, &Options));
+        TEST_CHECK(run, DataMap_Equals(ReadBack.Notes, Record.Notes));
+        Properties_Deconstruct(&MapRecordTable, &ReadBack);
+    }
+    if (Compound != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Compound, true));
+    }
+    if (Pool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Pool));
+    }
+
+    Memory_Free(Text._data);
+    Properties_Deconstruct(&MapRecordTable, &Record);
+    Properties_Deconstruct(&MapRecordTable, &Other);
+    TEST_CHECK(run, (Record.Notes == NULL) && (Other.Notes == NULL));
+    DataMap_Destroy(Map);
+    KeyRegistry_Deconstruct(&Keys);
 }
 
 static void ConstructGivesTheDefaults(TestRun* run)
@@ -1498,6 +1727,8 @@ void PropertyDescriptorTests_Run(TestRun* run)
     {
         { "tables_pass_their_check", TablesPassTheirCheck },
         { "broken_tables_fail_their_check", BrokenTablesFailTheirCheck },
+        { "data_map_rows_are_checked", DataMapRowsAreChecked },
+        { "data_maps_go_through_the_tables", DataMapsGoThroughTheTables },
         { "construct_gives_the_defaults", ConstructGivesTheDefaults },
         { "validation_names_the_key_and_the_rule", ValidationNamesTheKeyAndTheRule },
         { "json_round_trip_keeps_every_value", JSONRoundTripKeepsEveryValue },

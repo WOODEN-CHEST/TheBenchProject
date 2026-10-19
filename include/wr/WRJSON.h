@@ -241,6 +241,9 @@ static inline JSONObjectValue JSONObjectValue_CreateArray(JSONArray* value)
  * writers, this does not drop a trailing null first). With JSONSerializeFlags_PrettyPrinted the output is
  * indented and multi-line, otherwise compact. With JSONSerializeFlags_NullTerminated a single null byte is
  * appended after the text. The pool is not consulted and @p value is not modified or released.
+ * A real number is written as the shortest text that reads back as the same double, and always as a real number: a
+ * whole value keeps a fraction ("2.0", "-0.0"; "1e+21" has its exponent), so text read back by JSON_Deserialize keeps
+ * integers and real numbers apart.
  * @param value The value tree to serialize. Must not be NULL. Any reachable String/Compound/Array pointer
  *        must be non-NULL, and real numbers must be finite.
  * @param destination [out] Byte buffer (element size 1) the serialized text is appended to. Must not be

@@ -1,6 +1,7 @@
 #include "TestSuites.h"
 #include "TestAssets.h"
 #include "TestText.h"
+#include "TestWorld.h"
 #include "World.h"
 #include "WorldObject.h"
 #include "WorldComponent.h"
@@ -201,8 +202,9 @@ static Error ReadComponentJSON(TestRun* run, WorldComponent* component, const Pr
     return Result;
 }
 
-/* Constructs a world holding the standard types plus the two test drivers. */
-static bool ConstructDriverWorld(TestRun* run, World* world)
+/* Constructs a key registry and a world holding the standard types plus the two test drivers (release with
+ * TestWorld_Deconstruct). */
+static bool ConstructDriverWorld(TestRun* run, World* world, KeyRegistry* keys)
 {
     const WorldComponentTypeInfo* Types[WorldComponentType_Count + 2] =
     {
@@ -212,8 +214,17 @@ static bool ConstructDriverWorld(TestRun* run, World* world)
         &TestDriverA,
         &TestDriverB,
     };
-    return TEST_CHECK_SUCCESS(run, WorldInternal_ConstructWithTypes(world, NULL, NULL, Types,
-        sizeof(Types) / sizeof(Types[0])));
+    if (!TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(keys)))
+    {
+        return false;
+    }
+    if (!TEST_CHECK_SUCCESS(run, WorldInternal_ConstructWithTypes(world, keys, NULL, NULL, Types,
+        sizeof(Types) / sizeof(Types[0]))))
+    {
+        KeyRegistry_Deconstruct(keys);
+        return false;
+    }
+    return true;
 }
 
 
@@ -221,7 +232,8 @@ static bool ConstructDriverWorld(TestRun* run, World* world)
 static void ObjectsGetUniqueIdsThatAreNeverZero(TestRun* run)
 {
     World TestWorld;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
     {
         return;
     }
@@ -254,13 +266,14 @@ static void ObjectsGetUniqueIdsThatAreNeverZero(TestRun* run)
     }
     TEST_CHECK_ERROR(run, World_RemoveObject(&TestWorld, 2U), ErrorCode_InvalidOperation);
     TEST_CHECK_ERROR(run, World_RemoveObject(&TestWorld, 0U), ErrorCode_IllegalArgument);
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void LoaderIdsAdvanceTheCounter(TestRun* run)
 {
     World TestWorld;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
     {
         return;
     }
@@ -287,13 +300,14 @@ static void LoaderIdsAdvanceTheCounter(TestRun* run)
     TEST_CHECK(run, World_GetNextObjectId(&TestWorld) == 0U);
     TEST_CHECK_ERROR(run, World_CreateObject(&TestWorld, NULL, &Object), ErrorCode_InvalidOperation);
     TEST_CHECK(run, World_GetObjectCount(&TestWorld) == 5U);
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void ObjectSetVersionChangesOnCreateAndRemove(TestRun* run)
 {
     World TestWorld;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
     {
         return;
     }
@@ -313,13 +327,14 @@ static void ObjectSetVersionChangesOnCreateAndRemove(TestRun* run)
         TEST_CHECK_SUCCESS(run, World_RemoveObject(&TestWorld, WorldObject_GetId(Object)));
         TEST_CHECK(run, World_GetObjectSetVersion(&TestWorld) != AfterCreate);
     }
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void ObjectPropertiesValidateAndAdvanceTheRevision(TestRun* run)
 {
     World TestWorld;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
     {
         return;
     }
@@ -371,14 +386,15 @@ static void ObjectPropertiesValidateAndAdvanceTheRevision(TestRun* run)
     }
     TEST_CHECK_ERROR(run, World_CreateObject(&TestWorld, (const unsigned char*)u8"\xff", &Object),
         ErrorCode_ArgumentOutOfRange);
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void RotationIsDegreesInJSON(TestRun* run)
 {
     World TestWorld;
+    KeyRegistry TestKeys;
     JSONObjectPool* Pool = NULL;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
     {
         return;
     }
@@ -398,7 +414,7 @@ static void RotationIsDegreesInJSON(TestRun* run)
         }
         TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
     }
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 
@@ -406,7 +422,8 @@ static void RotationIsDegreesInJSON(TestRun* run)
 static void ComponentsAreAddedFoundAndRemoved(TestRun* run)
 {
     World TestWorld;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
     {
         return;
     }
@@ -457,13 +474,14 @@ static void ComponentsAreAddedFoundAndRemoved(TestRun* run)
         TEST_CHECK_ERROR(run, World_RemoveComponent(&TestWorld, 99U, WorldComponentType_Light),
             ErrorCode_InvalidOperation);
     }
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void RemovingAnObjectRemovesItsComponents(TestRun* run)
 {
     World TestWorld;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
     {
         return;
     }
@@ -483,13 +501,14 @@ static void RemovingAnObjectRemovesItsComponents(TestRun* run)
         CheckComponentOwners(run, &TestWorld, WorldComponentType_Sprite, NULL, 0U);
         CheckComponentOwners(run, &TestWorld, WorldComponentType_Light, NULL, 0U);
     }
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void PerTypeArraysStayConsistent(TestRun* run)
 {
     World TestWorld;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
     {
         return;
     }
@@ -525,13 +544,14 @@ static void PerTypeArraysStayConsistent(TestRun* run)
         CheckComponentOwners(run, &TestWorld, WorldComponentType_Model, ModelsAfter, 5U);
         CheckComponentOwners(run, &TestWorld, WorldComponentType_Light, LightsAfter, 3U);
     }
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void ComponentTypesAreFoundByName(TestRun* run)
 {
     World TestWorld;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
     {
         return;
     }
@@ -554,13 +574,14 @@ static void ComponentTypesAreFoundByName(TestRun* run)
     TEST_CHECK(run, !World_TryFindComponentType(&TestWorld, (const unsigned char*)u8"collider", &Found));
     TEST_CHECK(run, World_GetComponentTypeInfo(&TestWorld, WorldComponentType_Count) == NULL);
     TEST_CHECK(run, WorldComponent_GetStandardTypeInfo(WorldComponentType_Count) == NULL);
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
 {
     World TestWorld;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
     {
         return;
     }
@@ -612,7 +633,7 @@ static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
         TEST_CHECK(run, (WorldLightComponent_GetRange(Light) == 6.0f)
             && (WorldComponent_GetRevision(&Light->Base) == (Revision + 2U)));
     }
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 
@@ -620,7 +641,8 @@ static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
 static void WorldWithoutAssetsLeavesSpritesEmpty(TestRun* run)
 {
     World TestWorld;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
     {
         return;
     }
@@ -630,7 +652,7 @@ static void WorldWithoutAssetsLeavesSpritesEmpty(TestRun* run)
         TEST_CHECK(run, !SpriteAnimationInstance_HasSource(WorldSpriteComponent_GetAnimationInstance(Sprite)));
         TEST_CHECK(run, strcmp((const char*)WorldSpriteComponent_GetSpriteAnimation(Sprite), "walk") == 0);
     }
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void SpriteBindsAndTheWorldReleasesTheAnimationLast(TestRun* run)
@@ -638,8 +660,9 @@ static void SpriteBindsAndTheWorldReleasesTheAnimationLast(TestRun* run)
     TestAssetFixture Fixture;
     TestAssetCounters Counters = { 0 };
     World TestWorld;
+    KeyRegistry TestKeys;
     if (!TestAssetFixture_Construct(run, &Fixture) || !TestAssets_AddSpriteAnimation(run, &Fixture, "walk", &Counters)
-        || !TEST_CHECK_SUCCESS(run, World_Construct2(&TestWorld, Fixture.Manager, NULL)))
+        || !TestWorld_Construct(run, &TestWorld, &TestKeys, Fixture.Manager, NULL))
     {
         TestAssetFixture_Deconstruct(run, &Fixture);
         return;
@@ -660,7 +683,7 @@ static void SpriteBindsAndTheWorldReleasesTheAnimationLast(TestRun* run)
     }
 
     TEST_CHECK(run, Counters.UnloadCount == 0);
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
     TEST_CHECK(run, Counters.UnloadCount == 1);
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
@@ -679,8 +702,9 @@ static void MissingAnimationIsLoggedOnceAndLeavesTheSpriteEmpty(TestRun* run)
     }
 
     World TestWorld;
-    if (TestAssetFixture_Construct(run, &Fixture) && TEST_CHECK_SUCCESS(run, World_Construct2(&TestWorld,
-        Fixture.Manager, &Log)))
+    KeyRegistry TestKeys;
+    if (TestAssetFixture_Construct(run, &Fixture) && TestWorld_Construct(run, &TestWorld, &TestKeys,
+        Fixture.Manager, &Log))
     {
         WorldSpriteComponent* Sprite = AddSprite(run, &TestWorld, "missing");
         if (Sprite != NULL)
@@ -690,7 +714,7 @@ static void MissingAnimationIsLoggedOnceAndLeavesTheSpriteEmpty(TestRun* run)
             TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"missing"));
             TEST_CHECK(run, !IsBound(Sprite));
         }
-        TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+        TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
     }
     TestAssetFixture_Deconstruct(run, &Fixture);
     TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
@@ -702,10 +726,11 @@ static void RenamingRebindsAndTheSameNameKeepsPlaying(TestRun* run)
 {
     TestAssetFixture Fixture;
     World TestWorld;
+    KeyRegistry TestKeys;
     if (!TestAssetFixture_Construct(run, &Fixture)
         || !TestAssets_AddPlayingSpriteAnimation(run, &Fixture, "walk", 4U, 10.0, NULL)
         || !TestAssets_AddSpriteAnimation(run, &Fixture, "idle", NULL)
-        || !TEST_CHECK_SUCCESS(run, World_Construct2(&TestWorld, Fixture.Manager, NULL)))
+        || !TestWorld_Construct(run, &TestWorld, &TestKeys, Fixture.Manager, NULL))
     {
         TestAssetFixture_Deconstruct(run, &Fixture);
         return;
@@ -735,7 +760,7 @@ static void RenamingRebindsAndTheSameNameKeepsPlaying(TestRun* run)
         TEST_CHECK_ERROR(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"Bad Name"),
             ErrorCode_ArgumentOutOfRange);
     }
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
 
@@ -743,8 +768,9 @@ static void TableWritesRebindTheSprite(TestRun* run)
 {
     TestAssetFixture Fixture;
     World TestWorld;
+    KeyRegistry TestKeys;
     if (!TestAssetFixture_Construct(run, &Fixture) || !TestAssets_AddSpriteAnimation(run, &Fixture, "walk", NULL)
-        || !TEST_CHECK_SUCCESS(run, World_Construct2(&TestWorld, Fixture.Manager, NULL)))
+        || !TestWorld_Construct(run, &TestWorld, &TestKeys, Fixture.Manager, NULL))
     {
         TestAssetFixture_Deconstruct(run, &Fixture);
         return;
@@ -770,7 +796,7 @@ static void TableWritesRebindTheSprite(TestRun* run)
         TEST_CHECK_SUCCESS(run, Properties_CopyTo(Table, Other, Sprite));
         TEST_CHECK(run, IsBound(Sprite) && WorldSpriteComponent_HasOutline(Sprite));
     }
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
 
@@ -779,7 +805,8 @@ static void TableWritesRebindTheSprite(TestRun* run)
 static void FlagsAdvanceTheRevision(TestRun* run)
 {
     World TestWorld;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
     {
         return;
     }
@@ -795,13 +822,14 @@ static void FlagsAdvanceTheRevision(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(Object, true));
         TEST_CHECK(run, WorldObject_IsEnabled(Object) && !WorldObject_IsVisible(Object));
     }
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void AddingADriverMakesTheObjectMovable(TestRun* run)
 {
     World TestWorld;
-    if (!ConstructDriverWorld(run, &TestWorld))
+    KeyRegistry TestKeys;
+    if (!ConstructDriverWorld(run, &TestWorld, &TestKeys))
     {
         return;
     }
@@ -823,13 +851,14 @@ static void AddingADriverMakesTheObjectMovable(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldObject_SetMobility(Object, WorldMobility_Static));
         TEST_CHECK(run, WorldObject_GetMobility(Object) == WorldMobility_Static);
     }
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void ASecondTransformDriverIsRefused(TestRun* run)
 {
     World TestWorld;
-    if (!ConstructDriverWorld(run, &TestWorld))
+    KeyRegistry TestKeys;
+    if (!ConstructDriverWorld(run, &TestWorld, &TestKeys))
     {
         return;
     }
@@ -853,18 +882,23 @@ static void ASecondTransformDriverIsRefused(TestRun* run)
         const uint64_t DriverBOwners[] = { WorldObject_GetId(Other), Id };
         CheckComponentOwners(run, &TestWorld, TestDriverB.Type, DriverBOwners, 2U);
     }
-    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void CustomComponentTypesAreChecked(TestRun* run)
 {
     World TestWorld;
+    KeyRegistry TestKeys;
+    if (!TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&TestKeys)))
+    {
+        return;
+    }
     const WorldComponentTypeInfo* Shifted[2] =
     {
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Sprite), // type 1 at index 0
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Model),
     };
-    TEST_CHECK_ERROR(run, WorldInternal_ConstructWithTypes(&TestWorld, NULL, NULL, Shifted, 2U),
+    TEST_CHECK_ERROR(run, WorldInternal_ConstructWithTypes(&TestWorld, &TestKeys, NULL, NULL, Shifted, 2U),
         ErrorCode_IllegalArgument);
 
     // A test type may not take a standard type's slot: the standard downcasts trust the slot.
@@ -872,7 +906,7 @@ static void CustomComponentTypesAreChecked(TestRun* run)
         .Size = sizeof(TestDriverComponent), .Table = &TestDriverTable, .IsTransformDriver = false,
         .Construct = ConstructTestDriver, .Deconstruct = DeconstructTestDriver };
     const WorldComponentTypeInfo* Impostors[1] = { &Impostor };
-    TEST_CHECK_ERROR(run, WorldInternal_ConstructWithTypes(&TestWorld, NULL, NULL, Impostors, 1U),
+    TEST_CHECK_ERROR(run, WorldInternal_ConstructWithTypes(&TestWorld, &TestKeys, NULL, NULL, Impostors, 1U),
         ErrorCode_IllegalArgument);
 
     const WorldComponentTypeInfo* Unhooked[WorldComponentType_Count + 1] =
@@ -883,8 +917,12 @@ static void CustomComponentTypesAreChecked(TestRun* run)
         &TestUnhooked,
     };
     const char* const Fragments[] = { "test_unhooked", "AfterSet", NULL };
-    TestText_CheckErrorMessage(run, WorldInternal_ConstructWithTypes(&TestWorld, NULL, NULL, Unhooked,
+    TestText_CheckErrorMessage(run, WorldInternal_ConstructWithTypes(&TestWorld, &TestKeys, NULL, NULL, Unhooked,
         sizeof(Unhooked) / sizeof(Unhooked[0])), ErrorCode_IllegalArgument, Fragments);
+
+    // Every world needs a key registry.
+    TEST_CHECK_ERROR(run, World_Construct1(&TestWorld, NULL), ErrorCode_IllegalArgument);
+    KeyRegistry_Deconstruct(&TestKeys);
 }
 
 

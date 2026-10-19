@@ -11,6 +11,7 @@
 #define CATEGORY_OBJECT ((const unsigned char*)u8"Object")
 #define CATEGORY_TRANSFORM ((const unsigned char*)u8"Transform")
 #define CATEGORY_APPEARANCE ((const unsigned char*)u8"Appearance")
+#define CATEGORY_DATA ((const unsigned char*)u8"Data")
 
 
 // Types.
@@ -25,18 +26,13 @@ typedef enum ObjectPropertyEnum
     ObjectProperty_IsEnabled,
     ObjectProperty_IsVisible,
     ObjectProperty_Mobility,
+    ObjectProperty_Data,
     ObjectProperty_Count
 } ObjectProperty;
 
 
 // Static functions: the table's hook (the table below refers to it).
-/* Any change made through the table is a property change. */
-static void ObjectAfterSet(void* instance, const PropertyDescriptor* descriptor)
-{
-    UNUSED(descriptor);
-    WorldObject* Object = instance;
-    Object->_revision++;
-}
+static void ObjectAfterSet(void* instance, const PropertyDescriptor* descriptor);
 
 
 // Fields.
@@ -117,6 +113,19 @@ static const PropertyDescriptor ObjectProperties[ObjectProperty_Count] =
             u8"(doors, people, cars). A hint for speed: moving a static object still works, it just costs more.",
         .SinceVersion = 1U
     },
+    [ObjectProperty_Data] =
+    {
+        // Read-only for Properties_Set: changes go through the world (World_SetData ...), which keeps the tag index,
+        // the world's limit and the data revision. World files and copies still fill it.
+        .Key = u8"data", .TagsKey = u8"tags", .WireId = 11U, .Type = PropertyType_DataMap,
+        PROPERTY_MEMBER(WorldObject, _data), .Default.DataMapValue = NULL,
+        .Rules = PROPERTY_RULES_DATA_MAP(WORLD_OBJECT_DATA_MAX_ENTRIES, WORLD_OBJECT_DATA_MAX_BYTES),
+        .Flags = PropertyFlags_Persistent | PropertyFlags_Editable | PropertyFlags_ReadOnly | PropertyFlags_Script,
+        .Category = CATEGORY_DATA, .DisplayName = u8"Tags and data",
+        .Description = u8"Namespaced keys (\"town:visits\") with typed values, set in the editor or by scripts; a tag is "
+            u8"a key with no value. Selectors search them.",
+        .SinceVersion = 1U
+    },
 };
 
 static const PropertyTable ObjectTable =
@@ -134,6 +143,26 @@ static const PropertyTable ObjectTable =
 
 
 // Static functions.
+/* A change of the tags and data advances the data revision (and tells the world: its tag index and byte count); any
+ * other change, the revision. A read or a copy (no row) may have changed both. */
+static void ObjectAfterSet(void* instance, const PropertyDescriptor* descriptor)
+{
+    WorldObject* Object = instance;
+    const PropertyDescriptor* DataRow = &ObjectProperties[ObjectProperty_Data];
+    if (descriptor != DataRow)
+    {
+        Object->_revision++;
+    }
+    if ((descriptor == NULL) || (descriptor == DataRow))
+    {
+        Object->_dataRevision++;
+        if (Object->_world != NULL)
+        {
+            WorldInternal_SyncObjectData(Object->_world, Object);
+        }
+    }
+}
+
 /* Checks @p value against one row's rules (so the setters' rules live in the table only). */
 static Error CheckProperty(ObjectProperty property, PropertyValue value)
 {
