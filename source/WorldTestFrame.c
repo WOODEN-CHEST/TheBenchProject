@@ -398,6 +398,21 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         }
     }
 
+    // V toggles the eye's night vision (dim light losing its colour as it does for the eye); off = the colourful night
+    // a long-exposure photo shows. By day it changes nothing.
+    if (GameInput_IsKeyPressed(input, GameKey_V))
+    {
+        bool Enabled = !WorldRenderer_IsNightVisionEnabled(frame->_renderer);
+        WorldRenderer_SetNightVisionEnabled(frame->_renderer, Enabled);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: night vision (dim light loses its colour, as for the eye) %s.",
+                Enabled ? "ON" : "OFF");
+            Error_Deconstruct(&LogResult);
+        }
+    }
+
     // C toggles the crisp overlay (OmitPixelation objects rendered un-pixelated); off = they render pixelated.
     if (GameInput_IsKeyPressed(input, GameKey_C))
     {
@@ -678,8 +693,9 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             (const unsigned char*)u8"WorldTest: entered the world. WASD+SPACE/CTRL move, SHIFT sprint, mouse look; "
             u8"P pause/resume the clock, 1-4 = dawn/noon/dusk/midnight (paused), [ ] scrub time, , . previous/next "
             u8"day, / a week ahead; F full moon / calendar moon, Y seasons; O post effects, B bloom, G sun shafts, "
-            u8"C crisp overlay, L light gizmos, N light pollution, I renderer status and game time, T text sample; M "
-            u8"frees the mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");
+            u8"C crisp overlay, V night vision, L light gizmos, N light pollution, I renderer status and game time, T text "
+            u8"sample; M frees the mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go "
+            u8"of it).");
         Error_Deconstruct(&LogResult);
     }
     return Error_CreateSuccess();

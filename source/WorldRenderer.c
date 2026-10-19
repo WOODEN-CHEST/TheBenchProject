@@ -112,6 +112,27 @@ static bool IsMoonlightAvailable(const WorldRenderer* self)
     return self->_pbr._shader != NULL;
 }
 
+static bool IsNightVisionAvailable(const WorldRenderer* self)
+{
+    return (self->_pbr._shader != NULL) || (self->_sky._shader != NULL); // the two passes that apply it
+}
+
+/* The eye's night vision this frame: how strongly it applies (the renderer toggle x the world's strength), the field
+ * luminance it compares with (the sky's light, BaseSceneLuminance, so it runs after WorldRendererLighting_PrepareFrame;
+ * a non-finite one counts as daylight, changing nothing), the rods' grey (the world's blue shift), and whether it
+ * changes anything: only while the field is below the full-colour luminance (by day the shaders skip it). */
+static void DecideNightVision(const WorldRenderer* self, WorldRenderFrame* frame)
+{
+    const WorldEnvironment* Environment = frame->Environment;
+    float Strength = fminf(fmaxf(Environment->NightVisionStrength, 0.0f), 1.0f); // fmaxf drops a NaN
+    frame->NightVisionStrength = self->_isNightVisionEnabled ? Strength : 0.0f;
+    frame->NightVisionFieldLuminance = isfinite(frame->BaseSceneLuminance)
+        ? fmaxf(frame->BaseSceneLuminance, 0.0f) : self->_nightVision.FullColourLuminance;
+    NightVision_GetRodTint(Environment->NightVisionBlueShift, frame->NightVisionTint);
+    frame->IsNightVisionActive = IsNightVisionAvailable(self) && (frame->NightVisionStrength > 0.0f)
+        && (frame->NightVisionFieldLuminance < self->_nightVision.FullColourLuminance);
+}
+
 /* Advances the render clock behind WorldRenderFrame.TimeSeconds, wrapping it every RENDER_TIME_WRAP_SECONDS. A zero,
  * negative or non-finite delta holds it. */
 static void AdvanceRenderTime(WorldRenderer* self, double deltaSeconds)
@@ -274,6 +295,8 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->Features[WorldRendererFeature_Moon] = StateOf(IsMoonAvailable(self), frame->IsMoonActive);
     Status->Features[WorldRendererFeature_Moonlight] = StateOf(IsMoonlightAvailable(self),
         frame->MoonLight.Intensity > 0.0f);
+    Status->Features[WorldRendererFeature_NightVision] = StateOf(IsNightVisionAvailable(self),
+        frame->IsNightVisionActive);
     Status->StarCount = self->_stars._starCount;
 
     size_t ModelCount = 0;
@@ -360,6 +383,8 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_lightGizmosEnabled = true;
     Renderer->_pixelationEnabled = true;
     Renderer->_postfxEnabled = true;
+    Renderer->_isNightVisionEnabled = true;
+    Renderer->_nightVision = NightVision_GetCalibration();
     Renderer->_outline._isEnabled = true;
     Renderer->_bloom._isEnabled = true;
     Renderer->_sunshaft._isEnabled = true;
@@ -482,6 +507,7 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     WorldRendererSky_PrepareFrame(&Frame);
     DecidePasses(self, &Frame);
     WorldRendererLighting_PrepareFrame(self, &Frame);
+    DecideNightVision(self, &Frame);
 
     // Shadow maps first: the scene and crisp passes sample them.
     if (Frame.IsCascadeShadowActive)
@@ -572,6 +598,7 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_MoonShadows:      return (const unsigned char*)u8"moon shadows";
         case WorldRendererFeature_Moon:             return (const unsigned char*)u8"moon";
         case WorldRendererFeature_Moonlight:        return (const unsigned char*)u8"moonlight";
+        case WorldRendererFeature_NightVision:      return (const unsigned char*)u8"night vision";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -624,6 +651,16 @@ void WorldRenderer_SetPostEffectsEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_ArePostEffectsEnabled(const WorldRenderer* self)
 {
     return self->_postfxEnabled;
+}
+
+void WorldRenderer_SetNightVisionEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_isNightVisionEnabled = enabled;
+}
+
+bool WorldRenderer_IsNightVisionEnabled(const WorldRenderer* self)
+{
+    return self->_isNightVisionEnabled;
 }
 
 void WorldRenderer_SetBloomEnabled(WorldRenderer* self, bool enabled)

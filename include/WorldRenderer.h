@@ -24,7 +24,8 @@
  * point-light cube shadow; a normal/flag G-buffer and screen-space ambient occlusion (applied to the ambient term
  * only); the scene pass (atmospheric sky with the moon, the moonlit sky, the Milky Way and light pollution's skyglow,
  * the star field, PBR-lit models with the sun, the moon and forward-shaded point lights and distance fog, sprite
- * billboards, debug grid and light gizmos);
+ * billboards, debug grid and light gizmos; the sky's dim light and the reflected light go through the eye's night
+ * vision, which greys them at night as the eye does);
  * depth/normal-edge outlines; bloom and sun shafts (added in HDR); the tonemap with eye adaptation; and last
  * the crisp overlay, which draws OmitPixelation objects at window resolution over the pixelated image.
  *
@@ -99,6 +100,10 @@ typedef enum WorldRendererFeatureEnum
     WorldRendererFeature_Moon,
     /** @brief The moon's light on the world (inactive while the moon is down, by day, or without moonlight). */
     WorldRendererFeature_Moonlight,
+    /** @brief The eye's night vision: dim reflected and scattered light loses its colour into a faintly blue grey, as
+     *  the eye's does when the rods take over (active at dusk and at night; inactive by day, or switched off by the
+     *  renderer toggle or the world's NightVisionStrength). */
+    WorldRendererFeature_NightVision,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -260,6 +265,24 @@ void WorldRenderer_SetPostEffectsEnabled(WorldRenderer* self, bool enabled);
  * @returns true if the post-effects pass runs (given the shaders/targets are available).
  */
 bool WorldRenderer_ArePostEffectsEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Enables or disables the eye's night vision: dim reflected and scattered light losing its colour into a faintly
+ *        blue grey, as it does for the eye when the rods take over from the cones.
+ *
+ * A code-side toggle for A/B-ing it; the world's NightVisionStrength scales it further (0 there switches it off for a
+ * world). By day it changes nothing either way. Default enabled. Applied on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to apply it, false for colourful nights (what a long-exposure photo shows).
+ */
+void WorldRenderer_SetNightVisionEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the eye's night vision is enabled (see WorldRenderer_SetNightVisionEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true if enabled.
+ */
+bool WorldRenderer_IsNightVisionEnabled(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables the bloom pass (a blurred bright-pass of the scene added back in HDR).

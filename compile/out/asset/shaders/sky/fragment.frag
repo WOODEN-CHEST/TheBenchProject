@@ -2,7 +2,8 @@
 
 // Full-screen atmospheric sky: Rayleigh + Mie single-scattering (shaders/common/atmosphere.glsl, which the PBR
 // shader's distance fog shares) lit by the sun and, at night, by the moon; light pollution's skyglow; a sun disc, the
-// moon's disc and the Milky Way. The stars are a separate pass drawn over this one (shaders/stars).
+// moon's disc and the Milky Way. The eye's night vision (shaders/common/night_vision.glsl) greys the dim sky, not the
+// discs. The stars are a separate pass drawn over this one (shaders/stars).
 // Drawn behind the 3D geometry into the linear-HDR scene buffer; the tonemap post-pass maps it to display.
 // The per-pixel world ray is reconstructed from the inverse view-projection so the sky lines up exactly with
 // the 3D camera. Everything is world space with +Y up, matching WorldEnvironment_GetSunDirection.
@@ -40,10 +41,17 @@ uniform float moonEarthshine;      // the dark side's glow as a share of that (a
 uniform bool hasMoonTexture;       // false: the disc is a flat grey
 uniform sampler2D moonTexture;     // sky_moon: the full moon's face, flat-lit (sRGB; alpha 0 outside the disc)
 
+uniform float nightVisionFieldLuminance; // the scene luminance the sky's light gives (linear, the game's light units)
+uniform float nightVisionHalfLuminance;  // night vision's calibration on the game's light scale (source/NightVision.h)
+uniform float nightVisionSteepness;
+uniform float nightVisionStrength;       // 0 none (colourful nights) .. 1 the eye
+uniform vec3  nightVisionTint;           // the rods' grey, luminance 1 (the world's blue shift)
+
 out vec4 finalColor;
 
 #include "common/atmosphere"
 #include "common/night_sky"
+#include "common/night_vision"
 
 // The moon's face where no texture is bound (sRGB grey).
 const float MOON_FLAT_ALBEDO = 0.7;
@@ -132,13 +140,6 @@ void main()
         moon = moonDisc(rayDir, sunDir, moonCover);
     }
 
-    // Sun disc, only above the horizon (so the mirror does not create a second sun below).
-    float discCos = cos(radians(0.5*max(sunSize, 0.01)));
-    if ((rayDir.y > -0.02) && (dot(rayDir, sunDir) > discCos))
-    {
-        sky += max(sunColor, vec3(0.0))*iSun*(1.0 - moonCover);
-    }
-
     // The Milky Way, above the horizon only, dimmed near it like the stars. milkyWayRadiance already holds its
     // brightness, the light pollution and the twilight.
     if ((milkyWayRadiance > 0.0) && (rayDir.y > 0.0))
@@ -146,9 +147,23 @@ void main()
         sky += milkyWay(rayDir)*nightSkyExtinction(nightSkyAirmass(rayDir.y))*(1.0 - moonCover);
     }
 
-    // The moon, dimmed and reddened by the air in front of it: pale by day under the bright in-scatter, bright at night.
-    sky += moon*transmittance*moonCover;
+    // What the eye sees of the sky's dim light: at night its colour fades into the rods' grey (a low moon's sky is as
+    // orange as a sunset's, but too dim for colour vision); by day this leaves it exactly as it is.
+    vec3 tint = max(skyTint, vec3(0.0));
+    sky = nightVision(sky*tint, nightVisionFieldLuminance, nightVisionHalfLuminance, nightVisionSteepness,
+        nightVisionStrength, nightVisionTint);
 
-    sky *= max(skyTint, vec3(0.0));
+    // The discs are emitters, far brighter than the game draws them, so they keep their colour: the sun disc, only
+    // above the horizon (so the mirror does not create a second sun below), and the moon, dimmed and reddened by the air
+    // in front of it (pale by day under the bright in-scatter, bright at night, orange as it rises).
+    vec3 discs = vec3(0.0);
+    float discCos = cos(radians(0.5*max(sunSize, 0.01)));
+    if ((rayDir.y > -0.02) && (dot(rayDir, sunDir) > discCos))
+    {
+        discs += max(sunColor, vec3(0.0))*iSun*(1.0 - moonCover);
+    }
+    discs += moon*transmittance*moonCover;
+    sky += discs*tint;
+
     finalColor = vec4(sky, 1.0); // linear HDR; tonemap post-pass maps to display
 }

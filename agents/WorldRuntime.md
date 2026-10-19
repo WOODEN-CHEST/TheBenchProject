@@ -12,6 +12,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
 | WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-object cache and per-frame draw lists (models with resolved assets, sprites, lights). |
+| NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
 | WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c` | A concrete GameFrame: a WASD + mouse-look flycam over a test world. |
 
 `source/main.c` is the composition root (bootstrap).
@@ -80,13 +81,14 @@ definitions change).
 3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the sun's and the moon's linear colours,
    the ambient colour (with the moonlit sky's fill), the scene luminance for eye adaptation, fog density, shadow
    strength, and the forward-light candidates (every light except the cube-shadow light) with their linear radiance.
+   Then the eye's night vision for the frame (`DecideNightVision`: its strength, the field luminance, the rods' grey).
 4. The shadow cascades of the shadow light (the sun or the moon), then the point-light cube shadow (only casters
    within the light's reach).
 5. The normal/flag G-buffer and the AO pre-pass, when AO or outlines run.
 6. The scene pass: clear, atmospheric sky (with the moonlit sky, the moon's disc, the Milky Way and light pollution's
    skyglow), the stars (none behind the moon), PBR models (the sun and the moon; per object: up to
    `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), sprites, debug grid
-   and light gizmos.
+   and light gizmos. The sky's glow and the models' reflected light go through the eye's night vision.
 7. Outlines, then bloom and sun shafts from the (outlined) HDR scene.
 8. Eye adaptation, then the tonemapped point-upscale into the frame target.
 9. The crisp overlay for OmitPixelation objects, composited over the finished image.
@@ -193,6 +195,38 @@ the passes share is `shaders/common/night_sky.glsl`.
   `MoonColor`. The ambient gains the moonlit sky's fill (`MOON_AMBIENT_SHARE` 0.3 of the moonlight), the eye
   adaptation counts the moonlight like the sunlight. New-moon nights look as before.
 
+**Night vision.** The eye's dim-light vision: in dim light the rods take over from the cones and colour fades into a
+grey with a faint blue cast. A low moon's sky is as orange as a sunset's (moonlight is sunlight, scattered by the same
+air; a long exposure shows it), but the eye sees it grey-blue, and a moonlit field loses its greens. The maths is the
+private `source/NightVision.{h,c}` (tested in `tests/NightVisionTests.c`; its header explains the model), the GLSL
+`shaders/common/night_vision.glsl`.
+- **The model.** Hunt's rod sensitivity as Krawczyk, Myszkowski and Seidel use it (2005): the rods' share
+  sigma = 0.04 / (0.04 + L) for a luminance L in cd/m^2, half and half at 0.04 (a bright moonlit scene). The game's
+  light scale is compressed (its noon, a scene luminance of about 0.74, stands for 5000 cd/m^2, its moonless night,
+  about 0.006, for 0.001 cd/m^2), so a game luminance Y is read as 5000 x (Y / 0.74)^3.2 cd/m^2, which makes
+  sigma = 1 / (1 + (Y / 0.019)^3.2). A pixel is blended by sigma toward its luminance in the rods' grey: white shifted
+  toward the night blue (CIE x, y = 0.25, 0.25, Jensen et al. 2001) by the world's `NightVisionBlueShift` (default
+  0.5; the full blue looks like a film's day-for-night filter, Krawczyk's own tint reads violet), at the same luminance,
+  so the night's tuned brightness does not change.
+- **Which luminance.** The larger of the pixel's own and the field luminance: the frame's `BaseSceneLuminance`, the
+  light the sky gives the whole scene (the sun, the moon, the ambient), without the nearby lamps eye adaptation adds.
+  By day the field is far above 0.165, where sigma is below 1/1024, and the shaders return the colour untouched: day
+  frames are bit for bit what they were. At night each pixel is seen by its own light: a lamp's bright pool keeps its
+  colour, the dark beyond it greys. Lamps lower the exposure but do not raise the field: the rods adapt locally, so a
+  lamp beside the camera darkens the dim sky but gives it no colour.
+- **What goes through it.** The sky pass's glow (the in-scatter of the sun and the moon, the skyglow, the Milky Way;
+  before the discs are added) and the PBR shader's reflected light (ambient, the sun and the moon, point lights) and
+  its fog's sky. Not the emitters: the sun's and the moon's discs, the stars and emissive materials (the game draws
+  emitters far dimmer than they are, and a real emitter that bright is seen in colour: the orange rising moon, a lit
+  screen at night). Not yet the sprites (see below).
+- **Switches.** The world's `NightVisionStrength` (1 the eye, 0 colourful nights: a long-exposure photo) and
+  `NightVisionBlueShift`; the renderer toggle `WorldRenderer_SetNightVisionEnabled` (V in the test frame) for A/B.
+  Cost: a `pow` per sky pixel and per lit fragment.
+- **Not modelled.** The rods' slow dark adaptation (minutes; the vision follows the sky's light at once), a lit
+  interior at night (its dark corners would grey: its light is not part of the field; revisit with interiors), the
+  loss of sharpness in the dark. Sprites keep their colour for now: lit sprites (T06) must pass their reflected light
+  through `nightVision` too.
+
 **Sun and moon shadows.** Two camera-centred orthographic cascades (2048² depth textures): NEAR (small extent, sharp)
 and FAR (large extent, coarse, optional). Each model object's `WorldShadowTier` (Both / Near / Far) routes which
 cascade(s) it casts into. They are rendered from the frame's shadow light (`WorldEnvironment_GetSkyLights`): the
@@ -237,7 +271,8 @@ get no AO and no outlines.
   "stars" feature is inactive by day, while twilight, light pollution and the moonlit sky hide every star, and at
   density 0; the "Milky Way" is unavailable without its texture and inactive while it cannot be seen; "sun shadows" and
   "moon shadows" are the cascades cast by either light; "moon" is the disc (inactive below the horizon, near the sun or
-  switched off; drawn flat grey without its texture), "moonlight" the moon's light on the world. The renderer logs the status
+  switched off; drawn flat grey without its texture), "moonlight" the moon's light on the world, "night vision" the
+  eye's night vision (active while it changes something: dusk and night, with a strength above 0). The renderer logs the status
   once after its first render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame).
 
 ### Renderer structure (keep it clean)
@@ -249,7 +284,7 @@ get no AO and no outlines.
 | `WorldRendererCommon.c` | Config multipliers, colour conversion, shader loading, one-time warnings, render-target constructors. |
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
 | `WorldRendererGeometry.c` | Model meshes with per-draw materials, sprite billboards, light gizmos, the pixelation filter. |
-| `WorldRendererLighting.c` | The PBR shader, its location table and uniforms, forward point lights, per-material factors, eye adaptation. |
+| `WorldRendererLighting.c` | The PBR shader, its location table and uniforms (the night vision's among them), forward point lights, per-material factors, eye adaptation. |
 | `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow. |
 | `WorldRendererGBuffer.c` | The normal/flag G-buffer and the AO pre-pass. |
 | `WorldRendererSky.c` | The atmospheric sky with the moon, the moonlit sky, the Milky Way and light pollution's skyglow; the sky textures the world names; the night sky values and the moon's disc for the frame. |
@@ -292,8 +327,9 @@ is a second such pair. Each renderer shader lives in its own directory under `as
 shaders lives in `asset/shaders/common/` and is pulled in with `#include "common/<name>"` (no `#version` in shared
 files; rules in GameAssets.md, "GameShader"): `common/math` (`PI`), `common/atmosphere` (Rayleigh + Mie single
 scattering lit by the sun or the moon, with an overload that also gives the view ray's transmittance; used by
-`world_sky` and the PBR fog) and `common/night_sky` (air mass, extinction and the skyglow profile,
-used by `world_sky`, `world_stars` and the PBR fog). Put new shared lighting, dithering or noise code there instead of
+`world_sky` and the PBR fog), `common/night_sky` (air mass, extinction and the skyglow profile,
+used by `world_sky`, `world_stars` and the PBR fog) and `common/night_vision` (the eye's night vision: the rods' share
+and the blend into their grey; used by `world_sky` and `world_pbr`). Put new shared lighting, dithering or noise code there instead of
 copying it between shaders.
 
 ## WorldTestFrame
@@ -316,7 +352,8 @@ debug keys as raw keys:
 - **the moon and the seasons:** F pins the moon full (`MoonPhaseSource` fixed at 0.5) and gives it back to the
   calendar; Y switches the seasons (`AreSeasonsEnabled`). Every clock and moon log line carries the moon: `WorldTest:
   next day: Mon 2026-10-19 12:00:00; first quarter (phase 0.27, 59% lit, from the calendar).`;
-- **the renderer and the sky:** O post effects, B bloom, G sun shafts, C crisp overlay, L light gizmos, N cycle the
+- **the renderer and the sky:** O post effects, B bloom, G sun shafts, C crisp overlay, V night vision (logged), L
+  light gizmos, N cycle the
   light pollution (0, 0.35, 0.7, 1; logged), I log the renderer status, then the game time (`WorldTest: game time
   Sun 2026-10-18 12:00:00, running, 720 game seconds per real second (a day takes 2 real minutes); seasons off.`) and
   the moon;

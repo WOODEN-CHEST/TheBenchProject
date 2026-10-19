@@ -11,6 +11,7 @@
 #include "World.h"
 #include "WorldEnvironment.h"
 #include "WorldModelObject.h"
+#include "NightVision.h"
 #include "raylib/raylib.h"
 // rlgl supplies RL_MAX_SHADER_LOCATIONS and the scene near/far cull distances.
 #include "raylib/rlgl.h"
@@ -224,6 +225,14 @@ typedef struct WorldRenderFrameStruct
     Vector2 SunScreenUv;
     /** @brief The tonemap exposure from eye adaptation; set just before the tonemap. */
     float Exposure;
+    /** @brief The eye's night vision this frame, which the sky and PBR shaders apply: how strongly (the renderer toggle
+     *  x the world's NightVisionStrength; 0 = off), the field luminance it compares with (BaseSceneLuminance: the sky's
+     *  light, without nearby lamps), the rods' grey (linear, luminance 1, from the world's NightVisionBlueShift), and
+     *  whether it changes anything (on, with the field below the full-colour luminance: dusk and night). */
+    float NightVisionStrength;
+    float NightVisionFieldLuminance;
+    float NightVisionTint[3];
+    bool IsNightVisionActive;
 } WorldRenderFrame;
 
 /** @brief The scene render target the 3D world is drawn into (pixel resolution when pixelating). */
@@ -321,6 +330,13 @@ typedef struct WorldRendererPbrStateStruct
     int _locFogSunIntensity;
     int _locFogSkyglow;
     int _locFogMoonIntensity;
+    /** @brief Cached night vision uniform locations (-1 when absent): the field luminance, the calibration (uploaded
+     *  once at load), the strength and the rods' grey. */
+    int _locNightVisionFieldLuminance;
+    int _locNightVisionHalfLuminance;
+    int _locNightVisionSteepness;
+    int _locNightVisionStrength;
+    int _locNightVisionTint;
     /** @brief This render's forward-light candidates (WorldCullingLight): every light of the render cache except
      *  the cube-shadow light, which is shaded on its own. */
     GenericBuffer _forwardLights;
@@ -405,6 +421,11 @@ typedef struct WorldRendererSkyStateStruct
     int _locMoonSkyIntensity;
     int _locHasMoonTexture;
     int _locMoonTexture;
+    int _locNightVisionFieldLuminance;
+    int _locNightVisionHalfLuminance;
+    int _locNightVisionSteepness;
+    int _locNightVisionStrength;
+    int _locNightVisionTint;
 } WorldRendererSkyState;
 
 /** @brief The star field: the seeded star catalogue as one mesh of one-pixel quads, drawn right after the sky. */
@@ -646,6 +667,10 @@ struct WorldRendererStruct
     bool _shadersLoadAttempted;
     /** @brief Master toggle for AO + outlines; when false the scene blits straight to the tonemap. On by default. */
     bool _postfxEnabled;
+    /** @brief Toggle for the eye's night vision (A/B; on by default); the world's NightVisionStrength scales it. */
+    bool _isNightVisionEnabled;
+    /** @brief The night vision's calibration on the game's light scale (NightVision_GetCalibration), computed once. */
+    NightVisionCalibration _nightVision;
     /** @brief The per-object render cache and this render's model/sprite/light lists. */
     WorldRenderCache _cache;
     /** @brief What the most recent render did (WorldRenderer_GetStatus). */

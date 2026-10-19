@@ -28,6 +28,7 @@ int main(void)
     GameClockTests_Run(&Run);
     WorldEnvironmentTests_Run(&Run);
     NightSkyTests_Run(&Run);
+    NightVisionTests_Run(&Run);
     WorldDTOTests_Run(&Run);
     WorldRenderCacheTests_Run(&Run);
     LoggerTests_Run(&Run);

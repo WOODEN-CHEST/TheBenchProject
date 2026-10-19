@@ -492,12 +492,16 @@ static void FillEnvironment(WorldEnvironment* environment)
     environment->AmbientOcclusionStrength = 16.0f;
 }
 
-/* The settings T03 added (the moon, the seasons, the sky texture names), ids 31 to 43: every one off its default.
- * The names go through the table, which clones them and frees the old ones. */
-static const uint16_t MoonSettingWireIds[] = { 31U, 32U, 33U, 34U, 35U, 36U, 37U, 38U, 39U, 40U, 41U, 42U, 43U };
+/* The settings added after the hand-written encoder's time: T03's (the moon, the seasons, the sky texture names, ids 31
+ * to 43) and the night vision's (44 and 45), every one off its default. The names go through the table, which clones
+ * them and frees the old ones. */
+static const uint16_t LaterSettingWireIds[] =
+    { 31U, 32U, 33U, 34U, 35U, 36U, 37U, 38U, 39U, 40U, 41U, 42U, 43U, 44U, 45U };
 
-static void FillMoonSettings(TestRun* run, WorldEnvironment* environment)
+static void FillLaterSettings(TestRun* run, WorldEnvironment* environment)
 {
+    environment->NightVisionStrength = 0.25f;
+    environment->NightVisionBlueShift = 0.75f;
     environment->IsMoonEnabled = false;
     environment->MoonPhaseSource = WorldMoonPhaseSource_Fixed;
     environment->MoonPhase = 0.125f;
@@ -1268,8 +1272,8 @@ static void MigrationRunsForOlderData(TestRun* run)
 }
 
 /* The table-driven encoder writes the same GHDF tree as the hand-written one did, for defaults and for changed values,
- * except for T23's changes (no retired ids 2 and 3, the date as id 30) and T03's added settings (ids 31 to 43, left out
- * of the comparison here; environment_ghdf_round_trip covers them). Data written before T23 still reads. */
+ * except for T23's changes (no retired ids 2 and 3, the date as id 30) and the settings added since (ids 31 to 45, left
+ * out of the comparison here; environment_ghdf_round_trip covers them). Data written before T23 still reads. */
 static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
 {
     GHDFObjectPool* Pool = NULL;
@@ -1311,10 +1315,10 @@ static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
             TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Expected, 30U,
                 GHDF_CreateRegularType(GHDFValueType_EncodedInteger), &Date));
             TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Environment, Pool, Actual, &Everything));
-            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 41U);
-            for (size_t Index = 0U; Index < (sizeof(MoonSettingWireIds) / sizeof(MoonSettingWireIds[0])); Index++)
+            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 43U);
+            for (size_t Index = 0U; Index < (sizeof(LaterSettingWireIds) / sizeof(LaterSettingWireIds[0])); Index++)
             {
-                TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Actual, MoonSettingWireIds[Index]));
+                TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Actual, LaterSettingWireIds[Index]));
             }
             TEST_CHECK(run, AreGHDFCompoundsEqual(Expected, Actual, 0U));
         }
@@ -1337,12 +1341,12 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
     WorldEnvironment_SetDefaults(&Source);
     WorldEnvironment_SetDefaults(&Restored);
     FillEnvironment(&Source);
-    FillMoonSettings(run, &Source);
+    FillLaterSettings(run, &Source);
     JSONCompound* Compound = NULL;
     if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
     {
         TEST_CHECK_SUCCESS(run, WorldEnvironment_WriteJSON(&Source, Pool, Compound, NULL));
-        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 41U);
+        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 43U);
         JSONObjectValue Parsed;
         if (ReparseCompound(run, Pool, Compound, &Parsed))
         {
@@ -1428,12 +1432,12 @@ static void EnvironmentGHDFRoundTrip(TestRun* run)
     WorldEnvironment_SetDefaults(&Source);
     WorldEnvironment_SetDefaults(&Restored);
     FillEnvironment(&Source);
-    FillMoonSettings(run, &Source);
+    FillLaterSettings(run, &Source);
     GHDFCompound* Compound = NULL;
     if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Pool, &Compound)))
     {
         TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Source, Pool, Compound, NULL));
-        TEST_CHECK(run, GHDFCompound_GetEntryCount(Compound) == 41U);
+        TEST_CHECK(run, GHDFCompound_GetEntryCount(Compound) == 43U);
         TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(Table, Compound, &Restored, NULL));
         TEST_CHECK(run, Properties_Equals(Table, &Source, &Restored));
         TEST_CHECK(run, (Restored.MoonTexture != Source.MoonTexture) && AreStringsEqual(Restored.MoonTexture, u8"pack.red_moon"));

@@ -32,6 +32,10 @@
 #define DEFAULT_FOG_STRENGTH 1.0f
 /** Default post-effect strength multiplier applied to bloom/sunshafts/shadows. */
 #define DEFAULT_EFFECT_STRENGTH 1.0f
+/** Default night vision strength: the eye's. */
+#define DEFAULT_NIGHT_VISION_STRENGTH 1.0f
+/** Default night vision blue shift: half way to the night blue, a faint blue cast. */
+#define DEFAULT_NIGHT_VISION_BLUE_SHIFT 0.5f
 /** Sun elevation (GetSunDirection().y) at/below which daylight is fully gone (night). */
 #define DAYLIGHT_SET_ELEVATION (-0.12f)
 /** Sun elevation at/above which daylight is at full strength (day). Twilight ramps between the two. */
@@ -401,6 +405,24 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .DisplayName = u8"Ambient occlusion strength",
         .Description = u8"Multiplies how much ambient occlusion darkens creases and contacts (with the player's own "
             u8"setting).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"night_vision_strength", .WireId = 44U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, NightVisionStrength), .Default.FloatValue = DEFAULT_NIGHT_VISION_STRENGTH,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_EFFECTS,
+        .DisplayName = u8"Night vision",
+        .Description = u8"How much dim light loses its colour the way the eye's does at night: 1 is the eye (a moonlit "
+            u8"sky looks grey-blue), 0 keeps every colour (a long-exposure photo's night). Changes nothing by day.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"night_vision_blue_shift", .WireId = 45U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, NightVisionBlueShift), .Default.FloatValue = DEFAULT_NIGHT_VISION_BLUE_SHIFT,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_EFFECTS,
+        .DisplayName = u8"Night vision blue shift",
+        .Description = u8"How blue the night's grey looks: 0 a neutral grey (the eye's night vision sees no colour), 1 "
+            u8"the deep blue painters give night scenes; 0.5 is a faint blue cast. Changes nothing by day.",
         .SinceVersion = 1U
     },
 };

@@ -257,6 +257,16 @@ typedef struct WorldEnvironmentStruct
     /** @brief World-side ambient-occlusion strength multiplier (multiplied by the config's AO strength).
      *  Scales how strongly the screen-space AO darkens creased/contact areas. Finite and >= 0. */
     float AmbientOcclusionStrength;
+
+    /** @brief How strongly the eye's night vision applies: in dim light colours fade into a faintly blue grey, as they
+     *  do for the eye when the rods take over (a moonlit sky looks grey-blue, not as orange as a long-exposure photo
+     *  shows it; bright things such as lamps, lit screens and the moon's disc keep their colour). 1 (the default) is the
+     *  eye, 0 none: colourful nights. By day it changes nothing. Finite and in [0, 1]. */
+    float NightVisionStrength;
+    /** @brief How blue the night vision's grey is: 0 a neutral grey (the rods see no colour), 1 the deep night blue
+     *  painters give night scenes (CIE x, y = 0.25, 0.25); 0.5 (the default) is half way, a faint blue cast. By day it
+     *  changes nothing. Finite and in [0, 1]. */
+    float NightVisionBlueShift;
 } WorldEnvironment;
 
 

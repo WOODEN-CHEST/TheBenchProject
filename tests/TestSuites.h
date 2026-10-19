@@ -52,6 +52,10 @@ void WorldEnvironmentTests_Run(TestRun* run);
  *  orientation (NightSkyTests.c; a private module of source/). */
 void NightSkyTests_Run(TestRun* run);
 
+/** @brief The eye's night vision: its calibration on the game's light scale, untouched daylight, rods at night, the
+ *  strength, the rods' grey (NightVisionTests.c; a private module of source/). */
+void NightVisionTests_Run(TestRun* run);
+
 /** @brief World <-> DTO round trip and snapshot validation (WorldDTOTests.c). */
 void WorldDTOTests_Run(TestRun* run);
 

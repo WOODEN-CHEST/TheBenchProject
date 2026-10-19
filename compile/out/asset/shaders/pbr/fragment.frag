@@ -89,6 +89,14 @@ uniform float skySunIntensity;  // RAW sun intensity (NOT day-scaled); == WorldE
 uniform vec3  skyglowRadiance;  // light pollution's glow at the horizon, linear (same value the sky pass gets)
 uniform float skyMoonIntensity; // the moonlit sky's light relative to the sun's (same value the sky pass gets); 0 = none
 
+// The eye's night vision (shaders/common/night_vision.glsl): dim reflected light loses its colour as it does for the
+// eye; emissive light keeps it. The same values the sky pass gets.
+uniform float nightVisionFieldLuminance; // the scene luminance the sky's light gives (linear, the game's light units)
+uniform float nightVisionHalfLuminance;  // night vision's calibration on the game's light scale (source/NightVision.h)
+uniform float nightVisionSteepness;
+uniform float nightVisionStrength;       // 0 none (colourful nights) .. 1 the eye
+uniform vec3  nightVisionTint;           // the rods' grey, luminance 1 (the world's blue shift)
+
 out vec4 finalColor;
 
 #include "common/math"
@@ -217,6 +225,7 @@ float ComputeShadow(vec3 worldPos, float nDotL)
 // to the sky's colour, not sprout a second sun or stars).
 #include "common/atmosphere"
 #include "common/night_sky"
+#include "common/night_vision"
 
 // The sky colour along a world-space view ray (the sky pass's result minus the sun and moon discs, the Milky Way and
 // the stars, but with the moonlit sky and light pollution's skyglow). This is the colour distant fogged geometry fades
@@ -394,11 +403,17 @@ void main()
         emissive *= pow(max(em, vec3(0.0)), vec3(2.2)); // sRGB -> linear
     }
 
-    vec3 color = ambient + direct + pointTotal + emissive;
+    // The eye sees the reflected light through its night vision (its colour fades at night, a lamp's bright pool keeps
+    // it; by day nothing changes); emissive light is added after it and keeps its colour, like the sky's discs.
+    vec3 reflected = ambient + direct + pointTotal;
+    reflected = nightVision(reflected, nightVisionFieldLuminance, nightVisionHalfLuminance, nightVisionSteepness,
+        nightVisionStrength, nightVisionTint);
+    vec3 color = reflected + emissive;
 
     // Distance fog: fade toward the atmospheric sky colour along this fragment's own view ray with an
     // exponential falloff, so distant geometry dissolves into the exact sky behind it. The sky is only
     // evaluated when the fog actually contributes (near fragments skip the raymarch). fogDensity 0 = no fog.
+    // The fog's sky goes through the night vision too, as the sky pass's does.
     if (fogDensity > 0.0)
     {
         float fragDistance = length(fragPosition - viewPos);
@@ -406,7 +421,9 @@ void main()
         if (fogFactor > 0.001)
         {
             vec3 viewRay = normalize(fragPosition - viewPos);
-            color = mix(color, fogSkyColor(viewRay), fogFactor);
+            vec3 fogSky = nightVision(fogSkyColor(viewRay), nightVisionFieldLuminance, nightVisionHalfLuminance,
+                nightVisionSteepness, nightVisionStrength, nightVisionTint);
+            color = mix(color, fogSky, fogFactor);
         }
     }
 

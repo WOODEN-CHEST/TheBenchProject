@@ -154,6 +154,7 @@ static void DefaultsAreValid(TestRun* run)
     TEST_CHECK(run, (Environment.MoonTexture != NULL) && (strcmp((const char*)Environment.MoonTexture, "sky_moon") == 0));
     TEST_CHECK(run, Environment.IsMoonEnabled && (Environment.MoonPhaseSource == WorldMoonPhaseSource_Calendar));
     TEST_CHECK(run, (Environment.MoonCycleDays == WORLD_ENVIRONMENT_MOON_CYCLE_DAYS) && !Environment.AreSeasonsEnabled);
+    TEST_CHECK(run, (Environment.NightVisionStrength == 1.0f) && (Environment.NightVisionBlueShift == 0.5f));
     WorldEnvironment_Deconstruct(&Environment);
     WorldEnvironment_Deconstruct(&Environment); // safe to repeat
     TEST_CHECK(run, (Environment.MilkyWayTexture == NULL) && (Environment.MoonTexture == NULL));
@@ -223,6 +224,18 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.MilkyWayBrightness = -1.0f;
     CheckRejected(run, &Environment, "MilkyWayBrightness");
 
+    ResetEnvironment(&Environment);
+    Environment.NightVisionStrength = 1.5f;
+    CheckRejected(run, &Environment, "NightVisionStrength");
+
+    ResetEnvironment(&Environment);
+    Environment.NightVisionStrength = NAN;
+    CheckRejected(run, &Environment, "NightVisionStrength");
+
+    ResetEnvironment(&Environment);
+    Environment.NightVisionBlueShift = -0.25f;
+    CheckRejected(run, &Environment, "NightVisionBlueShift");
+
     // Zero is allowed where the rule is ">= 0" (an effect switched off), the [0, 1] ranges include both ends, and the
     // calendar's first and last days are dates.
     ResetEnvironment(&Environment);
@@ -231,6 +244,8 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.MilkyWayBrightness = 0.0f;
     Environment.LightPollution = 1.0f;
     Environment.StarTwinkle = 0.0f;
+    Environment.NightVisionStrength = 0.0f;
+    Environment.NightVisionBlueShift = 1.0f;
     Environment.TimeOfDay = 1.0f;
     Environment.Date = GAME_CALENDAR_LAST_DAY_NUMBER;
     TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));

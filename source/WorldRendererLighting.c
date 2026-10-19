@@ -1,5 +1,5 @@
 // The PBR shader and its uniforms (the sun and the moon, ambient, fog, shadows, per-object forward point lights,
-// per-material factors) and HDR eye adaptation.
+// per-material factors, the eye's night vision) and HDR eye adaptation.
 
 #include <math.h>
 #include <stdio.h>
@@ -168,6 +168,12 @@ static void CacheLocations(WorldRendererPbrState* pbr, Shader shader)
     pbr->_locFogSkyglow = GetShaderLocation(shader, "skyglowRadiance");
     pbr->_locFogMoonIntensity = GetShaderLocation(shader, "skyMoonIntensity");
 
+    pbr->_locNightVisionFieldLuminance = GetShaderLocation(shader, "nightVisionFieldLuminance");
+    pbr->_locNightVisionHalfLuminance = GetShaderLocation(shader, "nightVisionHalfLuminance");
+    pbr->_locNightVisionSteepness = GetShaderLocation(shader, "nightVisionSteepness");
+    pbr->_locNightVisionStrength = GetShaderLocation(shader, "nightVisionStrength");
+    pbr->_locNightVisionTint = GetShaderLocation(shader, "nightVisionTint");
+
     // Per-material scalar-factor + map-presence uniforms, uploaded per material by the mesh draw loop.
     pbr->_locMetallic = GetShaderLocation(shader, "metallic");
     pbr->_locRoughness = GetShaderLocation(shader, "roughness");
@@ -328,11 +334,14 @@ void WorldRendererLighting_LoadShader(WorldRenderer* self)
     self->_pbr._locs[SHADER_LOC_MAP_EMISSION] = GetShaderLocation(RayShader, "emissiveMap");
     self->_pbr._passShader = (Shader){ .id = RayShader.id, .locs = self->_pbr._locs };
 
-    // Constant shadow parameters; upload once (material params are per-material).
+    // Constant shadow parameters and the night vision's calibration; upload once (material params are per-material).
     float ShadowBias = SHADOW_BIAS;
     float ShadowTexel = 1.0f / (float)SHADOW_MAP_SIZE;
     SetShaderValue(RayShader, self->_pbr._locShadowBias, &ShadowBias, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_pbr._locShadowTexelSize, &ShadowTexel, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_pbr._locNightVisionHalfLuminance, &self->_nightVision.HalfLuminance,
+        SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_pbr._locNightVisionSteepness, &self->_nightVision.Steepness, SHADER_UNIFORM_FLOAT);
 
     // Point the renderer-owned samplers at their fixed units once (see WorldRendererTextureUnit).
     AssignSamplerUnit(RayShader, self->_pbr._locShadowMap, WorldRendererTextureUnit_ShadowNear);
@@ -425,6 +434,12 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
     SetShaderValue(RayShader, self->_pbr._locFogSkyglow, frame->SkyglowRadiance, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, self->_pbr._locFogMoonIntensity, &frame->MoonSkyIntensity, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_pbr._locFogDensity, &frame->FogDensity, SHADER_UNIFORM_FLOAT);
+
+    // The eye's night vision for the reflected light and the fog (strength 0 leaves every colour as it is).
+    SetShaderValue(RayShader, self->_pbr._locNightVisionFieldLuminance, &frame->NightVisionFieldLuminance,
+        SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_pbr._locNightVisionStrength, &frame->NightVisionStrength, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_pbr._locNightVisionTint, frame->NightVisionTint, SHADER_UNIFORM_VEC3);
 
     // The cascades darken the light they were rendered from (the sun or the moon), by the frame's shadow fade; with
     // both fades 0 (the cascades did not run) the shader samples no shadow map at all.
@@ -575,7 +590,7 @@ void WorldRendererLighting_UploadMaterial(WorldRenderer* self, const Material* m
     SetShaderValue(RayShader, self->_pbr._locHasEmissiveMap, &HasEmissive, SHADER_UNIFORM_INT);
 }
 
-/* Starts from the frame's base scene luminance (ambient + sun), adds nearby point lights (being near a light
+/* Starts from the frame's base scene luminance (ambient + sun + moon), adds nearby point lights (being near a light
  * raises the estimate -> lowers exposure), then eases the adapted luminance toward it. A non-finite estimate (a
  * corrupt light or environment value) holds the adaptation, so it can never be poisoned for good. */
 float WorldRendererLighting_UpdateExposure(WorldRenderer* self, const WorldRenderFrame* frame, float deltaSeconds)

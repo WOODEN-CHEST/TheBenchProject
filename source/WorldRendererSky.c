@@ -248,6 +248,16 @@ void WorldRendererSky_LoadShader(WorldRenderer* self)
     self->_sky._locMoonSkyIntensity = GetShaderLocation(RayShader, "moonSkyIntensity");
     self->_sky._locHasMoonTexture = GetShaderLocation(RayShader, "hasMoonTexture");
     self->_sky._locMoonTexture = GetShaderLocation(RayShader, "moonTexture");
+    self->_sky._locNightVisionFieldLuminance = GetShaderLocation(RayShader, "nightVisionFieldLuminance");
+    self->_sky._locNightVisionHalfLuminance = GetShaderLocation(RayShader, "nightVisionHalfLuminance");
+    self->_sky._locNightVisionSteepness = GetShaderLocation(RayShader, "nightVisionSteepness");
+    self->_sky._locNightVisionStrength = GetShaderLocation(RayShader, "nightVisionStrength");
+    self->_sky._locNightVisionTint = GetShaderLocation(RayShader, "nightVisionTint");
+
+    // The night vision's calibration never changes: upload it once.
+    SetShaderValue(RayShader, self->_sky._locNightVisionHalfLuminance, &self->_nightVision.HalfLuminance,
+        SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_sky._locNightVisionSteepness, &self->_nightVision.Steepness, SHADER_UNIFORM_FLOAT);
 }
 
 void WorldRendererSky_SyncTextures(WorldRenderer* self, const WorldEnvironment* environment)
@@ -320,6 +330,12 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     WorldRendererCommon_ColorToLinear(Environment->SkyTint, SkyTint);
     SetShaderValue(RayShader, self->_sky._locSkyTint, SkyTint, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, self->_sky._locSkyglowRadiance, frame->SkyglowRadiance, SHADER_UNIFORM_VEC3);
+
+    // The eye's night vision for the sky's dim light (strength 0 leaves it as it is).
+    SetShaderValue(RayShader, self->_sky._locNightVisionFieldLuminance, &frame->NightVisionFieldLuminance,
+        SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_sky._locNightVisionStrength, &frame->NightVisionStrength, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_sky._locNightVisionTint, frame->NightVisionTint, SHADER_UNIFORM_VEC3);
 
     // The moon: its direction (the moonlit sky needs it even without the disc), the moonlit sky's strength (0 skips
     // its raymarch), and the disc (an opacity of 0 draws none).

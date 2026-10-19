@@ -79,9 +79,9 @@ settings.
 GHDF wire id, the type, the default, the rules, the inspector text. `WorldEnvironment_SetDefaults`, `_Validate`,
 `_CopyTo` and `_Deconstruct` are thin wrappers over the table, and `WorldEnvironment_ReadJSON` / `_WriteJSON` are the
 JSON entry points for the world files (T09). **To add a setting, add the field and one table row** with a new,
-never-used wire id (the next free one is 44; 2 and 3 are retired); nothing else needs writing. The field comments state
-each value's rule; validation enforces them (finite, `TimeOfDay`, `LightPollution`, `StarTwinkle` and `MoonPhase` in
-[0, 1], `SunSizeMultiplier`, `MoonSizeMultiplier` and `MoonCycleDays` > 0, every strength/intensity/density/brightness
+never-used wire id (the next free one is 46; 2 and 3 are retired); nothing else needs writing. The field comments state
+each value's rule; validation enforces them (finite, `TimeOfDay`, `LightPollution`, `StarTwinkle`, `MoonPhase`,
+`NightVisionStrength` and `NightVisionBlueShift` in [0, 1], `SunSizeMultiplier`, `MoonSizeMultiplier` and `MoonCycleDays` > 0, every strength/intensity/density/brightness
 >= 0, `Date` inside the calendar, the texture names valid asset names of at most 128 bytes, `MoonPhaseSource` one of
 its names) and names the first broken field by key and C name: `world_environment.light_pollution (LightPollution)
 must be finite and in [0, 1].` `SunAngle` and `MoonOrbitTilt` are `Angle`s: radians in memory and GHDF, degrees in
@@ -128,6 +128,11 @@ place in the year, 0 at the March equinox; a uniform year, so the September equi
 with `SunAngle` > 0 summer days are longer and the noon sun higher, and the moon follows the ecliptic (a full moon low
 in summer, high in winter). Off by default: it changes how much daylight the working hours get.
 
+The night vision settings (the eye's dim-light vision, [WorldRuntime.md](WorldRuntime.md), "Night vision"):
+`night_vision_strength` ([0, 1], default 1: the eye; 0 keeps every colour, a long-exposure photo's night) and
+`night_vision_blue_shift` ([0, 1], default 0.5: how blue the rods' grey is, from a neutral grey to the night blue
+painters use). Neither changes anything by day.
+
 **The sky's model** (pure functions; the renderer only draws their results, [WorldRuntime.md](WorldRuntime.md), "Moon"
 and "Night sky"):
 - `WorldEnvironment_GetSunDirection`, `_GetDaylightFactor` (with the seasons when on).
@@ -163,8 +168,9 @@ sub-compound + array of object compounds), borrowing all compounds/arrays/string
 `GHDFObjectPool`. It does **not** write bytes. The stable numeric entry ids ARE the save schema: the root and object
 ids are `WorldEncoder*Field` enums in `WorldEncoder.h` (`WORLD_ENCODER_FORMAT_VERSION` = 1); the environment compound
 is written by `Properties_WriteGHDF` from the environment's table, every setting including defaults, under the table's
-wire ids (1 and 4-43: the entries the hand-written encoder wrote, without the retired 2 and 3, plus T23's date as an
-encoded day number and T03's moon, seasons and texture-name settings, ids 31-43; a test compares the old entries'
+wire ids (1 and 4-45: the entries the hand-written encoder wrote, without the retired 2 and 3, plus T23's date as an
+encoded day number, T03's moon, seasons and texture-name settings, ids 31-43, and the night vision's, 44-45; a test
+compares the old entries'
 trees, another round-trips them all). Colors are stored as `uint8[4]` RGBA arrays, vectors as `float[3]`
 arrays.
 

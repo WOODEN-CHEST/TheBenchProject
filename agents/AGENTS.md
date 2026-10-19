@@ -90,7 +90,8 @@ Current module list:
   * GameCamera - 3D camera (pos/fov/yaw/pitch/roll; +Y up, +Z forward), converted to a raylib camera at render time.
   * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, GHDF pool).
   * WorldRenderer - Renders a World through a GameCamera (PBR lit by the sun and the moon, HDR, sky with the moon,
-    stars, Milky Way and light pollution, sun and moon shadows, AO, outlines, bloom, sun shafts, crisp overlay);
+    stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, AO, outlines, bloom, sun
+    shafts, crisp overlay);
     separate from the world data and never writes to it. Split by render pass into
     source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
     WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
@@ -99,6 +100,8 @@ Current module list:
   * NightSky - The night sky's pure maths (private, source/NightSky.h): the seeded star catalogue, the limiting
     magnitude (light pollution, the moonlit sky, twilight), the air mass, star colours and the galaxy's place among
     the stars; used by the sky and star passes (WorldRendererSky.c, WorldRendererStars.c).
+  * NightVision - The eye's dim-light vision as pure maths (private, source/NightVision.h): Hunt's rod share calibrated
+    on the game's light scale and the rods' blue-grey; the sky and PBR shaders apply it (shaders/common/night_vision).
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world whose sky follows the frame's game
     clock, with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
