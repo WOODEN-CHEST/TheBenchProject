@@ -50,6 +50,7 @@ typedef struct LoggerStruct Logger;
  * | Angle       | float, radians              | number, DEGREES                        | Float, radians                |
  * | Vector2     | Vector2                     | [x, y]                                 | Float array of 2              |
  * | Vector3     | Vector3                     | [x, y, z]                              | Float array of 3              |
+ * | AngleVector3 | Vector3, radians          | [x, y, z], DEGREES                     | Float array of 3, radians     |
  * | Color       | Color                       | "#rrggbb" or "#rrggbbaa"               | UInt8 array of 4 (RGBA)       |
  * | RenderColor | RenderColor                 | "#rrggbb" or {tint, brightness, opacity} | Compound {1: UInt8[3] tint, 2: Float brightness, 3: Float opacity} |
  * | String      | unsigned char*, owned       | string, or null                        | String (absent when NULL)     |
@@ -128,6 +129,9 @@ typedef enum PropertyTypeEnum
     PropertyType_Vector2,
     /** @brief A Vector3; every component finite and within the optional bounds. */
     PropertyType_Vector3,
+    /** @brief Three angles (Euler rotations): a Vector3 in radians in memory and in GHDF, written in degrees in JSON.
+     *  Every component finite and within the optional bounds (in radians). */
+    PropertyType_AngleVector3,
     /** @brief A raylib Color (RGBA, all four channels are data). */
     PropertyType_Color,
     /** @brief A RenderColor: tint RGB plus brightness and opacity, both in [0, 1] (the tint's alpha is ignored). */
@@ -185,7 +189,7 @@ typedef union PropertyDataUnion
     double DoubleValue;
     /** @brief PropertyType_Vector2. */
     Vector2 Vector2Value;
-    /** @brief PropertyType_Vector3. */
+    /** @brief PropertyType_Vector3, and PropertyType_AngleVector3 in radians. */
     Vector3 Vector3Value;
     /** @brief PropertyType_Color. */
     Color ColorValue;
@@ -220,8 +224,8 @@ typedef struct PropertyValueStruct
  *        strings valid UTF-8, asset names valid, enums in their table).
  *
  * Build with the PROPERTY_RULES_* macros. Bounds apply to Int32, UInt32, Float, Double, Angle (radians) and to every
- * component of Vector2 and Vector3; the string rules to String and AssetName. PropertyTable_Check rejects rules that
- * do not fit the type.
+ * component of Vector2, Vector3 and AngleVector3 (radians); the string rules to String and AssetName.
+ * PropertyTable_Check rejects rules that do not fit the type.
  */
 typedef struct PropertyRulesStruct
 {
@@ -482,6 +486,12 @@ static inline PropertyValue PropertyValue_FromVector2(Vector2 value)
 static inline PropertyValue PropertyValue_FromVector3(Vector3 value)
 {
     return (PropertyValue){ .Type = PropertyType_Vector3, .Data.Vector3Value = value };
+}
+
+/** @brief Makes an AngleVector3 value. @param radians The angles in radians. @returns The typed value. */
+static inline PropertyValue PropertyValue_FromAngleVector3(Vector3 radians)
+{
+    return (PropertyValue){ .Type = PropertyType_AngleVector3, .Data.Vector3Value = radians };
 }
 
 /** @brief Makes a Color value. @param value The value. @returns The typed value. */

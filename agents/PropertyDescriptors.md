@@ -11,8 +11,9 @@ must agree. The editor's inspector, scripts (the `Script` flag, types and descri
 checker and autocomplete, `handoff/2026-10_scripting_language/PROPOSAL.md` section 5), saves and the world files
 (T09) all read the same tables. Decided as architecture A1 / G1 (a), built in T04.
 
-**Clients:** `WorldEnvironment` ([WorldData.md](WorldData.md), "Environment") and `GameClock` ([GameClock.md](GameClock.md),
-T23). T05 moves the world objects and their components onto tables, T16 the weather.
+**Clients:** `WorldEnvironment` ([WorldData.md](WorldData.md), "Environment"), `GameClock` ([GameClock.md](GameClock.md),
+T23), and since T05 the world objects (`world_object`) and their components (`model_component`, `sprite_component`,
+`light_component`; [WorldData.md](WorldData.md), "Property tables"). T16 adds the weather.
 
 ## Declaring a table
 
@@ -73,6 +74,7 @@ default passes its own rules**.
 | `Double` | `double`, always finite | number (shortest text that reads back) | Double |
 | `Angle` | `float`, **radians** | number, **degrees** (shortest text that reads back to the same radians) | Float, radians |
 | `Vector2` / `Vector3` | raylib vectors | `[x, y]` / `[x, y, z]` | Float array of 2 / 3 |
+| `AngleVector3` | `Vector3`, **radians** (Euler rotations) | `[x, y, z]`, **degrees** (each the shortest text that reads back to the same radians) | Float array of 3, radians |
 | `Color` | raylib `Color` (RGBA all data) | `"#rrggbb"`, `"#rrggbbaa"` when not opaque | UInt8 array of 4 |
 | `RenderColor` | `RenderColor` | `"#rrggbb"` when brightness and opacity are 1, else `{tint: [r,g,b], brightness, opacity}` | Compound {1: UInt8[3] tint, 2: Float brightness, 3: Float opacity} |
 | `String` | owned `unsigned char*` | string or `null` | String (absent when NULL) |
@@ -87,7 +89,7 @@ must have exactly 2 and 3 elements. A RenderColor's tint alpha is not part of it
 skipped by comparisons. Colors and vectors in GHDF match what the hand-written world encoder always wrote.
 
 Rules (`PROPERTY_RULES_*`): minimum/maximum, each inclusive or exclusive, for `Int32`, `UInt32`, `Float`, `Double`,
-`Angle` (radians) and every vector component (floats compare in float precision, so a bound of 0.1 accepts 0.1f;
+`Angle` (radians) and every vector component (`AngleVector3` in radians) (floats compare in float precision, so a bound of 0.1 accepts 0.1f;
 doubles in double precision); `PROPERTY_RULES_HALF_OPEN(min, max)` is [min, max), for values that wrap at the maximum
 (seconds of a day). `MaxLength` and `IsNullAllowed` for strings. Floats and doubles are always required finite.
 `UInt64`, `ObjectId`, `Bool` and `Color` accept every value; a `Date` takes no bounds, its type's rule is the
@@ -136,8 +138,10 @@ A property without `Persistent` is runtime state the table still copies, compare
   retired ids are skipped (forward compatibility); a known id with the wrong type, a wrong array length or a broken
   rule fails with `Deserialize`. There is no GHDF migration slot yet (a `// TODO:` in `PropertyDescriptorGHDF.c`).
 - **The `AfterSet` hook** (optional, on the table) is called after `Properties_Set` with the descriptor, and after a
-  committed read or a `CopyTo` with NULL (anything may have changed). T05's objects use it to advance their revision,
-  so caches notice changes made through tables.
+  committed read or a `CopyTo` with NULL (anything may have changed). The world objects use it to advance their
+  revision, so caches notice changes made through tables; every component table uses the world's
+  `WorldInternal_ComponentAfterSet`, which advances the component's revision and then runs its type's `OnPropertySet`
+  hook with the world (the sprite rebinds its animation when its name changed).
 
 Write functions validate first, so invalid data is never written. On a failure after validation the target compound
 may hold some entries: discard it.
@@ -155,7 +159,8 @@ that**; everything else respects the `_` convention and goes through the type's 
 (`PropertyDescriptorGHDF.c`). Also decide whether it takes bounds (`IsBoundedType`, and `IsBoundValid` for their
 range) and whether it owns memory (`PropertyInternal_IsStringType` today), document it in the header's type table and
 here, and test it in `tests/PropertyDescriptorTests.c` (the test record has one field of every type). `Double` and
-`Date` were added this way in T23. Planned: tag sets and the `DataMap` of namespaced keys (T24).
+`Date` were added this way in T23, `AngleVector3` (an object's rotation) in T05. Planned: tag sets and the `DataMap` of
+namespaced keys (T24).
 
 ## Known limits
 

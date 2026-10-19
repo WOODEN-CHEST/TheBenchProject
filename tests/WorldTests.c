@@ -1,39 +1,296 @@
 #include "TestSuites.h"
 #include "TestAssets.h"
+#include "TestText.h"
 #include "World.h"
-#include "WorldModelObject.h"
-#include "WorldSpriteObject.h"
-#include "WorldLight.h"
+#include "WorldObject.h"
+#include "WorldComponent.h"
+#include "WorldModelComponent.h"
+#include "WorldSpriteComponent.h"
+#include "WorldLightComponent.h"
+#include "WorldInternal.h"
 #include "SpriteAnimation.h"
+#include "Logger.h"
+#include "wr/WRFileSystem.h"
+#include "wr/WRPath.h"
+#include <math.h>
 #include <string.h>
 
 
-// Static functions.
-/* Creates a sprite object with the given animation name and adds it to the world. Returns it (world-owned), or
- * NULL with a failed check. */
-static WorldSpriteObject* AddSprite(TestRun* run, World* world, const char* animationName)
+// Macros.
+/** Initial capacity of path and text buffers; they grow as needed. */
+#define WORLD_TEST_TEXT_CAPACITY ((size_t)256)
+/** The most components one consistency check compares. */
+#define WORLD_TEST_MAX_EXPECTED ((size_t)16)
+
+
+// Types.
+/* A test-only component type: a transform driver with one property, so the one-driver rule can be tested before the
+ * game has a real driver (the character controller). */
+typedef struct TestDriverComponentStruct
 {
-    WorldSpriteObject* Sprite = NULL;
-    if (!TEST_CHECK_SUCCESS(run, WorldSpriteObject_Create((const unsigned char*)u8"sprite",
-        (const unsigned char*)animationName, &Sprite)))
+    WorldComponent Base;
+    float Speed;
+} TestDriverComponent;
+
+
+// Fields.
+static const PropertyDescriptor TestDriverProperties[] =
+{
+    { .Key = u8"speed", .WireId = 1U, .Type = PropertyType_Float, PROPERTY_MEMBER(TestDriverComponent, Speed),
+        .Default.FloatValue = 1.0f, .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING,
+        .SinceVersion = 1U },
+};
+
+static const PropertyTable TestDriverTable =
+{
+    .Name = u8"test_driver", .Version = 1U, .StructSize = sizeof(TestDriverComponent),
+    .Descriptors = TestDriverProperties,
+    .DescriptorCount = sizeof(TestDriverProperties) / sizeof(TestDriverProperties[0]),
+    .RetiredWireIds = NULL, .RetiredWireIdCount = 0U, .AfterSet = WorldInternal_ComponentAfterSet, .Migrate = NULL
+};
+
+/* The same table without the world's hook: an entry using it must be refused. */
+static const PropertyTable TestUnhookedTable =
+{
+    .Name = u8"test_unhooked", .Version = 1U, .StructSize = sizeof(TestDriverComponent),
+    .Descriptors = TestDriverProperties,
+    .DescriptorCount = sizeof(TestDriverProperties) / sizeof(TestDriverProperties[0]),
+    .RetiredWireIds = NULL, .RetiredWireIdCount = 0U, .AfterSet = NULL, .Migrate = NULL
+};
+
+
+// Static functions: the test component type.
+static Error ConstructTestDriver(WorldComponent* component)
+{
+    return Properties_Construct(&TestDriverTable, component);
+}
+
+static void DeconstructTestDriver(WorldComponent* component)
+{
+    Properties_Deconstruct(&TestDriverTable, component);
+}
+
+
+// Fields: the test registry entries (they refer to the functions above).
+static const WorldComponentTypeInfo TestDriverA =
+{
+    .Type = (WorldComponentType)WorldComponentType_Count, .Name = u8"test_driver_a",
+    .Size = sizeof(TestDriverComponent), .Table = &TestDriverTable, .IsTransformDriver = true,
+    .Construct = ConstructTestDriver, .Deconstruct = DeconstructTestDriver
+};
+
+static const WorldComponentTypeInfo TestDriverB =
+{
+    .Type = (WorldComponentType)(WorldComponentType_Count + 1), .Name = u8"test_driver_b",
+    .Size = sizeof(TestDriverComponent), .Table = &TestDriverTable, .IsTransformDriver = true,
+    .Construct = ConstructTestDriver, .Deconstruct = DeconstructTestDriver
+};
+
+static const WorldComponentTypeInfo TestUnhooked =
+{
+    .Type = (WorldComponentType)WorldComponentType_Count, .Name = u8"test_unhooked",
+    .Size = sizeof(TestDriverComponent), .Table = &TestUnhookedTable, .IsTransformDriver = false,
+    .Construct = ConstructTestDriver, .Deconstruct = DeconstructTestDriver
+};
+
+
+// Static functions: helpers.
+/* Creates an object; returns it (world-owned), or NULL with a failed check. */
+static WorldObject* CreateObject(TestRun* run, World* world, const char* name)
+{
+    WorldObject* Object = NULL;
+    if (!TEST_CHECK_SUCCESS(run, World_CreateObject(world, (const unsigned char*)name, &Object)))
     {
         return NULL;
     }
-    if (!TEST_CHECK_SUCCESS(run, World_AddObject(world, WorldSpriteObject_AsObject(Sprite))))
+    return Object;
+}
+
+/* Adds a component of @p type to @p object; returns it (world-owned), or NULL with a failed check. */
+static WorldComponent* AddComponent(TestRun* run, World* world, const WorldObject* object, WorldComponentType type)
+{
+    WorldComponent* Component = NULL;
+    if ((object == NULL)
+        || !TEST_CHECK_SUCCESS(run, World_AddComponent(world, WorldObject_GetId(object), type, &Component)))
     {
-        WorldObject_Destroy(WorldSpriteObject_AsObject(Sprite));
+        return NULL;
+    }
+    return Component;
+}
+
+/* Creates an object with a sprite component naming @p animationName; returns the sprite, or NULL with a failed
+ * check. */
+static WorldSpriteComponent* AddSprite(TestRun* run, World* world, const char* animationName)
+{
+    WorldSpriteComponent* Sprite = WorldSpriteComponent_FromComponent(AddComponent(run, world,
+        CreateObject(run, world, "sprite"), WorldComponentType_Sprite));
+    if ((Sprite == NULL)
+        || !TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite,
+            (const unsigned char*)animationName)))
+    {
         return NULL;
     }
     return Sprite;
 }
 
-static bool IsBound(WorldSpriteObject* sprite)
+static bool IsBound(WorldSpriteComponent* sprite)
 {
-    SpriteAnimationInstance* Instance = WorldSpriteObject_GetAnimationInstance(sprite);
-    return SpriteAnimationInstance_HasSource(Instance) && (SpriteAnimationInstance_GetFrameCount(Instance) == 1);
+    SpriteAnimationInstance* Instance = WorldSpriteComponent_GetAnimationInstance(sprite);
+    return SpriteAnimationInstance_HasSource(Instance) && (SpriteAnimationInstance_GetFrameCount(Instance) > 0);
 }
 
-static void ObjectSetVersionChangesOnAddAndRemove(TestRun* run)
+/* Checks that the world's components of @p type belong to the objects @p expectedIds, in that order. */
+static void CheckComponentOwners(TestRun* run, const World* world, WorldComponentType type, const uint64_t* expectedIds,
+    size_t expectedCount)
+{
+    size_t Count = 0;
+    WorldComponent* const* Components = World_GetComponents(world, type, &Count);
+    if (!TEST_CHECK(run, Count == expectedCount))
+    {
+        return;
+    }
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        const WorldObject* Owner = WorldComponent_GetOwner(Components[Index]);
+        TEST_CHECK(run, WorldComponent_GetType(Components[Index]) == type);
+        TEST_CHECK(run, WorldObject_GetId(Owner) == expectedIds[Index]);
+        TEST_CHECK(run, WorldObject_GetComponent(Owner, type) == Components[Index]);
+    }
+}
+
+/* Counts the occurrences of @p needle in "<directory>/logs/latest.log". */
+static size_t CountInLatestLog(TestRun* run, const unsigned char* directory, const char* needle)
+{
+    size_t Count = 0;
+    GenericBuffer Path;
+    GenericBuffer_AllocateVariable(&Path, WORLD_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    GenericBuffer Text;
+    GenericBuffer_AllocateVariable(&Text, WORLD_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    if (TEST_CHECK_SUCCESS(run, Path_Append(directory, (const unsigned char*)u8"logs/latest.log", &Path))
+        && TEST_CHECK_SUCCESS(run, FileSystem_ReadAllBytes(Path._data, &Text))
+        && TEST_CHECK(run, GenericBuffer_NullTerminate(&Text)))
+    {
+        for (const char* Found = strstr((const char*)Text._data, needle); Found != NULL;
+            Found = strstr(Found + 1, needle))
+        {
+            Count++;
+        }
+    }
+    Memory_Free(Text._data);
+    Memory_Free(Path._data);
+    return Count;
+}
+
+/* Reads @p text (a JSON object) into an attached component through its table. */
+static Error ReadComponentJSON(TestRun* run, WorldComponent* component, const PropertyTable* table, const char* text)
+{
+    JSONObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)))
+    {
+        return Error_Construct2(ErrorCode_InvalidState, "the test's JSON pool could not be created");
+    }
+    Error Result = Error_Construct2(ErrorCode_InvalidJSON, "the test's JSON did not parse");
+    JSONObjectValue Value;
+    if (TestText_ParseJSON(run, Pool, text, &Value))
+    {
+        Error_Deconstruct(&Result);
+        Result = Properties_ReadJSON(table, Value.Value.Compound, component, NULL);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    return Result;
+}
+
+/* Constructs a world holding the standard types plus the two test drivers. */
+static bool ConstructDriverWorld(TestRun* run, World* world)
+{
+    const WorldComponentTypeInfo* Types[WorldComponentType_Count + 2] =
+    {
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Model),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Sprite),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Light),
+        &TestDriverA,
+        &TestDriverB,
+    };
+    return TEST_CHECK_SUCCESS(run, WorldInternal_ConstructWithTypes(world, NULL, NULL, Types,
+        sizeof(Types) / sizeof(Types[0])));
+}
+
+
+// Static functions: objects.
+static void ObjectsGetUniqueIdsThatAreNeverZero(TestRun* run)
+{
+    World TestWorld;
+    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    {
+        return;
+    }
+
+    WorldObject* First = CreateObject(run, &TestWorld, "first");
+    WorldObject* Second = CreateObject(run, &TestWorld, "second");
+    WorldObject* Third = CreateObject(run, &TestWorld, NULL);
+    if ((First != NULL) && (Second != NULL) && (Third != NULL))
+    {
+        TEST_CHECK(run, (WorldObject_GetId(First) == 1U) && (WorldObject_GetId(Second) == 2U)
+            && (WorldObject_GetId(Third) == 3U));
+        TEST_CHECK(run, strcmp((const char*)WorldObject_GetName(Second), "second") == 0);
+        TEST_CHECK(run, WorldObject_GetName(Third) == NULL);
+        TEST_CHECK(run, World_GetObjectCount(&TestWorld) == 3U);
+
+        WorldObject* Found = NULL;
+        TEST_CHECK(run, World_TryGetObject(&TestWorld, 2U, &Found) && (Found == Second));
+        TEST_CHECK(run, !World_TryGetObject(&TestWorld, 0U, &Found) && (Found == NULL));
+        TEST_CHECK(run, !World_TryGetObject(&TestWorld, 99U, &Found) && (Found == NULL));
+
+        // Removing keeps the others in creation order; ids are never handed out twice.
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&TestWorld, 2U));
+        TEST_CHECK(run, !World_TryGetObject(&TestWorld, 2U, &Found));
+        WorldObject* AtOne = NULL;
+        TEST_CHECK(run, (World_GetObjectCount(&TestWorld) == 2U)
+            && TEST_CHECK_SUCCESS(run, World_GetObjectByIndex(&TestWorld, 1U, &AtOne)) && (AtOne == Third));
+        TEST_CHECK_ERROR(run, World_GetObjectByIndex(&TestWorld, 2U, &AtOne), ErrorCode_IndexOutOfBounds);
+        WorldObject* Fourth = CreateObject(run, &TestWorld, "fourth");
+        TEST_CHECK(run, (Fourth != NULL) && (WorldObject_GetId(Fourth) == 4U));
+    }
+    TEST_CHECK_ERROR(run, World_RemoveObject(&TestWorld, 2U), ErrorCode_InvalidOperation);
+    TEST_CHECK_ERROR(run, World_RemoveObject(&TestWorld, 0U), ErrorCode_IllegalArgument);
+    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+}
+
+static void LoaderIdsAdvanceTheCounter(TestRun* run)
+{
+    World TestWorld;
+    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    {
+        return;
+    }
+
+    WorldObject* Object = NULL;
+    TEST_CHECK_SUCCESS(run, World_CreateObjectWithId(&TestWorld, (const unsigned char*)u8"loaded", 10U, &Object));
+    TEST_CHECK(run, (Object != NULL) && (WorldObject_GetId(Object) == 10U)
+        && (World_GetNextObjectId(&TestWorld) == 11U));
+    TEST_CHECK_SUCCESS(run, World_CreateObjectWithId(&TestWorld, NULL, 5U, &Object)); // below the counter: kept
+    TEST_CHECK(run, World_GetNextObjectId(&TestWorld) == 11U);
+    TEST_CHECK_ERROR(run, World_CreateObjectWithId(&TestWorld, NULL, 10U, &Object), ErrorCode_InvalidOperation);
+    TEST_CHECK(run, Object == NULL);
+    TEST_CHECK_ERROR(run, World_CreateObjectWithId(&TestWorld, NULL, 0U, &Object), ErrorCode_IllegalArgument);
+    Object = CreateObject(run, &TestWorld, NULL);
+    TEST_CHECK(run, (Object != NULL) && (WorldObject_GetId(Object) == 11U));
+
+    World_EnsureNextObjectIdAtLeast(&TestWorld, 100U);
+    World_EnsureNextObjectIdAtLeast(&TestWorld, 50U); // never lowers it
+    Object = CreateObject(run, &TestWorld, NULL);
+    TEST_CHECK(run, (Object != NULL) && (WorldObject_GetId(Object) == 100U));
+
+    // A loaded object with the last id uses up the counter: no id can be handed out without colliding.
+    TEST_CHECK_SUCCESS(run, World_CreateObjectWithId(&TestWorld, NULL, UINT64_MAX, &Object));
+    TEST_CHECK(run, World_GetNextObjectId(&TestWorld) == 0U);
+    TEST_CHECK_ERROR(run, World_CreateObject(&TestWorld, NULL, &Object), ErrorCode_InvalidOperation);
+    TEST_CHECK(run, World_GetObjectCount(&TestWorld) == 5U);
+    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+}
+
+static void ObjectSetVersionChangesOnCreateAndRemove(TestRun* run)
 {
     World TestWorld;
     if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
@@ -42,29 +299,324 @@ static void ObjectSetVersionChangesOnAddAndRemove(TestRun* run)
     }
 
     uint64_t Initial = World_GetObjectSetVersion(&TestWorld);
-    WorldLight* Light = NULL;
-    if (TEST_CHECK_SUCCESS(run, WorldLight_Create(NULL, &Light)))
+    WorldObject* Object = CreateObject(run, &TestWorld, "object");
+    if (Object != NULL)
     {
-        if (TEST_CHECK_SUCCESS(run, World_AddObject(&TestWorld, WorldLight_AsObject(Light))))
-        {
-            uint64_t AfterAdd = World_GetObjectSetVersion(&TestWorld);
-            TEST_CHECK(run, AfterAdd != Initial);
+        uint64_t AfterCreate = World_GetObjectSetVersion(&TestWorld);
+        TEST_CHECK(run, AfterCreate != Initial);
 
-            // Changing an object's properties is not a change of the object set.
-            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldLight_AsObject(Light), (Vector3){ 1.0f, 2.0f, 3.0f }));
-            TEST_CHECK(run, World_GetObjectSetVersion(&TestWorld) == AfterAdd);
+        // Properties and components are not the object set.
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, (Vector3){ 1.0f, 2.0f, 3.0f }));
+        TEST_CHECK(run, AddComponent(run, &TestWorld, Object, WorldComponentType_Light) != NULL);
+        TEST_CHECK(run, World_GetObjectSetVersion(&TestWorld) == AfterCreate);
 
-            TEST_CHECK_SUCCESS(run, World_RemoveObjectById(&TestWorld, WorldObject_GetId(WorldLight_AsObject(Light))));
-            TEST_CHECK(run, World_GetObjectSetVersion(&TestWorld) != AfterAdd);
-        }
-        else
-        {
-            WorldObject_Destroy(WorldLight_AsObject(Light));
-        }
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&TestWorld, WorldObject_GetId(Object)));
+        TEST_CHECK(run, World_GetObjectSetVersion(&TestWorld) != AfterCreate);
     }
     TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
 }
 
+static void ObjectPropertiesValidateAndAdvanceTheRevision(TestRun* run)
+{
+    World TestWorld;
+    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    {
+        return;
+    }
+
+    WorldObject* Object = CreateObject(run, &TestWorld, "object");
+    if (Object != NULL)
+    {
+        Vector3 Scale = WorldObject_GetScale(Object);
+        TEST_CHECK(run, (Scale.x == 1.0f) && (Scale.y == 1.0f) && (Scale.z == 1.0f));
+        TEST_CHECK(run, WorldObject_IsEnabled(Object) && WorldObject_IsVisible(Object));
+        TEST_CHECK(run, WorldObject_GetMobility(Object) == WorldMobility_Static);
+        TEST_CHECK(run, (WorldObject_GetTint(Object).Opacity == 1.0f) && (WorldObject_GetTint(Object).Tint.r == 255));
+
+        uint32_t Revision = WorldObject_GetRevision(Object);
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, (Vector3){ 1.0f, 2.0f, 3.0f }));
+        TEST_CHECK(run, WorldObject_GetRevision(Object) != Revision);
+        Revision = WorldObject_GetRevision(Object);
+        TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Object, (Vector3){ 0.5f, 0.0f, 0.0f }));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetName(Object, (const unsigned char*)u8"renamed"));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetMobility(Object, WorldMobility_Movable));
+        TEST_CHECK(run, WorldObject_GetRevision(Object) == (Revision + 3U));
+        TEST_CHECK(run, strcmp((const char*)WorldObject_GetName(Object), "renamed") == 0);
+
+        // The table's rules: nothing changes on a refusal.
+        Revision = WorldObject_GetRevision(Object);
+        TEST_CHECK_ERROR(run, WorldObject_SetPosition(Object, (Vector3){ NAN, 0.0f, 0.0f }),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldObject_SetScale(Object, (Vector3){ 1.0f, INFINITY, 1.0f }),
+            ErrorCode_ArgumentOutOfRange);
+        RenderColor TooOpaque = RenderColor_White();
+        TooOpaque.Opacity = 2.0f;
+        TEST_CHECK_ERROR(run, WorldObject_SetTint(Object, TooOpaque), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldObject_SetMobility(Object, (WorldMobility)7), ErrorCode_ArgumentOutOfRange);
+        unsigned char LongName[WORLD_OBJECT_NAME_MAX_LENGTH + 2U];
+        memset(LongName, 'a', sizeof(LongName) - 1U);
+        LongName[sizeof(LongName) - 1U] = 0;
+        TEST_CHECK_ERROR(run, WorldObject_SetName(Object, LongName), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK(run, WorldObject_GetRevision(Object) == Revision);
+        TEST_CHECK(run, WorldObject_GetPosition(Object).x == 1.0f);
+        TEST_CHECK(run, strcmp((const char*)WorldObject_GetName(Object), "renamed") == 0);
+
+        // The table reaches the same fields, and its writes advance the revision too.
+        PropertyValue Value = PropertyValue_FromVector3((Vector3){ 4.0f, 5.0f, 6.0f });
+        TEST_CHECK_SUCCESS(run, Properties_Set(WorldObject_GetPropertyTable(), Object, u8"position", &Value));
+        TEST_CHECK(run, (WorldObject_GetPosition(Object).y == 5.0f) && (WorldObject_GetRevision(Object) != Revision));
+        Value = PropertyValue_FromBool(false);
+        TEST_CHECK_SUCCESS(run, Properties_Set(WorldObject_GetPropertyTable(), Object, u8"is_visible", &Value));
+        TEST_CHECK(run, !WorldObject_IsVisible(Object));
+    }
+    TEST_CHECK_ERROR(run, World_CreateObject(&TestWorld, (const unsigned char*)u8"\xff", &Object),
+        ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+}
+
+static void RotationIsDegreesInJSON(TestRun* run)
+{
+    World TestWorld;
+    JSONObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    {
+        return;
+    }
+    WorldObject* Object = CreateObject(run, &TestWorld, "turned");
+    if ((Object != NULL) && TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)))
+    {
+        JSONObjectValue Value;
+        if (TestText_ParseJSON(run, Pool, "{\"rotation\": [0, 90, 180], \"mobility\": \"movable\"}", &Value))
+        {
+            TEST_CHECK_SUCCESS(run, Properties_ReadJSON(WorldObject_GetPropertyTable(), Value.Value.Compound, Object,
+                NULL));
+            Vector3 Rotation = WorldObject_GetRotation(Object);
+            TEST_CHECK(run, (Rotation.x == 0.0f) && (fabsf(Rotation.y - 1.5707964f) < 1e-6f)
+                && (fabsf(Rotation.z - 3.1415927f) < 1e-6f));
+            TEST_CHECK(run, WorldObject_GetMobility(Object) == WorldMobility_Movable);
+            TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+        }
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    }
+    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+}
+
+
+// Static functions: components.
+static void ComponentsAreAddedFoundAndRemoved(TestRun* run)
+{
+    World TestWorld;
+    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    {
+        return;
+    }
+
+    WorldObject* Object = CreateObject(run, &TestWorld, "lamp");
+    uint64_t Version = World_GetComponentSetVersion(&TestWorld);
+    WorldComponent* ModelComponent = AddComponent(run, &TestWorld, Object, WorldComponentType_Model);
+    WorldComponent* Light = AddComponent(run, &TestWorld, Object, WorldComponentType_Light);
+    if ((ModelComponent != NULL) && (Light != NULL))
+    {
+        uint64_t Id = WorldObject_GetId(Object);
+        TEST_CHECK(run, World_GetComponentSetVersion(&TestWorld) != Version);
+        TEST_CHECK(run, (WorldComponent_GetType(ModelComponent) == WorldComponentType_Model)
+            && (WorldComponent_GetOwner(ModelComponent) == Object));
+        TEST_CHECK(run, (WorldModelComponent_FromComponent(ModelComponent) != NULL)
+            && (WorldLightComponent_FromComponent(ModelComponent) == NULL));
+        TEST_CHECK(run, WorldObject_GetComponent(Object, WorldComponentType_Light) == Light);
+        TEST_CHECK(run, WorldObject_GetComponent(Object, WorldComponentType_Sprite) == NULL);
+
+        WorldComponent* Found = NULL;
+        TEST_CHECK(run, World_TryGetComponent(&TestWorld, Id, WorldComponentType_Model, &Found)
+            && (Found == ModelComponent));
+        TEST_CHECK(run, !World_TryGetComponent(&TestWorld, Id, WorldComponentType_Sprite, &Found) && (Found == NULL));
+        TEST_CHECK(run, !World_TryGetComponent(&TestWorld, 99U, WorldComponentType_Model, &Found));
+
+        // At most one of each type.
+        WorldComponent* Second = NULL;
+        TEST_CHECK_ERROR(run, World_AddComponent(&TestWorld, Id, WorldComponentType_Model, &Second),
+            ErrorCode_InvalidOperation);
+        TEST_CHECK(run, Second == NULL);
+
+        Version = World_GetComponentSetVersion(&TestWorld);
+        TEST_CHECK_SUCCESS(run, World_RemoveComponent(&TestWorld, Id, WorldComponentType_Model));
+        TEST_CHECK(run, World_GetComponentSetVersion(&TestWorld) != Version);
+        TEST_CHECK(run, WorldObject_GetComponent(Object, WorldComponentType_Model) == NULL);
+        TEST_CHECK_ERROR(run, World_RemoveComponent(&TestWorld, Id, WorldComponentType_Model),
+            ErrorCode_InvalidOperation);
+        size_t Count = 1;
+        TEST_CHECK(run, (World_GetComponents(&TestWorld, WorldComponentType_Model, &Count) == NULL) && (Count == 0U));
+
+        // Bad arguments.
+        TEST_CHECK_ERROR(run, World_AddComponent(&TestWorld, Id, (WorldComponentType)WorldComponentType_Count, &Second),
+            ErrorCode_IllegalArgument);
+        TEST_CHECK_ERROR(run, World_AddComponent(&TestWorld, 0U, WorldComponentType_Model, &Second),
+            ErrorCode_IllegalArgument);
+        TEST_CHECK_ERROR(run, World_AddComponent(&TestWorld, 99U, WorldComponentType_Model, &Second),
+            ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, World_RemoveComponent(&TestWorld, 99U, WorldComponentType_Light),
+            ErrorCode_InvalidOperation);
+    }
+    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+}
+
+static void RemovingAnObjectRemovesItsComponents(TestRun* run)
+{
+    World TestWorld;
+    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    {
+        return;
+    }
+
+    WorldObject* Kept = CreateObject(run, &TestWorld, "kept");
+    WorldObject* Removed = CreateObject(run, &TestWorld, "removed");
+    if ((AddComponent(run, &TestWorld, Kept, WorldComponentType_Model) != NULL)
+        && (AddComponent(run, &TestWorld, Removed, WorldComponentType_Model) != NULL)
+        && (AddComponent(run, &TestWorld, Removed, WorldComponentType_Sprite) != NULL)
+        && (AddComponent(run, &TestWorld, Removed, WorldComponentType_Light) != NULL))
+    {
+        uint64_t KeptId = WorldObject_GetId(Kept);
+        uint64_t Version = World_GetComponentSetVersion(&TestWorld);
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&TestWorld, WorldObject_GetId(Removed)));
+        TEST_CHECK(run, World_GetComponentSetVersion(&TestWorld) != Version);
+        CheckComponentOwners(run, &TestWorld, WorldComponentType_Model, &KeptId, 1U);
+        CheckComponentOwners(run, &TestWorld, WorldComponentType_Sprite, NULL, 0U);
+        CheckComponentOwners(run, &TestWorld, WorldComponentType_Light, NULL, 0U);
+    }
+    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+}
+
+static void PerTypeArraysStayConsistent(TestRun* run)
+{
+    World TestWorld;
+    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    {
+        return;
+    }
+
+    WorldObject* Objects[6] = { NULL };
+    bool IsBuilt = true;
+    for (size_t Index = 0; Index < 6U; Index++)
+    {
+        Objects[Index] = CreateObject(run, &TestWorld, "object");
+        IsBuilt = IsBuilt && (AddComponent(run, &TestWorld, Objects[Index], WorldComponentType_Model) != NULL);
+        if ((Index % 2U) == 0U)
+        {
+            IsBuilt = IsBuilt && (AddComponent(run, &TestWorld, Objects[Index], WorldComponentType_Light) != NULL);
+        }
+    }
+    if (IsBuilt)
+    {
+        const uint64_t ModelsAll[] = { 1, 2, 3, 4, 5, 6 };
+        const uint64_t LightsAll[] = { 1, 3, 5 };
+        CheckComponentOwners(run, &TestWorld, WorldComponentType_Model, ModelsAll, 6U);
+        CheckComponentOwners(run, &TestWorld, WorldComponentType_Light, LightsAll, 3U);
+
+        // Interleaved: remove a model, remove a whole object, give the first object its model back (it goes last),
+        // add a light to an object that had none.
+        TEST_CHECK_SUCCESS(run, World_RemoveComponent(&TestWorld, 2U, WorldComponentType_Model));
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&TestWorld, 3U));
+        TEST_CHECK_SUCCESS(run, World_RemoveComponent(&TestWorld, 1U, WorldComponentType_Model));
+        TEST_CHECK(run, AddComponent(run, &TestWorld, Objects[0], WorldComponentType_Model) != NULL);
+        TEST_CHECK(run, AddComponent(run, &TestWorld, Objects[3], WorldComponentType_Light) != NULL);
+        TEST_CHECK(run, AddComponent(run, &TestWorld, Objects[1], WorldComponentType_Model) != NULL);
+        const uint64_t ModelsAfter[] = { 4, 5, 6, 1, 2 };
+        const uint64_t LightsAfter[] = { 1, 5, 4 };
+        CheckComponentOwners(run, &TestWorld, WorldComponentType_Model, ModelsAfter, 5U);
+        CheckComponentOwners(run, &TestWorld, WorldComponentType_Light, LightsAfter, 3U);
+    }
+    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+}
+
+static void ComponentTypesAreFoundByName(TestRun* run)
+{
+    World TestWorld;
+    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    {
+        return;
+    }
+
+    TEST_CHECK(run, World_GetComponentTypeCount(&TestWorld) == (size_t)WorldComponentType_Count);
+    const char* const Names[WorldComponentType_Count] = { "model", "sprite", "light" };
+    for (size_t Type = 0; Type < (size_t)WorldComponentType_Count; Type++)
+    {
+        const WorldComponentTypeInfo* Info = World_GetComponentTypeInfo(&TestWorld, (WorldComponentType)Type);
+        TEST_CHECK(run, (Info != NULL) && (Info == WorldComponent_GetStandardTypeInfo((WorldComponentType)Type)));
+        TEST_CHECK(run, (Info != NULL) && ((size_t)Info->Type == Type)
+            && (strcmp((const char*)Info->Name, Names[Type]) == 0));
+        TEST_CHECK_SUCCESS(run, WorldComponentTypeInfo_Check(Info));
+
+        WorldComponentType Found = WorldComponentType_Count;
+        TEST_CHECK(run, World_TryFindComponentType(&TestWorld, (const unsigned char*)Names[Type], &Found)
+            && ((size_t)Found == Type));
+    }
+    WorldComponentType Found = WorldComponentType_Model;
+    TEST_CHECK(run, !World_TryFindComponentType(&TestWorld, (const unsigned char*)u8"collider", &Found));
+    TEST_CHECK(run, World_GetComponentTypeInfo(&TestWorld, WorldComponentType_Count) == NULL);
+    TEST_CHECK(run, WorldComponent_GetStandardTypeInfo(WorldComponentType_Count) == NULL);
+    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+}
+
+static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
+{
+    World TestWorld;
+    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    {
+        return;
+    }
+
+    WorldObject* Object = CreateObject(run, &TestWorld, "object");
+    WorldModelComponent* ModelComponent = WorldModelComponent_FromComponent(AddComponent(run, &TestWorld, Object,
+        WorldComponentType_Model));
+    WorldLightComponent* Light = WorldLightComponent_FromComponent(AddComponent(run, &TestWorld, Object,
+        WorldComponentType_Light));
+    if ((ModelComponent != NULL) && (Light != NULL))
+    {
+        TEST_CHECK(run, (WorldModelComponent_GetModel(ModelComponent) == NULL)
+            && WorldModelComponent_HasOutline(ModelComponent)
+            && !WorldModelComponent_OmitsPixelation(ModelComponent) && WorldModelComponent_CastsShadows(ModelComponent)
+            && (WorldModelComponent_GetShadowTier(ModelComponent) == WorldShadowTier_Both));
+        TEST_CHECK(run, (WorldLightComponent_GetIntensity(Light) == WORLD_LIGHT_COMPONENT_DEFAULT_INTENSITY)
+            && (WorldLightComponent_GetRange(Light) == WORLD_LIGHT_COMPONENT_DEFAULT_RANGE)
+            && !WorldLightComponent_CastsShadows(Light));
+
+        uint32_t ObjectRevision = WorldObject_GetRevision(Object);
+        uint32_t Revision = WorldComponent_GetRevision(&ModelComponent->Base);
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetModel(ModelComponent, (const unsigned char*)u8"crate"));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasOutline(ModelComponent, false));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOmitsPixelation(ModelComponent, true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(ModelComponent, WorldShadowTier_Far));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetCastsShadows(ModelComponent, false));
+        TEST_CHECK(run, WorldComponent_GetRevision(&ModelComponent->Base) == (Revision + 5U));
+        PropertyValue Tier = PropertyValue_FromEnum(WorldShadowTier_Near);
+        TEST_CHECK_SUCCESS(run, Properties_Set(WorldModelComponent_GetPropertyTable(), ModelComponent, u8"shadow_tier",
+            &Tier));
+        TEST_CHECK(run, (WorldModelComponent_GetShadowTier(ModelComponent) == WorldShadowTier_Near)
+            && (WorldComponent_GetRevision(&ModelComponent->Base) == (Revision + 6U)));
+        TEST_CHECK(run, WorldObject_GetRevision(Object) == ObjectRevision); // a component is not its object
+
+        // Refused values change nothing.
+        Revision = WorldComponent_GetRevision(&ModelComponent->Base);
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetModel(ModelComponent, (const unsigned char*)u8"Not A Name"),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetShadowTier(ModelComponent, (WorldShadowTier)9),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldLightComponent_SetRange(Light, -1.0f), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldLightComponent_SetIntensity(Light, NAN), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK(run, WorldComponent_GetRevision(&ModelComponent->Base) == Revision);
+        TEST_CHECK(run, strcmp((const char*)WorldModelComponent_GetModel(ModelComponent), "crate") == 0);
+
+        Revision = WorldComponent_GetRevision(&Light->Base);
+        TEST_CHECK_SUCCESS(run, WorldLightComponent_SetRange(Light, 6.0f));
+        TEST_CHECK_SUCCESS(run, WorldLightComponent_SetColor(Light, (Color){ 255, 200, 100, 255 }));
+        TEST_CHECK(run, (WorldLightComponent_GetRange(Light) == 6.0f)
+            && (WorldComponent_GetRevision(&Light->Base) == (Revision + 2U)));
+    }
+    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+}
+
+
+// Static functions: the sprite binding.
 static void WorldWithoutAssetsLeavesSpritesEmpty(TestRun* run)
 {
     World TestWorld;
@@ -72,15 +624,16 @@ static void WorldWithoutAssetsLeavesSpritesEmpty(TestRun* run)
     {
         return;
     }
-    WorldSpriteObject* Sprite = AddSprite(run, &TestWorld, "walk");
+    WorldSpriteComponent* Sprite = AddSprite(run, &TestWorld, "walk");
     if (Sprite != NULL)
     {
-        TEST_CHECK(run, !SpriteAnimationInstance_HasSource(WorldSpriteObject_GetAnimationInstance(Sprite)));
+        TEST_CHECK(run, !SpriteAnimationInstance_HasSource(WorldSpriteComponent_GetAnimationInstance(Sprite)));
+        TEST_CHECK(run, strcmp((const char*)WorldSpriteComponent_GetSpriteAnimation(Sprite), "walk") == 0);
     }
     TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
 }
 
-static void AddedSpriteIsBoundAndReleasedWithTheWorld(TestRun* run)
+static void SpriteBindsAndTheWorldReleasesTheAnimationLast(TestRun* run)
 {
     TestAssetFixture Fixture;
     TestAssetCounters Counters = { 0 };
@@ -92,47 +645,101 @@ static void AddedSpriteIsBoundAndReleasedWithTheWorld(TestRun* run)
         return;
     }
 
-    WorldSpriteObject* First = AddSprite(run, &TestWorld, "walk");
-    WorldSpriteObject* Second = AddSprite(run, &TestWorld, "walk");
+    WorldSpriteComponent* First = AddSprite(run, &TestWorld, "walk");
+    WorldSpriteComponent* Second = AddSprite(run, &TestWorld, "walk");
     if ((First != NULL) && (Second != NULL))
     {
-        TEST_CHECK(run, IsBound(First));
-        TEST_CHECK(run, IsBound(Second));
-        TEST_CHECK(run, SpriteAnimationInstance_GetSource(WorldSpriteObject_GetAnimationInstance(First))
-            == SpriteAnimationInstance_GetSource(WorldSpriteObject_GetAnimationInstance(Second)));
+        TEST_CHECK(run, IsBound(First) && IsBound(Second));
+        TEST_CHECK(run, SpriteAnimationInstance_GetSource(WorldSpriteComponent_GetAnimationInstance(First))
+            == SpriteAnimationInstance_GetSource(WorldSpriteComponent_GetAnimationInstance(Second)));
         TEST_CHECK(run, Counters.LoadCount == 1); // shared: one load under the world's user
+
+        // Removing a sprite does not release the animation: the world's user holds it until the world goes.
+        uint64_t FirstId = WorldObject_GetId(WorldComponent_GetOwner(&First->Base));
+        TEST_CHECK_SUCCESS(run, World_RemoveComponent(&TestWorld, FirstId, WorldComponentType_Sprite));
     }
 
-    // The world's user holds the animation until the world is destroyed; then it is released (and unloaded,
-    // since nothing else holds it).
     TEST_CHECK(run, Counters.UnloadCount == 0);
     TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
     TEST_CHECK(run, Counters.UnloadCount == 1);
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
 
-static void MissingAnimationLeavesSpriteEmptyWithoutFailingTheAdd(TestRun* run)
+static void MissingAnimationIsLoggedOnceAndLeavesTheSpriteEmpty(TestRun* run)
+{
+    GenericBuffer Directory;
+    GenericBuffer_AllocateVariable(&Directory, WORLD_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    Logger Log;
+    TestAssetFixture Fixture;
+    if (!TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "world_missing_animation", &Directory))
+        || !TEST_CHECK_SUCCESS(run, Logger_Construct(&Log, Directory._data)))
+    {
+        Memory_Free(Directory._data);
+        return;
+    }
+
+    World TestWorld;
+    if (TestAssetFixture_Construct(run, &Fixture) && TEST_CHECK_SUCCESS(run, World_Construct2(&TestWorld,
+        Fixture.Manager, &Log)))
+    {
+        WorldSpriteComponent* Sprite = AddSprite(run, &TestWorld, "missing");
+        if (Sprite != NULL)
+        {
+            TEST_CHECK(run, !SpriteAnimationInstance_HasSource(WorldSpriteComponent_GetAnimationInstance(Sprite)));
+            // The same name again changes nothing, so it is not loaded or reported again.
+            TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"missing"));
+            TEST_CHECK(run, !IsBound(Sprite));
+        }
+        TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+    TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "has no animation: \"missing\"") == 1U);
+    Memory_Free(Directory._data);
+}
+
+static void RenamingRebindsAndTheSameNameKeepsPlaying(TestRun* run)
 {
     TestAssetFixture Fixture;
     World TestWorld;
-    if (!TestAssetFixture_Construct(run, &Fixture) || !TEST_CHECK_SUCCESS(run, World_Construct2(&TestWorld,
-        Fixture.Manager, NULL)))
+    if (!TestAssetFixture_Construct(run, &Fixture)
+        || !TestAssets_AddPlayingSpriteAnimation(run, &Fixture, "walk", 4U, 10.0, NULL)
+        || !TestAssets_AddSpriteAnimation(run, &Fixture, "idle", NULL)
+        || !TEST_CHECK_SUCCESS(run, World_Construct2(&TestWorld, Fixture.Manager, NULL)))
     {
         TestAssetFixture_Deconstruct(run, &Fixture);
         return;
     }
 
-    WorldSpriteObject* Sprite = AddSprite(run, &TestWorld, "missing");
+    WorldSpriteComponent* Sprite = AddSprite(run, &TestWorld, "missing");
     if (Sprite != NULL)
     {
-        TEST_CHECK(run, WorldObject_GetId(WorldSpriteObject_AsObject(Sprite)) != 0);
-        TEST_CHECK(run, !SpriteAnimationInstance_HasSource(WorldSpriteObject_GetAnimationInstance(Sprite)));
+        SpriteAnimationInstance* Instance = WorldSpriteComponent_GetAnimationInstance(Sprite);
+        TEST_CHECK(run, !IsBound(Sprite));
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"));
+        TEST_CHECK(run, IsBound(Sprite) && (SpriteAnimationInstance_GetFrameCount(Instance) == 4U));
+
+        // Playing on: the same name keeps the playback, another name restarts it.
+        TEST_CHECK_SUCCESS(run, SpriteAnimationInstance_Update(Instance, 0.15));
+        TEST_CHECK(run, SpriteAnimationInstance_GetFrameIndex(Instance) == 1U);
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"));
+        TEST_CHECK(run, SpriteAnimationInstance_GetFrameIndex(Instance) == 1U);
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"idle"));
+        TEST_CHECK(run, IsBound(Sprite) && (SpriteAnimationInstance_GetFrameCount(Instance) == 1U));
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"));
+        TEST_CHECK(run, SpriteAnimationInstance_GetFrameIndex(Instance) == 0U);
+
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, NULL));
+        TEST_CHECK(run, !SpriteAnimationInstance_HasSource(Instance));
+        TEST_CHECK(run, WorldSpriteComponent_GetSpriteAnimation(Sprite) == NULL);
+        TEST_CHECK_ERROR(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"Bad Name"),
+            ErrorCode_ArgumentOutOfRange);
     }
     TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
 
-static void RenamingThroughTheWorldRebinds(TestRun* run)
+static void TableWritesRebindTheSprite(TestRun* run)
 {
     TestAssetFixture Fixture;
     World TestWorld;
@@ -143,25 +750,33 @@ static void RenamingThroughTheWorldRebinds(TestRun* run)
         return;
     }
 
-    WorldSpriteObject* Sprite = AddSprite(run, &TestWorld, "missing");
-    if (Sprite != NULL)
+    const PropertyTable* Table = WorldSpriteComponent_GetPropertyTable();
+    WorldSpriteComponent* Sprite = AddSprite(run, &TestWorld, "missing");
+    WorldSpriteComponent* Other = AddSprite(run, &TestWorld, "walk");
+    if ((Sprite != NULL) && (Other != NULL))
     {
-        uint64_t Id = WorldObject_GetId(WorldSpriteObject_AsObject(Sprite));
+        PropertyValue Name = PropertyValue_FromAssetName((const unsigned char*)u8"walk");
+        TEST_CHECK_SUCCESS(run, Properties_Set(Table, Sprite, u8"sprite_animation", &Name));
+        TEST_CHECK(run, IsBound(Sprite));
+
+        // A read may change anything (its hook gets no row): the name is compared with the bound one.
+        TEST_CHECK_SUCCESS(run, ReadComponentJSON(run, &Sprite->Base, Table, "{\"sprite_animation\": \"missing\"}"));
         TEST_CHECK(run, !IsBound(Sprite));
-        if (TEST_CHECK_SUCCESS(run, World_SetSpriteAnimationAssetName(&TestWorld, Id, (const unsigned char*)u8"walk")))
-        {
-            TEST_CHECK(run, IsBound(Sprite));
-            TEST_CHECK(run, strcmp((const char*)WorldSpriteObject_GetSpriteAnimationAssetName(Sprite), "walk") == 0);
-        }
-        TEST_CHECK_SUCCESS(run, World_SetSpriteAnimationAssetName(&TestWorld, Id, NULL));
-        TEST_CHECK(run, !SpriteAnimationInstance_HasSource(WorldSpriteObject_GetAnimationInstance(Sprite)));
-        TEST_CHECK(run, WorldSpriteObject_GetSpriteAnimationAssetName(Sprite) == NULL);
+        // An absent key reads as its default: no animation.
+        TEST_CHECK_SUCCESS(run, ReadComponentJSON(run, &Sprite->Base, Table, "{\"has_outline\": false}"));
+        TEST_CHECK(run, (WorldSpriteComponent_GetSpriteAnimation(Sprite) == NULL) && !IsBound(Sprite));
+        TEST_CHECK(run, !WorldSpriteComponent_HasOutline(Sprite));
+
+        TEST_CHECK_SUCCESS(run, Properties_CopyTo(Table, Other, Sprite));
+        TEST_CHECK(run, IsBound(Sprite) && WorldSpriteComponent_HasOutline(Sprite));
     }
     TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
 
-static void SpriteSettersRefuseSpritesInAWorld(TestRun* run)
+
+// Static functions: flags, mobility and drivers.
+static void FlagsAdvanceTheRevision(TestRun* run)
 {
     World TestWorld;
     if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
@@ -169,65 +784,107 @@ static void SpriteSettersRefuseSpritesInAWorld(TestRun* run)
         return;
     }
 
-    // Before the add both setters work; afterwards the world owns the binding.
-    WorldSpriteObject* Sprite = NULL;
-    if (TEST_CHECK_SUCCESS(run, WorldSpriteObject_Create(NULL, NULL, &Sprite)))
+    WorldObject* Object = CreateObject(run, &TestWorld, "object");
+    if (Object != NULL)
     {
-        TEST_CHECK_SUCCESS(run, WorldSpriteObject_SetSpriteAnimationAssetName(Sprite, (const unsigned char*)u8"a"));
-        TEST_CHECK_SUCCESS(run, WorldSpriteObject_SetAnimation(Sprite, NULL));
-        if (TEST_CHECK_SUCCESS(run, World_AddObject(&TestWorld, WorldSpriteObject_AsObject(Sprite))))
-        {
-            TEST_CHECK_ERROR(run, WorldSpriteObject_SetSpriteAnimationAssetName(Sprite, (const unsigned char*)u8"b"),
-                ErrorCode_InvalidOperation);
-            TEST_CHECK_ERROR(run, WorldSpriteObject_SetAnimation(Sprite, NULL), ErrorCode_InvalidOperation);
-            TEST_CHECK(run, strcmp((const char*)WorldSpriteObject_GetSpriteAnimationAssetName(Sprite), "a") == 0);
-        }
-        else
-        {
-            WorldObject_Destroy(WorldSpriteObject_AsObject(Sprite));
-        }
+        uint32_t Revision = WorldObject_GetRevision(Object);
+        TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(Object, false));
+        TEST_CHECK(run, !WorldObject_IsEnabled(Object) && (WorldObject_GetRevision(Object) == (Revision + 1U)));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Object, false));
+        TEST_CHECK(run, !WorldObject_IsVisible(Object) && (WorldObject_GetRevision(Object) == (Revision + 2U)));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(Object, true));
+        TEST_CHECK(run, WorldObject_IsEnabled(Object) && !WorldObject_IsVisible(Object));
     }
     TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
 }
 
-static void SpriteRenameValidatesItsTarget(TestRun* run)
+static void AddingADriverMakesTheObjectMovable(TestRun* run)
 {
     World TestWorld;
-    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&TestWorld)))
+    if (!ConstructDriverWorld(run, &TestWorld))
     {
         return;
     }
 
-    WorldModelObject* ModelObject = NULL;
-    if (TEST_CHECK_SUCCESS(run, WorldModelObject_Create(NULL, NULL, &ModelObject)))
+    TEST_CHECK(run, World_GetComponentTypeCount(&TestWorld) == ((size_t)WorldComponentType_Count + 2U));
+    WorldComponentType Found = WorldComponentType_Model;
+    TEST_CHECK(run, World_TryFindComponentType(&TestWorld, (const unsigned char*)u8"test_driver_b", &Found)
+        && (Found == TestDriverB.Type));
+    WorldObject* Object = CreateObject(run, &TestWorld, "walker");
+    if ((Object != NULL) && (AddComponent(run, &TestWorld, Object, WorldComponentType_Model) != NULL))
     {
-        if (TEST_CHECK_SUCCESS(run, World_AddObject(&TestWorld, WorldModelObject_AsObject(ModelObject))))
-        {
-            uint64_t ModelId = WorldObject_GetId(WorldModelObject_AsObject(ModelObject));
-            TEST_CHECK_ERROR(run, World_SetSpriteAnimationAssetName(&TestWorld, ModelId, NULL),
-                ErrorCode_InvalidOperation);
-        }
-        else
-        {
-            WorldObject_Destroy(WorldModelObject_AsObject(ModelObject));
-        }
+        TEST_CHECK(run, WorldObject_GetMobility(Object) == WorldMobility_Static); // a model is no driver
+        uint32_t Revision = WorldObject_GetRevision(Object);
+        WorldComponent* Driver = AddComponent(run, &TestWorld, Object, TestDriverA.Type);
+        TEST_CHECK(run, (Driver != NULL) && (WorldObject_GetMobility(Object) == WorldMobility_Movable));
+        TEST_CHECK(run, WorldObject_GetRevision(Object) != Revision);
+
+        // A hint, never a lock: a driven object may still be marked static.
+        TEST_CHECK_SUCCESS(run, WorldObject_SetMobility(Object, WorldMobility_Static));
+        TEST_CHECK(run, WorldObject_GetMobility(Object) == WorldMobility_Static);
     }
-    TEST_CHECK_ERROR(run, World_SetSpriteAnimationAssetName(&TestWorld, 999, NULL), ErrorCode_InvalidOperation);
-    TEST_CHECK_ERROR(run, World_SetSpriteAnimationAssetName(&TestWorld, 0, NULL), ErrorCode_IllegalArgument);
     TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
 }
 
-static void ModelRenameAdvancesItsAssetRevision(TestRun* run)
+static void ASecondTransformDriverIsRefused(TestRun* run)
 {
-    WorldModelObject* ModelObject = NULL;
-    if (!TEST_CHECK_SUCCESS(run, WorldModelObject_Create(NULL, (const unsigned char*)u8"crate", &ModelObject)))
+    World TestWorld;
+    if (!ConstructDriverWorld(run, &TestWorld))
     {
         return;
     }
-    uint32_t Initial = WorldModelObject_GetAssetRevision(ModelObject);
-    TEST_CHECK_SUCCESS(run, WorldModelObject_SetModelAssetName(ModelObject, (const unsigned char*)u8"barrel"));
-    TEST_CHECK(run, WorldModelObject_GetAssetRevision(ModelObject) != Initial);
-    WorldObject_Destroy(WorldModelObject_AsObject(ModelObject));
+
+    WorldObject* Object = CreateObject(run, &TestWorld, "car");
+    WorldObject* Other = CreateObject(run, &TestWorld, "player");
+    if ((Object != NULL) && (Other != NULL) && (AddComponent(run, &TestWorld, Object, TestDriverA.Type) != NULL))
+    {
+        uint64_t Id = WorldObject_GetId(Object);
+        WorldComponent* Second = NULL;
+        TEST_CHECK_ERROR(run, World_AddComponent(&TestWorld, Id, TestDriverB.Type, &Second),
+            ErrorCode_InvalidOperation);
+        TEST_CHECK(run, (Second == NULL) && (WorldObject_GetComponent(Object, TestDriverB.Type) == NULL));
+        // Other components and other objects are not affected.
+        TEST_CHECK(run, AddComponent(run, &TestWorld, Object, WorldComponentType_Light) != NULL);
+        TEST_CHECK(run, AddComponent(run, &TestWorld, Other, TestDriverB.Type) != NULL);
+
+        // Once the first driver is gone, another may take over.
+        TEST_CHECK_SUCCESS(run, World_RemoveComponent(&TestWorld, Id, TestDriverA.Type));
+        TEST_CHECK(run, AddComponent(run, &TestWorld, Object, TestDriverB.Type) != NULL);
+        const uint64_t DriverBOwners[] = { WorldObject_GetId(Other), Id };
+        CheckComponentOwners(run, &TestWorld, TestDriverB.Type, DriverBOwners, 2U);
+    }
+    TEST_CHECK_SUCCESS(run, World_Deconstruct(&TestWorld));
+}
+
+static void CustomComponentTypesAreChecked(TestRun* run)
+{
+    World TestWorld;
+    const WorldComponentTypeInfo* Shifted[2] =
+    {
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Sprite), // type 1 at index 0
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Model),
+    };
+    TEST_CHECK_ERROR(run, WorldInternal_ConstructWithTypes(&TestWorld, NULL, NULL, Shifted, 2U),
+        ErrorCode_IllegalArgument);
+
+    // A test type may not take a standard type's slot: the standard downcasts trust the slot.
+    const WorldComponentTypeInfo Impostor = { .Type = WorldComponentType_Model, .Name = u8"impostor",
+        .Size = sizeof(TestDriverComponent), .Table = &TestDriverTable, .IsTransformDriver = false,
+        .Construct = ConstructTestDriver, .Deconstruct = DeconstructTestDriver };
+    const WorldComponentTypeInfo* Impostors[1] = { &Impostor };
+    TEST_CHECK_ERROR(run, WorldInternal_ConstructWithTypes(&TestWorld, NULL, NULL, Impostors, 1U),
+        ErrorCode_IllegalArgument);
+
+    const WorldComponentTypeInfo* Unhooked[WorldComponentType_Count + 1] =
+    {
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Model),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Sprite),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Light),
+        &TestUnhooked,
+    };
+    const char* const Fragments[] = { "test_unhooked", "AfterSet", NULL };
+    TestText_CheckErrorMessage(run, WorldInternal_ConstructWithTypes(&TestWorld, NULL, NULL, Unhooked,
+        sizeof(Unhooked) / sizeof(Unhooked[0])), ErrorCode_IllegalArgument, Fragments);
 }
 
 
@@ -236,15 +893,26 @@ void WorldTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
     {
-        { "object_set_version_changes_on_add_and_remove", ObjectSetVersionChangesOnAddAndRemove },
+        { "objects_get_unique_ids_that_are_never_zero", ObjectsGetUniqueIdsThatAreNeverZero },
+        { "loader_ids_advance_the_counter", LoaderIdsAdvanceTheCounter },
+        { "object_set_version_changes_on_create_and_remove", ObjectSetVersionChangesOnCreateAndRemove },
+        { "object_properties_validate_and_advance_the_revision", ObjectPropertiesValidateAndAdvanceTheRevision },
+        { "rotation_is_degrees_in_json", RotationIsDegreesInJSON },
+        { "components_are_added_found_and_removed", ComponentsAreAddedFoundAndRemoved },
+        { "removing_an_object_removes_its_components", RemovingAnObjectRemovesItsComponents },
+        { "per_type_arrays_stay_consistent", PerTypeArraysStayConsistent },
+        { "component_types_are_found_by_name", ComponentTypesAreFoundByName },
+        { "component_revisions_advance_on_every_change", ComponentRevisionsAdvanceOnEveryChange },
         { "world_without_assets_leaves_sprites_empty", WorldWithoutAssetsLeavesSpritesEmpty },
-        { "added_sprite_is_bound_and_released_with_the_world", AddedSpriteIsBoundAndReleasedWithTheWorld },
-        { "missing_animation_leaves_sprite_empty_without_failing_the_add",
-            MissingAnimationLeavesSpriteEmptyWithoutFailingTheAdd },
-        { "renaming_through_the_world_rebinds", RenamingThroughTheWorldRebinds },
-        { "sprite_setters_refuse_sprites_in_a_world", SpriteSettersRefuseSpritesInAWorld },
-        { "sprite_rename_validates_its_target", SpriteRenameValidatesItsTarget },
-        { "model_rename_advances_its_asset_revision", ModelRenameAdvancesItsAssetRevision },
+        { "sprite_binds_and_the_world_releases_the_animation_last", SpriteBindsAndTheWorldReleasesTheAnimationLast },
+        { "missing_animation_is_logged_once_and_leaves_the_sprite_empty",
+            MissingAnimationIsLoggedOnceAndLeavesTheSpriteEmpty },
+        { "renaming_rebinds_and_the_same_name_keeps_playing", RenamingRebindsAndTheSameNameKeepsPlaying },
+        { "table_writes_rebind_the_sprite", TableWritesRebindTheSprite },
+        { "flags_advance_the_revision", FlagsAdvanceTheRevision },
+        { "adding_a_driver_makes_the_object_movable", AddingADriverMakesTheObjectMovable },
+        { "a_second_transform_driver_is_refused", ASecondTransformDriverIsRefused },
+        { "custom_component_types_are_checked", CustomComponentTypesAreChecked },
     };
     TestRun_RunSuite(run, "World", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

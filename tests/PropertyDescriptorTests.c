@@ -3,6 +3,10 @@
 #include "PropertyDescriptor.h"
 #include "GameClock.h"
 #include "WorldEnvironment.h"
+#include "WorldObject.h"
+#include "WorldModelComponent.h"
+#include "WorldSpriteComponent.h"
+#include "WorldLightComponent.h"
 #include "Logger.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRPath.h"
@@ -45,6 +49,7 @@ typedef struct TestRecordStruct
     float Heading;
     Vector2 Pivot;
     Vector3 Position;
+    Vector3 Orientation;
     Color Tint;
     RenderColor Shade;
     unsigned char* Title;
@@ -140,6 +145,9 @@ static const PropertyDescriptor RecordProperties[] =
         .SinceVersion = 1U },
     { .Key = u8"due", .WireId = 20U, .Type = PropertyType_Date, PROPERTY_MEMBER(TestRecord, Due),
         .Default.DateValue = TEST_DUE_DEFAULT, .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"orientation", .WireId = 21U, .Type = PropertyType_AngleVector3,
+        PROPERTY_MEMBER(TestRecord, Orientation), .Default.Vector3Value = { 0.0f, 0.0f, 0.0f },
+        .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
 };
 
 #define RECORD_PROPERTY_COUNT (sizeof(RecordProperties) / sizeof(RecordProperties[0]))
@@ -206,6 +214,7 @@ static void FillRecord(TestRun* run, TestRecord* record)
     record->Heading = -2.5f;
     record->Pivot = (Vector2){ -0.25f, 0.75f };
     record->Position = (Vector3){ 1.0f / 3.0f, -1234.5f, 1e-7f };
+    record->Orientation = (Vector3){ 1.0f, -2.5f, 0.1f };
     record->Tint = (Color){ 10, 20, 30, 40 };
     record->Shade = (RenderColor){ { 1, 2, 3, 255 }, 0.5f, 0.25f };
     TEST_CHECK_SUCCESS(run, Properties_Set(&RecordTable, record, u8"title",
@@ -407,9 +416,9 @@ static Error ReferencePutColor(GHDFObjectPool* pool, GHDFCompound* compound, GHD
     return Result;
 }
 
-/* The pre-T04 EncodeEnvironment of source/WorldEncoder.c, with its field ids as literals. Ids 2 and 3 held the
- * day-night cycle switch and day length that T23 retired: they are written with their old defaults, as data saved
- * before T23 would hold them. The old encoder had no date (T23's id 30). */
+/* The pre-T04 EncodeEnvironment of source/WorldEncoder.c (removed in T05), with its field ids as literals. Ids 2 and
+ * 3 held the day-night cycle switch and day length that T23 retired: they are written with their old defaults, as data
+ * saved before T23 would hold them. The old encoder had no date (T23's id 30). */
 static Error ReferenceEncodeEnvironment(GHDFObjectPool* pool, GHDFCompound* compound, const WorldEnvironment* environment)
 {
     Error Result = ReferencePutFloat(compound, 1, environment->TimeOfDay);
@@ -528,6 +537,10 @@ static void TablesPassTheirCheck(TestRun* run)
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(&BigRecordTable));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldEnvironment_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(GameClock_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldObject_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldModelComponent_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldSpriteComponent_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldLightComponent_GetPropertyTable()));
     TEST_CHECK_ERROR(run, PropertyTable_Check(NULL), ErrorCode_IllegalArgument);
 }
 
@@ -898,7 +911,8 @@ static void JSONValuesUseTheGameConventions(TestRun* run)
         // by name, uint64 above INT64_MAX as a string.
         const char* Text = "{\"tint\": [1, 2, 3], \"shade\": \"#102030\", \"position\": {\"x\": 1, \"y\": 2, \"z\": 3},"
             " \"count\": \"7\", \"small_tier\": \"near\", \"seed\": \"18446744073709551615\", \"note\": null,"
-            " \"heading\": 180, \"due\": \"2027-01-20\", \"elapsed\": 12.25}";
+            " \"heading\": 180, \"due\": \"2027-01-20\", \"elapsed\": 12.25, \"orientation\": {\"x\": 90, \"y\": 0,"
+            " \"z\": \"-180\"}}";
         if (TEST_CHECK_SUCCESS(run, ReadRecordFromText(run, Pool, Text, &Record, NULL)))
         {
             TEST_CHECK(run, (Record.Tint.r == 1) && (Record.Tint.b == 3) && (Record.Tint.a == 255));
@@ -906,6 +920,8 @@ static void JSONValuesUseTheGameConventions(TestRun* run)
             TEST_CHECK(run, (Record.Position.x == 1.0f) && (Record.Position.z == 3.0f) && (Record.Count == 7));
             TEST_CHECK(run, (Record.SmallTier == TestTier_Near) && (Record.Seed == UINT64_MAX) && (Record.Note == NULL));
             TEST_CHECK(run, fabsf(Record.Heading - (float)TEST_PI) < 1e-6f);
+            TEST_CHECK(run, (fabsf(Record.Orientation.x - (float)(TEST_PI / 2.0)) < 1e-6f)
+                && (Record.Orientation.y == 0.0f) && (fabsf(Record.Orientation.z + (float)TEST_PI) < 1e-6f));
             TEST_CHECK(run, (Record.Due == TEST_DUE_LATER) && (Record.Elapsed == 12.25));
         }
 
@@ -916,6 +932,7 @@ static void JSONValuesUseTheGameConventions(TestRun* run)
         {
             Record.Tint = (Color){ 255, 0, 16, 128 };
             Record.Heading = (float)(TEST_PI / 2.0);
+            Record.Orientation = (Vector3){ 0.0f, (float)(TEST_PI / 2.0), (float)TEST_PI };
             TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&RecordTable, &Record, Pool, Compound, NULL));
             JSONObjectValue Value;
             if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"tint", JSONValueType_String, &Value)))
@@ -933,6 +950,17 @@ static void JSONValuesUseTheGameConventions(TestRun* run)
             if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"heading", JSONValueType_RealNumber, &Value)))
             {
                 TEST_CHECK(run, Value.Value.RealNumber == 90.0);
+            }
+            if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"orientation", JSONValueType_Array,
+                &Value)) && TEST_CHECK(run, JSONArray_GetElementCount(Value.Value.Array) == 3U))
+            {
+                const double Degrees[3] = { 0.0, 90.0, 180.0 };
+                for (size_t Index = 0; Index < 3U; Index++)
+                {
+                    JSONObjectValue Element;
+                    TEST_CHECK(run, TEST_CHECK_SUCCESS(run, JSONArray_Get(Value.Value.Array, Index, &Element))
+                        && (Element.Type == JSONValueType_RealNumber) && (Element.Value.RealNumber == Degrees[Index]));
+                }
             }
             if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"due", JSONValueType_String, &Value)))
             {
@@ -961,6 +989,8 @@ static void AnglesAreDegreesInJSONAndRadiansInGHDF(TestRun* run)
         for (size_t Index = 0; Index < (sizeof(Angles) / sizeof(Angles[0])); Index++)
         {
             Record.Heading = Angles[Index];
+            Record.Orientation = (Vector3){ Angles[Index], -Angles[Index], Angles[(Index + 1U) % (sizeof(Angles)
+                / sizeof(Angles[0]))] };
             JSONCompound* Compound = NULL;
             if (!TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
             {
@@ -972,12 +1002,16 @@ static void AnglesAreDegreesInJSONAndRadiansInGHDF(TestRun* run)
             {
                 TEST_CHECK_SUCCESS(run, Properties_ReadJSON(&RecordTable, Parsed.Value.Compound, &Restored, NULL));
                 TEST_CHECK(run, AreFloatsIdentical(Restored.Heading, Angles[Index]));
+                TEST_CHECK(run, AreFloatsIdentical(Restored.Orientation.x, Record.Orientation.x)
+                    && AreFloatsIdentical(Restored.Orientation.y, Record.Orientation.y)
+                    && AreFloatsIdentical(Restored.Orientation.z, Record.Orientation.z));
                 TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Parsed));
             }
             TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Compound, true));
         }
 
         Record.Heading = 0.5f;
+        Record.Orientation = (Vector3){ 0.25f, 0.5f, 0.75f };
         GHDFCompound* Binary = NULL;
         if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Binary)))
         {
@@ -987,6 +1021,14 @@ static void AnglesAreDegreesInJSONAndRadiansInGHDF(TestRun* run)
                 &Entry)))
             {
                 TEST_CHECK(run, Entry.Value.Float == 0.5f); // radians, as in memory
+            }
+            if (TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Binary, 21U, GHDF_CreateArrayType(GHDFValueType_Float),
+                &Entry)))
+            {
+                GHDFObjectValue Element;
+                TEST_CHECK(run, (GHDFArray_GetElementCount(Entry.Value.Array) == 3U)
+                    && TEST_CHECK_SUCCESS(run, GHDFArray_Get(Entry.Value.Array, 2U, &Element))
+                    && (Element.Value.Float == 0.75f));
             }
             TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Binary, true));
         }

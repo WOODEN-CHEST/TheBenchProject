@@ -41,7 +41,7 @@ typedef struct WorldCullingLightStruct
 {
     /** @brief World-space position of the light. */
     Vector3 Position;
-    /** @brief Reach radius (the WorldLight size); a light with Range <= 0 is never selected. */
+    /** @brief Reach radius (the light component's range); a light with Range <= 0 is never selected. */
     float Range;
     /** @brief Emission intensity; a light with Intensity <= 0 is never selected. */
     float Intensity;

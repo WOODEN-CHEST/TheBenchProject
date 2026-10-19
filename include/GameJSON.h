@@ -140,6 +140,19 @@ Error GameJSON_ParseVector2(const JSONObjectValue* value, Vector2* outVector);
 Error GameJSON_ParseVector3(const JSONObjectValue* value, Vector3* outVector);
 
 /**
+ * @brief Parses a 3D vector like GameJSON_ParseVector3, but keeps every component as a double.
+ *
+ * For values converted before they are stored, where reading a float first would round them twice (angles given
+ * in degrees and stored in radians). The components only have to be finite; the caller checks their range.
+ * @param value The JSON value; must not be NULL.
+ * @param outComponents [out] Receives x, y and z (at least three doubles). Must not be NULL. Unchanged on failure.
+ * @returns Success; ErrorCode_InvalidJSON on a malformed vector or a component that is not a finite decimal.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error GameJSON_ParseVector3Doubles(const JSONObjectValue* value, double* outComponents);
+
+/**
  * @brief Parses an integer 2D vector from a JSON value (compound {x,y} or array [x,y]).
  * @param value The JSON value; must not be NULL.
  * @param outX [out] Receives x. Must not be NULL.

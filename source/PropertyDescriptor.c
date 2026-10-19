@@ -100,6 +100,7 @@ static size_t GetStorageSize(PropertyType type)
         case PropertyType_Vector2:
             return sizeof(Vector2);
         case PropertyType_Vector3:
+        case PropertyType_AngleVector3:
             return sizeof(Vector3);
         case PropertyType_Color:
             return sizeof(Color);
@@ -119,7 +120,7 @@ static bool IsBoundedType(PropertyType type)
 {
     return (type == PropertyType_Int32) || (type == PropertyType_UInt32) || (type == PropertyType_Float)
         || (type == PropertyType_Double) || (type == PropertyType_Angle) || (type == PropertyType_Vector2)
-        || (type == PropertyType_Vector3);
+        || (type == PropertyType_Vector3) || (type == PropertyType_AngleVector3);
 }
 
 static bool IsValidType(PropertyType type)
@@ -615,6 +616,7 @@ bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, con
         case PropertyType_Vector2:
             return (a->Vector2Value.x == b->Vector2Value.x) && (a->Vector2Value.y == b->Vector2Value.y);
         case PropertyType_Vector3:
+        case PropertyType_AngleVector3:
             return (a->Vector3Value.x == b->Vector3Value.x) && (a->Vector3Value.y == b->Vector3Value.y)
                 && (a->Vector3Value.z == b->Vector3Value.z);
         case PropertyType_Color:
@@ -710,6 +712,7 @@ Error PropertyInternal_CheckData(const PropertyTable* table, const PropertyDescr
             return CheckFloats(table, descriptor, Components, 2U);
         }
         case PropertyType_Vector3:
+        case PropertyType_AngleVector3:
         {
             const float Components[3] = { data->Vector3Value.x, data->Vector3Value.y, data->Vector3Value.z };
             return CheckFloats(table, descriptor, Components, 3U);
@@ -851,6 +854,8 @@ const unsigned char* PropertyType_GetName(PropertyType type)
             return u8"vector2";
         case PropertyType_Vector3:
             return u8"vector3";
+        case PropertyType_AngleVector3:
+            return u8"angle_vector3";
         case PropertyType_Color:
             return u8"color";
         case PropertyType_RenderColor:

@@ -24,7 +24,9 @@ fit a float. Messages describe the value, not the key: callers that know the key
 - **Structured parsers**: `GameJSON_ParseColor` (hex string / `[r,g,b,(a)]` / `{r,g,b,(a)}`),
   `GameJSON_ParseRenderColor` (a plain color, or `{tint, brightness, opacity}`), `GameJSON_ParseVector2`
   (decimal; an array may be longer, only two elements are read), `GameJSON_ParseVector3` (decimal; an array must have
-  exactly three), `GameJSON_ParseVector2Int`.
+  exactly three), `GameJSON_ParseVector3Doubles` (the same shapes, each component kept as a finite double, for values
+  converted before they are stored: the property tables read angle vectors in degrees through it, so no float rounding
+  comes before the conversion to radians), `GameJSON_ParseVector2Int`.
 - **Optional compound readers** (key + default): `GameJSON_ReadOptionalInteger` / `...Double` /
   `...Boolean` / `...Vector2Int`.
 - **Value writers** (the caller owns the returned value: store it in a container or return it to the pool):

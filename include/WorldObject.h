@@ -1,141 +1,112 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
-// Vector3 and Color come from Raylib; RenderColor (the tint type) comes from the renderer. All three
-// are part of a world object's public data, so these includes are unavoidable in this header.
+// Vector3 comes from Raylib and RenderColor (the tint type) from the renderer. Both are part of a world object's public
+// data, so these includes are unavoidable in this header.
 #include "raylib/raylib.h"
 #include "Renderer.h"
 #include "wr/WRError.h"
+#include "PropertyDescriptor.h"
+#include "WorldComponent.h"
 
 
 /**
  * @file WorldObject.h
- * @brief Abstract base shared by every object that lives in a 3D world.
+ * @brief A world object: one concrete type for everything placed in a 3D world.
  *
- * A world is composed of world objects: 3D model objects, 2D sprite objects, and lights (see
- * WorldModelObject, WorldSpriteObject, WorldLight). Everything they have in common — a unique id, a
- * (non-unique) name, a spatial transform (position, Euler XYZ rotation, per-axis scale) and a render
- * tint — lives here in WorldObject, the abstract base each concrete type embeds as its FIRST member.
+ * Every object has the same data: a unique id, a (non-unique) name, a transform (position, Euler XYZ rotation,
+ * per-axis scale), a render tint, and three flags: whether it is enabled, whether it is visible, and its mobility.
+ * What an object is comes from its components (WorldComponent.h): a model, a sprite, a light, at most one of each type.
  *
- * A concrete type provides a WorldObjectVTable (currently just a Destroy slot) and calls
- * WorldObject_Construct from its own factory, then WorldObject_Deconstruct from its Destroy. Because
- * the base is the first member, a pointer to any concrete object is also a valid WorldObject*, which is
- * how the World stores and iterates them polymorphically.
+ * LIFETIME. Objects exist only inside a world: World_CreateObject makes one (the world assigns its id) and
+ * World_RemoveObject destroys it with its components. An object points back to its world, so a World must never be
+ * moved or copied once constructed.
  *
- * MUTABILITY. World objects are mutable, but the transform, tint and name are reached through
- * validating setters (which reject non-finite values) and small getters, so the internal layout can
- * change and invalid data cannot be stored. The id is assigned once by the owning World and is
- * read-only thereafter.
+ * PROPERTIES. Every property is a row of the object's property table (WorldObject_GetPropertyTable): name, position,
+ * rotation, scale, tint, is_enabled, is_visible and mobility. The setters below validate through the table, so the
+ * rules live there only, and the table functions (Properties_Set, the JSON and GHDF readers, Properties_CopyTo) work
+ * on objects too. Every change, from either side, advances the object's revision (WorldObject_GetRevision).
  *
- * This module holds no rendering logic: world objects can be created, mutated and destroyed with no
- * renderer present. The world renderer consumes them separately.
+ * FLAGS.
+ * - is_enabled (default true): false means every system skips the object: the renderer, and later collision and
+ *   scripts' searches.
+ * - is_visible (default true): false means the renderer skips it (its model, its sprite and its light), but it still
+ *   exists for collision and interaction (invisible walls, hidden triggers).
+ * - mobility (default static): a hint for performance, never a lock. Static is scenery that does not move in play;
+ *   movable is anything that does (doors, the player, NPCs, cars). Systems that cache static objects (collision's
+ *   static structure, later static shadows) rebuild when a static object moves anyway. Adding a transform driver
+ *   component makes an object movable.
+ *
+ * This module holds no rendering logic: the world renderer reads objects and never writes them.
  */
+
+
+// Macros.
+/** @brief The most bytes an object's name may have (without the terminator). */
+#define WORLD_OBJECT_NAME_MAX_LENGTH ((size_t)256)
 
 
 // Types.
 /**
- * @brief Discriminates the concrete kind of a WorldObject.
- *
- * Set once at construction and never changed; used to safely downcast a WorldObject* to its concrete
- * type.
+ * @brief Whether an object moves during play. Saved by its value: never renumber.
  */
-typedef enum WorldObjectTypeEnum
+typedef enum WorldMobilityEnum
 {
-    /** @brief A 3D model object (WorldModelObject). */
-    WorldObjectType_Model,
-    /** @brief A 2D sprite object (WorldSpriteObject). */
-    WorldObjectType_Sprite,
-    /** @brief A point light (WorldLight). */
-    WorldObjectType_Light
-} WorldObjectType;
+    /** @brief Scenery that does not move in play (the default). Systems may cache it. */
+    WorldMobility_Static = 0,
+    /** @brief Moves in play: doors, elevators, the player, NPCs, cars, later physics objects. */
+    WorldMobility_Movable = 1
+} WorldMobility;
 
 /**
- * @brief Virtual table of behavior for a concrete world object.
- *
- * A concrete type supplies one static instance. The self parameter is the concrete object (recovered
- * from void* without a cast, per the project's OOP convention).
- */
-typedef struct WorldObjectVTableStruct
-{
-    /**
-     * @brief Frees the concrete object and everything it owns.
-     *
-     * Must release the concrete type's own resources, call WorldObject_Deconstruct on the embedded
-     * base, and free the object allocation itself. Called by the owning World when the object is
-     * removed or the world is torn down.
-     * @param self The concrete world object.
-     */
-    void (*Destroy)(void* self);
-} WorldObjectVTable;
-
-/**
- * @brief Abstract base of every world object: identity plus spatial transform and tint.
- *
- * Embed as the FIRST member of a concrete world object. Underscore-prefixed fields are read-only to
- * code outside this module; use the WorldObject_* getters/setters to access them.
+ * @brief A world object. Underscore-prefixed fields are read-only to code outside the world modules; use the
+ *        accessors and setters (or the property table).
  */
 typedef struct WorldObjectStruct
 {
-    /** @brief Behavior table for this object; set by WorldObject_Construct. Never NULL afterwards. */
-    const WorldObjectVTable* VTable;
-    /** @brief The concrete kind of this object; set at construction, never changed. */
-    WorldObjectType Type;
-
-    /** @brief Unique id within the owning world; 0 means "unassigned". Assigned by the World, then read-only. */
+    /** @brief The world that owns the object (borrowed); set at creation, never changed. */
+    World* _world;
+    /** @brief Unique id within the world, never 0; assigned at creation, never changed. */
     uint64_t _id;
-    /** @brief Owned, NUL-terminated UTF-8 name (need not be unique); may be NULL. */
+    /** @brief Owned, NUL-terminated UTF-8 name (need not be unique, at most WORLD_OBJECT_NAME_MAX_LENGTH bytes);
+     *  may be NULL. */
     unsigned char* _name;
-
-    /** @brief World-space position. */
+    /** @brief Position (world space until parenting arrives). */
     Vector3 _position;
-    /** @brief Euler XYZ rotation, in radians. */
+    /** @brief Euler XYZ rotation, in radians (degrees in JSON). */
     Vector3 _rotation;
     /** @brief Per-axis scale. */
     Vector3 _scale;
-    /** @brief Render tint (tint color + brightness + opacity). */
+    /** @brief Render tint (tint colour, brightness and opacity, both in [0, 1]). */
     RenderColor _tint;
+    /** @brief Whether systems process the object at all (default true). */
+    bool _isEnabled;
+    /** @brief Whether the renderer draws the object (default true). */
+    bool _isVisible;
+    /** @brief Whether the object moves in play (default static). */
+    WorldMobility _mobility;
+    /** @brief Advances (wrapping) on every property change. Runtime only. */
+    uint32_t _revision;
+    /** @brief One slot per component type: the object's component of that type (world-owned), or NULL. */
+    WorldComponent* _components[WORLD_MAX_COMPONENT_TYPES];
 } WorldObject;
 
 
-// Base lifecycle (called by concrete types, not end users).
+// Functions: the table.
 /**
- * @brief Initializes the abstract base of a world object.
+ * @brief Returns the property table of world objects ("world_object").
  *
- * Sets the vtable and type, clones @p name into an owned copy, and defaults the transform to identity
- * (position 0, rotation 0, scale 1,1,1), the tint to opaque white and the id to 0 (unassigned). Call
- * first inside a concrete type's factory, then fill the concrete fields. Release with
- * WorldObject_Deconstruct.
- * @param self The base to initialize (usually &concrete->Base); must not be NULL.
- * @param vtable The concrete type's behavior table; must not be NULL with a non-NULL Destroy slot.
- * @param type The concrete kind being constructed.
- * @param name Borrowed NUL-terminated UTF-8 name to clone, or NULL for no name.
- * @returns Success; ErrorCode_IllegalArgument if @p self or @p vtable (or its Destroy) is NULL.
+ * Its rows: name, position, rotation (an AngleVector3: degrees in JSON), scale, tint, is_enabled, is_visible and
+ * mobility ("static" / "movable"). Its AfterSet advances the object's revision. Wire ids start at 3: 1 and 2 are left
+ * for the world file's own entries per object (the id and the components).
+ * @returns The table (static, immutable).
  */
-Error WorldObject_Construct(WorldObject* self, const WorldObjectVTable* vtable, WorldObjectType type,
-    const unsigned char* name);
+const PropertyTable* WorldObject_GetPropertyTable(void);
 
+
+// Functions: identity.
 /**
- * @brief Releases the base's owned resources (its name).
- *
- * Frees the owned name. Does NOT free @p self or any concrete resources — the concrete Destroy owns
- * those and calls this as part of its teardown. Safe on NULL.
- * @param self The base to release, or NULL.
- */
-void WorldObject_Deconstruct(WorldObject* self);
-
-/**
- * @brief Destroys a world object through its vtable (frees it and everything it owns).
- * @param self The object; must not be NULL. Must not be used afterwards.
- */
-static inline void WorldObject_Destroy(WorldObject* self)
-{
-    self->VTable->Destroy(self);
-}
-
-
-// Identity.
-/**
- * @brief Returns the object's unique world id (0 if not yet added to a world).
+ * @brief Returns the object's unique id (never 0).
  * @param self The object; must not be NULL.
  * @returns The id.
  */
@@ -145,26 +116,7 @@ static inline uint64_t WorldObject_GetId(const WorldObject* self)
 }
 
 /**
- * @brief Assigns the object's world id. Intended for the owning World only.
- *
- * @param self The object; must not be NULL.
- * @param id The id to assign; must not be 0.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p id is 0.
- */
-Error WorldObject_SetId(WorldObject* self, uint64_t id);
-
-/**
- * @brief Returns the object's concrete kind.
- * @param self The object; must not be NULL.
- * @returns The type discriminator.
- */
-static inline WorldObjectType WorldObject_GetType(const WorldObject* self)
-{
-    return self->Type;
-}
-
-/**
- * @brief Returns the object's borrowed name (may be NULL); valid until the name is changed or freed.
+ * @brief Returns the object's borrowed name (may be NULL); valid until the name is changed or the object removed.
  * @param self The object; must not be NULL.
  * @returns The NUL-terminated UTF-8 name, or NULL if unset.
  */
@@ -177,14 +129,27 @@ static inline const unsigned char* WorldObject_GetName(const WorldObject* self)
  * @brief Replaces the object's name with an owned clone of @p name (or NULL to clear it).
  * @param self The object; must not be NULL.
  * @param name Borrowed NUL-terminated UTF-8 name to clone, or NULL to clear the name.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if the name is longer
+ *          than WORLD_OBJECT_NAME_MAX_LENGTH bytes or not valid UTF-8 (nothing changes then).
  */
 Error WorldObject_SetName(WorldObject* self, const unsigned char* name);
 
-
-// Transform and tint (validating setters reject non-finite values).
 /**
- * @brief Returns the object's world-space position.
+ * @brief Returns a number that changes whenever one of the object's properties changes.
+ *
+ * Covers every row of the object's table (not its components: each has its own revision). Runtime only: not saved.
+ * @param self The object; must not be NULL.
+ * @returns The current revision.
+ */
+static inline uint32_t WorldObject_GetRevision(const WorldObject* self)
+{
+    return self->_revision;
+}
+
+
+// Functions: transform and tint.
+/**
+ * @brief Returns the object's position.
  * @param self The object; must not be NULL.
  * @returns The position.
  */
@@ -194,11 +159,11 @@ static inline Vector3 WorldObject_GetPosition(const WorldObject* self)
 }
 
 /**
- * @brief Sets the object's world-space position.
+ * @brief Sets the object's position.
  * @param self The object; must not be NULL.
  * @param position The new position; every component must be finite.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if any
- *          component is NaN or infinite.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if any component is
+ *          NaN or infinite.
  */
 Error WorldObject_SetPosition(WorldObject* self, Vector3 position);
 
@@ -216,8 +181,8 @@ static inline Vector3 WorldObject_GetRotation(const WorldObject* self)
  * @brief Sets the object's Euler XYZ rotation, in radians.
  * @param self The object; must not be NULL.
  * @param rotation The new rotation; every component must be finite.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if any
- *          component is NaN or infinite.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if any component is
+ *          NaN or infinite.
  */
 Error WorldObject_SetRotation(WorldObject* self, Vector3 rotation);
 
@@ -235,8 +200,8 @@ static inline Vector3 WorldObject_GetScale(const WorldObject* self)
  * @brief Sets the object's per-axis scale.
  * @param self The object; must not be NULL.
  * @param scale The new scale; every component must be finite.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if any
- *          component is NaN or infinite.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if any component is
+ *          NaN or infinite.
  */
 Error WorldObject_SetScale(WorldObject* self, Vector3 scale);
 
@@ -251,11 +216,83 @@ static inline RenderColor WorldObject_GetTint(const WorldObject* self)
 }
 
 /**
- * @brief Sets the object's render tint.
+ * @brief Sets the object's render tint (its opacity is stored; drawing it comes with dithered opacity).
  * @param self The object; must not be NULL.
- * @param tint The new tint; its Brightness and Opacity must be finite (they are clamped to [0;1] only
- *        when the color is resolved for rendering, so out-of-range-but-finite values are accepted here).
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if
- *          Brightness or Opacity is NaN or infinite.
+ * @param tint The new tint; Brightness and Opacity must be finite and in [0, 1] (the tint colour's alpha is not part
+ *        of the value and is ignored).
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if Brightness or
+ *          Opacity is not finite or outside [0, 1].
  */
 Error WorldObject_SetTint(WorldObject* self, RenderColor tint);
+
+
+// Functions: flags.
+/**
+ * @brief Returns whether systems process the object (see the file comment).
+ * @param self The object; must not be NULL.
+ * @returns true if enabled.
+ */
+static inline bool WorldObject_IsEnabled(const WorldObject* self)
+{
+    return self->_isEnabled;
+}
+
+/**
+ * @brief Enables or disables the object (advances its revision).
+ * @param self The object; must not be NULL.
+ * @param isEnabled false makes every system skip the object.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldObject_SetEnabled(WorldObject* self, bool isEnabled);
+
+/**
+ * @brief Returns whether the renderer draws the object (see the file comment).
+ * @param self The object; must not be NULL.
+ * @returns true if visible.
+ */
+static inline bool WorldObject_IsVisible(const WorldObject* self)
+{
+    return self->_isVisible;
+}
+
+/**
+ * @brief Shows or hides the object (advances its revision).
+ * @param self The object; must not be NULL.
+ * @param isVisible false hides the object's model, sprite and light; it still exists for collision and interaction.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldObject_SetVisible(WorldObject* self, bool isVisible);
+
+/**
+ * @brief Returns whether the object moves in play (see the file comment).
+ * @param self The object; must not be NULL.
+ * @returns The mobility.
+ */
+static inline WorldMobility WorldObject_GetMobility(const WorldObject* self)
+{
+    return self->_mobility;
+}
+
+/**
+ * @brief Sets whether the object moves in play (a performance hint, never a lock; advances its revision).
+ * @param self The object; must not be NULL.
+ * @param mobility WorldMobility_Static or WorldMobility_Movable.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for any other value.
+ */
+Error WorldObject_SetMobility(WorldObject* self, WorldMobility mobility);
+
+
+// Functions: components.
+/**
+ * @brief Returns the object's component of a type (world-owned, borrowed until it is removed), or NULL.
+ *
+ * Use the concrete type's FromComponent to reach its fields, e.g.
+ * `WorldModelComponent_FromComponent(WorldObject_GetComponent(object, WorldComponentType_Model))`.
+ * @param self The object; must not be NULL.
+ * @param type The component type.
+ * @returns The component, or NULL when the object has none of that type (or @p type is out of range).
+ */
+static inline WorldComponent* WorldObject_GetComponent(const WorldObject* self, WorldComponentType type)
+{
+    return ((size_t)type < WORLD_MAX_COMPONENT_TYPES) ? self->_components[type] : NULL;
+}

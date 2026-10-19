@@ -4,64 +4,92 @@
 #include <stddef.h>
 #include "wr/WRError.h"
 #include "wr/WRMemory.h"
-// AssetUserID: a world built with an asset manager holds its sprite animations under its own asset user.
+#include "wr/WRHashMap.h"
+// AssetUserID: a world built with an asset manager holds its components' assets (sprite animations) under its own user.
 #include "AssetManager.h"
 #include "WorldObject.h"
+#include "WorldComponent.h"
 #include "WorldEnvironment.h"
 
 
 /**
  * @file World.h
- * @brief A live 3D world: the objects it contains, the shared id counter, and its environment settings.
+ * @brief A live 3D world: its objects, their components, the id counter and the environment.
  *
- * A World owns a flat, ordered collection of WorldObject pointers (model objects, sprite objects and
- * lights, all stored polymorphically through their common base) plus the WorldEnvironment describing its
- * sky/fog/effect settings. It mints the unique object ids (a shared uint64 counter starting at 1; 0 is
- * never a valid id) and owns every object added to it — World_Deconstruct destroys them all.
+ * A World owns every object in it (WorldObject.h) and every component of those objects (WorldComponent.h), plus the
+ * WorldEnvironment describing its sky, fog and effects. It mints the unique object ids (a uint64 counter starting at
+ * 1; 0 is never a valid id) and keeps:
+ * - the objects in creation order, with an id -> object map for lookups;
+ * - one dense array of components per component type, in the order they were added, which systems iterate
+ *   (World_GetComponents): the renderer draws the models, sprites and lights from them.
  *
- * The world is data: it can be built, mutated, saved (via WorldDTO) and torn down with no renderer present.
- * The world renderer consumes a World separately and never writes to it.
+ * The world is data: it can be built, changed and torn down with no renderer present; the world renderer reads it and
+ * never writes to it. Objects and components point back to their world, so a World must never be moved or copied once
+ * constructed.
  *
- * ASSETS. A world built with World_Construct2 borrows an asset manager and owns an asset user of its own.
- * Sprite objects play their animation as world state (game logic advances it), so the world loads each
- * sprite's animation by name under that user when the sprite is added, and again when its name changes
- * through World_SetSpriteAnimationAssetName. The animations stay held until the world is destroyed. A world
- * built with World_Construct1 has no asset manager: its sprites stay empty (they draw nothing), which suits
- * tools and tests that only handle data.
+ * BUILDING. World_CreateObject makes an object, World_AddComponent gives it components:
+ * @code
+ *     WorldObject* Lamp = NULL;
+ *     World_CreateObject(&world, u8"lamp", &Lamp);
+ *     WorldObject_SetPosition(Lamp, (Vector3){ 2.0f, 0.0f, 1.0f });
+ *     WorldComponent* Light = NULL;
+ *     World_AddComponent(&world, WorldObject_GetId(Lamp), WorldComponentType_Light, &Light);
+ *     WorldLightComponent_SetRange(WorldLightComponent_FromComponent(Light), 6.0f);
+ * @endcode
  *
- * CHANGE TRACKING. The object-set version changes whenever an object is added or removed, so a consumer (the
- * renderer's per-object cache) can tell cheaply whether the object list is the one it saw last frame.
+ * ASSETS. A world built with World_Construct2 borrows an asset manager and owns an asset user of its own: sprite
+ * components load their animations under it (they play as world state, advanced by game logic). The assets stay held
+ * until the world is destroyed, after every object. A world built with World_Construct1 has no asset manager: its
+ * sprites stay empty (they draw nothing), which suits tools and tests that only handle data.
  *
- * Object lookup by id is currently a linear scan; this is fine for the expected object counts, and can be
- * backed by an index later without changing the API.
+ * CHANGE TRACKING. The object-set version changes when an object is created or removed, the component-set version
+ * when a component is added or removed (also with its object), so a consumer (the renderer's cache) can tell cheaply
+ * whether the lists are the ones it saw last frame. Property changes advance the object's and the component's own
+ * revisions instead.
+ *
+ * THE TICK. Systems that change a world run in this order each game tick, so each knows its slot:
+ * 1. input; 2. scripts (later); 3. transform drivers: characters, vehicles, physics (later); 4. collision sync
+ * (later); 5. queued events: trigger enter and exit, later contacts (later); 6. animation (sprite playback today);
+ * 7. the renderer, which only reads.
  */
 
 
 // Types.
 /**
- * @brief A live 3D world and everything persistently in it.
+ * @brief A live 3D world and everything in it.
  *
- * A value type the caller holds. Construct with World_Construct1 or World_Construct2 and release with
- * World_Deconstruct.
- * Underscore-prefixed fields are internal/read-only to code outside this module.
+ * A value type the caller holds, constructed in place with World_Construct1 or World_Construct2 and released with
+ * World_Deconstruct; never moved or copied in between. Underscore-prefixed fields are internal.
  */
 typedef struct WorldStruct
 {
-    /** @brief Owned buffer of WorldObject* (one pointer per contained object). */
+    /** @brief Owned buffer of WorldObject* in creation order. */
     GenericBuffer _objects;
-    /** @brief Next object id to hand out; starts at 1 and only increases. */
+    /** @brief uint64 id -> WorldObject* (the objects in _objects). */
+    HashMap _objectsById;
+    /** @brief The registry entry of each component type this world holds (static data), the first
+     *  _componentTypeCount set. */
+    const WorldComponentTypeInfo* _componentTypes[WORLD_MAX_COMPONENT_TYPES];
+    /** @brief How many component types the world holds. */
+    size_t _componentTypeCount;
+    /** @brief Per component type: an owned buffer of WorldComponent* in the order they were added (the first
+     *  _componentTypeCount constructed). */
+    GenericBuffer _components[WORLD_MAX_COMPONENT_TYPES];
+    /** @brief The next object id to hand out; starts at 1 and only increases; 0 once every id was handed out. */
     uint64_t _nextId;
-    /** @brief Incremented on every object addition and removal; see World_GetObjectSetVersion. */
+    /** @brief Changes on every object creation and removal; see World_GetObjectSetVersion. */
     uint64_t _objectSetVersion;
+    /** @brief Changes on every component addition and removal; see World_GetComponentSetVersion. */
+    uint64_t _componentSetVersion;
     /** @brief Owned, NUL-terminated UTF-8 world name; may be NULL. */
     unsigned char* _name;
-    /** @brief Asset manager the sprite animations load from; borrowed. NULL for a world without assets. */
+    /** @brief The asset manager components load from; borrowed. NULL for a world without assets. */
     AssetManager* _assets;
-    /** @brief Logger for asset failures; borrowed, may be NULL. */
+    /** @brief Logger for failures components report; borrowed, may be NULL. */
     Logger* _logger;
-    /** @brief The world's own asset user (holds its sprite animations); ASSET_USER_ID_INVALID without assets. */
+    /** @brief The world's own asset user; ASSET_USER_ID_INVALID without assets. */
     AssetUserID _assetUser;
-    /** @brief This world's environment/graphics settings (sky, fog, effect multipliers). */
+    /** @brief This world's environment settings (sky, sun, moon, fog, effects). */
     WorldEnvironment Environment;
 } World;
 
@@ -70,22 +98,23 @@ typedef struct WorldStruct
 /**
  * @brief Initializes an empty world without assets (no objects, default environment, id counter at 1).
  *
- * Sprite objects in such a world are never backed by an animation, so they draw nothing; use
- * World_Construct2 for a world that is rendered.
- * @param self The world to initialize; must not be NULL.
+ * Its sprite components never get an animation, so they draw nothing; use World_Construct2 for a world that is
+ * rendered.
+ * @param self The world to initialize in place; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
  */
 Error World_Construct1(World* self);
 
 /**
- * @brief Initializes an empty world that loads its sprite animations through an asset manager.
+ * @brief Initializes an empty world whose components load their assets through an asset manager.
  *
- * Mints an asset user for the world (retired by World_Deconstruct). Sprite animations are loaded under it
- * when sprites are added or renamed; see the file comment.
- * @param self The world to initialize; must not be NULL.
+ * Mints an asset user for the world (retired by World_Deconstruct).
+ * @param self The world to initialize in place; must not be NULL.
  * @param assets The asset manager; borrowed, must outlive the world. NULL gives a world without assets (as
  *        World_Construct1).
- * @param logger Receives one warning per sprite animation that fails to load; borrowed, may be NULL.
+ * @param logger Receives one warning per asset a component fails to load; borrowed, may be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
@@ -93,114 +122,164 @@ Error World_Construct1(World* self);
 Error World_Construct2(World* self, AssetManager* assets, Logger* logger);
 
 /**
- * @brief Destroys every object in the world and releases the world's own storage and assets.
+ * @brief Destroys every object (with its components) and releases the world's storage, environment and assets.
  *
- * Calls Destroy on each contained object, frees the object buffer and the world name, releases the
- * environment, then retires the world's asset user (which releases its sprite animations). Every object is
- * destroyed before any asset is released.
+ * Every component is detached and destroyed before any asset is released (a sprite's playback points into an
+ * animation the world's user holds).
  * @param self The world to release.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; otherwise the error from retiring the asset
- *          user (the world is fully released either way).
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; otherwise the error from retiring the asset user
+ *          (the world is fully released either way).
  */
 Error World_Deconstruct(World* self);
 
 
 // Objects.
 /**
- * @brief Adds an object to the world, assigning it the next free id; the world takes ownership.
- *
- * The object must not already carry an id (its id must be 0). On success the world owns the object and
- * will destroy it on removal or teardown; on failure ownership stays with the caller. A sprite object is
- * then backed by its named animation when the world has an asset manager (replacing any animation set
- * before); an animation that fails to load is logged once and leaves the sprite empty, without failing the
- * add. Binding re-initializes the sprite's playback instance, which drops event subscriptions made on it before
- * the add: subscribe after adding.
+ * @brief Creates an object with the next free id (default properties, no components).
  * @param self The world; must not be NULL.
- * @param object The object to add; must not be NULL and must have id 0 (not already added to a world).
- * @returns Success; ErrorCode_IllegalArgument if @p self or @p object is NULL; ErrorCode_InvalidOperation
- *          if the object already has an id, or the object could not be stored.
+ * @param name Borrowed NUL-terminated UTF-8 name to clone, or NULL (at most WORLD_OBJECT_NAME_MAX_LENGTH bytes).
+ * @param outObject [out] Receives the new object (world-owned; valid until it is removed). Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p outObject is NULL; ErrorCode_ArgumentOutOfRange for a
+ *          name that breaks its rules; ErrorCode_InvalidOperation when every id was handed out or the object could not
+ *          be stored.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
-Error World_AddObject(World* self, WorldObject* object);
+Error World_CreateObject(World* self, const unsigned char* name, WorldObject** outObject);
 
 /**
- * @brief Adds an object with an explicit id, used when loading a saved world; the world takes ownership.
+ * @brief Creates an object with an explicit id: the loader's version (world files keep their ids).
  *
- * Intended for the persistence layer (WorldDTO) to restore objects with their saved ids. The id must be
- * non-zero and not already used by another object in the world; the world's id counter is advanced past
- * @p id so future World_AddObject calls do not collide with it. On success the world owns the object, and a
- * sprite object is bound to its animation as in World_AddObject.
+ * The id counter is advanced past @p id, so later World_CreateObject calls never collide with it.
  * @param self The world; must not be NULL.
- * @param object The object to add; must not be NULL and must have id 0.
- * @param id The id to assign; must not be 0 and must be unused in this world.
- * @returns Success; ErrorCode_IllegalArgument if @p self or @p object is NULL, @p id is 0, or the object
- *          already has an id; ErrorCode_InvalidOperation if @p id is already in use or the object could
- *          not be stored.
+ * @param name Borrowed NUL-terminated UTF-8 name to clone, or NULL.
+ * @param id The id; must not be 0 and must be unused in this world.
+ * @param outObject [out] Receives the new object (world-owned). Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p outObject is NULL or @p id is 0;
+ *          ErrorCode_InvalidOperation if @p id is in use or the object could not be stored;
+ *          ErrorCode_ArgumentOutOfRange for a name that breaks its rules.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
-Error World_AddObjectWithId(World* self, WorldObject* object, uint64_t id);
+Error World_CreateObjectWithId(World* self, const unsigned char* name, uint64_t id, WorldObject** outObject);
 
 /**
- * @brief Removes and destroys the object with the given id.
+ * @brief Removes an object: detaches and destroys its components, then destroys it.
  * @param self The world; must not be NULL.
  * @param id The id of the object to remove.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p id is 0; ErrorCode_InvalidOperation
- *          if no object with that id exists.
- * @note May propagate errors from internal calls; consult the documentation of called functions for the
- *       full set.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p id is 0; ErrorCode_InvalidOperation if no
+ *          object has that id.
  */
-Error World_RemoveObjectById(World* self, uint64_t id);
+Error World_RemoveObject(World* self, uint64_t id);
 
 /**
- * @brief Changes a sprite object's animation asset name and backs its playback with the new animation.
- *
- * This is the only way to rename the animation of a sprite that belongs to a world (the sprite's own setter
- * refuses then), so the stored name and the playing animation cannot disagree. Playback restarts from the
- * new animation's defaults, and event subscriptions on the sprite's playback instance are dropped (subscribe
- * again afterwards). When the world has an asset manager the animation is loaded under the world's
- * asset user; a failed load is logged once and leaves the sprite empty, without failing the call. The
- * previous animation stays held until the world is destroyed.
- * @param self The world; must not be NULL.
- * @param id The id of a sprite object in this world.
- * @param assetName Borrowed NUL-terminated UTF-8 asset name to clone, or NULL to clear the animation.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p id is 0; ErrorCode_InvalidOperation if
- *          no object with @p id exists or it is not a sprite object.
- * @note May propagate errors from internal calls; consult the documentation of called functions for the
- *       full set.
- */
-Error World_SetSpriteAnimationAssetName(World* self, uint64_t id, const unsigned char* assetName);
-
-/**
- * @brief Looks up a contained object by id.
+ * @brief Looks up an object by id (a hash lookup).
  * @param self The world; must not be NULL.
  * @param id The id to look up.
- * @param outObject [out] Receives the borrowed object (world-owned) if found, NULL otherwise. Must not be NULL.
- * @returns true if an object with @p id was found (and written to @p outObject); false otherwise (including
- *          NULL arguments).
+ * @param outObject [out] Receives the object (world-owned) when found, NULL otherwise. Must not be NULL.
+ * @returns true if an object with @p id exists; false otherwise (including NULL arguments).
  */
-bool World_TryGetObjectById(World* self, uint64_t id, WorldObject** outObject);
+bool World_TryGetObject(World* self, uint64_t id, WorldObject** outObject);
 
 /**
  * @brief Returns the number of objects in the world.
  * @param self The world; may be NULL (returns 0).
  * @returns The object count.
  */
-size_t World_GetObjectCount(World* self);
+size_t World_GetObjectCount(const World* self);
 
 /**
- * @brief Returns the object at a given storage index (0-based), for iteration.
+ * @brief Returns the object at a storage index (creation order), for iteration.
  *
- * The index is a position in the world's internal ordering, not an id; it is stable only while the object
- * set is unmodified.
+ * The index is not an id; it is stable only while no object is created or removed.
  * @param self The world; must not be NULL.
  * @param index Index in [0, World_GetObjectCount).
- * @param outObject [out] Receives the borrowed object (world-owned). Must not be NULL.
- * @returns Success; ErrorCode_IllegalArgument if @p self or @p outObject is NULL; ErrorCode_IndexOutOfBounds
- *          if @p index is out of range.
+ * @param outObject [out] Receives the object (world-owned). Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p outObject is NULL; ErrorCode_IndexOutOfBounds if
+ *          @p index is out of range.
  */
 Error World_GetObjectByIndex(World* self, size_t index, WorldObject** outObject);
+
+
+// Components.
+/**
+ * @brief Constructs a component of @p type with its default properties, attaches it to the object and returns it.
+ *
+ * Refused when the object already has a component of that type, or when the type is a transform driver and the
+ * object already has one (an object has at most one driver). Adding a driver makes the object movable. The type's
+ * OnAttach hook runs last (a sprite binds its animation then).
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param type The component type; one of the world's types (World_GetComponentTypeInfo).
+ * @param outComponent [out] Receives the component (world-owned; valid until it is removed). Must not be NULL. Use the
+ *        concrete type's FromComponent to reach its fields.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p outComponent is NULL, @p id is 0 or @p type is not a
+ *          type of this world; ErrorCode_InvalidOperation if no object has @p id, it already has a component of
+ *          @p type, it already has a transform driver, or the component could not be stored.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error World_AddComponent(World* self, uint64_t id, WorldComponentType type, WorldComponent** outComponent);
+
+/**
+ * @brief Detaches and destroys an object's component of a type.
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param type The component type.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL, @p id is 0 or @p type is not a type of this world;
+ *          ErrorCode_InvalidOperation if no object has @p id or it has no component of @p type.
+ */
+Error World_RemoveComponent(World* self, uint64_t id, WorldComponentType type);
+
+/**
+ * @brief Looks up an object's component of a type.
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param type The component type.
+ * @param outComponent [out] Receives the component (world-owned) when found, NULL otherwise. Must not be NULL.
+ * @returns true if the object exists and has a component of @p type; false otherwise (including NULL arguments).
+ */
+bool World_TryGetComponent(World* self, uint64_t id, WorldComponentType type, WorldComponent** outComponent);
+
+/**
+ * @brief Returns every component of a type in the world, in the order they were added: what systems iterate.
+ *
+ * The array is the world's own (borrowed): valid until a component of that type is added or removed. Systems still
+ * check each owner's flags (WorldObject_IsEnabled, WorldObject_IsVisible).
+ * @param self The world; must not be NULL.
+ * @param type The component type.
+ * @param outCount [out] Receives the number of components. Must not be NULL.
+ * @returns The components; NULL (with a count of 0) when there are none or @p type is not a type of this world.
+ */
+WorldComponent* const* World_GetComponents(const World* self, WorldComponentType type, size_t* outCount);
+
+/**
+ * @brief Returns how many component types the world holds (WorldComponentType_Count for every world the game builds).
+ * @param self The world; must not be NULL.
+ * @returns The type count; the types are 0 to the count - 1.
+ */
+static inline size_t World_GetComponentTypeCount(const World* self)
+{
+    return self->_componentTypeCount;
+}
+
+/**
+ * @brief Returns the registry entry of one of the world's component types (its name, table and hooks).
+ * @param self The world; must not be NULL.
+ * @param type The type.
+ * @returns The entry (static data), or NULL when @p type is not a type of this world.
+ */
+const WorldComponentTypeInfo* World_GetComponentTypeInfo(const World* self, WorldComponentType type);
+
+/**
+ * @brief Finds one of the world's component types by its name (e.g. u8"model"), as world files and the editor name
+ *        them.
+ * @param self The world; must not be NULL.
+ * @param name The name; NULL finds nothing.
+ * @param outType [out] Receives the type when found. Must not be NULL.
+ * @returns true if a type has that name.
+ */
+bool World_TryFindComponentType(const World* self, const unsigned char* name, WorldComponentType* outType);
 
 
 // World properties.
@@ -215,10 +294,10 @@ static inline WorldEnvironment* World_GetEnvironment(World* self)
 }
 
 /**
- * @brief Returns a number that changes whenever an object is added to or removed from the world.
+ * @brief Returns a number that changes whenever an object is created or removed.
  *
- * Equal values from the same world mean its object list (which objects, in which order) is unchanged; it
- * says nothing about the objects' properties. Values from different worlds are unrelated.
+ * Equal values from the same world mean its object list (which objects, in which order) is unchanged; it says nothing
+ * about properties or components. Values from different worlds are unrelated.
  * @param self The world; must not be NULL.
  * @returns The current object-set version.
  */
@@ -228,7 +307,20 @@ static inline uint64_t World_GetObjectSetVersion(const World* self)
 }
 
 /**
- * @brief Returns the value the id counter will next hand out (useful for persistence).
+ * @brief Returns a number that changes whenever a component is added or removed (also with its object).
+ *
+ * Equal values from the same world mean every per-type component array is unchanged (which components, in which
+ * order). Values from different worlds are unrelated.
+ * @param self The world; must not be NULL.
+ * @returns The current component-set version.
+ */
+static inline uint64_t World_GetComponentSetVersion(const World* self)
+{
+    return self->_componentSetVersion;
+}
+
+/**
+ * @brief Returns the value the id counter will hand out next (for world files); 0 once every id was handed out.
  * @param self The world; must not be NULL.
  * @returns The next object id.
  */
@@ -240,8 +332,7 @@ static inline uint64_t World_GetNextObjectId(const World* self)
 /**
  * @brief Raises the id counter so the next id handed out is at least @p minimumNext (never lowers it).
  *
- * Used by the persistence layer to restore a saved id counter after re-adding objects, so future ids do
- * not collide with previously freed ones.
+ * Used when loading a world file, so new ids do not reuse ids its objects had before they were removed.
  * @param self The world; must not be NULL.
  * @param minimumNext The minimum value the next handed-out id should have.
  */

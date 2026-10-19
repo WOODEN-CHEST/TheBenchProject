@@ -28,11 +28,13 @@ void TextureTests_Run(TestRun* run);
 /** @brief Point-light reach culling (WorldLightCullingTests.c). */
 void WorldLightCullingTests_Run(TestRun* run);
 
-/** @brief World object set, sprite binding under the world's asset user, renames (WorldTests.c). */
+/** @brief The world's objects and components: ids, the per-type arrays, revisions, the sprite binding under the
+ *  world's asset user, flags, and the one-transform-driver rule with test-only component types (WorldTests.c). */
 void WorldTests_Run(TestRun* run);
 
-/** @brief Property tables: the self-check, construction, validation, copies, JSON and GHDF round trips, unknown keys,
- *  access by key, migration, and the environment's table against the old encoder (PropertyDescriptorTests.c). */
+/** @brief Property tables: the self-check (every table in the game), construction, validation, copies, JSON and GHDF
+ *  round trips, unknown keys, access by key, migration, and the environment's table against the old encoder
+ *  (PropertyDescriptorTests.c). */
 void PropertyDescriptorTests_Run(TestRun* run);
 
 /** @brief The calendar: day numbers to dates and back over eight centuries, weekdays, leap years, month lengths,
@@ -55,9 +57,6 @@ void NightSkyTests_Run(TestRun* run);
 /** @brief The eye's night vision: its calibration on the game's light scale, untouched daylight, rods at night, the
  *  strength, the rods' grey (NightVisionTests.c; a private module of source/). */
 void NightVisionTests_Run(TestRun* run);
-
-/** @brief World <-> DTO round trip and snapshot validation (WorldDTOTests.c). */
-void WorldDTOTests_Run(TestRun* run);
 
 /** @brief The renderer's per-object render cache (WorldRenderCacheTests.c; a private module of source/). */
 void WorldRenderCacheTests_Run(TestRun* run);

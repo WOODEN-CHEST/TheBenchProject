@@ -69,23 +69,26 @@ Current module list:
     (GameAction: named actions bound to keys with modifiers; JSON controls file load/save).
 * GameFrame (GameFrame.md) - Abstract base for a game "scene"/section (menu, level, loading screen), with stepped load/unload, logic lifecycle, and per-target rendering.
 * GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop (polls the input, then updates frames top-down so the top frame gets input first), and composites them to the screen; crashes gracefully on frame errors.
-* World data layer (WorldData.md) - The rendering-independent 3D world model. Covers eight modules:
-  * WorldObject - Abstract base of every world object (id, name, transform, tint; validating setters).
-  * WorldModelObject - 3D model object referencing a model asset by name (+ outline / pixelation / shadow-tier
-    toggles; an asset revision that changes on rename).
-  * WorldSpriteObject - 2D sprite object referencing a sprite animation by name, owning its playback instance
-    (+ outline / pixelation toggles); the World binds its animation.
-  * WorldLight - Point light (color, intensity, size, casts-shadows toggle).
+* World data layer (WorldData.md) - The rendering-independent 3D world model: one object type made of components.
+  Covers seven modules (plus the private source/WorldInternal.h they share):
+  * WorldObject - The one object type: id, name, transform, tint, enabled, visible, mobility (static/movable), a
+    revision, and one slot per component type; created by the World only; validating setters and a property table.
+  * WorldComponent - The component base (type, owner, revision), the component types, and the registry entry that
+    describes each (name, size, table, transform-driver flag, construct/deconstruct/attach/detach/property-set hooks).
+    At most one component of each type per object, at most one transform driver.
+  * WorldModelComponent - A 3D model by asset name (+ outline, crisp, shadow tier, casts shadows).
+  * WorldSpriteComponent - A sprite animation by asset name with its playback instance, bound under the world's asset
+    user on attach and whenever the name changes (also through the table).
+  * WorldLightComponent - A point light (colour, intensity, range, casts shadows).
   * WorldEnvironment - Per-world sky/sun/moon/night-sky/fog/effect settings, described by its property table
     (defaults, validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md; it owns its sky texture
     names). Its date and time of day are what the sky shows: the game clock writes them every tick, the environment
     never advances time itself. Pure functions turn them into the sky: the sun (optionally following the seasons), the
     moon (phase from the calendar, position, lit fraction, moonlight), the stars' daily turn and yearly drift, and
     which of the sun and the moon casts the shadows (WorldEnvironment_GetSkyLights).
-  * World - Owns the objects, mints the shared uint64 id counter, holds the environment; with an asset manager
-    (World_Construct2) it owns an asset user and binds its sprites' animations; an object-set version.
-  * WorldDTO - Flat persistent snapshot of a world + World<->DTO conversions.
-  * WorldEncoder - Encodes a WorldDTO into a GHDF compound tree (no binary write yet).
+  * World - Owns the objects and their components, mints the uint64 ids (an id map for lookups), keeps a dense array
+    of components per type for systems to iterate, holds the environment; with an asset manager (World_Construct2) it
+    owns an asset user its components load under; object-set and component-set versions. Saving comes back in T09.
 * World runtime layer (WorldRuntime.md) - Camera, renderer, services bundle and bootstrap for viewing a world:
   * GameCamera - 3D camera (pos/fov/yaw/pitch/roll; +Y up, +Z forward), converted to a raylib camera at render time.
   * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, GHDF pool).
@@ -95,8 +98,9 @@ Current module list:
     separate from the world data and never writes to it. Split by render pass into
     source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
     WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
-  * WorldRenderCache - The renderer's private per-object cache (source/WorldRenderCache.h): one world walk per frame
-    builds the model/sprite/light lists; model assets are resolved once per object and again only on rename.
+  * WorldRenderCache - The renderer's private per-component cache (source/WorldRenderCache.h): one walk over the
+    world's model/sprite/light component arrays per frame builds the lists (disabled and hidden objects not drawn);
+    model assets are resolved once per component and again only when the name changes.
   * NightSky - The night sky's pure maths (private, source/NightSky.h): the seeded star catalogue, the limiting
     magnitude (light pollution, the moonlit sky, twilight), the air mass, star colours and the galaxy's place among
     the stars; used by the sky and star passes (WorldRendererSky.c, WorldRendererStars.c).
@@ -108,7 +112,8 @@ Current module list:
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
   keys by mode, migration hook) and write (defaults left out by default), and get/set by key. The one module allowed to
-  write `_` fields by offset. WorldEnvironment is the first client; new data types get a table, not hand-written codecs.
+  write `_` fields by offset. Clients: WorldEnvironment, GameClock, the world objects and their components; new data
+  types get a table, not hand-written codecs.
 * GameCalendar (GameCalendar.md) - The game's calendar: pure functions over day numbers (days since 0001-01-01, an
   int64) and dates of the proleptic Gregorian calendar, years 1 to 9999: conversions, weekday (Monday = 0), day of the
   year, leap years, month lengths, validation, English names and the "yyyy-mm-dd" text. Every calendar rule lives

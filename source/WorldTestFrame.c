@@ -5,9 +5,9 @@
 #include "Services.h"
 #include "World.h"
 #include "WorldObject.h"
-#include "WorldModelObject.h"
-#include "WorldSpriteObject.h"
-#include "WorldLight.h"
+#include "WorldModelComponent.h"
+#include "WorldSpriteComponent.h"
+#include "WorldLightComponent.h"
 #include "GameCamera.h"
 #include "WorldRenderer.h"
 #include "Renderer.h"
@@ -473,26 +473,22 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
     }
 }
 
-/* Advances every sprite object's animation playback by the elapsed time (a no-op for empty / source-less
- * instances). Best-effort: an advance error on one sprite does not stop the others or the update tick. */
+/* The tick's animation step: advances the animation playback of every sprite on an enabled object by the elapsed
+ * time (a no-op for empty / source-less instances). Best-effort: an advance error on one sprite does not stop the
+ * others or the update tick. */
 static void AdvanceSpriteAnimations(World* world, double deltaSeconds)
 {
-    size_t Count = World_GetObjectCount(world);
+    size_t Count = 0;
+    WorldComponent* const* Sprites = World_GetComponents(world, WorldComponentType_Sprite, &Count);
     for (size_t Index = 0; Index < Count; Index++)
     {
-        WorldObject* Object = NULL;
-        Error GetResult = World_GetObjectByIndex(world, Index, &Object);
-        if (GetResult.Code != ErrorCode_Success)
-        {
-            Error_Deconstruct(&GetResult);
-            continue;
-        }
-        if (WorldObject_GetType(Object) != WorldObjectType_Sprite)
+        if (!WorldObject_IsEnabled(WorldComponent_GetOwner(Sprites[Index])))
         {
             continue;
         }
-        SpriteAnimationInstance* Instance = WorldSpriteObject_GetAnimationInstance((WorldSpriteObject*)Object);
-        Error UpdateResult = SpriteAnimationInstance_Update(Instance, deltaSeconds);
+        WorldSpriteComponent* Sprite = WorldSpriteComponent_FromComponent(Sprites[Index]);
+        Error UpdateResult = SpriteAnimationInstance_Update(WorldSpriteComponent_GetAnimationInstance(Sprite),
+            deltaSeconds);
         Error_Deconstruct(&UpdateResult);
     }
 }
@@ -845,98 +841,91 @@ static const GameFrameVTable WorldTestFrameVTable =
 
 
 // Static functions: world construction.
-/* Creates a model object with the given transform and hands it to the world (which takes ownership). On any
- * failure the partial object is destroyed and the error is returned. */
+/* Creates an object at @p position with @p scale and gives it a component of @p type. The world owns both at once,
+ * so on a failure the caller tears the whole world down. */
+static Error AddObject(World* world, const unsigned char* name, Vector3 position, Vector3 scale,
+    WorldComponentType type, WorldComponent** outComponent)
+{
+    WorldObject* Object = NULL;
+    Error Result = World_CreateObject(world, name, &Object);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldObject_SetPosition(Object, position);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldObject_SetScale(Object, scale);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = World_AddComponent(world, WorldObject_GetId(Object), type, outComponent);
+    }
+    return Result;
+}
+
+/* Creates an object drawing the named model. */
 static Error AddModelObject(World* world, const unsigned char* name, const unsigned char* assetName,
     Vector3 position, Vector3 scale, bool omitPixelation, WorldShadowTier shadowTier)
 {
-    WorldModelObject* ModelObject = NULL;
-    Error Result = WorldModelObject_Create(name, assetName, &ModelObject);
+    WorldComponent* Component = NULL;
+    Error Result = AddObject(world, name, position, scale, WorldComponentType_Model, &Component);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    ModelObject->OmitPixelation = omitPixelation; // crisp (un-pixelated) full-res overlay when true
-    ModelObject->ShadowTier = shadowTier;         // which sun shadow cascade(s) it casts into
-
-    WorldObject* Base = WorldModelObject_AsObject(ModelObject);
-    Result = WorldObject_SetPosition(Base, position);
+    WorldModelComponent* ModelComponent = WorldModelComponent_FromComponent(Component);
+    Result = WorldModelComponent_SetModel(ModelComponent, assetName);
     if (Result.Code == ErrorCode_Success)
     {
-        Result = WorldObject_SetScale(Base, scale);
+        // Crisp (un-pixelated) full-res overlay when true.
+        Result = WorldModelComponent_SetOmitsPixelation(ModelComponent, omitPixelation);
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = World_AddObject(world, Base);
-    }
-    if (Result.Code != ErrorCode_Success)
-    {
-        WorldObject_Destroy(Base);
+        Result = WorldModelComponent_SetShadowTier(ModelComponent, shadowTier); // which shadow cascade(s) it casts into
     }
     return Result;
 }
 
-/* Creates a sprite object (a billboard drawing the named sprite-animation asset) at the given position and
- * size, and hands it to the world. On any failure the partial object is destroyed and the error is returned. */
+/* Creates an object drawing the named sprite animation as a billboard, sized by the object's X/Y scale. */
 static Error AddSpriteObject(World* world, const unsigned char* name, const unsigned char* assetName,
     Vector3 position, Vector3 scale)
 {
-    WorldSpriteObject* SpriteObject = NULL;
-    Error Result = WorldSpriteObject_Create(name, assetName, &SpriteObject);
+    WorldComponent* Component = NULL;
+    Error Result = AddObject(world, name, position, scale, WorldComponentType_Sprite, &Component);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
-
-    WorldObject* Base = WorldSpriteObject_AsObject(SpriteObject);
-    Result = WorldObject_SetPosition(Base, position);
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldObject_SetScale(Base, scale);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = World_AddObject(world, Base);
-    }
-    if (Result.Code != ErrorCode_Success)
-    {
-        WorldObject_Destroy(Base);
-    }
-    return Result;
+    return WorldSpriteComponent_SetSpriteAnimation(WorldSpriteComponent_FromComponent(Component), assetName);
 }
 
-/* Creates a point light with the given transform/color/reach and hands it to the world (which takes
- * ownership). On any failure the partial light is destroyed and the error is returned. */
+/* Creates an object carrying a point light with the given colour and reach. */
 static Error AddPointLight(World* world, const unsigned char* name, Vector3 position, Color color,
-    float intensity, float size, bool castsShadows)
+    float intensity, float range, bool castsShadows)
 {
-    WorldLight* Light = NULL;
-    Error Result = WorldLight_Create(name, &Light);
+    WorldComponent* Component = NULL;
+    Error Result = AddObject(world, name, position, (Vector3){ 1.0f, 1.0f, 1.0f }, WorldComponentType_Light,
+        &Component);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
-    WorldObject* Base = WorldLight_AsObject(Light);
-    Light->Color = color;
-    Light->CastsShadows = castsShadows;
-    Result = WorldObject_SetPosition(Base, position);
+    WorldLightComponent* Light = WorldLightComponent_FromComponent(Component);
+    Result = WorldLightComponent_SetColor(Light, color);
     if (Result.Code == ErrorCode_Success)
     {
-        Result = WorldLight_SetIntensity(Light, intensity);
+        Result = WorldLightComponent_SetIntensity(Light, intensity);
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = WorldLight_SetSize(Light, size);
+        Result = WorldLightComponent_SetRange(Light, range);
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = World_AddObject(world, Base);
-    }
-    if (Result.Code != ErrorCode_Success)
-    {
-        WorldObject_Destroy(Base);
+        Result = WorldLightComponent_SetCastsShadows(Light, castsShadows);
     }
     return Result;
 }
@@ -952,9 +941,9 @@ static Error BuildTestWorld(World* world, Services* services)
         return ConstructResult;
     }
 
-    // Where the sky starts. These live on the world's WorldEnvironment and are saved WITH the world (see the
-    // WorldEncoder environment schema); the frame's game clock starts from the time of day and the date (the
-    // environment's default, 2026-10-18) and writes them every tick from then on.
+    // Where the sky starts. These live on the world's WorldEnvironment and are saved WITH the world (its property
+    // table); the frame's game clock starts from the time of day and the date (the environment's default, 2026-10-18)
+    // and writes them every tick from then on.
     WorldEnvironment* Environment = World_GetEnvironment(world);
     Environment->TimeOfDay = WORLD_ENVIRONMENT_TIME_OF_DAY_NOON;    // 0=midnight, 0.25=dawn, 0.5=noon, 0.75=dusk
     Environment->SunAngle = TEST_SUN_ANGLE;                        // radians the noon sun leans from straight up

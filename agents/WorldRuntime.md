@@ -11,7 +11,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | GameCamera | `include/GameCamera.h`, `source/GameCamera.c` | The 3D camera (position/fov/yaw/pitch/roll), converted to a raylib Camera3D only at render time. |
 | Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
-| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-object cache and per-frame draw lists (models with resolved assets, sprites, lights). |
+| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with resolved assets, sprites, lights), built from the world's per-type component arrays. |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
 | WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c` | A concrete GameFrame: a WASD + mouse-look flycam over a test world. |
 
@@ -34,7 +34,7 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
 - Borrows the `AssetManager`, the `Logger` and the `GameConfig` (config-side effect multipliers).
 - Owns two asset users: one holds the pass shaders for its lifetime, the other the world's models.
   `WorldRenderer_PrepareWorld` replaces the model user with a fresh one after resolving every model the world
-  still uses, so models no object uses any more are released (asset holds are not counted, so this swap is
+  still uses, so models no component uses any more are released (asset holds are not counted, so this swap is
   how unused models get released). Call it after building or loading a world, after large changes, and
   whenever a different World is (re)built at the address of the previous one.
 - Never writes to the world or to shared assets (AGENTS.md rule 3):
@@ -43,29 +43,34 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
   - the PBR shader's location table is a renderer-owned copy (`_pbr._locs`) whose material map samplers point
     at `mraMap` / `normalMap` / `emissiveMap`, so `DrawMesh` binds each material's textures without touching the
     shared shader asset;
-  - sprite animations belong to the World (`World_Construct2` binds them); the renderer only reads the current
-    frame.
+  - sprite animations belong to the World (its sprite components bind them under the world's asset user); the
+    renderer only reads the current frame.
 
-### Per-object render cache
+### Per-component render cache
 
-`WorldRenderCache_Sync` runs at the start of every render and walks the world once:
-- **Models:** one entry per model object, matched by object id. An entry's model asset is resolved once
-  (`AssetManager_LoadModel` under the model user) and again only when the object's asset revision changes
-  (`WorldModelObject_SetModelAssetName`). A failed resolution is logged once (`WorldRenderer: model object N
-  ("name") draws nothing: ...`) and not retried until the next rename. Each frame the entry gets the final
-  transform (import transform inside scale → Euler XYZ → translation, raylib's `DrawModelEx` convention) and a
-  conservative world bounding sphere from `GameModel_GetLocalBounds` (computed once at load).
-- **Sprites:** the sprites whose playback instance has a frame, with their current frame, position, size and
-  tint.
-- **Lights:** every light with position, reach, intensity, colour and shadow flag.
+`WorldRenderCache_Sync` runs at the start of every render and walks the world's per-type component arrays once
+(`World_GetComponents`), never the objects:
+- **Models:** one entry per model component, in the world's order, remembering the owner's id and the component. An
+  entry's model asset is resolved once (`AssetManager_LoadModel` under the model user); when the component's revision
+  changes the name is hashed again, and the model is resolved again only if the name changed. A failed resolution is
+  logged once (`WorldRenderer: object N ("name") draws nothing: ...`) and not retried until the name changes. Each
+  frame the entry copies the component's settings (outline, crisp, shadow tier, casts shadows), gets the final
+  transform of its object (import transform inside scale → Euler XYZ → translation, raylib's `DrawModelEx` convention)
+  and a conservative world bounding sphere from `GameModel_GetLocalBounds` (computed once at load), and `IsDrawn`:
+  its model resolved and its object enabled and visible. Passes draw only the `IsDrawn` entries; a hidden object keeps
+  its entry and its model.
+- **Sprites:** the sprites of enabled and visible objects whose playback instance has a frame, with their current
+  frame, position, size, tint, outline and crisp settings.
+- **Lights:** the lights of enabled and visible objects, with position, reach (the range), intensity, colour and
+  shadow flag.
 
-Entries follow the objects across additions and removals: when the world's object-set version changes, entries
-are re-matched by object id, and an entry is carried over only if its object still names the model it was
+Entries follow the components across additions and removals: when the world's component-set version changes, entries
+are re-matched by owner id, and an entry is carried over only if its component still names the model it was
 resolved for (an id can come back with another object, e.g. an editor undo or a re-applied save). A different
-World resets the cache, and the per-frame walk also checks each entry's object pointer, so a world rebuilt at the
-same address is caught as soon as an object differs. Objects spawned at runtime appear without calling
-`PrepareWorld`; a model that failed to load is retried only after a rename or `PrepareWorld` (call it after asset
-definitions change).
+World resets the cache, and the per-frame walk also checks each entry's component pointer and owner id, so a world
+rebuilt at the same address is caught as soon as a component differs. Components added at runtime appear without
+calling `PrepareWorld`; a model that failed to load is retried only after its name changes or `PrepareWorld` (call it
+after asset definitions change).
 
 ### Pipeline (one `WorldRenderer_RenderToTarget`)
 
@@ -228,8 +233,8 @@ private `source/NightVision.{h,c}` (tested in `tests/NightVisionTests.c`; its he
   through `nightVision` too.
 
 **Sun and moon shadows.** Two camera-centred orthographic cascades (2048² depth textures): NEAR (small extent, sharp)
-and FAR (large extent, coarse, optional). Each model object's `WorldShadowTier` (Both / Near / Far) routes which
-cascade(s) it casts into. They are rendered from the frame's shadow light (`WorldEnvironment_GetSkyLights`): the
+and FAR (large extent, coarse, optional). Each model component's `WorldShadowTier` (Both / Near / Far) routes which
+cascade(s) it casts into, and one with `casts_shadows` off casts into none (nor into the point-light shadow). They are rendered from the frame's shadow light (`WorldEnvironment_GetSkyLights`): the
 brighter of the sun and the moon by luminance, once it stands above 0.05 (the sine of its elevation; full shadows from
 0.15), faded out while the two are about as bright (0 where they are equal, full once one is 4 times the other) and for
 a light too dim for a shadow to show (a thin crescent). So dusk with the moon up goes from sun shadows through none to
@@ -334,8 +339,12 @@ copying it between shaders.
 
 ## WorldTestFrame
 
-Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World` built with `World_Construct2` (so it binds its
-sprites' animations itself), a `GameClock` ([GameClock.md](GameClock.md)), a `GameCamera`, and a `WorldRenderer`.
+Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World` built with `World_Construct2` (so its sprite
+components bind their animations themselves), a `GameClock` ([GameClock.md](GameClock.md)), a `GameCamera`, and a
+`WorldRenderer`. `BuildTestWorld` builds the test world through the object API: `World_CreateObject`, the transform
+setters, `World_AddComponent` and the components' setters (a model component per cube and for the ground slab, a sprite
+component, two light components). Its `Update` runs the tick's animation step: it advances the sprites of enabled
+objects (`World_GetComponents(world, WorldComponentType_Sprite)`).
 **Game time:** the clock starts from the world environment's date and time of day (noon, 2026-10-18) at time scale
 720 (a 2-minute day, as the test world had before T23; the clock's own default is 72). Every `Update` advances it,
 logs a new day when it crosses midnight, and writes its time of day and date into the environment, so the sky shows

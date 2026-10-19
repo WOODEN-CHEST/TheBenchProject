@@ -1,88 +1,263 @@
-#include <inttypes.h>
 #include "World.h"
-#include "WorldShared.h"
-#include "WorldSpriteObject.h"
-#include "Logger.h"
+#include "WorldInternal.h"
+#include "wr/WRCompile.h"
+#include "wr/WRHash.h"
 #include "wr/WRMemory.h"
 
 
 // Macros.
-/** Initial capacity (in objects) of a world's object buffer. */
+/** Initial capacity (in objects) of a world's object buffer and id map. */
 #define INITIAL_OBJECT_CAPACITY 32
+/** Initial capacity (in components) of each per-type component array. */
+#define INITIAL_COMPONENT_CAPACITY 16
 
 
-// Static functions.
-/* Returns the storage index of the object with the given id, or SIZE_MAX if not present. */
-static size_t FindObjectIndexById(World* self, uint64_t id)
+// Static functions: the id map.
+static HashCode HashObjectId(IMap* map, const void* key, const UserData* userData)
 {
-    for (size_t Index = 0; Index < self->_objects._count; Index++)
+    UNUSED(map);
+    UNUSED(userData);
+    uint64_t Id = 0;
+    Memory_Copy(key, &Id, sizeof(Id));
+    return Hash_UInt64(Id);
+}
+
+/* The object with @p id, or NULL. ContainsKey first: a miss on GetElement would build an error message. */
+static WorldObject* FindObject(World* self, uint64_t id)
+{
+    IMap* Map = HashMap_AsMap(&self->_objectsById);
+    bool IsPresent = false;
+    Error ContainsResult = IMap_ContainsKey(Map, &id, &IsPresent);
+    if ((ContainsResult.Code != ErrorCode_Success) || !IsPresent)
     {
-        WorldObject* Object = NULL;
-        GenericBuffer_GetAt(&self->_objects, Index, &Object);
-        if (WorldObject_GetId(Object) == id)
+        Error_Deconstruct(&ContainsResult);
+        return NULL;
+    }
+
+    WorldObject* Object = NULL;
+    Error GetResult = IMap_GetElement(Map, &id, &Object);
+    if (GetResult.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&GetResult);
+        return NULL;
+    }
+    return Object;
+}
+
+
+// Static functions: components.
+static bool IsWorldType(const World* self, WorldComponentType type)
+{
+    return ((size_t)type < self->_componentTypeCount) && (self->_componentTypes[type] != NULL);
+}
+
+/* Removes @p pointer from @p buffer (a buffer of pointers), keeping the order of the rest. */
+static void RemovePointer(GenericBuffer* buffer, const void* pointer)
+{
+    for (size_t Index = 0; Index < buffer->_count; Index++)
+    {
+        const void* Candidate = NULL;
+        GenericBuffer_GetAt(buffer, Index, &Candidate);
+        if (Candidate == pointer)
         {
-            return Index;
+            GenericBuffer_RemoveAt(buffer, Index);
+            return;
         }
     }
-    return SIZE_MAX;
 }
 
-/* Logs (once, now) that a sprite's animation could not be bound, and releases the error. */
-static void ReportSpriteBindFailure(World* self, WorldSpriteObject* sprite, const unsigned char* assetName,
-    Error* error)
+/* Whether the object carries a transform driver other than a component of @p exceptType. */
+static bool HasOtherDriver(const World* self, const WorldObject* object, WorldComponentType exceptType)
 {
-    if (self->_logger != NULL)
+    for (size_t Type = 0; Type < self->_componentTypeCount; Type++)
     {
-        const unsigned char* ObjectName = WorldObject_GetName(WorldSpriteObject_AsObject(sprite));
-        Error LogResult = Logger_LogWarningFormatted(self->_logger,
-            (const unsigned char*)u8"World: sprite object %" PRIu64 u8" (\"%s\") has no animation: \"%s\" could not "
-            u8"be loaded (%s).",
-            WorldObject_GetId(WorldSpriteObject_AsObject(sprite)),
-            (ObjectName != NULL) ? (const char*)ObjectName : "",
-            (const char*)assetName,
-            (error->Message != NULL) ? (const char*)error->Message : "no details");
-        Error_Deconstruct(&LogResult);
-    }
-    Error_Deconstruct(error);
-}
-
-/* Backs a sprite's playback with the animation its asset name refers to, loaded under the world's asset user, or
- * empties it when the world has no asset manager, the sprite has no name, or the load fails. A failed load is
- * a recoverable content problem: it is logged once, here, and the sprite stays empty (it draws nothing). */
-static void BindSpriteAnimation(World* self, WorldSpriteObject* sprite)
-{
-    SpriteAnimation* Animation = NULL;
-    const unsigned char* AssetName = WorldSpriteObject_GetSpriteAnimationAssetName(sprite);
-    if ((self->_assets != NULL) && (AssetName != NULL))
-    {
-        Error LoadResult = AssetManager_LoadSpriteAnimation(self->_assets, AssetName, self->_assetUser, &Animation);
-        if (LoadResult.Code != ErrorCode_Success)
+        if ((Type != (size_t)exceptType) && (object->_components[Type] != NULL)
+            && self->_componentTypes[Type]->IsTransformDriver)
         {
-            ReportSpriteBindFailure(self, sprite, AssetName, &LoadResult);
-            Animation = NULL;
+            return true;
         }
     }
+    return false;
+}
 
-    Error BindResult = WorldSpriteObject_BindAnimation(sprite, Animation);
-    if (BindResult.Code != ErrorCode_Success)
+/* Detaches a component from its object and the world's array, then destroys it. */
+static void DestroyComponent(World* self, WorldObject* object, WorldComponentType type)
+{
+    WorldComponent* Component = object->_components[type];
+    const WorldComponentTypeInfo* Info = self->_componentTypes[type];
+    if (Info->OnDetach != NULL)
     {
-        const unsigned char* ReportedName = (AssetName != NULL) ? AssetName : (const unsigned char*)u8"";
-        ReportSpriteBindFailure(self, sprite, ReportedName, &BindResult);
+        Info->OnDetach(self, object, Component);
+    }
+    RemovePointer(&self->_components[type], Component);
+    object->_components[type] = NULL;
+    self->_componentSetVersion++;
+
+    Info->Deconstruct(Component);
+    Memory_Free(Component);
+}
+
+/* Destroys every component of the object. With @p isTearingDown the world is being destroyed: the component arrays
+ * are freed whole afterwards, so they are not kept up to date one removal at a time. */
+static void DestroyComponents(World* self, WorldObject* object, bool isTearingDown)
+{
+    for (size_t Type = 0; Type < self->_componentTypeCount; Type++)
+    {
+        WorldComponent* Component = object->_components[Type];
+        if (Component == NULL)
+        {
+            continue;
+        }
+        if (!isTearingDown)
+        {
+            DestroyComponent(self, object, (WorldComponentType)Type);
+            continue;
+        }
+
+        const WorldComponentTypeInfo* Info = self->_componentTypes[Type];
+        if (Info->OnDetach != NULL)
+        {
+            Info->OnDetach(self, object, Component);
+        }
+        object->_components[Type] = NULL;
+        Info->Deconstruct(Component);
+        Memory_Free(Component);
     }
 }
 
-/* Work every successful insertion shares: the object-set version changes and a sprite gets its animation. */
-static void OnObjectAdded(World* self, WorldObject* object)
+
+// Static functions: objects.
+/* Constructs an object with @p id and stores it in the list and the id map. The caller checked the id is free. */
+static Error StoreNewObject(World* self, const unsigned char* name, uint64_t id, WorldObject** outObject)
 {
+    WorldObject* Object = Memory_Allocate(sizeof(WorldObject));
+    Error ConstructResult = WorldObject_Construct(Object, self, id, name);
+    if (ConstructResult.Code != ErrorCode_Success)
+    {
+        Memory_Free(Object);
+        return ConstructResult;
+    }
+
+    if (!GenericBuffer_AddLast(&self->_objects, &Object))
+    {
+        WorldObject_Deconstruct(Object);
+        Memory_Free(Object);
+        return Error_Construct2(ErrorCode_InvalidOperation, "World: failed to store the object.");
+    }
+    bool WasAdded = false;
+    Error MapResult = IMap_Add(HashMap_AsMap(&self->_objectsById), &id, &Object, &WasAdded);
+    if ((MapResult.Code != ErrorCode_Success) || !WasAdded)
+    {
+        Error_Deconstruct(&MapResult);
+        GenericBuffer_RemoveLast(&self->_objects);
+        WorldObject_Deconstruct(Object);
+        Memory_Free(Object);
+        return Error_Construct2(ErrorCode_InvalidOperation, "World: failed to index the object.");
+    }
+
     self->_objectSetVersion++;
-    if (WorldObject_GetType(object) == WorldObjectType_Sprite)
+    *outObject = Object;
+    return Error_CreateSuccess();
+}
+
+/* The shared body of the constructors: @p types are the world's component types (entry i of type i). */
+static Error Construct(World* self, AssetManager* assets, Logger* logger, const WorldComponentTypeInfo* const* types,
+    size_t typeCount)
+{
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (assets != NULL)
     {
-        BindSpriteAnimation(self, (WorldSpriteObject*)object);
+        Error UserResult = AssetManager_GetNewUserID(assets, &User);
+        if (UserResult.Code != ErrorCode_Success)
+        {
+            return UserResult;
+        }
     }
+
+    HashMapConstructOptions Options = HashMapConstructOptions_CreateDefault(sizeof(uint64_t), sizeof(WorldObject*),
+        HashObjectId);
+    Error MapResult = HashMap_Construct1(&self->_objectsById, Options);
+    if (MapResult.Code != ErrorCode_Success)
+    {
+        if (assets != NULL)
+        {
+            Error RetireResult = AssetManager_RetireUser(assets, User);
+            Error_Deconstruct(&RetireResult);
+        }
+        return MapResult;
+    }
+
+    GenericBuffer_AllocateVariable(&self->_objects, INITIAL_OBJECT_CAPACITY, sizeof(WorldObject*));
+    Memory_Zero(self->_componentTypes, sizeof(self->_componentTypes));
+    Memory_Zero(self->_components, sizeof(self->_components));
+    self->_componentTypeCount = typeCount;
+    for (size_t Type = 0; Type < typeCount; Type++)
+    {
+        self->_componentTypes[Type] = types[Type];
+        GenericBuffer_AllocateVariable(&self->_components[Type], INITIAL_COMPONENT_CAPACITY, sizeof(WorldComponent*));
+    }
+    self->_nextId = 1;
+    self->_objectSetVersion = 0;
+    self->_componentSetVersion = 0;
+    self->_name = NULL;
+    self->_assets = assets;
+    self->_logger = logger;
+    self->_assetUser = User;
+    WorldEnvironment_SetDefaults(&self->Environment);
+    return Error_CreateSuccess();
 }
 
 
-// Public functions.
+// Internal functions (declared in WorldInternal.h).
+void WorldInternal_ComponentAfterSet(void* instance, const PropertyDescriptor* descriptor)
+{
+    WorldComponent* Component = instance;
+    Component->_revision++;
+
+    WorldObject* Owner = Component->_owner;
+    if ((Owner == NULL) || (Owner->_world == NULL))
+    {
+        return;
+    }
+    World* OwnerWorld = Owner->_world;
+    const WorldComponentTypeInfo* Info = World_GetComponentTypeInfo(OwnerWorld, Component->_type);
+    if ((Info != NULL) && (Info->OnPropertySet != NULL))
+    {
+        Info->OnPropertySet(OwnerWorld, Owner, Component, descriptor);
+    }
+}
+
+Error WorldInternal_ConstructWithTypes(World* self, AssetManager* assets, Logger* logger,
+    const WorldComponentTypeInfo* const* types, size_t typeCount)
+{
+    if ((self == NULL) || (types == NULL) || (typeCount > WORLD_MAX_COMPONENT_TYPES))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "WorldInternal_ConstructWithTypes: self and types must not be NULL, and at most WORLD_MAX_COMPONENT_TYPES "
+            "types fit.");
+    }
+    for (size_t Type = 0; Type < typeCount; Type++)
+    {
+        // The standard types keep their own slots (their downcasts check the slot), the test types come after them.
+        bool IsStandardSlot = Type < (size_t)WorldComponentType_Count;
+        if ((types[Type] == NULL) || ((size_t)types[Type]->Type != Type)
+            || (IsStandardSlot && (types[Type] != WorldComponent_GetStandardTypeInfo((WorldComponentType)Type))))
+        {
+            return Error_Construct2(ErrorCode_IllegalArgument,
+                "WorldInternal_ConstructWithTypes: entry i must be the registry entry of type i, and the standard "
+                "types must come first, as their own entries.");
+        }
+        Error CheckResult = WorldComponentTypeInfo_Check(types[Type]);
+        if (CheckResult.Code != ErrorCode_Success)
+        {
+            return CheckResult;
+        }
+    }
+    return Construct(self, assets, logger, types, typeCount);
+}
+
+
+// Public functions: lifecycle.
 Error World_Construct1(World* self)
 {
     return World_Construct2(self, NULL, NULL);
@@ -95,26 +270,12 @@ Error World_Construct2(World* self, AssetManager* assets, Logger* logger)
         return Error_Construct2(ErrorCode_IllegalArgument, "World_Construct2: self must not be NULL.");
     }
 
-    AssetUserID User = ASSET_USER_ID_INVALID;
-    if (assets != NULL)
+    const WorldComponentTypeInfo* Types[WorldComponentType_Count];
+    for (size_t Type = 0; Type < (size_t)WorldComponentType_Count; Type++)
     {
-        Error UserResult = AssetManager_GetNewUserID(assets, &User);
-        if (UserResult.Code != ErrorCode_Success)
-        {
-            return UserResult;
-        }
+        Types[Type] = WorldComponent_GetStandardTypeInfo((WorldComponentType)Type);
     }
-
-    GenericBuffer_AllocateVariable(&self->_objects, INITIAL_OBJECT_CAPACITY, sizeof(WorldObject*));
-    self->_nextId = 1;
-    self->_objectSetVersion = 0;
-    self->_name = NULL;
-    self->_assets = assets;
-    self->_logger = logger;
-    self->_assetUser = User;
-    WorldEnvironment_SetDefaults(&self->Environment);
-
-    return Error_CreateSuccess();
+    return Construct(self, assets, logger, Types, (size_t)WorldComponentType_Count);
 }
 
 Error World_Deconstruct(World* self)
@@ -124,16 +285,25 @@ Error World_Deconstruct(World* self)
         return Error_Construct2(ErrorCode_IllegalArgument, "World_Deconstruct: self must not be NULL.");
     }
 
-    // Objects first: a sprite's playback instance points into an animation held by the world's asset user.
-    for (size_t Index = 0; Index < self->_objects._count; Index++)
+    // Objects (and their components) first: a sprite's playback points into an animation the world's user holds.
+    for (size_t Index = self->_objects._count; Index > 0; Index--)
     {
         WorldObject* Object = NULL;
-        GenericBuffer_GetAt(&self->_objects, Index, &Object);
-        WorldObject_Destroy(Object);
+        GenericBuffer_GetAt(&self->_objects, Index - 1, &Object);
+        DestroyComponents(self, Object, true);
+        WorldObject_Deconstruct(Object);
+        Memory_Free(Object);
     }
 
     Memory_Free(self->_objects._data);
+    for (size_t Type = 0; Type < self->_componentTypeCount; Type++)
+    {
+        Memory_Free(self->_components[Type]._data);
+    }
+    Error MapResult = HashMap_Deconstruct(&self->_objectsById);
+    Error_Deconstruct(&MapResult);
     Memory_Free(self->_name);
+    self->_name = NULL;
     WorldEnvironment_Deconstruct(&self->Environment);
 
     if (self->_assets != NULL)
@@ -143,139 +313,93 @@ Error World_Deconstruct(World* self)
     return Error_CreateSuccess();
 }
 
-Error World_AddObject(World* self, WorldObject* object)
+
+// Public functions: objects.
+Error World_CreateObject(World* self, const unsigned char* name, WorldObject** outObject)
 {
-    if ((self == NULL) || (object == NULL))
+    if ((self == NULL) || (outObject == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_AddObject: self and object must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "World_CreateObject: self and outObject must not be NULL.");
     }
-    if (WorldObject_GetId(object) != 0)
+    *outObject = NULL;
+    uint64_t Id = self->_nextId;
+    if ((Id == 0) || (FindObject(self, Id) != NULL))
     {
-        return Error_Construct2(ErrorCode_InvalidOperation, "World_AddObject: object already has an id.");
-    }
-
-    uint64_t NewId = self->_nextId;
-    if (!GenericBuffer_AddLast(&self->_objects, &object))
-    {
-        return Error_Construct2(ErrorCode_InvalidOperation, "World_AddObject: failed to store the object.");
+        return Error_Construct2(ErrorCode_InvalidOperation, "World_CreateObject: no free object id is left.");
     }
 
-    // Cannot fail: object is non-NULL and NewId is non-zero.
-    WorldObject_SetId(object, NewId);
-    self->_nextId++;
-    OnObjectAdded(self, object);
-    return Error_CreateSuccess();
+    Error Result = StoreNewObject(self, name, Id, outObject);
+    if (Result.Code == ErrorCode_Success)
+    {
+        self->_nextId = Id + 1; // 0 after UINT64_MAX: every id is used
+    }
+    return Result;
 }
 
-Error World_AddObjectWithId(World* self, WorldObject* object, uint64_t id)
+Error World_CreateObjectWithId(World* self, const unsigned char* name, uint64_t id, WorldObject** outObject)
 {
-    if ((self == NULL) || (object == NULL))
+    if ((self == NULL) || (outObject == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_AddObjectWithId: self and object must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "World_CreateObjectWithId: self and outObject must not be NULL.");
     }
+    *outObject = NULL;
     if (id == 0)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_AddObjectWithId: id must not be 0.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "World_CreateObjectWithId: id must not be 0.");
     }
-    if (WorldObject_GetId(object) != 0)
+    if (FindObject(self, id) != NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_AddObjectWithId: object already has an id.");
-    }
-    if (FindObjectIndexById(self, id) != SIZE_MAX)
-    {
-        return Error_Construct2(ErrorCode_InvalidOperation, "World_AddObjectWithId: id is already in use.");
+        return Error_Construct2(ErrorCode_InvalidOperation, "World_CreateObjectWithId: id is already in use.");
     }
 
-    if (!GenericBuffer_AddLast(&self->_objects, &object))
+    Error Result = StoreNewObject(self, name, id, outObject);
+    if ((Result.Code == ErrorCode_Success) && (self->_nextId != 0) && (id >= self->_nextId))
     {
-        return Error_Construct2(ErrorCode_InvalidOperation, "World_AddObjectWithId: failed to store the object.");
+        self->_nextId = id + 1; // 0 after UINT64_MAX: every id is used
     }
-
-    WorldObject_SetId(object, id);
-    if ((id != UINT64_MAX) && (id >= self->_nextId))
-    {
-        self->_nextId = id + 1;
-    }
-    OnObjectAdded(self, object);
-    return Error_CreateSuccess();
+    return Result;
 }
 
-Error World_RemoveObjectById(World* self, uint64_t id)
+Error World_RemoveObject(World* self, uint64_t id)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_RemoveObjectById: self must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "World_RemoveObject: self must not be NULL.");
     }
     if (id == 0)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_RemoveObjectById: id must not be 0.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "World_RemoveObject: id must not be 0.");
     }
-
-    size_t Index = FindObjectIndexById(self, id);
-    if (Index == SIZE_MAX)
+    WorldObject* Object = FindObject(self, id);
+    if (Object == NULL)
     {
-        return Error_Construct2(ErrorCode_InvalidOperation, "World_RemoveObjectById: no object with that id.");
+        return Error_Construct2(ErrorCode_InvalidOperation, "World_RemoveObject: no object with that id.");
     }
 
-    WorldObject* Object = NULL;
-    GenericBuffer_GetAt(&self->_objects, Index, &Object);
-    WorldObject_Destroy(Object);
-    GenericBuffer_RemoveAt(&self->_objects, Index);
+    // Components first, while the object is still in the world.
+    DestroyComponents(self, Object, false);
+    bool WasRemoved = false;
+    Error MapResult = IMap_Remove(HashMap_AsMap(&self->_objectsById), &id, &WasRemoved);
+    Error_Deconstruct(&MapResult);
+    RemovePointer(&self->_objects, Object);
+    WorldObject_Deconstruct(Object);
+    Memory_Free(Object);
     self->_objectSetVersion++;
     return Error_CreateSuccess();
 }
 
-Error World_SetSpriteAnimationAssetName(World* self, uint64_t id, const unsigned char* assetName)
-{
-    if (self == NULL)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_SetSpriteAnimationAssetName: self must not be NULL.");
-    }
-    if (id == 0)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_SetSpriteAnimationAssetName: id must not be 0.");
-    }
-
-    WorldObject* Object = NULL;
-    if (!World_TryGetObjectById(self, id, &Object))
-    {
-        return Error_Construct2(ErrorCode_InvalidOperation,
-            "World_SetSpriteAnimationAssetName: no object with that id.");
-    }
-    if (WorldObject_GetType(Object) != WorldObjectType_Sprite)
-    {
-        return Error_Construct2(ErrorCode_InvalidOperation,
-            "World_SetSpriteAnimationAssetName: the object is not a sprite object.");
-    }
-
-    // TODO: The previous animation stays held under the world's user until the world is destroyed (holds are
-    // not counted, so releasing it here could unload it under another sprite). If long-lived edited worlds
-    // pile up unused animations, add a release pass that swaps to a fresh user holding only bound animations.
-    WorldSpriteObject* Sprite = (WorldSpriteObject*)Object;
-    WorldSpriteObject_ReplaceAnimationAssetName(Sprite, assetName);
-    BindSpriteAnimation(self, Sprite);
-    return Error_CreateSuccess();
-}
-
-bool World_TryGetObjectById(World* self, uint64_t id, WorldObject** outObject)
+bool World_TryGetObject(World* self, uint64_t id, WorldObject** outObject)
 {
     if ((self == NULL) || (outObject == NULL))
     {
         return false;
     }
-
-    size_t Index = FindObjectIndexById(self, id);
-    if (Index == SIZE_MAX)
-    {
-        *outObject = NULL;
-        return false;
-    }
-
-    GenericBuffer_GetAt(&self->_objects, Index, outObject);
-    return true;
+    *outObject = (id != 0) ? FindObject(self, id) : NULL;
+    return *outObject != NULL;
 }
 
-size_t World_GetObjectCount(World* self)
+size_t World_GetObjectCount(const World* self)
 {
     if (self == NULL)
     {
@@ -288,7 +412,8 @@ Error World_GetObjectByIndex(World* self, size_t index, WorldObject** outObject)
 {
     if ((self == NULL) || (outObject == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_GetObjectByIndex: self and outObject must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "World_GetObjectByIndex: self and outObject must not be NULL.");
     }
     if (index >= self->_objects._count)
     {
@@ -299,9 +424,159 @@ Error World_GetObjectByIndex(World* self, size_t index, WorldObject** outObject)
     return Error_CreateSuccess();
 }
 
-void World_EnsureNextObjectIdAtLeast(World* self, uint64_t minimumNext)
+
+// Public functions: components.
+Error World_AddComponent(World* self, uint64_t id, WorldComponentType type, WorldComponent** outComponent)
+{
+    if ((self == NULL) || (outComponent == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "World_AddComponent: self and outComponent must not be NULL.");
+    }
+    *outComponent = NULL;
+    if ((id == 0) || !IsWorldType(self, type))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "World_AddComponent: id must not be 0 and type must be one of the world's component types.");
+    }
+    WorldObject* Object = FindObject(self, id);
+    if (Object == NULL)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "World_AddComponent: no object with that id.");
+    }
+    const WorldComponentTypeInfo* Info = self->_componentTypes[type];
+    if (Object->_components[type] != NULL)
+    {
+        return Error_Construct4(ErrorCode_InvalidOperation,
+            "World_AddComponent: the object already has a %s component.", (const char*)Info->Name);
+    }
+    if (Info->IsTransformDriver && HasOtherDriver(self, Object, type))
+    {
+        return Error_Construct4(ErrorCode_InvalidOperation,
+            "World_AddComponent: the object already has a component that drives its transform; a %s component cannot "
+            "drive it too.", (const char*)Info->Name);
+    }
+
+    WorldComponent* Component = Memory_Allocate(Info->Size);
+    Error ConstructResult = Info->Construct(Component);
+    if (ConstructResult.Code != ErrorCode_Success)
+    {
+        Memory_Free(Component);
+        return ConstructResult;
+    }
+    // Construct zeroed the base with the rest; the world sets it.
+    Component->_type = type;
+    Component->_owner = Object;
+    Component->_revision = 0;
+    if (!GenericBuffer_AddLast(&self->_components[type], &Component))
+    {
+        Info->Deconstruct(Component);
+        Memory_Free(Component);
+        return Error_Construct2(ErrorCode_InvalidOperation, "World_AddComponent: failed to store the component.");
+    }
+    Object->_components[type] = Component;
+    self->_componentSetVersion++;
+
+    if (Info->IsTransformDriver && (Object->_mobility != WorldMobility_Movable))
+    {
+        Error MobilityResult = WorldObject_SetMobility(Object, WorldMobility_Movable);
+        Error_Deconstruct(&MobilityResult); // cannot fail: the object exists and the value is valid
+    }
+    if (Info->OnAttach != NULL)
+    {
+        Info->OnAttach(self, Object, Component);
+    }
+    *outComponent = Component;
+    return Error_CreateSuccess();
+}
+
+Error World_RemoveComponent(World* self, uint64_t id, WorldComponentType type)
 {
     if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "World_RemoveComponent: self must not be NULL.");
+    }
+    if ((id == 0) || !IsWorldType(self, type))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "World_RemoveComponent: id must not be 0 and type must be one of the world's component types.");
+    }
+    WorldObject* Object = FindObject(self, id);
+    if (Object == NULL)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "World_RemoveComponent: no object with that id.");
+    }
+    if (Object->_components[type] == NULL)
+    {
+        return Error_Construct4(ErrorCode_InvalidOperation, "World_RemoveComponent: the object has no %s component.",
+            (const char*)self->_componentTypes[type]->Name);
+    }
+
+    DestroyComponent(self, Object, type);
+    return Error_CreateSuccess();
+}
+
+bool World_TryGetComponent(World* self, uint64_t id, WorldComponentType type, WorldComponent** outComponent)
+{
+    if ((self == NULL) || (outComponent == NULL))
+    {
+        return false;
+    }
+    *outComponent = NULL;
+    WorldObject* Object = NULL;
+    if (!IsWorldType(self, type) || !World_TryGetObject(self, id, &Object))
+    {
+        return false;
+    }
+    *outComponent = Object->_components[type];
+    return *outComponent != NULL;
+}
+
+WorldComponent* const* World_GetComponents(const World* self, WorldComponentType type, size_t* outCount)
+{
+    if (outCount != NULL)
+    {
+        *outCount = 0;
+    }
+    if ((self == NULL) || (outCount == NULL) || !IsWorldType(self, type) || (self->_components[type]._count == 0))
+    {
+        return NULL;
+    }
+    *outCount = self->_components[type]._count;
+    return (WorldComponent* const*)self->_components[type]._data;
+}
+
+const WorldComponentTypeInfo* World_GetComponentTypeInfo(const World* self, WorldComponentType type)
+{
+    if ((self == NULL) || !IsWorldType(self, type))
+    {
+        return NULL;
+    }
+    return self->_componentTypes[type];
+}
+
+bool World_TryFindComponentType(const World* self, const unsigned char* name, WorldComponentType* outType)
+{
+    if ((self == NULL) || (name == NULL) || (outType == NULL))
+    {
+        return false;
+    }
+    for (size_t Type = 0; Type < self->_componentTypeCount; Type++)
+    {
+        if (WorldInternal_AreStringsEqual(self->_componentTypes[Type]->Name, name))
+        {
+            *outType = (WorldComponentType)Type;
+            return true;
+        }
+    }
+    return false;
+}
+
+
+// Public functions: world properties.
+void World_EnsureNextObjectIdAtLeast(World* self, uint64_t minimumNext)
+{
+    if ((self == NULL) || (self->_nextId == 0))
     {
         return;
     }
@@ -318,8 +593,7 @@ Error World_SetName(World* self, const unsigned char* name)
         return Error_Construct2(ErrorCode_IllegalArgument, "World_SetName: self must not be NULL.");
     }
 
-    unsigned char* Clone;
-    WorldShared_CloneString(name, &Clone);
+    unsigned char* Clone = WorldInternal_CloneString(name);
     Memory_Free(self->_name);
     self->_name = Clone;
     return Error_CreateSuccess();

@@ -106,11 +106,11 @@ static void LoadPointShadowCube(WorldRenderer* self)
     self->_pointShadow._hasCube = true;
 }
 
-/* Whether a model object casts into the given shadow cascade, per its WorldShadowTier: Both casts into
- * either; Near casts only into the near cascade; Far casts only into the far cascade. */
-static bool ModelCastsIntoCascade(const WorldModelObject* modelObject, bool isNearCascade)
+/* Whether a model casts into the given shadow cascade, per its WorldShadowTier: Both casts into either; Near casts
+ * only into the near cascade; Far casts only into the far cascade. */
+static bool ModelCastsIntoCascade(WorldShadowTier shadowTier, bool isNearCascade)
 {
-    switch (modelObject->ShadowTier)
+    switch (shadowTier)
     {
         case WorldShadowTier_Near: return isNearCascade;
         case WorldShadowTier_Far:  return !isNearCascade;
@@ -120,7 +120,7 @@ static bool ModelCastsIntoCascade(const WorldModelObject* modelObject, bool isNe
     return true;
 }
 
-/* Draws the depth of the cached models that cast into the given shadow cascade (per WorldShadowTier) through
+/* Draws the depth of the drawn models that cast shadows into the given shadow cascade (per WorldShadowTier) through
  * @p shader. Ignores the pixelation filter (every pixelation state casts). Sprites do not cast cascade shadows
  * (billboards are not in the shadow passes). */
 static void DrawShadowCasters(WorldRenderer* self, const Shader* shader, bool isNearCascade)
@@ -130,15 +130,15 @@ static void DrawShadowCasters(WorldRenderer* self, const Shader* shader, bool is
     for (size_t Index = 0; Index < ModelCount; Index++)
     {
         const WorldRenderModel* Entry = &Models[Index];
-        if ((Entry->Asset != NULL) && ModelCastsIntoCascade(Entry->Object, isNearCascade))
+        if (Entry->IsDrawn && Entry->CastsShadows && ModelCastsIntoCascade(Entry->ShadowTier, isNearCascade))
         {
             WorldRendererGeometry_DrawModel(self, Entry, shader, false);
         }
     }
 }
 
-/* Draws the depth of the cached models whose bounding sphere reaches into the light's reach sphere: anything
- * further cannot shadow what the light lights (its light falls to 0 at its reach). */
+/* Draws the depth of the drawn models that cast shadows and whose bounding sphere reaches into the light's reach
+ * sphere: anything further cannot shadow what the light lights (its light falls to 0 at its reach). */
 static void DrawCastersInReach(WorldRenderer* self, const Shader* shader, Vector3 lightPosition, float reach)
 {
     size_t ModelCount = 0;
@@ -146,7 +146,8 @@ static void DrawCastersInReach(WorldRenderer* self, const Shader* shader, Vector
     for (size_t Index = 0; Index < ModelCount; Index++)
     {
         const WorldRenderModel* Entry = &Models[Index];
-        if ((Entry->Asset != NULL) && (Vector3Distance(Entry->Center, lightPosition) < (Entry->Radius + reach)))
+        if (Entry->IsDrawn && Entry->CastsShadows
+            && (Vector3Distance(Entry->Center, lightPosition) < (Entry->Radius + reach)))
         {
             WorldRendererGeometry_DrawModel(self, Entry, shader, false);
         }

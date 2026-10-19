@@ -5,9 +5,9 @@
 #include "AssetManager.h"
 #include "GameModel.h"
 #include "World.h"
-#include "WorldModelObject.h"
-#include "WorldSpriteObject.h"
-#include "WorldLight.h"
+#include "WorldModelComponent.h"
+#include "WorldSpriteComponent.h"
+#include "WorldLightComponent.h"
 #include "SpriteAnimation.h"
 #include "raylib/raylib.h"
 #include "wr/WRError.h"
@@ -16,45 +16,55 @@
 /*
  * Private header (source/): the world renderer's per-object render cache.
  *
- * At the start of every render, WorldRenderCache_Sync walks the world once and builds the lists every pass
- * shares: the model objects (with their resolved model asset, final transform and world bounding sphere), the
- * sprites that have a frame to draw, and the point lights. Passes iterate these lists instead of walking the
- * world and resolving assets by name themselves.
+ * At the start of every render, WorldRenderCache_Sync walks the world's per-type component arrays once
+ * (World_GetComponents) and builds the lists every pass shares: the model components (with their resolved model asset,
+ * final transform and world bounding sphere), the sprites that have a frame to draw, and the point lights. Passes
+ * iterate these lists instead of walking the world and resolving assets by name themselves.
  *
- * Model assets are resolved once per object: an entry remembers the object's asset revision and is resolved
- * again only when the revision changes (the model was renamed). A failed resolution is logged once and not
- * retried until then. Entries follow the world's objects across additions and removals: when the world's
- * object-set version changes, entries are re-matched by object id, and one is carried over only if its object
- * still names the model it was resolved for (an id can be reused by a different object). A different world
- * resets the cache; the per-frame walk also checks each entry's object, so a world rebuilt at the same address
- * is caught as soon as an object differs.
+ * Objects that are disabled or hidden (WorldObject_IsEnabled, WorldObject_IsVisible) are not drawn: their model
+ * entries stay (keeping the resolved model) but are not IsDrawn, and their sprites and lights are not listed.
  *
- * The cache only reads the world and its objects, and never writes to an asset. Every pointer in the lists is
- * borrowed and valid until the world changes; the models are held under the asset user passed to Sync.
+ * Model assets are resolved once per component: an entry remembers the component's revision and the hash of the name
+ * it resolved; when the revision changes the name is hashed again, and the model is resolved again only if the name
+ * changed. A failed resolution is logged once and not retried until the name changes. Entries follow the world's model
+ * components across additions and removals: when the world's component-set version changes, entries are re-matched by
+ * owner id, and one is carried over only if its owner still names the model it was resolved for (an id can come back
+ * with another object). A different world resets the cache; the per-frame walk also checks each entry's component,
+ * so a world rebuilt at the same address is caught as soon as a component differs.
+ *
+ * The cache only reads the world, its objects and components, and never writes to an asset. Every pointer in the lists
+ * is borrowed and valid until the world changes; the models are held under the asset user passed to Sync.
  */
 
 
 // Types.
-/** @brief A model object as the passes draw it. */
+/** @brief A model component as the passes draw it. */
 typedef struct WorldRenderModelStruct
 {
-    /** @brief Id of the model object this entry belongs to. */
+    /** @brief Id of the object that carries the component. */
     uint64_t ObjectId;
-    /** @brief The object's asset revision the asset was resolved for; meaningful once IsResolved is true. */
-    uint32_t AssetRevision;
-    /** @brief Whether a resolution was attempted for AssetRevision (it succeeded, or it failed and was logged). */
+    /** @brief The model component (borrowed); valid until the world changes. */
+    const WorldModelComponent* Component;
+    /** @brief The component revision the entry last checked; meaningful once IsResolved is true. */
+    uint32_t Revision;
+    /** @brief Whether a resolution was attempted for the current name (it succeeded, or it failed and was logged). */
     bool IsResolved;
     /** @brief Hash of the model name the entry was resolved for (0 for none); meaningful once IsResolved is true.
      *  Re-matching uses it to tell an object that reuses an id from the object the entry was made for. */
     uint64_t NameHash;
-    /** @brief The resolved model, held under the model user passed to Sync; NULL when the object has no asset name
-     *  or its model failed to load (then the object draws nothing). Read-only. */
+    /** @brief The resolved model, held under the model user passed to Sync; NULL when the component names no model or
+     *  its model failed to load (then the object draws nothing). Read-only. */
     GameModel* Asset;
     /** @brief Centre and radius of the asset's mesh-space bounding sphere; valid when Asset is not NULL. */
     Vector3 LocalCenter;
     float LocalRadius;
-    /** @brief The model object (borrowed); valid until the world changes. */
-    WorldModelObject* Object;
+    /** @brief Whether the passes draw the entry this frame: its model resolved, its object enabled and visible. */
+    bool IsDrawn;
+    /** @brief The component's render settings (this frame). */
+    bool HasOutline;
+    bool OmitsPixelation;
+    WorldShadowTier ShadowTier;
+    bool CastsShadows;
     /** @brief The asset's import transform composed with the object's world transform (this frame). Valid when
      *  Asset is not NULL. */
     Matrix Transform;
@@ -66,29 +76,32 @@ typedef struct WorldRenderModelStruct
     Color Tint;
 } WorldRenderModel;
 
-/** @brief A sprite object that has a frame to draw this frame. */
+/** @brief A sprite component that has a frame to draw this frame. */
 typedef struct WorldRenderSpriteStruct
 {
-    /** @brief The sprite object (borrowed); valid until the world changes. */
-    WorldSpriteObject* Object;
+    /** @brief The sprite component (borrowed); valid until the world changes. */
+    const WorldSpriteComponent* Component;
     /** @brief The current frame of its playback instance (the texture is borrowed from the animation). */
     SpriteAnimationFrame Frame;
-    /** @brief World-space centre of the billboard. */
+    /** @brief World-space centre of the billboard (the object's position). */
     Vector3 Position;
     /** @brief Billboard width and height in world units (the object's X and Y scale). */
     Vector2 Size;
     /** @brief The object's final tint colour. */
     Color Tint;
+    /** @brief The component's render settings. */
+    bool HasOutline;
+    bool OmitsPixelation;
 } WorldRenderSprite;
 
 /** @brief A point light as the passes use it this frame. */
 typedef struct WorldRenderLightStruct
 {
-    /** @brief The light (borrowed); valid until the world changes. */
-    const WorldLight* Light;
-    /** @brief World-space position. */
+    /** @brief The light component (borrowed); valid until the world changes. */
+    const WorldLightComponent* Component;
+    /** @brief World-space position (the object's). */
     Vector3 Position;
-    /** @brief Reach radius (the light's size). */
+    /** @brief Reach radius (the light's range). */
     float Range;
     /** @brief Emission intensity. */
     float Intensity;
@@ -106,21 +119,21 @@ typedef struct WorldRenderLightStruct
  */
 typedef struct WorldRenderCacheStruct
 {
-    /** @brief WorldRenderModel entries, one per model object, in the world's object order. */
+    /** @brief WorldRenderModel entries, one per model component, in the world's component order. */
     GenericBuffer _models;
-    /** @brief Scratch WorldRenderModel buffer used while re-matching entries to a changed object list. */
+    /** @brief Scratch WorldRenderModel buffer used while re-matching entries to a changed component list. */
     GenericBuffer _rematch;
     /** @brief WorldRenderSprite entries of this frame. */
     GenericBuffer _sprites;
-    /** @brief WorldRenderLight entries of this frame, in the world's object order. */
+    /** @brief WorldRenderLight entries of this frame, in the world's component order. */
     GenericBuffer _lights;
     /** @brief The world the model entries were matched against (compared by address only; never dereferenced). */
     const World* _world;
-    /** @brief That world's object-set version when the entries were matched. */
-    uint64_t _objectSetVersion;
+    /** @brief That world's component-set version when the entries were matched. */
+    uint64_t _componentSetVersion;
     /** @brief Whether the entries were matched at least once since construction or the last reset. */
     bool _isMatched;
-    /** @brief Whether this frame has a drawable OmitPixelation (crisp) model or sprite. */
+    /** @brief Whether this frame has a drawn OmitPixelation (crisp) model or sprite. */
     bool _hasCrispObjects;
 } WorldRenderCache;
 
@@ -150,12 +163,12 @@ void WorldRenderCache_Reset(WorldRenderCache* self);
 /**
  * @brief Brings the cache up to date with @p world and rebuilds this frame's lists.
  *
- * One walk over the world's objects. A world other than the last one resets the cache; entries are re-matched to
- * the objects (by id and model name) when the object-set version changed since the last Sync, or when an entry no
- * longer belongs to the object at its position. A model whose entry is new or whose asset revision changed is
- * resolved with AssetManager_LoadModel under @p modelUser; a failure is logged once (warning) and leaves the
- * entry without an asset until the next rename. Every model's transform and bounds are recomputed. Main thread
- * only; resolving a model needs the GL context.
+ * One walk over the world's model, sprite and light components. A world other than the last one resets the cache;
+ * entries are re-matched to the model components (by owner id and model name) when the component-set version changed
+ * since the last Sync, or when an entry no longer belongs to the component at its position. A model whose entry is new
+ * or whose name changed is resolved with AssetManager_LoadModel under @p modelUser; a failure is logged once (warning)
+ * and leaves the entry without an asset until the name changes. Every model's transform and bounds are recomputed.
+ * Main thread only; resolving a model needs the GL context.
  * @param self The cache; must not be NULL.
  * @param world The world to draw; must not be NULL.
  * @param assets Resolves the models; borrowed. Must not be NULL.
@@ -168,7 +181,8 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, AssetManager* 
     Logger* logger);
 
 /**
- * @brief Returns this frame's model entries (one per model object, in world order, including ones without asset).
+ * @brief Returns this frame's model entries: one per model component, in world order, including ones that are not
+ *        drawn (no asset, or a disabled or hidden object): the passes draw only the IsDrawn ones.
  * @param self The cache; must not be NULL.
  * @param outCount [out] Receives the entry count. Must not be NULL.
  * @returns The entries (borrowed until the next Sync or Reset); NULL when there are none.
@@ -181,7 +195,7 @@ static inline const WorldRenderModel* WorldRenderCache_GetModels(const WorldRend
 }
 
 /**
- * @brief Returns this frame's drawable sprites.
+ * @brief Returns this frame's drawable sprites (with a frame to draw, on enabled and visible objects).
  * @param self The cache; must not be NULL.
  * @param outCount [out] Receives the entry count. Must not be NULL.
  * @returns The entries (borrowed until the next Sync or Reset); NULL when there are none.
@@ -194,7 +208,8 @@ static inline const WorldRenderSprite* WorldRenderCache_GetSprites(const WorldRe
 }
 
 /**
- * @brief Returns this frame's point lights (every light object, including ones without intensity or reach).
+ * @brief Returns this frame's point lights: every light component on an enabled and visible object, including ones
+ *        without intensity or reach.
  * @param self The cache; must not be NULL.
  * @param outCount [out] Receives the entry count. Must not be NULL.
  * @returns The entries (borrowed until the next Sync or Reset); NULL when there are none.
@@ -207,9 +222,9 @@ static inline const WorldRenderLight* WorldRenderCache_GetLights(const WorldRend
 }
 
 /**
- * @brief Reports whether this frame has a drawable OmitPixelation model or sprite (the crisp overlay's input).
+ * @brief Reports whether this frame has a drawn OmitPixelation model or sprite (the crisp overlay's input).
  * @param self The cache; must not be NULL.
- * @returns true if at least one model with a resolved asset, or one listed sprite, is flagged OmitPixelation.
+ * @returns true if at least one drawn model, or one listed sprite, omits the pixelation.
  */
 static inline bool WorldRenderCache_HasCrispObjects(const WorldRenderCache* self)
 {

@@ -1,8 +1,8 @@
 # World data layer
 
-The rendering-independent model of a 3D world: the objects in it, its environment settings, and its
-persistence (snapshot DTO + GHDF encoding). No renderer is required to build, mutate, save or tear down a
-world — the world renderer consumes these separately and never writes to them.
+The rendering-independent model of a 3D world: its objects, their components, and its environment settings. No
+renderer is required to build, change or tear down a world; the world renderer reads it separately and never writes to
+it. Saving and loading worlds comes back with T09 (world files), built on the property tables.
 
 This one doc covers the whole cohesive layer; every symbol has full Doxygen in its header.
 
@@ -10,65 +10,198 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 
 | Module | Files | What it is |
 |---|---|---|
-| WorldObject | `include/WorldObject.h`, `source/WorldObject.c` | Abstract base of every world object. |
-| WorldModelObject | `include/WorldModelObject.h`, `source/WorldModelObject.c` | 3D model object (references a model asset by name). |
-| WorldSpriteObject | `include/WorldSpriteObject.h`, `source/WorldSpriteObject.c` | 2D sprite object (references a sprite animation by name, owns its playback instance). |
-| WorldLight | `include/WorldLight.h`, `source/WorldLight.c` | Point light (color/intensity/size/shadow toggle). |
+| WorldObject | `include/WorldObject.h`, `source/WorldObject.c` | The one object type: id, name, transform, tint, enabled, visible, mobility, and its component slots. |
+| WorldComponent | `include/WorldComponent.h`, `source/WorldComponent.c` | The component base, the component types and the registry entry that describes each (`WorldComponentTypeInfo`). |
+| WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A 3D model by asset name, with its render settings (outline, crisp, shadow tier, casts shadows). |
+| WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A sprite animation by asset name, with its playback instance, bound by the world. |
+| WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
 | WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
-| World | `include/World.h`, `source/World.c` | Owns the objects, mints ids, holds the environment and its own asset user. |
-| WorldDTO | `include/WorldDTO.h`, `source/WorldDTO.c` | Flat persistent snapshot + World<->DTO conversions. |
-| WorldEncoder | `include/WorldEncoder.h`, `source/WorldEncoder.c` | Encodes a WorldDTO into a GHDF compound tree. |
+| World | `include/World.h`, `source/World.c` | Owns the objects and their components, mints ids, keeps the id map and the per-type component arrays, holds the environment and its own asset user. |
 
-`source/WorldShared.h` is a private header with tiny shared helpers (finite-value checks, UTF-8 string
-clone) and the two hooks the World uses to bind and rename a sprite that already belongs to it; not public API.
+`source/WorldInternal.h` is the layer's private header: the object's construction (objects are made by the world only),
+`WorldInternal_ComponentAfterSet` (the hook every component table calls after a change), the world's asset manager,
+user and logger for components that load assets, small helpers, and `WorldInternal_ConstructWithTypes` (a test seam,
+below). Not public API.
 
-## Object model
+## Objects
 
-`WorldObject` is an abstract vtable class (`Destroy` slot) embedded as the FIRST member of each concrete
-type, so any concrete pointer is a valid `WorldObject*` and the World stores them polymorphically. Shared
-state: `Type` (discriminator), read-only `_id` (assigned by the World; 0 = unassigned), owned `_name`,
-and the transform (`_position`, Euler `_rotation` in radians, `_scale`) plus a `RenderColor _tint`. The
-transform/tint/name are reached through **validating setters** (reject NaN/inf) and inline getters.
+`WorldObject` is one concrete struct (T05 replaced the three subclasses: model, sprite and light objects are now
+components). Every object has:
 
-- `WorldModelObject`: an owned model asset name plus the render toggles `HasOutline` (default true),
-  `OmitPixelation` (default false) and `ShadowTier` (`WorldShadowTier`: Both / Near / Far, default Both, the
-  sun shadow cascade(s) it casts into; persisted, encoder field id 23). `WorldModelObject_SetModelAssetName`
-  advances a runtime **asset revision** (`WorldModelObject_GetAssetRevision`), which is how the renderer's cache
-  notices a rename without comparing names every frame.
-- `WorldSpriteObject`: an owned sprite animation asset name, the same two render toggles, and an embedded
-  `SpriteAnimationInstance` holding the playback state (current frame, timing, fps, running/looping) that game
-  logic advances (`SpriteAnimationInstance_Update`) and the renderer only reads. The instance starts empty.
-  **Binding belongs to the World** (see below): once a sprite is in a world, its own setters
-  (`WorldSpriteObject_SetSpriteAnimationAssetName`, `WorldSpriteObject_SetAnimation`) refuse with
-  `ErrorCode_InvalidOperation`; rename it with `World_SetSpriteAnimationAssetName`. A failed rebind leaves the
-  instance empty but constructed.
-- `WorldLight`: adds `Color`, validated `_intensity` and `_size` (finite, >= 0), and `CastsShadows`. It
-  uses the base Position/id/name; rotation/scale/tint are inherited but unused.
+- `_id` (unique in its world, never 0, assigned at creation, never changed), `_name` (owned, may be NULL, at most
+  `WORLD_OBJECT_NAME_MAX_LENGTH` = 256 bytes of valid UTF-8);
+- the transform: `_position`, `_rotation` (Euler XYZ in radians, degrees in JSON), `_scale` (they become local
+  transforms with parenting, T08);
+- `_tint`: a `RenderColor` (brightness and opacity in [0, 1]; drawing the opacity is T07's);
+- `_isEnabled` (default true): false makes **every system** skip the object: the renderer, later collision and
+  scripts' searches;
+- `_isVisible` (default true): false makes **the renderer** skip it (its model, its sprite and its light); it still
+  exists for collision and interaction (invisible walls, hidden triggers);
+- `_mobility`: `WorldMobility_Static` (default: scenery that does not move in play) or `WorldMobility_Movable`
+  (see "Ready for things that move");
+- `_revision`: advances on every property change (runtime only);
+- `_components[WORLD_MAX_COMPONENT_TYPES]`: one slot per component type, NULL when absent
+  (`WorldObject_GetComponent`);
+- `_world`: the world that owns it. **A World must never be moved or copied once constructed** (objects and
+  components point back to it).
 
-Create with the concrete `_Create` factories (they heap-allocate). Destroy through
-`WorldObject_Destroy` (vtable). Once handed to a `World`, the world owns and destroys it.
+Every field is reached through getters and validating setters (`WorldObject_SetPosition`, `_SetEnabled`, ...). The
+setters check through the object's property table (`Properties_CheckValue`), so the rules live in the table only, and
+`Properties_Set` / the JSON and GHDF readers / `Properties_CopyTo` work on objects too; either way the revision
+advances (the table's `AfterSet`).
+
+## Components
+
+A component is a struct that embeds `WorldComponent` first (`_type`, `_owner`, `_revision`). An object carries **at
+most one component of each type**; a street lamp is one object with a model and a light.
+
+| Type | Value | Name | Struct |
+|---|---|---|---|
+| `WorldComponentType_Model` | 0 | `model` | `WorldModelComponent` |
+| `WorldComponentType_Sprite` | 1 | `sprite` | `WorldSpriteComponent` |
+| `WorldComponentType_Light` | 2 | `light` | `WorldLightComponent` |
+
+The values are explicit and never renumbered (world files will save them). `WorldComponentType_Count` is the number
+of standard types; `WORLD_MAX_COMPONENT_TYPES` (16) is how many a world can hold, room for the types later tasks add
+(collider T12, character T13, ambient zone T14, screen T19) and for test-only types.
+
+**The registry.** Each type has one `WorldComponentTypeInfo` (a static constant of its module, handed out by
+`Xxx_GetTypeInfo`; `WorldComponent_GetStandardTypeInfo(type)` maps the standard types): `Type`, `Name` (the key of its
+block in world files and its label in the editor), `Size`, `Table` (its property table, whose `AfterSet` must be
+`WorldInternal_ComponentAfterSet`), `IsTransformDriver`, and the hooks `Construct` (must call `Properties_Construct`,
+which zeroes the whole struct, then set up runtime state), `Deconstruct`, `OnAttach(world, object, component)`,
+`OnDetach` and `OnPropertySet(world, object, component, descriptor)` (descriptor NULL after a read or a copy).
+`WorldComponentTypeInfo_Check` verifies an entry (a test runs it for every standard type). **A new component type is
+one enum value, one registry entry (and its case in `WorldComponent_GetStandardTypeInfo`), a table and the hooks.**
+
+**Lifetime.** Components exist only inside a world: `World_AddComponent` allocates the type's `Size`, constructs it,
+sets the base, appends it to the world's array of that type, puts it in the object's slot, then calls `OnAttach`.
+`World_RemoveComponent`, removing the object, or destroying the world calls `OnDetach`, then removes and destroys it.
+
+**Changes.** Every property change advances the component's revision (`WorldComponent_GetRevision`), from the typed
+setters and from every table write alike: they all end in `WorldInternal_ComponentAfterSet`, which advances the
+revision and then calls the type's `OnPropertySet` with the world. That is how a component keeps runtime state in step
+with its properties, whichever way they were written.
+
+**Downcasts.** `WorldModelComponent_FromComponent(component)` (and the sprite's and light's) returns the concrete
+struct, or NULL for NULL or another type; `..._AsComponent` upcasts.
+
+### Model component (`model_component`)
+`_model` (an asset name, NULL draws nothing), `_hasOutline` (true), `_omitPixelation` (false: drawn crisp at full
+resolution over the pixelated image when true), `_shadowTier` (`WorldShadowTier`: Both / Near / Far, the shadow
+cascade(s) it casts into) and `_castsShadows` (true; false skips it in every shadow pass, it still receives shadows).
+The component holds no asset: the renderer resolves the model by name and resolves it again when the name changes
+(it watches the revision, then compares the name).
+
+### Sprite component (`sprite_component`)
+`_spriteAnimation` (an asset name, NULL plays nothing), `_hasOutline` (true), `_omitPixelation` (false), and the
+runtime `_animationInstance` (`SpriteAnimationInstance` by value: the playback state game logic advances and the
+renderer reads; `WorldSpriteComponent_GetAnimationInstance`).
+
+**Binding.** The playing animation always matches the name. `OnAttach` binds it, and `OnPropertySet` binds it again
+whenever the name differs from the one it was bound for (`_boundAnimation`, an owned copy): after
+`WorldSpriteComponent_SetSpriteAnimation`, `Properties_Set`, a JSON or GHDF read, or `Properties_CopyTo`. Binding loads
+the animation under the world's asset user and restarts the instance from the animation's defaults (dropping its event
+subscriptions: subscribe after setting the name). Setting the name it already has changes nothing (playback goes on).
+A world without an asset manager, a NULL name or a failed load leaves the instance empty (it draws nothing); a failure
+is logged once, when it happens (`World: the sprite of object N ("name") has no animation: ...`). The animations stay
+held until the world is destroyed, after every component (asset holds are not counted, so releasing one on a rename
+could unload it under another sprite; a `// TODO:` in `source/WorldSpriteComponent.c` marks the release pass that
+long-lived edited worlds may need).
+
+### Light component (`light_component`)
+`_color` (white), `_intensity` (>= 0, default 1), `_range` (>= 0, default 1: how far the light reaches; T05 renamed it
+from `Size`), `_castsShadows` (false). It uses its object's position; rotation, scale and tint do not affect it. A
+hidden or disabled object's light is off.
 
 ## World
 
-Holds a `GenericBuffer` of `WorldObject*`, a `uint64` id counter (`_nextId`, starts at 1; 0 never valid),
-an owned name, an embedded `WorldEnvironment`, and (optionally) a borrowed asset manager with its own asset user.
+Holds the objects in creation order (`_objects`) with an id -> object map (`_objectsById`, a `WRHashMap`), the
+registry entries of its component types, one dense array of components per type (`_components[type]`, in add order),
+the id counter (`_nextId`, starts at 1; 0 once every id was handed out), two versions, an owned name, an embedded
+`WorldEnvironment`, and (optionally) a borrowed asset manager with its own asset user.
 
-- **Construction:** `World_Construct1(world)` makes a world without assets (tools, tests, a headless server):
-  its sprites stay empty and draw nothing. `World_Construct2(world, assets, logger)` makes a world that loads
-  its sprites' animations: it mints an asset user, which `World_Deconstruct` retires after destroying every
-  object (objects first, so no playback instance points into a released animation).
-- **Objects:** `World_AddObject` assigns the next id and takes ownership; `World_AddObjectWithId` is for the
-  loader (explicit id, advances the counter past it). Both bind a sprite's animation by its asset name under the
-  world's user (replacing anything set before, and dropping event subscriptions made on the instance before the
-  add, so subscribe afterwards); a missing or broken animation is logged once and leaves the sprite empty without
-  failing the add (AGENTS.md rule 7). `World_SetSpriteAnimationAssetName(world, id, name)`
-  renames a sprite in the world and rebinds it (playback restarts from the animation's defaults). Animations
-  stay held until the world is destroyed (marked `// TODO:` in `World.c`: a release pass for long-lived edited
-  worlds).
-- **Change tracking:** `World_GetObjectSetVersion` changes on every addition and removal (not on property
-  changes); the renderer's cache uses it to know when to re-match its entries.
-- Lookup by id is a linear scan (fine for expected counts; can be indexed later without API change).
-  `World_Deconstruct` destroys every contained object.
+- **Construction:** `World_Construct1(world)` makes a world without assets (tools, tests, a headless server): its
+  sprites stay empty. `World_Construct2(world, assets, logger)` makes a world whose components load their assets (the
+  sprites' animations) under its own asset user, which `World_Deconstruct` retires after destroying every object and
+  component.
+- **Objects:** `World_CreateObject(world, name, &object)` (the next id) and `World_CreateObjectWithId(world, name, id,
+  &object)` (the loader's version: refuses 0 and used ids, and advances the counter past the id); `World_RemoveObject
+  (world, id)` (its components first, then the object; ordered removal, so the other objects keep their order);
+  `World_TryGetObject(world, id, &object)` (a hash lookup); `World_GetObjectCount` / `World_GetObjectByIndex` for
+  iteration in creation order. `World_EnsureNextObjectIdAtLeast` and `World_GetNextObjectId` are for world files.
+- **Components:** `World_AddComponent(world, id, type, &component)`, `World_RemoveComponent(world, id, type)`,
+  `World_TryGetComponent(world, id, type, &component)`, and **`World_GetComponents(world, type, &count)`**: the world's
+  own dense array of every component of a type, in add order (removal keeps the order), valid until a component of that
+  type is added or removed. Systems iterate these instead of walking objects (the renderer's cache does); they still
+  check each owner's flags.
+- **Component types:** `World_GetComponentTypeCount`, `World_GetComponentTypeInfo(world, type)` and
+  `World_TryFindComponentType(world, name, &type)` (world files and the editor name types).
+- **Change tracking:** `World_GetObjectSetVersion` changes on every object creation and removal,
+  `World_GetComponentSetVersion` on every component addition and removal (also with its object); property changes
+  advance the object's and the component's own revisions instead.
+- **The test seam:** `WorldInternal_ConstructWithTypes` (private header) builds a world whose component types are a
+  given list: the standard ones first, as their own entries, then test-only types. `tests/WorldTests.c` adds two
+  transform drivers that way to test the one-driver rule before the game has a real driver.
+
+## Ready for things that move
+
+The game will have objects that move and react to each other: the player and NPCs (a `character` component, T13),
+cars (a `vehicle` component, later), physics objects (a `rigid_body` component, later, decision G13). None is built
+yet, but the model is ready for them:
+
+- **One driver per object.** A component type flagged `IsTransformDriver` writes its object's transform every tick.
+  `World_AddComponent` refuses a second driver on the same object (`ErrorCode_InvalidOperation`), so two systems never
+  fight over one transform. Adding a driver makes the object movable. A driven object is normally a root object; with
+  a parent (T08) the driver writes the local transform through the parent's inverse.
+- **Mobility is a hint for performance, never a lock.** Collision (T12) keeps static colliders in a structure built
+  once and movable ones in one updated every tick; the renderer can later cache static shadows. Moving a static object
+  still works (the editor does it constantly): it costs a rebuild of whatever cached it, and in play the system that
+  rebuilds logs one warning per object. A driven object may even be set back to static; it still moves, at that cost.
+  T05 has no such cache yet, so nothing warns yet: T12's static grid is the first (it sees the move through the
+  object's revision).
+- **The player is an ordinary object** with a character component. NPCs, triggers, vehicles and physics then all
+  treat it like any other object; no frame special-cases it.
+- **The tick order.** Each game tick runs the systems that change a world in this order, so each later system knows
+  its slot:
+  1. input (`GameInput`, polled by the frame manager);
+  2. scripts (later);
+  3. transform drivers: characters, vehicles, physics (later);
+  4. collision sync (T12);
+  5. queued events: trigger enter and exit, later contacts (T12; the queued-event rule, architecture A4);
+  6. animation (today: sprite playback, `AdvanceSpriteAnimations` in the test frame, enabled objects only);
+  7. the renderer, which only reads (AGENTS.md rule 3).
+
+## Property tables
+
+Every object and component property is one row of its type's table ([PropertyDescriptors.md](PropertyDescriptors.md));
+a test checks every table. Wire ids are the save schema: never renumber or reuse one.
+
+| Table | Key | Wire | Type | Default |
+|---|---|---|---|---|
+| `world_object` | `name` | 3 | String (256, null allowed) | null |
+| | `position` | 4 | Vector3 | (0, 0, 0) |
+| | `rotation` | 5 | AngleVector3 (degrees in JSON) | (0, 0, 0) |
+| | `scale` | 6 | Vector3 | (1, 1, 1) |
+| | `tint` | 7 | RenderColor | white |
+| | `is_enabled` | 8 | Bool | true |
+| | `is_visible` | 9 | Bool | true |
+| | `mobility` | 10 | Enum `static` / `movable` | `static` |
+| `model_component` | `model` | 1 | AssetName (128, null allowed) | null |
+| | `has_outline` | 2 | Bool | true |
+| | `omit_pixelation` | 3 | Bool | false |
+| | `shadow_tier` | 4 | Enum `both` / `near` / `far` | `both` |
+| | `casts_shadows` | 5 | Bool | true |
+| `sprite_component` | `sprite_animation` | 1 | AssetName (128, null allowed) | null |
+| | `has_outline` | 2 | Bool | true |
+| | `omit_pixelation` | 3 | Bool | false |
+| `light_component` | `color` | 1 | Color | white |
+| | `intensity` | 2 | Float >= 0 | 1 |
+| | `range` | 3 | Float >= 0 | 1 |
+| | `casts_shadows` | 4 | Bool | false |
+
+The object table's wire ids start at 3: 1 and 2 are left for the world file's own entries per object (T09: the id and
+the components). T24 adds `tags` and `data` to the object table, T08 `parent`.
 
 ## Environment
 
@@ -99,8 +232,8 @@ written yet (world files come with T09), so no migration is needed.
 **The environment owns its texture names** (`MilkyWayTexture`, `MoonTexture`; T03): `WorldEnvironment_SetDefaults`
 constructs and allocates them (call it on a new environment only; to reset one, `Deconstruct` first) and pairs with
 `WorldEnvironment_Deconstruct`; copies go through `CopyTo` (never assignment: a copied pointer would be freed twice);
-a name is changed through the table (`Properties_Set`), which clones the new one and frees the old. `World` and
-`WorldDTO` pair them.
+a name is changed through the table (`Properties_Set`), which clones the new one and frees the old. `World` pairs
+them.
 
 The night sky settings: `StarSeed` (which stars), `StarDensity` (1 = an Earth-like sky of about 9000 stars, the
 default; 0 none; at most 20000 stars), `StarBrightness`, `StarTwinkle` (0..1, default 0.25), `MilkyWayBrightness`
@@ -156,38 +289,27 @@ Validate anything that came from outside the program before using it.
 
 ## Persistence
 
-`WorldDTO` is the plain, owns-its-strings mirror of only the persistent data: world name, `NextObjectId`,
-`WorldEnvironment`, and a `GenericBuffer` of `WorldObjectDTO` (a tagged struct with a per-type union).
-`WorldDTO_FromWorld` snapshots a live world (clones strings, downcasts each object by `Type`, copies the
-environment with `CopyTo`). `WorldDTO_ApplyToWorld` first validates the environment (a bad one rejects the whole
-snapshot and leaves the world untouched), then rebuilds live objects into an (expected-empty) world, re-adding
-them with their saved ids and validating transforms as it goes; sprites are bound by the world as they are added.
-
-`WorldEncoder_EncodeToCompound` turns a `WorldDTO` into a `GHDFCompound` tree (root + environment
-sub-compound + array of object compounds), borrowing all compounds/arrays/strings from a caller-owned
-`GHDFObjectPool`. It does **not** write bytes. The stable numeric entry ids ARE the save schema: the root and object
-ids are `WorldEncoder*Field` enums in `WorldEncoder.h` (`WORLD_ENCODER_FORMAT_VERSION` = 1); the environment compound
-is written by `Properties_WriteGHDF` from the environment's table, every setting including defaults, under the table's
-wire ids (1 and 4-45: the entries the hand-written encoder wrote, without the retired 2 and 3, plus T23's date as an
-encoded day number, T03's moon, seasons and texture-name settings, ids 31-43, and the night vision's, 44-45; a test
-compares the old entries'
-trees, another round-trips them all). Colors are stored as `uint8[4]` RGBA arrays, vectors as `float[3]`
-arrays.
-
-Ownership note for the encoder: `GHDFCompound_SetValue` / `GHDFArray_AddValue` ADOPT the borrowed
-sub-resource, so on success it is never returned separately; on any failure the whole root is returned to
-the pool (which recursively frees everything already adopted).
-
-**There is no world decoder yet** (no GHDF → DTO, no stream read/write): marked `// TODO:` in `WorldEncoder.c`. The
-environment compound already reads back with `Properties_ReadGHDF(WorldEnvironment_GetPropertyTable(), ...)`; the
-objects move onto property tables in T05, and the world files (JSON and GHDF load and save) come with T09.
+**Nothing saves worlds at runtime yet.** T05 removed the old snapshot (`WorldDTO`) and its GHDF encoder
+(`WorldEncoder`) together with their tests: they were written for the three object subclasses, only tests used them,
+and the property tables now describe every object and component. T09 (world files) rebuilds JSON and GHDF loading and
+saving on the tables, with the root ids the old encoder used (format version 1, name 2, next id 3, environment 4,
+objects 5). The environment's table already reads and writes itself (`WorldEnvironment_ReadJSON` / `_WriteJSON`,
+`Properties_ReadGHDF` / `_WriteGHDF`), and `tests/PropertyDescriptorTests.c` still compares its GHDF tree with a
+literal copy of what the old encoder wrote.
 
 ## Tests
 
-`tests/WorldTests.c` (object set, sprite binding and release, renames, guards), `tests/WorldEnvironmentTests.c`
-(validation including the moon settings and texture names, copying, the date and time the clock writes, the retired
-ids, the celestial frame, the moon's phase against real dates, its motion and lit fraction, the moonlight, the stars'
-drift and its direction, the shadow light's hand-over, the seasons' day lengths), `tests/WorldDTOTests.c` (World → DTO → World round trip of every persisted
-field, bad-environment rejection) and `tests/PropertyDescriptorTests.c` (the environment's table passes its check, its
-GHDF tree matches the old encoder's, its JSON round trip). They run headless with `sh tests/run_linux.sh`; `tests/TestAssets.h`
-provides code-built sprite animation and model definitions that load without files or a GL context.
+`tests/WorldTests.c`: objects (ids unique and never 0, loader ids advance the counter, an exhausted counter, the
+object-set version, validated setters and table writes advancing the revision, rotation in degrees in JSON),
+components (add, find, remove; one per type; removing an object removes its components; the per-type arrays stay in
+order across interleaved adds and removes; types by name; revisions), the sprite binding (no assets, a shared
+animation released with the world last, a missing animation logged once, renaming, the same name keeps playing, table
+writes rebind), flags, and mobility and drivers (through two test-only driver types: adding one makes the object
+movable, a second is refused; the test seam refuses impostors). `tests/WorldEnvironmentTests.c` (validation including
+the moon settings and texture names, copying, the date and time the clock writes, the retired ids, the celestial frame,
+the moon's phase against real dates, its motion and lit fraction, the moonlight, the stars' drift and its direction, the
+shadow light's hand-over, the seasons' day lengths). `tests/PropertyDescriptorTests.c` (every table passes its check,
+the environment's GHDF tree matches the old encoder's, its JSON round trip). `tests/WorldRenderCacheTests.c` covers the
+renderer's side ([WorldRuntime.md](WorldRuntime.md)). They run headless with `sh tests/run_linux.sh`;
+`tests/TestAssets.h` provides code-built sprite animation and model definitions that load without files or a GL
+context.

@@ -100,7 +100,7 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, const Shader* passSha
     for (size_t Index = 0; Index < ModelCount; Index++)
     {
         const WorldRenderModel* Entry = &Models[Index];
-        if ((Entry->Asset != NULL) && WorldRendererGeometry_PassesFilter(Entry->Object->OmitPixelation, filter))
+        if (Entry->IsDrawn && WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter))
         {
             WorldRendererGeometry_DrawModel(self, Entry, passShader, isLit);
         }
@@ -122,7 +122,7 @@ void WorldRendererGeometry_DrawSprites(WorldRenderer* self, const WorldRenderFra
     for (size_t Index = 0; Index < SpriteCount; Index++)
     {
         const WorldRenderSprite* Entry = &Sprites[Index];
-        if (WorldRendererGeometry_PassesFilter(Entry->Object->OmitPixelation, filter))
+        if (WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter))
         {
             DrawBillboardRec(frame->RayCamera, Entry->Frame._texture, Entry->Frame._areaInTexture, Entry->Position,
                 Entry->Size, Entry->Tint);

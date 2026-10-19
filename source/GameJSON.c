@@ -254,8 +254,9 @@ static Error IsRenderColorCompound(JSONCompound* compound, bool* outResult)
     return Error_CreateSuccess();
 }
 
-/* Reads one vector component: element @p index of an array, or the key @p name of a compound. */
-static Error ReadVectorComponent(const JSONObjectValue* value, size_t index, const unsigned char* name, float* outComponent)
+/* Reads one vector component as a finite double: element @p index of an array, or the key @p name of a compound. */
+static Error ReadVectorComponent(const JSONObjectValue* value, size_t index, const unsigned char* name,
+    double* outComponent)
 {
     JSONObjectValue Component;
     if (value->Type == JSONValueType_Array)
@@ -276,18 +277,7 @@ static Error ReadVectorComponent(const JSONObjectValue* value, size_t index, con
         }
     }
 
-    double Decimal = 0.0;
-    Error ConvertResult = GameJSON_ValueToDouble(&Component, &Decimal);
-    if (ConvertResult.Code != ErrorCode_Success)
-    {
-        return ConvertResult;
-    }
-    if (!IsFiniteFloatRange(Decimal))
-    {
-        return Error_Construct2(ErrorCode_InvalidJSON, "Vector components must be finite decimals.");
-    }
-    *outComponent = (float)Decimal;
-    return Error_CreateSuccess();
+    return GameJSON_ValueToDouble(&Component, outComponent);
 }
 
 // Borrows a pool string holding the given bytes (without a terminator, like every WRJSON string).
@@ -726,7 +716,7 @@ Error GameJSON_ParseVector2(const JSONObjectValue* value, Vector2* outVector)
     return Error_Construct2(ErrorCode_InvalidJSON, "Expected a vector.");
 }
 
-Error GameJSON_ParseVector3(const JSONObjectValue* value, Vector3* outVector)
+Error GameJSON_ParseVector3Doubles(const JSONObjectValue* value, double* outComponents)
 {
     if ((value->Type == JSONValueType_Array) && (JSONArray_GetElementCount(value->Value.Array) != 3U))
     {
@@ -739,7 +729,7 @@ Error GameJSON_ParseVector3(const JSONObjectValue* value, Vector3* outVector)
 
     const unsigned char* Names[3] = { (const unsigned char*)u8"x", (const unsigned char*)u8"y",
         (const unsigned char*)u8"z" };
-    float Components[3] = { 0.0f, 0.0f, 0.0f };
+    double Components[3] = { 0.0, 0.0, 0.0 };
     for (size_t Index = 0; Index < 3U; Index++)
     {
         Error Result = ReadVectorComponent(value, Index, Names[Index], &Components[Index]);
@@ -748,7 +738,23 @@ Error GameJSON_ParseVector3(const JSONObjectValue* value, Vector3* outVector)
             return Result;
         }
     }
-    *outVector = (Vector3){ .x = Components[0], .y = Components[1], .z = Components[2] };
+    Memory_Copy(Components, outComponents, sizeof(Components));
+    return Error_CreateSuccess();
+}
+
+Error GameJSON_ParseVector3(const JSONObjectValue* value, Vector3* outVector)
+{
+    double Components[3] = { 0.0, 0.0, 0.0 };
+    Error Result = GameJSON_ParseVector3Doubles(value, Components);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (!IsFiniteFloatRange(Components[0]) || !IsFiniteFloatRange(Components[1]) || !IsFiniteFloatRange(Components[2]))
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, "Vector components must be finite decimals.");
+    }
+    *outVector = (Vector3){ .x = (float)Components[0], .y = (float)Components[1], .z = (float)Components[2] };
     return Error_CreateSuccess();
 }
 

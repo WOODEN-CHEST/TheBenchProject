@@ -73,11 +73,11 @@ static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter
     for (size_t Index = 0; Index < ModelCount; Index++)
     {
         const WorldRenderModel* Entry = &Models[Index];
-        if ((Entry->Asset == NULL) || !WorldRendererGeometry_PassesFilter(Entry->Object->OmitPixelation, filter))
+        if (!Entry->IsDrawn || !WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter))
         {
             continue;
         }
-        float OutlineFlag = Entry->Object->HasOutline ? 1.0f : 0.0f;
+        float OutlineFlag = Entry->HasOutline ? 1.0f : 0.0f;
         SetShaderValue(NormalShader, self->_gbuffer._locOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
         WorldRendererGeometry_DrawModel(self, Entry, &NormalShader, false);
     }
@@ -101,14 +101,14 @@ static void DrawNormalBufferSprites(WorldRenderer* self, const WorldRenderFrame*
     for (size_t Index = 0; Index < SpriteCount; Index++)
     {
         const WorldRenderSprite* Entry = &Sprites[Index];
-        if (!WorldRendererGeometry_PassesFilter(Entry->Object->OmitPixelation, filter))
+        if (!WorldRendererGeometry_PassesFilter(Entry->OmitsPixelation, filter))
         {
             continue;
         }
         // Billboards go through raylib's 2D batch, which draws at its next flush with the uniforms current then.
         // Flush the previous sprite's quad before changing the flag, or every sprite gets the last sprite's flag.
         rlDrawRenderBatchActive();
-        float OutlineFlag = Entry->Object->HasOutline ? 1.0f : 0.0f;
+        float OutlineFlag = Entry->HasOutline ? 1.0f : 0.0f;
         SetShaderValue(SpriteShader, self->_gbuffer._spriteLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
         // Tint WHITE: the normal buffer only cares about the frame's ALPHA (for the discard), not its colour.
         DrawBillboardRec(frame->RayCamera, Entry->Frame._texture, Entry->Frame._areaInTexture, Entry->Position,

@@ -65,6 +65,31 @@ static JSONObjectValue CreateAngleValue(float radians)
     return JSONObjectValue_CreateRealNumber(Degrees);
 }
 
+/* Three angles as an array of their shortest degrees, or the array returned to the pool on failure. */
+static Error CreateAngleVector3Value(JSONObjectPool* pool, Vector3 radians, JSONObjectValue* outValue)
+{
+    JSONArray* Array = NULL;
+    Error Result = JSONObjectPool_BorrowArray(pool, &Array);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    const float Components[3] = { radians.x, radians.y, radians.z };
+    for (size_t Index = 0; (Index < 3U) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        JSONObjectValue Element = CreateAngleValue(Components[Index]);
+        Result = JSONArray_Add(Array, &Element);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = JSONObjectPool_ReturnArray(pool, Array, true);
+        Error_Deconstruct(&ReturnResult);
+        return Result;
+    }
+    *outValue = JSONObjectValue_CreateArray(Array);
+    return Error_CreateSuccess();
+}
+
 /* The date text "yyyy-mm-dd" as a JSON string, formatted on the stack. */
 static Error CreateDateValue(JSONObjectPool* pool, int64_t dayNumber, JSONObjectValue* outValue)
 {
@@ -111,6 +136,8 @@ static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descrip
             return GameJSON_CreateVector2Value(pool, data->Vector2Value, outValue);
         case PropertyType_Vector3:
             return GameJSON_CreateVector3Value(pool, data->Vector3Value, outValue);
+        case PropertyType_AngleVector3:
+            return CreateAngleVector3Value(pool, data->Vector3Value, outValue);
         case PropertyType_Color:
             return GameJSON_CreateColorValue(pool, data->ColorValue, outValue);
         case PropertyType_RenderColor:
@@ -172,6 +199,29 @@ static Error ReadFloat(const JSONObjectValue* value, bool isAngle, float* outVal
         return Error_Construct2(ErrorCode_InvalidJSON, "The number does not fit a float.");
     }
     *outValue = (float)Decimal;
+    return Error_CreateSuccess();
+}
+
+/* Three angles given in degrees (each read as a double, so it converts to the same radians it was written from). */
+static Error ReadAngleVector3(const JSONObjectValue* value, Vector3* outValue)
+{
+    double Degrees[3] = { 0.0, 0.0, 0.0 };
+    Error Result = GameJSON_ParseVector3Doubles(value, Degrees);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    float Radians[3] = { 0.0f, 0.0f, 0.0f };
+    for (size_t Index = 0; Index < 3U; Index++)
+    {
+        double Converted = DegreesToRadians(Degrees[Index]);
+        if (!IsFiniteFloatRange(Converted))
+        {
+            return Error_Construct2(ErrorCode_InvalidJSON, "The angle does not fit a float.");
+        }
+        Radians[Index] = (float)Converted;
+    }
+    *outValue = (Vector3){ .x = Radians[0], .y = Radians[1], .z = Radians[2] };
     return Error_CreateSuccess();
 }
 
@@ -260,6 +310,8 @@ static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectVa
             return ReadVector2(value, &outData->Vector2Value);
         case PropertyType_Vector3:
             return GameJSON_ParseVector3(value, &outData->Vector3Value);
+        case PropertyType_AngleVector3:
+            return ReadAngleVector3(value, &outData->Vector3Value);
         case PropertyType_Color:
             return GameJSON_ParseColor(value, &outData->ColorValue);
         case PropertyType_RenderColor:

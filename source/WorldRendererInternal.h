@@ -10,7 +10,7 @@
 #include "GameCamera.h"
 #include "World.h"
 #include "WorldEnvironment.h"
-#include "WorldModelObject.h"
+#include "WorldModelComponent.h"
 #include "NightVision.h"
 #include "raylib/raylib.h"
 // rlgl supplies RL_MAX_SHADER_LOCATIONS and the scene near/far cull distances.

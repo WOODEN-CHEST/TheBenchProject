@@ -12,10 +12,10 @@
  * @brief Renders a World through a GameCamera, owning the render-target pipeline. Separate from world data.
  *
  * The world model carries no rendering logic; the WorldRenderer turns a World + a GameCamera into pixels and
- * never writes to the world or to shared assets. World objects reference models by name; the renderer
- * resolves each object's model once (again only when its name changes) and holds the models under its own
- * asset user. Sprite animations belong to the world (World_Construct2), so the renderer only reads each
- * sprite's current frame.
+ * never writes to the world or to shared assets. It draws the world's model, sprite and light components, skipping
+ * objects that are disabled or hidden. Model components reference models by name; the renderer resolves each
+ * component's model once (again only when its name changes) and holds the models under its own asset user. Sprite
+ * animations belong to the world (World_Construct2), so the renderer only reads each sprite's current frame.
  *
  * PIPELINE. The world is drawn into an internal floating-point (HDR) "scene" target, then tonemapped into the
  * caller's frame target. With pixelation enabled (default) the scene target is sized to the low pixel
@@ -135,13 +135,13 @@ typedef struct WorldRendererStatusStruct
     bool IsSceneDepthSamplable;
     /** @brief The state of each feature, indexed by WorldRendererFeature. */
     WorldRendererFeatureState Features[WorldRendererFeature_Count];
-    /** @brief Model objects with a usable model. */
+    /** @brief Model components with a usable model (drawn unless their object is disabled or hidden). */
     size_t ModelCount;
-    /** @brief Model objects that draw nothing: no model name, or a model that failed to load (logged once). */
+    /** @brief Model components that draw nothing: no model name, or a model that failed to load (logged once). */
     size_t ModelWithoutAssetCount;
-    /** @brief Sprite objects with a frame to draw. */
+    /** @brief Sprite components with a frame to draw, on enabled and visible objects. */
     size_t SpriteCount;
-    /** @brief Point lights in the world. */
+    /** @brief Point lights on enabled and visible objects. */
     size_t LightCount;
     /** @brief Stars in the star catalogue (from the environment's StarDensity), whether or not they show now. */
     size_t StarCount;
@@ -176,11 +176,11 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self);
  * @brief Loads the shaders, the sky textures the world's environment names and the models of the world's objects, so
  *        the first frames do not stall on them.
  *
- * Resolves every model object's model under a fresh asset user and then retires the previous one, so models
+ * Resolves every model component's model under a fresh asset user and then retires the previous one, so models
  * that no world object uses any more are released (asset holds are not counted, so this swap is how unused
- * models get released). Failures are logged once and skipped, not fatal. Objects added later are resolved by
- * WorldRenderer_RenderToTarget automatically, but a model that failed is not retried until its object is
- * renamed: call this again after asset definitions change (new search roots, AssetManager_ReadDefinitions,
+ * models get released). Failures are logged once and skipped, not fatal. Components added later are resolved by
+ * WorldRenderer_RenderToTarget automatically, but a model that failed is not retried until its component names
+ * another: call this again after asset definitions change (new search roots, AssetManager_ReadDefinitions,
  * AssetManager_ClearLoadFailures), after a large change to release unused models, and whenever a different world
  * is rebuilt at the address of the previous one.
  * @param self The renderer; must not be NULL.

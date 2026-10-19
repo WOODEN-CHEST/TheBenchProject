@@ -159,6 +159,7 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
             return PutFloats(pool, compound, Id, Components, 2U);
         }
         case PropertyType_Vector3:
+        case PropertyType_AngleVector3:
         {
             const float Components[3] = { data->Vector3Value.x, data->Vector3Value.y, data->Vector3Value.z };
             return PutFloats(pool, compound, Id, Components, 3U);
@@ -357,6 +358,7 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
             return Result;
         }
         case PropertyType_Vector3:
+        case PropertyType_AngleVector3:
         {
             float Components[3] = { 0.0f, 0.0f, 0.0f };
             Result = GetFloats(compound, Id, Components, 3U, outFound);

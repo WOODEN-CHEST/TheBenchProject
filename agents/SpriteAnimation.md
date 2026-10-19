@@ -10,8 +10,8 @@ animations").
 - **`SpriteAnimation`**: the shared, immutable data. An ordered list of frames plus default playback parameters.
   A loaded animation is an asset (`AssetManager_LoadSpriteAnimation`), shared by every holder.
 - **`SpriteAnimationInstance`**: one consumer's playback state. Current frame, timing, fps, frame step,
-  running/looping flags, and an event raised when playback ends or loops. Each sprite object or text sprite has
-  its own instance, advanced with `SpriteAnimationInstance_Update`.
+  running/looping flags, and an event raised when playback ends or loops. Each world sprite component or text
+  sprite has its own instance, advanced with `SpriteAnimationInstance_Update`.
 
 ## Types
 
@@ -58,8 +58,8 @@ Every field is read-only to other modules: use the inline getters (`SpriteAnimat
   and applies the animation's defaults (`SpriteAnimationInstance_ResetProperties`).
 - Never call either constructor on a live instance: both re-zero it and discard its event and subscribers without
   deconstructing them. Release every instance with `SpriteAnimationInstance_Deconstruct`.
-- Rebinding by deconstruct + create (what `WorldSpriteObject_SetAnimation` does) resets playback and drops the
-  event's subscribers. To switch animations and keep the subscribers, copy from a fresh instance:
+- Rebinding by deconstruct + create (what a world sprite component does when its animation name changes) resets
+  playback and drops the event's subscribers. To switch animations and keep the subscribers, copy from a fresh instance:
 
 ```c
 SpriteAnimationInstance Fresh;
@@ -136,7 +136,8 @@ source rectangle, so divide `_areaInTexture` by the texture's width and height (
 
 ## Current users
 
-- `WorldSpriteObject` embeds an instance (`WorldSpriteObject_GetAnimationInstance`). `WorldTestFrame` advances every
-  sprite each update tick (`AdvanceSpriteAnimations`); the WorldRenderer binds the animations (the known violation
-  above) and draws each sprite's current frame.
+- `WorldSpriteComponent` embeds an instance (`WorldSpriteComponent_GetAnimationInstance`); the world binds it to
+  the named animation under its own asset user (`agents/WorldData.md`). `WorldTestFrame` advances the sprites of
+  enabled objects each update tick (`AdvanceSpriteAnimations`); the WorldRenderer only draws each sprite's current
+  frame.
 - Text `SpriteComponent`s get their instances from `TextComponentResolver`'s `ObjectPool`.

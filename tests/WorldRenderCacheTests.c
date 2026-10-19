@@ -2,9 +2,10 @@
 #include "TestAssets.h"
 #include "WorldRenderCache.h"
 #include "World.h"
-#include "WorldModelObject.h"
-#include "WorldSpriteObject.h"
-#include "WorldLight.h"
+#include "WorldObject.h"
+#include "WorldModelComponent.h"
+#include "WorldSpriteComponent.h"
+#include "WorldLightComponent.h"
 #include <math.h>
 
 
@@ -56,23 +57,37 @@ static bool CacheFixture_Sync(TestRun* run, CacheFixture* self)
         self->ModelUser, NULL));
 }
 
-/* Adds a model object at @p position with @p scale; returns it (world-owned) or NULL with a failed check. */
-static WorldModelObject* AddModel(TestRun* run, World* world, const char* assetName, Vector3 position, Vector3 scale)
+/* Creates an object at @p position with @p scale and a model component naming @p assetName; returns the component
+ * (world-owned), or NULL with a failed check. */
+static WorldModelComponent* AddModel(TestRun* run, World* world, const char* assetName, Vector3 position, Vector3 scale)
 {
-    WorldModelObject* ModelObject = NULL;
-    if (!TEST_CHECK_SUCCESS(run, WorldModelObject_Create(NULL, (const unsigned char*)assetName, &ModelObject)))
+    WorldObject* Object = NULL;
+    WorldComponent* Component = NULL;
+    if (!TEST_CHECK_SUCCESS(run, World_CreateObject(world, NULL, &Object))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, position))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Object, scale))
+        || !TEST_CHECK_SUCCESS(run, World_AddComponent(world, WorldObject_GetId(Object), WorldComponentType_Model,
+            &Component)))
     {
         return NULL;
     }
-    WorldObject* Base = WorldModelObject_AsObject(ModelObject);
-    if (!TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Base, position))
-        || !TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Base, scale))
-        || !TEST_CHECK_SUCCESS(run, World_AddObject(world, Base)))
+    WorldModelComponent* ModelComponent = WorldModelComponent_FromComponent(Component);
+    if (!TEST_CHECK_SUCCESS(run, WorldModelComponent_SetModel(ModelComponent, (const unsigned char*)assetName)))
     {
-        WorldObject_Destroy(Base);
         return NULL;
     }
-    return ModelObject;
+    return ModelComponent;
+}
+
+/* The object that carries @p component. */
+static WorldObject* OwnerOf(const WorldModelComponent* component)
+{
+    return WorldComponent_GetOwner(&component->Base);
+}
+
+static uint64_t IdOf(const WorldModelComponent* component)
+{
+    return WorldObject_GetId(OwnerOf(component));
 }
 
 static bool IsNear(float a, float b)
@@ -94,7 +109,9 @@ static void ResolvesModelsAndComputesWorldBounds(TestRun* run)
             // Unit cube: local radius = |(0.5, 0.5, 0.5)|; the largest axis scale (4) scales it conservatively.
             TEST_CHECK(run, IsNear(Models[0].Center.x, 10.0f) && IsNear(Models[0].Center.y, 0.0f));
             TEST_CHECK(run, IsNear(Models[0].Radius, 4.0f * sqrtf(0.75f)));
-            TEST_CHECK(run, Models[0].IsResolved);
+            TEST_CHECK(run, Models[0].IsResolved && Models[0].IsDrawn);
+            TEST_CHECK(run, Models[0].HasOutline && !Models[0].OmitsPixelation && Models[0].CastsShadows
+                && (Models[0].ShadowTier == WorldShadowTier_Both));
         }
         TEST_CHECK(run, Fixture.BoxCounters.LoadCount == 1);
 
@@ -113,9 +130,9 @@ static void ResolvesModelsAndComputesWorldBounds(TestRun* run)
 static void FailedModelStaysUnresolvedUntilRenamed(TestRun* run)
 {
     CacheFixture Fixture;
-    WorldModelObject* ModelObject = NULL;
+    WorldModelComponent* ModelComponent = NULL;
     if (CacheFixture_Construct(run, &Fixture)
-        && ((ModelObject = AddModel(run, &Fixture.World, "missing", (Vector3){ 0.0f, 0.0f, 0.0f },
+        && ((ModelComponent = AddModel(run, &Fixture.World, "missing", (Vector3){ 0.0f, 0.0f, 0.0f },
             (Vector3){ 1.0f, 1.0f, 1.0f })) != NULL)
         && CacheFixture_Sync(run, &Fixture))
     {
@@ -123,37 +140,43 @@ static void FailedModelStaysUnresolvedUntilRenamed(TestRun* run)
         const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
         if (TEST_CHECK(run, Count == 1))
         {
-            TEST_CHECK(run, Models[0].IsResolved && (Models[0].Asset == NULL));
+            TEST_CHECK(run, Models[0].IsResolved && (Models[0].Asset == NULL) && !Models[0].IsDrawn);
         }
 
-        // Renaming advances the object's revision, so the next sync resolves the new model.
-        TEST_CHECK_SUCCESS(run, WorldModelObject_SetModelAssetName(ModelObject, (const unsigned char*)u8"box"));
+        // Another property changes the revision, but the name is the same: not retried.
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasOutline(ModelComponent, false));
         if (CacheFixture_Sync(run, &Fixture))
         {
             Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
-            TEST_CHECK(run, (Count == 1) && (Models[0].Asset != NULL));
-            uint32_t Revision = WorldModelObject_GetAssetRevision(ModelObject);
-            TEST_CHECK(run, (Count == 1) && (Models[0].AssetRevision == Revision));
+            TEST_CHECK(run, (Count == 1) && (Models[0].Asset == NULL) && !Models[0].HasOutline);
+        }
+
+        // Renaming changes the name, so the next sync resolves the new model.
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetModel(ModelComponent, (const unsigned char*)u8"box"));
+        if (CacheFixture_Sync(run, &Fixture))
+        {
+            Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+            TEST_CHECK(run, (Count == 1) && (Models[0].Asset != NULL) && Models[0].IsDrawn);
+            TEST_CHECK(run, (Count == 1) && (Models[0].Revision == WorldComponent_GetRevision(&ModelComponent->Base)));
         }
     }
     CacheFixture_Deconstruct(run, &Fixture);
 }
 
-static void EntriesFollowObjectsAcrossAddsAndRemovals(TestRun* run)
+static void EntriesFollowComponentsAcrossAddsAndRemovals(TestRun* run)
 {
     CacheFixture Fixture;
-    WorldModelObject* First = NULL;
-    WorldModelObject* Second = NULL;
+    WorldModelComponent* First = NULL;
+    WorldModelComponent* Second = NULL;
     Vector3 One = { 1.0f, 1.0f, 1.0f };
     if (CacheFixture_Construct(run, &Fixture)
         && ((First = AddModel(run, &Fixture.World, "box", (Vector3){ 0.0f, 0.0f, 0.0f }, One)) != NULL)
         && ((Second = AddModel(run, &Fixture.World, "missing", (Vector3){ 5.0f, 0.0f, 0.0f }, One)) != NULL)
         && CacheFixture_Sync(run, &Fixture))
     {
-        uint64_t SecondId = WorldObject_GetId(WorldModelObject_AsObject(Second));
-        WorldModelObject* Third = AddModel(run, &Fixture.World, "box", (Vector3){ 9.0f, 0.0f, 0.0f }, One);
-        uint64_t FirstId = WorldObject_GetId(WorldModelObject_AsObject(First));
-        TEST_CHECK_SUCCESS(run, World_RemoveObjectById(&Fixture.World, FirstId));
+        uint64_t SecondId = IdOf(Second);
+        WorldModelComponent* Third = AddModel(run, &Fixture.World, "box", (Vector3){ 9.0f, 0.0f, 0.0f }, One);
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&Fixture.World, IdOf(First)));
 
         if ((Third != NULL) && CacheFixture_Sync(run, &Fixture))
         {
@@ -161,13 +184,23 @@ static void EntriesFollowObjectsAcrossAddsAndRemovals(TestRun* run)
             const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
             if (TEST_CHECK(run, Count == 2))
             {
-                TEST_CHECK(run, (Models[0].ObjectId == SecondId) && (Models[0].Object == Second));
+                TEST_CHECK(run, (Models[0].ObjectId == SecondId) && (Models[0].Component == Second));
                 TEST_CHECK(run, Models[0].IsResolved && (Models[0].Asset == NULL));
-                TEST_CHECK(run, (Models[1].Object == Third) && (Models[1].Asset != NULL));
+                TEST_CHECK(run, (Models[1].Component == Third) && (Models[1].Asset != NULL));
                 TEST_CHECK(run, IsNear(Models[1].Center.x, 9.0f));
             }
         }
-        // The box asset is held once under the model user, however many objects use it.
+
+        // Removing only the component (the object stays) drops its entry too.
+        if ((Third != NULL)
+            && TEST_CHECK_SUCCESS(run, World_RemoveComponent(&Fixture.World, IdOf(Third), WorldComponentType_Model))
+            && CacheFixture_Sync(run, &Fixture))
+        {
+            size_t Count = 0;
+            const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+            TEST_CHECK(run, (Count == 1) && (Models[0].Component == Second));
+        }
+        // The box asset is held once under the model user, however many components use it.
         TEST_CHECK(run, Fixture.BoxCounters.LoadCount == 1);
     }
     CacheFixture_Deconstruct(run, &Fixture);
@@ -179,34 +212,32 @@ static void ReusedIdWithAnotherModelIsResolvedAgain(TestRun* run)
     TestAssetCounters CrateCounters = { 0 };
     BoundingBox BigCube = { .min = { -5.0f, -5.0f, -5.0f }, .max = { 5.0f, 5.0f, 5.0f } };
     Vector3 One = { 1.0f, 1.0f, 1.0f };
-    WorldModelObject* Box = NULL;
+    WorldModelComponent* Box = NULL;
     if (CacheFixture_Construct(run, &Fixture)
         && TestAssets_AddModel(run, &Fixture.Assets, "crate", BigCube, &CrateCounters)
         && ((Box = AddModel(run, &Fixture.World, "box", (Vector3){ 0.0f, 0.0f, 0.0f }, One)) != NULL)
         && CacheFixture_Sync(run, &Fixture))
     {
         // An editor undo or a re-applied save: the id comes back with another object, naming another model, at
-        // revision 0 like every new object. The old entry must not be reused.
-        uint64_t Id = WorldObject_GetId(WorldModelObject_AsObject(Box));
-        TEST_CHECK_SUCCESS(run, World_RemoveObjectById(&Fixture.World, Id));
-        WorldModelObject* Crate = NULL;
-        if (TEST_CHECK_SUCCESS(run, WorldModelObject_Create(NULL, (const unsigned char*)u8"crate", &Crate)))
+        // revision 0 like every new component. The old entry must not be reused.
+        uint64_t Id = IdOf(Box);
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&Fixture.World, Id));
+        WorldObject* Object = NULL;
+        WorldComponent* Component = NULL;
+        if (TEST_CHECK_SUCCESS(run, World_CreateObjectWithId(&Fixture.World, NULL, Id, &Object))
+            && TEST_CHECK_SUCCESS(run, World_AddComponent(&Fixture.World, Id, WorldComponentType_Model, &Component))
+            && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetModel(WorldModelComponent_FromComponent(Component),
+                (const unsigned char*)u8"crate"))
+            && CacheFixture_Sync(run, &Fixture))
         {
-            if (!TEST_CHECK_SUCCESS(run, World_AddObjectWithId(&Fixture.World, WorldModelObject_AsObject(Crate), Id)))
+            size_t Count = 0;
+            const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+            if (TEST_CHECK(run, Count == 1))
             {
-                WorldObject_Destroy(WorldModelObject_AsObject(Crate));
+                TEST_CHECK(run, Models[0].Component == WorldModelComponent_FromComponent(Component));
+                TEST_CHECK(run, IsNear(Models[0].Radius, sqrtf(75.0f)));
             }
-            else if (CacheFixture_Sync(run, &Fixture))
-            {
-                size_t Count = 0;
-                const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
-                if (TEST_CHECK(run, Count == 1))
-                {
-                    TEST_CHECK(run, Models[0].Object == Crate);
-                    TEST_CHECK(run, IsNear(Models[0].Radius, sqrtf(75.0f)));
-                }
-                TEST_CHECK(run, CrateCounters.LoadCount == 1);
-            }
+            TEST_CHECK(run, CrateCounters.LoadCount == 1);
         }
     }
     CacheFixture_Deconstruct(run, &Fixture);
@@ -225,7 +256,7 @@ static void AnotherWorldIsResolvedFromScratch(TestRun* run)
         return;
     }
 
-    // A second world whose first object has the same id (1) and revision (0), but another model.
+    // A second world whose first object has the same id (1) and revisions, but another model.
     World Other;
     if (TEST_CHECK_SUCCESS(run, World_Construct2(&Other, Fixture.Assets.Manager, NULL)))
     {
@@ -242,6 +273,19 @@ static void AnotherWorldIsResolvedFromScratch(TestRun* run)
     CacheFixture_Deconstruct(run, &Fixture);
 }
 
+/* Creates an object with a component of @p type; returns the component (world-owned), or NULL with a failed check. */
+static WorldComponent* AddComponentObject(TestRun* run, World* world, WorldComponentType type)
+{
+    WorldObject* Object = NULL;
+    WorldComponent* Component = NULL;
+    if (!TEST_CHECK_SUCCESS(run, World_CreateObject(world, NULL, &Object))
+        || !TEST_CHECK_SUCCESS(run, World_AddComponent(world, WorldObject_GetId(Object), type, &Component)))
+    {
+        return NULL;
+    }
+    return Component;
+}
+
 static void ListsDrawableSpritesAndEveryLight(TestRun* run)
 {
     CacheFixture Fixture;
@@ -251,34 +295,106 @@ static void ListsDrawableSpritesAndEveryLight(TestRun* run)
         return;
     }
 
-    WorldSpriteObject* Bound = NULL;
-    WorldSpriteObject* Empty = NULL;
-    WorldLight* Light = NULL;
-    bool IsBuilt = TEST_CHECK_SUCCESS(run, WorldSpriteObject_Create(NULL, (const unsigned char*)u8"walk", &Bound))
-        && TEST_CHECK_SUCCESS(run, World_AddObject(&Fixture.World, WorldSpriteObject_AsObject(Bound)))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteObject_Create(NULL, (const unsigned char*)u8"missing", &Empty))
-        && TEST_CHECK_SUCCESS(run, World_AddObject(&Fixture.World, WorldSpriteObject_AsObject(Empty)))
-        && TEST_CHECK_SUCCESS(run, WorldLight_Create(NULL, &Light))
-        && TEST_CHECK_SUCCESS(run, WorldLight_SetIntensity(Light, 0.0f)) // dark lights are still listed
-        && TEST_CHECK_SUCCESS(run, World_AddObject(&Fixture.World, WorldLight_AsObject(Light)));
+    WorldSpriteComponent* Bound = WorldSpriteComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+        WorldComponentType_Sprite));
+    WorldSpriteComponent* Empty = WorldSpriteComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+        WorldComponentType_Sprite));
+    WorldLightComponent* Light = WorldLightComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+        WorldComponentType_Light));
+    bool IsBuilt = (Bound != NULL) && (Empty != NULL) && (Light != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Bound, (const unsigned char*)u8"walk"))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Empty, (const unsigned char*)u8"missing"))
+        && TEST_CHECK_SUCCESS(run, WorldLightComponent_SetIntensity(Light, 0.0f)); // dark lights are still listed
     if (IsBuilt && CacheFixture_Sync(run, &Fixture))
     {
         size_t SpriteCount = 0;
         const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&Fixture.Cache, &SpriteCount);
         if (TEST_CHECK(run, SpriteCount == 1))
         {
-            TEST_CHECK(run, Sprites[0].Object == Bound);
+            TEST_CHECK(run, (Sprites[0].Component == Bound) && Sprites[0].HasOutline && !Sprites[0].OmitsPixelation);
         }
         size_t LightCount = 0;
         const WorldRenderLight* Lights = WorldRenderCache_GetLights(&Fixture.Cache, &LightCount);
-        TEST_CHECK(run, (LightCount == 1) && (Lights[0].Light == Light) && (Lights[0].Intensity == 0.0f));
+        TEST_CHECK(run, (LightCount == 1) && (Lights[0].Component == Light) && (Lights[0].Intensity == 0.0f));
         TEST_CHECK(run, !WorldRenderCache_HasCrispObjects(&Fixture.Cache));
 
-        Bound->OmitPixelation = true;
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOmitsPixelation(Bound, true));
         if (CacheFixture_Sync(run, &Fixture))
         {
             TEST_CHECK(run, WorldRenderCache_HasCrispObjects(&Fixture.Cache));
         }
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+static void DisabledAndHiddenObjectsAreNotDrawn(TestRun* run)
+{
+    CacheFixture Fixture;
+    Vector3 One = { 1.0f, 1.0f, 1.0f };
+    WorldModelComponent* ModelComponent = NULL;
+    if (!CacheFixture_Construct(run, &Fixture)
+        || ((ModelComponent = AddModel(run, &Fixture.World, "box", (Vector3){ 0.0f, 0.0f, 0.0f }, One)) == NULL))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+
+    WorldSpriteComponent* Sprite = WorldSpriteComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+        WorldComponentType_Sprite));
+    WorldLightComponent* Light = WorldLightComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+        WorldComponentType_Light));
+    if ((Sprite != NULL) && (Light != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"))
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOmitsPixelation(ModelComponent, true))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(OwnerOf(ModelComponent), false))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(WorldComponent_GetOwner(&Sprite->Base), false))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(WorldComponent_GetOwner(&Light->Base), false))
+        && CacheFixture_Sync(run, &Fixture))
+    {
+        // The hidden model keeps its entry and its resolved model, but is not drawn (nor crisp).
+        size_t Count = 0;
+        const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+        TEST_CHECK(run, (Count == 1) && (Models[0].Asset != NULL) && !Models[0].IsDrawn);
+        TEST_CHECK(run, !WorldRenderCache_HasCrispObjects(&Fixture.Cache));
+        WorldRenderCache_GetSprites(&Fixture.Cache, &Count);
+        TEST_CHECK(run, Count == 0);
+        WorldRenderCache_GetLights(&Fixture.Cache, &Count);
+        TEST_CHECK(run, Count == 0);
+
+        // Shown again: drawn without loading anything again.
+        TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(OwnerOf(ModelComponent), true));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(WorldComponent_GetOwner(&Sprite->Base), true));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(WorldComponent_GetOwner(&Light->Base), true));
+        if (CacheFixture_Sync(run, &Fixture))
+        {
+            Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+            TEST_CHECK(run, (Count == 1) && Models[0].IsDrawn);
+            TEST_CHECK(run, WorldRenderCache_HasCrispObjects(&Fixture.Cache));
+            WorldRenderCache_GetSprites(&Fixture.Cache, &Count);
+            TEST_CHECK(run, Count == 1);
+            WorldRenderCache_GetLights(&Fixture.Cache, &Count);
+            TEST_CHECK(run, Count == 1);
+        }
+        TEST_CHECK(run, Fixture.BoxCounters.LoadCount == 1);
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+static void EntriesCarryTheShadowSettings(TestRun* run)
+{
+    CacheFixture Fixture;
+    WorldModelComponent* ModelComponent = NULL;
+    if (CacheFixture_Construct(run, &Fixture)
+        && ((ModelComponent = AddModel(run, &Fixture.World, "box", (Vector3){ 0.0f, 0.0f, 0.0f },
+            (Vector3){ 1.0f, 1.0f, 1.0f })) != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetCastsShadows(ModelComponent, false))
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(ModelComponent, WorldShadowTier_Near))
+        && CacheFixture_Sync(run, &Fixture))
+    {
+        size_t Count = 0;
+        const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+        TEST_CHECK(run, (Count == 1) && Models[0].IsDrawn && !Models[0].CastsShadows
+            && (Models[0].ShadowTier == WorldShadowTier_Near));
     }
     CacheFixture_Deconstruct(run, &Fixture);
 }
@@ -311,10 +427,12 @@ void WorldRenderCacheTests_Run(TestRun* run)
     {
         { "resolves_models_and_computes_world_bounds", ResolvesModelsAndComputesWorldBounds },
         { "failed_model_stays_unresolved_until_renamed", FailedModelStaysUnresolvedUntilRenamed },
-        { "entries_follow_objects_across_adds_and_removals", EntriesFollowObjectsAcrossAddsAndRemovals },
+        { "entries_follow_components_across_adds_and_removals", EntriesFollowComponentsAcrossAddsAndRemovals },
         { "reused_id_with_another_model_is_resolved_again", ReusedIdWithAnotherModelIsResolvedAgain },
         { "another_world_is_resolved_from_scratch", AnotherWorldIsResolvedFromScratch },
         { "lists_drawable_sprites_and_every_light", ListsDrawableSpritesAndEveryLight },
+        { "disabled_and_hidden_objects_are_not_drawn", DisabledAndHiddenObjectsAreNotDrawn },
+        { "entries_carry_the_shadow_settings", EntriesCarryTheShadowSettings },
         { "reset_forgets_every_entry", ResetForgetsEveryEntry },
     };
     TestRun_RunSuite(run, "WorldRenderCache", Cases, sizeof(Cases) / sizeof(Cases[0]));
