@@ -1,7 +1,7 @@
 # World data layer
 
-The rendering-independent model of a 3D world: its objects, their components, their tags and data, and its
-environment settings. No renderer is required to build, change or tear down a world; the world renderer reads it
+The rendering-independent model of a 3D world: its objects, their hierarchy, their components, their tags and data, and
+its environment settings. No renderer is required to build, change or tear down a world; the world renderer reads it
 separately and never writes to it. Saving and loading worlds comes back with T09 (world files), built on the property
 tables. Tags, typed object data and queries (T24) have their own doc: [ObjectData.md](ObjectData.md).
 
@@ -11,21 +11,24 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 
 | Module | Files | What it is |
 |---|---|---|
-| WorldObject | `include/WorldObject.h`, `source/WorldObject.c` | The one object type: id, name, transform, tint, enabled, visible, mobility, and its component slots. |
+| WorldObject | `include/WorldObject.h`, `source/WorldObject.c` | The one object type: id, name, parent, transform (relative to the parent), tint, enabled, visible, mobility, and its component slots. |
 | WorldComponent | `include/WorldComponent.h`, `source/WorldComponent.c` | The component base, the component types and the registry entry that describes each (`WorldComponentTypeInfo`). |
 | WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A 3D model by asset name, with its render settings (outline, crisp, shadow tier, casts shadows). |
 | WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A sprite animation by asset name, with its playback instance, bound by the world, and how it is drawn: orientation, pivot, size, flips, alpha mode, lighting, decal, shadows. |
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
 | WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
-| World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index) | Owns the objects and their components, mints ids, keeps the id map and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
+| World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index), `source/WorldHierarchy.c` (parents, world matrices, effective flags, subtrees; also the `WorldObject_` functions about them) | Owns the objects and their components, mints ids, keeps the id map, the hierarchy and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
+| WorldTransform (private) | `source/WorldTransform.h`, `source/WorldTransform.c` | The pure maths of transforms: compose (DrawModelEx's order), the one decomposition back to position / Euler XYZ / scale, a local matrix under a parent, a bound on a matrix's stretch. Used by the hierarchy and the renderer's cache. |
 | WorldQuery | `include/WorldQuery.h`, `source/WorldQuery.c` | Searches over the objects by tags, data, components, flags and place ([ObjectData.md](ObjectData.md)). |
 
 `source/WorldInternal.h` is the layer's private header: the object's construction (objects are made by the world only),
 the object lookup (`WorldInternal_FindObject`), `WorldInternal_ComponentAfterSet` (the hook every component table calls
 after a change), the data bookkeeping (`WorldInternal_SyncObjectData` after a table write replaced an object's data,
-`_ForgetObjectData` before removal, `_GetTagMembers` for queries), the world's asset manager, user and logger for
-components that load assets, small helpers, and `WorldInternal_ConstructWithTypes` (a test seam, below). Not public
-API.
+`_ForgetObjectData` before removal, `_GetTagMembers` for queries), the hierarchy's bookkeeping
+(`WorldInternal_MarkTransformChanged`, `_SyncObjectParent` after a read or copy, `_CollectSubtree`, `_DetachFromParent`,
+`WorldObject_CheckTransform`), the world's asset manager, user and logger for components that load assets, small
+helpers, and two test seams: `WorldInternal_ConstructWithTypes` (below) and `WorldInternal_GetWorldMatrixRecomputeCount`.
+Not public API.
 
 ## Objects
 
@@ -34,14 +37,16 @@ components). Every object has:
 
 - `_id` (unique in its world, never 0, assigned at creation, never changed), `_name` (owned, may be NULL, at most
   `WORLD_OBJECT_NAME_MAX_LENGTH` = 256 bytes of valid UTF-8);
-- the transform: `_position`, `_rotation` (Euler XYZ in radians, degrees in JSON), `_scale` (they become local
-  transforms with parenting, T08);
+- `_parentId` (0 for a root) and the hierarchy's links (`_parent`, `_firstChild`, `_lastChild`, `_previousSibling`,
+  `_nextSibling`, `_childCount`); see "Hierarchy";
+- the transform, **relative to the parent** (world values for a root): `_position`, `_rotation` (Euler XYZ in radians,
+  degrees in JSON), `_scale`; the cached `_worldMatrix` with `_isWorldMatrixDirty`, and `_transformRevision`;
 - `_tint`: a `RenderColor` (brightness and opacity in [0, 1]; the renderer draws the opacity as a dither, and blended or
   additive sprites as alpha: WorldRuntime.md, "Visibility");
-- `_isEnabled` (default true): false makes **every system** skip the object: the renderer, later collision and
-  scripts' searches;
-- `_isVisible` (default true): false makes **the renderer** skip it (its model, its sprite and its light); it still
-  exists for collision and interaction (invisible walls, hidden triggers);
+- `_isEnabled` (default true): false makes **every system** skip the object and its subtree: the renderer, later
+  collision and scripts' searches;
+- `_isVisible` (default true): false makes **the renderer** skip it and its subtree (models, sprites and lights); they
+  still exist for collision and interaction (invisible walls, hidden triggers);
 - `_mobility`: `WorldMobility_Static` (default: scenery that does not move in play) or `WorldMobility_Movable`
   (see "Ready for things that move");
 - `_revision`: advances on every property change (runtime only), except the tags and data;
@@ -59,6 +64,72 @@ setters check through the object's property table (`Properties_CheckValue`), so 
 `Properties_Set` / the JSON and GHDF readers / `Properties_CopyTo` work on objects too; either way the revision
 advances (the table's `AfterSet`). The `data` row is `ReadOnly` for `Properties_Set`; a read or a copy (whose
 `AfterSet` gets no row) advances both revisions and has the world recount the object's bytes and re-index its tags.
+
+## Hierarchy
+
+Decided as G3 (a), built in T08. An object may have a **parent**; its position, rotation and scale are then relative to
+the parent's, so it follows it: moving a desk moves the cup on it, a lamp carries its light, a door's parts move as one.
+The world keeps the links (`source/WorldHierarchy.c`); the persisted value is the object table's `parent` row.
+
+- **`World_SetParent(world, childId, parentId, keepWorldTransform)`** places an object under a parent (it becomes the
+  parent's last child), or makes it a root (`parentId` 0); its subtree comes with it. Setting the parent it already has
+  changes nothing; otherwise the object's revision advances and its subtree is marked dirty. Refused, with nothing
+  changed (`ErrorCode_InvalidOperation`): an unknown object or parent; the object itself; a parent inside the object's
+  own subtree (a cycle); a hierarchy of more than **`WORLD_HIERARCHY_MAX_DEPTH` = 64 levels** (a root is level 1; a
+  moved subtree counts with its own height; AGENTS.md rule 5). With `keepWorldTransform` (the editor's default) the
+  object's local transform is rewritten so its world placement stays (within float precision; under a parent that
+  would shear it, its nearest unsheared form); that is refused for a new parent whose world matrix cannot be inverted
+  (a zero scale on an axis). Without it the local values stay, so the object moves with the change.
+- **Reading it:** `World_GetParent(world, id, &parentId)` (0 for a root), `World_GetChildren(world, id, outIds)`
+  (appends the ids in attach order), and the pointer walk `WorldObject_GetParent`, `_GetFirstChild`,
+  `_GetNextSibling`, `_GetChildCount` (valid until the hierarchy changes; do not change it while walking).
+- **World matrices.** `WorldObject_GetWorldMatrix(object)` is the object's local matrix (`WorldTransform_Compose`:
+  scale, then the Euler XYZ rotation, then the translation, raylib's `DrawModelEx` order) times its parent's world
+  matrix (raylib's `MatrixMultiply(local, parentWorld)`); a root's is its local one. Each object caches its own:
+  - a change of a transform row (a setter or any table write: `Properties_Set`, a read, a copy) or of the parent marks
+    the object and its **whole subtree** dirty and advances each one's `_transformRevision`
+    (`WorldObject_GetTransformRevision`: equal values mean the world matrix is the one a system saw; T12's collision
+    uses it);
+  - **`World_UpdateTransforms(world)`** recomputes the dirty ones, each once, parents first, and stores them. It is the
+    tick's step 7 (after everything that moves objects, before the renderer); with nothing dirty it returns at once,
+    otherwise it is one pass over the objects;
+  - **reading never writes**: a dirty matrix is computed on the fly from the nearest clean ancestor down and not
+    stored (at most 64 products), so the renderer may read it (AGENTS.md rule 3) and every read is correct whether the
+    update ran or not.
+  `WorldObject_GetWorldPosition` (a root's own position), `WorldObject_GetWorldTransform` (position, Euler XYZ, scale:
+  a root's own values exactly, a child's through `WorldTransform_Decompose`), and the id-based `World_GetWorldMatrix`,
+  `_GetWorldPosition`, `_GetWorldRotation`.
+- **One decomposition.** Rotations stay Euler XYZ in the data; everything composes with matrices, and the way back
+  (a world rotation, keeping the place on reparenting) is `WorldTransform_Decompose` only: the scale is each world
+  axis's length, the rotation that of the axes made orthonormal (X, then Y; Z their cross product; zero-length axes
+  completed from the others), read as Euler XYZ with no loss at gimbal lock. A matrix fixes only whether it mirrors,
+  not which axis carries a negative scale ((-1, -1, 1) is a half turn about Z), so the decomposition takes a sign hint:
+  the product of the scales' signs along the object's chain, axis by axis. A child then keeps the signs a root with its
+  scales would have (billboards, which drop the turn, flip by them), and `keepWorldTransform` keeps an object's world
+  signs (less its new parent's). Without a hint the mirror goes onto X. A
+  child turned inside a parent scaled unevenly is **sheared**, which a position, rotation and scale cannot hold: the
+  matrices keep the shear (models draw it exactly), the decomposition gives the nearest placement without it (sprites,
+  `keepWorldTransform`). Give groups no uneven scale of their own (the test world's desk is an empty object holding
+  its scaled parts).
+- **Effective flags.** `WorldObject_IsEffectivelyEnabled` / `_IsEffectivelyVisible` (and `World_IsEffectivelyEnabled`
+  / `_IsEffectivelyVisible` by id): the object and every ancestor. A disabled parent disables its subtree, an invisible
+  one hides it; the children's own flags stay. Systems read these (the render cache, queries, the test frame's
+  animation step), not the object's own flags. Opacity and mobility do not propagate.
+- **Removal.** `World_RemoveObject` removes the object's **whole subtree, children first**, like the UI's
+  `Widget_Destroy`: every component of the subtree is detached (its `OnDetach` hook; each object after its
+  descendants) while the hierarchy is still in place, so a hook sees its object where it is; then the subtree is
+  unlinked, the per-type arrays and the object list drop it in one pass each (the others keep their order), and the
+  objects are destroyed. One call costs one pass over the object list and over each array the subtree used, whatever
+  its size. `World_Deconstruct` likewise runs every hook (each root's subtree children first) before destroying
+  anything. Hooks must not change the hierarchy (`WorldComponent.h`).
+- **The `parent` row** (wire id 12, an `ObjectId`) is `ReadOnly` for `Properties_Set`: scripts and the editor go
+  through `World_SetParent`. JSON and GHDF reads and `Properties_CopyTo` still fill it (a copy brings the parent: the
+  copy becomes the original's sibling); the object table's `AfterSet` then has the world attach the object to that
+  parent, keeping the local transform it read, with `World_SetParent`'s checks. A parent the world cannot take is
+  **refused**: the object keeps its parent, the row goes back to it, `World_GetRefusedParentCount` rises and the first
+  refusal is logged (once per world). Tables check each value alone, so this is where a loader learns of a bad parent
+  (T09). A copy from an object of **another** world brings that world's parent id, which here names another object or
+  none: copy within one world, or set the parent afterwards.
 
 ## Components
 
@@ -111,7 +182,8 @@ how it is drawn (T06; the renderer's side is [WorldRuntime.md](WorldRuntime.md),
   only around the object's local Y axis; `fixed` uses the object's rotation, the image in its local XY plane facing +Z),
   `_pivot` (the point of the image at the object's position: (0, 0) bottom left, (1, 1) top right; default the centre,
   (0.5, 0) for things standing on the ground), `_pixelsPerUnit` (> 0, default 32: the world size is the frame's pixels
-  divided by it, times the object's X and Y scale; the Z scale does nothing), `_isFlippedX` / `_isFlippedY` (mirror the
+  divided by it, times the object's world X and Y scale; the Z scale does nothing; position, axes and scale are the
+  object's world ones, through its parents), `_isFlippedX` / `_isFlippedY` (mirror the
   image about the pivot). The image is two-sided.
 - **Transparency:** `_alphaMode` (`WorldSpriteAlphaMode`: `cutout`, the default: opaque where the texture's alpha
   reaches `_alphaCutoff` (0.5), depth-correct, casts shadows, outlined; `blend`: soft edges, sorted, its alpha times the
@@ -140,13 +212,14 @@ long-lived edited worlds may need).
 
 ### Light component (`light_component`)
 `_color` (white), `_intensity` (>= 0, default 1), `_range` (>= 0, default 1: how far the light reaches; T05 renamed it
-from `Size`), `_castsShadows` (false). It uses its object's position; rotation, scale and tint do not affect it. A
-hidden or disabled object's light is off.
+from `Size`), `_castsShadows` (false). It uses its object's world position (a lamp carries its light); rotation, scale
+and tint do not affect it. A hidden or disabled object's light is off, also under a hidden or disabled ancestor.
 
 ## World
 
 Holds the objects in creation order (`_objects`) with an id -> object map (`_objectsById`, a `WRHashMap`), the
-registry entries of its component types, one dense array of components per type (`_components[type]`, in add order),
+hierarchy's bookkeeping (how many world matrices are dirty, the recompute counter for tests, the refused parents, the
+removal scratch), the registry entries of its component types, one dense array of components per type (`_components[type]`, in add order),
 the id counter (`_nextId`, starts at 1; 0 once every id was handed out), two versions, an owned name, an embedded
 `WorldEnvironment`, the borrowed key registry (`World_GetKeys`), the tag index and data byte count
 ([ObjectData.md](ObjectData.md)), the query scratch, and (optionally) a borrowed asset manager with its own asset user.
@@ -160,7 +233,8 @@ the id counter (`_nextId`, starts at 1; 0 once every id was handed out), two ver
   &object)` (the loader's version: refuses 0 and used ids, and advances the counter past the id); `World_RemoveObject
   (world, id)` (its components first, then the object; ordered removal, so the other objects keep their order);
   `World_TryGetObject(world, id, &object)` (a hash lookup); `World_GetObjectCount` / `World_GetObjectByIndex` for
-  iteration in creation order. `World_EnsureNextObjectIdAtLeast` and `World_GetNextObjectId` are for world files.
+  iteration in creation order. A new object is a root at the default transform. Removal takes the whole subtree (see
+  "Hierarchy"). `World_EnsureNextObjectIdAtLeast` and `World_GetNextObjectId` are for world files.
 - **Components:** `World_AddComponent(world, id, type, &component)`, `World_RemoveComponent(world, id, type)`,
   `World_TryGetComponent(world, id, type, &component)`, and **`World_GetComponents(world, type, &count)`**: the world's
   own dense array of every component of a type, in add order (removal keeps the order), valid until a component of that
@@ -188,7 +262,11 @@ yet, but the model is ready for them:
 - **One driver per object.** A component type flagged `IsTransformDriver` writes its object's transform every tick.
   `World_AddComponent` refuses a second driver on the same object (`ErrorCode_InvalidOperation`), so two systems never
   fight over one transform. Adding a driver makes the object movable. A driven object is normally a root object; with
-  a parent (T08) the driver writes the local transform through the parent's inverse.
+  a parent the driver writes the local transform through the parent's inverse (`WorldTransform_TryGetLocalMatrix`,
+  then `WorldTransform_Decompose`).
+- **Moving with a parent.** An object under a movable parent moves in play although its own mobility may be static:
+  systems that cache static objects must watch the transform revision (it advances when an ancestor moves), not the
+  mobility alone (T12).
 - **Mobility is a hint for performance, never a lock.** Collision (T12) keeps static colliders in a structure built
   once and movable ones in one updated every tick; the renderer can later cache static shadows. Moving a static object
   still works (the editor does it constantly): it costs a rebuild of whatever cached it, and in play the system that
@@ -204,8 +282,9 @@ yet, but the model is ready for them:
   3. transform drivers: characters, vehicles, physics (later);
   4. collision sync (T12);
   5. queued events: trigger enter and exit, later contacts (T12; the queued-event rule, architecture A4);
-  6. animation (today: sprite playback, `AdvanceSpriteAnimations` in the test frame, enabled objects only);
-  7. the renderer, which only reads (AGENTS.md rule 3).
+  6. animation (today: sprite playback, `AdvanceSpriteAnimations` in the test frame, effectively enabled objects only);
+  7. `World_UpdateTransforms`: the world matrices of everything that moved this tick (T08);
+  8. the renderer, which only reads (AGENTS.md rule 3).
 
 ## Property tables
 
@@ -215,6 +294,7 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | Table | Key | Wire | Type | Default |
 |---|---|---|---|---|
 | `world_object` | `name` | 3 | String (256, null allowed) | null |
+| | `parent` | 12 | ObjectId, ReadOnly for `Properties_Set` (reads and copies relink through the world) | 0 (a root) |
 | | `position` | 4 | Vector3 | (0, 0, 0) |
 | | `rotation` | 5 | AngleVector3 (degrees in JSON) | (0, 0, 0) |
 | | `scale` | 6 | Vector3 | (1, 1, 1) |
@@ -251,7 +331,8 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 
 The object table's wire ids start at 3: 1 and 2 are left for the world file's own entries per object (T09: the id and
 the components). T24 added `data` (one row: the tags and the values are one map, written as two JSON keys, `tags` and
-`data`, and as one GHDF entry); T08's `parent` takes the next free id, 12.
+`data`, and as one GHDF entry); T08 added `parent` (12, placed after `name` in the table's order). The next free object
+wire id is 13.
 
 ## Environment
 
@@ -345,14 +426,25 @@ and the property tables now describe every object and component. T09 (world file
 saving on the tables, with the root ids the old encoder used (format version 1, name 2, next id 3, environment 4,
 objects 5). Reading objects with tags and data needs `PropertyReadOptions.Keys` (the world's registry,
 `World_GetKeys`) and `DefaultNamespace` (the story's namespace); after reading the objects, the loader refuses a world
-whose `World_GetDataByteSize` passes `WORLD_DATA_MAX_BYTES` (the table readers count it but cannot refuse it). The environment's table already reads and writes itself (`WorldEnvironment_ReadJSON` / `_WriteJSON`,
+whose `World_GetDataByteSize` passes `WORLD_DATA_MAX_BYTES` (the table readers count it but cannot refuse it). Parents work
+the same way (T08): the loader creates every object first (`World_CreateObjectWithId`), then reads their tables, so
+each `parent` names an object that exists; a parent the world refuses (missing, the object itself, a cycle, deeper than
+64 levels) raises `World_GetRefusedParentCount`, which the loader compares before and after each object's read to
+refuse the file and name the object. The environment's table already reads and writes itself (`WorldEnvironment_ReadJSON` / `_WriteJSON`,
 `Properties_ReadGHDF` / `_WriteGHDF`), and `tests/PropertyDescriptorTests.c` still compares its GHDF tree with a
 literal copy of what the old encoder wrote.
 
 ## Tests
 
 `tests/ObjectDataTests.c` covers tags, data and queries ([ObjectData.md](ObjectData.md)); `tests/TestWorld.h` builds a
-world with its own key registry for tests. `tests/WorldTests.c`: objects (ids unique and never 0, loader ids advance the counter, an exhausted counter, the
+world with its own key registry for tests. `tests/WorldHierarchyTests.c` covers the hierarchy: `World_SetParent`'s
+refusals (unknown ids, self, cycles two and three deep, 64 levels with a moved subtree's height), world matrices three
+levels deep (on the fly and cached, the same products), reparenting with and without keeping the world placement (and
+the refusal under a flattened parent), dirty propagation counted through `WorldInternal_GetWorldMatrixRecomputeCount`,
+reads that never store, the attach order, subtree removal (components, arrays in order, dirty counts) with the detach
+hooks children first, effective flags, and the `parent` row (ReadOnly, JSON reads attach or are refused and logged
+once, a copy brings the parent). `tests/WorldTransformTests.c` covers the maths (round trips of 2000 random transforms,
+mirrors, zero scales, gimbal lock, shear, local matrices, singular parents, the stretch bound). `tests/WorldTests.c`: objects (ids unique and never 0, loader ids advance the counter, an exhausted counter, the
 object-set version, validated setters and table writes advancing the revision, rotation in degrees in JSON),
 components (add, find, remove; one per type; removing an object removes its components; the per-type arrays stay in
 order across interleaved adds and removes; types by name; revisions), the sprite binding (no assets, a shared

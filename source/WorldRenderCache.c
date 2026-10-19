@@ -2,6 +2,7 @@
 #include <math.h>
 #include "WorldRenderCache.h"
 #include "WorldObject.h"
+#include "WorldTransform.h"
 #include "Renderer.h"
 #include "Logger.h"
 #include "raylib/raymath.h"
@@ -14,26 +15,16 @@
 
 
 // Static functions.
-/* Largest axis scale factor of a transform (longest of its three basis-vector columns), for conservatively
- * scaling a local bounding-sphere radius into world space under non-uniform scale + rotation. */
-static float MatrixMaxScale(Matrix m)
-{
-    float ScaleX = Vector3Length((Vector3){ m.m0, m.m1, m.m2 });
-    float ScaleY = Vector3Length((Vector3){ m.m4, m.m5, m.m6 });
-    float ScaleZ = Vector3Length((Vector3){ m.m8, m.m9, m.m10 });
-    return fmaxf(ScaleX, fmaxf(ScaleY, ScaleZ));
-}
-
 /* Identity of a model name for re-matching entries: its hash, or 0 for no name. */
 static uint64_t HashModelName(const unsigned char* name)
 {
     return (name != NULL) ? Hash_String(name) : 0;
 }
 
-/* Whether the renderer draws anything of the object this frame. */
+/* Whether the renderer draws anything of the object this frame: it and its ancestors are enabled and visible. */
 static bool IsObjectShown(const WorldObject* object)
 {
-    return WorldObject_IsEnabled(object) && WorldObject_IsVisible(object);
+    return WorldObject_IsEffectivelyEnabled(object) && WorldObject_IsEffectivelyVisible(object);
 }
 
 /* Logs (once, when it happens) that an object's model could not be resolved, and releases the error. */
@@ -86,7 +77,8 @@ static void ResolveModel(WorldRenderModel* entry, AssetManager* assets, AssetUse
 
 /* Brings one model entry up to date for this frame: re-resolves its asset if its name changed, then copies the
  * component's settings and recomputes whether it is drawn, its tint, its final transform (the import transform inside
- * the object's scale -> Euler XYZ -> translation, matching raylib's DrawModelEx) and its world bounding sphere. */
+ * the object's world matrix: its scale -> Euler XYZ -> translation, as raylib's DrawModelEx composes them, times its
+ * parents') and its world bounding sphere (conservative also when the hierarchy shears it). */
 static void UpdateModel(WorldRenderModel* entry, AssetManager* assets, AssetUserID modelUser, Logger* logger)
 {
     const WorldModelComponent* ModelComponent = entry->Component;
@@ -111,16 +103,10 @@ static void UpdateModel(WorldRenderModel* entry, AssetManager* assets, AssetUser
         return;
     }
 
-    Vector3 Position = WorldObject_GetPosition(Owner);
-    Vector3 Rotation = WorldObject_GetRotation(Owner);
-    Vector3 Scale = WorldObject_GetScale(Owner);
-    Matrix WorldTransform = MatrixMultiply(MatrixMultiply(MatrixScale(Scale.x, Scale.y, Scale.z),
-        MatrixRotateXYZ(Rotation)), MatrixTranslate(Position.x, Position.y, Position.z));
-
     Model RayModel = GameModel_GetRaylibModel(entry->Asset);
-    entry->Transform = MatrixMultiply(RayModel.transform, WorldTransform);
+    entry->Transform = MatrixMultiply(RayModel.transform, WorldObject_GetWorldMatrix(Owner));
     entry->Center = Vector3Transform(entry->LocalCenter, entry->Transform);
-    entry->Radius = entry->LocalRadius * MatrixMaxScale(entry->Transform);
+    entry->Radius = entry->LocalRadius * WorldTransform_GetMaxScale(entry->Transform);
 }
 
 /* Re-matches the model entries to the world's current model components, in order: a component keeps its entry (and
@@ -188,20 +174,23 @@ static void GetUvRect(const SpriteAnimationFrame* frame, float outRect[4])
     outRect[3] = frame->_areaInTexture.height / Height;
 }
 
-/* The sprite's quad before a viewer turns it: the object's position and rotation axes, the world size from the frame's
- * pixels, the pixels per unit and the object's scale, the pivot and the flips. */
+/* The sprite's quad before a viewer turns it: the object's world position and rotation axes, the world size from the
+ * frame's pixels, the pixels per unit and the object's world scale, the pivot and the flips. */
 static SpriteShape GetShape(const WorldSpriteComponent* sprite, const WorldObject* owner, Rectangle frameArea)
 {
-    Matrix Rotation = MatrixRotateXYZ(WorldObject_GetRotation(owner));
+    Vector3 Position;
+    Vector3 Rotation;
+    Vector3 Scale;
+    WorldObject_GetWorldTransform(owner, &Position, &Rotation, &Scale);
+    Matrix Axes = MatrixRotateXYZ(Rotation);
     return (SpriteShape)
     {
         .Orientation = WorldSpriteComponent_GetOrientation(sprite),
-        .Position = WorldObject_GetPosition(owner),
-        .AxisX = { Rotation.m0, Rotation.m1, Rotation.m2 },
-        .AxisY = { Rotation.m4, Rotation.m5, Rotation.m6 },
-        .AxisZ = { Rotation.m8, Rotation.m9, Rotation.m10 },
-        .Size = SpriteTransform_GetWorldSize(frameArea, WorldSpriteComponent_GetPixelsPerUnit(sprite),
-            WorldObject_GetScale(owner)),
+        .Position = Position,
+        .AxisX = { Axes.m0, Axes.m1, Axes.m2 },
+        .AxisY = { Axes.m4, Axes.m5, Axes.m6 },
+        .AxisZ = { Axes.m8, Axes.m9, Axes.m10 },
+        .Size = SpriteTransform_GetWorldSize(frameArea, WorldSpriteComponent_GetPixelsPerUnit(sprite), Scale),
         .Pivot = WorldSpriteComponent_GetPivot(sprite),
         .IsFlippedX = WorldSpriteComponent_IsFlippedX(sprite),
         .IsFlippedY = WorldSpriteComponent_IsFlippedY(sprite)
@@ -256,7 +245,7 @@ static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite)
     return Error_CreateSuccess();
 }
 
-/* Lists a point light of a shown object with the values the passes read. */
+/* Lists a point light of a shown object with the values the passes read (it sits at the object's world position). */
 static Error AddLight(WorldRenderCache* self, const WorldLightComponent* light)
 {
     const WorldObject* Owner = WorldComponent_GetOwner(&light->Base);
@@ -268,7 +257,7 @@ static Error AddLight(WorldRenderCache* self, const WorldLightComponent* light)
     WorldRenderLight Entry =
     {
         .Component = light,
-        .Position = WorldObject_GetPosition(Owner),
+        .Position = WorldObject_GetWorldPosition(Owner),
         .Range = WorldLightComponent_GetRange(light),
         .Intensity = WorldLightComponent_GetIntensity(light),
         .Color = WorldLightComponent_GetColor(light),

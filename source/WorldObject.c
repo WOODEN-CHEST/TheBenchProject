@@ -1,5 +1,6 @@
 #include "WorldObject.h"
 #include "WorldInternal.h"
+#include "WorldTransform.h"
 #include "wr/WRCompile.h"
 #include "wr/WRMemory.h"
 
@@ -19,6 +20,7 @@
 typedef enum ObjectPropertyEnum
 {
     ObjectProperty_Name,
+    ObjectProperty_Parent,
     ObjectProperty_Position,
     ObjectProperty_Rotation,
     ObjectProperty_Scale,
@@ -58,24 +60,39 @@ static const PropertyDescriptor ObjectProperties[ObjectProperty_Count] =
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_OBJECT, .DisplayName = u8"Name",
         .Description = u8"A name for people and scripts; need not be unique.", .SinceVersion = 1U
     },
+    [ObjectProperty_Parent] =
+    {
+        // Read-only for Properties_Set: World_SetParent changes it (it refuses cycles and trees too deep). A read or a
+        // copy that brings another parent has the world attach the object to it, or refuse it (ObjectAfterSet).
+        .Key = u8"parent", .WireId = 12U, .Type = PropertyType_ObjectId, PROPERTY_MEMBER(WorldObject, _parentId),
+        .Default.ObjectIdValue = 0U,
+        .Flags = PropertyFlags_Persistent | PropertyFlags_Editable | PropertyFlags_ReadOnly | PropertyFlags_Script,
+        .Category = CATEGORY_TRANSFORM, .DisplayName = u8"Parent",
+        .Description = u8"The object this one is placed on (0 for none): its position, rotation and scale are relative "
+            u8"to the parent's, and it moves, hides and is disabled with it.",
+        .SinceVersion = 1U
+    },
     [ObjectProperty_Position] =
     {
         .Key = u8"position", .WireId = 4U, .Type = PropertyType_Vector3, PROPERTY_MEMBER(WorldObject, _position),
         .Default.Vector3Value = { 0.0f, 0.0f, 0.0f }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_TRANSFORM,
-        .DisplayName = u8"Position", .Description = u8"Where the object is, in world units (+Y up).", .SinceVersion = 1U
+        .DisplayName = u8"Position",
+        .Description = u8"Where the object is, in world units (+Y up), relative to its parent.", .SinceVersion = 1U
     },
     [ObjectProperty_Rotation] =
     {
         .Key = u8"rotation", .WireId = 5U, .Type = PropertyType_AngleVector3, PROPERTY_MEMBER(WorldObject, _rotation),
         .Default.Vector3Value = { 0.0f, 0.0f, 0.0f }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_TRANSFORM,
         .DisplayName = u8"Rotation",
-        .Description = u8"Turns around the X, Y and Z axes in degrees, applied in that order.", .SinceVersion = 1U
+        .Description = u8"Turns around the X, Y and Z axes in degrees, applied in that order, relative to its parent.",
+        .SinceVersion = 1U
     },
     [ObjectProperty_Scale] =
     {
         .Key = u8"scale", .WireId = 6U, .Type = PropertyType_Vector3, PROPERTY_MEMBER(WorldObject, _scale),
         .Default.Vector3Value = { 1.0f, 1.0f, 1.0f }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_TRANSFORM,
-        .DisplayName = u8"Scale", .Description = u8"Size along each axis; 1 is the model's own size.",
+        .DisplayName = u8"Scale",
+        .Description = u8"Size along each axis; 1 is the model's own size. Multiplies the parent's.",
         .SinceVersion = 1U
     },
     [ObjectProperty_Tint] =
@@ -143,8 +160,17 @@ static const PropertyTable ObjectTable =
 
 
 // Static functions.
+static bool IsTransformRow(const PropertyDescriptor* descriptor)
+{
+    return (descriptor == &ObjectProperties[ObjectProperty_Position])
+        || (descriptor == &ObjectProperties[ObjectProperty_Rotation])
+        || (descriptor == &ObjectProperties[ObjectProperty_Scale]);
+}
+
 /* A change of the tags and data advances the data revision (and tells the world: its tag index and byte count); any
- * other change, the revision. A read or a copy (no row) may have changed both. */
+ * other change, the revision. A change of the transform marks the object's subtree dirty. A read or a copy (no row) may
+ * have changed everything, the parent included: the world attaches the object to the parent it brought, or refuses it
+ * (the object keeps its parent). */
 static void ObjectAfterSet(void* instance, const PropertyDescriptor* descriptor)
 {
     WorldObject* Object = instance;
@@ -160,6 +186,18 @@ static void ObjectAfterSet(void* instance, const PropertyDescriptor* descriptor)
         {
             WorldInternal_SyncObjectData(Object->_world, Object);
         }
+    }
+    if (Object->_world == NULL)
+    {
+        return;
+    }
+    if (descriptor == NULL)
+    {
+        WorldInternal_SyncObjectParent(Object->_world, Object);
+    }
+    if ((descriptor == NULL) || IsTransformRow(descriptor))
+    {
+        WorldInternal_MarkTransformChanged(Object->_world, Object);
     }
 }
 
@@ -188,6 +226,9 @@ Error WorldObject_Construct(WorldObject* self, World* world, uint64_t id, const 
     self->_world = world;
     self->_id = id;
     self->_name = WorldInternal_CloneString(name);
+    // A new object is a root at its default transform: its world matrix is its local one, up to date.
+    self->_worldMatrix = WorldTransform_Compose(self->_position, self->_rotation, self->_scale);
+    self->_isWorldMatrixDirty = false;
     return Error_CreateSuccess();
 }
 
@@ -198,6 +239,20 @@ void WorldObject_Deconstruct(WorldObject* self)
         return;
     }
     Properties_Deconstruct(&ObjectTable, self);
+}
+
+Error WorldObject_CheckTransform(Vector3 position, Vector3 rotation, Vector3 scale)
+{
+    Error Result = CheckProperty(ObjectProperty_Position, PropertyValue_FromVector3(position));
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = CheckProperty(ObjectProperty_Rotation, PropertyValue_FromAngleVector3(rotation));
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = CheckProperty(ObjectProperty_Scale, PropertyValue_FromVector3(scale));
+    }
+    return Result;
 }
 
 

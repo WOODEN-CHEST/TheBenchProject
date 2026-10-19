@@ -78,6 +78,15 @@
 /** The objects whose opacity the X key steps: the centre cube (a model) and the tree (a cutout sprite), both casting
  *  shadows. */
 #define OPACITY_TEST_OBJECT_COUNT 2U
+/** The test world's hierarchy (T08): the desk (an empty object holding its parts), where it stands, and how the J key
+ *  slides it along X: back and forth by this many metres either way, once per period. */
+#define TEST_DESK_OBJECT_NAME ((const unsigned char*)u8"desk")
+#define TEST_DESK_POSITION_X 1.8f
+#define TEST_DESK_POSITION_Y 0.05f
+#define TEST_DESK_POSITION_Z (-3.6f)
+#define TEST_DESK_TURN_DEGREES 15.0f
+#define DESK_SLIDE_DISTANCE 1.2f
+#define DESK_SLIDE_PERIOD_SECONDS 6.0
 /** Default font of the text sample: covers Latvian and Cyrillic. */
 #define TEXT_SAMPLE_FONT_NAME ((const unsigned char*)u8"noto_sans")
 /** Top-left corner of the text sample, in normalized-fitted units. */
@@ -154,6 +163,11 @@ typedef struct WorldTestFrameStruct
      *  OpacitySteps they are at. */
     uint64_t _opacityTestObjectIds[OPACITY_TEST_OBJECT_COUNT];
     size_t _opacityStep;
+    /** The desk the J key slides and the H key hides (0 if the test world lacks it), and whether it is sliding, for how
+     *  long it has (within one period). */
+    uint64_t _deskId;
+    bool _isDeskSliding;
+    double _deskSlideSeconds;
 } WorldTestFrame;
 
 
@@ -615,16 +629,16 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
     }
 }
 
-/* The tick's animation step: advances the animation playback of every sprite on an enabled object by the elapsed
- * time (a no-op for empty / source-less instances). Best-effort: an advance error on one sprite does not stop the
- * others or the update tick. */
+/* The tick's animation step: advances the animation playback of every sprite on an enabled object (whose ancestors are
+ * enabled too) by the elapsed time (a no-op for empty / source-less instances). Best-effort: an advance error on one
+ * sprite does not stop the others or the update tick. */
 static void AdvanceSpriteAnimations(World* world, double deltaSeconds)
 {
     size_t Count = 0;
     WorldComponent* const* Sprites = World_GetComponents(world, WorldComponentType_Sprite, &Count);
     for (size_t Index = 0; Index < Count; Index++)
     {
-        if (!WorldObject_IsEnabled(WorldComponent_GetOwner(Sprites[Index])))
+        if (!WorldObject_IsEffectivelyEnabled(WorldComponent_GetOwner(Sprites[Index])))
         {
             continue;
         }
@@ -633,6 +647,62 @@ static void AdvanceSpriteAnimations(World* world, double deltaSeconds)
             deltaSeconds);
         Error_Deconstruct(&UpdateResult);
     }
+}
+
+
+// Static functions: the desk (the test world's hierarchy).
+/* Logs a line about the desk. */
+static void LogDesk(WorldTestFrame* frame, const char* message)
+{
+    if (frame->_services->Logger != NULL)
+    {
+        Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger, (const unsigned char*)u8"WorldTest: %s",
+            message);
+        Error_Deconstruct(&LogResult);
+    }
+}
+
+/* The desk's debug keys: J starts and stops the desk sliding back and forth along X (its parts, the cup, the lamp and
+ * the lamp's light follow); H hides and shows the desk, and with it everything on it (the lamp's light goes off). */
+static void HandleDebugDeskInput(WorldTestFrame* frame, const GameInput* input)
+{
+    WorldObject* Desk = NULL;
+    if ((frame->_deskId == 0U) || !World_TryGetObject(&frame->_world, frame->_deskId, &Desk))
+    {
+        return;
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_J))
+    {
+        frame->_isDeskSliding = !frame->_isDeskSliding;
+        LogDesk(frame, frame->_isDeskSliding
+            ? "the desk slides along X; its parts, the cup, the lamp and the lamp's light follow."
+            : "the desk stops.");
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_H))
+    {
+        bool IsVisible = !WorldObject_IsVisible(Desk);
+        Error Result = WorldObject_SetVisible(Desk, IsVisible);
+        Error_Deconstruct(&Result); // cannot fail: the object exists
+        LogDesk(frame, IsVisible ? "the desk is shown again, with everything on it."
+            : "the desk is hidden, and with it everything on it (the lamp's light is off).");
+    }
+}
+
+/* Moves a sliding desk on by the tick's real time: back and forth along X around where it was built, one period at a
+ * time. Its children follow through the hierarchy. */
+static void SlideDesk(WorldTestFrame* frame, double deltaSeconds)
+{
+    WorldObject* Desk = NULL;
+    if (!frame->_isDeskSliding || (frame->_deskId == 0U) || !World_TryGetObject(&frame->_world, frame->_deskId, &Desk))
+    {
+        return;
+    }
+    frame->_deskSlideSeconds = fmod(frame->_deskSlideSeconds + deltaSeconds, DESK_SLIDE_PERIOD_SECONDS);
+    double Turn = (2.0 * PI * frame->_deskSlideSeconds) / DESK_SLIDE_PERIOD_SECONDS;
+    Vector3 Position = WorldObject_GetPosition(Desk);
+    Position.x = TEST_DESK_POSITION_X + (DESK_SLIDE_DISTANCE * (float)sin(Turn));
+    Error Result = WorldObject_SetPosition(Desk, Position);
+    Error_Deconstruct(&Result); // cannot fail: the position is finite
 }
 
 
@@ -814,6 +884,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     HandleDebugClockInput(frame, input, deltaSeconds);
     HandleDebugSkyInput(frame, input);
     HandleDebugInput(frame, input);
+    HandleDebugDeskInput(frame, input);
 }
 
 
@@ -832,7 +903,8 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"P pause/resume the clock, 1-4 = dawn/noon/dusk/midnight (paused), [ ] scrub time, , . previous/next "
             u8"day, / a week ahead; F full moon / calendar moon, Y seasons; O post effects, B bloom, G sun shafts, "
             u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, N light pollution, X opacity of the "
-            u8"centre cube and the tree, U frustum culling, I renderer status and game time, T text sample; M frees the "
+            u8"centre cube and the tree, U frustum culling, J slide the desk, H hide the desk, I renderer status and game "
+            u8"time, T text sample; M frees the "
             u8"mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");
         Error_Deconstruct(&LogResult);
     }
@@ -865,8 +937,12 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     }
     ApplyClockToEnvironment(Frame);
 
-    // Advance sprite animations (game logic; the renderer only reads the current frame).
+    // Advance sprite animations (game logic; the renderer only reads the current frame), and slide the desk.
     AdvanceSpriteAnimations(&Frame->_world, time.PassedTime);
+    SlideDesk(Frame, time.PassedTime);
+
+    // The world matrices of everything that moved this tick, so the renderer reads them cached.
+    World_UpdateTransforms(&Frame->_world);
 
     // The text sample animates its sprite and is laid out here (laying out loads its fonts); Render only draws it.
     Error TextResult = TextDocument_Update(&Frame->_textSample, time);
@@ -983,13 +1059,17 @@ static const GameFrameVTable WorldTestFrameVTable =
 
 
 // Static functions: world construction.
-/* Creates an object at @p position with @p scale and gives it a component of @p type. The world owns both at once,
- * so on a failure the caller tears the whole world down. */
-static Error AddObject(World* world, const unsigned char* name, Vector3 position, Vector3 scale,
+/* Creates an object under @p parentId (0: a root) at @p position with @p scale, both relative to the parent, and gives
+ * it a component of @p type. The world owns both at once, so on a failure the caller tears the whole world down. */
+static Error AddObject(World* world, const unsigned char* name, uint64_t parentId, Vector3 position, Vector3 scale,
     WorldComponentType type, WorldComponent** outComponent)
 {
     WorldObject* Object = NULL;
     Error Result = World_CreateObject(world, name, &Object);
+    if ((Result.Code == ErrorCode_Success) && (parentId != 0U))
+    {
+        Result = World_SetParent(world, WorldObject_GetId(Object), parentId, false);
+    }
     if (Result.Code == ErrorCode_Success)
     {
         Result = WorldObject_SetPosition(Object, position);
@@ -1005,12 +1085,12 @@ static Error AddObject(World* world, const unsigned char* name, Vector3 position
     return Result;
 }
 
-/* Creates an object drawing the named model. */
-static Error AddModelObject(World* world, const unsigned char* name, const unsigned char* assetName,
+/* Creates an object drawing the named model, under @p parentId (0: a root). */
+static Error AddModelObject(World* world, const unsigned char* name, uint64_t parentId, const unsigned char* assetName,
     Vector3 position, Vector3 scale, bool omitPixelation, WorldShadowTier shadowTier)
 {
     WorldComponent* Component = NULL;
-    Error Result = AddObject(world, name, position, scale, WorldComponentType_Model, &Component);
+    Error Result = AddObject(world, name, parentId, position, scale, WorldComponentType_Model, &Component);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
@@ -1034,7 +1114,7 @@ static Error AddModelObject(World* world, const unsigned char* name, const unsig
 static Error AddSpriteObject(World* world, const TestSprite* sprite)
 {
     WorldComponent* Component = NULL;
-    Error Result = AddObject(world, (const unsigned char*)sprite->ObjectName, sprite->Position,
+    Error Result = AddObject(world, (const unsigned char*)sprite->ObjectName, 0U, sprite->Position,
         (Vector3){ sprite->Scale, sprite->Scale, sprite->Scale }, WorldComponentType_Sprite, &Component);
     if (Result.Code != ErrorCode_Success)
     {
@@ -1079,12 +1159,12 @@ static Error AddSpriteObject(World* world, const TestSprite* sprite)
     return Result;
 }
 
-/* Creates an object carrying a point light with the given colour and reach. */
-static Error AddPointLight(World* world, const unsigned char* name, Vector3 position, Color color,
+/* Creates an object carrying a point light with the given colour and reach, under @p parentId (0: a root). */
+static Error AddPointLight(World* world, const unsigned char* name, uint64_t parentId, Vector3 position, Color color,
     float intensity, float range, bool castsShadows)
 {
     WorldComponent* Component = NULL;
-    Error Result = AddObject(world, name, position, (Vector3){ 1.0f, 1.0f, 1.0f }, WorldComponentType_Light,
+    Error Result = AddObject(world, name, parentId, position, (Vector3){ 1.0f, 1.0f, 1.0f }, WorldComponentType_Light,
         &Component);
     if (Result.Code != ErrorCode_Success)
     {
@@ -1104,6 +1184,62 @@ static Error AddPointLight(World* world, const unsigned char* name, Vector3 posi
     if (Result.Code == ErrorCode_Success)
     {
         Result = WorldLightComponent_SetCastsShadows(Light, castsShadows);
+    }
+    return Result;
+}
+
+/* The test world's hierarchy (T08): the desk, an empty object turned 15 degrees that holds its parts (a top and two
+ * sides), a cup and a desk lamp, which holds its light. Every child's position, rotation and scale are relative to its
+ * parent: the parts are placed in the desk's own frame (y 0 is the floor), and the light hangs 0.35 lamp units above the
+ * lamp's centre, which the lamp's height (0.8) makes 0.28 m. The desk carries no model of its own, so its children are
+ * not stretched by a scale of its. */
+static Error AddDesk(World* world)
+{
+    WorldObject* Desk = NULL;
+    Error Result = World_CreateObject(world, TEST_DESK_OBJECT_NAME, &Desk);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldObject_SetPosition(Desk, (Vector3){ TEST_DESK_POSITION_X, TEST_DESK_POSITION_Y,
+            TEST_DESK_POSITION_Z });
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldObject_SetRotation(Desk, (Vector3){ 0.0f, TEST_DESK_TURN_DEGREES * DEG2RAD, 0.0f });
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    // The test model is a 0.5 m cube, so each scale is twice the part's size in metres.
+    uint64_t DeskId = WorldObject_GetId(Desk);
+    Result = AddModelObject(world, (const unsigned char*)u8"desk_top", DeskId, TEST_MODEL_ASSET_NAME,
+        (Vector3){ 0.0f, 0.75f, 0.0f }, (Vector3){ 3.2f, 0.12f, 1.6f }, false, WorldShadowTier_Both);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddModelObject(world, (const unsigned char*)u8"desk_side_left", DeskId, TEST_MODEL_ASSET_NAME,
+            (Vector3){ -0.74f, 0.36f, 0.0f }, (Vector3){ 0.12f, 1.44f, 1.5f }, false, WorldShadowTier_Both);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddModelObject(world, (const unsigned char*)u8"desk_side_right", DeskId, TEST_MODEL_ASSET_NAME,
+            (Vector3){ 0.74f, 0.36f, 0.0f }, (Vector3){ 0.12f, 1.44f, 1.5f }, false, WorldShadowTier_Both);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddModelObject(world, (const unsigned char*)u8"cup", DeskId, TEST_PBR_METAL_ASSET_NAME,
+            (Vector3){ 0.45f, 0.84f, 0.15f }, (Vector3){ 0.18f, 0.24f, 0.18f }, false, WorldShadowTier_Near);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddModelObject(world, (const unsigned char*)u8"desk_lamp", DeskId, TEST_MODEL_ASSET_NAME,
+            (Vector3){ -0.5f, 0.98f, -0.2f }, (Vector3){ 0.1f, 0.8f, 0.1f }, false, WorldShadowTier_Near);
+    }
+    uint64_t LampId = FindObjectId(world, "desk_lamp");
+    if ((Result.Code == ErrorCode_Success) && (LampId != 0U))
+    {
+        Result = AddPointLight(world, (const unsigned char*)u8"desk_lamp_light", LampId, (Vector3){ 0.0f, 0.35f, 0.0f },
+            (Color){ 255, 214, 160, 255 }, 3.0f, 4.0f, false);
     }
     return Result;
 }
@@ -1128,18 +1264,18 @@ static Error BuildTestWorld(World* world, Services* services)
 
     // Centre model, raised so its shadow lands on the ground; then a wide, thin slab as the ground receiver.
     // (Both cast into both shadow cascades by default.)
-    Error Result = AddModelObject(world, TEST_MODEL_OBJECT_NAME, TEST_MODEL_ASSET_NAME,
+    Error Result = AddModelObject(world, TEST_MODEL_OBJECT_NAME, 0U, TEST_MODEL_ASSET_NAME,
         (Vector3){ 0.0f, 1.2f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f }, false, WorldShadowTier_Both);
     if (Result.Code == ErrorCode_Success)
     {
-        Result = AddModelObject(world, TEST_GROUND_OBJECT_NAME, TEST_MODEL_ASSET_NAME,
+        Result = AddModelObject(world, TEST_GROUND_OBJECT_NAME, 0U, TEST_MODEL_ASSET_NAME,
             (Vector3){ 0.0f, 0.0f, 0.0f }, (Vector3){ 40.0f, 0.2f, 40.0f }, false, WorldShadowTier_Both);
     }
     // A crisp (OmitPixelation) model to the side: it renders un-pixelated + full-res while the rest of the world
     // stays chunky — a stand-in for a readable in-world screen. Toggle it against pixelated with the C key.
     if (Result.Code == ErrorCode_Success)
     {
-        Result = AddModelObject(world, TEST_CRISP_OBJECT_NAME, TEST_MODEL_ASSET_NAME,
+        Result = AddModelObject(world, TEST_CRISP_OBJECT_NAME, 0U, TEST_MODEL_ASSET_NAME,
             (Vector3){ 3.0f, 1.2f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f }, true, WorldShadowTier_Both);
     }
     // Two coloured point lights flanking the centre cube (reach 10 units, so they light the cube + nearby
@@ -1147,12 +1283,12 @@ static Error BuildTestWorld(World* world, Services* services)
     if (Result.Code == ErrorCode_Success)
     {
         // The warm light casts shadows (exercises the point-light cube shadow map); the cool one does not.
-        Result = AddPointLight(world, (const unsigned char*)u8"warm_light",
+        Result = AddPointLight(world, (const unsigned char*)u8"warm_light", 0U,
             (Vector3){ 2.5f, 1.6f, 2.5f }, (Color){ 255, 150, 60, 255 }, 6.0f, 10.0f, true);
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = AddPointLight(world, (const unsigned char*)u8"cool_light",
+        Result = AddPointLight(world, (const unsigned char*)u8"cool_light", 0U,
             (Vector3){ -2.5f, 1.2f, -2.0f }, (Color){ 80, 150, 255, 255 }, 6.0f, 10.0f, false);
     }
     // The sprites (TestSprites): the original test image, a decal, a tree, a sign, smoke, a glow and a neon sign.
@@ -1167,13 +1303,18 @@ static Error BuildTestWorld(World* world, Services* services)
     // detailed prop), the metal cube casts FAR-only (still shadows coarsely at a distance — a large object).
     if (Result.Code == ErrorCode_Success)
     {
-        Result = AddModelObject(world, TEST_PBR_DEMO_OBJECT_NAME, TEST_PBR_DEMO_ASSET_NAME,
+        Result = AddModelObject(world, TEST_PBR_DEMO_OBJECT_NAME, 0U, TEST_PBR_DEMO_ASSET_NAME,
             (Vector3){ -6.0f, 1.2f, 0.0f }, (Vector3){ 2.0f, 2.0f, 2.0f }, false, WorldShadowTier_Near);
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = AddModelObject(world, TEST_PBR_METAL_OBJECT_NAME, TEST_PBR_METAL_ASSET_NAME,
+        Result = AddModelObject(world, TEST_PBR_METAL_OBJECT_NAME, 0U, TEST_PBR_METAL_ASSET_NAME,
             (Vector3){ 6.0f, 1.2f, 0.0f }, (Vector3){ 2.0f, 2.0f, 2.0f }, false, WorldShadowTier_Far);
+    }
+    // The hierarchy (T08): a desk with its parts, a cup and a lamp whose light hangs off it. J slides it, H hides it.
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddDesk(world);
     }
     if (Result.Code != ErrorCode_Success)
     {
@@ -1256,6 +1397,9 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         Frame->_opacityTestObjectIds[Index] = FindObjectId(&Frame->_world, OpacityTestObjectNames[Index]);
     }
     Frame->_opacityStep = 0U;
+    Frame->_deskId = FindObjectId(&Frame->_world, (const char*)TEST_DESK_OBJECT_NAME);
+    Frame->_isDeskSliding = false;
+    Frame->_deskSlideSeconds = 0.0;
     Frame->_camera = GameCamera_Create((Vector3){ .x = 0.0f, .y = 2.5f, .z = -7.0f }, GAME_CAMERA_DEFAULT_FOV_Y);
     Frame->_camera.Pitch = -0.2f;
     Frame->_cursorCaptured = false;

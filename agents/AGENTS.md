@@ -84,11 +84,13 @@ Current module list:
     world limits, the data revision, and the tag index queries use.
   * WorldQuery - Searches over a world's objects by tags, data comparisons, components, flags, distance and box, ordered
     by id or distance, with a limit: the engine side of selectors.
-* World data layer (WorldData.md) - The rendering-independent 3D world model: one object type made of components.
-  Covers seven modules (plus the private source/WorldInternal.h they share):
-  * WorldObject - The one object type: id, name, transform, tint, enabled, visible, mobility (static/movable), a
-    revision, its tags and data (a DataMap, with a data revision), and one slot per component type; created by the
-    World only; validating setters and a property table.
+* World data layer (WorldData.md) - The rendering-independent 3D world model: one object type made of components, in a
+  hierarchy. Covers eight modules (plus the private source/WorldInternal.h they share):
+  * WorldObject - The one object type: id, name, parent, transform (relative to the parent), tint, enabled, visible,
+    mobility (static/movable), a revision, its tags and data (a DataMap, with a data revision), and one slot per
+    component type; created by the World only; validating setters and a property table (the parent row is ReadOnly:
+    World_SetParent changes it). Its world placement (a cached world matrix, read without writing) and its effective
+    flags come through its parents.
   * WorldComponent - The component base (type, owner, revision), the component types, and the registry entry that
     describes each (name, size, table, transform-driver flag, construct/deconstruct/attach/detach/property-set hooks).
     At most one component of each type per object, at most one transform driver.
@@ -107,7 +109,13 @@ Current module list:
   * World - Owns the objects and their components, mints the uint64 ids (an id map for lookups), keeps a dense array
     of components per type for systems to iterate, holds the environment, borrows the key registry (the keys of its
     objects' tags and data) and keeps their tag index; with an asset manager (World_Construct2) it owns an asset user
-    its components load under; object-set and component-set versions. Saving comes back in T09.
+    its components load under; object-set and component-set versions. The hierarchy (source/WorldHierarchy.c):
+    World_SetParent (no cycles, at most 64 levels, optionally keeping the world placement), children in attach order,
+    cached world matrices marked dirty down a subtree and brought up to date by World_UpdateTransforms once a tick,
+    effective enabled/visible flags, and subtree removal (children first). Saving comes back in T09.
+  * WorldTransform - Transform maths (private, source/WorldTransform.h): compose a position, Euler XYZ rotation and
+    scale in DrawModelEx's order, the one decomposition back (mirrors, zero scales, gimbal lock; the nearest answer
+    for a sheared matrix), a local matrix under a parent, and a bound on a matrix's stretch for bounding spheres.
 * World runtime layer (WorldRuntime.md) - Camera, renderer, services bundle and bootstrap for viewing a world:
   * GameCamera - 3D camera (pos/fov/yaw/pitch/roll; +Y up, +Z forward), converted to a raylib camera at render time.
   * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, input, GHDF
@@ -120,8 +128,9 @@ Current module list:
     source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
     WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
   * WorldRenderCache - The renderer's private per-component cache (source/WorldRenderCache.h): one walk over the
-    world's model/sprite/light component arrays per frame builds the lists (disabled and hidden objects not drawn);
-    model assets are resolved once per component and again only when the name changes.
+    world's model/sprite/light component arrays per frame builds the lists with the objects' world placements
+    (effectively disabled and hidden objects not drawn); model assets are resolved once per component and again only
+    when the name changes.
   * WorldVisibility - What each pass draws this frame (private, source/WorldVisibility.h): frustum planes and sphere
     tests (the camera's frustum, each shadow cascade's box), draw distances (per kind, times the config's
     draw_distance_scale) with their fade band, the opacity's fade, the dither's C mirror (shaders/common/dither.glsl), and

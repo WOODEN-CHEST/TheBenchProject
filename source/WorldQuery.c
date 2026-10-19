@@ -244,7 +244,11 @@ static float GetDistanceSquared(Vector3 a, Vector3 b)
 
 static bool MatchesPlace(const WorldObject* object, const WorldQuery* query)
 {
-    Vector3 Position = WorldObject_GetPosition(object); // TODO: the world position once parenting arrives (T08).
+    if (!query->HasMaximumDistance && !query->HasBox)
+    {
+        return true;
+    }
+    Vector3 Position = WorldObject_GetWorldPosition(object);
     if (query->HasMaximumDistance
         && (GetDistanceSquared(Position, query->Origin) > (query->MaximumDistance * query->MaximumDistance)))
     {
@@ -257,7 +261,8 @@ static bool MatchesPlace(const WorldObject* object, const WorldQuery* query)
 
 static bool Matches(const WorldObject* object, const WorldQuery* query)
 {
-    if ((query->IsEnabledOnly && !WorldObject_IsEnabled(object)) || (query->IsVisibleOnly && !WorldObject_IsVisible(object)))
+    if ((query->IsEnabledOnly && !WorldObject_IsEffectivelyEnabled(object))
+        || (query->IsVisibleOnly && !WorldObject_IsEffectivelyVisible(object)))
     {
         return false;
     }
@@ -351,8 +356,8 @@ static bool CollectTaggedCandidates(World* world, const WorldQuery* query, const
 static bool KeepMatch(World* world, const WorldQuery* query, const WorldObject* object, bool areCandidatesOrdered)
 {
     WorldQueryMatch Match = { .Id = WorldObject_GetId(object),
-        .DistanceSquared = query->IsSortedByDistance ? GetDistanceSquared(WorldObject_GetPosition(object), query->Origin)
-            : 0.0f };
+        .DistanceSquared = query->IsSortedByDistance
+            ? GetDistanceSquared(WorldObject_GetWorldPosition(object), query->Origin) : 0.0f };
     GenericBuffer_AddLast(&world->_queryMatches, &Match);
     bool IsFull = (query->Limit > 0U) && (world->_queryMatches._count >= query->Limit);
     return !(IsFull && areCandidatesOrdered && !query->IsSortedByDistance);

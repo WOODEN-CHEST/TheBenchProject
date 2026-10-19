@@ -101,9 +101,9 @@ static void DestroyComponent(World* self, WorldObject* object, WorldComponentTyp
     Memory_Free(Component);
 }
 
-/* Destroys every component of the object. With @p isTearingDown the world is being destroyed: the component arrays
- * are freed whole afterwards, so they are not kept up to date one removal at a time. */
-static void DestroyComponents(World* self, WorldObject* object, bool isTearingDown)
+/* Detaches every component of the object (its types' OnDetach hooks) and adds their types' bits to @p ioTypes. They
+ * stay in the per-type arrays and in the object's slots until DestroyDetachedComponents. */
+static void DetachComponents(World* self, WorldObject* object, uint32_t* ioTypes)
 {
     for (size_t Type = 0; Type < self->_componentTypeCount; Type++)
     {
@@ -112,21 +112,48 @@ static void DestroyComponents(World* self, WorldObject* object, bool isTearingDo
         {
             continue;
         }
-        if (!isTearingDown)
-        {
-            DestroyComponent(self, object, (WorldComponentType)Type);
-            continue;
-        }
-
         const WorldComponentTypeInfo* Info = self->_componentTypes[Type];
         if (Info->OnDetach != NULL)
         {
             Info->OnDetach(self, object, Component);
         }
+        *ioTypes |= (uint32_t)1U << Type;
+    }
+}
+
+/* Destroys every component of the object, which DetachComponents detached and which no array holds any more. */
+static void DestroyDetachedComponents(World* self, WorldObject* object)
+{
+    for (size_t Type = 0; Type < self->_componentTypeCount; Type++)
+    {
+        WorldComponent* Component = object->_components[Type];
+        if (Component == NULL)
+        {
+            continue;
+        }
         object->_components[Type] = NULL;
-        Info->Deconstruct(Component);
+        self->_componentTypes[Type]->Deconstruct(Component);
         Memory_Free(Component);
     }
+}
+
+/* GenericBuffer_Filter predicates: keep what is not being removed. */
+static bool IsObjectKept(GenericBuffer* buffer, GenericBufferElementData element, const UserData* userData)
+{
+    UNUSED(buffer);
+    UNUSED(userData);
+    const WorldObject* Object = NULL;
+    Memory_Copy(element._element, &Object, sizeof(Object));
+    return !Object->_isBeingRemoved;
+}
+
+static bool IsComponentKept(GenericBuffer* buffer, GenericBufferElementData element, const UserData* userData)
+{
+    UNUSED(buffer);
+    UNUSED(userData);
+    const WorldComponent* Component = NULL;
+    Memory_Copy(element._element, &Component, sizeof(Component));
+    return !Component->_owner->_isBeingRemoved;
 }
 
 
@@ -212,6 +239,11 @@ static Error Construct(World* self, KeyRegistry* keys, AssetManager* assets, Log
     self->_nextId = 1;
     self->_objectSetVersion = 0;
     self->_componentSetVersion = 0;
+    self->_dirtyTransformCount = 0U;
+    self->_worldMatrixRecomputeCount = 0U;
+    self->_refusedParentCount = 0U;
+    self->_hasLoggedRefusedParent = false;
+    GenericBuffer_AllocateVariable(&self->_removalScratch, 0U, sizeof(WorldObject*));
     self->_name = NULL;
     self->_keys = keys;
     self->_assets = assets;
@@ -305,16 +337,32 @@ Error World_Deconstruct(World* self)
     }
 
     // Objects (and their components) first: a sprite's playback points into an animation the world's user holds.
+    // Every detach hook runs while every object is still alive and linked (each root's subtree children first), then
+    // everything is destroyed. The component arrays and the links are freed whole, so nothing is kept up to date.
+    WorldObject* const* Objects = (WorldObject* const*)self->_objects._data;
+    for (size_t Index = 0U; Index < self->_objects._count; Index++)
+    {
+        if (Objects[Index]->_parent != NULL)
+        {
+            continue;
+        }
+        for (WorldObject* Current = WorldInternal_GetFirstChildrenFirst(Objects[Index]); Current != NULL;
+            Current = WorldInternal_GetNextChildrenFirst(Current, Objects[Index]))
+        {
+            uint32_t Types = 0U;
+            DetachComponents(self, Current, &Types);
+        }
+    }
     for (size_t Index = self->_objects._count; Index > 0; Index--)
     {
-        WorldObject* Object = NULL;
-        GenericBuffer_GetAt(&self->_objects, Index - 1, &Object);
-        DestroyComponents(self, Object, true);
+        WorldObject* Object = Objects[Index - 1];
+        DestroyDetachedComponents(self, Object);
         WorldObject_Deconstruct(Object);
         Memory_Free(Object);
     }
 
     Memory_Free(self->_objects._data);
+    Memory_Free(self->_removalScratch._data);
     for (size_t Type = 0; Type < self->_componentTypeCount; Type++)
     {
         Memory_Free(self->_components[Type]._data);
@@ -397,15 +445,60 @@ Error World_RemoveObject(World* self, uint64_t id)
         return Error_Construct2(ErrorCode_InvalidOperation, "World_RemoveObject: no object with that id.");
     }
 
-    // Components and the data bookkeeping first, while the object is still in the world.
-    DestroyComponents(self, Object, false);
-    WorldInternal_ForgetObjectData(self, Object);
-    bool WasRemoved = false;
-    Error MapResult = IMap_Remove(HashMap_AsMap(&self->_objectsById), &id, &WasRemoved);
-    Error_Deconstruct(&MapResult);
-    RemovePointer(&self->_objects, Object);
-    WorldObject_Deconstruct(Object);
-    Memory_Free(Object);
+    // The whole subtree, children first, is listed before anything changes.
+    GenericBuffer* Removed = &self->_removalScratch;
+    GenericBuffer_Clear(Removed);
+    if (!WorldInternal_CollectSubtree(Object, Removed))
+    {
+        GenericBuffer_Clear(Removed);
+        return Error_Construct2(ErrorCode_InvalidOperation, "World_RemoveObject: the subtree could not be listed.");
+    }
+
+    // Children first, every component is detached while the whole hierarchy is still in place (its hooks see the
+    // object where it is). Then the subtree is unlinked, and the component arrays and the object list drop it in one
+    // pass each (keeping the others' order).
+    WorldObject* const* Objects = (WorldObject* const*)Removed->_data;
+    size_t RemovedCount = Removed->_count;
+    uint32_t Types = 0U;
+    for (size_t Index = 0U; Index < RemovedCount; Index++)
+    {
+        DetachComponents(self, Objects[Index], &Types);
+    }
+    WorldInternal_DetachFromParent(Object);
+    for (size_t Index = 0U; Index < RemovedCount; Index++)
+    {
+        Objects[Index]->_isBeingRemoved = true;
+    }
+    for (size_t Type = 0U; Type < self->_componentTypeCount; Type++)
+    {
+        if ((Types & ((uint32_t)1U << Type)) != 0U)
+        {
+            GenericBuffer_Filter(&self->_components[Type], IsComponentKept, NULL);
+        }
+    }
+    if (Types != 0U)
+    {
+        self->_componentSetVersion++;
+    }
+    GenericBuffer_Filter(&self->_objects, IsObjectKept, NULL);
+
+    for (size_t Index = 0U; Index < RemovedCount; Index++)
+    {
+        WorldObject* Doomed = Objects[Index];
+        DestroyDetachedComponents(self, Doomed);
+        WorldInternal_ForgetObjectData(self, Doomed);
+        uint64_t DoomedId = Doomed->_id;
+        bool WasRemoved = false;
+        Error MapResult = IMap_Remove(HashMap_AsMap(&self->_objectsById), &DoomedId, &WasRemoved);
+        Error_Deconstruct(&MapResult);
+        if (Doomed->_isWorldMatrixDirty)
+        {
+            self->_dirtyTransformCount--;
+        }
+        WorldObject_Deconstruct(Doomed);
+        Memory_Free(Doomed);
+    }
+    GenericBuffer_Clear(Removed);
     self->_objectSetVersion++;
     return Error_CreateSuccess();
 }

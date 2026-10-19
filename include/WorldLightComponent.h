@@ -9,11 +9,12 @@
 
 /**
  * @file WorldLightComponent.h
- * @brief The light component: a point light at its object's position.
+ * @brief The light component: a point light at its object's world position.
  *
  * It has a colour, an intensity, a range (how far the light reaches: the renderer fades it to nothing there and only
- * lights the objects within it) and whether it may cast a shadow. It uses its object's position; the rotation, scale
- * and tint do not affect it. A hidden or disabled object's light is off.
+ * lights the objects within it) and whether it may cast a shadow. It uses its object's world position (through its
+ * parents: a lamp carries its light); the rotation, scale and tint do not affect it. A hidden or disabled object's light
+ * is off, and so is one under a hidden or disabled ancestor.
  *
  * Added with World_AddComponent(world, id, WorldComponentType_Light, &component); reach its fields with
  * WorldLightComponent_FromComponent. Its properties are the rows of its table ("light_component"): color, intensity,

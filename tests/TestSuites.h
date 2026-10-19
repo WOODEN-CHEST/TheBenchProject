@@ -45,6 +45,17 @@ void ObjectDataTests_Run(TestRun* run);
  *  world's asset user, flags, and the one-transform-driver rule with test-only component types (WorldTests.c). */
 void WorldTests_Run(TestRun* run);
 
+/** @brief The transform hierarchy: World_SetParent's refusals (unknown ids, self, cycles, depth), world matrices down
+ *  three levels, reparenting with and without keeping the world placement, dirty propagation with a recompute count,
+ *  reads that never store, child order, subtree removal (components, arrays, hooks children first), effective flags,
+ *  and the parent row through the table (WorldHierarchyTests.c). */
+void WorldHierarchyTests_Run(TestRun* run);
+
+/** @brief Transform maths: DrawModelEx's composition, the decomposition's round trips (mirrors, zero scales, gimbal
+ *  lock, shear), local matrices under a parent and the parents that cannot be inverted, and the bound on a matrix's
+ *  stretch (WorldTransformTests.c; a private module of source/). */
+void WorldTransformTests_Run(TestRun* run);
+
 /** @brief Property tables: the self-check (every table in the game), construction, validation, copies, JSON and GHDF
  *  round trips, unknown keys, access by key, migration, and the environment's table against the old encoder
  *  (PropertyDescriptorTests.c). */

@@ -699,9 +699,20 @@ static void TheTagIndexFollowsEveryChange(TestRun* run)
 
 
 // Static functions: the brute-force comparison.
+/* An object's own flag and its ancestors', walked here by hand. */
+static bool AreAllEnabled(const WorldObject* object)
+{
+    return (object == NULL) || (WorldObject_IsEnabled(object) && AreAllEnabled(WorldObject_GetParent(object)));
+}
+
+static bool AreAllVisible(const WorldObject* object)
+{
+    return (object == NULL) || (WorldObject_IsVisible(object) && AreAllVisible(WorldObject_GetParent(object)));
+}
+
 static bool OracleMatches(const WorldObject* object, const WorldQuery* query)
 {
-    if ((query->IsEnabledOnly && !WorldObject_IsEnabled(object)) || (query->IsVisibleOnly && !WorldObject_IsVisible(object)))
+    if ((query->IsEnabledOnly && !AreAllEnabled(object)) || (query->IsVisibleOnly && !AreAllVisible(object)))
     {
         return false;
     }
@@ -748,7 +759,8 @@ static bool OracleMatches(const WorldObject* object, const WorldQuery* query)
         }
         IsMatch = IsMatch && Holds;
     }
-    Vector3 Position = WorldObject_GetPosition(object);
+    Matrix Placement = WorldObject_GetWorldMatrix(object);
+    Vector3 Position = { Placement.m12, Placement.m13, Placement.m14 };
     float X = Position.x - query->Origin.x;
     float Y = Position.y - query->Origin.y;
     float Z = Position.z - query->Origin.z;
@@ -778,7 +790,8 @@ static void RunOracle(World* world, const WorldQuery* query, GenericBuffer* outI
         {
             continue;
         }
-        Vector3 Position = WorldObject_GetPosition(Object);
+        Matrix Placement = WorldObject_GetWorldMatrix(Object);
+        Vector3 Position = { Placement.m12, Placement.m13, Placement.m14 };
         float X = Position.x - query->Origin.x;
         float Y = Position.y - query->Origin.y;
         float Z = Position.z - query->Origin.z;
@@ -866,8 +879,35 @@ static void BuildRandomWorld(TestRun* run, Random* random, DataFixture* fixture,
             TEST_CHECK_SUCCESS(run, World_AddComponent(TestWorld, Id, WorldComponentType_Light, &Component));
         }
         WorldObject* Object = GetObject(TestWorld, Id);
-        TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(Object, Random_NextInt32InLimit(random, 10) < 8));
-        TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Object, Random_NextInt32InLimit(random, 10) < 8));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(Object, Random_NextInt32InLimit(random, 10) < 9));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Object, Random_NextInt32InLimit(random, 10) < 9));
+
+        // A third of the objects sit on an earlier one (turned and scaled), so places and flags come through parents.
+        if ((Index > 0U) && (Random_NextInt32InLimit(random, 3) == 0))
+        {
+            WorldObject* Parent = NULL;
+            size_t At = (size_t)Random_NextInt32InLimit(random, (int32_t)World_GetObjectCount(TestWorld) - 1);
+            if (TEST_CHECK_SUCCESS(run, World_GetObjectByIndex(TestWorld, At, &Parent)))
+            {
+                TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Parent, (Vector3){ 0.0f,
+                    (float)Random_NextInt32InLimit(random, 628) / 100.0f, 0.0f }));
+                float Scale = (float)Random_NextInt32InRange(random, 5, 21) / 10.0f;
+                TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Parent, (Vector3){ Scale, Scale, Scale }));
+                // Never refused: parents picked among earlier objects stay far below the depth limit.
+                TEST_CHECK_SUCCESS(run, World_SetParent(TestWorld, Id, WorldObject_GetId(Parent), false));
+            }
+        }
+    }
+    // Some places are computed on the fly, the rest cached.
+    World_UpdateTransforms(TestWorld);
+    for (size_t Index = 0U; Index < RANDOM_TAG_COUNT; Index++)
+    {
+        WorldObject* Object = NULL;
+        if (TEST_CHECK_SUCCESS(run, World_GetObjectByIndex(TestWorld, Index * 7U, &Object)))
+        {
+            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, (Vector3){ RandomCoordinate(random),
+                RandomCoordinate(random), RandomCoordinate(random) }));
+        }
     }
 
     // Shake the index: remove some objects, and drop or overwrite some tags.

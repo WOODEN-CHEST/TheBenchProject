@@ -12,8 +12,9 @@ checker and autocomplete, `handoff/2026-10_scripting_language/PROPOSAL.md` secti
 (T09) all read the same tables. Decided as architecture A1 / G1 (a), built in T04.
 
 **Clients:** `WorldEnvironment` ([WorldData.md](WorldData.md), "Environment"), `GameClock` ([GameClock.md](GameClock.md),
-T23), and since T05 the world objects (`world_object`, with T24's `data` row for tags and custom data) and their
-components (`model_component`, `sprite_component`, `light_component`; [WorldData.md](WorldData.md), "Property
+T23), and since T05 the world objects (`world_object`, with T24's `data` row for tags and custom data and T08's
+`parent` row, both ReadOnly for `Properties_Set`, whose reads and copies the world reconciles in the table's `AfterSet`)
+and their components (`model_component`, `sprite_component`, `light_component`; [WorldData.md](WorldData.md), "Property
 tables"). T16 adds the weather.
 
 ## Declaring a table

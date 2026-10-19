@@ -23,6 +23,8 @@
  * - fixed: the quad lies in the object's local XY plane, facing local +Z, turned by the object's rotation (signs,
  *   posters, decals). The image is two-sided.
  *
+ * The object's position, rotation and scale here are its world ones: a parent's placement carries the sprite along.
+ *
  * LOOK. Lit sprites (is_lit, the default) take the sun, the moon, the lamps, shadows and fog like models; a billboard's
  * light wraps around it by light_wrap, as around a round thing. Unlit sprites show their colours as emitted light
  * (times emission: neon, fire), still fogged. The alpha mode decides transparency: cutout (alpha test at alpha_cutoff:

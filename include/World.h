@@ -23,12 +23,23 @@
  * WorldEnvironment describing its sky, fog and effects. It mints the unique object ids (a uint64 counter starting at
  * 1; 0 is never a valid id) and keeps:
  * - the objects in creation order, with an id -> object map for lookups;
+ * - the hierarchy: each object's parent and children (World_SetParent), and each object's cached world matrix;
  * - one dense array of components per component type, in the order they were added, which systems iterate
  *   (World_GetComponents): the renderer draws the models, sprites and lights from them.
  *
  * The world is data: it can be built, changed and torn down with no renderer present; the world renderer reads it and
  * never writes to it. Objects and components point back to their world, so a World must never be moved or copied once
  * constructed.
+ *
+ * HIERARCHY. World_SetParent places an object under another: its position, rotation and scale become relative to the
+ * parent, so it follows the parent (a cup on a desk, a light on a lamp, the parts of a door). It refuses unknown ids, an
+ * object as its own parent, cycles (a parent inside the object's own subtree) and hierarchies of more than
+ * WORLD_HIERARCHY_MAX_DEPTH levels; with keepWorldTransform it rewrites the object's local transform so it stays where it
+ * is (the editor's default). Removing an object removes its whole subtree, children first. A disabled parent disables
+ * its subtree and an invisible one hides it (World_IsEffectivelyEnabled, World_IsEffectivelyVisible). Each object's
+ * world matrix is cached: a change of a transform or a parent marks the subtree dirty, and World_UpdateTransforms
+ * (once a tick, after everything that moves objects) recomputes only the dirty ones, parents first. Reading a dirty
+ * matrix computes it without storing it, so reads never change the world (the renderer reads them).
  *
  * KEYS. Every world borrows the program's key registry (NamespacedKey.h): the keys of its objects' tags and data are
  * interned there, so they compare as integers.
@@ -67,7 +78,7 @@
  * THE TICK. Systems that change a world run in this order each game tick, so each knows its slot:
  * 1. input; 2. scripts (later); 3. transform drivers: characters, vehicles, physics (later); 4. collision sync
  * (later); 5. queued events: trigger enter and exit, later contacts (later); 6. animation (sprite playback today);
- * 7. the renderer, which only reads.
+ * 7. World_UpdateTransforms: the world matrices of everything that moved this tick; 8. the renderer, which only reads.
  */
 
 
@@ -117,6 +128,16 @@ typedef struct WorldStruct
     GenericBuffer _queryCandidates;
     /** @brief Scratch World_Query reuses: matches with their distances, for sorting. */
     GenericBuffer _queryMatches;
+    /** @brief How many objects' cached world matrices are dirty; World_UpdateTransforms brings them up to date. */
+    size_t _dirtyTransformCount;
+    /** @brief How many world matrices World_UpdateTransforms has computed and stored (a counter for tests). */
+    uint64_t _worldMatrixRecomputeCount;
+    /** @brief How many parents brought by reads and copies the world refused (World_GetRefusedParentCount). */
+    uint64_t _refusedParentCount;
+    /** @brief Whether a refused parent was logged (the first one is, once per world). */
+    bool _hasLoggedRefusedParent;
+    /** @brief Scratch World_RemoveObject reuses: the subtree being removed (WorldObject*), children first. */
+    GenericBuffer _removalScratch;
     /** @brief The asset manager components load from; borrowed. NULL for a world without assets. */
     AssetManager* _assets;
     /** @brief Logger for failures components report; borrowed, may be NULL. */
@@ -161,7 +182,8 @@ Error World_Construct2(World* self, KeyRegistry* keys, AssetManager* assets, Log
 /**
  * @brief Destroys every object (with its components) and releases the world's storage, environment and assets.
  *
- * Every component is detached and destroyed before any asset is released (a sprite's playback points into an
+ * Every component is detached first, while every object is alive and linked (each root's subtree children first), then
+ * the components and objects are destroyed, all before any asset is released (a sprite's playback points into an
  * animation the world's user holds).
  * @param self The world to release.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; otherwise the error from retiring the asset user
@@ -201,11 +223,16 @@ Error World_CreateObject(World* self, const unsigned char* name, WorldObject** o
 Error World_CreateObjectWithId(World* self, const unsigned char* name, uint64_t id, WorldObject** outObject);
 
 /**
- * @brief Removes an object: detaches and destroys its components, then destroys it.
+ * @brief Removes an object with its whole subtree (its children, theirs, ...): children first, each object's
+ *        components are detached (their OnDetach hooks run while the hierarchy is still in place), then the subtree is
+ *        unlinked and its components and objects destroyed.
+ *
+ * The other objects and components keep their order. The work is one pass over the world's object list and over each
+ * component array the subtree used, however large the subtree.
  * @param self The world; must not be NULL.
  * @param id The id of the object to remove.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p id is 0; ErrorCode_InvalidOperation if no
- *          object has that id.
+ *          object has that id or the subtree could not be listed (nothing is removed then).
  */
 Error World_RemoveObject(World* self, uint64_t id);
 
@@ -282,7 +309,8 @@ bool World_TryGetComponent(World* self, uint64_t id, WorldComponentType type, Wo
  * @brief Returns every component of a type in the world, in the order they were added: what systems iterate.
  *
  * The array is the world's own (borrowed): valid until a component of that type is added or removed. Systems still
- * check each owner's flags (WorldObject_IsEnabled, WorldObject_IsVisible).
+ * check each owner's flags (WorldObject_IsEffectivelyEnabled, WorldObject_IsEffectivelyVisible: a disabled or hidden
+ * ancestor counts).
  * @param self The world; must not be NULL.
  * @param type The component type.
  * @param outCount [out] Receives the number of components. Must not be NULL.
@@ -317,6 +345,123 @@ const WorldComponentTypeInfo* World_GetComponentTypeInfo(const World* self, Worl
  * @returns true if a type has that name.
  */
 bool World_TryFindComponentType(const World* self, const unsigned char* name, WorldComponentType* outType);
+
+
+// Hierarchy (source/WorldHierarchy.c).
+/**
+ * @brief Places an object under a parent, or makes it a root (@p parentId 0); its subtree comes with it.
+ *
+ * The object becomes the parent's last child. Setting the parent it already has changes nothing. Otherwise the
+ * object's revision advances, and its subtree's world matrices are marked dirty (and their transform revisions
+ * advance). Refused, with nothing changed, when: the object or the parent does not exist; the parent is the object
+ * itself or one of its descendants (a cycle); the hierarchy would get more than WORLD_HIERARCHY_MAX_DEPTH levels.
+ * @param self The world; must not be NULL.
+ * @param childId The object to move.
+ * @param parentId The new parent, or 0 for none.
+ * @param keepWorldTransform true: the object's position, rotation and scale are rewritten so that its world placement
+ *        stays the same (the editor's default; through the one decomposition, so a placement the new parent would shear
+ *        keeps its nearest unsheared form, and the values are within float precision of the old placement; the scale
+ *        keeps the signs the object has in the world, less the new parent's, so a billboard flips as before); false:
+ *        they are kept as they are, now relative to the new parent, so the object moves with the change.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p childId is 0; ErrorCode_InvalidOperation for
+ *          an unknown object or parent, the object itself, a cycle, a hierarchy too deep, or (with
+ *          @p keepWorldTransform) a new parent whose world matrix cannot be inverted (a zero scale on an axis);
+ *          ErrorCode_ArgumentOutOfRange if the kept placement breaks the transform's rules (not finite).
+ */
+Error World_SetParent(World* self, uint64_t childId, uint64_t parentId, bool keepWorldTransform);
+
+/**
+ * @brief Gives an object's parent.
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param outParentId [out] Receives the parent's id, 0 for a root (and on failure). Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p outParentId is NULL or @p id is 0;
+ *          ErrorCode_InvalidOperation if no object has @p id.
+ */
+Error World_GetParent(World* self, uint64_t id, uint64_t* outParentId);
+
+/**
+ * @brief Appends the ids of an object's children, in the order they were attached. @p outIds is not cleared.
+ *
+ * WorldObject_GetFirstChild / WorldObject_GetNextSibling walk them without copying.
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param outIds A buffer of uint64_t to append the ids to; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if an argument is NULL, @p outIds does not hold uint64_t or @p id is 0;
+ *          ErrorCode_InvalidOperation if no object has @p id; ErrorCode_BufferTooSmall if @p outIds could not grow.
+ */
+Error World_GetChildren(World* self, uint64_t id, GenericBuffer* outIds);
+
+/**
+ * @brief Gives an object's world matrix (WorldObject_GetWorldMatrix): its local transform times its parent's world
+ *        matrix. Reading never changes the world.
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param outMatrix [out] Receives the matrix. Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p outMatrix is NULL or @p id is 0;
+ *          ErrorCode_InvalidOperation if no object has @p id.
+ */
+Error World_GetWorldMatrix(World* self, uint64_t id, Matrix* outMatrix);
+
+/**
+ * @brief Gives an object's position in world space (WorldObject_GetWorldPosition).
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param outPosition [out] Receives the position. Must not be NULL.
+ * @returns As World_GetWorldMatrix.
+ */
+Error World_GetWorldPosition(World* self, uint64_t id, Vector3* outPosition);
+
+/**
+ * @brief Gives an object's rotation in world space as Euler XYZ angles in radians (WorldObject_GetWorldTransform: a
+ *        root's own rotation, a child's read from its world matrix).
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @param outRotation [out] Receives the rotation. Must not be NULL.
+ * @returns As World_GetWorldMatrix.
+ */
+Error World_GetWorldRotation(World* self, uint64_t id, Vector3* outRotation);
+
+/**
+ * @brief Reports whether an object and every ancestor are enabled (WorldObject_IsEffectivelyEnabled).
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @returns true if the object exists and is effectively enabled.
+ */
+bool World_IsEffectivelyEnabled(World* self, uint64_t id);
+
+/**
+ * @brief Reports whether an object and every ancestor are visible (WorldObject_IsEffectivelyVisible).
+ * @param self The world; must not be NULL.
+ * @param id The object's id.
+ * @returns true if the object exists and is effectively visible.
+ */
+bool World_IsEffectivelyVisible(World* self, uint64_t id);
+
+/**
+ * @brief Brings every dirty world matrix up to date (each computed once, its parent's first) and stores it.
+ *
+ * Run it once a tick after everything that moves objects (the tick's step 7, before the renderer), so the renderer and
+ * the next tick read cached matrices. Nothing to do (no walk at all) while nothing is dirty; otherwise one pass over the
+ * objects. Anything moved after it is still read correctly, computed on each read until the next update.
+ * @param self The world; may be NULL (does nothing).
+ */
+void World_UpdateTransforms(World* self);
+
+/**
+ * @brief Returns how many parents brought by reads and copies (the object table's JSON and GHDF readers,
+ *        Properties_CopyTo) the world refused.
+ *
+ * Those writes cannot fail on a parent (the tables check each value alone), so the world refuses one it cannot take (no
+ * such object, the object itself, a cycle, a hierarchy too deep): the object keeps its parent, and the first refusal
+ * is logged. A loader compares the count before and after reading each object and refuses a file that raised it.
+ * @param self The world; must not be NULL.
+ * @returns The count since the world was made.
+ */
+static inline uint64_t World_GetRefusedParentCount(const World* self)
+{
+    return self->_refusedParentCount;
+}
 
 
 // Tags and data.

@@ -20,10 +20,13 @@
  * At the start of every render, WorldRenderCache_Sync walks the world's per-type component arrays once
  * (World_GetComponents) and builds the lists every pass shares: the model components (with their resolved model asset,
  * final transform and world bounding sphere), the sprites that have a frame to draw, and the point lights. Passes
- * iterate these lists instead of walking the world and resolving assets by name themselves.
+ * iterate these lists instead of walking the world and resolving assets by name themselves. Every placement is the
+ * object's world one, through its parents (WorldObject_GetWorldMatrix, WorldObject_GetWorldTransform,
+ * WorldObject_GetWorldPosition), read without writing to the world.
  *
- * Objects that are disabled or hidden (WorldObject_IsEnabled, WorldObject_IsVisible) are not drawn: their model
- * entries stay (keeping the resolved model) but are not IsDrawn, and their sprites and lights are not listed.
+ * Objects that are disabled or hidden, or under a disabled or hidden ancestor (WorldObject_IsEffectivelyEnabled,
+ * WorldObject_IsEffectivelyVisible), are not drawn: their model entries stay (keeping the resolved model) but are not
+ * IsDrawn, and their sprites and lights are not listed.
  *
  * Model assets are resolved once per component: an entry remembers the component's revision and the hash of the name
  * it resolved; when the revision changes the name is hashed again, and the model is resolved again only if the name
@@ -59,18 +62,19 @@ typedef struct WorldRenderModelStruct
     /** @brief Centre and radius of the asset's mesh-space bounding sphere; valid when Asset is not NULL. */
     Vector3 LocalCenter;
     float LocalRadius;
-    /** @brief Whether the passes draw the entry this frame: its model resolved, its object enabled and visible. */
+    /** @brief Whether the passes draw the entry this frame: its model resolved, its object (effectively) enabled and
+     *  visible. */
     bool IsDrawn;
     /** @brief The component's render settings (this frame). */
     bool HasOutline;
     bool OmitsPixelation;
     WorldShadowTier ShadowTier;
     bool CastsShadows;
-    /** @brief The asset's import transform composed with the object's world transform (this frame). Valid when
-     *  Asset is not NULL. */
+    /** @brief The asset's import transform composed with the object's world matrix (this frame). Valid when Asset is
+     *  not NULL. */
     Matrix Transform;
-    /** @brief World-space bounding sphere (this frame): conservative under rotation and non-uniform scale. Valid
-     *  when Asset is not NULL. */
+    /** @brief World-space bounding sphere (this frame): conservative under rotation, non-uniform scale and the shear a
+     *  hierarchy can add (WorldTransform_GetMaxScale). Valid when Asset is not NULL. */
     Vector3 Center;
     float Radius;
     /** @brief The object's final tint colour (this frame). */
@@ -86,8 +90,9 @@ typedef struct WorldRenderSpriteStruct
     SpriteAnimationFrame Frame;
     /** @brief The frame's area in its texture, normalized: x, y of its top left, width, height (the shader's uvRect). */
     float UvRect[4];
-    /** @brief The quad before a viewer turns it (source/SpriteTransform.h): orientation, the object's position and
-     *  axes, the world size (the frame's pixels / pixels per unit x the object's X and Y scale), the pivot, the flips. */
+    /** @brief The quad before a viewer turns it (source/SpriteTransform.h): orientation, the object's world position
+     *  and axes, the world size (the frame's pixels / pixels per unit x the object's world X and Y scale), the pivot,
+     *  the flips. */
     SpriteShape Shape;
     /** @brief The fixed orientation's matrix (it does not depend on the viewer); valid when Shape.Orientation is
      *  WorldSpriteOrientation_Fixed. */
@@ -120,7 +125,7 @@ typedef struct WorldRenderLightStruct
 {
     /** @brief The light component (borrowed); valid until the world changes. */
     const WorldLightComponent* Component;
-    /** @brief World-space position (the object's). */
+    /** @brief World-space position (the object's world position). */
     Vector3 Position;
     /** @brief Reach radius (the light's range). */
     float Range;
@@ -214,7 +219,7 @@ static inline const WorldRenderModel* WorldRenderCache_GetModels(const WorldRend
 }
 
 /**
- * @brief Returns this frame's drawable sprites (with a frame to draw, on enabled and visible objects).
+ * @brief Returns this frame's drawable sprites (with a frame to draw, on effectively enabled and visible objects).
  * @param self The cache; must not be NULL.
  * @param outCount [out] Receives the entry count. Must not be NULL.
  * @returns The entries (borrowed until the next Sync or Reset); NULL when there are none.
@@ -227,8 +232,8 @@ static inline const WorldRenderSprite* WorldRenderCache_GetSprites(const WorldRe
 }
 
 /**
- * @brief Returns this frame's point lights: every light component on an enabled and visible object, including ones
- *        without intensity or reach.
+ * @brief Returns this frame's point lights: every light component on an effectively enabled and visible object,
+ *        including ones without intensity or reach.
  * @param self The cache; must not be NULL.
  * @param outCount [out] Receives the entry count. Must not be NULL.
  * @returns The entries (borrowed until the next Sync or Reset); NULL when there are none.

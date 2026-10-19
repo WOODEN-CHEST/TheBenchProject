@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 // Vector3 comes from Raylib and RenderColor (the tint type) from the renderer. Both are part of a world object's public
 // data, so these includes are unavoidable in this header.
 #include "raylib/raylib.h"
@@ -15,20 +16,35 @@
  * @file WorldObject.h
  * @brief A world object: one concrete type for everything placed in a 3D world.
  *
- * Every object has the same data: a unique id, a (non-unique) name, a transform (position, Euler XYZ rotation,
- * per-axis scale), a render tint, three flags (whether it is enabled, whether it is visible, and its mobility), and its
- * tags and custom data. What an object is comes from its components (WorldComponent.h): a model, a sprite, a light, at
- * most one of each type.
+ * Every object has the same data: a unique id, a (non-unique) name, a parent, a transform (position, Euler XYZ
+ * rotation, per-axis scale) relative to that parent, a render tint, three flags (whether it is enabled, whether it is
+ * visible, and its mobility), and its tags and custom data. What an object is comes from its components
+ * (WorldComponent.h): a model, a sprite, a light, at most one of each type.
  *
  * LIFETIME. Objects exist only inside a world: World_CreateObject makes one (the world assigns its id) and
- * World_RemoveObject destroys it with its components. An object points back to its world, so a World must never be
- * moved or copied once constructed.
+ * World_RemoveObject destroys it with its components and its whole subtree. An object points back to its world, so a
+ * World must never be moved or copied once constructed.
  *
- * PROPERTIES. Every property is a row of the object's property table (WorldObject_GetPropertyTable): name, position,
- * rotation, scale, tint, is_enabled, is_visible, mobility and data. The setters below validate through the table, so
- * the rules live there only, and the table functions (Properties_Set, the JSON and GHDF readers, Properties_CopyTo)
- * work on objects too. Every change, from either side, advances the object's revision (WorldObject_GetRevision); a
- * change of the tags and data advances its data revision instead (WorldObject_GetDataRevision).
+ * HIERARCHY. An object may have a parent (World_SetParent; a root has none). Its position, rotation and scale are then
+ * relative to the parent: moving a desk moves the cup on it, a lamp carries its light. For a root they are world
+ * values. A parent's children are kept in the order they were attached (WorldObject_GetFirstChild, then
+ * WorldObject_GetNextSibling). A hierarchy has at most WORLD_HIERARCHY_MAX_DEPTH levels and no cycles: the world
+ * refuses a parent that would break either. What the systems use is the object's world placement:
+ * - WorldObject_GetWorldMatrix (the local transform's matrix times the parent's world matrix), WorldObject_GetWorldPosition
+ *   and WorldObject_GetWorldTransform. The world caches each object's world matrix; a change of a transform or a parent
+ *   marks the object's subtree dirty (and advances each one's transform revision, WorldObject_GetTransformRevision),
+ *   World_UpdateTransforms (once a tick) brings the cache up to date, and a read of a dirty one computes it on the fly
+ *   without storing it, so reading never changes anything (the renderer may read it).
+ * - WorldObject_IsEffectivelyEnabled and WorldObject_IsEffectivelyVisible: a disabled parent disables its subtree, an
+ *   invisible parent hides it. Systems read these, not the object's own flags.
+ *
+ * PROPERTIES. Every property is a row of the object's property table (WorldObject_GetPropertyTable): name, parent,
+ * position, rotation, scale, tint, is_enabled, is_visible, mobility and data. The setters below validate through the
+ * table, so the rules live there only, and the table functions (Properties_Set, the JSON and GHDF readers,
+ * Properties_CopyTo) work on objects too. Every change, from either side, advances the object's revision
+ * (WorldObject_GetRevision); a change of the tags and data advances its data revision instead
+ * (WorldObject_GetDataRevision). The parent row is ReadOnly for Properties_Set (World_SetParent changes it); a read or a
+ * copy that brings another parent attaches the object to it, or the world refuses it (World_GetRefusedParentCount).
  *
  * TAGS AND DATA. Each object holds a DataMap (DataMap.h) of namespaced keys to typed values: a tag is an entry with no
  * value. It is NULL while empty. Change it through the world, which keeps its tag index, its limits and the data
@@ -57,6 +73,8 @@
 #define WORLD_OBJECT_DATA_MAX_ENTRIES ((size_t)256)
 /** @brief The most bytes an object's data may count (DataMap_GetByteSize): 64 KiB. */
 #define WORLD_OBJECT_DATA_MAX_BYTES ((size_t)65536)
+/** @brief The most levels a hierarchy may have: a root is level 1, so an object has at most 63 ancestors. */
+#define WORLD_HIERARCHY_MAX_DEPTH ((size_t)64)
 
 
 // Types.
@@ -84,11 +102,13 @@ typedef struct WorldObjectStruct
     /** @brief Owned, NUL-terminated UTF-8 name (need not be unique, at most WORLD_OBJECT_NAME_MAX_LENGTH bytes);
      *  may be NULL. */
     unsigned char* _name;
-    /** @brief Position (world space until parenting arrives). */
+    /** @brief The parent's id, 0 for a root: the table's parent row. The world keeps it the id of _parent. */
+    uint64_t _parentId;
+    /** @brief Position relative to the parent (world space for a root). */
     Vector3 _position;
-    /** @brief Euler XYZ rotation, in radians (degrees in JSON). */
+    /** @brief Euler XYZ rotation relative to the parent, in radians (degrees in JSON). */
     Vector3 _rotation;
-    /** @brief Per-axis scale. */
+    /** @brief Per-axis scale, relative to the parent's. */
     Vector3 _scale;
     /** @brief Render tint (tint colour, brightness and opacity, both in [0, 1]). */
     RenderColor _tint;
@@ -110,6 +130,29 @@ typedef struct WorldObjectStruct
     size_t _countedDataBytes;
     /** @brief The world's bookkeeping: how many of the tag index's lists hold this object. */
     uint32_t _indexedTagCount;
+    /** @brief The parent (world-owned), or NULL for a root. */
+    WorldObject* _parent;
+    /** @brief The first child (in the order they were attached), or NULL without children. */
+    WorldObject* _firstChild;
+    /** @brief The last child, or NULL without children. */
+    WorldObject* _lastChild;
+    /** @brief The parent's child attached just before this one, or NULL for its first child (and for a root). */
+    WorldObject* _previousSibling;
+    /** @brief The parent's child attached just after this one, or NULL for its last child (and for a root). */
+    WorldObject* _nextSibling;
+    /** @brief How many children it has. */
+    size_t _childCount;
+    /** @brief The cached world matrix: the local transform's matrix times the parent's world matrix (for a root, the
+     *  local one). Up to date while _isWorldMatrixDirty is false. */
+    Matrix _worldMatrix;
+    /** @brief Whether _worldMatrix is out of date: the object's or an ancestor's transform or parent changed since it
+     *  was computed. A dirty object's descendants are all dirty too. */
+    bool _isWorldMatrixDirty;
+    /** @brief Advances (wrapping) whenever the object's world transform may have changed: its own position, rotation,
+     *  scale or parent, or an ancestor's. Runtime only. */
+    uint32_t _transformRevision;
+    /** @brief The world's bookkeeping while it removes a subtree. */
+    bool _isBeingRemoved;
 } WorldObject;
 
 
@@ -117,9 +160,11 @@ typedef struct WorldObjectStruct
 /**
  * @brief Returns the property table of world objects ("world_object").
  *
- * Its rows: name, position, rotation (an AngleVector3: degrees in JSON), scale, tint, is_enabled, is_visible and
- * mobility ("static" / "movable"). Its AfterSet advances the object's revision. Wire ids start at 3: 1 and 2 are left
- * for the world file's own entries per object (the id and the components).
+ * Its rows: name, parent (an ObjectId, ReadOnly for Properties_Set: World_SetParent changes it), position, rotation (an
+ * AngleVector3: degrees in JSON), scale, tint, is_enabled, is_visible, mobility ("static" / "movable") and data (tags
+ * and custom data). Its AfterSet advances the object's revision; after a change of the transform it marks the object's
+ * subtree dirty, and after a read or a copy the world attaches the object to the parent it brought (or refuses it). Wire
+ * ids start at 3: 1 and 2 are left for the world file's own entries per object (the id and the components).
  * @returns The table (static, immutable).
  */
 const PropertyTable* WorldObject_GetPropertyTable(void);
@@ -207,7 +252,8 @@ static inline bool WorldObject_HasTag(const WorldObject* self, uint32_t key)
 
 // Functions: transform and tint.
 /**
- * @brief Returns the object's position.
+ * @brief Returns the object's position relative to its parent (in world space for a root; see
+ *        WorldObject_GetWorldPosition).
  * @param self The object; must not be NULL.
  * @returns The position.
  */
@@ -217,7 +263,7 @@ static inline Vector3 WorldObject_GetPosition(const WorldObject* self)
 }
 
 /**
- * @brief Sets the object's position.
+ * @brief Sets the object's position relative to its parent (in world space for a root). Its subtree moves with it.
  * @param self The object; must not be NULL.
  * @param position The new position; every component must be finite.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if any component is
@@ -226,7 +272,7 @@ static inline Vector3 WorldObject_GetPosition(const WorldObject* self)
 Error WorldObject_SetPosition(WorldObject* self, Vector3 position);
 
 /**
- * @brief Returns the object's Euler XYZ rotation, in radians.
+ * @brief Returns the object's Euler XYZ rotation relative to its parent, in radians.
  * @param self The object; must not be NULL.
  * @returns The rotation.
  */
@@ -236,7 +282,7 @@ static inline Vector3 WorldObject_GetRotation(const WorldObject* self)
 }
 
 /**
- * @brief Sets the object's Euler XYZ rotation, in radians.
+ * @brief Sets the object's Euler XYZ rotation relative to its parent, in radians. Its subtree turns with it.
  * @param self The object; must not be NULL.
  * @param rotation The new rotation; every component must be finite.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if any component is
@@ -245,7 +291,7 @@ static inline Vector3 WorldObject_GetRotation(const WorldObject* self)
 Error WorldObject_SetRotation(WorldObject* self, Vector3 rotation);
 
 /**
- * @brief Returns the object's per-axis scale.
+ * @brief Returns the object's per-axis scale, relative to its parent's.
  * @param self The object; must not be NULL.
  * @returns The scale.
  */
@@ -255,7 +301,8 @@ static inline Vector3 WorldObject_GetScale(const WorldObject* self)
 }
 
 /**
- * @brief Sets the object's per-axis scale.
+ * @brief Sets the object's per-axis scale, relative to its parent's. Its subtree scales with it (its children's
+ *        positions too).
  * @param self The object; must not be NULL.
  * @param scale The new scale; every component must be finite.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if any component is
@@ -287,7 +334,8 @@ Error WorldObject_SetTint(WorldObject* self, RenderColor tint);
 
 // Functions: flags.
 /**
- * @brief Returns whether systems process the object (see the file comment).
+ * @brief Returns the object's own enabled flag (see the file comment). Systems read WorldObject_IsEffectivelyEnabled,
+ *        which also asks its ancestors.
  * @param self The object; must not be NULL.
  * @returns true if enabled.
  */
@@ -299,13 +347,14 @@ static inline bool WorldObject_IsEnabled(const WorldObject* self)
 /**
  * @brief Enables or disables the object (advances its revision).
  * @param self The object; must not be NULL.
- * @param isEnabled false makes every system skip the object.
+ * @param isEnabled false makes every system skip the object and its subtree.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  */
 Error WorldObject_SetEnabled(WorldObject* self, bool isEnabled);
 
 /**
- * @brief Returns whether the renderer draws the object (see the file comment).
+ * @brief Returns the object's own visible flag (see the file comment). Systems read WorldObject_IsEffectivelyVisible,
+ *        which also asks its ancestors.
  * @param self The object; must not be NULL.
  * @returns true if visible.
  */
@@ -317,7 +366,8 @@ static inline bool WorldObject_IsVisible(const WorldObject* self)
 /**
  * @brief Shows or hides the object (advances its revision).
  * @param self The object; must not be NULL.
- * @param isVisible false hides the object's model, sprite and light; it still exists for collision and interaction.
+ * @param isVisible false hides the object's model, sprite and light, and its subtree's; they still exist for collision
+ *        and interaction.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  */
 Error WorldObject_SetVisible(WorldObject* self, bool isVisible);
@@ -355,3 +405,123 @@ static inline WorldComponent* WorldObject_GetComponent(const WorldObject* self, 
 {
     return ((size_t)type < WORLD_MAX_COMPONENT_TYPES) ? self->_components[type] : NULL;
 }
+
+
+// Functions: hierarchy (source/WorldHierarchy.c; change it through World_SetParent and World_RemoveObject).
+/**
+ * @brief Returns the id of the object's parent.
+ * @param self The object; must not be NULL.
+ * @returns The parent's id, or 0 for a root.
+ */
+static inline uint64_t WorldObject_GetParentId(const WorldObject* self)
+{
+    return self->_parentId;
+}
+
+/**
+ * @brief Returns the object's parent (world-owned: valid until it is removed), or NULL for a root.
+ * @param self The object; must not be NULL.
+ * @returns The parent, or NULL.
+ */
+static inline WorldObject* WorldObject_GetParent(const WorldObject* self)
+{
+    return self->_parent;
+}
+
+/**
+ * @brief Returns the object's first child, in the order they were attached; walk the rest with
+ *        WorldObject_GetNextSibling.
+ *
+ * The pointers are valid until the hierarchy changes (World_SetParent, World_RemoveObject): do not change it while
+ * walking; World_GetChildren copies the ids instead.
+ * @param self The object; must not be NULL.
+ * @returns The first child, or NULL without children.
+ */
+static inline WorldObject* WorldObject_GetFirstChild(const WorldObject* self)
+{
+    return self->_firstChild;
+}
+
+/**
+ * @brief Returns the next child of the object's parent (see WorldObject_GetFirstChild).
+ * @param self The object; must not be NULL.
+ * @returns The child attached after this one, or NULL for the last (and for a root).
+ */
+static inline WorldObject* WorldObject_GetNextSibling(const WorldObject* self)
+{
+    return self->_nextSibling;
+}
+
+/**
+ * @brief Returns how many children the object has.
+ * @param self The object; must not be NULL.
+ * @returns The child count.
+ */
+static inline size_t WorldObject_GetChildCount(const WorldObject* self)
+{
+    return self->_childCount;
+}
+
+/**
+ * @brief Returns a number that changes whenever the object's world transform may have changed: its own position,
+ *        rotation, scale or parent, or any ancestor's.
+ *
+ * For systems that keep something per object in world space (collision's structures, later static shadows): equal
+ * values mean the world matrix is the one they saw. Runtime only: not saved.
+ * @param self The object; must not be NULL.
+ * @returns The current transform revision.
+ */
+static inline uint32_t WorldObject_GetTransformRevision(const WorldObject* self)
+{
+    return self->_transformRevision;
+}
+
+/**
+ * @brief Returns the object's world matrix: its local transform's matrix (scale, then the Euler XYZ rotation, then the
+ *        translation) times its parent's world matrix; a root's is its local one.
+ *
+ * The world's cached matrix when it is up to date; otherwise it is computed from the nearest up-to-date ancestor down
+ * (at most WORLD_HIERARCHY_MAX_DEPTH matrix products) and NOT stored: reading never changes the world, so the renderer
+ * may read it. World_UpdateTransforms stores them. A world matrix can hold a shear (a child turned inside a parent
+ * scaled unevenly).
+ * @param self The object; must not be NULL.
+ * @returns The world matrix.
+ */
+Matrix WorldObject_GetWorldMatrix(const WorldObject* self);
+
+/**
+ * @brief Returns the object's position in world space (its world matrix's translation; a root's own position).
+ * @param self The object; must not be NULL.
+ * @returns The world position.
+ */
+Vector3 WorldObject_GetWorldPosition(const WorldObject* self);
+
+/**
+ * @brief Gives the object's world placement as a position, an Euler XYZ rotation (radians) and a scale.
+ *
+ * A root's own values exactly. A child's come from its world matrix through the one decomposition the world uses: the
+ * scale is the length of each world axis, signed as the product of the scales' signs along its chain (its own and its
+ * ancestors', axis by axis) wherever the matrix allows, so a child keeps the signs a root with those scales would have
+ * (billboards flip by them); the rotation is that of the axes made orthonormal. A sheared world matrix has no exact
+ * answer and gives the nearest placement without the shear.
+ * @param self The object; must not be NULL.
+ * @param outPosition [out] Receives the world position. Must not be NULL.
+ * @param outRotation [out] Receives the world rotation, Euler XYZ in radians. Must not be NULL.
+ * @param outScale [out] Receives the world scale. Must not be NULL.
+ */
+void WorldObject_GetWorldTransform(const WorldObject* self, Vector3* outPosition, Vector3* outRotation,
+    Vector3* outScale);
+
+/**
+ * @brief Returns whether systems process the object: it and every ancestor are enabled.
+ * @param self The object; must not be NULL.
+ * @returns true if the object and all its ancestors are enabled.
+ */
+bool WorldObject_IsEffectivelyEnabled(const WorldObject* self);
+
+/**
+ * @brief Returns whether the object is shown (if it is also enabled): it and every ancestor are visible.
+ * @param self The object; must not be NULL.
+ * @returns true if the object and all its ancestors are visible.
+ */
+bool WorldObject_IsEffectivelyVisible(const WorldObject* self);

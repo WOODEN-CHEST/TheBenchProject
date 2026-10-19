@@ -17,7 +17,8 @@
  *        selectors.
  *
  * A WorldQuery holds optional filters, combined with AND: tags (all of, any of, none of), data keys present, data
- * comparisons, component types present, enabled and visible only, within a distance of a point, inside a box. It also
+ * comparisons, component types present, enabled and visible only (effectively: a disabled or hidden ancestor counts),
+ * within a distance of a point, inside a box (both by the object's world position, through its parents). It also
  * holds the order (object ids ascending, or nearest first) and a limit. World_Query appends the ids of the matching
  * objects. Start from WorldQuery_Create (no filter: every object) and set what is needed; the arrays are borrowed for
  * the call.
@@ -99,21 +100,22 @@ typedef struct WorldQueryStruct
     const WorldComponentType* ComponentTypes;
     /** @brief The number of ComponentTypes. */
     size_t ComponentTypeCount;
-    /** @brief Only enabled objects (scripts' searches set it). */
+    /** @brief Only enabled objects whose ancestors are all enabled too (WorldObject_IsEffectivelyEnabled; scripts'
+     *  searches set it). */
     bool IsEnabledOnly;
-    /** @brief Only visible objects. */
+    /** @brief Only visible objects whose ancestors are all visible too (WorldObject_IsEffectivelyVisible). */
     bool IsVisibleOnly;
     /** @brief The point distances are measured from (finite). */
     Vector3 Origin;
     /** @brief Whether MaximumDistance applies. */
     bool HasMaximumDistance;
-    /** @brief The farthest an object's position may be from Origin (finite, at least 0). */
+    /** @brief The farthest an object's world position may be from Origin (finite, at least 0). */
     float MaximumDistance;
     /** @brief Whether the box applies. */
     bool HasBox;
     /** @brief The box's lowest corner (finite, every component at most BoxMaximum's). */
     Vector3 BoxMinimum;
-    /** @brief The box's highest corner; positions on the faces are inside. */
+    /** @brief The box's highest corner; world positions on the faces are inside. */
     Vector3 BoxMaximum;
     /** @brief true: nearest to Origin first (ties by id); false: object ids ascending. */
     bool IsSortedByDistance;
@@ -135,7 +137,8 @@ static inline WorldQuery WorldQuery_Create(void)
 /**
  * @brief Appends the ids of the objects that match a query, in its order and within its limit.
  *
- * Objects are placed by their position (world space until parenting arrives). @p outIds is not cleared.
+ * Objects are placed by their world position (WorldObject_GetWorldPosition, through their parents). @p outIds is not
+ * cleared.
  * @param self The world; must not be NULL.
  * @param query The query; must not be NULL.
  * @param outIds A buffer of uint64_t to append the ids to; must not be NULL.

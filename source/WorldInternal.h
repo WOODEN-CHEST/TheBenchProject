@@ -16,12 +16,13 @@
 
 
 /**
- * Private header (source/) of the world data modules: World (World.c, WorldData.c for tags and data, WorldQuery.c),
- * WorldObject, WorldComponent and the component types (WorldModelComponent, WorldSpriteComponent,
- * WorldLightComponent). Not public API. It holds what those modules share: the object's construction (objects are made
- * by the world only), the object lookup, the hook every component table calls after a change, the world's data
- * bookkeeping (the tag index and the byte count), the world's assets for components that load some, small helpers,
- * and a seam for tests.
+ * Private header (source/) of the world data modules: World (World.c, WorldData.c for tags and data, WorldHierarchy.c
+ * for parents and world matrices, WorldQuery.c), WorldObject, WorldComponent and the component types
+ * (WorldModelComponent, WorldSpriteComponent, WorldLightComponent). Not public API. It holds what those modules share:
+ * the object's construction (objects are made by the world only), the object lookup, the hook every component table
+ * calls after a change, the world's data bookkeeping (the tag index and the byte count), the hierarchy's bookkeeping
+ * (dirty world matrices, parents from reads, subtrees), the world's assets for components that load some, small
+ * helpers, and seams for tests.
  */
 
 
@@ -45,6 +46,10 @@ Error WorldObject_Construct(WorldObject* self, World* world, uint64_t id, const 
 
 /** Releases what the object owns (its name). Its components must have been destroyed first; not the memory itself. */
 void WorldObject_Deconstruct(WorldObject* self);
+
+/** Checks a transform against the object table's rules for position, rotation and scale (the first broken one fails,
+ *  ErrorCode_ArgumentOutOfRange), for code that writes the three fields itself (World_SetParent). */
+Error WorldObject_CheckTransform(Vector3 position, Vector3 rotation, Vector3 scale);
 
 
 // Functions: the world (World.c).
@@ -72,6 +77,49 @@ void WorldInternal_ForgetObjectData(World* world, WorldObject* object);
 /** The ids of the objects carrying @p tag, ascending (borrowed: valid until the tag index changes); NULL with a count
  *  of 0 when none do. */
 const uint64_t* WorldInternal_GetTagMembers(World* world, uint32_t tag, size_t* outCount);
+
+
+// Functions: the hierarchy (WorldHierarchy.c).
+/**
+ * After an object's position, rotation, scale or parent changed: marks its cached world matrix and those of its whole
+ * subtree dirty (counted for World_UpdateTransforms) and advances each one's transform revision. Walks the subtree
+ * every time (the revisions must move even where the matrices were dirty already).
+ */
+void WorldInternal_MarkTransformChanged(World* world, WorldObject* object);
+
+/**
+ * After a read or a copy wrote an object's parent id behind the world's back (the object table's AfterSet): attaches
+ * the object under that parent, keeping its local transform, as World_SetParent would. A parent it cannot take (no such
+ * object, the object itself, one of its descendants, or a hierarchy deeper than WORLD_HIERARCHY_MAX_DEPTH) is refused:
+ * the object keeps its parent and the id goes back to it, the world counts the refusal (World_GetRefusedParentCount)
+ * and logs the first one. The caller marks the transform changed.
+ */
+void WorldInternal_SyncObjectParent(World* world, WorldObject* object);
+
+/**
+ * The first object of a children-first walk of @p root's subtree (every object after all of its descendants, @p root
+ * last): its deepest first child. Walk on with WorldInternal_GetNextChildrenFirst; the links must not change meanwhile.
+ */
+WorldObject* WorldInternal_GetFirstChildrenFirst(WorldObject* root);
+
+/** The object after @p current in a children-first walk of @p root's subtree, or NULL after @p root. */
+WorldObject* WorldInternal_GetNextChildrenFirst(WorldObject* current, const WorldObject* root);
+
+/**
+ * Appends @p object's subtree to @p outObjects (a buffer of WorldObject*) children first: every object after all of
+ * its descendants, @p object last. Nothing is changed. Returns false if the buffer could not grow.
+ */
+bool WorldInternal_CollectSubtree(WorldObject* object, GenericBuffer* outObjects);
+
+/** Takes @p object out of its parent's children: it becomes a root (its own children stay with it). Its local transform
+ *  and its dirty flags are left alone (the caller marks what changed). */
+void WorldInternal_DetachFromParent(WorldObject* object);
+
+/** Tests only: how many world matrices World_UpdateTransforms has computed and stored since the world was made. */
+static inline uint64_t WorldInternal_GetWorldMatrixRecomputeCount(const World* world)
+{
+    return world->_worldMatrixRecomputeCount;
+}
 
 
 // Functions: components (World.c).

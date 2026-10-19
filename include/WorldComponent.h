@@ -106,8 +106,11 @@ typedef void (*WorldComponentDeconstructFunction)(WorldComponent* component);
  * @brief Called when a component joins (OnAttach) or leaves (OnDetach) its object in a world.
  *
  * OnAttach runs after the component is in its object's slot and in the world's per-type array; OnDetach runs before
- * it leaves them. Neither can fail: a recoverable problem (a missing asset) is logged once and leaves the component in
- * a harmless state (AGENTS.md rule 7). Must not add or remove objects or components.
+ * it leaves them, while its object and the object's whole hierarchy are still in place: removing an object runs the
+ * hooks of its whole subtree (children first) before unlinking or destroying any of it, and destroying a world runs
+ * every hook before destroying any object. Neither can fail: a recoverable problem (a missing asset) is logged once
+ * and leaves the component in a harmless state (AGENTS.md rule 7). Must not add or remove objects or components, nor
+ * change the hierarchy (World_SetParent).
  * @param world The world; never NULL.
  * @param object The owning object; never NULL.
  * @param component The component; never NULL.
@@ -118,7 +121,7 @@ typedef void (*WorldComponentHookFunction)(World* world, WorldObject* object, Wo
  * @brief Called after a property of an attached component changed (after its revision advanced).
  *
  * Runs for the component's own setters and for every table write (see the file comment). Must not add or remove
- * objects or components.
+ * objects or components, nor change the hierarchy (World_SetParent).
  * @param world The world; never NULL.
  * @param object The owning object; never NULL.
  * @param component The component; never NULL.

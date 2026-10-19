@@ -132,9 +132,10 @@ recomputed per frame.
   `Greater`, `GreaterOrEqual` order numbers (int and float) and date_times, and never match other types;
 - `ComponentTypes` present;
 - `IsEnabledOnly`, `IsVisibleOnly` (off by default; scripts' searches set `IsEnabledOnly`, since a disabled object is
-  skipped by every system, and the editor leaves it off);
+  skipped by every system, and the editor leaves it off). Both are effective (T08): an object under a disabled or
+  hidden ancestor counts as disabled or hidden;
 - within `MaximumDistance` of `Origin`; inside the box `BoxMinimum`..`BoxMaximum` (faces inside); positions are the
-  objects' own (world space until parenting, T08: a `// TODO:` in `source/WorldQuery.c`);
+  objects' world positions (`WorldObject_GetWorldPosition`, through their parents; T08);
 - the order: object ids ascending, or nearest to `Origin` first (`IsSortedByDistance`, ties by id); then `Limit`.
 
 Malformed queries (a NULL array with a count, key id 0, an ordering operator on a string, a NaN, a negative distance,

@@ -8,6 +8,7 @@
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
+#include "raylib/raymath.h"
 #include <math.h>
 #include <string.h>
 
@@ -469,6 +470,139 @@ static void SpriteEntriesCarryTheirQuadAndSettings(TestRun* run)
     CacheFixture_Deconstruct(run, &Fixture);
 }
 
+/* Creates an object under @p parent with a component of @p type; returns the component, or NULL with a failed check. */
+static WorldComponent* AddChildComponent(TestRun* run, World* world, const WorldObject* parent, WorldComponentType type,
+    Vector3 position)
+{
+    WorldComponent* Component = AddComponentObject(run, world, type);
+    if ((Component == NULL)
+        || !TEST_CHECK_SUCCESS(run, World_SetParent(world, WorldObject_GetId(WorldComponent_GetOwner(Component)),
+            WorldObject_GetId(parent), false))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(Component), position)))
+    {
+        return NULL;
+    }
+    return Component;
+}
+
+/* A parent turned a quarter about Y and scaled 2 places its children: a model, a light and a sprite. The cache reads
+ * their world placements, also while they are dirty (no World_UpdateTransforms) and after the parent moves. */
+static void ChildrenAreDrawnWhereTheirParentsPutThem(TestRun* run)
+{
+    CacheFixture Fixture;
+    WorldObject* Parent = NULL;
+    if (!CacheFixture_Construct(run, &Fixture)
+        || !TEST_CHECK_SUCCESS(run, World_CreateObject(&Fixture.World, NULL, &Parent))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, (Vector3){ 10.0f, 0.0f, 0.0f }))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Parent, (Vector3){ 0.0f, PI / 2.0f, 0.0f }))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Parent, (Vector3){ 2.0f, 2.0f, 2.0f })))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    WorldModelComponent* ModelComponent = WorldModelComponent_FromComponent(AddChildComponent(run, &Fixture.World,
+        Parent, WorldComponentType_Model, (Vector3){ 1.0f, 0.0f, 0.0f }));
+    WorldLightComponent* Light = WorldLightComponent_FromComponent(AddChildComponent(run, &Fixture.World, Parent,
+        WorldComponentType_Light, (Vector3){ 0.0f, 1.0f, 0.0f }));
+    WorldSpriteComponent* Sprite = WorldSpriteComponent_FromComponent(AddChildComponent(run, &Fixture.World, Parent,
+        WorldComponentType_Sprite, (Vector3){ 0.0f, 0.0f, 1.0f }));
+    if ((ModelComponent != NULL) && (Light != NULL) && (Sprite != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetModel(ModelComponent, (const unsigned char*)u8"box"))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOrientation(Sprite, WorldSpriteOrientation_Fixed)))
+    {
+        for (size_t Pass = 0U; (Pass < 2U) && CacheFixture_Sync(run, &Fixture); Pass++)
+        {
+            // The turn takes local +X to -Z and +Z to +X; the scale doubles the distances and the sizes.
+            float Shift = (Pass == 0U) ? 0.0f : 5.0f;
+            size_t Count = 0;
+            const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+            TEST_CHECK(run, (Count == 1) && Models[0].IsDrawn && IsNear(Models[0].Center.x, 10.0f)
+                && IsNear(Models[0].Center.y, Shift) && IsNear(Models[0].Center.z, -2.0f)
+                && IsNear(Models[0].Radius, 2.0f * sqrtf(0.75f)));
+            TEST_CHECK(run, (Count == 1)
+                && (memcmp(&Models[0].Transform, &(Matrix){ 0 }, sizeof(Matrix)) != 0)
+                && IsNear(Models[0].Transform.m12, 10.0f) && IsNear(Models[0].Transform.m14, -2.0f));
+            const WorldRenderLight* Lights = WorldRenderCache_GetLights(&Fixture.Cache, &Count);
+            TEST_CHECK(run, (Count == 1) && IsNear(Lights[0].Position.x, 10.0f)
+                && IsNear(Lights[0].Position.y, 2.0f + Shift) && IsNear(Lights[0].Position.z, 0.0f));
+            const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&Fixture.Cache, &Count);
+            TEST_CHECK(run, (Count == 1) && IsNear(Sprites[0].Shape.Position.x, 12.0f)
+                && IsNear(Sprites[0].Shape.Position.y, Shift) && IsNear(Sprites[0].Shape.AxisZ.x, 1.0f)
+                && IsNear(Sprites[0].Shape.AxisX.z, -1.0f) && IsNear(Sprites[0].Shape.Size.x, 2.0f / 32.0f));
+
+            // Then the parent rises; the next sync finds the children with it (the matrices cached this time).
+            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, (Vector3){ 10.0f, 5.0f, 0.0f }));
+            World_UpdateTransforms(&Fixture.World);
+        }
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+static void HiddenOrDisabledParentsHideTheirSubtree(TestRun* run)
+{
+    CacheFixture Fixture;
+    WorldObject* Parent = NULL;
+    if (!CacheFixture_Construct(run, &Fixture) || !TEST_CHECK_SUCCESS(run, World_CreateObject(&Fixture.World, NULL,
+        &Parent)))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    WorldModelComponent* ModelComponent = WorldModelComponent_FromComponent(AddChildComponent(run, &Fixture.World,
+        Parent, WorldComponentType_Model, Vector3Zero()));
+    WorldSpriteComponent* Sprite = WorldSpriteComponent_FromComponent(AddChildComponent(run, &Fixture.World, Parent,
+        WorldComponentType_Sprite, Vector3Zero()));
+    bool IsBuilt = (ModelComponent != NULL) && (Sprite != NULL)
+        && (AddChildComponent(run, &Fixture.World, Parent, WorldComponentType_Light, Vector3Zero()) != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetModel(ModelComponent, (const unsigned char*)u8"box"))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"));
+    // Shown, hidden by the parent, disabled by the parent, shown again.
+    const bool Visible[] = { true, false, true, true };
+    const bool Enabled[] = { true, true, false, true };
+    for (size_t Step = 0U; IsBuilt && (Step < 4U); Step++)
+    {
+        bool IsShown = Visible[Step] && Enabled[Step];
+        if (!TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Parent, Visible[Step]))
+            || !TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(Parent, Enabled[Step]))
+            || !CacheFixture_Sync(run, &Fixture))
+        {
+            break;
+        }
+        size_t Count = 0;
+        const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+        TEST_CHECK(run, (Count == 1) && (Models[0].IsDrawn == IsShown));
+        WorldRenderCache_GetSprites(&Fixture.Cache, &Count);
+        TEST_CHECK(run, Count == (IsShown ? 1U : 0U));
+        WorldRenderCache_GetLights(&Fixture.Cache, &Count);
+        TEST_CHECK(run, Count == (IsShown ? 1U : 0U));
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+/* A child turned 45 degrees inside a parent stretched 4 times along X is sheared: its longest axis is about 2.9 long,
+ * but the matrix stretches some direction 4 times, and the bounding sphere must hold that. */
+static void BoundsStayConservativeUnderShear(TestRun* run)
+{
+    CacheFixture Fixture;
+    WorldObject* Parent = NULL;
+    WorldModelComponent* ModelComponent = NULL;
+    if (CacheFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, World_CreateObject(&Fixture.World, NULL, &Parent))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Parent, (Vector3){ 4.0f, 1.0f, 1.0f }))
+        && ((ModelComponent = WorldModelComponent_FromComponent(AddChildComponent(run, &Fixture.World, Parent,
+            WorldComponentType_Model, Vector3Zero()))) != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(OwnerOf(ModelComponent), (Vector3){ 0.0f, PI / 4.0f, 0.0f }))
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetModel(ModelComponent, (const unsigned char*)u8"box"))
+        && CacheFixture_Sync(run, &Fixture))
+    {
+        size_t Count = 0;
+        const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+        TEST_CHECK(run, (Count == 1) && (Models[0].Radius >= ((4.0f * sqrtf(0.75f)) - 1e-4f)));
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
 static void ResetForgetsEveryEntry(TestRun* run)
 {
     CacheFixture Fixture;
@@ -505,6 +639,9 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "entries_carry_the_shadow_settings", EntriesCarryTheShadowSettings },
         { "sprite_entries_carry_their_quad_and_settings", SpriteEntriesCarryTheirQuadAndSettings },
         { "reset_forgets_every_entry", ResetForgetsEveryEntry },
+        { "children_are_drawn_where_their_parents_put_them", ChildrenAreDrawnWhereTheirParentsPutThem },
+        { "hidden_or_disabled_parents_hide_their_subtree", HiddenOrDisabledParentsHideTheirSubtree },
+        { "bounds_stay_conservative_under_shear", BoundsStayConservativeUnderShear },
     };
     TestRun_RunSuite(run, "WorldRenderCache", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

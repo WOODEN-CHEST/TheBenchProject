@@ -57,19 +57,25 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
   changes the name is hashed again, and the model is resolved again only if the name changed. A failed resolution is
   logged once (`WorldRenderer: object N ("name") draws nothing: ...`) and not retried until the name changes. Each
   frame the entry copies the component's settings (outline, crisp, shadow tier, casts shadows), gets the final
-  transform of its object (import transform inside scale → Euler XYZ → translation, raylib's `DrawModelEx` convention)
-  and a conservative world bounding sphere from `GameModel_GetLocalBounds` (computed once at load), and `IsDrawn`:
-  its model resolved and its object enabled and visible. Passes draw only the `IsDrawn` entries; a hidden object keeps
-  its entry and its model.
-- **Sprites:** the sprites of enabled and visible objects whose playback instance has a frame: the current frame and
-  its area in its texture (normalized: the shaders' `uvRect`), the quad before a viewer turns it (`SpriteShape`: the
-  orientation, the object's position and rotation axes, the world size from the frame's pixels, the pixels per unit and
-  the object's X and Y scale, the pivot, the flips), a fixed sprite's matrix (it needs no viewer), a sphere around the
+  transform (the asset's import transform inside the object's world matrix, `WorldObject_GetWorldMatrix`: scale →
+  Euler XYZ → translation, raylib's `DrawModelEx` convention, times its parents'; read without writing to the world, a
+  dirty one computed on the fly) and a conservative world bounding sphere from `GameModel_GetLocalBounds` (computed once
+  at load) scaled by `WorldTransform_GetMaxScale` (never below the true stretch: the longest axis, bit for bit as
+  before, for an unturned object; an ulp or so more for a turned one with an uneven scale, whose axes' dot products
+  round a hair from zero; more under the shear a hierarchy can add, where the longest axis fell short), and `IsDrawn`:
+  its model resolved and
+  its object effectively enabled and visible (`WorldObject_IsEffectivelyEnabled` / `_IsEffectivelyVisible`: a disabled
+  or hidden ancestor counts). Passes draw only the `IsDrawn` entries; a hidden object keeps its entry and its model.
+- **Sprites:** the sprites of effectively enabled and visible objects whose playback instance has a frame: the current
+  frame and its area in its texture (normalized: the shaders' `uvRect`), the quad before a viewer turns it
+  (`SpriteShape`: the orientation, the object's world position and rotation axes, the world size from the frame's
+  pixels, the pixels per unit and the object's world X and Y scale, the pivot, the flips; `WorldObject_GetWorldTransform`:
+  a root's own values, a child's decomposed from its world matrix), a fixed sprite's matrix (it needs no viewer), a sphere around the
   pivot that holds the quad in every orientation, the tint, and the settings: alpha mode and cutoff, lit, emission,
   light wrap, decal (marked as one and fixed) and its lift, casts shadows, outline, and crisp (only for cutout sprites
   that are not decals: the crisp overlay composites opaque surfaces).
-- **Lights:** the lights of enabled and visible objects, with position, reach (the range), intensity, colour and
-  shadow flag.
+- **Lights:** the lights of effectively enabled and visible objects, with their world position, reach (the range),
+  intensity, colour and shadow flag.
 
 Entries follow the components across additions and removals: when the world's component-set version changes, entries
 are re-matched by owner id, and an entry is carried over only if its component still names the model it was
@@ -501,13 +507,19 @@ instead of copying it between shaders.
 
 Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World` built with `World_Construct2` on `Services.Keys` (so
 its sprite components bind their animations themselves), a `GameClock` ([GameClock.md](GameClock.md)), a `GameCamera`, and a
-`WorldRenderer`. `BuildTestWorld` builds the test world through the object API: `World_CreateObject`, the transform
-setters, `World_AddComponent` and the components' setters (a model component per cube and for the ground slab, two light
-components, and the sprites of its `TestSprites` table: the test image as a camera-facing billboard, 1.5 m wide at 1280
-pixels per metre, and T06's placeholders from `sprite_animations/test_world/`: a blended tire-mark decal on the ground in
-front of the camera, an axis-billboard tree that casts a shadow, a fixed sign behind it, a lit blended smoke puff in
-front of an additive, unlit glow around the warm lamp, and an unlit neon sign). Its `Update` runs the tick's animation step: it advances the sprites of enabled
-objects (`World_GetComponents(world, WorldComponentType_Sprite)`).
+`WorldRenderer`. `BuildTestWorld` builds the test world through the object API: `World_CreateObject`, `World_SetParent`,
+the transform setters, `World_AddComponent` and the components' setters (a model component per cube and for the ground
+slab, two light components, and the sprites of its `TestSprites` table: the test image as a camera-facing billboard,
+1.5 m wide at 1280 pixels per metre, and T06's placeholders from `sprite_animations/test_world/`: a blended tire-mark
+decal on the ground in front of the camera, an axis-billboard tree that casts a shadow, a fixed sign behind it, a lit
+blended smoke puff in front of an additive, unlit glow around the warm lamp, and an unlit neon sign). Its hierarchy
+(T08, `AddDesk`): a `desk` at (1.8, 0.05, -3.6) on the left of the start view, an empty object turned 15 degrees that
+holds its parts (`desk_top` and two `desk_side_*`, scaled test cubes), a gold `cup` and a `desk_lamp` (a thin post) whose
+child `desk_lamp_light` is a warm point light (intensity 3, reach 4, no shadow) 0.35 lamp units above the post's centre
+(0.28 m: a child's position is in its parent's scaled space). Its `Update` runs the tick's animation step: it advances the
+sprites of effectively enabled objects (`World_GetComponents(world, WorldComponentType_Sprite)`) and slides the desk
+while J has it sliding; then, last, `World_UpdateTransforms` (the tick's world-matrix step), so the renderer reads cached
+matrices.
 **Game time:** the clock starts from the world environment's date and time of day (noon, 2026-10-18) at time scale
 720 (a 2-minute day, as the test world had before T23; the clock's own default is 72). Every `Update` advances it,
 logs a new day when it crosses midnight, and writes its time of day and date into the environment, so the sky shows
@@ -532,6 +544,9 @@ debug keys as raw keys:
   fading counts), then the game time (`WorldTest: game time
   Sun 2026-10-18 12:00:00, running, 720 game seconds per real second (a day takes 2 real minutes); seasons off.`) and
   the moon;
+- **the hierarchy (T08):** J starts and stops the desk sliding back and forth along X (1.2 m either way, a 6-second
+  period of real time): its parts, the cup, the lamp and the lamp's light follow; H hides and shows the desk, and with it
+  everything on it (the lamp's light goes off). Both logged;
 - T toggles the text sample.
 
 M frees the cursor for the UI (and captures it again); a left click the UI did not take captures it again. An

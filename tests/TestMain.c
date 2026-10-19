@@ -25,6 +25,8 @@ int main(void)
     NamespacedKeyTests_Run(&Run);
     DataValueTests_Run(&Run);
     WorldTests_Run(&Run);
+    WorldHierarchyTests_Run(&Run);
+    WorldTransformTests_Run(&Run);
     ObjectDataTests_Run(&Run);
     PropertyDescriptorTests_Run(&Run);
     GameCalendarTests_Run(&Run);
