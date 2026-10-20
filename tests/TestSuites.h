@@ -57,6 +57,12 @@ void WorldTests_Run(TestRun* run);
  *  component's override flags and the settings they resolve to, and the shipped world models (WorldModelTests.c). */
 void WorldModelTests_Run(TestRun* run);
 
+/** @brief World sprites: the definition's defaults, rules and messages (the rules shared with the sprite component's
+ *  rows), loading with the animation as a dependency, the sprite component's override flags and the settings they
+ *  resolve to (the draw distance from the placement, the world sprite or the kind), swapping the world sprite, and the
+ *  shipped world sprites (WorldSpriteTests.c). */
+void WorldSpriteTests_Run(TestRun* run);
+
 /** @brief The transform hierarchy: World_SetParent's refusals (unknown ids, self, cycles, depth), world matrices down
  *  three levels, reparenting with and without keeping the world placement, dirty propagation with a recompute count,
  *  reads that never store, child order, subtree removal (components, arrays, hooks children first), effective flags,

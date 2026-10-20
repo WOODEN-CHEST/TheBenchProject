@@ -1,0 +1,6 @@
+{
+    "name": "test_sign",
+    "sprite_animation": "test_sign",
+    "orientation": "fixed",
+    "pivot": [0.5, 0.0]
+}

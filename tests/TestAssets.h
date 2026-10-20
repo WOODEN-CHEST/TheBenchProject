@@ -13,7 +13,8 @@
  *  - a model without meshes whose mesh-space bounds are given (enough for anything that does not draw);
  *  - a monospace font of the printable ASCII glyphs with metrics but no texture (enough to measure text);
  *  - a texture that names a made-up GPU id and was never uploaded (enough for anything that only copies it);
- *  - world models built from JSON by the real "world_model" type, over the code-built models and textures above.
+ *  - world models built from JSON by the real "world_model" type, over the code-built models and textures above;
+ *  - world sprites built from JSON by the real "world_sprite" type, over the code-built sprite animations above.
  * Each definition can count how often its asset is loaded and unloaded, which shows when an asset user really
  * releases it.
  */
@@ -134,3 +135,18 @@ bool TestAssets_AddWorldModel(TestRun* run, TestAssetFixture* fixture, const cha
  * @returns true when it was built and registered.
  */
 bool TestAssets_AddWorldModelOf(TestRun* run, TestAssetFixture* fixture, const char* name, const char* modelName);
+
+/**
+ * @brief Builds a world sprite definition from @p json with the real "world_sprite" type (AssetManager_BuildDefinition)
+ *        and registers it. Its sprite animation must be code-built (TestAssets_AddSpriteAnimation) for it to load without
+ *        a GL context.
+ * @returns true when it was built and registered.
+ */
+bool TestAssets_AddWorldSprite(TestRun* run, TestAssetFixture* fixture, const char* json);
+
+/**
+ * @brief Registers a world sprite named @p name that plays the sprite animation @p animationName with the default
+ *        settings.
+ * @returns true when it was built and registered.
+ */
+bool TestAssets_AddWorldSpriteOf(TestRun* run, TestAssetFixture* fixture, const char* name, const char* animationName);

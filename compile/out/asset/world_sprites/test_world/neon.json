@@ -1,0 +1,7 @@
+{
+    "name": "test_neon",
+    "sprite_animation": "test_neon",
+    "orientation": "fixed",
+    "is_lit": false,
+    "emission": 3.0
+}

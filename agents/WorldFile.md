@@ -85,8 +85,10 @@ T10 changed the model component without either (the test world was the only worl
 key `model` (a model asset) became `world_model` (a world model), and wires 2 to 5 became the placement's own values
 behind new override flags. A JSON file from before reads with `model` skipped as unknown, a GHDF one with entry 1 read
 as the world model's name (the shipped world models carry their models' names), and either keeps those values unused
-until their flags are set; once other worlds must keep loading, such a change raises the table's version with a
-`Migrate` (and a GHDF migration slot, which the tables do not have yet) and the world format version.
+until their flags are set. T26 did the same to the sprite component: wire 1 / key `sprite_animation` became
+`world_sprite` (a world sprite named as its animation, for the shipped ones), and wires 2 to 16 became the placement's
+own values behind new override flags. Once other worlds must keep loading, such a change raises the table's version
+with a `Migrate` (and a GHDF migration slot, which the tables do not have yet) and the world format version.
 
 ## Writing
 

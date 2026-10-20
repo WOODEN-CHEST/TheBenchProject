@@ -58,7 +58,7 @@ Every field is read-only to other modules: use the inline getters (`SpriteAnimat
   and applies the animation's defaults (`SpriteAnimationInstance_ResetProperties`).
 - Never call either constructor on a live instance: both re-zero it and discard its event and subscribers without
   deconstructing them. Release every instance with `SpriteAnimationInstance_Deconstruct`.
-- Rebinding by deconstruct + create (what a world sprite component does when its animation name changes) resets
+- Rebinding by deconstruct + create (what a sprite component does when its world sprite's name changes) resets
   playback and drops the event's subscribers. To switch animations and keep the subscribers, copy from a fresh instance:
 
 ```c
@@ -136,8 +136,9 @@ source rectangle, so divide `_areaInTexture` by the texture's width and height (
 
 ## Current users
 
-- `WorldSpriteComponent` embeds an instance (`WorldSpriteComponent_GetAnimationInstance`); the world binds it to
-  the named animation under its own asset user (`agents/WorldData.md`). `WorldTestFrame` advances the sprites of
+- `WorldSpriteComponent` embeds an instance (`WorldSpriteComponent_GetAnimationInstance`); the world binds it to the
+  animation of the named world sprite (a `world_sprite` asset, which loads its animation as a dependency:
+  `agents/WorldSprites.md`) under its own asset user (`agents/WorldData.md`). `WorldTestFrame` advances the sprites of
   enabled objects each update tick (`AdvanceSpriteAnimations`); the WorldRenderer only draws each sprite's current
   frame.
 - Text `SpriteComponent`s get their instances from `TextComponentResolver`'s `ObjectPool`.

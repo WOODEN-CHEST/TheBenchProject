@@ -750,8 +750,8 @@ static void HandleDebugModelInput(WorldTestFrame* frame, const GameInput* input)
         frame->_camera.FovY = frame->_isZoomed ? ZOOMED_FOV_Y : GAME_CAMERA_DEFAULT_FOV_Y;
         if (Log != NULL)
         {
-            const char* What = frame->_isZoomed ? "zoomed in: models' draw distances reach about 4.4 times as far"
-                : "zoom off";
+            const char* What = frame->_isZoomed
+                ? "zoomed in: the draw distances of models and sprites reach about 4.4 times as far" : "zoom off";
             Error LogResult = Logger_LogInfoFormatted(Log,
                 (const unsigned char*)u8"WorldTest: %s (a %.0f-degree view).", What, (double)frame->_camera.FovY);
             Error_Deconstruct(&LogResult);

@@ -1,7 +1,7 @@
 {
     "format_version": 1,
     "name": "test",
-    "next_object_id": 24,
+    "next_object_id": 25,
     "environment": {},
     "objects": [
         {
@@ -67,8 +67,7 @@
             "position": [-3.0, 1.5, 0.0],
             "components": {
                 "sprite": {
-                    "sprite_animation": "test_sprite",
-                    "pixels_per_unit": 1280.0
+                    "world_sprite": "test_sprite"
                 }
             }
         },
@@ -79,10 +78,7 @@
             "rotation": [-90.0, 25.0, 0.0],
             "components": {
                 "sprite": {
-                    "sprite_animation": "test_tire_mark",
-                    "orientation": "fixed",
-                    "alpha_mode": "blend",
-                    "is_decal": true
+                    "world_sprite": "test_tire_mark"
                 }
             }
         },
@@ -92,9 +88,7 @@
             "position": [-6.0, 0.05, 4.0],
             "components": {
                 "sprite": {
-                    "sprite_animation": "test_tree",
-                    "orientation": "axis_billboard",
-                    "pivot": [0.5, 0.0]
+                    "world_sprite": "test_tree"
                 }
             }
         },
@@ -105,9 +99,7 @@
             "rotation": [0.0, 200.0, 0.0],
             "components": {
                 "sprite": {
-                    "sprite_animation": "test_sign",
-                    "orientation": "fixed",
-                    "pivot": [0.5, 0.0]
+                    "world_sprite": "test_sign"
                 }
             }
         },
@@ -118,8 +110,7 @@
             "scale": [2.0, 2.0, 2.0],
             "components": {
                 "sprite": {
-                    "sprite_animation": "test_smoke",
-                    "alpha_mode": "blend"
+                    "world_sprite": "test_smoke"
                 }
             }
         },
@@ -130,10 +121,7 @@
             "scale": [2.0, 2.0, 2.0],
             "components": {
                 "sprite": {
-                    "sprite_animation": "test_glow",
-                    "alpha_mode": "additive",
-                    "is_lit": false,
-                    "emission": 2.0
+                    "world_sprite": "test_glow"
                 }
             }
         },
@@ -144,10 +132,7 @@
             "rotation": [0.0, 180.0, 0.0],
             "components": {
                 "sprite": {
-                    "sprite_animation": "test_neon",
-                    "orientation": "fixed",
-                    "is_lit": false,
-                    "emission": 3.0
+                    "world_sprite": "test_neon"
                 }
             }
         },
@@ -281,6 +266,18 @@
                     "world_model": "painted_cube",
                     "uses_variant": true,
                     "variant": "blue"
+                }
+            }
+        },
+        {
+            "id": 24,
+            "name": "tree_mirrored",
+            "position": [-3.5, 0.05, 6.5],
+            "components": {
+                "sprite": {
+                    "world_sprite": "test_tree",
+                    "overrides_flip_x": true,
+                    "flip_x": true
                 }
             }
         }

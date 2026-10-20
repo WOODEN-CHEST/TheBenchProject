@@ -46,7 +46,7 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, and registers the eight standard types. Read its lifetime rules before touching assets.
+  caches failed loads, and registers the nine standard types. Read its lifetime rules before touching assets.
 * Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader, GameSound and GameTexture: the manager-owned
   wrappers for the standard font, model, shader, sound and texture types, with their ownership rules, accessors and
   pitfalls. GameModel.h also holds GameMaterialFactors (source/GameModel.c): the PBR factors a material override sets,
@@ -62,6 +62,14 @@ Current module list:
   variants' textures load as its dependencies. The definition (source/WorldModelDefinition.c) refuses unknown keys and
   checks every rule when it is read. Variants apply to the renderer's per-draw material copies, never to an asset. The
   model component names a world model and overrides its settings per placement with explicit flags.
+* World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
+  animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
+  source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
+  (WorldSpriteSettings: orientation, pivot, pixels per unit, flips, transparency, lighting, decal, render flags, draw
+  distance or its kind's, fixed), described by two property tables whose rows the sprite component's table shares
+  (the private source/WorldSpriteInternal.h): one copy of every key, default and rule. The definition
+  (source/WorldSpriteDefinition.c) reads them through those tables and refuses unknown keys. The sprite component names
+  a world sprite and may override every setting per placement with explicit flags.
 * SpriteSheet (SpriteSheet.md) - Texture atlas with named pixel regions; the asset loader shelf-packs padded source
   images into one texture (padding at most 64 px, atlas at most 8192 px).
 * SpriteAnimation (SpriteAnimation.md) - 2D frame animations: SpriteAnimation (shared asset data: frames plus default
@@ -108,10 +116,12 @@ Current module list:
     placement overrides: each an explicit flag (overrides_<key>) next to the placement's own value (outline, crisp, shadow
     tier, casts shadows, draw distance, fixed draw distance), plus a draw distance multiplier; a pure function resolves
     the settings in effect.
-  * WorldSpriteComponent - A sprite animation by asset name with its playback instance, bound under the world's asset
-    user on attach and whenever the name changes (also through the table), and how it is drawn: orientation (billboard,
-    axis billboard, fixed), pivot, pixels per unit, flips, alpha mode (cutout, blend, additive), lit or unlit, light
-    wrap, decal, shadows.
+  * WorldSpriteComponent - A world sprite by asset name (WorldSprites.md) with its animation's playback instance, bound
+    under the world's asset user on attach and whenever the name changes (also through the table), and every setting
+    this placement overrides: each an explicit flag (overrides_<key>) next to the placement's own value (orientation,
+    pivot, pixels per unit, flips, alpha mode and cutoff, lit, emission, light wrap, casts shadows, decal and its lift,
+    outline, crisp, draw distance, fixed draw distance), plus a draw distance multiplier; a pure function resolves the
+    settings in effect (the draw distance from the placement, the world sprite or the kind).
   * WorldLightComponent - A point light (colour, intensity, range, casts shadows).
   * WorldEnvironment - Per-world sky/sun/moon/night-sky/fog/effect settings, described by its property table
     (defaults, validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md; it owns its sky texture
@@ -150,10 +160,11 @@ Current module list:
   * WorldRenderCache - The renderer's private per-component cache (source/WorldRenderCache.h): one walk over the
     world's model/sprite/light component arrays per frame builds the lists with the objects' world placements
     (effectively disabled and hidden objects not drawn); world models are resolved once per component and again only
-    when the name changes (LOD 0 drawn until T11), variants to an index, and the settings in effect every frame.
+    when the name changes (LOD 0 drawn until T11), variants to an index, and the settings in effect (models' and
+    sprites') every frame.
   * WorldVisibility - What each pass draws this frame (private, source/WorldVisibility.h): frustum planes and sphere
-    tests (the camera's frustum, each shadow cascade's box), draw distances (each model's own, times the config's
-    draw_distance_scale unless fixed, against its distance times the camera's zoom factor; sprites per kind) with their
+    tests (the camera's frustum, each shadow cascade's box), draw distances (each model's and sprite's own, times the
+    config's draw_distance_scale unless fixed, against its distance times the camera's zoom factor) with their
     fade band, the opacity's fade, the dither's C mirror (shaders/common/dither.glsl), and
     the per-pass lists of cache entries with their fades, built every frame from the render cache.
   * SpriteTransform - A sprite quad's pure maths (private, source/SpriteTransform.h): its matrix for a viewer (the
@@ -170,7 +181,7 @@ Current module list:
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
   keys by mode, migration hook) and write (defaults left out by default, integers in GHDF's smallest type), and get/set
-  by key. The one module allowed to write `_` fields by offset. Clients: WorldEnvironment, GameClock, the world objects and their components; new data
+  by key. The one module allowed to write `_` fields by offset. Clients: WorldEnvironment, GameClock, the world objects and their components, the world sprite's settings; new data
   types get a table, not hand-written codecs. A setting a placement overrides is two rows, a Bool `overrides_<key>` and
   the value `<key>` (the table check enforces the pairing). A DataMap property (tags and typed data) is written as two JSON keys.
 * GameCalendar (GameCalendar.md) - The game's calendar: pure functions over day numbers (days since 0001-01-01, an

@@ -6,7 +6,7 @@ tags, data and components. It has two forms with the same content:
 - **JSON** (`<name>.world.json`): authored worlds. Readable, editable by hand, and written so that git diffs stay
   small.
 - **GHDF** (`<name>.world.ghdf`, `references/ghdf.txt`): saves, packed stories and worlds sent over the network.
-  Compact: the test world is 7003 bytes as JSON and 1354 bytes as GHDF.
+  Compact: the test world is 7690 bytes as JSON and 1498 bytes as GHDF.
 
 `WorldFile` reads and writes both (`agents/WorldFile.md`). Until story packs exist, worlds live in
 `<base>/worlds/` next to the executable; the test frame loads `worlds/test.world.json`.
@@ -127,6 +127,46 @@ placement's own: 2 is seen twice as far. It is a plain setting, not an override.
 }
 ```
 
+### The sprite block
+
+The `sprite` component names a world sprite (`world_sprite`: a `world_sprites/` asset, `references/asset_structure.md`,
+"World sprites"), which says which sprite animation to play and how it stands, is lit and is seen. A placement may
+override every one of its settings, each with the same two keys as the model block: an override flag, `overrides_` and
+the setting's key (false by default: the world sprite's value applies), and its own value next to it, kept and saved
+while its flag is off.
+
+| Setting | Flag | Value (default) |
+|---|---|---|
+| How the quad turns | `overrides_orientation` | `orientation`: `billboard`, `axis_billboard`, `fixed` (`billboard`) |
+| The point at the object's position | `overrides_pivot` | `pivot`: `[x, y]` (`[0.5, 0.5]`) |
+| Image pixels per metre | `overrides_pixels_per_unit` | `pixels_per_unit`: above 0 (32) |
+| Mirrored left to right | `overrides_flip_x` | `flip_x` (false) |
+| Mirrored top to bottom | `overrides_flip_y` | `flip_y` (false) |
+| Transparency | `overrides_alpha_mode` | `alpha_mode`: `cutout`, `blend`, `additive` (`cutout`) |
+| The cutout threshold | `overrides_alpha_cutoff` | `alpha_cutoff`: in [0, 1] (0.5) |
+| Lit, or glowing as it is | `overrides_is_lit` | `is_lit` (true) |
+| How bright it glows unlit | `overrides_emission` | `emission`: >= 0 (1) |
+| Light wrapping around a billboard | `overrides_light_wrap` | `light_wrap`: in [0, 1] (1) |
+| Casting shadows | `overrides_casts_shadows` | `casts_shadows` (true) |
+| A decal on a surface (with `fixed`) | `overrides_is_decal` | `is_decal` (false) |
+| A decal's lift | `overrides_decal_offset` | `decal_offset`: metres, >= 0 (0.01) |
+| The outline | `overrides_has_outline` | `has_outline` (true) |
+| Full resolution over the pixelated image | `overrides_omit_pixelation` | `omit_pixelation` (false) |
+| The draw distance | `overrides_draw_distance` | `draw_distance`: metres, above 0 (150) |
+| Keeping it fixed against the quality setting | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` (false) |
+
+`draw_distance_multiplier` (above 0, default 1) multiplies the draw distance in effect: the placement's own, the world
+sprite's, or, when neither gives one, its kind's (150 m, or 60 m for a decal, decided on the settings in effect). It is
+a plain setting, not an override.
+
+```
+"sprite": {
+    "world_sprite": "test_tree",
+    "overrides_flip_x": true,
+    "flip_x": true
+}
+```
+
 ### Values
 
 - Numbers: integers or decimals; a float keeps its fraction when written (`2.0`). Angles are degrees.
@@ -234,9 +274,16 @@ Downloaded worlds use the same code, so loading treats every file as hostile:
   not know. GHDF entry ids a table retired are skipped silently.
 - **Versions:** the format version is raised only for changes an older game cannot read by skipping what it does not
   know (a renamed key, a value read another way); new keys and new component types keep it. Every table a world file
-  holds is at its version 1 under format 1. One exception, while the test world was the only world file: world models
-  (task T10) renamed the model block's `model` (a model asset) to `world_model` (a world model) and made its
-  `has_outline`, `omit_pixelation`, `shadow_tier` and `casts_shadows` the placement's own values behind override flags,
-  without a new format version. A JSON file written before reads with its `model` key skipped as unknown (the object
-  draws nothing); a GHDF one keeps the name on entry 1, which now reads as the world model's name (it draws where a
-  world model has the model's name). Either way its render settings stay unused until their flags are set.
+  holds is at its version 1 under format 1. Two exceptions, while the test world was the only world file, made without
+  a new format version:
+  - World models (task T10) renamed the model block's `model` (a model asset) to `world_model` (a world model) and made
+    its `has_outline`, `omit_pixelation`, `shadow_tier` and `casts_shadows` the placement's own values behind override
+    flags. A JSON file written before reads with its `model` key skipped as unknown (the object draws nothing); a GHDF
+    one keeps the name on entry 1, which now reads as the world model's name (it draws where a world model has the
+    model's name). Either way its render settings stay unused until their flags are set.
+  - World sprites (task T26) did the same to the sprite block: `sprite_animation` (a sprite animation) became
+    `world_sprite` (a world sprite) on the same entry 1, and every look setting (`orientation` to `omit_pixelation`)
+    became the placement's own value behind an override flag. A JSON file written before draws no sprite (its
+    `sprite_animation` key is skipped as unknown); a GHDF one reads the name as a world sprite's (it draws where a
+    world sprite has the animation's name, as every shipped one has), with the world sprite's look until the flags are
+    set.

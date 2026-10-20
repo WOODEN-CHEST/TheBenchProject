@@ -1,0 +1,7 @@
+{
+    "name": "test_glow",
+    "sprite_animation": "test_glow",
+    "alpha_mode": "additive",
+    "is_lit": false,
+    "emission": 2.0
+}

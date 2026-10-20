@@ -95,8 +95,9 @@ typedef struct WorldModelSettingsStruct
     WorldShadowTier ShadowTier;
     /** @brief Whether the model casts shadows at all (it receives them either way). */
     bool CastsShadows;
-    /** @brief How far the model is seen, in metres, above 0 (+infinity: never faded by distance), before the player's
-     *  draw_distance_scale and the zoom; beyond it the model fades out. */
+    /** @brief How far the model is seen, in metres, before the player's draw_distance_scale and the zoom; beyond it the
+     *  model fades out. Above 0 in a world model; once resolved for a placement, the product with its multiplier:
+     *  +infinity when it overflows (never faded by distance), 0 when two tiny factors underflow (never drawn). */
     float DrawDistance;
     /** @brief Whether the player's draw_distance_scale leaves DrawDistance as it is (landmarks, gameplay-critical
      *  props). */

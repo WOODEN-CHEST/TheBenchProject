@@ -1,0 +1,5 @@
+{
+    "name": "test_smoke",
+    "sprite_animation": "test_smoke",
+    "alpha_mode": "blend"
+}

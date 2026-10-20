@@ -31,11 +31,13 @@
  *
  * VISIBILITY. Each frame the camera's passes draw only what is in the camera's view; each shadow cascade draws the
  * casters in its own box (a caster behind the camera still shadows what is in view), the cube shadow the casters in its
- * light's reach. Every object has a draw distance (models 600 m, sprites 150 m, decals 60 m, times the config's
- * draw_distance_scale): beyond it the object is not drawn, and over its last tenth (at least 3 m) it fades out. An
- * object's opacity (its tint's) fades it the same way. Models and cutout sprites show a fade as a 4x4 ordered dither on
- * the scene's pixel grid, in every pass, so a fading object's shadow thins with it; the G-buffer draws it solid until
- * half its fade and not after, so its outline switches off once. Blended and additive sprites fade their alpha instead.
+ * light's reach. Every object has its own draw distance (its world model's or world sprite's, a sprite's kind's when
+ * its world sprite gives none: 150 m, decals 60 m, or its placement's own; times the config's draw_distance_scale unless
+ * it is fixed, and pushed out by a narrower field of view): beyond it the object is not drawn, and over its last tenth
+ * (at least 3 m) it fades out. An object's opacity (its tint's) fades it the same way. Models and cutout sprites show
+ * a fade as a 4x4 ordered dither on the scene's pixel grid, in every pass, so a fading object's shadow thins with it;
+ * the G-buffer draws it solid until half its fade and not after, so its outline switches off once. Blended and
+ * additive sprites fade their alpha instead.
  *
  * FAILURES. A missing shader or a GPU target that cannot be created disables the feature that needs it, with
  * one log line when it happens; WorldRenderer_GetStatus reports what ran. The only fatal failure is a scene

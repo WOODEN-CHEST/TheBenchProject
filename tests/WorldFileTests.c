@@ -12,6 +12,7 @@
 #include "WorldFile.h"
 #include "WorldModelComponent.h"
 #include "WorldObject.h"
+#include "WorldSpriteComponent.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRGHDF.h"
 #include "wr/WRMemoryStream.h"
@@ -1354,8 +1355,16 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 23U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 24U);
             TEST_CHECK(run, AreNamesEqual(World_GetName(&Loaded), (const unsigned char*)u8"test"));
+            // The world sprite example (T26): the tree placed a second time, mirrored by its placement.
+            WorldComponent* Mirrored = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 24U, WorldComponentType_Sprite, &Mirrored)
+                && AreNamesEqual(WorldSpriteComponent_GetWorldSprite(WorldSpriteComponent_FromComponent(Mirrored)),
+                    (const unsigned char*)u8"test_tree")
+                && WorldSpriteComponent_IsOverridden(WorldSpriteComponent_FromComponent(Mirrored),
+                    WorldSpriteSetting_FlipX)
+                && WorldSpriteComponent_IsFlippedX(WorldSpriteComponent_FromComponent(Mirrored)));
             // The variant example (T10): two cubes of one world model, red and blue.
             WorldComponent* Painted = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 23U, WorldComponentType_Model, &Painted)

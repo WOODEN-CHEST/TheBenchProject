@@ -103,6 +103,7 @@ typedef struct GameShaderStruct GameShader;
 typedef struct GameModelStruct GameModel;
 typedef struct GameTextureStruct GameTexture;
 typedef struct WorldModelStruct WorldModel;
+typedef struct WorldSpriteStruct WorldSprite;
 
 
 // Core identifier types.
@@ -352,6 +353,9 @@ typedef struct StandardAssetTypesStruct
     /** @brief World model type id: a placeable thing's LOD models, draw distance, render defaults and variants, built
      *  on model and texture assets (WorldModel.h). */
     AssetTypeID WorldModel;
+    /** @brief World sprite type id: how a sprite animation stands, is lit and is seen in the world, built on a sprite
+     *  animation asset (WorldSprite.h). */
+    AssetTypeID WorldSprite;
 } StandardAssetTypes;
 
 
@@ -431,8 +435,8 @@ Error AssetManager_CreateAssetType(AssetManager* self, const AssetTypeInfo* info
 /**
  * @brief Registers all standard asset types and a shared JSON pool used to parse their definitions.
  *
- * Registers the eight standard types (sprite sheet, sprite animation, sound, font, shader, model, texture and world
- * model), writing their ids into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
+ * Registers the nine standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world model
+ * and world sprite), writing their ids into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
  * ConstructorUserData so all standard definition parsing recycles JSON compounds/arrays/strings instead of
  * reallocating. The caller OWNS @p *outDefinitionPool and must free it with JSONObjectPool_Deconstruct after (or
  * alongside) the manager. The same pool may be reused as the ConstructorUserData of a custom JSON-based type to
@@ -978,6 +982,13 @@ Error AssetManager_LoadTexture(AssetManager* self, const unsigned char* name, As
  */
 Error AssetManager_LoadWorldModel(AssetManager* self, const unsigned char* name, AssetUserID user,
     WorldModel** outAsset);
+
+/**
+ * @brief Loads a world sprite by name (WorldSprite.h), with its sprite animation as a dependency. See
+ *        AssetManager_LoadSpriteSheet for semantics.
+ */
+Error AssetManager_LoadWorldSprite(AssetManager* self, const unsigned char* name, AssetUserID user,
+    WorldSprite** outAsset);
 
 
 // ---- Bulk load (stepped, main thread) ----

@@ -5,7 +5,7 @@
 #include "wr/WRError.h"
 #include "wr/WRMemory.h"
 #include "wr/WRHashMap.h"
-// AssetUserID: a world built with an asset manager holds its components' assets (sprite animations) under its own user.
+// AssetUserID: a world built with an asset manager holds its components' assets (world sprites) under its own user.
 #include "AssetManager.h"
 #include "DataMap.h"
 #include "DataValue.h"
@@ -66,9 +66,10 @@
  * @endcode
  *
  * ASSETS. A world built with World_Construct2 borrows an asset manager and owns an asset user of its own: sprite
- * components load their animations under it (they play as world state, advanced by game logic). The assets stay held
- * until the world is destroyed, after every object. A world built with World_Construct1 has no asset manager: its
- * sprites stay empty (they draw nothing), which suits tools and tests that only handle data.
+ * components load their world sprites under it, and with them the animations they play (as world state, advanced by
+ * game logic). The assets stay held until the world is destroyed, after every object. A world built with
+ * World_Construct1 has no asset manager: its sprites stay empty (they draw nothing), which suits tools and tests that
+ * only handle data.
  *
  * CHANGE TRACKING. The object-set version changes when an object is created or removed, the component-set version
  * when a component is added or removed (also with its object), so a consumer (the renderer's cache) can tell cheaply
@@ -160,7 +161,7 @@ typedef struct WorldStruct
 /**
  * @brief Initializes an empty world without assets (no objects, default environment, id counter at 1).
  *
- * Its sprite components never get an animation, so they draw nothing; use World_Construct2 for a world that is
+ * Its sprite components never get a world sprite, so they draw nothing; use World_Construct2 for a world that is
  * rendered.
  * @param self The world to initialize in place; must not be NULL.
  * @param keys The program's key registry; borrowed, must outlive the world. Must not be NULL.
@@ -190,8 +191,8 @@ Error World_Construct2(World* self, KeyRegistry* keys, AssetManager* assets, Log
  * @brief Destroys every object (with its components) and releases the world's storage, environment and assets.
  *
  * Every component is detached first, while every object is alive and linked (each root's subtree children first), then
- * the components and objects are destroyed, all before any asset is released (a sprite's playback points into an
- * animation the world's user holds).
+ * the components and objects are destroyed, all before any asset is released (a sprite's playback points into the
+ * animation of a world sprite the world's user holds).
  * @param self The world to release.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; otherwise the error from retiring the asset user
  *          (the world is fully released either way).
@@ -279,7 +280,7 @@ Error World_GetObjectByIndex(const World* self, size_t index, WorldObject** outO
  *
  * Refused when the object already has a component of that type, or when the type is a transform driver and the
  * object already has one (an object has at most one driver). Adding a driver makes the object movable. The type's
- * OnAttach hook runs last (a sprite binds its animation then).
+ * OnAttach hook runs last (a sprite binds its world sprite then).
  * @param self The world; must not be NULL.
  * @param id The object's id.
  * @param type The component type; one of the world's types (World_GetComponentTypeInfo).

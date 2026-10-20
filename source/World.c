@@ -338,7 +338,8 @@ Error World_Deconstruct(World* self)
         return Error_Construct2(ErrorCode_IllegalArgument, "World_Deconstruct: self must not be NULL.");
     }
 
-    // Objects (and their components) first: a sprite's playback points into an animation the world's user holds.
+    // Objects (and their components) first: a sprite's playback points into an animation the world's user holds (its
+    // world sprite's).
     // Every detach hook runs while every object is still alive and linked (each root's subtree children first), then
     // everything is destroyed. The component arrays and the links are freed whole, so nothing is kept up to date.
     WorldObject* const* Objects = (WorldObject* const*)self->_objects._data;

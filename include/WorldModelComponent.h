@@ -362,7 +362,8 @@ Error WorldModelComponent_SetIsDrawDistanceFixed(WorldModelComponent* self, bool
  * @param self The model component; must not be NULL.
  * @param modelSettings The world model's settings (WorldModel_GetSettings), or WorldModelSettings_CreateDefault()
  *        while it is not resolved; must not be NULL.
- * @returns The settings in effect. Their draw distance is above 0 (+infinity when the product overflows).
+ * @returns The settings in effect. Their draw distance is at least 0: +infinity when the product overflows, 0 when two
+ *          tiny factors underflow (nothing within reach is drawn then).
  */
 WorldModelSettings WorldModelComponent_ResolveSettings(const WorldModelComponent* self,
     const WorldModelSettings* modelSettings);

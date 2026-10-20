@@ -1,0 +1,6 @@
+{
+    "name": "test_tree",
+    "sprite_animation": "test_tree",
+    "orientation": "axis_billboard",
+    "pivot": [0.5, 0.0]
+}

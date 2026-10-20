@@ -25,8 +25,10 @@ non-default raylib configuration.
 | raylib | https://github.com/raysan5/raylib (local copy: `../raylib/6.0`) | commit `65abee1` (2026-07-04), reports `6.1-dev` | CMake, see below |
 | WRFramework | `../WRFramework` | commit `8c9af0b06dd65e945f4fc33d92c822407af858cb` | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
 
-**What T09 changed in WRFramework** (at the owner's request; committed as `58c1e31`, the commit above, which
-`lib/libwr.a`, `include/wr/` and `agents/WRFramework.md` match):
+`lib/libwr.a`, `include/wr/` and `agents/WRFramework.md` match the commit above, `8c9af0b`, which adds `WRArena` (a
+bump allocator) on top of T09's changes.
+
+**What T09 changed in WRFramework** (at the owner's request; committed as `58c1e31`):
 - WRJSON: compounds keep insertion order (every collection view and `JSON_Serialize`; the order is a plain buffer of
   key pointers, about 90 bytes per compound); a new `JSONSerializeFlags_InlineScalarArrays` keeps arrays of scalars on
   one line in pretty output; `JSON_DeserializeWithLimits` refuses a document whose parsed tree would pass a byte

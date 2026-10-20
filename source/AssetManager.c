@@ -1726,6 +1726,8 @@ Error AssetManager_CreateStandardAssetTypes(AssetManager* self, StandardAssetTyp
         { ASSET_TYPE_NAME_TEXTURE, ASSET_TYPE_DIRECTORY_TEXTURE, TextureDefinition_Construct, &outTypes->Texture },
         { ASSET_TYPE_NAME_WORLD_MODEL, ASSET_TYPE_DIRECTORY_WORLD_MODEL, WorldModelDefinition_Construct,
             &outTypes->WorldModel },
+        { ASSET_TYPE_NAME_WORLD_SPRITE, ASSET_TYPE_DIRECTORY_WORLD_SPRITE, WorldSpriteDefinition_Construct,
+            &outTypes->WorldSprite },
     };
 
     for (size_t i = 0; i < (sizeof(Standard) / sizeof(Standard[0])); i++)
@@ -2570,6 +2572,13 @@ Error AssetManager_LoadWorldModel(AssetManager* self, const unsigned char* name,
     WorldModel** outAsset)
 {
     return LoadStandard(self, (self != NULL) ? self->_standardTypes.WorldModel : ASSET_TYPE_ID_INVALID, name, user,
+        (void**)outAsset);
+}
+
+Error AssetManager_LoadWorldSprite(AssetManager* self, const unsigned char* name, AssetUserID user,
+    WorldSprite** outAsset)
+{
+    return LoadStandard(self, (self != NULL) ? self->_standardTypes.WorldSprite : ASSET_TYPE_ID_INVALID, name, user,
         (void**)outAsset);
 }
 

@@ -392,16 +392,23 @@ bool TestAssets_AddTexture(TestRun* run, TestAssetFixture* fixture, const char* 
     return TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, &Definition->Base));
 }
 
-bool TestAssets_AddWorldModel(TestRun* run, TestAssetFixture* fixture, const char* json)
+/* Builds a definition of @p type from @p json with the type's real constructor and registers it. */
+static bool AddFromJSON(TestRun* run, TestAssetFixture* fixture, AssetTypeID type, const char* json,
+    const char* description)
 {
     GenericBuffer Bytes;
     GenericBuffer_AllocateVariable(&Bytes, 0U, sizeof(unsigned char));
     GenericBuffer_AppendString(&Bytes, (const unsigned char*)json);
     AssetDefinition* Definition = NULL;
-    bool IsBuilt = TEST_CHECK_SUCCESS(run, AssetManager_BuildDefinition(fixture->Manager, fixture->Types.WorldModel,
-        &Bytes, (const unsigned char*)u8"test world model", &Definition));
+    bool IsBuilt = TEST_CHECK_SUCCESS(run, AssetManager_BuildDefinition(fixture->Manager, type, &Bytes,
+        (const unsigned char*)description, &Definition));
     Memory_Free(Bytes._data);
     return IsBuilt && TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, Definition));
+}
+
+bool TestAssets_AddWorldModel(TestRun* run, TestAssetFixture* fixture, const char* json)
+{
+    return AddFromJSON(run, fixture, fixture->Types.WorldModel, json, "test world model");
 }
 
 bool TestAssets_AddWorldModelOf(TestRun* run, TestAssetFixture* fixture, const char* name, const char* modelName)
@@ -410,4 +417,16 @@ bool TestAssets_AddWorldModelOf(TestRun* run, TestAssetFixture* fixture, const c
     snprintf(Json, sizeof(Json), "{\"name\": \"%s\", \"lods\": [{\"model\": \"%s\", \"max_distance\": 600}]}",
         name, modelName);
     return TestAssets_AddWorldModel(run, fixture, Json);
+}
+
+bool TestAssets_AddWorldSprite(TestRun* run, TestAssetFixture* fixture, const char* json)
+{
+    return AddFromJSON(run, fixture, fixture->Types.WorldSprite, json, "test world sprite");
+}
+
+bool TestAssets_AddWorldSpriteOf(TestRun* run, TestAssetFixture* fixture, const char* name, const char* animationName)
+{
+    char Json[256];
+    snprintf(Json, sizeof(Json), "{\"name\": \"%s\", \"sprite_animation\": \"%s\"}", name, animationName);
+    return TestAssets_AddWorldSprite(run, fixture, Json);
 }

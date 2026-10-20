@@ -21,8 +21,10 @@
  * At the start of every render, WorldRenderCache_Sync walks the world's per-type component arrays once
  * (World_GetComponents) and builds the lists every pass shares: the model components (with their resolved world model,
  * the LOD drawn, the variant, the settings in effect, final transform and world bounding sphere), the sprites that have
- * a frame to draw, and the point lights. Passes iterate these lists instead of walking the world and resolving assets
- * by name themselves. Every placement is the object's world one, through its parents (WorldObject_GetWorldMatrix,
+ * a frame to draw (with the settings in effect: their world sprite's, or the placement's own while their override flags
+ * are on, WorldSpriteComponent_ResolveSettings, taken every frame), and the point lights. Passes iterate these lists
+ * instead of walking the world and resolving assets by name themselves. Every placement is the object's world one,
+ * through its parents (WorldObject_GetWorldMatrix,
  * WorldObject_GetWorldTransform, WorldObject_GetWorldPosition), read without writing to the world.
  *
  * Objects that are disabled or hidden, or under a disabled or hidden ancestor (WorldObject_IsEffectivelyEnabled,
@@ -43,7 +45,8 @@
  *
  * The cache only reads the world, its objects and components, and never writes to an asset. Every pointer in the lists
  * is borrowed and valid until the world changes; the world models (and with them their LOD models and textures) are
- * held under the asset user passed to Sync.
+ * held under the asset user passed to Sync, the sprites' world sprites (and their animations) under the world's own,
+ * which their components bind.
  */
 
 
@@ -89,9 +92,9 @@ typedef struct WorldRenderModelStruct
     bool OmitsPixelation;
     WorldShadowTier ShadowTier;
     bool CastsShadows;
-    /** @brief The draw distance in effect, in metres, times the component's multiplier (above 0; +infinity never
-     *  fades), and whether the player's draw_distance_scale leaves it as it is (this frame). WorldVisibility applies
-     *  the scale and the zoom. */
+    /** @brief The draw distance in effect, in metres, times the component's multiplier (>= 0: +infinity never fades, 0
+     *  is never drawn), and whether the player's draw_distance_scale leaves it as it is (this frame). WorldVisibility
+     *  applies the scale and the zoom. */
     float DrawDistance;
     bool IsDrawDistanceFixed;
     /** @brief The drawn LOD's import transform composed with the object's world matrix (this frame). Valid when Asset
@@ -105,7 +108,9 @@ typedef struct WorldRenderModelStruct
     Color Tint;
 } WorldRenderModel;
 
-/** @brief A sprite component that has a frame to draw this frame, with everything the passes need. */
+/** @brief A sprite component that has a frame to draw this frame, with everything the passes need. Its settings are the
+ *  ones in effect (WorldSpriteComponent_ResolveSettings: its world sprite's, or the placement's own while their
+ *  override flags are on). */
 typedef struct WorldRenderSpriteStruct
 {
     /** @brief The sprite component (borrowed); valid until the world changes. */
@@ -126,7 +131,7 @@ typedef struct WorldRenderSpriteStruct
     float BoundsRadius;
     /** @brief The object's final tint colour (its alpha is the object's opacity). */
     Color Tint;
-    /** @brief The component's alpha mode, cutout threshold and lighting. */
+    /** @brief The alpha mode, cutout threshold and lighting. */
     WorldSpriteAlphaMode AlphaMode;
     float AlphaCutoff;
     bool IsLit;
@@ -135,13 +140,18 @@ typedef struct WorldRenderSpriteStruct
     /** @brief Whether it is drawn as a decal (marked as one, with the fixed orientation), and how far it is lifted. */
     bool IsDecal;
     float DecalOffset;
-    /** @brief The component's casts_shadows (only cutout sprites that are not decals cast). */
+    /** @brief Whether it casts shadows (only cutout sprites that are not decals cast). */
     bool CastsShadows;
-    /** @brief The component's outline setting. */
+    /** @brief The outline setting. */
     bool HasOutline;
     /** @brief Whether it is drawn crisp: omit_pixelation on a cutout sprite that is not a decal (the crisp overlay
      *  composites opaque surfaces only, so the others stay pixelated). */
     bool OmitsPixelation;
+    /** @brief The draw distance in effect, in metres, times the component's multiplier (>= 0: +infinity never fades, 0
+     *  is never drawn), and whether the player's draw_distance_scale leaves it as it is (this frame). WorldVisibility
+     *  applies the scale and the zoom. */
+    float DrawDistance;
+    bool IsDrawDistanceFixed;
 } WorldRenderSprite;
 
 /** @brief A point light as the passes use it this frame. */

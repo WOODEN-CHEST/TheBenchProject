@@ -119,15 +119,14 @@ static WorldComponent* AddComponent(TestRun* run, World* world, const WorldObjec
     return Component;
 }
 
-/* Creates an object with a sprite component naming @p animationName; returns the sprite, or NULL with a failed
- * check. */
-static WorldSpriteComponent* AddSprite(TestRun* run, World* world, const char* animationName)
+/* Creates an object with a sprite component naming the world sprite @p worldSpriteName; returns the sprite, or NULL with
+ * a failed check. */
+static WorldSpriteComponent* AddSprite(TestRun* run, World* world, const char* worldSpriteName)
 {
     WorldSpriteComponent* Sprite = WorldSpriteComponent_FromComponent(AddComponent(run, world,
         CreateObject(run, world, "sprite"), WorldComponentType_Sprite));
     if ((Sprite == NULL)
-        || !TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite,
-            (const unsigned char*)animationName)))
+        || !TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)worldSpriteName)))
     {
         return NULL;
     }
@@ -659,8 +658,8 @@ static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
 }
 
 
-/* A sprite's drawing settings start at their documented defaults, refuse what their rules refuse (changing nothing),
- * read their enum names and the pivot from JSON, round-trip through it, and a decal needs the fixed orientation. */
+/* A placement's own sprite settings start at their documented defaults with every override flag off, refuse what their
+ * rules refuse (changing nothing), read their enum names and the pivot from JSON, and round-trip through it. */
 static void SpriteSettingsHaveDefaultsRulesAndNames(TestRun* run)
 {
     World TestWorld;
@@ -681,6 +680,8 @@ static void SpriteSettingsHaveDefaultsRulesAndNames(TestRun* run)
     }
 
     Vector2 Pivot = WorldSpriteComponent_GetPivot(Sprite);
+    TEST_CHECK(run, (WorldSpriteComponent_GetWorldSprite(Sprite) == NULL)
+        && (WorldSpriteComponent_GetBoundWorldSprite(Sprite) == NULL));
     TEST_CHECK(run, (WorldSpriteComponent_GetOrientation(Sprite) == WorldSpriteOrientation_Billboard)
         && (Pivot.x == 0.5f) && (Pivot.y == 0.5f) && (WorldSpriteComponent_GetPixelsPerUnit(Sprite) == 32.0f)
         && !WorldSpriteComponent_IsFlippedX(Sprite) && !WorldSpriteComponent_IsFlippedY(Sprite));
@@ -690,6 +691,15 @@ static void SpriteSettingsHaveDefaultsRulesAndNames(TestRun* run)
         && WorldSpriteComponent_CastsShadows(Sprite));
     TEST_CHECK(run, !WorldSpriteComponent_IsDecal(Sprite) && (WorldSpriteComponent_GetDecalOffset(Sprite) == 0.01f)
         && WorldSpriteComponent_HasOutline(Sprite) && !WorldSpriteComponent_OmitsPixelation(Sprite));
+    TEST_CHECK(run, (WorldSpriteComponent_GetDrawDistance(Sprite) == 150.0f)
+        && (WorldSpriteComponent_GetDrawDistanceMultiplier(Sprite) == 1.0f)
+        && !WorldSpriteComponent_IsDrawDistanceFixed(Sprite));
+    bool IsAnyOverridden = false;
+    for (int Setting = 0; Setting < (int)WorldSpriteSetting_Count; Setting++)
+    {
+        IsAnyOverridden = IsAnyOverridden || WorldSpriteComponent_IsOverridden(Sprite, (WorldSpriteSetting)Setting);
+    }
+    TEST_CHECK(run, !IsAnyOverridden);
 
     // Every setter advances the revision once.
     uint32_t Revision = WorldComponent_GetRevision(&Sprite->Base);
@@ -706,14 +716,27 @@ static void SpriteSettingsHaveDefaultsRulesAndNames(TestRun* run)
     TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetCastsShadows(Sprite, false));
     TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDecal(Sprite, true));
     TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDecalOffset(Sprite, 0.05f));
-    TEST_CHECK(run, WorldComponent_GetRevision(&Sprite->Base) == (Revision + 13U));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetHasOutline(Sprite, false));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOmitsPixelation(Sprite, true));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDrawDistance(Sprite, 40.0f));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDrawDistanceMultiplier(Sprite, 2.0f));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetIsDrawDistanceFixed(Sprite, true));
+    TEST_CHECK(run, WorldComponent_GetRevision(&Sprite->Base) == (Revision + 18U));
     TEST_CHECK(run, (WorldSpriteComponent_GetPixelsPerUnit(Sprite) == 16.0f)
-        && (WorldSpriteComponent_GetEmission(Sprite) == 3.0f) && WorldSpriteComponent_IsFlippedY(Sprite));
+        && (WorldSpriteComponent_GetEmission(Sprite) == 3.0f) && WorldSpriteComponent_IsFlippedY(Sprite)
+        && (WorldSpriteComponent_GetDrawDistance(Sprite) == 40.0f)
+        && (WorldSpriteComponent_GetDrawDistanceMultiplier(Sprite) == 2.0f)
+        && WorldSpriteComponent_IsDrawDistanceFixed(Sprite));
 
-    // A decal only with the fixed orientation.
-    TEST_CHECK(run, WorldSpriteComponent_IsDecal(Sprite) && !WorldSpriteComponent_IsDrawnAsDecal(Sprite));
-    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOrientation(Sprite, WorldSpriteOrientation_Fixed));
-    TEST_CHECK(run, WorldSpriteComponent_IsDrawnAsDecal(Sprite));
+    // Every override flag, on and off, advances it too.
+    Revision = WorldComponent_GetRevision(&Sprite->Base);
+    for (int Setting = 0; Setting < (int)WorldSpriteSetting_Count; Setting++)
+    {
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Sprite, (WorldSpriteSetting)Setting, true));
+        TEST_CHECK(run, WorldSpriteComponent_IsOverridden(Sprite, (WorldSpriteSetting)Setting));
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Sprite, (WorldSpriteSetting)Setting, false));
+    }
+    TEST_CHECK(run, WorldComponent_GetRevision(&Sprite->Base) == (Revision + (2U * (uint32_t)WorldSpriteSetting_Count)));
 
     // Refused values change nothing.
     Revision = WorldComponent_GetRevision(&Sprite->Base);
@@ -721,6 +744,10 @@ static void SpriteSettingsHaveDefaultsRulesAndNames(TestRun* run)
     for (size_t Index = 0; Index < 3; Index++)
     {
         TEST_CHECK_ERROR(run, WorldSpriteComponent_SetPixelsPerUnit(Sprite, BadPixelsPerUnit[Index]),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldSpriteComponent_SetDrawDistance(Sprite, BadPixelsPerUnit[Index]),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldSpriteComponent_SetDrawDistanceMultiplier(Sprite, BadPixelsPerUnit[Index]),
             ErrorCode_ArgumentOutOfRange);
     }
     TEST_CHECK_ERROR(run, WorldSpriteComponent_SetAlphaCutoff(Sprite, 1.5f), ErrorCode_ArgumentOutOfRange);
@@ -734,26 +761,39 @@ static void SpriteSettingsHaveDefaultsRulesAndNames(TestRun* run)
         ErrorCode_ArgumentOutOfRange);
     TEST_CHECK_ERROR(run, WorldSpriteComponent_SetAlphaMode(Sprite, (WorldSpriteAlphaMode)9),
         ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, WorldSpriteComponent_SetOverridden(Sprite, WorldSpriteSetting_Count, true),
+        ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)u8"Bad Name"),
+        ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK(run, !WorldSpriteComponent_IsOverridden(Sprite, WorldSpriteSetting_Count));
     TEST_CHECK(run, (WorldComponent_GetRevision(&Sprite->Base) == Revision)
         && (WorldSpriteComponent_GetPixelsPerUnit(Sprite) == 16.0f)
-        && (WorldSpriteComponent_GetOrientation(Sprite) == WorldSpriteOrientation_Fixed));
+        && (WorldSpriteComponent_GetDrawDistance(Sprite) == 40.0f)
+        && (WorldSpriteComponent_GetOrientation(Sprite) == WorldSpriteOrientation_AxisBillboard));
 
-    // JSON: the enums by name, the pivot as an array; a bad value refuses the whole read.
+    // JSON: the enums by name, the pivot as an array, the flags next to their values; a bad value refuses the whole
+    // read.
     const PropertyTable* Table = WorldSpriteComponent_GetPropertyTable();
     JSONObjectValue Value;
-    if (TestText_ParseJSON(run, Pool, "{\"orientation\": \"axis_billboard\", \"pivot\": [0.5, 0], "
-        "\"pixels_per_unit\": 64, \"flip_x\": true, \"alpha_mode\": \"additive\", \"is_lit\": false, \"emission\": 2.5, "
-        "\"light_wrap\": 0.25, \"is_decal\": true, \"decal_offset\": 0.02, \"casts_shadows\": false}", &Value))
+    if (TestText_ParseJSON(run, Pool, "{\"orientation\": \"fixed\", \"pivot\": [0.5, 0], \"pixels_per_unit\": 64, "
+        "\"flip_x\": true, \"alpha_mode\": \"additive\", \"is_lit\": false, \"emission\": 2.5, \"light_wrap\": 0.25, "
+        "\"is_decal\": true, \"decal_offset\": 0.02, \"casts_shadows\": false, \"overrides_flip_x\": true, "
+        "\"overrides_draw_distance\": true, \"draw_distance\": 12}", &Value))
     {
         TEST_CHECK_SUCCESS(run, Properties_ReadJSON(Table, Value.Value.Compound, Sprite, NULL));
         Pivot = WorldSpriteComponent_GetPivot(Sprite);
-        TEST_CHECK(run, (WorldSpriteComponent_GetOrientation(Sprite) == WorldSpriteOrientation_AxisBillboard)
+        TEST_CHECK(run, (WorldSpriteComponent_GetOrientation(Sprite) == WorldSpriteOrientation_Fixed)
             && (Pivot.x == 0.5f) && (Pivot.y == 0.0f) && (WorldSpriteComponent_GetPixelsPerUnit(Sprite) == 64.0f)
             && WorldSpriteComponent_IsFlippedX(Sprite) && !WorldSpriteComponent_IsFlippedY(Sprite));
         TEST_CHECK(run, (WorldSpriteComponent_GetAlphaMode(Sprite) == WorldSpriteAlphaMode_Additive)
             && !WorldSpriteComponent_IsLit(Sprite) && (WorldSpriteComponent_GetEmission(Sprite) == 2.5f)
             && (WorldSpriteComponent_GetLightWrap(Sprite) == 0.25f) && WorldSpriteComponent_IsDecal(Sprite)
-            && !WorldSpriteComponent_IsDrawnAsDecal(Sprite) && !WorldSpriteComponent_CastsShadows(Sprite));
+            && !WorldSpriteComponent_CastsShadows(Sprite));
+        TEST_CHECK(run, WorldSpriteComponent_IsOverridden(Sprite, WorldSpriteSetting_FlipX)
+            && WorldSpriteComponent_IsOverridden(Sprite, WorldSpriteSetting_DrawDistance)
+            && !WorldSpriteComponent_IsOverridden(Sprite, WorldSpriteSetting_Orientation)
+            && (WorldSpriteComponent_GetDrawDistance(Sprite) == 12.0f)
+            && (WorldSpriteComponent_GetDrawDistanceMultiplier(Sprite) == 1.0f));
         TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
     }
     if (TestText_ParseJSON(run, Pool, "{\"alpha_mode\": \"glow\", \"pixels_per_unit\": 8}", &Value))
@@ -763,7 +803,7 @@ static void SpriteSettingsHaveDefaultsRulesAndNames(TestRun* run)
         TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
     }
 
-    // Written and read back into another sprite, every setting survives.
+    // Written and read back into another sprite, every setting and flag survives.
     JSONCompound* Written = NULL;
     if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Written)))
     {
@@ -791,7 +831,8 @@ static void WorldWithoutAssetsLeavesSpritesEmpty(TestRun* run)
     if (Sprite != NULL)
     {
         TEST_CHECK(run, !SpriteAnimationInstance_HasSource(WorldSpriteComponent_GetAnimationInstance(Sprite)));
-        TEST_CHECK(run, strcmp((const char*)WorldSpriteComponent_GetSpriteAnimation(Sprite), "walk") == 0);
+        TEST_CHECK(run, WorldSpriteComponent_GetBoundWorldSprite(Sprite) == NULL);
+        TEST_CHECK(run, strcmp((const char*)WorldSpriteComponent_GetWorldSprite(Sprite), "walk") == 0);
     }
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
@@ -802,7 +843,9 @@ static void SpriteBindsAndTheWorldReleasesTheAnimationLast(TestRun* run)
     TestAssetCounters Counters = { 0 };
     World TestWorld;
     KeyRegistry TestKeys;
-    if (!TestAssetFixture_Construct(run, &Fixture) || !TestAssets_AddSpriteAnimation(run, &Fixture, "walk", &Counters)
+    if (!TestAssetFixture_Construct(run, &Fixture)
+        || !TestAssets_AddSpriteAnimation(run, &Fixture, "walk_animation", &Counters)
+        || !TestAssets_AddWorldSpriteOf(run, &Fixture, "walk", "walk_animation")
         || !TestWorld_Construct(run, &TestWorld, &TestKeys, Fixture.Manager, NULL))
     {
         TestAssetFixture_Deconstruct(run, &Fixture);
@@ -813,29 +856,36 @@ static void SpriteBindsAndTheWorldReleasesTheAnimationLast(TestRun* run)
     WorldSpriteComponent* Second = AddSprite(run, &TestWorld, "walk");
     if ((First != NULL) && (Second != NULL))
     {
-        TEST_CHECK(run, IsBound(First) && IsBound(Second));
-        TEST_CHECK(run, SpriteAnimationInstance_GetSource(WorldSpriteComponent_GetAnimationInstance(First))
-            == SpriteAnimationInstance_GetSource(WorldSpriteComponent_GetAnimationInstance(Second)));
-        TEST_CHECK(run, Counters.LoadCount == 1); // shared: one load under the world's user
+        const WorldSprite* Bound = WorldSpriteComponent_GetBoundWorldSprite(First);
+        TEST_CHECK(run, IsBound(First) && IsBound(Second) && (Bound != NULL)
+            && (WorldSpriteComponent_GetBoundWorldSprite(Second) == Bound));
+        // Both play the world sprite's animation.
+        TEST_CHECK(run, (Bound != NULL)
+            && (SpriteAnimationInstance_GetSource(WorldSpriteComponent_GetAnimationInstance(First))
+                == WorldSprite_GetAnimation(Bound))
+            && (SpriteAnimationInstance_GetSource(WorldSpriteComponent_GetAnimationInstance(Second))
+                == WorldSprite_GetAnimation(Bound)));
+        TEST_CHECK(run, Counters.LoadCount == 1); // shared: one load, a dependency of the one world sprite
 
-        // Removing a sprite does not release the animation: the world's user holds it until the world goes.
+        // Removing a sprite does not release anything: the world's user holds the world sprite until the world goes.
         uint64_t FirstId = WorldObject_GetId(WorldComponent_GetOwner(&First->Base));
         TEST_CHECK_SUCCESS(run, World_RemoveComponent(&TestWorld, FirstId, WorldComponentType_Sprite));
     }
 
     TEST_CHECK(run, Counters.UnloadCount == 0);
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
-    TEST_CHECK(run, Counters.UnloadCount == 1);
+    TEST_CHECK(run, Counters.UnloadCount == 1); // the animation unloaded with its world sprite
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
 
-static void MissingAnimationIsLoggedOnceAndLeavesTheSpriteEmpty(TestRun* run)
+/* A world sprite that does not exist, and one whose animation does not, leave their sprites empty, each logged once. */
+static void MissingWorldSpriteIsLoggedOnceAndLeavesTheSpriteEmpty(TestRun* run)
 {
     GenericBuffer Directory;
     GenericBuffer_AllocateVariable(&Directory, WORLD_TEST_TEXT_CAPACITY, sizeof(unsigned char));
     Logger Log;
     TestAssetFixture Fixture;
-    if (!TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "world_missing_animation", &Directory))
+    if (!TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "world_missing_sprite", &Directory))
         || !TEST_CHECK_SUCCESS(run, Logger_Construct(&Log, Directory._data)))
     {
         Memory_Free(Directory._data);
@@ -844,22 +894,26 @@ static void MissingAnimationIsLoggedOnceAndLeavesTheSpriteEmpty(TestRun* run)
 
     World TestWorld;
     KeyRegistry TestKeys;
-    if (TestAssetFixture_Construct(run, &Fixture) && TestWorld_Construct(run, &TestWorld, &TestKeys,
-        Fixture.Manager, &Log))
+    if (TestAssetFixture_Construct(run, &Fixture) && TestAssets_AddWorldSpriteOf(run, &Fixture, "broken", "nowhere")
+        && TestWorld_Construct(run, &TestWorld, &TestKeys, Fixture.Manager, &Log))
     {
         WorldSpriteComponent* Sprite = AddSprite(run, &TestWorld, "missing");
-        if (Sprite != NULL)
+        WorldSpriteComponent* Broken = AddSprite(run, &TestWorld, "broken");
+        if ((Sprite != NULL) && (Broken != NULL))
         {
-            TEST_CHECK(run, !SpriteAnimationInstance_HasSource(WorldSpriteComponent_GetAnimationInstance(Sprite)));
+            TEST_CHECK(run, !SpriteAnimationInstance_HasSource(WorldSpriteComponent_GetAnimationInstance(Sprite))
+                && (WorldSpriteComponent_GetBoundWorldSprite(Sprite) == NULL));
+            TEST_CHECK(run, !IsBound(Broken) && (WorldSpriteComponent_GetBoundWorldSprite(Broken) == NULL));
             // The same name again changes nothing, so it is not loaded or reported again.
-            TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"missing"));
+            TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)u8"missing"));
             TEST_CHECK(run, !IsBound(Sprite));
         }
         TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
     }
     TestAssetFixture_Deconstruct(run, &Fixture);
     TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
-    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "has no animation: \"missing\"") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "shows nothing: world sprite \"missing\"") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "shows nothing: world sprite \"broken\"") == 1U);
     Memory_Free(Directory._data);
 }
 
@@ -869,8 +923,10 @@ static void RenamingRebindsAndTheSameNameKeepsPlaying(TestRun* run)
     World TestWorld;
     KeyRegistry TestKeys;
     if (!TestAssetFixture_Construct(run, &Fixture)
-        || !TestAssets_AddPlayingSpriteAnimation(run, &Fixture, "walk", 4U, 10.0, NULL)
-        || !TestAssets_AddSpriteAnimation(run, &Fixture, "idle", NULL)
+        || !TestAssets_AddPlayingSpriteAnimation(run, &Fixture, "walk_animation", 4U, 10.0, NULL)
+        || !TestAssets_AddSpriteAnimation(run, &Fixture, "idle_animation", NULL)
+        || !TestAssets_AddWorldSpriteOf(run, &Fixture, "walk", "walk_animation")
+        || !TestAssets_AddWorldSpriteOf(run, &Fixture, "idle", "idle_animation")
         || !TestWorld_Construct(run, &TestWorld, &TestKeys, Fixture.Manager, NULL))
     {
         TestAssetFixture_Deconstruct(run, &Fixture);
@@ -882,23 +938,27 @@ static void RenamingRebindsAndTheSameNameKeepsPlaying(TestRun* run)
     {
         SpriteAnimationInstance* Instance = WorldSpriteComponent_GetAnimationInstance(Sprite);
         TEST_CHECK(run, !IsBound(Sprite));
-        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"));
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)u8"walk"));
         TEST_CHECK(run, IsBound(Sprite) && (SpriteAnimationInstance_GetFrameCount(Instance) == 4U));
+        const WorldSprite* Walk = WorldSpriteComponent_GetBoundWorldSprite(Sprite);
 
         // Playing on: the same name keeps the playback, another name restarts it.
         TEST_CHECK_SUCCESS(run, SpriteAnimationInstance_Update(Instance, 0.15));
         TEST_CHECK(run, SpriteAnimationInstance_GetFrameIndex(Instance) == 1U);
-        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"));
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)u8"walk"));
         TEST_CHECK(run, SpriteAnimationInstance_GetFrameIndex(Instance) == 1U);
-        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"idle"));
-        TEST_CHECK(run, IsBound(Sprite) && (SpriteAnimationInstance_GetFrameCount(Instance) == 1U));
-        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"));
-        TEST_CHECK(run, SpriteAnimationInstance_GetFrameIndex(Instance) == 0U);
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)u8"idle"));
+        TEST_CHECK(run, IsBound(Sprite) && (SpriteAnimationInstance_GetFrameCount(Instance) == 1U)
+            && (WorldSpriteComponent_GetBoundWorldSprite(Sprite) != Walk));
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)u8"walk"));
+        TEST_CHECK(run, (SpriteAnimationInstance_GetFrameIndex(Instance) == 0U)
+            && (WorldSpriteComponent_GetBoundWorldSprite(Sprite) == Walk));
 
-        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, NULL));
-        TEST_CHECK(run, !SpriteAnimationInstance_HasSource(Instance));
-        TEST_CHECK(run, WorldSpriteComponent_GetSpriteAnimation(Sprite) == NULL);
-        TEST_CHECK_ERROR(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"Bad Name"),
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, NULL));
+        TEST_CHECK(run, !SpriteAnimationInstance_HasSource(Instance)
+            && (WorldSpriteComponent_GetBoundWorldSprite(Sprite) == NULL));
+        TEST_CHECK(run, WorldSpriteComponent_GetWorldSprite(Sprite) == NULL);
+        TEST_CHECK_ERROR(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)u8"Bad Name"),
             ErrorCode_ArgumentOutOfRange);
     }
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
@@ -910,7 +970,8 @@ static void TableWritesRebindTheSprite(TestRun* run)
     TestAssetFixture Fixture;
     World TestWorld;
     KeyRegistry TestKeys;
-    if (!TestAssetFixture_Construct(run, &Fixture) || !TestAssets_AddSpriteAnimation(run, &Fixture, "walk", NULL)
+    if (!TestAssetFixture_Construct(run, &Fixture) || !TestAssets_AddSpriteAnimation(run, &Fixture, "walk_animation", NULL)
+        || !TestAssets_AddWorldSpriteOf(run, &Fixture, "walk", "walk_animation")
         || !TestWorld_Construct(run, &TestWorld, &TestKeys, Fixture.Manager, NULL))
     {
         TestAssetFixture_Deconstruct(run, &Fixture);
@@ -923,19 +984,20 @@ static void TableWritesRebindTheSprite(TestRun* run)
     if ((Sprite != NULL) && (Other != NULL))
     {
         PropertyValue Name = PropertyValue_FromAssetName((const unsigned char*)u8"walk");
-        TEST_CHECK_SUCCESS(run, Properties_Set(Table, Sprite, u8"sprite_animation", &Name));
+        TEST_CHECK_SUCCESS(run, Properties_Set(Table, Sprite, u8"world_sprite", &Name));
         TEST_CHECK(run, IsBound(Sprite));
 
         // A read may change anything (its hook gets no row): the name is compared with the bound one.
-        TEST_CHECK_SUCCESS(run, ReadComponentJSON(run, &Sprite->Base, Table, "{\"sprite_animation\": \"missing\"}"));
-        TEST_CHECK(run, !IsBound(Sprite));
-        // An absent key reads as its default: no animation.
+        TEST_CHECK_SUCCESS(run, ReadComponentJSON(run, &Sprite->Base, Table, "{\"world_sprite\": \"missing\"}"));
+        TEST_CHECK(run, !IsBound(Sprite) && (WorldSpriteComponent_GetBoundWorldSprite(Sprite) == NULL));
+        // An absent key reads as its default: no world sprite.
         TEST_CHECK_SUCCESS(run, ReadComponentJSON(run, &Sprite->Base, Table, "{\"has_outline\": false}"));
-        TEST_CHECK(run, (WorldSpriteComponent_GetSpriteAnimation(Sprite) == NULL) && !IsBound(Sprite));
+        TEST_CHECK(run, (WorldSpriteComponent_GetWorldSprite(Sprite) == NULL) && !IsBound(Sprite));
         TEST_CHECK(run, !WorldSpriteComponent_HasOutline(Sprite));
 
         TEST_CHECK_SUCCESS(run, Properties_CopyTo(Table, Other, Sprite));
-        TEST_CHECK(run, IsBound(Sprite) && WorldSpriteComponent_HasOutline(Sprite));
+        TEST_CHECK(run, IsBound(Sprite) && WorldSpriteComponent_HasOutline(Sprite)
+            && (WorldSpriteComponent_GetBoundWorldSprite(Sprite) == WorldSpriteComponent_GetBoundWorldSprite(Other)));
     }
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
     TestAssetFixture_Deconstruct(run, &Fixture);
@@ -1085,8 +1147,8 @@ void WorldTests_Run(TestRun* run)
         { "sprite_settings_have_defaults_rules_and_names", SpriteSettingsHaveDefaultsRulesAndNames },
         { "world_without_assets_leaves_sprites_empty", WorldWithoutAssetsLeavesSpritesEmpty },
         { "sprite_binds_and_the_world_releases_the_animation_last", SpriteBindsAndTheWorldReleasesTheAnimationLast },
-        { "missing_animation_is_logged_once_and_leaves_the_sprite_empty",
-            MissingAnimationIsLoggedOnceAndLeavesTheSpriteEmpty },
+        { "missing_world_sprite_is_logged_once_and_leaves_the_sprite_empty",
+            MissingWorldSpriteIsLoggedOnceAndLeavesTheSpriteEmpty },
         { "renaming_rebinds_and_the_same_name_keeps_playing", RenamingRebindsAndTheSameNameKeepsPlaying },
         { "table_writes_rebind_the_sprite", TableWritesRebindTheSprite },
         { "flags_advance_the_revision", FlagsAdvanceTheRevision },

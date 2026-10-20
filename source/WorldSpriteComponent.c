@@ -1,19 +1,23 @@
 #include <inttypes.h>
 #include "WorldSpriteComponent.h"
 #include "WorldInternal.h"
+#include "WorldSpriteInternal.h"
+#include "AssetManager.h"
 #include "wr/WRMemory.h"
 
 
 // Macros.
 /** The format version of the sprite component's property table. */
 #define SPRITE_TABLE_VERSION 1U
-/** The inspector's categories. */
-#define CATEGORY_SPRITE ((const unsigned char*)u8"Sprite")
-#define CATEGORY_LIGHTING ((const unsigned char*)u8"Lighting")
-#define CATEGORY_DECAL ((const unsigned char*)u8"Decal")
-/** The defaults that are not the type's zero. */
-#define DEFAULT_ALPHA_CUTOFF 0.5f
-#define DEFAULT_DECAL_OFFSET 0.01f
+/** An override flag's row: "overrides_" + its setting's key, a Bool (false: the world sprite's value applies), right
+ *  before the value's row. @p name is how the flag's texts call the setting. */
+#define OVERRIDE_ROW(setting, key, wireId, category, name) \
+    { \
+        .Key = u8"overrides_" key, .WireId = (wireId), .Type = PropertyType_Bool, \
+        PROPERTY_MEMBER(WorldSpriteComponent, _overrides[setting]), .Default.BoolValue = false, \
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = (category), .DisplayName = u8"Override " name, \
+        .Description = u8"Uses this object's " name u8" instead of its world sprite's.", .SinceVersion = 1U \
+    }
 
 
 // Types.
@@ -21,193 +25,185 @@
  * without a search. */
 typedef enum SpritePropertyEnum
 {
-    SpriteProperty_SpriteAnimation,
+    SpriteProperty_WorldSprite,
+    SpriteProperty_OverridesOrientation,
     SpriteProperty_Orientation,
+    SpriteProperty_OverridesPivot,
     SpriteProperty_Pivot,
+    SpriteProperty_OverridesPixelsPerUnit,
     SpriteProperty_PixelsPerUnit,
+    SpriteProperty_OverridesFlipX,
     SpriteProperty_FlipX,
+    SpriteProperty_OverridesFlipY,
     SpriteProperty_FlipY,
+    SpriteProperty_OverridesAlphaMode,
     SpriteProperty_AlphaMode,
+    SpriteProperty_OverridesAlphaCutoff,
     SpriteProperty_AlphaCutoff,
+    SpriteProperty_OverridesIsLit,
     SpriteProperty_IsLit,
+    SpriteProperty_OverridesEmission,
     SpriteProperty_Emission,
+    SpriteProperty_OverridesLightWrap,
     SpriteProperty_LightWrap,
+    SpriteProperty_OverridesCastsShadows,
     SpriteProperty_CastsShadows,
+    SpriteProperty_OverridesIsDecal,
     SpriteProperty_IsDecal,
+    SpriteProperty_OverridesDecalOffset,
     SpriteProperty_DecalOffset,
+    SpriteProperty_OverridesHasOutline,
     SpriteProperty_HasOutline,
+    SpriteProperty_OverridesOmitPixelation,
     SpriteProperty_OmitPixelation,
+    SpriteProperty_OverridesDrawDistance,
+    SpriteProperty_DrawDistance,
+    SpriteProperty_DrawDistanceMultiplier,
+    SpriteProperty_OverridesIsDrawDistanceFixed,
+    SpriteProperty_IsDrawDistanceFixed,
     SpriteProperty_Count
 } SpriteProperty;
 
 
 // Fields.
-static const PropertyEnumEntry OrientationEntries[] =
-{
-    { .Name = u8"billboard", .Value = WorldSpriteOrientation_Billboard },
-    { .Name = u8"axis_billboard", .Value = WorldSpriteOrientation_AxisBillboard },
-    { .Name = u8"fixed", .Value = WorldSpriteOrientation_Fixed },
-};
-
-static const PropertyEnumTable OrientationEnum =
-{
-    .Name = u8"sprite_orientation", .Entries = OrientationEntries,
-    .EntryCount = sizeof(OrientationEntries) / sizeof(OrientationEntries[0])
-};
-
-static const PropertyEnumEntry AlphaModeEntries[] =
-{
-    { .Name = u8"cutout", .Value = WorldSpriteAlphaMode_Cutout },
-    { .Name = u8"blend", .Value = WorldSpriteAlphaMode_Blend },
-    { .Name = u8"additive", .Value = WorldSpriteAlphaMode_Additive },
-};
-
-static const PropertyEnumTable AlphaModeEnum =
-{
-    .Name = u8"sprite_alpha_mode", .Entries = AlphaModeEntries,
-    .EntryCount = sizeof(AlphaModeEntries) / sizeof(AlphaModeEntries[0])
-};
-
-/* Every property, in inspector order. The wire ids are the save schema: never renumber or reuse one; a removed
- * property's id goes into the table's retired list. */
+/* Every property, in inspector order: each override flag sits right before the value it switches on, and the values
+ * share their rows with the world sprite's tables (WorldSpriteInternal.h). The wire ids are the save schema: never
+ * renumber or reuse one; a removed property's id goes into the table's retired list. (T26 renamed wire 1 from
+ * "sprite_animation", a sprite animation, to "world_sprite", a world sprite, and made rows 2 to 16 the placement's own
+ * values behind their override flags.) The next free wire id is 37. */
 static const PropertyDescriptor SpriteProperties[SpriteProperty_Count] =
 {
-    [SpriteProperty_SpriteAnimation] =
+    [SpriteProperty_WorldSprite] =
     {
-        .Key = u8"sprite_animation", .WireId = 1U, .Type = PropertyType_AssetName,
-        PROPERTY_MEMBER(WorldSpriteComponent, _spriteAnimation), .Default.StringValue = NULL,
+        .Key = u8"world_sprite", .WireId = 1U, .Type = PropertyType_AssetName,
+        PROPERTY_MEMBER(WorldSpriteComponent, _worldSprite), .Default.StringValue = NULL,
         .Rules = PROPERTY_RULES_STRING(WORLD_SPRITE_COMPONENT_NAME_MAX_LENGTH, true), .Flags = PROPERTY_FLAGS_SETTING,
-        .Category = CATEGORY_SPRITE, .DisplayName = u8"Animation",
-        .Description = u8"The sprite animation to play; none shows nothing.", .SinceVersion = 1U
+        .Category = WORLD_SPRITE_CATEGORY_SPRITE, .DisplayName = u8"World sprite",
+        .Description = u8"The world sprite to show (its animation, shape, look and draw distance); none shows nothing.",
+        .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesOrientation] = OVERRIDE_ROW(WorldSpriteSetting_Orientation, "orientation", 17U,
+        WORLD_SPRITE_CATEGORY_SPRITE, "orientation"),
     [SpriteProperty_Orientation] =
     {
-        .Key = u8"orientation", .WireId = 4U, .Type = PropertyType_Enum,
-        PROPERTY_MEMBER(WorldSpriteComponent, _orientation), .Default.EnumValue = WorldSpriteOrientation_Billboard,
-        .EnumTable = &OrientationEnum, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE,
-        .DisplayName = u8"Orientation",
-        .Description = u8"\"billboard\" faces the camera; \"axis_billboard\" turns only around the object's own up axis "
-            u8"to face it (trees, lamp posts); \"fixed\" keeps the object's rotation, facing its +Z (signs, decals).",
+        WORLD_SPRITE_ROW_ORIENTATION, .WireId = 4U, PROPERTY_MEMBER(WorldSpriteComponent, _orientation),
         .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesPivot] = OVERRIDE_ROW(WorldSpriteSetting_Pivot, "pivot", 18U,
+        WORLD_SPRITE_CATEGORY_SPRITE, "pivot"),
     [SpriteProperty_Pivot] =
     {
-        .Key = u8"pivot", .WireId = 5U, .Type = PropertyType_Vector2, PROPERTY_MEMBER(WorldSpriteComponent, _pivot),
-        .Default.Vector2Value = { 0.5f, 0.5f }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE,
-        .DisplayName = u8"Pivot",
-        .Description = u8"The point of the image at the object's position: [0, 0] its bottom left, [1, 1] its top right; "
-            u8"[0.5, 0] for things standing on the ground.",
-        .SinceVersion = 1U
+        WORLD_SPRITE_ROW_PIVOT, .WireId = 5U, PROPERTY_MEMBER(WorldSpriteComponent, _pivot), .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesPixelsPerUnit] = OVERRIDE_ROW(WorldSpriteSetting_PixelsPerUnit, "pixels_per_unit", 19U,
+        WORLD_SPRITE_CATEGORY_SPRITE, "pixels per metre"),
     [SpriteProperty_PixelsPerUnit] =
     {
-        .Key = u8"pixels_per_unit", .WireId = 6U, .Type = PropertyType_Float,
-        PROPERTY_MEMBER(WorldSpriteComponent, _pixelsPerUnit),
-        .Default.FloatValue = WORLD_SPRITE_COMPONENT_DEFAULT_PIXELS_PER_UNIT, .Rules = PROPERTY_RULES_ABOVE(0.0),
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE, .DisplayName = u8"Pixels per metre",
-        .Description = u8"Image pixels per metre: the sprite's size is its frame's size divided by this, times the "
-            u8"object's X and Y scale.",
+        WORLD_SPRITE_ROW_PIXELS_PER_UNIT, .WireId = 6U, PROPERTY_MEMBER(WorldSpriteComponent, _pixelsPerUnit),
         .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesFlipX] = OVERRIDE_ROW(WorldSpriteSetting_FlipX, "flip_x", 20U,
+        WORLD_SPRITE_CATEGORY_SPRITE, "left-right flip"),
     [SpriteProperty_FlipX] =
     {
-        .Key = u8"flip_x", .WireId = 7U, .Type = PropertyType_Bool, PROPERTY_MEMBER(WorldSpriteComponent, _isFlippedX),
-        .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE,
-        .DisplayName = u8"Flip left-right", .Description = u8"Mirrors the image left to right, about the pivot.",
-        .SinceVersion = 1U
+        WORLD_SPRITE_ROW_FLIP_X, .WireId = 7U, PROPERTY_MEMBER(WorldSpriteComponent, _isFlippedX), .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesFlipY] = OVERRIDE_ROW(WorldSpriteSetting_FlipY, "flip_y", 21U,
+        WORLD_SPRITE_CATEGORY_SPRITE, "upside-down flip"),
     [SpriteProperty_FlipY] =
     {
-        .Key = u8"flip_y", .WireId = 8U, .Type = PropertyType_Bool, PROPERTY_MEMBER(WorldSpriteComponent, _isFlippedY),
-        .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE,
-        .DisplayName = u8"Flip upside down", .Description = u8"Mirrors the image top to bottom, about the pivot.",
-        .SinceVersion = 1U
+        WORLD_SPRITE_ROW_FLIP_Y, .WireId = 8U, PROPERTY_MEMBER(WorldSpriteComponent, _isFlippedY), .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesAlphaMode] = OVERRIDE_ROW(WorldSpriteSetting_AlphaMode, "alpha_mode", 22U,
+        WORLD_SPRITE_CATEGORY_SPRITE, "transparency"),
     [SpriteProperty_AlphaMode] =
     {
-        .Key = u8"alpha_mode", .WireId = 11U, .Type = PropertyType_Enum,
-        PROPERTY_MEMBER(WorldSpriteComponent, _alphaMode), .Default.EnumValue = WorldSpriteAlphaMode_Cutout,
-        .EnumTable = &AlphaModeEnum, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE,
-        .DisplayName = u8"Transparency",
-        .Description = u8"\"cutout\": hard edges, opaque where drawn (pixel art; casts shadows); \"blend\": soft edges "
-            u8"(smoke, stains); \"additive\": adds its light (glows).",
+        WORLD_SPRITE_ROW_ALPHA_MODE, .WireId = 11U, PROPERTY_MEMBER(WorldSpriteComponent, _alphaMode),
         .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesAlphaCutoff] = OVERRIDE_ROW(WorldSpriteSetting_AlphaCutoff, "alpha_cutoff", 23U,
+        WORLD_SPRITE_CATEGORY_SPRITE, "cutout threshold"),
     [SpriteProperty_AlphaCutoff] =
     {
-        .Key = u8"alpha_cutoff", .WireId = 12U, .Type = PropertyType_Float,
-        PROPERTY_MEMBER(WorldSpriteComponent, _alphaCutoff), .Default.FloatValue = DEFAULT_ALPHA_CUTOFF,
-        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE,
-        .DisplayName = u8"Cutout threshold",
-        .Description = u8"With \"cutout\" transparency, texels less opaque than this are not drawn.", .SinceVersion = 1U
+        WORLD_SPRITE_ROW_ALPHA_CUTOFF, .WireId = 12U, PROPERTY_MEMBER(WorldSpriteComponent, _alphaCutoff),
+        .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesIsLit] = OVERRIDE_ROW(WorldSpriteSetting_IsLit, "is_lit", 24U,
+        WORLD_SPRITE_CATEGORY_LIGHTING, "lighting"),
     [SpriteProperty_IsLit] =
     {
-        .Key = u8"is_lit", .WireId = 9U, .Type = PropertyType_Bool, PROPERTY_MEMBER(WorldSpriteComponent, _isLit),
-        .Default.BoolValue = true, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_LIGHTING,
-        .DisplayName = u8"Lit",
-        .Description = u8"Lit by the sun, the moon and lamps like the models around it. Off: its colours glow as they "
-            u8"are, by day and night (neon, fire).",
-        .SinceVersion = 1U
+        WORLD_SPRITE_ROW_IS_LIT, .WireId = 9U, PROPERTY_MEMBER(WorldSpriteComponent, _isLit), .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesEmission] = OVERRIDE_ROW(WorldSpriteSetting_Emission, "emission", 25U,
+        WORLD_SPRITE_CATEGORY_LIGHTING, "glow"),
     [SpriteProperty_Emission] =
     {
-        .Key = u8"emission", .WireId = 10U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldSpriteComponent, _emission),
-        .Default.FloatValue = 1.0f, .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING,
-        .Category = CATEGORY_LIGHTING, .DisplayName = u8"Glow",
-        .Description = u8"How bright an unlit sprite glows; 1 shows its colours as they are.", .SinceVersion = 1U
+        WORLD_SPRITE_ROW_EMISSION, .WireId = 10U, PROPERTY_MEMBER(WorldSpriteComponent, _emission), .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesLightWrap] = OVERRIDE_ROW(WorldSpriteSetting_LightWrap, "light_wrap", 26U,
+        WORLD_SPRITE_CATEGORY_LIGHTING, "light wrap"),
     [SpriteProperty_LightWrap] =
     {
-        .Key = u8"light_wrap", .WireId = 16U, .Type = PropertyType_Float,
-        PROPERTY_MEMBER(WorldSpriteComponent, _lightWrap), .Default.FloatValue = 1.0f,
-        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_LIGHTING,
-        .DisplayName = u8"Light wrap",
-        .Description = u8"Billboards only: how far light wraps around the sprite. 0 lights it as a flat card facing you, "
-            u8"1 as a round thing, half lit from the side.",
+        WORLD_SPRITE_ROW_LIGHT_WRAP, .WireId = 16U, PROPERTY_MEMBER(WorldSpriteComponent, _lightWrap),
         .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesCastsShadows] = OVERRIDE_ROW(WorldSpriteSetting_CastsShadows, "casts_shadows", 27U,
+        WORLD_SPRITE_CATEGORY_LIGHTING, "shadow casting"),
     [SpriteProperty_CastsShadows] =
     {
-        .Key = u8"casts_shadows", .WireId = 15U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldSpriteComponent, _castsShadows), .Default.BoolValue = true,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_LIGHTING, .DisplayName = u8"Casts shadows",
-        .Description = u8"Cutout sprites only: casts a shadow (a billboard's shadow faces the light, so it does not turn "
-            u8"with the camera). Decals and soft sprites never cast.",
+        WORLD_SPRITE_ROW_CASTS_SHADOWS, .WireId = 15U, PROPERTY_MEMBER(WorldSpriteComponent, _castsShadows),
         .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesIsDecal] = OVERRIDE_ROW(WorldSpriteSetting_IsDecal, "is_decal", 28U,
+        WORLD_SPRITE_CATEGORY_DECAL, "decal setting"),
     [SpriteProperty_IsDecal] =
     {
-        .Key = u8"is_decal", .WireId = 13U, .Type = PropertyType_Bool, PROPERTY_MEMBER(WorldSpriteComponent, _isDecal),
-        .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_DECAL,
-        .DisplayName = u8"Decal",
-        .Description = u8"With the \"fixed\" orientation: lies on a surface (dirt, tire marks), drawn over it without "
-            u8"shadow or outline.",
-        .SinceVersion = 1U
+        WORLD_SPRITE_ROW_IS_DECAL, .WireId = 13U, PROPERTY_MEMBER(WorldSpriteComponent, _isDecal), .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesDecalOffset] = OVERRIDE_ROW(WorldSpriteSetting_DecalOffset, "decal_offset", 29U,
+        WORLD_SPRITE_CATEGORY_DECAL, "lift"),
     [SpriteProperty_DecalOffset] =
     {
-        .Key = u8"decal_offset", .WireId = 14U, .Type = PropertyType_Float,
-        PROPERTY_MEMBER(WorldSpriteComponent, _decalOffset), .Default.FloatValue = DEFAULT_DECAL_OFFSET,
-        .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_DECAL,
-        .DisplayName = u8"Lift",
-        .Description = u8"Metres a decal is lifted off its surface so it does not flicker against it.",
+        WORLD_SPRITE_ROW_DECAL_OFFSET, .WireId = 14U, PROPERTY_MEMBER(WorldSpriteComponent, _decalOffset),
         .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesHasOutline] = OVERRIDE_ROW(WorldSpriteSetting_HasOutline, "has_outline", 30U,
+        WORLD_SPRITE_CATEGORY_SPRITE, "outline"),
     [SpriteProperty_HasOutline] =
     {
-        .Key = u8"has_outline", .WireId = 2U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldSpriteComponent, _hasOutline), .Default.BoolValue = true, .Flags = PROPERTY_FLAGS_SETTING,
-        .Category = CATEGORY_SPRITE, .DisplayName = u8"Outline",
-        .Description = u8"Draws a 1-pixel outline around the sprite's shape (cutout sprites).", .SinceVersion = 1U
+        WORLD_SPRITE_ROW_HAS_OUTLINE, .WireId = 2U, PROPERTY_MEMBER(WorldSpriteComponent, _hasOutline),
+        .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesOmitPixelation] = OVERRIDE_ROW(WorldSpriteSetting_OmitPixelation, "omit_pixelation", 31U,
+        WORLD_SPRITE_CATEGORY_SPRITE, "crisp setting"),
     [SpriteProperty_OmitPixelation] =
     {
-        .Key = u8"omit_pixelation", .WireId = 3U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldSpriteComponent, _omitPixelation), .Default.BoolValue = false,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SPRITE, .DisplayName = u8"Crisp",
-        .Description = u8"Draws the sprite at full resolution over the pixelated image (cutout sprites).",
+        WORLD_SPRITE_ROW_OMIT_PIXELATION, .WireId = 3U, PROPERTY_MEMBER(WorldSpriteComponent, _omitPixelation),
         .SinceVersion = 1U
+    },
+    [SpriteProperty_OverridesDrawDistance] = OVERRIDE_ROW(WorldSpriteSetting_DrawDistance, "draw_distance", 32U,
+        WORLD_SPRITE_CATEGORY_DRAW_DISTANCE, "draw distance"),
+    [SpriteProperty_DrawDistance] =
+    {
+        WORLD_SPRITE_ROW_DRAW_DISTANCE, .WireId = 33U, PROPERTY_MEMBER(WorldSpriteComponent, _drawDistance),
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_DrawDistanceMultiplier] =
+    {
+        .Key = u8"draw_distance_multiplier", .WireId = 34U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldSpriteComponent, _drawDistanceMultiplier), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = WORLD_SPRITE_CATEGORY_DRAW_DISTANCE, .DisplayName = u8"Draw distance multiplier",
+        .Description = u8"Multiplies the draw distance in effect, the world sprite's or this object's: 2 is seen twice "
+            u8"as far.",
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_OverridesIsDrawDistanceFixed] = OVERRIDE_ROW(WorldSpriteSetting_IsDrawDistanceFixed,
+        "is_draw_distance_fixed", 35U, WORLD_SPRITE_CATEGORY_DRAW_DISTANCE, "fixed draw distance"),
+    [SpriteProperty_IsDrawDistanceFixed] =
+    {
+        WORLD_SPRITE_ROW_IS_DRAW_DISTANCE_FIXED, .WireId = 36U,
+        PROPERTY_MEMBER(WorldSpriteComponent, _isDrawDistanceFixed), .SinceVersion = 1U
     },
 };
 
@@ -224,9 +220,31 @@ static const PropertyTable SpriteTable =
     .Migrate = NULL
 };
 
+/* Each setting's override flag row. */
+static const SpriteProperty OverrideFlagRows[WorldSpriteSetting_Count] =
+{
+    [WorldSpriteSetting_Orientation] = SpriteProperty_OverridesOrientation,
+    [WorldSpriteSetting_Pivot] = SpriteProperty_OverridesPivot,
+    [WorldSpriteSetting_PixelsPerUnit] = SpriteProperty_OverridesPixelsPerUnit,
+    [WorldSpriteSetting_FlipX] = SpriteProperty_OverridesFlipX,
+    [WorldSpriteSetting_FlipY] = SpriteProperty_OverridesFlipY,
+    [WorldSpriteSetting_AlphaMode] = SpriteProperty_OverridesAlphaMode,
+    [WorldSpriteSetting_AlphaCutoff] = SpriteProperty_OverridesAlphaCutoff,
+    [WorldSpriteSetting_IsLit] = SpriteProperty_OverridesIsLit,
+    [WorldSpriteSetting_Emission] = SpriteProperty_OverridesEmission,
+    [WorldSpriteSetting_LightWrap] = SpriteProperty_OverridesLightWrap,
+    [WorldSpriteSetting_CastsShadows] = SpriteProperty_OverridesCastsShadows,
+    [WorldSpriteSetting_IsDecal] = SpriteProperty_OverridesIsDecal,
+    [WorldSpriteSetting_DecalOffset] = SpriteProperty_OverridesDecalOffset,
+    [WorldSpriteSetting_HasOutline] = SpriteProperty_OverridesHasOutline,
+    [WorldSpriteSetting_OmitPixelation] = SpriteProperty_OverridesOmitPixelation,
+    [WorldSpriteSetting_DrawDistance] = SpriteProperty_OverridesDrawDistance,
+    [WorldSpriteSetting_IsDrawDistanceFixed] = SpriteProperty_OverridesIsDrawDistanceFixed,
+};
+
 
 // Static functions: binding.
-/* Logs (once, now) that a sprite's animation could not be bound, and releases the error. */
+/* Logs (once, now) that a sprite's world sprite could not be bound, and releases the error. */
 static void ReportBindFailure(World* world, const WorldObject* object, const unsigned char* assetName, Error* error)
 {
     Logger* Log = WorldInternal_GetLogger(world);
@@ -234,8 +252,8 @@ static void ReportBindFailure(World* world, const WorldObject* object, const uns
     {
         const unsigned char* ObjectName = WorldObject_GetName(object);
         Error LogResult = Logger_LogWarningFormatted(Log,
-            (const unsigned char*)u8"World: the sprite of object %" PRIu64 u8" (\"%s\") has no animation: \"%s\" could "
-            u8"not be loaded (%s).",
+            (const unsigned char*)u8"World: the sprite of object %" PRIu64 u8" (\"%s\") shows nothing: world sprite "
+            u8"\"%s\" could not be loaded (%s).",
             WorldObject_GetId(object),
             (ObjectName != NULL) ? (const char*)ObjectName : "",
             (assetName != NULL) ? (const char*)assetName : "",
@@ -270,38 +288,39 @@ static Error BindInstance(WorldSpriteComponent* sprite, SpriteAnimation* animati
     return CreateResult;
 }
 
-/* Backs the instance with the animation the sprite names, loaded under the world's asset user, or empties it when the
- * world has no asset manager, the sprite names none, or the load fails. A failed load is a recoverable content
- * problem: it is logged once, here, and the sprite stays empty (it draws nothing). The name is remembered either way,
- * so the same name is not bound (or reported) again. */
+/* Backs the instance with the animation of the world sprite the component names, loaded under the world's asset user,
+ * or empties it when the world has no asset manager, the component names none, or the load fails. A failed load is a
+ * recoverable content problem: it is logged once, here, and the sprite stays empty (it draws nothing). The name is
+ * remembered either way, so the same name is not bound (or reported) again. */
 static void Bind(World* world, const WorldObject* object, WorldSpriteComponent* sprite)
 {
-    // TODO: A previous animation stays held under the world's user until the world is destroyed (holds are not
+    // TODO: A previous world sprite stays held under the world's user until the world is destroyed (holds are not
     // counted, so releasing it here could unload it under another sprite). If long-lived edited worlds pile up unused
-    // animations, add a release pass that swaps to a fresh user holding only the bound animations.
-    const unsigned char* AssetName = sprite->_spriteAnimation;
+    // world sprites, add a release pass that swaps to a fresh user holding only the bound ones.
+    const unsigned char* AssetName = sprite->_worldSprite;
     AssetManager* Assets = WorldInternal_GetAssets(world);
-    SpriteAnimation* Animation = NULL;
+    WorldSprite* Bound = NULL;
     if ((Assets != NULL) && (AssetName != NULL))
     {
-        Error LoadResult = AssetManager_LoadSpriteAnimation(Assets, AssetName, WorldInternal_GetAssetUser(world),
-            &Animation);
+        Error LoadResult = AssetManager_LoadWorldSprite(Assets, AssetName, WorldInternal_GetAssetUser(world), &Bound);
         if (LoadResult.Code != ErrorCode_Success)
         {
             ReportBindFailure(world, object, AssetName, &LoadResult);
-            Animation = NULL;
+            Bound = NULL;
         }
     }
 
-    Error BindResult = BindInstance(sprite, Animation);
+    Error BindResult = BindInstance(sprite, (Bound != NULL) ? WorldSprite_GetAnimation(Bound) : NULL);
     if (BindResult.Code != ErrorCode_Success)
     {
         ReportBindFailure(world, object, AssetName, &BindResult);
+        Bound = NULL;
     }
+    sprite->_boundWorldSprite = Bound;
 
     unsigned char* BoundName = WorldInternal_CloneString(AssetName);
-    Memory_Free(sprite->_boundAnimation);
-    sprite->_boundAnimation = BoundName;
+    Memory_Free(sprite->_boundName);
+    sprite->_boundName = BoundName;
 }
 
 
@@ -315,14 +334,15 @@ static Error ConstructSprite(WorldComponent* component)
         return Result;
     }
 
-    // Empty (no source) until the world binds the animation.
+    // Empty (no source) until the world binds the world sprite.
     Result = SpriteAnimationInstance_Construct1(&Sprite->_animationInstance);
     if (Result.Code != ErrorCode_Success)
     {
         Properties_Deconstruct(&SpriteTable, Sprite);
         return Result;
     }
-    Sprite->_boundAnimation = NULL;
+    Sprite->_boundName = NULL;
+    Sprite->_boundWorldSprite = NULL;
     return Error_CreateSuccess();
 }
 
@@ -331,8 +351,9 @@ static void DeconstructSprite(WorldComponent* component)
     WorldSpriteComponent* Sprite = (WorldSpriteComponent*)component;
     Error InstanceResult = SpriteAnimationInstance_Deconstruct(&Sprite->_animationInstance);
     Error_Deconstruct(&InstanceResult); // best-effort; tears down the instance's embedded event
-    Memory_Free(Sprite->_boundAnimation);
-    Sprite->_boundAnimation = NULL;
+    Memory_Free(Sprite->_boundName);
+    Sprite->_boundName = NULL;
+    Sprite->_boundWorldSprite = NULL;
     Properties_Deconstruct(&SpriteTable, Sprite);
 }
 
@@ -346,11 +367,19 @@ static void OnSpritePropertySet(World* world, WorldObject* object, WorldComponen
     const PropertyDescriptor* descriptor)
 {
     WorldSpriteComponent* Sprite = (WorldSpriteComponent*)component;
-    bool MayHaveRenamed = (descriptor == NULL) || (descriptor == &SpriteProperties[SpriteProperty_SpriteAnimation]);
-    if (MayHaveRenamed && !WorldInternal_AreStringsEqual(Sprite->_spriteAnimation, Sprite->_boundAnimation))
+    bool MayHaveRenamed = (descriptor == NULL) || (descriptor == &SpriteProperties[SpriteProperty_WorldSprite]);
+    if (MayHaveRenamed && !WorldInternal_AreStringsEqual(Sprite->_worldSprite, Sprite->_boundName))
     {
         Bind(world, object, Sprite);
     }
+}
+
+
+// Static functions: the setters.
+/* The error of a setter called without a component. */
+static Error CreateNullSelfError(const char* function)
+{
+    return Error_Construct4(ErrorCode_IllegalArgument, "%s: self must not be NULL.", function);
 }
 
 /* Checks @p value against one row's rules (so the setters' rules live in the table only). */
@@ -366,6 +395,13 @@ static Error FinishSet(WorldSpriteComponent* sprite, SpriteProperty property)
     return Error_CreateSuccess();
 }
 
+/* Sets a bool row. */
+static Error SetBoolProperty(WorldSpriteComponent* sprite, SpriteProperty property, bool* field, bool value)
+{
+    *field = value;
+    return FinishSet(sprite, property);
+}
+
 /* Sets a float row after checking the value against its rules; nothing changes when it breaks them. */
 static Error SetFloatProperty(WorldSpriteComponent* sprite, SpriteProperty property, float* field, float value)
 {
@@ -376,6 +412,83 @@ static Error SetFloatProperty(WorldSpriteComponent* sprite, SpriteProperty prope
     }
     *field = value;
     return FinishSet(sprite, property);
+}
+
+
+// Static functions: the settings in effect.
+/* The shape's settings: the placement's own where it overrides them. */
+static void ResolveShape(const WorldSpriteComponent* self, WorldSpriteSettings* settings)
+{
+    if (self->_overrides[WorldSpriteSetting_Orientation])
+    {
+        settings->Orientation = self->_orientation;
+    }
+    if (self->_overrides[WorldSpriteSetting_Pivot])
+    {
+        settings->Pivot = self->_pivot;
+    }
+    if (self->_overrides[WorldSpriteSetting_PixelsPerUnit])
+    {
+        settings->PixelsPerUnit = self->_pixelsPerUnit;
+    }
+    if (self->_overrides[WorldSpriteSetting_FlipX])
+    {
+        settings->IsFlippedX = self->_isFlippedX;
+    }
+    if (self->_overrides[WorldSpriteSetting_FlipY])
+    {
+        settings->IsFlippedY = self->_isFlippedY;
+    }
+}
+
+/* The transparency and lighting settings: the placement's own where it overrides them. */
+static void ResolveLook(const WorldSpriteComponent* self, WorldSpriteSettings* settings)
+{
+    if (self->_overrides[WorldSpriteSetting_AlphaMode])
+    {
+        settings->AlphaMode = self->_alphaMode;
+    }
+    if (self->_overrides[WorldSpriteSetting_AlphaCutoff])
+    {
+        settings->AlphaCutoff = self->_alphaCutoff;
+    }
+    if (self->_overrides[WorldSpriteSetting_IsLit])
+    {
+        settings->IsLit = self->_isLit;
+    }
+    if (self->_overrides[WorldSpriteSetting_Emission])
+    {
+        settings->Emission = self->_emission;
+    }
+    if (self->_overrides[WorldSpriteSetting_LightWrap])
+    {
+        settings->LightWrap = self->_lightWrap;
+    }
+}
+
+/* The decal and render settings: the placement's own where it overrides them. */
+static void ResolveDecalAndRender(const WorldSpriteComponent* self, WorldSpriteSettings* settings)
+{
+    if (self->_overrides[WorldSpriteSetting_IsDecal])
+    {
+        settings->IsDecal = self->_isDecal;
+    }
+    if (self->_overrides[WorldSpriteSetting_DecalOffset])
+    {
+        settings->DecalOffset = self->_decalOffset;
+    }
+    if (self->_overrides[WorldSpriteSetting_CastsShadows])
+    {
+        settings->Render.CastsShadows = self->_castsShadows;
+    }
+    if (self->_overrides[WorldSpriteSetting_HasOutline])
+    {
+        settings->Render.HasOutline = self->_hasOutline;
+    }
+    if (self->_overrides[WorldSpriteSetting_OmitPixelation])
+    {
+        settings->Render.OmitsPixelation = self->_omitPixelation;
+    }
 }
 
 
@@ -406,64 +519,55 @@ const PropertyTable* WorldSpriteComponent_GetPropertyTable(void)
     return &SpriteTable;
 }
 
-Error WorldSpriteComponent_SetSpriteAnimation(WorldSpriteComponent* self, const unsigned char* spriteAnimation)
+Error WorldSpriteComponent_SetWorldSprite(WorldSpriteComponent* self, const unsigned char* worldSprite)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument,
-            "WorldSpriteComponent_SetSpriteAnimation: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetWorldSprite");
     }
-    Error CheckResult = CheckProperty(SpriteProperty_SpriteAnimation, PropertyValue_FromAssetName(spriteAnimation));
+    Error CheckResult = CheckProperty(SpriteProperty_WorldSprite, PropertyValue_FromAssetName(worldSprite));
     if (CheckResult.Code != ErrorCode_Success)
     {
         return CheckResult;
     }
 
-    unsigned char* Clone = WorldInternal_CloneString(spriteAnimation);
-    Memory_Free(self->_spriteAnimation);
-    self->_spriteAnimation = Clone;
-    WorldInternal_ComponentAfterSet(self, &SpriteProperties[SpriteProperty_SpriteAnimation]);
-    return Error_CreateSuccess();
+    unsigned char* Clone = WorldInternal_CloneString(worldSprite);
+    Memory_Free(self->_worldSprite);
+    self->_worldSprite = Clone;
+    return FinishSet(self, SpriteProperty_WorldSprite);
 }
 
-Error WorldSpriteComponent_SetHasOutline(WorldSpriteComponent* self, bool hasOutline)
+bool WorldSpriteComponent_IsOverridden(const WorldSpriteComponent* self, WorldSpriteSetting setting)
+{
+    // A value outside the enum: nothing is overridden.
+    return ((unsigned int)setting < (unsigned int)WorldSpriteSetting_Count) && self->_overrides[setting];
+}
+
+Error WorldSpriteComponent_SetOverridden(WorldSpriteComponent* self, WorldSpriteSetting setting, bool isOverridden)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument,
-            "WorldSpriteComponent_SetHasOutline: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetOverridden");
     }
-
-    self->_hasOutline = hasOutline;
-    WorldInternal_ComponentAfterSet(self, &SpriteProperties[SpriteProperty_HasOutline]);
-    return Error_CreateSuccess();
-}
-
-Error WorldSpriteComponent_SetOmitsPixelation(WorldSpriteComponent* self, bool omitPixelation)
-{
-    if (self == NULL)
+    if ((unsigned int)setting >= (unsigned int)WorldSpriteSetting_Count)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument,
-            "WorldSpriteComponent_SetOmitsPixelation: self must not be NULL.");
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange,
+            "WorldSpriteComponent_SetOverridden: %d is not a WorldSpriteSetting.", (int)setting);
     }
-
-    self->_omitPixelation = omitPixelation;
-    WorldInternal_ComponentAfterSet(self, &SpriteProperties[SpriteProperty_OmitPixelation]);
-    return Error_CreateSuccess();
+    return SetBoolProperty(self, OverrideFlagRows[setting], &self->_overrides[setting], isOverridden);
 }
 
 Error WorldSpriteComponent_SetOrientation(WorldSpriteComponent* self, WorldSpriteOrientation orientation)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetOrientation: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetOrientation");
     }
     Error CheckResult = CheckProperty(SpriteProperty_Orientation, PropertyValue_FromEnum((int32_t)orientation));
     if (CheckResult.Code != ErrorCode_Success)
     {
         return CheckResult;
     }
-
     self->_orientation = orientation;
     return FinishSet(self, SpriteProperty_Orientation);
 }
@@ -472,14 +576,13 @@ Error WorldSpriteComponent_SetPivot(WorldSpriteComponent* self, Vector2 pivot)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetPivot: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetPivot");
     }
     Error CheckResult = CheckProperty(SpriteProperty_Pivot, PropertyValue_FromVector2(pivot));
     if (CheckResult.Code != ErrorCode_Success)
     {
         return CheckResult;
     }
-
     self->_pivot = pivot;
     return FinishSet(self, SpriteProperty_Pivot);
 }
@@ -488,8 +591,7 @@ Error WorldSpriteComponent_SetPixelsPerUnit(WorldSpriteComponent* self, float pi
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument,
-            "WorldSpriteComponent_SetPixelsPerUnit: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetPixelsPerUnit");
     }
     return SetFloatProperty(self, SpriteProperty_PixelsPerUnit, &self->_pixelsPerUnit, pixelsPerUnit);
 }
@@ -498,34 +600,31 @@ Error WorldSpriteComponent_SetFlippedX(WorldSpriteComponent* self, bool isFlippe
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetFlippedX: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetFlippedX");
     }
-    self->_isFlippedX = isFlipped;
-    return FinishSet(self, SpriteProperty_FlipX);
+    return SetBoolProperty(self, SpriteProperty_FlipX, &self->_isFlippedX, isFlipped);
 }
 
 Error WorldSpriteComponent_SetFlippedY(WorldSpriteComponent* self, bool isFlipped)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetFlippedY: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetFlippedY");
     }
-    self->_isFlippedY = isFlipped;
-    return FinishSet(self, SpriteProperty_FlipY);
+    return SetBoolProperty(self, SpriteProperty_FlipY, &self->_isFlippedY, isFlipped);
 }
 
 Error WorldSpriteComponent_SetAlphaMode(WorldSpriteComponent* self, WorldSpriteAlphaMode alphaMode)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetAlphaMode: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetAlphaMode");
     }
     Error CheckResult = CheckProperty(SpriteProperty_AlphaMode, PropertyValue_FromEnum((int32_t)alphaMode));
     if (CheckResult.Code != ErrorCode_Success)
     {
         return CheckResult;
     }
-
     self->_alphaMode = alphaMode;
     return FinishSet(self, SpriteProperty_AlphaMode);
 }
@@ -534,7 +633,7 @@ Error WorldSpriteComponent_SetAlphaCutoff(WorldSpriteComponent* self, float alph
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetAlphaCutoff: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetAlphaCutoff");
     }
     return SetFloatProperty(self, SpriteProperty_AlphaCutoff, &self->_alphaCutoff, alphaCutoff);
 }
@@ -543,17 +642,16 @@ Error WorldSpriteComponent_SetLit(WorldSpriteComponent* self, bool isLit)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetLit: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetLit");
     }
-    self->_isLit = isLit;
-    return FinishSet(self, SpriteProperty_IsLit);
+    return SetBoolProperty(self, SpriteProperty_IsLit, &self->_isLit, isLit);
 }
 
 Error WorldSpriteComponent_SetEmission(WorldSpriteComponent* self, float emission)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetEmission: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetEmission");
     }
     return SetFloatProperty(self, SpriteProperty_Emission, &self->_emission, emission);
 }
@@ -562,7 +660,7 @@ Error WorldSpriteComponent_SetLightWrap(WorldSpriteComponent* self, float lightW
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetLightWrap: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetLightWrap");
     }
     return SetFloatProperty(self, SpriteProperty_LightWrap, &self->_lightWrap, lightWrap);
 }
@@ -571,28 +669,97 @@ Error WorldSpriteComponent_SetCastsShadows(WorldSpriteComponent* self, bool cast
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument,
-            "WorldSpriteComponent_SetCastsShadows: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetCastsShadows");
     }
-    self->_castsShadows = castsShadows;
-    return FinishSet(self, SpriteProperty_CastsShadows);
+    return SetBoolProperty(self, SpriteProperty_CastsShadows, &self->_castsShadows, castsShadows);
 }
 
 Error WorldSpriteComponent_SetDecal(WorldSpriteComponent* self, bool isDecal)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetDecal: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetDecal");
     }
-    self->_isDecal = isDecal;
-    return FinishSet(self, SpriteProperty_IsDecal);
+    return SetBoolProperty(self, SpriteProperty_IsDecal, &self->_isDecal, isDecal);
 }
 
 Error WorldSpriteComponent_SetDecalOffset(WorldSpriteComponent* self, float decalOffset)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "WorldSpriteComponent_SetDecalOffset: self must not be NULL.");
+        return CreateNullSelfError("WorldSpriteComponent_SetDecalOffset");
     }
     return SetFloatProperty(self, SpriteProperty_DecalOffset, &self->_decalOffset, decalOffset);
+}
+
+Error WorldSpriteComponent_SetHasOutline(WorldSpriteComponent* self, bool hasOutline)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldSpriteComponent_SetHasOutline");
+    }
+    return SetBoolProperty(self, SpriteProperty_HasOutline, &self->_hasOutline, hasOutline);
+}
+
+Error WorldSpriteComponent_SetOmitsPixelation(WorldSpriteComponent* self, bool omitPixelation)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldSpriteComponent_SetOmitsPixelation");
+    }
+    return SetBoolProperty(self, SpriteProperty_OmitPixelation, &self->_omitPixelation, omitPixelation);
+}
+
+Error WorldSpriteComponent_SetDrawDistance(WorldSpriteComponent* self, float drawDistance)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldSpriteComponent_SetDrawDistance");
+    }
+    return SetFloatProperty(self, SpriteProperty_DrawDistance, &self->_drawDistance, drawDistance);
+}
+
+Error WorldSpriteComponent_SetDrawDistanceMultiplier(WorldSpriteComponent* self, float multiplier)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldSpriteComponent_SetDrawDistanceMultiplier");
+    }
+    return SetFloatProperty(self, SpriteProperty_DrawDistanceMultiplier, &self->_drawDistanceMultiplier, multiplier);
+}
+
+Error WorldSpriteComponent_SetIsDrawDistanceFixed(WorldSpriteComponent* self, bool isFixed)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldSpriteComponent_SetIsDrawDistanceFixed");
+    }
+    return SetBoolProperty(self, SpriteProperty_IsDrawDistanceFixed, &self->_isDrawDistanceFixed, isFixed);
+}
+
+WorldSpriteSettings WorldSpriteComponent_ResolveSettings(const WorldSpriteComponent* self,
+    const WorldSpriteSettings* spriteSettings)
+{
+    WorldSpriteSettings Settings = *spriteSettings;
+    ResolveShape(self, &Settings);
+    ResolveLook(self, &Settings);
+    ResolveDecalAndRender(self, &Settings);
+
+    if (self->_overrides[WorldSpriteSetting_DrawDistance])
+    {
+        Settings.DrawDistance = self->_drawDistance;
+        Settings.HasDrawDistance = true;
+    }
+    if (!Settings.HasDrawDistance)
+    {
+        // The kind is the one in effect: a placement that turns its sprite into a decal gets the decals' distance.
+        Settings.DrawDistance = WorldSpriteSettings_GetDefaultDrawDistance(&Settings);
+        Settings.HasDrawDistance = true;
+    }
+    Settings.DrawDistance *= self->_drawDistanceMultiplier;
+    if (self->_overrides[WorldSpriteSetting_IsDrawDistanceFixed])
+    {
+        Settings.IsDrawDistanceFixed = self->_isDrawDistanceFixed;
+    }
+    return Settings;
 }

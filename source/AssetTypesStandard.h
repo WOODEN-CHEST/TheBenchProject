@@ -38,6 +38,10 @@
  *  variants, built on model and texture assets). */
 #define ASSET_TYPE_NAME_WORLD_MODEL      ((const unsigned char*)u8"world_model")
 #define ASSET_TYPE_DIRECTORY_WORLD_MODEL ((const unsigned char*)u8"world_models")
+/** @brief Standard world sprite type name / directory (WorldSprite.h: how a sprite animation stands, is lit and is seen
+ *  in the world, built on a sprite animation asset). */
+#define ASSET_TYPE_NAME_WORLD_SPRITE      ((const unsigned char*)u8"world_sprite")
+#define ASSET_TYPE_DIRECTORY_WORLD_SPRITE ((const unsigned char*)u8"world_sprites")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -74,4 +78,8 @@ Error TextureDefinition_Construct(AssetManager* manager, const UserData* userDat
 
 /** @brief Builds a world model definition from a JSON blob (WorldModelDefinition.c). See AssetDefinitionConstructor. */
 Error WorldModelDefinition_Construct(AssetManager* manager, const UserData* userData,
+    const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+
+/** @brief Builds a world sprite definition from a JSON blob (WorldSpriteDefinition.c). See AssetDefinitionConstructor. */
+Error WorldSpriteDefinition_Construct(AssetManager* manager, const UserData* userData,
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);

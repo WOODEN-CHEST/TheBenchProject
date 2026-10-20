@@ -24,15 +24,16 @@
 #define TEST_SCALE 0.05f
 /** A box model's bounding radius at scale 1 (a unit cube's half diagonal). */
 #define BOX_RADIUS 0.8660254f
-/** The sprites' pixels per unit: the test frame is 1x1 pixels, so a sprite is 2 m wide and tall (bounding radius
- *  sqrt(2) around its centre pivot). */
-#define SPRITE_PIXELS_PER_UNIT 0.5f
+/** The test sprites' bounding radius: their frame is 1x1 pixels at 0.5 pixels per unit, so they are 2 m wide and tall
+ *  (half the diagonal around their centre pivot). */
+#define SPRITE_RADIUS 1.4142136f
 
 
 // Types.
 /* An asset fixture with a "box" model (unit cube bounds) and a "box" world model over it (600 m, the draw distance
- * models had before world models), a "walk" animation (one 1x1 frame), a world built with it, a render cache and the
- * visibility lists. */
+ * models had before world models), three 2 m world sprites over a one-frame animation (1x1 pixels) without draw
+ * distances of their own: "cutout", "smoke" (blended) and "decal" (fixed, a decal), a world built with them, a render
+ * cache and the visibility lists. */
 typedef struct VisibilityFixtureStruct
 {
     TestAssetFixture Assets;
@@ -58,7 +59,13 @@ static bool VisibilityFixture_Construct(TestRun* run, VisibilityFixture* self)
     if (!TestAssetFixture_Construct(run, &self->Assets)
         || !TestAssets_AddModel(run, &self->Assets, "box", UnitCube, NULL)
         || !TestAssets_AddWorldModelOf(run, &self->Assets, "box", "box")
-        || !TestAssets_AddSpriteAnimation(run, &self->Assets, "walk", NULL)
+        || !TestAssets_AddSpriteAnimation(run, &self->Assets, "walk_animation", NULL)
+        || !TestAssets_AddWorldSprite(run, &self->Assets, "{\"name\": \"cutout\", \"sprite_animation\": "
+            "\"walk_animation\", \"pixels_per_unit\": 0.5}")
+        || !TestAssets_AddWorldSprite(run, &self->Assets, "{\"name\": \"smoke\", \"sprite_animation\": "
+            "\"walk_animation\", \"pixels_per_unit\": 0.5, \"alpha_mode\": \"blend\"}")
+        || !TestAssets_AddWorldSprite(run, &self->Assets, "{\"name\": \"decal\", \"sprite_animation\": "
+            "\"walk_animation\", \"pixels_per_unit\": 0.5, \"orientation\": \"fixed\", \"is_decal\": true}")
         || !TEST_CHECK_SUCCESS(run, AssetManager_GetNewUserID(self->Assets.Manager, &self->ModelUser))
         || !TestWorld_Construct(run, &self->World, &self->Keys, self->Assets.Manager, NULL))
     {
@@ -161,10 +168,9 @@ static WorldModelComponent* AddBox(TestRun* run, World* world, Vector3 position)
     return AddWorldModel(run, world, "box", position);
 }
 
-/* Creates an object at @p position with a 2 m sprite of the given kind; returns the sprite component, or NULL with a
- * failed check. A decal is fixed (decals need the fixed orientation). */
-static WorldSpriteComponent* AddSprite(TestRun* run, World* world, Vector3 position, WorldSpriteAlphaMode alphaMode,
-    bool isDecal)
+/* Creates an object at @p position with a sprite showing the world sprite @p worldSprite; returns the sprite component,
+ * or NULL with a failed check. */
+static WorldSpriteComponent* AddSprite(TestRun* run, World* world, Vector3 position, const char* worldSprite)
 {
     WorldObject* Object = NULL;
     WorldComponent* Component = NULL;
@@ -176,15 +182,8 @@ static WorldSpriteComponent* AddSprite(TestRun* run, World* world, Vector3 posit
         return NULL;
     }
     WorldSpriteComponent* Sprite = WorldSpriteComponent_FromComponent(Component);
-    bool IsSet = TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetPixelsPerUnit(Sprite, SPRITE_PIXELS_PER_UNIT))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetAlphaMode(Sprite, alphaMode));
-    if (IsSet && isDecal)
-    {
-        IsSet = TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOrientation(Sprite, WorldSpriteOrientation_Fixed))
-            && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDecal(Sprite, true));
-    }
-    return IsSet ? Sprite : NULL;
+    return TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)worldSprite))
+        ? Sprite : NULL;
 }
 
 /* Sets an object's opacity, keeping the rest of its tint. */
@@ -344,20 +343,7 @@ static void CascadeBoxCullsItsCasters(TestRun* run)
 
 
 // Tests: draw distances and fades.
-static void DrawDistancesByKindAndScale(TestRun* run)
-{
-    TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Sprite, 1.0f), 150.0f));
-    TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Decal, 1.0f), 60.0f));
-    TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Sprite, 0.5f), 75.0f));
-    TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Decal, 2.0f), 120.0f));
-    TEST_CHECK(run, WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Sprite, 0.0f) == 0.0f);
-    // Unusable scales count as 1.
-    TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Sprite, -1.0f), 150.0f));
-    TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Sprite, NAN), 150.0f));
-    TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Sprite, INFINITY), 150.0f));
-}
-
-/* A model's own draw distance takes the quality scale unless it is fixed; the zoom factor is exactly 1 at 60 degrees,
+/* An entry's own draw distance takes the quality scale unless it is fixed; the zoom factor is exactly 1 at 60 degrees,
  * below 1 zoomed in (distances shrink, so far things stay), above 1 zoomed out, and 1 for an unusable field of view. */
 static void OwnDrawDistancesAndTheZoomFactor(TestRun* run)
 {
@@ -774,8 +760,9 @@ static void ModelsFadeAtTheirOwnDrawDistance(TestRun* run)
     VisibilityFixture_Deconstruct(run, &Fixture);
 }
 
-/* Sprites cull and fade like models, by their own kind's draw distance (decals the shortest), around a sphere that holds
- * their quad; only cutout sprites that are not decals cast shadows. */
+/* Sprites cull and fade like models; without a draw distance of their own (in their world sprites or their placements)
+ * by their kind's (decals the shortest), around a sphere that holds their quad; only cutout sprites that are not decals
+ * cast shadows. */
 static void SpritesCullAndFadeByTheirKind(TestRun* run)
 {
     VisibilityFixture Fixture;
@@ -786,20 +773,14 @@ static void SpritesCullAndFadeByTheirKind(TestRun* run)
     }
     // TEST_SCALE: sprites 7.5 m (fading from 4.5 m), decals 3 m (fading from 0); a 2 m sprite's radius is sqrt(2).
     Vector3 CameraPosition = { 0.0f, 1.0f, 0.0f };
-    WorldSpriteComponent* Ahead = AddSprite(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, 5.0f },
-        WorldSpriteAlphaMode_Cutout, false);
-    WorldSpriteComponent* Behind = AddSprite(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, -5.0f },
-        WorldSpriteAlphaMode_Cutout, false);
-    WorldSpriteComponent* Fading = AddSprite(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, 7.0f },
-        WorldSpriteAlphaMode_Cutout, false);
-    WorldSpriteComponent* Decal = AddSprite(run, &Fixture.World, (Vector3){ 0.0f, 0.01f, 2.0f },
-        WorldSpriteAlphaMode_Cutout, true);
-    WorldSpriteComponent* Smoke = AddSprite(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, -3.0f },
-        WorldSpriteAlphaMode_Blend, false);
-    WorldSpriteComponent* Beyond = AddSprite(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, 20.0f },
-        WorldSpriteAlphaMode_Cutout, false);
+    WorldSpriteComponent* Ahead = AddSprite(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, 5.0f }, "cutout");
+    WorldSpriteComponent* Behind = AddSprite(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, -5.0f }, "cutout");
+    WorldSpriteComponent* Fading = AddSprite(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, 7.0f }, "cutout");
+    WorldSpriteComponent* Decal = AddSprite(run, &Fixture.World, (Vector3){ 0.0f, 0.01f, 2.0f }, "decal");
+    WorldSpriteComponent* Smoke = AddSprite(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, -3.0f }, "smoke");
+    WorldSpriteComponent* Beyond = AddSprite(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, 20.0f }, "cutout");
     WorldVisibilityView View = MakeView(CameraPosition);
-    float Radius = sqrtf(2.0f);
+    float Radius = SPRITE_RADIUS;
     if ((Ahead != NULL) && (Behind != NULL) && (Fading != NULL) && (Decal != NULL) && (Smoke != NULL)
         && (Beyond != NULL) && SetOpacity(run, OwnerOfSprite(Smoke), 0.5f)
         && VisibilityFixture_Build(run, &Fixture, &View))
@@ -835,6 +816,71 @@ static void SpritesCullAndFadeByTheirKind(TestRun* run)
         WorldVisibilityCounts Counts = WorldVisibility_GetCounts(&Fixture.Visibility);
         TEST_CHECK(run, (Counts.DrawnSpriteCount == 3) && (Counts.OutsideViewCount == 2) && (Counts.FadedOutCount == 1)
             && (Counts.FadingCount == 2));
+    }
+    VisibilityFixture_Deconstruct(run, &Fixture);
+}
+
+/* A sprite fades at its own draw distance, with the models' rules (G17): its world sprite's, or the placement's own while
+ * it overrides it, times the placement's multiplier, then the quality scale unless it is fixed, against its distance
+ * times the zoom factor. */
+static void SpritesFadeAtTheirOwnDrawDistance(TestRun* run)
+{
+    VisibilityFixture Fixture;
+    if (!VisibilityFixture_Construct(run, &Fixture)
+        || !TestAssets_AddWorldSprite(run, &Fixture.Assets, "{\"name\": \"sign\", \"sprite_animation\": "
+            "\"walk_animation\", \"pixels_per_unit\": 0.5, \"draw_distance\": 12}")
+        || !TestAssets_AddWorldSprite(run, &Fixture.Assets, "{\"name\": \"landmark\", \"sprite_animation\": "
+            "\"walk_animation\", \"pixels_per_unit\": 0.5, \"draw_distance\": 12, \"is_draw_distance_fixed\": true}"))
+    {
+        VisibilityFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    // All 11 m ahead, so their spheres' nearest points are 11 - sqrt(2) away; 12 m fades from 9 m (a 3 m band).
+    Vector3 Ahead = { 0.0f, 1.0f, 11.0f };
+    float Distance = 11.0f - SPRITE_RADIUS;
+    WorldSpriteComponent* Sign = AddSprite(run, &Fixture.World, Ahead, "sign");
+    WorldSpriteComponent* Farther = AddSprite(run, &Fixture.World, Ahead, "sign");
+    WorldSpriteComponent* Shorter = AddSprite(run, &Fixture.World, Ahead, "sign");
+    WorldSpriteComponent* Landmark = AddSprite(run, &Fixture.World, Ahead, "landmark");
+    WorldVisibilityView View = MakeView((Vector3){ 0.0f, 1.0f, 0.0f });
+    View.DrawDistanceScale = 1.0f;
+    if ((Sign == NULL) || (Farther == NULL) || (Shorter == NULL) || (Landmark == NULL)
+        || !TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Farther, WorldSpriteSetting_DrawDistance, true))
+        || !TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDrawDistance(Farther, 30.0f))
+        || !TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDrawDistanceMultiplier(Shorter, 0.5f))
+        || !VisibilityFixture_Build(run, &Fixture, &View))
+    {
+        VisibilityFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+
+    float SignFade = WorldVisibility_GetSpriteFade(&Fixture.Visibility, SpriteIndex(&Fixture.Cache, Sign)).Combined;
+    TEST_CHECK(run, IsNear(SignFade, (Distance - 9.0f) / 3.0f) && HasSprite(&Fixture, WorldVisibilityPass_Camera, Sign));
+    TEST_CHECK(run, WorldVisibility_GetSpriteFade(&Fixture.Visibility, SpriteIndex(&Fixture.Cache, Farther)).Combined
+        == 0.0f);
+    TEST_CHECK(run, !HasSprite(&Fixture, WorldVisibilityPass_Camera, Shorter)); // 6 m
+    TEST_CHECK(run, IsNear(WorldVisibility_GetSpriteFade(&Fixture.Visibility, SpriteIndex(&Fixture.Cache,
+        Landmark)).Combined, SignFade));
+
+    // Half the quality: 6 m for the sign, its own distance for the fixed landmark, 15 m for the overriding one.
+    View.DrawDistanceScale = 0.5f;
+    if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
+    {
+        TEST_CHECK(run, !HasSprite(&Fixture, WorldVisibilityPass_Camera, Sign)
+            && HasSprite(&Fixture, WorldVisibilityPass_Camera, Landmark)
+            && HasSprite(&Fixture, WorldVisibilityPass_Camera, Farther));
+        TEST_CHECK(run, IsNear(WorldVisibility_GetSpriteFade(&Fixture.Visibility, SpriteIndex(&Fixture.Cache,
+            Landmark)).Combined, SignFade));
+    }
+
+    // Zoomed in twice: the 6 m sprite is seen again, at half its distance (fading from 3 m).
+    View.DrawDistanceScale = 1.0f;
+    View.ZoomFactor = 0.5f;
+    if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
+    {
+        TEST_CHECK(run, HasSprite(&Fixture, WorldVisibilityPass_Camera, Shorter)
+            && IsNear(WorldVisibility_GetSpriteFade(&Fixture.Visibility, SpriteIndex(&Fixture.Cache, Shorter)).Combined,
+                ((Distance * 0.5f) - 3.0f) / 3.0f));
     }
     VisibilityFixture_Deconstruct(run, &Fixture);
 }
@@ -933,7 +979,6 @@ void WorldVisibilityTests_Run(TestRun* run)
     {
         { "frustum_planes_from_a_view_projection", FrustumPlanesFromAViewProjection },
         { "cascade_box_culls_its_casters", CascadeBoxCullsItsCasters },
-        { "draw_distances_by_kind_and_scale", DrawDistancesByKindAndScale },
         { "own_draw_distances_and_the_zoom_factor", OwnDrawDistancesAndTheZoomFactor },
         { "distance_fade_rises_over_the_band", DistanceFadeRisesOverTheBand },
         { "opacity_fade_and_the_max_rule", OpacityFadeAndTheMaxRule },
@@ -943,6 +988,7 @@ void WorldVisibilityTests_Run(TestRun* run)
         { "draw_distance_and_opacity_fade_and_cull", DrawDistanceAndOpacityFadeAndCull },
         { "models_fade_at_their_own_draw_distance", ModelsFadeAtTheirOwnDrawDistance },
         { "sprites_cull_and_fade_by_their_kind", SpritesCullAndFadeByTheirKind },
+        { "sprites_fade_at_their_own_draw_distance", SpritesFadeAtTheirOwnDrawDistance },
         { "culling_off_keeps_everything_within_reach", CullingOffKeepsEverythingWithinReach },
         { "crisp_objects_count_only_in_view", CrispObjectsCountOnlyInView },
         { "lists_follow_their_cache", ListsFollowTheirCache },

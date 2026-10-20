@@ -23,8 +23,9 @@
 
 
 // Types.
-/* An asset fixture with a "box" model (unit cube bounds) and a "box" world model over it, a "walk" animation, a world
- * built with it, and a render cache whose world models are held under their own user. */
+/* An asset fixture with a "box" model (unit cube bounds) and a "box" world model over it, a "walk" world sprite with the
+ * default settings over a one-frame animation, a world built with it, and a render cache whose world models are held
+ * under their own user. */
 typedef struct CacheFixtureStruct
 {
     TestAssetFixture Assets;
@@ -45,7 +46,8 @@ static bool CacheFixture_Construct(TestRun* run, CacheFixture* self)
     if (!TestAssetFixture_Construct(run, &self->Assets)
         || !TestAssets_AddModel(run, &self->Assets, "box", UnitCube, &self->BoxCounters)
         || !TestAssets_AddWorldModelOf(run, &self->Assets, "box", "box")
-        || !TestAssets_AddSpriteAnimation(run, &self->Assets, "walk", NULL)
+        || !TestAssets_AddSpriteAnimation(run, &self->Assets, "walk_animation", NULL)
+        || !TestAssets_AddWorldSpriteOf(run, &self->Assets, "walk", "walk_animation")
         || !TEST_CHECK_SUCCESS(run, AssetManager_GetNewUserID(self->Assets.Manager, &self->ModelUser))
         || !TestWorld_Construct(run, &self->World, &self->Keys, self->Assets.Manager, NULL))
     {
@@ -325,8 +327,8 @@ static void ListsDrawableSpritesAndEveryLight(TestRun* run)
     WorldLightComponent* Light = WorldLightComponent_FromComponent(AddComponentObject(run, &Fixture.World,
         WorldComponentType_Light));
     bool IsBuilt = (Bound != NULL) && (Empty != NULL) && (Light != NULL)
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Bound, (const unsigned char*)u8"walk"))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Empty, (const unsigned char*)u8"missing"))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Bound, (const unsigned char*)u8"walk"))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Empty, (const unsigned char*)u8"missing"))
         && TEST_CHECK_SUCCESS(run, WorldLightComponent_SetIntensity(Light, 0.0f)); // dark lights are still listed
     if (IsBuilt && CacheFixture_Sync(run, &Fixture))
     {
@@ -340,7 +342,14 @@ static void ListsDrawableSpritesAndEveryLight(TestRun* run)
         const WorldRenderLight* Lights = WorldRenderCache_GetLights(&Fixture.Cache, &LightCount);
         TEST_CHECK(run, (LightCount == 1) && (Lights[0].Component == Light) && (Lights[0].Intensity == 0.0f));
 
+        // The placement's own crisp setting applies once its flag is on.
         TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOmitsPixelation(Bound, true));
+        if (CacheFixture_Sync(run, &Fixture))
+        {
+            Sprites = WorldRenderCache_GetSprites(&Fixture.Cache, &SpriteCount);
+            TEST_CHECK(run, (SpriteCount == 1) && !Sprites[0].OmitsPixelation);
+        }
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Bound, WorldSpriteSetting_OmitPixelation, true));
         if (CacheFixture_Sync(run, &Fixture))
         {
             Sprites = WorldRenderCache_GetSprites(&Fixture.Cache, &SpriteCount);
@@ -367,7 +376,7 @@ static void DisabledAndHiddenObjectsAreNotDrawn(TestRun* run)
     WorldLightComponent* Light = WorldLightComponent_FromComponent(AddComponentObject(run, &Fixture.World,
         WorldComponentType_Light));
     if ((Sprite != NULL) && (Light != NULL)
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)u8"walk"))
         && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(ModelComponent, WorldModelSetting_OmitPixelation,
             true))
         && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOmitsPixelation(ModelComponent, true))
@@ -684,12 +693,16 @@ static void BoundsAndTheDrawnLodComeFromTheWorldModel(TestRun* run)
 }
 
 /* A sprite entry carries its quad (the world size from the frame's pixels, the pixels per unit and the object's scale;
- * the object's axes; the pivot and flips), the fixed matrix, its bounds and its drawing settings; a decal needs the
- * fixed orientation, and only cutout sprites that are not decals are drawn crisp. */
+ * the object's axes; the pivot and flips), the fixed matrix, its bounds and its drawing settings, all as they are in
+ * effect: the world sprite's, with the placement's own where it overrides them. A decal needs the fixed orientation, and
+ * only cutout sprites that are not decals are drawn crisp. */
 static void SpriteEntriesCarryTheirQuadAndSettings(TestRun* run)
 {
     CacheFixture Fixture;
-    if (!CacheFixture_Construct(run, &Fixture))
+    if (!CacheFixture_Construct(run, &Fixture)
+        || !TestAssets_AddWorldSprite(run, &Fixture.Assets, "{\"name\": \"sign\", \"sprite_animation\": "
+            "\"walk_animation\", \"orientation\": \"fixed\", \"pivot\": [0.5, 0], \"pixels_per_unit\": 0.5, "
+            "\"alpha_mode\": \"blend\", \"is_decal\": true, \"render\": {\"omit_pixelation\": true}}"))
     {
         CacheFixture_Deconstruct(run, &Fixture);
         return;
@@ -700,25 +713,28 @@ static void SpriteEntriesCarryTheirQuadAndSettings(TestRun* run)
     WorldSpriteComponent* Puff = WorldSpriteComponent_FromComponent(AddComponentObject(run, &Fixture.World,
         WorldComponentType_Sprite));
     bool IsBuilt = (Sign != NULL) && (Puff != NULL)
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sign, (const unsigned char*)u8"walk"))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Puff, (const unsigned char*)u8"walk"))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sign, (const unsigned char*)u8"sign"))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Puff, (const unsigned char*)u8"walk"))
         && TEST_CHECK_SUCCESS(run, WorldObject_SetScale(WorldComponent_GetOwner(&Sign->Base),
             (Vector3){ 2.0f, 3.0f, 9.0f }))
         && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(&Sign->Base),
             (Vector3){ 1.0f, 2.0f, 3.0f }))
         && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(WorldComponent_GetOwner(&Sign->Base),
             (Vector3){ 0.0f, PI / 2.0f, 0.0f }))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetPixelsPerUnit(Sign, 0.5f))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOrientation(Sign, WorldSpriteOrientation_Fixed))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetPivot(Sign, (Vector2){ 0.5f, 0.0f }))
+        // The sign's own look comes from its world sprite; this placement mirrors it.
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Sign, WorldSpriteSetting_FlipX, true))
         && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetFlippedX(Sign, true))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDecal(Sign, true))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetAlphaMode(Sign, WorldSpriteAlphaMode_Blend))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOmitsPixelation(Sign, true))
+        // The puff's default look, changed by this placement: unlit and bright, a "decal" billboard (not drawn as one),
+        // crisp. A value without its flag changes nothing.
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Puff, WorldSpriteSetting_IsLit, true))
         && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetLit(Puff, false))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Puff, WorldSpriteSetting_Emission, true))
         && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetEmission(Puff, 4.0f))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDecal(Puff, true)) // a billboard: not drawn as a decal
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOmitsPixelation(Puff, true));
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Puff, WorldSpriteSetting_IsDecal, true))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDecal(Puff, true))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Puff, WorldSpriteSetting_OmitPixelation, true))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOmitsPixelation(Puff, true))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetPixelsPerUnit(Puff, 4.0f));
     size_t Count = 0;
     const WorldRenderSprite* Sprites = NULL;
     if (IsBuilt && CacheFixture_Sync(run, &Fixture))
@@ -742,11 +758,65 @@ static void SpriteEntriesCarryTheirQuadAndSettings(TestRun* run)
             Entry->Shape.Pivot)));
         TEST_CHECK(run, Entry->IsDecal && (Entry->AlphaMode == WorldSpriteAlphaMode_Blend) && !Entry->OmitsPixelation
             && Entry->IsLit && Entry->CastsShadows && IsNear(Entry->DecalOffset, 0.01f));
+        // No draw distance anywhere: a decal's.
+        TEST_CHECK(run, (Entry->DrawDistance == 60.0f) && !Entry->IsDrawDistanceFixed);
 
         Entry = &Sprites[1];
         // The cutout billboard is drawn crisp; the blended decal above is not.
         TEST_CHECK(run, !Entry->IsDecal && !Entry->IsLit && (Entry->Emission == 4.0f) && Entry->OmitsPixelation);
         TEST_CHECK(run, IsNear(Entry->Shape.Size.x, 1.0f / 32.0f) && (Entry->Shape.Pivot.x == 0.5f));
+        TEST_CHECK(run, Entry->DrawDistance == 150.0f);
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+/* A sprite entry's draw distance is the one in effect (the world sprite's, or the placement's own while it overrides
+ * it, times the multiplier) and so is the fixed flag; swapping the world sprite swaps the settings and keeps the
+ * placement's overrides. */
+static void SpriteEntriesCarryTheirDrawDistanceAndFollowASwap(TestRun* run)
+{
+    CacheFixture Fixture;
+    WorldSpriteComponent* Sprite = NULL;
+    if (!CacheFixture_Construct(run, &Fixture)
+        || !TestAssets_AddWorldSprite(run, &Fixture.Assets, "{\"name\": \"landmark\", \"sprite_animation\": "
+            "\"walk_animation\", \"pixels_per_unit\": 8, \"draw_distance\": 40, \"is_draw_distance_fixed\": true}")
+        || ((Sprite = WorldSpriteComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+            WorldComponentType_Sprite))) == NULL)
+        || !TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)u8"landmark")))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+
+    size_t Count = 0;
+    const WorldRenderSprite* Sprites = NULL;
+    if (CacheFixture_Sync(run, &Fixture) && ((Sprites = WorldRenderCache_GetSprites(&Fixture.Cache, &Count)) != NULL)
+        && TEST_CHECK(run, Count == 1))
+    {
+        TEST_CHECK(run, (Sprites[0].DrawDistance == 40.0f) && Sprites[0].IsDrawDistanceFixed
+            && IsNear(Sprites[0].Shape.Size.x, 1.0f / 8.0f));
+    }
+
+    // The multiplier scales the world sprite's distance; the placement's own replaces it while its flag is on.
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDrawDistanceMultiplier(Sprite, 2.0f));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDrawDistance(Sprite, 10.0f));
+    if (CacheFixture_Sync(run, &Fixture) && ((Sprites = WorldRenderCache_GetSprites(&Fixture.Cache, &Count)) != NULL))
+    {
+        TEST_CHECK(run, (Count == 1) && (Sprites[0].DrawDistance == 80.0f));
+    }
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Sprite, WorldSpriteSetting_DrawDistance, true));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Sprite, WorldSpriteSetting_IsDrawDistanceFixed, true));
+    if (CacheFixture_Sync(run, &Fixture) && ((Sprites = WorldRenderCache_GetSprites(&Fixture.Cache, &Count)) != NULL))
+    {
+        TEST_CHECK(run, (Count == 1) && (Sprites[0].DrawDistance == 20.0f) && !Sprites[0].IsDrawDistanceFixed);
+    }
+
+    // Another world sprite: its look, the placement's overrides still on top.
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)u8"walk"));
+    if (CacheFixture_Sync(run, &Fixture) && ((Sprites = WorldRenderCache_GetSprites(&Fixture.Cache, &Count)) != NULL))
+    {
+        TEST_CHECK(run, (Count == 1) && IsNear(Sprites[0].Shape.Size.x, 1.0f / 32.0f)
+            && (Sprites[0].DrawDistance == 20.0f) && !Sprites[0].IsDrawDistanceFixed);
     }
     CacheFixture_Deconstruct(run, &Fixture);
 }
@@ -789,7 +859,8 @@ static void ChildrenAreDrawnWhereTheirParentsPutThem(TestRun* run)
         WorldComponentType_Sprite, (Vector3){ 0.0f, 0.0f, 1.0f }));
     if ((ModelComponent != NULL) && (Light != NULL) && (Sprite != NULL)
         && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetWorldModel(ModelComponent, (const unsigned char*)u8"box"))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)u8"walk"))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Sprite, WorldSpriteSetting_Orientation, true))
         && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOrientation(Sprite, WorldSpriteOrientation_Fixed)))
     {
         for (size_t Pass = 0U; (Pass < 2U) && CacheFixture_Sync(run, &Fixture); Pass++)
@@ -837,7 +908,7 @@ static void HiddenOrDisabledParentsHideTheirSubtree(TestRun* run)
     bool IsBuilt = (ModelComponent != NULL) && (Sprite != NULL)
         && (AddChildComponent(run, &Fixture.World, Parent, WorldComponentType_Light, Vector3Zero()) != NULL)
         && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetWorldModel(ModelComponent, (const unsigned char*)u8"box"))
-        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)u8"walk"));
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sprite, (const unsigned char*)u8"walk"));
     // Shown, hidden by the parent, disabled by the parent, shown again.
     const bool Visible[] = { true, false, true, true };
     const bool Enabled[] = { true, true, false, true };
@@ -924,6 +995,8 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "a_replaced_component_gets_its_own_variant", AReplacedComponentGetsItsOwnVariant },
         { "derived_bounds_compose_the_import_with_the_placement", DerivedBoundsComposeTheImportWithThePlacement },
         { "sprite_entries_carry_their_quad_and_settings", SpriteEntriesCarryTheirQuadAndSettings },
+        { "sprite_entries_carry_their_draw_distance_and_follow_a_swap",
+            SpriteEntriesCarryTheirDrawDistanceAndFollowASwap },
         { "reset_forgets_every_entry", ResetForgetsEveryEntry },
         { "children_are_drawn_where_their_parents_put_them", ChildrenAreDrawnWhereTheirParentsPutThem },
         { "hidden_or_disabled_parents_hide_their_subtree", HiddenOrDisabledParentsHideTheirSubtree },

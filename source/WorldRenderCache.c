@@ -241,7 +241,7 @@ static void GetUvRect(const SpriteAnimationFrame* frame, float outRect[4])
 
 /* The sprite's quad before a viewer turns it: the object's world position and rotation axes, the world size from the
  * frame's pixels, the pixels per unit and the object's world scale, the pivot and the flips. */
-static SpriteShape GetShape(const WorldSpriteComponent* sprite, const WorldObject* owner, Rectangle frameArea)
+static SpriteShape GetShape(const WorldSpriteSettings* settings, const WorldObject* owner, Rectangle frameArea)
 {
     Vector3 Position;
     Vector3 Rotation;
@@ -250,26 +250,27 @@ static SpriteShape GetShape(const WorldSpriteComponent* sprite, const WorldObjec
     Matrix Axes = MatrixRotateXYZ(Rotation);
     return (SpriteShape)
     {
-        .Orientation = WorldSpriteComponent_GetOrientation(sprite),
+        .Orientation = settings->Orientation,
         .Position = Position,
         .AxisX = { Axes.m0, Axes.m1, Axes.m2 },
         .AxisY = { Axes.m4, Axes.m5, Axes.m6 },
         .AxisZ = { Axes.m8, Axes.m9, Axes.m10 },
-        .Size = SpriteTransform_GetWorldSize(frameArea, WorldSpriteComponent_GetPixelsPerUnit(sprite), Scale),
-        .Pivot = WorldSpriteComponent_GetPivot(sprite),
-        .IsFlippedX = WorldSpriteComponent_IsFlippedX(sprite),
-        .IsFlippedY = WorldSpriteComponent_IsFlippedY(sprite)
+        .Size = SpriteTransform_GetWorldSize(frameArea, settings->PixelsPerUnit, Scale),
+        .Pivot = settings->Pivot,
+        .IsFlippedX = settings->IsFlippedX,
+        .IsFlippedY = settings->IsFlippedY
     };
 }
 
-/* Lists a sprite when its object is shown and its playback instance has a frame to draw (the world binds the
- * animation; a sprite without one, or whose animation failed to load, is simply not drawn), with its quad, its frame's
- * place in the texture and the settings the passes read. */
+/* Lists a sprite when its object is shown and its playback instance has a frame to draw (the world binds its world
+ * sprite; a sprite without one, or whose world sprite failed to load, is simply not drawn), with its quad, its frame's
+ * place in the texture and the settings in effect the passes read. */
 static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite)
 {
     const WorldObject* Owner = WorldComponent_GetOwner(&sprite->Base);
+    const WorldSprite* Asset = WorldSpriteComponent_GetBoundWorldSprite(sprite);
     SpriteAnimationInstance* Instance = WorldSpriteComponent_GetAnimationInstance(sprite);
-    if (!IsObjectShown(Owner) || !SpriteAnimationInstance_HasSource(Instance)
+    if (!IsObjectShown(Owner) || (Asset == NULL) || !SpriteAnimationInstance_HasSource(Instance)
         || (SpriteAnimationInstance_GetFrameCount(Instance) == 0))
     {
         return Error_CreateSuccess();
@@ -283,26 +284,29 @@ static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite)
         return Error_CreateSuccess();
     }
 
+    WorldSpriteSettings Settings = WorldSpriteComponent_ResolveSettings(sprite, WorldSprite_GetSettings(Asset));
     Entry.Component = sprite;
     GetUvRect(&Entry.Frame, Entry.UvRect);
-    Entry.Shape = GetShape(sprite, Owner, Entry.Frame._areaInTexture);
+    Entry.Shape = GetShape(&Settings, Owner, Entry.Frame._areaInTexture);
     // A fixed quad does not depend on its viewer.
     SpriteViewer AnyViewer = SpriteViewer_FromPoint(Entry.Shape.Position, (Vector3){ 0.0f, 1.0f, 0.0f });
     Entry.FixedTransform = (Entry.Shape.Orientation == WorldSpriteOrientation_Fixed)
         ? SpriteTransform_GetMatrix(&Entry.Shape, &AnyViewer) : MatrixIdentity();
     Entry.BoundsRadius = SpriteTransform_GetBoundingRadius(Entry.Shape.Size, Entry.Shape.Pivot);
     Entry.Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Owner));
-    Entry.AlphaMode = WorldSpriteComponent_GetAlphaMode(sprite);
-    Entry.AlphaCutoff = WorldSpriteComponent_GetAlphaCutoff(sprite);
-    Entry.IsLit = WorldSpriteComponent_IsLit(sprite);
-    Entry.Emission = WorldSpriteComponent_GetEmission(sprite);
-    Entry.LightWrap = WorldSpriteComponent_GetLightWrap(sprite);
-    Entry.IsDecal = WorldSpriteComponent_IsDrawnAsDecal(sprite);
-    Entry.DecalOffset = WorldSpriteComponent_GetDecalOffset(sprite);
-    Entry.CastsShadows = WorldSpriteComponent_CastsShadows(sprite);
-    Entry.HasOutline = WorldSpriteComponent_HasOutline(sprite);
-    Entry.OmitsPixelation = WorldSpriteComponent_OmitsPixelation(sprite)
-        && (Entry.AlphaMode == WorldSpriteAlphaMode_Cutout) && !Entry.IsDecal;
+    Entry.AlphaMode = Settings.AlphaMode;
+    Entry.AlphaCutoff = Settings.AlphaCutoff;
+    Entry.IsLit = Settings.IsLit;
+    Entry.Emission = Settings.Emission;
+    Entry.LightWrap = Settings.LightWrap;
+    Entry.IsDecal = WorldSpriteSettings_IsDrawnAsDecal(&Settings);
+    Entry.DecalOffset = Settings.DecalOffset;
+    Entry.CastsShadows = Settings.Render.CastsShadows;
+    Entry.HasOutline = Settings.Render.HasOutline;
+    Entry.OmitsPixelation = Settings.Render.OmitsPixelation && (Entry.AlphaMode == WorldSpriteAlphaMode_Cutout)
+        && !Entry.IsDecal;
+    Entry.DrawDistance = Settings.DrawDistance;
+    Entry.IsDrawDistanceFixed = Settings.IsDrawDistanceFixed;
     if (!GenericBuffer_AddLast(&self->_sprites, &Entry))
     {
         return Error_Construct2(ErrorCode_InvalidOperation, "WorldRenderCache: could not grow the sprite list.");

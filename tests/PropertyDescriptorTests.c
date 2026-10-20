@@ -574,6 +574,8 @@ static void TablesPassTheirCheck(TestRun* run)
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldObject_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldModelComponent_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldSpriteComponent_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldSprite_GetSettingsPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldSprite_GetRenderPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldLightComponent_GetPropertyTable()));
     TEST_CHECK_ERROR(run, PropertyTable_Check(NULL), ErrorCode_IllegalArgument);
 }

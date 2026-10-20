@@ -574,3 +574,72 @@ one fails the load (logged once, like every load failure) and the objects using 
 The test world's world models are in `world_models/test_world/`: `test`, `pbr_demo` and `pbr_metal`, one LOD each, the
 model of the same name, seen 600 m (the draw distance every model had before world models), and `painted_cube`, the test
 cube with two variants, `red` and `blue` (tints only).
+
+
+## World sprites.
+A world sprite is the reusable definition of a flat image placed in the 3D world (a tree, a sign, a tire mark, a
+glow): which sprite animation to play, how its quad stands, how it is lit and how far it is seen. It is built on its
+sprite animation as a world model is built on models: the animation is named by its asset name and loaded with the
+world sprite as its dependency (holding the world sprite holds it; it unloads with it). A sprite animation stays a
+plain asset that text uses too; what only matters in the world lives here. Definitions live under `world_sprites/` and
+have no resource files of their own.
+
+A placed object names its world sprite in its sprite component (`references/world_structure.md`) and can override
+every setting of this file for that one placement: an explicit override flag next to its own value.
+
+```
+{
+    "name": "street_tree",
+    "sprite_animation": "street_tree",       // the sprite animation to play
+    "orientation": "axis_billboard",         // [OPTIONAL] default "billboard"
+    "pivot": [0.5, 0.0],                     // [OPTIONAL] default [0.5, 0.5]
+    "pixels_per_unit": 32,                   // [OPTIONAL] default 32
+    "flip_x": false,                         // [OPTIONAL] default false
+    "flip_y": false,                         // [OPTIONAL] default false
+    "alpha_mode": "cutout",                  // [OPTIONAL] default "cutout"
+    "alpha_cutoff": 0.5,                     // [OPTIONAL] default 0.5
+    "is_lit": true,                          // [OPTIONAL] default true
+    "emission": 1.0,                         // [OPTIONAL] default 1
+    "light_wrap": 1.0,                       // [OPTIONAL] default 1
+    "is_decal": false,                       // [OPTIONAL] default false
+    "decal_offset": 0.01,                    // [OPTIONAL] default 0.01
+    "render": { "has_outline": true, "omit_pixelation": false, "casts_shadows": true },  // [OPTIONAL] each key too
+    "has_draw_distance": true,               // [OPTIONAL] default: whether "draw_distance" is given
+    "draw_distance": 150,                    // [OPTIONAL] used while has_draw_distance is on
+    "is_draw_distance_fixed": false          // [OPTIONAL] default false
+}
+```
+
+| Key | Value | Meaning |
+|---|---|---|
+| `sprite_animation` | asset name, required | The sprite animation to play (`sprite_animations/`). Its playback (fps, running, looped) comes from the animation; each placement plays its own copy. |
+| `orientation` | `billboard`, `axis_billboard`, `fixed` | `billboard` faces the camera; `axis_billboard` turns only around the object's own up axis to face it (trees, lamp posts); `fixed` keeps the object's rotation, the image in its local XY plane facing +Z (signs, posters, decals). |
+| `pivot` | `[x, y]`, finite | The point of the image at the object's position: `[0, 0]` its bottom left, `[1, 1]` its top right; `[0.5, 0]` for things standing on the ground. It may lie outside the image. |
+| `pixels_per_unit` | number above 0 | Image pixels per metre: the sprite's size is its frame's size divided by this, times the object's X and Y scale. |
+| `flip_x`, `flip_y` | boolean | Mirror the image left to right, or top to bottom, about the pivot. |
+| `alpha_mode` | `cutout`, `blend`, `additive` | `cutout`: hard edges, opaque where drawn (pixel art; casts shadows, outlined); `blend`: soft edges (smoke, stains), sorted, no shadow; `additive`: adds its light (glows). |
+| `alpha_cutoff` | in [0, 1] | With `cutout`, texels less opaque than this are not drawn. |
+| `is_lit` | boolean | Lit by the sun, the moon and lamps like the models around it; `false`: its colours glow as they are, by day and night (neon, fire), still fogged. |
+| `emission` | >= 0 | How bright an unlit sprite glows; 1 shows its colours as they are. |
+| `light_wrap` | in [0, 1] | Billboards only: how far light wraps around the sprite. 0 lights it as a flat card facing you, 1 as a round thing, half lit from the side. |
+| `is_decal` | boolean | With `fixed`: lies on a surface (dirt, tire marks), drawn over it without shadow or outline. |
+| `decal_offset` | metres, >= 0 | How far a decal is lifted off its surface so it does not flicker against it. |
+| `render` | object | `has_outline` (a 1-pixel outline), `omit_pixelation` (drawn at full resolution over the pixelated image) and `casts_shadows`: all three for cutout sprites that are not decals only. The same block as a world model's, without `shadow_tier` (sprites cast into both shadow cascades). |
+| `has_draw_distance` | boolean | Whether `draw_distance` applies. Left out, it is on exactly when `draw_distance` is given, so a hand-written file just gives the distance. Off, the sprite is seen as far as its kind: 150 m, or 60 m for a decal, decided for each placement (a placement may turn a sprite into a decal), and a `draw_distance` next to it is kept unused. A tool that writes definitions and leaves out default values must still write this key whenever it writes `draw_distance`. |
+| `draw_distance` | metres, above 0 | How far the sprite is seen while `has_draw_distance` is on. The player's `draw_distance_scale` (`config.json`) multiplies it unless it is fixed, and a narrower field of view (zooming in) pushes it out. Over its last tenth (at least 3 m) the sprite dithers away (blended and additive ones fade their alpha). |
+| `is_draw_distance_fixed` | boolean | true: the player's `draw_distance_scale` leaves the draw distance as it is (landmarks, gameplay-critical signs). |
+
+**The same keys, the same rules.** These are the sprite component's settings, with its names, defaults and rules: the
+world sprite's tables and the component's table are built from the same rows, so a placement's own value is checked
+exactly as the asset's. There are no rules between keys: a combination that does not apply (a "decal" billboard, crisp
+smoke) is kept as written and simply has no effect.
+
+**Rules.** A definition that breaks one is rejected when the definitions are read, with a message naming the key and
+the rule (`World sprite "tree": world_sprite.pixels_per_unit (PixelsPerUnit) must be finite and > 0.`). Unknown keys are
+rejected in the root and in `render`, with the keys allowed there (the render flags belong in `render`). The sprite
+animation must exist when the world sprite loads; a missing one fails the load (logged once, like every load failure)
+and the objects using it draw nothing.
+
+The test world's world sprites are in `world_sprites/test_world/`, each named as the animation it plays: `test_sprite`
+(the test image at 1280 pixels per metre), `test_tire_mark`, `test_tree`, `test_sign`, `test_smoke`, `test_glow` and
+`test_neon` (T06's placeholders, with the look the test world gave them).

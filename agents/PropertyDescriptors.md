@@ -14,8 +14,11 @@ checker and autocomplete, `handoff/2026-10_scripting_language/PROPOSAL.md` secti
 **Clients:** `WorldEnvironment` ([WorldData.md](WorldData.md), "Environment"), `GameClock` ([GameClock.md](GameClock.md),
 T23), and since T05 the world objects (`world_object`, with T24's `data` row for tags and custom data and T08's
 `parent` row, both ReadOnly for `Properties_Set`, whose reads and copies the world reconciles in the table's `AfterSet`)
-and their components (`model_component`, with T10's override pairs, `sprite_component`, `light_component`;
-[WorldData.md](WorldData.md), "Property tables"). T16 adds the weather.
+and their components (`model_component`, with T10's override pairs, `sprite_component`, with T26's 17 override pairs,
+`light_component`; [WorldData.md](WorldData.md), "Property tables"), and since T26 a world sprite's settings
+(`world_sprite` and `world_sprite_render`, which read its definition: [WorldSprites.md](WorldSprites.md)). The sprite
+component's value rows and the world sprite's rows come from the same macros (`source/WorldSpriteInternal.h`), so the
+two tables share every key, default, rule and text: a way to keep one copy of a row in two tables. T16 adds the weather.
 
 ## Declaring a table
 

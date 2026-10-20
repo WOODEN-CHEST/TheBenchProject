@@ -31,7 +31,8 @@ typedef struct WorldObjectStruct WorldObject;
  * CHANGES. Every property change advances the component's revision (WorldComponent_GetRevision), whether it comes
  * from the component's own setters or from the table (Properties_Set, a JSON or GHDF read, Properties_CopyTo): every
  * component table's AfterSet hook advances it and then calls the type's OnPropertySet hook with the world, so a
- * component that holds runtime state for a property (the sprite's playing animation) stays in step with it.
+ * component that holds runtime state for a property (the sprite's bound world sprite and its playing animation) stays
+ * in step with it.
  *
  * TRANSFORM DRIVERS. A type flagged IsTransformDriver writes its object's transform every tick (later: the character
  * controller, vehicles, rigid bodies). An object carries at most one driver, so two systems never fight over where an
@@ -61,7 +62,7 @@ typedef enum WorldComponentTypeEnum
 {
     /** @brief A 3D model (WorldModelComponent.h). */
     WorldComponentType_Model = 0,
-    /** @brief A 2D sprite playing a sprite animation (WorldSpriteComponent.h). */
+    /** @brief A 2D sprite showing a world sprite, which plays a sprite animation (WorldSpriteComponent.h). */
     WorldComponentType_Sprite = 1,
     /** @brief A point light (WorldLightComponent.h). */
     WorldComponentType_Light = 2,

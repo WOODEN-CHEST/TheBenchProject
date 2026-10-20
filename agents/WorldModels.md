@@ -12,7 +12,7 @@ A **world model** is everything that is the same for every placement of a thing:
 object** is one placement: its id, transform, tags and data, which world model it uses, which variant, and what it
 overrides (the classic prefab / instance split, PLAN.md 2.2). Models stay plain assets that the UI can use too: what
 only matters in the world lives in the world model (the owner's rule G17: world-level assets are built on the plain ones
-as dependencies; world sprites, T26, do the same for sprite animations).
+as dependencies; world sprites, T26, do the same for sprite animations: [WorldSprites.md](WorldSprites.md)).
 
 ## The asset type
 
@@ -116,7 +116,7 @@ An object's draw distance is resolved in two steps:
    zoomed camera keep far objects in sight. T11's LOD selection uses the same factor.
 
 A placement may draw less far than its world model's last LOD distance: its coarser LODs are then never reached.
-Sprites keep a default per kind until T26 gives them the same through world sprites.
+Sprites follow the same two steps since T26, through world sprites ([WorldSprites.md](WorldSprites.md)).
 
 ## LODs
 

@@ -39,22 +39,16 @@ static WorldPlane MakePlane(float a, float b, float c, float d)
     return (WorldPlane){ .Normal = { a / Length, b / Length, c / Length }, .Distance = d / Length };
 }
 
-/* The default draw distance of a kind, before the scale. */
-static float GetBaseDrawDistance(WorldDrawDistanceKind kind)
-{
-    switch (kind)
-    {
-        case WorldDrawDistanceKind_Sprite: return WORLD_VISIBILITY_SPRITE_DRAW_DISTANCE;
-        case WorldDrawDistanceKind_Decal:  return WORLD_VISIBILITY_DECAL_DRAW_DISTANCE;
-    }
-    // Only reachable with a corrupted kind; the longer distance keeps the entry drawn.
-    return WORLD_VISIBILITY_SPRITE_DRAW_DISTANCE;
-}
-
 /* The draw distance scale to use: anything not finite or below 0 counts as 1. */
 static float SanitizeScale(float scale)
 {
     return (isfinite(scale) && (scale >= 0.0f)) ? scale : 1.0f;
+}
+
+/* The view's zoom factor to use: anything not finite or not above 0 counts as 1. */
+static float GetZoomFactor(const WorldVisibilityView* view)
+{
+    return (isfinite(view->ZoomFactor) && (view->ZoomFactor > 0.0f)) ? view->ZoomFactor : 1.0f;
 }
 
 /* Whether a model casts into the given shadow cascade, per its WorldShadowTier: Both casts into either; Near casts only
@@ -171,8 +165,7 @@ static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, con
         // setting unless it is fixed, against the zoomed distance (G17).
         float DrawDistance = WorldVisibility_ScaleDrawDistance(model->DrawDistance, model->IsDrawDistanceFixed,
             view->DrawDistanceScale);
-        float ZoomFactor = (isfinite(view->ZoomFactor) && (view->ZoomFactor > 0.0f)) ? view->ZoomFactor : 1.0f;
-        Fade = GetFade(view, model->Center, model->Radius, DrawDistance, ZoomFactor, model->Tint);
+        Fade = GetFade(view, model->Center, model->Radius, DrawDistance, GetZoomFactor(view), model->Tint);
     }
     if (!GenericBuffer_AddLast(&self->_modelFades, &Fade))
     {
@@ -202,12 +195,12 @@ static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, con
 static bool AddSprite(WorldVisibility* self, const WorldVisibilityView* view, const WorldRenderSprite* sprite,
     size_t index)
 {
-    // TODO: T26 replaces the kind's default with the sprite's own distance, as T10 did for models, through world
-    // sprites (G17), with the same quality scale and zoom rules.
-    WorldDrawDistanceKind Kind = sprite->IsDecal ? WorldDrawDistanceKind_Decal : WorldDrawDistanceKind_Sprite;
-    float DrawDistance = WorldVisibility_GetDrawDistance(Kind, view->DrawDistanceScale);
-    WorldVisibilityFade Fade = GetFade(view, sprite->Shape.Position, sprite->BoundsRadius, DrawDistance, 1.0f,
-        sprite->Tint);
+    // Its own draw distance (the world sprite's, its kind's or the placement's, times its multiplier), with the models'
+    // rules: scaled by the quality setting unless it is fixed, against the zoomed distance (G17).
+    float DrawDistance = WorldVisibility_ScaleDrawDistance(sprite->DrawDistance, sprite->IsDrawDistanceFixed,
+        view->DrawDistanceScale);
+    WorldVisibilityFade Fade = GetFade(view, sprite->Shape.Position, sprite->BoundsRadius, DrawDistance,
+        GetZoomFactor(view), sprite->Tint);
     if (!GenericBuffer_AddLast(&self->_spriteFades, &Fade))
     {
         return false;
@@ -267,11 +260,6 @@ bool WorldVisibility_IsSphereInFrustum(const WorldFrustum* frustum, Vector3 cent
         }
     }
     return true;
-}
-
-float WorldVisibility_GetDrawDistance(WorldDrawDistanceKind kind, float scale)
-{
-    return GetBaseDrawDistance(kind) * SanitizeScale(scale);
 }
 
 float WorldVisibility_ScaleDrawDistance(float drawDistance, bool isFixed, float scale)

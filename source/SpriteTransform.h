@@ -1,7 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
-#include "WorldSpriteComponent.h"
+#include "WorldSprite.h"
 #include "raylib/raylib.h"
 #include "wr/WRMemory.h"
 

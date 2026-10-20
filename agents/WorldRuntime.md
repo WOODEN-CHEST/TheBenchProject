@@ -11,7 +11,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | GameCamera | `include/GameCamera.h`, `source/GameCamera.c` | The 3D camera (position/fov/yaw/pitch/roll), converted to a raylib Camera3D only at render time. |
 | Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, the key registry, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
-| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, the LOD drawn, the variant and the settings in effect; sprites; lights), built from the world's per-type component arrays. |
+| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, the LOD drawn, the variant and the settings in effect; sprites with their world sprites' settings in effect; lights), built from the world's per-type component arrays. |
 | WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
@@ -45,8 +45,8 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
   - the PBR shader's location table is a renderer-owned copy (`_pbr._locs`) whose material map samplers point
     at `mraMap` / `normalMap` / `emissiveMap`, so `DrawMesh` binds each material's textures without touching the
     shared shader asset;
-  - sprite animations belong to the World (its sprite components bind them under the world's asset user); the
-    renderer only reads the current frame.
+  - world sprites and their animations belong to the World (its sprite components bind them under the world's asset
+    user); the renderer only reads the current frame and the bound world sprite's settings.
 
 ### Per-component render cache
 
@@ -82,8 +82,12 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
   pixels, the pixels per unit and the object's world X and Y scale, the pivot, the flips; `WorldObject_GetWorldTransform`:
   a root's own values, a child's decomposed from its world matrix), a fixed sprite's matrix (it needs no viewer), a sphere around the
   pivot that holds the quad in every orientation, the tint, and the settings: alpha mode and cutoff, lit, emission,
-  light wrap, decal (marked as one and fixed) and its lift, casts shadows, outline, and crisp (only for cutout sprites
-  that are not decals: the crisp overlay composites opaque surfaces).
+  light wrap, decal (marked as one and fixed) and its lift, casts shadows, outline, crisp (only for cutout sprites that
+  are not decals: the crisp overlay composites opaque surfaces), and the draw distance and whether it is fixed. Every
+  setting is the one in effect, taken every frame: the sprite's world sprite's (the one its component bound,
+  `WorldSpriteComponent_GetBoundWorldSprite`), or the placement's own while its override flag is on
+  (`WorldSpriteComponent_ResolveSettings`, [WorldSprites.md](WorldSprites.md)). A sprite without a bound world sprite is
+  not listed.
 - **Lights:** the lights of effectively enabled and visible objects, with their world position, reach (the range),
   intensity, colour and shadow flag.
 
@@ -111,16 +115,17 @@ are rebuilt every frame without allocating once grown; each entry also gets its 
   builds once per frame), routed by their shadow tier; the cube shadow takes the casters touching its lamp's reach.
   A model casts when it has `casts_shadows`; a sprite when it is a cutout sprite that is not a decal and casts
   (`WorldRenderSprite_CastsShadows`).
-- **Draw distance.** Each model has its own since T10 (decision G17, [WorldModels.md](WorldModels.md)): its world
-  model's `draw_distance`, or its placement's own while `overrides_draw_distance` is on, times the placement's
-  `draw_distance_multiplier` (the cache resolves it); then times the config's `draw_distance_scale` (default 1,
-  [0, 16]) unless the world model or the placement keeps it fixed (`WorldVisibility_ScaleDrawDistance`). Sprites keep a
-  default per kind until T26 (150 m, decals 60 m) times the scale (`// TODO:` in `AddSprite`). The distance measured is
-  the camera's to the nearest point of the entry's sphere (0 inside it), so a large object does not fade while its near
-  end is close; for models it is multiplied by the **zoom factor**, `WorldVisibility_GetZoomFactor(fovY)` =
-  tan(fovY / 2) / tan(30 degrees) (`WorldVisibilityView.ZoomFactor`, from the camera's field of view): exactly 1 at the
-  default 60 degrees, below 1 when zoomed in, so a zoomed view (binoculars, a camera) keeps far models instead of fading
-  them. T11's LOD selection uses the same factor. Beyond its draw distance an entry is in no list (its shadow goes too); over the last
+- **Draw distance.** Each model has its own since T10 and each sprite since T26 (decision G17,
+  [WorldModels.md](WorldModels.md), [WorldSprites.md](WorldSprites.md)): its world model's or world sprite's
+  `draw_distance` (a world sprite without one: its kind's, 150 m or 60 m for a decal, decided per placement), or its
+  placement's own while `overrides_draw_distance` is on, times the placement's `draw_distance_multiplier` (the cache
+  resolves it); then times the config's `draw_distance_scale` (default 1, [0, 16]) unless the asset or the placement
+  keeps it fixed (`WorldVisibility_ScaleDrawDistance`). The distance measured is the camera's to the nearest point of
+  the entry's sphere (0 inside it), so a large object does not fade while its near end is close, multiplied by the
+  **zoom factor**, `WorldVisibility_GetZoomFactor(fovY)` = tan(fovY / 2) / tan(30 degrees)
+  (`WorldVisibilityView.ZoomFactor`, from the camera's field of view): exactly 1 at the default 60 degrees, below 1 when
+  zoomed in, so a zoomed view (binoculars, a camera) keeps far models and sprites instead of fading them. T11's LOD
+  selection uses the same factor. Beyond its draw distance an entry is in no list (its shadow goes too); over the last
   stretch (10% of the distance, at least 3 m, at most all of it) its distance fade rises linearly from 0 to 1.
 - **Opacity.** The tint's opacity (the alpha byte of the final tint) asks for a fade of 1 - opacity, and a draw's fade is
   the larger of that and the distance fade. An entry whose fade is 1 is in no list. Models no longer use alpha blending:
@@ -232,7 +237,8 @@ the same way (`WorldRendererLighting_PrepareLitShader`, `WorldRendererLighting_U
 changing a bit of the PBR image (checked against the previous build on two drivers). Without it models draw unlit with
 raylib's default shader.
 
-**Sprites** (T06; the component's settings are in [WorldData.md](WorldData.md)). Every sprite is one unit quad
+**Sprites** (T06; since T26 their settings are their world sprite's, each overridable per placement:
+[WorldSprites.md](WorldSprites.md), [WorldData.md](WorldData.md)). Every sprite is one unit quad
 (`WorldRendererSprites.c`: x and y in [0, 1] from the image's bottom left, z 0, normal +Z; six unindexed vertices,
 because raylib's `DrawMesh` draws indexed only while the CPU index array is kept) drawn with `DrawMesh` and a matrix from
 `SpriteTransform`, with a material built on the stack (the frame's texture as the albedo map, the tint as `colDiffuse`).
@@ -523,15 +529,16 @@ Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World`, a `GameClock` (
 `GameCamera`, and a `WorldRenderer`. **The test world is a file** (T09; since T10 its model components name world models, `world_models/test_world/`):
 `Create` loads `<base>/worlds/test.world.json`
 (`compile/out/worlds/` in the repository) with `WorldFile_LoadJSON` ([WorldFile.md](WorldFile.md)) on `Services.Keys`,
-`Services.Assets` and `Services.Logger`, so its sprite components bind their animations themselves. A missing or broken
+`Services.Assets` and `Services.Logger`, so its sprite components bind their world sprites themselves. A missing or broken
 file is logged once (`WorldTest: could not load the test world (...): <why>. The world is empty instead.`) and gives an
 empty world with the debug grid on: visible, and the frame still starts. The file holds what the frame's
 `BuildTestWorld` built in code until T09 (the shipped file was written from it, and the image is the same bit for
-bit): a model component per cube and for the ground slab, two light components, and the sprites: the test image as a
-camera-facing billboard, 1.5 m wide at 1280 pixels per metre, and T06's placeholders from
-`sprite_animations/test_world/`: a blended tire-mark decal on the ground in front of the camera, an axis-billboard tree
-that casts a shadow, a fixed sign behind it, a lit blended smoke puff in front of an additive, unlit glow around the
-warm lamp, and an unlit neon sign. Its hierarchy (T08): a `desk` at (1.8, 0.05, -3.6) on the left of the start view,
+bit): a model component per cube and for the ground slab, two light components, and the sprites, which name world
+sprites since T26 (`world_sprites/test_world/`, each with the look the sprite components used to hold): the test image
+as a camera-facing billboard, 1.5 m wide at 1280 pixels per metre, and T06's placeholders: a blended tire-mark decal on
+the ground in front of the camera, an axis-billboard tree that casts a shadow, a fixed sign behind it, a lit blended
+smoke puff in front of an additive, unlit glow around the warm lamp, and an unlit neon sign. The tree stands a second
+time, mirrored by its placement (`tree_mirrored`: `overrides_flip_x`), left of the first and farther back (T26). Its hierarchy (T08): a `desk` at (1.8, 0.05, -3.6) on the left of the start view,
 an empty object turned 15 degrees that holds its parts (`desk_top` and two `desk_side_*`, scaled test cubes), a gold
 `cup` and a `desk_lamp` (a thin post) whose child `desk_lamp_light` is a warm point light (intensity 3, reach 4, no
 shadow) 0.35 lamp units above the post's centre (0.28 m: a child's position is in its parent's scaled space). Its
@@ -571,8 +578,8 @@ debug keys as raw keys:
   everything on it (the lamp's light goes off). Both logged;
 - **the world models (T10):** E steps the two variant cubes through their variants: their own (red and blue), swapped,
   then none (`uses_variant` off: the model's own white), through the component's setters, so the cache resolves the
-  variants again (logged); Z zooms the camera to a 15-degree view and back (logged): the zoom factor then lets models'
-  draw distances reach about 4.4 times as far;
+  variants again (logged); Z zooms the camera to a 15-degree view and back (logged): the zoom factor then lets the draw
+  distances of models and (since T26) sprites reach about 4.4 times as far;
 - **the world file (T09):** F5 saves the live world next to the test world, as `worlds/test.saved.world.json` and
   `worlds/test.saved.world.ghdf` (atomically; each logged with its path, gitignored), for round-trip checks: saved at
   noon with nothing changed (2, then F5) the JSON is the shipped file byte for byte; otherwise its diff against

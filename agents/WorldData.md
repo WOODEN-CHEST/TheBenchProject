@@ -15,7 +15,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldObject | `include/WorldObject.h`, `source/WorldObject.c` | The one object type: id, name, parent, transform (relative to the parent), tint, enabled, visible, mobility, and its component slots. |
 | WorldComponent | `include/WorldComponent.h`, `source/WorldComponent.c` | The component base, the component types and the registry entry that describes each (`WorldComponentTypeInfo`). |
 | WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A world model by asset name ([WorldModels.md](WorldModels.md)), the variant drawn, and the settings this placement overrides (explicit flags next to its own values: outline, crisp, shadow tier, casts shadows, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
-| WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A sprite animation by asset name, with its playback instance, bound by the world, and how it is drawn: orientation, pivot, size, flips, alpha mode, lighting, decal, shadows. |
+| WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A world sprite by asset name ([WorldSprites.md](WorldSprites.md)), bound by the world with its animation's playback instance, and every setting this placement overrides (explicit flags next to its own values: orientation, pivot, size, flips, alpha mode, lighting, decal, render flags, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
 | WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
 | World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index), `source/WorldHierarchy.c` (parents, world matrices, effective flags, subtrees; also the `WorldObject_` functions about them) | Owns the objects and their components, mints ids, keeps the id map, the hierarchy and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
@@ -190,16 +190,23 @@ changes (it watches the revision, then compares the name), and the variant again
 changes.
 
 ### Sprite component (`sprite_component`)
-`_spriteAnimation` (an asset name, NULL plays nothing), the runtime `_animationInstance` (`SpriteAnimationInstance` by
-value: the playback state game logic advances and the renderer reads; `WorldSpriteComponent_GetAnimationInstance`), and
-how it is drawn (T06; the renderer's side is [WorldRuntime.md](WorldRuntime.md), "Sprites"):
-- **Shape:** `_orientation` (`WorldSpriteOrientation`: `billboard` faces the camera, the default; `axis_billboard` turns
-  only around the object's local Y axis; `fixed` uses the object's rotation, the image in its local XY plane facing +Z),
-  `_pivot` (the point of the image at the object's position: (0, 0) bottom left, (1, 1) top right; default the centre,
-  (0.5, 0) for things standing on the ground), `_pixelsPerUnit` (> 0, default 32: the world size is the frame's pixels
-  divided by it, times the object's world X and Y scale; the Z scale does nothing; position, axes and scale are the
-  object's world ones, through its parents), `_isFlippedX` / `_isFlippedY` (mirror the
-  image about the pivot). The image is two-sided.
+Since T26 the component names a **world sprite** ([WorldSprites.md](WorldSprites.md)): the sprite animation to play and
+how it stands, is lit and is seen (T06's settings, which used to live here and are now the world sprite's defaults).
+`_worldSprite` (an asset name, NULL shows nothing; changing it swaps the sprite and keeps the object), the runtime
+`_animationInstance` (`SpriteAnimationInstance` by value: the playback state game logic advances and the renderer reads;
+`WorldSpriteComponent_GetAnimationInstance`) and the runtime `_boundWorldSprite` (the world sprite it plays,
+`WorldSpriteComponent_GetBoundWorldSprite`).
+
+**Every setting can be overridden** (the owner's answer for T26): for each `WorldSpriteSetting` an override flag (the
+array `_overrides`, false: the world sprite's value applies) and the placement's own value, kept while the flag is off.
+The values and their defaults are T06's (the renderer's side is [WorldRuntime.md](WorldRuntime.md), "Sprites"):
+- **Shape:** `_orientation` (`WorldSpriteOrientation`, declared in `WorldSprite.h` since T26: `billboard` faces the
+  camera, the default; `axis_billboard` turns only around the object's local Y axis; `fixed` uses the object's rotation,
+  the image in its local XY plane facing +Z), `_pivot` (the point of the image at the object's position: (0, 0) bottom
+  left, (1, 1) top right; default the centre, (0.5, 0) for things standing on the ground), `_pixelsPerUnit` (> 0,
+  default 32: the world size is the frame's pixels divided by it, times the object's world X and Y scale; the Z scale
+  does nothing; position, axes and scale are the object's world ones, through its parents), `_isFlippedX` /
+  `_isFlippedY` (mirror the image about the pivot). The image is two-sided.
 - **Transparency:** `_alphaMode` (`WorldSpriteAlphaMode`: `cutout`, the default: opaque where the texture's alpha
   reaches `_alphaCutoff` (0.5), depth-correct, casts shadows, outlined; `blend`: soft edges, sorted, its alpha times the
   object's opacity; `additive`: adds its light).
@@ -207,23 +214,30 @@ how it is drawn (T06; the renderer's side is [WorldRuntime.md](WorldRuntime.md),
   default 1), still fogged), `_lightWrap` ([0, 1], default 1: how far light wraps around a billboard or axis billboard,
   0 a flat card, 1 a round thing half lit from the side; fixed sprites ignore it), `_castsShadows` (true; only cutout
   sprites that are not decals cast).
-- **Decal:** `_isDecal` (false; takes effect only with the fixed orientation, `WorldSpriteComponent_IsDrawnAsDecal`:
-  drawn over the opaque world, no shadow, no outline) and `_decalOffset` (>= 0, default 0.01 metres: lifted off its
-  surface along its normal, toward the viewer's side).
+- **Decal:** `_isDecal` (false; takes effect only with the fixed orientation, `WorldSpriteSettings_IsDrawnAsDecal` on
+  the settings in effect: drawn over the opaque world, no shadow, no outline) and `_decalOffset` (>= 0, default 0.01
+  metres: lifted off its surface along its normal, toward the viewer's side).
 - `_hasOutline` (true) and `_omitPixelation` (false) apply to cutout sprites that are not decals.
-There are no cross-field rules in the tables, so a combination that does not apply (a "decal" billboard, crisp smoke)
-is stored as set and simply has no effect.
+- **Draw distance:** `_drawDistance` (150 m, above 0) and `_isDrawDistanceFixed` (false: the player's
+  `draw_distance_scale` applies); `_drawDistanceMultiplier` (above 0, default 1) multiplies whichever draw distance is in
+  effect, the placement's, the world sprite's or its kind's (150 m, decals 60 m).
+The flags are set with `WorldSpriteComponent_SetOverridden(self, setting, isOverridden)` and read with
+`_IsOverridden`; `WorldSpriteComponent_ResolveSettings(self, spriteSettings)` is the pure function that gives the
+`WorldSpriteSettings` in effect. The getters of the values (`WorldSpriteComponent_GetPivot` and the others) return the
+placement's own values, not the ones in effect. There are no cross-field rules in the tables, so a combination that
+does not apply (a "decal" billboard, crisp smoke) is stored as set and simply has no effect.
 
-**Binding.** The playing animation always matches the name. `OnAttach` binds it, and `OnPropertySet` binds it again
-whenever the name differs from the one it was bound for (`_boundAnimation`, an owned copy): after
-`WorldSpriteComponent_SetSpriteAnimation`, `Properties_Set`, a JSON or GHDF read, or `Properties_CopyTo`. Binding loads
-the animation under the world's asset user and restarts the instance from the animation's defaults (dropping its event
-subscriptions: subscribe after setting the name). Setting the name it already has changes nothing (playback goes on).
-A world without an asset manager, a NULL name or a failed load leaves the instance empty (it draws nothing); a failure
-is logged once, when it happens (`World: the sprite of object N ("name") has no animation: ...`). The animations stay
-held until the world is destroyed, after every component (asset holds are not counted, so releasing one on a rename
-could unload it under another sprite; a `// TODO:` in `source/WorldSpriteComponent.c` marks the release pass that
-long-lived edited worlds may need).
+**Binding.** The playing sprite always matches the name. `OnAttach` binds it, and `OnPropertySet` binds it again
+whenever the name differs from the one it was bound for (`_boundName`, an owned copy): after
+`WorldSpriteComponent_SetWorldSprite`, `Properties_Set`, a JSON or GHDF read, or `Properties_CopyTo`. Binding loads the
+world sprite (and with it, as its dependency, its animation) under the world's asset user and restarts the instance
+from the animation's defaults (dropping its event subscriptions: subscribe after setting the name). Setting the name it
+already has changes nothing (playback goes on). A world without an asset manager, a NULL name or a failed load leaves
+the instance empty and the bound world sprite NULL (it draws nothing); a failure is logged once, when it happens
+(`World: the sprite of object N ("name") shows nothing: world sprite ...`). The world sprites stay held until the world
+is destroyed, after every component (asset holds are not counted, so releasing one on a rename could unload it under
+another sprite; a `// TODO:` in `source/WorldSpriteComponent.c` marks the release pass that long-lived edited worlds may
+need).
 
 ### Light component (`light_component`)
 `_color` (white), `_intensity` (>= 0, default 1), `_range` (>= 0, default 1: how far the light reaches; T05 renamed it
@@ -243,8 +257,8 @@ the id counter (`_nextId`, starts at 1; 0 once every id was handed out: ids run 
 - **Construction:** every world borrows the program's key registry ([NamespacedKey.md](NamespacedKey.md);
   `Services.Keys`). `World_Construct1(world, keys)` makes a world without assets (tools, tests, a headless server): its
   sprites stay empty. `World_Construct2(world, keys, assets, logger)` makes a world whose components load their assets
-  (the sprites' animations) under its own asset user, which `World_Deconstruct` retires after destroying every object
-  and component. The logger also hears of each data limit once.
+  (the sprites' world sprites, and with them their animations) under its own asset user, which `World_Deconstruct`
+  retires after destroying every object and component. The logger also hears of each data limit once.
 - **Objects:** `World_CreateObject(world, name, &object)` (the next id) and `World_CreateObjectWithId(world, name, id,
   &object)` (the loader's version: refuses 0, ids above `WORLD_OBJECT_ID_MAX` and used ids, and advances the counter past
   the id). `UINT64_MAX` is never an id, so a world file always has a next id to record; an object with the last id
@@ -339,30 +353,54 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `draw_distance_multiplier` | 14 | Float > 0 | 1 |
 | | `overrides_is_draw_distance_fixed` | 15 | Bool | false |
 | | `is_draw_distance_fixed` | 16 | Bool | false |
-| `sprite_component` | `sprite_animation` | 1 | AssetName (128, null allowed) | null |
+| `sprite_component` | `world_sprite` | 1 | AssetName (128, null allowed): a world sprite | null |
+| | `overrides_orientation` | 17 | Bool | false |
 | | `orientation` | 4 | Enum `billboard` / `axis_billboard` / `fixed` | `billboard` |
+| | `overrides_pivot` | 18 | Bool | false |
 | | `pivot` | 5 | Vector2 | (0.5, 0.5) |
+| | `overrides_pixels_per_unit` | 19 | Bool | false |
 | | `pixels_per_unit` | 6 | Float > 0 | 32 |
+| | `overrides_flip_x` | 20 | Bool | false |
 | | `flip_x` | 7 | Bool | false |
+| | `overrides_flip_y` | 21 | Bool | false |
 | | `flip_y` | 8 | Bool | false |
+| | `overrides_alpha_mode` | 22 | Bool | false |
 | | `alpha_mode` | 11 | Enum `cutout` / `blend` / `additive` | `cutout` |
+| | `overrides_alpha_cutoff` | 23 | Bool | false |
 | | `alpha_cutoff` | 12 | Float in [0, 1] | 0.5 |
+| | `overrides_is_lit` | 24 | Bool | false |
 | | `is_lit` | 9 | Bool | true |
+| | `overrides_emission` | 25 | Bool | false |
 | | `emission` | 10 | Float >= 0 | 1 |
+| | `overrides_light_wrap` | 26 | Bool | false |
 | | `light_wrap` | 16 | Float in [0, 1] | 1 |
+| | `overrides_casts_shadows` | 27 | Bool | false |
 | | `casts_shadows` | 15 | Bool | true |
+| | `overrides_is_decal` | 28 | Bool | false |
 | | `is_decal` | 13 | Bool | false |
+| | `overrides_decal_offset` | 29 | Bool | false |
 | | `decal_offset` | 14 | Float >= 0 | 0.01 |
+| | `overrides_has_outline` | 30 | Bool | false |
 | | `has_outline` | 2 | Bool | true |
+| | `overrides_omit_pixelation` | 31 | Bool | false |
 | | `omit_pixelation` | 3 | Bool | false |
+| | `overrides_draw_distance` | 32 | Bool | false |
+| | `draw_distance` | 33 | Float > 0 | 150 |
+| | `draw_distance_multiplier` | 34 | Float > 0 | 1 |
+| | `overrides_is_draw_distance_fixed` | 35 | Bool | false |
+| | `is_draw_distance_fixed` | 36 | Bool | false |
 | `light_component` | `color` | 1 | Color | white |
 | | `intensity` | 2 | Float >= 0 | 1 |
 | | `range` | 3 | Float >= 0 | 1 |
 | | `casts_shadows` | 4 | Bool | false |
 
 T10 renamed the model component's wire 1 from `model` (a model asset) to `world_model` and made wires 2 to 5 the
-placement's own values behind their override flags; its next free wire id is 17. Each override flag sits right before
-its value, in table order (the inspector's and the JSON writer's order), and `PropertyTable_Check` checks the pairing.
+placement's own values behind their override flags; its next free wire id is 17. T26 did the same to the sprite
+component: wire 1 `sprite_animation` became `world_sprite`, wires 2 to 16 the placement's own values behind their flags
+(wires 17 to 31), and the draw distance rows came new (32 to 36); its next free wire id is 37. The sprite's value rows
+share their key, type, default, rules and texts with the world sprite's tables (`source/WorldSpriteInternal.h`,
+[WorldSprites.md](WorldSprites.md)). Each override flag sits right before its value, in table order (the inspector's and
+the JSON writer's order), and `PropertyTable_Check` checks the pairing.
 
 The object table's wire ids start at 3: 1 and 2 are the world file's own entries per object (the id and the
 components, [WorldFile.md](WorldFile.md)). T24 added `data` (one row: the tags and the values are one map, written as two JSON keys, `tags` and
@@ -482,10 +520,10 @@ once, a copy brings the parent). `tests/WorldTransformTests.c` covers the maths 
 mirrors, zero scales, gimbal lock, shear, local matrices, singular parents, the stretch bound). `tests/WorldTests.c`: objects (ids unique and never 0, loader ids advance the counter, an exhausted counter, the
 object-set version, validated setters and table writes advancing the revision, rotation in degrees in JSON),
 components (add, find, remove; one per type; removing an object removes its components; the per-type arrays stay in
-order across interleaved adds and removes; types by name; revisions), the sprite binding (no assets, a shared
-animation released with the world last, a missing animation logged once, renaming, the same name keeps playing, table
-writes rebind), the sprite's drawing settings (defaults, rules, enum names and the pivot in JSON, the decal needing the
-fixed orientation), flags, and mobility and drivers (through two test-only driver types: adding one makes the object
+order across interleaved adds and removes; types by name; revisions), the sprite binding (no assets, a shared world
+sprite whose animation is released with the world last, a missing world sprite and one with a missing animation logged
+once, renaming, the same name keeps playing, table writes rebind), a placement's own sprite settings (defaults with
+every flag off, rules, the flags and enum names in JSON, the round trip), flags, and mobility and drivers (through two test-only driver types: adding one makes the object
 movable, a second is refused; the test seam refuses impostors). `tests/WorldEnvironmentTests.c` (validation including
 the moon settings and texture names, copying, the date and time the clock writes, the retired ids, the celestial frame,
 the moon's phase against real dates, its motion and lit fraction, the moonlight, the stars' drift and its direction, the
@@ -493,5 +531,6 @@ shadow light's hand-over, the seasons' day lengths). `tests/PropertyDescriptorTe
 the environment's GHDF tree matches the old encoder's, its JSON round trip). `tests/WorldRenderCacheTests.c` covers the
 renderer's side ([WorldRuntime.md](WorldRuntime.md)). They run headless with `sh tests/run_linux.sh`;
 `tests/TestAssets.h` provides code-built sprite animation, model and texture definitions that load without files or a
-GL context, and world models built from JSON over them. `tests/WorldModelTests.c` covers the world models and the model
-component's overrides ([WorldModels.md](WorldModels.md)).
+GL context, and world models and world sprites built from JSON over them. `tests/WorldModelTests.c` covers the world
+models and the model component's overrides ([WorldModels.md](WorldModels.md)), `tests/WorldSpriteTests.c` the world
+sprites and the sprite component's overrides ([WorldSprites.md](WorldSprites.md)).

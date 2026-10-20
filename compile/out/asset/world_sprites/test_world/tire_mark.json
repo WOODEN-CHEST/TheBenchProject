@@ -1,0 +1,7 @@
+{
+    "name": "test_tire_mark",
+    "sprite_animation": "test_tire_mark",
+    "orientation": "fixed",
+    "alpha_mode": "blend",
+    "is_decal": true
+}

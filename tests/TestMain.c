@@ -28,6 +28,7 @@ int main(void)
     DataValueTests_Run(&Run);
     WorldTests_Run(&Run);
     WorldModelTests_Run(&Run);
+    WorldSpriteTests_Run(&Run);
     WorldHierarchyTests_Run(&Run);
     WorldTransformTests_Run(&Run);
     ObjectDataTests_Run(&Run);
