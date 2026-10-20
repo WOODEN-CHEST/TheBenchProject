@@ -23,7 +23,7 @@ non-default raylib configuration.
 | Library | Source | Version | Build |
 |---|---|---|---|
 | raylib | https://github.com/raysan5/raylib (local copy: `../raylib/6.0`) | commit `65abee1` (2026-07-04), reports `6.1-dev` | CMake, see below |
-| WRFramework | `../WRFramework` | commit `58c1e31d6a96799432b3b387e6484b7e0afec1d2` | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
+| WRFramework | `../WRFramework` | commit `8c9af0b06dd65e945f4fc33d92c822407af858cb` | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
 
 **What T09 changed in WRFramework** (at the owner's request; committed as `58c1e31`, the commit above, which
 `lib/libwr.a`, `include/wr/` and `agents/WRFramework.md` match):

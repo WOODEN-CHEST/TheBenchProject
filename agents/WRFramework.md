@@ -39,6 +39,8 @@ Headers go under `include/`, source files go under `source/`.
 The project is a custom library called WRFramework, it adds extra funcionality which raylib doesnt have, at least not fully.
 The library is split into modules, each one having a header file and each for a specific task.
 The modules are (in alphabetical order):
+- WRArena: A bump allocator for memory that dies together (per-frame scratch, per-level data): hands out memory of any size and alignment from large blocks and takes it back all at once (clear, or rewind to a marker). Can also back a GenericBuffer with arena memory.
+  - Functions: [construct options create default, construct, deconstruct, allocate, allocate zeroed, allocate array, allocate from next block, get marker, rewind to marker, clear, get used byte count, get capacity, get peak used byte count, create generic buffer]
 - WRArrayList: A generic array list.
   - Functions: [construct, ensure total capacity, reserve more capacity, get active buffer, deconstruct]
 - WRBinaryIO: Classes and streams for writing and reading binary data.
@@ -502,6 +504,11 @@ in usage converted to UTF-8.
   without counting it (the convention `StringBuilder`'s buffers use), so the result reads as a C string and the next
   append continues it. (They used to count the NUL, so anything appended after a number landed behind it.)
   `GenericBuffer_NullTerminate`, by contrast, appends a counted NUL.
+- **Arenas free all at once.** Memory from an `Arena` comes back only through `Arena_Clear` or `Arena_RewindToMarker`
+  (markers nest like a stack), so use arenas for memory that dies together (per-frame scratch, per-level data) and
+  `ObjectPool` or the heap for objects freed one at a time. `Arena_Clear` merges a grown arena's blocks into one, so a
+  frame arena stops allocating after warm-up. A buffer from `Arena_CreateGenericBuffer` lives in arena memory: never
+  `Memory_Free` its data, and it dies with the clear or rewind that frees its storage.
 
 
 ---
