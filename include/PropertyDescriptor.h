@@ -45,9 +45,9 @@ typedef struct DataMapStruct DataMap;
  * | Type        | In memory                   | JSON                                   | GHDF                          |
  * |-------------|-----------------------------|----------------------------------------|-------------------------------|
  * | Bool        | bool                        | true / false                           | Boolean                       |
- * | Int32       | int32_t                     | integer                                | Int32                         |
- * | UInt32      | uint32_t                    | integer                                | UInt32                        |
- * | UInt64      | uint64_t                    | integer (a string above INT64_MAX)     | UInt64                        |
+ * | Int32       | int32_t                     | integer                                | smallest signed type (*)      |
+ * | UInt32      | uint32_t                    | integer                                | smallest unsigned type (*)    |
+ * | UInt64      | uint64_t                    | integer (a string above INT64_MAX)     | smallest unsigned type (*)    |
  * | Float       | float                       | number                                 | Float                         |
  * | Double      | double                      | number                                 | Double                        |
  * | Angle       | float, radians              | number, DEGREES                        | Float, radians                |
@@ -59,9 +59,12 @@ typedef struct DataMapStruct DataMap;
  * | String      | unsigned char*, owned       | string, or null                        | String (absent when NULL)     |
  * | AssetName   | unsigned char*, owned       | string, or null                        | String (absent when NULL)     |
  * | Enum        | integer of 1, 2 or 4 bytes  | the entry's name, e.g. "near"          | EncodedInteger (the value)    |
- * | ObjectId    | uint64_t, 0 = none          | integer (a string above INT64_MAX)     | UInt64                        |
+ * | ObjectId    | uint64_t, 0 = none          | integer (a string above INT64_MAX)     | smallest unsigned type (*)    |
  * | Date        | int64_t day number          | "yyyy-mm-dd", e.g. "2026-10-18"        | EncodedInteger (the day number) |
  * | DataMap     | DataMap*, owned, NULL while empty | two keys: TagsKey ["key", ...] and Key {"key": value} | Compound array of entries |
+ *
+ * (*) Written in the smallest GHDF integer type that holds the value (a parent id of 12 is one UInt8 byte; GameGHDF.h);
+ * read from any GHDF integer type, fixed width or encoded, whose value fits the property's type.
  *
  * JSON readers accept every form the GameJSON parsers accept (colors also as arrays or {r, g, b, a} compounds,
  * vectors also as {x, y, z} compounds, numbers also as numeric strings). A RenderColor's tint alpha is not part of
@@ -709,11 +712,24 @@ Error Properties_Set(const PropertyTable* table, void* instance, const unsigned 
 
 // Functions: JSON.
 /**
+ * @brief Finds the persistent property a JSON key belongs to: the descriptor whose Key it is, or the data map whose
+ *        TagsKey it is.
+ *
+ * Exactly the keys Properties_ReadJSON reads; any other key (also the key of a property that is not persistent) is one
+ * it calls unknown. A loader that reads many instances can use it to report unknown keys its own way (once per name
+ * instead of once per read). A linear scan over the descriptors.
+ * @param table The table; must not be NULL.
+ * @param key The JSON key; NULL finds nothing.
+ * @returns The descriptor (inside @p table), or NULL when the reader would call the key unknown.
+ */
+const PropertyDescriptor* PropertyTable_FindByJSONKey(const PropertyTable* table, const unsigned char* key);
+
+/**
  * @brief Writes an instance's persistent properties into a JSON compound, in table order.
  *
  * Validates the instance first, so invalid data is never written. By default values equal to their default are left
- * out (see PropertyWriteOptions). Keys already in @p compound with a property's key are overwritten; other keys stay.
- * WRJSON compounds are hash maps, so the serialized key order is the map's, not the table's.
+ * out (see PropertyWriteOptions). Keys already in @p compound with a property's key are overwritten in place; other keys
+ * stay. WRJSON compounds keep insertion order, so the new keys come out in table order, after the keys already there.
  * @param table The table; must not be NULL.
  * @param instance The instance; must not be NULL.
  * @param pool The pool owning @p compound, which every written value is borrowed from; must not be NULL.

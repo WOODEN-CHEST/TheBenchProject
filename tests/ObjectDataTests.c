@@ -1472,7 +1472,8 @@ static void ValuesFromTheSameDataAreCopiedFirst(TestRun* run)
 }
 
 
-/* The JSON example of agents/ObjectData.md, which must keep reading (and writing back unchanged). */
+/* The tags and data example T24 documented (references/world_structure.md has it now, in a world file), which must
+ * keep reading (and writing back unchanged). */
 static const char* const DocumentedExample =
     "{\"name\": \"street lamp\", \"tags\": [\"game:office\", \"town:street_lamp\"], \"data\": {"
     "\"town:visits\": 3, \"town:owner\": \"Bob\", \"town:rate\": 1.5, \"town:full\": 2.0, "

@@ -6,6 +6,14 @@
 #include "WRUserData.h"
 
 
+// Macros.
+/**
+ * @brief The most bytes of objects one section holds once the pool has grown: sections double from the requested
+ *        capacity up to this (1 MiB), or stay at the requested capacity when that alone is larger.
+ */
+#define OBJECT_POOL_MAX_SECTION_BYTES ((size_t)1048576)
+
+
 // Types.
 /**
  * @brief Caller-supplied hook invoked at a single point in a pooled object's lifecycle.
@@ -66,12 +74,15 @@ typedef struct ObjectPoolLifecycleStruct
  *
  * Hands out raw storage slots of a fixed elementSize. Borrow a slot with
  * ObjectPool_GetNewObject and return it with ObjectPool_DisposeObject; returned slots are reused
- * by later borrows instead of being freed. Storage grows in fixed-capacity sections as needed and
- * is never shrunk until the pool is cleared or deconstructed. Object pointers handed out remain
- * stable for the lifetime of the pool (sections are not relocated), so a borrowed pointer stays
- * valid until the object is returned. Initialize with one of the ObjectPool_Construct functions
- * and release with ObjectPool_Deconstruct. Not thread-safe; external synchronization is required
- * for concurrent use.
+ * by later borrows instead of being freed. Storage grows in sections as needed and is never shrunk
+ * until the pool is deconstructed: the first section holds sectionCapacity objects and each later
+ * one twice as many as the one before, up to OBJECT_POOL_MAX_SECTION_BYTES of objects (or
+ * sectionCapacity objects, if that is more), so a large pool has few sections. Borrowing takes O(1)
+ * (the pool keeps the sections with a free slot at hand) and returning O(log sections) (it finds an
+ * object's section by address). Object pointers handed out remain stable for the lifetime of the
+ * pool (sections are not relocated), so a borrowed pointer stays valid until the object is returned.
+ * Initialize with one of the ObjectPool_Construct functions and release with ObjectPool_Deconstruct.
+ * Not thread-safe; external synchronization is required for concurrent use.
  */
 typedef struct ObjectPoolStruct
 {
@@ -79,9 +90,14 @@ typedef struct ObjectPoolStruct
     GenericBuffer _sections;
     /** @brief Size in bytes of each pooled object. Fixed at construction; must be greater than zero. */
     size_t _elementSize;
-    size_t _sectionCapacity; // Object count per section.
-    /** @brief Section index where the next borrow begins its search for a free slot; a placement hint, not a correctness invariant. */
-    size_t _nextSectionSearchIndex;
+    /** @brief The number of objects the first section holds; later sections double it, up to OBJECT_POOL_MAX_SECTION_BYTES. */
+    size_t _sectionCapacity;
+    /** @brief Indices (size_t) of the sections that have a slot to hand out, each at most once: borrows take from the
+     *  last, returns add a section that had none. */
+    GenericBuffer _availableSections;
+    /** @brief Indices (size_t) of every section, ordered by the address of its objects, so a returned object's section
+     *  is found by binary search. */
+    GenericBuffer _sectionsByAddress;
     /** @brief The lifecycle callback set (and their NULL/default behavior) configured for this pool. */
     ObjectPoolLifecycle _lifecycle;
     /** @brief Fixed 128-byte caller context passed (as a const pointer) to every lifecycle callback. */
@@ -100,8 +116,9 @@ typedef struct ObjectPoolStruct
  * @param self The pool to initialize. Must not be NULL; must later be released with
  *        ObjectPool_Deconstruct.
  * @param elementSize Size in bytes of each pooled object. Must be greater than zero.
- * @param sectionCapacity Number of objects per allocated section (the growth granularity). Must be
- *        greater than zero.
+ * @param sectionCapacity Number of objects the first section holds; each later section holds twice
+ *        as many as the one before, up to OBJECT_POOL_MAX_SECTION_BYTES of objects (or this many,
+ *        if that is more). Must be greater than zero.
  * @returns A success Error on success. Raises ErrorCode_IllegalArgument if @p self is NULL, and
  *          ErrorCode_ArgumentOutOfRange if @p elementSize or @p sectionCapacity is zero.
  */
@@ -118,8 +135,9 @@ Error ObjectPool_Construct1(ObjectPool* self, size_t elementSize, size_t section
  * ObjectPool_Deconstruct.
  * @param self The pool to initialize. Must not be NULL.
  * @param elementSize Size in bytes of each pooled object. Must be greater than zero.
- * @param sectionCapacity Number of objects per allocated section (the growth granularity). Must be
- *        greater than zero.
+ * @param sectionCapacity Number of objects the first section holds; each later section holds twice
+ *        as many as the one before, up to OBJECT_POOL_MAX_SECTION_BYTES of objects (or this many,
+ *        if that is more). Must be greater than zero.
  * @param lifecycle The lifecycle callback set. Any slot may be NULL for default behavior; the whole
  *        struct may be zero-initialized. Copied by value.
  * @param userData Caller context (128 bytes) handed as a const pointer to every callback, or NULL
@@ -163,11 +181,13 @@ static inline size_t ObjectPool_GetElementSize(ObjectPool* self)
 }
 
 /**
- * @brief Returns the per-section capacity (objects per section) the pool was constructed with.
+ * @brief Returns the section capacity the pool was constructed with: the number of objects its first
+ *        section holds.
  *
- * This is the granularity by which the pool grows, not a cap on total objects.
+ * Later sections double it, up to OBJECT_POOL_MAX_SECTION_BYTES of objects (or this capacity, if
+ * that is more), so it is the pool's smallest growth step, not a cap on total objects.
  * @param self The pool to query. Must not be NULL.
- * @returns The number of objects each section holds.
+ * @returns The number of objects the first section holds.
  */
 static inline size_t ObjectPool_GetSectionCapacity(ObjectPool* self)
 {

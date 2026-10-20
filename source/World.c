@@ -3,6 +3,8 @@
 #include "wr/WRCompile.h"
 #include "wr/WRHash.h"
 #include "wr/WRMemory.h"
+#include "wr/WRString.h"
+#include <inttypes.h>
 
 
 // Macros.
@@ -399,7 +401,7 @@ Error World_CreateObject(World* self, const unsigned char* name, WorldObject** o
     Error Result = StoreNewObject(self, name, Id, outObject);
     if (Result.Code == ErrorCode_Success)
     {
-        self->_nextId = Id + 1; // 0 after UINT64_MAX: every id is used
+        self->_nextId = (Id == WORLD_OBJECT_ID_MAX) ? 0U : (Id + 1U); // 0: every id is used
     }
     return Result;
 }
@@ -416,6 +418,11 @@ Error World_CreateObjectWithId(World* self, const unsigned char* name, uint64_t 
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "World_CreateObjectWithId: id must not be 0.");
     }
+    if (id > WORLD_OBJECT_ID_MAX)
+    {
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange,
+            "World_CreateObjectWithId: id must be at most %" PRIu64 " (WORLD_OBJECT_ID_MAX).", WORLD_OBJECT_ID_MAX);
+    }
     if (FindObject(self, id) != NULL)
     {
         return Error_Construct2(ErrorCode_InvalidOperation, "World_CreateObjectWithId: id is already in use.");
@@ -424,7 +431,7 @@ Error World_CreateObjectWithId(World* self, const unsigned char* name, uint64_t 
     Error Result = StoreNewObject(self, name, id, outObject);
     if ((Result.Code == ErrorCode_Success) && (self->_nextId != 0) && (id >= self->_nextId))
     {
-        self->_nextId = id + 1; // 0 after UINT64_MAX: every id is used
+        self->_nextId = (id == WORLD_OBJECT_ID_MAX) ? 0U : (id + 1U); // 0: every id is used
     }
     return Result;
 }
@@ -522,7 +529,7 @@ size_t World_GetObjectCount(const World* self)
     return self->_objects._count;
 }
 
-Error World_GetObjectByIndex(World* self, size_t index, WorldObject** outObject)
+Error World_GetObjectByIndex(const World* self, size_t index, WorldObject** outObject)
 {
     if ((self == NULL) || (outObject == NULL))
     {
@@ -534,7 +541,7 @@ Error World_GetObjectByIndex(World* self, size_t index, WorldObject** outObject)
         return Error_Construct2(ErrorCode_IndexOutOfBounds, "World_GetObjectByIndex: index out of range.");
     }
 
-    GenericBuffer_GetAt(&self->_objects, index, outObject);
+    *outObject = ((WorldObject* const*)self->_objects._data)[index];
     return Error_CreateSuccess();
 }
 
@@ -694,6 +701,11 @@ void World_EnsureNextObjectIdAtLeast(World* self, uint64_t minimumNext)
     {
         return;
     }
+    if (minimumNext > WORLD_OBJECT_ID_MAX)
+    {
+        self->_nextId = 0U; // No id is that large: every id is used.
+        return;
+    }
     if (minimumNext > self->_nextId)
     {
         self->_nextId = minimumNext;
@@ -705,6 +717,11 @@ Error World_SetName(World* self, const unsigned char* name)
     if (self == NULL)
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "World_SetName: self must not be NULL.");
+    }
+    if ((name != NULL) && ((StringUTF8_GetByteLength(name) > WORLD_NAME_MAX_LENGTH) || !StringUTF8_IsEncodingValid(name)))
+    {
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange,
+            "A world name must be valid UTF-8 of at most %zu bytes.", WORLD_NAME_MAX_LENGTH);
     }
 
     unsigned char* Clone = WorldInternal_CloneString(name);

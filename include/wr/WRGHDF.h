@@ -30,6 +30,40 @@
  */
 #define GHDF_MAX_NESTING_DEPTH ((size_t)512)
 
+/**
+ * @brief Maximum byte length of a string GHDF_Read accepts (1 GiB).
+ *
+ * GHDF_Read refuses a string declaring more bytes with ErrorCode_Deserialize before reading or allocating anything for
+ * it. Below the limit memory still only grows with the bytes that actually arrive: a declared length beyond what a
+ * seekable stream has left is refused at once, and a stream that cannot tell its size is read in chunks, so a short
+ * document declaring a huge string fails with "unexpected end" instead of reserving the declared size.
+ */
+#define GHDF_MAX_STRING_LENGTH ((uint64_t)1 << 30)
+
+/**
+ * @brief The bytes GHDF_ReadWithLimits charges for each compound it builds: the compound with its empty map, and the
+ *        map's first allocation when the first entry goes in (see GHDFReadLimits).
+ */
+#define GHDF_READ_COMPOUND_BYTES ((size_t)1200)
+
+/**
+ * @brief The bytes GHDF_ReadWithLimits charges for each array it builds, before its elements (each element is charged
+ *        its storage: 1 to 8 bytes by type, a pointer for strings and compounds; see GHDFReadLimits).
+ */
+#define GHDF_READ_ARRAY_BYTES ((size_t)288)
+
+/**
+ * @brief The bytes GHDF_ReadWithLimits charges for each compound entry: the map entry holding its id, type and value
+ *        (see GHDFReadLimits).
+ */
+#define GHDF_READ_ENTRY_BYTES ((size_t)128)
+
+/**
+ * @brief The bytes GHDF_ReadWithLimits charges for each string besides twice its length: the pooled buffer and its
+ *        allocation (see GHDFReadLimits).
+ */
+#define GHDF_READ_STRING_BYTES ((size_t)144)
+
 
 // Types.
 /**
@@ -183,6 +217,28 @@ typedef struct GHDFArrayIndexedValueStruct
     /** The element's value, typed as the array's element type. */
     GHDFObjectValue Value;
 } GHDFArrayIndexedValue;
+
+/**
+ * @brief Limits on what GHDF_ReadWithLimits builds from one document, for data that may be hostile.
+ *
+ * A document's length bounds its read size only loosely: an empty compound in an array of compounds is one byte of
+ * data and takes about 800 bytes of memory, so a few megabytes of them would take gigabytes once read (and running out
+ * of memory aborts the program). The limits refuse such a document while it is read, before that memory is taken.
+ */
+typedef struct GHDFReadLimitsStruct
+{
+    /**
+     * @brief The most bytes of memory the read tree may take, as the reader estimates it while building the tree.
+     *
+     * The estimate charges each compound (the root too) GHDF_READ_COMPOUND_BYTES, each compound entry
+     * GHDF_READ_ENTRY_BYTES, each array GHDF_READ_ARRAY_BYTES plus its elements' storage, and each string
+     * GHDF_READ_STRING_BYTES plus twice its length (its buffer grows in powers of two). That is at or a little above
+     * what each takes on a 64-bit build, measured with the pool's bookkeeping (less on a 32-bit build). Not counted:
+     * the pool's spare capacity, which grows in sections ahead of use (at most one section per kind of value, up to
+     * OBJECT_POOL_MAX_SECTION_BYTES each). Must be greater than zero.
+     */
+    size_t MaxTreeByteCount;
+} GHDFReadLimits;
 
 
 // Functions.
@@ -387,7 +443,9 @@ Error GHDF_Write(const GHDFCompound* root, IOStream* stream);
  * everything. The stream is read from its current position and is not closed. Compounds and arrays may
  * nest at most GHDF_MAX_NESTING_DEPTH levels deep (the root compound is level 1 and every nested compound
  * or array adds one); a deeper container is rejected before its contents are read, so the reader's
- * recursion and stack use stay bounded.
+ * recursion and stack use stay bounded. A string may declare at most GHDF_MAX_STRING_LENGTH bytes, and nothing is
+ * reserved for more bytes than the data holds: a declared length beyond what a seekable stream has left is refused,
+ * and other streams are read in chunks, so hostile input cannot make the reader allocate what it does not contain.
  *
  * On any failure *outRoot is set to NULL and any partially built tree is returned to the pool, so
  * the caller never owns anything after an error.
@@ -397,13 +455,37 @@ Error GHDF_Write(const GHDFCompound* root, IOStream* stream);
  *        be NULL.
  * @returns Success with *outRoot set. Raises ErrorCode_IllegalArgument if any argument is NULL;
  *          ErrorCode_Deserialize if the signature is wrong, the version is unsupported, a type byte
- *          is invalid, a declared length exceeds the platform range, or compounds/arrays nest deeper
- *          than GHDF_MAX_NESTING_DEPTH (root compound = depth 1). If finalizing the underlying binary
+ *          is invalid, a declared length exceeds the platform range, a string declares more than
+ *          GHDF_MAX_STRING_LENGTH bytes or more than a seekable stream has left, the data ends early, or
+ *          compounds/arrays nest deeper than GHDF_MAX_NESTING_DEPTH (root compound = depth 1). If finalizing the
+ *          underlying binary
  *          stream fails, that cleanup error is returned in preference to any read error.
  * @note May propagate errors from internal calls; consult the documentation of called functions for
  *       the full set.
  */
 Error GHDF_Read(IOStream* stream, GHDFObjectPool* objectPool, GHDFCompound** outRoot);
+
+/**
+ * @brief Read a complete GHDF document like GHDF_Read, refusing it when the tree it builds would take more memory than
+ *        @p limits allow.
+ *
+ * For data from outside the program (downloads, files other people made): GHDF_Read's nesting and string limits bound
+ * the reader's stack and each string, and this also bounds the memory the whole tree takes (see GHDFReadLimits). The
+ * estimate is charged as each value is about to be built, so a refused document never builds past the limit, and the
+ * partial tree is returned to the pool as with any other failure. Everything else is as GHDF_Read.
+ * @param stream Source byte stream positioned at the document start. Must not be NULL.
+ * @param objectPool Pool from which all reconstructed objects are borrowed. Must not be NULL.
+ * @param limits The limits to apply; MaxTreeByteCount must be greater than zero. Must not be NULL.
+ * @param outRoot [out] Receives the borrowed root compound on success, or NULL on failure. Must not be NULL.
+ * @returns As GHDF_Read; also ErrorCode_Deserialize when the tree would take more than limits->MaxTreeByteCount bytes.
+ *          Raises ErrorCode_IllegalArgument if @p limits is NULL, and ErrorCode_ArgumentOutOfRange if its
+ *          MaxTreeByteCount is zero.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error GHDF_ReadWithLimits(IOStream* stream,
+    GHDFObjectPool* objectPool,
+    const GHDFReadLimits* limits,
+    GHDFCompound** outRoot);
 
 /**
  * @brief Remove all entries from a compound, releasing each entry's borrowed sub-resources.
@@ -732,7 +814,10 @@ Error GHDFObjectPool_Create(GHDFObjectPool** outPool);
  *
  * Tears down the compound, array, and string sub-pools and frees the pool itself. After this call any
  * compound, array, or string previously borrowed from the pool is invalid and must not be used or
- * returned. Passing NULL is treated as an error rather than a silent no-op.
+ * returned. Compounds and arrays still borrowed out may hold values when the pool goes: each frees only its
+ * own storage, never what it holds, so the values from this pool are freed with their own slots and a value
+ * borrowed from another pool stays borrowed from that pool until that pool is deconstructed. Passing NULL is
+ * treated as an error rather than a silent no-op.
  * @param self The pool to destroy. Must not be NULL.
  * @returns Success once the pool is freed. Raises ErrorCode_IllegalArgument if self is NULL. If a
  *          sub-pool teardown fails the first such error is returned (the pool memory is still freed).

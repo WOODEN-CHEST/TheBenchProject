@@ -70,8 +70,8 @@ default passes its own rules**.
 | Type | In memory | JSON | GHDF |
 |---|---|---|---|
 | `Bool` | `bool` | `true` / `false` | Boolean |
-| `Int32` / `UInt32` | `int32_t` / `uint32_t` | integer | Int32 / UInt32 |
-| `UInt64` | `uint64_t` | integer, a decimal string above INT64_MAX | UInt64 |
+| `Int32` / `UInt32` | `int32_t` / `uint32_t` | integer | the smallest integer type that holds the value |
+| `UInt64` | `uint64_t` | integer, a decimal string above INT64_MAX | the smallest integer type that holds the value |
 | `Float` | `float`, always finite | number (shortest text that reads back) | Float |
 | `Double` | `double`, always finite | number (shortest text that reads back) | Double |
 | `Angle` | `float`, **radians** | number, **degrees** (shortest text that reads back to the same radians) | Float, radians |
@@ -82,9 +82,13 @@ default passes its own rules**.
 | `String` | owned `unsigned char*` | string or `null` | String (absent when NULL) |
 | `AssetName` | owned `unsigned char*`, `AssetManager_IsValidAssetName` | string or `null` | String (absent when NULL) |
 | `Enum` | integer of 1, 2 (unsigned) or 4 bytes | the entry's name, e.g. `"near"` | EncodedInteger (the value) |
-| `ObjectId` | `uint64_t`, 0 = none | like UInt64 | UInt64 |
+| `ObjectId` | `uint64_t`, 0 = none | like UInt64 | the smallest integer type that holds the value |
 | `Date` | `int64_t` day number ([GameCalendar.md](GameCalendar.md)), inside the calendar (years 1 to 9999) | `"yyyy-mm-dd"` only, e.g. `"2026-10-18"` | EncodedInteger (the day number; three bytes for this era) |
 | `DataMap` | owned `DataMap*` ([ObjectData.md](ObjectData.md)), NULL while empty (its only default) | two keys: the tags under the descriptor's `TagsKey` (`["town:lamp"]`), the values under its `Key` (`{"town:visits": 3}`) | Compound array of entry compounds |
+
+Since T09 the integer types are written in the smallest GHDF integer type that holds the value (a `parent` of 12 is one
+UInt8 byte) and read from any GHDF integer type, fixed width or encoded, whose value fits the property's type
+([GameGHDF.md](GameGHDF.md)); data written with wider types still reads. `Enum` and `Date` stay encoded integers.
 
 JSON readers go through `GameJSON` ([GameJSON.md](GameJSON.md)), so they accept every form asset definitions accept
 (colors as arrays or `{r,g,b,a}`, vectors as `{x,y,z}`, numbers as numeric strings); `Vector2` and `Vector3` arrays
@@ -108,7 +112,9 @@ A property without `Persistent` is runtime state the table still copies, compare
 ## Functions
 
 - **`PropertyTable_Check(table)`**, **`PropertyTable_FindByKey(table, key)`** (a linear scan; resolve once when
-  calling often), **`PropertyType_GetName(type)`**.
+  calling often), **`PropertyTable_FindByJSONKey(table, key)`** (the persistent row a JSON key belongs to, also a data
+  map's tags key: exactly the keys the JSON reader reads; the world files report unknown keys with it once per name),
+  **`PropertyType_GetName(type)`**.
 - **Lifecycle.** `Properties_Construct(table, instance)` zeroes `StructSize` bytes, then writes every default (strings
   cloned): call it on **new memory only** (it does not release what the instance held) and pair it with
   `Properties_Deconstruct`, which frees the owned strings (NULLing them; safe to repeat). Fields the table does not
@@ -127,7 +133,8 @@ A property without `Persistent` is runtime state the table still copies, compare
   (`InvalidOperation`). Build values with `PropertyValue_From*`.
 - **JSON.** `Properties_WriteJSON(table, instance, pool, compound, options)` validates first, then sets one key per
   persistent property; by default values equal to their default are left out (`PropertyWriteOptions.
-  AreDefaultsWritten` writes them all). `Properties_ReadJSON(table, compound, instance, options)`:
+  AreDefaultsWritten` writes them all). Since T09 WRJSON compounds keep insertion order, so the keys are serialized in
+  table order and a new key moves no other. `Properties_ReadJSON(table, compound, instance, options)`:
   - **All or nothing**: it reads into a scratch copy (on the stack up to 1 KiB of struct, a heap block above),
     validates it, then commits. On any failure the instance is unchanged.
   - Every persistent property comes from its key or **gets its default when the key is absent**; non-persistent
@@ -175,9 +182,6 @@ and here, and test it in `tests/PropertyDescriptorTests.c` (the test record has 
 
 ## Known limits
 
-- **JSON key order.** WRJSON compounds are hash maps and `JSON_Serialize` writes them in bucket order, so files are
-  written in a stable but not table order, and adding a key can reorder others. Diff-friendly files in table order
-  need an insertion-ordered compound (or a sorted-keys serialize flag) in WRFramework.
 - No cross-field rules (each property is checked on its own) and no bounds on `UInt64`.
 - Tables are flat: no nested property tables. The one nested value, a `DataMap`, limits its own depth (16 levels, its
   codec; [ObjectData.md](ObjectData.md)); any later nested type needs a limit too (AGENTS.md rule 5).

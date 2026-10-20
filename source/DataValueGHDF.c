@@ -4,6 +4,7 @@
 #include <float.h>
 #include <stdio.h>
 #include "DataValueInternal.h"
+#include "GameGHDF.h"
 #include "GameCalendar.h"
 #include "wr/WRMath.h"
 #include "wr/WRMemory.h"
@@ -38,144 +39,6 @@ typedef struct GHDFReadStruct
     /* The bytes the value may still count, or NULL for no budget. */
     DataBudget* Budget;
 } GHDFRead;
-
-
-// Static functions: integers.
-static bool IsInt8(int64_t value)
-{
-    return (value >= INT8_MIN) && (value <= INT8_MAX);
-}
-
-static bool IsInt16(int64_t value)
-{
-    return (value >= INT16_MIN) && (value <= INT16_MAX);
-}
-
-static bool IsInt32(int64_t value)
-{
-    return (value >= INT32_MIN) && (value <= INT32_MAX);
-}
-
-/* The smallest signed type that holds every value in [minimum, maximum]. */
-static GHDFValueType GetSignedType(int64_t minimum, int64_t maximum)
-{
-    if (IsInt8(minimum) && IsInt8(maximum))
-    {
-        return GHDFValueType_Int8;
-    }
-    if (IsInt16(minimum) && IsInt16(maximum))
-    {
-        return GHDFValueType_Int16;
-    }
-    return (IsInt32(minimum) && IsInt32(maximum)) ? GHDFValueType_Int32 : GHDFValueType_Int64;
-}
-
-/* The smallest unsigned type that holds @p maximum. */
-static GHDFValueType GetUnsignedType(uint64_t maximum)
-{
-    if (maximum <= UINT8_MAX)
-    {
-        return GHDFValueType_UInt8;
-    }
-    if (maximum <= UINT16_MAX)
-    {
-        return GHDFValueType_UInt16;
-    }
-    return (maximum <= UINT32_MAX) ? GHDFValueType_UInt32 : GHDFValueType_UInt64;
-}
-
-/* @p value as a GHDF value of @p type (one GetSignedType chose for it). */
-static GHDFObjectValue MakeSigned(GHDFValueType type, int64_t value)
-{
-    switch (type)
-    {
-        case GHDFValueType_Int8:
-            return GHDFObjectValue_CreateInt8((int8_t)value);
-        case GHDFValueType_Int16:
-            return GHDFObjectValue_CreateInt16((int16_t)value);
-        case GHDFValueType_Int32:
-            return GHDFObjectValue_CreateInt32((int32_t)value);
-        default:
-            return GHDFObjectValue_CreateInt64(value);
-    }
-}
-
-/* @p value as a GHDF value of @p type (one GetUnsignedType chose for it). */
-static GHDFObjectValue MakeUnsigned(GHDFValueType type, uint64_t value)
-{
-    switch (type)
-    {
-        case GHDFValueType_UInt8:
-            return GHDFObjectValue_CreateUInt8((uint8_t)value);
-        case GHDFValueType_UInt16:
-            return GHDFObjectValue_CreateUInt16((uint16_t)value);
-        case GHDFValueType_UInt32:
-            return GHDFObjectValue_CreateUInt32((uint32_t)value);
-        default:
-            return GHDFObjectValue_CreateUInt64(value);
-    }
-}
-
-static bool IsIntegerType(GHDFValueType type)
-{
-    return (type == GHDFValueType_UInt8) || (type == GHDFValueType_Int8) || (type == GHDFValueType_Int16)
-        || (type == GHDFValueType_UInt16) || (type == GHDFValueType_Int32) || (type == GHDFValueType_UInt32)
-        || (type == GHDFValueType_Int64) || (type == GHDFValueType_UInt64) || (type == GHDFValueType_EncodedInteger);
-}
-
-/* Any integer value as an int64; false for a UInt64 above INT64_MAX or another type. */
-static bool TryGetSigned(const GHDFObjectValue* value, int64_t* outValue)
-{
-    switch (value->Type)
-    {
-        case GHDFValueType_UInt8:
-            *outValue = (int64_t)value->Value.UInt8;
-            return true;
-        case GHDFValueType_Int8:
-            *outValue = (int64_t)value->Value.Int8;
-            return true;
-        case GHDFValueType_Int16:
-            *outValue = (int64_t)value->Value.Int16;
-            return true;
-        case GHDFValueType_UInt16:
-            *outValue = (int64_t)value->Value.UInt16;
-            return true;
-        case GHDFValueType_Int32:
-            *outValue = (int64_t)value->Value.Int32;
-            return true;
-        case GHDFValueType_UInt32:
-            *outValue = (int64_t)value->Value.UInt32;
-            return true;
-        case GHDFValueType_Int64:
-            *outValue = value->Value.Int64;
-            return true;
-        case GHDFValueType_UInt64:
-            *outValue = (int64_t)value->Value.UInt64;
-            return value->Value.UInt64 <= (uint64_t)INT64_MAX;
-        case GHDFValueType_EncodedInteger:
-            *outValue = value->Value.EncodedInteger;
-            return true;
-        default:
-            return false;
-    }
-}
-
-/* Any integer value as a uint64; false for a negative one or another type. */
-static bool TryGetUnsigned(const GHDFObjectValue* value, uint64_t* outValue)
-{
-    if (value->Type == GHDFValueType_UInt64)
-    {
-        *outValue = value->Value.UInt64;
-        return true;
-    }
-    int64_t Signed = 0;
-    if (!TryGetSigned(value, &Signed) || (Signed < 0))
-    {
-        return false;
-    }
-    *outValue = (uint64_t)Signed;
-    return true;
-}
 
 
 // Static functions: writing.
@@ -258,7 +121,7 @@ static GHDFValueType GetIntListType(const DataValue* list)
         Minimum = (Value < Minimum) ? Value : Minimum;
         Maximum = (Value > Maximum) ? Value : Maximum;
     }
-    return GetSignedType(Minimum, Maximum);
+    return GameGHDF_GetSmallestSignedType(Minimum, Maximum);
 }
 
 /* The smallest unsigned type that holds every element of an object list. */
@@ -270,7 +133,7 @@ static GHDFValueType GetObjectListType(const DataValue* list)
         uint64_t Value = DataValue_GetListElement(list, Index)->ObjectValue;
         Maximum = (Value > Maximum) ? Value : Maximum;
     }
-    return GetUnsignedType(Maximum);
+    return GameGHDF_GetSmallestUnsignedType(Maximum);
 }
 
 /* Float when every element of a float list is exactly a float, Double otherwise. */
@@ -329,14 +192,14 @@ static Error AddListElement(const DataValue* element, const KeyRegistry* keys, G
             Value = GHDFObjectValue_CreateBoolean(element->BoolValue);
             break;
         case DataType_Int:
-            Value = MakeSigned(arrayType, element->IntValue);
+            Value = GameGHDF_CreateSigned(arrayType, element->IntValue);
             break;
         case DataType_Float:
             Value = (arrayType == GHDFValueType_Float) ? GHDFObjectValue_CreateFloat((float)element->FloatValue)
                 : GHDFObjectValue_CreateDouble(element->FloatValue);
             break;
         case DataType_Object:
-            Value = MakeUnsigned(arrayType, element->ObjectValue);
+            Value = GameGHDF_CreateUnsigned(arrayType, element->ObjectValue);
             break;
         case DataType_DateTime:
             Value = GHDFObjectValue_CreateInt64(element->DateTimeValue);
@@ -647,7 +510,7 @@ static Error ReadScalar(const GHDFRead* read, DataType type, const GHDFObjectVal
             return Error_CreateSuccess();
         case DataType_Int:
             *outValue = DataValue_FromInt(0);
-            return TryGetSigned(value, &outValue->IntValue) ? Error_CreateSuccess()
+            return GameGHDF_TryGetSigned(value, &outValue->IntValue) ? Error_CreateSuccess()
                 : PathError(read, "an int must be an integer that fits 64 signed bits");
         case DataType_Float:
             if ((value->Type != GHDFValueType_Float) && (value->Type != GHDFValueType_Double))
@@ -664,11 +527,11 @@ static Error ReadScalar(const GHDFRead* read, DataType type, const GHDFObjectVal
             return ReadKey(read, value, outValue);
         case DataType_Object:
             *outValue = DataValue_FromObject(0U);
-            return TryGetUnsigned(value, &outValue->ObjectValue) ? Error_CreateSuccess()
+            return GameGHDF_TryGetUnsigned(value, &outValue->ObjectValue) ? Error_CreateSuccess()
                 : PathError(read, "an object must be a non-negative integer");
         case DataType_DateTime:
             *outValue = DataValue_FromDateTime(0);
-            return (TryGetSigned(value, &outValue->DateTimeValue) && GameCalendar_IsDateTimeValid(outValue->DateTimeValue))
+            return (GameGHDF_TryGetSigned(value, &outValue->DateTimeValue) && GameCalendar_IsDateTimeValid(outValue->DateTimeValue))
                 ? Error_CreateSuccess() : PathError(read, "a date_time must be an integer inside the calendar");
         case DataType_Tag:
         case DataType_Vector3:
@@ -725,7 +588,7 @@ static bool DoesArrayFit(DataType elementType, GHDFValueType arrayType, size_t* 
         case DataType_Int:
         case DataType_Object:
         case DataType_DateTime:
-            return IsIntegerType(arrayType);
+            return GameGHDF_IsIntegerType(arrayType);
         case DataType_Float:
             return (arrayType == GHDFValueType_Float) || (arrayType == GHDFValueType_Double);
         case DataType_String:
@@ -1053,7 +916,7 @@ Error DataValueInternal_WriteGHDF(const DataValue* value, const KeyRegistry* key
             return PutScalar(compound, DATA_GHDF_VALUE, GHDFObjectValue_CreateBoolean(value->BoolValue));
         case DataType_Int:
             return PutScalar(compound, DATA_GHDF_VALUE,
-                MakeSigned(GetSignedType(value->IntValue, value->IntValue), value->IntValue));
+                GameGHDF_CreateSigned(GameGHDF_GetSmallestSignedType(value->IntValue, value->IntValue), value->IntValue));
         case DataType_Float:
             return PutScalar(compound, DATA_GHDF_VALUE, IsExactFloat(value->FloatValue)
                 ? GHDFObjectValue_CreateFloat((float)value->FloatValue) : GHDFObjectValue_CreateDouble(value->FloatValue));
@@ -1064,7 +927,7 @@ Error DataValueInternal_WriteGHDF(const DataValue* value, const KeyRegistry* key
                 KeyRegistry_GetText(keys, value->KeyValue));
         case DataType_Object:
             return PutScalar(compound, DATA_GHDF_VALUE,
-                MakeUnsigned(GetUnsignedType(value->ObjectValue), value->ObjectValue));
+                GameGHDF_CreateUnsigned(GameGHDF_GetSmallestUnsignedType(value->ObjectValue), value->ObjectValue));
         case DataType_DateTime:
             return PutScalar(compound, DATA_GHDF_VALUE, GHDFObjectValue_CreateInt64(value->DateTimeValue));
         case DataType_Vector3:

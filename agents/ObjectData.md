@@ -155,44 +155,21 @@ index, the limits and the revision); world files and copies still fill it. Readi
 `PropertyReadOptions.Keys`, and `DefaultNamespace` for keys written without one (the story's or pack's id; `tbp` when
 NULL).
 
-### JSON (until T09 writes `references/world_structure.md`, this is the reference)
+### JSON
 
-```json
-{
-    "name": "street lamp",
-    "tags": ["game:office", "town:street_lamp"],
-    "data": {
-        "town:visits": 3,
-        "town:owner": "Bob",
-        "town:rate": 1.5,
-        "town:full": 2.0,
-        "town:open": true,
-        "town:kind": {"$key": "town:desk"},
-        "town:switch": {"$object": 12},
-        "town:spawn": {"$vector3": [1, 2, 3]},
-        "town:shade": {"$color": "#ffcc00"},
-        "town:opened": {"$date_time": "2026-10-18T09:30:00"},
-        "town:inventory": ["pen", "stamp"],
-        "town:visitors": {"$list": "string"},
-        "town:delivery": {"$type": "town:delivery", "form": {"$key": "town:tax_form"}, "days": 3}
-    }
-}
-```
+The full reference, with an example a test reads from the file, is `references/world_structure.md` ("Tags and data";
+T09 moved it there from here). In short:
 
 - **Tags** are a list of keys under `tags`; everything else is a map of key -> value under `data`. A key may leave out
   its namespace (`"office"` reads as `tbp:office`, or in the reader's default namespace); the writer always writes
-  the full key. The writer lists the tags in alphabetical order; `data`'s order is WRJSON's (hash order).
+  the full key. The writer lists both in alphabetical order of their keys (WRJSON keeps insertion order since T09, and
+  `DataMap_WriteJSON` inserts them sorted by text).
 - **Plain JSON types map directly:** an integer is an `int`, a number with a fraction or an exponent (`1.5`, `2.0`,
   `3e2`) a `float`, then string, bool, an array a list (all elements of its first element's type), an object a
   compound. `null` is refused (leave the entry out).
-- **Wrappers** (an object with exactly one entry whose name starts with `$`): `$key`, `$object`, `$vector3`, `$color`
-  (any colour form GameJSON reads; written as `"#rrggbb"`, `"#rrggbbaa"` when not opaque), `$date_time`
-  (`"yyyy-mm-ddThh:mm:ss"`, up to six fractional digits), `$float`, and `$list` for an **empty list**, which names its
+- **Wrappers** (an object with exactly one entry whose name starts with `$`): `$key`, `$object`, `$vector3`, `$color`,
+  `$date_time`, `$float` (read only: whole floats are written `2.0`), and `$list` for an **empty list**, which names its
   element type (`[]` is refused: its element type would be unknown).
-- **Whole floats keep their fraction.** WRJSON keeps integers and fractions apart when reading, and since
-  2026-10-19 its writer keeps a whole real number's fraction too (`JSON_Serialize` writes `2.0`, not `2`), so a float
-  is always written plain. `{"$float": 2}` still reads as a float, for files from tools that drop the `.0`; the
-  writer never uses it.
 - **Compounds**: names are any 1-256 bytes of UTF-8 not starting with `$`; `$type`, when present, is the key's text.
 - **Errors** say where, prefixed with the table: `world_object: data.town:inventory[2]: the element's type is string,
   but the list holds int values (its first element's type).`, `world_object: tags[1]: Namespaced key "Town:B":
@@ -207,7 +184,11 @@ of UInt8/16/32/64; vector3 as a Float array of 3; color as a UInt8 array of 4; d
 of its elements (the smallest integer type for all of an int list, Float or Double for floats, 3 floats per vector3, 4
 bytes per color, Int64 per date_time, a Compound array of value compounds for lists and compounds); a compound as a
 Compound array of entry compounds with names. Readers accept any integer type that holds the value, skip unknown
-entry ids (forward compatibility), require full keys, and refuse duplicates.
+entry ids (forward compatibility), require full keys, and refuse duplicates. The integer helpers are shared with the
+property tables and the world files ([GameGHDF.md](GameGHDF.md)).
+
+**World files** ([WorldFile.md](WorldFile.md)) save and load the data with the rest of each object, and refuse a world
+whose objects' data together passes `WORLD_DATA_MAX_BYTES`, checked after each object.
 
 ### Hostile content
 
@@ -225,10 +206,10 @@ registry: the readers (`DataValue_ReadJSON`/`ReadGHDF`, `DataMap_ReadJSON`/`Read
 (`KeyRegistry_TruncateTo`), so content cannot fill the registry by being refused again and again.
 
 The world's 16 MiB cannot be checked by the generic table code (it does not see the world while it reads one object):
-it is counted, logged once when passed, and **a world loader (T09) must refuse a world whose `World_GetDataByteSize`
-passes `WORLD_DATA_MAX_BYTES` after reading its objects**. Refusing a whole world after some objects were read, the
-loader must do the same as the readers: destroy what it built, then truncate the registry to the count it took before
-reading. The key registry has its own cap (2^20 keys).
+it is counted, logged once when passed, and the world loader ([WorldFile.md](WorldFile.md)) refuses a world whose
+`World_GetDataByteSize` passes `WORLD_DATA_MAX_BYTES`, checked after each object it reads. Refusing a whole world after
+some objects were read, the loader does the same as the readers: it destroys what it built, then truncates the registry
+to the count it took before reading. The key registry has its own cap (2^20 keys).
 
 ### Authored and runtime data
 

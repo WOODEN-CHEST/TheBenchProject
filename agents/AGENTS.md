@@ -28,6 +28,8 @@ The references/ directory contains various reference files for various things. I
 * asset_structure.md - A file which describes the JSON asset structure that assets must have.
 * text_component_structure.md - The JSON structure of text components.
 * controls_structure.md - The JSON structure of the player's controls file (action bindings).
+* world_structure.md - The structure of world files: JSON (authored worlds) and GHDF (saves, the network), their
+  loading rules and what the writer writes.
 
 BUILDING.md (repository root) records the exact raylib and WRFramework versions and the required raylib
 configuration: raylib is built with SUPPORT_CUSTOM_FRAME_CONTROL, so EndDrawing neither swaps buffers nor polls
@@ -112,10 +114,17 @@ Current module list:
     its components load under; object-set and component-set versions. The hierarchy (source/WorldHierarchy.c):
     World_SetParent (no cycles, at most 64 levels, optionally keeping the world placement), children in attach order,
     cached world matrices marked dirty down a subtree and brought up to date by World_UpdateTransforms once a tick,
-    effective enabled/visible flags, and subtree removal (children first). Saving comes back in T09.
+    effective enabled/visible flags, and subtree removal (children first). Saved and loaded by WorldFile.
   * WorldTransform - Transform maths (private, source/WorldTransform.h): compose a position, Euler XYZ rotation and
     scale in DrawModelEx's order, the one decomposition back (mirrors, zero scales, gimbal lock; the nearest answer
     for a sheared matrix), a local matrix under a parent, and a bound on a matrix's stretch for bounding spheres.
+* WorldFile (WorldFile.md) - Worlds saved and loaded as JSON (authored, diffable) and GHDF (saves, the network), from
+  files or memory, through the property tables: the format version, name, next id, environment, and each object's id,
+  table and components (references/world_structure.md). Loading is all or nothing into caller memory and treats input
+  as hostile (limits on the input and on its parsed tree, ids, parents through the world's checks, the data limit, keys
+  given back on failure); unknown
+  names are skipped with one warning per name; objects are written parents first and saves are atomic. The private
+  source/WorldFileInternal.h holds the rules both formats share.
 * World runtime layer (WorldRuntime.md) - Camera, renderer, services bundle and bootstrap for viewing a world:
   * GameCamera - 3D camera (pos/fov/yaw/pitch/roll; +Y up, +Z forward), converted to a raylib camera at render time.
   * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, input, GHDF
@@ -148,8 +157,8 @@ Current module list:
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
-  keys by mode, migration hook) and write (defaults left out by default), and get/set by key. The one module allowed to
-  write `_` fields by offset. Clients: WorldEnvironment, GameClock, the world objects and their components; new data
+  keys by mode, migration hook) and write (defaults left out by default, integers in GHDF's smallest type), and get/set
+  by key. The one module allowed to write `_` fields by offset. Clients: WorldEnvironment, GameClock, the world objects and their components; new data
   types get a table, not hand-written codecs. A DataMap property (tags and typed data) is written as two JSON keys.
 * GameCalendar (GameCalendar.md) - The game's calendar: pure functions over day numbers (days since 0001-01-01, an
   int64) and dates of the proleptic Gregorian calendar, years 1 to 9999: conversions, weekday (Monday = 0), day of the
@@ -200,6 +209,9 @@ Current module list:
 * GameJSON (GameJSON.md) - Shared parsers and writers for the game's common JSON value shapes (numbers, booleans,
   strings, colors, render colors, vectors); the asset-definition helpers, the text component codec and the property
   tables all use it so the value conventions live in one place. Raises ErrorCode_InvalidJSON for every bad value.
+* GameGHDF (GameGHDF.md) - The GHDF counterpart: integers written in the smallest GHDF type that holds them and read
+  from any integer type whose value fits (arrays refused), and strings without NULs inside. Used by the property
+  tables, the data values and the world files.
 * Text component serialization (TextComponentSerialization.md) - Text component trees to and from the game's three
   formats. JSON (references/text_component_structure.md) and GHDF share ONE codec (source/TextComponentCodec.c,
   private) that lists every type's fields once, validates every value, names the key and the component's path in

@@ -10,6 +10,13 @@
 
 /** @brief GameJSON value conversions (GameJSONTests.c). */
 void GameJSONTests_Run(TestRun* run);
+/** @brief WRFramework behaviours the game relies on since T09: JSON insertion order and one-line scalar arrays, GHDF
+ *  strings read in chunks and refused when they declare more than the data holds, pools freeing borrowed containers,
+ *  truncated documents leaving nothing behind, atomic file replacement (WRFrameworkTests.c). */
+void WRFrameworkTests_Run(TestRun* run);
+/** @brief GameGHDF: integers in the smallest type, read from any integer type in range, strings without NULs
+ *  (GameGHDFTests.c). */
+void GameGHDFTests_Run(TestRun* run);
 
 /** @brief Config file loading and validation (ConfigTests.c). */
 void ConfigTests_Run(TestRun* run);
@@ -56,6 +63,11 @@ void WorldHierarchyTests_Run(TestRun* run);
  *  stretch (WorldTransformTests.c; a private module of source/). */
 void WorldTransformTests_Run(TestRun* run);
 
+/** @brief World files: JSON and GHDF round trips of a world using every property, the written form (defaults left out,
+ *  table order, parents first), hostile input refused with nothing left (ids, parents, cycles, depth, counts, sizes,
+ *  types, truncated and lying GHDF), unknown names skipped with one warning each, the next object id, files and memory
+ *  buffers, atomic saves and the shipped test world (WorldFileTests.c). */
+void WorldFileTests_Run(TestRun* run);
 /** @brief Property tables: the self-check (every table in the game), construction, validation, copies, JSON and GHDF
  *  round trips, unknown keys, access by key, migration, and the environment's table against the old encoder
  *  (PropertyDescriptorTests.c). */

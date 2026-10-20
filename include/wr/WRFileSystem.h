@@ -415,6 +415,29 @@ Error FileSystem_DeleteEntry(const unsigned char* path);
 Error FileSystem_MoveEntry(const unsigned char* oldPath, const unsigned char* newPath);
 
 /**
+ * @brief Moves a file to a path, atomically replacing the file there: the last step of a safe save.
+ *
+ * Moves the file at @p sourcePath to @p destinationPath, replacing a file already there in one step: a reader of
+ * @p destinationPath sees either the old file or the new one, never a missing or partly written one, even if the
+ * program stops during the call. The safe way to save a file is to write the new contents to a temporary file next to
+ * it (the same directory, so the same volume), then replace the target with it. Unlike FileSystem_MoveEntry, replacing
+ * an existing file is part of this contract on every platform (Linux: rename(); Windows: MoveFileExW with
+ * MOVEFILE_REPLACE_EXISTING and MOVEFILE_WRITE_THROUGH). @p destinationPath need not exist yet. Both paths must be on
+ * the same volume (nothing is copied), and neither may be a directory: a directory source is refused before anything
+ * moves (the platforms' own calls would move it to a missing path), and a directory destination makes the move fail.
+ * @param sourcePath Null-terminated UTF-8 path of the file to move. Must not be NULL or empty and must be a valid
+ *        path.
+ * @param destinationPath Null-terminated UTF-8 path the file is moved to, replacing a file there. Must not be NULL or
+ *        empty and must be a valid path.
+ * @returns A success Error on success. ErrorCode_IllegalArgument if @p sourcePath or @p destinationPath is NULL;
+ *          ErrorCode_InvalidPath if either path is empty or otherwise invalid; ErrorCode_FileNotFound /
+ *          ErrorCode_DirectoryNotFound if the source does not exist or the destination's parent is missing;
+ *          ErrorCode_IO for other failures (another volume, a directory at either path, no permission).
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error FileSystem_ReplaceEntry(const unsigned char* sourcePath, const unsigned char* destinationPath);
+
+/**
  * @brief Renames an entry in place, keeping it in its current parent directory.
  *
  * Computes the parent directory of @p path and moves the entry to a sibling whose name is @p newName,

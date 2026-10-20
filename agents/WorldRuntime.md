@@ -505,21 +505,25 @@ instead of copying it between shaders.
 
 ## WorldTestFrame
 
-Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World` built with `World_Construct2` on `Services.Keys` (so
-its sprite components bind their animations themselves), a `GameClock` ([GameClock.md](GameClock.md)), a `GameCamera`, and a
-`WorldRenderer`. `BuildTestWorld` builds the test world through the object API: `World_CreateObject`, `World_SetParent`,
-the transform setters, `World_AddComponent` and the components' setters (a model component per cube and for the ground
-slab, two light components, and the sprites of its `TestSprites` table: the test image as a camera-facing billboard,
-1.5 m wide at 1280 pixels per metre, and T06's placeholders from `sprite_animations/test_world/`: a blended tire-mark
-decal on the ground in front of the camera, an axis-billboard tree that casts a shadow, a fixed sign behind it, a lit
-blended smoke puff in front of an additive, unlit glow around the warm lamp, and an unlit neon sign). Its hierarchy
-(T08, `AddDesk`): a `desk` at (1.8, 0.05, -3.6) on the left of the start view, an empty object turned 15 degrees that
-holds its parts (`desk_top` and two `desk_side_*`, scaled test cubes), a gold `cup` and a `desk_lamp` (a thin post) whose
-child `desk_lamp_light` is a warm point light (intensity 3, reach 4, no shadow) 0.35 lamp units above the post's centre
-(0.28 m: a child's position is in its parent's scaled space). Its `Update` runs the tick's animation step: it advances the
-sprites of effectively enabled objects (`World_GetComponents(world, WorldComponentType_Sprite)`) and slides the desk
-while J has it sliding; then, last, `World_UpdateTransforms` (the tick's world-matrix step), so the renderer reads cached
-matrices.
+Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World`, a `GameClock` ([GameClock.md](GameClock.md)), a
+`GameCamera`, and a `WorldRenderer`. **The test world is a file** (T09): `Create` loads `<base>/worlds/test.world.json`
+(`compile/out/worlds/` in the repository) with `WorldFile_LoadJSON` ([WorldFile.md](WorldFile.md)) on `Services.Keys`,
+`Services.Assets` and `Services.Logger`, so its sprite components bind their animations themselves. A missing or broken
+file is logged once (`WorldTest: could not load the test world (...): <why>. The world is empty instead.`) and gives an
+empty world with the debug grid on: visible, and the frame still starts. The file holds what the frame's
+`BuildTestWorld` built in code until T09 (the shipped file was written from it, and the image is the same bit for
+bit): a model component per cube and for the ground slab, two light components, and the sprites: the test image as a
+camera-facing billboard, 1.5 m wide at 1280 pixels per metre, and T06's placeholders from
+`sprite_animations/test_world/`: a blended tire-mark decal on the ground in front of the camera, an axis-billboard tree
+that casts a shadow, a fixed sign behind it, a lit blended smoke puff in front of an additive, unlit glow around the
+warm lamp, and an unlit neon sign. Its hierarchy (T08): a `desk` at (1.8, 0.05, -3.6) on the left of the start view,
+an empty object turned 15 degrees that holds its parts (`desk_top` and two `desk_side_*`, scaled test cubes), a gold
+`cup` and a `desk_lamp` (a thin post) whose child `desk_lamp_light` is a warm point light (intensity 3, reach 4, no
+shadow) 0.35 lamp units above the post's centre (0.28 m: a child's position is in its parent's scaled space). Edit the
+file and restart to change the test world. Its `Update` runs the tick's animation step: it advances the sprites of
+effectively enabled objects (`World_GetComponents(world, WorldComponentType_Sprite)`) and slides the desk while J has it
+sliding (around the X it was loaded at); then, last, `World_UpdateTransforms` (the tick's world-matrix step), so the
+renderer reads cached matrices.
 **Game time:** the clock starts from the world environment's date and time of day (noon, 2026-10-18) at time scale
 720 (a 2-minute day, as the test world had before T23; the clock's own default is 72). Every `Update` advances it,
 logs a new day when it crosses midnight, and writes its time of day and date into the environment, so the sky shows
@@ -547,11 +551,15 @@ debug keys as raw keys:
 - **the hierarchy (T08):** J starts and stops the desk sliding back and forth along X (1.2 m either way, a 6-second
   period of real time): its parts, the cup, the lamp and the lamp's light follow; H hides and shows the desk, and with it
   everything on it (the lamp's light goes off). Both logged;
+- **the world file (T09):** F5 saves the live world next to the test world, as `worlds/test.saved.world.json` and
+  `worlds/test.saved.world.ghdf` (atomically; each logged with its path, gitignored), for round-trip checks: saved at
+  noon with nothing changed (2, then F5) the JSON is the shipped file byte for byte; otherwise its diff against
+  `test.world.json` shows what changed in the game (the time of day once the clock ran, a slid desk, an opacity);
 - T toggles the text sample.
 
 M frees the cursor for the UI (and captures it again); a left click the UI did not take captures it again. An
 unconsumed `pause` (Escape once the UI is not using it) quits through `GameFrameManager_RequestStop`. `Render` handles
-no input. Captures the cursor in `Start`, releases it in `End`/`Destroy`. The world and the clock are built in `Create`;
+no input. Captures the cursor in `Start`, releases it in `End`/`Destroy`. The world is loaded and the clock built in `Create`;
 `BeginLoad` calls `WorldRenderer_PrepareWorld` (shaders and models), so the stepped load/unload slots are trivial.
 `Create` builds everything up front so `Destroy` is always safe (even on forced teardown); it destroys the renderer,
 then the world, the clock and the text sample.

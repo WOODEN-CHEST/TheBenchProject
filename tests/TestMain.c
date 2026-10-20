@@ -17,6 +17,8 @@ int main(void)
     }
 
     GameJSONTests_Run(&Run);
+    WRFrameworkTests_Run(&Run);
+    GameGHDFTests_Run(&Run);
     ConfigTests_Run(&Run);
     AssetManagerTests_Run(&Run);
     ShaderSourceTests_Run(&Run);
@@ -28,6 +30,7 @@ int main(void)
     WorldHierarchyTests_Run(&Run);
     WorldTransformTests_Run(&Run);
     ObjectDataTests_Run(&Run);
+    WorldFileTests_Run(&Run);
     PropertyDescriptorTests_Run(&Run);
     GameCalendarTests_Run(&Run);
     GameClockTests_Run(&Run);

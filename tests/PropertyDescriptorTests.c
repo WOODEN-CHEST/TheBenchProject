@@ -2,6 +2,7 @@
 #include "TestText.h"
 #include "PropertyDescriptor.h"
 #include "DataMap.h"
+#include "GameGHDF.h"
 #include "GameClock.h"
 #include "NamespacedKey.h"
 #include "WorldEnvironment.h"
@@ -1368,6 +1369,98 @@ static void GHDFSkipsUnknownIdsAndRejectsWrongTypes(TestRun* run)
     TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Pool));
 }
 
+/* The GHDF type an entry of @p compound has (GHDFValueType_None when absent). */
+static GHDFValueType GetEntryType(GHDFCompound* compound, GHDFEntryID id)
+{
+    GHDFObjectValue Entry = { .Type = GHDFValueType_None };
+    bool IsFound = false;
+    Error Result = GHDFCompound_GetOptional(compound, id, &Entry, &IsFound);
+    Error_Deconstruct(&Result);
+    return IsFound ? Entry.Type : GHDFValueType_None;
+}
+
+/* Sets an entry of @p compound to a scalar value of its own type. */
+static void PutEntry(TestRun* run, GHDFCompound* compound, GHDFEntryID id, GHDFObjectValue value)
+{
+    TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(compound, id, GHDF_CreateRegularType(value.Type), &value));
+}
+
+/* Since T09 every integer property takes the smallest GHDF type that holds its value (GameGHDF), and is read from any
+ * integer type whose value fits its own type: older data and other tools still read. A value that does not fit, a
+ * negative one for an unsigned property, another type or an array fails the read. */
+static void IntegersTakeTheSmallestGHDFType(TestRun* run)
+{
+    GHDFObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&Pool)))
+    {
+        return;
+    }
+    TestRecord Record;
+    TestRecord Restored;
+    GHDFCompound* Compound = NULL;
+    if (CheckConstruct(run, &Record) && CheckConstruct(run, &Restored)
+        && TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Pool, &Compound)))
+    {
+        Record.Count = 42;
+        Record.Mask = 0x1234U;
+        Record.Seed = 0x123456789ULL;
+        Record.Target = 300U;
+        TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&RecordTable, &Record, Pool, Compound, NULL));
+        TEST_CHECK(run, GetEntryType(Compound, 2U) == GHDFValueType_Int8);
+        TEST_CHECK(run, GetEntryType(Compound, 3U) == GHDFValueType_UInt16);
+        TEST_CHECK(run, GetEntryType(Compound, 4U) == GHDFValueType_UInt64);
+        TEST_CHECK(run, GetEntryType(Compound, 16U) == GHDFValueType_UInt16);
+        TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&RecordTable, Compound, &Restored, NULL));
+        TEST_CHECK(run, (Restored.Count == 42) && (Restored.Mask == 0x1234U) && (Restored.Seed == 0x123456789ULL)
+            && (Restored.Target == 300U));
+
+        // Wider and encoded integers read as long as the value fits.
+        PutEntry(run, Compound, 2U, GHDFObjectValue_CreateInt64(7));
+        PutEntry(run, Compound, 3U, GHDFObjectValue_CreateEncodedInteger(0xABCD));
+        PutEntry(run, Compound, 4U, GHDFObjectValue_CreateUInt8(200U));
+        PutEntry(run, Compound, 16U, GHDFObjectValue_CreateInt32(5));
+        TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&RecordTable, Compound, &Restored, NULL));
+        TEST_CHECK(run, (Restored.Count == 7) && (Restored.Mask == 0xABCDU) && (Restored.Seed == 200U)
+            && (Restored.Target == 5U));
+
+        // Values that do not fit, negative unsigned values, other types and arrays fail, naming the key.
+        const char* const MaskFragments[] = { "test_record.mask", "from 0 to 4294967295", NULL };
+        PutEntry(run, Compound, 3U, GHDFObjectValue_CreateInt8(-1));
+        TestText_CheckErrorMessage(run, Properties_ReadGHDF(&RecordTable, Compound, &Restored, NULL),
+            ErrorCode_Deserialize, MaskFragments);
+        PutEntry(run, Compound, 3U, GHDFObjectValue_CreateUInt64(0x100000000ULL));
+        TestText_CheckErrorMessage(run, Properties_ReadGHDF(&RecordTable, Compound, &Restored, NULL),
+            ErrorCode_Deserialize, MaskFragments);
+        PutEntry(run, Compound, 3U, GHDFObjectValue_CreateUInt8(1U));
+        const char* const CountFragments[] = { "test_record.count", NULL };
+        PutEntry(run, Compound, 2U, GHDFObjectValue_CreateInt64(1LL << 40));
+        TestText_CheckErrorMessage(run, Properties_ReadGHDF(&RecordTable, Compound, &Restored, NULL),
+            ErrorCode_Deserialize, CountFragments);
+        PutEntry(run, Compound, 2U, GHDFObjectValue_CreateFloat(3.0f));
+        TestText_CheckErrorMessage(run, Properties_ReadGHDF(&RecordTable, Compound, &Restored, NULL),
+            ErrorCode_Deserialize, CountFragments);
+        GHDFArray* Numbers = NULL;
+        if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowArray(Pool, GHDFValueType_Int32, &Numbers)))
+        {
+            GHDFObjectValue Element = GHDFObjectValue_CreateInt32(3);
+            TEST_CHECK_SUCCESS(run, GHDFArray_AddValue(Numbers, &Element));
+            GHDFObjectValue ArrayValue = GHDFObjectValue_CreateArray(Numbers, GHDFValueType_Int32);
+            TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Compound, 2U, GHDF_CreateArrayType(GHDFValueType_Int32),
+                &ArrayValue));
+            TestText_CheckErrorMessage(run, Properties_ReadGHDF(&RecordTable, Compound, &Restored, NULL),
+                ErrorCode_Deserialize, CountFragments);
+        }
+        TEST_CHECK(run, Restored.Count == 7); // the failed reads changed nothing
+    }
+    if (Compound != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Compound, true));
+    }
+    Properties_Deconstruct(&RecordTable, &Record);
+    Properties_Deconstruct(&RecordTable, &Restored);
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Pool));
+}
+
 static void CopiesAreDeep(TestRun* run)
 {
     TestRecord Source;
@@ -1579,9 +1672,12 @@ static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
             TEST_CHECK(run, Properties_Equals(Table, &Environment, &Restored));
             WorldEnvironment_Deconstruct(&Restored);
 
-            // The table writes the old entries without the retired ids, plus the date as an encoded day number.
+            // The table writes the old entries without the retired ids, plus the date as an encoded day number. Since
+            // T09 integers take the smallest type that holds them: the old encoder's UInt64 seed (read above) is now a
+            // UInt8 for the default seed (0), still a UInt64 for the filled one.
             TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Expected, 2U));
             TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Expected, 3U));
+            TEST_CHECK_SUCCESS(run, GameGHDF_PutUnsigned(Expected, 10U, Environment.StarSeed));
             GHDFObjectValue Date = GHDFObjectValue_CreateEncodedInteger(Environment.Date);
             TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Expected, 30U,
                 GHDF_CreateRegularType(GHDFValueType_EncodedInteger), &Date));
@@ -1739,6 +1835,7 @@ void PropertyDescriptorTests_Run(TestRun* run)
         { "angles_are_degrees_in_json_and_radians_in_ghdf", AnglesAreDegreesInJSONAndRadiansInGHDF },
         { "ghdf_round_trip_keeps_every_value", GHDFRoundTripKeepsEveryValue },
         { "ghdf_skips_unknown_ids_and_rejects_wrong_types", GHDFSkipsUnknownIdsAndRejectsWrongTypes },
+        { "integers_take_the_smallest_ghdf_type", IntegersTakeTheSmallestGHDFType },
         { "copies_are_deep", CopiesAreDeep },
         { "get_and_set_by_key", GetAndSetByKey },
         { "big_structs_read_through_a_heap_scratch", BigStructsReadThroughAHeapScratch },

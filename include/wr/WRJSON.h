@@ -13,7 +13,12 @@
  * then returned to the pool when no longer used.
  * 
  * Compound string keys are copied into pool-managed storage when inserted.
- * 
+ *
+ * Compounds keep their keys in insertion order, like JavaScript objects: JSON_Deserialize inserts them in the order the
+ * text lists them, JSON_Serialize writes them in that order, and every collection view iterates in it. Setting a key
+ * that is already present keeps its place; removing a key drops it from the order. So a document read and written back
+ * keeps its key order, and a writer controls the order its output has.
+ *
  * String values are stored as generic buffers borrowed from the pool.
  * 
  * The compound and array get functions work with the following mannet:
@@ -37,13 +42,39 @@
  */
 #define JSON_MAX_NESTING_DEPTH ((size_t)512)
 
+/**
+ * @brief The bytes JSON_DeserializeWithLimits charges for each JSON object (`{...}`) it builds: the compound with its
+ *        empty map, and the map's first allocation when the first key goes in (see JSONReadLimits).
+ */
+#define JSON_READ_COMPOUND_BYTES ((size_t)1280)
+
+/**
+ * @brief The bytes JSON_DeserializeWithLimits charges for each JSON array (`[...]`) it builds, before its elements
+ *        (each element is charged sizeof(JSONObjectValue); see JSONReadLimits).
+ */
+#define JSON_READ_ARRAY_BYTES ((size_t)320)
+
+/**
+ * @brief The bytes JSON_DeserializeWithLimits charges for each key of a JSON object besides the key's length: the
+ *        pool's copy of the key, the map entry holding the value and the key's place in the insertion order (see
+ *        JSONReadLimits).
+ */
+#define JSON_READ_ENTRY_BYTES ((size_t)160)
+
+/**
+ * @brief The bytes JSON_DeserializeWithLimits charges for each string value besides twice its length: the pooled
+ *        buffer and its allocation (see JSONReadLimits).
+ */
+#define JSON_READ_STRING_BYTES ((size_t)96)
+
 
 // Types.
 /**
  * @brief Opaque JSON object (a `{...}` map of string keys to JSON values).
  *
- * A compound holds an unordered set of key/value entries. Keys are UTF-8 byte strings and values are
- * JSONObjectValue. A compound is always owned by exactly one JSONObjectPool: it must be obtained from
+ * A compound holds key/value entries with unique keys, in insertion order (lookups by key are hashed). Keys are UTF-8
+ * byte strings and values are JSONObjectValue. A compound is always owned by exactly one JSONObjectPool: it must be
+ * obtained from
  * a pool via JSONObjectPool_BorrowCompound and given back with JSONObjectPool_ReturnCompound (or
  * indirectly via JSONObjectPool_ReturnValue / a parent container's release). Key bytes are copied into
  * pool-managed storage on insertion; the caller's key buffer is not retained.
@@ -119,7 +150,34 @@ typedef enum JSONSerializeFlagsEnum
     JSONSerializeFlags_None = 0,                    /**< Compact output, no trailing null byte. */
     JSONSerializeFlags_NullTerminated = (1 << 0),   /**< Append a terminating null byte after the JSON text. */
     JSONSerializeFlags_PrettyPrinted = (1 << 1),    /**< Indented, multi-line "pretty" layout instead of compact. */
+    /** With JSONSerializeFlags_PrettyPrinted: an array holding only scalar values (strings, numbers, booleans, null)
+     *  is written on one line, `[1.0, 2.0, 3.0]`, instead of one element per line; arrays holding a compound or an
+     *  array keep the multi-line layout. Without PrettyPrinted it changes nothing (compact output is one line). */
+    JSONSerializeFlags_InlineScalarArrays = (1 << 2),
 } JSONSerializeFlags;
+
+/**
+ * @brief Limits on what JSON_DeserializeWithLimits builds from one document, for text that may be hostile.
+ *
+ * A document's length bounds its parsed size only loosely: `{}` is two bytes of text and its compound takes about 900
+ * bytes of memory, so a few megabytes of empty objects would take gigabytes once parsed (and running out of memory
+ * aborts the program). The limits refuse such a document while it is read, before that memory is taken.
+ */
+typedef struct JSONReadLimitsStruct
+{
+    /**
+     * @brief The most bytes of memory the parsed tree may take, as the reader estimates it while building the tree.
+     *
+     * The estimate charges each object JSON_READ_COMPOUND_BYTES, each array JSON_READ_ARRAY_BYTES, each array
+     * element sizeof(JSONObjectValue), each object key JSON_READ_ENTRY_BYTES plus the key's length, and each string
+     * value JSON_READ_STRING_BYTES plus twice its length (its buffer grows in powers of two). That is at or a little
+     * above what each takes on a 64-bit build, measured with the pool's bookkeeping (less on a 32-bit build); numbers,
+     * booleans and null take only their slot. Not counted: the root value (the caller's) and the pool's spare
+     * capacity, which grows in sections ahead of use (at most one section per kind of value, up to
+     * OBJECT_POOL_MAX_SECTION_BYTES each). Must be greater than zero.
+     */
+    size_t MaxTreeByteCount;
+} JSONReadLimits;
 
 /**
  * @brief A single key/value pair surfaced while iterating a compound's entry collection.
@@ -239,8 +297,9 @@ static inline JSONObjectValue JSONObjectValue_CreateArray(JSONArray* value)
  * Writes the textual JSON for @p value (recursively, including nested compounds and arrays) by appending
  * raw bytes to the end of @p destination's current contents; existing contents are kept (unlike string
  * writers, this does not drop a trailing null first). With JSONSerializeFlags_PrettyPrinted the output is
- * indented and multi-line, otherwise compact. With JSONSerializeFlags_NullTerminated a single null byte is
- * appended after the text. The pool is not consulted and @p value is not modified or released.
+ * indented and multi-line, otherwise compact; JSONSerializeFlags_InlineScalarArrays then keeps arrays of scalars on
+ * one line. With JSONSerializeFlags_NullTerminated a single null byte is appended after the text. Compound keys are
+ * written in insertion order. The pool is not consulted and @p value is not modified or released.
  * A real number is written as the shortest text that reads back as the same double, and always as a real number: a
  * whole value keeps a fraction ("2.0", "-0.0"; "1e+21" has its exponent), so text read back by JSON_Deserialize keeps
  * integers and real numbers apart.
@@ -283,6 +342,31 @@ Error JSON_Serialize(JSONObjectValue* value, GenericBuffer* destination, JSONSer
  *       full set.
  */
 Error JSON_Deserialize(JSONObjectPool* pool, GenericBuffer* source, JSONObjectValue* outValue);
+
+/**
+ * @brief Parse a complete UTF-8 JSON document like JSON_Deserialize, refusing it when its parsed tree would take more
+ *        memory than @p limits allow.
+ *
+ * For text from outside the program (downloads, files other people made): JSON_Deserialize's nesting limit bounds the
+ * parser's stack, and this also bounds the memory the tree takes (see JSONReadLimits). The estimate is charged as each
+ * value is about to be built, so a refused document never builds past the limit by more than one value's buffer, and
+ * the partial tree is returned to the pool as with any other failure. Everything else is as JSON_Deserialize.
+ * @param pool The object pool that will own all produced structures. Must not be NULL.
+ * @param source [in] Byte buffer (element size 1) holding the JSON text to parse. Must not be NULL and must be a byte
+ *        buffer; it is read, not modified.
+ * @param limits The limits to apply; MaxTreeByteCount must be greater than zero. Must not be NULL.
+ * @param outValue [out] Receives the parsed root value on success; set to JSONValueType_None on failure. Must not be
+ *        NULL.
+ * @returns As JSON_Deserialize; also ErrorCode_InvalidJSON when the tree would take more than
+ *          limits->MaxTreeByteCount bytes (the message names the byte offset of the value that would pass it).
+ *          Raises ErrorCode_IllegalArgument if @p limits is NULL, and ErrorCode_ArgumentOutOfRange if its
+ *          MaxTreeByteCount is zero.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error JSON_DeserializeWithLimits(JSONObjectPool* pool,
+    GenericBuffer* source,
+    const JSONReadLimits* limits,
+    JSONObjectValue* outValue);
 
 
 /**
@@ -395,7 +479,8 @@ Error JSONCompound_Clear(JSONCompound* self);
  * @brief Remove a single entry by key, returning its value to the pool.
  *
  * The entry's value is returned to the owning pool (recursively releasing any nested structure) and the
- * key/value pair is removed.
+ * key/value pair is removed; the other keys keep their order. Linear in the entry count (the key's place in the
+ * order is searched).
  * @param self The compound to modify. Must not be NULL.
  * @param key NUL-terminated UTF-8 key of the entry to remove. Must not be NULL.
  * @returns Success if an entry was removed. Raises ErrorCode_IllegalArgument if @p self or @p key is NULL;
@@ -416,8 +501,8 @@ size_t JSONCompound_GetEntryCount(JSONCompound* self);
  * @brief Get a read-only collection that iterates the compound's entries as JSONCompoundEntry values.
  *
  * The returned collection is owned by @p self (not a new allocation); do not free it. Enumerated entries
- * borrow pool-owned key/value storage and are valid only until the compound is modified. Iteration order is
- * unspecified.
+ * borrow pool-owned key/value storage and are valid only until the compound is modified. Entries come in insertion
+ * order.
  * @param self The compound to iterate. May be NULL.
  * @returns A borrowed ICollection of JSONCompoundEntry, or NULL if @p self is NULL.
  */
@@ -427,7 +512,7 @@ ICollection* JSONCompound_GetEntryCollection(JSONCompound* self);
  * @brief Get a read-only collection that iterates the compound's values as JSONObjectValue.
  *
  * The returned collection is owned by @p self; do not free it. Enumerated values borrow pool-owned storage
- * and are valid only until the compound is modified. Iteration order is unspecified.
+ * and are valid only until the compound is modified. Values come in their keys' insertion order.
  * @param self The compound to iterate. May be NULL.
  * @returns A borrowed ICollection of JSONObjectValue, or NULL if @p self is NULL.
  */
@@ -437,8 +522,7 @@ ICollection* JSONCompound_GetValueCollection(JSONCompound* self);
  * @brief Get a read-only collection that iterates the compound's keys as `unsigned char*` strings.
  *
  * The returned collection is owned by @p self; do not free it. Enumerated keys are borrowed, NUL-terminated
- * UTF-8 strings owned by the pool and are valid only until the compound is modified. Iteration order is
- * unspecified.
+ * UTF-8 strings owned by the pool and are valid only until the compound is modified. Keys come in insertion order.
  * @param self The compound to iterate. May be NULL.
  * @returns A borrowed ICollection of `unsigned char*` keys, or NULL if @p self is NULL.
  */

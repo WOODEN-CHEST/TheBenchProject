@@ -23,7 +23,33 @@ non-default raylib configuration.
 | Library | Source | Version | Build |
 |---|---|---|---|
 | raylib | https://github.com/raysan5/raylib (local copy: `../raylib/6.0`) | commit `65abee1` (2026-07-04), reports `6.1-dev` | CMake, see below |
-| WRFramework | `../WRFramework` | commit `37d91c9a88970f983de4e7013be89146f371c173` (2026-10-19: `JSON_Serialize` writes whole real numbers as `2.0`; the signed `Number_*FromString` parsers accept their most negative value; the decimal parsers read numbers below the double range instead of refusing them) | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
+| WRFramework | `../WRFramework` | commit `58c1e31d6a96799432b3b387e6484b7e0afec1d2` | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
+
+**WRFramework's uncommitted T09 changes** (at the owner's request; `lib/libwr.a`, `include/wr/` and
+`agents/WRFramework.md` are built and copied from that working tree). Commit them in `../WRFramework`, then put the new
+hash in the table above:
+- WRJSON: compounds keep insertion order (every collection view and `JSON_Serialize`; the order is a plain buffer of
+  key pointers, about 90 bytes per compound); a new `JSONSerializeFlags_InlineScalarArrays` keeps arrays of scalars on
+  one line in pretty output; `JSON_DeserializeWithLimits` refuses a document whose parsed tree would pass a byte
+  estimate (`JSONReadLimits`).
+- WRGHDF: a string may declare at most `GHDF_MAX_STRING_LENGTH` (1 GiB) and no more than a seekable stream has left,
+  and is read in 64 KiB chunks (a 28-byte document declaring 2^50 bytes used to abort the process); deconstructing a
+  pool no longer releases the children of containers still borrowed into sub-pools already freed (a use-after-free);
+  `GHDF_ReadWithLimits` (`GHDFReadLimits`) as for JSON.
+- WRObjectPool: sections double up to 1 MiB of objects, borrowing takes a section from a stack of those with a free
+  slot (O(1)) and returning finds the section by binary search on an address-sorted index (O(log sections)). Before,
+  both scanned every 16-object section: 300 000 objects took 1.2 s to borrow and 7.4 s to return in shuffled order,
+  now 0.006 s and 0.014 s. Every JSON and GHDF read and write goes through these pools.
+- WRMemory / WRList: `GenericBuffer` and `IList` sorts are introsorts (median-of-three pivot, recursion into the
+  smaller side, heapsort fallback, insertion sort up to 16). The old quicksort took the last element as its pivot: on
+  sorted input it was quadratic and recursed once per element (saving a world of about 87 000 objects overflowed the
+  stack). The `IList` one also misordered some inputs: its partition kept the pivot's copy in a scratch slot its swaps
+  also used, so after the first swap it compared against whichever element was swapped last.
+- WRBinaryIO: the encoded-integer reader freed nothing of the stream's error it replaced (one leaked message per
+  truncated document).
+- WRFileSystem: `FileSystem_ReplaceEntry` (rename on Linux; `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING |
+  MOVEFILE_WRITE_THROUGH` on Windows), refusing a directory source (rename would move it). The Windows side is only
+  compiled against stub declarations of the Win32 calls: no MinGW on this machine.
 
 The project's `include/raylib/` and `include/wr/` headers must come from the same versions as the libraries.
 To update WRFramework: build it with its own script, then copy its `include/*.h` into `include/wr/`,

@@ -2,8 +2,9 @@
 
 The rendering-independent model of a 3D world: its objects, their hierarchy, their components, their tags and data, and
 its environment settings. No renderer is required to build, change or tear down a world; the world renderer reads it
-separately and never writes to it. Saving and loading worlds comes back with T09 (world files), built on the property
-tables. Tags, typed object data and queries (T24) have their own doc: [ObjectData.md](ObjectData.md).
+separately and never writes to it. Worlds are saved and loaded as JSON and GHDF by [WorldFile.md](WorldFile.md) (the
+format: `references/world_structure.md`), built on the property tables. Tags, typed object data and queries (T24) have
+their own doc: [ObjectData.md](ObjectData.md).
 
 This one doc covers the whole cohesive layer; every symbol has full Doxygen in its header.
 
@@ -220,7 +221,8 @@ and tint do not affect it. A hidden or disabled object's light is off, also unde
 Holds the objects in creation order (`_objects`) with an id -> object map (`_objectsById`, a `WRHashMap`), the
 hierarchy's bookkeeping (how many world matrices are dirty, the recompute counter for tests, the refused parents, the
 removal scratch), the registry entries of its component types, one dense array of components per type (`_components[type]`, in add order),
-the id counter (`_nextId`, starts at 1; 0 once every id was handed out), two versions, an owned name, an embedded
+the id counter (`_nextId`, starts at 1; 0 once every id was handed out: ids run from 1 to `WORLD_OBJECT_ID_MAX`,
+`UINT64_MAX - 1`, since T09), two versions, an owned name, an embedded
 `WorldEnvironment`, the borrowed key registry (`World_GetKeys`), the tag index and data byte count
 ([ObjectData.md](ObjectData.md)), the query scratch, and (optionally) a borrowed asset manager with its own asset user.
 
@@ -230,11 +232,15 @@ the id counter (`_nextId`, starts at 1; 0 once every id was handed out), two ver
   (the sprites' animations) under its own asset user, which `World_Deconstruct` retires after destroying every object
   and component. The logger also hears of each data limit once.
 - **Objects:** `World_CreateObject(world, name, &object)` (the next id) and `World_CreateObjectWithId(world, name, id,
-  &object)` (the loader's version: refuses 0 and used ids, and advances the counter past the id); `World_RemoveObject
+  &object)` (the loader's version: refuses 0, ids above `WORLD_OBJECT_ID_MAX` and used ids, and advances the counter past
+  the id). `UINT64_MAX` is never an id, so a world file always has a next id to record; an object with the last id
+  uses the counter up, as does `World_EnsureNextObjectIdAtLeast` past it. `World_RemoveObject
   (world, id)` (its components first, then the object; ordered removal, so the other objects keep their order);
-  `World_TryGetObject(world, id, &object)` (a hash lookup); `World_GetObjectCount` / `World_GetObjectByIndex` for
-  iteration in creation order. A new object is a root at the default transform. Removal takes the whole subtree (see
+  `World_TryGetObject(world, id, &object)` (a hash lookup); `World_GetObjectCount` / `World_GetObjectByIndex` (a const
+  world since T09) for iteration in creation order. A new object is a root at the default transform. Removal takes the whole subtree (see
   "Hierarchy"). `World_EnsureNextObjectIdAtLeast` and `World_GetNextObjectId` are for world files.
+- **Name:** `World_SetName` / `World_GetName`: NULL or at most `WORLD_NAME_MAX_LENGTH` (256) bytes of valid UTF-8
+  (since T09 a longer or broken name is refused, as an object's is); world files save it.
 - **Components:** `World_AddComponent(world, id, type, &component)`, `World_RemoveComponent(world, id, type)`,
   `World_TryGetComponent(world, id, type, &component)`, and **`World_GetComponents(world, type, &count)`**: the world's
   own dense array of every component of a type, in add order (removal keeps the order), valid until a component of that
@@ -329,8 +335,8 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `range` | 3 | Float >= 0 | 1 |
 | | `casts_shadows` | 4 | Bool | false |
 
-The object table's wire ids start at 3: 1 and 2 are left for the world file's own entries per object (T09: the id and
-the components). T24 added `data` (one row: the tags and the values are one map, written as two JSON keys, `tags` and
+The object table's wire ids start at 3: 1 and 2 are the world file's own entries per object (the id and the
+components, [WorldFile.md](WorldFile.md)). T24 added `data` (one row: the tags and the values are one map, written as two JSON keys, `tags` and
 `data`, and as one GHDF entry); T08 added `parent` (12, placed after `name` in the table's order). The next free object
 wire id is 13.
 
@@ -420,24 +426,24 @@ Validate anything that came from outside the program before using it.
 
 ## Persistence
 
-**Nothing saves worlds at runtime yet.** T05 removed the old snapshot (`WorldDTO`) and its GHDF encoder
-(`WorldEncoder`) together with their tests: they were written for the three object subclasses, only tests used them,
-and the property tables now describe every object and component. T09 (world files) rebuilds JSON and GHDF loading and
-saving on the tables, with the root ids the old encoder used (format version 1, name 2, next id 3, environment 4,
-objects 5). Reading objects with tags and data needs `PropertyReadOptions.Keys` (the world's registry,
-`World_GetKeys`) and `DefaultNamespace` (the story's namespace); after reading the objects, the loader refuses a world
-whose `World_GetDataByteSize` passes `WORLD_DATA_MAX_BYTES` (the table readers count it but cannot refuse it). Parents work
-the same way (T08): the loader creates every object first (`World_CreateObjectWithId`), then reads their tables, so
-each `parent` names an object that exists; a parent the world refuses (missing, the object itself, a cycle, deeper than
-64 levels) raises `World_GetRefusedParentCount`, which the loader compares before and after each object's read to
-refuse the file and name the object. The environment's table already reads and writes itself (`WorldEnvironment_ReadJSON` / `_WriteJSON`,
-`Properties_ReadGHDF` / `_WriteGHDF`), and `tests/PropertyDescriptorTests.c` still compares its GHDF tree with a
-literal copy of what the old encoder wrote.
+**World files** ([WorldFile.md](WorldFile.md), format in `references/world_structure.md`, T09) save and load a whole
+world as JSON or GHDF through the tables: the environment's, each object's and each component's, with the root ids the
+old encoder used (format version 1, name 2, next id 3, environment 4, objects 5). The loader creates every object first
+(`World_CreateObjectWithId`), then reads their tables, so each `parent` names an object that exists; it compares
+`World_GetRefusedParentCount` around each object's read to refuse a bad parent and name the object, checks
+`World_GetDataByteSize` against `WORLD_DATA_MAX_BYTES` after each object, reads data maps with
+`PropertyReadOptions.Keys` (`World_GetKeys`) and `DefaultNamespace`, and truncates the key registry when it refuses a
+file. T05 had removed the hand-written snapshot (`WorldDTO`) and its GHDF encoder (`WorldEncoder`); nothing replaces them
+but the tables. `tests/PropertyDescriptorTests.c` still compares the environment's GHDF tree with a literal copy of what
+the old encoder wrote (since T09 integers take the smallest GHDF type, so the seed's entry differs there).
+
+Runtime state is not saved: playback positions, revisions, data scripts change in play (game saves as differences from
+the world come with the save round, architecture 3.7).
 
 ## Tests
 
 `tests/ObjectDataTests.c` covers tags, data and queries ([ObjectData.md](ObjectData.md)); `tests/TestWorld.h` builds a
-world with its own key registry for tests. `tests/WorldHierarchyTests.c` covers the hierarchy: `World_SetParent`'s
+world with its own key registry for tests. `tests/WorldFileTests.c` covers the world files ([WorldFile.md](WorldFile.md)). `tests/WorldHierarchyTests.c` covers the hierarchy: `World_SetParent`'s
 refusals (unknown ids, self, cycles two and three deep, 64 levels with a moved subtree's height), world matrices three
 levels deep (on the fly and cached, the same products), reparenting with and without keeping the world placement (and
 the refusal under a flattened parent), dirty propagation counted through `WorldInternal_GetWorldMatrixRecomputeCount`,

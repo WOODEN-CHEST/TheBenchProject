@@ -1,9 +1,11 @@
 // GHDF reading and writing of property tables (see PropertyDescriptor.h for the entry types). The entry ids are the
-// descriptors' wire ids; the layout of colors and vectors matches what the hand-written world encoder wrote.
+// descriptors' wire ids; the layout of colors and vectors matches what the hand-written world encoder wrote. Integers
+// are written in the smallest GHDF type that holds them and read from any integer type that holds the value (GameGHDF).
 
 #include <inttypes.h>
 #include "PropertyDescriptorInternal.h"
 #include "DataMap.h"
+#include "GameGHDF.h"
 #include "NamespacedKey.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -75,30 +77,6 @@ static Error PutChannels(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntry
     return PutArray(pool, compound, id, GHDFValueType_UInt8, Elements, count);
 }
 
-static Error PutString(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id, const unsigned char* text)
-{
-    GenericBuffer* Buffer = NULL;
-    Error Result = GHDFObjectPool_BorrowString(pool, &Buffer);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-    if (!GenericBuffer_AppendString(Buffer, text) || !GenericBuffer_NullTerminate(Buffer))
-    {
-        Error ReturnResult = GHDFObjectPool_ReturnString(pool, Buffer);
-        Error_Deconstruct(&ReturnResult);
-        return Error_Construct2(ErrorCode_EncodeError, "Could not build a string buffer.");
-    }
-    GHDFObjectValue Value = GHDFObjectValue_CreateString(Buffer);
-    Result = GHDFCompound_SetValue(compound, id, GHDF_CreateRegularType(GHDFValueType_String), &Value);
-    if (Result.Code != ErrorCode_Success)
-    {
-        Error ReturnResult = GHDFObjectPool_ReturnString(pool, Buffer);
-        Error_Deconstruct(&ReturnResult);
-    }
-    return Result;
-}
-
 /* { 1: UInt8[3] tint, 2: Float brightness, 3: Float opacity } */
 static Error PutRenderColor(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id, RenderColor color)
 {
@@ -158,13 +136,13 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
         case PropertyType_Bool:
             return PutScalar(compound, Id, GHDFObjectValue_CreateBoolean(data->BoolValue));
         case PropertyType_Int32:
-            return PutScalar(compound, Id, GHDFObjectValue_CreateInt32(data->Int32Value));
+            return GameGHDF_PutSigned(compound, Id, (int64_t)data->Int32Value);
         case PropertyType_UInt32:
-            return PutScalar(compound, Id, GHDFObjectValue_CreateUInt32(data->UInt32Value));
+            return GameGHDF_PutUnsigned(compound, Id, (uint64_t)data->UInt32Value);
         case PropertyType_UInt64:
-            return PutScalar(compound, Id, GHDFObjectValue_CreateUInt64(data->UInt64Value));
+            return GameGHDF_PutUnsigned(compound, Id, data->UInt64Value);
         case PropertyType_ObjectId:
-            return PutScalar(compound, Id, GHDFObjectValue_CreateUInt64(data->ObjectIdValue));
+            return GameGHDF_PutUnsigned(compound, Id, data->ObjectIdValue);
         case PropertyType_Float:
         case PropertyType_Angle:
             return PutScalar(compound, Id, GHDFObjectValue_CreateFloat(data->FloatValue));
@@ -191,7 +169,7 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
         case PropertyType_String:
         case PropertyType_AssetName:
             // GHDF has no null: a NULL string is left out, which reads back as its NULL default.
-            return (data->StringValue != NULL) ? PutString(pool, compound, Id, data->StringValue) : Error_CreateSuccess();
+            return (data->StringValue != NULL) ? GameGHDF_PutString(pool, compound, Id, data->StringValue) : Error_CreateSuccess();
         case PropertyType_Enum:
             return PutScalar(compound, Id, GHDFObjectValue_CreateEncodedInteger((int64_t)data->EnumValue));
         case PropertyType_DataMap:
@@ -297,28 +275,21 @@ static Error GetRenderColor(GHDFCompound* compound, GHDFEntryID id, RenderColor*
  * checked when the read commits. */
 static Error ReadString(GHDFCompound* compound, const PropertyDescriptor* descriptor, void* target)
 {
-    GHDFObjectValue Entry;
+    const unsigned char* Source = NULL;
+    size_t ByteCount = 0U;
     bool IsFound = false;
-    Error Result = GHDFCompound_GetOptionalVerified(compound, (GHDFEntryID)descriptor->WireId,
-        GHDF_CreateRegularType(GHDFValueType_String), &Entry, &IsFound);
+    Error Result = GameGHDF_GetOptionalString(compound, (GHDFEntryID)descriptor->WireId, &Source, &ByteCount, &IsFound);
     if ((Result.Code != ErrorCode_Success) || !IsFound)
     {
         return Result;
     }
-
-    GenericBuffer* Buffer = Entry.Value.String;
-    if ((Buffer == NULL) || (Buffer->_count == 0U) || (StringUTF8_GetByteLength(Buffer->_data) != (Buffer->_count - 1U)))
-    {
-        return Error_Construct2(ErrorCode_Deserialize, "Expected a string without NUL characters.");
-    }
-    size_t ByteCount = Buffer->_count - 1U;
     if (ByteCount > descriptor->Rules.MaxLength)
     {
         return Error_Construct4(ErrorCode_Deserialize, "The string is longer than the %" PRIu64 " bytes allowed.",
             (uint64_t)descriptor->Rules.MaxLength);
     }
-    unsigned char* Text = Memory_Allocate(Buffer->_count);
-    Memory_Copy(Buffer->_data, Text, Buffer->_count);
+    unsigned char* Text = Memory_Allocate(ByteCount + 1U);
+    Memory_Copy(Source, Text, ByteCount + 1U);
     PropertyInternal_AdoptOwned(descriptor, target, Text);
     return Error_CreateSuccess();
 }
@@ -351,11 +322,18 @@ static Error ReadDataMap(GHDFCompound* compound, const PropertyDescriptor* descr
     return Error_CreateSuccess();
 }
 
-/* Reads a scalar entry of @p type into *outEntry; *outFound false when absent. */
+/* Reads a scalar entry of @p type into *outEntry; *outFound false when absent, and on an error. */
 static Error GetScalar(GHDFCompound* compound, GHDFEntryID id, GHDFValueType type, GHDFObjectValue* outEntry,
     bool* outFound)
 {
-    return GHDFCompound_GetOptionalVerified(compound, id, GHDF_CreateRegularType(type), outEntry, outFound);
+    Error Result = GHDFCompound_GetOptionalVerified(compound, id, GHDF_CreateRegularType(type), outEntry, outFound);
+    if (Result.Code != ErrorCode_Success)
+    {
+        // An entry of another type is found but refused, and *outEntry holds that type's value: reading it as this
+        // type would be wrong (a Boolean that is not 0 or 1 is undefined behaviour).
+        *outFound = false;
+    }
+    return Result;
 }
 
 /* The non-string types; leaves *outFound false when the entry is absent (the property keeps its default). */
@@ -371,21 +349,25 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
             outData->BoolValue = *outFound && Entry.Value.Boolean;
             return Result;
         case PropertyType_Int32:
-            Result = GetScalar(compound, Id, GHDFValueType_Int32, &Entry, outFound);
-            outData->Int32Value = *outFound ? Entry.Value.Int32 : 0;
+        {
+            int64_t Value = 0;
+            Result = GameGHDF_GetOptionalSigned(compound, Id, (int64_t)INT32_MIN, (int64_t)INT32_MAX, &Value, outFound);
+            outData->Int32Value = *outFound ? (int32_t)Value : 0;
             return Result;
+        }
         case PropertyType_UInt32:
-            Result = GetScalar(compound, Id, GHDFValueType_UInt32, &Entry, outFound);
-            outData->UInt32Value = *outFound ? Entry.Value.UInt32 : 0U;
+        {
+            uint64_t Value = 0U;
+            Result = GameGHDF_GetOptionalUnsigned(compound, Id, (uint64_t)UINT32_MAX, &Value, outFound);
+            outData->UInt32Value = *outFound ? (uint32_t)Value : 0U;
             return Result;
+        }
         case PropertyType_UInt64:
-            Result = GetScalar(compound, Id, GHDFValueType_UInt64, &Entry, outFound);
-            outData->UInt64Value = *outFound ? Entry.Value.UInt64 : 0U;
-            return Result;
+            outData->UInt64Value = 0U;
+            return GameGHDF_GetOptionalUnsigned(compound, Id, UINT64_MAX, &outData->UInt64Value, outFound);
         case PropertyType_ObjectId:
-            Result = GetScalar(compound, Id, GHDFValueType_UInt64, &Entry, outFound);
-            outData->ObjectIdValue = *outFound ? Entry.Value.UInt64 : 0U;
-            return Result;
+            outData->ObjectIdValue = 0U;
+            return GameGHDF_GetOptionalUnsigned(compound, Id, UINT64_MAX, &outData->ObjectIdValue, outFound);
         case PropertyType_Float:
         case PropertyType_Angle:
             Result = GetScalar(compound, Id, GHDFValueType_Float, &Entry, outFound);

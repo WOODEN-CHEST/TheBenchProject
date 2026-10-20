@@ -85,6 +85,13 @@
 // Macros.
 /** @brief The most bytes the data of all of a world's objects may count together (DataMap_GetByteSize): 16 MiB. */
 #define WORLD_DATA_MAX_BYTES ((size_t)16777216)
+/** @brief The longest world name, in bytes of UTF-8 without the terminator (World_SetName). */
+#define WORLD_NAME_MAX_LENGTH ((size_t)256)
+/**
+ * @brief The largest object id: UINT64_MAX - 1. UINT64_MAX is never an id (World_CreateObjectWithId refuses it, the
+ *        counter stops below it), so every object can be saved and loaded: a world file has no next id past it.
+ */
+#define WORLD_OBJECT_ID_MAX (UINT64_MAX - 1U)
 
 
 // Types.
@@ -209,14 +216,15 @@ Error World_CreateObject(World* self, const unsigned char* name, WorldObject** o
 /**
  * @brief Creates an object with an explicit id: the loader's version (world files keep their ids).
  *
- * The id counter is advanced past @p id, so later World_CreateObject calls never collide with it.
+ * The id counter is advanced past @p id, so later World_CreateObject calls never collide with it; an object with
+ * WORLD_OBJECT_ID_MAX uses the counter up (World_CreateObject then fails).
  * @param self The world; must not be NULL.
  * @param name Borrowed NUL-terminated UTF-8 name to clone, or NULL.
- * @param id The id; must not be 0 and must be unused in this world.
+ * @param id The id; from 1 to WORLD_OBJECT_ID_MAX and unused in this world.
  * @param outObject [out] Receives the new object (world-owned). Must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self or @p outObject is NULL or @p id is 0;
  *          ErrorCode_InvalidOperation if @p id is in use or the object could not be stored;
- *          ErrorCode_ArgumentOutOfRange for a name that breaks its rules.
+ *          ErrorCode_ArgumentOutOfRange if @p id is above WORLD_OBJECT_ID_MAX or for a name that breaks its rules.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
@@ -262,7 +270,7 @@ size_t World_GetObjectCount(const World* self);
  * @returns Success; ErrorCode_IllegalArgument if @p self or @p outObject is NULL; ErrorCode_IndexOutOfBounds if
  *          @p index is out of range.
  */
-Error World_GetObjectByIndex(World* self, size_t index, WorldObject** outObject);
+Error World_GetObjectByIndex(const World* self, size_t index, WorldObject** outObject);
 
 
 // Components.
@@ -609,7 +617,8 @@ static inline uint64_t World_GetNextObjectId(const World* self)
 /**
  * @brief Raises the id counter so the next id handed out is at least @p minimumNext (never lowers it).
  *
- * Used when loading a world file, so new ids do not reuse ids its objects had before they were removed.
+ * Used when loading a world file, so new ids do not reuse ids its objects had before they were removed. A minimum
+ * above WORLD_OBJECT_ID_MAX uses the counter up: no id is that large (World_GetNextObjectId returns 0).
  * @param self The world; must not be NULL.
  * @param minimumNext The minimum value the next handed-out id should have.
  */
@@ -628,7 +637,8 @@ static inline const unsigned char* World_GetName(const World* self)
 /**
  * @brief Replaces the world name with an owned clone of @p name (or NULL to clear it).
  * @param self The world; must not be NULL.
- * @param name Borrowed NUL-terminated UTF-8 name to clone, or NULL to clear.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ * @param name Borrowed NUL-terminated UTF-8 name to clone (at most WORLD_NAME_MAX_LENGTH bytes), or NULL to clear.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for a name longer than
+ *          WORLD_NAME_MAX_LENGTH bytes or not valid UTF-8 (nothing changes then).
  */
 Error World_SetName(World* self, const unsigned char* name);

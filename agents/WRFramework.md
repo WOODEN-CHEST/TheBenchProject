@@ -64,9 +64,9 @@ The modules are (in alphabetical order):
 - WRFileStream: An IOStream for file system files (used in place of FILE*).
   - Functions: [as IO stream, construct from handle, deconstruct]
 - WRFileSystem: File system operations, like opening file streams, iterating files, getting file system entry properties, etc.
-  - Functions: [get entries, get files, get directories, get entry info, create directory, create all directories, create file, open file stream, read all text, read all bytes, write all text, write all bytes, delete entry, move entry, rename entry, get executable directory, directory entry enumerator has next, directory entry enumerator next, directory entry enumerator deconstruct, entry info deconstruct]
+  - Functions: [get entries, get files, get directories, get entry info, create directory, create all directories, create file, open file stream, read all text, read all bytes, write all text, write all bytes, delete entry, move entry, replace entry (atomic), rename entry, get executable directory, directory entry enumerator has next, directory entry enumerator next, directory entry enumerator deconstruct, entry info deconstruct]
 - WRGHDF: A binary file format to store data in, like game saves and such. Used for saving binary data to the disk.
-  - Functions: [GHDF write document, GHDF read document, GHDF create regular type, GHDF create array type, GHDFObjectValue create value, GHDFCompound set value, GHDFCompound get, GHDFCompound get optional, GHDFCompound get verified, GHDFCompound get optional verified, GHDFCompound remove, GHDFCompound clear, GHDFCompound get entry count, GHDFCompound get entry collection, GHDFCompound get value collection, GHDFCompound get key collection, GHDFArray add value, GHDFArray insert value, GHDFArray replace value, GHDFArray remove at, GHDFArray get, GHDFArray clear, GHDFArray copy raw bytes, GHDFArray get element count, GHDFArray get element type, GHDFArray get element collection, GHDFObjectPool create, GHDFObjectPool borrow object, GHDFObjectPool return object, GHDFObjectPool deconstruct]
+  - Functions: [GHDF write document, GHDF read document, GHDF read document with limits, GHDF create regular type, GHDF create array type, GHDFObjectValue create value, GHDFCompound set value, GHDFCompound get, GHDFCompound get optional, GHDFCompound get verified, GHDFCompound get optional verified, GHDFCompound remove, GHDFCompound clear, GHDFCompound get entry count, GHDFCompound get entry collection, GHDFCompound get value collection, GHDFCompound get key collection, GHDFArray add value, GHDFArray insert value, GHDFArray replace value, GHDFArray remove at, GHDFArray get, GHDFArray clear, GHDFArray copy raw bytes, GHDFArray get element count, GHDFArray get element type, GHDFArray get element collection, GHDFObjectPool create, GHDFObjectPool borrow object, GHDFObjectPool return object, GHDFObjectPool deconstruct]
 - WRHash: Hashcode creation functions.
   - Functions: [hash string, hash bytes, hash pointer, hash number]
 - WRHashMap: A generic map data structure.
@@ -78,7 +78,7 @@ The modules are (in alphabetical order):
 - WRIO: IO streams like in C# and Java.
   - Functions: [get position, set position, seek to start or end, move position, set length, flush, write byte, write bytes, write string, read byte, read bytes, read all, get total size, get remaining size, is seekable, is writable, is readable, is length-settable, is end of stream, close, deconstruct]
 - WRJSON: JSON reading, writing and handling.
-  - Functions: [JSON serialize, JSON deserialize, JSONObjectValue create value, JSONCompound set, JSONCompound get, JSONCompound get optional, JSONCompound get verified, JSONCompound get optional verified, JSONCompound remove, JSONCompound clear, JSONCompound get entry count, JSONCompound get entry collection, JSONCompound get value collection, JSONCompound get key collection, JSONArray add, JSONArray insert, JSONArray replace, JSONArray remove at, JSONArray get, JSONArray get optional, JSONArray get verified, JSONArray get optional verified, JSONArray clear, JSONArray get element count, JSONArray get element collection, JSONObjectPool create, JSONObjectPool borrow object, JSONObjectPool return object, JSONObjectPool deconstruct]
+  - Functions: [JSON serialize, JSON deserialize, JSON deserialize with limits, JSONObjectValue create value, JSONCompound set, JSONCompound get, JSONCompound get optional, JSONCompound get verified, JSONCompound get optional verified, JSONCompound remove, JSONCompound clear, JSONCompound get entry count, JSONCompound get entry collection, JSONCompound get value collection, JSONCompound get key collection, JSONArray add, JSONArray insert, JSONArray replace, JSONArray remove at, JSONArray get, JSONArray get optional, JSONArray get verified, JSONArray get optional verified, JSONArray clear, JSONArray get element count, JSONArray get element collection, JSONObjectPool create, JSONObjectPool borrow object, JSONObjectPool return object, JSONObjectPool deconstruct]
 - WRList: An interface for lists.
   - Functions: [as collection, get enumerator size, init enumerator, create enumerator, get element count, get element size, get flags, is read-only, add last, add first, insert, remove first, remove last, remove at, replace, add range last, add range first, insert range, remove range, replace range, clear, get element, get pointer to element, get first, get last, get scratch size, sort ascending, sort descending, reverse, filter, map, sum, max, min, contains, count where, first index of, last index of, copy to, deconstruct]
 - WRMap: An interface for maps.
@@ -373,6 +373,9 @@ void List_Append(List* self, int value);
   the plain form takes a caller-owned scratch buffer (size from `IList_GetScratchSize` /
   `GenericBuffer_GetSortScratchSize`) and does NOT allocate per call — PREFER THIS, reusing one scratch buffer.
   The `...Allocating` form allocates the scratch for you; use it only when you would have to allocate anyway.
+- The sorts are introsorts: O(n log n) on any input (sorted, reversed and equal input included) with O(log n) stack
+  (median-of-three pivots, recursion into the smaller side only, heapsort past 2·log2 n levels, insertion sort for up to
+  16 elements). They are NOT stable: give the comparator a tiebreak when equal elements must keep an order.
 - Functions which write to a generic buffer should NOT clear the buffer beforehand, that is the responsibility of the
   caller of said function.
 - This rule is strict: do not call `GenericBuffer_Clear` inside a function just because that function writes to a
@@ -474,6 +477,31 @@ in usage converted to UTF-8.
 - **Document readers cap nesting depth.** `JSON_Deserialize` and `GHDF_Read` reject documents nested deeper than
   512 levels (`JSON_MAX_NESTING_DEPTH` / `GHDF_MAX_NESTING_DEPTH`; every object/array or compound/array is one
   level, root = 1) with `ErrorCode_InvalidJSON` / `ErrorCode_Deserialize`, so hostile input cannot overflow the stack.
+- **GHDF strings are bounded.** `GHDF_Read` refuses a string declaring more than `GHDF_MAX_STRING_LENGTH` (1 GiB) or
+  more bytes than a seekable stream has left, and reads strings in chunks, so a short hostile document cannot make it
+  reserve a declared size. Deconstructing a `GHDFObjectPool` frees compounds and arrays still borrowed without releasing
+  what they hold (their values from that pool go with their own slots; values borrowed from another pool stay borrowed
+  there until that pool goes).
+- **JSON compounds keep insertion order.** Keys come out of every collection view and `JSON_Serialize` in the order they
+  were first set (`JSON_Deserialize` sets them in text order, so a document read and written back keeps its order);
+  setting a present key keeps its place, removing one drops it. `JSONSerializeFlags_InlineScalarArrays` keeps arrays of
+  scalars on one line in pretty-printed output (`[1.0, 2.0, 3.0]`).
+- **Atomic saves.** Write to a temporary file next to the target, then `FileSystem_ReplaceEntry(temp, target)`: it
+  replaces an existing file in one step on every platform (`FileSystem_MoveEntry` does not promise to replace). It
+  moves files only: a directory source is refused with `ErrorCode_IO`.
+- **Untrusted documents: read them with limits.** A document's size bounds its parsed tree only loosely (`{}` is two
+  bytes of text and about 900 bytes parsed; an empty GHDF compound in a compound array one byte and about 800), and
+  running out of memory aborts. `JSON_DeserializeWithLimits` / `GHDF_ReadWithLimits` take a `MaxTreeByteCount` and
+  refuse a document as soon as their estimate of its tree passes it (`JSON_READ_*_BYTES` / `GHDF_READ_*_BYTES` per
+  container, entry and string: at or a little above the measured 64-bit cost, strings at twice their length).
+- **Object pools grow geometrically.** Sections double from the requested capacity up to
+  `OBJECT_POOL_MAX_SECTION_BYTES` (1 MiB of objects); borrowing is O(1) (a stack of the sections with a free slot) and
+  returning O(log sections) (sections sorted by address). A large pool keeps up to one section of spare capacity.
+- **Number formatters leave their NUL past the count.** The integer `Number_*ToString` functions,
+  `Number_FloatToString` and `Number_DoubleToString` append the text and write a NUL just past the buffer's count
+  without counting it (the convention `StringBuilder`'s buffers use), so the result reads as a C string and the next
+  append continues it. (They used to count the NUL, so anything appended after a number landed behind it.)
+  `GenericBuffer_NullTerminate`, by contrast, appends a counted NUL.
 
 
 ---

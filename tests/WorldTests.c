@@ -295,11 +295,33 @@ static void LoaderIdsAdvanceTheCounter(TestRun* run)
     Object = CreateObject(run, &TestWorld, NULL);
     TEST_CHECK(run, (Object != NULL) && (WorldObject_GetId(Object) == 100U));
 
-    // A loaded object with the last id uses up the counter: no id can be handed out without colliding.
-    TEST_CHECK_SUCCESS(run, World_CreateObjectWithId(&TestWorld, NULL, UINT64_MAX, &Object));
+    // UINT64_MAX is never an id (no world file could hold a next id past it); an object with the last id uses the
+    // counter up, so no id can be handed out after it.
+    TEST_CHECK_ERROR(run, World_CreateObjectWithId(&TestWorld, NULL, UINT64_MAX, &Object), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_SUCCESS(run, World_CreateObjectWithId(&TestWorld, NULL, WORLD_OBJECT_ID_MAX, &Object));
     TEST_CHECK(run, World_GetNextObjectId(&TestWorld) == 0U);
     TEST_CHECK_ERROR(run, World_CreateObject(&TestWorld, NULL, &Object), ErrorCode_InvalidOperation);
     TEST_CHECK(run, World_GetObjectCount(&TestWorld) == 5U);
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
+
+    // The counter hands out the last id itself, then stops; raising it past the last id uses it up too.
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
+    {
+        return;
+    }
+    World_EnsureNextObjectIdAtLeast(&TestWorld, WORLD_OBJECT_ID_MAX);
+    Object = CreateObject(run, &TestWorld, NULL);
+    TEST_CHECK(run, (Object != NULL) && (WorldObject_GetId(Object) == WORLD_OBJECT_ID_MAX)
+        && (World_GetNextObjectId(&TestWorld) == 0U));
+    TEST_CHECK_ERROR(run, World_CreateObject(&TestWorld, NULL, &Object), ErrorCode_InvalidOperation);
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
+    {
+        return;
+    }
+    World_EnsureNextObjectIdAtLeast(&TestWorld, UINT64_MAX);
+    TEST_CHECK(run, World_GetNextObjectId(&TestWorld) == 0U);
+    TEST_CHECK_ERROR(run, World_CreateObject(&TestWorld, NULL, &Object), ErrorCode_InvalidOperation);
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 

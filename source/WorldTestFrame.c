@@ -1,13 +1,13 @@
+#include <inttypes.h>
 #include <math.h>
 #include "WorldTestFrame.h"
 #include "GameClock.h"
 #include "GameFrame.h"
 #include "Services.h"
 #include "World.h"
+#include "WorldFile.h"
 #include "WorldObject.h"
-#include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
-#include "WorldLightComponent.h"
 #include "GameCamera.h"
 #include "WorldRenderer.h"
 #include "Renderer.h"
@@ -28,23 +28,10 @@
 // Macros.
 /** Debug name used in log/crash messages. */
 #define FRAME_DEBUG_NAME ((const unsigned char*)u8"WorldTest")
-/** Asset name of the test model placed at the world centre. */
-#define TEST_MODEL_ASSET_NAME ((const unsigned char*)u8"test")
-/** Name given to the test model object. */
-#define TEST_MODEL_OBJECT_NAME ((const unsigned char*)u8"test_object")
-/** Name given to the ground-slab object (a flattened test model that receives the sun shadow). */
-#define TEST_GROUND_OBJECT_NAME ((const unsigned char*)u8"ground")
-/** Name given to the crisp (OmitPixelation) demo object — renders un-pixelated to stand in for a screen. */
-#define TEST_CRISP_OBJECT_NAME ((const unsigned char*)u8"crisp_object")
-/** Pixels per metre of the test image (a 1920x1080 screenshot): 1.5 metres wide, as its billboard always was. */
-#define TEST_IMAGE_PIXELS_PER_UNIT 1280.0f
-/** Demo of per-material PBR MAPS: a cube whose material carries albedo/normal/ORM/emissive textures. */
-#define TEST_PBR_DEMO_OBJECT_NAME ((const unsigned char*)u8"pbr_demo_object")
-#define TEST_PBR_DEMO_ASSET_NAME ((const unsigned char*)u8"pbr_demo")
-/** Demo of per-material PBR scalar VALUES (no maps): a polished gold cube (metallic 1, low roughness). */
-#define TEST_PBR_METAL_OBJECT_NAME ((const unsigned char*)u8"pbr_metal_object")
-#define TEST_PBR_METAL_ASSET_NAME ((const unsigned char*)u8"pbr_metal")
-
+/** The test world's file, <base>/worlds/test.world.json, and the name F5 saves the live world under (as JSON and
+ *  GHDF: worlds/test.saved.world.json and .world.ghdf), for round-trip checks. */
+#define TEST_WORLD_FILE_NAME ((const unsigned char*)u8"test")
+#define SAVED_WORLD_FILE_NAME ((const unsigned char*)u8"test.saved")
 /** Base movement speed, in world units per second. */
 #define MOVE_SPEED 6.0f
 /** Multiplier applied to movement speed while the sprint key is held. */
@@ -54,8 +41,6 @@
 /** The test world's clock speed in game seconds per real second: a 2-minute day, short so the cycle is easy to
  *  observe (the clock's own default is 72, a 20-minute day). */
 #define TEST_TIME_SCALE 720.0
-/** Sun-arc tilt from the zenith at noon for the test world, in radians (~23 degrees). */
-#define TEST_SUN_ANGLE 0.4f
 /** Manual time scrub rate (fraction of a full day per real second while [ or ] is held). */
 #define TIME_SCRUB_RATE 0.1
 /** The hours the number keys jump to: dawn, noon, dusk and midnight. */
@@ -78,13 +63,9 @@
 /** The objects whose opacity the X key steps: the centre cube (a model) and the tree (a cutout sprite), both casting
  *  shadows. */
 #define OPACITY_TEST_OBJECT_COUNT 2U
-/** The test world's hierarchy (T08): the desk (an empty object holding its parts), where it stands, and how the J key
- *  slides it along X: back and forth by this many metres either way, once per period. */
+/** The test world's hierarchy (T08): the desk (an empty object holding its parts) and how the J key slides it along X:
+ *  back and forth by this many metres either way around where it was loaded, once per period. */
 #define TEST_DESK_OBJECT_NAME ((const unsigned char*)u8"desk")
-#define TEST_DESK_POSITION_X 1.8f
-#define TEST_DESK_POSITION_Y 0.05f
-#define TEST_DESK_POSITION_Z (-3.6f)
-#define TEST_DESK_TURN_DEGREES 15.0f
 #define DESK_SLIDE_DISTANCE 1.2f
 #define DESK_SLIDE_PERIOD_SECONDS 6.0
 /** Default font of the text sample: covers Latvian and Cyrillic. */
@@ -116,25 +97,6 @@
 
 
 // Types.
-/* One sprite of the test world: its object, its animation and the settings that differ from the defaults. */
-typedef struct TestSpriteStruct
-{
-    const char* ObjectName;
-    const char* Animation;
-    Vector3 Position;
-    /** Euler rotation in degrees (X, then Y, then Z). */
-    Vector3 RotationDegrees;
-    /** The object's uniform scale. */
-    float Scale;
-    WorldSpriteOrientation Orientation;
-    WorldSpriteAlphaMode AlphaMode;
-    Vector2 Pivot;
-    float PixelsPerUnit;
-    bool IsLit;
-    float Emission;
-    bool IsDecal;
-} TestSprite;
-
 typedef struct WorldTestFrameStruct
 {
     /** Abstract base (must be first). */
@@ -163,40 +125,13 @@ typedef struct WorldTestFrameStruct
      *  OpacitySteps they are at. */
     uint64_t _opacityTestObjectIds[OPACITY_TEST_OBJECT_COUNT];
     size_t _opacityStep;
-    /** The desk the J key slides and the H key hides (0 if the test world lacks it), and whether it is sliding, for how
-     *  long it has (within one period). */
+    /** The desk the J key slides and the H key hides (0 if the test world lacks it), where along X it was loaded (the
+     *  slide's centre), and whether it is sliding, for how long it has (within one period). */
     uint64_t _deskId;
+    float _deskStartX;
     bool _isDeskSliding;
     double _deskSlideSeconds;
 } WorldTestFrame;
-
-
-// Fields: the test world's sprites (T06): one of each kind, placed so the camera's start view shows them.
-static const TestSprite TestSprites[] =
-{
-    // The original test sprite: a camera-facing billboard of an opaque screenshot, 1.5 m wide.
-    { "sprite_object", "test_sprite", { -3.0f, 1.5f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 1.0f,
-        WorldSpriteOrientation_Billboard, WorldSpriteAlphaMode_Cutout, { 0.5f, 0.5f }, TEST_IMAGE_PIXELS_PER_UNIT, true,
-        1.0f, false },
-    // A blended tire-mark decal lying on the ground slab (its top is at y 0.05), turned 25 degrees.
-    { "tire_mark", "test_tire_mark", { -1.0f, 0.05f, -3.0f }, { -90.0f, 25.0f, 0.0f }, 1.0f,
-        WorldSpriteOrientation_Fixed, WorldSpriteAlphaMode_Blend, { 0.5f, 0.5f }, 32.0f, true, 1.0f, true },
-    // An axis-billboard tree standing on its bottom centre; it casts a shadow that faces the light.
-    { "tree", "test_tree", { -6.0f, 0.05f, 4.0f }, { 0.0f, 0.0f, 0.0f }, 1.0f, WorldSpriteOrientation_AxisBillboard,
-        WorldSpriteAlphaMode_Cutout, { 0.5f, 0.0f }, 32.0f, true, 1.0f, false },
-    // A fixed sign behind the tree, turned toward the start view: the tree's transparent texels show it.
-    { "sign", "test_sign", { -8.5f, 0.05f, 7.0f }, { 0.0f, 200.0f, 0.0f }, 1.0f, WorldSpriteOrientation_Fixed,
-        WorldSpriteAlphaMode_Cutout, { 0.5f, 0.0f }, 32.0f, true, 1.0f, false },
-    // A blended, lit smoke puff in front of the warm lamp's glow (the two blend over each other).
-    { "smoke", "test_smoke", { 1.5f, 1.95f, -1.3f }, { 0.0f, 0.0f, 0.0f }, 2.0f, WorldSpriteOrientation_Billboard,
-        WorldSpriteAlphaMode_Blend, { 0.5f, 0.5f }, 32.0f, true, 1.0f, false },
-    // An additive, unlit glow around the warm lamp.
-    { "lamp_glow", "test_glow", { 2.5f, 1.6f, 2.5f }, { 0.0f, 0.0f, 0.0f }, 2.0f, WorldSpriteOrientation_Billboard,
-        WorldSpriteAlphaMode_Additive, { 0.5f, 0.5f }, 32.0f, false, 2.0f, false },
-    // An unlit neon sign facing the start view: as bright at night as by day.
-    { "neon_sign", "test_neon", { 4.5f, 2.2f, 4.5f }, { 0.0f, 180.0f, 0.0f }, 1.0f, WorldSpriteOrientation_Fixed,
-        WorldSpriteAlphaMode_Cutout, { 0.5f, 0.5f }, 32.0f, false, 3.0f, false },
-};
 
 
 // Static functions: the world-up direction for vertical movement.
@@ -472,8 +407,85 @@ static void HandleDebugSkyInput(WorldTestFrame* frame, const GameInput* input)
     }
 }
 
-/* The renderer's and the sky's debug keys (A/B toggles, the light pollution steps, status lines). Called from Update
- * with the tick's input (what the UI above did not consume). */
+// Static functions: the world file.
+/* Loads the test world from <base>/worlds/test.world.json into @p world. A missing or broken file is logged once and
+ * leaves an empty world instead (the debug grid shows that it is empty), so the frame still starts; only failing to
+ * build even that is an error. @p outIsLoaded says which it was. */
+static Error LoadTestWorld(World* world, Services* services, bool* outIsLoaded)
+{
+    *outIsLoaded = false;
+    GenericBuffer Path;
+    GenericBuffer_AllocateVariable(&Path, 0U, sizeof(unsigned char));
+    Error Result = (services->BaseDirectory != NULL)
+        ? WorldFile_BuildPath(services->BaseDirectory, TEST_WORLD_FILE_NAME, WorldFileFormat_JSON, &Path)
+        : Error_Construct2(ErrorCode_IllegalArgument, "The game has no base directory.");
+    if (Result.Code == ErrorCode_Success)
+    {
+        WorldFileReadOptions Options = WorldFileReadOptions_Create(services->Keys, services->Assets, services->Logger);
+        Result = WorldFile_LoadJSON(Path._data, &Options, world);
+    }
+
+    const char* PathText = (Path._count > 0U) ? (const char*)Path._data : "worlds/test.world.json";
+    if (Result.Code == ErrorCode_Success)
+    {
+        *outIsLoaded = true;
+        if (services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(services->Logger,
+                (const unsigned char*)u8"WorldTest: loaded the test world from %s (%" PRIu64 " objects).", PathText,
+                (uint64_t)World_GetObjectCount(world));
+            Error_Deconstruct(&LogResult);
+        }
+    }
+    else
+    {
+        if (services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogWarningFormatted(services->Logger,
+                (const unsigned char*)u8"WorldTest: could not load the test world (%s): %s The world is empty instead.",
+                PathText, (Result.Message != NULL) ? (const char*)Result.Message : "no details.");
+            Error_Deconstruct(&LogResult);
+        }
+        Error_Deconstruct(&Result);
+        Result = World_Construct2(world, services->Keys, services->Assets, services->Logger);
+    }
+    Memory_Free(Path._data);
+    return Result;
+}
+
+/* Saves the live world as worlds/test.saved.world.json or .world.ghdf (atomically) and logs where, or why not. */
+static void SaveWorldAs(WorldTestFrame* frame, WorldFileFormat format)
+{
+    if (frame->_services->BaseDirectory == NULL)
+    {
+        return;
+    }
+    GenericBuffer Path;
+    GenericBuffer_AllocateVariable(&Path, 0U, sizeof(unsigned char));
+    Error Result = WorldFile_BuildPath(frame->_services->BaseDirectory, SAVED_WORLD_FILE_NAME, format, &Path);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = (format == WorldFileFormat_JSON) ? WorldFile_SaveJSON(&frame->_world, Path._data)
+            : WorldFile_SaveGHDF(&frame->_world, Path._data);
+    }
+    if (frame->_services->Logger != NULL)
+    {
+        const char* PathText = (Path._count > 0U) ? (const char*)Path._data : "?";
+        Error LogResult = (Result.Code == ErrorCode_Success)
+            ? Logger_LogInfoFormatted(frame->_services->Logger, (const unsigned char*)u8"WorldTest: saved the world to %s.",
+                PathText)
+            : Logger_LogWarningFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: could not save the world to %s: %s", PathText,
+                (Result.Message != NULL) ? (const char*)Result.Message : "no details.");
+        Error_Deconstruct(&LogResult);
+    }
+    Error_Deconstruct(&Result);
+    Memory_Free(Path._data);
+}
+
+
+/* The renderer's and the sky's debug keys (A/B toggles, the light pollution steps, status lines), and F5 (save the
+ * world). Called from Update with the tick's input (what the UI above did not consume). */
 static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
 {
     WorldEnvironment* Environment = World_GetEnvironment(&frame->_world);
@@ -615,6 +627,14 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         }
     }
 
+    // F5 saves the live world next to the test world, as JSON and GHDF, for round-trip checks: loaded back they are the
+    // same world, and the JSON's diff against worlds/test.world.json shows only what changed in the game.
+    if (GameInput_IsKeyPressed(input, GameKey_F5))
+    {
+        SaveWorldAs(frame, WorldFileFormat_JSON);
+        SaveWorldAs(frame, WorldFileFormat_GHDF);
+    }
+
     // L toggles the debug light gizmos (wireframe spheres at light positions).
     if (GameInput_IsKeyPressed(input, GameKey_L))
     {
@@ -688,7 +708,7 @@ static void HandleDebugDeskInput(WorldTestFrame* frame, const GameInput* input)
     }
 }
 
-/* Moves a sliding desk on by the tick's real time: back and forth along X around where it was built, one period at a
+/* Moves a sliding desk on by the tick's real time: back and forth along X around where it was loaded, one period at a
  * time. Its children follow through the hierarchy. */
 static void SlideDesk(WorldTestFrame* frame, double deltaSeconds)
 {
@@ -700,7 +720,7 @@ static void SlideDesk(WorldTestFrame* frame, double deltaSeconds)
     frame->_deskSlideSeconds = fmod(frame->_deskSlideSeconds + deltaSeconds, DESK_SLIDE_PERIOD_SECONDS);
     double Turn = (2.0 * PI * frame->_deskSlideSeconds) / DESK_SLIDE_PERIOD_SECONDS;
     Vector3 Position = WorldObject_GetPosition(Desk);
-    Position.x = TEST_DESK_POSITION_X + (DESK_SLIDE_DISTANCE * (float)sin(Turn));
+    Position.x = frame->_deskStartX + (DESK_SLIDE_DISTANCE * (float)sin(Turn));
     Error Result = WorldObject_SetPosition(Desk, Position);
     Error_Deconstruct(&Result); // cannot fail: the position is finite
 }
@@ -904,7 +924,7 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"day, / a week ahead; F full moon / calendar moon, Y seasons; O post effects, B bloom, G sun shafts, "
             u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, N light pollution, X opacity of the "
             u8"centre cube and the tree, U frustum culling, J slide the desk, H hide the desk, I renderer status and game "
-            u8"time, T text sample; M frees the "
+            u8"time, T text sample, F5 save the world (worlds/test.saved.world.json and .ghdf); M frees the "
             u8"mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");
         Error_Deconstruct(&LogResult);
     }
@@ -1058,275 +1078,6 @@ static const GameFrameVTable WorldTestFrameVTable =
 };
 
 
-// Static functions: world construction.
-/* Creates an object under @p parentId (0: a root) at @p position with @p scale, both relative to the parent, and gives
- * it a component of @p type. The world owns both at once, so on a failure the caller tears the whole world down. */
-static Error AddObject(World* world, const unsigned char* name, uint64_t parentId, Vector3 position, Vector3 scale,
-    WorldComponentType type, WorldComponent** outComponent)
-{
-    WorldObject* Object = NULL;
-    Error Result = World_CreateObject(world, name, &Object);
-    if ((Result.Code == ErrorCode_Success) && (parentId != 0U))
-    {
-        Result = World_SetParent(world, WorldObject_GetId(Object), parentId, false);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldObject_SetPosition(Object, position);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldObject_SetScale(Object, scale);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = World_AddComponent(world, WorldObject_GetId(Object), type, outComponent);
-    }
-    return Result;
-}
-
-/* Creates an object drawing the named model, under @p parentId (0: a root). */
-static Error AddModelObject(World* world, const unsigned char* name, uint64_t parentId, const unsigned char* assetName,
-    Vector3 position, Vector3 scale, bool omitPixelation, WorldShadowTier shadowTier)
-{
-    WorldComponent* Component = NULL;
-    Error Result = AddObject(world, name, parentId, position, scale, WorldComponentType_Model, &Component);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    WorldModelComponent* ModelComponent = WorldModelComponent_FromComponent(Component);
-    Result = WorldModelComponent_SetModel(ModelComponent, assetName);
-    if (Result.Code == ErrorCode_Success)
-    {
-        // Crisp (un-pixelated) full-res overlay when true.
-        Result = WorldModelComponent_SetOmitsPixelation(ModelComponent, omitPixelation);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldModelComponent_SetShadowTier(ModelComponent, shadowTier); // which shadow cascade(s) it casts into
-    }
-    return Result;
-}
-
-/* Creates an object drawing a test sprite: its animation, rotation and the settings that differ from the defaults. */
-static Error AddSpriteObject(World* world, const TestSprite* sprite)
-{
-    WorldComponent* Component = NULL;
-    Error Result = AddObject(world, (const unsigned char*)sprite->ObjectName, 0U, sprite->Position,
-        (Vector3){ sprite->Scale, sprite->Scale, sprite->Scale }, WorldComponentType_Sprite, &Component);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-    WorldObject* Object = WorldComponent_GetOwner(Component);
-    Vector3 Rotation = Vector3Scale(sprite->RotationDegrees, DEG2RAD);
-    WorldSpriteComponent* Sprite = WorldSpriteComponent_FromComponent(Component);
-    Result = WorldObject_SetRotation(Object, Rotation);
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldSpriteComponent_SetSpriteAnimation(Sprite, (const unsigned char*)sprite->Animation);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldSpriteComponent_SetOrientation(Sprite, sprite->Orientation);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldSpriteComponent_SetAlphaMode(Sprite, sprite->AlphaMode);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldSpriteComponent_SetPivot(Sprite, sprite->Pivot);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldSpriteComponent_SetPixelsPerUnit(Sprite, sprite->PixelsPerUnit);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldSpriteComponent_SetLit(Sprite, sprite->IsLit);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldSpriteComponent_SetEmission(Sprite, sprite->Emission);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldSpriteComponent_SetDecal(Sprite, sprite->IsDecal);
-    }
-    return Result;
-}
-
-/* Creates an object carrying a point light with the given colour and reach, under @p parentId (0: a root). */
-static Error AddPointLight(World* world, const unsigned char* name, uint64_t parentId, Vector3 position, Color color,
-    float intensity, float range, bool castsShadows)
-{
-    WorldComponent* Component = NULL;
-    Error Result = AddObject(world, name, parentId, position, (Vector3){ 1.0f, 1.0f, 1.0f }, WorldComponentType_Light,
-        &Component);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    WorldLightComponent* Light = WorldLightComponent_FromComponent(Component);
-    Result = WorldLightComponent_SetColor(Light, color);
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldLightComponent_SetIntensity(Light, intensity);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldLightComponent_SetRange(Light, range);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldLightComponent_SetCastsShadows(Light, castsShadows);
-    }
-    return Result;
-}
-
-/* The test world's hierarchy (T08): the desk, an empty object turned 15 degrees that holds its parts (a top and two
- * sides), a cup and a desk lamp, which holds its light. Every child's position, rotation and scale are relative to its
- * parent: the parts are placed in the desk's own frame (y 0 is the floor), and the light hangs 0.35 lamp units above the
- * lamp's centre, which the lamp's height (0.8) makes 0.28 m. The desk carries no model of its own, so its children are
- * not stretched by a scale of its. */
-static Error AddDesk(World* world)
-{
-    WorldObject* Desk = NULL;
-    Error Result = World_CreateObject(world, TEST_DESK_OBJECT_NAME, &Desk);
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldObject_SetPosition(Desk, (Vector3){ TEST_DESK_POSITION_X, TEST_DESK_POSITION_Y,
-            TEST_DESK_POSITION_Z });
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = WorldObject_SetRotation(Desk, (Vector3){ 0.0f, TEST_DESK_TURN_DEGREES * DEG2RAD, 0.0f });
-    }
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-
-    // The test model is a 0.5 m cube, so each scale is twice the part's size in metres.
-    uint64_t DeskId = WorldObject_GetId(Desk);
-    Result = AddModelObject(world, (const unsigned char*)u8"desk_top", DeskId, TEST_MODEL_ASSET_NAME,
-        (Vector3){ 0.0f, 0.75f, 0.0f }, (Vector3){ 3.2f, 0.12f, 1.6f }, false, WorldShadowTier_Both);
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddModelObject(world, (const unsigned char*)u8"desk_side_left", DeskId, TEST_MODEL_ASSET_NAME,
-            (Vector3){ -0.74f, 0.36f, 0.0f }, (Vector3){ 0.12f, 1.44f, 1.5f }, false, WorldShadowTier_Both);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddModelObject(world, (const unsigned char*)u8"desk_side_right", DeskId, TEST_MODEL_ASSET_NAME,
-            (Vector3){ 0.74f, 0.36f, 0.0f }, (Vector3){ 0.12f, 1.44f, 1.5f }, false, WorldShadowTier_Both);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddModelObject(world, (const unsigned char*)u8"cup", DeskId, TEST_PBR_METAL_ASSET_NAME,
-            (Vector3){ 0.45f, 0.84f, 0.15f }, (Vector3){ 0.18f, 0.24f, 0.18f }, false, WorldShadowTier_Near);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddModelObject(world, (const unsigned char*)u8"desk_lamp", DeskId, TEST_MODEL_ASSET_NAME,
-            (Vector3){ -0.5f, 0.98f, -0.2f }, (Vector3){ 0.1f, 0.8f, 0.1f }, false, WorldShadowTier_Near);
-    }
-    uint64_t LampId = FindObjectId(world, "desk_lamp");
-    if ((Result.Code == ErrorCode_Success) && (LampId != 0U))
-    {
-        Result = AddPointLight(world, (const unsigned char*)u8"desk_lamp_light", LampId, (Vector3){ 0.0f, 0.35f, 0.0f },
-            (Color){ 255, 214, 160, 255 }, 3.0f, 4.0f, false);
-    }
-    return Result;
-}
-
-/* Builds the test world: a raised centre model that casts a shadow onto a wide ground slab, lit by the sun
- * plus a couple of coloured point lights near the centre model (to exercise point-light reach culling). The world
- * gets the asset manager so it loads its sprites' animations itself. */
-static Error BuildTestWorld(World* world, Services* services)
-{
-    Error ConstructResult = World_Construct2(world, services->Keys, services->Assets, services->Logger);
-    if (ConstructResult.Code != ErrorCode_Success)
-    {
-        return ConstructResult;
-    }
-
-    // Where the sky starts. These live on the world's WorldEnvironment and are saved WITH the world (its property
-    // table); the frame's game clock starts from the time of day and the date (the environment's default, 2026-10-18)
-    // and writes them every tick from then on.
-    WorldEnvironment* Environment = World_GetEnvironment(world);
-    Environment->TimeOfDay = WORLD_ENVIRONMENT_TIME_OF_DAY_NOON;    // 0=midnight, 0.25=dawn, 0.5=noon, 0.75=dusk
-    Environment->SunAngle = TEST_SUN_ANGLE;                        // radians the noon sun leans from straight up
-
-    // Centre model, raised so its shadow lands on the ground; then a wide, thin slab as the ground receiver.
-    // (Both cast into both shadow cascades by default.)
-    Error Result = AddModelObject(world, TEST_MODEL_OBJECT_NAME, 0U, TEST_MODEL_ASSET_NAME,
-        (Vector3){ 0.0f, 1.2f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f }, false, WorldShadowTier_Both);
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddModelObject(world, TEST_GROUND_OBJECT_NAME, 0U, TEST_MODEL_ASSET_NAME,
-            (Vector3){ 0.0f, 0.0f, 0.0f }, (Vector3){ 40.0f, 0.2f, 40.0f }, false, WorldShadowTier_Both);
-    }
-    // A crisp (OmitPixelation) model to the side: it renders un-pixelated + full-res while the rest of the world
-    // stays chunky — a stand-in for a readable in-world screen. Toggle it against pixelated with the C key.
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddModelObject(world, TEST_CRISP_OBJECT_NAME, 0U, TEST_MODEL_ASSET_NAME,
-            (Vector3){ 3.0f, 1.2f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f }, true, WorldShadowTier_Both);
-    }
-    // Two coloured point lights flanking the centre cube (reach 10 units, so they light the cube + nearby
-    // ground and fade out before the slab edges — exercises the per-object reach culling + forward shading).
-    if (Result.Code == ErrorCode_Success)
-    {
-        // The warm light casts shadows (exercises the point-light cube shadow map); the cool one does not.
-        Result = AddPointLight(world, (const unsigned char*)u8"warm_light", 0U,
-            (Vector3){ 2.5f, 1.6f, 2.5f }, (Color){ 255, 150, 60, 255 }, 6.0f, 10.0f, true);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddPointLight(world, (const unsigned char*)u8"cool_light", 0U,
-            (Vector3){ -2.5f, 1.2f, -2.0f }, (Color){ 80, 150, 255, 255 }, 6.0f, 10.0f, false);
-    }
-    // The sprites (TestSprites): the original test image, a decal, a tree, a sign, smoke, a glow and a neon sign.
-    for (size_t Index = 0; (Index < (sizeof(TestSprites) / sizeof(TestSprites[0]))) && (Result.Code == ErrorCode_Success);
-        Index++)
-    {
-        Result = AddSpriteObject(world, &TestSprites[Index]);
-    }
-    // Per-material PBR demos: a mapped cube (albedo/normal/ORM/emissive textures) on the left, and a scalar-
-    // value gold metal cube (metallic 1, low roughness, no maps) on the right — A/B for the maps vs values path.
-    // Shadow-tier demo: the mapped cube casts NEAR-only (its shadow vanishes once you fly far from it — a
-    // detailed prop), the metal cube casts FAR-only (still shadows coarsely at a distance — a large object).
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddModelObject(world, TEST_PBR_DEMO_OBJECT_NAME, 0U, TEST_PBR_DEMO_ASSET_NAME,
-            (Vector3){ -6.0f, 1.2f, 0.0f }, (Vector3){ 2.0f, 2.0f, 2.0f }, false, WorldShadowTier_Near);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddModelObject(world, TEST_PBR_METAL_OBJECT_NAME, 0U, TEST_PBR_METAL_ASSET_NAME,
-            (Vector3){ 6.0f, 1.2f, 0.0f }, (Vector3){ 2.0f, 2.0f, 2.0f }, false, WorldShadowTier_Far);
-    }
-    // The hierarchy (T08): a desk with its parts, a cup and a lamp whose light hangs off it. J slides it, H hides it.
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = AddDesk(world);
-    }
-    if (Result.Code != ErrorCode_Success)
-    {
-        Error DeconstructResult = World_Deconstruct(world);
-        Error_Deconstruct(&DeconstructResult);
-        return Result;
-    }
-
-    return Error_CreateSuccess();
-}
-
-
 // Public functions.
 Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
 {
@@ -1346,7 +1097,8 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         return BaseResult;
     }
 
-    Error WorldResult = BuildTestWorld(&Frame->_world, services);
+    bool IsTestWorldLoaded = false;
+    Error WorldResult = LoadTestWorld(&Frame->_world, services, &IsTestWorldLoaded);
     if (WorldResult.Code != ErrorCode_Success)
     {
         GameFrame_Deconstruct(&Frame->Base);
@@ -1398,8 +1150,14 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     }
     Frame->_opacityStep = 0U;
     Frame->_deskId = FindObjectId(&Frame->_world, (const char*)TEST_DESK_OBJECT_NAME);
+    WorldObject* Desk = NULL;
+    Frame->_deskStartX = World_TryGetObject(&Frame->_world, Frame->_deskId, &Desk) ? WorldObject_GetPosition(Desk).x : 0.0f;
     Frame->_isDeskSliding = false;
     Frame->_deskSlideSeconds = 0.0;
+    if (!IsTestWorldLoaded)
+    {
+        WorldRenderer_SetDebugGridEnabled(Frame->_renderer, true); // an empty world shows the grid, so it is visible
+    }
     Frame->_camera = GameCamera_Create((Vector3){ .x = 0.0f, .y = 2.5f, .z = -7.0f }, GAME_CAMERA_DEFAULT_FOV_Y);
     Frame->_camera.Pitch = -0.2f;
     Frame->_cursorCaptured = false;

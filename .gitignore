@@ -61,6 +61,11 @@ local/
 compile/out/logs/
 tests/out/
 
+# Worlds the test frame's F5 key saves for round-trip checks (worlds/test.saved.world.json and .ghdf), and a save's
+# temporary file if one is ever left behind.
+compile/out/worlds/*.saved.world.*
+compile/out/worlds/*.tmp
+
 # Asset manager temp-file cache (created next to the executable when needed).
 .wr_asset_cache/
 

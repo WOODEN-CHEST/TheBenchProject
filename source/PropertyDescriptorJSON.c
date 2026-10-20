@@ -430,8 +430,12 @@ static Error ReadDataMap(const PropertyTable* table, const PropertyDescriptor* d
 }
 
 /* The persistent descriptor that reads @p key: its Key, or a data map's TagsKey; NULL for none. */
-static const PropertyDescriptor* FindPersistentByJSONKey(const PropertyTable* table, const unsigned char* key)
+const PropertyDescriptor* PropertyTable_FindByJSONKey(const PropertyTable* table, const unsigned char* key)
 {
+    if ((table == NULL) || (key == NULL))
+    {
+        return NULL;
+    }
     for (size_t Index = 0; Index < table->DescriptorCount; Index++)
     {
         const PropertyDescriptor* Descriptor = &table->Descriptors[Index];
@@ -494,7 +498,7 @@ static Error CollectUnknownKeys(const PropertyTable* table, JSONCompound* compou
         {
             break;
         }
-        if (FindPersistentByJSONKey(table, Entry.Key) == NULL)
+        if (PropertyTable_FindByJSONKey(table, Entry.Key) == NULL)
         {
             if (*outCount < PROPERTY_JSON_UNKNOWN_KEY_LIST_LIMIT)
             {
