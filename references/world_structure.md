@@ -57,7 +57,8 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
             "position": [0.45, 0.84, 0.15],
             "components": {
                 "model": {
-                    "model": "pbr_metal",
+                    "world_model": "pbr_metal",
+                    "overrides_shadow_tier": true,
                     "shadow_tier": "near"
                 }
             }
@@ -93,6 +94,38 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 
 An object has at most one component of each type. A block whose values are all defaults is still written (`"light":
 {}`): the component is there.
+
+### The model block
+
+The `model` component names a world model (`world_model`: a `world_models/` asset, `references/asset_structure.md`,
+"World models"), which says which meshes to draw, how far they are seen and how they are drawn by default. A placement
+picks a variant with `uses_variant` (true) and `variant` (its name), and overrides each default setting with two keys:
+an override flag, `overrides_` and the setting's key (false by default: the world model's value applies), and its own
+value next to it. The value is kept, and saved, while its flag is off, so switching the flag back on restores it. There
+are no "inherit" values.
+
+| Setting | Flag | Value |
+|---|---|---|
+| The outline | `overrides_has_outline` | `has_outline` (default true) |
+| Full resolution over the pixelated image | `overrides_omit_pixelation` | `omit_pixelation` (default false) |
+| The shadow cascades | `overrides_shadow_tier` | `shadow_tier`: `both` (default), `near`, `far` |
+| Casting shadows | `overrides_casts_shadows` | `casts_shadows` (default true) |
+| The draw distance | `overrides_draw_distance` | `draw_distance`: metres, above 0 (default 600) |
+| Keeping it fixed against the quality setting | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` (default false) |
+
+`draw_distance_multiplier` (above 0, default 1) multiplies the draw distance in effect, the world model's or the
+placement's own: 2 is seen twice as far. It is a plain setting, not an override.
+
+```
+"model": {
+    "world_model": "office_desk",
+    "uses_variant": true,
+    "variant": "dark_wood",
+    "overrides_draw_distance": true,
+    "draw_distance": 250.0,
+    "draw_distance_multiplier": 1.5
+}
+```
 
 ### Values
 
@@ -201,4 +234,9 @@ Downloaded worlds use the same code, so loading treats every file as hostile:
   not know. GHDF entry ids a table retired are skipped silently.
 - **Versions:** the format version is raised only for changes an older game cannot read by skipping what it does not
   know (a renamed key, a value read another way); new keys and new component types keep it. Every table a world file
-  holds is at its version 1 under format 1.
+  holds is at its version 1 under format 1. One exception, while the test world was the only world file: world models
+  (task T10) renamed the model block's `model` (a model asset) to `world_model` (a world model) and made its
+  `has_outline`, `omit_pixelation`, `shadow_tier` and `casts_shadows` the placement's own values behind override flags,
+  without a new format version. A JSON file written before reads with its `model` key skipped as unknown (the object
+  draws nothing); a GHDF one keeps the name on entry 1, which now reads as the world model's name (it draws where a
+  world model has the model's name). Either way its render settings stay unused until their flags are set.

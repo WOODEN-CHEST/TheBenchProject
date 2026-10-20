@@ -615,7 +615,7 @@ static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
         WorldComponentType_Light));
     if ((ModelComponent != NULL) && (Light != NULL))
     {
-        TEST_CHECK(run, (WorldModelComponent_GetModel(ModelComponent) == NULL)
+        TEST_CHECK(run, (WorldModelComponent_GetWorldModel(ModelComponent) == NULL)
             && WorldModelComponent_HasOutline(ModelComponent)
             && !WorldModelComponent_OmitsPixelation(ModelComponent) && WorldModelComponent_CastsShadows(ModelComponent)
             && (WorldModelComponent_GetShadowTier(ModelComponent) == WorldShadowTier_Both));
@@ -625,7 +625,7 @@ static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
 
         uint32_t ObjectRevision = WorldObject_GetRevision(Object);
         uint32_t Revision = WorldComponent_GetRevision(&ModelComponent->Base);
-        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetModel(ModelComponent, (const unsigned char*)u8"crate"));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetWorldModel(ModelComponent, (const unsigned char*)u8"crate"));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasOutline(ModelComponent, false));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOmitsPixelation(ModelComponent, true));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(ModelComponent, WorldShadowTier_Far));
@@ -640,14 +640,14 @@ static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
 
         // Refused values change nothing.
         Revision = WorldComponent_GetRevision(&ModelComponent->Base);
-        TEST_CHECK_ERROR(run, WorldModelComponent_SetModel(ModelComponent, (const unsigned char*)u8"Not A Name"),
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetWorldModel(ModelComponent, (const unsigned char*)u8"Not A Name"),
             ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldModelComponent_SetShadowTier(ModelComponent, (WorldShadowTier)9),
             ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldLightComponent_SetRange(Light, -1.0f), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldLightComponent_SetIntensity(Light, NAN), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK(run, WorldComponent_GetRevision(&ModelComponent->Base) == Revision);
-        TEST_CHECK(run, strcmp((const char*)WorldModelComponent_GetModel(ModelComponent), "crate") == 0);
+        TEST_CHECK(run, strcmp((const char*)WorldModelComponent_GetWorldModel(ModelComponent), "crate") == 0);
 
         Revision = WorldComponent_GetRevision(&Light->Base);
         TEST_CHECK_SUCCESS(run, WorldLightComponent_SetRange(Light, 6.0f));

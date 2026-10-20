@@ -1,0 +1,6 @@
+{
+    "name": "pbr_metal",
+    "lods": [
+        { "model": "pbr_metal", "max_distance": 600 }
+    ]
+}

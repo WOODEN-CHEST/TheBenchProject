@@ -10,6 +10,7 @@
 #include "WorldComponent.h"
 #include "WorldEnvironment.h"
 #include "WorldFile.h"
+#include "WorldModelComponent.h"
 #include "WorldObject.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRGHDF.h"
@@ -686,7 +687,8 @@ static void WrittenJSONLeavesOutDefaultsInTableOrder(TestRun* run)
         if (TEST_CHECK_SUCCESS(run, World_AddComponent(&Source, 2U, WorldComponentType_Model, &Component)))
         {
             TEST_CHECK_SUCCESS(run, Properties_Set(World_GetComponentTypeInfo(&Source, WorldComponentType_Model)->Table,
-                Component, u8"model", &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"desk" }));
+                Component, u8"world_model", &(PropertyValue){ .Type = PropertyType_AssetName,
+                .Data.StringValue = u8"desk" }));
         }
     }
     const char* Expected =
@@ -708,7 +710,7 @@ static void WrittenJSONLeavesOutDefaultsInTableOrder(TestRun* run)
         "            \"scale\": [2.0, 2.0, 2.0],\n"
         "            \"components\": {\n"
         "                \"model\": {\n"
-        "                    \"model\": \"desk\"\n"
+        "                    \"world_model\": \"desk\"\n"
         "                }\n"
         "            }\n"
         "        }\n"
@@ -1352,8 +1354,14 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 21U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 23U);
             TEST_CHECK(run, AreNamesEqual(World_GetName(&Loaded), (const unsigned char*)u8"test"));
+            // The variant example (T10): two cubes of one world model, red and blue.
+            WorldComponent* Painted = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 23U, WorldComponentType_Model, &Painted)
+                && WorldModelComponent_UsesVariant(WorldModelComponent_FromComponent(Painted))
+                && AreNamesEqual(WorldModelComponent_GetVariant(WorldModelComponent_FromComponent(Painted)),
+                    (const unsigned char*)u8"blue"));
             // The desk holds five parts, the lamp its light.
             WorldObject* Desk = NULL;
             WorldObject* LampLight = NULL;

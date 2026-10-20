@@ -14,8 +14,8 @@ checker and autocomplete, `handoff/2026-10_scripting_language/PROPOSAL.md` secti
 **Clients:** `WorldEnvironment` ([WorldData.md](WorldData.md), "Environment"), `GameClock` ([GameClock.md](GameClock.md),
 T23), and since T05 the world objects (`world_object`, with T24's `data` row for tags and custom data and T08's
 `parent` row, both ReadOnly for `Properties_Set`, whose reads and copies the world reconciles in the table's `AfterSet`)
-and their components (`model_component`, `sprite_component`, `light_component`; [WorldData.md](WorldData.md), "Property
-tables"). T16 adds the weather.
+and their components (`model_component`, with T10's override pairs, `sprite_component`, `light_component`;
+[WorldData.md](WorldData.md), "Property tables"). T16 adds the weather.
 
 ## Declaring a table
 
@@ -62,8 +62,23 @@ Rules for rows:
 
 `PropertyTable_Check` enforces all of this (plus: fields inside `StructSize` with the size their type needs, no two
 fields overlapping, bounds only on bounded numeric types and finite/ordered/whole as the type needs, enum tables only
-on enums with unique snake_case names and values that fit the field, only known flag bits) and checks that **every
-default passes its own rules**.
+on enums with unique snake_case names and values that fit the field, only known flag bits, the override flags below)
+and checks that **every default passes its own rules**.
+
+### Override flags
+
+A setting that a placement can override (a world model's draw distance on one placed object, decided in T10 with the
+owner's rule from G17) is **two rows**: the flag `overrides_<key>` (`PROPERTY_OVERRIDE_FLAG_PREFIX`), a `Bool` whose
+default is false, right before the value row `<key>`. While the flag is off the asset's value applies and the row's own
+value is kept, saved and shown, so switching the flag back on restores it. No sentinel values (0, an empty name, -1) and
+no `inherit` states: a flag cannot collide with a real value, and the editor shows a checkbox next to the field.
+- `PropertyTable_Check` requires every row whose key starts with `overrides_` to be a `Bool` and the rest of its key to
+  name another row of its table; the editor and scripts pair them by these names.
+- Two plain rows rather than a new "optional value" property type: every reader, writer, `Properties_Set`, the copy and
+  the comparison handle them as they are, JSON and GHDF carry both, and no type is needed per value type (bools,
+  floats, enums, names, T11's distance lists). The cost is that nothing stops a caller from reading a value without its
+  flag: the type that owns the table resolves the pairs in one pure function (`WorldModelComponent_ResolveSettings`).
+- A plain multiplier with a neutral default (`draw_distance_multiplier` 1) is not an override: one row.
 
 ## Types
 

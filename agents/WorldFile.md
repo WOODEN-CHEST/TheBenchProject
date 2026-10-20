@@ -81,6 +81,12 @@ parent, before it is destroyed).
 **Versions** (`GetTableVersion` in WorldFile.c): format 1 wrote every table at its version 1, which the reads pass as
 `PropertyReadOptions.DataVersion`. A table that raises its `Version` (with a `Migrate`) needs a new world format
 version and that mapping: a `// TODO:` there says so, and a test fails while any table a world file holds is above 1.
+T10 changed the model component without either (the test world was the only world file, as T09 noted): its wire 1 /
+key `model` (a model asset) became `world_model` (a world model), and wires 2 to 5 became the placement's own values
+behind new override flags. A JSON file from before reads with `model` skipped as unknown, a GHDF one with entry 1 read
+as the world model's name (the shipped world models carry their models' names), and either keeps those values unused
+until their flags are set; once other worlds must keep loading, such a change raises the table's version with a
+`Migrate` (and a GHDF migration slot, which the tables do not have yet) and the world format version.
 
 ## Writing
 

@@ -15,8 +15,8 @@
 
 
 // Static functions.
-/* Identity of a model name for re-matching entries: its hash, or 0 for no name. */
-static uint64_t HashModelName(const unsigned char* name)
+/* Identity of a name for re-matching entries and noticing changes: its hash, or 0 for no name. */
+static uint64_t HashName(const unsigned char* name)
 {
     return (name != NULL) ? Hash_String(name) : 0;
 }
@@ -27,75 +27,136 @@ static bool IsObjectShown(const WorldObject* object)
     return WorldObject_IsEffectivelyEnabled(object) && WorldObject_IsEffectivelyVisible(object);
 }
 
-/* Logs (once, when it happens) that an object's model could not be resolved, and releases the error. */
+/* The object's name for a log line ("" without one). */
+static const char* GetOwnerName(const WorldModelComponent* model)
+{
+    const unsigned char* Name = WorldObject_GetName(WorldComponent_GetOwner(&model->Base));
+    return (Name != NULL) ? (const char*)Name : "";
+}
+
+/* Logs (once, when it happens) that an object's world model could not be resolved, and releases the error. */
 static void ReportModelFailure(Logger* logger, const WorldModelComponent* model, const unsigned char* assetName,
     Error* error)
 {
     if (logger != NULL)
     {
-        const WorldObject* Owner = WorldComponent_GetOwner(&model->Base);
-        const unsigned char* ObjectName = WorldObject_GetName(Owner);
         Error LogResult = Logger_LogWarningFormatted(logger,
-            (const unsigned char*)u8"WorldRenderer: object %" PRIu64 u8" (\"%s\") draws nothing: model \"%s\" could "
-            u8"not be loaded (%s).",
-            WorldObject_GetId(Owner),
-            (ObjectName != NULL) ? (const char*)ObjectName : "",
-            (const char*)assetName,
+            (const unsigned char*)u8"WorldRenderer: object %" PRIu64 u8" (\"%s\") draws nothing: world model \"%s\" "
+            u8"could not be loaded (%s).",
+            WorldObject_GetId(WorldComponent_GetOwner(&model->Base)), GetOwnerName(model), (const char*)assetName,
             (error->Message != NULL) ? (const char*)error->Message : "no details");
         Error_Deconstruct(&LogResult);
     }
     Error_Deconstruct(error);
 }
 
-/* Resolves an entry's model for the component's current name. A component without a model name draws nothing (not an
- * error); a load failure is logged here, once, and not retried until the name changes. */
-static void ResolveModel(WorldRenderModel* entry, AssetManager* assets, AssetUserID modelUser, Logger* logger)
+/* Logs (once, when the variant is resolved) that an object asks for a variant its world model does not have. */
+static void ReportVariantFailure(Logger* logger, const WorldModelComponent* model)
 {
-    const unsigned char* AssetName = WorldModelComponent_GetModel(entry->Component);
-    entry->IsResolved = true;
-    entry->NameHash = HashModelName(AssetName);
-    entry->Asset = NULL;
-    if (AssetName == NULL)
+    if (logger == NULL)
     {
         return;
     }
-
-    GameModel* Asset = NULL;
-    Error LoadResult = AssetManager_LoadModel(assets, AssetName, modelUser, &Asset);
-    if (LoadResult.Code != ErrorCode_Success)
-    {
-        ReportModelFailure(logger, entry->Component, AssetName, &LoadResult);
-        return;
-    }
-
-    BoundingBox Bounds = GameModel_GetLocalBounds(Asset);
-    Vector3 Half = Vector3Scale(Vector3Subtract(Bounds.max, Bounds.min), 0.5f);
-    entry->LocalCenter = Vector3Scale(Vector3Add(Bounds.min, Bounds.max), 0.5f);
-    entry->LocalRadius = Vector3Length(Half);
-    entry->Asset = Asset;
+    const unsigned char* Variant = WorldModelComponent_GetVariant(model);
+    Error LogResult = Logger_LogWarningFormatted(logger,
+        (const unsigned char*)u8"WorldRenderer: object %" PRIu64 u8" (\"%s\") draws world model \"%s\" with its own "
+        u8"materials: it has no variant \"%s\".",
+        WorldObject_GetId(WorldComponent_GetOwner(&model->Base)), GetOwnerName(model),
+        (const char*)WorldModelComponent_GetWorldModel(model), (Variant != NULL) ? (const char*)Variant : "");
+    Error_Deconstruct(&LogResult);
 }
 
-/* Brings one model entry up to date for this frame: re-resolves its asset if its name changed, then copies the
- * component's settings and recomputes whether it is drawn, its tint, its final transform (the import transform inside
- * the object's world matrix: its scale -> Euler XYZ -> translation, as raylib's DrawModelEx composes them, times its
- * parents') and its world bounding sphere (conservative also when the hierarchy shears it). */
+/* Resolves an entry's variant for the component's current uses_variant and variant name: the variant's index, or the
+ * model's own materials (an unknown name is logged here, once, and not looked up again until it changes). */
+static void ResolveVariant(WorldRenderModel* entry, Logger* logger)
+{
+    entry->UsesVariant = WorldModelComponent_UsesVariant(entry->Component);
+    entry->VariantNameHash = HashName(WorldModelComponent_GetVariant(entry->Component));
+    entry->HasVariant = false;
+    entry->VariantIndex = 0U;
+    if (!entry->UsesVariant || (entry->Asset == NULL))
+    {
+        return;
+    }
+    size_t Index = 0U;
+    if (WorldModel_TryFindVariant(entry->Asset, WorldModelComponent_GetVariant(entry->Component), &Index))
+    {
+        entry->HasVariant = true;
+        entry->VariantIndex = Index;
+        return;
+    }
+    ReportVariantFailure(logger, entry->Component);
+}
+
+/* Whether a component asks for another variant than the one an entry resolved. */
+static bool IsVariantChanged(const WorldRenderModel* entry, const WorldModelComponent* component)
+{
+    return (WorldModelComponent_UsesVariant(component) != entry->UsesVariant)
+        || (HashName(WorldModelComponent_GetVariant(component)) != entry->VariantNameHash);
+}
+
+/* Resolves an entry's world model for the component's current name, then its variant. A component without a name draws
+ * nothing (not an error); a load failure is logged here, once, and not retried until the name changes. */
+static void ResolveModel(WorldRenderModel* entry, AssetManager* assets, AssetUserID modelUser, Logger* logger)
+{
+    const unsigned char* AssetName = WorldModelComponent_GetWorldModel(entry->Component);
+    entry->IsResolved = true;
+    entry->NameHash = HashName(AssetName);
+    entry->Asset = NULL;
+    entry->Model = NULL;
+    if (AssetName != NULL)
+    {
+        WorldModel* Asset = NULL;
+        Error LoadResult = AssetManager_LoadWorldModel(assets, AssetName, modelUser, &Asset);
+        if (LoadResult.Code == ErrorCode_Success)
+        {
+            entry->Asset = Asset;
+            entry->Model = WorldModel_GetLodModel(Asset, 0U); // TODO: T11 picks the LOD by distance, with cross-fades.
+            entry->LocalCenter = WorldModel_GetBoundsCenter(Asset);
+            entry->LocalRadius = WorldModel_GetBoundsRadius(Asset);
+            entry->BoundsTransform = WorldModel_GetBoundsTransform(Asset);
+        }
+        else
+        {
+            ReportModelFailure(logger, entry->Component, AssetName, &LoadResult);
+        }
+    }
+    ResolveVariant(entry, logger);
+}
+
+/* Brings one model entry up to date for this frame: re-resolves its world model if its name changed (or its variant if
+ * that changed), then takes the settings in effect (WorldModelComponent_ResolveSettings) and recomputes whether it is
+ * drawn, its tint, its final transform (the LOD's import transform inside the object's world matrix: its scale -> Euler
+ * XYZ -> translation, as raylib's DrawModelEx composes them, times its parents') and its world bounding sphere (the
+ * world model's, through its own transform composed with the world matrix: conservative also when the hierarchy shears
+ * it, and exactly the drawn model's sphere when it is LOD 0's). */
 static void UpdateModel(WorldRenderModel* entry, AssetManager* assets, AssetUserID modelUser, Logger* logger)
 {
     const WorldModelComponent* ModelComponent = entry->Component;
     uint32_t Revision = WorldComponent_GetRevision(&ModelComponent->Base);
-    if (!entry->IsResolved
-        || ((entry->Revision != Revision)
-            && (HashModelName(WorldModelComponent_GetModel(ModelComponent)) != entry->NameHash)))
+    bool IsChanged = entry->IsResolved && (entry->Revision != Revision);
+    bool IsRenamed = IsChanged && (HashName(WorldModelComponent_GetWorldModel(ModelComponent)) != entry->NameHash);
+    if (!entry->IsResolved || IsRenamed)
     {
         ResolveModel(entry, assets, modelUser, logger);
     }
+    else if (IsChanged && IsVariantChanged(entry, ModelComponent))
+    {
+        ResolveVariant(entry, logger);
+    }
     entry->Revision = Revision;
 
+    WorldModelSettings Defaults = (entry->Asset != NULL) ? *WorldModel_GetSettings(entry->Asset)
+        : WorldModelSettings_CreateDefault();
+    WorldModelSettings Settings = WorldModelComponent_ResolveSettings(ModelComponent, &Defaults);
+    entry->HasOutline = Settings.HasOutline;
+    entry->OmitsPixelation = Settings.OmitsPixelation;
+    entry->ShadowTier = Settings.ShadowTier;
+    entry->CastsShadows = Settings.CastsShadows;
+    entry->DrawDistance = Settings.DrawDistance;
+    entry->IsDrawDistanceFixed = Settings.IsDrawDistanceFixed;
+
     const WorldObject* Owner = WorldComponent_GetOwner(&ModelComponent->Base);
-    entry->HasOutline = WorldModelComponent_HasOutline(ModelComponent);
-    entry->OmitsPixelation = WorldModelComponent_OmitsPixelation(ModelComponent);
-    entry->ShadowTier = WorldModelComponent_GetShadowTier(ModelComponent);
-    entry->CastsShadows = WorldModelComponent_CastsShadows(ModelComponent);
     entry->Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Owner));
     entry->IsDrawn = (entry->Asset != NULL) && IsObjectShown(Owner);
     if (entry->Asset == NULL)
@@ -103,15 +164,18 @@ static void UpdateModel(WorldRenderModel* entry, AssetManager* assets, AssetUser
         return;
     }
 
-    Model RayModel = GameModel_GetRaylibModel(entry->Asset);
-    entry->Transform = MatrixMultiply(RayModel.transform, WorldObject_GetWorldMatrix(Owner));
-    entry->Center = Vector3Transform(entry->LocalCenter, entry->Transform);
-    entry->Radius = entry->LocalRadius * WorldTransform_GetMaxScale(entry->Transform);
+    Matrix WorldMatrix = WorldObject_GetWorldMatrix(Owner);
+    entry->Transform = MatrixMultiply(GameModel_GetRaylibModel(entry->Model).transform, WorldMatrix);
+    Matrix BoundsToWorld = MatrixMultiply(entry->BoundsTransform, WorldMatrix);
+    entry->Center = Vector3Transform(entry->LocalCenter, BoundsToWorld);
+    entry->Radius = entry->LocalRadius * WorldTransform_GetMaxScale(BoundsToWorld);
 }
 
 /* Re-matches the model entries to the world's current model components, in order: a component keeps its entry (and
- * resolved asset) when one with its owner's id exists and was resolved for the model name the component has now;
- * otherwise it gets a new, unresolved one (an id can be reused: removed, then created again with another model).
+ * resolved asset) when one with its owner's id exists and was resolved for the world model name and the variant the
+ * component asks for now; otherwise it gets a new, unresolved one (an id can be reused: removed, then created again
+ * with another model or variant). The revision cannot tell that: revisions of two components are not comparable, and a
+ * component read from a file or copied often starts at the same one.
  * Entries of removed components are dropped. The world appends components and removes them in place, so one forward
  * scan through the previous entries finds every survivor; one found out of order just gets a new entry (and is
  * resolved again, which is cheap while its model is still held). */
@@ -127,14 +191,15 @@ static Error RematchModels(WorldRenderCache* self, World* world)
     {
         const WorldModelComponent* ModelComponent = WorldModelComponent_FromComponent(Models[Index]);
         uint64_t Id = WorldObject_GetId(WorldComponent_GetOwner(Models[Index]));
-        WorldRenderModel Entry = { .ObjectId = Id, .IsResolved = false, .Asset = NULL };
+        WorldRenderModel Entry = { .ObjectId = Id, .IsResolved = false, .Asset = NULL, .Model = NULL };
         for (size_t Search = Cursor; Search < PreviousCount; Search++)
         {
             const WorldRenderModel* Previous = GenericBuffer_GetPointerToElement(&self->_models, Search);
             if (Previous->ObjectId == Id)
             {
-                uint64_t NameHash = HashModelName(WorldModelComponent_GetModel(ModelComponent));
-                if (!Previous->IsResolved || (Previous->NameHash == NameHash))
+                uint64_t NameHash = HashName(WorldModelComponent_GetWorldModel(ModelComponent));
+                if (!Previous->IsResolved
+                    || ((Previous->NameHash == NameHash) && !IsVariantChanged(Previous, ModelComponent)))
                 {
                     Entry = *Previous;
                 }

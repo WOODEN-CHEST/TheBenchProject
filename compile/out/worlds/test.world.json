@@ -1,7 +1,7 @@
 {
     "format_version": 1,
     "name": "test",
-    "next_object_id": 22,
+    "next_object_id": 24,
     "environment": {},
     "objects": [
         {
@@ -10,7 +10,7 @@
             "position": [0.0, 1.2, 0.0],
             "components": {
                 "model": {
-                    "model": "test"
+                    "world_model": "test"
                 }
             }
         },
@@ -20,7 +20,7 @@
             "scale": [40.0, 0.2, 40.0],
             "components": {
                 "model": {
-                    "model": "test"
+                    "world_model": "test"
                 }
             }
         },
@@ -30,7 +30,8 @@
             "position": [3.0, 1.2, 0.0],
             "components": {
                 "model": {
-                    "model": "test",
+                    "world_model": "test",
+                    "overrides_omit_pixelation": true,
                     "omit_pixelation": true
                 }
             }
@@ -157,7 +158,8 @@
             "scale": [2.0, 2.0, 2.0],
             "components": {
                 "model": {
-                    "model": "pbr_demo",
+                    "world_model": "pbr_demo",
+                    "overrides_shadow_tier": true,
                     "shadow_tier": "near"
                 }
             }
@@ -169,7 +171,8 @@
             "scale": [2.0, 2.0, 2.0],
             "components": {
                 "model": {
-                    "model": "pbr_metal",
+                    "world_model": "pbr_metal",
+                    "overrides_shadow_tier": true,
                     "shadow_tier": "far"
                 }
             }
@@ -188,7 +191,7 @@
             "scale": [3.2, 0.12, 1.6],
             "components": {
                 "model": {
-                    "model": "test"
+                    "world_model": "test"
                 }
             }
         },
@@ -200,7 +203,7 @@
             "scale": [0.12, 1.44, 1.5],
             "components": {
                 "model": {
-                    "model": "test"
+                    "world_model": "test"
                 }
             }
         },
@@ -212,7 +215,7 @@
             "scale": [0.12, 1.44, 1.5],
             "components": {
                 "model": {
-                    "model": "test"
+                    "world_model": "test"
                 }
             }
         },
@@ -224,7 +227,8 @@
             "scale": [0.18, 0.24, 0.18],
             "components": {
                 "model": {
-                    "model": "pbr_metal",
+                    "world_model": "pbr_metal",
+                    "overrides_shadow_tier": true,
                     "shadow_tier": "near"
                 }
             }
@@ -237,7 +241,8 @@
             "scale": [0.1, 0.8, 0.1],
             "components": {
                 "model": {
-                    "model": "test",
+                    "world_model": "test",
+                    "overrides_shadow_tier": true,
                     "shadow_tier": "near"
                 }
             }
@@ -252,6 +257,30 @@
                     "color": "#ffd6a0",
                     "intensity": 3.0,
                     "range": 4.0
+                }
+            }
+        },
+        {
+            "id": 22,
+            "name": "variant_cube_left",
+            "position": [1.0, 0.3, 2.5],
+            "components": {
+                "model": {
+                    "world_model": "painted_cube",
+                    "uses_variant": true,
+                    "variant": "red"
+                }
+            }
+        },
+        {
+            "id": 23,
+            "name": "variant_cube_right",
+            "position": [-1.0, 0.3, 2.5],
+            "components": {
+                "model": {
+                    "world_model": "painted_cube",
+                    "uses_variant": true,
+                    "variant": "blue"
                 }
             }
         }

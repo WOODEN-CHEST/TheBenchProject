@@ -1,3 +1,7 @@
+#include <float.h>
+#include <inttypes.h>
+#include <math.h>
+#include <stddef.h>
 #include "AssetDefinitionCommon.h"
 #include "GameJSON.h"
 #include "wr/WRString.h"
@@ -7,6 +11,16 @@
 // Macros.
 /** Number of entries in a fixed array. */
 #define ARRAY_LENGTH(array) (sizeof(array) / sizeof((array)[0]))
+/** Room for a collection enumerator on the stack, so checking a compound's keys allocates nothing. */
+#define ENUMERATOR_STORAGE_SIZE ((size_t)256)
+/** How many bytes of an unknown key its message shows. */
+#define UNKNOWN_KEY_PRINT_CAPACITY ((size_t)65)
+/** The printable ASCII range [first, last]: AssetJSON_CopyPrintable shows every other byte as '?'. */
+#define FIRST_PRINTABLE_ASCII 0x20U
+#define LAST_PRINTABLE_ASCII 0x7EU
+/** The bounds of the material factors in [0, 1] (metallic, roughness) and of the emissive intensity (>= 0). */
+#define MATERIAL_FACTOR_MINIMUM 0.0f
+#define MATERIAL_FACTOR_MAXIMUM 1.0f
 
 
 // Types.
@@ -16,6 +30,13 @@ typedef struct TexturePropertyNameStruct
     const unsigned char* Name;
     int Value;
 } TexturePropertyName;
+
+/* Stack storage for a collection enumerator. */
+typedef union EnumeratorStorageUnion
+{
+    max_align_t Alignment;
+    unsigned char Bytes[ENUMERATOR_STORAGE_SIZE];
+} EnumeratorStorage;
 
 
 // Fields.
@@ -89,6 +110,98 @@ static Error ReadTexturePropertyName(JSONCompound* properties, const unsigned ch
         Text, expected);
     Memory_Free(Text);
     return Result;
+}
+
+/* Whether @p key is one of @p knownKeys. */
+static bool IsKnownKey(const unsigned char* key, const unsigned char* const* knownKeys, size_t knownKeyCount)
+{
+    for (size_t Index = 0U; Index < knownKeyCount; Index++)
+    {
+        if (StringsEqual(key, knownKeys[Index]))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The error for an unknown key: its printable form, where it is and the keys allowed there. */
+static Error CreateUnknownKeyError(const unsigned char* key, const unsigned char* const* knownKeys,
+    size_t knownKeyCount, const char* where)
+{
+    char PrintableKey[UNKNOWN_KEY_PRINT_CAPACITY];
+    AssetJSON_CopyPrintable(key, PrintableKey, sizeof(PrintableKey));
+
+    GenericBuffer KnownList;
+    GenericBuffer_AllocateVariable(&KnownList, 0U, sizeof(unsigned char));
+    bool IsListed = true;
+    for (size_t Index = 0U; Index < knownKeyCount; Index++)
+    {
+        if (Index > 0U)
+        {
+            IsListed = IsListed && GenericBuffer_AppendString(&KnownList, (const unsigned char*)u8", ");
+        }
+        IsListed = IsListed && GenericBuffer_AppendString(&KnownList, knownKeys[Index]);
+    }
+    IsListed = IsListed && GenericBuffer_NullTerminate(&KnownList);
+
+    Error Result = Error_Construct4(ErrorCode_InvalidAssetDefinition,
+        "Unknown key \"%s\" in %s; the keys allowed there are: %s.", PrintableKey, where,
+        IsListed ? (const char*)KnownList._data : "(the list could not be built)");
+    Memory_Free(KnownList._data);
+    return Result;
+}
+
+/* Checks that a number read from a definition lies in [minimum, maximum] (a NaN never does); the message names the
+ * key. */
+static Error CheckFactorRange(const unsigned char* key, float value, float minimum, float maximum)
+{
+    if ((value >= minimum) && (value <= maximum))
+    {
+        return Error_CreateSuccess();
+    }
+    if (isinf(maximum))
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"\"%s\" is %g; it must be at least %g.", key,
+            (double)value, (double)minimum);
+    }
+    return Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"\"%s\" is %g; it must be in [%g, %g].", key,
+        (double)value, (double)minimum, (double)maximum);
+}
+
+/* Reads one optional factor in [minimum, maximum]: absent leaves *outHas false. */
+static Error ReadFactorKey(JSONCompound* compound, const unsigned char* key, float minimum, float maximum, bool* outHas,
+    float* outValue)
+{
+    Error Result = AssetJSON_ReadOptionalFloat(compound, key, 0.0f, outValue, outHas);
+    if ((Result.Code != ErrorCode_Success) || !*outHas)
+    {
+        return Result;
+    }
+    return CheckFactorRange(key, *outValue, minimum, maximum);
+}
+
+/* Reads one optional colour: absent leaves *outHas false. */
+static Error ReadColorKey(JSONCompound* compound, const unsigned char* key, bool* outHas, Color* outColor)
+{
+    *outHas = false;
+    JSONObjectValue Value;
+    bool Found = false;
+    Error GetResult = JSONCompound_GetOptional(compound, key, &Value, &Found);
+    if ((GetResult.Code != ErrorCode_Success) || !Found)
+    {
+        return GetResult;
+    }
+    Error ColorResult = AssetJSON_ParseColor(&Value, outColor);
+    if (ColorResult.Code != ErrorCode_Success)
+    {
+        Error Wrapped = Error_Construct3(ColorResult.Code, u8"\"%s\": %s", key,
+            (ColorResult.Message != NULL) ? ColorResult.Message : (const unsigned char*)u8"not a colour.");
+        Error_Deconstruct(&ColorResult);
+        return Wrapped;
+    }
+    *outHas = true;
+    return Error_CreateSuccess();
 }
 
 
@@ -309,6 +422,175 @@ Error AssetJSON_ReadOptionalVectorInt(JSONCompound* compound, const unsigned cha
 Error AssetJSON_ParseColor(const JSONObjectValue* value, Color* outColor)
 {
     return GameJSON_ParseColor(value, outColor);
+}
+
+Error AssetJSON_ValueToFloat(const JSONObjectValue* value, float* outValue)
+{
+    double Value = 0.0;
+    Error Result = GameJSON_ValueToDouble(value, &Value);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (fabs(Value) > (double)FLT_MAX)
+    {
+        return Error_Construct3(ErrorCode_InvalidJSON, u8"The number %g is beyond the float range.", Value);
+    }
+    *outValue = (float)Value;
+    return Error_CreateSuccess();
+}
+
+Error AssetJSON_ReadOptionalFloat(JSONCompound* compound, const unsigned char* key, float defaultValue,
+    float* outValue, bool* outFound)
+{
+    *outValue = defaultValue;
+    if (outFound != NULL)
+    {
+        *outFound = false;
+    }
+    JSONObjectValue Value;
+    bool Found = false;
+    Error GetResult = JSONCompound_GetOptional(compound, key, &Value, &Found);
+    if ((GetResult.Code != ErrorCode_Success) || !Found)
+    {
+        return GetResult;
+    }
+
+    float Parsed = 0.0f;
+    Error Result = AssetJSON_ValueToFloat(&Value, &Parsed);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error Wrapped = Error_Construct3(Result.Code, u8"\"%s\": %s", key,
+            (Result.Message != NULL) ? Result.Message : (const unsigned char*)u8"not a number.");
+        Error_Deconstruct(&Result);
+        return Wrapped;
+    }
+    *outValue = Parsed;
+    if (outFound != NULL)
+    {
+        *outFound = true;
+    }
+    return Error_CreateSuccess();
+}
+
+void AssetJSON_CopyPrintable(const unsigned char* text, char* buffer, size_t capacity)
+{
+    size_t Length = 0U;
+    if (text != NULL)
+    {
+        while ((text[Length] != 0U) && ((Length + 1U) < capacity))
+        {
+            unsigned char Byte = text[Length];
+            bool IsPrintable = (Byte >= FIRST_PRINTABLE_ASCII) && (Byte <= LAST_PRINTABLE_ASCII);
+            buffer[Length] = IsPrintable ? (char)Byte : '?';
+            Length++;
+        }
+    }
+    buffer[Length] = '\0';
+}
+
+Error AssetJSON_RejectUnknownKeys(JSONCompound* compound, const unsigned char* const* knownKeys, size_t knownKeyCount,
+    const char* where)
+{
+    EnumeratorStorage Storage;
+    ICollection* Entries = JSONCompound_GetEntryCollection(compound);
+    bool IsOnStack = (Entries != NULL) && (ICollection_GetEnumeratorSize(Entries) <= sizeof(Storage.Bytes));
+    CollectionEnumerator* Enumerator = NULL;
+    if (Entries != NULL)
+    {
+        Enumerator = IsOnStack ? ICollection_InitEnumerator(Entries, Storage.Bytes)
+            : ICollection_CreateEnumerator(Entries);
+    }
+    if (Enumerator == NULL)
+    {
+        return Error_Construct4(ErrorCode_BufferTooSmall, "Could not enumerate the keys of %s.", where);
+    }
+
+    bool HasNext = false;
+    Error Result = CollectionEnumerator_HasNext(Enumerator, &HasNext);
+    while ((Result.Code == ErrorCode_Success) && HasNext)
+    {
+        JSONCompoundEntry Entry;
+        Result = CollectionEnumerator_NextByValue(Enumerator, &Entry);
+        if (Result.Code != ErrorCode_Success)
+        {
+            break;
+        }
+        if (!IsKnownKey(Entry.Key, knownKeys, knownKeyCount))
+        {
+            Result = CreateUnknownKeyError(Entry.Key, knownKeys, knownKeyCount, where);
+            break;
+        }
+        Result = CollectionEnumerator_HasNext(Enumerator, &HasNext);
+    }
+
+    if (IsOnStack)
+    {
+        CollectionEnumerator_Deconstruct(Enumerator);
+    }
+    else
+    {
+        CollectionEnumerator_Destroy(Enumerator);
+    }
+    return Result;
+}
+
+Error AssetJSON_ReadMaterialSlot(JSONCompound* compound, int32_t* outSlot)
+{
+    JSONObjectValue Value;
+    bool Found = false;
+    Error GetResult = JSONCompound_GetOptional(compound, (const unsigned char*)u8"slot", &Value, &Found);
+    if (GetResult.Code != ErrorCode_Success)
+    {
+        return GetResult;
+    }
+    int64_t Slot = -1;
+    if (Found)
+    {
+        Error IntegerResult = GameJSON_ValueToInt64(&Value, &Slot);
+        if (IntegerResult.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&IntegerResult);
+            Slot = -1;
+        }
+    }
+    if ((Slot < 0) || (Slot > (int64_t)INT32_MAX))
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+            u8"A material override requires a \"slot\": a whole number from 0 to %" PRId32 u8".", INT32_MAX);
+    }
+    *outSlot = (int32_t)Slot;
+    return Error_CreateSuccess();
+}
+
+Error AssetJSON_ReadMaterialFactors(JSONCompound* compound, GameMaterialFactors* outFactors)
+{
+    Memory_Zero(outFactors, sizeof(*outFactors));
+    outFactors->Tint = WHITE;
+    outFactors->EmissiveColor = WHITE;
+
+    Error Result = ReadColorKey(compound, (const unsigned char*)u8"tint", &outFactors->HasTint, &outFactors->Tint);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadColorKey(compound, (const unsigned char*)u8"emissive_color", &outFactors->HasEmissiveColor,
+            &outFactors->EmissiveColor);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadFactorKey(compound, (const unsigned char*)u8"metallic", MATERIAL_FACTOR_MINIMUM,
+            MATERIAL_FACTOR_MAXIMUM, &outFactors->HasMetallic, &outFactors->Metallic);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadFactorKey(compound, (const unsigned char*)u8"roughness", MATERIAL_FACTOR_MINIMUM,
+            MATERIAL_FACTOR_MAXIMUM, &outFactors->HasRoughness, &outFactors->Roughness);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadFactorKey(compound, (const unsigned char*)u8"emissive_intensity", MATERIAL_FACTOR_MINIMUM,
+            INFINITY, &outFactors->HasEmissiveIntensity, &outFactors->EmissiveIntensity);
+    }
+    return Result;
 }
 
 Error AssetJSON_ReadOptionalFormat(JSONCompound* root, const AssetExtensionFilter* accepted,

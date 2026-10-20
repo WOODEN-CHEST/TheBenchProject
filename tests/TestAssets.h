@@ -11,7 +11,9 @@
  * exercise code that holds real assets (the world's sprite animations, the renderer's per-object cache):
  *  - a sprite animation with one texture-less frame, or with several frames and running playback;
  *  - a model without meshes whose mesh-space bounds are given (enough for anything that does not draw);
- *  - a monospace font of the printable ASCII glyphs with metrics but no texture (enough to measure text).
+ *  - a monospace font of the printable ASCII glyphs with metrics but no texture (enough to measure text);
+ *  - a texture that names a made-up GPU id and was never uploaded (enough for anything that only copies it);
+ *  - world models built from JSON by the real "world_model" type, over the code-built models and textures above.
  * Each definition can count how often its asset is loaded and unloaded, which shows when an asset user really
  * releases it.
  */
@@ -99,3 +101,36 @@ bool TestAssets_AddFontWithShadowOffset(TestRun* run, TestAssetFixture* fixture,
  */
 bool TestAssets_AddModel(TestRun* run, TestAssetFixture* fixture, const char* name, BoundingBox bounds,
     TestAssetCounters* counters);
+
+/**
+ * @brief Registers a model definition like TestAssets_AddModel whose asset also has @p materialCount materials
+ *        (without maps or textures) and the import transform @p transform.
+ * @param counters Counts its loads and unloads; may be NULL. Must outlive the fixture's manager.
+ * @returns true when it was registered.
+ */
+bool TestAssets_AddModelWithMaterials(TestRun* run, TestAssetFixture* fixture, const char* name, BoundingBox bounds,
+    int materialCount, Matrix transform, TestAssetCounters* counters);
+
+/**
+ * @brief Registers a texture definition named @p name whose asset names the GPU texture id @p textureId without
+ *        uploading anything (16 x 16, sRGB).
+ * @param counters Counts its loads and unloads; may be NULL. Must outlive the fixture's manager.
+ * @returns true when it was registered.
+ */
+bool TestAssets_AddTexture(TestRun* run, TestAssetFixture* fixture, const char* name, unsigned int textureId,
+    TestAssetCounters* counters);
+
+/**
+ * @brief Builds a world model definition from @p json with the real "world_model" type (AssetManager_BuildDefinition)
+ *        and registers it. Its LOD models and textures must be code-built (TestAssets_AddModel, TestAssets_AddTexture)
+ *        for it to load without a GL context.
+ * @returns true when it was built and registered.
+ */
+bool TestAssets_AddWorldModel(TestRun* run, TestAssetFixture* fixture, const char* json);
+
+/**
+ * @brief Registers a world model named @p name with one LOD, the model @p modelName, used up to 600 m (the draw
+ *        distance models had before world models), and the default settings.
+ * @returns true when it was built and registered.
+ */
+bool TestAssets_AddWorldModelOf(TestRun* run, TestAssetFixture* fixture, const char* name, const char* modelName);

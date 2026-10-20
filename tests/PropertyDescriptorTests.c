@@ -608,6 +608,9 @@ static void BreakVersion(PropertyDescriptor* descriptor) { descriptor->SinceVers
 static void BreakFlags(PropertyDescriptor* descriptor) { descriptor->Flags |= 1U << 20; }
 static void BreakEnumDefault(PropertyDescriptor* descriptor) { descriptor->Default.EnumValue = 9; }
 static void BreakDateDefault(PropertyDescriptor* descriptor) { descriptor->Default.DateValue = -1; }
+static void BreakOverrideFlagTarget(PropertyDescriptor* descriptor) { descriptor->Key = u8"overrides_nothing"; }
+static void BreakOverrideFlagType(PropertyDescriptor* descriptor) { descriptor->Key = u8"overrides_count"; }
+static void BreakOverrideFlagBare(PropertyDescriptor* descriptor) { descriptor->Key = u8"overrides_"; }
 
 static void BrokenTablesFailTheirCheck(TestRun* run)
 {
@@ -629,6 +632,16 @@ static void BrokenTablesFailTheirCheck(TestRun* run)
     CheckBrokenDescriptor(run, 13U, BreakEnumDefault, "one of \"both\", \"near\" or \"far\"");
     CheckBrokenDescriptor(run, 19U, BreakBoundsOnBool, "no minimum or maximum"); // a date takes no bounds
     CheckBrokenDescriptor(run, 19U, BreakDateDefault, "due (Due) must be a date");
+    // An override flag (overrides_<key>) is a Bool next to another row of its table.
+    CheckBrokenDescriptor(run, 0U, BreakOverrideFlagTarget, "must name the row it switches on");
+    CheckBrokenDescriptor(run, 4U, BreakOverrideFlagType, "an override flag (overrides_<key>) must be a Bool");
+    CheckBrokenDescriptor(run, 0U, BreakOverrideFlagBare, "must name the row it switches on");
+    PropertyDescriptor Paired[RECORD_PROPERTY_COUNT];
+    Memory_Copy(RecordProperties, Paired, sizeof(Paired));
+    Paired[0].Key = u8"overrides_weight";
+    PropertyTable PairedTable = RecordTable;
+    PairedTable.Descriptors = Paired;
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(&PairedTable));
 
     // A table-level fault: a wire id retired twice.
     static const uint16_t Twice[] = { 40U, 40U };

@@ -64,12 +64,21 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   meshes fails the load. Then:
   - the definition's `transform` (scale, `rotation_euler` in degrees, translation) is baked into `model.transform`;
   - every material gets PBR defaults where the importer left a value at or below 0: roughness 0.5, occlusion 1.0;
-  - `material_overrides` apply by material **index** (`slot`); a slot beyond the model's material count is skipped
-    silently. Override maps go to `albedo` -> `MATERIAL_MAP_ALBEDO`, `normal` -> `MATERIAL_MAP_NORMAL`, `mra` (packed
-    occlusion/roughness/metallic) -> `MATERIAL_MAP_METALNESS`, `emissive` -> `MATERIAL_MAP_EMISSION`, loaded from the
-    models directory with the texture extensions. Scalars: `tint`, `metallic`, `roughness`, `emissive_color`,
-    `emissive_intensity`. The slot's `texture_properties` (filtering, wrap, mipmaps; `TextureProperties_Apply`) apply
-    to each of its maps, so distant textured models can use mipmaps and shimmer less.
+  - `material_overrides` apply by material **index** (`slot`, 0 to `INT32_MAX`); a slot beyond the model's material
+    count is skipped silently. Override maps go to `albedo` -> `MATERIAL_MAP_ALBEDO`, `normal` ->
+    `MATERIAL_MAP_NORMAL`, `mra` (packed occlusion/roughness/metallic) -> `MATERIAL_MAP_METALNESS`, `emissive` ->
+    `MATERIAL_MAP_EMISSION`, loaded from the models directory with the texture extensions. Scalars: `tint`, `metallic`
+    and `roughness` (in [0, 1]), `emissive_color`, `emissive_intensity` (>= 0). The slot's `texture_properties`
+    (filtering, wrap, mipmaps; `TextureProperties_Apply`) apply to each of its maps, so distant textured models can use
+    mipmaps and shimmer less.
+  - **The factors are shared with world model variants** (T10, [WorldModels.md](WorldModels.md)): the slot and the
+    scalars are read by `AssetJSON_ReadMaterialSlot` and `AssetJSON_ReadMaterialFactors`
+    (`source/AssetDefinitionCommon.{h,c}`) into a `GameMaterialFactors` (`GameModel.h`: each factor with its own
+    `Has...` flag), and applied by `GameMaterialFactors_Apply(factors, hasEmissiveMap, maps)` (`source/GameModel.c`):
+    here to the model's own materials while it loads, for a variant to the renderer's per-draw copy. An override with an
+    emissive map but no emissive colour or intensity shows the map at white x 1. Since T10 the shared parser enforces
+    the ranges the reference always gave (metallic and roughness in [0, 1], a non-negative intensity, finite numbers
+    that fit a float).
 - **Ownership:** the asset owns the meshes, the materials and their map arrays, and every texture its materials
   referenced at load (the importer's textures plus the overrides; raylib's default texture is skipped). Importer
   textures that an override replaced are unloaded during the load. On unload each tracked texture id is unloaded

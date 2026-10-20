@@ -417,8 +417,9 @@ the profile of light pollution's skyglow).
 
     "material_overrides": [              // [OPTIONAL] rebind material slots to game-managed assets
         {
-            "slot": 0,                   // material index within the model (REQUIRED, >= 0). Addressing a
-                                         // material by name is not implemented yet; use the index.
+            "slot": 0,                   // material index within the model (REQUIRED, 0 to 2147483647). A slot
+                                         // past the model's materials is skipped. Addressing a material by
+                                         // name is not implemented yet; use the index.
 
             // --- PBR texture maps (all [OPTIONAL]; each a texture FILE location, resolved against the models dir) ---
             "albedo": asset location,    // base colour (sRGB)
@@ -428,13 +429,13 @@ the profile of light pollution's skyglow).
                                          // metallic/roughness/occlusion factors below (glTF metal-rough style).
             "emissive": asset location,  // sRGB emissive colour map; MULTIPLIES emissive_color*emissive_intensity
 
-            // --- PBR scalar factors (all [OPTIONAL]) ---
+            // --- PBR scalar factors (all [OPTIONAL]; world model variants read them with the same parser) ---
             "tint": color,               // multiplies the albedo (combined with the object's own tint)
-            "metallic": number,          // 0..1 base metallic factor (default: importer value, else 0)
-            "roughness": number,         // 0..1 base roughness factor (default: importer value, else 0.5)
+            "metallic": number,          // in [0, 1]: base metallic factor (default: importer value, else 0)
+            "roughness": number,         // in [0, 1]: base roughness factor (default: importer value, else 0.5)
             "emissive_color": color,     // emissive colour (default WHITE when an emissive map is present)
-            "emissive_intensity": number,// emissive multiplier (default 0; defaults to 1 when an emissive map
-                                         // is present, so the map is visible without extra keys)
+            "emissive_intensity": number,// >= 0: emissive multiplier (default 0; defaults to 1 when an emissive
+                                         // map is present, so the map is visible without extra keys)
 
             "texture_properties": texture properties  // [OPTIONAL] filtering, wrap and mipmaps, applied to all
                                          // this slot's maps (mipmaps keep distant textured models calm)
@@ -452,6 +453,10 @@ the profile of light pollution's skyglow).
                                          // present only if/when skeletal support lands; OBJ ignores it
 }
 ```
+
+
+A value outside its range (a metallic of 1.5, a negative intensity) rejects the definition with a message naming the key.
+Every number must be finite and fit a float.
 
 
 ## Textures.
@@ -496,3 +501,76 @@ mip levels:
 ```
 These two are the defaults of a world's `milky_way_texture` and `moon_texture` settings; a world can name other
 textures.
+
+
+## World models.
+A world model is the reusable definition of a placeable thing in the 3D world (a desk, a street lamp, a car): which
+model to draw at which distance, how far it is seen, the default render settings of the objects placed with it, and its
+material variants. It is built on other assets, as a sprite animation is built on sprite sheets: its LOD models are
+`model` assets and the maps its variants swap in are `texture` assets, all named by their asset names and loaded with it
+as its dependencies (holding the world model holds them; they unload with it). A model stays a plain asset that the UI
+can use too; what only matters in the world lives here. Definitions live under `world_models/` and have no resource
+files of their own.
+
+A placed object names its world model in its model component (`references/world_structure.md`) and can override each
+default setting of this file for that one placement: an explicit override flag next to its own value.
+
+```
+{
+    "name": "office_desk",
+    "lods": [                                      // 1 to 8 LODs, the finest first
+        { "model": "office_desk_lod0", "max_distance": 15 },
+        { "model": "office_desk_lod1", "max_distance": 40 },
+        { "model": "office_desk_lod2", "max_distance": 90 }
+    ],
+    "draw_distance": 120,                          // [OPTIONAL] metres; default: the last LOD's max_distance
+    "is_draw_distance_fixed": false,               // [OPTIONAL] default false
+    "lod_fade_seconds": 0.3,                       // [OPTIONAL] default 0.3
+    "lod_hysteresis": 0.05,                        // [OPTIONAL] default 0.05
+    "render": {                                    // [OPTIONAL] each key [OPTIONAL]
+        "has_outline": true, "omit_pixelation": false, "shadow_tier": "both", "casts_shadows": true
+    },
+    "variants": [                                  // [OPTIONAL] at most 64
+        {
+            "name": "dark_wood",
+            "material_overrides": [ { "slot": 0, "albedo": "office_desk_dark_albedo", "tint": "#d0c0b0" } ]
+        }
+    ],
+    "bounds": { "center": [0, 0.4, 0], "radius": 1.1 }  // [OPTIONAL] default: LOD 0's
+}
+```
+
+| Key | Value | Meaning |
+|---|---|---|
+| `lods` | 1 to 8 `{ "model", "max_distance" }` | The models to draw, the finest first. `model` is a model asset's name; `max_distance` (metres, above 0, rising strictly from one LOD to the next) is how far that LOD is used, at the default 60-degree field of view. Past the last one the last LOD keeps drawing until the draw distance. Until LOD switching arrives (task T11) every object draws LOD 0. Every LOD should share the same origin, axes, scale and material slots. |
+| `draw_distance` | metres | How far objects of this world model are seen: at least the last LOD's `max_distance`; left out, it is that distance. The player's `draw_distance_scale` (`config.json`) multiplies it unless it is fixed, and a narrower field of view (zooming in) pushes it out. Over its last tenth (at least 3 m) the object dithers away. |
+| `is_draw_distance_fixed` | boolean | true: the player's `draw_distance_scale` leaves the draw distance as it is (landmarks, gameplay-critical props). |
+| `lod_fade_seconds` | seconds, >= 0 | How long a LOD cross-fade takes (T11); 0 swaps at once. |
+| `lod_hysteresis` | in [0, 1) | A LOD switches to a coarser one at its switch distance x (1 + h) and back at x (1 - h), so an object standing at a boundary does not flicker (T11). |
+| `render` | object | The default render settings of the placements: `has_outline` (default true: a 1-pixel outline), `omit_pixelation` (default false: true draws it at full resolution over the pixelated image, for readable screens), `shadow_tier` (`both` (default), `near`: only the sharp near shadow, for small props, `far`: only the coarse far one, for big objects) and `casts_shadows` (default true). |
+| `variants` | at most 64 `{ "name", "material_overrides" }` | Other looks of the same meshes (dark wood, a red car). `name`: `[a-z][a-z0-9_.-]*`, at most 128 bytes, unique in the world model. `material_overrides` (optional; at most 32, one per slot): what the variant changes in each material slot, below. A placed object picks one with `uses_variant` and `variant`. |
+| `bounds` | `{ "center": [x, y, z], "radius": metres >= 0 }` | The bounding sphere culling and draw distances use, in the object's own space (after each LOD's import transform). Left out, it is the sphere around LOD 0's mesh bounds. |
+
+**A variant's material override** takes the same keys as a model's `material_overrides` and reads them with the same
+parser, with one difference: the maps name **texture assets** (`textures/`, see "Textures"), so a texture several
+variants or world models share loads once, and its filtering, wrap and mipmaps come from its own definition (there is no
+`texture_properties` here).
+* `slot` (required, 0 to 2147483647): the material's index in every LOD's model. A slot that no LOD model has changes
+  nothing (logged once, when the world model loads).
+* `albedo`, `normal`, `mra` (the packed occlusion/roughness/metallic map), `emissive`: texture asset names; a map that is
+  left out keeps the model's.
+* `tint`, `metallic` and `roughness` (in [0, 1]), `emissive_color`, `emissive_intensity` (>= 0): as for models; an
+  emissive map without a colour or intensity of its own shows at white x 1.
+A variant is applied when the object is drawn, to the renderer's copy of each material, never to the model asset, so
+the same model can show every variant at once.
+
+**Rules.** A definition that breaks one is rejected when the definitions are read, with a message naming the key and
+where it is (`World model "desk": lods[1].max_distance (12) must be above lods[0].max_distance (15)...`). Unknown keys
+are rejected in the root, each LOD, `render`, each variant, each material override and `bounds`, with the keys allowed
+there: the `collision` (T12) and `surfaces` (T19) sections come with their tasks. (Vectors and colours accept their
+usual forms, see "Common data structures".) The LOD models and variant textures must exist when the world model loads; a missing
+one fails the load (logged once, like every load failure) and the objects using it draw nothing.
+
+The test world's world models are in `world_models/test_world/`: `test`, `pbr_demo` and `pbr_metal`, one LOD each, the
+model of the same name, seen 600 m (the draw distance every model had before world models), and `painted_cube`, the test
+cube with two variants, `red` and `blue` (tints only).

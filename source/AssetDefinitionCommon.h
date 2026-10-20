@@ -1,5 +1,6 @@
 #pragma once
 #include "AssetManager.h"
+#include "GameModel.h"
 #include "wr/WRJSON.h"
 #include "raylib/raylib.h"
 
@@ -206,6 +207,75 @@ Error AssetJSON_ReadOptionalVectorInt(JSONCompound* compound, const unsigned cha
  * @returns Success; ErrorCode_InvalidJSON (from GameJSON) on a malformed color.
  */
 Error AssetJSON_ParseColor(const JSONObjectValue* value, Color* outColor);
+
+/**
+ * @brief Converts a JSON value to a finite float: a number, an integer or a numeric string (GameJSON_ValueToDouble's
+ *        forms) whose value lies within the float range.
+ * @param value The JSON value; must not be NULL.
+ * @param outValue [out] Receives the value. Must not be NULL. Unchanged on failure.
+ * @returns Success; ErrorCode_InvalidJSON for a value that is not a number form, not finite, or beyond the float range.
+ */
+Error AssetJSON_ValueToFloat(const JSONObjectValue* value, float* outValue);
+
+/**
+ * @brief Reads an optional float key (see AssetJSON_ValueToFloat).
+ * @param compound The compound.
+ * @param key The key.
+ * @param defaultValue Value used when the key is absent.
+ * @param outValue [out] Receives the value. Must not be NULL.
+ * @param outFound [out] Receives whether the key was present. May be NULL.
+ * @returns Success; ErrorCode_InvalidJSON if present but not a finite number within the float range (the message names
+ *          the key).
+ */
+Error AssetJSON_ReadOptionalFloat(JSONCompound* compound, const unsigned char* key, float defaultValue,
+    float* outValue, bool* outFound);
+
+/**
+ * @brief Copies text from a definition into a buffer for an error message, cut to fit, with every byte that is not
+ *        printable ASCII shown as '?' (a hostile file cannot put control characters or escape sequences into the log).
+ * @param text The text, NUL-terminated; NULL copies as "".
+ * @param buffer [out] Receives the NUL-terminated copy. Must not be NULL.
+ * @param capacity The buffer's size in bytes, at least 1.
+ */
+void AssetJSON_CopyPrintable(const unsigned char* text, char* buffer, size_t capacity);
+
+/**
+ * @brief Rejects a compound that holds a key outside @p knownKeys, for definitions that refuse unknown keys (a
+ *        misspelt key would otherwise be ignored without a word).
+ * @param compound The compound to check.
+ * @param knownKeys The keys the compound may hold; must not be NULL when @p knownKeyCount is above 0.
+ * @param knownKeyCount The number of known keys.
+ * @param where What the compound is, for the message, e.g. "world model \"desk\", lods[1]"; must not be NULL.
+ * @returns Success when every key is known; ErrorCode_InvalidAssetDefinition naming the first unknown key (made
+ *          printable, see AssetJSON_CopyPrintable), where it is and the keys allowed there; ErrorCode_BufferTooSmall if
+ *          the keys could not be enumerated.
+ */
+Error AssetJSON_RejectUnknownKeys(JSONCompound* compound, const unsigned char* const* knownKeys, size_t knownKeyCount,
+    const char* where);
+
+/**
+ * @brief Reads a material override's required "slot": the index of the material it changes in the model, a whole
+ *        number from 0 to INT32_MAX.
+ *
+ * Shared by the model type's "material_overrides" and world model variants.
+ * @param compound The override's compound.
+ * @param outSlot [out] Receives the slot. Must not be NULL.
+ * @returns Success; ErrorCode_InvalidAssetDefinition when the slot is absent, not a whole number or out of range.
+ */
+Error AssetJSON_ReadMaterialSlot(JSONCompound* compound, int32_t* outSlot);
+
+/**
+ * @brief Reads the factor keys of a material override, each optional: "tint" and "emissive_color" (colours, any
+ *        AssetJSON_ParseColor form), "metallic" and "roughness" (in [0, 1]) and "emissive_intensity" (>= 0).
+ *
+ * The one parser the model type's "material_overrides" and world model variants share. A key that is absent leaves its
+ * factor's flag false.
+ * @param compound The override's compound.
+ * @param outFactors [out] Receives the factors. Must not be NULL.
+ * @returns Success; ErrorCode_InvalidJSON for a malformed value (the message names the key);
+ *          ErrorCode_InvalidAssetDefinition for a number outside its range.
+ */
+Error AssetJSON_ReadMaterialFactors(JSONCompound* compound, GameMaterialFactors* outFactors);
 
 /**
  * @brief Reads the optional "format" key (a file extension without the dot) and checks the loader accepts it.

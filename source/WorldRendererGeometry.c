@@ -24,24 +24,35 @@ static Color MultiplyColor(Color a, Color b)
     return Result;
 }
 
-/* Draws one mesh with a material built on the stack. The asset material's maps are copied, so the tint and the
- * pass shader land on the copy and nothing is written to the shared asset (raylib's DrawModel instead writes the
- * tint into the asset's maps for the duration of the draw). A NULL @p passShader keeps the material's own shader.
- * DrawMesh still binds the maps' textures, through the shader's location table. */
-static void DrawMeshWithCopiedMaterial(Mesh mesh, const Material* assetMaterial, const Shader* passShader,
-    Color tint, Matrix transform)
+/* Draws one mesh of a model entry with a material built on the stack. The asset material's maps are copied, so the
+ * variant (its maps and factors for this material slot), the tint and the pass shader land on the copy and nothing is
+ * written to the shared assets (raylib's DrawModel instead writes the tint into the asset's maps for the duration of
+ * the draw). The lit pass uploads the copy's PBR factors and map flags before the draw. A NULL @p passShader keeps the
+ * material's own shader. DrawMesh still binds the maps' textures, through the shader's location table. */
+static void DrawMeshWithCopiedMaterial(WorldRenderer* self, const WorldRenderModel* model, Model rayModel,
+    int meshIndex, const Shader* passShader, bool isLit)
 {
+    int MaterialIndex = rayModel.meshMaterial[meshIndex];
+    const Material* AssetMaterial = &rayModel.materials[MaterialIndex];
     MaterialMap Maps[WORLD_RENDERER_MATERIAL_MAP_COUNT];
-    Memory_Copy(assetMaterial->maps, Maps, sizeof(Maps));
-    Maps[MATERIAL_MAP_ALBEDO].color = MultiplyColor(Maps[MATERIAL_MAP_ALBEDO].color, tint);
+    Memory_Copy(AssetMaterial->maps, Maps, sizeof(Maps));
+    if (model->HasVariant)
+    {
+        WorldModel_ApplyVariant(model->Asset, model->VariantIndex, MaterialIndex, Maps);
+    }
 
-    Material DrawMaterial = *assetMaterial;
+    Material DrawMaterial = *AssetMaterial;
     DrawMaterial.maps = Maps;
+    if (isLit)
+    {
+        WorldRendererLighting_UploadMaterial(self, &DrawMaterial);
+    }
+    Maps[MATERIAL_MAP_ALBEDO].color = MultiplyColor(Maps[MATERIAL_MAP_ALBEDO].color, model->Tint);
     if (passShader != NULL)
     {
         DrawMaterial.shader = *passShader;
     }
-    DrawMesh(mesh, DrawMaterial, transform);
+    DrawMesh(rayModel.meshes[meshIndex], DrawMaterial, model->Transform);
 }
 
 
@@ -70,18 +81,12 @@ void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel
     }
 
     // Mesh by mesh, so each material's PBR factors and map flags can be uploaded before its draw (raylib's
-    // DrawModel cannot do that). The transform is the asset's import transform inside the object's world
+    // DrawModel cannot do that). The transform is the LOD's import transform inside the object's world
     // transform, matching raylib's DrawModelEx convention.
-    Model RayModel = GameModel_GetRaylibModel(model->Asset);
+    Model RayModel = GameModel_GetRaylibModel(model->Model);
     for (int MeshIndex = 0; MeshIndex < RayModel.meshCount; MeshIndex++)
     {
-        const Material* AssetMaterial = &RayModel.materials[RayModel.meshMaterial[MeshIndex]];
-        if (isLit)
-        {
-            WorldRendererLighting_UploadMaterial(self, AssetMaterial);
-        }
-        DrawMeshWithCopiedMaterial(RayModel.meshes[MeshIndex], AssetMaterial, passShader, model->Tint,
-            model->Transform);
+        DrawMeshWithCopiedMaterial(self, model, RayModel, MeshIndex, passShader, isLit);
     }
 }
 

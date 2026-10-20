@@ -44,7 +44,7 @@
 // Types.
 typedef struct ModelMaterialOverrideStruct
 {
-    int64_t Slot;
+    int32_t Slot;
     bool HasAlbedo;
     OwnedAssetLocation Albedo;   // base colour texture
     bool HasNormal;
@@ -53,16 +53,7 @@ typedef struct ModelMaterialOverrideStruct
     OwnedAssetLocation Mra;      // packed occlusion(R)/roughness(G)/metallic(B) map
     bool HasEmissiveMap;
     OwnedAssetLocation EmissiveMap;
-    bool HasTint;
-    Color Tint;
-    bool HasMetallic;
-    float Metallic;
-    bool HasRoughness;
-    float Roughness;
-    bool HasEmissiveColor;
-    Color EmissiveColor;
-    bool HasEmissiveIntensity;
-    float EmissiveIntensity;
+    GameMaterialFactors Factors;  // tint, metallic, roughness, emissive colour and intensity (the shared parser)
     TextureProperties Properties; // filter, wrap and mipmaps of every map this override loads
 } ModelMaterialOverride;
 
@@ -225,52 +216,15 @@ static Error ReadOptionalTextureLocationKey(JSONCompound* compound, const unsign
     return Error_CreateSuccess();
 }
 
-/* Reads an OPTIONAL decimal-number key into @p outValue, setting @p outHas. Absent key -> outHas false. */
-static Error ReadOptionalFloatKey(JSONCompound* compound, const unsigned char* key, bool* outHas, float* outValue)
-{
-    *outHas = false;
-    JSONObjectValue Value;
-    bool Found = false;
-    Error GetResult = JSONCompound_GetOptional(compound, key, &Value, &Found);
-    if (GetResult.Code != ErrorCode_Success) { return GetResult; }
-    if (!Found) { return Error_CreateSuccess(); }
-    Error FloatResult = ReadFloatFromValue(&Value, outValue);
-    if (FloatResult.Code != ErrorCode_Success) { return FloatResult; }
-    *outHas = true;
-    return Error_CreateSuccess();
-}
-
-/* Reads an OPTIONAL colour key into @p outColor, setting @p outHas. Absent key -> outHas false. */
-static Error ReadOptionalColorKey(JSONCompound* compound, const unsigned char* key, bool* outHas, Color* outColor)
-{
-    *outHas = false;
-    JSONObjectValue Value;
-    bool Found = false;
-    Error GetResult = JSONCompound_GetOptional(compound, key, &Value, &Found);
-    if (GetResult.Code != ErrorCode_Success) { return GetResult; }
-    if (!Found) { return Error_CreateSuccess(); }
-    Error ColorResult = AssetJSON_ParseColor(&Value, outColor);
-    if (ColorResult.Code != ErrorCode_Success) { return ColorResult; }
-    *outHas = true;
-    return Error_CreateSuccess();
-}
-
 static Error ParseMaterialOverride(JSONCompound* compound, ModelMaterialOverride* outOverride)
 {
     Memory_Zero(outOverride, sizeof(*outOverride));
-    outOverride->Tint = WHITE;
-    outOverride->EmissiveColor = WHITE;
 
-    int64_t Slot = -1;
-    Error SlotResult = AssetJSON_ReadOptionalInteger(compound, (const unsigned char*)u8"slot", -1, &Slot);
-    if (SlotResult.Code != ErrorCode_Success) { return SlotResult; }
-    if (Slot < 0)
-    {
-        return Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"A material override requires a non-negative \"slot\".");
-    }
-    outOverride->Slot = Slot;
+    Error Result = AssetJSON_ReadMaterialSlot(compound, &outOverride->Slot);
+    if (Result.Code != ErrorCode_Success) { return Result; }
 
-    Error Result = ReadOptionalTextureLocationKey(compound, (const unsigned char*)u8"albedo", &outOverride->HasAlbedo, &outOverride->Albedo);
+    Result = ReadOptionalTextureLocationKey(compound, (const unsigned char*)u8"albedo", &outOverride->HasAlbedo,
+        &outOverride->Albedo);
     if (Result.Code != ErrorCode_Success) { return Result; }
     Result = ReadOptionalTextureLocationKey(compound, (const unsigned char*)u8"normal", &outOverride->HasNormal, &outOverride->Normal);
     if (Result.Code != ErrorCode_Success) { return Result; }
@@ -279,16 +233,7 @@ static Error ParseMaterialOverride(JSONCompound* compound, ModelMaterialOverride
     Result = ReadOptionalTextureLocationKey(compound, (const unsigned char*)u8"emissive", &outOverride->HasEmissiveMap, &outOverride->EmissiveMap);
     if (Result.Code != ErrorCode_Success) { return Result; }
 
-    Result = ReadOptionalColorKey(compound, (const unsigned char*)u8"tint", &outOverride->HasTint, &outOverride->Tint);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = ReadOptionalColorKey(compound, (const unsigned char*)u8"emissive_color", &outOverride->HasEmissiveColor, &outOverride->EmissiveColor);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-
-    Result = ReadOptionalFloatKey(compound, (const unsigned char*)u8"metallic", &outOverride->HasMetallic, &outOverride->Metallic);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = ReadOptionalFloatKey(compound, (const unsigned char*)u8"roughness", &outOverride->HasRoughness, &outOverride->Roughness);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = ReadOptionalFloatKey(compound, (const unsigned char*)u8"emissive_intensity", &outOverride->HasEmissiveIntensity, &outOverride->EmissiveIntensity);
+    Result = AssetJSON_ReadMaterialFactors(compound, &outOverride->Factors);
     if (Result.Code != ErrorCode_Success) { return Result; }
 
     return AssetJSON_ReadTextureProperties(compound, (const unsigned char*)u8"texture_properties", true,
@@ -500,37 +445,8 @@ static Error ApplyMaterialOverride(AssetManager* manager, AssetTypeID type, cons
         if (Result.Code != ErrorCode_Success) { return Result; }
     }
 
-    if (override->HasTint)
-    {
-        material->maps[MATERIAL_MAP_ALBEDO].color = override->Tint;
-    }
-    if (override->HasMetallic)
-    {
-        material->maps[MATERIAL_MAP_METALNESS].value = override->Metallic;
-    }
-    if (override->HasRoughness)
-    {
-        material->maps[MATERIAL_MAP_ROUGHNESS].value = override->Roughness;
-    }
-
-    // Emissive: colour + intensity. An emissive MAP with no explicit colour/intensity implies white * 1 so the
-    // map is actually visible (otherwise the default intensity 0 would suppress it).
-    if (override->HasEmissiveColor)
-    {
-        material->maps[MATERIAL_MAP_EMISSION].color = override->EmissiveColor;
-    }
-    else if (override->HasEmissiveMap)
-    {
-        material->maps[MATERIAL_MAP_EMISSION].color = WHITE;
-    }
-    if (override->HasEmissiveIntensity)
-    {
-        material->maps[MATERIAL_MAP_EMISSION].value = override->EmissiveIntensity;
-    }
-    else if (override->HasEmissiveMap)
-    {
-        material->maps[MATERIAL_MAP_EMISSION].value = 1.0f;
-    }
+    // Tint, metallic, roughness and emissive colour + intensity (an emissive map alone shows at white x 1).
+    GameMaterialFactors_Apply(&override->Factors, override->HasEmissiveMap, material->maps);
     return Error_CreateSuccess();
 }
 
@@ -580,12 +496,12 @@ static Error ApplyDefinitionToModel(const ModelDefinition* definition, AssetMana
     for (size_t i = 0; i < definition->OverrideCount; i++)
     {
         const ModelMaterialOverride* Override = &definition->Overrides[i];
-        if ((Override->Slot < 0) || (Override->Slot >= model->materialCount))
+        if (Override->Slot >= model->materialCount)
         {
             continue;
         }
         Error ApplyResult = ApplyMaterialOverride(manager, definition->Base.Type, definition->Base.Name,
-            Override, ownedTextureIds, &model->materials[(int)Override->Slot]);
+            Override, ownedTextureIds, &model->materials[Override->Slot]);
         if (ApplyResult.Code != ErrorCode_Success)
         {
             return ApplyResult;

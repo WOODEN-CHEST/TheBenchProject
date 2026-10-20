@@ -11,7 +11,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | GameCamera | `include/GameCamera.h`, `source/GameCamera.c` | The 3D camera (position/fov/yaw/pitch/roll), converted to a raylib Camera3D only at render time. |
 | Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, the key registry, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
-| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with resolved assets, sprites, lights), built from the world's per-type component arrays. |
+| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, the LOD drawn, the variant and the settings in effect; sprites; lights), built from the world's per-type component arrays. |
 | WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
@@ -34,10 +34,10 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
 ### Ownership and lifetime
 
 - Borrows the `AssetManager`, the `Logger` and the `GameConfig` (config-side effect multipliers).
-- Owns two asset users: one holds the pass shaders for its lifetime, the other the world's models.
-  `WorldRenderer_PrepareWorld` replaces the model user with a fresh one after resolving every model the world
-  still uses, so models no component uses any more are released (asset holds are not counted, so this swap is
-  how unused models get released). Call it after building or loading a world, after large changes, and
+- Owns two asset users: one holds the pass shaders for its lifetime, the other the world's world models (and through
+  them, as their dependencies, their LOD models and variant textures). `WorldRenderer_PrepareWorld` replaces the model
+  user with a fresh one after resolving every world model the world still uses, so world models no component uses any
+  more are released with their meshes (asset holds are not counted, so this swap is how unused ones get released). Call it after building or loading a world, after large changes, and
   whenever a different World is (re)built at the address of the previous one.
 - Never writes to the world or to shared assets (AGENTS.md rule 3):
   - meshes draw with a `Material` built on the stack (`WorldRendererGeometry`): the asset's 12 material maps
@@ -53,19 +53,29 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
 `WorldRenderCache_Sync` runs at the start of every render and walks the world's per-type component arrays once
 (`World_GetComponents`), never the objects:
 - **Models:** one entry per model component, in the world's order, remembering the owner's id and the component. An
-  entry's model asset is resolved once (`AssetManager_LoadModel` under the model user); when the component's revision
-  changes the name is hashed again, and the model is resolved again only if the name changed. A failed resolution is
-  logged once (`WorldRenderer: object N ("name") draws nothing: ...`) and not retried until the name changes. Each
-  frame the entry copies the component's settings (outline, crisp, shadow tier, casts shadows), gets the final
-  transform (the asset's import transform inside the object's world matrix, `WorldObject_GetWorldMatrix`: scale →
+  entry's **world model** ([WorldModels.md](WorldModels.md)) is resolved once (`AssetManager_LoadWorldModel` under the
+  model user, which loads its LOD models and variant textures with it); when the component's revision changes the name
+  is hashed again, and the world model is resolved again only if the name changed. A failed resolution is logged once
+  (`WorldRenderer: object N ("name") draws nothing: world model ...`) and not retried until the name changes. The entry
+  draws the world model's **LOD 0** (`Model`; T11 picks the LOD by distance) and resolves the component's **variant** to
+  an index (`HasVariant`, `VariantIndex`) with the world model, and again when `uses_variant` or `variant` changes (an
+  entry is carried over to a replacing component only when it was resolved for the same world model and variant); an
+  unknown variant draws the model's own materials and is logged once (`... draws world model "x" with its own
+  materials: it has no variant "y".`). Each frame the entry takes the **settings in effect**
+  (`WorldModelComponent_ResolveSettings`: the world model's, or the placement's own while their override flags are on:
+  outline, crisp, shadow tier, casts shadows, the draw distance times the multiplier, and whether it is fixed), gets the
+  final transform (LOD 0's import transform inside the object's world matrix, `WorldObject_GetWorldMatrix`: scale →
   Euler XYZ → translation, raylib's `DrawModelEx` convention, times its parents'; read without writing to the world, a
-  dirty one computed on the fly) and a conservative world bounding sphere from `GameModel_GetLocalBounds` (computed once
-  at load) scaled by `WorldTransform_GetMaxScale` (never below the true stretch: the longest axis, bit for bit as
-  before, for an unturned object; an ulp or so more for a turned one with an uneven scale, whose axes' dot products
-  round a hair from zero; more under the shear a hierarchy can add, where the longest axis fell short), and `IsDrawn`:
-  its model resolved and
-  its object effectively enabled and visible (`WorldObject_IsEffectivelyEnabled` / `_IsEffectivelyVisible`: a disabled
-  or hidden ancestor counts). Passes draw only the `IsDrawn` entries; a hidden object keeps its entry and its model.
+  dirty one computed on the fly) and a conservative world bounding sphere: the world model's (its `bounds`, or the
+  sphere around LOD 0's mesh bounds, computed once at load) moved by its bounds transform (identity, or LOD 0's import
+  transform) composed with the world matrix and scaled by that product's `WorldTransform_GetMaxScale` (never below the
+  true stretch: the longest axis, bit for bit, for an unturned object; an ulp or so more for a turned one with an
+  uneven scale, whose axes' dot products round a hair from zero; more under the shear a hierarchy can add, where the
+  longest axis fell short), and `IsDrawn`: its world model resolved and its object
+  effectively enabled and visible (`WorldObject_IsEffectivelyEnabled` / `_IsEffectivelyVisible`: a disabled or hidden
+  ancestor counts). Passes draw only the `IsDrawn` entries; a hidden object keeps its entry and its world model. Every
+  pass draws a model through `WorldRendererGeometry_DrawModel`, which applies the entry's variant to the per-draw
+  material copy (`WorldModel_ApplyVariant`) before the lit pass uploads the copy's factors.
 - **Sprites:** the sprites of effectively enabled and visible objects whose playback instance has a frame: the current
   frame and its area in its texture (normalized: the shaders' `uvRect`), the quad before a viewer turns it
   (`SpriteShape`: the orientation, the object's world position and rotation axes, the world size from the frame's
@@ -101,12 +111,16 @@ are rebuilt every frame without allocating once grown; each entry also gets its 
   builds once per frame), routed by their shadow tier; the cube shadow takes the casters touching its lamp's reach.
   A model casts when it has `casts_shadows`; a sprite when it is a cutout sprite that is not a decal and casts
   (`WorldRenderSprite_CastsShadows`).
-- **Draw distance.** Models 600 m, sprites 150 m, decals 60 m, times the config's `draw_distance_scale` (default 1,
-  [0, 16]). Per-placement distances arrive with T10 for models and T26 for sprites (decision G17: the asset's default
-  or the placement's own, a multiplier, a flag that keeps it fixed against the quality scale, and a zoom factor;
-  `// TODO:` where the distance is chosen). The
-  distance measured is the camera's to the nearest point of the entry's sphere (0 inside it), so a large object does not
-  fade while its near end is close. Beyond its draw distance an entry is in no list (its shadow goes too); over the last
+- **Draw distance.** Each model has its own since T10 (decision G17, [WorldModels.md](WorldModels.md)): its world
+  model's `draw_distance`, or its placement's own while `overrides_draw_distance` is on, times the placement's
+  `draw_distance_multiplier` (the cache resolves it); then times the config's `draw_distance_scale` (default 1,
+  [0, 16]) unless the world model or the placement keeps it fixed (`WorldVisibility_ScaleDrawDistance`). Sprites keep a
+  default per kind until T26 (150 m, decals 60 m) times the scale (`// TODO:` in `AddSprite`). The distance measured is
+  the camera's to the nearest point of the entry's sphere (0 inside it), so a large object does not fade while its near
+  end is close; for models it is multiplied by the **zoom factor**, `WorldVisibility_GetZoomFactor(fovY)` =
+  tan(fovY / 2) / tan(30 degrees) (`WorldVisibilityView.ZoomFactor`, from the camera's field of view): exactly 1 at the
+  default 60 degrees, below 1 when zoomed in, so a zoomed view (binoculars, a camera) keeps far models instead of fading
+  them. T11's LOD selection uses the same factor. Beyond its draw distance an entry is in no list (its shadow goes too); over the last
   stretch (10% of the distance, at least 3 m, at most all of it) its distance fade rises linearly from 0 to 1.
 - **Opacity.** The tint's opacity (the alpha byte of the final tint) asks for a fade of 1 - opacity, and a draw's fade is
   the larger of that and the distance fade. An entry whose fade is 1 is in no list. Models no longer use alpha blending:
@@ -506,7 +520,8 @@ instead of copying it between shaders.
 ## WorldTestFrame
 
 Concrete `GameFrame` (embeds `GameFrame` first). Owns a `World`, a `GameClock` ([GameClock.md](GameClock.md)), a
-`GameCamera`, and a `WorldRenderer`. **The test world is a file** (T09): `Create` loads `<base>/worlds/test.world.json`
+`GameCamera`, and a `WorldRenderer`. **The test world is a file** (T09; since T10 its model components name world models, `world_models/test_world/`):
+`Create` loads `<base>/worlds/test.world.json`
 (`compile/out/worlds/` in the repository) with `WorldFile_LoadJSON` ([WorldFile.md](WorldFile.md)) on `Services.Keys`,
 `Services.Assets` and `Services.Logger`, so its sprite components bind their animations themselves. A missing or broken
 file is logged once (`WorldTest: could not load the test world (...): <why>. The world is empty instead.`) and gives an
@@ -519,8 +534,11 @@ that casts a shadow, a fixed sign behind it, a lit blended smoke puff in front o
 warm lamp, and an unlit neon sign. Its hierarchy (T08): a `desk` at (1.8, 0.05, -3.6) on the left of the start view,
 an empty object turned 15 degrees that holds its parts (`desk_top` and two `desk_side_*`, scaled test cubes), a gold
 `cup` and a `desk_lamp` (a thin post) whose child `desk_lamp_light` is a warm point light (intensity 3, reach 4, no
-shadow) 0.35 lamp units above the post's centre (0.28 m: a child's position is in its parent's scaled space). Edit the
-file and restart to change the test world. Its `Update` runs the tick's animation step: it advances the sprites of
+shadow) 0.35 lamp units above the post's centre (0.28 m: a child's position is in its parent's scaled space). Its
+world models (T10): two cubes behind the centre row, `variant_cube_left` (red) and `variant_cube_right` (blue), show the
+`painted_cube` world model's two variants; the crisp cube and the shadow tiers of the PBR demo cubes, the cup and the
+lamp are placement overrides (`overrides_omit_pixelation`, `overrides_shadow_tier`). Edit the file and restart to
+change the test world. Its `Update` runs the tick's animation step: it advances the sprites of
 effectively enabled objects (`World_GetComponents(world, WorldComponentType_Sprite)`) and slides the desk while J has it
 sliding (around the X it was loaded at); then, last, `World_UpdateTransforms` (the tick's world-matrix step), so the
 renderer reads cached matrices.
@@ -551,6 +569,10 @@ debug keys as raw keys:
 - **the hierarchy (T08):** J starts and stops the desk sliding back and forth along X (1.2 m either way, a 6-second
   period of real time): its parts, the cup, the lamp and the lamp's light follow; H hides and shows the desk, and with it
   everything on it (the lamp's light goes off). Both logged;
+- **the world models (T10):** E steps the two variant cubes through their variants: their own (red and blue), swapped,
+  then none (`uses_variant` off: the model's own white), through the component's setters, so the cache resolves the
+  variants again (logged); Z zooms the camera to a 15-degree view and back (logged): the zoom factor then lets models'
+  draw distances reach about 4.4 times as far;
 - **the world file (T09):** F5 saves the live world next to the test world, as `worlds/test.saved.world.json` and
   `worlds/test.saved.world.ghdf` (atomically; each logged with its path, gitignored), for round-trip checks: saved at
   noon with nothing changed (2, then F5) the JSON is the shipped file byte for byte; otherwise its diff against

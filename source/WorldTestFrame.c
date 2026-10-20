@@ -7,6 +7,7 @@
 #include "World.h"
 #include "WorldFile.h"
 #include "WorldObject.h"
+#include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "GameCamera.h"
 #include "WorldRenderer.h"
@@ -68,6 +69,13 @@
 #define TEST_DESK_OBJECT_NAME ((const unsigned char*)u8"desk")
 #define DESK_SLIDE_DISTANCE 1.2f
 #define DESK_SLIDE_PERIOD_SECONDS 6.0
+/** The test world's variant example (T10): two cubes of the "painted_cube" world model, and how many looks the E key
+ *  steps them through (VariantSteps). */
+#define VARIANT_TEST_OBJECT_COUNT 2U
+#define VARIANT_STEP_COUNT 3U
+/** The vertical field of view the Z key zooms to, in degrees: about 4.4 times closer than the default 60, so models'
+ *  draw distances reach 4.4 times as far. */
+#define ZOOMED_FOV_Y 15.0f
 /** Default font of the text sample: covers Latvian and Cyrillic. */
 #define TEXT_SAMPLE_FONT_NAME ((const unsigned char*)u8"noto_sans")
 /** Top-left corner of the text sample, in normalized-fitted units. */
@@ -131,6 +139,12 @@ typedef struct WorldTestFrameStruct
     float _deskStartX;
     bool _isDeskSliding;
     double _deskSlideSeconds;
+    /** The variant cubes the E key steps (VARIANT_TEST_OBJECT_COUNT; 0 for one the test world lacks), and the step of
+     *  VariantSteps they are at. */
+    uint64_t _variantTestObjectIds[VARIANT_TEST_OBJECT_COUNT];
+    size_t _variantStep;
+    /** Whether the Z key's zoom is on (the camera at ZOOMED_FOV_Y). */
+    bool _isZoomed;
 } WorldTestFrame;
 
 
@@ -142,6 +156,17 @@ static const float LightPollutionSteps[] = { 0.0f, 0.35f, 0.7f, 1.0f };
 static const float OpacitySteps[] = { 1.0f, 0.5f, 0.0f };
 /* The names of the X key's objects (OPACITY_TEST_OBJECT_COUNT): the centre cube and the tree sprite. */
 static const char* const OpacityTestObjectNames[OPACITY_TEST_OBJECT_COUNT] = { "test_object", "tree" };
+/* The names of the E key's objects (VARIANT_TEST_OBJECT_COUNT): the variant cubes on the left and the right. */
+static const char* const VariantTestObjectNames[VARIANT_TEST_OBJECT_COUNT] =
+{
+    "variant_cube_left", "variant_cube_right"
+};
+/* The variants the E key gives the two cubes at each step (the first is the test world's): their own, swapped, then
+ * none (NULL: uses_variant off, the model's own white; the names are kept). */
+static const char* const VariantSteps[VARIANT_STEP_COUNT][VARIANT_TEST_OBJECT_COUNT] =
+{
+    { "red", "blue" }, { "blue", "red" }, { NULL, NULL }
+};
 /* The moon's phases by name, from new moon (phase 0) in eighths of the cycle. */
 static const char* const MoonPhaseNames[MOON_PHASE_NAME_COUNT] =
 {
@@ -670,6 +695,71 @@ static void AdvanceSpriteAnimations(World* world, double deltaSeconds)
 }
 
 
+// Static functions: the world models (T10).
+/* Gives one variant cube the variant of the current step (NULL: none), through the component's setters, so the
+ * renderer's cache resolves the variant again. */
+static void ApplyTestVariant(WorldTestFrame* frame, uint64_t objectId, const char* variant)
+{
+    WorldObject* Object = NULL;
+    if ((objectId == 0U) || !World_TryGetObject(&frame->_world, objectId, &Object))
+    {
+        return;
+    }
+    WorldModelComponent* ModelComponent = WorldModelComponent_FromComponent(WorldObject_GetComponent(Object,
+        WorldComponentType_Model));
+    if (ModelComponent == NULL)
+    {
+        return;
+    }
+    Error Result = Error_CreateSuccess();
+    if (variant != NULL)
+    {
+        Result = WorldModelComponent_SetVariant(ModelComponent, (const unsigned char*)variant);
+    }
+    Error_Deconstruct(&Result); // every step's name is valid
+    Result = WorldModelComponent_SetUsesVariant(ModelComponent, variant != NULL);
+    Error_Deconstruct(&Result);
+}
+
+/* The world models' debug keys: E steps the variant cubes through their variants (their own, swapped, none); Z toggles
+ * a zoomed camera, whose draw distances reach farther. */
+static void HandleDebugModelInput(WorldTestFrame* frame, const GameInput* input)
+{
+    Logger* Log = frame->_services->Logger;
+    if (GameInput_IsKeyPressed(input, GameKey_E))
+    {
+        frame->_variantStep = (frame->_variantStep + 1U) % VARIANT_STEP_COUNT;
+        const char* const* Variants = VariantSteps[frame->_variantStep];
+        for (size_t Index = 0U; Index < VARIANT_TEST_OBJECT_COUNT; Index++)
+        {
+            ApplyTestVariant(frame, frame->_variantTestObjectIds[Index], Variants[Index]);
+        }
+        if (Log != NULL)
+        {
+            Error LogResult = (Variants[0] != NULL)
+                ? Logger_LogInfoFormatted(Log, (const unsigned char*)u8"WorldTest: the variant cubes show their %s and "
+                    u8"%s variants.", Variants[0], Variants[1])
+                : Logger_LogInfo(Log, (const unsigned char*)u8"WorldTest: the variant cubes show their model's own "
+                    u8"materials (no variant).");
+            Error_Deconstruct(&LogResult);
+        }
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_Z))
+    {
+        frame->_isZoomed = !frame->_isZoomed;
+        frame->_camera.FovY = frame->_isZoomed ? ZOOMED_FOV_Y : GAME_CAMERA_DEFAULT_FOV_Y;
+        if (Log != NULL)
+        {
+            const char* What = frame->_isZoomed ? "zoomed in: models' draw distances reach about 4.4 times as far"
+                : "zoom off";
+            Error LogResult = Logger_LogInfoFormatted(Log,
+                (const unsigned char*)u8"WorldTest: %s (a %.0f-degree view).", What, (double)frame->_camera.FovY);
+            Error_Deconstruct(&LogResult);
+        }
+    }
+}
+
+
 // Static functions: the desk (the test world's hierarchy).
 /* Logs a line about the desk. */
 static void LogDesk(WorldTestFrame* frame, const char* message)
@@ -905,6 +995,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     HandleDebugSkyInput(frame, input);
     HandleDebugInput(frame, input);
     HandleDebugDeskInput(frame, input);
+    HandleDebugModelInput(frame, input);
 }
 
 
@@ -1154,6 +1245,12 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     Frame->_deskStartX = World_TryGetObject(&Frame->_world, Frame->_deskId, &Desk) ? WorldObject_GetPosition(Desk).x : 0.0f;
     Frame->_isDeskSliding = false;
     Frame->_deskSlideSeconds = 0.0;
+    for (size_t Index = 0U; Index < VARIANT_TEST_OBJECT_COUNT; Index++)
+    {
+        Frame->_variantTestObjectIds[Index] = FindObjectId(&Frame->_world, VariantTestObjectNames[Index]);
+    }
+    Frame->_variantStep = 0U;
+    Frame->_isZoomed = false;
     if (!IsTestWorldLoaded)
     {
         WorldRenderer_SetDebugGridEnabled(Frame->_renderer, true); // an empty world shows the grid, so it is visible

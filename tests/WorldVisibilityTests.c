@@ -30,8 +30,9 @@
 
 
 // Types.
-/* An asset fixture with a "box" model (unit cube bounds) and a "walk" animation (one 1x1 frame), a world built with it,
- * a render cache and the visibility lists. */
+/* An asset fixture with a "box" model (unit cube bounds) and a "box" world model over it (600 m, the draw distance
+ * models had before world models), a "walk" animation (one 1x1 frame), a world built with it, a render cache and the
+ * visibility lists. */
 typedef struct VisibilityFixtureStruct
 {
     TestAssetFixture Assets;
@@ -56,6 +57,7 @@ static bool VisibilityFixture_Construct(TestRun* run, VisibilityFixture* self)
     BoundingBox UnitCube = { .min = { -0.5f, -0.5f, -0.5f }, .max = { 0.5f, 0.5f, 0.5f } };
     if (!TestAssetFixture_Construct(run, &self->Assets)
         || !TestAssets_AddModel(run, &self->Assets, "box", UnitCube, NULL)
+        || !TestAssets_AddWorldModelOf(run, &self->Assets, "box", "box")
         || !TestAssets_AddSpriteAnimation(run, &self->Assets, "walk", NULL)
         || !TEST_CHECK_SUCCESS(run, AssetManager_GetNewUserID(self->Assets.Manager, &self->ModelUser))
         || !TestWorld_Construct(run, &self->World, &self->Keys, self->Assets.Manager, NULL))
@@ -114,7 +116,7 @@ static Matrix MakeCascadeViewProjection(Vector3 focus, float size)
 }
 
 /* The list tests' view: the camera at @p cameraPosition looking along +Z, both cascades (32 and 160 m boxes around it)
- * running, no cube shadow, TEST_SCALE. */
+ * running, no cube shadow, TEST_SCALE, no zoom. */
 static WorldVisibilityView MakeView(Vector3 cameraPosition)
 {
     return (WorldVisibilityView)
@@ -129,13 +131,14 @@ static WorldVisibilityView MakeView(Vector3 cameraPosition)
         .IsPointShadowActive = false,
         .PointShadowPosition = { 0.0f, 0.0f, 0.0f },
         .PointShadowReach = 0.0f,
-        .DrawDistanceScale = TEST_SCALE
+        .DrawDistanceScale = TEST_SCALE,
+        .ZoomFactor = 1.0f
     };
 }
 
-/* Creates an object at @p position with a box model; returns the model component (world-owned), or NULL with a failed
- * check. */
-static WorldModelComponent* AddBox(TestRun* run, World* world, Vector3 position)
+/* Creates an object at @p position with a model component naming the world model @p worldModel; returns the component
+ * (world-owned), or NULL with a failed check. */
+static WorldModelComponent* AddWorldModel(TestRun* run, World* world, const char* worldModel, Vector3 position)
 {
     WorldObject* Object = NULL;
     WorldComponent* Component = NULL;
@@ -146,8 +149,16 @@ static WorldModelComponent* AddBox(TestRun* run, World* world, Vector3 position)
     {
         return NULL;
     }
-    WorldModelComponent* Box = WorldModelComponent_FromComponent(Component);
-    return TEST_CHECK_SUCCESS(run, WorldModelComponent_SetModel(Box, (const unsigned char*)u8"box")) ? Box : NULL;
+    WorldModelComponent* ModelComponent = WorldModelComponent_FromComponent(Component);
+    return TEST_CHECK_SUCCESS(run, WorldModelComponent_SetWorldModel(ModelComponent, (const unsigned char*)worldModel))
+        ? ModelComponent : NULL;
+}
+
+/* Creates an object at @p position with a box model; returns the model component (world-owned), or NULL with a failed
+ * check. */
+static WorldModelComponent* AddBox(TestRun* run, World* world, Vector3 position)
+{
+    return AddWorldModel(run, world, "box", position);
 }
 
 /* Creates an object at @p position with a 2 m sprite of the given kind; returns the sprite component, or NULL with a
@@ -335,16 +346,43 @@ static void CascadeBoxCullsItsCasters(TestRun* run)
 // Tests: draw distances and fades.
 static void DrawDistancesByKindAndScale(TestRun* run)
 {
-    TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Model, 1.0f), 600.0f));
     TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Sprite, 1.0f), 150.0f));
     TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Decal, 1.0f), 60.0f));
-    TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Model, 0.5f), 300.0f));
+    TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Sprite, 0.5f), 75.0f));
     TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Decal, 2.0f), 120.0f));
     TEST_CHECK(run, WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Sprite, 0.0f) == 0.0f);
     // Unusable scales count as 1.
     TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Sprite, -1.0f), 150.0f));
     TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Sprite, NAN), 150.0f));
     TEST_CHECK(run, IsNear(WorldVisibility_GetDrawDistance(WorldDrawDistanceKind_Sprite, INFINITY), 150.0f));
+}
+
+/* A model's own draw distance takes the quality scale unless it is fixed; the zoom factor is exactly 1 at 60 degrees,
+ * below 1 zoomed in (distances shrink, so far things stay), above 1 zoomed out, and 1 for an unusable field of view. */
+static void OwnDrawDistancesAndTheZoomFactor(TestRun* run)
+{
+    TEST_CHECK(run, WorldVisibility_ScaleDrawDistance(100.0f, false, 0.5f) == 50.0f);
+    TEST_CHECK(run, WorldVisibility_ScaleDrawDistance(100.0f, true, 0.5f) == 100.0f);
+    TEST_CHECK(run, WorldVisibility_ScaleDrawDistance(100.0f, true, 4.0f) == 100.0f);
+    TEST_CHECK(run, WorldVisibility_ScaleDrawDistance(100.0f, false, 0.0f) == 0.0f);
+    TEST_CHECK(run, WorldVisibility_ScaleDrawDistance(100.0f, false, NAN) == 100.0f);
+    TEST_CHECK(run, WorldVisibility_ScaleDrawDistance(100.0f, false, -2.0f) == 100.0f);
+    TEST_CHECK(run, isinf(WorldVisibility_ScaleDrawDistance(INFINITY, false, 2.0f)));
+
+    TEST_CHECK(run, WorldVisibility_GetZoomFactor(60.0f) == 1.0f);
+    TEST_CHECK(run, IsNear(WorldVisibility_GetZoomFactor(30.0f), tanf(15.0f * DEG2RAD) / tanf(30.0f * DEG2RAD)));
+    TEST_CHECK(run, IsNear(WorldVisibility_GetZoomFactor(15.0f), tanf(7.5f * DEG2RAD) / tanf(30.0f * DEG2RAD)));
+    TEST_CHECK(run, WorldVisibility_GetZoomFactor(90.0f) > 1.0f);
+    float Previous = 0.0f;
+    for (float Fov = 5.0f; Fov < 175.0f; Fov += 5.0f)
+    {
+        float Factor = WorldVisibility_GetZoomFactor(Fov);
+        TEST_CHECK(run, (Factor > Previous) && isfinite(Factor));
+        Previous = Factor;
+    }
+    TEST_CHECK(run, (WorldVisibility_GetZoomFactor(0.0f) == 1.0f) && (WorldVisibility_GetZoomFactor(180.0f) == 1.0f)
+        && (WorldVisibility_GetZoomFactor(-30.0f) == 1.0f) && (WorldVisibility_GetZoomFactor(NAN) == 1.0f)
+        && (WorldVisibility_GetZoomFactor(INFINITY) == 1.0f));
 }
 
 /* 0 before the band, rising to 1 at the limit, monotonic in between; the band is a tenth, at least 3 m, at most all. */
@@ -568,8 +606,11 @@ static void CastersBehindTheCameraStayInTheShadowLists(TestRun* run)
     View.PointShadowPosition = (Vector3){ 0.0f, 1.0f, -10.0f };
     View.PointShadowReach = 5.0f;
     if ((Behind != NULL) && (NonCaster != NULL) && (NearOnly != NULL) && (FarOnly != NULL) && (PastTheNearBox != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(NonCaster, WorldModelSetting_CastsShadows, true))
         && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetCastsShadows(NonCaster, false))
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(NearOnly, WorldModelSetting_ShadowTier, true))
         && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(NearOnly, WorldShadowTier_Near))
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(FarOnly, WorldModelSetting_ShadowTier, true))
         && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(FarOnly, WorldShadowTier_Far))
         && VisibilityFixture_Build(run, &Fixture, &View))
     {
@@ -660,6 +701,75 @@ static void DrawDistanceAndOpacityFadeAndCull(TestRun* run)
         WorldVisibilityCounts Counts = WorldVisibility_GetCounts(&Fixture.Visibility);
         TEST_CHECK(run, (Counts.DrawnModelCount == 2) && (Counts.FadedOutCount == 2) && (Counts.FadingCount == 2)
             && (Counts.OutsideViewCount == 0));
+    }
+    VisibilityFixture_Deconstruct(run, &Fixture);
+}
+
+/* Each model fades at its own draw distance: its world model's, or its placement's while that overrides it, times the
+ * placement's multiplier; the quality scale applies unless the world model or the placement keeps it fixed; zooming in
+ * shrinks the distances, so far models stay. */
+static void ModelsFadeAtTheirOwnDrawDistance(TestRun* run)
+{
+    VisibilityFixture Fixture;
+    if (!VisibilityFixture_Construct(run, &Fixture)
+        || !TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"near_box\", \"lods\": [{\"model\": "
+            "\"box\", \"max_distance\": 200}]}")
+        || !TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"landmark\", \"lods\": [{\"model\": "
+            "\"box\", \"max_distance\": 200}], \"is_draw_distance_fixed\": true}"))
+    {
+        VisibilityFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    // TEST_SCALE (0.05): near_box is seen 10 m (fading from 7 m), the fixed landmark 200 m. Every box stands 20 m ahead
+    // (and up to 5 m aside), 19.1 to 19.8 m from the camera to its sphere.
+    Vector3 CameraPosition = { 0.0f, 1.0f, 0.0f };
+    WorldModelComponent* Near = AddWorldModel(run, &Fixture.World, "near_box", (Vector3){ -5.0f, 1.0f, 20.0f });
+    WorldModelComponent* Landmark = AddWorldModel(run, &Fixture.World, "landmark", (Vector3){ -3.0f, 1.0f, 20.0f });
+    WorldModelComponent* OwnDistance = AddWorldModel(run, &Fixture.World, "near_box", (Vector3){ -1.0f, 1.0f, 20.0f });
+    WorldModelComponent* Multiplied = AddWorldModel(run, &Fixture.World, "near_box", (Vector3){ 1.0f, 1.0f, 20.0f });
+    WorldModelComponent* Unfixed = AddWorldModel(run, &Fixture.World, "landmark", (Vector3){ 3.0f, 1.0f, 20.0f });
+    WorldModelComponent* Fixed = AddWorldModel(run, &Fixture.World, "near_box", (Vector3){ 5.0f, 1.0f, 20.0f });
+    bool IsBuilt = (Near != NULL) && (Landmark != NULL) && (OwnDistance != NULL) && (Multiplied != NULL)
+        && (Unfixed != NULL) && (Fixed != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(OwnDistance, WorldModelSetting_DrawDistance, true))
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistance(OwnDistance, 1000.0f)) // 50 m scaled
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistanceMultiplier(Multiplied, 4.0f)) // 40 m scaled
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Unfixed, WorldModelSetting_IsDrawDistanceFixed,
+            true)) // its own "not fixed": 10 m scaled
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Fixed, WorldModelSetting_IsDrawDistanceFixed,
+            true))
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsDrawDistanceFixed(Fixed, true)); // 200 m
+    WorldVisibilityView View = MakeView(CameraPosition);
+    if (IsBuilt && VisibilityFixture_Build(run, &Fixture, &View))
+    {
+        TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_Camera, Near));
+        TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Camera, Landmark));
+        TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Camera, OwnDistance));
+        TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Camera, Multiplied));
+        TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_Camera, Unfixed));
+        TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Camera, Fixed));
+        TEST_CHECK(run, WorldVisibility_GetModelFade(&Fixture.Visibility, ModelIndex(&Fixture.Cache, Near)).Distance
+            == 1.0f);
+        TEST_CHECK(run, WorldVisibility_GetModelFade(&Fixture.Visibility, ModelIndex(&Fixture.Cache, Landmark)).Distance
+            == 0.0f);
+    }
+
+    // Zoomed in 4 times: 19.8 m counts as 4.9 m, inside even the 10 m distances.
+    View.ZoomFactor = 0.25f;
+    if (IsBuilt && VisibilityFixture_Build(run, &Fixture, &View))
+    {
+        TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Camera, Near));
+        TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Camera, Unfixed));
+        TEST_CHECK(run, WorldVisibility_GetModelFade(&Fixture.Visibility, ModelIndex(&Fixture.Cache, Near)).Distance
+            == 0.0f);
+        // A zoom of 0.45 puts near_box (5 m aside) 8.9 m away: in the fade band (7 to 10 m).
+        View.ZoomFactor = 0.45f;
+        if (VisibilityFixture_Build(run, &Fixture, &View))
+        {
+            float Expected = (((sqrtf(25.0f + 400.0f) - BOX_RADIUS) * 0.45f) - 7.0f) / 3.0f;
+            TEST_CHECK(run, IsNear(WorldVisibility_GetModelFade(&Fixture.Visibility,
+                ModelIndex(&Fixture.Cache, Near)).Distance, Expected));
+        }
     }
     VisibilityFixture_Deconstruct(run, &Fixture);
 }
@@ -770,7 +880,9 @@ static void CrispObjectsCountOnlyInView(TestRun* run)
     WorldModelComponent* Screen = AddBox(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, -6.0f });
     WorldVisibilityView LookingAway = MakeView((Vector3){ 0.0f, 1.0f, 0.0f });
     WorldVisibilityView LookingAt = MakeView((Vector3){ 0.0f, 1.0f, -12.0f });
-    if ((Screen != NULL) && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOmitsPixelation(Screen, true))
+    if ((Screen != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Screen, WorldModelSetting_OmitPixelation, true))
+        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOmitsPixelation(Screen, true))
         && VisibilityFixture_Build(run, &Fixture, &LookingAway))
     {
         TEST_CHECK(run, !WorldVisibility_HasCrispObjects(&Fixture.Visibility));
@@ -822,12 +934,14 @@ void WorldVisibilityTests_Run(TestRun* run)
         { "frustum_planes_from_a_view_projection", FrustumPlanesFromAViewProjection },
         { "cascade_box_culls_its_casters", CascadeBoxCullsItsCasters },
         { "draw_distances_by_kind_and_scale", DrawDistancesByKindAndScale },
+        { "own_draw_distances_and_the_zoom_factor", OwnDrawDistancesAndTheZoomFactor },
         { "distance_fade_rises_over_the_band", DistanceFadeRisesOverTheBand },
         { "opacity_fade_and_the_max_rule", OpacityFadeAndTheMaxRule },
         { "dither_matches_the_shader_formula", DitherMatchesTheShaderFormula },
         { "camera_list_holds_what_is_in_view", CameraListHoldsWhatIsInView },
         { "casters_behind_the_camera_stay_in_the_shadow_lists", CastersBehindTheCameraStayInTheShadowLists },
         { "draw_distance_and_opacity_fade_and_cull", DrawDistanceAndOpacityFadeAndCull },
+        { "models_fade_at_their_own_draw_distance", ModelsFadeAtTheirOwnDrawDistance },
         { "sprites_cull_and_fade_by_their_kind", SpritesCullAndFadeByTheirKind },
         { "culling_off_keeps_everything_within_reach", CullingOffKeepsEverythingWithinReach },
         { "crisp_objects_count_only_in_view", CrispObjectsCountOnlyInView },

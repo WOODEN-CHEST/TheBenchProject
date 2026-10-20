@@ -34,6 +34,10 @@
 /** @brief Standard texture type name / directory. */
 #define ASSET_TYPE_NAME_TEXTURE      ((const unsigned char*)u8"texture")
 #define ASSET_TYPE_DIRECTORY_TEXTURE ((const unsigned char*)u8"textures")
+/** @brief Standard world model type name / directory (WorldModel.h: LOD models, draw distance, render defaults and
+ *  variants, built on model and texture assets). */
+#define ASSET_TYPE_NAME_WORLD_MODEL      ((const unsigned char*)u8"world_model")
+#define ASSET_TYPE_DIRECTORY_WORLD_MODEL ((const unsigned char*)u8"world_models")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -66,4 +70,8 @@ Error ModelDefinition_Construct(AssetManager* manager, const UserData* userData,
 
 /** @brief Builds a texture definition from a JSON blob. See AssetDefinitionConstructor. */
 Error TextureDefinition_Construct(AssetManager* manager, const UserData* userData,
+    const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+
+/** @brief Builds a world model definition from a JSON blob (WorldModelDefinition.c). See AssetDefinitionConstructor. */
+Error WorldModelDefinition_Construct(AssetManager* manager, const UserData* userData,
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);

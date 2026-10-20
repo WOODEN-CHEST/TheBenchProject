@@ -1,0 +1,6 @@
+{
+    "name": "test",
+    "lods": [
+        { "model": "test", "max_distance": 600 }
+    ]
+}

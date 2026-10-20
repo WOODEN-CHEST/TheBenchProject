@@ -5,6 +5,7 @@
 #include "AssetManager.h"
 #include "GameModel.h"
 #include "World.h"
+#include "WorldModel.h"
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
@@ -18,26 +19,31 @@
  * Private header (source/): the world renderer's per-object render cache.
  *
  * At the start of every render, WorldRenderCache_Sync walks the world's per-type component arrays once
- * (World_GetComponents) and builds the lists every pass shares: the model components (with their resolved model asset,
- * final transform and world bounding sphere), the sprites that have a frame to draw, and the point lights. Passes
- * iterate these lists instead of walking the world and resolving assets by name themselves. Every placement is the
- * object's world one, through its parents (WorldObject_GetWorldMatrix, WorldObject_GetWorldTransform,
- * WorldObject_GetWorldPosition), read without writing to the world.
+ * (World_GetComponents) and builds the lists every pass shares: the model components (with their resolved world model,
+ * the LOD drawn, the variant, the settings in effect, final transform and world bounding sphere), the sprites that have
+ * a frame to draw, and the point lights. Passes iterate these lists instead of walking the world and resolving assets
+ * by name themselves. Every placement is the object's world one, through its parents (WorldObject_GetWorldMatrix,
+ * WorldObject_GetWorldTransform, WorldObject_GetWorldPosition), read without writing to the world.
  *
  * Objects that are disabled or hidden, or under a disabled or hidden ancestor (WorldObject_IsEffectivelyEnabled,
  * WorldObject_IsEffectivelyVisible), are not drawn: their model entries stay (keeping the resolved model) but are not
  * IsDrawn, and their sprites and lights are not listed.
  *
- * Model assets are resolved once per component: an entry remembers the component's revision and the hash of the name
- * it resolved; when the revision changes the name is hashed again, and the model is resolved again only if the name
- * changed. A failed resolution is logged once and not retried until the name changes. Entries follow the world's model
+ * World models (WorldModel.h) are resolved once per component: an entry remembers the component's revision and the
+ * hash of the name it resolved; when the revision changes the name is hashed again, and the world model is resolved
+ * again only if the name changed. A failed resolution is logged once and not retried until the name changes. The
+ * variant is resolved to an index with the world model, and again when the revision changes and the component's
+ * uses_variant or variant name did; an unknown name draws the model's own materials and is logged once. The settings in
+ * effect (the world model's, or the placement's own while its override flag is on: WorldModelComponent_ResolveSettings)
+ * are taken every frame. Until T11 every entry draws its world model's LOD 0. Entries follow the world's model
  * components across additions and removals: when the world's component-set version changes, entries are re-matched by
- * owner id, and one is carried over only if its owner still names the model it was resolved for (an id can come back
- * with another object). A different world resets the cache; the per-frame walk also checks each entry's component,
+ * owner id, and one is carried over only if its owner still names the world model it was resolved for (an id can come
+ * back with another object). A different world resets the cache; the per-frame walk also checks each entry's component,
  * so a world rebuilt at the same address is caught as soon as a component differs.
  *
  * The cache only reads the world, its objects and components, and never writes to an asset. Every pointer in the lists
- * is borrowed and valid until the world changes; the models are held under the asset user passed to Sync.
+ * is borrowed and valid until the world changes; the world models (and with them their LOD models and textures) are
+ * held under the asset user passed to Sync.
  */
 
 
@@ -53,25 +59,43 @@ typedef struct WorldRenderModelStruct
     uint32_t Revision;
     /** @brief Whether a resolution was attempted for the current name (it succeeded, or it failed and was logged). */
     bool IsResolved;
-    /** @brief Hash of the model name the entry was resolved for (0 for none); meaningful once IsResolved is true.
-     *  Re-matching uses it to tell an object that reuses an id from the object the entry was made for. */
+    /** @brief Hash of the world model name the entry was resolved for (0 for none); meaningful once IsResolved is
+     *  true. Re-matching uses it to tell an object that reuses an id from the object the entry was made for. */
     uint64_t NameHash;
-    /** @brief The resolved model, held under the model user passed to Sync; NULL when the component names no model or
-     *  its model failed to load (then the object draws nothing). Read-only. */
-    GameModel* Asset;
-    /** @brief Centre and radius of the asset's mesh-space bounding sphere; valid when Asset is not NULL. */
+    /** @brief The resolved world model, held under the model user passed to Sync; NULL when the component names none or
+     *  it failed to load (then the object draws nothing). Read-only. */
+    const WorldModel* Asset;
+    /** @brief The LOD model drawn (LOD 0 until T11); borrowed from Asset, NULL exactly when Asset is. Read-only. */
+    GameModel* Model;
+    /** @brief The component's uses_variant and the hash of its variant name when the variant was resolved (0 for none),
+     *  so a change of either resolves it again. */
+    bool UsesVariant;
+    uint64_t VariantNameHash;
+    /** @brief Whether the entry draws a variant (uses_variant on and the world model has a variant of that name), and
+     *  which (WorldModel_ApplyVariant). */
+    bool HasVariant;
+    size_t VariantIndex;
+    /** @brief Centre and radius of the world model's bounding sphere, and the transform from its space to the object's
+     *  (WorldModel_GetBoundsTransform); valid when Asset is not NULL. */
     Vector3 LocalCenter;
     float LocalRadius;
-    /** @brief Whether the passes draw the entry this frame: its model resolved, its object (effectively) enabled and
-     *  visible. */
+    Matrix BoundsTransform;
+    /** @brief Whether the passes draw the entry this frame: its world model resolved, its object (effectively) enabled
+     *  and visible. */
     bool IsDrawn;
-    /** @brief The component's render settings (this frame). */
+    /** @brief The render settings in effect (this frame): the world model's, or the component's own while their
+     *  override flags are on (WorldModelComponent_ResolveSettings). */
     bool HasOutline;
     bool OmitsPixelation;
     WorldShadowTier ShadowTier;
     bool CastsShadows;
-    /** @brief The asset's import transform composed with the object's world matrix (this frame). Valid when Asset is
-     *  not NULL. */
+    /** @brief The draw distance in effect, in metres, times the component's multiplier (above 0; +infinity never
+     *  fades), and whether the player's draw_distance_scale leaves it as it is (this frame). WorldVisibility applies
+     *  the scale and the zoom. */
+    float DrawDistance;
+    bool IsDrawDistanceFixed;
+    /** @brief The drawn LOD's import transform composed with the object's world matrix (this frame). Valid when Asset
+     *  is not NULL. */
     Matrix Transform;
     /** @brief World-space bounding sphere (this frame): conservative under rotation, non-uniform scale and the shear a
      *  hierarchy can add (WorldTransform_GetMaxScale). Valid when Asset is not NULL. */
@@ -188,16 +212,19 @@ void WorldRenderCache_Reset(WorldRenderCache* self);
  * @brief Brings the cache up to date with @p world and rebuilds this frame's lists.
  *
  * One walk over the world's model, sprite and light components. A world other than the last one resets the cache;
- * entries are re-matched to the model components (by owner id and model name) when the component-set version changed
- * since the last Sync, or when an entry no longer belongs to the component at its position. A model whose entry is new
- * or whose name changed is resolved with AssetManager_LoadModel under @p modelUser; a failure is logged once (warning)
- * and leaves the entry without an asset until the name changes. Every model's transform and bounds are recomputed.
- * Main thread only; resolving a model needs the GL context.
+ * entries are re-matched to the model components (by owner id and world model name) when the component-set version
+ * changed since the last Sync, or when an entry no longer belongs to the component at its position. A world model whose
+ * entry is new or whose name changed is resolved with AssetManager_LoadWorldModel under @p modelUser; a failure is
+ * logged once (warning) and leaves the entry without an asset until the name changes. Variants are resolved with the
+ * world model and when the component's variant changes (an unknown one logged once). Every model's settings, transform
+ * and bounds are recomputed. Main thread only; resolving a world model loads its LOD models, which needs the GL
+ * context.
  * @param self The cache; must not be NULL.
  * @param world The world to draw; must not be NULL.
- * @param assets Resolves the models; borrowed. Must not be NULL.
- * @param modelUser The asset user the models are held under; must outlive the entries (see Reset).
- * @param logger Receives one warning per failed model resolution; borrowed, may be NULL.
+ * @param assets Resolves the world models; borrowed. Must not be NULL.
+ * @param modelUser The asset user the world models are held under; must outlive the entries (see Reset).
+ * @param logger Receives one warning per failed world model resolution and per unknown variant; borrowed, may be
+ *        NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self, @p world or @p assets is NULL;
  *          ErrorCode_InvalidOperation if a list could not grow (the lists are then incomplete).
  */
@@ -206,7 +233,7 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, AssetManager* 
 
 /**
  * @brief Returns this frame's model entries: one per model component, in world order, including ones that are not
- *        drawn (no asset, or a disabled or hidden object): the passes draw only the IsDrawn ones.
+ *        drawn (no world model, or a disabled or hidden object): the passes draw only the IsDrawn ones.
  * @param self The cache; must not be NULL.
  * @param outCount [out] Receives the entry count. Must not be NULL.
  * @returns The entries (borrowed until the next Sync or Reset); NULL when there are none.

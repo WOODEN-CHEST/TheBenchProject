@@ -1,0 +1,6 @@
+{
+    "name": "pbr_demo",
+    "lods": [
+        { "model": "pbr_demo", "max_distance": 600 }
+    ]
+}

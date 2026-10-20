@@ -242,9 +242,9 @@ static void DecideShadows(WorldRenderer* self, WorldRenderFrame* frame)
     }
 }
 
-/* Builds the frame's visibility from the render cache: what the camera's passes draw (its frustum, the draw distances,
- * the opacities) and which casters each shadow pass that runs draws (each cascade's box, the cube's reach). Needs the
- * shadow decisions and WorldRendererShadows_PrepareFrame. */
+/* Builds the frame's visibility from the render cache: what the camera's passes draw (its frustum, the draw distances
+ * under the quality setting and the camera's zoom, the opacities) and which casters each shadow pass that runs draws
+ * (each cascade's box, the cube's reach). Needs the shadow decisions and WorldRendererShadows_PrepareFrame. */
 static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     WorldVisibilityView View =
@@ -259,7 +259,8 @@ static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
         .IsPointShadowActive = frame->IsPointShadowActive,
         .PointShadowPosition = frame->PointShadowPosition,
         .PointShadowReach = frame->PointShadowFar,
-        .DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self)
+        .DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self),
+        .ZoomFactor = WorldVisibility_GetZoomFactor(frame->Camera->FovY)
     };
     return WorldVisibility_Build(&self->_visibility, &self->_cache, &View);
 }
@@ -726,7 +727,7 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     const char* Tier = !Status->IsSceneHdr ? "8-bit"
         : (Status->IsSceneDepthSamplable ? "HDR with samplable depth" : "HDR without samplable depth");
     Error LogResult = Logger_LogInfoFormatted(self->_logger,
-        (const unsigned char*)u8"WorldRenderer: %s scene; %" PRIu64 u8" models (%" PRIu64 u8" without a model), %"
+        (const unsigned char*)u8"WorldRenderer: %s scene; %" PRIu64 u8" models (%" PRIu64 u8" without a world model), %"
         PRIu64 u8" sprites (%" PRIu64 u8" decals, %" PRIu64 u8" blended or additive), %" PRIu64 u8" lights, %" PRIu64
         u8" stars; drawn %" PRIu64 u8" models and %" PRIu64 u8" sprites (%" PRIu64 u8" fading), culled %" PRIu64
         u8" outside the view%s and %" PRIu64 u8" faded out (draw distance, opacity); %s.",

@@ -1,10 +1,12 @@
 #include "TestAssets.h"
 #include "GameModel.h"
 #include "GameFont.h"
+#include "GameTexture.h"
 #include "SpriteAnimation.h"
 #include "raylib/raymath.h"
 #include "wr/WRCompile.h"
 #include "wr/WRJSON.h"
+#include <stdio.h>
 #include <string.h>
 
 
@@ -43,6 +45,8 @@ typedef struct TestModelDefinitionStruct
 {
     AssetDefinition Base;
     BoundingBox Bounds;
+    int MaterialCount;
+    Matrix Transform;
     TestAssetCounters* Counters;
 } TestModelDefinition;
 
@@ -51,6 +55,19 @@ typedef struct TestModelLoadedStruct
     GameModel Model;
     TestAssetCounters* Counters;
 } TestModelLoaded;
+
+typedef struct TestTextureDefinitionStruct
+{
+    AssetDefinition Base;
+    unsigned int TextureId;
+    TestAssetCounters* Counters;
+} TestTextureDefinition;
+
+typedef struct TestTextureLoadedStruct
+{
+    GameTexture Texture;
+    TestAssetCounters* Counters;
+} TestTextureLoaded;
 
 
 // Static functions.
@@ -196,6 +213,7 @@ static void TestModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
     {
         Loaded->Counters->UnloadCount++;
     }
+    Memory_Free(Loaded->Model._rayModel.materials);
     Memory_Free(Loaded);
 }
 
@@ -209,8 +227,16 @@ static Error TestModel_LoadAsset(void* self, AssetManager* manager, AssetUserID 
 
     TestModelLoaded* Loaded = Memory_Allocate(sizeof(TestModelLoaded));
     Memory_Zero(Loaded, sizeof(*Loaded));
-    Loaded->Model._rayModel.transform = MatrixIdentity();
+    Loaded->Model._rayModel.transform = Definition->Transform;
     Loaded->Model._localBounds = Definition->Bounds;
+    if (Definition->MaterialCount > 0)
+    {
+        // Materials only count here (nothing draws them); their maps stay NULL.
+        size_t ByteCount = (size_t)Definition->MaterialCount * sizeof(Material);
+        Loaded->Model._rayModel.materials = Memory_Allocate(ByteCount);
+        Memory_Zero(Loaded->Model._rayModel.materials, ByteCount);
+        Loaded->Model._rayModel.materialCount = Definition->MaterialCount;
+    }
     Loaded->Counters = Definition->Counters;
     if (Loaded->Counters != NULL)
     {
@@ -223,6 +249,45 @@ static Error TestModel_LoadAsset(void* self, AssetManager* manager, AssetUserID 
 }
 
 static const AssetDefinitionVTable TestModelVTable = { TestModel_LoadAsset, TestDefinition_Destroy };
+
+static void TestTextureLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
+{
+    UNUSED(manager);
+    TestTextureLoaded* Loaded = self->DestroyContext;
+    if (Loaded->Counters != NULL)
+    {
+        Loaded->Counters->UnloadCount++;
+    }
+    Memory_Free(Loaded);
+}
+
+static const LoadedAssetVTable TestTextureLoadedVTable = { TestTextureLoaded_Destroy };
+
+// A texture that only names a GPU id: copying it needs no GL context.
+static Error TestTexture_LoadAsset(void* self, AssetManager* manager, AssetUserID dependencyUser,
+    LoadedAsset* outLoaded)
+{
+    UNUSED(manager);
+    UNUSED(dependencyUser);
+    TestTextureDefinition* Definition = self;
+
+    TestTextureLoaded* Loaded = Memory_Allocate(sizeof(TestTextureLoaded));
+    Memory_Zero(Loaded, sizeof(*Loaded));
+    Loaded->Texture._rayTexture = (Texture2D){ .id = Definition->TextureId, .width = 16, .height = 16, .mipmaps = 1,
+        .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 };
+    Loaded->Texture._isSrgb = true;
+    Loaded->Counters = Definition->Counters;
+    if (Loaded->Counters != NULL)
+    {
+        Loaded->Counters->LoadCount++;
+    }
+    outLoaded->Asset = &Loaded->Texture;
+    outLoaded->VTable = &TestTextureLoadedVTable;
+    outLoaded->DestroyContext = Loaded;
+    return Error_CreateSuccess();
+}
+
+static const AssetDefinitionVTable TestTextureVTable = { TestTexture_LoadAsset, TestDefinition_Destroy };
 
 
 // Public functions.
@@ -296,11 +361,53 @@ bool TestAssets_AddFont(TestRun* run, TestAssetFixture* fixture, const char* nam
 bool TestAssets_AddModel(TestRun* run, TestAssetFixture* fixture, const char* name, BoundingBox bounds,
     TestAssetCounters* counters)
 {
+    return TestAssets_AddModelWithMaterials(run, fixture, name, bounds, 0, MatrixIdentity(), counters);
+}
+
+bool TestAssets_AddModelWithMaterials(TestRun* run, TestAssetFixture* fixture, const char* name, BoundingBox bounds,
+    int materialCount, Matrix transform, TestAssetCounters* counters)
+{
     TestModelDefinition* Definition = Memory_Allocate(sizeof(TestModelDefinition));
+    Memory_Zero(Definition, sizeof(*Definition));
     Definition->Base.VTable = &TestModelVTable;
     Definition->Base.Type = fixture->Types.Model;
     Definition->Base.Name = CloneName(name);
     Definition->Bounds = bounds;
+    Definition->MaterialCount = materialCount;
+    Definition->Transform = transform;
     Definition->Counters = counters;
     return TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, &Definition->Base));
+}
+
+bool TestAssets_AddTexture(TestRun* run, TestAssetFixture* fixture, const char* name, unsigned int textureId,
+    TestAssetCounters* counters)
+{
+    TestTextureDefinition* Definition = Memory_Allocate(sizeof(TestTextureDefinition));
+    Memory_Zero(Definition, sizeof(*Definition));
+    Definition->Base.VTable = &TestTextureVTable;
+    Definition->Base.Type = fixture->Types.Texture;
+    Definition->Base.Name = CloneName(name);
+    Definition->TextureId = textureId;
+    Definition->Counters = counters;
+    return TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, &Definition->Base));
+}
+
+bool TestAssets_AddWorldModel(TestRun* run, TestAssetFixture* fixture, const char* json)
+{
+    GenericBuffer Bytes;
+    GenericBuffer_AllocateVariable(&Bytes, 0U, sizeof(unsigned char));
+    GenericBuffer_AppendString(&Bytes, (const unsigned char*)json);
+    AssetDefinition* Definition = NULL;
+    bool IsBuilt = TEST_CHECK_SUCCESS(run, AssetManager_BuildDefinition(fixture->Manager, fixture->Types.WorldModel,
+        &Bytes, (const unsigned char*)u8"test world model", &Definition));
+    Memory_Free(Bytes._data);
+    return IsBuilt && TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, Definition));
+}
+
+bool TestAssets_AddWorldModelOf(TestRun* run, TestAssetFixture* fixture, const char* name, const char* modelName)
+{
+    char Json[256];
+    snprintf(Json, sizeof(Json), "{\"name\": \"%s\", \"lods\": [{\"model\": \"%s\", \"max_distance\": 600}]}",
+        name, modelName);
+    return TestAssets_AddWorldModel(run, fixture, Json);
 }

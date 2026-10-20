@@ -558,6 +558,31 @@ static Error CheckTagsKey(const PropertyTable* table, const PropertyDescriptor* 
     return Error_CreateSuccess();
 }
 
+/* An override flag (PROPERTY_OVERRIDE_FLAG_PREFIX + a key) is a Bool next to the value it switches on: the rest of its
+ * key must name another row of the table. */
+static Error CheckOverrideFlag(const PropertyTable* table, const PropertyDescriptor* descriptor)
+{
+    const unsigned char* Prefix = (const unsigned char*)PROPERTY_OVERRIDE_FLAG_PREFIX;
+    size_t PrefixLength = sizeof(PROPERTY_OVERRIDE_FLAG_PREFIX) - 1U;
+    for (size_t Index = 0; Index < PrefixLength; Index++)
+    {
+        if (descriptor->Key[Index] != Prefix[Index])
+        {
+            return Error_CreateSuccess(); // not an override flag (a shorter key ends at its NUL, which differs)
+        }
+    }
+    if (descriptor->Type != PropertyType_Bool)
+    {
+        return TableError(table, descriptor, "an override flag (overrides_<key>) must be a Bool");
+    }
+    if (PropertyTable_FindByKey(table, descriptor->Key + PrefixLength) == NULL)
+    {
+        return TableError(table, descriptor,
+            "an override flag (overrides_<key>) must name the row it switches on, another row of its table");
+    }
+    return Error_CreateSuccess();
+}
+
 static Error CheckEnumTable(const PropertyTable* table, const PropertyDescriptor* descriptor)
 {
     const PropertyEnumTable* Enum = descriptor->EnumTable;
@@ -988,6 +1013,10 @@ Error PropertyTable_Check(const PropertyTable* table)
         if (Result.Code == ErrorCode_Success)
         {
             Result = CheckEnumTable(table, Descriptor);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = CheckOverrideFlag(table, Descriptor);
         }
         for (size_t Other = 0; (Other < Index) && (Result.Code == ErrorCode_Success); Other++)
         {

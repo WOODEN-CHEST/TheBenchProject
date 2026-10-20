@@ -14,7 +14,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 |---|---|---|
 | WorldObject | `include/WorldObject.h`, `source/WorldObject.c` | The one object type: id, name, parent, transform (relative to the parent), tint, enabled, visible, mobility, and its component slots. |
 | WorldComponent | `include/WorldComponent.h`, `source/WorldComponent.c` | The component base, the component types and the registry entry that describes each (`WorldComponentTypeInfo`). |
-| WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A 3D model by asset name, with its render settings (outline, crisp, shadow tier, casts shadows). |
+| WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A world model by asset name ([WorldModels.md](WorldModels.md)), the variant drawn, and the settings this placement overrides (explicit flags next to its own values: outline, crisp, shadow tier, casts shadows, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
 | WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A sprite animation by asset name, with its playback instance, bound by the world, and how it is drawn: orientation, pivot, size, flips, alpha mode, lighting, decal, shadows. |
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
 | WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
@@ -169,11 +169,25 @@ with its properties, whichever way they were written.
 struct, or NULL for NULL or another type; `..._AsComponent` upcasts.
 
 ### Model component (`model_component`)
-`_model` (an asset name, NULL draws nothing), `_hasOutline` (true), `_omitPixelation` (false: drawn crisp at full
-resolution over the pixelated image when true), `_shadowTier` (`WorldShadowTier`: Both / Near / Far, the shadow
-cascade(s) it casts into) and `_castsShadows` (true; false skips it in every shadow pass, it still receives shadows).
-The component holds no asset: the renderer resolves the model by name and resolves it again when the name changes
-(it watches the revision, then compares the name).
+Since T10 the component names a **world model** ([WorldModels.md](WorldModels.md)): the reusable definition of the thing
+placed (its LOD models, draw distance, render defaults and variants). `_worldModel` (an asset name, NULL draws nothing;
+changing it swaps the model and keeps the object), `_usesVariant` (false) and `_variant` (a variant name, kept while
+`_usesVariant` is off; an unknown one draws the model's own materials and the renderer warns once).
+
+The settings a placement can override (`WorldModelSetting`) are each a pair: an override flag, `_overrides...` (false:
+the world model's value applies), and the placement's own value, kept while the flag is off: `_hasOutline` (true),
+`_omitPixelation` (false: drawn crisp at full resolution over the pixelated image), `_shadowTier` (`WorldShadowTier`,
+declared in `WorldModel.h` since T10: Both / Near / Far, the shadow cascade(s) it casts into), `_castsShadows` (true;
+false skips it in every shadow pass, it still receives shadows), `_drawDistance` (600 m, above 0) and
+`_isDrawDistanceFixed` (false: the player's `draw_distance_scale` applies). `_drawDistanceMultiplier` (above 0, default
+1) multiplies whichever draw distance is in effect. The flags are set with `WorldModelComponent_SetOverridden(self,
+setting, isOverridden)` and read with `_IsOverridden`; `WorldModelComponent_ResolveSettings(self, modelSettings)` is the
+pure function that gives the `WorldModelSettings` in effect. The getters of the values (`WorldModelComponent_HasOutline`
+and the others) return the placement's own values, not the ones in effect.
+
+The component holds no asset: the renderer resolves the world model by name and resolves it again when the name
+changes (it watches the revision, then compares the name), and the variant again when `uses_variant` or `variant`
+changes.
 
 ### Sprite component (`sprite_component`)
 `_spriteAnimation` (an asset name, NULL plays nothing), the runtime `_animationInstance` (`SpriteAnimationInstance` by
@@ -309,11 +323,22 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `is_visible` | 9 | Bool | true |
 | | `mobility` | 10 | Enum `static` / `movable` | `static` |
 | | `data` (JSON: `data` and `tags`) | 11 | DataMap, ReadOnly for `Properties_Set`; 256 entries, 64 KiB | empty (NULL) |
-| `model_component` | `model` | 1 | AssetName (128, null allowed) | null |
+| `model_component` | `world_model` | 1 | AssetName (128, null allowed): a world model | null |
+| | `uses_variant` | 6 | Bool | false |
+| | `variant` | 7 | String (128, null allowed) | null |
+| | `overrides_has_outline` | 8 | Bool | false |
 | | `has_outline` | 2 | Bool | true |
+| | `overrides_omit_pixelation` | 9 | Bool | false |
 | | `omit_pixelation` | 3 | Bool | false |
+| | `overrides_shadow_tier` | 10 | Bool | false |
 | | `shadow_tier` | 4 | Enum `both` / `near` / `far` | `both` |
+| | `overrides_casts_shadows` | 11 | Bool | false |
 | | `casts_shadows` | 5 | Bool | true |
+| | `overrides_draw_distance` | 12 | Bool | false |
+| | `draw_distance` | 13 | Float > 0 | 600 |
+| | `draw_distance_multiplier` | 14 | Float > 0 | 1 |
+| | `overrides_is_draw_distance_fixed` | 15 | Bool | false |
+| | `is_draw_distance_fixed` | 16 | Bool | false |
 | `sprite_component` | `sprite_animation` | 1 | AssetName (128, null allowed) | null |
 | | `orientation` | 4 | Enum `billboard` / `axis_billboard` / `fixed` | `billboard` |
 | | `pivot` | 5 | Vector2 | (0.5, 0.5) |
@@ -334,6 +359,10 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `intensity` | 2 | Float >= 0 | 1 |
 | | `range` | 3 | Float >= 0 | 1 |
 | | `casts_shadows` | 4 | Bool | false |
+
+T10 renamed the model component's wire 1 from `model` (a model asset) to `world_model` and made wires 2 to 5 the
+placement's own values behind their override flags; its next free wire id is 17. Each override flag sits right before
+its value, in table order (the inspector's and the JSON writer's order), and `PropertyTable_Check` checks the pairing.
 
 The object table's wire ids start at 3: 1 and 2 are the world file's own entries per object (the id and the
 components, [WorldFile.md](WorldFile.md)). T24 added `data` (one row: the tags and the values are one map, written as two JSON keys, `tags` and
@@ -463,5 +492,6 @@ the moon's phase against real dates, its motion and lit fraction, the moonlight,
 shadow light's hand-over, the seasons' day lengths). `tests/PropertyDescriptorTests.c` (every table passes its check,
 the environment's GHDF tree matches the old encoder's, its JSON round trip). `tests/WorldRenderCacheTests.c` covers the
 renderer's side ([WorldRuntime.md](WorldRuntime.md)). They run headless with `sh tests/run_linux.sh`;
-`tests/TestAssets.h` provides code-built sprite animation and model definitions that load without files or a GL
-context.
+`tests/TestAssets.h` provides code-built sprite animation, model and texture definitions that load without files or a
+GL context, and world models built from JSON over them. `tests/WorldModelTests.c` covers the world models and the model
+component's overrides ([WorldModels.md](WorldModels.md)).

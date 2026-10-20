@@ -102,6 +102,7 @@ typedef struct GameFontStruct GameFont;
 typedef struct GameShaderStruct GameShader;
 typedef struct GameModelStruct GameModel;
 typedef struct GameTextureStruct GameTexture;
+typedef struct WorldModelStruct WorldModel;
 
 
 // Core identifier types.
@@ -348,6 +349,9 @@ typedef struct StandardAssetTypesStruct
     AssetTypeID Model;
     /** @brief Standalone texture type id (sky panoramas, the moon, noise, normal maps, masks). */
     AssetTypeID Texture;
+    /** @brief World model type id: a placeable thing's LOD models, draw distance, render defaults and variants, built
+     *  on model and texture assets (WorldModel.h). */
+    AssetTypeID WorldModel;
 } StandardAssetTypes;
 
 
@@ -427,11 +431,11 @@ Error AssetManager_CreateAssetType(AssetManager* self, const AssetTypeInfo* info
 /**
  * @brief Registers all standard asset types and a shared JSON pool used to parse their definitions.
  *
- * Registers the seven standard types (sprite sheet, sprite animation, sound, font, shader, model and texture),
- * writing their ids into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's ConstructorUserData
- * so all standard definition parsing recycles JSON compounds/arrays/strings instead of reallocating. The
- * caller OWNS @p *outDefinitionPool and must free it with JSONObjectPool_Deconstruct after (or alongside)
- * the manager. The same pool may be reused as the ConstructorUserData of a custom JSON-based type to
+ * Registers the eight standard types (sprite sheet, sprite animation, sound, font, shader, model, texture and world
+ * model), writing their ids into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
+ * ConstructorUserData so all standard definition parsing recycles JSON compounds/arrays/strings instead of
+ * reallocating. The caller OWNS @p *outDefinitionPool and must free it with JSONObjectPool_Deconstruct after (or
+ * alongside) the manager. The same pool may be reused as the ConstructorUserData of a custom JSON-based type to
  * extend the recycling to it. The manager also remembers these ids internally so the typed convenience
  * loaders (AssetManager_LoadSpriteSheet, etc.) work.
  * @param self The manager; must not be NULL.
@@ -967,6 +971,13 @@ Error AssetManager_LoadModel(AssetManager* self, const unsigned char* name, Asse
  * @brief Loads a standalone texture by name. See AssetManager_LoadSpriteSheet for semantics.
  */
 Error AssetManager_LoadTexture(AssetManager* self, const unsigned char* name, AssetUserID user, GameTexture** outAsset);
+
+/**
+ * @brief Loads a world model by name (WorldModel.h), with its LOD models and its variants' textures as dependencies.
+ *        See AssetManager_LoadSpriteSheet for semantics.
+ */
+Error AssetManager_LoadWorldModel(AssetManager* self, const unsigned char* name, AssetUserID user,
+    WorldModel** outAsset);
 
 
 // ---- Bulk load (stepped, main thread) ----

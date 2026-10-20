@@ -1,14 +1,21 @@
 #pragma once
-// raylib.h is needed for Model and Mesh, which these wrappers hold by value.
+#include <stdbool.h>
+// raylib.h is needed for Model and Mesh, which these wrappers hold by value, and for the Color and MaterialMap of the
+// material factors.
 #include "raylib/raylib.h"
 
 /**
  * @file GameModel.h
- * @brief Thin wrappers around a Raylib Model and Mesh loaded by the asset manager.
+ * @brief Thin wrappers around a Raylib Model and Mesh loaded by the asset manager, and the PBR factors a material
+ *        override sets.
  *
  * A GameModel holds a loaded Raylib Model (meshes + materials, with its import transform baked into the
  * Model's transform matrix). It is the static-state model asset produced by the asset manager's model type
  * (load one with AssetManager_LoadModel).
+ *
+ * GameMaterialFactors are the scalar part of a material override: the model type's "material_overrides" apply them to
+ * the model's own materials while it loads, and world model variants (WorldModel.h) to the renderer's per-draw copy of
+ * a material. Both read them with one parser and apply them with GameMaterialFactors_Apply.
  *
  * OWNERSHIP. The asset manager owns everything the asset loaded: the meshes, each material's map array, and
  * every GPU texture referenced by a material map at load time (textures the OBJ/MTL or glTF importer loaded,
@@ -49,6 +56,37 @@ typedef struct GameMeshStruct
     Mesh _rayMesh;
 } GameMesh;
 
+/**
+ * @brief The PBR factors a material override sets on top of a model's material.
+ *
+ * Each factor has its own flag: a factor whose flag is false leaves the material's value as it is. A plain value type;
+ * the model type's "material_overrides" and world model variants read it from their definitions and apply it with
+ * GameMaterialFactors_Apply.
+ */
+typedef struct GameMaterialFactorsStruct
+{
+    /** @brief Whether Tint replaces the albedo colour. */
+    bool HasTint;
+    /** @brief The albedo colour (multiplies the albedo texture; the object's tint multiplies it in turn). */
+    Color Tint;
+    /** @brief Whether Metallic replaces the metallic factor. */
+    bool HasMetallic;
+    /** @brief The metallic factor, in [0, 1] (multiplies a packed ORM map's blue channel). */
+    float Metallic;
+    /** @brief Whether Roughness replaces the roughness factor. */
+    bool HasRoughness;
+    /** @brief The roughness factor, in [0, 1] (multiplies a packed ORM map's green channel). */
+    float Roughness;
+    /** @brief Whether EmissiveColor replaces the emissive colour. */
+    bool HasEmissiveColor;
+    /** @brief The emissive colour (multiplies an emissive map). */
+    Color EmissiveColor;
+    /** @brief Whether EmissiveIntensity replaces the emissive intensity. */
+    bool HasEmissiveIntensity;
+    /** @brief The emissive intensity, >= 0. */
+    float EmissiveIntensity;
+} GameMaterialFactors;
+
 
 /**
  * @brief Returns the underlying Raylib Model for rendering.
@@ -76,3 +114,18 @@ static inline BoundingBox GameModel_GetLocalBounds(const GameModel* self)
 {
     return self->_localBounds;
 }
+
+/**
+ * @brief Applies material factors to a material's maps: each factor whose flag is set replaces its map's value.
+ *
+ * Tint goes to the albedo map's colour, Metallic and Roughness to the metalness and roughness maps' values,
+ * EmissiveColor and EmissiveIntensity to the emission map's colour and value. An override that brings an emissive map
+ * (@p hasEmissiveMap) but no emissive colour or intensity of its own shows that map at white x 1, since the importer's
+ * default intensity of 0 would hide it. Writes only to @p maps: give it the model's own materials while the model
+ * loads, or the renderer's per-draw copy, never a loaded asset's maps.
+ * @param self The factors; must not be NULL.
+ * @param hasEmissiveMap Whether the same override set an emissive map.
+ * @param maps [in,out] A material's maps, indexed by MaterialMapIndex (raylib's MAX_MATERIAL_MAPS entries); must not be
+ *        NULL.
+ */
+void GameMaterialFactors_Apply(const GameMaterialFactors* self, bool hasEmissiveMap, MaterialMap* maps);

@@ -52,6 +52,11 @@ void ObjectDataTests_Run(TestRun* run);
  *  world's asset user, flags, and the one-transform-driver rule with test-only component types (WorldTests.c). */
 void WorldTests_Run(TestRun* run);
 
+/** @brief World models: the definition's rules and their messages, the limits, loading with the LOD models and the
+ *  variants' textures as dependencies (and releasing them), variants by name and on one material slot, the model
+ *  component's override flags and the settings they resolve to, and the shipped world models (WorldModelTests.c). */
+void WorldModelTests_Run(TestRun* run);
+
 /** @brief The transform hierarchy: World_SetParent's refusals (unknown ids, self, cycles, depth), world matrices down
  *  three levels, reparenting with and without keeping the world placement, dirty propagation with a recompute count,
  *  reads that never store, child order, subtree removal (components, arrays, hooks children first), effective flags,

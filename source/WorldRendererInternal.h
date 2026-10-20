@@ -979,9 +979,10 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
 bool WorldRendererGeometry_PassesFilter(bool omitPixelation, WorldRendererPixelFilter filter);
 
 /**
- * @brief Draws one cached model mesh by mesh, each mesh with a material built on the stack (the asset's maps
- *        copied, @p passShader, the object's tint applied to the copy), so nothing is written to the asset. The caller
- *        uploads the draw's dither to @p passShader first.
+ * @brief Draws one cached model (its LOD model, WorldRenderModel.Model) mesh by mesh, each mesh with a material built
+ *        on the stack (the asset's maps copied, the entry's variant applied to the copy, @p passShader, the object's
+ *        tint applied to the copy), so nothing is written to an asset. The caller uploads the draw's dither to
+ *        @p passShader first.
  *
  * Must run inside a 3D mode (BeginMode3D or explicit rlgl matrices).
  * @param self The renderer.
@@ -1123,7 +1124,8 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
 /**
  * @brief Uploads one material's PBR scalar factors and map-presence flags, for its meshes drawn next.
  *
- * DrawMesh uploads colDiffuse and binds the maps itself, but not these.
+ * DrawMesh uploads colDiffuse and binds the maps itself, but not these. Pass the per-draw copy, after the variant was
+ * applied to it, so its factors and maps are the ones drawn.
  */
 void WorldRendererLighting_UploadMaterial(WorldRenderer* self, const Material* material);
 

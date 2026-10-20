@@ -4,17 +4,17 @@ Files: `include/AssetManager.h`, `source/AssetManager.c`. Standard asset types: 
 (type names and directories), `source/AssetDefinitionCommon.h/.c` (shared JSON helpers and the accepted extension
 sets), and one loader per type: `source/SpriteSheetDefinition.c`, `source/SpriteAnimationDefinition.c`,
 `source/SoundDefinition.c`, `source/FontDefinition.c`, `source/ShaderDefinition.c` (with its `#include` expander
-`source/ShaderSource.{h,c}`), `source/ModelDefinition.c`, `source/TextureDefinition.c`.
+`source/ShaderSource.{h,c}`), `source/ModelDefinition.c`, `source/TextureDefinition.c`, `source/WorldModelDefinition.c`.
 The definition JSON format is specified in `references/asset_structure.md`.
 
 ## Purpose
 
 Loads, shares and unloads game assets. The manager stores **definitions** (named recipes, normally JSON files
 under the asset search roots) and builds an asset from its definition the first time someone loads it. Asset
-types are registered at runtime (`AssetManager_CreateAssetType`); the seven standard types (sprite sheet, sprite
-animation, sound, font, shader, model, texture) are registered together by `AssetManager_CreateStandardAssetTypes`. The
-wrappers it hands out are documented in [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md)
-and [GameAssets.md](GameAssets.md).
+types are registered at runtime (`AssetManager_CreateAssetType`); the eight standard types (sprite sheet, sprite
+animation, sound, font, shader, model, texture, world model) are registered together by
+`AssetManager_CreateStandardAssetTypes`. The wrappers it hands out are documented in [SpriteSheet.md](SpriteSheet.md),
+[SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md) and [WorldModels.md](WorldModels.md).
 
 ## Lifetime rules (read first)
 
@@ -117,7 +117,8 @@ Error_Deconstruct(&RetireResult);
 ```
 
 The typed loaders (`AssetManager_LoadSpriteSheet`, `LoadSpriteAnimation`, `LoadSound`, `LoadFont`, `LoadShader`,
-`LoadModel`, `LoadTexture`) return `ErrorCode_InvalidState` if the standard types were never registered. Custom types use
+`LoadModel`, `LoadTexture`, `LoadWorldModel`) return `ErrorCode_InvalidState` if the standard types were never
+registered. Custom types use
 `AssetManager_LoadAssetSingle(self, typeId, name, user, &AssetPointer)` with a `void*` result.
 
 ## Definitions
@@ -243,7 +244,7 @@ Only reference resources loaded through `AssetManager_AcquireResourcePath` use i
 
 ## Standard types
 
-All seven read JSON definitions (`.json`) and parse them with the shared `JSONObjectPool` from
+All eight read JSON definitions (`.json`) and parse them with the shared `JSONObjectPool` from
 `AssetManager_CreateStandardAssetTypes`. Every `texture_properties` key goes through one parser,
 `AssetJSON_ReadTextureProperties` (filtering, wrap, mipmaps); the texture type and model material maps apply all three
 with `TextureProperties_Apply`, the sprite sheet, sprite animation and font loaders only the filter (and reject
@@ -258,8 +259,10 @@ with `TextureProperties_Apply`, the sprite sheet, sprite animation and font load
 | `shader` (`shaders`) | `AssetManager_LoadShader` | `GameShader` | The raylib `Shader` (`UnloadShader`). Each stage's `#include` lines are expanded first (shared files in `shaders/common/`, no definitions). |
 | `model` (`models`) | `AssetManager_LoadModel` | `GameModel` | Meshes, materials and map arrays (`UnloadModel`), plus every texture its materials referenced at load, tracked by id and unloaded first (`rlUnloadTexture`). Never `UnloadMaterial`: it would also unload the material's shader, and a texture shared by two materials twice. |
 | `texture` (`textures`) | `AssetManager_LoadTexture` | `GameTexture` | One GPU texture (`UnloadTexture`), at most 8192 px per side, with its filtering, wrap and optional mipmaps applied, and its `color_space` flag. |
+| `world_model` (`world_models`) | `AssetManager_LoadWorldModel` | `WorldModel` | Only its own data: the variants, their overrides and names in one block. Its LOD models and its variants' textures are held under its dependency user and unload right after it. Unknown keys are refused anywhere in its definition. |
 
-Details per type: [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md).
+Details per type: [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md),
+[WorldModels.md](WorldModels.md).
 
 ## Bulk operations (stepped loading)
 
@@ -303,7 +306,9 @@ once or a few times per frame until `AssetBulkOperation_IsComplete`, then `Promi
 
 Templates: `TextureDefinition.c` (the smallest: path-based, one GPU object), `FontDefinition.c` (path-based, with
 `format`), `ShaderDefinition.c` (stream-based, pooled buffers),
-`SpriteAnimationDefinition.c` (dependencies), `ModelDefinition.c` (tracking GPU objects to unload).
+`SpriteAnimationDefinition.c` (dependencies), `ModelDefinition.c` (tracking GPU objects to unload),
+`WorldModelDefinition.c` (built only from other assets, by name: dependencies of two types, no resource files; refuses
+unknown keys with `AssetJSON_RejectUnknownKeys`, which a new type should use too).
 `AssetManager_RemoveAssetType` refuses while definitions or loaded assets of the type remain.
 
 ## Other notes
@@ -322,4 +327,19 @@ Templates: `TextureDefinition.c` (the smallest: path-based, one GPU object), `Fo
   files, name validation, same-root duplicates, file matching (material libraries, ambiguity, the whole last name,
   unsupported extensions) and the failed-load cache, all without a window. Extend it when you change that logic.
   `tests/TextureTests.c` covers the texture type and the `texture_properties` parser (including the size limit, which
-  fails before the GPU upload), `tests/ShaderSourceTests.c` the shader `#include` expander.
+  fails before the GPU upload), `tests/ShaderSourceTests.c` the shader `#include` expander, `tests/WorldModelTests.c`
+  the world model type (with code-built models and textures, `tests/TestAssets.h`, so it loads without GL).
+- **Reload (planned, built with the editor; T10 designed the consumers for it).** Today an asset never changes while it
+  is loaded. The editor will edit a working copy of a definition, write its JSON into the pack and ask for that one
+  definition to be reloaded. The plan:
+  - `AssetManager_ReloadDefinition(self, type, name)` reads the definition's file again and replaces the definition
+    (as `AssetManager_ReadDefinitions` does for one file);
+  - if the asset is loaded, it is rebuilt **in place**: the new build replaces the old one's contents behind the same
+    wrapper pointer, so holders keep a valid pointer (a failed rebuild keeps the old asset and reports the error);
+  - every loaded asset gets a **revision** that advances on each rebuild; consumers that derived data from it (the
+    world renderer's cache: a world model's LOD model pointers, the variant index, the bounds) compare it and derive
+    again. Consumers already keep names, not data, and re-resolve by name (the render cache by the component's
+    revision), so only the per-asset revision is new for them;
+  - dependencies: an asset built on another (a world model on its models and textures, a sprite animation on its
+    sheets) is rebuilt when one it depends on is.
+  This is a light version of the fix plan's deferred decision D3 (c).

@@ -112,6 +112,17 @@ typedef struct DataMapStruct DataMap;
 /** @brief The flags of a creator setting: saved, shown in the editor's inspector and reachable from scripts. */
 #define PROPERTY_FLAGS_SETTING ((uint32_t)(PropertyFlags_Persistent | PropertyFlags_Editable | PropertyFlags_Script))
 
+/**
+ * @brief The key prefix of an override flag.
+ *
+ * A setting a placement can override (a world model's draw distance, say) is two rows: the flag `overrides_<key>` (a
+ * Bool, false by default: the asset's value applies) and the value `<key>` next to it, which is kept, and saved, while
+ * the flag is off, so switching it back on restores it. No sentinel values and no "inherit" states (the owner's rule,
+ * G17). PropertyTable_Check requires every row whose key starts with the prefix to be a Bool that names another row of
+ * its table; the editor pairs them by the names.
+ */
+#define PROPERTY_OVERRIDE_FLAG_PREFIX u8"overrides_"
+
 
 // Types.
 /**

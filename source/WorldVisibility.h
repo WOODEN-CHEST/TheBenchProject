@@ -17,11 +17,15 @@
  * by the camera (a caster off screen can still shadow what is on it): each shadow cascade culls its casters against its
  * own orthographic box, and the cube shadow keeps its reach test.
  *
- * DRAW DISTANCE. Each kind of entry has a default draw distance (models 600 m, sprites 150 m, decals 60 m) times the
- * config's draw_distance_scale. An entry's distance is the camera's distance to the nearest point of its bounding sphere
- * (0 inside it), so a large object does not fade while its near end is close. Beyond its draw distance an entry is not
- * drawn; over the last stretch (10% of the distance, at least 3 m, at most all of it) its distance fade rises linearly
- * from 0 to 1.
+ * DRAW DISTANCE. A model's draw distance is its own (T10, decision G17): its world model's, or its placement's while
+ * that overrides it, times the placement's multiplier (the render cache resolves it), then times the config's
+ * draw_distance_scale unless it is fixed (WorldVisibility_ScaleDrawDistance). Sprites keep a default per kind until
+ * T26 (sprites 150 m, decals 60 m) times the scale. An entry's distance is the camera's distance to the nearest point
+ * of its bounding sphere (0 inside it), so a large object does not fade while its near end is close; for models it is
+ * multiplied by the zoom factor (WorldVisibility_GetZoomFactor: tan(fovY/2) / tan(30 degrees), 1 at the default
+ * 60-degree field of view, below 1 zoomed in), so a zoomed view (binoculars, a camera) shows far objects instead of
+ * fading them. T11's LOD selection uses the same factor. Beyond its draw distance an entry is not drawn; over the last
+ * stretch (10% of the distance, at least 3 m, at most all of it) its distance fade rises linearly from 0 to 1.
  *
  * FADES. A draw's fade runs from 0 (solid) to 1 (gone): the larger of its distance fade and 1 - its opacity (the tint's).
  * Models and cutout sprites show it as a dither; blended and additive sprites, transparent already, take their distance
@@ -43,10 +47,13 @@
 
 
 // Macros.
-/** @brief Default draw distances, in metres, before the config's draw_distance_scale. */
-#define WORLD_VISIBILITY_MODEL_DRAW_DISTANCE 600.0f
+/** @brief The sprites' default draw distances, in metres, before the config's draw_distance_scale (models have their
+ *  own, from their world models). */
 #define WORLD_VISIBILITY_SPRITE_DRAW_DISTANCE 150.0f
 #define WORLD_VISIBILITY_DECAL_DRAW_DISTANCE 60.0f
+/** @brief The vertical field of view, in degrees, that draw and LOD distances are authored at: the zoom factor is 1
+ *  there (the camera's default). */
+#define WORLD_VISIBILITY_REFERENCE_FOV_Y 60.0
 /** @brief The fade band: this share of the draw distance, but at least WORLD_VISIBILITY_MIN_FADE_BAND metres (and at
  *  most the whole distance). */
 #define WORLD_VISIBILITY_FADE_BAND_SHARE 0.1f
@@ -94,11 +101,9 @@ typedef struct WorldFrustumStruct
     WorldPlane Planes[WorldFrustumPlane_Count];
 } WorldFrustum;
 
-/** @brief Which default draw distance an entry has. */
+/** @brief Which default draw distance a sprite has (models have their own, from their world models). */
 typedef enum WorldDrawDistanceKindEnum
 {
-    /** @brief A model component: WORLD_VISIBILITY_MODEL_DRAW_DISTANCE. */
-    WorldDrawDistanceKind_Model,
     /** @brief A sprite that is not a decal: WORLD_VISIBILITY_SPRITE_DRAW_DISTANCE. */
     WorldDrawDistanceKind_Sprite,
     /** @brief A decal: WORLD_VISIBILITY_DECAL_DRAW_DISTANCE. */
@@ -155,6 +160,9 @@ typedef struct WorldVisibilityViewStruct
     float PointShadowReach;
     /** @brief The draw distance scale (the config's draw_distance_scale; finite and >= 0). */
     float DrawDistanceScale;
+    /** @brief The camera's zoom factor (WorldVisibility_GetZoomFactor): models' distances are multiplied by it before
+     *  they are compared with their draw distances. Anything not finite or not above 0 counts as 1. */
+    float ZoomFactor;
 } WorldVisibilityView;
 
 /** @brief A build's counts, for the renderer's status. A plain value type. */
@@ -220,12 +228,33 @@ bool WorldVisibility_IsSphereInFrustum(const WorldFrustum* frustum, Vector3 cent
 
 // Functions: draw distances and fades.
 /**
- * @brief An entry's draw distance: its kind's default times the scale.
+ * @brief A sprite's draw distance: its kind's default times the scale.
  * @param kind The kind.
  * @param scale The draw distance scale; anything not finite or below 0 counts as 1.
  * @returns The draw distance, in metres (>= 0).
  */
 float WorldVisibility_GetDrawDistance(WorldDrawDistanceKind kind, float scale);
+
+/**
+ * @brief An entry's own draw distance under the player's quality setting: times the scale, unless it is fixed.
+ * @param drawDistance The entry's draw distance, in metres (its world model's or its placement's, times its
+ *        multiplier).
+ * @param isFixed Whether the quality setting leaves it as it is (landmarks, gameplay-critical things).
+ * @param scale The draw distance scale; anything not finite or below 0 counts as 1.
+ * @returns The draw distance to compare with.
+ */
+float WorldVisibility_ScaleDrawDistance(float drawDistance, bool isFixed, float scale);
+
+/**
+ * @brief The zoom factor of a field of view: tan(fovY / 2) / tan(WORLD_VISIBILITY_REFERENCE_FOV_Y / 2).
+ *
+ * Distances are multiplied by it before they are compared with draw distances (and, from T11, LOD switch distances):
+ * 1 at the reference 60 degrees (exactly), below 1 when zoomed in, so a narrower view keeps far objects visible and
+ * detailed, and above 1 for a wider one.
+ * @param fovYDegrees The camera's vertical field of view, in degrees.
+ * @returns The factor (above 0); 1 for a field of view that is not finite or not in (0, 180).
+ */
+float WorldVisibility_GetZoomFactor(float fovYDegrees);
 
 /**
  * @brief The fade band of a draw distance: WORLD_VISIBILITY_FADE_BAND_SHARE of it, at least
@@ -318,8 +347,9 @@ void WorldVisibility_Deconstruct(WorldVisibility* self);
 /**
  * @brief Rebuilds the lists for this frame from the render cache.
  *
- * Every entry gets its fades (WorldVisibilityFade; entries the passes do not draw at all get 1). An entry with a
- * combined fade below 1 joins:
+ * Every entry gets its fades (WorldVisibilityFade; entries the passes do not draw at all get 1): a model's from its own
+ * draw distance (WorldVisibility_ScaleDrawDistance) against its zoomed distance, a sprite's from its kind's. An entry
+ * with a combined fade below 1 joins:
  *   - the camera's list when it is drawn (a model must be IsDrawn) and inside the camera's frustum;
  *   - a cascade's list when it casts shadows (a model with CastsShadows whose shadow tier routes it to that cascade; a
  *     sprite with WorldRenderSprite_CastsShadows), that cascade runs and its sphere is inside the cascade's box;
