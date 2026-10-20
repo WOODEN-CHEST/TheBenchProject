@@ -182,7 +182,7 @@ static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, 
     SetShaderValue(RayShader, self->_sprites._locEmission, &Emission, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sprites._locLightWrap, &LightWrap, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sprites._locUseScreenAo, &UseScreenAo, SHADER_UNIFORM_INT);
-    WorldRendererCommon_SetDither(RayShader, &self->_sprites._dither, DitherFade, false);
+    WorldRendererCommon_SetDither(RayShader, &self->_sprites._dither, DitherFade, 0.0f, false);
     if (IsLit)
     {
         WorldRendererLighting_UploadObjectLights(self, RayShader, &self->_sprites._lit, sprite->Shape.Position,

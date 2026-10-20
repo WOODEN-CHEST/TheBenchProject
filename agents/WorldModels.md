@@ -5,7 +5,8 @@ variants by name and on one material) and `source/WorldModelDefinition.c` (the `
 parser and the loader). The placements' side is the model component, `include/WorldModelComponent.h` and
 `source/WorldModelComponent.c` ([WorldData.md](WorldData.md)). The definition format is in
 `references/asset_structure.md`, "World models". Tests: `tests/WorldModelTests.c`, the renderer's side in
-`tests/WorldRenderCacheTests.c` and `tests/WorldVisibilityTests.c`. Built in T10 (decisions G4 and G17).
+`tests/WorldRenderCacheTests.c` and `tests/WorldVisibilityTests.c`; the LOD maths in `tests/WorldLodTests.c`. Built in T10 (decisions G4 and G17); T11 added
+the LOD selection and cross-fades.
 
 A **world model** is everything that is the same for every placement of a thing: which model to draw at which distance
 (its LODs), how far it is seen, the default render settings of its placements, and its material variants. A **world
@@ -96,8 +97,11 @@ and `PropertyTable_Check` enforces the pairing for every table ([PropertyDescrip
 | `CastsShadows` | `overrides_casts_shadows` | `casts_shadows` |
 | `DrawDistance` | `overrides_draw_distance` | `draw_distance` |
 | `IsDrawDistanceFixed` | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` |
+| `LodDistances` (T11) | `overrides_lod_distances` | `lod_distances` (a list) |
 
-`draw_distance_multiplier` (above 0, default 1) is a plain setting: it multiplies whichever draw distance is in effect.
+`draw_distance_multiplier` (above 0, default 1) is a plain setting: it multiplies whichever draw distance is in effect;
+`lod_distance_multiplier` likewise for the LOD switch distances, and `is_lod_forced` with `forced_lod` force a LOD (see
+"LODs").
 In C: `WorldModelComponent_IsOverridden` / `_SetOverridden(self, setting, isOverridden)` for the flags, the typed
 getters and setters for the values. **`WorldModelComponent_ResolveSettings(component, modelSettings)`** is the one pure
 function that turns the world model's settings and the overrides into the settings in effect; the renderer's cache
@@ -120,10 +124,34 @@ Sprites follow the same two steps since T26, through world sprites ([WorldSprite
 
 ## LODs
 
-Until T11, every object draws its world model's **LOD 0** (`WorldRenderModel.Model`; a `// TODO: T11` in
-`WorldRenderCache.c`): with its import transform inside the object's world matrix, in every pass. T11 picks the LOD by
-the zoomed distance against `max_distance` (with its own placement overrides: `lod_distances`, `lod_distance_multiplier`,
-`is_lod_forced`), cross-fades with `lod_fade_seconds` and holds with `lod_hysteresis`, both stored here already.
+A world model has 1 to `WORLD_MODEL_MAX_LODS` (8) LODs, the finest first, each with its `max_distance`: LOD i is drawn
+while the object is nearer than its switch distance i, the last LOD past the last boundary until the draw distance
+(where T07's fade takes it; the last LOD's own `max_distance` is the default draw distance). Built in T11 (decisions G6,
+G17); the maths is the private `source/WorldLod.{h,c}` ([WorldRuntime.md](WorldRuntime.md), "LODs").
+- **Per placement** (`WorldModelComponent_ResolveLodSettings`, a pure function: `WorldModelLodSettings`): the switch
+  distances are the world model's `max_distance`s, or the placement's own list while `overrides_lod_distances` is on and
+  the list holds one distance per LOD (a `FloatList` row: finite, above 0, rising, at most 8; when the world model gains
+  or loses a LOD the list no longer fits and the world model's distances apply, with one warning per object, logged when
+  it starts); times `lod_distance_multiplier` (above 0, default 1: larger keeps each LOD farther, more detail). With
+  `is_lod_forced` the LOD `forced_lod` is drawn whatever the distance (clamped to the last LOD; kept while not forced).
+  The world model's `lod_hysteresis` and `lod_fade_seconds` come along.
+- **Per frame** (`WorldRenderCache_UpdateLods`): the distance is the camera's to the object's bounding-sphere centre
+  times the **zoom factor** (`WorldVisibility_GetZoomFactor`: zooming in picks finer LODs), compared with each switch
+  distance times the player's **`lod_distance_scale`** (`config.json`, default 1, [0, 16]; above 1 more detail). A fixed
+  draw distance does not exempt the LODs: `is_draw_distance_fixed` keeps an object visible, not detailed.
+- **Hysteresis:** from the LOD an object shows (or heads to), it switches to a coarser one only at a switch distance
+  x (1 + h), back to a finer one only below x (1 - h): standing at a boundary does not flicker.
+- **Cross-fade:** a new LOD fades in over `lod_fade_seconds` (0 swaps at once): both LODs are drawn with complementary
+  4x4 dither masks (the incoming LOD takes the share of the pixels the fade's progress gives), so no pixel is empty and
+  the background never shows. Going back during a fade runs it back from the same pixels, so nothing pops; a third LOD
+  fades on from the LOD with the larger share (never three LODs). The G-buffer draws the LOD with the larger share, the
+  shadow passes the LOD the object heads to, both solid, so shadows never shimmer.
+- **Drawing:** each LOD is drawn with its own import transform inside the object's world matrix
+  (`WorldRenderModel_GetLodTransform`); the bounding sphere is the world model's (its `bounds`, or LOD 0's), the same
+  for every LOD. Every LOD should share the same origin, axes, scale and material slots (variants apply to each).
+- **Debug:** the test frame's Q key tints models by LOD (0 white, 1 green, 2 yellow, 3 red, coarser magenta; LODs past 0
+  also glow faintly, so the colours read at night); the I key's status line counts the drawn models per LOD and the
+  cross-fading ones.
 
 ## Hot reload (designed in, built later)
 
@@ -139,10 +167,14 @@ here.
 
 `compile/out/asset/world_models/test_world/`: `test`, `pbr_demo` and `pbr_metal` (one LOD each, the model of the same
 name, 600 m: the draw distance every model had before), and `painted_cube` (the test cube with the variants `red` and
-`blue`, tints only). The test world (`compile/out/worlds/test.world.json`) names world models; its per-object crisp and
-shadow tier settings are now override pairs. Two cubes behind the centre row show `painted_cube`'s variants; the test
-frame's E key steps them (their own, swapped, none) and Z zooms the camera to 15 degrees ([WorldRuntime.md](WorldRuntime.md),
-"WorldTestFrame").
+`blue`, tints only), and since T11 `lod_test`: three LODs of a sphere (the placeholder models `lod_test_lod0` to `_lod2`,
+`models/placeholder_lod_test/`: UV spheres of radius 0.5 m at 32x16, 16x8 and 8x4 segments, written by a generator
+script) switching at 13 and 16 m, seen 60 m. The test world (`compile/out/worlds/test.world.json`) names world models;
+its per-object crisp and shadow tier settings are now override pairs. Two cubes behind the centre row show
+`painted_cube`'s variants; the test frame's E key steps them (their own, swapped, none) and Z zooms the camera to 15
+degrees ([WorldRuntime.md](WorldRuntime.md), "WorldTestFrame"). A row of six `lod_test` spheres stands along the left
+edge of the ground (x = 8, z = -6 to 9), with two more beside it: `lod_test_forced` (LOD 2 forced) and
+`lod_test_own_distances` (its own switch distances, 3 and 6 m); Q tints them by LOD.
 
 ## Known limits
 

@@ -9,6 +9,7 @@
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
+#include "WorldLod.h"
 #include "SpriteAnimation.h"
 #include "SpriteTransform.h"
 #include "raylib/raylib.h"
@@ -37,11 +38,16 @@
  * variant is resolved to an index with the world model, and again when the revision changes and the component's
  * uses_variant or variant name did; an unknown name draws the model's own materials and is logged once. The settings in
  * effect (the world model's, or the placement's own while its override flag is on: WorldModelComponent_ResolveSettings)
- * are taken every frame. Until T11 every entry draws its world model's LOD 0. Entries follow the world's model
- * components across additions and removals: when the world's component-set version changes, entries are re-matched by
- * owner id, and one is carried over only if its owner still names the world model it was resolved for (an id can come
- * back with another object). A different world resets the cache; the per-frame walk also checks each entry's component,
- * so a world rebuilt at the same address is caught as soon as a component differs.
+ * are taken every frame. Entries follow the world's model components across additions and removals: when the world's
+ * component-set version changes, entries are re-matched by owner id, and one is carried over only if its owner still
+ * names the world model it was resolved for (an id can come back with another object). A different world resets the
+ * cache; the per-frame walk also checks each entry's component, so a world rebuilt at the same address is caught as soon
+ * as a component differs.
+ *
+ * LODS (T11). Each model entry keeps its LOD state across frames (WorldLod.h: the two LODs of a cross-fade, the fade's
+ * progress and direction); WorldRenderCache_UpdateLods, once per frame after the sync, picks every drawn entry's LOD by
+ * the camera's distance and moves its cross-fade on. A LOD is drawn with its own import transform inside the object's
+ * world matrix (WorldRenderModel_GetLodTransform); the bounding sphere is the world model's, the same for every LOD.
  *
  * The cache only reads the world, its objects and components, and never writes to an asset. Every pointer in the lists
  * is borrowed and valid until the world changes; the world models (and with them their LOD models and textures) are
@@ -66,10 +72,16 @@ typedef struct WorldRenderModelStruct
      *  true. Re-matching uses it to tell an object that reuses an id from the object the entry was made for. */
     uint64_t NameHash;
     /** @brief The resolved world model, held under the model user passed to Sync; NULL when the component names none or
-     *  it failed to load (then the object draws nothing). Read-only. */
+     *  it failed to load (then the object draws nothing). Its LOD models are borrowed from it. Read-only. */
     const WorldModel* Asset;
-    /** @brief The LOD model drawn (LOD 0 until T11); borrowed from Asset, NULL exactly when Asset is. Read-only. */
-    GameModel* Model;
+    // TODO: one LOD state per entry serves one camera. A second view of the same world through this renderer (a mirror,
+    // a camera feed on the CRT) needs a state per view, or the fades would follow whichever camera updated last.
+    /** @brief The LOD drawn and the cross-fade (WorldLod.h), kept across frames: picked by WorldRenderCache_UpdateLods,
+     *  started afresh when the world model is resolved again or the entry was not drawn. */
+    WorldLodState Lod;
+    /** @brief Whether the placement's own LOD distances were refused last frame (its list does not fit the world model):
+     *  the warning is logged when this turns true. */
+    bool IsLodListRefused;
     /** @brief The component's uses_variant and the hash of its variant name when the variant was resolved (0 for none),
      *  so a change of either resolves it again. */
     bool UsesVariant;
@@ -97,9 +109,9 @@ typedef struct WorldRenderModelStruct
      *  applies the scale and the zoom. */
     float DrawDistance;
     bool IsDrawDistanceFixed;
-    /** @brief The drawn LOD's import transform composed with the object's world matrix (this frame). Valid when Asset
-     *  is not NULL. */
-    Matrix Transform;
+    /** @brief The object's world matrix (this frame); each LOD is drawn with its own import transform inside it
+     *  (WorldRenderModel_GetLodTransform). Valid when Asset is not NULL. */
+    Matrix WorldMatrix;
     /** @brief World-space bounding sphere (this frame): conservative under rotation, non-uniform scale and the shear a
      *  hierarchy can add (WorldTransform_GetMaxScale). Valid when Asset is not NULL. */
     Vector3 Center;
@@ -171,6 +183,23 @@ typedef struct WorldRenderLightStruct
     bool CastsShadows;
 } WorldRenderLight;
 
+/** @brief What a frame's LOD update needs (WorldRenderCache_UpdateLods): the camera, the quality setting and the frame's
+ *  time. A plain value type. */
+typedef struct WorldRenderLodViewStruct
+{
+    /** @brief The camera's world position: an object's LOD distance is measured from it to its bounding sphere's
+     *  centre. */
+    Vector3 CameraPosition;
+    /** @brief The camera's zoom factor (WorldVisibility_GetZoomFactor): the distances are multiplied by it, so zooming in
+     *  picks finer LODs. Anything not finite or not above 0 counts as 1. */
+    float ZoomFactor;
+    /** @brief The player's lod_distance_scale: it multiplies every switch distance (above 1: more detail). Anything not
+     *  finite or below 0 counts as 1. */
+    float DistanceScale;
+    /** @brief Real seconds since the previous frame: the cross-fades advance by them (0 holds them). */
+    float DeltaSeconds;
+} WorldRenderLodView;
+
 /**
  * @brief The per-object render cache and this frame's lists.
  *
@@ -240,6 +269,43 @@ void WorldRenderCache_Reset(WorldRenderCache* self);
  */
 Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, AssetManager* assets, AssetUserID modelUser,
     Logger* logger);
+
+/**
+ * @brief Picks the LOD every drawn model entry shows this frame and advances its cross-fade (WorldLod.h). Call it once
+ *        per frame, after WorldRenderCache_Sync.
+ *
+ * For each entry that is drawn: its LOD settings in effect (WorldModelComponent_ResolveLodSettings; when the placement's
+ * own list does not fit its world model, the world model's distances, with one warning when that starts), the camera's
+ * distance to its bounding sphere's centre times the zoom factor, WorldLod_Select from the LOD it heads to, then
+ * WorldLodState_Update with the frame's seconds. An entry that is not drawn (no world model, a disabled or hidden object)
+ * starts afresh when it is drawn again, so it appears at its LOD without a fade. Entries beyond their draw distance or
+ * outside the view are still updated: their shadows use their LOD. Main thread only; never writes to the world.
+ * @param self The cache, synced for this frame; must not be NULL.
+ * @param view The camera and the frame; must not be NULL.
+ * @param logger Receives the warning when an object's own LOD distances stop fitting its world model; borrowed, may be
+ *        NULL.
+ */
+void WorldRenderCache_UpdateLods(WorldRenderCache* self, const WorldRenderLodView* view, Logger* logger);
+
+/**
+ * @brief Returns one LOD's model of a cached model entry.
+ * @param model The entry; must not be NULL and must have an asset.
+ * @param lod The LOD, 0 the finest.
+ * @returns The model (borrowed from the world model), or NULL for a LOD past the last.
+ */
+static inline GameModel* WorldRenderModel_GetLodModel(const WorldRenderModel* model, size_t lod)
+{
+    return WorldModel_GetLodModel(model->Asset, lod);
+}
+
+/**
+ * @brief Returns the final transform one LOD of a cached model entry is drawn with this frame: the LOD's import transform
+ *        inside the object's world matrix (raylib's DrawModelEx convention).
+ * @param model The entry; must not be NULL and must have an asset.
+ * @param lod The LOD, 0 the finest; past the last LOD the world matrix alone.
+ * @returns The transform.
+ */
+Matrix WorldRenderModel_GetLodTransform(const WorldRenderModel* model, size_t lod);
 
 /**
  * @brief Returns this frame's model entries: one per model component, in world order, including ones that are not

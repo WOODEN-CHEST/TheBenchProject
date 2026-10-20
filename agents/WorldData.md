@@ -185,6 +185,18 @@ setting, isOverridden)` and read with `_IsOverridden`; `WorldModelComponent_Reso
 pure function that gives the `WorldModelSettings` in effect. The getters of the values (`WorldModelComponent_HasOutline`
 and the others) return the placement's own values, not the ones in effect.
 
+**LODs** (T11, [WorldModels.md](WorldModels.md), "LODs"): `_lodDistances` (the placement's own switch distances, a
+`PropertyFloatList`: finite, above 0, rising, at most `WORLD_MODEL_MAX_LODS`; empty by default) behind its flag
+`_overridesLodDistances` (`WorldModelSetting_LodDistances`: it applies only while the list holds one distance per LOD of
+the world model; otherwise the world model's distances, and the renderer warns once), `_lodDistanceMultiplier` (above 0,
+default 1: 2 keeps each LOD twice as far, more detail), `_isLodForced` (false) with `_forcedLod` (a `uint32_t`, any value:
+past the world model's last LOD it draws the last; kept while not forced). Setters: `WorldModelComponent_SetLodDistances
+(self, distances, count)` (a copy, checked by the table's rule), `_SetLodDistanceMultiplier`, `_SetIsLodForced`,
+`_SetForcedLod`; `WorldModelComponent_GetLodDistances(self, &count)` borrows the list.
+**`WorldModelComponent_ResolveLodSettings(self, worldModel, &settings)`** is the pure function that gives the
+`WorldModelLodSettings` in effect (the switch distances times the multiplier, the forced LOD clamped, the world model's
+hysteresis and fade time); it returns false when the placement's own list is on but does not fit.
+
 The component holds no asset: the renderer resolves the world model by name and resolves it again when the name
 changes (it watches the revision, then compares the name), and the variant again when `uses_variant` or `variant`
 changes.
@@ -353,6 +365,11 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `draw_distance_multiplier` | 14 | Float > 0 | 1 |
 | | `overrides_is_draw_distance_fixed` | 15 | Bool | false |
 | | `is_draw_distance_fixed` | 16 | Bool | false |
+| | `overrides_lod_distances` | 17 | Bool | false |
+| | `lod_distances` | 18 | FloatList: at most 8, each > 0, rising | empty (NULL) |
+| | `lod_distance_multiplier` | 19 | Float > 0 | 1 |
+| | `is_lod_forced` | 20 | Bool | false |
+| | `forced_lod` | 21 | UInt32 | 0 |
 | `sprite_component` | `world_sprite` | 1 | AssetName (128, null allowed): a world sprite | null |
 | | `overrides_orientation` | 17 | Bool | false |
 | | `orientation` | 4 | Enum `billboard` / `axis_billboard` / `fixed` | `billboard` |
@@ -395,9 +412,9 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `casts_shadows` | 4 | Bool | false |
 
 T10 renamed the model component's wire 1 from `model` (a model asset) to `world_model` and made wires 2 to 5 the
-placement's own values behind their override flags; its next free wire id is 17. T26 did the same to the sprite
-component: wire 1 `sprite_animation` became `world_sprite`, wires 2 to 16 the placement's own values behind their flags
-(wires 17 to 31), and the draw distance rows came new (32 to 36); its next free wire id is 37. The sprite's value rows
+placement's own values behind their override flags; T11 added the LOD rows (17 to 21); its next free wire id is 22. T26
+did the same to the sprite component: wire 1 `sprite_animation` became `world_sprite`, wires 2 to 16 the placement's own
+values behind their flags (wires 17 to 31), and the draw distance rows came new (32 to 36); its next free wire id is 37. The sprite's value rows
 share their key, type, default, rules and texts with the world sprite's tables (`source/WorldSpriteInternal.h`,
 [WorldSprites.md](WorldSprites.md)). Each override flag sits right before its value, in table order (the inspector's and
 the JSON writer's order), and `PropertyTable_Check` checks the pairing.

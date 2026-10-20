@@ -30,6 +30,8 @@
 #define CONFIG_KEY_FOG_STRENGTH ((const unsigned char*)u8"fog_strength")
 /** JSON key for the draw distance scale. */
 #define CONFIG_KEY_DRAW_DISTANCE_SCALE ((const unsigned char*)u8"draw_distance_scale")
+/** JSON key for the LOD distance scale. */
+#define CONFIG_KEY_LOD_DISTANCE_SCALE ((const unsigned char*)u8"lod_distance_scale")
 
 /** Index of the width element within the resolution array. */
 #define CONFIG_RESOLUTION_WIDTH_INDEX ((size_t)0)
@@ -213,6 +215,7 @@ static void ReadConfigValues(JSONCompound* root, GameConfig* config)
     ReadFloat(root, CONFIG_KEY_AMBIENT_OCCLUSION_STRENGTH, &config->AmbientOcclusionStrength);
     ReadFloat(root, CONFIG_KEY_FOG_STRENGTH, &config->FogStrength);
     ReadFloat(root, CONFIG_KEY_DRAW_DISTANCE_SCALE, &config->DrawDistanceScale);
+    ReadFloat(root, CONFIG_KEY_LOD_DISTANCE_SCALE, &config->LodDistanceScale);
 }
 
 /* Parses the raw file bytes as a JSON object and overlays its settings onto the config, then discards the
@@ -272,6 +275,7 @@ void GameConfig_SetDefaults(GameConfig* self)
     self->AmbientOcclusionStrength = CONFIG_DEFAULT_EFFECT_STRENGTH;
     self->FogStrength = CONFIG_DEFAULT_EFFECT_STRENGTH;
     self->DrawDistanceScale = CONFIG_DEFAULT_EFFECT_STRENGTH;
+    self->LodDistanceScale = CONFIG_DEFAULT_EFFECT_STRENGTH;
 }
 
 Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
@@ -310,6 +314,7 @@ Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
     ClampEffectStrength(&outConfig->AmbientOcclusionStrength);
     ClampEffectStrength(&outConfig->FogStrength);
     ClampEffectStrength(&outConfig->DrawDistanceScale); // a multiplier like the effect strengths
+    ClampEffectStrength(&outConfig->LodDistanceScale);
     return ParseResult;
 }
 

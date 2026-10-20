@@ -112,18 +112,20 @@ static size_t GetStorageSize(PropertyType type)
             return sizeof(unsigned char*);
         case PropertyType_DataMap:
             return sizeof(DataMap*);
+        case PropertyType_FloatList:
+            return sizeof(PropertyFloatList*);
         case PropertyType_Enum:
             return 0U;
     }
     return 0U;
 }
 
-/* Types that take Minimum/Maximum rules. */
+/* Types that take Minimum/Maximum rules (a float list's apply to each of its values). */
 static bool IsBoundedType(PropertyType type)
 {
     return (type == PropertyType_Int32) || (type == PropertyType_UInt32) || (type == PropertyType_Float)
         || (type == PropertyType_Double) || (type == PropertyType_Angle) || (type == PropertyType_Vector2)
-        || (type == PropertyType_Vector3) || (type == PropertyType_AngleVector3);
+        || (type == PropertyType_Vector3) || (type == PropertyType_AngleVector3) || (type == PropertyType_FloatList);
 }
 
 static bool IsValidType(PropertyType type)
@@ -131,7 +133,7 @@ static bool IsValidType(PropertyType type)
     return (type == PropertyType_Enum) || (GetStorageSize(type) != 0U);
 }
 
-/* Reads the pointer of an owned field (a string or a map): the instance's own. */
+/* Reads the pointer of an owned field (a string, a map or a float list): the instance's own. */
 static void* ReadOwnedPointer(const PropertyDescriptor* descriptor, const void* instance)
 {
     void* Owned = NULL;
@@ -142,13 +144,21 @@ static void* ReadOwnedPointer(const PropertyDescriptor* descriptor, const void* 
 /* The pointer an owned type's value holds (borrowed). */
 static const void* GetOwnedData(PropertyType type, const PropertyData* data)
 {
-    return (type == PropertyType_DataMap) ? (const void*)data->DataMapValue : (const void*)data->StringValue;
+    if (type == PropertyType_DataMap)
+    {
+        return data->DataMapValue;
+    }
+    return (type == PropertyType_FloatList) ? (const void*)data->FloatListValue : (const void*)data->StringValue;
 }
 
-/* An owned copy of an owned type's value; NULL for NULL (and for an empty map). */
+/* An owned copy of an owned type's value; NULL for NULL (and for an empty map or list). */
 static void* CloneOwned(PropertyType type, const void* value)
 {
-    return (type == PropertyType_DataMap) ? (void*)DataMap_Clone(value) : (void*)CloneString(value);
+    if (type == PropertyType_DataMap)
+    {
+        return DataMap_Clone(value);
+    }
+    return (type == PropertyType_FloatList) ? (void*)PropertyFloatList_Clone(value) : (void*)CloneString(value);
 }
 
 static int32_t ReadEnumStorage(const unsigned char* field, size_t size)
@@ -363,6 +373,35 @@ static Error CheckDataMap(const PropertyTable* table, const PropertyDescriptor* 
     return MakeRuleError(table, descriptor, Text);
 }
 
+/* "hold at most 8 values", "have every value finite and > 0", "rise strictly from each value to the next" */
+static Error CheckFloatList(const PropertyTable* table, const PropertyDescriptor* descriptor,
+    const PropertyFloatList* list)
+{
+    size_t Count = PropertyFloatList_GetCount(list);
+    const float* Values = PropertyFloatList_GetValues(list);
+    char Text[PROPERTY_RULE_TEXT_SIZE + 32U];
+    if (Count > descriptor->Rules.MaxCount)
+    {
+        snprintf(Text, sizeof(Text), "hold at most %" PRIu64 " values", (uint64_t)descriptor->Rules.MaxCount);
+        return MakeRuleError(table, descriptor, Text);
+    }
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        if (!IsFloatFinite(Values[Index]) || !IsFloatWithinBounds(&descriptor->Rules, Values[Index]))
+        {
+            char Rule[PROPERTY_RULE_TEXT_SIZE];
+            FormatRuleText(&descriptor->Rules, true, Rule, sizeof(Rule));
+            snprintf(Text, sizeof(Text), "have every value %s", Rule);
+            return MakeRuleError(table, descriptor, Text);
+        }
+        if (descriptor->Rules.IsStrictlyIncreasing && (Index > 0U) && !(Values[Index] > Values[Index - 1U]))
+        {
+            return MakeRuleError(table, descriptor, "rise strictly from each value to the next");
+        }
+    }
+    return Error_CreateSuccess();
+}
+
 
 // Static functions: the table check.
 static Error TableError(const PropertyTable* table, const PropertyDescriptor* descriptor, const char* problem)
@@ -516,6 +555,7 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
 
     bool IsString = PropertyInternal_IsStringType(descriptor->Type);
     bool IsMap = descriptor->Type == PropertyType_DataMap;
+    bool IsList = descriptor->Type == PropertyType_FloatList;
     if (IsString && (Rules->MaxLength == 0U))
     {
         return TableError(table, descriptor, "a string needs a MaxLength");
@@ -524,13 +564,21 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
     {
         return TableError(table, descriptor, "a data map needs a MaxCount and a MaxLength (bytes)");
     }
+    if (IsList && ((Rules->MaxCount == 0U) || (Rules->MaxCount > PROPERTY_FLOAT_LIST_MAX_COUNT)))
+    {
+        return TableError(table, descriptor, "a float list needs a MaxCount of 1 to PROPERTY_FLOAT_LIST_MAX_COUNT");
+    }
     if ((!IsString && !IsMap && (Rules->MaxLength != 0U)) || (!IsString && Rules->IsNullAllowed))
     {
         return TableError(table, descriptor, "only strings take MaxLength and IsNullAllowed (and data maps MaxLength)");
     }
-    if (!IsMap && (Rules->MaxCount != 0U))
+    if (!IsMap && !IsList && (Rules->MaxCount != 0U))
     {
-        return TableError(table, descriptor, "only data maps take a MaxCount");
+        return TableError(table, descriptor, "only data maps and float lists take a MaxCount");
+    }
+    if (!IsList && Rules->IsStrictlyIncreasing)
+    {
+        return TableError(table, descriptor, "only float lists take IsStrictlyIncreasing");
     }
     if (IsString && Rules->IsNullAllowed && (descriptor->Default.StringValue != NULL))
     {
@@ -539,6 +587,10 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
     if (IsMap && (descriptor->Default.DataMapValue != NULL))
     {
         return TableError(table, descriptor, "a data map must default to empty (NULL)");
+    }
+    if (IsList && (descriptor->Default.FloatListValue != NULL))
+    {
+        return TableError(table, descriptor, "a float list must default to empty (NULL)");
     }
     return Error_CreateSuccess();
 }
@@ -657,7 +709,17 @@ bool PropertyInternal_IsStringType(PropertyType type)
 
 bool PropertyInternal_IsOwnedType(PropertyType type)
 {
-    return PropertyInternal_IsStringType(type) || (type == PropertyType_DataMap);
+    return PropertyInternal_IsStringType(type) || (type == PropertyType_DataMap) || (type == PropertyType_FloatList);
+}
+
+PropertyFloatList* PropertyInternal_AllocateFloatList(size_t count)
+{
+    // count is at most PROPERTY_FLOAT_LIST_MAX_COUNT, so the size cannot overflow.
+    size_t ByteCount = sizeof(PropertyFloatList) + (count * sizeof(float));
+    PropertyFloatList* List = Memory_Allocate(ByteCount);
+    Memory_Zero(List, ByteCount);
+    List->_count = count;
+    return List;
 }
 
 PropertyData PropertyInternal_ReadField(const PropertyDescriptor* descriptor, const void* instance)
@@ -696,6 +758,11 @@ void PropertyInternal_AdoptOwned(const PropertyDescriptor* descriptor, void* ins
     if (descriptor->Type == PropertyType_DataMap)
     {
         DataMap_Destroy(Previous);
+        return;
+    }
+    if (descriptor->Type == PropertyType_FloatList)
+    {
+        PropertyFloatList_Destroy(Previous);
         return;
     }
     Memory_Free(Previous);
@@ -744,6 +811,8 @@ bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, con
             return a->DateValue == b->DateValue;
         case PropertyType_DataMap:
             return DataMap_Equals(a->DataMapValue, b->DataMapValue);
+        case PropertyType_FloatList:
+            return PropertyFloatList_Equals(a->FloatListValue, b->FloatListValue);
     }
     return false;
 }
@@ -841,6 +910,8 @@ Error PropertyInternal_CheckData(const PropertyTable* table, const PropertyDescr
             return CheckEnum(table, descriptor, data->EnumValue);
         case PropertyType_DataMap:
             return CheckDataMap(table, descriptor, data->DataMapValue);
+        case PropertyType_FloatList:
+            return CheckFloatList(table, descriptor, data->FloatListValue);
     }
     return MakeRuleError(table, descriptor, "have a known property type");
 }
@@ -982,8 +1053,73 @@ const unsigned char* PropertyType_GetName(PropertyType type)
             return u8"date";
         case PropertyType_DataMap:
             return u8"data_map";
+        case PropertyType_FloatList:
+            return u8"float_list";
     }
     return u8"unknown";
+}
+
+Error PropertyFloatList_Create(const float* values, size_t count, PropertyFloatList** outList)
+{
+    if (outList == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "PropertyFloatList_Create: outList must not be NULL.");
+    }
+    *outList = NULL;
+    if (count == 0U)
+    {
+        return Error_CreateSuccess();
+    }
+    if (values == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "PropertyFloatList_Create: values must not be NULL when count is above 0.");
+    }
+    if (count > PROPERTY_FLOAT_LIST_MAX_COUNT)
+    {
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange,
+            "PropertyFloatList_Create: a list holds at most %" PRIu64 " values, not %" PRIu64 ".",
+            (uint64_t)PROPERTY_FLOAT_LIST_MAX_COUNT, (uint64_t)count);
+    }
+    PropertyFloatList* List = PropertyInternal_AllocateFloatList(count);
+    Memory_Copy(values, List->_values, count * sizeof(float));
+    *outList = List;
+    return Error_CreateSuccess();
+}
+
+void PropertyFloatList_Destroy(PropertyFloatList* list)
+{
+    Memory_Free(list);
+}
+
+PropertyFloatList* PropertyFloatList_Clone(const PropertyFloatList* list)
+{
+    if (list == NULL)
+    {
+        return NULL;
+    }
+    PropertyFloatList* Copy = PropertyInternal_AllocateFloatList(list->_count);
+    Memory_Copy(list->_values, Copy->_values, list->_count * sizeof(float));
+    return Copy;
+}
+
+bool PropertyFloatList_Equals(const PropertyFloatList* a, const PropertyFloatList* b)
+{
+    size_t Count = PropertyFloatList_GetCount(a);
+    if (Count != PropertyFloatList_GetCount(b))
+    {
+        return false;
+    }
+    const float* First = PropertyFloatList_GetValues(a);
+    const float* Second = PropertyFloatList_GetValues(b);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        if (!(First[Index] == Second[Index]))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 Error PropertyTable_Check(const PropertyTable* table)

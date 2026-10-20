@@ -42,6 +42,7 @@ int main(void)
     WorldRenderCacheTests_Run(&Run);
     SpriteTransformTests_Run(&Run);
     WorldVisibilityTests_Run(&Run);
+    WorldLodTests_Run(&Run);
     LoggerTests_Run(&Run);
     TextComponentTests_Run(&Run);
     TextComponentCodecTests_Run(&Run);

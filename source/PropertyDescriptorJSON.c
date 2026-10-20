@@ -92,6 +92,31 @@ static Error CreateAngleVector3Value(JSONObjectPool* pool, Vector3 radians, JSON
     return Error_CreateSuccess();
 }
 
+/* A float list as an array of numbers (each the shortest text that reads back as the same float); [] when empty. */
+static Error CreateFloatListValue(JSONObjectPool* pool, const PropertyFloatList* list, JSONObjectValue* outValue)
+{
+    JSONArray* Array = NULL;
+    Error Result = JSONObjectPool_BorrowArray(pool, &Array);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    const float* Values = PropertyFloatList_GetValues(list);
+    for (size_t Index = 0; (Index < PropertyFloatList_GetCount(list)) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        JSONObjectValue Element = GameJSON_CreateFloatValue(Values[Index]);
+        Result = JSONArray_Add(Array, &Element);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = JSONObjectPool_ReturnArray(pool, Array, true);
+        Error_Deconstruct(&ReturnResult);
+        return Result;
+    }
+    *outValue = JSONObjectValue_CreateArray(Array);
+    return Error_CreateSuccess();
+}
+
 /* The date text "yyyy-mm-dd" as a JSON string, formatted on the stack. */
 static Error CreateDateValue(JSONObjectPool* pool, int64_t dayNumber, JSONObjectValue* outValue)
 {
@@ -165,6 +190,8 @@ static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descrip
             return CreateDateValue(pool, data->DateValue, outValue);
         case PropertyType_DataMap:
             return Error_Construct2(ErrorCode_InvalidState, "Data maps are written separately.");
+        case PropertyType_FloatList:
+            return CreateFloatListValue(pool, data->FloatListValue, outValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -331,8 +358,49 @@ static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectVa
             return ReadDate(value, &outData->DateValue);
         case PropertyType_DataMap:
             return Error_Construct2(ErrorCode_InvalidState, "Data maps are read separately.");
+        case PropertyType_FloatList:
+            return Error_Construct2(ErrorCode_InvalidState, "Float lists are read separately.");
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
+}
+
+/* An array of numbers, its length checked before anything is allocated (the values' rules are checked when the read
+ * commits); [] is the empty list. */
+static Error ReadFloatList(const PropertyDescriptor* descriptor, const JSONObjectValue* value, void* target)
+{
+    if (value->Type != JSONValueType_Array)
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, "Expected an array of numbers.");
+    }
+    size_t Count = JSONArray_GetElementCount(value->Value.Array);
+    if (Count > descriptor->Rules.MaxCount)
+    {
+        return Error_Construct4(ErrorCode_InvalidJSON, "The list has %" PRIu64 " values; at most %" PRIu64
+            " are allowed.", (uint64_t)Count, (uint64_t)descriptor->Rules.MaxCount);
+    }
+    if (Count == 0U)
+    {
+        PropertyInternal_AdoptOwned(descriptor, target, NULL);
+        return Error_CreateSuccess();
+    }
+    PropertyFloatList* List = PropertyInternal_AllocateFloatList(Count);
+    Error Result = Error_CreateSuccess();
+    for (size_t Index = 0; (Index < Count) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        JSONObjectValue Element;
+        Result = JSONArray_Get(value->Value.Array, Index, &Element);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = ReadFloat(&Element, false, &List->_values[Index]);
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        PropertyFloatList_Destroy(List);
+        return Result;
+    }
+    PropertyInternal_AdoptOwned(descriptor, target, List);
+    return Error_CreateSuccess();
 }
 
 /* A string or null, length-checked before it is copied (the rest of its rules are checked when the read commits). */
@@ -376,6 +444,10 @@ static Error ReadValue(const PropertyTable* table, const PropertyDescriptor* des
     if (PropertyInternal_IsStringType(descriptor->Type))
     {
         Result = ReadString(descriptor, value, target);
+    }
+    else if (descriptor->Type == PropertyType_FloatList)
+    {
+        Result = ReadFloatList(descriptor, value, target);
     }
     else
     {

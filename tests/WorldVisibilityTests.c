@@ -461,23 +461,28 @@ static void DitherMatchesTheShaderFormula(TestRun* run)
     }
     TEST_CHECK(run, AreThresholdsDistinct && IsPeriodic);
 
+    // A fade of k/16 keeps 16 - k pixels of every block; a LOD cross-fade at progress k/16 gives the incoming LOD k of
+    // them and the outgoing one the other 16 - k.
     bool AreLevelsExact = true;
     for (uint32_t Level = 0U; Level <= WORLD_VISIBILITY_DITHER_LEVELS; Level++)
     {
-        float Fade = (float)Level / (float)WORLD_VISIBILITY_DITHER_LEVELS;
+        float Share = (float)Level / (float)WORLD_VISIBILITY_DITHER_LEVELS;
         uint32_t Kept = 0U;
-        uint32_t KeptInverted = 0U;
+        uint32_t KeptByOutgoing = 0U;
+        uint32_t KeptByIncoming = 0U;
         for (uint32_t Cell = 0U; Cell < WORLD_VISIBILITY_DITHER_LEVELS; Cell++)
         {
-            Kept += WorldVisibility_IsDitherDiscarded(Fade, false, Cell % 4U, Cell / 4U) ? 0U : 1U;
-            KeptInverted += WorldVisibility_IsDitherDiscarded(Fade, true, Cell % 4U, Cell / 4U) ? 0U : 1U;
+            Kept += WorldVisibility_IsDitherDiscarded(Share, 0.0f, false, Cell % 4U, Cell / 4U) ? 0U : 1U;
+            KeptByOutgoing += WorldVisibility_IsDitherDiscarded(0.0f, Share, false, Cell % 4U, Cell / 4U) ? 0U : 1U;
+            KeptByIncoming += WorldVisibility_IsDitherDiscarded(0.0f, Share, true, Cell % 4U, Cell / 4U) ? 0U : 1U;
         }
         AreLevelsExact = AreLevelsExact && (Kept == WORLD_VISIBILITY_DITHER_LEVELS - Level)
-            && (KeptInverted == WORLD_VISIBILITY_DITHER_LEVELS - Level);
+            && (KeptByOutgoing == WORLD_VISIBILITY_DITHER_LEVELS - Level) && (KeptByIncoming == Level);
     }
     TEST_CHECK(run, AreLevelsExact);
 
-    // Progress values on, between and at the pattern's own thresholds ((k + 0.5) / 16, where a tie could double-draw).
+    // Progress values on, between and at the pattern's own thresholds ((k + 0.5) / 16, where a tie could double-draw):
+    // the two LODs always keep complementary pixels (tests/WorldLodTests.c checks many more, with the fade too).
     const float Progresses[] = { 0.0f, 1.0f / 32.0f, 0.03f, 0.3f, 0.5f, 0.5019608f, 0.53125f, 0.77f, 0.999f, 1.0f };
     bool IsPartition = true;
     for (size_t Index = 0U; Index < (sizeof(Progresses) / sizeof(Progresses[0])); Index++)
@@ -485,17 +490,19 @@ static void DitherMatchesTheShaderFormula(TestRun* run)
         float Progress = Progresses[Index];
         for (uint32_t Cell = 0U; Cell < WORLD_VISIBILITY_DITHER_LEVELS; Cell++)
         {
-            bool IsDrawnByOutgoing = !WorldVisibility_IsDitherDiscarded(Progress, false, Cell % 4U, Cell / 4U);
-            bool IsDrawnByIncoming = !WorldVisibility_IsDitherDiscarded(1.0f - Progress, true, Cell % 4U, Cell / 4U);
+            bool IsDrawnByOutgoing = !WorldVisibility_IsDitherDiscarded(0.0f, Progress, false, Cell % 4U, Cell / 4U);
+            bool IsDrawnByIncoming = !WorldVisibility_IsDitherDiscarded(0.0f, Progress, true, Cell % 4U, Cell / 4U);
             IsPartition = IsPartition && (IsDrawnByOutgoing != IsDrawnByIncoming);
         }
     }
     TEST_CHECK(run, IsPartition);
-    // Either pattern keeps everything at fade 0 and nothing at fade 1.
-    TEST_CHECK(run, !WorldVisibility_IsDitherDiscarded(0.0f, false, 2U, 3U)
-        && !WorldVisibility_IsDitherDiscarded(0.0f, true, 2U, 3U));
-    TEST_CHECK(run, WorldVisibility_IsDitherDiscarded(1.0f, false, 2U, 3U)
-        && WorldVisibility_IsDitherDiscarded(1.0f, true, 2U, 3U));
+    // A draw outside a cross-fade (progress 0, the outgoing side) keeps everything at fade 0 and nothing at fade 1; at
+    // progress 1 the incoming LOD keeps everything and the outgoing one nothing.
+    TEST_CHECK(run, !WorldVisibility_IsDitherDiscarded(0.0f, 0.0f, false, 2U, 3U)
+        && WorldVisibility_IsDitherDiscarded(1.0f, 0.0f, false, 2U, 3U));
+    TEST_CHECK(run, !WorldVisibility_IsDitherDiscarded(0.0f, 1.0f, true, 2U, 3U)
+        && WorldVisibility_IsDitherDiscarded(0.0f, 1.0f, false, 2U, 3U)
+        && WorldVisibility_IsDitherDiscarded(0.0f, 0.0f, true, 2U, 3U));
 
     bool IsCheckerboard = true;
     for (uint32_t Cell = 0U; Cell < WORLD_VISIBILITY_DITHER_LEVELS; Cell++)
@@ -503,7 +510,7 @@ static void DitherMatchesTheShaderFormula(TestRun* run)
         uint32_t X = Cell % 4U;
         uint32_t Y = Cell / 4U;
         bool IsEvenCell = ((X + Y) % 2U) == 0U;
-        IsCheckerboard = IsCheckerboard && (WorldVisibility_IsDitherDiscarded(0.5f, false, X, Y) == IsEvenCell);
+        IsCheckerboard = IsCheckerboard && (WorldVisibility_IsDitherDiscarded(0.5f, 0.0f, false, X, Y) == IsEvenCell);
     }
     TEST_CHECK(run, IsCheckerboard);
 
@@ -940,6 +947,68 @@ static void CrispObjectsCountOnlyInView(TestRun* run)
     VisibilityFixture_Deconstruct(run, &Fixture);
 }
 
+/* The counts give the drawn models by the LOD they show (or head to: a fade that turned back counts under the LOD it
+ * returns to) and how many cross-fade: models outside the view, hidden or faded out are not counted. */
+static void DrawnModelsAreCountedByLod(TestRun* run)
+{
+    VisibilityFixture Fixture;
+    BoundingBox UnitCube = { .min = { -0.5f, -0.5f, -0.5f }, .max = { 0.5f, 0.5f, 0.5f } };
+    if (!VisibilityFixture_Construct(run, &Fixture)
+        || !TestAssets_AddModel(run, &Fixture.Assets, "box_lod1", UnitCube, NULL)
+        || !TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"stepped\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 10}, {\"model\": \"box_lod1\", \"max_distance\": 30}], \"lod_hysteresis\": 0}"))
+    {
+        VisibilityFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    Vector3 CameraPosition = { 0.0f, 1.0f, 0.0f };
+    WorldModelComponent* Near = AddWorldModel(run, &Fixture.World, "stepped", (Vector3){ 0.0f, 1.0f, 5.0f });
+    WorldModelComponent* AlsoNear = AddWorldModel(run, &Fixture.World, "stepped", (Vector3){ 1.0f, 1.0f, 6.0f });
+    WorldModelComponent* Far = AddWorldModel(run, &Fixture.World, "stepped", (Vector3){ 0.0f, 1.0f, 20.0f });
+    WorldModelComponent* Behind = AddWorldModel(run, &Fixture.World, "stepped", (Vector3){ 0.0f, 1.0f, -20.0f });
+    WorldVisibilityView View = MakeView(CameraPosition);
+    View.DrawDistanceScale = 1.0f;
+    WorldRenderLodView LodView = { .CameraPosition = CameraPosition, .ZoomFactor = 1.0f, .DistanceScale = 1.0f,
+        .DeltaSeconds = 0.1f };
+    if ((Near != NULL) && (AlsoNear != NULL) && (Far != NULL) && (Behind != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Fixture.Assets.Manager,
+            Fixture.ModelUser, NULL)))
+    {
+        WorldRenderCache_UpdateLods(&Fixture.Cache, &LodView, NULL);
+        if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
+        {
+            WorldVisibilityCounts Counts = WorldVisibility_GetCounts(&Fixture.Visibility);
+            TEST_CHECK(run, (Counts.DrawnModelCount == 3U) && (Counts.DrawnModelsByLod[0] == 2U)
+                && (Counts.DrawnModelsByLod[1] == 1U) && (Counts.DrawnModelsByLod[2] == 0U)
+                && (Counts.LodFadingCount == 0U));
+        }
+        // The camera steps back 8 m: the near ones cross the 10 m switch and cross-fade to LOD 1.
+        LodView.CameraPosition.z = -8.0f;
+        View = MakeView(LodView.CameraPosition);
+        View.DrawDistanceScale = 1.0f;
+        WorldRenderCache_UpdateLods(&Fixture.Cache, &LodView, NULL);
+        if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
+        {
+            WorldVisibilityCounts Counts = WorldVisibility_GetCounts(&Fixture.Visibility);
+            TEST_CHECK(run, (Counts.DrawnModelCount == 3U) && (Counts.DrawnModelsByLod[0] == 0U)
+                && (Counts.DrawnModelsByLod[1] == 3U) && (Counts.LodFadingCount == 2U));
+        }
+        // Back again within the fade (half a frame's worth): the near ones turn around and count under LOD 0 again.
+        LodView.CameraPosition.z = 0.0f;
+        LodView.DeltaSeconds = 0.05f;
+        View = MakeView(LodView.CameraPosition);
+        View.DrawDistanceScale = 1.0f;
+        WorldRenderCache_UpdateLods(&Fixture.Cache, &LodView, NULL);
+        if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
+        {
+            WorldVisibilityCounts Counts = WorldVisibility_GetCounts(&Fixture.Visibility);
+            TEST_CHECK(run, (Counts.DrawnModelCount == 3U) && (Counts.DrawnModelsByLod[0] == 2U)
+                && (Counts.DrawnModelsByLod[1] == 1U) && (Counts.LodFadingCount == 2U));
+        }
+    }
+    VisibilityFixture_Deconstruct(run, &Fixture);
+}
+
 /* A list is read against the cache it was built from: against a cache of another size it is empty, so no index can run
  * past the cache; an index the build did not cover reads as fully faded. */
 static void ListsFollowTheirCache(TestRun* run)
@@ -992,6 +1061,7 @@ void WorldVisibilityTests_Run(TestRun* run)
         { "culling_off_keeps_everything_within_reach", CullingOffKeepsEverythingWithinReach },
         { "crisp_objects_count_only_in_view", CrispObjectsCountOnlyInView },
         { "lists_follow_their_cache", ListsFollowTheirCache },
+        { "drawn_models_are_counted_by_lod", DrawnModelsAreCountedByLod },
     };
     TestRun_RunSuite(run, "WorldVisibility", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

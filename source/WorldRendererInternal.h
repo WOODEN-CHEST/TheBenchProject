@@ -268,15 +268,17 @@ typedef struct WorldRenderFrameStruct
 } WorldRenderFrame;
 
 /**
- * @brief The dither uniforms of a geometry shader (shaders/common/dither.glsl): its fade, whether it is inverted, and the
- *        pass's pixels per scene pixel. -1 for a uniform the shader lacks.
+ * @brief The dither uniforms of a geometry shader (shaders/common/dither.glsl): the draw's fade, its part of a LOD
+ *        cross-fade (the progress, whether it is the incoming LOD), and the pass's pixels per scene pixel. -1 for a
+ *        uniform the shader lacks.
  *
- * Filled by WorldRendererCommon_PrepareDither, which also uploads the defaults (solid, not inverted, scale 1).
+ * Filled by WorldRendererCommon_PrepareDither, which also uploads the defaults (solid, no cross-fade, scale 1).
  */
 typedef struct WorldRendererDitherLocationsStruct
 {
     int _locFade;
-    int _locInvert;
+    int _locLodProgress;
+    int _locIsIncomingLod;
     int _locPixelScale;
 } WorldRendererDitherLocations;
 
@@ -806,6 +808,9 @@ struct WorldRendererStruct
     /** @brief Toggle for the camera's frustum culling and the cascades' box culling (A/B; on by default). Off draws
      *  everything within its draw distance, as before culling existed. */
     bool _isCullingEnabled;
+    /** @brief Whether every model's LOD is shown by a colour multiplied into its albedo (a debug aid; off by default):
+     *  LOD 0 white, 1 green, 2 yellow, 3 red, coarser magenta. */
+    bool _isLodTintingEnabled;
     /** @brief What the most recent render did (WorldRenderer_GetStatus). */
     WorldRendererStatus _status;
     /** @brief Set once the status has been logged after the first render. */
@@ -851,24 +856,31 @@ float WorldRendererCommon_ConfigSunshaftStrength(const WorldRenderer* self);
 /** @brief Config-side draw distance scale (the config's draw_distance_scale; 1.0 when no config is bound). */
 float WorldRendererCommon_ConfigDrawDistanceScale(const WorldRenderer* self);
 
+/** @brief Config-side LOD distance scale (the config's lod_distance_scale; 1.0 when no config is bound). */
+float WorldRendererCommon_ConfigLodDistanceScale(const WorldRenderer* self);
+
 /**
  * @brief Caches a geometry shader's dither uniforms (shaders/common/dither.glsl) and uploads their defaults: solid (fade
- *        0), not inverted, a pixel scale of 1. Call once at load; passes then change only what differs.
+ *        0), no LOD cross-fade (progress 0, not the incoming LOD), a pixel scale of 1. Call once at load; passes then
+ *        change only what differs.
  * @param shader The shader (its program).
  * @param outLocations [out] Receives the locations (-1 for a uniform the shader lacks).
  */
 void WorldRendererCommon_PrepareDither(Shader shader, WorldRendererDitherLocations* outLocations);
 
 /**
- * @brief Uploads a draw's dither: its fade (0 solid .. 1 gone) and whether it uses the mirrored pattern.
+ * @brief Uploads a draw's dither: its fade (0 solid .. 1 gone) and its part of a LOD cross-fade. Every draw sets all of
+ *        it (the uniforms stay with the shader until changed).
  * @param shader The shader (its program).
  * @param locations Its dither locations (WorldRendererCommon_PrepareDither).
- * @param fade The draw's fade.
- * @param isInverted Whether the draw uses the mirrored pattern (T11's incoming LOD, at 1 - the outgoing's fade: the two
- *        keep complementary pixels); false otherwise.
+ * @param fade The draw's fade (its draw distance, its opacity).
+ * @param lodProgress The LOD cross-fade's progress: the share of the pixels the incoming LOD takes (WorldLodDraw); 0 for a
+ *        draw that is not part of a cross-fade.
+ * @param isIncomingLod Whether the draw is the incoming LOD of a cross-fade (it keeps the pixels the outgoing LOD leaves);
+ *        false for the outgoing LOD and for every other draw.
  */
 void WorldRendererCommon_SetDither(Shader shader, const WorldRendererDitherLocations* locations, float fade,
-    bool isInverted);
+    float lodProgress, bool isIncomingLod);
 
 /**
  * @brief Uploads a pass's dither pixel scale: its pixels per scene pixel (1 at the scene's resolution, window / scene in
@@ -979,23 +991,25 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
 bool WorldRendererGeometry_PassesFilter(bool omitPixelation, WorldRendererPixelFilter filter);
 
 /**
- * @brief Draws one cached model (its LOD model, WorldRenderModel.Model) mesh by mesh, each mesh with a material built
- *        on the stack (the asset's maps copied, the entry's variant applied to the copy, @p passShader, the object's
- *        tint applied to the copy), so nothing is written to an asset. The caller uploads the draw's dither to
- *        @p passShader first.
+ * @brief Draws one LOD of a cached model mesh by mesh, with the LOD's import transform inside the object's world matrix
+ *        (WorldRenderModel_GetLodTransform), each mesh with a material built on the stack (the asset's maps copied, the
+ *        entry's variant applied to the copy, @p passShader, the object's tint applied to the copy, times the LOD's
+ *        debug colour while the LOD tinting is on), so nothing is written to an asset. The caller uploads the draw's
+ *        dither to @p passShader first, and in the lit pass the object's forward point lights.
  *
- * Must run inside a 3D mode (BeginMode3D or explicit rlgl matrices).
+ * Must run inside a 3D mode (BeginMode3D or explicit rlgl matrices). A LOD past the world model's last draws nothing.
  * @param self The renderer.
  * @param model The cached model; must have an asset.
+ * @param lod The LOD to draw (the entry's LOD state says which: WorldLod.h).
  * @param passShader The shader to draw with, or NULL to keep each material's own shader.
- * @param isLit Whether this is the lit (PBR) pass: then the object's forward point lights and each material's
- *        PBR factors are uploaded before its meshes.
+ * @param isLit Whether this is the lit (PBR) pass: then each material's PBR factors are uploaded before its meshes.
  */
-void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel* model, const Shader* passShader,
-    bool isLit);
+void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel* model, size_t lod,
+    const Shader* passShader, bool isLit);
 
-/** @brief Draws the camera's models (the visibility's camera list) that pass @p filter, each with its fade dithered when
- *  @p isLit (the PBR pass; see WorldRendererGeometry_DrawModel). */
+/** @brief Draws the camera's models (the visibility's camera list) that pass @p filter. When @p isLit (the PBR pass) it
+ *  uploads each object's forward point lights and draws its LODs (both during a cross-fade) dithered by its fade and
+ *  its part of the cross-fade; otherwise (the materials' own shaders) it draws the LOD with the larger share, solid. */
 void WorldRendererGeometry_DrawModels(WorldRenderer* self, const Shader* passShader, bool isLit,
     WorldRendererPixelFilter filter);
 

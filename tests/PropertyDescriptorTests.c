@@ -24,6 +24,8 @@
 #define TEST_TITLE_MAX_LENGTH ((size_t)16)
 #define TEST_NOTE_MAX_LENGTH ((size_t)64)
 #define TEST_MODEL_MAX_LENGTH ((size_t)32)
+/** The most values the record's float list holds. */
+#define TEST_STEPS_MAX_COUNT ((size_t)4)
 /** Bytes of padding that push the big record past the readers' inline scratch storage. */
 #define TEST_BIG_RECORD_PADDING ((size_t)2048)
 /** Day numbers of the record's default due date, 2026-10-18, and of a later one, 2027-01-20. */
@@ -65,6 +67,7 @@ typedef struct TestRecordStruct
     uint64_t Serial;
     double Elapsed;
     int64_t Due;
+    PropertyFloatList* Steps;
     int32_t Revision;
     int32_t AfterSetCount;
     const PropertyDescriptor* LastChanged;
@@ -160,7 +163,13 @@ static const PropertyDescriptor RecordProperties[] =
     { .Key = u8"orientation", .WireId = 21U, .Type = PropertyType_AngleVector3,
         PROPERTY_MEMBER(TestRecord, Orientation), .Default.Vector3Value = { 0.0f, 0.0f, 0.0f },
         .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"steps", .WireId = 22U, .Type = PropertyType_FloatList, PROPERTY_MEMBER(TestRecord, Steps),
+        .Default.FloatListValue = NULL, .Rules = PROPERTY_RULES_INCREASING_FLOAT_LIST_ABOVE(TEST_STEPS_MAX_COUNT, 0.0),
+        .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
 };
+
+/** The index of the record's float list row. */
+#define RECORD_STEPS_ROW 21U
 
 #define RECORD_PROPERTY_COUNT (sizeof(RecordProperties) / sizeof(RecordProperties[0]))
 
@@ -262,6 +271,14 @@ static void FillRecord(TestRun* run, TestRecord* record)
     record->Serial = 5U;
     record->Elapsed = 1.0 / 3.0; // every bit of a double must survive JSON text
     record->Due = TEST_DUE_LATER;
+    PropertyFloatList* Steps = NULL;
+    const float StepValues[] = { 0.1f, 2.5f, 1.0f / 3.0f + 3.0f }; // every bit must survive JSON text
+    if (TEST_CHECK_SUCCESS(run, PropertyFloatList_Create(StepValues, 3U, &Steps)))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_Set(&RecordTable, record, u8"steps", &(PropertyValue){
+            .Type = PropertyType_FloatList, .Data.FloatListValue = Steps }));
+        PropertyFloatList_Destroy(Steps);
+    }
     record->Revision = 3;
 }
 
@@ -613,6 +630,18 @@ static void BreakDateDefault(PropertyDescriptor* descriptor) { descriptor->Defau
 static void BreakOverrideFlagTarget(PropertyDescriptor* descriptor) { descriptor->Key = u8"overrides_nothing"; }
 static void BreakOverrideFlagType(PropertyDescriptor* descriptor) { descriptor->Key = u8"overrides_count"; }
 static void BreakOverrideFlagBare(PropertyDescriptor* descriptor) { descriptor->Key = u8"overrides_"; }
+static void BreakListCountToZero(PropertyDescriptor* descriptor) { descriptor->Rules.MaxCount = 0U; }
+static void BreakListCountPastTheCap(PropertyDescriptor* descriptor)
+{
+    descriptor->Rules.MaxCount = PROPERTY_FLOAT_LIST_MAX_COUNT + 1U;
+}
+static void BreakListDefault(PropertyDescriptor* descriptor)
+{
+    static const int NotAList = 0;
+    descriptor->Default.FloatListValue = (const PropertyFloatList*)(const void*)&NotAList; // never read: refused first
+}
+static void BreakListLength(PropertyDescriptor* descriptor) { descriptor->Rules.MaxLength = 8U; }
+static void BreakIncreasingOnFloat(PropertyDescriptor* descriptor) { descriptor->Rules.IsStrictlyIncreasing = true; }
 
 static void BrokenTablesFailTheirCheck(TestRun* run)
 {
@@ -638,6 +667,12 @@ static void BrokenTablesFailTheirCheck(TestRun* run)
     CheckBrokenDescriptor(run, 0U, BreakOverrideFlagTarget, "must name the row it switches on");
     CheckBrokenDescriptor(run, 4U, BreakOverrideFlagType, "an override flag (overrides_<key>) must be a Bool");
     CheckBrokenDescriptor(run, 0U, BreakOverrideFlagBare, "must name the row it switches on");
+    // A float list needs a MaxCount up to the cap and defaults to empty; only lists take IsStrictlyIncreasing.
+    CheckBrokenDescriptor(run, RECORD_STEPS_ROW, BreakListCountToZero, "a float list needs a MaxCount");
+    CheckBrokenDescriptor(run, RECORD_STEPS_ROW, BreakListCountPastTheCap, "a float list needs a MaxCount");
+    CheckBrokenDescriptor(run, RECORD_STEPS_ROW, BreakListDefault, "a float list must default to empty");
+    CheckBrokenDescriptor(run, RECORD_STEPS_ROW, BreakListLength, "only strings take MaxLength");
+    CheckBrokenDescriptor(run, 4U, BreakIncreasingOnFloat, "only float lists take IsStrictlyIncreasing");
     PropertyDescriptor Paired[RECORD_PROPERTY_COUNT];
     Memory_Copy(RecordProperties, Paired, sizeof(Paired));
     Paired[0].Key = u8"overrides_weight";
@@ -685,7 +720,7 @@ static void DataMapRowsAreChecked(TestRun* run)
     CheckBrokenMapDescriptor(run, 1U, BreakTagsKeyToOtherKey, "key is used twice");
     CheckBrokenMapDescriptor(run, 1U, BreakMapCount, "MaxCount and a MaxLength");
     CheckBrokenMapDescriptor(run, 1U, BreakMapDefault, "default to empty");
-    CheckBrokenMapDescriptor(run, 0U, BreakCountOnInteger, "only data maps take a MaxCount");
+    CheckBrokenMapDescriptor(run, 0U, BreakCountOnInteger, "only data maps and float lists take a MaxCount");
     CheckBrokenMapDescriptor(run, 0U, BreakTagsKeyOnInteger, "only data maps take a TagsKey");
 }
 
@@ -864,7 +899,7 @@ static void ConstructGivesTheDefaults(TestRun* run)
     TEST_CHECK(run, AreStringsEqual(Record.Title, u8"untitled") && (Record.Title != RecordProperties[10].Default.StringValue));
     TEST_CHECK(run, (Record.Note == NULL) && (Record.Model == NULL));
     TEST_CHECK(run, (Record.Tier == TestTier_Near) && (Record.SmallTier == TestTier_Far) && (Record.Target == 0U));
-    TEST_CHECK(run, (Record.Elapsed == 0.5) && (Record.Due == TEST_DUE_DEFAULT));
+    TEST_CHECK(run, (Record.Elapsed == 0.5) && (Record.Due == TEST_DUE_DEFAULT) && (Record.Steps == NULL));
     TEST_CHECK(run, (Record.AfterSetCount == 0) && (Record.LastChanged == NULL)); // undescribed fields are zeroed
     TEST_CHECK_SUCCESS(run, Properties_Validate(&RecordTable, &Record));
 
@@ -945,6 +980,32 @@ static void ValidationNamesTheKeyAndTheRule(TestRun* run)
     Record.Due = GAME_CALENDAR_LAST_DAY_NUMBER + 1;
     CheckInvalidRecord(run, &Record, (const char* const[]){ "due (Due)", NULL });
     Record.Due = GAME_CALENDAR_LAST_DAY_NUMBER;
+
+    // A float list: at most 4 values, each finite and above 0, each above the one before.
+    const float TooMany[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f };
+    const float Falling[] = { 1.0f, 3.0f, 2.0f };
+    const float Equal[] = { 1.0f, 1.0f };
+    const float Zero[] = { 0.0f };
+    const float NotFinite[] = { 1.0f, NAN };
+    struct { const float* Values; size_t Count; const char* Fragment; } BadLists[] =
+    {
+        { TooMany, 5U, "test_record.steps (Steps) must hold at most 4 values" },
+        { Falling, 3U, "test_record.steps (Steps) must rise strictly from each value to the next" },
+        { Equal, 2U, "rise strictly" },
+        { Zero, 1U, "test_record.steps (Steps) must have every value finite and > 0" },
+        { NotFinite, 2U, "have every value finite" },
+    };
+    for (size_t Index = 0U; Index < (sizeof(BadLists) / sizeof(BadLists[0])); Index++)
+    {
+        PropertyFloatList* List = NULL;
+        if (TEST_CHECK_SUCCESS(run, PropertyFloatList_Create(BadLists[Index].Values, BadLists[Index].Count, &List)))
+        {
+            Record.Steps = List;
+            CheckInvalidRecord(run, &Record, (const char* const[]){ BadLists[Index].Fragment, NULL });
+            Record.Steps = NULL;
+            PropertyFloatList_Destroy(List);
+        }
+    }
 
     TEST_CHECK_SUCCESS(run, Properties_Validate(&RecordTable, &Record));
     TEST_CHECK_ERROR(run, Properties_Validate(&RecordTable, NULL), ErrorCode_IllegalArgument);
@@ -1127,6 +1188,14 @@ static void WrongValuesAreRejectedAndChangeNothing(TestRun* run)
             { "{\"count\": 1, \"due\": \"2026-02-29\"}", "test_record.due" },
             { "{\"count\": 1, \"due\": \"2026-10-18T12:00\"}", "test_record.due" },
             { "{\"count\": 1, \"due\": \"0000-12-31\"}", "test_record.due" },
+            { "{\"count\": 1, \"steps\": 3}", "test_record.steps: Expected an array of numbers" },
+            { "{\"count\": 1, \"steps\": null}", "test_record.steps: Expected an array of numbers" },
+            { "{\"count\": 1, \"steps\": [1, \"x\"]}", "test_record.steps" },
+            { "{\"count\": 1, \"steps\": [1, 2, 3, 4, 5]}", "The list has 5 values; at most 4 are allowed" },
+            { "{\"count\": 1, \"steps\": [2, 1]}", "test_record.steps (Steps) must rise strictly" },
+            { "{\"count\": 1, \"steps\": [0]}", "test_record.steps (Steps) must have every value finite and > 0" },
+            { "{\"count\": 1, \"steps\": [1, 1e300]}", "test_record.steps" },
+            { "{\"count\": 1, \"steps\": [[1]]}", "test_record.steps" },
         };
         for (size_t Index = 0; Index < (sizeof(BadDocuments) / sizeof(BadDocuments[0])); Index++)
         {
@@ -1562,6 +1631,143 @@ static void GetAndSetByKey(TestRun* run)
     Properties_Deconstruct(&RecordTable, &Record);
 }
 
+/* Float lists: created, copied and compared by value (NULL is the empty list); set copies, get borrows; JSON arrays of
+ * numbers ([] the empty list, values as the shortest text that reads back) and GHDF Float arrays, with too long and
+ * wrongly typed arrays refused and nothing changed; the table-driven copy is deep. */
+static void FloatListsGoThroughTheTables(TestRun* run)
+{
+    const float Values[] = { 0.5f, 2.0f, 7.25f };
+    PropertyFloatList* List = NULL;
+    TEST_CHECK_SUCCESS(run, PropertyFloatList_Create(Values, 0U, &List));
+    TEST_CHECK(run, (List == NULL) && (PropertyFloatList_GetCount(NULL) == 0U)
+        && (PropertyFloatList_GetValues(NULL) == NULL));
+    TEST_CHECK_ERROR(run, PropertyFloatList_Create(NULL, 2U, &List), ErrorCode_IllegalArgument);
+    TEST_CHECK_ERROR(run, PropertyFloatList_Create(Values, PROPERTY_FLOAT_LIST_MAX_COUNT + 1U, &List),
+        ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK(run, List == NULL);
+    TEST_CHECK_ERROR(run, PropertyFloatList_Create(Values, 1U, NULL), ErrorCode_IllegalArgument);
+    if (!TEST_CHECK_SUCCESS(run, PropertyFloatList_Create(Values, 3U, &List)))
+    {
+        return;
+    }
+    PropertyFloatList* Copy = PropertyFloatList_Clone(List);
+    const float Signed[] = { -0.0f };
+    const float Unsigned[] = { 0.0f };
+    PropertyFloatList* NegativeZero = NULL;
+    PropertyFloatList* PositiveZero = NULL;
+    TEST_CHECK_SUCCESS(run, PropertyFloatList_Create(Signed, 1U, &NegativeZero));
+    TEST_CHECK_SUCCESS(run, PropertyFloatList_Create(Unsigned, 1U, &PositiveZero));
+    TEST_CHECK(run, (Copy != List) && PropertyFloatList_Equals(Copy, List) && (PropertyFloatList_GetCount(Copy) == 3U)
+        && (PropertyFloatList_GetValues(Copy)[2] == 7.25f));
+    TEST_CHECK(run, PropertyFloatList_Equals(NULL, NULL) && !PropertyFloatList_Equals(List, NULL)
+        && PropertyFloatList_Equals(NegativeZero, PositiveZero) && !PropertyFloatList_Equals(List, PositiveZero)
+        && (PropertyFloatList_Clone(NULL) == NULL));
+    PropertyFloatList_Destroy(NegativeZero);
+    PropertyFloatList_Destroy(PositiveZero);
+    PropertyFloatList_Destroy(NULL);
+
+    TestRecord Record;
+    TestRecord Other;
+    JSONObjectPool* Pool = NULL;
+    GHDFObjectPool* BinaryPool = NULL;
+    if (CheckConstruct(run, &Record) && CheckConstruct(run, &Other) && TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool))
+        && TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&BinaryPool)))
+    {
+        // Set copies, get borrows the instance's own, a deep copy has its own list.
+        PropertyValue Value = PropertyValue_FromFloatList(List);
+        TEST_CHECK_SUCCESS(run, Properties_Set(&RecordTable, &Record, u8"steps", &Value));
+        TEST_CHECK(run, (Record.Steps != NULL) && (Record.Steps != List) && PropertyFloatList_Equals(Record.Steps, List));
+        PropertyValue Got;
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, Properties_Get(&RecordTable, &Record, u8"steps", &Got))
+            && (Got.Type == PropertyType_FloatList) && (Got.Data.FloatListValue == Record.Steps));
+        TEST_CHECK_ERROR(run, Properties_Set(&RecordTable, &Record, u8"steps", &(PropertyValue){
+            .Type = PropertyType_Float, .Data.FloatValue = 1.0f }), ErrorCode_IllegalArgument);
+        TEST_CHECK_SUCCESS(run, Properties_CopyTo(&RecordTable, &Record, &Other));
+        TEST_CHECK(run, (Other.Steps != Record.Steps) && Properties_Equals(&RecordTable, &Record, &Other));
+
+        // JSON: an array of numbers, read back the same; [] is the empty list.
+        JSONCompound* Compound = NULL;
+        if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
+        {
+            TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&RecordTable, &Record, Pool, Compound, NULL));
+            JSONObjectValue Array;
+            if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"steps", JSONValueType_Array, &Array)))
+            {
+                JSONObjectValue Element;
+                TEST_CHECK(run, (JSONArray_GetElementCount(Array.Value.Array) == 3U)
+                    && TEST_CHECK_SUCCESS(run, JSONArray_Get(Array.Value.Array, 1U, &Element))
+                    && (Element.Type == JSONValueType_RealNumber) && (Element.Value.RealNumber == 2.0));
+            }
+            TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Compound, true));
+        }
+        TEST_CHECK_SUCCESS(run, ReadRecordFromText(run, Pool, "{\"steps\": []}", &Other, NULL));
+        TEST_CHECK(run, Other.Steps == NULL);
+        TEST_CHECK_SUCCESS(run, ReadRecordFromText(run, Pool, "{\"steps\": [\"1.5\", 4]}", &Other, NULL));
+        TEST_CHECK(run, (PropertyFloatList_GetCount(Other.Steps) == 2U)
+            && (PropertyFloatList_GetValues(Other.Steps)[0] == 1.5f));
+
+        // GHDF: a Float array; an empty one is the empty list; too long or of another type is refused, changing nothing.
+        GHDFCompound* Binary = NULL;
+        if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Binary)))
+        {
+            TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&RecordTable, &Record, BinaryPool, Binary, NULL));
+            GHDFObjectValue Entry;
+            TEST_CHECK(run, TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Binary, 22U,
+                GHDF_CreateArrayType(GHDFValueType_Float), &Entry)) && (GHDFArray_GetElementCount(Entry.Value.Array) == 3U));
+            TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&RecordTable, Binary, &Other, NULL));
+            TEST_CHECK(run, PropertyFloatList_Equals(Other.Steps, Record.Steps));
+
+            GHDFArray* Long = NULL;
+            if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowArray(BinaryPool, GHDFValueType_Float, &Long)))
+            {
+                for (int Index = 0; Index < 5; Index++)
+                {
+                    GHDFObjectValue Element = GHDFObjectValue_CreateFloat((float)(Index + 1));
+                    TEST_CHECK_SUCCESS(run, GHDFArray_AddValue(Long, &Element));
+                }
+                GHDFObjectValue LongValue = GHDFObjectValue_CreateArray(Long, GHDFValueType_Float);
+                TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Binary, 22U, GHDF_CreateArrayType(GHDFValueType_Float),
+                    &LongValue));
+                const char* const Fragments[] = { "test_record.steps", "at most 4", NULL };
+                TestText_CheckErrorMessage(run, Properties_ReadGHDF(&RecordTable, Binary, &Other, NULL),
+                    ErrorCode_Deserialize, Fragments);
+                TEST_CHECK(run, PropertyFloatList_Equals(Other.Steps, Record.Steps));
+            }
+            GHDFArray* Bytes = NULL;
+            if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowArray(BinaryPool, GHDFValueType_UInt8, &Bytes)))
+            {
+                GHDFObjectValue BytesValue = GHDFObjectValue_CreateArray(Bytes, GHDFValueType_UInt8);
+                TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Binary, 22U, GHDF_CreateArrayType(GHDFValueType_UInt8),
+                    &BytesValue));
+                TEST_CHECK_ERROR(run, Properties_ReadGHDF(&RecordTable, Binary, &Other, NULL), ErrorCode_Deserialize);
+            }
+            GHDFArray* Empty = NULL;
+            if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowArray(BinaryPool, GHDFValueType_Float, &Empty)))
+            {
+                GHDFObjectValue EmptyValue = GHDFObjectValue_CreateArray(Empty, GHDFValueType_Float);
+                TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Binary, 22U, GHDF_CreateArrayType(GHDFValueType_Float),
+                    &EmptyValue));
+                TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&RecordTable, Binary, &Other, NULL));
+                TEST_CHECK(run, Other.Steps == NULL);
+            }
+            TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Binary, true));
+        }
+    }
+    Properties_Deconstruct(&RecordTable, &Record);
+    Properties_Deconstruct(&RecordTable, &Other);
+    TEST_CHECK(run, (Record.Steps == NULL) && (Other.Steps == NULL));
+    if (BinaryPool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(BinaryPool));
+    }
+    if (Pool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    }
+    PropertyFloatList_Destroy(Copy);
+    PropertyFloatList_Destroy(List);
+}
+
 /* A struct bigger than the inline scratch reads through a heap scratch (run under --sanitize). */
 static void BigStructsReadThroughAHeapScratch(TestRun* run)
 {
@@ -1853,6 +2059,7 @@ void PropertyDescriptorTests_Run(TestRun* run)
         { "integers_take_the_smallest_ghdf_type", IntegersTakeTheSmallestGHDFType },
         { "copies_are_deep", CopiesAreDeep },
         { "get_and_set_by_key", GetAndSetByKey },
+        { "float_lists_go_through_the_tables", FloatListsGoThroughTheTables },
         { "big_structs_read_through_a_heap_scratch", BigStructsReadThroughAHeapScratch },
         { "migration_runs_for_older_data", MigrationRunsForOlderData },
         { "environment_ghdf_matches_the_old_encoder", EnvironmentGHDFMatchesTheOldEncoder },

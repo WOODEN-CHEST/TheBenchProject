@@ -34,11 +34,11 @@
  * outlines and AO switch off once, at mid-fade, instead of breaking up with the dither.
  *
  * THE DITHER. shaders/common/dither.glsl keeps a share of a draw's pixels by a 4x4 ordered (Bayer) pattern on the scene's
- * pixel grid: cell = floor(gl_FragCoord.xy / ditherPixelScale) mod 4, threshold = (BAYER[cell.y][cell.x] + 0.5) / 16, a
- * pixel is kept (covered) when threshold > fade, or with the mirrored pattern (invert) when 1 - threshold >= fade.
- * WorldVisibility_GetDitherCell, WorldVisibility_GetDitherThreshold and WorldVisibility_IsDitherDiscarded are that
- * formula in C, for the tests (T11's LOD cross-fade draws the outgoing LOD at fade p and the incoming one inverted at
- * 1 - p: complementary pixels).
+ * pixel grid: cell = floor(gl_FragCoord.xy / ditherPixelScale) mod 4, threshold = (BAYER[cell.y][cell.x] + 0.5) / 16. A
+ * pixel is kept when both masks keep it: the draw's fade (threshold > fade) and its part of a LOD cross-fade (T11: the
+ * outgoing LOD keeps threshold > progress, the incoming one threshold <= progress, so the two keep complementary pixels;
+ * a LOD drawn alone has progress 0 and keeps every pixel). WorldVisibility_GetDitherCell,
+ * WorldVisibility_GetDitherThreshold and WorldVisibility_IsDitherDiscarded are that formula in C, for the tests.
  *
  * LISTS. WorldVisibility_Build fills, from the render cache, one list per pass (WorldVisibilityPass) of the entries it
  * draws, as indices into the cache's models and sprites, plus every entry's fades and the counts the renderer's status
@@ -165,6 +165,10 @@ typedef struct WorldVisibilityCountsStruct
     /** @brief Of the drawn ones, those fading or translucent (fade above 0): dithered, or alpha-faded (blended and
      *  additive sprites). */
     size_t FadingCount;
+    /** @brief Of the drawn models, how many show each LOD ([i] counts LOD i): the LOD they show, or fade to. */
+    size_t DrawnModelsByLod[WORLD_MODEL_MAX_LODS];
+    /** @brief Of the drawn models, those cross-fading between two LODs. */
+    size_t LodFadingCount;
 } WorldVisibilityCounts;
 
 /**
@@ -298,16 +302,19 @@ uint32_t WorldVisibility_GetDitherCell(float fragCoord, float pixelScale);
 float WorldVisibility_GetDitherThreshold(uint32_t x, uint32_t y);
 
 /**
- * @brief Whether the dither discards a cell's pixel for a fade: the pixel is kept when its threshold is above the fade, or
- *        with the mirrored pattern (@p isInverted) when 1 - its threshold is at least the fade. Either way a fade of k/16
- *        keeps 16 - k of every 16 pixels, and a draw at fade p and an inverted one at 1 - p keep complementary pixels.
+ * @brief Whether the dither discards a cell's pixel: the pixel is kept only when its threshold is above the draw's fade
+ *        and its part of a LOD cross-fade keeps it (the outgoing LOD where the threshold is above the progress, the
+ *        incoming LOD where it is at or below it). A fade of k/16 keeps 16 - k of every 16 pixels; at any progress the
+ *        outgoing and the incoming LOD keep complementary pixels, and the fade removes its pixels from both.
  * @param fade The draw's fade (0 keeps every pixel, 1 none).
- * @param isInverted Whether the draw uses the mirrored pattern (T11's incoming LOD).
+ * @param lodProgress The LOD cross-fade's progress: the share of the pixels the incoming LOD takes (0 for a draw that is
+ *        not part of a cross-fade).
+ * @param isIncomingLod Whether the draw is the incoming LOD of a cross-fade.
  * @param x The cell's column.
  * @param y The cell's row.
  * @returns true when the pixel is discarded.
  */
-bool WorldVisibility_IsDitherDiscarded(float fade, bool isInverted, uint32_t x, uint32_t y);
+bool WorldVisibility_IsDitherDiscarded(float fade, float lodProgress, bool isIncomingLod, uint32_t x, uint32_t y);
 
 
 // Functions: the lists.

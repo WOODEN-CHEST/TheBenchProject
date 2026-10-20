@@ -1,7 +1,7 @@
 {
     "format_version": 1,
     "name": "test",
-    "next_object_id": 25,
+    "next_object_id": 33,
     "environment": {},
     "objects": [
         {
@@ -278,6 +278,90 @@
                     "world_sprite": "test_tree",
                     "overrides_flip_x": true,
                     "flip_x": true
+                }
+            }
+        },
+        {
+            "id": 25,
+            "name": "lod_test_1",
+            "position": [8.0, 0.55, -6.0],
+            "components": {
+                "model": {
+                    "world_model": "lod_test"
+                }
+            }
+        },
+        {
+            "id": 26,
+            "name": "lod_test_2",
+            "position": [8.0, 0.55, -3.0],
+            "components": {
+                "model": {
+                    "world_model": "lod_test"
+                }
+            }
+        },
+        {
+            "id": 27,
+            "name": "lod_test_3",
+            "position": [8.0, 0.55, 0.0],
+            "components": {
+                "model": {
+                    "world_model": "lod_test"
+                }
+            }
+        },
+        {
+            "id": 28,
+            "name": "lod_test_4",
+            "position": [8.0, 0.55, 3.0],
+            "components": {
+                "model": {
+                    "world_model": "lod_test"
+                }
+            }
+        },
+        {
+            "id": 29,
+            "name": "lod_test_5",
+            "position": [8.0, 0.55, 6.0],
+            "components": {
+                "model": {
+                    "world_model": "lod_test"
+                }
+            }
+        },
+        {
+            "id": 30,
+            "name": "lod_test_6",
+            "position": [8.0, 0.55, 9.0],
+            "components": {
+                "model": {
+                    "world_model": "lod_test"
+                }
+            }
+        },
+        {
+            "id": 31,
+            "name": "lod_test_forced",
+            "position": [9.3, 0.55, 0.0],
+            "components": {
+                "model": {
+                    "world_model": "lod_test",
+                    "is_lod_forced": true,
+                    "forced_lod": 2
+                }
+            }
+        },
+        {
+            "id": 32,
+            "name": "lod_test_own_distances",
+            "position": [9.3, 0.55, 3.0],
+            "components": {
+                "model": {
+                    "world_model": "lod_test",
+                    "overrides_lod_distances": true,
+                    "lod_distances": [3.0, 6.0, 60.0]
                 }
             }
         }

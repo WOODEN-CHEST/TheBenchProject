@@ -1,26 +1,33 @@
-// The dithered fade of the world's geometry shaders, for #include "common/dither". A draw's fade runs from 0 (solid) to
-// 1 (gone): the draw keeps a matching share of its pixels, chosen by a 4x4 ordered (Bayer) pattern on the scene's pixel
-// grid. A fading or half-transparent object then looks like pixel-art dithering and keeps its depth and its shadow (the
-// shadow passes dither too); nothing needs sorting or blending. The renderer uses it for the draw-distance fade and the
-// object's opacity; T11 draws two LODs at once, the outgoing one at fade p and the incoming one at fade 1 - p with the
-// mirrored pattern (ditherInvert), so every pixel is drawn by exactly one of them.
+// The dithered fades of the world's geometry shaders, for #include "common/dither". A pixel is drawn only where two masks
+// keep it, both from one 4x4 ordered (Bayer) pattern on the scene's pixel grid, so a fading or half-transparent object
+// looks like pixel-art dithering and keeps its depth and its shadow (the shadow passes dither too); nothing needs sorting
+// or blending:
+// - the draw's fade (ditherFade: its draw distance, its opacity) from 0 (solid) to 1 (gone): the draw keeps the pixels
+//   whose threshold lies above it;
+// - the LOD cross-fade (T11): while an object swaps LODs both are drawn, and the incoming LOD takes the share of the
+//   pixels given by the fade's progress (ditherLodProgress): it keeps the pixels whose threshold is at or below the
+//   progress (ditherIsIncomingLod), the outgoing LOD the others. The two compare the same value, so every pixel is drawn
+//   by exactly one of them; the draw's fade then removes its pixels from both alike. A LOD drawn alone has progress 0
+//   and is not the incoming one: it keeps every pixel.
 //
 // The formula (agents/WorldRuntime.md, "Visibility"; source/WorldVisibility.c is its C mirror for the tests):
 //   cell      = floor(gl_FragCoord.xy / ditherPixelScale), each coordinate mod 4 (x from the left, y from the bottom row
 //               of the target)
 //   threshold = (DITHER_BAYER[cell.y*4 + cell.x] + 0.5) / 16
-//   covered   = invert ? (1 - threshold >= fade) : (threshold > fade)
-//   discard   = !covered
-// Either way a fade of 0 keeps every pixel, 1 none, and k/16 keeps 16 - k pixels of every 4x4 block; a draw at fade p and
-// an inverted one at fade 1 - p keep exactly complementary pixels.
+//   keptByFade = threshold > fade
+//   keptByLod  = isIncomingLod ? (threshold <= lodProgress) : (threshold > lodProgress)
+//   discard    = !(keptByFade && keptByLod)
+// A fade of 0 keeps every pixel, 1 none, and k/16 keeps 16 - k pixels of every 4x4 block; a LOD progress of k/16 gives
+// the incoming LOD k pixels of every block and the outgoing one the other 16 - k.
 //
 // Test it last in a shader that takes derivatives or samples mipmapped textures (after those), so they stay defined for
 // the pixels that are drawn.
 
-uniform float ditherFade;      // this draw's fade: 0 solid .. 1 gone
-uniform bool ditherInvert;     // the mirrored pattern (the incoming LOD of a cross-fade, at 1 - the outgoing's fade)
-uniform vec2 ditherPixelScale; // this pass's pixels per scene pixel: 1 at the scene's resolution (and in the shadow maps,
-                               // on their texel grid), window / scene in the crisp overlay
+uniform float ditherFade;         // this draw's fade (its draw distance, its opacity): 0 solid .. 1 gone
+uniform float ditherLodProgress;  // its LOD cross-fade's progress: the share of the pixels the incoming LOD takes
+uniform bool ditherIsIncomingLod; // whether this draw is the incoming LOD (it keeps the pixels the outgoing one leaves)
+uniform vec2 ditherPixelScale;    // this pass's pixels per scene pixel: 1 at the scene's resolution (and in the shadow
+                                  // maps, on their texel grid), window / scene in the crisp overlay
 
 // The 4x4 Bayer matrix, row by row, the first row at the target's bottom.
 const float DITHER_BAYER[16] = float[16](
@@ -36,10 +43,11 @@ float DitherThreshold()
     return (DITHER_BAYER[cell.y*4 + cell.x] + 0.5)/16.0;
 }
 
-// Whether this fragment is discarded for a fade, with the normal or the mirrored pattern.
-bool DitherDiscard(float fade, bool invert)
+// Whether this fragment is discarded: the draw's fade or its part of a LOD cross-fade removes it.
+bool DitherDiscard()
 {
     float threshold = DitherThreshold();
-    bool isCovered = invert ? ((1.0 - threshold) >= fade) : (threshold > fade);
-    return !isCovered;
+    bool isKeptByFade = threshold > ditherFade;
+    bool isKeptByLod = ditherIsIncomingLod ? (threshold <= ditherLodProgress) : (threshold > ditherLodProgress);
+    return !(isKeptByFade && isKeptByLod);
 }

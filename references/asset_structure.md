@@ -542,11 +542,11 @@ default setting of this file for that one placement: an explicit override flag n
 
 | Key | Value | Meaning |
 |---|---|---|
-| `lods` | 1 to 8 `{ "model", "max_distance" }` | The models to draw, the finest first. `model` is a model asset's name; `max_distance` (metres, above 0, rising strictly from one LOD to the next) is how far that LOD is used, at the default 60-degree field of view. Past the last one the last LOD keeps drawing until the draw distance. Until LOD switching arrives (task T11) every object draws LOD 0. Every LOD should share the same origin, axes, scale and material slots. |
+| `lods` | 1 to 8 `{ "model", "max_distance" }` | The models to draw, the finest first. `model` is a model asset's name; `max_distance` (metres, above 0, rising strictly from one LOD to the next) is how far that LOD is used, at the default 60-degree field of view. Past the last one the last LOD keeps drawing until the draw distance. A placement may give its own distances, scale them or force a LOD (`references/world_structure.md`, the model block); the player's `lod_distance_scale` (`config.json`) multiplies them, and a narrower field of view (zooming in) picks finer LODs. Every LOD should share the same origin, axes, scale and material slots. |
 | `draw_distance` | metres | How far objects of this world model are seen: at least the last LOD's `max_distance`; left out, it is that distance. The player's `draw_distance_scale` (`config.json`) multiplies it unless it is fixed, and a narrower field of view (zooming in) pushes it out. Over its last tenth (at least 3 m) the object dithers away. |
 | `is_draw_distance_fixed` | boolean | true: the player's `draw_distance_scale` leaves the draw distance as it is (landmarks, gameplay-critical props). |
-| `lod_fade_seconds` | seconds, >= 0 | How long a LOD cross-fade takes (T11); 0 swaps at once. |
-| `lod_hysteresis` | in [0, 1) | A LOD switches to a coarser one at its switch distance x (1 + h) and back at x (1 - h), so an object standing at a boundary does not flicker (T11). |
+| `lod_fade_seconds` | seconds, >= 0 | How long a LOD cross-fade takes: both LODs are drawn with complementary pixel dithers meanwhile; 0 swaps at once. |
+| `lod_hysteresis` | in [0, 1) | A LOD switches to a coarser one at its switch distance x (1 + h) and back at x (1 - h), so an object standing at a boundary does not flicker. |
 | `render` | object | The default render settings of the placements: `has_outline` (default true: a 1-pixel outline), `omit_pixelation` (default false: true draws it at full resolution over the pixelated image, for readable screens), `shadow_tier` (`both` (default), `near`: only the sharp near shadow, for small props, `far`: only the coarse far one, for big objects) and `casts_shadows` (default true). |
 | `variants` | at most 64 `{ "name", "material_overrides" }` | Other looks of the same meshes (dark wood, a red car). `name`: `[a-z][a-z0-9_.-]*`, at most 128 bytes, unique in the world model. `material_overrides` (optional; at most 32, one per slot): what the variant changes in each material slot, below. A placed object picks one with `uses_variant` and `variant`. |
 | `bounds` | `{ "center": [x, y, z], "radius": metres >= 0 }` | The bounding sphere culling and draw distances use, in the object's own space (after each LOD's import transform). Left out, it is the sphere around LOD 0's mesh bounds. |
@@ -572,8 +572,10 @@ usual forms, see "Common data structures".) The LOD models and variant textures 
 one fails the load (logged once, like every load failure) and the objects using it draw nothing.
 
 The test world's world models are in `world_models/test_world/`: `test`, `pbr_demo` and `pbr_metal`, one LOD each, the
-model of the same name, seen 600 m (the draw distance every model had before world models), and `painted_cube`, the test
-cube with two variants, `red` and `blue` (tints only).
+model of the same name, seen 600 m (the draw distance every model had before world models), `painted_cube`, the test
+cube with two variants, `red` and `blue` (tints only), and `lod_test`, three LODs of a sphere switching at 13 and 16 m and
+seen 60 m: the placeholder models `lod_test_lod0` to `lod_test_lod2` (`models/placeholder_lod_test/`, UV spheres of
+radius 0.5 m at 32x16, 16x8 and 8x4 segments).
 
 
 ## World sprites.

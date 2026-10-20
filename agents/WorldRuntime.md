@@ -11,7 +11,8 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | GameCamera | `include/GameCamera.h`, `source/GameCamera.c` | The 3D camera (position/fov/yaw/pitch/roll), converted to a raylib Camera3D only at render time. |
 | Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, the key registry, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
-| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, the LOD drawn, the variant and the settings in effect; sprites with their world sprites' settings in effect; lights), built from the world's per-type component arrays. |
+| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, their LOD state, the variant and the settings in effect; sprites with their world sprites' settings in effect; lights), built from the world's per-type component arrays. |
+| WorldLod | `source/WorldLod.h`, `source/WorldLod.c` (private) | Levels of detail as pure maths (see "LODs"): the LOD selection by distance with hysteresis, the scale and a forced LOD, and the cross-fade's state and its two draws. |
 | WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
@@ -57,16 +58,18 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
   model user, which loads its LOD models and variant textures with it); when the component's revision changes the name
   is hashed again, and the world model is resolved again only if the name changed. A failed resolution is logged once
   (`WorldRenderer: object N ("name") draws nothing: world model ...`) and not retried until the name changes. The entry
-  draws the world model's **LOD 0** (`Model`; T11 picks the LOD by distance) and resolves the component's **variant** to
+  keeps its **LOD state** across frames (`Lod`, see "LODs"; started afresh when the world model is resolved again) and
+  resolves the component's **variant** to
   an index (`HasVariant`, `VariantIndex`) with the world model, and again when `uses_variant` or `variant` changes (an
   entry is carried over to a replacing component only when it was resolved for the same world model and variant); an
   unknown variant draws the model's own materials and is logged once (`... draws world model "x" with its own
   materials: it has no variant "y".`). Each frame the entry takes the **settings in effect**
   (`WorldModelComponent_ResolveSettings`: the world model's, or the placement's own while their override flags are on:
   outline, crisp, shadow tier, casts shadows, the draw distance times the multiplier, and whether it is fixed), gets the
-  final transform (LOD 0's import transform inside the object's world matrix, `WorldObject_GetWorldMatrix`: scale →
-  Euler XYZ → translation, raylib's `DrawModelEx` convention, times its parents'; read without writing to the world, a
-  dirty one computed on the fly) and a conservative world bounding sphere: the world model's (its `bounds`, or the
+  object's world matrix (`WorldObject_GetWorldMatrix`: scale → Euler XYZ → translation, raylib's `DrawModelEx`
+  convention, times its parents'; read without writing to the world, a dirty one computed on the fly; each LOD is drawn
+  with its own import transform inside it, `WorldRenderModel_GetLodTransform`) and a conservative world bounding sphere:
+  the world model's (its `bounds`, or the
   sphere around LOD 0's mesh bounds, computed once at load) moved by its bounds transform (identity, or LOD 0's import
   transform) composed with the world matrix and scaled by that product's `WorldTransform_GetMaxScale` (never below the
   true stretch: the longest axis, bit for bit, for an unturned object; an ulp or so more for a turned one with an
@@ -74,8 +77,8 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
   longest axis fell short), and `IsDrawn`: its world model resolved and its object
   effectively enabled and visible (`WorldObject_IsEffectivelyEnabled` / `_IsEffectivelyVisible`: a disabled or hidden
   ancestor counts). Passes draw only the `IsDrawn` entries; a hidden object keeps its entry and its world model. Every
-  pass draws a model through `WorldRendererGeometry_DrawModel`, which applies the entry's variant to the per-draw
-  material copy (`WorldModel_ApplyVariant`) before the lit pass uploads the copy's factors.
+  pass draws a model one LOD at a time through `WorldRendererGeometry_DrawModel`, which applies the entry's variant to
+  the per-draw material copy (`WorldModel_ApplyVariant`) before the lit pass uploads the copy's factors.
 - **Sprites:** the sprites of effectively enabled and visible objects whose playback instance has a frame: the current
   frame and its area in its texture (normalized: the shaders' `uvRect`), the quad before a viewer turns it
   (`SpriteShape`: the orientation, the object's world position and rotation axes, the world size from the frame's
@@ -139,12 +142,14 @@ are rebuilt every frame without allocating once grown; each entry also gets its 
   outline and the AO switch off once, at mid-fade. The outline pass reads the G-buffer's depth for the same reason.
 - **The dither** (`shaders/common/dither.glsl`, included by every world geometry shader: `world_pbr`, `world_normal`,
   `world_depth`, `world_cube_depth`, `world_sprite`, `world_normal_sprite`, `world_sprite_depth`,
-  `world_sprite_cube_depth`). Uniforms `ditherFade` (this draw's fade: 0 solid .. 1 gone), `ditherInvert` (the mirrored
-  pattern: T11's incoming LOD) and `ditherPixelScale` (the pass's pixels per scene pixel: 1 in the scene-resolution
-  passes and in the shadow maps, on their texel grid; window / scene in the crisp overlay), uploaded per draw (once per
-  object for models: their meshes share it); `WorldRendererCommon_PrepareDither` caches them and uploads the defaults at
-  load. The formula, which `WorldVisibility_GetDitherCell`, `WorldVisibility_GetDitherThreshold` and
-  `WorldVisibility_IsDitherDiscarded` mirror in C for the tests:
+  `world_sprite_cube_depth`; each tests `DitherDiscard()` once). Uniforms `ditherFade` (this draw's fade: 0 solid .. 1
+  gone), `ditherLodProgress` and `ditherIsIncomingLod` (its part of a LOD cross-fade, T11: the share of the pixels the
+  incoming LOD takes, and whether this draw is that LOD; 0 and false for every other draw) and `ditherPixelScale` (the
+  pass's pixels per scene pixel: 1 in the scene-resolution passes and in the shadow maps, on their texel grid; window /
+  scene in the crisp overlay), uploaded per draw (once per LOD for models: its meshes share it);
+  `WorldRendererCommon_PrepareDither` caches them and uploads the defaults at load, `WorldRendererCommon_SetDither` sets
+  all of them for every draw. The formula, which `WorldVisibility_GetDitherCell`, `WorldVisibility_GetDitherThreshold`
+  and `WorldVisibility_IsDitherDiscarded` mirror in C for the tests:
 
   ```
   BAYER (rows from the target's bottom row, gl_FragCoord's origin):
@@ -152,15 +157,18 @@ are rebuilt every frame without allocating once grown; each entry also gets its 
       12  4 14  6
        3 11  1  9
       15  7 13  5
-  cell      = floor(gl_FragCoord.xy / max(ditherPixelScale, 1)), each coordinate mod 4
-  threshold = (BAYER[cell.y][cell.x] + 0.5) / 16
-  covered   = ditherInvert ? (1 - threshold >= fade) : (threshold > fade)
-  discard   = !covered
+  cell       = floor(gl_FragCoord.xy / max(ditherPixelScale, 1)), each coordinate mod 4
+  threshold  = (BAYER[cell.y][cell.x] + 0.5) / 16
+  keptByFade = threshold > fade
+  keptByLod  = isIncomingLod ? (threshold <= lodProgress) : (threshold > lodProgress)
+  discard    = !(keptByFade && keptByLod)
   ```
 
-  With either pattern a fade of k/16 keeps 16 - k pixels of every 4x4 block (half a fade is a checkerboard), and a draw
-  at fade p with the normal pattern and one at fade 1 - p with the mirrored pattern keep exactly complementary pixels:
-  T11's two LODs mid cross-fade (the outgoing at its progress p, the incoming at 1 - p, inverted) cover every pixel once.
+  A fade of k/16 keeps 16 - k pixels of every 4x4 block (half a fade is a checkerboard). The two LODs of a cross-fade
+  compare the same progress from both sides, so they keep exactly complementary pixels at every progress (the incoming
+  one k of 16 at k/16), and the draw's fade removes its pixels from both alike: the object as a whole shows its fade,
+  each of its pixels drawn by one LOD. (T07 had planned the incoming LOD as a mirrored pattern at fade 1 - p; computing
+  1 - p in floats drew a few pixels twice right next to the pattern's thresholds, so T11 compares the progress itself.)
   In the crisp overlay every window pixel of one scene pixel gets that scene pixel's cell, so its dither sits on the same
   pixel grid as the rest.
   Shaders that take derivatives or sample mipmapped textures test it after those (the PBR shader last), so they stay
@@ -169,11 +177,48 @@ are rebuilt every frame without allocating once grown; each entry also gets its 
   off: everything within its draw distance is drawn, as before culling existed, and the image must not change. The
   draw distances, fades and the cube's reach stay.
 - **Status.** The status line (after the first render, the I key) gives what the camera's passes drew (models, sprites,
-  how many of them fading), how many entries lay outside the view, and how many faded out (beyond their draw distance
-  or fully transparent).
+  how many of them fading; the models by LOD and how many cross-fade), how many entries lay outside the view, and how
+  many faded out (beyond their draw distance or fully transparent).
 - **Known limits.** The cube shadow of a fading object is grainy: its 20-tap PCF spreads over about 17 texels and samples
   the dither pattern unevenly (the cascades' 2x2 PCF always takes one texel of each quarter of the pattern, so their
   shadows thin smoothly). The far plane is extracted from a float matrix, about 10 m uncertain at 4 km.
+
+### LODs (T11)
+
+Every model draws one of its world model's LODs ([WorldModels.md](WorldModels.md), "LODs"), picked each frame by
+`WorldRenderCache_UpdateLods` (right after the frame is built, before the visibility) with the pure maths of the private
+`source/WorldLod.{h,c}` (tested in `tests/WorldLodTests.c`):
+- **Selection** (`WorldLod_Select`): the camera's distance to the entry's bounding-sphere centre times the zoom factor,
+  against the placement's switch distances in effect (`WorldModelComponent_ResolveLodSettings`) times the config's
+  `lod_distance_scale`: LOD i below switch distance i, the last LOD past the last boundary. From the LOD it shows (or
+  heads to, `WorldLodState_GetDestinationLod`) an object moves coarser only at a switch distance x (1 + h) and back only
+  below x (1 - h), h the world model's `lod_hysteresis`. A forced LOD is taken as it is. Chosen afresh (no hysteresis)
+  for an entry's first frame.
+- **The cross-fade** (`WorldLodState`, per cache entry: `CurrentLod` the LOD a fade started from, `TargetLod` the one it
+  started toward, `Progress` the second one's share, `IsReturning`): a new LOD starts a fade that moves by the frame's
+  real seconds over the world model's `lod_fade_seconds` (0 swaps at once; a frame without time holds it). Changes
+  during a fade never pop back: when the selection returns to the LOD the fade started from (the camera turns back
+  within the fade, Z pressed twice), the fade runs back (`IsReturning`, the share falls) and every pixel keeps its LOD
+  at the turn; a third LOD keeps the LOD with the larger share and fades from it to the new one (the other LOD's pixels,
+  at most half, switch at once; never three LODs). An entry that is not drawn (no world model, hidden or disabled)
+  starts afresh, so it appears at its LOD at once when drawn again; entries outside the view or beyond their draw
+  distance still update (their shadows use their LOD).
+- **In the passes:** the scene and the crisp overlay draw both LODs of a fade (`WorldLodState_GetDraws`) with
+  complementary dither masks (see "Visibility", the dither): every pixel is drawn by one of them and the background
+  never shows; the object's lights are uploaded once for both. The G-buffer draws the LOD with the larger share
+  (`WorldLodState_GetSolidLod`: the incoming one from half the fade on), solid, as T07's rule draws a fading object
+  solid; the shadow cascades and the cube shadow draw the LOD the object heads to (`WorldLodState_GetShadowLod`), solid
+  (only the object's own fade dithers them), so a shadow changes once per change and never shimmers. Without the PBR
+  shader (raylib's default shader, no dither) the larger share is drawn alone.
+- **LOD tinting** (`WorldRenderer_SetLodTintingEnabled`, Q in the test frame): every LOD's debug colour multiplied into
+  its albedo (LOD 0 white, i.e. its own colours, 1 green, 2 yellow, 3 red, coarser magenta), and LODs past 0 glow
+  faintly in it (`LOD_TINT_GLOW_INTENSITY`, a linear emission: the eye's night vision greys reflected colour, not
+  emitted light, so the colours read at night too). Off by default; the status line says when it is on.
+- A placement whose own LOD list no longer fits its world model gets the world model's distances and one warning, logged
+  when that starts: `WorldRenderer: object 12 ("lamp") uses its world model "street_lamp"'s LOD distances: its own
+  lod_distances holds 2, the world model has 3 LODs.`
+- **Not built:** impostors (a sprite as the last LOD; a `// TODO:` in `WorldModel.h`). The renderer keeps one LOD state
+  per model, for its one camera: a second view of the same world (a mirror, a security camera) would need its own.
 
 ### Pipeline (one `WorldRenderer_RenderToTarget`)
 
@@ -186,7 +231,8 @@ are rebuilt every frame without allocating once grown; each entry also gets its 
    the two lights' intensities and the shadow light with its fade), the stars' rotation (`StarsToWorld`), the render
    clock (`TimeSeconds`), sizes, the night sky values (`WorldRendererSky_PrepareFrame`: limiting magnitude, Milky Way
    radiance, skyglow, the moonlit sky's strength and the moon's disc; first the star catalogue is rebuilt if the
-   world's seed or density changed, and the sky textures reloaded if the world names others), and every pass decision:
+   world's seed or density changed, and the sky textures reloaded if the world names others), every model's LOD and its
+   cross-fade (`WorldRenderCache_UpdateLods`, see "LODs"), and every pass decision:
    first which shadow passes run (`DecideShadows`) and their light matrices (`WorldRendererShadows_PrepareFrame`: both
    cascades' view, projection and box, the cube shadow's lamp and far range), then the frame's visibility (what every
    pass draws, see "Visibility"), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
@@ -197,13 +243,13 @@ are rebuilt every frame without allocating once grown; each entry also gets its 
    and each sprite's matrices (`WorldRendererSprites_PrepareFrame`: facing the camera, facing the cascades' light and the
    cube shadow's lamp while those run) with the blended and additive sprites sorted back to front.
 4. The shadow cascades of the shadow light (the sun or the moon), then the point-light cube shadow, each drawing its
-   visibility list (the casters in its box; within the light's reach). Models and cutout sprites cast; sprites turned
-   toward the light; each caster dithered by its fade.
-5. The normal/flag G-buffer (the camera's models and cutout sprites, solid below half their fade) and the AO pre-pass,
-   when AO or outlines run.
+   visibility list (the casters in its box; within the light's reach). Models (the LOD they show or fade to) and cutout
+   sprites cast; sprites turned toward the light; each caster dithered by its fade.
+5. The normal/flag G-buffer (the camera's models, the LOD with the larger share, and cutout sprites, solid below half
+   their fade) and the AO pre-pass, when AO or outlines run.
 6. The scene pass: clear, atmospheric sky (with the moonlit sky, the moon's disc, the Milky Way and light pollution's
-   skyglow), the stars (none behind the moon), debug grid, the camera's PBR models (each dithered by its fade; the sun and
-   the moon; per object: up to
+   skyglow), the stars (none behind the moon), debug grid, the camera's PBR models (each dithered by its fade, both LODs
+   of a cross-fade with complementary dithers; the sun and the moon; per object: up to
    `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), the camera's lit sprites
    (the cutout ones, then decals, then blended and additive ones back to front) and light gizmos. The sky's glow and the
    models' and lit sprites' reflected light go through the eye's night vision.
@@ -465,7 +511,7 @@ get no AO and no outlines.
 | `WorldRendererInternal.h` | The renderer state (one state struct per pass), `WorldRenderFrame`, fixed texture units, shared constants, and every internal function, documented. |
 | `WorldRendererCommon.c` | Config multipliers, colour conversion, shader loading, one-time warnings, render-target constructors. |
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
-| `WorldRendererGeometry.c` | Model meshes with per-draw materials, light gizmos, the pixelation filter. |
+| `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes), the LOD tinting, light gizmos, the pixelation filter. |
 | `WorldRendererSprites.c` | The sprites: the unit quad, the lit sprite shader, each frame's sprite matrices (camera, cascades' light, cube's lamp) and transparent draw order, the lit cutout / decal / sorted transparent draws. The G-buffer and shadow passes draw sprites with this file's quad and matrices. |
 | `WorldRendererLighting.c` | The PBR shader and its location table, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: the PBR and the sprite shader, the night vision's among them), forward point lights, per-material factors, eye adaptation. |
 | `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow (models, and cutout sprites through alpha-tested depth shaders). |
@@ -475,6 +521,7 @@ get no AO and no outlines.
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
 | `WorldRendererCrisp.c` | The crisp overlay. |
 | `WorldVisibility.c` (with the cache, not a pass) | The frame's visibility lists (per pass, the entries it draws, and every entry's fades) and the dither's C mirror; see "Visibility". |
+| `WorldLod.c` (with the cache, not a pass) | LOD selection and the cross-fade's state; the cache's `WorldRenderCache_UpdateLods` runs it per entry; see "LODs". |
 
 The renderer keeps receiving features, so:
 
@@ -520,7 +567,8 @@ and the blend into their grey; used by `world_sky` and `common/lighting`), `comm
 uniforms, the BRDF and its wrapped variant, the cascades' shadow, point lights and the cube shadow, the screen AO, the
 night vision and the fog; used by `world_pbr` and `world_sprite`), `common/distance_packing` (the cube shadow's
 packed distance; used by `world_cube_depth`, `world_sprite_cube_depth` and `common/lighting`) and `common/dither` (the
-dithered fade; used by every world geometry shader, see "Visibility"). Put new shared lighting or noise code there
+dithered fades: the draw's fade and its part of a LOD cross-fade; used by every world geometry shader, see
+"Visibility"). Put new shared lighting or noise code there
 instead of copying it between shaders.
 
 ## WorldTestFrame
@@ -544,8 +592,10 @@ an empty object turned 15 degrees that holds its parts (`desk_top` and two `desk
 shadow) 0.35 lamp units above the post's centre (0.28 m: a child's position is in its parent's scaled space). Its
 world models (T10): two cubes behind the centre row, `variant_cube_left` (red) and `variant_cube_right` (blue), show the
 `painted_cube` world model's two variants; the crisp cube and the shadow tiers of the PBR demo cubes, the cup and the
-lamp are placement overrides (`overrides_omit_pixelation`, `overrides_shadow_tier`). Edit the file and restart to
-change the test world. Its `Update` runs the tick's animation step: it advances the sprites of
+lamp are placement overrides (`overrides_omit_pixelation`, `overrides_shadow_tier`). Its LODs (T11): a row of six
+`lod_test` spheres (`lod_test_1` to `_6`, ids 25 to 30) along the left edge of the ground, at x = 8 from z = -6 to 9,
+switching at 13 and 16 m, and beside it `lod_test_forced` (id 31, LOD 2 forced) and `lod_test_own_distances` (id 32, its
+own switch distances 3 and 6 m). Edit the file and restart to change the test world. Its `Update` runs the tick's animation step: it advances the sprites of
 effectively enabled objects (`World_GetComponents(world, WorldComponentType_Sprite)`) and slides the desk while J has it
 sliding (around the X it was loaded at); then, last, `World_UpdateTransforms` (the tick's world-matrix step), so the
 renderer reads cached matrices.
@@ -579,7 +629,9 @@ debug keys as raw keys:
 - **the world models (T10):** E steps the two variant cubes through their variants: their own (red and blue), swapped,
   then none (`uses_variant` off: the model's own white), through the component's setters, so the cache resolves the
   variants again (logged); Z zooms the camera to a 15-degree view and back (logged): the zoom factor then lets the draw
-  distances of models and (since T26) sprites reach about 4.4 times as far;
+  distances of models and (since T26) sprites, and the LOD distances (T11), reach about 4.4 times as far;
+- **the LODs (T11):** Q toggles the LOD tinting (logged): every model takes its LOD's colour (0 white, 1 green, 2 yellow,
+  3 red, coarser magenta; LODs past 0 glow faintly, for the night), to watch the switches along the `lod_test` row;
 - **the world file (T09):** F5 saves the live world next to the test world, as `worlds/test.saved.world.json` and
   `worlds/test.saved.world.ghdf` (atomically; each logged with its path, gitignored), for round-trip checks: saved at
   noon with nothing changed (2, then F5) the JSON is the shipped file byte for byte; otherwise its diff against

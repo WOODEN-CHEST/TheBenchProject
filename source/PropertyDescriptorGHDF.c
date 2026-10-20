@@ -108,6 +108,34 @@ static Error PutRenderColor(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEn
     return Result;
 }
 
+/* A Float array of the list's values (empty for the empty list). */
+static Error PutFloatList(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id, const PropertyFloatList* list)
+{
+    GHDFArray* Array = NULL;
+    Error Result = GHDFObjectPool_BorrowArray(pool, GHDFValueType_Float, &Array);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    const float* Values = PropertyFloatList_GetValues(list);
+    for (size_t Index = 0; (Index < PropertyFloatList_GetCount(list)) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        GHDFObjectValue Element = GHDFObjectValue_CreateFloat(Values[Index]);
+        Result = GHDFArray_AddValue(Array, &Element);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        GHDFObjectValue ArrayValue = GHDFObjectValue_CreateArray(Array, GHDFValueType_Float);
+        Result = GHDFCompound_SetValue(compound, id, GHDF_CreateArrayType(GHDFValueType_Float), &ArrayValue);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = GHDFObjectPool_ReturnArray(pool, Array, true);
+        Error_Deconstruct(&ReturnResult);
+    }
+    return Result;
+}
+
 /* A Compound array of the map's entries (see DataMap.h). */
 static Error PutDataMap(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id, const DataMap* map)
 {
@@ -174,6 +202,8 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
             return PutScalar(compound, Id, GHDFObjectValue_CreateEncodedInteger((int64_t)data->EnumValue));
         case PropertyType_DataMap:
             return PutDataMap(pool, compound, Id, data->DataMapValue);
+        case PropertyType_FloatList:
+            return PutFloatList(pool, compound, Id, data->FloatListValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -322,6 +352,48 @@ static Error ReadDataMap(GHDFCompound* compound, const PropertyDescriptor* descr
     return Error_CreateSuccess();
 }
 
+/* A float list from its Float array, its length checked before anything is allocated (the values' rules are checked when
+ * the read commits); an empty array is the empty list. */
+static Error ReadFloatList(GHDFCompound* compound, const PropertyDescriptor* descriptor, void* target)
+{
+    GHDFObjectValue Entry;
+    bool IsFound = false;
+    Error Result = GHDFCompound_GetOptionalVerified(compound, (GHDFEntryID)descriptor->WireId,
+        GHDF_CreateArrayType(GHDFValueType_Float), &Entry, &IsFound);
+    if ((Result.Code != ErrorCode_Success) || !IsFound)
+    {
+        return Result;
+    }
+    size_t Count = GHDFArray_GetElementCount(Entry.Value.Array);
+    if (Count > descriptor->Rules.MaxCount)
+    {
+        return Error_Construct4(ErrorCode_Deserialize, "The list has %" PRIu64 " values; at most %" PRIu64
+            " are allowed.", (uint64_t)Count, (uint64_t)descriptor->Rules.MaxCount);
+    }
+    if (Count == 0U)
+    {
+        PropertyInternal_AdoptOwned(descriptor, target, NULL);
+        return Error_CreateSuccess();
+    }
+    PropertyFloatList* List = PropertyInternal_AllocateFloatList(Count);
+    for (size_t Index = 0; (Index < Count) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        GHDFObjectValue Element = { .Type = GHDFValueType_None };
+        Result = GHDFArray_Get(Entry.Value.Array, Index, &Element);
+        if (Result.Code == ErrorCode_Success)
+        {
+            List->_values[Index] = Element.Value.Float;
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        PropertyFloatList_Destroy(List);
+        return Result;
+    }
+    PropertyInternal_AdoptOwned(descriptor, target, List);
+    return Error_CreateSuccess();
+}
+
 /* Reads a scalar entry of @p type into *outEntry; *outFound false when absent, and on an error. */
 static Error GetScalar(GHDFCompound* compound, GHDFEntryID id, GHDFValueType type, GHDFObjectValue* outEntry,
     bool* outFound)
@@ -415,6 +487,8 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
             return Result;
         case PropertyType_DataMap:
             return Error_Construct2(ErrorCode_InvalidState, "Data maps are read separately.");
+        case PropertyType_FloatList:
+            return Error_Construct2(ErrorCode_InvalidState, "Float lists are read separately.");
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -426,6 +500,10 @@ static Error ReadEntry(const PropertyTable* table, GHDFCompound* compound, const
     if (descriptor->Type == PropertyType_DataMap)
     {
         Result = ReadDataMap(compound, descriptor, options, target);
+    }
+    else if (descriptor->Type == PropertyType_FloatList)
+    {
+        Result = ReadFloatList(compound, descriptor, target);
     }
     else if (PropertyInternal_IsStringType(descriptor->Type))
     {

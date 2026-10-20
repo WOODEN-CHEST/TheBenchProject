@@ -16,7 +16,7 @@ out vec4 finalColor;
 
 void main()
 {
-    if ((texture(texture0, fragTexCoord).a < alphaCutoff) || DitherDiscard(ditherFade, ditherInvert))
+    if ((texture(texture0, fragTexCoord).a < alphaCutoff) || DitherDiscard())
     {
         discard;
     }

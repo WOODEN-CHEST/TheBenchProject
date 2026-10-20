@@ -411,8 +411,8 @@ static bool BayerMatchesTheMirror(const GenericBuffer* text)
 }
 
 /* Every geometry shader of the world (models and sprites; the scene, the G-buffer, the cascades and the cube shadow)
- * dithers through the one shared include and tests it once, and the include's Bayer matrix is the one the C mirror
- * (source/WorldVisibility.c) and the tests use. */
+ * dithers through the one shared include (the draw's fade and its part of a LOD cross-fade) and tests it once, and the
+ * include's Bayer matrix and comparisons are the ones the C mirror (source/WorldVisibility.c) and the tests use. */
 static void ShippedGeometryShadersShareOneDither(TestRun* run)
 {
     ShaderFixture Fixture;
@@ -430,10 +430,20 @@ static void ShippedGeometryShadersShareOneDither(TestRun* run)
             if (ExpandShippedStage(run, &Fixture, Stages[Index]))
             {
                 bool HasUniforms = (CountOccurrences(&Fixture.Text, "uniform float ditherFade;") == 1U)
-                    && (CountOccurrences(&Fixture.Text, "uniform bool ditherInvert;") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "uniform float ditherLodProgress;") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "uniform bool ditherIsIncomingLod;") == 1U)
                     && (CountOccurrences(&Fixture.Text, "uniform vec2 ditherPixelScale;") == 1U);
-                bool IsTested = CountOccurrences(&Fixture.Text, "DitherDiscard(ditherFade, ditherInvert)") == 1U;
-                if (!TEST_CHECK(run, HasUniforms && IsTested
+                // The include defines it once, the shader tests it once.
+                bool IsTested = (CountOccurrences(&Fixture.Text, "DitherDiscard()") == 2U)
+                    && (CountOccurrences(&Fixture.Text, "bool DitherDiscard()") == 1U);
+                // Its comparisons are the C mirror's (WorldVisibility_IsDitherDiscarded), which the LOD tests prove
+                // complementary: a changed formula fails here until the mirror and this check change with it.
+                bool IsTheMirrorsFormula =
+                    (CountOccurrences(&Fixture.Text, "bool isKeptByFade = threshold > ditherFade;") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "bool isKeptByLod = ditherIsIncomingLod ? "
+                        "(threshold <= ditherLodProgress) : (threshold > ditherLodProgress);") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "return !(isKeptByFade && isKeptByLod);") == 1U);
+                if (!TEST_CHECK(run, HasUniforms && IsTested && IsTheMirrorsFormula
                     && BufferContains(&Fixture.SourceList, "\"common/dither\"") && BayerMatchesTheMirror(&Fixture.Text)))
                 {
                     printf("    in \"%s\"\n", Stages[Index]);

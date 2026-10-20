@@ -129,9 +129,10 @@ static bool AddCaster(GenericBuffer lists[WorldVisibilityPass_Count], const Worl
     return true;
 }
 
-/* Adds an entry that is not faded out to the camera's list when it is in view, and counts it. */
+/* Adds an entry that is not faded out to the camera's list when it is in view, and counts it. @p outIsInView (may be NULL)
+ * says whether it joined the list. */
 static bool AddToCamera(WorldVisibility* self, GenericBuffer* cameraList, const WorldVisibilityView* view,
-    Vector3 center, float radius, float fade, bool omitsPixelation, size_t index, size_t* drawnCount)
+    Vector3 center, float radius, float fade, bool omitsPixelation, size_t index, size_t* drawnCount, bool* outIsInView)
 {
     if (!IsInVolume(view, &view->CameraFrustum, center, radius))
     {
@@ -141,6 +142,10 @@ static bool AddToCamera(WorldVisibility* self, GenericBuffer* cameraList, const 
     if (!AddIndex(cameraList, index))
     {
         return false;
+    }
+    if (outIsInView != NULL)
+    {
+        *outIsInView = true;
     }
     (*drawnCount)++;
     if (fade > 0.0f)
@@ -181,10 +186,18 @@ static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, con
         return true;
     }
 
+    bool IsInView = false;
     if (!AddToCamera(self, &self->_models[WorldVisibilityPass_Camera], view, model->Center, model->Radius,
-        Fade.Combined, model->OmitsPixelation, index, &self->_counts.DrawnModelCount))
+        Fade.Combined, model->OmitsPixelation, index, &self->_counts.DrawnModelCount, &IsInView))
     {
         return false;
+    }
+    if (IsInView)
+    {
+        // By the LOD it shows or heads to (the cache's LOD update ran before this build).
+        size_t Lod = WorldLodState_GetDestinationLod(&model->Lod);
+        self->_counts.DrawnModelsByLod[(Lod < WORLD_MODEL_MAX_LODS) ? Lod : (WORLD_MODEL_MAX_LODS - 1U)]++;
+        self->_counts.LodFadingCount += WorldLodState_IsFading(&model->Lod) ? 1U : 0U;
     }
     return !model->CastsShadows || AddCaster(self->_models, view, model->Center, model->Radius,
         ModelCastsIntoCascade(model->ShadowTier, true), ModelCastsIntoCascade(model->ShadowTier, false), index);
@@ -212,7 +225,7 @@ static bool AddSprite(WorldVisibility* self, const WorldVisibilityView* view, co
     }
 
     if (!AddToCamera(self, &self->_sprites[WorldVisibilityPass_Camera], view, sprite->Shape.Position,
-        sprite->BoundsRadius, Fade.Combined, sprite->OmitsPixelation, index, &self->_counts.DrawnSpriteCount))
+        sprite->BoundsRadius, Fade.Combined, sprite->OmitsPixelation, index, &self->_counts.DrawnSpriteCount, NULL))
     {
         return false;
     }
@@ -337,11 +350,12 @@ float WorldVisibility_GetDitherThreshold(uint32_t x, uint32_t y)
     return (Value + 0.5f) / (float)WORLD_VISIBILITY_DITHER_LEVELS;
 }
 
-bool WorldVisibility_IsDitherDiscarded(float fade, bool isInverted, uint32_t x, uint32_t y)
+bool WorldVisibility_IsDitherDiscarded(float fade, float lodProgress, bool isIncomingLod, uint32_t x, uint32_t y)
 {
     float Threshold = WorldVisibility_GetDitherThreshold(x, y);
-    bool IsCovered = isInverted ? ((1.0f - Threshold) >= fade) : (Threshold > fade);
-    return !IsCovered;
+    bool IsKeptByFade = Threshold > fade;
+    bool IsKeptByLod = isIncomingLod ? (Threshold <= lodProgress) : (Threshold > lodProgress);
+    return !(IsKeptByFade && IsKeptByLod);
 }
 
 void WorldVisibility_Construct(WorldVisibility* self)

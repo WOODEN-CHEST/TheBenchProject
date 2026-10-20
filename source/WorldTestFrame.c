@@ -722,7 +722,7 @@ static void ApplyTestVariant(WorldTestFrame* frame, uint64_t objectId, const cha
 }
 
 /* The world models' debug keys: E steps the variant cubes through their variants (their own, swapped, none); Z toggles
- * a zoomed camera, whose draw distances reach farther. */
+ * a zoomed camera, whose draw distances reach farther and whose LODs are finer; Q toggles the LOD tinting. */
 static void HandleDebugModelInput(WorldTestFrame* frame, const GameInput* input)
 {
     Logger* Log = frame->_services->Logger;
@@ -751,9 +751,23 @@ static void HandleDebugModelInput(WorldTestFrame* frame, const GameInput* input)
         if (Log != NULL)
         {
             const char* What = frame->_isZoomed
-                ? "zoomed in: the draw distances of models and sprites reach about 4.4 times as far" : "zoom off";
+                ? "zoomed in: the draw distances of models and sprites, and the LOD distances, reach about 4.4 times as "
+                    "far" : "zoom off";
             Error LogResult = Logger_LogInfoFormatted(Log,
                 (const unsigned char*)u8"WorldTest: %s (a %.0f-degree view).", What, (double)frame->_camera.FovY);
+            Error_Deconstruct(&LogResult);
+        }
+    }
+    // Q colours every model by the LOD it shows (0 white, 1 green, 2 yellow, 3 red, coarser magenta), to watch the
+    // switches along the lod_test row.
+    if (GameInput_IsKeyPressed(input, GameKey_Q))
+    {
+        bool IsEnabled = !WorldRenderer_IsLodTintingEnabled(frame->_renderer);
+        WorldRenderer_SetLodTintingEnabled(frame->_renderer, IsEnabled);
+        if (Log != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(Log, (const unsigned char*)u8"WorldTest: LOD tinting %s.",
+                IsEnabled ? "ON (LOD 0 white, 1 green, 2 yellow, 3 red, coarser magenta)" : "OFF");
             Error_Deconstruct(&LogResult);
         }
     }
@@ -1014,8 +1028,9 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"P pause/resume the clock, 1-4 = dawn/noon/dusk/midnight (paused), [ ] scrub time, , . previous/next "
             u8"day, / a week ahead; F full moon / calendar moon, Y seasons; O post effects, B bloom, G sun shafts, "
             u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, N light pollution, X opacity of the "
-            u8"centre cube and the tree, U frustum culling, J slide the desk, H hide the desk, I renderer status and game "
-            u8"time, T text sample, F5 save the world (worlds/test.saved.world.json and .ghdf); M frees the "
+            u8"centre cube and the tree, U frustum culling, J slide the desk, H hide the desk, E variants, Z zoom, Q LOD "
+            u8"tinting, I renderer status and game time, T text sample, F5 save the world (worlds/test.saved.world.json "
+            u8"and .ghdf); M frees the "
             u8"mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");
         Error_Deconstruct(&LogResult);
     }

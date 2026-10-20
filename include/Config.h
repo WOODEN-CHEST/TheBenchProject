@@ -72,6 +72,10 @@ typedef struct GameConfigStruct
      *  drawn, and over the last tenth of it (at least 3 m) it dithers out. Default 1; [0, 16] like the multipliers above
      *  (0 draws nothing but fixed ones). Lower it for slower machines or to see the fade sooner. */
     float DrawDistanceScale;
+    /** @brief Scales every LOD switch distance (each world model's, or a placement's own, times its multiplier): above 1
+     *  keeps the finer LODs farther (more detail), below 1 switches to coarser ones sooner. A fixed draw distance does
+     *  not exempt the LODs. Default 1; [0, 16] like the multipliers above (0 always draws the coarsest LOD). */
+    float LodDistanceScale;
 } GameConfig;
 
 

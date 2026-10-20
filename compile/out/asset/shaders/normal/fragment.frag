@@ -29,7 +29,7 @@ out vec4 finalColor;
 
 void main()
 {
-    if (DitherDiscard(ditherFade, ditherInvert))
+    if (DitherDiscard())
     {
         discard;
     }

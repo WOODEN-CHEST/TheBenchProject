@@ -10,6 +10,7 @@
 #include "Logger.h"
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
+#include "wr/WRString.h"
 
 
 // Macros.
@@ -27,6 +28,11 @@
 /** The render clock (WorldRenderFrame.TimeSeconds) wraps after this many seconds, so a float still resolves
  *  milliseconds. */
 #define RENDER_TIME_WRAP_SECONDS 3600.0
+/** Initial capacity (in bytes) of the status line's LOD counts ("9 / 3 / 1"). */
+#define STATUS_LOD_TEXT_CAPACITY 64
+
+_Static_assert(WORLD_RENDERER_STATUS_LOD_COUNT == WORLD_MODEL_MAX_LODS,
+    "the status counts drawn models for every LOD a world model may have");
 
 
 // Static functions.
@@ -222,6 +228,20 @@ static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera
     outFrame->CameraFrustum = WorldVisibility_ExtractFrustum(outFrame->ViewProjection);
 }
 
+/* Picks every model's LOD for this frame (the camera's distance to it, the camera's zoom, the player's lod_distance_scale)
+ * and advances the LOD cross-fades by the frame's real seconds. Before the visibility, which counts the LODs drawn. */
+static void UpdateLods(WorldRenderer* self, const WorldRenderFrame* frame, double deltaSeconds)
+{
+    WorldRenderLodView View =
+    {
+        .CameraPosition = frame->Camera->Position,
+        .ZoomFactor = WorldVisibility_GetZoomFactor(frame->Camera->FovY),
+        .DistanceScale = WorldRendererCommon_ConfigLodDistanceScale(self),
+        .DeltaSeconds = (float)deltaSeconds
+    };
+    WorldRenderCache_UpdateLods(&self->_cache, &View, self->_logger);
+}
+
 /* Decides which shadow passes run this frame (both are rendered before the scene pass). The cascades follow the sky's
  * shadow light (the sun by day, the moon on bright nights, none while both are low or handing over:
  * WorldEnvironment_GetSkyLights decides); the point-light shadow is independent of the sky (shadows at night), cast by
@@ -400,6 +420,32 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->OutsideViewCount = Counts.OutsideViewCount;
     Status->FadedOutCount = Counts.FadedOutCount;
     Status->FadingCount = Counts.FadingCount;
+    Memory_Copy(Counts.DrawnModelsByLod, Status->DrawnModelsByLod, sizeof(Status->DrawnModelsByLod));
+    Status->LodFadingCount = Counts.LodFadingCount;
+    Status->IsLodTintingEnabled = self->_isLodTintingEnabled;
+}
+
+/* Appends the drawn models per LOD to the status line's LOD text, LOD 0 first, up to the coarsest LOD drawn: "9 / 3 / 1".
+ * The text is NUL-terminated. */
+static bool AppendLodCounts(GenericBuffer* text, const WorldRendererStatus* status)
+{
+    size_t LastLod = 0U;
+    for (size_t Lod = 0U; Lod < WORLD_RENDERER_STATUS_LOD_COUNT; Lod++)
+    {
+        if (status->DrawnModelsByLod[Lod] > 0U)
+        {
+            LastLod = Lod;
+        }
+    }
+    bool IsAppended = true;
+    for (size_t Lod = 0U; (Lod <= LastLod) && IsAppended; Lod++)
+    {
+        Error Result = StringUTF8_Format(u8"%s%" PRIu64, text, (Lod == 0U) ? "" : " / ",
+            (uint64_t)status->DrawnModelsByLod[Lod]);
+        IsAppended = Result.Code == ErrorCode_Success;
+        Error_Deconstruct(&Result);
+    }
+    return IsAppended && GenericBuffer_NullTerminate(text);
 }
 
 /* Appends "<label>name, name" (or "<label>none") for the features in @p state to the status line. */
@@ -595,8 +641,9 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     WorldRendererStars_SyncCatalogue(self, Frame.Environment);
     WorldRendererSky_SyncTextures(self, Frame.Environment);
     WorldRendererSky_PrepareFrame(&Frame);
-    // Which shadow passes run and their light matrices, then what every pass draws: the camera's frustum, each
-    // cascade's box and the cube's reach cull, the draw distances and opacities fade.
+    // Every model's LOD and its cross-fade, then which shadow passes run and their light matrices, then what every pass
+    // draws: the camera's frustum, each cascade's box and the cube's reach cull, the draw distances and opacities fade.
+    UpdateLods(self, &Frame, deltaSeconds);
     DecideShadows(self, &Frame);
     WorldRendererShadows_PrepareFrame(self, &Frame);
     Error VisibilityResult = BuildVisibility(self, &Frame);
@@ -723,21 +770,27 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
         && AppendFeatureList(&Lists, Status, WorldRendererFeatureState_Unavailable,
             (const unsigned char*)u8"; unavailable: ")
         && GenericBuffer_NullTerminate(&Lists);
+    GenericBuffer Lods;
+    GenericBuffer_AllocateVariable(&Lods, STATUS_LOD_TEXT_CAPACITY, sizeof(unsigned char));
+    bool AreLodsBuilt = AppendLodCounts(&Lods, Status);
 
     const char* Tier = !Status->IsSceneHdr ? "8-bit"
         : (Status->IsSceneDepthSamplable ? "HDR with samplable depth" : "HDR without samplable depth");
     Error LogResult = Logger_LogInfoFormatted(self->_logger,
         (const unsigned char*)u8"WorldRenderer: %s scene; %" PRIu64 u8" models (%" PRIu64 u8" without a world model), %"
         PRIu64 u8" sprites (%" PRIu64 u8" decals, %" PRIu64 u8" blended or additive), %" PRIu64 u8" lights, %" PRIu64
-        u8" stars; drawn %" PRIu64 u8" models and %" PRIu64 u8" sprites (%" PRIu64 u8" fading), culled %" PRIu64
-        u8" outside the view%s and %" PRIu64 u8" faded out (draw distance, opacity); %s.",
+        u8" stars; drawn %" PRIu64 u8" models and %" PRIu64 u8" sprites (%" PRIu64 u8" fading; models by LOD %s, %"
+        PRIu64 u8" cross-fading%s), culled %" PRIu64 u8" outside the view%s and %" PRIu64 u8" faded out (draw "
+        u8"distance, opacity); %s.",
         Tier, (uint64_t)Status->ModelCount, (uint64_t)Status->ModelWithoutAssetCount, (uint64_t)Status->SpriteCount,
         (uint64_t)Status->DecalCount, (uint64_t)Status->TransparentSpriteCount, (uint64_t)Status->LightCount,
         (uint64_t)Status->StarCount, (uint64_t)Status->DrawnModelCount, (uint64_t)Status->DrawnSpriteCount,
-        (uint64_t)Status->FadingCount, (uint64_t)Status->OutsideViewCount,
-        Status->IsCullingEnabled ? "" : " (frustum culling off)", (uint64_t)Status->FadedOutCount,
-        IsBuilt ? (const char*)Lists._data : "feature list unavailable");
+        (uint64_t)Status->FadingCount, AreLodsBuilt ? (const char*)Lods._data : "?",
+        (uint64_t)Status->LodFadingCount, Status->IsLodTintingEnabled ? ", LOD tinting on" : "",
+        (uint64_t)Status->OutsideViewCount, Status->IsCullingEnabled ? "" : " (frustum culling off)",
+        (uint64_t)Status->FadedOutCount, IsBuilt ? (const char*)Lists._data : "feature list unavailable");
     Error_Deconstruct(&LogResult);
+    Memory_Free(Lods._data);
     Memory_Free(Lists._data);
 }
 
@@ -789,6 +842,16 @@ void WorldRenderer_SetCullingEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_IsCullingEnabled(const WorldRenderer* self)
 {
     return self->_isCullingEnabled;
+}
+
+void WorldRenderer_SetLodTintingEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_isLodTintingEnabled = enabled;
+}
+
+bool WorldRenderer_IsLodTintingEnabled(const WorldRenderer* self)
+{
+    return self->_isLodTintingEnabled;
 }
 
 void WorldRenderer_SetBloomEnabled(WorldRenderer* self, bool enabled)

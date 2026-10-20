@@ -70,8 +70,10 @@ static bool IsSolidInGBuffer(float fade)
 
 /* Draws the camera's models (passing @p filter, and solid enough: IsSolidInGBuffer) into the G-buffer through the
  * normal shader, setting the per-object outline flag uniform (1 when the object has outlines enabled, else 0) before
- * each draw. The normal shader writes RGB=view-space normal, A=surface/outline flag (0.5 = surface, 1.0 = surface with
- * outline); pixels the sky/grid leave untouched stay at the cleared 0 (not a surface). */
+ * each draw. A model mid LOD cross-fade is drawn once, solid, as the LOD with the larger share (the same rule as the
+ * fade's: no dither holes in the G-buffer). The normal shader writes RGB=view-space normal, A=surface/outline flag
+ * (0.5 = surface, 1.0 = surface with outline); pixels the sky/grid leave untouched stay at the cleared 0 (not a
+ * surface). */
 static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter filter)
 {
     Shader NormalShader = GameShader_GetRaylibShader(self->_gbuffer._shader);
@@ -91,7 +93,7 @@ static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter
         }
         float OutlineFlag = Entry->HasOutline ? 1.0f : 0.0f;
         SetShaderValue(NormalShader, self->_gbuffer._locOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
-        WorldRendererGeometry_DrawModel(self, Entry, &NormalShader, false);
+        WorldRendererGeometry_DrawModel(self, Entry, WorldLodState_GetSolidLod(&Entry->Lod), &NormalShader, false);
     }
 }
 

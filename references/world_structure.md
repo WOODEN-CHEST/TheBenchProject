@@ -6,7 +6,7 @@ tags, data and components. It has two forms with the same content:
 - **JSON** (`<name>.world.json`): authored worlds. Readable, editable by hand, and written so that git diffs stay
   small.
 - **GHDF** (`<name>.world.ghdf`, `references/ghdf.txt`): saves, packed stories and worlds sent over the network.
-  Compact: the test world is 7690 bytes as JSON and 1498 bytes as GHDF.
+  Compact: the test world is 9913 bytes as JSON and 1931 bytes as GHDF.
 
 `WorldFile` reads and writes both (`agents/WorldFile.md`). Until story packs exist, worlds live in
 `<base>/worlds/` next to the executable; the test frame loads `worlds/test.world.json`.
@@ -112,9 +112,16 @@ are no "inherit" values.
 | Casting shadows | `overrides_casts_shadows` | `casts_shadows` (default true) |
 | The draw distance | `overrides_draw_distance` | `draw_distance`: metres, above 0 (default 600) |
 | Keeping it fixed against the quality setting | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` (default false) |
+| The LOD switch distances | `overrides_lod_distances` | `lod_distances`: metres, finest LOD first, each above 0 and above the one before, at most 8 (default `[]`) |
 
 `draw_distance_multiplier` (above 0, default 1) multiplies the draw distance in effect, the world model's or the
-placement's own: 2 is seen twice as far. It is a plain setting, not an override.
+placement's own: 2 is seen twice as far. It is a plain setting, not an override. The LODs (T11):
+- `lod_distances` applies only while it holds one distance per LOD of the world model; when the world model gains or
+  loses a LOD, the world model's distances apply instead (the game warns once) until the list fits again.
+- `lod_distance_multiplier` (above 0, default 1) multiplies the switch distances in effect: 2 keeps each LOD twice as
+  far (more detail).
+- `is_lod_forced` (default false) with `forced_lod` (an integer >= 0, default 0) draws that LOD whatever the distance;
+  past the world model's last LOD it draws the last. `forced_lod` is kept while `is_lod_forced` is off.
 
 ```
 "model": {
@@ -123,7 +130,9 @@ placement's own: 2 is seen twice as far. It is a plain setting, not an override.
     "variant": "dark_wood",
     "overrides_draw_distance": true,
     "draw_distance": 250.0,
-    "draw_distance_multiplier": 1.5
+    "draw_distance_multiplier": 1.5,
+    "overrides_lod_distances": true,
+    "lod_distances": [10.0, 30.0, 90.0]
 }
 ```
 
@@ -170,6 +179,7 @@ a plain setting, not an override.
 ### Values
 
 - Numbers: integers or decimals; a float keeps its fraction when written (`2.0`). Angles are degrees.
+- Lists of numbers: `[a, b, ...]` (`[]` for none), on one line.
 - Vectors: `[x, y]`, `[x, y, z]` (also `{"x": ..., "y": ..., "z": ...}` when read).
 - Colours: `"#rrggbb"`, `"#rrggbbaa"` when not opaque (also `[r, g, b, a]` or `{"r": ...}` when read).
 - Enums: the entry's name (`"near"`, `"axis_billboard"`).
@@ -251,9 +261,9 @@ every integer in the smallest GHDF type that holds it.
 | 3 and up | The `world_object` table's wire ids: 3 `name`, 4 `position`, 5 `rotation`, 6 `scale`, 7 `tint`, 8 `is_enabled`, 9 `is_visible`, 10 `mobility`, 11 the tags and data, 12 `parent`. |
 
 How each type is stored (`agents/PropertyDescriptors.md`, "Types"): integers in the smallest integer type (readers take
-any integer type whose value fits), floats as Float (angles in radians), vectors as Float arrays, colours as UInt8
-arrays, render colours as a compound, strings as strings, enums and dates as encoded integers, the tags and data as an
-array of entry compounds (`agents/ObjectData.md`, "GHDF"). A document must end where its root ends.
+any integer type whose value fits), floats as Float (angles in radians), vectors and float lists as Float arrays,
+colours as UInt8 arrays, render colours as a compound, strings as strings, enums and dates as encoded integers, the tags
+and data as an array of entry compounds (`agents/ObjectData.md`, "GHDF"). A document must end where its root ends.
 
 ## Loading rules
 

@@ -56,7 +56,7 @@ vec3 FacingNormal(vec3 n, vec3 toward)
 void main()
 {
     vec4 texel = texture(texture0, fragTexCoord);
-    if (((alphaMode == ALPHA_MODE_CUTOUT) && (texel.a < alphaCutoff)) || DitherDiscard(ditherFade, ditherInvert))
+    if (((alphaMode == ALPHA_MODE_CUTOUT) && (texel.a < alphaCutoff)) || DitherDiscard())
     {
         discard;
     }

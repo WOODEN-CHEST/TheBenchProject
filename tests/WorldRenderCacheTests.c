@@ -127,7 +127,9 @@ static void ResolvesModelsAndComputesWorldBounds(TestRun* run)
             TEST_CHECK(run, IsNear(Models[0].Center.x, 10.0f) && IsNear(Models[0].Center.y, 0.0f));
             TEST_CHECK(run, IsNear(Models[0].Radius, 4.0f * sqrtf(0.75f)));
             TEST_CHECK(run, Models[0].IsResolved && Models[0].IsDrawn);
-            TEST_CHECK(run, Models[0].Model == WorldModel_GetLodModel(Models[0].Asset, 0U));
+            // Before any LOD update the entry holds no LOD yet: it reads as LOD 0, not fading.
+            TEST_CHECK(run, !Models[0].Lod.IsStarted && (Models[0].Lod.CurrentLod == 0U)
+                && !WorldLodState_IsFading(&Models[0].Lod));
             TEST_CHECK(run, Models[0].HasOutline && !Models[0].OmitsPixelation && Models[0].CastsShadows
                 && (Models[0].ShadowTier == WorldShadowTier_Both));
             TEST_CHECK(run, (Models[0].DrawDistance == 600.0f) && !Models[0].IsDrawDistanceFixed
@@ -170,8 +172,7 @@ static void FailedModelStaysUnresolvedUntilRenamed(TestRun* run)
         if (CacheFixture_Sync(run, &Fixture))
         {
             Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
-            TEST_CHECK(run, (Count == 1) && (Models[0].Asset == NULL) && (Models[0].Model == NULL)
-                && !Models[0].HasOutline);
+            TEST_CHECK(run, (Count == 1) && (Models[0].Asset == NULL) && !Models[0].HasOutline);
         }
 
         // Renaming changes the name, so the next sync resolves the new model.
@@ -647,14 +648,15 @@ static void DerivedBoundsComposeTheImportWithThePlacement(TestRun* run)
             TEST_CHECK(run, IsNear(Models[0].Radius, Expected) && (Models[0].Radius < (0.5f * Separate)));
             TEST_CHECK(run, IsNear(Models[0].Center.x, 2.0f) && IsNear(Models[0].Center.y, 1.0f)
                 && IsNear(Models[0].Center.z, -3.0f));
-            TEST_CHECK(run, memcmp(&Models[0].Transform, &Composed, sizeof(Matrix)) == 0);
+            Matrix LodTransform = WorldRenderModel_GetLodTransform(&Models[0], 0U);
+            TEST_CHECK(run, memcmp(&LodTransform, &Composed, sizeof(Matrix)) == 0);
         }
     }
     CacheFixture_Deconstruct(run, &Fixture);
 }
 
 /* The bounding sphere is the world model's: its "bounds" in the object's own space, or LOD 0's mesh bounds moved by
- * LOD 0's import transform. LOD 0 is drawn (until T11), inside the object's world matrix. */
+ * LOD 0's import transform. Each LOD is drawn with its own import transform inside the object's world matrix. */
 static void BoundsAndTheDrawnLodComeFromTheWorldModel(TestRun* run)
 {
     CacheFixture Fixture;
@@ -683,10 +685,17 @@ static void BoundsAndTheDrawnLodComeFromTheWorldModel(TestRun* run)
     {
         TEST_CHECK(run, IsNear(Models[0].Center.x, 10.0f) && IsNear(Models[0].Center.y, 2.0f)
             && IsNear(Models[0].Radius, 4.0f));
-        // LOD 0 is lifted 3 m by its import transform: its sphere and its draw transform both are, scaled by 2.
+        // LOD 0 is lifted 3 m by its import transform: its sphere and its draw transform both are, scaled by 2. LOD 1
+        // (the box) has none: drawn at the object's own place. Past the last LOD the world matrix alone.
         TEST_CHECK(run, IsNear(Models[1].Center.y, 6.0f) && IsNear(Models[1].Radius, 2.0f * sqrtf(0.75f)));
-        TEST_CHECK(run, (Models[1].Model == WorldModel_GetLodModel(Models[1].Asset, 0U))
-            && IsNear(Models[1].Transform.m13, 6.0f) && IsNear(Models[1].Transform.m12, 10.0f));
+        Matrix Lifted = WorldRenderModel_GetLodTransform(&Models[1], 0U);
+        Matrix Plain = WorldRenderModel_GetLodTransform(&Models[1], 1U);
+        Matrix Past = WorldRenderModel_GetLodTransform(&Models[1], 2U);
+        TEST_CHECK(run, (WorldRenderModel_GetLodModel(&Models[1], 0U) == WorldModel_GetLodModel(Models[1].Asset, 0U))
+            && IsNear(Lifted.m13, 6.0f) && IsNear(Lifted.m12, 10.0f));
+        TEST_CHECK(run, IsNear(Plain.m13, 0.0f) && IsNear(Plain.m12, 10.0f) && IsNear(Plain.m0, 2.0f)
+            && (WorldRenderModel_GetLodModel(&Models[1], 2U) == NULL)
+            && (memcmp(&Past, &Models[1].WorldMatrix, sizeof(Matrix)) == 0));
         TEST_CHECK(run, Models[1].DrawDistance == 20.0f);
     }
     CacheFixture_Deconstruct(run, &Fixture);
@@ -872,9 +881,9 @@ static void ChildrenAreDrawnWhereTheirParentsPutThem(TestRun* run)
             TEST_CHECK(run, (Count == 1) && Models[0].IsDrawn && IsNear(Models[0].Center.x, 10.0f)
                 && IsNear(Models[0].Center.y, Shift) && IsNear(Models[0].Center.z, -2.0f)
                 && IsNear(Models[0].Radius, 2.0f * sqrtf(0.75f)));
-            TEST_CHECK(run, (Count == 1)
-                && (memcmp(&Models[0].Transform, &(Matrix){ 0 }, sizeof(Matrix)) != 0)
-                && IsNear(Models[0].Transform.m12, 10.0f) && IsNear(Models[0].Transform.m14, -2.0f));
+            Matrix LodTransform = (Count == 1) ? WorldRenderModel_GetLodTransform(&Models[0], 0U) : (Matrix){ 0 };
+            TEST_CHECK(run, (Count == 1) && (memcmp(&LodTransform, &(Matrix){ 0 }, sizeof(Matrix)) != 0)
+                && IsNear(LodTransform.m12, 10.0f) && IsNear(LodTransform.m14, -2.0f));
             const WorldRenderLight* Lights = WorldRenderCache_GetLights(&Fixture.Cache, &Count);
             TEST_CHECK(run, (Count == 1) && IsNear(Lights[0].Position.x, 10.0f)
                 && IsNear(Lights[0].Position.y, 2.0f + Shift) && IsNear(Lights[0].Position.z, 0.0f));
@@ -955,6 +964,289 @@ static void BoundsStayConservativeUnderShear(TestRun* run)
     CacheFixture_Deconstruct(run, &Fixture);
 }
 
+/* Adds the "steps" world model: three LODs switching at 10 and 20 m (40 m for the last, its draw distance), a 0.4 s
+ * cross-fade and a hysteresis of 0.1, over three code-built box models. */
+static bool AddSteps(TestRun* run, CacheFixture* fixture)
+{
+    BoundingBox UnitCube = { .min = { -0.5f, -0.5f, -0.5f }, .max = { 0.5f, 0.5f, 0.5f } };
+    return TestAssets_AddModel(run, &fixture->Assets, "step_lod1", UnitCube, NULL)
+        && TestAssets_AddModel(run, &fixture->Assets, "step_lod2", UnitCube, NULL)
+        && TestAssets_AddWorldModel(run, &fixture->Assets, "{\"name\": \"steps\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 10}, {\"model\": \"step_lod1\", \"max_distance\": 20}, {\"model\": \"step_lod2\", "
+            "\"max_distance\": 40}], \"lod_fade_seconds\": 0.4, \"lod_hysteresis\": 0.1}");
+}
+
+/* Runs one frame's LOD update with the camera at @p camera. */
+static void UpdateLods(CacheFixture* fixture, Vector3 camera, float zoom, float scale, float deltaSeconds, Logger* logger)
+{
+    WorldRenderLodView View = { .CameraPosition = camera, .ZoomFactor = zoom, .DistanceScale = scale,
+        .DeltaSeconds = deltaSeconds };
+    WorldRenderCache_UpdateLods(&fixture->Cache, &View, logger);
+}
+
+/* The entry of a model component (NULL when absent). */
+static const WorldRenderModel* EntryOf(const CacheFixture* fixture, const WorldModelComponent* component)
+{
+    size_t Count = 0;
+    const WorldRenderModel* Models = WorldRenderCache_GetModels(&fixture->Cache, &Count);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        if (Models[Index].Component == component)
+        {
+            return &Models[Index];
+        }
+    }
+    return NULL;
+}
+
+/* Whether an entry shows @p lod, not fading. */
+static bool ShowsLod(const CacheFixture* fixture, const WorldModelComponent* component, size_t lod)
+{
+    const WorldRenderModel* Entry = EntryOf(fixture, component);
+    return (Entry != NULL) && Entry->Lod.IsStarted && !WorldLodState_IsFading(&Entry->Lod)
+        && (Entry->Lod.CurrentLod == lod);
+}
+
+/* Each drawn entry's LOD follows the camera's distance to its bounding sphere's centre: the first update takes it at
+ * once, a change cross-fades over the world model's fade time by the frames' seconds (the shadow LOD at once, the
+ * G-buffer's at half), the hysteresis holds an object at a boundary, and an entry carried over a re-match keeps its
+ * state. */
+static void LodsFollowTheDistanceAndCrossFade(TestRun* run)
+{
+    CacheFixture Fixture;
+    WorldModelComponent* Near = NULL;
+    WorldModelComponent* Middle = NULL;
+    WorldModelComponent* Far = NULL;
+    WorldModelComponent* Farthest = NULL;
+    Vector3 Unit = { 1.0f, 1.0f, 1.0f };
+    if (!CacheFixture_Construct(run, &Fixture) || !AddSteps(run, &Fixture)
+        || ((Near = AddModel(run, &Fixture.World, "steps", (Vector3){ 0.0f, 0.0f, 5.0f }, Unit)) == NULL)
+        || ((Middle = AddModel(run, &Fixture.World, "steps", (Vector3){ 0.0f, 0.0f, 15.0f }, Unit)) == NULL)
+        || ((Far = AddModel(run, &Fixture.World, "steps", (Vector3){ 0.0f, 0.0f, 30.0f }, Unit)) == NULL)
+        || ((Farthest = AddModel(run, &Fixture.World, "steps", (Vector3){ 0.0f, 0.0f, 100.0f }, Unit)) == NULL)
+        || !CacheFixture_Sync(run, &Fixture))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    Vector3 Eye = { 0.0f, 0.0f, 0.0f };
+    UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.1f, NULL);
+    TEST_CHECK(run, ShowsLod(&Fixture, Near, 0U) && ShowsLod(&Fixture, Middle, 1U) && ShowsLod(&Fixture, Far, 2U)
+        && ShowsLod(&Fixture, Farthest, 2U));
+
+    // 6 m back: the near box is 11 m away, past 10 x 1.1, and cross-fades to LOD 1; the middle one (21 m) stays within
+    // its band (below 22 m).
+    Eye.z = -6.0f;
+    UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.1f, NULL);
+    const WorldRenderModel* Entry = EntryOf(&Fixture, Near);
+    TEST_CHECK(run, (Entry != NULL) && WorldLodState_IsFading(&Entry->Lod) && (Entry->Lod.CurrentLod == 0U)
+        && (Entry->Lod.TargetLod == 1U) && IsNear(Entry->Lod.Progress, 0.25f)
+        && (WorldLodState_GetShadowLod(&Entry->Lod) == 1U) && (WorldLodState_GetSolidLod(&Entry->Lod) == 0U));
+    TEST_CHECK(run, ShowsLod(&Fixture, Middle, 1U));
+
+    // A component added meanwhile re-matches the entries; the fading one keeps its fade.
+    TEST_CHECK(run, AddModel(run, &Fixture.World, "box", (Vector3){ 50.0f, 0.0f, 0.0f }, Unit) != NULL);
+    if (CacheFixture_Sync(run, &Fixture))
+    {
+        Entry = EntryOf(&Fixture, Near);
+        TEST_CHECK(run, (Entry != NULL) && WorldLodState_IsFading(&Entry->Lod) && IsNear(Entry->Lod.Progress, 0.25f));
+        UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.1f, NULL);
+        Entry = EntryOf(&Fixture, Near);
+        TEST_CHECK(run, (Entry != NULL) && IsNear(Entry->Lod.Progress, 0.5f)
+            && (WorldLodState_GetSolidLod(&Entry->Lod) == 1U));
+        UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.1f, NULL);
+        UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.1f, NULL);
+        TEST_CHECK(run, ShowsLod(&Fixture, Near, 1U));
+    }
+
+    // Standing at the band's edge while the camera wobbles: no switch back.
+    const float Wobble[] = { -5.2f, -4.9f, -5.3f, -4.95f };
+    bool IsSteady = true;
+    for (size_t Index = 0U; Index < (sizeof(Wobble) / sizeof(Wobble[0])); Index++)
+    {
+        Eye.z = Wobble[Index]; // 10.2, 9.9, 10.3, 9.95 m: all above 10 x 0.9
+        UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.1f, NULL);
+        IsSteady = IsSteady && ShowsLod(&Fixture, Near, 1U);
+    }
+    TEST_CHECK(run, IsSteady);
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+/* The switch distances in effect move with the zoom (a narrower view picks finer LODs), the player's lod_distance_scale,
+ * the placement's multiplier, its own list (while it fits the world model: otherwise the world model's distances, with
+ * one warning when that starts) and its forced LOD, which still cross-fades when it changes. */
+static void ThePlacementAndThePlayerMoveTheSwitches(TestRun* run)
+{
+    GenericBuffer Directory;
+    GenericBuffer_AllocateVariable(&Directory, CACHE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    Logger Log;
+    if (!TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "cache_lods", &Directory))
+        || !TEST_CHECK_SUCCESS(run, Logger_Construct(&Log, Directory._data)))
+    {
+        Memory_Free(Directory._data);
+        return;
+    }
+    CacheFixture Fixture;
+    WorldModelComponent* Plain = NULL;
+    WorldModelComponent* Placement = NULL;
+    Vector3 Unit = { 1.0f, 1.0f, 1.0f };
+    Vector3 Eye = { 0.0f, 0.0f, 0.0f };
+    if (CacheFixture_Construct(run, &Fixture) && AddSteps(run, &Fixture)
+        && ((Plain = AddModel(run, &Fixture.World, "steps", (Vector3){ 0.0f, 0.0f, 15.0f }, Unit)) != NULL)
+        && ((Placement = AddModel(run, &Fixture.World, "steps", (Vector3){ 1.0f, 0.0f, 15.0f }, Unit)) != NULL)
+        && CacheFixture_Sync(run, &Fixture))
+    {
+        // Each case starts afresh (the entries hidden for a frame), so the hysteresis does not hold the old LOD.
+        UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.0f, &Log);
+        TEST_CHECK(run, ShowsLod(&Fixture, Plain, 1U));
+        UpdateLods(&Fixture, Eye, 0.65f, 1.0f, 0.0f, &Log); // zoomed in a little: 9.75 m, the hysteresis holds LOD 1
+        TEST_CHECK(run, ShowsLod(&Fixture, Plain, 1U));
+        UpdateLods(&Fixture, Eye, 0.25f, 1.0f, 0.0f, &Log); // 3.75 m: below 10 x 0.9
+        const WorldRenderModel* Entry = EntryOf(&Fixture, Plain);
+        TEST_CHECK(run, (Entry != NULL) && (WorldLodState_GetDestinationLod(&Entry->Lod) == 0U));
+        UpdateLods(&Fixture, Eye, 1.0f, 0.5f, 0.0f, &Log); // half the quality: switches at 5 and 10 m
+        Entry = EntryOf(&Fixture, Plain);
+        TEST_CHECK(run, (Entry != NULL) && (WorldLodState_GetDestinationLod(&Entry->Lod) == 2U));
+
+        // The placement's multiplier keeps its LODs twice as far: 15 m is LOD 0 (below 20 m).
+        TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(OwnerOf(Placement), false));
+        CacheFixture_Sync(run, &Fixture);
+        UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.0f, &Log);
+        TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(OwnerOf(Placement), true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetLodDistanceMultiplier(Placement, 2.0f));
+        CacheFixture_Sync(run, &Fixture);
+        UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.0f, &Log);
+        TEST_CHECK(run, ShowsLod(&Fixture, Placement, 0U));
+
+        // Its own list (3, 6, 50 m, times 2): 15 m is LOD 2, at once (the hidden frame started it afresh).
+        const float Own[] = { 3.0f, 6.0f, 50.0f };
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetLodDistances(Placement, Own, 3U));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Placement, WorldModelSetting_LodDistances, true));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(OwnerOf(Placement), false));
+        CacheFixture_Sync(run, &Fixture);
+        UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.0f, &Log);
+        TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(OwnerOf(Placement), true));
+        CacheFixture_Sync(run, &Fixture);
+        UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.0f, &Log);
+        TEST_CHECK(run, ShowsLod(&Fixture, Placement, 2U));
+
+        // A list that no longer fits: the world model's distances (times 2: LOD 0 at 15 m, cross-fading from LOD 2),
+        // warned about once over several frames; fitting again and failing again warns again.
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetLodDistances(Placement, Own, 2U));
+        CacheFixture_Sync(run, &Fixture);
+        for (int Frame = 0; Frame < 3; Frame++)
+        {
+            UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.1f, &Log);
+        }
+        Entry = EntryOf(&Fixture, Placement);
+        TEST_CHECK(run, (Entry != NULL) && (WorldLodState_GetDestinationLod(&Entry->Lod) == 0U)
+            && Entry->IsLodListRefused);
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetLodDistances(Placement, Own, 3U));
+        CacheFixture_Sync(run, &Fixture);
+        UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.1f, &Log);
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetLodDistances(Placement, Own, 1U));
+        CacheFixture_Sync(run, &Fixture);
+        UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.1f, &Log);
+
+        // A forced LOD, and a change of it, cross-fade.
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Placement, WorldModelSetting_LodDistances, false));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsLodForced(Placement, true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetForcedLod(Placement, 2U));
+        CacheFixture_Sync(run, &Fixture);
+        for (int Frame = 0; Frame < 5; Frame++)
+        {
+            UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.1f, &Log);
+        }
+        TEST_CHECK(run, ShowsLod(&Fixture, Placement, 2U));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetForcedLod(Placement, 1U));
+        CacheFixture_Sync(run, &Fixture);
+        UpdateLods(&Fixture, Eye, 1.0f, 1.0f, 0.1f, &Log);
+        Entry = EntryOf(&Fixture, Placement);
+        TEST_CHECK(run, (Entry != NULL) && WorldLodState_IsFading(&Entry->Lod) && (Entry->Lod.CurrentLod == 2U)
+            && (Entry->Lod.TargetLod == 1U));
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+    TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "uses its world model \"steps\"'s LOD distances: its own "
+        "lod_distances holds 2, the world model has 3 LODs.") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "lod_distances holds 1,") == 1U);
+    Memory_Free(Directory._data);
+}
+
+/* An object that is not drawn (hidden, or under a disabled parent) forgets its LOD: drawn again, it appears at the LOD
+ * its distance picks, at once. A world model resolved again (a rename) starts afresh too. */
+static void AnObjectDrawnAgainAppearsAtItsLod(TestRun* run)
+{
+    CacheFixture Fixture;
+    WorldModelComponent* Component = NULL;
+    Vector3 Unit = { 1.0f, 1.0f, 1.0f };
+    if (!CacheFixture_Construct(run, &Fixture) || !AddSteps(run, &Fixture)
+        || ((Component = AddModel(run, &Fixture.World, "steps", (Vector3){ 0.0f, 0.0f, 5.0f }, Unit)) == NULL)
+        || !CacheFixture_Sync(run, &Fixture))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    UpdateLods(&Fixture, (Vector3){ 0.0f, 0.0f, 0.0f }, 1.0f, 1.0f, 0.1f, NULL);
+    TEST_CHECK(run, ShowsLod(&Fixture, Component, 0U));
+
+    TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(OwnerOf(Component), false));
+    CacheFixture_Sync(run, &Fixture);
+    UpdateLods(&Fixture, (Vector3){ 0.0f, 0.0f, -30.0f }, 1.0f, 1.0f, 0.1f, NULL);
+    const WorldRenderModel* Entry = EntryOf(&Fixture, Component);
+    TEST_CHECK(run, (Entry != NULL) && !Entry->IsDrawn && !Entry->Lod.IsStarted);
+    TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(OwnerOf(Component), true));
+    CacheFixture_Sync(run, &Fixture);
+    UpdateLods(&Fixture, (Vector3){ 0.0f, 0.0f, -30.0f }, 1.0f, 1.0f, 0.1f, NULL);
+    TEST_CHECK(run, ShowsLod(&Fixture, Component, 2U)); // 35 m: no fade from LOD 0
+
+    // Renamed to a one-LOD world model and back: each resolution starts afresh, at its LOD.
+    TEST_CHECK_SUCCESS(run, WorldModelComponent_SetWorldModel(Component, (const unsigned char*)u8"box"));
+    CacheFixture_Sync(run, &Fixture);
+    UpdateLods(&Fixture, (Vector3){ 0.0f, 0.0f, -30.0f }, 1.0f, 1.0f, 0.1f, NULL);
+    TEST_CHECK(run, ShowsLod(&Fixture, Component, 0U));
+    TEST_CHECK_SUCCESS(run, WorldModelComponent_SetWorldModel(Component, (const unsigned char*)u8"steps"));
+    CacheFixture_Sync(run, &Fixture);
+    UpdateLods(&Fixture, (Vector3){ 0.0f, 0.0f, -30.0f }, 1.0f, 1.0f, 0.1f, NULL);
+    TEST_CHECK(run, ShowsLod(&Fixture, Component, 2U));
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+/* A camera that turns back within a fade turns the fade around: the same two LODs keep their pixels while the share
+ * runs back, the shadows draw the LOD it heads back to, and the hysteresis measures from that LOD, so standing inside
+ * the band keeps it heading there. */
+static void ACameraTurningBackTurnsTheFadeAround(TestRun* run)
+{
+    CacheFixture Fixture;
+    WorldModelComponent* Near = NULL;
+    Vector3 Unit = { 1.0f, 1.0f, 1.0f };
+    if (!CacheFixture_Construct(run, &Fixture) || !AddSteps(run, &Fixture)
+        || ((Near = AddModel(run, &Fixture.World, "steps", (Vector3){ 0.0f, 0.0f, 5.0f }, Unit)) == NULL)
+        || !CacheFixture_Sync(run, &Fixture))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    UpdateLods(&Fixture, (Vector3){ 0.0f, 0.0f, 0.0f }, 1.0f, 1.0f, 0.1f, NULL);
+    UpdateLods(&Fixture, (Vector3){ 0.0f, 0.0f, -6.0f }, 1.0f, 1.0f, 0.1f, NULL); // 11 m: a quarter of the way to LOD 1
+
+    // Back at 5 m within the fade: it runs back toward LOD 0 from where it was (0.05 s of the 0.4 s fade).
+    UpdateLods(&Fixture, (Vector3){ 0.0f, 0.0f, 0.0f }, 1.0f, 1.0f, 0.05f, NULL);
+    const WorldRenderModel* Entry = EntryOf(&Fixture, Near);
+    TEST_CHECK(run, (Entry != NULL) && WorldLodState_IsFading(&Entry->Lod) && Entry->Lod.IsReturning
+        && (Entry->Lod.CurrentLod == 0U) && (Entry->Lod.TargetLod == 1U) && IsNear(Entry->Lod.Progress, 0.125f)
+        && (WorldLodState_GetDestinationLod(&Entry->Lod) == 0U) && (WorldLodState_GetShadowLod(&Entry->Lod) == 0U));
+
+    // At 10 m, inside the band (9 to 11 m): measured from LOD 0, it keeps heading back, and then arrives.
+    UpdateLods(&Fixture, (Vector3){ 0.0f, 0.0f, -5.0f }, 1.0f, 1.0f, 0.02f, NULL);
+    Entry = EntryOf(&Fixture, Near);
+    TEST_CHECK(run, (Entry != NULL) && Entry->Lod.IsReturning && (WorldLodState_GetDestinationLod(&Entry->Lod) == 0U)
+        && IsNear(Entry->Lod.Progress, 0.075f));
+    UpdateLods(&Fixture, (Vector3){ 0.0f, 0.0f, -5.0f }, 1.0f, 1.0f, 0.1f, NULL);
+    TEST_CHECK(run, ShowsLod(&Fixture, Near, 0U));
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
 static void ResetForgetsEveryEntry(TestRun* run)
 {
     CacheFixture Fixture;
@@ -1001,6 +1293,10 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "children_are_drawn_where_their_parents_put_them", ChildrenAreDrawnWhereTheirParentsPutThem },
         { "hidden_or_disabled_parents_hide_their_subtree", HiddenOrDisabledParentsHideTheirSubtree },
         { "bounds_stay_conservative_under_shear", BoundsStayConservativeUnderShear },
+        { "lods_follow_the_distance_and_cross_fade", LodsFollowTheDistanceAndCrossFade },
+        { "the_placement_and_the_player_move_the_switches", ThePlacementAndThePlayerMoveTheSwitches },
+        { "an_object_drawn_again_appears_at_its_lod", AnObjectDrawnAgainAppearsAtItsLod },
+        { "a_camera_turning_back_turns_the_fade_around", ACameraTurningBackTurnsTheFadeAround },
     };
     TestRun_RunSuite(run, "WorldRenderCache", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

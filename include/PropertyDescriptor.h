@@ -62,6 +62,7 @@ typedef struct DataMapStruct DataMap;
  * | ObjectId    | uint64_t, 0 = none          | integer (a string above INT64_MAX)     | smallest unsigned type (*)    |
  * | Date        | int64_t day number          | "yyyy-mm-dd", e.g. "2026-10-18"        | EncodedInteger (the day number) |
  * | DataMap     | DataMap*, owned, NULL while empty | two keys: TagsKey ["key", ...] and Key {"key": value} | Compound array of entries |
+ * | FloatList   | PropertyFloatList*, owned, NULL while empty | [a, b, ...]                  | Float array                   |
  *
  * (*) Written in the smallest GHDF integer type that holds the value (a parent id of 12 is one UInt8 byte; GameGHDF.h);
  * read from any GHDF integer type, fixed width or encoded, whose value fits the property's type.
@@ -72,7 +73,8 @@ typedef struct DataMapStruct DataMap;
  * day number of the game calendar (GameCalendar.h: days since 0001-01-01), and its JSON text is only ever the
  * "yyyy-mm-dd" form. A DataMap (tags and typed custom data, DataMap.h) is written as two JSON keys, its tags under the
  * descriptor's TagsKey and its values under its Key; reading one needs PropertyReadOptions.Keys, the program's key
- * registry, to intern the keys.
+ * registry, to intern the keys. A FloatList (a world model placement's LOD distances) is a list of finite floats: an
+ * empty list is NULL, written [] in JSON and as an empty Float array in GHDF when defaults are written.
  *
  * Not thread-safe: tables are immutable static data, but instances are plain structs with no locking.
  */
@@ -108,6 +110,17 @@ typedef struct DataMapStruct DataMap;
 #define PROPERTY_RULES_STRING(maxLength, isNullAllowed) { .MaxLength = (maxLength), .IsNullAllowed = (isNullAllowed) }
 /** @brief Rules for a DataMap: at most @p maxCount entries counting at most @p maxBytes bytes (DataMap_GetByteSize). */
 #define PROPERTY_RULES_DATA_MAP(maxCount, maxBytes) { .MaxLength = (maxBytes), .MaxCount = (maxCount) }
+/** @brief Rules for a FloatList: at most @p maxCount finite values (at most PROPERTY_FLOAT_LIST_MAX_COUNT). */
+#define PROPERTY_RULES_FLOAT_LIST(maxCount) { .MaxCount = (maxCount) }
+/** @brief Rules for a FloatList of at most @p maxCount values, each above @p minimum (exclusive) and above the one
+ *         before it (switch distances, thresholds). */
+#define PROPERTY_RULES_INCREASING_FLOAT_LIST_ABOVE(maxCount, minimum) \
+    { .HasMinimum = true, .IsMinimumExclusive = true, .Minimum = (minimum), .MaxCount = (maxCount), \
+        .IsStrictlyIncreasing = true }
+
+/** @brief The most values any FloatList may hold, whatever its rules say (a row's Rules.MaxCount must not pass it), so a
+ *         list's size never overflows and no single list can take much memory. */
+#define PROPERTY_FLOAT_LIST_MAX_COUNT ((size_t)4096)
 
 /** @brief The flags of a creator setting: saved, shown in the editor's inspector and reachable from scripts. */
 #define PROPERTY_FLAGS_SETTING ((uint32_t)(PropertyFlags_Persistent | PropertyFlags_Editable | PropertyFlags_Script))
@@ -175,7 +188,11 @@ typedef enum PropertyTypeEnum
     /** @brief Tags and typed custom data: an owned `DataMap*` (DataMap.h), NULL while empty, which is its only default.
      *  Rules.MaxCount and Rules.MaxLength bound its entries and bytes; the descriptor's TagsKey names the JSON key of
      *  its tags. */
-    PropertyType_DataMap
+    PropertyType_DataMap,
+    /** @brief A list of floats: an owned `PropertyFloatList*`, NULL while empty, which is its only default. Every value
+     *  is finite and within the optional bounds; Rules.MaxCount (required) bounds the count, Rules.IsStrictlyIncreasing
+     *  makes each value rise above the one before it. */
+    PropertyType_FloatList
 } PropertyType;
 
 /**
@@ -195,6 +212,22 @@ typedef enum PropertyFlagsEnum
      *  for type checking and autocomplete. */
     PropertyFlags_Script = 1 << 3
 } PropertyFlags;
+
+/**
+ * @brief A list of floats: the value of a PropertyType_FloatList property, one heap block holding its count and its
+ *        values.
+ *
+ * An empty list is NULL (there is no empty block). Create one with PropertyFloatList_Create and release it with
+ * PropertyFloatList_Destroy; the instance whose field holds a list owns it, and Properties_Set copies the list it is
+ * given. Immutable once created: read it through PropertyFloatList_GetCount and PropertyFloatList_GetValues.
+ */
+typedef struct PropertyFloatListStruct
+{
+    /** @brief The number of values: 1 to PROPERTY_FLOAT_LIST_MAX_COUNT. */
+    size_t _count;
+    /** @brief The values, _count of them. */
+    float _values[];
+} PropertyFloatList;
 
 /**
  * @brief The data of a property value; the active member is selected by the property's PropertyType.
@@ -235,6 +268,9 @@ typedef union PropertyDataUnion
      *  Properties_Get it points into the instance and stays valid until that property changes; Properties_Set copies
      *  it. */
     const DataMap* DataMapValue;
+    /** @brief PropertyType_FloatList: the list, or NULL for an empty one. Borrowed, as DataMapValue: NULL in a default,
+     *  the instance's own from Properties_Get, copied by Properties_Set. */
+    const PropertyFloatList* FloatListValue;
 } PropertyData;
 
 /**
@@ -253,9 +289,10 @@ typedef struct PropertyValueStruct
  * @brief The rules a property's value must follow, beyond its type's own (floats finite, render colors in range,
  *        strings valid UTF-8, asset names valid, enums in their table).
  *
- * Build with the PROPERTY_RULES_* macros. Bounds apply to Int32, UInt32, Float, Double, Angle (radians) and to every
- * component of Vector2, Vector3 and AngleVector3 (radians); the string rules to String and AssetName; MaxCount and
- * MaxLength (bytes) to a DataMap. PropertyTable_Check rejects rules that do not fit the type.
+ * Build with the PROPERTY_RULES_* macros. Bounds apply to Int32, UInt32, Float, Double, Angle (radians), to every
+ * component of Vector2, Vector3 and AngleVector3 (radians) and to every value of a FloatList; the string rules to String
+ * and AssetName; MaxCount and MaxLength (bytes) to a DataMap; MaxCount and IsStrictlyIncreasing to a FloatList.
+ * PropertyTable_Check rejects rules that do not fit the type.
  */
 typedef struct PropertyRulesStruct
 {
@@ -276,11 +313,14 @@ typedef struct PropertyRulesStruct
      *  content from other players cannot grow a save without bound. DataMap: the most bytes its entries may count
      *  (DataMap_GetByteSize); required too. */
     size_t MaxLength;
-    /** @brief DataMap: the most entries, tags included; required (> 0). Must be 0 for every other type. */
+    /** @brief DataMap: the most entries, tags included; FloatList: the most values (at most
+     *  PROPERTY_FLOAT_LIST_MAX_COUNT). Required (> 0) for both; must be 0 for every other type. */
     size_t MaxCount;
     /** @brief Strings: whether NULL is a valid value. Such a property must default to NULL (GHDF has no null, so NULL
      *  is written as an absent entry, which reads back as the default). */
     bool IsNullAllowed;
+    /** @brief FloatList only: whether every value must be above the one before it (strictly increasing). */
+    bool IsStrictlyIncreasing;
 } PropertyRules;
 
 /**
@@ -588,12 +628,76 @@ static inline PropertyValue PropertyValue_FromDataMap(const DataMap* map)
     return (PropertyValue){ .Type = PropertyType_DataMap, .Data.DataMapValue = map };
 }
 
+/** @brief Makes a FloatList value. @param list The list (borrowed; Properties_Set copies it), or NULL for an empty one.
+ *  @returns The typed value. */
+static inline PropertyValue PropertyValue_FromFloatList(const PropertyFloatList* list)
+{
+    return (PropertyValue){ .Type = PropertyType_FloatList, .Data.FloatListValue = list };
+}
+
 /**
  * @brief Returns a property type's name for messages and tooling, e.g. u8"float" or u8"render_color".
  * @param type The type.
  * @returns A static string; u8"unknown" for a value outside PropertyType.
  */
 const unsigned char* PropertyType_GetName(PropertyType type);
+
+
+// Functions: float lists.
+/**
+ * @brief Creates a float list holding a copy of @p count values (one allocation).
+ *
+ * The values are copied as they are; whether they suit a property (finite, bounded, rising) is that property's rules'
+ * business (Properties_CheckValue).
+ * @param values The values; may be NULL only when @p count is 0.
+ * @param count The number of values, 0 to PROPERTY_FLOAT_LIST_MAX_COUNT; 0 gives the empty list, NULL.
+ * @param outList [out] Receives the new list (the caller owns it: PropertyFloatList_Destroy), or NULL for an empty one.
+ *        Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p outList is NULL, or @p values is NULL with a count above 0;
+ *          ErrorCode_ArgumentOutOfRange for a count above PROPERTY_FLOAT_LIST_MAX_COUNT (*outList is NULL then).
+ */
+Error PropertyFloatList_Create(const float* values, size_t count, PropertyFloatList** outList);
+
+/**
+ * @brief Releases a float list.
+ * @param list The list, or NULL (nothing happens).
+ */
+void PropertyFloatList_Destroy(PropertyFloatList* list);
+
+/**
+ * @brief Copies a float list.
+ * @param list The list to copy; NULL (the empty list) gives NULL.
+ * @returns The copy, owned by the caller (PropertyFloatList_Destroy).
+ */
+PropertyFloatList* PropertyFloatList_Clone(const PropertyFloatList* list);
+
+/**
+ * @brief Reports whether two float lists hold the same values in the same order (compared by value: 0 equals -0).
+ * @param a The first list; NULL is the empty list.
+ * @param b The second list; NULL is the empty list.
+ * @returns true when they are equal.
+ */
+bool PropertyFloatList_Equals(const PropertyFloatList* a, const PropertyFloatList* b);
+
+/**
+ * @brief Returns how many values a float list holds.
+ * @param list The list; NULL is the empty list.
+ * @returns The count (0 for NULL).
+ */
+static inline size_t PropertyFloatList_GetCount(const PropertyFloatList* list)
+{
+    return (list != NULL) ? list->_count : 0U;
+}
+
+/**
+ * @brief Returns a float list's values.
+ * @param list The list; NULL is the empty list.
+ * @returns The values (borrowed: valid while the list is), PropertyFloatList_GetCount of them; NULL for NULL.
+ */
+static inline const float* PropertyFloatList_GetValues(const PropertyFloatList* list)
+{
+    return (list != NULL) ? list->_values : NULL;
+}
 
 
 // Functions: tables.
@@ -603,11 +707,13 @@ const unsigned char* PropertyType_GetName(PropertyType type);
  * Checked: a valid name and a version of at least 1; at least one descriptor; every key snake_case and unique; every
  * wire id non-zero, unique and not retired; retired ids non-zero and unique; every field inside StructSize with the
  * size its type needs (Enum: 1, 2 or 4 bytes), and no two fields overlapping; rules that fit the type (bounds only on
- * bounded numeric types, finite and ordered, whole and in range for integers; MaxLength on every string; MaxCount and
- * MaxLength on every DataMap); a TagsKey exactly on DataMaps, snake_case and unique among the keys; an enum table
+ * bounded numeric types and float lists, finite and ordered, whole and in range for integers; MaxLength on every string;
+ * MaxCount and MaxLength on every DataMap; MaxCount, at most PROPERTY_FLOAT_LIST_MAX_COUNT, on every FloatList, and
+ * IsStrictlyIncreasing only there); a TagsKey exactly on DataMaps, snake_case and unique among the keys; an enum table
  * exactly on enums, with snake_case unique names and unique values that fit the field; only known flag bits;
- * SinceVersion in [1, Version]; and every default passing its own rules (a DataMap's is NULL). Run it from a test for
- * every table in the game.
+ * SinceVersion in [1, Version]; override flags (PROPERTY_OVERRIDE_FLAG_PREFIX) that are Bools naming another row; and
+ * every default passing its own rules (a DataMap's and a FloatList's is NULL). Run it from a test for every table in the
+ * game.
  * @param table The table; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p table is NULL or breaks a rule (the message names the table, the
  *          key and the rule).
@@ -639,7 +745,7 @@ const PropertyDescriptor* PropertyTable_FindByKey(const PropertyTable* table, co
 Error Properties_Construct(const PropertyTable* table, void* instance);
 
 /**
- * @brief Releases what an instance owns (its String and AssetName fields, which become NULL).
+ * @brief Releases what an instance owns (its String, AssetName, DataMap and FloatList fields, which become NULL).
  *
  * Other fields are untouched. Safe on a constructed instance, also more than once; NULL arguments do nothing.
  * @param table The table, or NULL.
@@ -672,8 +778,9 @@ Error Properties_Validate(const PropertyTable* table, const void* instance);
 Error Properties_CheckValue(const PropertyTable* table, const PropertyDescriptor* descriptor, const PropertyValue* value);
 
 /**
- * @brief Deep-copies every described field of one instance into another (strings cloned, the destination's old
- *        strings released), then calls the table's AfterSet with a NULL descriptor on the destination.
+ * @brief Deep-copies every described field of one instance into another (strings, data maps and float lists cloned,
+ *        the destination's old ones released), then calls the table's AfterSet with a NULL descriptor on the
+ *        destination.
  *
  * Fields the table does not describe are untouched. Copying an instance onto itself does nothing.
  * @param table The table; must not be NULL.

@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "wr/WRError.h"
 #include "PropertyDescriptor.h"
 #include "WorldComponent.h"
@@ -27,12 +28,20 @@
  * VARIANTS. With uses_variant on, the object is drawn with the world model's variant of the given name (another look of
  * the same meshes); an unknown name draws the model's own materials, and the renderer warns once.
  *
+ * LODS (T11). The world model says up to which distance each of its LODs is drawn; a placement may replace those switch
+ * distances with its own list (overrides_lod_distances with lod_distances: it applies only while the list has as many
+ * distances as the world model has LODs), scale whichever are in effect (lod_distance_multiplier: 2 keeps each LOD twice
+ * as far, more detail), or force one LOD (is_lod_forced with forced_lod). WorldModelComponent_ResolveLodSettings turns
+ * them into the switch distances in effect; the renderer measures the distance, adds the player's lod_distance_scale and
+ * the zoom, and cross-fades every change.
+ *
  * Added with World_AddComponent(world, id, WorldComponentType_Model, &component); reach its fields with
  * WorldModelComponent_FromComponent. Its properties are the rows of its table ("model_component"), in this order:
  * world_model, uses_variant, variant, overrides_has_outline, has_outline, overrides_omit_pixelation, omit_pixelation,
  * overrides_shadow_tier, shadow_tier ("both" / "near" / "far"), overrides_casts_shadows, casts_shadows,
- * overrides_draw_distance, draw_distance, draw_distance_multiplier, overrides_is_draw_distance_fixed and
- * is_draw_distance_fixed. Every change advances the component's revision (WorldComponent_GetRevision).
+ * overrides_draw_distance, draw_distance, draw_distance_multiplier, overrides_is_draw_distance_fixed,
+ * is_draw_distance_fixed, overrides_lod_distances, lod_distances, lod_distance_multiplier, is_lod_forced and forced_lod.
+ * Every change advances the component's revision (WorldComponent_GetRevision).
  */
 
 
@@ -60,6 +69,8 @@ typedef enum WorldModelSettingEnum
     /** @brief Keeping the draw distance fixed against the quality setting (is_draw_distance_fixed, flag
      *  overrides_is_draw_distance_fixed). */
     WorldModelSetting_IsDrawDistanceFixed,
+    /** @brief The LOD switch distances (lod_distances, flag overrides_lod_distances). */
+    WorldModelSetting_LodDistances,
     /** @brief The number of settings; not a setting. */
     WorldModelSetting_Count
 } WorldModelSetting;
@@ -106,6 +117,20 @@ typedef struct WorldModelComponentStruct
     bool _overridesIsDrawDistanceFixed;
     /** @brief This placement's "the quality setting leaves the draw distance as it is" (default false). */
     bool _isDrawDistanceFixed;
+    /** @brief Whether _lodDistances replaces the world model's LOD switch distances (default false); it applies only
+     *  while the list has as many distances as the world model has LODs. */
+    bool _overridesLodDistances;
+    /** @brief This placement's own LOD switch distances, in metres, finest LOD first: finite, above 0, rising, at most
+     *  WORLD_MODEL_MAX_LODS (owned; NULL, the empty list, by default). Kept while _overridesLodDistances is off. */
+    PropertyFloatList* _lodDistances;
+    /** @brief Multiplies the LOD switch distances in effect (the world model's or this placement's), above 0 (default 1;
+     *  2 = each LOD kept twice as far: more detail). A plain setting, not an override. */
+    float _lodDistanceMultiplier;
+    /** @brief Whether _forcedLod is drawn whatever the distance (default false: the LOD is chosen by distance). */
+    bool _isLodForced;
+    /** @brief The LOD drawn while _isLodForced is on, 0 the finest (default 0); past the world model's last LOD it draws
+     *  the last. Kept while _isLodForced is off. */
+    uint32_t _forcedLod;
 } WorldModelComponent;
 
 
@@ -353,6 +378,108 @@ static inline bool WorldModelComponent_IsDrawDistanceFixed(const WorldModelCompo
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  */
 Error WorldModelComponent_SetIsDrawDistanceFixed(WorldModelComponent* self, bool isFixed);
+
+/**
+ * @brief Returns this placement's own LOD switch distances (they apply while WorldModelSetting_LodDistances is
+ *        overridden and their count is the world model's LOD count).
+ * @param self The model component; must not be NULL.
+ * @param outCount [out] Receives how many there are (0 for none). Must not be NULL.
+ * @returns The distances in metres, finest LOD first (borrowed: valid until they change); NULL when there are none.
+ */
+static inline const float* WorldModelComponent_GetLodDistances(const WorldModelComponent* self, size_t* outCount)
+{
+    *outCount = PropertyFloatList_GetCount(self->_lodDistances);
+    return PropertyFloatList_GetValues(self->_lodDistances);
+}
+
+/**
+ * @brief Sets this placement's own LOD switch distances (a copy; they apply while WorldModelSetting_LodDistances is
+ *        overridden and there are as many as the world model has LODs).
+ * @param self The model component; must not be NULL.
+ * @param distances The distances in metres, finest LOD first: finite, above 0 and rising; may be NULL when @p count is
+ *        0.
+ * @param count How many, 0 to WORLD_MODEL_MAX_LODS (0 clears the list).
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL, or @p distances is NULL with a count above 0;
+ *          ErrorCode_ArgumentOutOfRange when the distances break a rule: more than WORLD_MODEL_MAX_LODS, one not finite or
+ *          not above 0, one not above the one before it (nothing changes then).
+ */
+Error WorldModelComponent_SetLodDistances(WorldModelComponent* self, const float* distances, size_t count);
+
+/**
+ * @brief Returns the LOD distance multiplier: it multiplies the LOD switch distances in effect (2 = each LOD kept twice
+ *        as far).
+ * @param self The model component; must not be NULL.
+ * @returns The multiplier, above 0 (default 1).
+ */
+static inline float WorldModelComponent_GetLodDistanceMultiplier(const WorldModelComponent* self)
+{
+    return self->_lodDistanceMultiplier;
+}
+
+/**
+ * @brief Sets the LOD distance multiplier (it multiplies the world model's or the placement's switch distances, whichever
+ *        are in effect; above 1 keeps more detail).
+ * @param self The model component; must not be NULL.
+ * @param multiplier Finite and above 0; 1 changes nothing.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for a value that is not
+ *          finite or not above 0.
+ */
+Error WorldModelComponent_SetLodDistanceMultiplier(WorldModelComponent* self, float multiplier);
+
+/**
+ * @brief Returns whether this placement draws one LOD whatever the distance (WorldModelComponent_GetForcedLod).
+ * @param self The model component; must not be NULL.
+ * @returns true while the LOD is forced.
+ */
+static inline bool WorldModelComponent_IsLodForced(const WorldModelComponent* self)
+{
+    return self->_isLodForced;
+}
+
+/**
+ * @brief Switches the forced LOD on or off (off: the LOD is chosen by distance). The forced LOD's index is kept either
+ *        way; the renderer cross-fades to the new LOD.
+ * @param self The model component; must not be NULL.
+ * @param isForced Whether the forced LOD is drawn.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldModelComponent_SetIsLodForced(WorldModelComponent* self, bool isForced);
+
+/**
+ * @brief Returns the LOD drawn while the LOD is forced, 0 the finest (one past the world model's last draws its last).
+ * @param self The model component; must not be NULL.
+ * @returns The LOD's index.
+ */
+static inline uint32_t WorldModelComponent_GetForcedLod(const WorldModelComponent* self)
+{
+    return self->_forcedLod;
+}
+
+/**
+ * @brief Sets the LOD drawn while the LOD is forced (it applies while WorldModelComponent_IsLodForced).
+ * @param self The model component; must not be NULL.
+ * @param lod The LOD's index, 0 the finest; any value: one past the world model's last LOD draws its last.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldModelComponent_SetForcedLod(WorldModelComponent* self, uint32_t lod);
+
+/**
+ * @brief How this placement chooses among its world model's LODs: the switch distances in effect (the placement's own
+ *        list while WorldModelSetting_LodDistances is overridden and it has one distance per LOD, else the world model's
+ *        max distances; times the LOD distance multiplier), the forced LOD (clamped to the last LOD), and the world
+ *        model's hysteresis and fade time.
+ *
+ * A pure function (the renderer calls it for every model each frame).
+ * @param self The model component; must not be NULL.
+ * @param worldModel The world model the placement draws; must not be NULL.
+ * @param outSettings [out] Receives the settings. Must not be NULL.
+ * @returns true when the settings are what the placement asks for; false when its own list is switched on but holds
+ *          another number of distances than the world model has LODs (the world model gained or lost one), so the
+ *          world model's distances were used instead, and the LOD is not forced (then no distance matters): the caller
+ *          warns once.
+ */
+bool WorldModelComponent_ResolveLodSettings(const WorldModelComponent* self, const WorldModel* worldModel,
+    WorldModelLodSettings* outSettings);
 
 /**
  * @brief The settings that apply to this placement: each setting from the world model, or the placement's own value

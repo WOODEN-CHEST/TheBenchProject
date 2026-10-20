@@ -14,7 +14,8 @@ checker and autocomplete, `handoff/2026-10_scripting_language/PROPOSAL.md` secti
 **Clients:** `WorldEnvironment` ([WorldData.md](WorldData.md), "Environment"), `GameClock` ([GameClock.md](GameClock.md),
 T23), and since T05 the world objects (`world_object`, with T24's `data` row for tags and custom data and T08's
 `parent` row, both ReadOnly for `Properties_Set`, whose reads and copies the world reconciles in the table's `AfterSet`)
-and their components (`model_component`, with T10's override pairs, `sprite_component`, with T26's 17 override pairs,
+and their components (`model_component`, with T10's override pairs and T11's LOD rows, `sprite_component`, with T26's 17
+override pairs,
 `light_component`; [WorldData.md](WorldData.md), "Property tables"), and since T26 a world sprite's settings
 (`world_sprite` and `world_sprite_render`, which read its definition: [WorldSprites.md](WorldSprites.md)). The sprite
 component's value rows and the world sprite's rows come from the same macros (`source/WorldSpriteInternal.h`), so the
@@ -103,6 +104,7 @@ no `inherit` states: a flag cannot collide with a real value, and the editor sho
 | `ObjectId` | `uint64_t`, 0 = none | like UInt64 | the smallest integer type that holds the value |
 | `Date` | `int64_t` day number ([GameCalendar.md](GameCalendar.md)), inside the calendar (years 1 to 9999) | `"yyyy-mm-dd"` only, e.g. `"2026-10-18"` | EncodedInteger (the day number; three bytes for this era) |
 | `DataMap` | owned `DataMap*` ([ObjectData.md](ObjectData.md)), NULL while empty (its only default) | two keys: the tags under the descriptor's `TagsKey` (`["town:lamp"]`), the values under its `Key` (`{"town:visits": 3}`) | Compound array of entry compounds |
+| `FloatList` (T11) | owned `PropertyFloatList*`, NULL while empty (its only default) | array of numbers, `[3.0, 6.0, 60.0]` (`[]` when empty) | Float array (empty when empty) |
 
 Since T09 the integer types are written in the smallest GHDF integer type that holds the value (a `parent` of 12 is one
 UInt8 byte) and read from any GHDF integer type, fixed width or encoded, whose value fits the property's type
@@ -121,7 +123,10 @@ doubles in double precision); `PROPERTY_RULES_HALF_OPEN(min, max)` is [min, max)
 calendar's range. A JSON date must be the exact text "yyyy-mm-dd" of an existing day; a bare day number is refused, so
 files stay readable. A `DataMap` takes `PROPERTY_RULES_DATA_MAP(maxCount, maxBytes)` (`Rules.MaxCount` entries and
 `Rules.MaxLength` bytes, both required) and a `TagsKey` (snake_case, unique among the table's keys; only data maps take
-one); its default must be NULL (empty).
+one); its default must be NULL (empty). A `FloatList` takes `Rules.MaxCount` (required, 1 to
+`PROPERTY_FLOAT_LIST_MAX_COUNT`, 4096), bounds that apply to every value (every value is finite), and
+`Rules.IsStrictlyIncreasing` (each value above the one before; only lists take it): `PROPERTY_RULES_FLOAT_LIST(count)`,
+`PROPERTY_RULES_INCREASING_FLOAT_LIST_ABOVE(count, minimum)` (a placement's LOD distances); its default must be NULL.
 
 Flags: `Persistent` (written and read by JSON and GHDF), `Editable` (inspector), `ReadOnly` (visible, refused by
 `Properties_Set`; reads from files still fill it), `Script`. `PROPERTY_FLAGS_SETTING` = Persistent | Editable | Script.
@@ -196,7 +201,18 @@ range) and whether it owns memory (`PropertyInternal_IsOwnedType`: the strings a
 cloned and handed over through `PropertyInternal_AdoptOwned` and `CloneOwned`), document it in the header's type table
 and here, and test it in `tests/PropertyDescriptorTests.c` (the test record has one field of every type but
 `DataMap`, which has its own record: it needs a key registry). `Double` and `Date` were added this way in T23,
-`AngleVector3` (an object's rotation) in T05, `DataMap` (tags and typed data) in T24.
+`AngleVector3` (an object's rotation) in T05, `DataMap` (tags and typed data) in T24, `FloatList` (a placement's LOD
+distances) in T11.
+
+### Float lists
+
+`PropertyFloatList` (in `PropertyDescriptor.h`) is one heap block: its count and its values (a flexible array member).
+The empty list is NULL, never an empty block. `PropertyFloatList_Create(values, count, &list)` copies (NULL for 0; at most
+`PROPERTY_FLOAT_LIST_MAX_COUNT`), `_Destroy`, `_Clone`, `_Equals` (by value, NULL is empty, 0 equals -0), and the inline
+`_GetCount` / `_GetValues` (0 and NULL for NULL). A list field is owned like a string: `Properties_Set` copies the list
+it is given (`PropertyValue_FromFloatList`), `Properties_Get` borrows the instance's own, copies clone, reads hand a new
+list over. The readers check the count against the row's `MaxCount` before they allocate anything (JSON: "The list has
+9 values; at most 8 are allowed."); the values' rules are checked when the read commits, like every rule.
 
 ## Known limits
 

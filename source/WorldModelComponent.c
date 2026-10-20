@@ -10,6 +10,7 @@
 #define CATEGORY_MODEL ((const unsigned char*)u8"Model")
 #define CATEGORY_RENDERING ((const unsigned char*)u8"Rendering")
 #define CATEGORY_DRAW_DISTANCE ((const unsigned char*)u8"Draw distance")
+#define CATEGORY_LODS ((const unsigned char*)u8"Level of detail")
 
 
 // Types.
@@ -32,6 +33,11 @@ typedef enum ModelPropertyEnum
     ModelProperty_DrawDistanceMultiplier,
     ModelProperty_OverridesIsDrawDistanceFixed,
     ModelProperty_IsDrawDistanceFixed,
+    ModelProperty_OverridesLodDistances,
+    ModelProperty_LodDistances,
+    ModelProperty_LodDistanceMultiplier,
+    ModelProperty_IsLodForced,
+    ModelProperty_ForcedLod,
     ModelProperty_Count
 } ModelProperty;
 
@@ -40,7 +46,7 @@ typedef enum ModelPropertyEnum
 /* Every property, in inspector order: each override flag sits right before the value it switches on. The wire ids are
  * the save schema: never renumber or reuse one; a removed property's id goes into the table's retired list. (T10
  * renamed wire 1 from "model", a model asset, to "world_model", and made rows 2 to 5 the placement's own values behind
- * their override flags.) The next free wire id is 17. */
+ * their override flags; T11 added the LOD rows, 17 to 21.) The next free wire id is 22. */
 static const PropertyDescriptor ModelProperties[ModelProperty_Count] =
 {
     [ModelProperty_WorldModel] =
@@ -179,6 +185,52 @@ static const PropertyDescriptor ModelProperties[ModelProperty_Count] =
             u8"setting: for landmarks and gameplay-critical things (while \"Override fixed draw distance\" is on).",
         .SinceVersion = 1U
     },
+    [ModelProperty_OverridesLodDistances] =
+    {
+        .Key = u8"overrides_lod_distances", .WireId = 17U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldModelComponent, _overridesLodDistances), .Default.BoolValue = false,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_LODS, .DisplayName = u8"Override LOD distances",
+        .Description = u8"Uses this object's LOD distances instead of its world model's (while it gives one per LOD).",
+        .SinceVersion = 1U
+    },
+    [ModelProperty_LodDistances] =
+    {
+        .Key = u8"lod_distances", .WireId = 18U, .Type = PropertyType_FloatList,
+        PROPERTY_MEMBER(WorldModelComponent, _lodDistances), .Default.FloatListValue = NULL,
+        .Rules = PROPERTY_RULES_INCREASING_FLOAT_LIST_ABOVE(WORLD_MODEL_MAX_LODS, 0.0), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_LODS, .DisplayName = u8"LOD distances",
+        .Description = u8"Up to which distance, in metres, each LOD is drawn, the finest first and rising, before the "
+            u8"quality setting and the zoom (while \"Override LOD distances\" is on, and only with one distance per LOD "
+            u8"of the world model).",
+        .SinceVersion = 1U
+    },
+    [ModelProperty_LodDistanceMultiplier] =
+    {
+        .Key = u8"lod_distance_multiplier", .WireId = 19U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldModelComponent, _lodDistanceMultiplier), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_LODS,
+        .DisplayName = u8"LOD distance multiplier",
+        .Description = u8"Multiplies the LOD distances in effect, the world model's or this object's: 2 keeps each LOD "
+            u8"twice as far (more detail).",
+        .SinceVersion = 1U
+    },
+    [ModelProperty_IsLodForced] =
+    {
+        .Key = u8"is_lod_forced", .WireId = 20U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldModelComponent, _isLodForced), .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_LODS, .DisplayName = u8"Force a LOD",
+        .Description = u8"Draws the \"Forced LOD\" whatever the distance, instead of choosing a LOD by distance.",
+        .SinceVersion = 1U
+    },
+    [ModelProperty_ForcedLod] =
+    {
+        .Key = u8"forced_lod", .WireId = 21U, .Type = PropertyType_UInt32, PROPERTY_MEMBER(WorldModelComponent, _forcedLod),
+        .Default.UInt32Value = 0U, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_LODS,
+        .DisplayName = u8"Forced LOD",
+        .Description = u8"The LOD drawn while \"Force a LOD\" is on: 0 the finest; past the world model's last LOD, its "
+            u8"last.",
+        .SinceVersion = 1U
+    },
 };
 
 static const PropertyTable ModelTable =
@@ -265,6 +317,10 @@ static bool TryGetOverrideFlag(WorldModelComponent* self, WorldModelSetting sett
             *outFlag = &self->_overridesIsDrawDistanceFixed;
             *outProperty = ModelProperty_OverridesIsDrawDistanceFixed;
             return true;
+        case WorldModelSetting_LodDistances:
+            *outFlag = &self->_overridesLodDistances;
+            *outProperty = ModelProperty_OverridesLodDistances;
+            return true;
         case WorldModelSetting_Count:
             break;
     }
@@ -349,6 +405,7 @@ bool WorldModelComponent_IsOverridden(const WorldModelComponent* self, WorldMode
         case WorldModelSetting_CastsShadows:        return self->_overridesCastsShadows;
         case WorldModelSetting_DrawDistance:        return self->_overridesDrawDistance;
         case WorldModelSetting_IsDrawDistanceFixed: return self->_overridesIsDrawDistanceFixed;
+        case WorldModelSetting_LodDistances:        return self->_overridesLodDistances;
         case WorldModelSetting_Count:               break;
     }
     // Only reachable with a value outside the enum: nothing is overridden.
@@ -458,6 +515,93 @@ Error WorldModelComponent_SetIsDrawDistanceFixed(WorldModelComponent* self, bool
     }
     SetBool(self, &self->_isDrawDistanceFixed, isFixed, ModelProperty_IsDrawDistanceFixed);
     return Error_CreateSuccess();
+}
+
+Error WorldModelComponent_SetLodDistances(WorldModelComponent* self, const float* distances, size_t count)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelComponent_SetLodDistances");
+    }
+    PropertyFloatList* List = NULL;
+    Error Result = PropertyFloatList_Create(distances, count, &List);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = CheckProperty(ModelProperty_LodDistances, PropertyValue_FromFloatList(List));
+    if (Result.Code != ErrorCode_Success)
+    {
+        PropertyFloatList_Destroy(List);
+        return Result;
+    }
+    PropertyFloatList_Destroy(self->_lodDistances);
+    self->_lodDistances = List;
+    WorldInternal_ComponentAfterSet(self, &ModelProperties[ModelProperty_LodDistances]);
+    return Error_CreateSuccess();
+}
+
+Error WorldModelComponent_SetLodDistanceMultiplier(WorldModelComponent* self, float multiplier)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelComponent_SetLodDistanceMultiplier");
+    }
+    Error CheckResult = CheckProperty(ModelProperty_LodDistanceMultiplier, PropertyValue_FromFloat(multiplier));
+    if (CheckResult.Code != ErrorCode_Success)
+    {
+        return CheckResult;
+    }
+    self->_lodDistanceMultiplier = multiplier;
+    WorldInternal_ComponentAfterSet(self, &ModelProperties[ModelProperty_LodDistanceMultiplier]);
+    return Error_CreateSuccess();
+}
+
+Error WorldModelComponent_SetIsLodForced(WorldModelComponent* self, bool isForced)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelComponent_SetIsLodForced");
+    }
+    SetBool(self, &self->_isLodForced, isForced, ModelProperty_IsLodForced);
+    return Error_CreateSuccess();
+}
+
+Error WorldModelComponent_SetForcedLod(WorldModelComponent* self, uint32_t lod)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelComponent_SetForcedLod");
+    }
+    self->_forcedLod = lod;
+    WorldInternal_ComponentAfterSet(self, &ModelProperties[ModelProperty_ForcedLod]);
+    return Error_CreateSuccess();
+}
+
+bool WorldModelComponent_ResolveLodSettings(const WorldModelComponent* self, const WorldModel* worldModel,
+    WorldModelLodSettings* outSettings)
+{
+    size_t LodCount = WorldModel_GetLodCount(worldModel);
+    size_t LastLod = (LodCount > 0U) ? (LodCount - 1U) : 0U;
+    size_t OwnCount = 0U;
+    const float* Own = WorldModelComponent_GetLodDistances(self, &OwnCount);
+    bool IsOwnListUsed = self->_overridesLodDistances && (OwnCount == LodCount);
+
+    WorldModelLodSettings Settings =
+    {
+        .LodCount = LodCount,
+        .Hysteresis = WorldModel_GetLodHysteresis(worldModel),
+        .FadeSeconds = WorldModel_GetLodFadeSeconds(worldModel),
+        .IsLodForced = self->_isLodForced,
+        .ForcedLod = ((size_t)self->_forcedLod < LastLod) ? (size_t)self->_forcedLod : LastLod
+    };
+    for (size_t Index = 0U; (Index < LodCount) && (Index < WORLD_MODEL_MAX_LODS); Index++)
+    {
+        float Distance = IsOwnListUsed ? Own[Index] : WorldModel_GetLodMaxDistance(worldModel, Index);
+        Settings.SwitchDistances[Index] = Distance * self->_lodDistanceMultiplier;
+    }
+    *outSettings = Settings;
+    return self->_isLodForced || !self->_overridesLodDistances || IsOwnListUsed;
 }
 
 WorldModelSettings WorldModelComponent_ResolveSettings(const WorldModelComponent* self,

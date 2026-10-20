@@ -95,15 +95,34 @@ static bool IsVariantChanged(const WorldRenderModel* entry, const WorldModelComp
         || (HashName(WorldModelComponent_GetVariant(component)) != entry->VariantNameHash);
 }
 
+/* Logs (once, when it starts) that an object's own LOD distances do not fit its world model, whose distances it uses. */
+static void ReportLodListRefused(Logger* logger, const WorldRenderModel* entry)
+{
+    if (logger == NULL)
+    {
+        return;
+    }
+    size_t OwnCount = 0U;
+    WorldModelComponent_GetLodDistances(entry->Component, &OwnCount);
+    Error LogResult = Logger_LogWarningFormatted(logger,
+        (const unsigned char*)u8"WorldRenderer: object %" PRIu64 u8" (\"%s\") uses its world model \"%s\"'s LOD "
+        u8"distances: its own lod_distances holds %" PRIu64 u8", the world model has %" PRIu64 u8" LODs.",
+        entry->ObjectId, GetOwnerName(entry->Component), (const char*)WorldModelComponent_GetWorldModel(entry->Component),
+        (uint64_t)OwnCount, (uint64_t)WorldModel_GetLodCount(entry->Asset));
+    Error_Deconstruct(&LogResult);
+}
+
 /* Resolves an entry's world model for the component's current name, then its variant. A component without a name draws
- * nothing (not an error); a load failure is logged here, once, and not retried until the name changes. */
+ * nothing (not an error); a load failure is logged here, once, and not retried until the name changes. The LOD state
+ * starts afresh: another world model's LODs say nothing about this one's. */
 static void ResolveModel(WorldRenderModel* entry, AssetManager* assets, AssetUserID modelUser, Logger* logger)
 {
     const unsigned char* AssetName = WorldModelComponent_GetWorldModel(entry->Component);
     entry->IsResolved = true;
     entry->NameHash = HashName(AssetName);
     entry->Asset = NULL;
-    entry->Model = NULL;
+    entry->Lod = WorldLodState_Create();
+    entry->IsLodListRefused = false;
     if (AssetName != NULL)
     {
         WorldModel* Asset = NULL;
@@ -111,7 +130,6 @@ static void ResolveModel(WorldRenderModel* entry, AssetManager* assets, AssetUse
         if (LoadResult.Code == ErrorCode_Success)
         {
             entry->Asset = Asset;
-            entry->Model = WorldModel_GetLodModel(Asset, 0U); // TODO: T11 picks the LOD by distance, with cross-fades.
             entry->LocalCenter = WorldModel_GetBoundsCenter(Asset);
             entry->LocalRadius = WorldModel_GetBoundsRadius(Asset);
             entry->BoundsTransform = WorldModel_GetBoundsTransform(Asset);
@@ -126,10 +144,10 @@ static void ResolveModel(WorldRenderModel* entry, AssetManager* assets, AssetUse
 
 /* Brings one model entry up to date for this frame: re-resolves its world model if its name changed (or its variant if
  * that changed), then takes the settings in effect (WorldModelComponent_ResolveSettings) and recomputes whether it is
- * drawn, its tint, its final transform (the LOD's import transform inside the object's world matrix: its scale -> Euler
- * XYZ -> translation, as raylib's DrawModelEx composes them, times its parents') and its world bounding sphere (the
- * world model's, through its own transform composed with the world matrix: conservative also when the hierarchy shears
- * it, and exactly the drawn model's sphere when it is LOD 0's). */
+ * drawn, its tint, its world matrix (scale -> Euler XYZ -> translation, as raylib's DrawModelEx composes them, times its
+ * parents'; each LOD is drawn with its import transform inside it) and its world bounding sphere (the world model's,
+ * through its own transform composed with the world matrix: conservative also when the hierarchy shears it, and exactly
+ * LOD 0's sphere when the world model has no bounds of its own). */
 static void UpdateModel(WorldRenderModel* entry, AssetManager* assets, AssetUserID modelUser, Logger* logger)
 {
     const WorldModelComponent* ModelComponent = entry->Component;
@@ -164,9 +182,8 @@ static void UpdateModel(WorldRenderModel* entry, AssetManager* assets, AssetUser
         return;
     }
 
-    Matrix WorldMatrix = WorldObject_GetWorldMatrix(Owner);
-    entry->Transform = MatrixMultiply(GameModel_GetRaylibModel(entry->Model).transform, WorldMatrix);
-    Matrix BoundsToWorld = MatrixMultiply(entry->BoundsTransform, WorldMatrix);
+    entry->WorldMatrix = WorldObject_GetWorldMatrix(Owner);
+    Matrix BoundsToWorld = MatrixMultiply(entry->BoundsTransform, entry->WorldMatrix);
     entry->Center = Vector3Transform(entry->LocalCenter, BoundsToWorld);
     entry->Radius = entry->LocalRadius * WorldTransform_GetMaxScale(BoundsToWorld);
 }
@@ -191,7 +208,7 @@ static Error RematchModels(WorldRenderCache* self, World* world)
     {
         const WorldModelComponent* ModelComponent = WorldModelComponent_FromComponent(Models[Index]);
         uint64_t Id = WorldObject_GetId(WorldComponent_GetOwner(Models[Index]));
-        WorldRenderModel Entry = { .ObjectId = Id, .IsResolved = false, .Asset = NULL, .Model = NULL };
+        WorldRenderModel Entry = { .ObjectId = Id, .IsResolved = false, .Asset = NULL, .Lod = WorldLodState_Create() };
         for (size_t Search = Cursor; Search < PreviousCount; Search++)
         {
             const WorldRenderModel* Previous = GenericBuffer_GetPointerToElement(&self->_models, Search);
@@ -366,6 +383,30 @@ static void UpdateModels(WorldRenderCache* self, World* world, AssetManager* ass
     *outAreEntriesAligned = true;
 }
 
+/* One drawn entry's LOD this frame: its LOD settings in effect (a placement's own list that does not fit its world model
+ * is warned about once, when that starts), the LOD for the camera's zoomed distance to its sphere's centre, chosen from
+ * the LOD it heads to, then the cross-fade moved on. */
+static void UpdateLod(WorldRenderModel* entry, const WorldRenderLodView* view, float zoomFactor, Logger* logger)
+{
+    WorldModelLodSettings Settings;
+    bool IsAsAsked = WorldModelComponent_ResolveLodSettings(entry->Component, entry->Asset, &Settings);
+    if (!IsAsAsked && !entry->IsLodListRefused)
+    {
+        ReportLodListRefused(logger, entry);
+    }
+    entry->IsLodListRefused = !IsAsAsked;
+
+    // A state from a world model with more LODs (cannot happen while the cache resolves again on a rename) starts afresh.
+    if ((entry->Lod.CurrentLod >= Settings.LodCount) || (entry->Lod.TargetLod >= Settings.LodCount))
+    {
+        entry->Lod = WorldLodState_Create();
+    }
+    float Distance = Vector3Distance(view->CameraPosition, entry->Center) * zoomFactor;
+    size_t Lod = WorldLod_Select(&Settings, Distance, view->DistanceScale, entry->Lod.IsStarted,
+        WorldLodState_GetDestinationLod(&entry->Lod));
+    WorldLodState_Update(&entry->Lod, Lod, view->DeltaSeconds, Settings.FadeSeconds);
+}
+
 /* Rebuilds this frame's sprite and light lists from the world's sprite and light components. */
 static Error BuildSpritesAndLights(WorldRenderCache* self, World* world)
 {
@@ -480,4 +521,27 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, AssetManager* 
         return BuildResult;
     }
     return Error_CreateSuccess();
+}
+
+void WorldRenderCache_UpdateLods(WorldRenderCache* self, const WorldRenderLodView* view, Logger* logger)
+{
+    float ZoomFactor = (isfinite(view->ZoomFactor) && (view->ZoomFactor > 0.0f)) ? view->ZoomFactor : 1.0f;
+    for (size_t Index = 0; Index < self->_models._count; Index++)
+    {
+        WorldRenderModel* Entry = GenericBuffer_GetPointerToElement(&self->_models, Index);
+        if (!Entry->IsDrawn)
+        {
+            // When it is drawn again it appears at its LOD at once, not fading from the one it had.
+            Entry->Lod = WorldLodState_Create();
+            continue;
+        }
+        UpdateLod(Entry, view, ZoomFactor, logger);
+    }
+}
+
+Matrix WorldRenderModel_GetLodTransform(const WorldRenderModel* model, size_t lod)
+{
+    GameModel* LodModel = WorldRenderModel_GetLodModel(model, lod);
+    return (LodModel != NULL) ? MatrixMultiply(GameModel_GetRaylibModel(LodModel).transform, model->WorldMatrix)
+        : model->WorldMatrix;
 }

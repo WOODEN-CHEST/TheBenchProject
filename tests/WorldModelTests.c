@@ -680,6 +680,7 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
         [WorldModelSetting_CastsShadows] = "casts_shadows",
         [WorldModelSetting_DrawDistance] = "draw_distance",
         [WorldModelSetting_IsDrawDistanceFixed] = "is_draw_distance_fixed",
+        [WorldModelSetting_LodDistances] = "lod_distances",
     };
     const PropertyTable* Table = WorldModelComponent_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(Table));
@@ -841,6 +842,11 @@ static void TheComponentStartsAtItsDefaults(TestRun* run)
             && (WorldModelComponent_GetDrawDistance(Placement) == WORLD_MODEL_DEFAULT_DRAW_DISTANCE)
             && (WorldModelComponent_GetDrawDistanceMultiplier(Placement) == 1.0f)
             && !WorldModelComponent_IsDrawDistanceFixed(Placement));
+        // No LOD distances of its own, a LOD multiplier of 1, the LOD chosen by distance (forced LOD 0 kept).
+        size_t LodDistanceCount = 1U;
+        TEST_CHECK(run, (WorldModelComponent_GetLodDistances(Placement, &LodDistanceCount) == NULL)
+            && (LodDistanceCount == 0U) && (WorldModelComponent_GetLodDistanceMultiplier(Placement) == 1.0f)
+            && !WorldModelComponent_IsLodForced(Placement) && (WorldModelComponent_GetForcedLod(Placement) == 0U));
         WorldModelSettings Defaults = WorldModelSettings_CreateDefault();
         WorldModelSettings Resolved = WorldModelComponent_ResolveSettings(Placement, &Defaults);
         TEST_CHECK(run, AreSettingsEqual(&Resolved, &Defaults));
@@ -849,11 +855,163 @@ static void TheComponentStartsAtItsDefaults(TestRun* run)
 }
 
 
+/* The LOD settings in effect: the world model's switch distances, or the placement's own list while its flag is on and it
+ * has one distance per LOD (otherwise the world model's, and the call says so unless the LOD is forced, for the
+ * renderer's warning), times the LOD multiplier; the world model's hysteresis and fade time; the forced LOD clamped to
+ * the last one and kept as written. The rules refuse lists that do not rise, hold a distance that is not finite or not
+ * above 0, or more than 8 distances, and a refused set changes nothing; JSON carries the list through the table. */
+static void ThePlacementPicksItsLodSettings(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    BoundingBox Box = { .min = { -0.5f, -0.5f, -0.5f }, .max = { 0.5f, 0.5f, 0.5f } };
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    World TestWorld;
+    KeyRegistry Keys;
+    bool IsWorldBuilt = false;
+    WorldModel* Loaded = NULL;
+    WorldComponent* Component = NULL;
+    WorldObject* Object = NULL;
+    if (TestAssetFixture_Construct(run, &Fixture)
+        && TestAssets_AddModel(run, &Fixture, "lamp_lod0", Box, NULL)
+        && TestAssets_AddModel(run, &Fixture, "lamp_lod1", Box, NULL)
+        && TestAssets_AddModel(run, &Fixture, "lamp_lod2", Box, NULL)
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"lamp\", \"lods\": [{\"model\": \"lamp_lod0\", "
+            "\"max_distance\": 10}, {\"model\": \"lamp_lod1\", \"max_distance\": 30}, {\"model\": \"lamp_lod2\", "
+            "\"max_distance\": 90}], \"lod_fade_seconds\": 0.5, \"lod_hysteresis\": 0.2}")
+        && ((Loaded = LoadWorldModel(run, &Fixture, "lamp", &User)) != NULL)
+        && (IsWorldBuilt = TestWorld_Construct(run, &TestWorld, &Keys, NULL, NULL))
+        && TEST_CHECK_SUCCESS(run, World_CreateObject(&TestWorld, NULL, &Object))
+        && TEST_CHECK_SUCCESS(run, World_AddComponent(&TestWorld, WorldObject_GetId(Object), WorldComponentType_Model,
+            &Component)))
+    {
+        WorldModelComponent* Placement = WorldModelComponent_FromComponent(Component);
+        WorldModelLodSettings Settings;
+        TEST_CHECK(run, WorldModelComponent_ResolveLodSettings(Placement, Loaded, &Settings));
+        TEST_CHECK(run, (Settings.LodCount == 3U) && (Settings.SwitchDistances[0] == 10.0f)
+            && (Settings.SwitchDistances[1] == 30.0f) && (Settings.SwitchDistances[2] == 90.0f)
+            && (Settings.SwitchDistances[3] == 0.0f) && (Settings.Hysteresis == 0.2f) && (Settings.FadeSeconds == 0.5f)
+            && !Settings.IsLodForced && (Settings.ForcedLod == 0U));
+
+        // The placement's own list is kept, unused, while its flag is off; on, it replaces the world model's.
+        const float Own[] = { 5.0f, 12.0f, 40.0f };
+        uint32_t Revision = WorldComponent_GetRevision(Component);
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetLodDistances(Placement, Own, 3U));
+        TEST_CHECK(run, WorldComponent_GetRevision(Component) == (Revision + 1U));
+        TEST_CHECK(run, WorldModelComponent_ResolveLodSettings(Placement, Loaded, &Settings)
+            && (Settings.SwitchDistances[0] == 10.0f));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Placement, WorldModelSetting_LodDistances, true));
+        TEST_CHECK(run, WorldModelComponent_ResolveLodSettings(Placement, Loaded, &Settings)
+            && (Settings.SwitchDistances[0] == 5.0f) && (Settings.SwitchDistances[1] == 12.0f)
+            && (Settings.SwitchDistances[2] == 40.0f));
+
+        // The multiplier scales whichever distances are in effect.
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetLodDistanceMultiplier(Placement, 2.0f));
+        TEST_CHECK(run, WorldModelComponent_ResolveLodSettings(Placement, Loaded, &Settings)
+            && (Settings.SwitchDistances[0] == 10.0f) && (Settings.SwitchDistances[2] == 80.0f));
+
+        // A list that does not fit the world model (it lost a LOD, or gained one): the world model's distances, and false.
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetLodDistances(Placement, Own, 2U));
+        TEST_CHECK(run, !WorldModelComponent_ResolveLodSettings(Placement, Loaded, &Settings)
+            && (Settings.SwitchDistances[0] == 20.0f) && (Settings.SwitchDistances[1] == 60.0f)
+            && (Settings.SwitchDistances[2] == 180.0f));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetLodDistances(Placement, NULL, 0U));
+        TEST_CHECK(run, !WorldModelComponent_ResolveLodSettings(Placement, Loaded, &Settings));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Placement, WorldModelSetting_LodDistances, false));
+        TEST_CHECK(run, WorldModelComponent_ResolveLodSettings(Placement, Loaded, &Settings));
+
+        // A forced LOD, clamped to the last one in the settings and kept as written.
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsLodForced(Placement, true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetForcedLod(Placement, 1U));
+        TEST_CHECK(run, WorldModelComponent_ResolveLodSettings(Placement, Loaded, &Settings) && Settings.IsLodForced
+            && (Settings.ForcedLod == 1U));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetForcedLod(Placement, 7U));
+        TEST_CHECK(run, WorldModelComponent_ResolveLodSettings(Placement, Loaded, &Settings)
+            && (Settings.ForcedLod == 2U) && (WorldModelComponent_GetForcedLod(Placement) == 7U));
+
+        // While the LOD is forced no distance matters, so an own list that does not fit is not reported; unforced, it is.
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Placement, WorldModelSetting_LodDistances, true));
+        TEST_CHECK(run, WorldModelComponent_ResolveLodSettings(Placement, Loaded, &Settings) && Settings.IsLodForced);
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsLodForced(Placement, false));
+        TEST_CHECK(run, !WorldModelComponent_ResolveLodSettings(Placement, Loaded, &Settings));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsLodForced(Placement, true));
+
+        // The rules; a refused set changes nothing.
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetLodDistances(Placement, Own, 3U));
+        const float Flat[] = { 5.0f, 5.0f };
+        const float Falling[] = { 5.0f, 3.0f };
+        const float Zero[] = { 0.0f, 3.0f };
+        const float NotFinite[] = { 2.0f, INFINITY };
+        const float Missing[] = { NAN };
+        const float Nine[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f };
+        const char* const RiseFragments[] = { "model_component.lod_distances", "rise strictly", NULL };
+        const char* const AboveFragments[] = { "lod_distances (_lodDistances) must have every value finite and > 0",
+            NULL };
+        const char* const CountFragments[] = { "lod_distances", "hold at most 8 values", NULL };
+        TestText_CheckErrorMessage(run, WorldModelComponent_SetLodDistances(Placement, Flat, 2U),
+            ErrorCode_ArgumentOutOfRange, RiseFragments);
+        TestText_CheckErrorMessage(run, WorldModelComponent_SetLodDistances(Placement, Falling, 2U),
+            ErrorCode_ArgumentOutOfRange, RiseFragments);
+        TestText_CheckErrorMessage(run, WorldModelComponent_SetLodDistances(Placement, Zero, 2U),
+            ErrorCode_ArgumentOutOfRange, AboveFragments);
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetLodDistances(Placement, NotFinite, 2U),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetLodDistances(Placement, Missing, 1U), ErrorCode_ArgumentOutOfRange);
+        TestText_CheckErrorMessage(run, WorldModelComponent_SetLodDistances(Placement, Nine, 9U),
+            ErrorCode_ArgumentOutOfRange, CountFragments);
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetLodDistances(Placement, NULL, 2U), ErrorCode_IllegalArgument);
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetLodDistanceMultiplier(Placement, 0.0f),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetLodDistanceMultiplier(Placement, NAN), ErrorCode_ArgumentOutOfRange);
+        size_t Count = 0U;
+        const float* Kept = WorldModelComponent_GetLodDistances(Placement, &Count);
+        TEST_CHECK(run, (Count == 3U) && (Kept[0] == 5.0f) && (Kept[2] == 40.0f)
+            && (WorldModelComponent_GetLodDistanceMultiplier(Placement) == 2.0f));
+
+        // JSON through the table: the list as an array of numbers, read back the same.
+        JSONObjectPool* Pool = NULL;
+        JSONCompound* Compound = NULL;
+        if (TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool))
+            && TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
+        {
+            const PropertyTable* Table = WorldModelComponent_GetPropertyTable();
+            TEST_CHECK_SUCCESS(run, Properties_WriteJSON(Table, Placement, Pool, Compound, NULL));
+            JSONObjectValue List;
+            if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"lod_distances", JSONValueType_Array, &List)))
+            {
+                JSONObjectValue Last;
+                TEST_CHECK(run, (JSONArray_GetElementCount(List.Value.Array) == 3U)
+                    && TEST_CHECK_SUCCESS(run, JSONArray_Get(List.Value.Array, 2U, &Last))
+                    && (Last.Type == JSONValueType_RealNumber) && (Last.Value.RealNumber == 40.0));
+            }
+            WorldObject* Other = NULL;
+            WorldComponent* OtherComponent = NULL;
+            if (TEST_CHECK_SUCCESS(run, World_CreateObject(&TestWorld, NULL, &Other))
+                && TEST_CHECK_SUCCESS(run, World_AddComponent(&TestWorld, WorldObject_GetId(Other),
+                    WorldComponentType_Model, &OtherComponent)))
+            {
+                TEST_CHECK_SUCCESS(run, Properties_ReadJSON(Table, Compound, OtherComponent, NULL));
+                TEST_CHECK(run, Properties_Equals(Table, Placement, OtherComponent));
+            }
+            TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Compound, true));
+        }
+        if (Pool != NULL)
+        {
+            TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+        }
+    }
+    if (IsWorldBuilt)
+    {
+        TestWorld_Deconstruct(run, &TestWorld, &Keys);
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+
 // Tests: the shipped content.
 /* The game's world models (compile/out/asset/world_models) are all read without a skipped file. */
 static void TheShippedWorldModelsAreRead(TestRun* run)
 {
-    static const char* const Names[] = { "test", "pbr_demo", "pbr_metal", "painted_cube" };
+    static const char* const Names[] = { "test", "pbr_demo", "pbr_metal", "painted_cube", "lod_test" };
     TestAssetFixture Fixture;
     GenericBuffer Root;
     GenericBuffer_AllocateVariable(&Root, WORLD_MODEL_TEST_TEXT_CAPACITY, sizeof(unsigned char));
@@ -895,6 +1053,7 @@ void WorldModelTests_Run(TestRun* run)
         { "the_flags_choose_between_the_world_model_and_the_placement",
             TheFlagsChooseBetweenTheWorldModelAndThePlacement },
         { "the_component_starts_at_its_defaults", TheComponentStartsAtItsDefaults },
+        { "the_placement_picks_its_lod_settings", ThePlacementPicksItsLodSettings },
         { "the_shipped_world_models_are_read", TheShippedWorldModelsAreRead },
     };
     TestRun_RunSuite(run, "WorldModel", Cases, sizeof(Cases) / sizeof(Cases[0]));

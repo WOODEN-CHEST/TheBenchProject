@@ -35,8 +35,10 @@ typedef struct GameTextureStruct GameTexture;
  * VARIANTS apply at draw time, never to an asset: the renderer copies a mesh's material maps for each draw and
  * WorldModel_ApplyVariant changes that copy (textures, then the factors), the same rule as the object's tint.
  *
- * LODS. Until T11 the renderer draws LOD 0; T11 picks the LOD by distance (each LOD is used up to its max distance, the
- * last one until the draw distance) and cross-fades between them with the fade time and hysteresis stored here.
+ * LODS. Each LOD is drawn while the object is nearer than its max distance (at the default 60-degree field of view), the
+ * last one until the draw distance; a placement may give its own switch distances, scale them or force a LOD
+ * (WorldModelComponent_ResolveLodSettings). The renderer picks the LOD by the camera's distance with the hysteresis
+ * stored here, and cross-fades a change over the fade time with a dither (T11).
  *
  * Every field is read-only (underscore-prefixed): read them through the accessors.
  */
@@ -104,6 +106,33 @@ typedef struct WorldModelSettingsStruct
     bool IsDrawDistanceFixed;
 } WorldModelSettings;
 
+/**
+ * @brief How one placement chooses among its world model's LODs (WorldModelComponent_ResolveLodSettings): the switch
+ *        distances in effect, the forced LOD, and the world model's hysteresis and fade time.
+ *
+ * A plain value type; the renderer resolves it for every model each frame.
+ */
+typedef struct WorldModelLodSettingsStruct
+{
+    /** @brief The number of LODs, 1 to WORLD_MODEL_MAX_LODS: the world model's. */
+    size_t LodCount;
+    /** @brief The first LodCount entries: LOD i is drawn while the object is nearer than SwitchDistances[i] metres (at
+     *  the default 60-degree field of view, before the player's lod_distance_scale); past the last one the last LOD
+     *  keeps drawing until the draw distance. The world model's max distances or the placement's own list, times the
+     *  placement's multiplier: at least 0, +infinity where a product overflows. The other entries are 0. */
+    float SwitchDistances[WORLD_MODEL_MAX_LODS];
+    /** @brief The world model's hysteresis, in [0, 1): a switch to a coarser LOD waits until the switch distance
+     *  x (1 + h), one back to a finer LOD until x (1 - h). */
+    float Hysteresis;
+    /** @brief The world model's cross-fade time, in seconds (>= 0; 0 swaps at once). */
+    float FadeSeconds;
+    /** @brief Whether ForcedLod is drawn whatever the distance. */
+    bool IsLodForced;
+    /** @brief The LOD drawn while IsLodForced, below LodCount (the placement's forced_lod, clamped to the last LOD). */
+    size_t ForcedLod;
+} WorldModelLodSettings;
+
+// TODO: impostors: a world model could use a sprite (a world sprite) as its last, farthest LOD.
 /** @brief One level of detail of a world model. */
 typedef struct WorldModelLodStruct
 {

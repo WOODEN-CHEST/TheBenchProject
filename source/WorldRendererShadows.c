@@ -111,7 +111,9 @@ static void LoadPointShadowCube(WorldRenderer* self)
 }
 
 /* Draws the depth of a shadow pass's model casters (its visibility list) through @p shader, each dithered by its fade.
- * Ignores the pixelation filter (every pixelation state casts). The sprites are DrawSpriteCasters'. */
+ * A caster mid LOD cross-fade casts the LOD it heads to, solid (no cross-fade dither), so its shadow changes once per
+ * change and never shimmers. Ignores the pixelation filter (every pixelation state casts). The sprites are
+ * DrawSpriteCasters'. */
 static void DrawShadowCasters(WorldRenderer* self, Shader shader, const WorldRendererDitherLocations* dither,
     WorldVisibilityPass pass)
 {
@@ -122,9 +124,10 @@ static void DrawShadowCasters(WorldRenderer* self, Shader shader, const WorldRen
     for (size_t Position = 0; Position < CasterCount; Position++)
     {
         size_t Index = Casters[Position];
+        const WorldRenderModel* Entry = &Models[Index];
         WorldRendererCommon_SetDither(shader, dither, WorldVisibility_GetModelFade(&self->_visibility, Index).Combined,
-            false);
-        WorldRendererGeometry_DrawModel(self, &Models[Index], &shader, false);
+            0.0f, false);
+        WorldRendererGeometry_DrawModel(self, Entry, WorldLodState_GetShadowLod(&Entry->Lod), &shader, false);
     }
 }
 
@@ -156,7 +159,7 @@ static void DrawSpriteCasters(WorldRenderer* self, Shader shader, const WorldRen
         SetShaderValue(shader, locUvRect, Entry->UvRect, SHADER_UNIFORM_VEC4);
         SetShaderValue(shader, locAlphaCutoff, &Entry->AlphaCutoff, SHADER_UNIFORM_FLOAT);
         WorldRendererCommon_SetDither(shader, dither, WorldVisibility_GetSpriteFade(&self->_visibility, Index).Combined,
-            false);
+            0.0f, false);
         WorldRendererSprites_DrawQuad(self, shader, Entry, WHITE,
             isCascade ? Matrices->CascadeTransform : Matrices->PointTransform);
     }

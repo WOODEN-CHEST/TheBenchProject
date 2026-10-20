@@ -147,9 +147,28 @@ static PropertyValue MakeCandidate(const PropertyDescriptor* row, size_t attempt
             Value.Data.DateValue = row->Default.DateValue + 40 + (int64_t)attempt;
             break;
         case PropertyType_DataMap:
-            break;
+        case PropertyType_FloatList:
+            break; // FillData and FillFloatList build these
     }
     return Value;
+}
+
+/* Sets a float list row to rising values within its count and above any minimum: 1.5, 3, 4.5 (or fewer). */
+static void FillFloatList(TestRun* run, const PropertyTable* table, void* instance, const PropertyDescriptor* row)
+{
+    float Values[3];
+    size_t Count = (row->Rules.MaxCount < 3U) ? row->Rules.MaxCount : 3U;
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        Values[Index] = 1.5f * (float)(Index + 1U);
+    }
+    PropertyFloatList* List = NULL;
+    if (TEST_CHECK_SUCCESS(run, PropertyFloatList_Create(Values, Count, &List)))
+    {
+        PropertyValue Value = PropertyValue_FromFloatList(List);
+        TEST_CHECK_SUCCESS(run, Properties_Set(table, instance, row->Key, &Value));
+        PropertyFloatList_Destroy(List);
+    }
 }
 
 /* Sets every settable row of @p table (all but the ReadOnly ones, which go through the world) to a value that is not
@@ -161,6 +180,11 @@ static void FillTable(TestRun* run, const PropertyTable* table, void* instance)
         const PropertyDescriptor* Descriptor = &table->Descriptors[Row];
         if ((Descriptor->Flags & PropertyFlags_ReadOnly) != 0U)
         {
+            continue;
+        }
+        if (Descriptor->Type == PropertyType_FloatList)
+        {
+            FillFloatList(run, table, instance, Descriptor);
             continue;
         }
         bool IsSet = false;
@@ -1355,8 +1379,25 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 24U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 32U);
             TEST_CHECK(run, AreNamesEqual(World_GetName(&Loaded), (const unsigned char*)u8"test"));
+            // The LOD examples (T11): a row of lod_test spheres, one forcing its coarsest LOD, one with its own distances.
+            WorldComponent* Forced = NULL;
+            WorldComponent* OwnDistances = NULL;
+            size_t DistanceCount = 0U;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 25U, WorldComponentType_Model, &Forced)
+                && AreNamesEqual(WorldModelComponent_GetWorldModel(WorldModelComponent_FromComponent(Forced)),
+                    (const unsigned char*)u8"lod_test"));
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 31U, WorldComponentType_Model, &Forced)
+                && WorldModelComponent_IsLodForced(WorldModelComponent_FromComponent(Forced))
+                && (WorldModelComponent_GetForcedLod(WorldModelComponent_FromComponent(Forced)) == 2U));
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 32U, WorldComponentType_Model, &OwnDistances)
+                && WorldModelComponent_IsOverridden(WorldModelComponent_FromComponent(OwnDistances),
+                    WorldModelSetting_LodDistances)
+                && (WorldModelComponent_GetLodDistances(WorldModelComponent_FromComponent(OwnDistances),
+                    &DistanceCount) != NULL) && (DistanceCount == 3U)
+                && (WorldModelComponent_GetLodDistances(WorldModelComponent_FromComponent(OwnDistances),
+                    &DistanceCount)[1] == 6.0f));
             // The world sprite example (T26): the tree placed a second time, mirrored by its placement.
             WorldComponent* Mirrored = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 24U, WorldComponentType_Sprite, &Mirrored)

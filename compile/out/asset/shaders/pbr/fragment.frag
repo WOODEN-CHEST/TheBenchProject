@@ -112,7 +112,7 @@ void main()
 
     // The fade is tested last, after every derivative and mipmapped fetch above, so those stay defined for the pixels
     // that are drawn.
-    if (DitherDiscard(ditherFade, ditherInvert))
+    if (DitherDiscard())
     {
         discard;
     }

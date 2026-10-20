@@ -39,6 +39,12 @@
  * the G-buffer draws it solid until half its fade and not after, so its outline switches off once. Blended and
  * additive sprites fade their alpha instead.
  *
+ * LODS. Every model draws the LOD of its world model that its distance picks (the camera's distance to its centre,
+ * pushed out by a narrower field of view, against its switch distances times the config's lod_distance_scale, with a
+ * hysteresis; or a forced LOD), and a change cross-fades over the world model's fade time: both LODs are drawn with
+ * complementary dithers, so every pixel shows one of them. The G-buffer draws the LOD with the larger share, the
+ * shadows the LOD it heads to, both solid.
+ *
  * FAILURES. A missing shader or a GPU target that cannot be created disables the feature that needs it, with
  * one log line when it happens; WorldRenderer_GetStatus reports what ran. The only fatal failure is a scene
  * target that cannot be created at all.
@@ -69,6 +75,12 @@ typedef struct GameCameraStruct GameCamera;
 
 /** @brief The world renderer. Opaque; construct with WorldRenderer_Create. */
 typedef struct WorldRendererStruct WorldRenderer;
+
+
+// Macros.
+/** @brief How many LODs the status counts drawn models for (WorldRendererStatus.DrawnModelsByLod): a world model's most,
+ *  WORLD_MODEL_MAX_LODS (WorldModel.h). */
+#define WORLD_RENDERER_STATUS_LOD_COUNT 8U
 
 
 // Types.
@@ -177,6 +189,12 @@ typedef struct WorldRendererStatusStruct
     /** @brief Of the drawn models and sprites, those fading or translucent (dithered; blended and additive sprites
      *  alpha-faded). */
     size_t FadingCount;
+    /** @brief Of the drawn models, how many showed each LOD ([i] counts LOD i: the LOD shown, or headed to). */
+    size_t DrawnModelsByLod[WORLD_RENDERER_STATUS_LOD_COUNT];
+    /** @brief Of the drawn models, those cross-fading between two LODs. */
+    size_t LodFadingCount;
+    /** @brief Whether the LOD tinting was on (WorldRenderer_SetLodTintingEnabled). */
+    bool IsLodTintingEnabled;
 } WorldRendererStatus;
 
 
@@ -354,6 +372,26 @@ void WorldRenderer_SetCullingEnabled(WorldRenderer* self, bool enabled);
  * @returns true if enabled.
  */
 bool WorldRenderer_IsCullingEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Enables or disables the LOD tinting: every model drawn with its LOD's colour multiplied into its albedo, so the
+ *        LOD switches can be watched.
+ *
+ * A debug aid: LOD 0 keeps its colours (white), LOD 1 is green, 2 yellow, 3 red, coarser ones magenta, and LODs past 0
+ * also glow faintly in their colour (night vision greys reflected colour, not emitted light, so the colours show at
+ * night too); during a cross-fade the two LODs' dithers show both colours. Default disabled. Applied on the next
+ * render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to tint the models by their LODs.
+ */
+void WorldRenderer_SetLodTintingEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the LOD tinting is enabled (see WorldRenderer_SetLodTintingEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true if enabled.
+ */
+bool WorldRenderer_IsLodTintingEnabled(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables the bloom pass (a blurred bright-pass of the scene added back in HDR).

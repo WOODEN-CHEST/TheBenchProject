@@ -117,6 +117,11 @@ void SpriteTransformTests_Run(TestRun* run);
  *  source/). */
 void WorldVisibilityTests_Run(TestRun* run);
 
+/** @brief LODs: the selection by distance with hysteresis, the scale, the zoom and a forced LOD; the cross-fade's state
+ *  (its start, progress, snapping, a fade time of 0, held frames); the two LODs' complementary dither masks
+ *  (WorldLodTests.c; a private module of source/). */
+void WorldLodTests_Run(TestRun* run);
+
 /** @brief Log rotation, pruning and formatted output under a base directory (LoggerTests.c). */
 void LoggerTests_Run(TestRun* run);
 

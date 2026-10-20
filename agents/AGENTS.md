@@ -57,7 +57,8 @@ Current module list:
   panoramas, the moon, noise, masks) with filtering, wrap, optional mipmaps and an sRGB/linear flag.
 * World models (WorldModels.md) - The world_model asset type (a standard type, JSON in world_models/): the reusable
   definition of a placeable thing, kept apart from its placements. WorldModel (include/WorldModel.h, source/WorldModel.c)
-  holds its LOD models and their switch distances, its draw distance and whether it is fixed against the quality
+  holds its LOD models and their switch distances (drawn by distance with dithered cross-fades since T11), its draw
+  distance and whether it is fixed against the quality
   setting, the default render settings of its placements, its material variants and its bounds; its LOD models and its
   variants' textures load as its dependencies. The definition (source/WorldModelDefinition.c) refuses unknown keys and
   checks every rule when it is read. Variants apply to the renderer's per-draw material copies, never to an asset. The
@@ -114,8 +115,8 @@ Current module list:
     At most one component of each type per object, at most one transform driver.
   * WorldModelComponent - A world model by asset name (WorldModels.md), the variant drawn, and the settings this
     placement overrides: each an explicit flag (overrides_<key>) next to the placement's own value (outline, crisp, shadow
-    tier, casts shadows, draw distance, fixed draw distance), plus a draw distance multiplier; a pure function resolves
-    the settings in effect.
+    tier, casts shadows, draw distance, fixed draw distance, LOD switch distances), plus a draw distance multiplier, a LOD
+    distance multiplier and a forced LOD; pure functions resolve the settings and the LOD settings in effect.
   * WorldSpriteComponent - A world sprite by asset name (WorldSprites.md) with its animation's playback instance, bound
     under the world's asset user on attach and whenever the name changes (also through the table), and every setting
     this placement overrides: each an explicit flag (overrides_<key>) next to the placement's own value (orientation,
@@ -153,19 +154,24 @@ Current module list:
   * WorldRenderer - Renders a World through a GameCamera (PBR lit by the sun and the moon, HDR, sky with the moon,
     stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, AO, outlines, bloom, sun
     shafts, crisp overlay, lit sprites with decals, sorted transparency and shadows that face the light; frustum
-    culling, draw distances, and dithered fades and opacity);
+    culling, draw distances, and dithered fades and opacity; LODs with dithered cross-fades);
     separate from the world data and never writes to it. Split by render pass into
     source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
     WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
   * WorldRenderCache - The renderer's private per-component cache (source/WorldRenderCache.h): one walk over the
     world's model/sprite/light component arrays per frame builds the lists with the objects' world placements
     (effectively disabled and hidden objects not drawn); world models are resolved once per component and again only
-    when the name changes (LOD 0 drawn until T11), variants to an index, and the settings in effect (models' and
-    sprites') every frame.
+    when the name changes, variants to an index, and the settings in effect (models' and sprites') every frame; each
+    model's LOD state is kept across frames and updated once per frame (WorldRenderCache_UpdateLods).
+  * WorldLod - Levels of detail as pure maths (private, source/WorldLod.h): the LOD a distance picks (the zoom, the
+    config's lod_distance_scale, the placement's switch distances, hysteresis, a forced LOD) and the cross-fade's state
+    across frames (progress over the world model's fade time, turning back without a pop, a third LOD from the larger
+    share, the two draws with complementary dithers, the LOD the G-buffer and the shadows draw solid).
   * WorldVisibility - What each pass draws this frame (private, source/WorldVisibility.h): frustum planes and sphere
     tests (the camera's frustum, each shadow cascade's box), draw distances (each model's and sprite's own, times the
     config's draw_distance_scale unless fixed, against its distance times the camera's zoom factor) with their
-    fade band, the opacity's fade, the dither's C mirror (shaders/common/dither.glsl), and
+    fade band, the opacity's fade, the dither's C mirror (shaders/common/dither.glsl: the draw's fade and the LOD
+    cross-fade's complementary masks), and
     the per-pass lists of cache entries with their fades, built every frame from the render cache.
   * SpriteTransform - A sprite quad's pure maths (private, source/SpriteTransform.h): its matrix for a viewer (the
     camera or a light; billboard, axis billboard, fixed), its world size from pixels per unit, its bounds and the
@@ -181,9 +187,12 @@ Current module list:
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
   keys by mode, migration hook) and write (defaults left out by default, integers in GHDF's smallest type), and get/set
-  by key. The one module allowed to write `_` fields by offset. Clients: WorldEnvironment, GameClock, the world objects and their components, the world sprite's settings; new data
-  types get a table, not hand-written codecs. A setting a placement overrides is two rows, a Bool `overrides_<key>` and
-  the value `<key>` (the table check enforces the pairing). A DataMap property (tags and typed data) is written as two JSON keys.
+  by key. The one module allowed to write `_` fields by offset. Clients: WorldEnvironment, GameClock, the world objects
+  and their components, the world sprite's settings; new data types get a table, not hand-written codecs. A FloatList
+  type (PropertyFloatList: an owned list of floats with a maximum count, per-value bounds and an optional rising rule)
+  carries lists such as a placement's LOD distances. A setting a placement overrides is two rows, a Bool
+  `overrides_<key>` and the value `<key>` (the table check enforces the pairing). A DataMap property (tags and typed
+  data) is written as two JSON keys.
 * GameCalendar (GameCalendar.md) - The game's calendar: pure functions over day numbers (days since 0001-01-01, an
   int64) and dates of the proleptic Gregorian calendar, years 1 to 9999: conversions, weekday (Monday = 0), day of the
   year, leap years, month lengths, validation, English names, the "yyyy-mm-dd" text, and date-times (int64
