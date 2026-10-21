@@ -263,7 +263,9 @@ static void GetSimplexPoints(const CollisionSimplex* simplex, Vector3* outA, Vec
  * *outDistance the distance to report. It keeps the best simplex seen and stops when a step no longer brings the point
  * closer: with smooth shapes (cylinders, ellipsoids) float noise can otherwise make it cycle between nearly equal
  * simplices. Every support also bounds the distance from below (the difference lies beyond the support plane), and
- * an exit before convergence reports that bound, never more: a gap is never overstated, so a contact is not missed. */
+ * an exit before convergence reports the tightest such bound (the last simplex's direction included), never more: a
+ * gap is never overstated, so a contact is not missed. Near shapes tens of metres across a direction off by float
+ * noise still bounds it short by up to that noise times their size (millimetres for a box hundreds of metres wide). */
 static bool RunGjk(const CollisionConvex* a, const CollisionConvex* b, bool isFull, CollisionSimplex* simplex,
     Vector3* outClosest, float* outDistance)
 {
@@ -329,7 +331,16 @@ static bool RunGjk(const CollisionConvex* a, const CollisionConvex* b, bool isFu
         }
         if (NewSquared >= BestSquared)
         {
-            // No progress: go back to the best simplex.
+            // No progress: go back to the best simplex. The new simplex's direction still bounds the distance, often
+            // far more tightly: above the middle of a large face the best simplex is an edge across it, whose direction
+            // leans a hair toward a corner tens of metres away and so bounds the gap millimetres short, while the new
+            // one is the face itself.
+            CollisionSimplexVertex Last;
+            SupportPair(a, b, CollisionMath_Negate(V), isFull, &Last);
+            if (NewSquared > TINY_SQUARED)
+            {
+                LowerBound = fmaxf(LowerBound, CollisionMath_Dot(V, Last.W) / sqrtf(NewSquared));
+            }
             *simplex = Best;
             V = BestV;
             break;

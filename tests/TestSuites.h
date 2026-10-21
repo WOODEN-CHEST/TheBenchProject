@@ -85,6 +85,11 @@ void WorldCollisionTests_Run(TestRun* run);
  *  (WorldCollisionMotionTests.c). */
 void WorldCollisionMotionTests_Run(TestRun* run);
 
+/** @brief Characters (T13): the character asset's and component's tables and overrides, the input, walking into walls,
+ *  corners, steps, slopes, stairs and ledges, platforms, other characters, crouching, jumping, flying, tunnelling, the
+ *  look ray and use (WorldCharacterTests.c). */
+void WorldCharacterTests_Run(TestRun* run);
+
 /** @brief World sprites: the definition's defaults, rules and messages (the rules shared with the sprite component's
  *  rows), loading with the animation as a dependency, the sprite component's override flags and the settings they
  *  resolve to (the draw distance from the placement, the world sprite or the kind), swapping the world sprite, and the

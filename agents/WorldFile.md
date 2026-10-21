@@ -99,7 +99,9 @@ with a `Migrate` (and a GHDF migration slot, which the tables do not have yet) a
   instead of a warning and a counter that starts over.
 - **The object order** (`WorldFileInternal_CollectObjects`): the roots in id order, each followed by its subtree depth
   first (no recursion: the links lead back up), children in attach order. Parents come before their children, diffs
-  stay stable, and a load restores the attach order.
+  stay stable, and a load restores the attach order. **Runtime objects** (`WorldObject_IsPersistent` false, T13: the
+  player and spawned NPCs, which the game state will save on its own) are left out with their whole subtrees; a saved
+  object never hangs under one.
 - **JSON:** `id`, the object table's keys (defaults left out), then `components` keyed by registry name in type
   order. Serialized pretty (`JSONSerializeFlags_PrettyPrinted | JSONSerializeFlags_InlineScalarArrays`: WRJSON keeps
   insertion order, so keys come out in table order and vectors on one line) with a final newline.

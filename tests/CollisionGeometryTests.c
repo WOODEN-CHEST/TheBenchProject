@@ -1047,6 +1047,33 @@ static void RestingBoxesReadTheirTrueDistance(TestRun* run)
     TEST_CHECK(run, Wrong == 0U);
 }
 
+/* A character's capsule 1 mm above the middle of floor boxes 1 to 120 m wide (T13's review): GJK's first direction there
+ * leans a hair toward a corner tens of metres away, and the step that reached the face (no closer than the edge before
+ * it) once ended the search on that leaning bound, 1.5 mm short at 40 m and 4.4 mm at 120 m: a capsule resting on the
+ * floor read as inside it. */
+static void ACapsuleAboveTheMiddleOfALargeBoxReadsItsGap(TestRun* run)
+{
+    static const float Halves[] = { 0.5f, 5.0f, 20.0f, 60.0f };
+    static const Vector2 Offsets[] = { { 0.0001f, 0.0f }, { 0.00003f, 0.0f }, { 0.0f, 0.0001f }, { 0.0001f, -0.0002f },
+        { 0.013f, 0.0f } };
+    uint32_t Wrong = 0U;
+    for (size_t Half = 0U; Half < (sizeof(Halves) / sizeof(Halves[0])); Half++)
+    {
+        CollisionConvex Floor = Box(V3(0.0f, -0.5f, 0.0f), V3(Halves[Half], 0.5f, Halves[Half]), V3(0.0f, 0.0f, 0.0f));
+        for (size_t Offset = 0U; Offset < (sizeof(Offsets) / sizeof(Offsets[0])); Offset++)
+        {
+            // Radius 0.3, 1.75 tall, its bottom 1 mm above the face.
+            CollisionConvex Body = Capsule(V3(Offsets[Offset].x, 0.876f, Offsets[Offset].y), 0.3f, 0.575f,
+                V3(0.0f, 0.0f, 0.0f));
+            CollisionDistance Distance;
+            CollisionGeometry_GetDistance(&Body, &Floor, &Distance);
+            bool IsRight = !Distance.AreCoresOverlapping && IsNear(Distance.Distance, 0.001f, 1e-5f);
+            Wrong += IsRight ? 0U : 1U;
+        }
+    }
+    TEST_CHECK(run, Wrong == 0U);
+}
+
 /* A shape left where a cast stopped (within rounding of touching) moves away and along freely and is stopped only going
  * deeper, by the linear and the turning cast alike; once every follow-up was blocked at fraction 0. */
 static void CastsFromRestMoveAwayFreely(TestRun* run)
@@ -1372,6 +1399,7 @@ void CollisionGeometryTests_Run(TestRun* run)
         { "random_casts_never_miss_a_contact", RandomCastsNeverMissAContact },
         { "random_turning_casts_never_miss_a_contact", RandomTurningCastsNeverMissAContact },
         { "resting_boxes_read_their_true_distance", RestingBoxesReadTheirTrueDistance },
+        { "a_capsule_above_the_middle_of_a_large_box_reads_its_gap", ACapsuleAboveTheMiddleOfALargeBoxReadsItsGap },
         { "casts_from_rest_move_away_freely", CastsFromRestMoveAwayFreely },
         { "turning_casts_near_a_floor_keep_their_turn", TurningCastsNearAFloorKeepTheirTurn },
         { "spinning_in_place_hits_nothing", SpinningInPlaceHitsNothing },

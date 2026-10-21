@@ -16,7 +16,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
-| WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c` | A concrete GameFrame: a WASD + mouse-look flycam over a test world. |
+| WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and since T13 walk mode (the player as a character) and test NPCs. |
 
 `source/main.c` is the composition root (bootstrap).
 
@@ -606,16 +606,22 @@ and movable): a `pusher_wall` (id 35, kinematic) behind a row of five crates `ro
 z = -1.5, a static `row_stop` (id 41) at the row's far end, and a `door_crate` (id 42) pinned in the corner of two
 static posts (`door_post_west`, `door_post_north`, ids 43 and 44) in the door's swing. Edit the file and restart to
 change the test world.
-The frame owns a `WorldCollision` too, created after the world. Its `Update` runs the tick in the order of
-[WorldData.md](WorldData.md) ("Ready for things that move"): the transform drivers' step (it slides the desk while J
+The frame owns a `WorldCollision` too, created after the world, and since T13 a `WorldCharacters` (the character
+system, [Characters.md](Characters.md)) created after that, with its test characters (the private
+`source/WorldTestCharacters.{h,c}`: walk mode, the test NPCs and their scripted brains, the player controller, the
+character events and status lines). Its `Update` runs the tick in the order of
+[WorldData.md](WorldData.md) ("Ready for things that move"): the test NPCs' brains set their characters' inputs, the
+transform drivers' step (it slides the desk while J
 has it sliding, around the X it was loaded at; swings the door toward open or closed and moves the pushing wall toward
-its far end or home, each from where it actually is, since the collision step may have stopped it), the collision step
+its far end or home, each from where it actually is, since the collision step may have stopped it), then the
+characters (`WorldCharacters_Update`, last among the drivers), the collision step
 (`WorldCollision_Step`), the queued events of that step, logged and cleared (`WorldTest: trigger 34
 ("desk_trigger_zone") enter: object 16 ("desk_top").`, `WorldTest: contact begins: object 33 ("door") and object 42
 ("door_crate"), 1 shape pairs, impact 0.71 m/s.`, `WorldTest: object 33 ("door") is blocked by object 42
 ("door_crate"), which cannot get out of its way; it stops.`), then advances the sprites of effectively enabled objects
-(`World_GetComponents(world, WorldComponentType_Sprite)`), and last calls `World_UpdateTransforms` (the tick's
-world-matrix step), so the renderer reads cached matrices.
+(`World_GetComponents(world, WorldComponentType_Sprite)`), calls `World_UpdateTransforms` (the tick's
+world-matrix step), so the renderer reads cached matrices, and last logs the characters' events, updates the player's
+look target and, in walk mode, puts the camera at the player's eyes.
 **Game time:** the clock starts from the world environment's date and time of day (noon, 2026-10-18) at time scale
 720 (a 2-minute day, as the test world had before T23; the clock's own default is 72). Every `Update` advances it,
 logs a new day when it crosses midnight, and writes its time of day and date into the environment, so the sky shows
@@ -625,7 +631,8 @@ All input runs in `Update` at the fixed timestep and comes from `Services.Input`
 the UI test frame above had first refusal: movement through the actions (`move_*`, default WASD + SPACE/CTRL, `sprint`
 default SHIFT), mouse-look (`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured) and the
 debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
-it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key is taken already):
+it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key and F1 to F10 and
+F12 are taken already; F11 is free):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
   06:00:00.`): P pause/resume the clock; 1–4 jump to dawn/noon/dusk/midnight of the clock's day (06:00, 12:00, 18:00,
@@ -668,6 +675,19 @@ it navigates Tab, the arrows, Enter and Escape. Give the world test none of them
   `worlds/test.saved.world.ghdf` (atomically; each logged with its path, gitignored), for round-trip checks: saved at
   noon with nothing changed (2, then F5) the JSON is the shipped file byte for byte; otherwise its diff against
   `test.world.json` shows what changed in the game (the time of day once the clock ran, a slid desk, an opacity);
+- **the characters (T13):** F1 switches walk mode on and off: walking creates a `player` object (a runtime object, never
+  saved) with a character component of the test human below the flycam, dropped to the ground, and the camera then
+  sits at its eyes (`PlayerController`: WASD walk relative to the view, SHIFT runs, SPACE jumps (the `jump` action),
+  CTRL crouches while held (`crouch`), E uses what you look at (`use`, logged with what it hit; it takes the E press
+  from the variants key while walking), the mouse looks around). F2 spawns and removes the test NPCs 3 m in front of
+  the camera: a human (orange) walking a square and crouching every third side, a dog (brown) running circles and
+  lying down, a pigeon (grey-violet) walking, taking off, flying a loop and landing: each a character driven by a
+  scripted pattern through the same `CharacterInput` as the player, wearing a placeholder body of two test cubes (the
+  trunk squashes when it crouches). F3 lets the player fly and lands it (SPACE and CTRL climb and sink while flying), F4
+  turns the player into the next kind (human, dog, pigeon: the same object, another character asset), F12 the head
+  bob. The log names what you look at whenever it changes and every character event (jumped, landed with its speed,
+  left the ground, crouched, stood up, took off, stopped flying, used); I adds `WorldTest: you: a human (test_human),
+  walking, standing, on object 2 ("ground"), 1.40 m/s, eyes 1.62 m up; looking at ...`;
 - T toggles the text sample.
 
 M frees the cursor for the UI (and captures it again); a left click the UI did not take captures it again. An

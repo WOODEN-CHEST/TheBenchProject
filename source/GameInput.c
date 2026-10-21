@@ -83,6 +83,12 @@ static const GameActionInfo GameActionInfos[GameAction_Count] =
         .Defaults = { BINDING(GameKey_LeftControl, GAME_KEY_MODIFIER_NONE) }, .DefaultCount = 1 },
     [GameAction_Sprint] = { .IdString = u8"sprint", .DisplayName = u8"Sprint",
         .Defaults = { BINDING(GameKey_LeftShift, GAME_KEY_MODIFIER_NONE) }, .DefaultCount = 1 },
+    [GameAction_Jump] = { .IdString = u8"jump", .DisplayName = u8"Jump",
+        .Defaults = { BINDING(GameKey_Space, GAME_KEY_MODIFIER_NONE) }, .DefaultCount = 1 },
+    [GameAction_Crouch] = { .IdString = u8"crouch", .DisplayName = u8"Crouch",
+        .Defaults = { BINDING(GameKey_LeftControl, GAME_KEY_MODIFIER_NONE) }, .DefaultCount = 1 },
+    [GameAction_Use] = { .IdString = u8"use", .DisplayName = u8"Use",
+        .Defaults = { BINDING(GameKey_E, GAME_KEY_MODIFIER_NONE) }, .DefaultCount = 1 },
     [GameAction_Pause] = { .IdString = u8"pause", .DisplayName = u8"Pause",
         .Defaults = { BINDING(GameKey_Escape, GAME_KEY_MODIFIER_NONE) }, .DefaultCount = 1 },
 };

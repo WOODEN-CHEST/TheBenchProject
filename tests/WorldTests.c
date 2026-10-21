@@ -211,6 +211,7 @@ static bool ConstructDriverWorld(TestRun* run, World* world, KeyRegistry* keys)
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Sprite),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Light),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Collider),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Character),
         &TestDriverA,
         &TestDriverB,
     };
@@ -586,7 +587,7 @@ static void ComponentTypesAreFoundByName(TestRun* run)
     }
 
     TEST_CHECK(run, World_GetComponentTypeCount(&TestWorld) == (size_t)WorldComponentType_Count);
-    const char* const Names[WorldComponentType_Count] = { "model", "sprite", "light", "collider" };
+    const char* const Names[WorldComponentType_Count] = { "model", "sprite", "light", "collider", "character" };
     for (size_t Type = 0; Type < (size_t)WorldComponentType_Count; Type++)
     {
         const WorldComponentTypeInfo* Info = World_GetComponentTypeInfo(&TestWorld, (WorldComponentType)Type);
@@ -600,7 +601,7 @@ static void ComponentTypesAreFoundByName(TestRun* run)
             && ((size_t)Found == Type));
     }
     WorldComponentType Found = WorldComponentType_Model;
-    TEST_CHECK(run, !World_TryFindComponentType(&TestWorld, (const unsigned char*)u8"character", &Found));
+    TEST_CHECK(run, !World_TryFindComponentType(&TestWorld, (const unsigned char*)u8"vehicle", &Found));
     TEST_CHECK(run, World_GetComponentTypeInfo(&TestWorld, WorldComponentType_Count) == NULL);
     TEST_CHECK(run, WorldComponent_GetStandardTypeInfo(WorldComponentType_Count) == NULL);
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
@@ -1096,6 +1097,30 @@ static void ASecondTransformDriverIsRefused(TestRun* run)
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
+static void ACharacterIsADriverThatRefusesASecond(TestRun* run)
+{
+    World TestWorld;
+    KeyRegistry TestKeys;
+    if (!ConstructDriverWorld(run, &TestWorld, &TestKeys))
+    {
+        return;
+    }
+
+    WorldObject* Object = CreateObject(run, &TestWorld, "player");
+    if (Object != NULL)
+    {
+        const WorldComponentTypeInfo* Info = WorldComponent_GetStandardTypeInfo(WorldComponentType_Character);
+        TEST_CHECK(run, (Info != NULL) && Info->IsTransformDriver);
+        WorldComponent* Walker = AddComponent(run, &TestWorld, Object, WorldComponentType_Character);
+        TEST_CHECK(run, (Walker != NULL) && (WorldObject_GetMobility(Object) == WorldMobility_Movable));
+        WorldComponent* Second = NULL;
+        TEST_CHECK_ERROR(run, World_AddComponent(&TestWorld, WorldObject_GetId(Object), TestDriverA.Type, &Second),
+            ErrorCode_InvalidOperation);
+        TEST_CHECK(run, (Second == NULL) && (WorldObject_GetComponent(Object, TestDriverA.Type) == NULL));
+    }
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
+}
+
 static void CustomComponentTypesAreChecked(TestRun* run)
 {
     World TestWorld;
@@ -1126,6 +1151,7 @@ static void CustomComponentTypesAreChecked(TestRun* run)
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Sprite),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Light),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Collider),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Character),
         &TestUnhooked,
     };
     const char* const Fragments[] = { "test_unhooked", "AfterSet", NULL };
@@ -1162,6 +1188,7 @@ void WorldTests_Run(TestRun* run)
         { "table_writes_rebind_the_sprite", TableWritesRebindTheSprite },
         { "flags_advance_the_revision", FlagsAdvanceTheRevision },
         { "adding_a_driver_makes_the_object_movable", AddingADriverMakesTheObjectMovable },
+        { "a_character_is_a_driver_that_refuses_a_second", ACharacterIsADriverThatRefusesASecond },
         { "a_second_transform_driver_is_refused", ASecondTransformDriverIsRefused },
         { "custom_component_types_are_checked", CustomComponentTypesAreChecked },
     };

@@ -19,7 +19,10 @@ override pairs,
 `light_component`; [WorldData.md](WorldData.md), "Property tables"), and since T26 a world sprite's settings
 (`world_sprite` and `world_sprite_render`, which read its definition: [WorldSprites.md](WorldSprites.md)). The sprite
 component's value rows and the world sprite's rows come from the same macros (`source/WorldSpriteInternal.h`), so the
-two tables share every key, default, rule and text: a way to keep one copy of a row in two tables. T16 adds the weather.
+two tables share every key, default, rule and text: a way to keep one copy of a row in two tables. Since T13 the same
+for characters: a character asset's settings (`character`) and the character component (`character_component`: the
+asset's name, then an override flag and a value per setting) share their rows (`source/CharacterInternal.h`;
+[Characters.md](Characters.md)). T16 adds the weather.
 
 ## Declaring a table
 

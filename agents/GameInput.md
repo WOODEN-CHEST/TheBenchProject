@@ -83,6 +83,8 @@ bindings:
 | | `ui_back` | Escape |
 | Movement | `move_forward`, `move_back`, `move_left`, `move_right`, `move_up`, `move_down` | W, S, A, D, Space, Left Control |
 | | `sprint` | Left Shift |
+| Characters (T13) | `jump`, `crouch` | Space, Left Control (shared with `move_up` and `move_down`: walking reads these, the flycam and flight those) |
+| | `use` | E (use what the character looks at) |
 | Pause / menu | `pause` | Escape |
 
 Queries: `GameInput_IsActionDown` / `IsActionPressed` / `IsActionReleased` / `IsActionPressedOrRepeated`. An action

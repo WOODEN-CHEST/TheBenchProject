@@ -42,6 +42,10 @@
  *  in the world, built on a sprite animation asset). */
 #define ASSET_TYPE_NAME_WORLD_SPRITE      ((const unsigned char*)u8"world_sprite")
 #define ASSET_TYPE_DIRECTORY_WORLD_SPRITE ((const unsigned char*)u8"world_sprites")
+/** @brief Standard character type name / directory (CharacterAsset.h: the defaults of a kind of character, its body and how
+ *  it moves). */
+#define ASSET_TYPE_NAME_CHARACTER      ((const unsigned char*)u8"character")
+#define ASSET_TYPE_DIRECTORY_CHARACTER ((const unsigned char*)u8"characters")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -82,4 +86,8 @@ Error WorldModelDefinition_Construct(AssetManager* manager, const UserData* user
 
 /** @brief Builds a world sprite definition from a JSON blob (WorldSpriteDefinition.c). See AssetDefinitionConstructor. */
 Error WorldSpriteDefinition_Construct(AssetManager* manager, const UserData* userData,
+    const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+
+/** @brief Builds a character definition from a JSON blob (CharacterDefinition.c). See AssetDefinitionConstructor. */
+Error CharacterDefinition_Construct(AssetManager* manager, const UserData* userData,
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);

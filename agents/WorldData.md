@@ -18,6 +18,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A world sprite by asset name ([WorldSprites.md](WorldSprites.md)), bound by the world with its animation's playback instance, and every setting this placement overrides (explicit flags next to its own values: orientation, pivot, size, flips, alpha mode, lighting, decal, render flags, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
 | WorldColliderComponent | `include/WorldColliderComponent.h`, `source/WorldColliderComponent.c` | How the object collides (T12, [WorldCollision.md](WorldCollision.md)): its world model's collision set (or one primitive of its own), its layer, mask and trigger flag (each overriding the world model's default with an explicit flag), a local offset, rotation and scale, and a rotation mode, with the pure function that resolves the settings in effect. |
+| WorldCharacterComponent | `include/WorldCharacterComponent.h`, `source/WorldCharacterComponent.c` | The player or an NPC (T13, [Characters.md](Characters.md)): a character asset by name and every setting this placement overrides (explicit flags next to its own values), the input its driver gives it and the state it is in; the first transform driver. |
 | WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
 | World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index), `source/WorldHierarchy.c` (parents, world matrices, effective flags, subtrees; also the `WorldObject_` functions about them) | Owns the objects and their components, mints ids, keeps the id map, the hierarchy and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
 | WorldTransform (private) | `source/WorldTransform.h`, `source/WorldTransform.c` | The pure maths of transforms: compose (DrawModelEx's order), the one decomposition back to position / Euler XYZ / scale, a local matrix under a parent, a bound on a matrix's stretch. Used by the hierarchy and the renderer's cache. |
@@ -59,7 +60,10 @@ components). Every object has:
 - `_components[WORLD_MAX_COMPONENT_TYPES]`: one slot per component type, NULL when absent
   (`WorldObject_GetComponent`);
 - `_world`: the world that owns it. **A World must never be moved or copied once constructed** (objects and
-  components point back to it).
+  components point back to it);
+- `_isPersistent` (default true, T13): whether world files save it. A runtime flag, not a property (not saved, no
+  revision): objects made for the session (the player, spawned NPCs, effects) turn it off with
+  `WorldObject_SetPersistent`, and the writers leave them out with their subtrees ([WorldFile.md](WorldFile.md)).
 
 Every field is reached through getters and validating setters (`WorldObject_SetPosition`, `_SetEnabled`, ...). The
 setters check through the object's property table (`Properties_CheckValue`), so the rules live in the table only, and
@@ -144,10 +148,11 @@ carries **at most one component of each type**; a street lamp is one object with
 | `WorldComponentType_Sprite` | 1 | `sprite` | `WorldSpriteComponent` |
 | `WorldComponentType_Light` | 2 | `light` | `WorldLightComponent` |
 | `WorldComponentType_Collider` | 3 | `collider` | `WorldColliderComponent` (T12) |
+| `WorldComponentType_Character` | 4 | `character` | `WorldCharacterComponent` (T13, a transform driver; [Characters.md](Characters.md)) |
 
 The values are explicit and never renumbered (world files will save them). `WorldComponentType_Count` is the number
 of standard types; `WORLD_MAX_COMPONENT_TYPES` (16) is how many a world can hold, room for the types later tasks add
-(character T13, ambient zone T14, screen T19) and for test-only types.
+(ambient zone T14, screen T19) and for test-only types.
 
 **The registry.** Each type has one `WorldComponentTypeInfo` (a static constant of its module, handed out by
 `Xxx_GetTypeInfo`; `WorldComponent_GetStandardTypeInfo(type)` maps the standard types): `Type`, `Name` (the key of its
@@ -277,6 +282,14 @@ mask, trigger flag and mass (`prop`, prop's mask, no trigger and 1 kg without on
 `SetOwnShape` sets the own primitive from a `CollisionShape`, all or nothing. No hooks: the collision world watches the
 revision.
 
+### Character component (`character_component`)
+The player or an NPC (T13; everything about characters is in [Characters.md](Characters.md)): `character` (the asset
+name of a character, `characters/`), then for each of the character's 36 settings an override flag and the placement's
+own value (`overrides_radius` / `radius`, ..., `overrides_interaction_layers` / `interaction_layers`), whose rows it
+shares with the character asset's table. Its input (`CharacterInput`) and its state are runtime only. It is the first
+**transform driver**: the character system (`WorldCharacters`) writes its object's position (the feet) and yaw once a
+tick, and gives the object a capsule collider whose shape and motion rows it keeps in step.
+
 ### Light component (`light_component`)
 `_color` (white), `_intensity` (>= 0, default 1), `_range` (>= 0, default 1: how far the light reaches; T05 renamed it
 from `Size`), `_castsShadows` (false). It uses its object's world position (a lamp carries its light); rotation, scale
@@ -327,9 +340,9 @@ the id counter (`_nextId`, starts at 1; 0 once every id was handed out: ids run 
 
 ## Ready for things that move
 
-The game will have objects that move and react to each other: the player and NPCs (a `character` component, T13),
-cars (a `vehicle` component, later), physics objects (a `rigid_body` component, later, decision G13). None is built
-yet, but the model is ready for them:
+The game has objects that move and react to each other: the player and NPCs (the `character` component, T13: the first
+transform driver), cars (a `vehicle` component, later), physics objects (a `rigid_body` component, later, decision G13).
+The model is ready for them:
 
 - **One driver per object.** A component type flagged `IsTransformDriver` writes its object's transform every tick.
   `World_AddComponent` refuses a second driver on the same object (`ErrorCode_InvalidOperation`), so two systems never
@@ -357,7 +370,9 @@ yet, but the model is ready for them:
   its slot:
   1. input (`GameInput`, polled by the frame manager);
   2. scripts (later);
-  3. transform drivers: characters, vehicles, physics (later);
+  3. transform drivers: scripted movers (the test frame's desk, door and pushing wall), then **the characters**
+     (`WorldCharacters_Update`, T13) last among them, so a platform moved this tick carries the characters on it
+     exactly; vehicles and physics later;
   4. the collision step: `WorldCollision_Step` (T27), which syncs (T12; the world matrices first), sweeps every
      collider that moved, pushes apart what overlaps and writes the pushes back;
   5. queued events: trigger enter and exit (`WorldCollision_GetTriggerEvents`, then `_ClearTriggerEvents`), contacts
@@ -462,13 +477,14 @@ wire id is 13.
 ## Environment
 
 `WorldEnvironment` is a struct with the date and time of day, sky, sun, night sky, moon, ambient, fog and effect
-settings.
+settings, and the world's gravity (T13: `gravity`, 9.81 m/s² straight down by default, in [0, 1000]; characters
+multiply it by their own `gravity_multiplier`).
 **Every field is one row of its property table** (`WorldEnvironment_GetPropertyTable`, in `source/WorldEnvironment.c`; module doc
 [PropertyDescriptors.md](PropertyDescriptors.md)): the key (the field name in snake_case, e.g. `light_pollution`), the
 GHDF wire id, the type, the default, the rules, the inspector text. `WorldEnvironment_SetDefaults`, `_Validate`,
 `_CopyTo` and `_Deconstruct` are thin wrappers over the table, and `WorldEnvironment_ReadJSON` / `_WriteJSON` are the
 JSON entry points for the world files (T09). **To add a setting, add the field and one table row** with a new,
-never-used wire id (the next free one is 46; 2 and 3 are retired); nothing else needs writing. The field comments state
+never-used wire id (the next free one is 47; 2 and 3 are retired); nothing else needs writing. The field comments state
 each value's rule; validation enforces them (finite, `TimeOfDay`, `LightPollution`, `StarTwinkle`, `MoonPhase`,
 `NightVisionStrength` and `NightVisionBlueShift` in [0, 1], `SunSizeMultiplier`, `MoonSizeMultiplier` and `MoonCycleDays` > 0, every strength/intensity/density/brightness
 >= 0, `Date` inside the calendar, the texture names valid asset names of at most 128 bytes, `MoonPhaseSource` one of

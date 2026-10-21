@@ -42,7 +42,8 @@ typedef struct LoggerStruct Logger;
  *
  * WRITING validates every object and component before anything is written (an invalid world writes nothing) and lists
  * the objects parents first: the roots in id order, each followed by its subtree depth first, children in the order
- * they were attached (which a load restores). JSON is pretty-printed with arrays of numbers on one line and ends with a
+ * they were attached (which a load restores). Runtime objects (WorldObject_IsPersistent false: the player, spawned NPCs)
+ * are left out with their subtrees. JSON is pretty-printed with arrays of numbers on one line and ends with a
  * newline. Saves to a path are atomic: the bytes go to a temporary file next to the target, which then replaces it.
  *
  * Paths are the caller's; the game resolves them against Services.BaseDirectory (WorldFile_BuildPath).

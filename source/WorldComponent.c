@@ -4,6 +4,7 @@
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
 #include "WorldColliderComponent.h"
+#include "WorldCharacterComponent.h"
 
 
 // Static functions.
@@ -47,6 +48,8 @@ const WorldComponentTypeInfo* WorldComponent_GetStandardTypeInfo(WorldComponentT
             return WorldLightComponent_GetTypeInfo();
         case WorldComponentType_Collider:
             return WorldColliderComponent_GetTypeInfo();
+        case WorldComponentType_Character:
+            return WorldCharacterComponent_GetTypeInfo();
         case WorldComponentType_Count:
             break;
     }

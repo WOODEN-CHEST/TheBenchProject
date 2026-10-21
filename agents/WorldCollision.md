@@ -190,7 +190,13 @@ Every query takes a `WorldCollisionFilter` (`WorldCollisionFilter_Create(layerMa
 - **layers:** the layers it sees;
 - **triggers:** ignored (the default of rays, casts and contacts), included (the default of overlaps) or the only ones;
 - **an ignored object:** `IgnoredObjectId`, optionally with its whole subtree (`IsIgnoredSubtree`: what a character
-  carries).
+  carries);
+- **pushables** (T13): `ArePushablesIgnored` skips pushable colliders and the movable colliders a pushable carries (its
+  children's, which its push moves: a crate's handle, later a held item). A character's own moves sweep past other
+  characters and crates and leave them to the collision step, which pushes both by mass ([Characters.md](Characters.md));
+- **as a layer** (T13): with `HasOwnLayer` the query collides as a collider on `OwnLayer` would, so it also skips
+  colliders whose mask lacks that layer (the other half of `CollisionLayer_DoCollide`'s symmetric rule). A character's
+  sweeps collide as the `character` layer: a prop set not to collide with characters lets it through.
 
 | Query | Gives |
 |---|---|
@@ -396,7 +402,10 @@ it, so colliders at rest cost little beyond the sync.
 - **GJK** finds distances (Johnson's sub-algorithm). It tracks its best simplex and stops when it makes no progress,
   which keeps smooth shapes from cycling.
   - **Never overstated.** Every support also bounds the distance from below, and an exit before convergence reports
-    that bound, never more.
+    the tightest such bound, never more. The last simplex's direction is one of them (T13's review): above the middle of
+    a large face the first directions lean a hair toward corners tens of metres away and bound the gap millimetres
+    short, and the step that reaches the face itself is no closer than the edge before it, so the search used to end
+    on the leaning bound (a capsule resting 1 mm above a 40 m floor read 1.5 mm inside it, above a 120 m one 4.4 mm).
   - **Exact near a face.** Near a face the closest point is the origin moved along the face's normal, which keeps the
     direction exact for a large face next to the origin; the old form read a resting plank as 0.6 mm apart.
   - **Double precision for triangles.** The triangle's region tests and weights run in double precision, because GJK
@@ -495,6 +504,12 @@ motion events are logged, and the I key's status lines add the counts and the la
 
 ## Known limits
 
+- **Shapes hundreds of metres across lose millimetres in GJK.** A direction off by float rounding (about 1e-7 of the
+  coordinates) bounds a gap short by that times the shape's size: 2.8 mm next to a box 400 m wide. Up to 120 m the
+  distance is right to 0.04 mm. Make a huge ground a plane or a mesh, not one box.
+- **Queries see the colliders of the last sync.** A driver that queries (the characters, T13) sees a platform moved by
+  an earlier driver in the same tick where the last step left it: a sync between them would also advance the tick
+  stamped on every event.
 - **`WorldCollision_CollideObject` skips an object's own plane and mesh shapes.** It is marked `// TODO:`; T27's movers
   are convex.
 - **A mesh's debug wireframe draws every edge every frame:** fine for test content, slow for a large terrain.

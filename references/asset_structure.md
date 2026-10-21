@@ -695,3 +695,102 @@ and the objects using it draw nothing.
 The test world's world sprites are in `world_sprites/test_world/`, each named as the animation it plays: `test_sprite`
 (the test image at 1280 pixels per metre), `test_tire_mark`, `test_tree`, `test_sign`, `test_smoke`, `test_glow` and
 `test_neon` (T06's placeholders, with the look the test world gave them).
+
+## Characters.
+A character is the reusable definition of a kind of character (a human, a dog, a pigeon): its body and how it moves. The
+player and NPCs are world objects with a character component that names one (`references/world_structure.md`), and a
+placement may override every key of this file for that one character, with an explicit override flag next to its own
+value. Gravity itself is the world's (the environment's `gravity`); a character multiplies it. Definitions live under
+`characters/` and have no resource files and no dependencies. How a character's model looks and animates comes later
+(T29, T30).
+
+```
+{
+    "name": "human",
+    "radius": 0.3,                      // [OPTIONAL] default 0.3: the upright capsule's radius, metres
+    "height": 1.75,                     // [OPTIONAL] default 1.75: its whole height, caps included (>= 2 x radius)
+    "eye_height": 1.62,                 // [OPTIONAL] default 1.62: the eyes above the feet
+    "mass": 75.0,                       // [OPTIONAL] default 75: kilograms
+    "is_pushable": true,                // [OPTIONAL] default true
+    "collides_with": ["world", "prop", "character", "vehicle", "dynamic", "trigger"],  // [OPTIONAL] these by default
+    "walk_speed": 1.4,                  // [OPTIONAL] default 1.4 m/s
+    "can_run": true,                    // [OPTIONAL] default true
+    "run_speed": 3.5,                   // [OPTIONAL] default 3.5 m/s
+    "acceleration": 8.0,                // [OPTIONAL] default 8 m/s²
+    "deceleration": 10.0,               // [OPTIONAL] default 10 m/s²
+    "step_height": 0.35,                // [OPTIONAL] default 0.35 m
+    "slope_limit": 45,                  // [OPTIONAL] default 45 degrees
+    "ground_snap_distance": 0.35,       // [OPTIONAL] default 0.35 m
+    "turn_speed": 360,                  // [OPTIONAL] default 360 degrees per second
+    "is_turn_instant": false,           // [OPTIONAL] default false
+    "can_crouch": true,                 // [OPTIONAL] default true
+    "crouch_height": 1.15,              // [OPTIONAL] default 1.15 m (>= 2 x radius, <= height)
+    "crouch_eye_height": 1.0,           // [OPTIONAL] default 1.0 m
+    "crouch_speed": 1.0,                // [OPTIONAL] default 1.0 m/s
+    "crouch_transition_seconds": 0.2,   // [OPTIONAL] default 0.2
+    "can_jump": false,                  // [OPTIONAL] default false
+    "jump_speed": 3.2,                  // [OPTIONAL] default 3.2 m/s
+    "can_jump_while_crouched": false,   // [OPTIONAL] default false
+    "coyote_seconds": 0.1,              // [OPTIONAL] default 0.1
+    "jump_buffer_seconds": 0.1,         // [OPTIONAL] default 0.1
+    "gravity_multiplier": 1.0,          // [OPTIONAL] default 1
+    "air_acceleration": 2.0,            // [OPTIONAL] default 2 m/s²
+    "max_fall_speed": 55.0,             // [OPTIONAL] default 55 m/s
+    "can_fly": false,                   // [OPTIONAL] default false
+    "fly_speed": 5.0,                   // [OPTIONAL] default 5 m/s
+    "fly_fast_speed": 10.0,             // [OPTIONAL] default 10 m/s
+    "fly_acceleration": 6.0,            // [OPTIONAL] default 6 m/s²
+    "fly_deceleration": 6.0,            // [OPTIONAL] default 6 m/s²
+    "interaction_reach": 2.5,           // [OPTIONAL] default 2.5 m
+    "interaction_layers": ["world", "prop", "character", "vehicle", "dynamic", "interaction"]  // [OPTIONAL] these by default
+}
+```
+
+| Key | Value | Meaning |
+|---|---|---|
+| `radius` | metres, above 0, at most 100 | The radius of the character's upright capsule: how close it comes to walls and how narrow a gap it fits through. Every character is an upright capsule (the owner's decision G22); a dog's nose and tail may poke past it. |
+| `height` | metres, above 0, at most 100 | The standing capsule's whole height, from the feet (the object's position) to the top of the head; at least twice the radius. |
+| `eye_height` | metres, 0 to 100 | The eyes above the feet while standing: where the player's camera sits and where the character looks from. |
+| `mass` | kilograms, above 0, at most 1000000 | How pushes are shared: characters and crates push each other by mass (equal masses give way equally). |
+| `is_pushable` | boolean | Whether others (characters, doors, platforms) push it. `false`: it is never pushed; it pushes and stops when it cannot. |
+| `collides_with` | list of layer names | The collision layers it collides with (`world`, `prop`, `character`, `vehicle`, `dynamic`, `trigger`, `interaction`). |
+| `walk_speed`, `run_speed` | metres per second, 0 to 1000 | Walking and running speeds. |
+| `can_run` | boolean | Whether it may run (asking to run walks otherwise). |
+| `acceleration`, `deceleration` | metres per second squared, above 0, at most 10000 | How fast it speeds up on the ground, and how fast it slows down and turns around. |
+| `step_height` | metres, 0 to 100 | The highest step it walks up; anything higher is a wall. |
+| `slope_limit` | degrees, 0 to below 90 | The steepest ground it walks on; steeper ground is a wall it slides down. |
+| `ground_snap_distance` | metres, 0 to 100 | How far down it follows the ground (stairs, slopes) instead of falling. |
+| `turn_speed` | degrees per second, above 0 | How fast its body turns (toward where it moves or looks, as its input asks). |
+| `is_turn_instant` | boolean | Turns its body at once instead. |
+| `can_crouch` | boolean | Whether it may crouch. |
+| `crouch_height` | metres, above 0 | The crouched capsule's whole height: at least twice the radius, at most `height`. What it fits under. |
+| `crouch_eye_height` | metres, 0 to 100 | The eyes above the feet while crouched. |
+| `crouch_speed` | metres per second, 0 to 1000 | Its speed while crouched (running does not change it). |
+| `crouch_transition_seconds` | seconds, 0 to 60 | How long the eyes take to go down or up; the capsule changes at once (standing up waits for room). |
+| `can_jump` | boolean | Whether it may jump. |
+| `jump_speed` | metres per second, 0 to 1000 | The upward speed a jump starts with: 3.2 jumps about half a metre on Earth. |
+| `can_jump_while_crouched` | boolean | Whether a crouched character may jump. |
+| `coyote_seconds` | seconds, 0 to 60 | How long after walking off an edge a jump still starts. |
+| `jump_buffer_seconds` | seconds, 0 to 60 | How long a jump asked for just before landing waits for the ground. |
+| `gravity_multiplier` | 0 to 100 | Times the world's gravity while walking and falling (flying has none). |
+| `air_acceleration` | metres per second squared, 0 to 10000 | How fast it steers in the air; 0 none. |
+| `max_fall_speed` | metres per second, above 0 | The fastest it falls. |
+| `can_fly` | boolean | Whether it may fly (birds). |
+| `fly_speed`, `fly_fast_speed` | metres per second, 0 to 1000 | Flying speed, and while running. |
+| `fly_acceleration`, `fly_deceleration` | metres per second squared, above 0 | How fast it speeds up and slows down while flying. |
+| `interaction_reach` | metres, above 0, at most 100 | How far from its eyes it can look at and use things. |
+| `interaction_layers` | list of layer names | What its look and use ray sees; `trigger` is never seen. |
+
+**The same keys, the same rules.** These are the character component's settings, with its names, defaults and rules:
+the character's table and the component's table are built from the same rows, so a placement's own value is checked
+exactly as the asset's.
+
+**Rules.** A definition that breaks one is rejected when the definitions are read, with a message naming the key and
+the rule (`Character "dog": character.radius (Radius) must be finite and in ...`). Two rules span keys: `height` and
+`crouch_height` include the capsule's caps, so each must be at least twice `radius`, and `crouch_height` must not pass
+`height` (`Character "dog": character: height (0.5 m) must be at least twice the radius (0.3 m): ...`). A placement whose
+overrides break them gets the nearest heights that fit. Unknown keys are rejected, with the keys allowed.
+
+The test characters are in `characters/test_world/`: `test_human` (the defaults, but it may jump), `test_dog` (0.28 m by
+0.7 m, 25 kg, runs at 6 m/s, lies down as its crouch) and `test_pigeon` (0.1 m by 0.3 m, 0.35 kg, flies at 6 m/s and
+cannot crouch).

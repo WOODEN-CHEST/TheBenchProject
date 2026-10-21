@@ -68,8 +68,10 @@ typedef enum WorldComponentTypeEnum
     WorldComponentType_Light = 2,
     /** @brief A collider: the object's part in collision (WorldColliderComponent.h, T12). */
     WorldComponentType_Collider = 3,
+    /** @brief A character: the player or an NPC, a transform driver (WorldCharacterComponent.h, T13). */
+    WorldComponentType_Character = 4,
     /** @brief The number of standard types (not a type). */
-    WorldComponentType_Count = 4
+    WorldComponentType_Count = 5
 } WorldComponentType;
 
 /**

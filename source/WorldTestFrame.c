@@ -6,8 +6,10 @@
 #include "GameFrame.h"
 #include "Services.h"
 #include "World.h"
+#include "WorldCharacters.h"
 #include "WorldColliderComponent.h"
 #include "WorldCollision.h"
+#include "WorldTestCharacters.h"
 #include "WorldFile.h"
 #include "WorldObject.h"
 #include "WorldModelComponent.h"
@@ -187,6 +189,10 @@ typedef struct WorldTestFrameStruct
     uint64_t _doorCrateId;
     Vector3 _doorCrateHome;
     bool _isDoorCrateAside;
+    /** The world's characters, moved every tick after the other drivers (T13); owned. */
+    WorldCharacters* _characters;
+    /** The test characters: walk mode (F1), the test NPCs (F2) and the player's options (F3, F4, F12); owned. */
+    WorldTestCharacters _testCharacters;
 } WorldTestFrame;
 
 
@@ -686,6 +692,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         WorldRenderer_LogStatus(frame->_renderer);
         LogClockStatus(frame);
         LogCollisionStatus(frame);
+        WorldTestCharacters_LogStatus(&frame->_testCharacters);
     }
 
     // T toggles the text sample (checks font drawing, Latvian and Cyrillic glyphs, decorations, inline sprites).
@@ -1251,8 +1258,14 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
         SetCursorCaptured(frame, true);
     }
 
+    // The characters' keys (F1 walk mode, F2 the test NPCs, F3 flight, F4 the player's kind, F12 the head bob) and,
+    // while walking, the player controller: it reads the movement actions and the mouse into the player's character
+    // (and takes the use press, so the E debug key below does not see it). The flycam stands still meanwhile.
+    WorldTestCharacters_HandleInput(&frame->_testCharacters, input, &frame->_camera, frame->_cursorCaptured);
+    bool IsWalking = WorldTestCharacters_IsWalking(&frame->_testCharacters);
+
     // Mouse look (only while captured). Input is polled once per update tick, so this is the tick's movement.
-    if (frame->_cursorCaptured)
+    if (frame->_cursorCaptured && !IsWalking)
     {
         Vector2 MouseDelta = GameInput_GetMouseDelta(input);
         // Mouse-right must turn the view right: increasing yaw rotates forward toward +X, which renders on
@@ -1272,7 +1285,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     if (GameInput_IsActionDown(input, GameAction_MoveLeft)) { Movement = Vector3Subtract(Movement, Right); }
     if (GameInput_IsActionDown(input, GameAction_MoveUp)) { Movement = Vector3Add(Movement, FrameWorldUp); }
     if (GameInput_IsActionDown(input, GameAction_MoveDown)) { Movement = Vector3Subtract(Movement, FrameWorldUp); }
-    if ((Movement.x != 0.0f) || (Movement.y != 0.0f) || (Movement.z != 0.0f))
+    if (!IsWalking && ((Movement.x != 0.0f) || (Movement.y != 0.0f) || (Movement.z != 0.0f)))
     {
         Movement = Vector3Scale(Vector3Normalize(Movement), Speed * deltaSeconds);
         frame->_camera.Position = Vector3Add(frame->_camera.Position, Movement);
@@ -1305,7 +1318,9 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, N light pollution, X opacity of the "
             u8"centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the desk, "
             u8"E variants, Z zoom, Q LOD tinting, F7 collider wireframes, F8 contact points, F6 swing the door, F9 the "
-            u8"pushing wall, F10 move the door's crate, I renderer, "
+            u8"pushing wall, F10 move the door's crate; F1 walk (the player as a character: WASD, SHIFT run, SPACE jump, "
+            u8"CTRL crouch, E use), F2 the test NPCs (a human, a dog, a pigeon), F3 fly, F4 the player's kind, F12 head "
+            u8"bob; I renderer, "
             u8"game time and collision status, T text sample, F5 save the world (worlds/test.saved.world.json "
             u8"and .ghdf); M frees the "
             u8"mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");
@@ -1340,20 +1355,25 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     }
     ApplyClockToEnvironment(Frame);
 
-    // The tick's order (agents/WorldData.md): the drivers move things (the desk, the door, the pushing wall), the
+    // The tick's order (agents/WorldData.md): the NPCs' brains set their inputs (the scripts' slot), the drivers move
+    // things (the desk, the door, the pushing wall, then the characters, so what moved this tick carries them), the
     // collision step sweeps and pushes (it syncs first and writes the pushes back), its queued trigger, contact and
-    // motion events are handled, then the animations.
+    // motion events and the characters' events are handled, then the animations.
+    WorldTestCharacters_UpdateBrains(&Frame->_testCharacters, Delta);
     SlideDesk(Frame, time.PassedTime);
     SwingDoor(Frame, Delta);
     MovePusher(Frame, Delta);
+    WorldCharacters_Update(Frame->_characters, Delta);
     WorldCollision_Step(Frame->_collision, Delta);
     LogTriggerEvents(Frame);
     LogContactEvents(Frame);
     LogMotionEvents(Frame);
     AdvanceSpriteAnimations(&Frame->_world, time.PassedTime);
 
-    // The world matrices of everything that moved this tick, so the renderer reads them cached.
+    // The world matrices of everything that moved this tick, so the renderer reads them cached; then the camera at the
+    // player's eyes while walking (and the look target, its changes logged).
     World_UpdateTransforms(&Frame->_world);
+    WorldTestCharacters_AfterStep(&Frame->_testCharacters, &Frame->_camera, Delta);
 
     // The text sample animates its sprite and is laid out here (laying out loads its fonts); Render only draws it.
     Error TextResult = TextDocument_Update(&Frame->_textSample, time);
@@ -1439,7 +1459,10 @@ static void WorldTestFrame_Destroy(void* self)
         Error RendererResult = WorldRenderer_Deconstruct(Frame->_renderer);
         Error_Deconstruct(&RendererResult);
     }
-    // The collision world borrows the world (and the renderer borrowed it): it goes after the renderer, before the world.
+    // The characters borrow the collision world, which borrows the world (and the renderer borrowed it): they go after
+    // the renderer, before the world.
+    WorldTestCharacters_Deconstruct(&Frame->_testCharacters);
+    WorldCharacters_Destroy(Frame->_characters);
     WorldCollision_Destroy(Frame->_collision);
 
     Error WorldResult = World_Deconstruct(&Frame->_world);
@@ -1550,6 +1573,24 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         Memory_Free(Frame);
         return CollisionResult;
     }
+
+    Error CharactersResult = WorldCharacters_Create(&Frame->_world, Frame->_collision, services->Logger,
+        &Frame->_characters);
+    if (CharactersResult.Code != ErrorCode_Success)
+    {
+        DeconstructTextSample(Frame);
+        WorldCollision_Destroy(Frame->_collision);
+        Error Cleanup = WorldRenderer_Deconstruct(Frame->_renderer);
+        Error_Deconstruct(&Cleanup);
+        Cleanup = World_Deconstruct(&Frame->_world);
+        Error_Deconstruct(&Cleanup);
+        GameClock_Deconstruct(&Frame->_clock);
+        GameFrame_Deconstruct(&Frame->Base);
+        Memory_Free(Frame);
+        return CharactersResult;
+    }
+    WorldTestCharacters_Construct(&Frame->_testCharacters, &Frame->_world, Frame->_collision, Frame->_characters,
+        services->Logger);
 
     Frame->_services = services;
     for (size_t Index = 0U; Index < OPACITY_TEST_OBJECT_COUNT; Index++)

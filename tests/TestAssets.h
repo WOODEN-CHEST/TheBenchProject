@@ -161,3 +161,10 @@ bool TestAssets_AddWorldSprite(TestRun* run, TestAssetFixture* fixture, const ch
  * @returns true when it was built and registered.
  */
 bool TestAssets_AddWorldSpriteOf(TestRun* run, TestAssetFixture* fixture, const char* name, const char* animationName);
+
+/**
+ * @brief Builds a character definition from @p json with the real "character" type (AssetManager_BuildDefinition) and
+ *        registers it (a character has no dependencies: it loads without a GL context).
+ * @returns true when it was built and registered.
+ */
+bool TestAssets_AddCharacter(TestRun* run, TestAssetFixture* fixture, const char* json);

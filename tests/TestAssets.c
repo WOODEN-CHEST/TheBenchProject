@@ -506,6 +506,11 @@ bool TestAssets_AddWorldSprite(TestRun* run, TestAssetFixture* fixture, const ch
     return AddFromJSON(run, fixture, fixture->Types.WorldSprite, json, "test world sprite");
 }
 
+bool TestAssets_AddCharacter(TestRun* run, TestAssetFixture* fixture, const char* json)
+{
+    return AddFromJSON(run, fixture, fixture->Types.Character, json, "test character");
+}
+
 bool TestAssets_AddWorldSpriteOf(TestRun* run, TestAssetFixture* fixture, const char* name, const char* animationName)
 {
     char Json[256];

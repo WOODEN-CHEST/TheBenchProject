@@ -58,6 +58,10 @@
  *  moon's (about 1/400000), so that at the night exposure a full-moon night is clearly lighter than a new-moon one,
  *  with soft shadows, and still reads as night (tuned on rendered frames: 8% lit the test world nearly like day). */
 #define WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY 0.02f
+/** @brief The default gravity, in metres per second squared: the Earth's standard gravity. */
+#define WORLD_ENVIRONMENT_DEFAULT_GRAVITY 9.81f
+/** @brief The largest gravity a world may set, in metres per second squared (a bound for hostile content). */
+#define WORLD_ENVIRONMENT_MAX_GRAVITY 1000.0
 /** @brief The most bytes a texture name (MilkyWayTexture, MoonTexture) may have, without the terminator. */
 #define WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH ((size_t)128)
 
@@ -267,6 +271,11 @@ typedef struct WorldEnvironmentStruct
      *  painters give night scenes (CIE x, y = 0.25, 0.25); 0.5 (the default) is half way, a faint blue cast. By day it
      *  changes nothing. Finite and in [0, 1]. */
     float NightVisionBlueShift;
+
+    /** @brief How fast things fall in this world, in metres per second squared, straight down (-Y): characters (times
+     *  their own gravity multiplier) and later physics objects. WORLD_ENVIRONMENT_DEFAULT_GRAVITY by default; a story on
+     *  the moon sets 1.62. Finite and in [0, WORLD_ENVIRONMENT_MAX_GRAVITY]. */
+    float Gravity;
 } WorldEnvironment;
 
 

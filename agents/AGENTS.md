@@ -46,7 +46,7 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, and registers the nine standard types. Read its lifetime rules before touching assets.
+  caches failed loads, and registers the ten standard types. Read its lifetime rules before touching assets.
 * Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader, GameSound and GameTexture: the manager-owned
   wrappers for the standard font, model, shader, sound and texture types, with their ownership rules, accessors and
   pitfalls. GameModel.h also holds GameMaterialFactors (source/GameModel.c): the PBR factors a material override sets,
@@ -93,6 +93,24 @@ Current module list:
     each object's motion result (push, contacts, ground); teleports skip the sweep and pushables at rest sleep.
   The world model's `collision` section (sets and their defaults, or "bounds") is parsed and loaded by
   source/WorldModelCollisionDefinition.c (World models).
+* Characters (Characters.md) - The player and NPCs (T13): what makes an object walk, run, crouch, jump, fly, look
+  around and use things, the same for the player and every NPC, whether a human, a dog or a pigeon. Covers:
+  * CharacterAsset - The character asset type (a standard type, JSON in characters/): the defaults of a kind of
+    character (CharacterSettings: an upright capsule, eye height, mass, walking, turning, crouching, jumping, falling,
+    flying, reach), described by a property table whose rows the component shares (the private
+    source/CharacterInternal.h); the definition (source/CharacterDefinition.c) refuses unknown keys and checks the
+    heights against the radius.
+  * WorldCharacterComponent - Component type 4, the first transform driver: a character asset by name, every setting
+    overridable per placement with explicit flags, the CharacterInput its driver fills (move direction, run, crouch,
+    jump, fly, use, look yaw and pitch, how the body faces) and the state it shows (mode, stance, ground, velocity,
+    facing, eyes, crouch amount, time in the air).
+  * WorldCharacters - The character system: once a tick, after the other drivers, it moves every character (modes and
+    stances, platforms, velocity, move and slide, steps, ground following, facing, eyes), keeps each one's capsule
+    collider in step, queues events (jumped, landed, left the ground, crouched, stood up, took off, stopped flying, used)
+    and answers what a character looks at; its capsule motion is the private source/WorldCharacterMotion.c
+    (source/WorldCharacterInternal.h).
+  * PlayerController - The player's side: GameInput actions and the mouse into a character's input, the camera at its
+    eyes (optional head bob), what the player looks at.
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -216,13 +234,16 @@ Current module list:
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world whose sky follows the frame's game
     clock and whose colliders it steps every tick (trigger, contact and motion events logged; F7 shows the colliders,
     F8 the contact points, F6 swings the door, F9 sends a wall through a row of crates, F10 moves the door's crate),
-    with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world.
+    with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world. Since T13 its
+    characters move every tick: F1 walk mode (the player as a character), F2 test NPCs (a human, a dog, a pigeon), F3
+    flight, F4 the player's kind, F12 head bob (the private source/WorldTestCharacters.{h,c}).
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
   keys by mode, migration hook) and write (defaults left out by default, integers in GHDF's smallest type), and get/set
   by key. The one module allowed to write `_` fields by offset. Clients: WorldEnvironment, GameClock, the world objects
-  and their components, the world sprite's settings; new data types get a table, not hand-written codecs. A FloatList
+  and their components, the world sprite's settings, the character asset's settings; new data types get a table, not
+  hand-written codecs. A FloatList
   type (PropertyFloatList: an owned list of floats with a maximum count, per-value bounds and an optional rising rule)
   carries lists such as a placement's LOD distances; an EnumSet type (a uint32 mask of an enum's entries, JSON an
   array of names) carries a collider's layer mask. A setting a placement overrides is two rows, a Bool

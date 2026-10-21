@@ -229,6 +229,7 @@ Error WorldObject_Construct(WorldObject* self, World* world, uint64_t id, const 
     // A new object is a root at its default transform: its world matrix is its local one, up to date.
     self->_worldMatrix = WorldTransform_Compose(self->_position, self->_rotation, self->_scale);
     self->_isWorldMatrixDirty = false;
+    self->_isPersistent = true;
     return Error_CreateSuccess();
 }
 

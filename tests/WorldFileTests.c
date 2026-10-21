@@ -634,6 +634,66 @@ static void AFullWorldRoundTripsThroughJSON(TestRun* run)
     DestroyWorld(run, &Source, &Keys);
 }
 
+/* Runtime objects (the player, spawned NPCs: WorldObject_IsPersistent false) are left out of both formats with their
+ * subtrees, saved objects under them too; a runtime child of a saved object goes, its saved child with it. */
+static void RuntimeObjectsAreLeftOutOfFiles(TestRun* run)
+{
+    World Source;
+    KeyRegistry Keys;
+    if (!TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys)))
+    {
+        return;
+    }
+    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&Source, &Keys)))
+    {
+        KeyRegistry_Deconstruct(&Keys);
+        return;
+    }
+    // 1 saved root; 2 runtime root with 3 (saved) under it; 4 saved root with 5 (runtime) and 6 (saved) under 5; 7 saved
+    // child of 4 after them.
+    WorldObject* Objects[7] = { NULL };
+    for (size_t Index = 0U; Index < 7U; Index++)
+    {
+        Objects[Index] = CreateObject(run, &Source);
+    }
+    if ((Objects[6] != NULL))
+    {
+        WorldObject_SetPersistent(Objects[1], false);
+        WorldObject_SetPersistent(Objects[4], false);
+        TEST_CHECK_SUCCESS(run, World_SetParent(&Source, 3U, 2U, false));
+        TEST_CHECK_SUCCESS(run, World_SetParent(&Source, 5U, 4U, false));
+        TEST_CHECK_SUCCESS(run, World_SetParent(&Source, 6U, 5U, false));
+        TEST_CHECK_SUCCESS(run, World_SetParent(&Source, 7U, 4U, false));
+        TEST_CHECK(run, WorldObject_IsPersistent(Objects[0]) && !WorldObject_IsPersistent(Objects[1]));
+        for (int Format = 0; Format < 2; Format++)
+        {
+            GenericBuffer Bytes;
+            GenericBuffer_AllocateVariable(&Bytes, WORLD_FILE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+            World Loaded;
+            WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
+            bool IsWritten = (Format == 0) ? TEST_CHECK_SUCCESS(run, WorldFile_WriteJSON(&Source, &Bytes))
+                : TEST_CHECK_SUCCESS(run, WorldFile_WriteGHDF(&Source, &Bytes));
+            bool IsRead = IsWritten && ((Format == 0)
+                ? TEST_CHECK_SUCCESS(run, WorldFile_ReadJSON(Bytes._data, Bytes._count, &Options, &Loaded))
+                : TEST_CHECK_SUCCESS(run, ReadGHDFBytes(&Bytes, &Keys, NULL, &Loaded)));
+            if (IsRead)
+            {
+                WorldObject* Found = NULL;
+                TEST_CHECK(run, World_GetObjectCount(&Loaded) == 3U);
+                TEST_CHECK(run, World_TryGetObject(&Loaded, 1U, &Found) && World_TryGetObject(&Loaded, 4U, &Found)
+                    && World_TryGetObject(&Loaded, 7U, &Found) && (WorldObject_GetParentId(Found) == 4U));
+                TEST_CHECK(run, !World_TryGetObject(&Loaded, 2U, &Found) && !World_TryGetObject(&Loaded, 3U, &Found)
+                    && !World_TryGetObject(&Loaded, 5U, &Found) && !World_TryGetObject(&Loaded, 6U, &Found));
+                // Loaded objects are saved again.
+                TEST_CHECK(run, World_TryGetObject(&Loaded, 1U, &Found) && WorldObject_IsPersistent(Found));
+                TEST_CHECK_SUCCESS(run, World_Deconstruct(&Loaded));
+            }
+            Memory_Free(Bytes._data);
+        }
+    }
+    DestroyWorld(run, &Source, &Keys);
+}
+
 static void AFullWorldRoundTripsThroughGHDF(TestRun* run)
 {
     World Source;
@@ -1757,6 +1817,7 @@ static void AWorldAtTheObjectLimitSavesAndLoads(TestRun* run)
 static const TestCase WorldFileTestCases[] =
 {
     { "a_full_world_round_trips_through_json", AFullWorldRoundTripsThroughJSON },
+    { "runtime_objects_are_left_out_of_files", RuntimeObjectsAreLeftOutOfFiles },
     { "a_full_world_round_trips_through_ghdf", AFullWorldRoundTripsThroughGHDF },
     { "json_and_ghdf_hold_the_same_world", JSONAndGHDFHoldTheSameWorld },
     { "written_json_leaves_out_defaults_in_table_order", WrittenJSONLeavesOutDefaultsInTableOrder },

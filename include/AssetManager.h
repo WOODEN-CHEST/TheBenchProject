@@ -104,6 +104,7 @@ typedef struct GameModelStruct GameModel;
 typedef struct GameTextureStruct GameTexture;
 typedef struct WorldModelStruct WorldModel;
 typedef struct WorldSpriteStruct WorldSprite;
+typedef struct CharacterAssetStruct CharacterAsset;
 
 
 // Core identifier types.
@@ -356,6 +357,9 @@ typedef struct StandardAssetTypesStruct
     /** @brief World sprite type id: how a sprite animation stands, is lit and is seen in the world, built on a sprite
      *  animation asset (WorldSprite.h). */
     AssetTypeID WorldSprite;
+    /** @brief Character type id: the defaults of a kind of character (a human, a dog, a pigeon): its body and how it
+     *  moves (CharacterAsset.h). */
+    AssetTypeID Character;
 } StandardAssetTypes;
 
 
@@ -435,8 +439,8 @@ Error AssetManager_CreateAssetType(AssetManager* self, const AssetTypeInfo* info
 /**
  * @brief Registers all standard asset types and a shared JSON pool used to parse their definitions.
  *
- * Registers the nine standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world model
- * and world sprite), writing their ids into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
+ * Registers the ten standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world model,
+ * world sprite and character), writing their ids into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
  * ConstructorUserData so all standard definition parsing recycles JSON compounds/arrays/strings instead of
  * reallocating. The caller OWNS @p *outDefinitionPool and must free it with JSONObjectPool_Deconstruct after (or
  * alongside) the manager. The same pool may be reused as the ConstructorUserData of a custom JSON-based type to
@@ -989,6 +993,11 @@ Error AssetManager_LoadWorldModel(AssetManager* self, const unsigned char* name,
  */
 Error AssetManager_LoadWorldSprite(AssetManager* self, const unsigned char* name, AssetUserID user,
     WorldSprite** outAsset);
+
+/**
+ * @brief Loads a character by name (CharacterAsset.h). See AssetManager_LoadSpriteSheet for semantics.
+ */
+Error AssetManager_LoadCharacter(AssetManager* self, const unsigned char* name, AssetUserID user, CharacterAsset** outAsset);
 
 
 // ---- Bulk load (stepped, main thread) ----

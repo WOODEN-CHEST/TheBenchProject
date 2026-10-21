@@ -691,6 +691,7 @@ static bool ConstructRecorderWorld(TestRun* run, World* world, KeyRegistry* keys
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Sprite),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Light),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Collider),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Character),
         &RecorderType,
     };
     if (!TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(keys)))

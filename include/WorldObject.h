@@ -153,7 +153,35 @@ typedef struct WorldObjectStruct
     uint32_t _transformRevision;
     /** @brief The world's bookkeeping while it removes a subtree. */
     bool _isBeingRemoved;
+    /** @brief Whether world files save the object (default true). Runtime only, not a property: objects made at runtime
+     *  for the session (the player, spawned NPCs, effects) set it off, and the world file writers leave them and their
+     *  subtrees out (WorldFile.h). */
+    bool _isPersistent;
 } WorldObject;
+
+
+// Functions: runtime flags.
+/**
+ * @brief Returns whether world files save the object (default true): false for runtime objects (the player, spawned
+ *        NPCs), which the writers leave out with their whole subtree.
+ * @param self The object; must not be NULL.
+ * @returns true when the object is saved.
+ */
+static inline bool WorldObject_IsPersistent(const WorldObject* self)
+{
+    return self->_isPersistent;
+}
+
+/**
+ * @brief Sets whether world files save the object. A runtime flag, not a property: it is not saved itself, does not
+ *        advance the object's revision and is true for every object a file creates.
+ * @param self The object; must not be NULL.
+ * @param isPersistent false to leave the object and its subtree out of world files.
+ */
+static inline void WorldObject_SetPersistent(WorldObject* self, bool isPersistent)
+{
+    self->_isPersistent = isPersistent;
+}
 
 
 // Functions: the table.

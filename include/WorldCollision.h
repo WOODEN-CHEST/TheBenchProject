@@ -178,6 +178,17 @@ typedef struct WorldCollisionFilterStruct
     uint64_t IgnoredObjectId;
     /** @brief Whether the ignored object's whole subtree is skipped (what a character carries). */
     bool IsIgnoredSubtree;
+    /** @brief Whether pushable colliders are skipped, and the movable colliders a pushable carries (its children's, which
+     *  its push moves; default false): a character's own movement sweeps past them and leaves them to the collision
+     *  step, which pushes both by mass (T13). Kinematic and static colliders still count. */
+    bool ArePushablesIgnored;
+    /** @brief Whether the query collides as a collider on OwnLayer would (default false): it then also skips colliders
+     *  whose mask lacks that layer, the other half of CollisionLayer_DoCollide's symmetric rule (a character's sweeps
+     *  pass what does not collide with characters). Off, the query's LayerMask alone decides. */
+    bool HasOwnLayer;
+    /** @brief The layer the query collides as, while HasOwnLayer is on (a value that is not a layer: the query sees
+     *  nothing). */
+    CollisionLayer OwnLayer;
 } WorldCollisionFilter;
 
 /**
@@ -552,7 +563,8 @@ static inline WorldCollisionOptions WorldCollisionOptions_CreateDefault(void)
 static inline WorldCollisionFilter WorldCollisionFilter_Create(uint32_t layerMask, WorldCollisionTriggerMode triggerMode)
 {
     return (WorldCollisionFilter){ .LayerMask = layerMask, .TriggerMode = triggerMode, .IgnoredObjectId = 0U,
-        .IsIgnoredSubtree = false };
+        .IsIgnoredSubtree = false, .ArePushablesIgnored = false, .HasOwnLayer = false,
+        .OwnLayer = CollisionLayer_Prop };
 }
 
 

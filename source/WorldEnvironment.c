@@ -95,6 +95,7 @@
 #define CATEGORY_AMBIENT ((const unsigned char*)u8"Ambient light")
 #define CATEGORY_FOG ((const unsigned char*)u8"Fog")
 #define CATEGORY_EFFECTS ((const unsigned char*)u8"Effects")
+#define CATEGORY_PHYSICS ((const unsigned char*)u8"Physics")
 
 
 // Fields.
@@ -423,6 +424,15 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .DisplayName = u8"Night vision blue shift",
         .Description = u8"How blue the night's grey looks: 0 a neutral grey (the eye's night vision sees no colour), 1 "
             u8"the deep blue painters give night scenes; 0.5 is a faint blue cast. Changes nothing by day.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"gravity", .WireId = 46U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, Gravity),
+        .Default.FloatValue = WORLD_ENVIRONMENT_DEFAULT_GRAVITY,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_GRAVITY), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_PHYSICS, .DisplayName = u8"Gravity",
+        .Description = u8"How fast things fall, in metres per second squared: 9.81 on Earth, 1.62 on the moon. Characters "
+            u8"multiply it by their own gravity setting.",
         .SinceVersion = 1U
     },
 };

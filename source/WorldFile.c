@@ -481,7 +481,18 @@ static ComparisonResult CompareObjectsById(GenericBuffer* buffer, GenericBufferE
     return (First < Second) ? ComparisonResult_ALessThanB : ComparisonResult_AGreaterThanB;
 }
 
-/* Appends @p root and its subtree depth first, children in attach order (no recursion: the links lead back up). */
+/* @p object or the first of its later siblings that files save (WorldObject_IsPersistent), or NULL. */
+static WorldObject* SkipRuntimeObjects(WorldObject* object)
+{
+    while ((object != NULL) && !WorldObject_IsPersistent(object))
+    {
+        object = WorldObject_GetNextSibling(object);
+    }
+    return object;
+}
+
+/* Appends @p root (saved) and its subtree depth first, children in attach order, leaving out runtime objects with their
+ * subtrees (no recursion: the links lead back up). */
 static bool AppendSubtree(WorldObject* root, GenericBuffer* outObjects)
 {
     WorldObject* Current = root;
@@ -491,16 +502,17 @@ static bool AppendSubtree(WorldObject* root, GenericBuffer* outObjects)
         {
             return false;
         }
-        if (WorldObject_GetFirstChild(Current) != NULL)
+        WorldObject* Child = SkipRuntimeObjects(WorldObject_GetFirstChild(Current));
+        if (Child != NULL)
         {
-            Current = WorldObject_GetFirstChild(Current);
+            Current = Child;
             continue;
         }
-        while ((Current != root) && (WorldObject_GetNextSibling(Current) == NULL))
+        while ((Current != root) && (SkipRuntimeObjects(WorldObject_GetNextSibling(Current)) == NULL))
         {
             Current = WorldObject_GetParent(Current);
         }
-        Current = (Current == root) ? NULL : WorldObject_GetNextSibling(Current);
+        Current = (Current == root) ? NULL : SkipRuntimeObjects(WorldObject_GetNextSibling(Current));
     }
     return true;
 }
@@ -518,7 +530,7 @@ Error WorldFileInternal_CollectObjects(const World* world, GenericBuffer* outObj
         WorldObject* Object = NULL;
         Result = World_GetObjectByIndex(world, Index, &Object);
         if ((Result.Code == ErrorCode_Success) && (WorldObject_GetParent(Object) == NULL)
-            && !GenericBuffer_AddLast(&Roots, &Object))
+            && WorldObject_IsPersistent(Object) && !GenericBuffer_AddLast(&Roots, &Object))
         {
             Result = Error_Construct2(ErrorCode_BufferTooSmall, "Could not list the world's objects.");
         }

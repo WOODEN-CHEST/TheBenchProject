@@ -147,7 +147,7 @@ void WorldFileInternal_EndEnumeration(CollectionEnumerator* enumerator, const Wo
 
 // Functions: writing (WorldFile.c).
 /** Appends the world's objects (WorldObject*) in file order: the roots by id, each followed by its subtree depth first,
- *  children in attach order. */
+ *  children in attach order. Runtime objects (WorldObject_IsPersistent false) are left out with their subtrees. */
 Error WorldFileInternal_CollectObjects(const World* world, GenericBuffer* outObjects);
 
 /** The next object id a file records: the world's counter, or UINT64_MAX once every id was handed out (the counter is

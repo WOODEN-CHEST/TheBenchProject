@@ -96,7 +96,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `mobility` | `"static"` / `"movable"` | |
 | `tags` | array of keys | See "Tags and data". |
 | `data` | object | See "Tags and data". |
-| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component` in `agents/WorldData.md`). |
+| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component` in `agents/WorldData.md` and `agents/Characters.md`). |
 
 An object has at most one component of each type. A block whose values are all defaults is still written (`"light":
 {}`): the component is there.
@@ -231,6 +231,31 @@ A crate that a door or a character pushes (its object `movable`), heavier than i
 }
 ```
 
+### The character block
+
+The `character` component (T13) makes the object a character: the player or an NPC, an upright capsule whose feet are at
+the object's position (`agents/Characters.md`). It names a character asset (`references/asset_structure.md`,
+"Characters") and may override every one of its settings, each with its own flag next to its value, as the sprite block
+does: `overrides_radius` with `radius`, `overrides_walk_speed` with `walk_speed`, ..., one pair per key of a character
+definition, with the same values and rules. While a flag is off its value is kept and saved. What the character is
+doing (its velocity, stance, mode) is not saved. The game gives the object a capsule collider when it has none, and keeps
+that collider's shape, layer, mask, mass and motion keys in step with the character: edit them through the character.
+
+| Key | Value (default) | |
+|---|---|---|
+| `character` | an asset name or `null` (null) | The kind of character; none uses the defaults (a human). |
+| `overrides_<key>`, `<key>` | false, the key's value (its default) | One pair per setting of a character definition. |
+
+A placed NPC that is a dog that walks slower than dogs do:
+```
+"character": {
+    "character": "dog",
+    "overrides_walk_speed": true,
+    "walk_speed": 0.8
+}
+```
+Characters made at runtime (the player, spawned NPCs) are not written into world files (below).
+
 ### Values
 
 - Numbers: integers or decimals; a float keeps its fraction when written (`2.0`). Angles are degrees.
@@ -289,7 +314,9 @@ Every object can carry tags and typed data under namespaced keys (`agents/Object
 
 - Only values that differ from their defaults, so files stay short and pick up changed defaults.
 - Keys in table order: `id` first, then the object table's keys, `components` last; component blocks in type order
-  (`model`, `sprite`, `light`); tags and data keys alphabetically.
+  (`model`, `sprite`, `light`, `collider`, `character`); tags and data keys alphabetically.
+- Not the runtime objects: the player and NPCs made during play (`WorldObject_IsPersistent` off) are left out with
+  everything under them. The game state will save them on its own.
 - The objects **parents first**: the roots in id order, each followed by its subtree depth first, the children in the
   order they were attached to their parent (which a load restores).
 - Pretty-printed with four spaces, arrays of numbers and strings on one line, and a newline at the end.
@@ -313,7 +340,7 @@ every integer in the smallest GHDF type that holds it.
 | Object entry | Value |
 |---|---|
 | 1 | The id (an unsigned integer). |
-| 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`), each a compound keyed by the type's wire ids. |
+| 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`, 5 `character`), each a compound keyed by the type's wire ids. |
 | 3 and up | The `world_object` table's wire ids: 3 `name`, 4 `position`, 5 `rotation`, 6 `scale`, 7 `tint`, 8 `is_enabled`, 9 `is_visible`, 10 `mobility`, 11 the tags and data, 12 `parent`. |
 
 How each type is stored (`agents/PropertyDescriptors.md`, "Types"): integers in the smallest integer type (readers take

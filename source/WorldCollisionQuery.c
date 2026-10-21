@@ -529,6 +529,34 @@ static void CastAgainstShape(CastRun* run, Vector3 sweptMin, Vector3 sweptMax)
 }
 
 
+/* Whether the collision step moves an instance by pushes: it is pushable, or it hangs under a pushable that carries it
+ * (a movable collider whose nearest pushable ancestor owns it in the step). The live hierarchy, found by id, as the
+ * subtree check does. */
+static bool IsPushedOrCarried(WorldCollision* self, const WorldCollisionInstance* instance)
+{
+    if (WorldCollisionInternal_IsPushable(instance))
+    {
+        return true;
+    }
+    WorldObject* Object = NULL;
+    if (instance->IsStatic || !World_TryGetObject(self->_world, instance->ObjectId, &Object))
+    {
+        return false;
+    }
+    for (const WorldObject* Ancestor = WorldObject_GetParent(Object); Ancestor != NULL;
+        Ancestor = WorldObject_GetParent(Ancestor))
+    {
+        uint32_t Slot = 0U;
+        if (WorldCollisionInternal_FindSlot(self, WorldObject_GetId(Ancestor), &Slot)
+            && WorldCollisionInternal_IsPushable(WorldCollisionInternal_GetInstance(self, Slot)))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+
 // Internal functions (WorldCollisionInternal.h).
 bool WorldCollisionInternal_PassesFilter(WorldCollision* self, const WorldCollisionInstance* instance,
     const WorldCollisionFilter* filter)
@@ -538,6 +566,15 @@ bool WorldCollisionInternal_PassesFilter(WorldCollision* self, const WorldCollis
         return false;
     }
     if ((filter->LayerMask & COLLISION_LAYER_BIT(instance->Settings.Layer)) == 0U)
+    {
+        return false;
+    }
+    if (filter->HasOwnLayer && (((uint32_t)filter->OwnLayer >= (uint32_t)CollisionLayer_Count)
+        || ((instance->Settings.CollidesWith & COLLISION_LAYER_BIT(filter->OwnLayer)) == 0U)))
+    {
+        return false;
+    }
+    if (filter->ArePushablesIgnored && IsPushedOrCarried(self, instance))
     {
         return false;
     }

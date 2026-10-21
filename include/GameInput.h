@@ -97,6 +97,12 @@ typedef enum GameActionEnum
     GameAction_MoveDown,
     /** @brief Move faster while held ("sprint"; default Left Shift). */
     GameAction_Sprint,
+    /** @brief Jump, when walking ("jump"; default Space, which "move_up" shares: the flycam and flight climb with it). */
+    GameAction_Jump,
+    /** @brief Crouch while held, when walking ("crouch"; default Left Control, which "move_down" shares). */
+    GameAction_Crouch,
+    /** @brief Use what the character looks at ("use"; default E). */
+    GameAction_Use,
     /** @brief Pause / open the game menu ("pause"; default Escape). Read it after the UI had first refusal. */
     GameAction_Pause,
 
