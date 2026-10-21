@@ -6,5 +6,6 @@
     "variants": [
         { "name": "red", "material_overrides": [ { "slot": 0, "tint": "#c8463c" } ] },
         { "name": "blue", "material_overrides": [ { "slot": 0, "tint": "#3c64c8" } ] }
-    ]
+    ],
+    "collision": "bounds"
 }

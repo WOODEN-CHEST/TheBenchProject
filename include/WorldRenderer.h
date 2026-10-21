@@ -72,6 +72,8 @@ typedef struct GameConfigStruct GameConfig;
 typedef struct WorldStruct World;
 /** @brief The game camera; full type in GameCamera.h. */
 typedef struct GameCameraStruct GameCamera;
+/** @brief A collision world whose shapes the renderer can draw for debugging; full type in WorldCollision.h. */
+typedef struct WorldCollisionStruct WorldCollision;
 
 /** @brief The world renderer. Opaque; construct with WorldRenderer_Create. */
 typedef struct WorldRendererStruct WorldRenderer;
@@ -466,6 +468,25 @@ void WorldRenderer_SetLightGizmosEnabled(WorldRenderer* self, bool enabled);
  * @returns true if the light gizmos are drawn.
  */
 bool WorldRenderer_AreLightGizmosEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Sets the collision world whose shapes are drawn as wireframes (a debug aid), or NULL to draw none (the
+ *        default).
+ *
+ * The renderer only reads the collision world's debug list (WorldCollision_GetDebugShapes, rule 3), so nothing shows
+ * until WorldCollision_SetDebugListEnabled turns the list on. The shapes are drawn in the scene pass after the light
+ * gizmos, depth-tested, coloured by layer (triggers violet whatever their layer; static shapes darker).
+ * @param self The renderer; must not be NULL.
+ * @param collision The collision world (borrowed: set NULL before destroying it), or NULL.
+ */
+void WorldRenderer_SetCollisionDebug(WorldRenderer* self, const WorldCollision* collision);
+
+/**
+ * @brief Returns the collision world whose shapes are drawn, or NULL.
+ * @param self The renderer; must not be NULL.
+ * @returns The collision world set by WorldRenderer_SetCollisionDebug (borrowed), or NULL.
+ */
+const WorldCollision* WorldRenderer_GetCollisionDebug(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables the debug reference grid drawn on the ground plane.

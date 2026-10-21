@@ -4,5 +4,10 @@
         { "model": "lod_test_lod0", "max_distance": 13 },
         { "model": "lod_test_lod1", "max_distance": 16 },
         { "model": "lod_test_lod2", "max_distance": 60 }
-    ]
+    ],
+    "collision": {
+        "sets": [
+            { "name": "hull", "shapes": [ { "type": "convex_hull", "model": "lod_test_lod0", "max_vertices": 64 } ] }
+        ]
+    }
 }

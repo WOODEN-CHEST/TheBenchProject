@@ -204,6 +204,8 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
             return PutDataMap(pool, compound, Id, data->DataMapValue);
         case PropertyType_FloatList:
             return PutFloatList(pool, compound, Id, data->FloatListValue);
+        case PropertyType_EnumSet:
+            return GameGHDF_PutUnsigned(compound, Id, (uint64_t)data->EnumSetValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -489,6 +491,14 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
             return Error_Construct2(ErrorCode_InvalidState, "Data maps are read separately.");
         case PropertyType_FloatList:
             return Error_Construct2(ErrorCode_InvalidState, "Float lists are read separately.");
+        case PropertyType_EnumSet:
+        {
+            // Bits outside the enum are refused when the read commits, like every rule.
+            uint64_t Value = 0U;
+            Result = GameGHDF_GetOptionalUnsigned(compound, Id, (uint64_t)UINT32_MAX, &Value, outFound);
+            outData->EnumSetValue = *outFound ? (uint32_t)Value : 0U;
+            return Result;
+        }
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }

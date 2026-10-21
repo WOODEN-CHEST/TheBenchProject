@@ -5,6 +5,8 @@
 #include "GameFrame.h"
 #include "Services.h"
 #include "World.h"
+#include "WorldColliderComponent.h"
+#include "WorldCollision.h"
 #include "WorldFile.h"
 #include "WorldObject.h"
 #include "WorldModelComponent.h"
@@ -67,6 +69,10 @@
 /** The test world's hierarchy (T08): the desk (an empty object holding its parts) and how the J key slides it along X:
  *  back and forth by this many metres either way around where it was loaded, once per period. */
 #define TEST_DESK_OBJECT_NAME ((const unsigned char*)u8"desk")
+/** The test world's door (T12): the F6 key swaps its collider between its world model's two sets. */
+#define TEST_DOOR_OBJECT_NAME "door"
+#define DOOR_CLOSED_SET ((const unsigned char*)u8"closed")
+#define DOOR_OPEN_SET ((const unsigned char*)u8"open")
 #define DESK_SLIDE_DISTANCE 1.2f
 #define DESK_SLIDE_PERIOD_SECONDS 6.0
 /** The test world's variant example (T10): two cubes of the "painted_cube" world model, and how many looks the E key
@@ -145,6 +151,13 @@ typedef struct WorldTestFrameStruct
     size_t _variantStep;
     /** Whether the Z key's zoom is on (the camera at ZOOMED_FOV_Y). */
     bool _isZoomed;
+    /** The world's colliders, synced every tick after the desk moves; owned. Its trigger events are logged. */
+    WorldCollision* _collision;
+    /** Whether the R key's collider wireframes are shown. */
+    bool _areCollidersShown;
+    /** The door the F6 key opens and closes (0 if the test world lacks it), and whether its hitbox is the open one. */
+    uint64_t _doorId;
+    bool _isDoorOpen;
 } WorldTestFrame;
 
 
@@ -312,6 +325,24 @@ static void LogClockStatus(WorldTestFrame* frame)
         World_GetEnvironment(&frame->_world)->AreSeasonsEnabled ? "on" : "off");
     Error_Deconstruct(&LogResult);
     LogClock(frame, "the moon now");
+}
+
+/* The I key's line about the collision world. */
+static void LogCollisionStatus(WorldTestFrame* frame)
+{
+    if (frame->_services->Logger == NULL)
+    {
+        return;
+    }
+    WorldCollisionStats Stats = WorldCollision_GetStats(frame->_collision);
+    Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+        (const unsigned char*)u8"WorldTest: collision: %" PRIu64 u8" colliders (%" PRIu64 u8" static, %" PRIu64
+        u8" movable), %" PRIu64 u8" shapes (%" PRIu64 u8" mesh triangles, %" PRIu64 u8" infinite planes), %" PRIu64
+        u8" trigger pairs; %" PRIu64 u8" rebuilds and %" PRIu64 u8" moves in %" PRIu64 u8" syncs.",
+        (uint64_t)Stats.InstanceCount, (uint64_t)Stats.StaticInstanceCount, (uint64_t)Stats.MovableInstanceCount,
+        (uint64_t)Stats.ShapeCount, (uint64_t)Stats.TriangleCount, (uint64_t)Stats.PlaneCount,
+        (uint64_t)Stats.TriggerPairCount, Stats.RebuildCount, Stats.MoveCount, Stats.Tick);
+    Error_Deconstruct(&LogResult);
 }
 
 /* Starts the clock at the test speed, where the world's sky starts: the environment's date and time of day. */
@@ -616,6 +647,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
     {
         WorldRenderer_LogStatus(frame->_renderer);
         LogClockStatus(frame);
+        LogCollisionStatus(frame);
     }
 
     // T toggles the text sample (checks font drawing, Latvian and Cyrillic glyphs, decorations, inline sprites).
@@ -775,8 +807,8 @@ static void HandleDebugModelInput(WorldTestFrame* frame, const GameInput* input)
 
 
 // Static functions: the desk (the test world's hierarchy).
-/* Logs a line about the desk. */
-static void LogDesk(WorldTestFrame* frame, const char* message)
+/* Logs a line of the frame's (about the desk, the door, the wireframes). */
+static void LogLine(WorldTestFrame* frame, const char* message)
 {
     if (frame->_services->Logger != NULL)
     {
@@ -798,7 +830,7 @@ static void HandleDebugDeskInput(WorldTestFrame* frame, const GameInput* input)
     if (GameInput_IsKeyPressed(input, GameKey_J))
     {
         frame->_isDeskSliding = !frame->_isDeskSliding;
-        LogDesk(frame, frame->_isDeskSliding
+        LogLine(frame, frame->_isDeskSliding
             ? "the desk slides along X; its parts, the cup, the lamp and the lamp's light follow."
             : "the desk stops.");
     }
@@ -807,7 +839,7 @@ static void HandleDebugDeskInput(WorldTestFrame* frame, const GameInput* input)
         bool IsVisible = !WorldObject_IsVisible(Desk);
         Error Result = WorldObject_SetVisible(Desk, IsVisible);
         Error_Deconstruct(&Result); // cannot fail: the object exists
-        LogDesk(frame, IsVisible ? "the desk is shown again, with everything on it."
+        LogLine(frame, IsVisible ? "the desk is shown again, with everything on it."
             : "the desk is hidden, and with it everything on it (the lamp's light is off).");
     }
 }
@@ -827,6 +859,76 @@ static void SlideDesk(WorldTestFrame* frame, double deltaSeconds)
     Position.x = frame->_deskStartX + (DESK_SLIDE_DISTANCE * (float)sin(Turn));
     Error Result = WorldObject_SetPosition(Desk, Position);
     Error_Deconstruct(&Result); // cannot fail: the position is finite
+}
+
+
+// Static functions: collision (T12).
+static const char* GetNameOf(World* world, uint64_t id)
+{
+    WorldObject* Object = NULL;
+    const unsigned char* Name = World_TryGetObject(world, id, &Object) ? WorldObject_GetName(Object) : NULL;
+    return (Name != NULL) ? (const char*)Name : "";
+}
+
+/* The tick's events step: logs the trigger events of this tick's sync (the desk's parts entering and leaving the zone
+ * at the end of its slide), then drops them. An exit can name an object that was just removed: its name is then empty. */
+static void LogTriggerEvents(WorldTestFrame* frame)
+{
+    size_t Count = 0U;
+    const WorldTriggerEvent* Events = WorldCollision_GetTriggerEvents(frame->_collision, &Count);
+    for (size_t Index = 0U; (Index < Count) && (frame->_services->Logger != NULL); Index++)
+    {
+        Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+            (const unsigned char*)u8"WorldTest: trigger %" PRIu64 u8" (\"%s\") %s: object %" PRIu64 u8" (\"%s\").",
+            Events[Index].TriggerId, GetNameOf(&frame->_world, Events[Index].TriggerId),
+            (Events[Index].Kind == WorldTriggerEventKind_Enter) ? "enter" : "exit", Events[Index].OtherId,
+            GetNameOf(&frame->_world, Events[Index].OtherId));
+        Error_Deconstruct(&LogResult);
+    }
+    WorldCollision_ClearTriggerEvents(frame->_collision);
+}
+
+/* Opens or closes the door: its collider switches to the world model's other set (the model itself does not move). */
+static void ToggleDoor(WorldTestFrame* frame)
+{
+    WorldComponent* Component = NULL;
+    if ((frame->_doorId == 0U) || !World_TryGetComponent(&frame->_world, frame->_doorId, WorldComponentType_Collider,
+        &Component))
+    {
+        LogLine(frame, "the test world has no door with a collider.");
+        return;
+    }
+    WorldColliderComponent* Collider = WorldColliderComponent_FromComponent(Component);
+    bool IsOpen = !frame->_isDoorOpen;
+    Error Result = WorldColliderComponent_SetCollisionSet(Collider, IsOpen ? DOOR_OPEN_SET : DOOR_CLOSED_SET);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldColliderComponent_SetOverridden(Collider, WorldColliderSetting_CollisionSet, true);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        frame->_isDoorOpen = IsOpen;
+    }
+    Error_Deconstruct(&Result); // cannot fail: the names are valid and the setting exists
+    LogLine(frame, frame->_isDoorOpen ? "the door's hitbox is open (turned 90 degrees about its hinge; the model does "
+        "not move: R shows it)." : "the door's hitbox is closed.");
+}
+
+/* The collision keys: R shows and hides the collider wireframes (coloured by layer: world grey, prop orange, triggers
+ * violet; static ones darker), F6 opens and closes the door's hitbox. */
+static void HandleDebugCollisionInput(WorldTestFrame* frame, const GameInput* input)
+{
+    if (GameInput_IsKeyPressed(input, GameKey_R))
+    {
+        frame->_areCollidersShown = !frame->_areCollidersShown;
+        WorldCollision_SetDebugListEnabled(frame->_collision, frame->_areCollidersShown);
+        WorldRenderer_SetCollisionDebug(frame->_renderer, frame->_areCollidersShown ? frame->_collision : NULL);
+        LogLine(frame, frame->_areCollidersShown ? "collider wireframes ON." : "collider wireframes OFF.");
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_F6))
+    {
+        ToggleDoor(frame);
+    }
 }
 
 
@@ -1010,6 +1112,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     HandleDebugInput(frame, input);
     HandleDebugDeskInput(frame, input);
     HandleDebugModelInput(frame, input);
+    HandleDebugCollisionInput(frame, input);
 }
 
 
@@ -1028,8 +1131,9 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"P pause/resume the clock, 1-4 = dawn/noon/dusk/midnight (paused), [ ] scrub time, , . previous/next "
             u8"day, / a week ahead; F full moon / calendar moon, Y seasons; O post effects, B bloom, G sun shafts, "
             u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, N light pollution, X opacity of the "
-            u8"centre cube and the tree, U frustum culling, J slide the desk, H hide the desk, E variants, Z zoom, Q LOD "
-            u8"tinting, I renderer status and game time, T text sample, F5 save the world (worlds/test.saved.world.json "
+            u8"centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the desk, "
+            u8"E variants, Z zoom, Q LOD tinting, R collider wireframes, F6 open/close the door's hitbox, I renderer, "
+            u8"game time and collision status, T text sample, F5 save the world (worlds/test.saved.world.json "
             u8"and .ghdf); M frees the "
             u8"mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");
         Error_Deconstruct(&LogResult);
@@ -1063,9 +1167,12 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     }
     ApplyClockToEnvironment(Frame);
 
-    // Advance sprite animations (game logic; the renderer only reads the current frame), and slide the desk.
-    AdvanceSpriteAnimations(&Frame->_world, time.PassedTime);
+    // The tick's order (agents/WorldData.md): the drivers move things (the desk), the collision world follows them (its
+    // sync brings the world matrices up to date first), its queued trigger events are handled, then the animations.
     SlideDesk(Frame, time.PassedTime);
+    WorldCollision_Sync(Frame->_collision);
+    LogTriggerEvents(Frame);
+    AdvanceSpriteAnimations(&Frame->_world, time.PassedTime);
 
     // The world matrices of everything that moved this tick, so the renderer reads them cached.
     World_UpdateTransforms(&Frame->_world);
@@ -1154,6 +1261,8 @@ static void WorldTestFrame_Destroy(void* self)
         Error RendererResult = WorldRenderer_Deconstruct(Frame->_renderer);
         Error_Deconstruct(&RendererResult);
     }
+    // The collision world borrows the world (and the renderer borrowed it): it goes after the renderer, before the world.
+    WorldCollision_Destroy(Frame->_collision);
 
     Error WorldResult = World_Deconstruct(&Frame->_world);
     Error_Deconstruct(&WorldResult);
@@ -1249,6 +1358,21 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         return TextResult;
     }
 
+    Error CollisionResult = WorldCollision_Create(&Frame->_world, services->Assets, services->Logger, NULL,
+        &Frame->_collision);
+    if (CollisionResult.Code != ErrorCode_Success)
+    {
+        DeconstructTextSample(Frame);
+        Error Cleanup = WorldRenderer_Deconstruct(Frame->_renderer);
+        Error_Deconstruct(&Cleanup);
+        Cleanup = World_Deconstruct(&Frame->_world);
+        Error_Deconstruct(&Cleanup);
+        GameClock_Deconstruct(&Frame->_clock);
+        GameFrame_Deconstruct(&Frame->Base);
+        Memory_Free(Frame);
+        return CollisionResult;
+    }
+
     Frame->_services = services;
     for (size_t Index = 0U; Index < OPACITY_TEST_OBJECT_COUNT; Index++)
     {
@@ -1266,6 +1390,9 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     }
     Frame->_variantStep = 0U;
     Frame->_isZoomed = false;
+    Frame->_areCollidersShown = false;
+    Frame->_doorId = FindObjectId(&Frame->_world, TEST_DOOR_OBJECT_NAME);
+    Frame->_isDoorOpen = false;
     if (!IsTestWorldLoaded)
     {
         WorldRenderer_SetDebugGridEnabled(Frame->_renderer, true); // an empty world shows the grid, so it is visible

@@ -7,6 +7,7 @@
 #include "NamespacedKey.h"
 #include "PropertyDescriptor.h"
 #include "World.h"
+#include "WorldColliderComponent.h"
 #include "WorldComponent.h"
 #include "WorldEnvironment.h"
 #include "WorldFile.h"
@@ -146,6 +147,13 @@ static PropertyValue MakeCandidate(const PropertyDescriptor* row, size_t attempt
         case PropertyType_Date:
             Value.Data.DateValue = row->Default.DateValue + 40 + (int64_t)attempt;
             break;
+        case PropertyType_EnumSet:
+        {
+            // The default with one entry switched: a different entry for each attempt.
+            const PropertyEnumEntry* Entry = &row->EnumTable->Entries[attempt % row->EnumTable->EntryCount];
+            Value.Data.EnumSetValue = row->Default.EnumSetValue ^ ((uint32_t)1U << (uint32_t)Entry->Value);
+            break;
+        }
         case PropertyType_DataMap:
         case PropertyType_FloatList:
             break; // FillData and FillFloatList build these
@@ -1147,9 +1155,9 @@ static void UnknownNamesAreSkippedWithOneWarningEach(TestRun* run)
             "{\"format_version\": 1, \"flavour\": \"vanilla\",\n"
             " \"environment\": {\"fog_colour\": 3, \"light_pollution\": 0.5},\n"
             " \"objects\": [\n"
-            "  {\"id\": 1, \"positon\": [1, 2, 3], \"components\": {\"collider\": {}, \"light\": {\"intensty\": 4, "
+            "  {\"id\": 1, \"positon\": [1, 2, 3], \"components\": {\"no_such_component\": {}, \"light\": {\"intensty\": 4, "
             "\"range\": 2}}},\n"
-            "  {\"id\": 2, \"positon\": [1, 2, 3], \"components\": {\"collider\": {\"size\": 1}}},\n"
+            "  {\"id\": 2, \"positon\": [1, 2, 3], \"components\": {\"no_such_component\": {\"size\": 1}}},\n"
             "  {\"id\": 3, \"positon\": [1, 2, 3], \"name\": \"kept\"}]}";
         World Loaded;
         if (TEST_CHECK_SUCCESS(run, ReadJSONText(Text, &Keys, &Log, &Loaded)))
@@ -1225,8 +1233,8 @@ static void UnknownNamesAreSkippedWithOneWarningEach(TestRun* run)
     TEST_CHECK(run, CountInLatestLog(run, Base, "skipped the unknown key \"fog_colour\" in world_environment.") == 1U);
     TEST_CHECK(run, CountInLatestLog(run, Base,
         "skipped the unknown key \"positon\" in world_object (3 times; first in object 1).") == 1U);
-    TEST_CHECK(run, CountInLatestLog(run, Base, "skipped the unknown component \"collider\" (2 times; first in object 1).")
-        == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Base,
+        "skipped the unknown component \"no_such_component\" (2 times; first in object 1).") == 1U);
     TEST_CHECK(run, CountInLatestLog(run, Base, "skipped the unknown key \"intensty\" in light_component (in object 1).")
         == 1U);
     TEST_CHECK(run, CountInLatestLog(run, Base, "skipped the unknown entry 9 in the root.") == 1U);
@@ -1379,7 +1387,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 32U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 34U);
             TEST_CHECK(run, AreNamesEqual(World_GetName(&Loaded), (const unsigned char*)u8"test"));
             // The LOD examples (T11): a row of lod_test spheres, one forcing its coarsest LOD, one with its own distances.
             WorldComponent* Forced = NULL;
@@ -1412,10 +1420,26 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                 && WorldModelComponent_UsesVariant(WorldModelComponent_FromComponent(Painted))
                 && AreNamesEqual(WorldModelComponent_GetVariant(WorldModelComponent_FromComponent(Painted)),
                     (const unsigned char*)u8"blue"));
-            // The desk holds five parts, the lamp its light.
+            // The desk holds five parts, the lamp its light; it moves (the J key), so it is movable.
             WorldObject* Desk = NULL;
             WorldObject* LampLight = NULL;
-            TEST_CHECK(run, World_TryGetObject(&Loaded, 15U, &Desk) && (WorldObject_GetChildCount(Desk) == 5U));
+            TEST_CHECK(run, World_TryGetObject(&Loaded, 15U, &Desk) && (WorldObject_GetChildCount(Desk) == 5U)
+                && (WorldObject_GetMobility(Desk) == WorldMobility_Movable));
+            // The collision examples (T12): 24 colliders, a door of two sets, a trigger zone where the desk slides.
+            size_t ColliderCount = 0U;
+            World_GetComponents(&Loaded, WorldComponentType_Collider, &ColliderCount);
+            TEST_CHECK(run, ColliderCount == 24U);
+            WorldComponent* DoorModel = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 33U, WorldComponentType_Model, &DoorModel)
+                && AreNamesEqual(WorldModelComponent_GetWorldModel(WorldModelComponent_FromComponent(DoorModel)),
+                    (const unsigned char*)u8"test_door"));
+            WorldComponent* Zone = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 34U, WorldComponentType_Collider, &Zone)
+                && WorldColliderComponent_UsesOwnShape(WorldColliderComponent_FromComponent(Zone))
+                && WorldColliderComponent_IsOverridden(WorldColliderComponent_FromComponent(Zone),
+                    WorldColliderSetting_IsTrigger)
+                && WorldColliderComponent_IsTrigger(WorldColliderComponent_FromComponent(Zone))
+                && (WorldColliderComponent_GetLayer(WorldColliderComponent_FromComponent(Zone)) == CollisionLayer_Trigger));
             TEST_CHECK(run, World_TryGetObject(&Loaded, 21U, &LampLight)
                 && (WorldObject_GetParentId(LampLight) == 20U));
             // The file is in the writer's own form, so a save of the unchanged world diffs empty against it.

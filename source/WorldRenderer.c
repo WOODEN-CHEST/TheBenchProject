@@ -903,3 +903,13 @@ bool WorldRenderer_AreLightGizmosEnabled(const WorldRenderer* self)
 {
     return self->_lightGizmosEnabled;
 }
+
+void WorldRenderer_SetCollisionDebug(WorldRenderer* self, const WorldCollision* collision)
+{
+    self->_collisionDebug = collision;
+}
+
+const WorldCollision* WorldRenderer_GetCollisionDebug(const WorldRenderer* self)
+{
+    return self->_collisionDebug;
+}

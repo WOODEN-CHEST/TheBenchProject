@@ -63,6 +63,7 @@ typedef struct DataMapStruct DataMap;
  * | Date        | int64_t day number          | "yyyy-mm-dd", e.g. "2026-10-18"        | EncodedInteger (the day number) |
  * | DataMap     | DataMap*, owned, NULL while empty | two keys: TagsKey ["key", ...] and Key {"key": value} | Compound array of entries |
  * | FloatList   | PropertyFloatList*, owned, NULL while empty | [a, b, ...]                  | Float array                   |
+ * | EnumSet     | uint32_t mask (bit N: the entry of value N) | ["name", ...] (table order)    | smallest unsigned type (*)    |
  *
  * (*) Written in the smallest GHDF integer type that holds the value (a parent id of 12 is one UInt8 byte; GameGHDF.h);
  * read from any GHDF integer type, fixed width or encoded, whose value fits the property's type.
@@ -74,7 +75,9 @@ typedef struct DataMapStruct DataMap;
  * "yyyy-mm-dd" form. A DataMap (tags and typed custom data, DataMap.h) is written as two JSON keys, its tags under the
  * descriptor's TagsKey and its values under its Key; reading one needs PropertyReadOptions.Keys, the program's key
  * registry, to intern the keys. A FloatList (a world model placement's LOD distances) is a list of finite floats: an
- * empty list is NULL, written [] in JSON and as an empty Float array in GHDF when defaults are written.
+ * empty list is NULL, written [] in JSON and as an empty Float array in GHDF when defaults are written. An EnumSet (a
+ * collider's layer mask) is a set of an enum table's entries, whose values are their bit indices (0 to 31): JSON
+ * names them in an array, GHDF stores the mask.
  *
  * Not thread-safe: tables are immutable static data, but instances are plain structs with no locking.
  */
@@ -192,7 +195,10 @@ typedef enum PropertyTypeEnum
     /** @brief A list of floats: an owned `PropertyFloatList*`, NULL while empty, which is its only default. Every value
      *  is finite and within the optional bounds; Rules.MaxCount (required) bounds the count, Rules.IsStrictlyIncreasing
      *  makes each value rise above the one before it. */
-    PropertyType_FloatList
+    PropertyType_FloatList,
+    /** @brief A set of an enum's entries: a uint32_t mask, bit N set for the entry of value N. The descriptor's
+     *  EnumTable (required) gives the names, its values 0 to 31; a set bit must name an entry. Takes no other rules. */
+    PropertyType_EnumSet
 } PropertyType;
 
 /**
@@ -271,6 +277,8 @@ typedef union PropertyDataUnion
     /** @brief PropertyType_FloatList: the list, or NULL for an empty one. Borrowed, as DataMapValue: NULL in a default,
      *  the instance's own from Properties_Get, copied by Properties_Set. */
     const PropertyFloatList* FloatListValue;
+    /** @brief PropertyType_EnumSet: the mask (bit N: the entry of value N). */
+    uint32_t EnumSetValue;
 } PropertyData;
 
 /**
@@ -378,7 +386,8 @@ typedef struct PropertyDescriptorStruct
     PropertyData Default;
     /** @brief The rules beyond the type's own. */
     PropertyRules Rules;
-    /** @brief The enum's values; required for PropertyType_Enum, NULL for every other type. */
+    /** @brief The enum's values; required for PropertyType_Enum and PropertyType_EnumSet (whose entries' values are bit
+     *  indices, 0 to 31), NULL for every other type. */
     const PropertyEnumTable* EnumTable;
     /** @brief PropertyFlags bits. */
     uint32_t Flags;
@@ -633,6 +642,12 @@ static inline PropertyValue PropertyValue_FromDataMap(const DataMap* map)
 static inline PropertyValue PropertyValue_FromFloatList(const PropertyFloatList* list)
 {
     return (PropertyValue){ .Type = PropertyType_FloatList, .Data.FloatListValue = list };
+}
+
+/** @brief Makes an EnumSet value. @param mask The set (bit N: the enum entry of value N). @returns The typed value. */
+static inline PropertyValue PropertyValue_FromEnumSet(uint32_t mask)
+{
+    return (PropertyValue){ .Type = PropertyType_EnumSet, .Data.EnumSetValue = mask };
 }
 
 /**

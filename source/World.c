@@ -241,6 +241,7 @@ static Error Construct(World* self, KeyRegistry* keys, AssetManager* assets, Log
     self->_nextId = 1;
     self->_objectSetVersion = 0;
     self->_componentSetVersion = 0;
+    self->_lastComponentSerial = 0U;
     self->_dirtyTransformCount = 0U;
     self->_worldMatrixRecomputeCount = 0U;
     self->_refusedParentCount = 0U;
@@ -590,6 +591,7 @@ Error World_AddComponent(World* self, uint64_t id, WorldComponentType type, Worl
     Component->_type = type;
     Component->_owner = Object;
     Component->_revision = 0;
+    Component->_serial = self->_lastComponentSerial + 1U;
     if (!GenericBuffer_AddLast(&self->_components[type], &Component))
     {
         Info->Deconstruct(Component);
@@ -598,6 +600,7 @@ Error World_AddComponent(World* self, uint64_t id, WorldComponentType type, Worl
     }
     Object->_components[type] = Component;
     self->_componentSetVersion++;
+    self->_lastComponentSerial = Component->_serial;
 
     if (Info->IsTransformDriver && (Object->_mobility != WorldMobility_Movable))
     {

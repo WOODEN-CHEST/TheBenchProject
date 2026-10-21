@@ -226,6 +226,12 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
         WorldRendererGeometry_DrawLightGizmos(self);
     }
 
+    // Collider wireframes: a debug aid (the collision world's read-only debug list), off unless a collision world is set.
+    if (self->_collisionDebug != NULL)
+    {
+        WorldRendererCollision_Draw(self);
+    }
+
     EndMode3D();
     EndTextureMode();
 }

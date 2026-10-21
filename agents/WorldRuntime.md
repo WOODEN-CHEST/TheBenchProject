@@ -251,8 +251,9 @@ Every model draws one of its world model's LODs ([WorldModels.md](WorldModels.md
    skyglow), the stars (none behind the moon), debug grid, the camera's PBR models (each dithered by its fade, both LODs
    of a cross-fade with complementary dithers; the sun and the moon; per object: up to
    `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), the camera's lit sprites
-   (the cutout ones, then decals, then blended and additive ones back to front) and light gizmos. The sky's glow and the
-   models' and lit sprites' reflected light go through the eye's night vision.
+   (the cutout ones, then decals, then blended and additive ones back to front), light gizmos, and collider wireframes
+   while a collision world is set (T12). The sky's glow and the models' and lit sprites' reflected light go through the
+   eye's night vision.
 7. Outlines, then bloom and sun shafts from the (outlined) HDR scene.
 8. Eye adaptation, then the tonemapped point-upscale into the frame target.
 9. The crisp overlay for OmitPixelation models and cutout sprites, composited over the finished image.
@@ -520,6 +521,7 @@ get no AO and no outlines.
 | `WorldRendererStars.c` | The star field: the catalogue's mesh (rebuilt when the seed or density changes) and its draw (none behind the moon). |
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
 | `WorldRendererCrisp.c` | The crisp overlay. |
+| `WorldRendererCollision.c` | Debug wireframes of a collision world's shapes (`WorldRenderer_SetCollisionDebug`), drawn in the scene pass after the light gizmos from its read-only debug list ([WorldCollision.md](WorldCollision.md)). |
 | `WorldVisibility.c` (with the cache, not a pass) | The frame's visibility lists (per pass, the entries it draws, and every entry's fades) and the dither's C mirror; see "Visibility". |
 | `WorldLod.c` (with the cache, not a pass) | LOD selection and the cross-fade's state; the cache's `WorldRenderCache_UpdateLods` runs it per entry; see "LODs". |
 
@@ -595,10 +597,17 @@ world models (T10): two cubes behind the centre row, `variant_cube_left` (red) a
 lamp are placement overrides (`overrides_omit_pixelation`, `overrides_shadow_tier`). Its LODs (T11): a row of six
 `lod_test` spheres (`lod_test_1` to `_6`, ids 25 to 30) along the left edge of the ground, at x = 8 from z = -6 to 9,
 switching at 13 and 16 m, and beside it `lod_test_forced` (id 31, LOD 2 forced) and `lod_test_own_distances` (id 32, its
-own switch distances 3 and 6 m). Edit the file and restart to change the test world. Its `Update` runs the tick's animation step: it advances the sprites of
-effectively enabled objects (`World_GetComponents(world, WorldComponentType_Sprite)`) and slides the desk while J has it
-sliding (around the X it was loaded at); then, last, `World_UpdateTransforms` (the tick's world-matrix step), so the
-renderer reads cached matrices.
+own switch distances 3 and 6 m). Its collision (T12, [WorldCollision.md](WorldCollision.md)): 24 colliders (the slab,
+the cubes, the desk's parts, the LOD spheres' hulls, the PBR cube's mesh, the cup's and the tree trunk's cylinders, the
+sign's plane), a `door` (id 33, the `test_door` world model with a `closed` and an `open` set) on the right of the start
+view, and a `desk_trigger_zone` (id 34, an own box, a trigger) at the end of the desk's slide; the desk is movable. Edit
+the file and restart to change the test world.
+The frame owns a `WorldCollision` too, created after the world. Its `Update` runs the tick in the order of
+[WorldData.md](WorldData.md) ("Ready for things that move"): it slides the desk while J has it sliding (around the X it
+was loaded at; the transform driver's step), syncs the collision world (`WorldCollision_Sync`), logs the trigger events
+of that sync and clears them (`WorldTest: trigger 34 ("desk_trigger_zone") enter: object 16 ("desk_top").`), advances
+the sprites of effectively enabled objects (`World_GetComponents(world, WorldComponentType_Sprite)`), and last calls
+`World_UpdateTransforms` (the tick's world-matrix step), so the renderer reads cached matrices.
 **Game time:** the clock starts from the world environment's date and time of day (noon, 2026-10-18) at time scale
 720 (a 2-minute day, as the test world had before T23; the clock's own default is 72). Every `Update` advances it,
 logs a new day when it crosses midnight, and writes its time of day and date into the environment, so the sky shows
@@ -621,8 +630,9 @@ debug keys as raw keys:
   0; logged: a 50% dither on the pixel grid, then gone, their shadows with them), U frustum culling (off draws everything
   within its draw distance; the image must not change; logged), I log the renderer status (with the drawn, culled and
   fading counts), then the game time (`WorldTest: game time
-  Sun 2026-10-18 12:00:00, running, 720 game seconds per real second (a day takes 2 real minutes); seasons off.`) and
-  the moon;
+  Sun 2026-10-18 12:00:00, running, 720 game seconds per real second (a day takes 2 real minutes); seasons off.`), the
+  moon, and the collision world's counts (`WorldTest: collision: 24 colliders (19 static, 5 movable), 25 shapes (12
+  mesh triangles, 0 infinite planes), 0 trigger pairs; 24 rebuilds and 0 moves in 2 syncs.`);
 - **the hierarchy (T08):** J starts and stops the desk sliding back and forth along X (1.2 m either way, a 6-second
   period of real time): its parts, the cup, the lamp and the lamp's light follow; H hides and shows the desk, and with it
   everything on it (the lamp's light goes off). Both logged;
@@ -632,6 +642,10 @@ debug keys as raw keys:
   distances of models and (since T26) sprites, and the LOD distances (T11), reach about 4.4 times as far;
 - **the LODs (T11):** Q toggles the LOD tinting (logged): every model takes its LOD's colour (0 white, 1 green, 2 yellow,
   3 red, coarser magenta; LODs past 0 glow faintly, for the night), to watch the switches along the `lod_test` row;
+- **collision (T12):** R shows and hides the collider wireframes (the collision world's debug list, drawn by the
+  renderer: world grey, prop orange, triggers violet, static ones darker; logged); F6 opens and closes the door's hitbox
+  (its collider switches between the `closed` and `open` sets; the model does not move; logged). J slides the desk
+  through the trigger zone: its parts log enter and exit;
 - **the world file (T09):** F5 saves the live world next to the test world, as `worlds/test.saved.world.json` and
   `worlds/test.saved.world.ghdf` (atomically; each logged with its path, gitignored), for round-trip checks: saved at
   noon with nothing changed (2, then F5) the JSON is the shipped file byte for byte; otherwise its diff against
@@ -643,7 +657,8 @@ unconsumed `pause` (Escape once the UI is not using it) quits through `GameFrame
 no input. Captures the cursor in `Start`, releases it in `End`/`Destroy`. The world is loaded and the clock built in `Create`;
 `BeginLoad` calls `WorldRenderer_PrepareWorld` (shaders and models), so the stepped load/unload slots are trivial.
 `Create` builds everything up front so `Destroy` is always safe (even on forced teardown); it destroys the renderer,
-then the world, the clock and the text sample.
+then the collision world (it borrows the world, and the renderer borrowed it), then the world, the clock and the text
+sample.
 
 **Text sample** (shown by default, T toggles it): a `TextDocument` built from the `TEXT_SAMPLE_JSON` text component
 JSON in `Create` (so the real game runs the codec), with `noto_sans` as its default font, laid out in `Update`

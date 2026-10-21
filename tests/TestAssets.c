@@ -48,6 +48,10 @@ typedef struct TestModelDefinitionStruct
     int MaterialCount;
     Matrix Transform;
     TestAssetCounters* Counters;
+    float* Vertices;          // owned copies of a CPU-side mesh (NULL: no mesh)
+    int VertexCount;
+    unsigned short* Indices;  // NULL: every three vertices are a triangle
+    int TriangleCount;
 } TestModelDefinition;
 
 typedef struct TestModelLoadedStruct
@@ -214,10 +218,43 @@ static void TestModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
         Loaded->Counters->UnloadCount++;
     }
     Memory_Free(Loaded->Model._rayModel.materials);
+    if (Loaded->Model._rayModel.meshes != NULL)
+    {
+        Memory_Free(Loaded->Model._rayModel.meshes[0].vertices);
+        Memory_Free(Loaded->Model._rayModel.meshes[0].indices);
+        Memory_Free(Loaded->Model._rayModel.meshes);
+        Memory_Free(Loaded->Model._rayModel.meshMaterial);
+    }
     Memory_Free(Loaded);
 }
 
 static const LoadedAssetVTable TestModelLoadedVTable = { TestModelLoaded_Destroy };
+
+/* Gives a loaded test model its definition's CPU-side mesh (no GPU upload: vaoId 0), as LoadModel keeps it. */
+static void AddTestMesh(const TestModelDefinition* definition, Model* model)
+{
+    Mesh* Built = Memory_Allocate(sizeof(Mesh));
+    Memory_Zero(Built, sizeof(*Built));
+    size_t VertexBytes = (size_t)definition->VertexCount * 3U * sizeof(float);
+    Built->vertices = Memory_Allocate(VertexBytes);
+    Memory_Copy(definition->Vertices, Built->vertices, VertexBytes);
+    Built->vertexCount = definition->VertexCount;
+    if (definition->Indices != NULL)
+    {
+        size_t IndexBytes = (size_t)definition->TriangleCount * 3U * sizeof(unsigned short);
+        Built->indices = Memory_Allocate(IndexBytes);
+        Memory_Copy(definition->Indices, Built->indices, IndexBytes);
+        Built->triangleCount = definition->TriangleCount;
+    }
+    else
+    {
+        Built->triangleCount = definition->VertexCount / 3;
+    }
+    model->meshes = Built;
+    model->meshCount = 1;
+    model->meshMaterial = Memory_Allocate(sizeof(int));
+    model->meshMaterial[0] = 0;
+}
 
 static Error TestModel_LoadAsset(void* self, AssetManager* manager, AssetUserID dependencyUser, LoadedAsset* outLoaded)
 {
@@ -237,6 +274,10 @@ static Error TestModel_LoadAsset(void* self, AssetManager* manager, AssetUserID 
         Memory_Zero(Loaded->Model._rayModel.materials, ByteCount);
         Loaded->Model._rayModel.materialCount = Definition->MaterialCount;
     }
+    if (Definition->Vertices != NULL)
+    {
+        AddTestMesh(Definition, &Loaded->Model._rayModel);
+    }
     Loaded->Counters = Definition->Counters;
     if (Loaded->Counters != NULL)
     {
@@ -248,7 +289,15 @@ static Error TestModel_LoadAsset(void* self, AssetManager* manager, AssetUserID 
     return Error_CreateSuccess();
 }
 
-static const AssetDefinitionVTable TestModelVTable = { TestModel_LoadAsset, TestDefinition_Destroy };
+static void TestModelDefinition_Destroy(void* self)
+{
+    TestModelDefinition* Definition = self;
+    Memory_Free(Definition->Vertices);
+    Memory_Free(Definition->Indices);
+    TestDefinition_Destroy(self);
+}
+
+static const AssetDefinitionVTable TestModelVTable = { TestModel_LoadAsset, TestModelDefinition_Destroy };
 
 static void TestTextureLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
 {
@@ -376,6 +425,39 @@ bool TestAssets_AddModelWithMaterials(TestRun* run, TestAssetFixture* fixture, c
     Definition->MaterialCount = materialCount;
     Definition->Transform = transform;
     Definition->Counters = counters;
+    return TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, &Definition->Base));
+}
+
+bool TestAssets_AddMeshModel(TestRun* run, TestAssetFixture* fixture, const char* name, const float* vertices,
+    int vertexCount, const unsigned short* indices, int triangleCount, Matrix transform, TestAssetCounters* counters)
+{
+    BoundingBox Bounds = { .min = { 0.0f, 0.0f, 0.0f }, .max = { 0.0f, 0.0f, 0.0f } };
+    for (int Vertex = 0; Vertex < vertexCount; Vertex++)
+    {
+        Vector3 Point = { vertices[(Vertex * 3)], vertices[(Vertex * 3) + 1], vertices[(Vertex * 3) + 2] };
+        Bounds.min = (Vertex == 0) ? Point : Vector3Min(Bounds.min, Point);
+        Bounds.max = (Vertex == 0) ? Point : Vector3Max(Bounds.max, Point);
+    }
+    TestModelDefinition* Definition = Memory_Allocate(sizeof(TestModelDefinition));
+    Memory_Zero(Definition, sizeof(*Definition));
+    Definition->Base.VTable = &TestModelVTable;
+    Definition->Base.Type = fixture->Types.Model;
+    Definition->Base.Name = CloneName(name);
+    Definition->Bounds = Bounds;
+    Definition->MaterialCount = 1;
+    Definition->Transform = transform;
+    Definition->Counters = counters;
+    size_t VertexBytes = (size_t)vertexCount * 3U * sizeof(float);
+    Definition->Vertices = Memory_Allocate(VertexBytes);
+    Memory_Copy(vertices, Definition->Vertices, VertexBytes);
+    Definition->VertexCount = vertexCount;
+    if (indices != NULL)
+    {
+        size_t IndexBytes = (size_t)triangleCount * 3U * sizeof(unsigned short);
+        Definition->Indices = Memory_Allocate(IndexBytes);
+        Memory_Copy(indices, Definition->Indices, IndexBytes);
+        Definition->TriangleCount = triangleCount;
+    }
     return TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, &Definition->Base));
 }
 

@@ -210,6 +210,7 @@ static bool ConstructDriverWorld(TestRun* run, World* world, KeyRegistry* keys)
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Model),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Sprite),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Light),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Collider),
         &TestDriverA,
         &TestDriverB,
     };
@@ -455,6 +456,8 @@ static void ComponentsAreAddedFoundAndRemoved(TestRun* run)
     WorldComponent* Light = AddComponent(run, &TestWorld, Object, WorldComponentType_Light);
     if ((ModelComponent != NULL) && (Light != NULL))
     {
+        // Serials: from 1 in the order of adding (read now: the model component is removed below).
+        TEST_CHECK(run, (WorldComponent_GetSerial(ModelComponent) == 1U) && (WorldComponent_GetSerial(Light) == 2U));
         uint64_t Id = WorldObject_GetId(Object);
         TEST_CHECK(run, World_GetComponentSetVersion(&TestWorld) != Version);
         TEST_CHECK(run, (WorldComponent_GetType(ModelComponent) == WorldComponentType_Model)
@@ -484,6 +487,11 @@ static void ComponentsAreAddedFoundAndRemoved(TestRun* run)
             ErrorCode_InvalidOperation);
         size_t Count = 1;
         TEST_CHECK(run, (World_GetComponents(&TestWorld, WorldComponentType_Model, &Count) == NULL) && (Count == 0U));
+
+        // A replacement gets a new serial, never one given before (it often reuses the removed one's memory).
+        WorldComponent* Replacement = AddComponent(run, &TestWorld, Object, WorldComponentType_Model);
+        TEST_CHECK(run, (Replacement != NULL) && (WorldComponent_GetSerial(Replacement) == 3U));
+        TEST_CHECK_SUCCESS(run, World_RemoveComponent(&TestWorld, Id, WorldComponentType_Model));
 
         // Bad arguments.
         TEST_CHECK_ERROR(run, World_AddComponent(&TestWorld, Id, (WorldComponentType)WorldComponentType_Count, &Second),
@@ -578,7 +586,7 @@ static void ComponentTypesAreFoundByName(TestRun* run)
     }
 
     TEST_CHECK(run, World_GetComponentTypeCount(&TestWorld) == (size_t)WorldComponentType_Count);
-    const char* const Names[WorldComponentType_Count] = { "model", "sprite", "light" };
+    const char* const Names[WorldComponentType_Count] = { "model", "sprite", "light", "collider" };
     for (size_t Type = 0; Type < (size_t)WorldComponentType_Count; Type++)
     {
         const WorldComponentTypeInfo* Info = World_GetComponentTypeInfo(&TestWorld, (WorldComponentType)Type);
@@ -592,7 +600,7 @@ static void ComponentTypesAreFoundByName(TestRun* run)
             && ((size_t)Found == Type));
     }
     WorldComponentType Found = WorldComponentType_Model;
-    TEST_CHECK(run, !World_TryFindComponentType(&TestWorld, (const unsigned char*)u8"collider", &Found));
+    TEST_CHECK(run, !World_TryFindComponentType(&TestWorld, (const unsigned char*)u8"character", &Found));
     TEST_CHECK(run, World_GetComponentTypeInfo(&TestWorld, WorldComponentType_Count) == NULL);
     TEST_CHECK(run, WorldComponent_GetStandardTypeInfo(WorldComponentType_Count) == NULL);
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
@@ -1117,6 +1125,7 @@ static void CustomComponentTypesAreChecked(TestRun* run)
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Model),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Sprite),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Light),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Collider),
         &TestUnhooked,
     };
     const char* const Fragments[] = { "test_unhooked", "AfterSet", NULL };

@@ -564,10 +564,55 @@ variants or world models share loads once, and its filtering, wrap and mipmaps c
 A variant is applied when the object is drawn, to the renderer's copy of each material, never to the model asset, so
 the same model can show every variant at once.
 
+**Collision** (`collision`, optional, T12): the hitboxes of the objects placed with this world model, as named
+**collision sets**. Each set is a compound of shapes placed in the world model's own space (after the LOD models' import
+transforms, like the meshes they stand for). A placed object needs a collider component to collide; it uses the default
+set, or the one it names (a door swaps between `closed` and `open`), and may override the layer, the mask and the
+trigger flag (`references/world_structure.md`, the collider block).
+```
+"collision": {
+    "default_set": "closed",                       // [OPTIONAL] default: the first set
+    "layer": "world",                              // [OPTIONAL] the placements' layer; default "prop"
+    "collides_with": ["character", "vehicle"],     // [OPTIONAL] default: the layer's default mask
+    "is_trigger": false,                           // [OPTIONAL] default false
+    "sets": [                                      // 1 to 32 sets, at most 1024 shapes together
+        { "name": "closed", "shapes": [            // 1 to 128 shapes
+            { "type": "box", "name": "panel", "center": [0.5, 1, 0], "half_extents": [0.5, 1, 0.05] },
+            { "type": "sphere", "name": "handle", "center": [0.9, 1, 0.09], "radius": 0.04 } ] },
+        { "name": "open", "shapes": [
+            { "type": "box", "center": [0, 1, 0.5], "rotation": [0, 90, 0], "half_extents": [0.5, 1, 0.05] } ] },
+        { "name": "walls", "shapes": [ { "type": "mesh", "model": "shop_collision", "is_two_sided": false } ] }
+    ]
+}
+```
+`"collision": "bounds"` is the shortcut: one set, `bounds`, holding a box around LOD 0's mesh (exact under its import
+transform). Without a `collision` key the world model has no collision.
+
+Every shape has a `type`, an optional `center` ([x, y, z], default the origin), `rotation` (Euler XYZ degrees, default
+none) and `name` (the part a hit reports, `[a-z][a-z0-9_.-]*`, at most 128 bytes), and the keys of its type only (a key
+of another type is refused, so a typo is caught):
+
+| `type` | Keys | Shape |
+|---|---|---|
+| `sphere` | `radius` (> 0) | Around the centre. |
+| `capsule` | `radius` (> 0), `half_height` (>= 0) | A segment of 2 x `half_height` along local Y swept by the radius; 0 is a sphere. |
+| `box` | `half_extents` ([x, y, z], each > 0) | Turned by the rotation. |
+| `cylinder` | `radius` (> 0), `half_height` (> 0) | Along local Y. |
+| `convex_hull` | `points` ([[x, y, z], ...], 4 to 65536, spanning a volume) or `model` (a model asset: its vertices after its import transform); optional `max_vertices` (4 to 256, default 64) | The convex hull of the points. A finer hull is reduced to `max_vertices`, keeping its extremes. |
+| `plane` | optional `is_bounded` (default true), `half_extents` ([x, z], each > 0, required while bounded), `depth` (>= 0, default 0) | The front is local +Y. Bounded: a rectangle in local XZ, solid `depth` metres behind it within the rectangle (depth 0: a flat rectangle, solid from the front only). Unbounded: an infinite half-space, solid without limit behind it. Contacts and casts push to the front; rays hit the front only. |
+| `mesh` | `model` (a model asset: its triangles after its import transform); optional `is_two_sided` (default true) | For architecture and terrain: never pushed (T27). Vertices at the same place are welded, degenerate triangles skipped; seams between flat or concave neighbours let shapes slide without catching. One-sided meshes are hit from their front (counter-clockwise) side only. |
+
+`layer` and the names in `collides_with` are collision layers: `world`, `prop`, `character`, `vehicle`, `dynamic`,
+`trigger`, `interaction`. Two colliders block each other when each one's mask holds the other's layer; left out, a mask
+is its layer's default (the solid layers collide with each other, `trigger` sees `prop`, `character`, `vehicle` and
+`dynamic`, `interaction` collides with nothing). A trigger reports what touches it and blocks nothing. A `model` of a
+hull or mesh loads with the world model as one more dependency; a missing one fails the world model. Loading a model
+needs the GPU, so tools without it can use only `points` hulls.
+
 **Rules.** A definition that breaks one is rejected when the definitions are read, with a message naming the key and
 where it is (`World model "desk": lods[1].max_distance (12) must be above lods[0].max_distance (15)...`). Unknown keys
-are rejected in the root, each LOD, `render`, each variant, each material override and `bounds`, with the keys allowed
-there: the `collision` (T12) and `surfaces` (T19) sections come with their tasks. (Vectors and colours accept their
+are rejected in the root, each LOD, `render`, each variant, each material override, `bounds`, `collision`, each set and
+each shape, with the keys allowed there: the `surfaces` (T19) section comes with its task. (Vectors and colours accept their
 usual forms, see "Common data structures".) The LOD models and variant textures must exist when the world model loads; a missing
 one fails the load (logged once, like every load failure) and the objects using it draw nothing.
 
@@ -575,7 +620,10 @@ The test world's world models are in `world_models/test_world/`: `test`, `pbr_de
 model of the same name, seen 600 m (the draw distance every model had before world models), `painted_cube`, the test
 cube with two variants, `red` and `blue` (tints only), and `lod_test`, three LODs of a sphere switching at 13 and 16 m and
 seen 60 m: the placeholder models `lod_test_lod0` to `lod_test_lod2` (`models/placeholder_lod_test/`, UV spheres of
-radius 0.5 m at 32x16, 16x8 and 8x4 segments).
+radius 0.5 m at 32x16, 16x8 and 8x4 segments). Since T12 they collide: `test`, `pbr_metal` and `painted_cube` with
+`"bounds"`, `lod_test` with a hull of `lod_test_lod0`, `pbr_demo` with a mesh of its own model; and `test_door` (the
+model `test_door`: the test cube made a 1 x 2 m panel by its import transform, hinged at its origin) has the sets
+`closed` and `open`.
 
 
 ## World sprites.

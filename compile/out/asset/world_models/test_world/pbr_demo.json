@@ -2,5 +2,11 @@
     "name": "pbr_demo",
     "lods": [
         { "model": "pbr_demo", "max_distance": 600 }
-    ]
+    ],
+    "collision": {
+        "layer": "world",
+        "sets": [
+            { "name": "mesh", "shapes": [ { "type": "mesh", "model": "pbr_demo" } ] }
+        ]
+    }
 }

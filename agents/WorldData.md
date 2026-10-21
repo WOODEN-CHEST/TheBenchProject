@@ -17,6 +17,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A world model by asset name ([WorldModels.md](WorldModels.md)), the variant drawn, and the settings this placement overrides (explicit flags next to its own values: outline, crisp, shadow tier, casts shadows, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
 | WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A world sprite by asset name ([WorldSprites.md](WorldSprites.md)), bound by the world with its animation's playback instance, and every setting this placement overrides (explicit flags next to its own values: orientation, pivot, size, flips, alpha mode, lighting, decal, render flags, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
+| WorldColliderComponent | `include/WorldColliderComponent.h`, `source/WorldColliderComponent.c` | How the object collides (T12, [WorldCollision.md](WorldCollision.md)): its world model's collision set (or one primitive of its own), its layer, mask and trigger flag (each overriding the world model's default with an explicit flag), a local offset, rotation and scale, and a rotation mode, with the pure function that resolves the settings in effect. |
 | WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
 | World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index), `source/WorldHierarchy.c` (parents, world matrices, effective flags, subtrees; also the `WorldObject_` functions about them) | Owns the objects and their components, mints ids, keeps the id map, the hierarchy and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
 | WorldTransform (private) | `source/WorldTransform.h`, `source/WorldTransform.c` | The pure maths of transforms: compose (DrawModelEx's order), the one decomposition back to position / Euler XYZ / scale, a local matrix under a parent, a bound on a matrix's stretch. Used by the hierarchy and the renderer's cache. |
@@ -134,18 +135,19 @@ The world keeps the links (`source/WorldHierarchy.c`); the persisted value is th
 
 ## Components
 
-A component is a struct that embeds `WorldComponent` first (`_type`, `_owner`, `_revision`). An object carries **at
-most one component of each type**; a street lamp is one object with a model and a light.
+A component is a struct that embeds `WorldComponent` first (`_type`, `_owner`, `_revision`, `_serial`). An object
+carries **at most one component of each type**; a street lamp is one object with a model and a light.
 
 | Type | Value | Name | Struct |
 |---|---|---|---|
 | `WorldComponentType_Model` | 0 | `model` | `WorldModelComponent` |
 | `WorldComponentType_Sprite` | 1 | `sprite` | `WorldSpriteComponent` |
 | `WorldComponentType_Light` | 2 | `light` | `WorldLightComponent` |
+| `WorldComponentType_Collider` | 3 | `collider` | `WorldColliderComponent` (T12) |
 
 The values are explicit and never renumbered (world files will save them). `WorldComponentType_Count` is the number
 of standard types; `WORLD_MAX_COMPONENT_TYPES` (16) is how many a world can hold, room for the types later tasks add
-(collider T12, character T13, ambient zone T14, screen T19) and for test-only types.
+(character T13, ambient zone T14, screen T19) and for test-only types.
 
 **The registry.** Each type has one `WorldComponentTypeInfo` (a static constant of its module, handed out by
 `Xxx_GetTypeInfo`; `WorldComponent_GetStandardTypeInfo(type)` maps the standard types): `Type`, `Name` (the key of its
@@ -164,6 +166,12 @@ sets the base, appends it to the world's array of that type, puts it in the obje
 setters and from every table write alike: they all end in `WorldInternal_ComponentAfterSet`, which advances the
 revision and then calls the type's `OnPropertySet` with the world. That is how a component keeps runtime state in step
 with its properties, whichever way they were written.
+
+**Identity.** A revision restarts at 0 for every new component, and a removed component's memory is usually reused by
+the next one added, so neither its address nor its revision tells a replacement from the component before it.
+`WorldComponent_GetSerial` does: `World_AddComponent` gives each component a number no other component of its world
+ever had (from 1, in add order). The collision world compares serials (T12); a cache that keeps component pointers
+across component-set changes should too.
 
 **Downcasts.** `WorldModelComponent_FromComponent(component)` (and the sprite's and light's) returns the concrete
 struct, or NULL for NULL or another type; `..._AsComponent` upcasts.
@@ -251,6 +259,20 @@ is destroyed, after every component (asset holds are not counted, so releasing o
 another sprite; a `// TODO:` in `source/WorldSpriteComponent.c` marks the release pass that long-lived edited worlds may
 need).
 
+### Collider component (`collider_component`)
+How the object takes part in collision (T12; the shapes, the layers and the collision world are in
+[WorldCollision.md](WorldCollision.md)). The rows, in order: `is_enabled` (true); `overrides_collision_set` /
+`collision_set` (off: the world model's default set; a door swaps sets to swap hitboxes); `uses_own_shape` (one
+primitive of its own instead of the sets) with `shape_type` (`sphere`, `capsule`, `box` (the default), `cylinder`,
+`plane`), `shape_center`, `shape_rotation`, `shape_radius`, `shape_half_height`, `shape_half_extents`,
+`shape_is_bounded`, `shape_plane_half_extents` and `shape_depth`; `overrides_layer` / `layer` (`prop`),
+`overrides_collides_with` / `collides_with` (an `EnumSet` of layers: prop's default mask), `overrides_is_trigger` /
+`is_trigger`; `offset`, `rotation`, `scale` (a local transform of all its shapes, the scale above 0); `rotation_mode`
+(`full`, `yaw_only`, `none`). Without the flags the world model's `collision` section gives the set, layer, mask and
+trigger flag (`prop`, prop's mask and no trigger without one). `WorldColliderComponent_ResolveSettings(collider,
+collision)` is the pure function that gives the settings in effect; `SetOwnShape` sets the own primitive from a
+`CollisionShape`, all or nothing. No hooks: the collision world watches the revision.
+
 ### Light component (`light_component`)
 `_color` (white), `_intensity` (>= 0, default 1), `_range` (>= 0, default 1: how far the light reaches; T05 renamed it
 from `Size`), `_castsShadows` (false). It uses its object's world position (a lamp carries its light); rotation, scale
@@ -317,8 +339,8 @@ yet, but the model is ready for them:
   once and movable ones in one updated every tick; the renderer can later cache static shadows. Moving a static object
   still works (the editor does it constantly): it costs a rebuild of whatever cached it, and in play the system that
   rebuilds logs one warning per object. A driven object may even be set back to static; it still moves, at that cost.
-  T05 has no such cache yet, so nothing warns yet: T12's static grid is the first (it sees the move through the
-  object's revision).
+  T12's static tree is the first such cache: it sees the move through the object's transform revision, re-inserts the
+  collider and warns once ([WorldCollision.md](WorldCollision.md)).
 - **The player is an ordinary object** with a character component. NPCs, triggers, vehicles and physics then all
   treat it like any other object; no frame special-cases it.
 - **The tick order.** Each game tick runs the systems that change a world in this order, so each later system knows
@@ -326,8 +348,9 @@ yet, but the model is ready for them:
   1. input (`GameInput`, polled by the frame manager);
   2. scripts (later);
   3. transform drivers: characters, vehicles, physics (later);
-  4. collision sync (T12);
-  5. queued events: trigger enter and exit, later contacts (T12; the queued-event rule, architecture A4);
+  4. collision sync: `WorldCollision_Sync` (T12), which brings the world matrices up to date first;
+  5. queued events: trigger enter and exit (`WorldCollision_GetTriggerEvents`, then `_ClearTriggerEvents`), later
+     contacts (T27; the queued-event rule, architecture A4);
   6. animation (today: sprite playback, `AdvanceSpriteAnimations` in the test frame, effectively enabled objects only);
   7. `World_UpdateTransforms`: the world matrices of everything that moved this tick (T08);
   8. the renderer, which only reads (AGENTS.md rule 3).
@@ -550,4 +573,6 @@ renderer's side ([WorldRuntime.md](WorldRuntime.md)). They run headless with `sh
 `tests/TestAssets.h` provides code-built sprite animation, model and texture definitions that load without files or a
 GL context, and world models and world sprites built from JSON over them. `tests/WorldModelTests.c` covers the world
 models and the model component's overrides ([WorldModels.md](WorldModels.md)), `tests/WorldSpriteTests.c` the world
-sprites and the sprite component's overrides ([WorldSprites.md](WorldSprites.md)).
+sprites and the sprite component's overrides ([WorldSprites.md](WorldSprites.md)), `tests/WorldColliderTests.c` the
+collider component and the world models' collision, `tests/WorldCollisionTests.c` the collision world
+([WorldCollision.md](WorldCollision.md)).

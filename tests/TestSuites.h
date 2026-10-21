@@ -32,6 +32,12 @@ void ShaderSourceTests_Run(TestRun* run);
  *  and the shipped placeholder (TextureTests.c). */
 void TextureTests_Run(TestRun* run);
 
+/** @brief The collision narrowphase: affine maths and poses, supports under any transform, GJK distances, EPA
+ *  penetrations, contact manifolds and their feature ids, rays against every shape, linear and rotating casts (the
+ *  fast thin cases that would tunnel with steps), convex hulls and their reduction, meshes with their active edges and
+ *  BVH (CollisionGeometryTests.c; private modules of source/). */
+void CollisionGeometryTests_Run(TestRun* run);
+
 /** @brief Point-light reach culling (WorldLightCullingTests.c). */
 void WorldLightCullingTests_Run(TestRun* run);
 
@@ -56,6 +62,21 @@ void WorldTests_Run(TestRun* run);
  *  variants' textures as dependencies (and releasing them), variants by name and on one material slot, the model
  *  component's override flags and the settings they resolve to, and the shipped world models (WorldModelTests.c). */
 void WorldModelTests_Run(TestRun* run);
+
+/** @brief Colliders: the world model's collision section (every key, the "bounds" box under the import transform,
+ *  each rule and its message, the limits, hulls and meshes from models as dependencies, a model that cannot give
+ *  them), the collider component's defaults, the settings it resolves to from its override flags over the world
+ *  model's defaults, its setters' checks, and its JSON and GHDF round trips (WorldColliderTests.c). */
+void WorldColliderTests_Run(TestRun* run);
+
+/** @brief The collision world: the sync (moves without rebuilds, set and world model switches, disabled objects and
+ *  ancestors, a replaced collider at its predecessor's address), rotation modes, the collider's transform and uneven
+ *  scales (ellipsoids), both trees against brute force on a seeded random scene that moves, filters (layers, triggers,
+ *  ignored subtrees) and the layer rule of an object's contacts, mobility and static moves, trigger events (hysteresis,
+ *  removal, the pairs that never form, their order), rays, continuous casts (fast, starting inside, turning),
+ *  overlaps, manifolds and their local points, mesh triangles, planes, the debug list and the warnings given once
+ *  (WorldCollisionTests.c). */
+void WorldCollisionTests_Run(TestRun* run);
 
 /** @brief World sprites: the definition's defaults, rules and messages (the rules shared with the sprite component's
  *  rows), loading with the animation as a dependency, the sprite component's override flags and the settings they

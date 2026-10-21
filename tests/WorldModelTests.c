@@ -285,7 +285,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
                 "name, "
             "lods, draw_distance" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"collision\": {}}",
-            ErrorCode_InvalidAssetDefinition, "Unknown key \"collision\" in world model \"m\"" },
+            ErrorCode_InvalidAssetDefinition, "collision.sets must hold 1 to 32 sets" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"maxdistance\": 40}]}", ErrorCode_InvalidAssetDefinition,
             "Unknown key \"maxdistance\" in world model \"m\", lods[0]; the keys allowed there are: model, "
                 "max_distance" },
@@ -1011,7 +1011,7 @@ static void ThePlacementPicksItsLodSettings(TestRun* run)
 /* The game's world models (compile/out/asset/world_models) are all read without a skipped file. */
 static void TheShippedWorldModelsAreRead(TestRun* run)
 {
-    static const char* const Names[] = { "test", "pbr_demo", "pbr_metal", "painted_cube", "lod_test" };
+    static const char* const Names[] = { "test", "pbr_demo", "pbr_metal", "painted_cube", "lod_test", "test_door" };
     TestAssetFixture Fixture;
     GenericBuffer Root;
     GenericBuffer_AllocateVariable(&Root, WORLD_MODEL_TEST_TEXT_CAPACITY, sizeof(unsigned char));

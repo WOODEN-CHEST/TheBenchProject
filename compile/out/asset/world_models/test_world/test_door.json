@@ -1,0 +1,21 @@
+{
+    "name": "test_door",
+    "lods": [
+        { "model": "test_door", "max_distance": 600 }
+    ],
+    "collision": {
+        "default_set": "closed",
+        "layer": "world",
+        "sets": [
+            { "name": "closed", "shapes": [
+                { "type": "box", "name": "panel", "center": [0.5, 1.0, 0.0], "half_extents": [0.5, 1.0, 0.05] },
+                { "type": "sphere", "name": "handle", "center": [0.9, 1.0, 0.09], "radius": 0.04 }
+            ] },
+            { "name": "open", "shapes": [
+                { "type": "box", "name": "panel", "center": [0.0, 1.0, 0.5], "rotation": [0.0, 90.0, 0.0],
+                    "half_extents": [0.5, 1.0, 0.05] },
+                { "type": "sphere", "name": "handle", "center": [0.09, 1.0, 0.9], "radius": 0.04 }
+            ] }
+        ]
+    }
+}

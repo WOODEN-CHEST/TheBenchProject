@@ -19,6 +19,8 @@
 /** The largest value of an enum stored in 1 and in 2 bytes (unsigned). */
 #define PROPERTY_ENUM_UINT8_MAX 255
 #define PROPERTY_ENUM_UINT16_MAX 65535
+/** The largest entry value of an enum set: its bit index in the 32-bit mask. */
+#define PROPERTY_ENUM_SET_MAX_VALUE 31
 /** The asset name grammar, for messages (see AssetManager_IsValidAssetName). */
 #define PROPERTY_ASSET_NAME_GRAMMAR "[a-z][a-z0-9_.-]*"
 
@@ -114,6 +116,8 @@ static size_t GetStorageSize(PropertyType type)
             return sizeof(DataMap*);
         case PropertyType_FloatList:
             return sizeof(PropertyFloatList*);
+        case PropertyType_EnumSet:
+            return sizeof(uint32_t);
         case PropertyType_Enum:
             return 0U;
     }
@@ -335,6 +339,24 @@ static Error CheckString(const PropertyTable* table, const PropertyDescriptor* d
 }
 
 /* Lists the entries' names: "one of \"both\", \"near\" or \"far\"" (a failed append only shortens the message). */
+/* Every bit of an enum set names an entry of its table. */
+static Error CheckEnumSet(const PropertyTable* table, const PropertyDescriptor* descriptor, uint32_t mask)
+{
+    const PropertyEnumTable* Enum = descriptor->EnumTable;
+    if (Enum == NULL)
+    {
+        return MakeRuleError(table, descriptor, "have an enum table");
+    }
+    uint32_t Known = 0U;
+    for (size_t Index = 0; Index < Enum->EntryCount; Index++)
+    {
+        int32_t Value = Enum->Entries[Index].Value;
+        Known |= ((Value >= 0) && (Value < 32)) ? ((uint32_t)1U << (uint32_t)Value) : 0U;
+    }
+    return ((mask & ~Known) == 0U) ? Error_CreateSuccess()
+        : MakeRuleError(table, descriptor, "hold only entries of its enum");
+}
+
 static Error CheckEnum(const PropertyTable* table, const PropertyDescriptor* descriptor, int32_t value)
 {
     const PropertyEnumTable* Enum = descriptor->EnumTable;
@@ -638,18 +660,21 @@ static Error CheckOverrideFlag(const PropertyTable* table, const PropertyDescrip
 static Error CheckEnumTable(const PropertyTable* table, const PropertyDescriptor* descriptor)
 {
     const PropertyEnumTable* Enum = descriptor->EnumTable;
-    if (descriptor->Type != PropertyType_Enum)
+    bool IsSet = descriptor->Type == PropertyType_EnumSet;
+    if ((descriptor->Type != PropertyType_Enum) && !IsSet)
     {
-        return (Enum == NULL) ? Error_CreateSuccess() : TableError(table, descriptor, "only enums take an enum table");
+        return (Enum == NULL) ? Error_CreateSuccess()
+            : TableError(table, descriptor, "only enums and enum sets take an enum table");
     }
     if ((Enum == NULL) || (Enum->Entries == NULL) || (Enum->EntryCount == 0U))
     {
         return TableError(table, descriptor, "an enum needs an enum table with entries");
     }
 
-    int64_t StorageMaximum = (descriptor->Size == 1U) ? PROPERTY_ENUM_UINT8_MAX
-        : ((descriptor->Size == 2U) ? PROPERTY_ENUM_UINT16_MAX : (int64_t)INT32_MAX);
-    int64_t StorageMinimum = (descriptor->Size == 4U) ? (int64_t)INT32_MIN : 0;
+    // An enum set's values are bit indices of its 32-bit mask.
+    int64_t StorageMaximum = IsSet ? (int64_t)PROPERTY_ENUM_SET_MAX_VALUE : ((descriptor->Size == 1U)
+        ? PROPERTY_ENUM_UINT8_MAX : ((descriptor->Size == 2U) ? PROPERTY_ENUM_UINT16_MAX : (int64_t)INT32_MAX));
+    int64_t StorageMinimum = (IsSet || (descriptor->Size != 4U)) ? 0 : (int64_t)INT32_MIN;
     for (size_t Index = 0; Index < Enum->EntryCount; Index++)
     {
         const PropertyEnumEntry* Entry = &Enum->Entries[Index];
@@ -813,6 +838,8 @@ bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, con
             return DataMap_Equals(a->DataMapValue, b->DataMapValue);
         case PropertyType_FloatList:
             return PropertyFloatList_Equals(a->FloatListValue, b->FloatListValue);
+        case PropertyType_EnumSet:
+            return a->EnumSetValue == b->EnumSetValue;
     }
     return false;
 }
@@ -912,6 +939,8 @@ Error PropertyInternal_CheckData(const PropertyTable* table, const PropertyDescr
             return CheckDataMap(table, descriptor, data->DataMapValue);
         case PropertyType_FloatList:
             return CheckFloatList(table, descriptor, data->FloatListValue);
+        case PropertyType_EnumSet:
+            return CheckEnumSet(table, descriptor, data->EnumSetValue);
     }
     return MakeRuleError(table, descriptor, "have a known property type");
 }
@@ -1055,6 +1084,8 @@ const unsigned char* PropertyType_GetName(PropertyType type)
             return u8"data_map";
         case PropertyType_FloatList:
             return u8"float_list";
+        case PropertyType_EnumSet:
+            return u8"enum_set";
     }
     return u8"unknown";
 }

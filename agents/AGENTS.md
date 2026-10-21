@@ -59,10 +59,32 @@ Current module list:
   definition of a placeable thing, kept apart from its placements. WorldModel (include/WorldModel.h, source/WorldModel.c)
   holds its LOD models and their switch distances (drawn by distance with dithered cross-fades since T11), its draw
   distance and whether it is fixed against the quality
-  setting, the default render settings of its placements, its material variants and its bounds; its LOD models and its
-  variants' textures load as its dependencies. The definition (source/WorldModelDefinition.c) refuses unknown keys and
+  setting, the default render settings of its placements, its material variants, its bounds and (since T12) its
+  collision sets; its LOD models, its variants' textures and the models its hulls and meshes are built from load as its
+  dependencies. The definition (source/WorldModelDefinition.c) refuses unknown keys and
   checks every rule when it is read. Variants apply to the renderer's per-draw material copies, never to an asset. The
   model component names a world model and overrides its settings per placement with explicit flags.
+* World collision (WorldCollision.md) - Collision for the 3D world (T12): shapes, layers, the collider component and
+  the collision world. Covers:
+  * CollisionShape - Collision shapes as plain values (sphere, capsule, box, cylinder, convex hull, plane bounded or
+    infinite, triangle mesh) placed by a centre and a rotation, named sets of them (compounds), convex hulls (quickhull,
+    merged coplanar faces, reduced to a vertex budget) and meshes (welded, active edges, a BVH), built from points or
+    from a model's vertices.
+  * CollisionLayer - The collision layers (world, prop, character, vehicle, dynamic, trigger, interaction), their
+    default masks and the symmetric blocking rule.
+  * The narrowphase (private, source/CollisionGeometry.h and source/Collision*.c) - Support functions under any affine
+    transform (uneven scales exact: an ellipsoid), GJK distances, EPA penetrations, contact manifolds of up to 4 points
+    with feature ids, rays against every shape, linear casts (exact time of impact) and rotating casts (conservative
+    advancement: no contact is ever skipped).
+  * WorldColliderComponent - Component type 3: which of its world model's collision sets (or one primitive of its own),
+    the layer, mask and trigger flag (override flags over the world model's defaults), a local offset, rotation and
+    scale, and a rotation mode (full, yaw only, none).
+  * WorldCollision - The collision world: every enabled collider in world space, synced once a tick (rebuilt or moved
+    only when something changed; static and movable dynamic AABB trees, infinite planes in a list), queries with layer,
+    trigger and ignore filters (rays, casts with rotation, overlaps, contact manifolds with local points and triangle
+    data), trigger enter/exit events with hysteresis, counts and a debug list the renderer draws as wireframes.
+  The world model's `collision` section (sets and their defaults, or "bounds") is parsed and loaded by
+  source/WorldModelCollisionDefinition.c (World models).
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -110,9 +132,10 @@ Current module list:
     component type; created by the World only; validating setters and a property table (the parent row is ReadOnly:
     World_SetParent changes it). Its world placement (a cached world matrix, read without writing) and its effective
     flags come through its parents.
-  * WorldComponent - The component base (type, owner, revision), the component types, and the registry entry that
-    describes each (name, size, table, transform-driver flag, construct/deconstruct/attach/detach/property-set hooks).
-    At most one component of each type per object, at most one transform driver.
+  * WorldComponent - The component base (type, owner, revision, and a serial no other component of the world ever had),
+    the component types, and the registry entry that describes each (name, size, table, transform-driver flag,
+    construct/deconstruct/attach/detach/property-set hooks). At most one component of each type per object, at most one
+    transform driver.
   * WorldModelComponent - A world model by asset name (WorldModels.md), the variant drawn, and the settings this
     placement overrides: each an explicit flag (overrides_<key>) next to the placement's own value (outline, crisp, shadow
     tier, casts shadows, draw distance, fixed draw distance, LOD switch distances), plus a draw distance multiplier, a LOD
@@ -124,6 +147,7 @@ Current module list:
     outline, crisp, draw distance, fixed draw distance), plus a draw distance multiplier; a pure function resolves the
     settings in effect (the draw distance from the placement, the world sprite or the kind).
   * WorldLightComponent - A point light (colour, intensity, range, casts shadows).
+  * WorldColliderComponent - How the object collides (World collision, WorldCollision.md).
   * WorldEnvironment - Per-world sky/sun/moon/night-sky/fog/effect settings, described by its property table
     (defaults, validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md; it owns its sky texture
     names). Its date and time of day are what the sky shows: the game clock writes them every tick, the environment
@@ -182,7 +206,8 @@ Current module list:
   * NightVision - The eye's dim-light vision as pure maths (private, source/NightVision.h): Hunt's rod share calibrated
     on the game's light scale and the rods' blue-grey; the sky and PBR shaders apply it (shaders/common/night_vision).
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world whose sky follows the frame's game
-    clock, with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world.
+    clock and whose colliders it syncs every tick (trigger events logged; R shows them, F6 swaps the door's hitbox),
+    with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
@@ -190,7 +215,8 @@ Current module list:
   by key. The one module allowed to write `_` fields by offset. Clients: WorldEnvironment, GameClock, the world objects
   and their components, the world sprite's settings; new data types get a table, not hand-written codecs. A FloatList
   type (PropertyFloatList: an owned list of floats with a maximum count, per-value bounds and an optional rising rule)
-  carries lists such as a placement's LOD distances. A setting a placement overrides is two rows, a Bool
+  carries lists such as a placement's LOD distances; an EnumSet type (a uint32 mask of an enum's entries, JSON an
+  array of names) carries a collider's layer mask. A setting a placement overrides is two rows, a Bool
   `overrides_<key>` and the value `<key>` (the table check enforces the pairing). A DataMap property (tags and typed
   data) is written as two JSON keys.
 * GameCalendar (GameCalendar.md) - The game's calendar: pure functions over day numbers (days since 0001-01-01, an

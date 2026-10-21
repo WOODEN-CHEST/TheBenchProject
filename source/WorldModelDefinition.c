@@ -9,6 +9,7 @@
 #include "GameTexture.h"
 #include "Logger.h"
 #include "WorldModel.h"
+#include "WorldModelCollisionInternal.h"
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -25,7 +26,9 @@
  *
  * The loaded WorldModel is pure data: the LODs' models and the variants' textures are borrowed pointers into those
  * dependencies, and the variants, their overrides and their names live in one allocation the asset owns. Nothing in it
- * points into the definition, which may be replaced while the asset is loaded.
+ * points into the definition, which may be replaced while the asset is loaded. The "collision" section (T12) is parsed
+ * and loaded by source/WorldModelCollisionDefinition.c: its sets live in a second block the asset owns, with the hulls
+ * and meshes built from models that load as further dependencies.
  */
 
 
@@ -85,6 +88,7 @@ typedef struct WorldModelDefinitionStruct
     float BoundsRadius;
     WorldModelVariantDefinition* Variants; // owned array
     size_t VariantCount;
+    WorldModelCollisionDefinition* Collision; // owned, NULL without a "collision" section
 } WorldModelDefinition;
 
 /* The definition being read and its name in printable form, for messages. */
@@ -96,8 +100,9 @@ typedef struct ParseContextStruct
 
 typedef struct WorldModelLoadedStruct
 {
-    WorldModel Model;   // Asset points here
-    void* VariantBlock; // owned: the variants, their overrides and their names in one block (NULL without variants)
+    WorldModel Model;     // Asset points here
+    void* VariantBlock;   // owned: the variants, their overrides and their names in one block (NULL without variants)
+    void* CollisionBlock; // owned: the collision sets, shapes, hulls and meshes (NULL without collision)
 } WorldModelLoaded;
 
 
@@ -105,7 +110,7 @@ typedef struct WorldModelLoadedStruct
 static const unsigned char* const RootKeys[] =
 {
     u8"name", u8"lods", u8"draw_distance", u8"is_draw_distance_fixed", u8"lod_fade_seconds", u8"lod_hysteresis",
-    u8"render", u8"variants", u8"bounds"
+    u8"render", u8"variants", u8"bounds", u8"collision"
 };
 static const unsigned char* const LodKeys[] = { u8"model", u8"max_distance" };
 static const unsigned char* const RenderKeys[] =
@@ -711,6 +716,10 @@ static Error ParseDefinition(WorldModelDefinition* definition, JSONCompound* roo
     {
         Result = ParseBounds(&Context, root);
     }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldModelCollisionDefinition_Parse(Context.Name, root, &definition->Collision);
+    }
     return Result;
 }
 
@@ -721,6 +730,7 @@ static void WorldModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
     (void)manager;
     WorldModelLoaded* Loaded = self->DestroyContext;
     Memory_Free(Loaded->VariantBlock);
+    WorldModelCollision_DestroyBlock(Loaded->CollisionBlock);
     Memory_Free(Loaded);
 }
 
@@ -958,8 +968,8 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
     WorldModel Built;
     Memory_Zero(&Built, sizeof(Built));
 
-    // Every failure returns before anything is allocated that outlives the call: the manager releases the dependency
-    // user's holds when the load fails.
+    // Every failure frees what this call allocated before it returns (the variant block when the collision fails); the
+    // manager releases the dependency user's holds when the load fails.
     Error Result = LoadLods(Definition, manager, dependencyUser, &Built);
     if (Result.Code != ErrorCode_Success)
     {
@@ -971,6 +981,17 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
     {
         return Result;
     }
+    void* CollisionBlock = NULL;
+    if (Definition->Collision != NULL)
+    {
+        Result = WorldModelCollisionDefinition_Load(Definition->Collision, Definition->Base.Name, manager, dependencyUser,
+            Built._lods[0]._model, &CollisionBlock, &Built._collision);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Memory_Free(VariantBlock);
+            return Result;
+        }
+    }
     Built._settings = Definition->Settings;
     Built._lodFadeSeconds = Definition->LodFadeSeconds;
     Built._lodHysteresis = Definition->LodHysteresis;
@@ -980,6 +1001,7 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
     WorldModelLoaded* Loaded = Memory_Allocate(sizeof(WorldModelLoaded));
     Loaded->Model = Built;
     Loaded->VariantBlock = VariantBlock;
+    Loaded->CollisionBlock = CollisionBlock;
     outLoaded->Asset = &Loaded->Model;
     outLoaded->VTable = &WorldModelLoadedVTable;
     outLoaded->DestroyContext = Loaded;
@@ -1007,6 +1029,7 @@ static void WorldModelDefinition_Destroy(void* self)
         Memory_Free(Variant->Name);
     }
     Memory_Free(Definition->Variants);
+    WorldModelCollisionDefinition_Destroy(Definition->Collision);
     Memory_Free(Definition->Base.Name);
     Memory_Free(Definition);
 }

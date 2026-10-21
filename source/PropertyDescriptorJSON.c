@@ -117,6 +117,40 @@ static Error CreateFloatListValue(JSONObjectPool* pool, const PropertyFloatList*
     return Error_CreateSuccess();
 }
 
+/* An enum set as an array of its entries' names, in the enum table's order. */
+static Error CreateEnumSetValue(JSONObjectPool* pool, const PropertyEnumTable* table, uint32_t mask,
+    JSONObjectValue* outValue)
+{
+    JSONArray* Array = NULL;
+    Error Result = JSONObjectPool_BorrowArray(pool, &Array);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    for (size_t Index = 0; (Index < table->EntryCount) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        int32_t Value = table->Entries[Index].Value;
+        if ((Value < 0) || (Value >= 32) || ((mask & ((uint32_t)1U << (uint32_t)Value)) == 0U))
+        {
+            continue;
+        }
+        JSONObjectValue Element;
+        Result = GameJSON_CreateStringValue(pool, table->Entries[Index].Name, &Element);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = JSONArray_Add(Array, &Element);
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = JSONObjectPool_ReturnArray(pool, Array, true);
+        Error_Deconstruct(&ReturnResult);
+        return Result;
+    }
+    *outValue = JSONObjectValue_CreateArray(Array);
+    return Error_CreateSuccess();
+}
+
 /* The date text "yyyy-mm-dd" as a JSON string, formatted on the stack. */
 static Error CreateDateValue(JSONObjectPool* pool, int64_t dayNumber, JSONObjectValue* outValue)
 {
@@ -192,6 +226,8 @@ static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descrip
             return Error_Construct2(ErrorCode_InvalidState, "Data maps are written separately.");
         case PropertyType_FloatList:
             return CreateFloatListValue(pool, data->FloatListValue, outValue);
+        case PropertyType_EnumSet:
+            return CreateEnumSetValue(pool, descriptor->EnumTable, data->EnumSetValue, outValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -296,6 +332,44 @@ static Error ReadEnum(const PropertyDescriptor* descriptor, const JSONObjectValu
     return Result;
 }
 
+/* An array of entry names (each at most once) as an enum set. */
+static Error ReadEnumSet(const PropertyDescriptor* descriptor, const JSONObjectValue* value, uint32_t* outMask)
+{
+    const PropertyEnumTable* Enum = descriptor->EnumTable;
+    if (value->Type != JSONValueType_Array)
+    {
+        return Error_Construct4(ErrorCode_InvalidJSON, "Expected an array of %s names.", (const char*)Enum->Name);
+    }
+    uint32_t Mask = 0U;
+    size_t Count = JSONArray_GetElementCount(value->Value.Array);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        JSONObjectValue Element;
+        Error Result = JSONArray_Get(value->Value.Array, Index, &Element);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+        int32_t EntryValue = 0;
+        Result = ReadEnum(descriptor, &Element, &EntryValue);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error Wrapped = Error_Construct4(ErrorCode_InvalidJSON, "[%" PRIu64 "]: %s", (uint64_t)Index,
+                (Result.Message != NULL) ? (const char*)Result.Message : "Expected an enum name.");
+            Error_Deconstruct(&Result);
+            return Wrapped;
+        }
+        uint32_t Bit = (uint32_t)1U << (uint32_t)EntryValue;
+        if ((Mask & Bit) != 0U)
+        {
+            return Error_Construct4(ErrorCode_InvalidJSON, "[%" PRIu64 "]: the name appears twice.", (uint64_t)Index);
+        }
+        Mask |= Bit;
+    }
+    *outMask = Mask;
+    return Error_CreateSuccess();
+}
+
 /* Only the text "yyyy-mm-dd": a bare day number would be a count of days no person could check. */
 static Error ReadDate(const JSONObjectValue* value, int64_t* outDayNumber)
 {
@@ -360,6 +434,8 @@ static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectVa
             return Error_Construct2(ErrorCode_InvalidState, "Data maps are read separately.");
         case PropertyType_FloatList:
             return Error_Construct2(ErrorCode_InvalidState, "Float lists are read separately.");
+        case PropertyType_EnumSet:
+            return ReadEnumSet(descriptor, value, &outData->EnumSetValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }

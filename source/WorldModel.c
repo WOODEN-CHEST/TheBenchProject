@@ -1,6 +1,6 @@
-// The world model asset's data functions: the shadow tier's names, the default settings, and the variants (lookup by
-// name, and applying one to a per-draw copy of a material's maps). The definition and the loader are in
-// WorldModelDefinition.c.
+// The world model asset's data functions: the shadow tier's names, the default settings, the variants (lookup by
+// name, and applying one to a per-draw copy of a material's maps) and the collision sets (lookup by name). The
+// definition and the loader are in WorldModelDefinition.c, the collision section's in WorldModelCollisionDefinition.c.
 
 #include "WorldModel.h"
 #include "GameTexture.h"
@@ -57,6 +57,26 @@ bool WorldModel_TryFindVariant(const WorldModel* self, const unsigned char* name
     {
         bool IsEqual = false;
         Error Result = StringUTF8_EqualsExact(self->_variants[Index]._name, name, &IsEqual);
+        Error_Deconstruct(&Result);
+        if (IsEqual)
+        {
+            *outIndex = Index;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool WorldModelCollision_TryFindSet(const WorldModelCollision* self, const unsigned char* name, uint32_t* outIndex)
+{
+    if (name == NULL)
+    {
+        return false;
+    }
+    for (uint32_t Index = 0U; Index < self->_setCount; Index++)
+    {
+        bool IsEqual = false;
+        Error Result = StringUTF8_EqualsExact(self->_sets[Index]._name, name, &IsEqual);
         Error_Deconstruct(&Result);
         if (IsEqual)
         {

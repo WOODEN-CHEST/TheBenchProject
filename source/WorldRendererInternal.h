@@ -787,6 +787,8 @@ struct WorldRendererStruct
     bool _drawDebugGrid;
     /** @brief Whether the debug light gizmos (wireframe spheres at light positions) are drawn. Default on. */
     bool _lightGizmosEnabled;
+    /** @brief The collision world whose debug shapes are drawn as wireframes (borrowed), or NULL (the default). */
+    const WorldCollision* _collisionDebug;
     /** @brief Whether the final pixelation pass is applied. */
     bool _pixelationEnabled;
     /** @brief Set once the shaders' load has been attempted (success or failure), so it is tried only once. */
@@ -1015,6 +1017,12 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, const Shader* passSha
 
 /** @brief Draws a small wireframe sphere at each light, tinted by its colour (a debug aid). Inside BeginMode3D. */
 void WorldRendererGeometry_DrawLightGizmos(WorldRenderer* self);
+
+
+// WorldRendererCollision.c
+/** @brief Draws the collision world's debug shapes (_collisionDebug) as wireframes in their world placements, coloured by
+ *  layer (a debug aid). Inside BeginMode3D; reads only. */
+void WorldRendererCollision_Draw(WorldRenderer* self);
 
 
 // WorldRendererSprites.c

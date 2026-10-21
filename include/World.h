@@ -122,6 +122,8 @@ typedef struct WorldStruct
     uint64_t _objectSetVersion;
     /** @brief Changes on every component addition and removal; see World_GetComponentSetVersion. */
     uint64_t _componentSetVersion;
+    /** @brief The serial the last added component got (WorldComponent_GetSerial); 0 before the first. */
+    uint64_t _lastComponentSerial;
     /** @brief Owned, NUL-terminated UTF-8 world name; may be NULL. */
     unsigned char* _name;
     /** @brief The key registry the keys of the objects' tags and data come from; borrowed, never NULL. */

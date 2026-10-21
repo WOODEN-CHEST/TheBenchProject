@@ -6,7 +6,7 @@ parser and the loader). The placements' side is the model component, `include/Wo
 `source/WorldModelComponent.c` ([WorldData.md](WorldData.md)). The definition format is in
 `references/asset_structure.md`, "World models". Tests: `tests/WorldModelTests.c`, the renderer's side in
 `tests/WorldRenderCacheTests.c` and `tests/WorldVisibilityTests.c`; the LOD maths in `tests/WorldLodTests.c`. Built in T10 (decisions G4 and G17); T11 added
-the LOD selection and cross-fades.
+the LOD selection and cross-fades, T12 the `collision` section ("Collision" below; `tests/WorldColliderTests.c`).
 
 A **world model** is everything that is the same for every placement of a thing: which model to draw at which distance
 (its LODs), how far it is seen, the default render settings of its placements, and its material variants. A **world
@@ -153,6 +153,23 @@ G17); the maths is the private `source/WorldLod.{h,c}` ([WorldRuntime.md](WorldR
   also glow faintly, so the colours read at night); the I key's status line counts the drawn models per LOD and the
   cross-fading ones.
 
+## Collision (T12)
+
+A world model may hold its placements' collision: named **collision sets** (compounds of spheres, capsules, boxes,
+cylinders, convex hulls, planes and meshes, each placed in the model's space, an optional part name each), the set its
+placements use by default, and the placements' default layer, mask and trigger flag. `"collision": "bounds"` is one
+set, `bounds`, holding a box around LOD 0 (exact under its import transform). No section: no collision. The format is in
+`references/asset_structure.md`; the shapes, the collider component that places them and the collision world are in
+[WorldCollision.md](WorldCollision.md).
+- **Parsed with the definition** (`source/WorldModelCollisionDefinition.c`): the same rules as the rest (messages name
+  the place, `collision.sets[0].shapes[2].radius`), each shape type refusing the other types' keys, the limits (32 sets,
+  128 shapes a set, 1024 in all), point hulls built once to refuse flat ones.
+- **Loaded with the asset:** a hull or mesh built from a `model` loads that model as one more **dependency** (it may be a
+  LOD model too); a failure fails the world model, naming the set and the shape (`World model "shop": collision set
+  "walls", shape 0: ...`). One block holds the sets, shapes, names, hulls and meshes; the asset owns it.
+  `WorldModel_GetCollision` returns it (NULL without a section), with `WorldModelCollision_GetSetCount`, `_GetSet`,
+  `_GetDefaultSetIndex` and `_TryFindSet(name)`.
+
 ## Hot reload (designed in, built later)
 
 Consumers keep only names and re-resolve when something changes: the render cache resolves a world model by name and
@@ -176,10 +193,14 @@ degrees ([WorldRuntime.md](WorldRuntime.md), "WorldTestFrame"). A row of six `lo
 edge of the ground (x = 8, z = -6 to 9), with two more beside it: `lod_test_forced` (LOD 2 forced) and
 `lod_test_own_distances` (its own switch distances, 3 and 6 m); Q tints them by LOD.
 
+Since T12 the world models collide: `test`, `pbr_metal` and `painted_cube` with `"bounds"`, `lod_test` with a convex
+hull of `lod_test_lod0` (64 vertices), `pbr_demo` with a mesh of its own model (layer `world`); and `test_door` (the test
+cube through the model `test_door`'s import transform, a 1 x 2 m panel hinged at its origin) has a `closed` and an
+`open` set, a panel and a named handle each ([WorldCollision.md](WorldCollision.md), "Debugging and the test content").
+
 ## Known limits
 
-- **Collision and surfaces** belong to T12 and T19: their `collision` and `surfaces` keys are refused as unknown until
-  then.
+- **Surfaces** belong to T19: the `surfaces` key is refused as unknown until then.
 - **A missing dependency fails the whole world model** (every LOD and texture must load), so its objects draw nothing;
   a variant texture typo costs the model, not just the variant.
 - **The unknown-variant warning** comes again after `WorldRenderer_PrepareWorld` (the cache resolves everything again).

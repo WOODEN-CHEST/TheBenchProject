@@ -23,11 +23,14 @@ int main(void)
     AssetManagerTests_Run(&Run);
     ShaderSourceTests_Run(&Run);
     TextureTests_Run(&Run);
+    CollisionGeometryTests_Run(&Run);
     WorldLightCullingTests_Run(&Run);
     NamespacedKeyTests_Run(&Run);
     DataValueTests_Run(&Run);
     WorldTests_Run(&Run);
     WorldModelTests_Run(&Run);
+    WorldColliderTests_Run(&Run);
+    WorldCollisionTests_Run(&Run);
     WorldSpriteTests_Run(&Run);
     WorldHierarchyTests_Run(&Run);
     WorldTransformTests_Run(&Run);

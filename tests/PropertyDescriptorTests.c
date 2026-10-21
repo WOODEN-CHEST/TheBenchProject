@@ -1,4 +1,5 @@
 #include "TestSuites.h"
+#include "CollisionLayer.h"
 #include "TestText.h"
 #include "PropertyDescriptor.h"
 #include "DataMap.h"
@@ -10,6 +11,7 @@
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
+#include "WorldColliderComponent.h"
 #include "Logger.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRPath.h"
@@ -207,6 +209,27 @@ static const PropertyTable MapRecordTable =
 {
     .Name = u8"test_map_record", .Version = 1U, .StructSize = sizeof(TestMapRecord), .Descriptors = MapRecordProperties,
     .DescriptorCount = sizeof(MapRecordProperties) / sizeof(MapRecordProperties[0]), .AfterSet = MapRecordAfterSet
+};
+
+/* A record with an enum set (a mask of the collision layers), its own record so the main record's tests stay as they
+ * are. */
+typedef struct TestSetRecordStruct
+{
+    uint32_t Layers;
+} TestSetRecord;
+
+static const PropertyDescriptor SetRecordProperties[] =
+{
+    { .Key = u8"layers", .WireId = 1U, .Type = PropertyType_EnumSet, PROPERTY_MEMBER(TestSetRecord, Layers),
+        .Default.EnumSetValue = COLLISION_LAYER_BIT(CollisionLayer_World) | COLLISION_LAYER_BIT(CollisionLayer_Prop),
+        .Rules = PROPERTY_RULES_NONE, .EnumTable = &COLLISION_LAYER_ENUM, .Flags = PROPERTY_FLAGS_SETTING,
+        .SinceVersion = 1U },
+};
+
+static const PropertyTable SetRecordTable =
+{
+    .Name = u8"test_set_record", .Version = 1U, .StructSize = sizeof(TestSetRecord), .Descriptors = SetRecordProperties,
+    .DescriptorCount = sizeof(SetRecordProperties) / sizeof(SetRecordProperties[0])
 };
 
 static const PropertyDescriptor BigRecordProperties[] =
@@ -594,6 +617,7 @@ static void TablesPassTheirCheck(TestRun* run)
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldSprite_GetSettingsPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldSprite_GetRenderPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldLightComponent_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldColliderComponent_GetPropertyTable()));
     TEST_CHECK_ERROR(run, PropertyTable_Check(NULL), ErrorCode_IllegalArgument);
 }
 
@@ -1634,6 +1658,112 @@ static void GetAndSetByKey(TestRun* run)
 /* Float lists: created, copied and compared by value (NULL is the empty list); set copies, get borrows; JSON arrays of
  * numbers ([] the empty list, values as the shortest text that reads back) and GHDF Float arrays, with too long and
  * wrongly typed arrays refused and nothing changed; the table-driven copy is deep. */
+static Error ReadSetRecordFromText(TestRun* run, JSONObjectPool* pool, const char* text, TestSetRecord* record)
+{
+    JSONObjectValue Value;
+    if (!TestText_ParseJSON(run, pool, text, &Value))
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, "the test's JSON did not parse");
+    }
+    Error Result = Properties_ReadJSON(&SetRecordTable, Value.Value.Compound, record, NULL);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(pool, &Value));
+    return Result;
+}
+
+static void EnumSetsGoThroughTheTables(TestRun* run)
+{
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(&SetRecordTable));
+    TestSetRecord Record;
+    TEST_CHECK_SUCCESS(run, Properties_Construct(&SetRecordTable, &Record));
+    uint32_t WorldAndProp = COLLISION_LAYER_BIT(CollisionLayer_World) | COLLISION_LAYER_BIT(CollisionLayer_Prop);
+    TEST_CHECK(run, Record.Layers == WorldAndProp);
+
+    // Set and check: only the enum's entries.
+    PropertyValue Characters = PropertyValue_FromEnumSet(COLLISION_LAYER_BIT(CollisionLayer_Character)
+        | COLLISION_LAYER_BIT(CollisionLayer_Trigger));
+    TEST_CHECK_SUCCESS(run, Properties_Set(&SetRecordTable, &Record, u8"layers", &Characters));
+    PropertyValue Stray = PropertyValue_FromEnumSet(1U << 20U);
+    TEST_CHECK_ERROR(run, Properties_Set(&SetRecordTable, &Record, u8"layers", &Stray), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK(run, Record.Layers == Characters.Data.EnumSetValue);
+
+    JSONObjectPool* Pool = NULL;
+    GHDFObjectPool* BinaryPool = NULL;
+    if (TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)) && TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&BinaryPool)))
+    {
+        // JSON: the names in the table's order; read back the same; [] is the empty set.
+        JSONCompound* Compound = NULL;
+        if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
+        {
+            TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&SetRecordTable, &Record, Pool, Compound, NULL));
+            JSONObjectValue Array;
+            if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"layers", JSONValueType_Array, &Array)))
+            {
+                JSONObjectValue First;
+                JSONObjectValue Second;
+                TEST_CHECK(run, (JSONArray_GetElementCount(Array.Value.Array) == 2U)
+                    && TEST_CHECK_SUCCESS(run, JSONArray_Get(Array.Value.Array, 0U, &First))
+                    && TEST_CHECK_SUCCESS(run, JSONArray_Get(Array.Value.Array, 1U, &Second))
+                    && (First.Type == JSONValueType_String) && (First.Value.String->_count == 9U)
+                    && Memory_IsEqual(First.Value.String->_data, u8"character", 9U)
+                    && (Second.Value.String->_count == 7U) && Memory_IsEqual(Second.Value.String->_data, u8"trigger", 7U));
+            }
+            TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Compound, true));
+        }
+        TestSetRecord Other;
+        TEST_CHECK_SUCCESS(run, Properties_Construct(&SetRecordTable, &Other));
+        TEST_CHECK_SUCCESS(run, ReadSetRecordFromText(run, Pool, "{\"layers\": [\"vehicle\", \"world\"]}", &Other));
+        TEST_CHECK(run, Other.Layers == (COLLISION_LAYER_BIT(CollisionLayer_Vehicle) | COLLISION_LAYER_BIT(CollisionLayer_World)));
+        TEST_CHECK_SUCCESS(run, ReadSetRecordFromText(run, Pool, "{\"layers\": []}", &Other));
+        TEST_CHECK(run, Other.Layers == 0U);
+        const char* const Unknown[] = { "test_set_record.layers", "[1]", "collision_layer", NULL };
+        TestText_CheckErrorMessage(run, ReadSetRecordFromText(run, Pool, "{\"layers\": [\"world\", \"ghost\"]}", &Other),
+            ErrorCode_InvalidJSON, Unknown);
+        const char* const Twice[] = { "twice", NULL };
+        TestText_CheckErrorMessage(run, ReadSetRecordFromText(run, Pool, "{\"layers\": [\"prop\", \"prop\"]}", &Other),
+            ErrorCode_InvalidJSON, Twice);
+        TEST_CHECK_ERROR(run, ReadSetRecordFromText(run, Pool, "{\"layers\": \"prop\"}", &Other), ErrorCode_InvalidJSON);
+        TEST_CHECK(run, Other.Layers == 0U); // all or nothing
+
+        // GHDF: the mask in the smallest unsigned type; bits outside the enum are refused.
+        GHDFCompound* Binary = NULL;
+        if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Binary)))
+        {
+            TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&SetRecordTable, &Record, BinaryPool, Binary, NULL));
+            GHDFObjectValue Entry;
+            TEST_CHECK(run, TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Binary, 1U,
+                GHDF_CreateRegularType(GHDFValueType_UInt8), &Entry)) && (Entry.Value.UInt8 == Record.Layers));
+            TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&SetRecordTable, Binary, &Other, NULL));
+            TEST_CHECK(run, Other.Layers == Record.Layers);
+            TEST_CHECK_SUCCESS(run, GameGHDF_PutUnsigned(Binary, 1U, 1U << 20U));
+            TEST_CHECK_ERROR(run, Properties_ReadGHDF(&SetRecordTable, Binary, &Other, NULL), ErrorCode_Deserialize);
+            TEST_CHECK(run, Other.Layers == Record.Layers);
+            TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Binary, true));
+        }
+        Properties_Deconstruct(&SetRecordTable, &Other);
+    }
+    if (BinaryPool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(BinaryPool));
+    }
+    if (Pool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    }
+    Properties_Deconstruct(&SetRecordTable, &Record);
+
+    // A table whose set enum has a value past the mask's 32 bits, or whose default holds a stray bit, is refused.
+    static const PropertyEnumEntry WideEntries[] = { { u8"low", 0 }, { u8"high", 40 } };
+    static const PropertyEnumTable WideEnum = { .Name = u8"wide", .Entries = WideEntries, .EntryCount = 2U };
+    PropertyDescriptor Bad = SetRecordProperties[0];
+    Bad.EnumTable = &WideEnum;
+    PropertyTable BadTable = SetRecordTable;
+    BadTable.Descriptors = &Bad;
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&BadTable), ErrorCode_IllegalArgument);
+    Bad = SetRecordProperties[0];
+    Bad.Default.EnumSetValue = 1U << 30U;
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&BadTable), ErrorCode_IllegalArgument);
+}
+
 static void FloatListsGoThroughTheTables(TestRun* run)
 {
     const float Values[] = { 0.5f, 2.0f, 7.25f };
@@ -2060,6 +2190,7 @@ void PropertyDescriptorTests_Run(TestRun* run)
         { "copies_are_deep", CopiesAreDeep },
         { "get_and_set_by_key", GetAndSetByKey },
         { "float_lists_go_through_the_tables", FloatListsGoThroughTheTables },
+        { "enum_sets_go_through_the_tables", EnumSetsGoThroughTheTables },
         { "big_structs_read_through_a_heap_scratch", BigStructsReadThroughAHeapScratch },
         { "migration_runs_for_older_data", MigrationRunsForOlderData },
         { "environment_ghdf_matches_the_old_encoder", EnvironmentGHDFMatchesTheOldEncoder },

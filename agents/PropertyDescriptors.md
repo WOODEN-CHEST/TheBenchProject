@@ -105,6 +105,7 @@ no `inherit` states: a flag cannot collide with a real value, and the editor sho
 | `Date` | `int64_t` day number ([GameCalendar.md](GameCalendar.md)), inside the calendar (years 1 to 9999) | `"yyyy-mm-dd"` only, e.g. `"2026-10-18"` | EncodedInteger (the day number; three bytes for this era) |
 | `DataMap` | owned `DataMap*` ([ObjectData.md](ObjectData.md)), NULL while empty (its only default) | two keys: the tags under the descriptor's `TagsKey` (`["town:lamp"]`), the values under its `Key` (`{"town:visits": 3}`) | Compound array of entry compounds |
 | `FloatList` (T11) | owned `PropertyFloatList*`, NULL while empty (its only default) | array of numbers, `[3.0, 6.0, 60.0]` (`[]` when empty) | Float array (empty when empty) |
+| `EnumSet` (T12) | `uint32_t` mask: bit N is the enum entry of value N | array of the entries' names in the table's order, `["world", "prop"]` (`[]` when empty) | the smallest unsigned integer type that holds the mask |
 
 Since T09 the integer types are written in the smallest GHDF integer type that holds the value (a `parent` of 12 is one
 UInt8 byte) and read from any GHDF integer type, fixed width or encoded, whose value fits the property's type
@@ -127,6 +128,10 @@ one); its default must be NULL (empty). A `FloatList` takes `Rules.MaxCount` (re
 `PROPERTY_FLOAT_LIST_MAX_COUNT`, 4096), bounds that apply to every value (every value is finite), and
 `Rules.IsStrictlyIncreasing` (each value above the one before; only lists take it): `PROPERTY_RULES_FLOAT_LIST(count)`,
 `PROPERTY_RULES_INCREASING_FLOAT_LIST_ABOVE(count, minimum)` (a placement's LOD distances); its default must be NULL.
+An `EnumSet` takes an enum table like an `Enum`, whose values must be 0 to `PROPERTY_ENUM_SET_MAX_VALUE` (31, the table
+check refuses others); a mask with a bit that is no entry of the table is refused. JSON reads an array of names: an
+unknown name or one given twice is refused, naming its index (`[1]: ...`). The collider's `collides_with` (a set of
+collision layers) is the first.
 
 Flags: `Persistent` (written and read by JSON and GHDF), `Editable` (inspector), `ReadOnly` (visible, refused by
 `Properties_Set`; reads from files still fill it), `Script`. `PROPERTY_FLAGS_SETTING` = Persistent | Editable | Script.
@@ -202,7 +207,7 @@ cloned and handed over through `PropertyInternal_AdoptOwned` and `CloneOwned`), 
 and here, and test it in `tests/PropertyDescriptorTests.c` (the test record has one field of every type but
 `DataMap`, which has its own record: it needs a key registry). `Double` and `Date` were added this way in T23,
 `AngleVector3` (an object's rotation) in T05, `DataMap` (tags and typed data) in T24, `FloatList` (a placement's LOD
-distances) in T11.
+distances) in T11, `EnumSet` (a collider's layer mask) in T12.
 
 ### Float lists
 

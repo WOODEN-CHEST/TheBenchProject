@@ -113,6 +113,17 @@ bool TestAssets_AddModelWithMaterials(TestRun* run, TestAssetFixture* fixture, c
     int materialCount, Matrix transform, TestAssetCounters* counters);
 
 /**
+ * @brief Registers a model definition named @p name whose asset has one CPU-side mesh (copies of @p vertices, three
+ *        floats each, and of @p indices, three per triangle, or none: every three vertices are a triangle), never
+ *        uploaded, one material, the import transform @p transform and the vertices' box as its mesh-space bounds: what
+ *        collision hulls and meshes read from a real model.
+ * @param counters Counts its loads and unloads; may be NULL. Must outlive the fixture's manager.
+ * @returns true when it was registered.
+ */
+bool TestAssets_AddMeshModel(TestRun* run, TestAssetFixture* fixture, const char* name, const float* vertices,
+    int vertexCount, const unsigned short* indices, int triangleCount, Matrix transform, TestAssetCounters* counters);
+
+/**
  * @brief Registers a texture definition named @p name whose asset names the GPU texture id @p textureId without
  *        uploading anything (16 x 16, sRGB).
  * @param counters Counts its loads and unloads; may be NULL. Must outlive the fixture's manager.

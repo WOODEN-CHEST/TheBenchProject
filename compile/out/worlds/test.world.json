@@ -1,7 +1,7 @@
 {
     "format_version": 1,
     "name": "test",
-    "next_object_id": 33,
+    "next_object_id": 35,
     "environment": {},
     "objects": [
         {
@@ -11,7 +11,8 @@
             "components": {
                 "model": {
                     "world_model": "test"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -21,6 +22,10 @@
             "components": {
                 "model": {
                     "world_model": "test"
+                },
+                "collider": {
+                    "overrides_layer": true,
+                    "layer": "world"
                 }
             }
         },
@@ -33,7 +38,8 @@
                     "world_model": "test",
                     "overrides_omit_pixelation": true,
                     "omit_pixelation": true
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -89,6 +95,13 @@
             "components": {
                 "sprite": {
                     "world_sprite": "test_tree"
+                },
+                "collider": {
+                    "uses_own_shape": true,
+                    "shape_type": "cylinder",
+                    "shape_center": [0.0, 1.2, 0.0],
+                    "shape_radius": 0.12,
+                    "shape_half_height": 1.2
                 }
             }
         },
@@ -100,6 +113,14 @@
             "components": {
                 "sprite": {
                     "world_sprite": "test_sign"
+                },
+                "collider": {
+                    "uses_own_shape": true,
+                    "shape_type": "plane",
+                    "shape_center": [0.0, 0.75, 0.0],
+                    "shape_rotation": [90.0, 0.0, 0.0],
+                    "shape_plane_half_extents": [1.0, 0.75],
+                    "shape_depth": 0.03
                 }
             }
         },
@@ -146,7 +167,8 @@
                     "world_model": "pbr_demo",
                     "overrides_shadow_tier": true,
                     "shadow_tier": "near"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -159,14 +181,16 @@
                     "world_model": "pbr_metal",
                     "overrides_shadow_tier": true,
                     "shadow_tier": "far"
-                }
+                },
+                "collider": {}
             }
         },
         {
             "id": 15,
             "name": "desk",
             "position": [1.8, 0.05, -3.6],
-            "rotation": [0.0, 15.0, 0.0]
+            "rotation": [0.0, 15.0, 0.0],
+            "mobility": "movable"
         },
         {
             "id": 16,
@@ -177,7 +201,8 @@
             "components": {
                 "model": {
                     "world_model": "test"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -189,7 +214,8 @@
             "components": {
                 "model": {
                     "world_model": "test"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -201,7 +227,8 @@
             "components": {
                 "model": {
                     "world_model": "test"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -215,6 +242,12 @@
                     "world_model": "pbr_metal",
                     "overrides_shadow_tier": true,
                     "shadow_tier": "near"
+                },
+                "collider": {
+                    "uses_own_shape": true,
+                    "shape_type": "cylinder",
+                    "shape_radius": 0.25,
+                    "shape_half_height": 0.25
                 }
             }
         },
@@ -229,7 +262,8 @@
                     "world_model": "test",
                     "overrides_shadow_tier": true,
                     "shadow_tier": "near"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -254,7 +288,8 @@
                     "world_model": "painted_cube",
                     "uses_variant": true,
                     "variant": "red"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -266,7 +301,8 @@
                     "world_model": "painted_cube",
                     "uses_variant": true,
                     "variant": "blue"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -288,7 +324,8 @@
             "components": {
                 "model": {
                     "world_model": "lod_test"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -298,7 +335,8 @@
             "components": {
                 "model": {
                     "world_model": "lod_test"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -308,7 +346,8 @@
             "components": {
                 "model": {
                     "world_model": "lod_test"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -318,7 +357,8 @@
             "components": {
                 "model": {
                     "world_model": "lod_test"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -328,7 +368,8 @@
             "components": {
                 "model": {
                     "world_model": "lod_test"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -338,7 +379,8 @@
             "components": {
                 "model": {
                     "world_model": "lod_test"
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -350,7 +392,8 @@
                     "world_model": "lod_test",
                     "is_lod_forced": true,
                     "forced_lod": 2
-                }
+                },
+                "collider": {}
             }
         },
         {
@@ -362,6 +405,33 @@
                     "world_model": "lod_test",
                     "overrides_lod_distances": true,
                     "lod_distances": [3.0, 6.0, 60.0]
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 33,
+            "name": "door",
+            "position": [-3.5, 0.05, -4.5],
+            "components": {
+                "model": {
+                    "world_model": "test_door"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 34,
+            "name": "desk_trigger_zone",
+            "position": [3.6, 0.6, -3.6],
+            "components": {
+                "collider": {
+                    "uses_own_shape": true,
+                    "shape_half_extents": [0.25, 0.6, 0.8],
+                    "overrides_layer": true,
+                    "layer": "trigger",
+                    "overrides_is_trigger": true,
+                    "is_trigger": true
                 }
             }
         }

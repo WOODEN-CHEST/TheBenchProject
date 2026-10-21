@@ -3,8 +3,11 @@
 #include <stddef.h>
 #include <stdint.h>
 // raylib.h is needed for Vector3 (the bounds) and MaterialMap (variants apply to a material's maps); GameModel.h for
-// GameModel and GameMaterialFactors; PropertyDescriptor.h for the shadow tier's names (a PropertyEnumTable).
+// GameModel and GameMaterialFactors; PropertyDescriptor.h for the shadow tier's names (a PropertyEnumTable);
+// CollisionShape.h and CollisionLayer.h for the collision sets and their placements' defaults.
 #include "raylib/raylib.h"
+#include "CollisionLayer.h"
+#include "CollisionShape.h"
 #include "GameModel.h"
 #include "PropertyDescriptor.h"
 
@@ -34,6 +37,12 @@ typedef struct GameTextureStruct GameTexture;
  *
  * VARIANTS apply at draw time, never to an asset: the renderer copies a mesh's material maps for each draw and
  * WorldModel_ApplyVariant changes that copy (textures, then the factors), the same rule as the object's tint.
+ *
+ * COLLISION (T12). A world model may have collision sets (WorldModelCollision): named compounds of shapes in its own
+ * space, one of them the default, and the defaults of its placements' colliders (a layer, a mask, a trigger flag). A
+ * placement's collider picks a set and may override each default (WorldColliderComponent.h). Hulls and meshes built
+ * from models are the world model's own (their models load as dependencies), shared by every placement. Without a
+ * "collision" section a world model has no collision.
  *
  * LODS. Each LOD is drawn while the object is nearer than its max distance (at the default 60-degree field of view), the
  * last one until the draw distance; a placement may give its own switch distances, scale them or force a LOD
@@ -170,6 +179,29 @@ typedef struct WorldModelVariantStruct
 } WorldModelVariant;
 
 /**
+ * @brief A world model's collision: its sets and the defaults of its placements' colliders. Read-only, owned by the
+ *        world model (valid while it is loaded).
+ */
+typedef struct WorldModelCollisionStruct
+{
+    /** @brief The sets (1 to COLLISION_MAX_SETS), each a compound of shapes in the world model's own space. */
+    const CollisionSet* _sets;
+    uint32_t _setCount;
+    /** @brief The set a placement uses unless it names another (below _setCount). */
+    uint32_t _defaultSet;
+    /** @brief The default layer of its placements' colliders. */
+    CollisionLayer _layer;
+    /** @brief Whether the definition gave a mask (otherwise the layer in effect's default mask applies). */
+    bool _hasCollidesWith;
+    /** @brief The default mask while _hasCollidesWith (COLLISION_LAYER_BIT per layer). */
+    uint32_t _collidesWith;
+    /** @brief Whether its placements' colliders are triggers by default. */
+    bool _isTrigger;
+    /** @brief Whether the sets are the built-in "bounds" fallback (one box around LOD 0). */
+    bool _isBoundsFallback;
+} WorldModelCollision;
+
+/**
  * @brief A loaded world model. Built and owned by the asset manager (the "world_model" type); read-only.
  */
 typedef struct WorldModelStruct
@@ -194,6 +226,8 @@ typedef struct WorldModelStruct
     /** @brief The variants (owned), and their count (0 to WORLD_MODEL_MAX_VARIANTS). */
     const WorldModelVariant* _variants;
     size_t _variantCount;
+    /** @brief The collision (owned), or NULL: no collision. */
+    const WorldModelCollision* _collision;
 } WorldModel;
 
 
@@ -356,3 +390,53 @@ bool WorldModel_TryFindVariant(const WorldModel* self, const unsigned char* name
  * @param maps [in,out] A copy of that material's maps (raylib's MAX_MATERIAL_MAPS entries); must not be NULL.
  */
 void WorldModel_ApplyVariant(const WorldModel* self, size_t variantIndex, int materialIndex, MaterialMap* maps);
+
+/**
+ * @brief Returns the world model's collision.
+ * @param self The world model; must not be NULL.
+ * @returns The collision (borrowed: valid while the world model is loaded), or NULL when it has none.
+ */
+static inline const WorldModelCollision* WorldModel_GetCollision(const WorldModel* self)
+{
+    return self->_collision;
+}
+
+/**
+ * @brief Returns how many collision sets there are.
+ * @param self The collision; must not be NULL.
+ * @returns 1 to COLLISION_MAX_SETS.
+ */
+static inline uint32_t WorldModelCollision_GetSetCount(const WorldModelCollision* self)
+{
+    return self->_setCount;
+}
+
+/**
+ * @brief Returns one collision set.
+ * @param self The collision; must not be NULL.
+ * @param index The set's index.
+ * @returns The set (borrowed: valid while the world model is loaded), or NULL for an index past the last set.
+ */
+static inline const CollisionSet* WorldModelCollision_GetSet(const WorldModelCollision* self, uint32_t index)
+{
+    return (index < self->_setCount) ? &self->_sets[index] : NULL;
+}
+
+/**
+ * @brief Returns the index of the set placements use unless they name another.
+ * @param self The collision; must not be NULL.
+ * @returns The default set's index.
+ */
+static inline uint32_t WorldModelCollision_GetDefaultSetIndex(const WorldModelCollision* self)
+{
+    return self->_defaultSet;
+}
+
+/**
+ * @brief Finds a collision set by name (a linear search over a few sets; resolve once and keep the index).
+ * @param self The collision; must not be NULL.
+ * @param name The name, NUL-terminated UTF-8; NULL finds nothing.
+ * @param outIndex [out] Receives the set's index when found. Must not be NULL.
+ * @returns true when there is a set of that name.
+ */
+bool WorldModelCollision_TryFindSet(const WorldModelCollision* self, const unsigned char* name, uint32_t* outIndex);

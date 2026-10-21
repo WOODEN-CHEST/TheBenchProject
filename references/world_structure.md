@@ -60,6 +60,12 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
                     "world_model": "pbr_metal",
                     "overrides_shadow_tier": true,
                     "shadow_tier": "near"
+                },
+                "collider": {
+                    "uses_own_shape": true,
+                    "shape_type": "cylinder",
+                    "shape_radius": 0.25,
+                    "shape_half_height": 0.25
                 }
             }
         }
@@ -90,7 +96,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `mobility` | `"static"` / `"movable"` | |
 | `tags` | array of keys | See "Tags and data". |
 | `data` | object | See "Tags and data". |
-| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component` in `agents/WorldData.md`). |
+| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component` in `agents/WorldData.md`). |
 
 An object has at most one component of each type. A block whose values are all defaults is still written (`"light":
 {}`): the component is there.
@@ -176,6 +182,40 @@ a plain setting, not an override.
 }
 ```
 
+### The collider block
+
+The `collider` component (T12) makes the object collide: with its world model's collision (the model block's world
+model, `references/asset_structure.md`, "World models", `collision`) or with one shape of its own. Without it an object
+does not collide, whatever its world model holds. Its layer, mask and trigger flag come from the world model, each
+overridable with the same two keys as the model block.
+
+| Key | Value (default) | |
+|---|---|---|
+| `is_enabled` | `true` / `false` (true) | Off: not in the collision world. |
+| `overrides_collision_set`, `collision_set` | false, a set name or `null` (null) | On: the world model's set of this name instead of its `default_set` (an unknown name: no collision, warned once). |
+| `uses_own_shape` | false | On: the shape below instead of the world model's sets. |
+| `shape_type` | `sphere`, `capsule`, `box`, `cylinder`, `plane` (`box`) | The own shape, as in a world model's `collision` (`references/asset_structure.md`). |
+| `shape_center`, `shape_rotation` | `[x, y, z]` ([0, 0, 0]; degrees) | Where it sits in the object's space. |
+| `shape_radius`, `shape_half_height` | metres (0.5, 0.5) | Sphere, capsule, cylinder. |
+| `shape_half_extents` | `[x, y, z]` ([0.5, 0.5, 0.5]) | Box. |
+| `shape_is_bounded`, `shape_plane_half_extents`, `shape_depth` | true, `[x, z]` ([0.5, 0.5]), metres (0) | Plane. |
+| `overrides_layer`, `layer` | false, a layer (`prop`) | `world`, `prop`, `character`, `vehicle`, `dynamic`, `trigger`, `interaction`. |
+| `overrides_collides_with`, `collides_with` | false, an array of layers (prop's default mask) | The layers it blocks and is blocked by. |
+| `overrides_is_trigger`, `is_trigger` | false, false | A trigger reports what touches it and blocks nothing. |
+| `offset`, `rotation`, `scale` | `[x, y, z]` (none, none, [1, 1, 1]) | A transform of all its shapes on top of the object's; the scale above 0 on every axis. |
+| `rotation_mode` | `full`, `yaw_only`, `none` (`full`) | How the shapes follow the object's turn: fully, only about the up axis (upright), or not at all (axis-aligned). |
+
+```
+"collider": {
+    "uses_own_shape": true,
+    "shape_half_extents": [0.25, 0.6, 0.8],
+    "overrides_layer": true,
+    "layer": "trigger",
+    "overrides_is_trigger": true,
+    "is_trigger": true
+}
+```
+
 ### Values
 
 - Numbers: integers or decimals; a float keeps its fraction when written (`2.0`). Angles are degrees.
@@ -183,6 +223,7 @@ a plain setting, not an override.
 - Vectors: `[x, y]`, `[x, y, z]` (also `{"x": ..., "y": ..., "z": ...}` when read).
 - Colours: `"#rrggbb"`, `"#rrggbbaa"` when not opaque (also `[r, g, b, a]` or `{"r": ...}` when read).
 - Enums: the entry's name (`"near"`, `"axis_billboard"`).
+- Sets of an enum's entries: an array of names in the enum's order (`["world", "prop"]`, `[]` for none).
 - Dates: `"yyyy-mm-dd"`, a real day of the calendar (years 1 to 9999).
 - Asset names: `[a-z][a-z0-9_.-]*`, at most 128 bytes.
 
@@ -257,12 +298,13 @@ every integer in the smallest GHDF type that holds it.
 | Object entry | Value |
 |---|---|
 | 1 | The id (an unsigned integer). |
-| 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`), each a compound keyed by the type's wire ids. |
+| 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`), each a compound keyed by the type's wire ids. |
 | 3 and up | The `world_object` table's wire ids: 3 `name`, 4 `position`, 5 `rotation`, 6 `scale`, 7 `tint`, 8 `is_enabled`, 9 `is_visible`, 10 `mobility`, 11 the tags and data, 12 `parent`. |
 
 How each type is stored (`agents/PropertyDescriptors.md`, "Types"): integers in the smallest integer type (readers take
 any integer type whose value fits), floats as Float (angles in radians), vectors and float lists as Float arrays,
-colours as UInt8 arrays, render colours as a compound, strings as strings, enums and dates as encoded integers, the tags
+colours as UInt8 arrays, render colours as a compound, strings as strings, enums and dates as encoded integers, sets of
+enum entries as their mask in the smallest unsigned integer type, the tags
 and data as an array of entry compounds (`agents/ObjectData.md`, "GHDF"). A document must end where its root ends.
 
 ## Loading rules

@@ -47,8 +47,8 @@ typedef struct WorldObjectStruct WorldObject;
 /**
  * @brief How many component types a world can hold: every object has one slot per type.
  *
- * Above WorldComponentType_Count to leave room for the types later tasks add (collider, character, screen, ambient
- * zone, ...) and for test-only types.
+ * Above WorldComponentType_Count to leave room for the types later tasks add (character, screen, ambient zone, ...) and
+ * for test-only types.
  */
 #define WORLD_MAX_COMPONENT_TYPES ((size_t)16)
 
@@ -66,8 +66,10 @@ typedef enum WorldComponentTypeEnum
     WorldComponentType_Sprite = 1,
     /** @brief A point light (WorldLightComponent.h). */
     WorldComponentType_Light = 2,
+    /** @brief A collider: the object's part in collision (WorldColliderComponent.h, T12). */
+    WorldComponentType_Collider = 3,
     /** @brief The number of standard types (not a type). */
-    WorldComponentType_Count = 3
+    WorldComponentType_Count = 4
 } WorldComponentType;
 
 /**
@@ -85,6 +87,8 @@ typedef struct WorldComponentStruct
     WorldObject* _owner;
     /** @brief Advances (wrapping) on every property change; see the file comment. */
     uint32_t _revision;
+    /** @brief Unique among the components its world ever added (from 1); set when it is added, never changed. */
+    uint64_t _serial;
 } WorldComponent;
 
 /**
@@ -195,6 +199,19 @@ static inline WorldObject* WorldComponent_GetOwner(const WorldComponent* self)
 static inline uint32_t WorldComponent_GetRevision(const WorldComponent* self)
 {
     return self->_revision;
+}
+
+/**
+ * @brief Returns a number no other component of the same world ever had (from 1, in the order they were added).
+ *
+ * Tells a component from the one it replaced: a removed component's memory is often reused by the next one added, so
+ * a consumer that keeps component pointers (the collision world) compares serials, not addresses. Runtime only.
+ * @param self The component; must not be NULL.
+ * @returns The serial.
+ */
+static inline uint64_t WorldComponent_GetSerial(const WorldComponent* self)
+{
+    return self->_serial;
 }
 
 /**
