@@ -206,7 +206,7 @@ Current module list:
   * NightVision - The eye's dim-light vision as pure maths (private, source/NightVision.h): Hunt's rod share calibrated
     on the game's light scale and the rods' blue-grey; the sky and PBR shaders apply it (shaders/common/night_vision).
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world whose sky follows the frame's game
-    clock and whose colliders it syncs every tick (trigger events logged; R shows them, F6 swaps the door's hitbox),
+    clock and whose colliders it syncs every tick (trigger events logged; F7 shows them, F6 swaps the door's hitbox),
     with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,

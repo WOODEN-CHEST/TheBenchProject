@@ -153,7 +153,7 @@ typedef struct WorldTestFrameStruct
     bool _isZoomed;
     /** The world's colliders, synced every tick after the desk moves; owned. Its trigger events are logged. */
     WorldCollision* _collision;
-    /** Whether the R key's collider wireframes are shown. */
+    /** Whether the F7 key's collider wireframes are shown. */
     bool _areCollidersShown;
     /** The door the F6 key opens and closes (0 if the test world lacks it), and whether its hitbox is the open one. */
     uint64_t _doorId;
@@ -911,14 +911,14 @@ static void ToggleDoor(WorldTestFrame* frame)
     }
     Error_Deconstruct(&Result); // cannot fail: the names are valid and the setting exists
     LogLine(frame, frame->_isDoorOpen ? "the door's hitbox is open (turned 90 degrees about its hinge; the model does "
-        "not move: R shows it)." : "the door's hitbox is closed.");
+        "not move: F7 shows it)." : "the door's hitbox is closed.");
 }
 
-/* The collision keys: R shows and hides the collider wireframes (coloured by layer: world grey, prop orange, triggers
- * violet; static ones darker), F6 opens and closes the door's hitbox. */
+/* The collision keys: F7 shows and hides the collider wireframes (coloured by layer: world grey, prop orange, triggers
+ * violet; static ones darker), F6 opens and closes the door's hitbox. Not R: the UI test frame above takes it. */
 static void HandleDebugCollisionInput(WorldTestFrame* frame, const GameInput* input)
 {
-    if (GameInput_IsKeyPressed(input, GameKey_R))
+    if (GameInput_IsKeyPressed(input, GameKey_F7))
     {
         frame->_areCollidersShown = !frame->_areCollidersShown;
         WorldCollision_SetDebugListEnabled(frame->_collision, frame->_areCollidersShown);
@@ -1132,7 +1132,7 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"day, / a week ahead; F full moon / calendar moon, Y seasons; O post effects, B bloom, G sun shafts, "
             u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, N light pollution, X opacity of the "
             u8"centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the desk, "
-            u8"E variants, Z zoom, Q LOD tinting, R collider wireframes, F6 open/close the door's hitbox, I renderer, "
+            u8"E variants, Z zoom, Q LOD tinting, F7 collider wireframes, F6 open/close the door's hitbox, I renderer, "
             u8"game time and collision status, T text sample, F5 save the world (worlds/test.saved.world.json "
             u8"and .ghdf); M frees the "
             u8"mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");

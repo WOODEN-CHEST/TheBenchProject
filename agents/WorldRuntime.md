@@ -616,7 +616,9 @@ the clock.
 All input runs in `Update` at the fixed timestep and comes from `Services.Input` ([GameInput.md](GameInput.md)), after
 the UI test frame above had first refusal: movement through the actions (`move_*`, default WASD + SPACE/CTRL, `sprint`
 default SHIFT), mouse-look (`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured) and the
-debug keys as raw keys:
+debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
+it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key is taken already):
+
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
   06:00:00.`): P pause/resume the clock; 1–4 jump to dawn/noon/dusk/midnight of the clock's day (06:00, 12:00, 18:00,
   00:00) and pause; `[` `]` scrub the time while held (a tenth of a day per real second, across midnights, logged when
@@ -642,7 +644,7 @@ debug keys as raw keys:
   distances of models and (since T26) sprites, and the LOD distances (T11), reach about 4.4 times as far;
 - **the LODs (T11):** Q toggles the LOD tinting (logged): every model takes its LOD's colour (0 white, 1 green, 2 yellow,
   3 red, coarser magenta; LODs past 0 glow faintly, for the night), to watch the switches along the `lod_test` row;
-- **collision (T12):** R shows and hides the collider wireframes (the collision world's debug list, drawn by the
+- **collision (T12):** F7 shows and hides the collider wireframes (the collision world's debug list, drawn by the
   renderer: world grey, prop orange, triggers violet, static ones darker; logged); F6 opens and closes the door's hitbox
   (its collider switches between the `closed` and `open` sets; the model does not move; logged). J slides the desk
   through the trigger zone: its parts log enter and exit;

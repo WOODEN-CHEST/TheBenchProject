@@ -101,6 +101,10 @@ static void TheUITestFrameSharesInputWithTheWorld(TestRun* run)
         GameInput* Input = &Fixture.Input;
         TickWithKey(run, &Fixture, GameKey_W);
         TEST_CHECK(run, GameInput_IsActionDown(Input, GameAction_MoveForward)); // Not a UI key: left to the world.
+        TickWithKey(run, &Fixture, GameKey_F7); // Nor are the world test's collision keys (F7 wireframes, F6 the door).
+        TEST_CHECK(run, GameInput_IsKeyPressed(Input, GameKey_F7));
+        TickWithKey(run, &Fixture, GameKey_F6);
+        TEST_CHECK(run, GameInput_IsKeyPressed(Input, GameKey_F6));
 
         TickWithKey(run, &Fixture, GameKey_Tab); // Starts navigation on the menu.
         TEST_CHECK(run, GameInput_IsKeyConsumed(Input, GameKey_Tab));
@@ -112,7 +116,7 @@ static void TheUITestFrameSharesInputWithTheWorld(TestRun* run)
         TickWithKey(run, &Fixture, GameKey_Delete); // Focus went with it: nothing to remove now.
         TEST_CHECK(run, !GameInput_IsKeyConsumed(Input, GameKey_Delete));
 
-        TickWithKey(run, &Fixture, GameKey_R); // Rebuilds the menu (destroying the old one).
+        TickWithKey(run, &Fixture, GameKey_R); // Rebuilds the menu (destroying the old one): R never reaches the world.
         TEST_CHECK(run, GameInput_IsKeyConsumed(Input, GameKey_R));
         TickWithKey(run, &Fixture, GameKey_Escape); // Navigation ends and the UI lets go.
         TEST_CHECK(run, GameInput_IsKeyConsumed(Input, GameKey_Escape));

@@ -297,8 +297,8 @@ animate.
   - a mesh's inactive edges darker;
   - drawn twice, faint without the depth test (hidden parts, and lines that lie on a surface), then solid with it.
 
-**In the test frame** ([WorldRuntime.md](WorldRuntime.md)): R toggles the wireframes, F6 swaps the door's hitbox, and the
-I key's status line adds the counts.
+**In the test frame** ([WorldRuntime.md](WorldRuntime.md)): F7 toggles the wireframes, F6 swaps the door's hitbox, and
+the I key's status line adds the counts.
 
 **The test world** (`compile/out/worlds/test.world.json`) has 24 colliders:
 - **`"bounds"`:** the slab (a `world` layer override), the cubes, the desk's parts and the variant cubes, through
