@@ -11,20 +11,36 @@
 
 /*
  * Private header (source/): the collision world's state, shared by its files: source/WorldCollision.c (lifetime, sync,
- * debug list, stats), source/WorldCollisionQuery.c (the queries) and source/WorldCollisionTrigger.c (trigger pairs and
- * events).
+ * debug list, stats), source/WorldCollisionQuery.c (the queries), source/WorldCollisionTrigger.c (trigger pairs and
+ * events), and since T27 source/WorldCollisionStep.c (the step: motions, who takes part, blocked movers, the write-back,
+ * the results), source/WorldCollisionSolver.c (pairs, contacts at poses, the sweeps, the push-out solver) and
+ * source/WorldCollisionEvents.c (contacts across steps, contact and motion events, the debug contacts).
  *
  * INSTANCES live in slots (one growable array with a free list), so a tree proxy can name its shape by (slot, shape
  * index) for as long as the instance lives. Between changes of the world's component set, _order maps each collider of
  * the world's dense collider array to its slot, so a sync is one walk in the world's order; _lookup (sorted by object
  * id) finds an object's instance for the queries. Every instance holds its shapes in world space (WorldCollisionShape:
  * the transform both ways, the box, the proxy).
+ *
+ * THE STEP (T27). Each instance keeps its motion frame (Pose: its object's world position and its turn by the rotation
+ * mode, rigid) and where that was at the end of the last step (LastPose); each shape keeps its transform relative to the
+ * pose (ShapeToPose), so it can be placed anywhere along a motion. A step gives every instance that takes part a BODY:
+ * pushables that are awake (moved, pushed, or near something that moved), kinematic and static instances that pair with
+ * them. A body's push moves its OWNER: a pushable owns itself and the non-pushable colliders under it (it carries them);
+ * kinematic and static bodies have none. PAIRS of shapes (A convex and owned by a pushable whenever either side is) are
+ * collected from the trees with the bodies' swept boxes; a solve turns their contacts into ROWS (one per contact point:
+ * a normal, the separation after the motions without pushes, the push so far), and the projected Gauss-Seidel moves
+ * the owners. The last solve's contacts at the final poses become the step's contacts (source/WorldCollisionEvents.c).
  */
 
 
 // Macros.
 /** A slot that names nothing. */
 #define WORLD_COLLISION_NO_SLOT UINT32_MAX
+/** A body that names nothing. */
+#define WORLD_COLLISION_NO_BODY UINT32_MAX
+/** A contact's triangle when its shapes have none. */
+#define WORLD_COLLISION_NO_TRIANGLE UINT32_MAX
 
 
 // Types.
@@ -50,6 +66,8 @@ typedef struct WorldCollisionShapeStruct
     Vector3 Max;
     /** Its proxy in the instance's tree, or COLLISION_TREE_NULL. */
     int32_t Proxy;
+    /** Shape space to the instance's pose (T27): the shape placed at any pose P is P * ShapeToPose. */
+    CollisionAffine ShapeToPose;
 } WorldCollisionShape;
 
 /** One enabled collider of an effectively enabled object. */
@@ -75,6 +93,14 @@ typedef struct WorldCollisionInstanceStruct
     /** Whether the shapes are in the trees, and in which. */
     bool IsActive;
     bool IsStatic;
+    /** T27, kept beside IsActive and IsStatic (the step's passes over every instance read little else of a static one):
+     *  its shapes were rebuilt, or it was placed for the first time, since the last step (it wakes what is near it); a
+     *  pushable that stays awake into the next step (left overlapping beyond the slop); whether it was blocked or crushed
+     *  after the last step (the motion events' edges). */
+    bool IsChanged;
+    bool IsAwake;
+    bool WasBlocked;
+    bool WasCrushed;
     WorldColliderSettings Settings;
     /** The collider's own primitive, while Settings.UsesOwnShape: an owned block, allocated the first time, so its
      *  address survives the instances' buffer growing (its shape points at it); NULL before. */
@@ -91,6 +117,35 @@ typedef struct WorldCollisionInstanceStruct
     bool HasWarnedSet;
     bool HasWarnedStaticMove;
     bool HasWarnedFlatShape;
+    bool HasWarnedPushableShape;
+    bool HasWarnedWriteBack;
+
+    /* T27: motion. */
+    /** The motion frame now (rigid: the object's world position, its turn by the rotation mode), and at the end of the
+     *  last step (valid while HasLastPose: from the instance's first placement; cleared when it leaves the trees). */
+    CollisionPose Pose;
+    CollisionPose LastPose;
+    bool HasLastPose;
+    /** How far its valid shapes reach from the pose's origin (a turn sweeps them within it), metres. */
+    float Reach;
+    /** The slot of the pushable instance that owns it this step (itself, or the nearest pushable up its object's chain),
+     *  or WORLD_COLLISION_NO_SLOT (always for a static one); and a pushable's nearest pushable strict ancestor's slot
+     *  (its push is written back relative to that one's; it is woken with it), or WORLD_COLLISION_NO_SLOT. */
+    uint32_t OwnerSlot;
+    uint32_t PushableAboveSlot;
+    /** Its body in the running step, or WORLD_COLLISION_NO_BODY. */
+    uint32_t Body;
+    /** A kinematic mover set back this step (when_blocked stop): it takes part in no later block round. */
+    bool IsStoppedThisStep;
+    /** Its tree proxies were widened by this step (they go back to its shapes' boxes at the step's end). */
+    bool IsWidened;
+    /** A kinematic mover that stops when blocked: the local transforms along its object's chain at the end of the last
+     *  step, ChainCount records from ChainStart in _chainRecords (0: none, and after a rebuild). */
+    uint32_t ChainStart;
+    uint32_t ChainCount;
+    /** Its feedback, stamped with the step that filled it (WorldCollisionInternal_TouchResult; an older stamp reads as
+     *  empty). */
+    WorldMotionResult Result;
 } WorldCollisionInstance;
 
 /** An overlapping trigger pair. */
@@ -106,6 +161,178 @@ typedef struct WorldCollisionLookupStruct
     uint64_t ObjectId;
     uint32_t Slot;
 } WorldCollisionLookup;
+
+/** What a body is. */
+typedef enum WorldCollisionBodyKindEnum
+{
+    WorldCollisionBodyKind_Static,
+    WorldCollisionBodyKind_Kinematic,
+    WorldCollisionBodyKind_Pushable
+} WorldCollisionBodyKind;
+
+/** One instance taking part in a step. */
+typedef struct WorldCollisionBodyStruct
+{
+    uint32_t Slot;
+    WorldCollisionBodyKind Kind;
+    /** The body whose push moves this one: itself for a pushable, its pushable owner's for a collider that one carries,
+     *  WORLD_COLLISION_NO_BODY for the rest. */
+    uint32_t Owner;
+    /** A pushable's nearest pushable strict ancestor's body (its push is written relative to that one's), or
+     *  WORLD_COLLISION_NO_BODY. */
+    uint32_t ParentPushable;
+    /** 1 / mass of its owner (0 without one). */
+    float InverseMass;
+    /** Its own motion this step: the pose at the last step's end and the pose now (equal when it does not move). */
+    CollisionPose StepFrom;
+    CollisionPose StepTo;
+    bool IsMoving;
+    float Turn;
+    /** Whether its motion is swept (its collider's is_continuous; a body that does not move counts as swept). */
+    bool IsContinuous;
+    /** The running solve's motion: From (its start, the pushes so far included) to To (its target, without the solve's
+     *  push); Final = To + the owner's Correction. PhaseTurn is the turn from From to To (To's rotation times From's
+     *  inverse), while IsPhaseTurning. */
+    CollisionPose From;
+    CollisionPose To;
+    Quaternion PhaseTurn;
+    float PhaseTurnAngle;
+    bool IsPhaseTurning;
+    /** The running solve's earliest unresolved sweep hit of an owner (1: none): its motion stops just before it. */
+    float ClampFraction;
+    /** Scratch of the blocked check: the body's island (union-find parent) and, at an island's root, its deepest
+     *  violation. */
+    uint32_t Island;
+    float IslandDepth;
+    /** Owners: the running solve's push, and the pushes of the step so far; the push at the start of the running
+     *  solver iteration (its convergence test). */
+    Vector3 Correction;
+    Vector3 Accumulated;
+    Vector3 IterationCorrection;
+    /** The box of its shapes over the step's motion (with the reach of a turn), for pairs. */
+    Vector3 SweptMin;
+    Vector3 SweptMax;
+    /** Kinematic movers: blocked by a pushable (which, how deep), and whether it was set back (stop). */
+    bool IsBlocked;
+    uint64_t BlockedById;
+    float BlockDepth;
+    bool IsStopped;
+    /** Pushables (owners): left overlapping beyond the slop (how deep, with what). */
+    bool IsCrushed;
+    float CrushDepth;
+    uint64_t CrushedById;
+} WorldCollisionBody;
+
+/** A sweep's hit that no round resolved: the body whose motion hit, the other body, and when. */
+typedef struct WorldCollisionSweepHitStruct
+{
+    uint32_t Body;
+    uint32_t OtherBody;
+    float Fraction;
+} WorldCollisionSweepHit;
+
+/** A pair of shapes the solver looks at: A is convex, and owned by a pushable whenever either side is. */
+typedef struct WorldCollisionPairStruct
+{
+    uint32_t SlotA;
+    uint32_t ShapeA;
+    uint32_t SlotB;
+    uint32_t ShapeB;
+    uint32_t BodyA;
+    uint32_t BodyB;
+    /** Their objects (the sort key with the shapes). */
+    uint64_t ObjectA;
+    uint64_t ObjectB;
+    /** Swept: contacts before the motion and sweeps (not when a side that moves is not continuous). */
+    bool IsSwept;
+} WorldCollisionPair;
+
+/** One non-penetration constraint: a contact point of a pair of shapes (A's and B's, as their slots and shape indices). */
+typedef struct WorldCollisionRowStruct
+{
+    uint32_t SlotA;
+    uint32_t ShapeA;
+    uint32_t SlotB;
+    uint32_t ShapeB;
+    /** The owners whose pushes it moves (WORLD_COLLISION_NO_BODY: none) and their inverse masses. */
+    uint32_t OwnerA;
+    uint32_t OwnerB;
+    float InverseMassA;
+    float InverseMassB;
+    /** From A to B. */
+    Vector3 Normal;
+    /** The separation after the solve's motions, before any push. */
+    float Base;
+    /** The push so far (at least 0). */
+    float Push;
+    /** B's triangle (WORLD_COLLISION_NO_TRIANGLE: none) and the point's feature id. */
+    uint32_t Triangle;
+    uint32_t FeatureId;
+} WorldCollisionRow;
+
+/** A contact of a pair of shapes at the poses of a solve (narrowphase points, A to B in the pair's orientation). */
+typedef struct WorldCollisionManifoldStruct
+{
+    uint32_t SlotA;
+    uint32_t ShapeA;
+    uint32_t SlotB;
+    uint32_t ShapeB;
+    uint32_t BodyA;
+    uint32_t BodyB;
+    /** B's triangle, or WORLD_COLLISION_NO_TRIANGLE. */
+    uint32_t Triangle;
+    CollisionContact Contact;
+} WorldCollisionManifold;
+
+/** The key of a contact across steps: the objects (A the lower id), their shapes and B's triangle... or A's: the
+ *  triangle of whichever shape is a mesh. */
+typedef struct WorldCollisionContactKeyStruct
+{
+    uint64_t ObjectA;
+    uint64_t ObjectB;
+    uint32_t ShapeA;
+    uint32_t ShapeB;
+    uint32_t Triangle;
+} WorldCollisionContactKey;
+
+/** The push a step put on one contact point (rows summed over its solves). */
+typedef struct WorldCollisionPushStruct
+{
+    WorldCollisionContactKey Key;
+    uint32_t FeatureId;
+    float Push;
+} WorldCollisionPush;
+
+/** Where a pair of shapes started the step: the separation of its contact before the motion, and how fast its drivers'
+ *  motions closed it along the normal (metres per step). */
+typedef struct WorldCollisionStartStruct
+{
+    WorldCollisionContactKey Key;
+    float Separation;
+    float Closing;
+} WorldCollisionStart;
+
+/** An object pair in contact. */
+typedef struct WorldCollisionContactPairStruct
+{
+    uint64_t ObjectA;
+    uint64_t ObjectB;
+    uint32_t AgeTicks;
+    float ApproachSpeed;
+    float TimeOfImpact;
+    /** Whether either collider reports persisting contacts. */
+    bool ReportsPersisting;
+} WorldCollisionContactPair;
+
+/** An object's local transform and its parent (0: none), recorded at the end of a step. */
+typedef struct WorldCollisionChainRecordStruct
+{
+    uint64_t ObjectId;
+    uint64_t ParentId;
+    Vector3 Position;
+    Vector3 Rotation;
+    Vector3 Scale;
+} WorldCollisionChainRecord;
 
 struct WorldCollisionStruct
 {
@@ -140,6 +367,47 @@ struct WorldCollisionStruct
     uint64_t _tick;
     uint64_t _rebuildCount;
     uint64_t _moveCount;
+
+    /* T27: the step. */
+    float _deltaSeconds;
+    /** The tick of the last step (results stamped with another tick read as empty). */
+    uint64_t _stepTick;
+    /** uint64_t object ids teleported since the last step. */
+    GenericBuffer _teleports;
+    /** WorldCollisionBody of the running step, uint32_t slots waiting in the wake-up walk, and uint32_t slots of the
+     *  instances that hang under a pushable in collider order: the colliders it carries (owned by it) and the pushables
+     *  under it (woken with it). */
+    GenericBuffer _bodies;
+    GenericBuffer _queue;
+    GenericBuffer _carried;
+    /** WorldCollisionPair, sorted by objects and shapes; WorldCollisionRow of the running solve; WorldCollisionSweepHit
+     *  of its sweeps. */
+    GenericBuffer _pairs;
+    GenericBuffer _rows;
+    GenericBuffer _rowScratch;
+    GenericBuffer _sweepHits;
+    /** WorldCollisionManifold: the last solve's contacts at the final poses. */
+    GenericBuffer _manifolds;
+    /** WorldCollisionPush and WorldCollisionStart of the step, sorted at its end. */
+    GenericBuffer _pushes;
+    GenericBuffer _starts;
+    /** WorldContact: this step's (sorted by key) and the last one's. */
+    GenericBuffer _contacts;
+    GenericBuffer _previousContacts;
+    /** WorldCollisionContactPair: the object pairs in contact (sorted), and the next step's. */
+    GenericBuffer _contactPairs;
+    GenericBuffer _newContactPairs;
+    /** Queued WorldContactEvent, the WorldContact copies they index, and queued WorldMotionEvent. */
+    GenericBuffer _contactEvents;
+    GenericBuffer _eventContacts;
+    GenericBuffer _motionEvents;
+    /** WorldCollisionChainRecord of the kinematic movers that stop. */
+    GenericBuffer _chainRecords;
+    /** WorldCollisionDebugContact, while enabled. */
+    bool _isDebugContactsEnabled;
+    GenericBuffer _debugContacts;
+    /** The last step's counts (WorldCollisionStats' T27 part). */
+    WorldCollisionStats _stepStats;
 };
 
 
@@ -179,9 +447,27 @@ bool WorldCollisionInternal_FindSlot(const WorldCollision* self, uint64_t object
 bool WorldCollisionInternal_PassesFilter(WorldCollision* self, const WorldCollisionInstance* instance,
     const WorldCollisionFilter* filter);
 
+/* Whether a candidate the trees found (by fattened or widened boxes) really reaches the box [min, max]: an instance that
+ * takes part in the running step always does (its tree boxes cover its motion), any other one by its shape's own box
+ * (an unbounded plane reaches everything). */
+static inline bool WorldCollisionInternal_IsCandidateNear(const WorldCollisionInstance* instance,
+    const WorldCollisionShape* shape, Vector3 min, Vector3 max)
+{
+    if ((instance->Body != WORLD_COLLISION_NO_BODY) || shape->IsUnbounded)
+    {
+        return true;
+    }
+    return (shape->Min.x <= max.x) && (shape->Max.x >= min.x) && (shape->Min.y <= max.y) && (shape->Max.y >= min.y)
+        && (shape->Min.z <= max.z) && (shape->Max.z >= min.z);
+}
+
 /* Fills what a result says about an instance's shape (no triangle). */
 void WorldCollisionInternal_FillShapeInfo(const WorldCollisionInstance* instance, const WorldCollisionShape* shape,
     WorldCollisionShapeInfo* outInfo);
+
+/* Fills what a result says about a mesh triangle (its index, model part, source triangle and material; not the
+ * barycentrics). */
+void WorldCollisionInternal_FillTriangleInfo(const CollisionMesh* mesh, uint32_t triangle, WorldCollisionShapeInfo* info);
 
 /* Collects into _candidates the keys of every shape whose box overlaps [min, max] (both trees) and every unbounded
  * plane. */
@@ -193,3 +479,93 @@ void WorldCollisionInternal_UpdateTriggers(WorldCollision* self);
 /* Whether two instances' shapes overlap (touching counts), or come within @p margin of each other. */
 bool WorldCollisionInternal_DoInstancesTouch(WorldCollision* self, const WorldCollisionInstance* a,
     const WorldCollisionInstance* b, float margin);
+
+
+// Functions: the sync (source/WorldCollision.c).
+/* The sync without the triggers: world matrices, the instances' match to the colliders, each instance in step with its
+ * collider and object (poses included). */
+void WorldCollisionInternal_SyncShapes(WorldCollision* self);
+
+/* Rebuilds the debug list of shapes, if it is enabled. */
+void WorldCollisionInternal_RebuildDebugList(WorldCollision* self);
+
+/* Puts every valid shape's tree proxy back on its box (after a step widened them to swept boxes). */
+void WorldCollisionInternal_RestoreProxy(WorldCollision* self, WorldCollisionInstance* instance);
+
+/* Widens an instance's shape proxies to the box [min, max] (a step's swept box) so the trees find it on its way. */
+void WorldCollisionInternal_WidenProxies(WorldCollision* self, WorldCollisionInstance* instance, Vector3 min,
+    Vector3 max);
+
+/* Widens the proxies of an instance's shapes that a push of @p shift (from where the sync placed them) takes past their
+ * tree boxes, to cover where it takes them. */
+void WorldCollisionInternal_WidenPushedProxies(WorldCollision* self, WorldCollisionInstance* instance, Vector3 shift);
+
+/* Logs a warning about an instance's object (once: the caller keeps the flag). */
+void WorldCollisionInternal_Warn(const WorldCollision* self, const WorldCollisionInstance* instance, const char* text);
+
+
+// Functions: the step (source/WorldCollisionStep.c).
+/* Whether an instance is a pushable this step: active, pushable, movable and not a trigger. */
+bool WorldCollisionInternal_IsPushable(const WorldCollisionInstance* instance);
+
+/* Whether two instances' colliders block each other: neither a trigger, the layers both ways, not one owner. */
+bool WorldCollisionInternal_DoBlock(const WorldCollisionInstance* a, const WorldCollisionInstance* b);
+
+/* Whether a blocked kinematic mover is set back: it stops when blocked, was not set back yet this step, and its object's
+ * chain changed since the last step (in the same hierarchy: a reparented object cannot go back). */
+bool WorldCollisionInternal_CanStopMover(const WorldCollision* self, const WorldCollisionInstance* instance);
+
+/* The body of an instance in the running step, made when it has none (a static or still kinematic one met on the way, or
+ * a sleeping pushable that is woken). */
+uint32_t WorldCollisionInternal_GetBody(WorldCollision* self, uint32_t slot);
+
+static inline WorldCollisionBody* WorldCollisionInternal_GetBodyAt(const WorldCollision* self, uint32_t body)
+{
+    return &((WorldCollisionBody*)(void*)self->_bodies._data)[body];
+}
+
+/* An instance's result for the running step: emptied the first time the step writes it (a step leaves untouched the
+ * results of everything it did not reach, which read as empty since their stamp is older). */
+static inline WorldMotionResult* WorldCollisionInternal_TouchResult(const WorldCollision* self,
+    WorldCollisionInstance* instance)
+{
+    if (instance->Result.Tick != self->_stepTick)
+    {
+        Memory_Zero(&instance->Result, sizeof(instance->Result));
+        instance->Result.Tick = self->_stepTick;
+    }
+    return &instance->Result;
+}
+
+/* Whether an instance's result is the last step's and says blocked (or, with @p isCrushed, crushed). */
+static inline bool WorldCollisionInternal_IsFlagged(const WorldCollision* self, const WorldCollisionInstance* instance,
+    bool isCrushed)
+{
+    return (instance->Result.Tick == self->_stepTick) && (isCrushed ? instance->Result.IsCrushed
+        : instance->Result.IsBlocked);
+}
+
+/* The key of a contact between shape @p shapeA of the instance in @p slotA and @p shapeB of @p slotB on @p triangle (A the
+ * lower object id), and whether the given A is the key's B. */
+WorldCollisionContactKey WorldCollisionInternal_GetContactKey(const WorldCollision* self, uint32_t slotA,
+    uint32_t shapeA, uint32_t slotB, uint32_t shapeB, uint32_t triangle, bool* outIsSwapped);
+
+/* Orders contact keys: objects, then shapes, then triangles. */
+int WorldCollisionInternal_CompareContactKeys(const WorldCollisionContactKey* a, const WorldCollisionContactKey* b);
+
+
+// Functions: the solver (source/WorldCollisionSolver.c).
+/* Solves the step's bodies: substeps of speculative contacts, the push-out and the sweeps, then the depenetration at the
+ * final poses; leaves each owner's Accumulated push, the blocked and crushed flags, and _manifolds at the final poses.
+ * With @p mayStopMovers it ends early once a blocked mover will be set back (the step solves again); without, it runs
+ * through (the step's last round). */
+void WorldCollisionInternal_Solve(WorldCollision* self, bool mayStopMovers);
+
+
+// Functions: events (source/WorldCollisionEvents.c).
+/* The step's contacts from _manifolds (and the unchanged ones carried over), matched to the last step's; their contact
+ * events; the results' contact counts and grounds; the debug contacts. */
+void WorldCollisionInternal_UpdateContacts(WorldCollision* self);
+
+/* Queues an instance's blocked and crushed events of the step (the states that began or ended since the last). */
+void WorldCollisionInternal_QueueMotionEvents(WorldCollision* self, const WorldCollisionInstance* instance);

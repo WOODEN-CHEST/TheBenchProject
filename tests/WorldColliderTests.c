@@ -109,7 +109,7 @@ static void TheCollisionSectionReadsEveryKey(TestRun* run)
     char Json[COLLIDER_TEST_JSON_CAPACITY];
     FormatWorldModel(Json, sizeof(Json), "door",
         "{\"default_set\": \"open\", \"layer\": \"world\", \"collides_with\": [\"character\", \"vehicle\"], "
-        "\"is_trigger\": true, \"sets\": ["
+        "\"is_trigger\": true, \"mass\": 25, \"sets\": ["
         "{\"name\": \"closed\", \"shapes\": ["
         "{\"type\": \"box\", \"center\": [0, 1, 0], \"rotation\": [0, 90, 0], \"half_extents\": [0.5, 1, 0.05], "
             "\"name\": \"panel\"},"
@@ -133,6 +133,7 @@ static void TheCollisionSectionReadsEveryKey(TestRun* run)
         TEST_CHECK(run, (Collision->_layer == CollisionLayer_World) && Collision->_hasCollidesWith
             && Collision->_isTrigger && (Collision->_collidesWith == (COLLISION_LAYER_BIT(CollisionLayer_Character)
                 | COLLISION_LAYER_BIT(CollisionLayer_Vehicle))));
+        TEST_CHECK(run, IsNear(Collision->_mass, 25.0f));
         uint32_t Open = 0U;
         TEST_CHECK(run, WorldModelCollision_TryFindSet(Collision, (const unsigned char*)u8"open", &Open)
             && (Open == 1U));
@@ -188,6 +189,7 @@ static void TheBoundsFallbackIsABoxAroundLod0(TestRun* run)
     if (TEST_CHECK(run, (Collision != NULL) && Collision->_isBoundsFallback
         && (WorldModelCollision_GetSetCount(Collision) == 1U)))
     {
+        TEST_CHECK(run, IsNear(Collision->_mass, COLLISION_DEFAULT_MASS));
         const CollisionSet* Set = WorldModelCollision_GetSet(Collision, 0U);
         const CollisionShape* Shape = CollisionSet_GetShape(Set, 0U);
         TEST_CHECK(run, AreNamesEqual(CollisionSet_GetName(Set), "bounds") && (Shape->Type == CollisionShapeType_Box));
@@ -279,6 +281,10 @@ static void EachCollisionRuleIsRefused(TestRun* run)
         { "{\"collides_with\": [\"world\", \"ghost\"], \"sets\": [{\"name\": \"a\", \"shapes\": [{\"type\": "
             "\"sphere\", \"radius\": 1}]}]}",
             ErrorCode_InvalidAssetDefinition, "collision.collides_with[1] \"ghost\" is not a layer" },
+        { "{\"mass\": 0, \"sets\": [{\"name\": \"a\", \"shapes\": [{\"type\": \"sphere\", \"radius\": 1}]}]}",
+            ErrorCode_InvalidAssetDefinition, "collision.mass is 0; it must be above 0 and at most 1e+06" },
+        { "{\"mass\": 2e6, \"sets\": [{\"name\": \"a\", \"shapes\": [{\"type\": \"sphere\", \"radius\": 1}]}]}",
+            ErrorCode_InvalidAssetDefinition, "collision.mass is 2e+06" },
     };
     TestAssetFixture Fixture;
     if (!TestAssetFixture_Construct(run, &Fixture))
@@ -392,6 +398,12 @@ static void TheColliderStartsAtItsDefaults(TestRun* run)
         CollisionShape Own = WorldColliderComponent_GetOwnShape(Collider);
         TEST_CHECK(run, (Own.Type == CollisionShapeType_Box) && IsNear(Own.HalfExtents.x, COLLISION_SHAPE_DEFAULT_SIZE)
             && Own.IsBounded && IsNear(Own.Depth, 0.0f));
+        // T27: kinematic on a movable object (not pushable), 1 kg, stops when blocked, swept, no persisting contacts.
+        TEST_CHECK(run, !WorldColliderComponent_IsPushable(Collider)
+            && IsNear(WorldColliderComponent_GetMass(Collider), COLLISION_DEFAULT_MASS)
+            && (WorldColliderComponent_GetWhenBlocked(Collider) == WorldColliderBlockedMode_Stop)
+            && WorldColliderComponent_IsContinuous(Collider)
+            && !WorldColliderComponent_ReportsPersistingContacts(Collider));
     }
     TestWorld_Deconstruct(run, &TestWorld, &Keys);
 }
@@ -412,6 +424,8 @@ static void TheColliderResolvesItsSettings(TestRun* run)
         WorldColliderComponent_ResolveSettings(Collider, NULL, &Settings);
         TEST_CHECK(run, !Settings.HasSet && !Settings.UsesOwnShape && (Settings.Layer == CollisionLayer_Prop)
             && (Settings.CollidesWith == CollisionLayer_GetDefaultMask(CollisionLayer_Prop)) && !Settings.IsTrigger);
+        TEST_CHECK(run, IsNear(Settings.Mass, COLLISION_DEFAULT_MASS) && !Settings.IsPushable && Settings.IsContinuous
+            && (Settings.WhenBlocked == WorldColliderBlockedMode_Stop) && !Settings.ReportsPersistingContacts);
 
         // A world model's defaults: its default set, layer, mask and trigger flag.
         CollisionSet Sets[2] =
@@ -419,10 +433,11 @@ static void TheColliderResolvesItsSettings(TestRun* run)
             { ._name = (const unsigned char*)u8"closed" }, { ._name = (const unsigned char*)u8"open" }
         };
         WorldModelCollision Collision = { ._sets = Sets, ._setCount = 2U, ._defaultSet = 1U,
-            ._layer = CollisionLayer_World, ._hasCollidesWith = false, ._isTrigger = true };
+            ._layer = CollisionLayer_World, ._hasCollidesWith = false, ._isTrigger = true, ._mass = 30.0f };
         WorldColliderComponent_ResolveSettings(Collider, &Collision, &Settings);
         TEST_CHECK(run, Settings.HasSet && (Settings.SetIndex == 1U) && (Settings.Layer == CollisionLayer_World)
             && (Settings.CollidesWith == CollisionLayer_GetDefaultMask(CollisionLayer_World)) && Settings.IsTrigger);
+        TEST_CHECK(run, IsNear(Settings.Mass, 30.0f));
         Collision._hasCollidesWith = true;
         Collision._collidesWith = COLLISION_LAYER_BIT(CollisionLayer_Character);
         WorldColliderComponent_ResolveSettings(Collider, &Collision, &Settings);
@@ -434,8 +449,10 @@ static void TheColliderResolvesItsSettings(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetCollidesWith(Collider,
             COLLISION_LAYER_BIT(CollisionLayer_World)));
         TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetIsTrigger(Collider, false));
+        TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetMass(Collider, 4.0f));
         WorldColliderComponent_ResolveSettings(Collider, &Collision, &Settings);
         TEST_CHECK(run, (Settings.SetIndex == 1U) && (Settings.Layer == CollisionLayer_World) && Settings.IsTrigger);
+        TEST_CHECK(run, IsNear(Settings.Mass, 30.0f));
         for (int Setting = 0; Setting < (int)WorldColliderSetting_Count; Setting++)
         {
             TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetOverridden(Collider, (WorldColliderSetting)Setting,
@@ -444,6 +461,16 @@ static void TheColliderResolvesItsSettings(TestRun* run)
         WorldColliderComponent_ResolveSettings(Collider, &Collision, &Settings);
         TEST_CHECK(run, Settings.HasSet && (Settings.SetIndex == 0U) && (Settings.Layer == CollisionLayer_Character)
             && (Settings.CollidesWith == COLLISION_LAYER_BIT(CollisionLayer_World)) && !Settings.IsTrigger);
+        TEST_CHECK(run, IsNear(Settings.Mass, 4.0f));
+
+        // The motion rows pass through as they are.
+        TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetPushable(Collider, true));
+        TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetWhenBlocked(Collider, WorldColliderBlockedMode_PushThrough));
+        TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetContinuous(Collider, false));
+        TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetReportsPersistingContacts(Collider, true));
+        WorldColliderComponent_ResolveSettings(Collider, &Collision, &Settings);
+        TEST_CHECK(run, Settings.IsPushable && (Settings.WhenBlocked == WorldColliderBlockedMode_PushThrough)
+            && !Settings.IsContinuous && Settings.ReportsPersistingContacts);
 
         // A set the world model lacks: no shapes, and worth a warning.
         TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetCollisionSet(Collider, (const unsigned char*)u8"ajar"));
@@ -504,6 +531,13 @@ static void TheColliderSettersCheckTheirValues(TestRun* run)
             ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldColliderComponent_SetOverridden(Collider, WorldColliderSetting_Count, true),
             ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldColliderComponent_SetMass(Collider, 0.0f), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldColliderComponent_SetMass(Collider, 2.0e6f), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldColliderComponent_SetMass(Collider, NAN), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK(run, IsNear(WorldColliderComponent_GetMass(Collider), COLLISION_DEFAULT_MASS));
+        TEST_CHECK_ERROR(run, WorldColliderComponent_SetWhenBlocked(Collider, (WorldColliderBlockedMode)5),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetMass(Collider, COLLISION_MAX_MASS));
         TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetLocalTransform(Collider, (Vector3){ 0.0f, 0.5f, 0.0f },
             (Vector3){ 0.0f, PI * 0.5f, 0.0f }, (Vector3){ 2.0f, 1.0f, 1.0f }));
         Matrix Local = WorldColliderComponent_GetLocalTransform(Collider);
@@ -537,6 +571,12 @@ static void TheColliderSavesThroughItsTable(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetCollidesWith(Collider,
             COLLISION_LAYER_BIT(CollisionLayer_Character) | COLLISION_LAYER_BIT(CollisionLayer_World)));
         TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetRotationMode(Collider, WorldColliderRotationMode_YawOnly));
+        TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetPushable(Collider, true));
+        TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetOverridden(Collider, WorldColliderSetting_Mass, true));
+        TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetMass(Collider, 12.5f));
+        TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetWhenBlocked(Collider, WorldColliderBlockedMode_PushThrough));
+        TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetContinuous(Collider, false));
+        TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetReportsPersistingContacts(Collider, true));
         const PropertyTable* Table = WorldColliderComponent_GetPropertyTable();
         JSONCompound* Compound = NULL;
         if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
@@ -549,6 +589,10 @@ static void TheColliderSavesThroughItsTable(TestRun* run)
                 JSONValueType_Array, &Value)) && (JSONArray_GetElementCount(Value.Value.Array) == 2U));
             TEST_CHECK(run, TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"rotation_mode",
                 JSONValueType_String, &Value)) && Memory_IsEqual(Value.Value.String->_data, u8"yaw_only", 8U));
+            TEST_CHECK(run, TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"when_blocked",
+                JSONValueType_String, &Value)) && Memory_IsEqual(Value.Value.String->_data, u8"push_through", 12U));
+            TEST_CHECK(run, TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"is_pushable",
+                JSONValueType_Boolean, &Value)) && Value.Value.Boolean);
             WorldColliderComponent* Copy = NULL;
             if (AddCollider(run, &TestWorld, &Copy))
             {

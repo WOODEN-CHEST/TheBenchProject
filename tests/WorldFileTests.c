@@ -1387,7 +1387,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 34U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 44U);
             TEST_CHECK(run, AreNamesEqual(World_GetName(&Loaded), (const unsigned char*)u8"test"));
             // The LOD examples (T11): a row of lod_test spheres, one forcing its coarsest LOD, one with its own distances.
             WorldComponent* Forced = NULL;
@@ -1425,10 +1425,18 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
             WorldObject* LampLight = NULL;
             TEST_CHECK(run, World_TryGetObject(&Loaded, 15U, &Desk) && (WorldObject_GetChildCount(Desk) == 5U)
                 && (WorldObject_GetMobility(Desk) == WorldMobility_Movable));
-            // The collision examples (T12): 24 colliders, a door of two sets, a trigger zone where the desk slides.
+            // The collision examples (T12): 24 colliders, a door of two sets, a trigger zone where the desk slides;
+            // since T27 ten more (a pushing wall, a row of five pushable crates, its stop, a crate pinned in a corner
+            // of two posts in the door's swing), and the door turns, so it is movable.
             size_t ColliderCount = 0U;
             World_GetComponents(&Loaded, WorldComponentType_Collider, &ColliderCount);
-            TEST_CHECK(run, ColliderCount == 24U);
+            TEST_CHECK(run, ColliderCount == 34U);
+            WorldObject* Door = NULL;
+            TEST_CHECK(run, World_TryGetObject(&Loaded, 33U, &Door)
+                && (WorldObject_GetMobility(Door) == WorldMobility_Movable));
+            WorldComponent* Crate = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 42U, WorldComponentType_Collider, &Crate)
+                && WorldColliderComponent_IsPushable(WorldColliderComponent_FromComponent(Crate)));
             WorldComponent* DoorModel = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 33U, WorldComponentType_Model, &DoorModel)
                 && AreNamesEqual(WorldModelComponent_GetWorldModel(WorldModelComponent_FromComponent(DoorModel)),

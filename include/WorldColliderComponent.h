@@ -35,13 +35,24 @@
  * object), yaw_only (they stay upright: only the turn about the world's up axis) or none (they stay axis-aligned). An
  * uneven scale applies exactly to every shape (an unevenly scaled sphere is an ellipsoid).
  *
+ * HOW IT MOVES (T27). The collision step (WorldCollision_Step) sweeps every moving collider and pushes apart what
+ * overlaps. A movable object's collider with is_pushable on is PUSHED: characters, NPCs, crates (later physics objects);
+ * pushables share a push by mass (overrides_mass with mass over its world model's mass, 1 kg without one; equal
+ * masses give way equally). A movable object's collider that is not pushable is KINEMATIC: doors, elevators, anything a
+ * script or an animation moves; it pushes and is never pushed, and when_blocked says what it does when it would squeeze
+ * a pushable against something that does not give way (stop: it stays where it was this tick; push_through: it moves on).
+ * A static object's collider is never pushed and never moves in play. is_continuous off skips the sweep of this
+ * collider's own motion, its pushes included (cheap movers that never go fast: its contacts still hold it, and what
+ * moves against it is still swept, against where it ends up). reports_persisting_contacts asks for a contact event
+ * every tick while it touches something, not only when a touch begins and ends.
+ *
  * Added with World_AddComponent(world, id, WorldComponentType_Collider, &component); reach its fields with
  * WorldColliderComponent_FromComponent. Its properties are the rows of its table ("collider_component"), in this order:
  * is_enabled, overrides_collision_set, collision_set, uses_own_shape, shape_type, shape_center, shape_rotation,
  * shape_radius, shape_half_height, shape_half_extents, shape_is_bounded, shape_plane_half_extents, shape_depth,
  * overrides_layer, layer, overrides_collides_with, collides_with, overrides_is_trigger, is_trigger, offset, rotation,
- * scale, rotation_mode. Every change advances the component's revision; the collision world (WorldCollision.h) watches
- * it.
+ * scale, rotation_mode, is_pushable, overrides_mass, mass, when_blocked, is_continuous, reports_persisting_contacts.
+ * Every change advances the component's revision; the collision world (WorldCollision.h) watches it.
  */
 
 
@@ -60,6 +71,18 @@ typedef enum WorldColliderRotationModeEnum
 } WorldColliderRotationMode;
 
 /**
+ * @brief What a kinematic mover does when its push cannot be satisfied: it would squeeze a pushable against something
+ *        that does not give way (T27). Saved by value: never renumber.
+ */
+typedef enum WorldColliderBlockedModeEnum
+{
+    /** @brief The mover stays where it was at the start of the tick (the default): a door stops on a pinned box. */
+    WorldColliderBlockedMode_Stop = 0,
+    /** @brief The mover moves on, and the pushable is left overlapping it as little as it can. */
+    WorldColliderBlockedMode_PushThrough = 1
+} WorldColliderBlockedMode;
+
+/**
  * @brief The settings a placement can override, each with its own flag.
  */
 typedef enum WorldColliderSettingEnum
@@ -72,6 +95,8 @@ typedef enum WorldColliderSettingEnum
     WorldColliderSetting_CollidesWith,
     /** @brief The trigger flag (is_trigger, flag overrides_is_trigger). */
     WorldColliderSetting_IsTrigger,
+    /** @brief The mass (mass, flag overrides_mass; T27). */
+    WorldColliderSetting_Mass,
     /** @brief The number of settings; not a setting. */
     WorldColliderSetting_Count
 } WorldColliderSetting;
@@ -96,6 +121,17 @@ typedef struct WorldColliderSettingsStruct
     uint32_t CollidesWith;
     /** @brief Whether it is a trigger. */
     bool IsTrigger;
+    /** @brief Whether the collision step may push it (the collider's is_pushable; it applies to movable objects only, and
+     *  a trigger is never pushed). */
+    bool IsPushable;
+    /** @brief The mass, in kilograms (the placement's, else its world model's, else COLLISION_DEFAULT_MASS). */
+    float Mass;
+    /** @brief What it does as a kinematic mover whose push cannot be satisfied. */
+    WorldColliderBlockedMode WhenBlocked;
+    /** @brief Whether its own motion is swept (continuous) or only pushed out at its new pose. */
+    bool IsContinuous;
+    /** @brief Whether its contacts report every tick while they last (persist events). */
+    bool ReportsPersistingContacts;
 } WorldColliderSettings;
 
 /**
@@ -153,12 +189,27 @@ typedef struct WorldColliderComponentStruct
     Vector3 _scale;
     /** @brief How the shapes follow the object's rotation (default WorldColliderRotationMode_Full). */
     WorldColliderRotationMode _rotationMode;
+    /** @brief Whether the collision step may push the object (default false: a movable object's collider is kinematic). */
+    bool _isPushable;
+    /** @brief Whether _mass replaces the world model's mass (default false). */
+    bool _overridesMass;
+    /** @brief The mass used while _overridesMass is on, in kilograms (above 0, at most COLLISION_MAX_MASS; default
+     *  COLLISION_DEFAULT_MASS). */
+    float _mass;
+    /** @brief What a kinematic mover does when its push cannot be satisfied (default WorldColliderBlockedMode_Stop). */
+    WorldColliderBlockedMode _whenBlocked;
+    /** @brief Whether the collider's own motion is swept (default true). */
+    bool _isContinuous;
+    /** @brief Whether its contacts report every tick while they last (default false). */
+    bool _reportsPersistingContacts;
 } WorldColliderComponent;
 
 
 // Fields.
 /** @brief The rotation modes' names ("full", "yaw_only", "none"). */
 extern const PropertyEnumTable WORLD_COLLIDER_ROTATION_MODE_ENUM;
+/** @brief The blocked modes' names ("stop", "push_through"). */
+extern const PropertyEnumTable WORLD_COLLIDER_BLOCKED_MODE_ENUM;
 
 
 // Functions: the type.
@@ -264,6 +315,39 @@ static inline WorldColliderRotationMode WorldColliderComponent_GetRotationMode(c
     return self->_rotationMode;
 }
 
+/** @brief Whether the collision step may push the object (on a movable object). @param self The component; must not
+ *  be NULL. */
+static inline bool WorldColliderComponent_IsPushable(const WorldColliderComponent* self)
+{
+    return self->_isPushable;
+}
+
+/** @brief The placement's own mass (used while its override flag is on), in kilograms. @param self The component; must
+ *  not be NULL. */
+static inline float WorldColliderComponent_GetMass(const WorldColliderComponent* self)
+{
+    return self->_mass;
+}
+
+/** @brief What a kinematic mover does when its push cannot be satisfied. @param self The component; must not be
+ *  NULL. */
+static inline WorldColliderBlockedMode WorldColliderComponent_GetWhenBlocked(const WorldColliderComponent* self)
+{
+    return self->_whenBlocked;
+}
+
+/** @brief Whether the collider's own motion is swept. @param self The component; must not be NULL. */
+static inline bool WorldColliderComponent_IsContinuous(const WorldColliderComponent* self)
+{
+    return self->_isContinuous;
+}
+
+/** @brief Whether its contacts report every tick while they last. @param self The component; must not be NULL. */
+static inline bool WorldColliderComponent_ReportsPersistingContacts(const WorldColliderComponent* self)
+{
+    return self->_reportsPersistingContacts;
+}
+
 /**
  * @brief Whether a setting's override flag is on.
  * @param self The component; must not be NULL.
@@ -290,7 +374,8 @@ Matrix WorldColliderComponent_GetLocalTransform(const WorldColliderComponent* se
  * @brief The settings in effect: which shapes (an own shape, or which of the world model's sets), the layer, the mask
  *        and the trigger flag, from the placement's overrides over the world model's defaults.
  *
- * A pure function. The defaults without a world model's collision are prop, the layer's default mask and no trigger.
+ * A pure function. The defaults without a world model's collision are prop, the layer's default mask, no trigger and
+ * COLLISION_DEFAULT_MASS.
  * @param self The component; must not be NULL.
  * @param collision The object's world model's collision, or NULL when it has none (or no world model).
  * @param outSettings [out] Receives the settings. Must not be NULL.
@@ -393,3 +478,46 @@ Error WorldColliderComponent_SetLocalTransform(WorldColliderComponent* self, Vec
  *          a mode.
  */
 Error WorldColliderComponent_SetRotationMode(WorldColliderComponent* self, WorldColliderRotationMode mode);
+
+/**
+ * @brief Lets the collision step push the object, or not (a movable object's collider that is not pushable is
+ *        kinematic: it pushes and is never pushed).
+ * @param self The component; must not be NULL.
+ * @param isPushable The flag.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL @p self.
+ */
+Error WorldColliderComponent_SetPushable(WorldColliderComponent* self, bool isPushable);
+
+/**
+ * @brief Sets the placement's own mass (it applies while its override flag is on; the flag is not changed).
+ * @param self The component; must not be NULL.
+ * @param mass The mass in kilograms: above 0, at most COLLISION_MAX_MASS.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL @p self; ErrorCode_ArgumentOutOfRange for a mass outside the
+ *          range or not finite.
+ */
+Error WorldColliderComponent_SetMass(WorldColliderComponent* self, float mass);
+
+/**
+ * @brief Sets what a kinematic mover does when its push cannot be satisfied.
+ * @param self The component; must not be NULL.
+ * @param mode The mode.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL @p self; ErrorCode_ArgumentOutOfRange for a value that is not
+ *          a mode.
+ */
+Error WorldColliderComponent_SetWhenBlocked(WorldColliderComponent* self, WorldColliderBlockedMode mode);
+
+/**
+ * @brief Sets whether the collider's own motion is swept (off: it is only pushed out where it ends up).
+ * @param self The component; must not be NULL.
+ * @param isContinuous The flag.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL @p self.
+ */
+Error WorldColliderComponent_SetContinuous(WorldColliderComponent* self, bool isContinuous);
+
+/**
+ * @brief Sets whether its contacts report every tick while they last.
+ * @param self The component; must not be NULL.
+ * @param reportsPersistingContacts The flag.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL @p self.
+ */
+Error WorldColliderComponent_SetReportsPersistingContacts(WorldColliderComponent* self, bool reportsPersistingContacts);

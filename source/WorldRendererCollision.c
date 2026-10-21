@@ -1,7 +1,10 @@
 // Debug wireframes of the collision world's shapes (WorldRenderer_SetCollisionDebug): each shape of the collision world's
 // debug list drawn in its own space under its world transform (uneven scales and shear included, so an ellipsoid looks
-// like one), coloured by layer. Rule 3: it only reads the list; nothing here touches the world or the collision world.
+// like one), coloured by layer; and (T27) its debug contacts: each point a small cross, its normal a short line, its
+// push a red line along the normal as long as the push's speed over CONTACT_PUSH_SECONDS. Rule 3: it only reads the
+// lists; nothing here touches the world or the collision world.
 
+#include <math.h>
 #include "WorldRendererInternal.h"
 #include "WorldCollision.h"
 #include "raylib/raymath.h"
@@ -24,6 +27,13 @@
 #define INACTIVE_EDGE_SHADE 0.45f
 /** The opacity of the parts behind something (drawn without the depth test, under the visible parts). */
 #define HIDDEN_ALPHA 90
+/** A contact point's cross (half its arms) and its normal's line, in metres. */
+#define CONTACT_CROSS_SIZE 0.02f
+#define CONTACT_NORMAL_LENGTH 0.12f
+/** A push is drawn as long as it would carry the pushed thing in this time at its speed (a push of 1 m/s: 5 cm). */
+#define CONTACT_PUSH_SECONDS 0.05f
+/** The longest push line, in metres. */
+#define CONTACT_PUSH_MAX_LENGTH 0.5f
 
 
 // Static functions.
@@ -191,12 +201,39 @@ static void DrawShapes(const WorldCollisionDebugShape* shapes, size_t count, uns
 }
 
 
+/* The contact points: crosses (white touching, grey speculative), normals (cyan) and pushes (red). */
+static void DrawContacts(const WorldCollisionDebugContact* contacts, size_t count, unsigned char alpha)
+{
+    for (size_t Index = 0U; Index < count; Index++)
+    {
+        const WorldCollisionDebugContact* Contact = &contacts[Index];
+        Color Point = Contact->IsTouching ? (Color){ 255, 255, 255, alpha } : (Color){ 140, 140, 140, alpha };
+        Vector3 At = Contact->Point;
+        DrawLine3D(Vector3Add(At, (Vector3){ -CONTACT_CROSS_SIZE, 0.0f, 0.0f }),
+            Vector3Add(At, (Vector3){ CONTACT_CROSS_SIZE, 0.0f, 0.0f }), Point);
+        DrawLine3D(Vector3Add(At, (Vector3){ 0.0f, -CONTACT_CROSS_SIZE, 0.0f }),
+            Vector3Add(At, (Vector3){ 0.0f, CONTACT_CROSS_SIZE, 0.0f }), Point);
+        DrawLine3D(Vector3Add(At, (Vector3){ 0.0f, 0.0f, -CONTACT_CROSS_SIZE }),
+            Vector3Add(At, (Vector3){ 0.0f, 0.0f, CONTACT_CROSS_SIZE }), Point);
+        DrawLine3D(At, Vector3Add(At, Vector3Scale(Contact->Normal, CONTACT_NORMAL_LENGTH)),
+            (Color){ 40, 220, 255, alpha });
+        float Push = fminf(Contact->PushSpeed * CONTACT_PUSH_SECONDS, CONTACT_PUSH_MAX_LENGTH);
+        if (Push > 0.0f)
+        {
+            DrawLine3D(At, Vector3Add(At, Vector3Scale(Contact->Normal, Push)), (Color){ 255, 50, 40, alpha });
+        }
+    }
+}
+
+
 // Internal functions (declared in WorldRendererInternal.h).
 void WorldRendererCollision_Draw(WorldRenderer* self)
 {
     size_t Count = 0U;
     const WorldCollisionDebugShape* Shapes = WorldCollision_GetDebugShapes(self->_collisionDebug, &Count);
-    if (Count == 0U)
+    size_t ContactCount = 0U;
+    const WorldCollisionDebugContact* Contacts = WorldCollision_GetDebugContacts(self->_collisionDebug, &ContactCount);
+    if ((Count == 0U) && (ContactCount == 0U))
     {
         return;
     }
@@ -205,7 +242,9 @@ void WorldRendererCollision_Draw(WorldRenderer* self)
     rlDrawRenderBatchActive();
     rlDisableDepthTest();
     DrawShapes(Shapes, Count, HIDDEN_ALPHA);
+    DrawContacts(Contacts, ContactCount, HIDDEN_ALPHA);
     rlDrawRenderBatchActive();
     rlEnableDepthTest();
     DrawShapes(Shapes, Count, 255);
+    DrawContacts(Contacts, ContactCount, 255);
 }

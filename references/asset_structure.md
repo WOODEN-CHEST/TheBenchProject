@@ -567,14 +567,15 @@ the same model can show every variant at once.
 **Collision** (`collision`, optional, T12): the hitboxes of the objects placed with this world model, as named
 **collision sets**. Each set is a compound of shapes placed in the world model's own space (after the LOD models' import
 transforms, like the meshes they stand for). A placed object needs a collider component to collide; it uses the default
-set, or the one it names (a door swaps between `closed` and `open`), and may override the layer, the mask and the
-trigger flag (`references/world_structure.md`, the collider block).
+set, or the one it names (a door swaps between `closed` and `open`), and may override the layer, the mask, the
+trigger flag and the mass (`references/world_structure.md`, the collider block).
 ```
 "collision": {
     "default_set": "closed",                       // [OPTIONAL] default: the first set
     "layer": "world",                              // [OPTIONAL] the placements' layer; default "prop"
     "collides_with": ["character", "vehicle"],     // [OPTIONAL] default: the layer's default mask
     "is_trigger": false,                           // [OPTIONAL] default false
+    "mass": 1.0,                                   // [OPTIONAL] kilograms, above 0, at most 1000000; default 1 (T27)
     "sets": [                                      // 1 to 32 sets, at most 1024 shapes together
         { "name": "closed", "shapes": [            // 1 to 128 shapes
             { "type": "box", "name": "panel", "center": [0.5, 1, 0], "half_extents": [0.5, 1, 0.05] },
@@ -605,7 +606,8 @@ of another type is refused, so a typo is caught):
 `layer` and the names in `collides_with` are collision layers: `world`, `prop`, `character`, `vehicle`, `dynamic`,
 `trigger`, `interaction`. Two colliders block each other when each one's mask holds the other's layer; left out, a mask
 is its layer's default (the solid layers collide with each other, `trigger` sees `prop`, `character`, `vehicle` and
-`dynamic`, `interaction` collides with nothing). A trigger reports what touches it and blocks nothing. A `model` of a
+`dynamic`, `interaction` collides with nothing). A trigger reports what touches it and blocks nothing. The `mass` is
+how pushable placements share a push (T27): equal masses give way equally, a heavy one barely moves. A `model` of a
 hull or mesh loads with the world model as one more dependency; a missing one fails the world model. Loading a model
 needs the GPU, so tools without it can use only `points` hulls.
 

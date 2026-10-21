@@ -11,14 +11,16 @@
 
 /*
  * The collision world (include/WorldCollision.h): lifetime, the sync, the debug list and the counts. Queries are in
- * source/WorldCollisionQuery.c, trigger pairs in source/WorldCollisionTrigger.c; the shared state in
+ * source/WorldCollisionQuery.c, trigger pairs in source/WorldCollisionTrigger.c, the step (T27) in
+ * source/WorldCollisionStep.c with source/WorldCollisionSolver.c and source/WorldCollisionEvents.c; the shared state in
  * source/WorldCollisionInternal.h.
  *
  * A SYNC walks the world's colliders in its own order (_order maps each to its instance's slot; re-matched by object
  * id whenever the world's component set changes, so an added, removed or replaced component is noticed) and for each:
  * out of the trees when it or an ancestor is disabled; its shapes rebuilt when the collider changed (its revision), its
  * world model's name changed, it moved between the static and the movable tree, or it was just (re)enabled; moved
- * (new transforms, boxes and proxies) when only its object's transform revision changed.
+ * (new transforms, boxes and proxies) when only its object's transform revision changed. Either way its motion pose
+ * (T27) follows: the rigid frame its shapes move with, each shape's place relative to it, and how far they reach.
  */
 
 
@@ -26,6 +28,10 @@
 /** The first capacities of the buffers. */
 #define INITIAL_INSTANCES 16U
 #define INITIAL_CANDIDATES 64U
+#define INITIAL_STEP_ITEMS 16U
+/** A shape's place relative to its pose changed when an entry moved by more than this share of its size (at least 1):
+ *  above the rounding of a turn's decomposition, far below any scale a creator sets. */
+#define SHAPE_FRAME_TOLERANCE 1e-5f
 
 
 // Static functions: messages.
@@ -76,6 +82,9 @@ static uint32_t AllocateSlot(WorldCollision* self)
     Memory_Zero(Instance, sizeof(*Instance));
     Instance->IsUsed = true;
     Instance->NextFree = WORLD_COLLISION_NO_SLOT;
+    Instance->OwnerSlot = WORLD_COLLISION_NO_SLOT;
+    Instance->PushableAboveSlot = WORLD_COLLISION_NO_SLOT;
+    Instance->Body = WORLD_COLLISION_NO_BODY;
     GenericBuffer_AllocateVariable(&Instance->Shapes, 1U, sizeof(WorldCollisionShape));
     return Slot;
 }
@@ -83,6 +92,8 @@ static uint32_t AllocateSlot(WorldCollision* self)
 /* Takes an instance's shapes out of the trees and the planes list. */
 static void Deactivate(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot)
 {
+    // Out of the world, it has no motion to sweep: when it comes back it starts where it is then.
+    instance->HasLastPose = false;
     if (!instance->IsActive)
     {
         return;
@@ -111,6 +122,20 @@ static void Deactivate(WorldCollision* self, WorldCollisionInstance* instance, u
 static void FreeSlot(WorldCollision* self, uint32_t slot)
 {
     WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, slot);
+    // A collider that goes while blocked or crushed ends that state (T27's motion events).
+    WorldMotionEvent Ends[2] =
+    {
+        { .Kind = WorldMotionEventKind_BlockedEnd, .ObjectId = Instance->ObjectId, .Tick = self->_tick },
+        { .Kind = WorldMotionEventKind_CrushedEnd, .ObjectId = Instance->ObjectId, .Tick = self->_tick }
+    };
+    if (Instance->WasBlocked)
+    {
+        GenericBuffer_AddLast(&self->_motionEvents, &Ends[0]);
+    }
+    if (Instance->WasCrushed)
+    {
+        GenericBuffer_AddLast(&self->_motionEvents, &Ends[1]);
+    }
     Deactivate(self, Instance, slot);
     Memory_Free(Instance->Shapes._data);
     Memory_Free(Instance->WorldModelName);
@@ -215,28 +240,85 @@ static bool IsEffectivelyStatic(const WorldObject* object)
 
 /* The collider's frame in the world: the object's world matrix by the rotation mode, then the collider's own
  * transform. yaw_only and none rebuild the frame from the world transform's decomposition (a mirror lives in its scale,
- * so the turn they keep is a proper rotation) with the object's scale along the turned (or the world's) axes. */
-static Matrix GetColliderToWorld(const WorldColliderComponent* collider, const WorldObject* object, Matrix objectWorld)
+ * so the turn they keep is a proper rotation) with the object's scale along the turned (or the world's) axes. The
+ * frame's rigid part is the motion's pose (T27): the object's world position, turned as the shapes turn. */
+static Matrix GetColliderToWorld(const WorldColliderComponent* collider, const WorldObject* object, Matrix objectWorld,
+    CollisionPose* outPose)
 {
     Matrix Frame = objectWorld;
     WorldColliderRotationMode Mode = WorldColliderComponent_GetRotationMode(collider);
+    Vector3 Position;
+    Vector3 Rotation;
+    Vector3 Scale;
+    WorldObject_GetWorldTransform(object, &Position, &Rotation, &Scale);
+    Vector3 Turn = Rotation;
     if (Mode != WorldColliderRotationMode_Full)
     {
-        Vector3 Position;
-        Vector3 Rotation;
-        Vector3 Scale;
-        WorldObject_GetWorldTransform(object, &Position, &Rotation, &Scale);
         float Yaw = 0.0f;
         if (Mode == WorldColliderRotationMode_YawOnly)
         {
             // The yaw of the turn's forward (local +Z), or of its right (local +X) when it points straight up or down.
-            Matrix Turn = WorldTransform_Compose((Vector3){ 0.0f, 0.0f, 0.0f }, Rotation, (Vector3){ 1.0f, 1.0f, 1.0f });
-            bool HasForward = ((Turn.m8 * Turn.m8) + (Turn.m10 * Turn.m10)) > 1e-12f;
-            Yaw = HasForward ? atan2f(Turn.m8, Turn.m10) : atan2f(-Turn.m2, Turn.m0);
+            Matrix Turned = WorldTransform_Compose((Vector3){ 0.0f, 0.0f, 0.0f }, Rotation,
+                (Vector3){ 1.0f, 1.0f, 1.0f });
+            bool HasForward = ((Turned.m8 * Turned.m8) + (Turned.m10 * Turned.m10)) > 1e-12f;
+            Yaw = HasForward ? atan2f(Turned.m8, Turned.m10) : atan2f(-Turned.m2, Turned.m0);
         }
-        Frame = WorldTransform_Compose(Position, (Vector3){ 0.0f, Yaw, 0.0f }, Scale);
+        Turn = (Vector3){ 0.0f, Yaw, 0.0f };
+        Frame = WorldTransform_Compose(Position, Turn, Scale);
     }
+    outPose->Position = (Vector3){ objectWorld.m12, objectWorld.m13, objectWorld.m14 };
+    outPose->Rotation = QuaternionNormalize(QuaternionFromMatrix(MatrixRotateXYZ(Turn)));
     return MatrixMultiply(WorldColliderComponent_GetLocalTransform(collider), Frame);
+}
+
+/* Whether a shape's place relative to its instance's pose changed beyond rounding. */
+static bool IsShapeFrameChanged(const CollisionAffine* before, const CollisionAffine* after)
+{
+    Vector3 Before[4] = { before->X, before->Y, before->Z, before->Translation };
+    Vector3 After[4] = { after->X, after->Y, after->Z, after->Translation };
+    for (size_t Column = 0U; Column < 4U; Column++)
+    {
+        float Size = fmaxf(1.0f, CollisionMath_MaxAbsComponent(Before[Column]));
+        if (CollisionMath_MaxAbsComponent(CollisionMath_Subtract(After[Column], Before[Column]))
+            > (SHAPE_FRAME_TOLERANCE * Size))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Places each shape relative to the instance's pose and finds how far the valid ones reach from its origin (T27).
+ * Returns whether a valid shape's place relative to the pose changed (a scale or a shear: no motion of the pose shows
+ * it). */
+static bool UpdatePoseShapes(WorldCollisionInstance* instance)
+{
+    CollisionAffine PoseToWorld = CollisionPose_ToAffine(&instance->Pose);
+    CollisionAffine WorldToPose;
+    CollisionAffine_TryInvert(&PoseToWorld, &WorldToPose);
+    float Reach = 0.0f;
+    bool IsReshaped = false;
+    for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
+    {
+        WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(instance, Index);
+        CollisionAffine Before = Shape->ShapeToPose;
+        Shape->ShapeToPose = CollisionAffine_Multiply(&WorldToPose, &Shape->ShapeToWorld);
+        IsReshaped = IsReshaped || (Shape->IsValid && IsShapeFrameChanged(&Before, &Shape->ShapeToPose));
+        Vector3 LocalMin;
+        Vector3 LocalMax;
+        if (!Shape->IsValid || !CollisionShape_TryGetLocalBounds(Shape->Shape, &LocalMin, &LocalMax))
+        {
+            continue; // an unbounded plane reaches everything: the sweeps treat it apart
+        }
+        for (uint32_t Corner = 0U; Corner < 8U; Corner++)
+        {
+            Vector3 Local = { ((Corner & 1U) != 0U) ? LocalMax.x : LocalMin.x, ((Corner & 2U) != 0U) ? LocalMax.y
+                : LocalMin.y, ((Corner & 4U) != 0U) ? LocalMax.z : LocalMin.z };
+            Reach = fmaxf(Reach, CollisionMath_Length(CollisionAffine_TransformPoint(&Shape->ShapeToPose, Local)));
+        }
+    }
+    instance->Reach = Reach;
+    return IsReshaped;
 }
 
 /* A shape's transforms and box under the collider's frame; false when the frame flattens it. */
@@ -317,10 +399,13 @@ static const CollisionShape* GetSourceShapes(WorldCollisionInstance* instance, u
     return CollisionSet_GetShape(Set, 0U);
 }
 
-/* Rebuilds an instance's shapes from its settings in effect and puts them into the right tree. */
+/* Rebuilds an instance's shapes from its settings in effect and puts them into the right tree. Its motion goes on: the
+ * next step sweeps the new shapes from where the last step left the instance. */
 static void Rebuild(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot, bool isStatic)
 {
+    bool HadLastPose = instance->HasLastPose;
     Deactivate(self, instance, slot);
+    instance->HasLastPose = HadLastPose;
     GenericBuffer_Clear(&instance->Shapes);
     const WorldModelCollision* Collision = (instance->WorldModel != NULL) ? WorldModel_GetCollision(instance->WorldModel)
         : NULL;
@@ -342,7 +427,7 @@ static void Rebuild(WorldCollision* self, WorldCollisionInstance* instance, uint
     const WorldObject* Object = WorldComponent_GetOwner(&instance->Collider->Base);
     Matrix ObjectWorld = WorldObject_GetWorldMatrix(Object);
     UpdateObjectTransform(instance, ObjectWorld);
-    Matrix Frame = GetColliderToWorld(instance->Collider, Object, ObjectWorld);
+    Matrix Frame = GetColliderToWorld(instance->Collider, Object, ObjectWorld, &instance->Pose);
     bool HasFlatShape = false;
     for (uint32_t Index = 0U; Index < Count; Index++)
     {
@@ -370,6 +455,17 @@ static void Rebuild(WorldCollision* self, WorldCollisionInstance* instance, uint
             "size; it collides with nothing", NULL, "", NULL);
     }
     instance->IsStatic = isStatic;
+    UpdatePoseShapes(instance);
+    instance->IsChanged = true;
+    instance->ChainCount = 0U; // a chain recorded before may name other objects now
+    if (isStatic)
+    {
+        // A static collider never sweeps and nothing pushes it (T27): it starts every step where it is, unowned.
+        instance->LastPose = instance->Pose;
+        instance->HasLastPose = true;
+        instance->OwnerSlot = WORLD_COLLISION_NO_SLOT;
+        instance->PushableAboveSlot = WORLD_COLLISION_NO_SLOT;
+    }
     if (Count > 0U)
     {
         Activate(self, instance, slot);
@@ -383,7 +479,7 @@ static void Move(WorldCollision* self, WorldCollisionInstance* instance, uint32_
     const WorldObject* Object = WorldComponent_GetOwner(&instance->Collider->Base);
     Matrix ObjectWorld = WorldObject_GetWorldMatrix(Object);
     UpdateObjectTransform(instance, ObjectWorld);
-    Matrix Frame = GetColliderToWorld(instance->Collider, Object, ObjectWorld);
+    Matrix Frame = GetColliderToWorld(instance->Collider, Object, ObjectWorld, &instance->Pose);
     CollisionTree* Tree = instance->IsStatic ? &self->_staticTree : &self->_movableTree;
     for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
     {
@@ -401,11 +497,24 @@ static void Move(WorldCollision* self, WorldCollisionInstance* instance, uint32_
             CollisionTree_Move(Tree, Shape->Proxy, Shape->Min, Shape->Max);
         }
     }
-    if (instance->IsStatic && self->_options.WarnsWhenStaticObjectsMove && !instance->HasWarnedStaticMove)
+    // A shape whose place relative to the pose changed (a scale) moved in a way no motion of the pose shows: the
+    // instance is changed (T27), so the step wakes what is near it and pushes it out.
+    if (UpdatePoseShapes(instance))
     {
-        instance->HasWarnedStaticMove = true;
-        WarnAbout(self, instance, "is static but moved; its collider was moved in the static tree (mark the object "
-            "movable if it moves in play)", NULL, "", NULL);
+        instance->IsChanged = true;
+    }
+    if (instance->IsStatic)
+    {
+        // A static object never moves in play: its move is a teleport (T27), with no sweep.
+        instance->IsChanged = true;
+        instance->LastPose = instance->Pose;
+        instance->HasLastPose = true;
+        if (self->_options.WarnsWhenStaticObjectsMove && !instance->HasWarnedStaticMove)
+        {
+            instance->HasWarnedStaticMove = true;
+            WarnAbout(self, instance, "is static but moved; its collider was moved in the static tree (mark the object "
+                "movable if it moves in play)", NULL, "", NULL);
+        }
     }
     self->_moveCount++;
 }
@@ -525,6 +634,94 @@ bool WorldCollisionInternal_FindSlot(const WorldCollision* self, uint64_t object
 }
 
 
+void WorldCollisionInternal_SyncShapes(WorldCollision* self)
+{
+    World_UpdateTransforms(self->_world);
+    if (!self->_hasComponentSetVersion || (World_GetComponentSetVersion(self->_world) != self->_componentSetVersion))
+    {
+        Rematch(self);
+    }
+    for (size_t Index = 0U; Index < self->_order._count; Index++)
+    {
+        Refresh(self, ((const uint32_t*)(const void*)self->_order._data)[Index]);
+    }
+}
+
+void WorldCollisionInternal_WidenProxies(WorldCollision* self, WorldCollisionInstance* instance, Vector3 min,
+    Vector3 max)
+{
+    instance->IsWidened = true;
+    CollisionTree* Tree = instance->IsStatic ? &self->_staticTree : &self->_movableTree;
+    for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
+    {
+        WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(instance, Index);
+        if (Shape->Proxy != COLLISION_TREE_NULL)
+        {
+            CollisionTree_Move(Tree, Shape->Proxy, CollisionMath_Min(min, Shape->Min), CollisionMath_Max(max, Shape->Max));
+        }
+    }
+}
+
+void WorldCollisionInternal_WidenPushedProxies(WorldCollision* self, WorldCollisionInstance* instance, Vector3 shift)
+{
+    CollisionTree* Tree = instance->IsStatic ? &self->_staticTree : &self->_movableTree;
+    for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
+    {
+        WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(instance, Index);
+        if (Shape->Proxy == COLLISION_TREE_NULL)
+        {
+            continue;
+        }
+        Vector3 FatMin;
+        Vector3 FatMax;
+        Vector3 Min = CollisionMath_Add(Shape->Min, shift);
+        Vector3 Max = CollisionMath_Add(Shape->Max, shift);
+        CollisionTree_GetBounds(Tree, Shape->Proxy, &FatMin, &FatMax);
+        bool IsInside = (Min.x >= FatMin.x) && (Min.y >= FatMin.y) && (Min.z >= FatMin.z) && (Max.x <= FatMax.x)
+            && (Max.y <= FatMax.y) && (Max.z <= FatMax.z);
+        if (!IsInside)
+        {
+            instance->IsWidened = true;
+            CollisionTree_Move(Tree, Shape->Proxy, CollisionMath_Min(Min, FatMin), CollisionMath_Max(Max, FatMax));
+        }
+    }
+}
+
+void WorldCollisionInternal_RestoreProxy(WorldCollision* self, WorldCollisionInstance* instance)
+{
+    CollisionTree* Tree = instance->IsStatic ? &self->_staticTree : &self->_movableTree;
+    float Slack = 2.0f * Tree->Margin;
+    for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
+    {
+        WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(instance, Index);
+        if (Shape->Proxy == COLLISION_TREE_NULL)
+        {
+            continue;
+        }
+        // Refitted only when the fat box grew well past the shape's (a sweep widened it); moves inside it cost nothing.
+        Vector3 FatMin;
+        Vector3 FatMax;
+        CollisionTree_GetBounds(Tree, Shape->Proxy, &FatMin, &FatMax);
+        bool IsLoose = ((Shape->Min.x - FatMin.x) > Slack) || ((Shape->Min.y - FatMin.y) > Slack)
+            || ((Shape->Min.z - FatMin.z) > Slack) || ((FatMax.x - Shape->Max.x) > Slack)
+            || ((FatMax.y - Shape->Max.y) > Slack) || ((FatMax.z - Shape->Max.z) > Slack);
+        if (IsLoose)
+        {
+            CollisionTree_Refit(Tree, Shape->Proxy, Shape->Min, Shape->Max);
+        }
+        else
+        {
+            CollisionTree_Move(Tree, Shape->Proxy, Shape->Min, Shape->Max);
+        }
+    }
+}
+
+void WorldCollisionInternal_Warn(const WorldCollision* self, const WorldCollisionInstance* instance, const char* text)
+{
+    WarnAbout(self, instance, text, NULL, "", NULL);
+}
+
+
 // Public functions.
 Error WorldCollision_Create(World* world, AssetManager* assets, Logger* logger, const WorldCollisionOptions* options,
     WorldCollision** outCollision)
@@ -561,6 +758,26 @@ Error WorldCollision_Create(World* world, AssetManager* assets, Logger* logger, 
     GenericBuffer_AllocateVariable(&Self->_triggerEvents, 8U, sizeof(WorldTriggerEvent));
     GenericBuffer_AllocateVariable(&Self->_candidates, INITIAL_CANDIDATES, sizeof(uint64_t));
     GenericBuffer_AllocateVariable(&Self->_debugShapes, 0U, sizeof(WorldCollisionDebugShape));
+    GenericBuffer_AllocateVariable(&Self->_teleports, 4U, sizeof(uint64_t));
+    GenericBuffer_AllocateVariable(&Self->_bodies, INITIAL_STEP_ITEMS, sizeof(WorldCollisionBody));
+    GenericBuffer_AllocateVariable(&Self->_queue, INITIAL_STEP_ITEMS, sizeof(uint32_t));
+    GenericBuffer_AllocateVariable(&Self->_carried, INITIAL_STEP_ITEMS, sizeof(uint32_t));
+    GenericBuffer_AllocateVariable(&Self->_pairs, INITIAL_STEP_ITEMS, sizeof(WorldCollisionPair));
+    GenericBuffer_AllocateVariable(&Self->_rows, INITIAL_STEP_ITEMS, sizeof(WorldCollisionRow));
+    GenericBuffer_AllocateVariable(&Self->_rowScratch, INITIAL_STEP_ITEMS, sizeof(WorldCollisionRow));
+    GenericBuffer_AllocateVariable(&Self->_sweepHits, INITIAL_STEP_ITEMS, sizeof(WorldCollisionSweepHit));
+    GenericBuffer_AllocateVariable(&Self->_manifolds, INITIAL_STEP_ITEMS, sizeof(WorldCollisionManifold));
+    GenericBuffer_AllocateVariable(&Self->_pushes, INITIAL_STEP_ITEMS, sizeof(WorldCollisionPush));
+    GenericBuffer_AllocateVariable(&Self->_starts, INITIAL_STEP_ITEMS, sizeof(WorldCollisionStart));
+    GenericBuffer_AllocateVariable(&Self->_contacts, INITIAL_STEP_ITEMS, sizeof(WorldContact));
+    GenericBuffer_AllocateVariable(&Self->_previousContacts, INITIAL_STEP_ITEMS, sizeof(WorldContact));
+    GenericBuffer_AllocateVariable(&Self->_contactPairs, INITIAL_STEP_ITEMS, sizeof(WorldCollisionContactPair));
+    GenericBuffer_AllocateVariable(&Self->_newContactPairs, INITIAL_STEP_ITEMS, sizeof(WorldCollisionContactPair));
+    GenericBuffer_AllocateVariable(&Self->_contactEvents, 8U, sizeof(WorldContactEvent));
+    GenericBuffer_AllocateVariable(&Self->_eventContacts, 8U, sizeof(WorldContact));
+    GenericBuffer_AllocateVariable(&Self->_motionEvents, 4U, sizeof(WorldMotionEvent));
+    GenericBuffer_AllocateVariable(&Self->_chainRecords, INITIAL_STEP_ITEMS, sizeof(WorldCollisionChainRecord));
+    GenericBuffer_AllocateVariable(&Self->_debugContacts, 0U, sizeof(WorldCollisionDebugContact));
     CollisionTree_Construct(&Self->_staticTree, 0.0f);
     CollisionTree_Construct(&Self->_movableTree, WORLD_COLLISION_MOVABLE_MARGIN);
     *outCollision = Self;
@@ -594,6 +811,17 @@ void WorldCollision_Destroy(WorldCollision* self)
     Memory_Free(self->_triggerEvents._data);
     Memory_Free(self->_candidates._data);
     Memory_Free(self->_debugShapes._data);
+    GenericBuffer* StepBuffers[] =
+    {
+        &self->_teleports, &self->_bodies, &self->_queue, &self->_carried, &self->_pairs, &self->_rows,
+        &self->_rowScratch, &self->_sweepHits, &self->_manifolds, &self->_pushes, &self->_starts, &self->_contacts,
+        &self->_previousContacts, &self->_contactPairs, &self->_newContactPairs, &self->_contactEvents,
+        &self->_eventContacts, &self->_motionEvents, &self->_chainRecords, &self->_debugContacts
+    };
+    for (size_t Index = 0U; Index < (sizeof(StepBuffers) / sizeof(StepBuffers[0])); Index++)
+    {
+        Memory_Free(StepBuffers[Index]->_data);
+    }
     if ((self->_assets != NULL) && (self->_assetUser != ASSET_USER_ID_INVALID))
     {
         Error Result = AssetManager_RetireUser(self->_assets, self->_assetUser);
@@ -605,20 +833,20 @@ void WorldCollision_Destroy(WorldCollision* self)
 void WorldCollision_Sync(WorldCollision* self)
 {
     self->_tick++;
-    World_UpdateTransforms(self->_world);
-    if (!self->_hasComponentSetVersion || (World_GetComponentSetVersion(self->_world) != self->_componentSetVersion))
-    {
-        Rematch(self);
-    }
-    for (size_t Index = 0U; Index < self->_order._count; Index++)
-    {
-        Refresh(self, ((const uint32_t*)(const void*)self->_order._data)[Index]);
-    }
+    WorldCollisionInternal_SyncShapes(self);
     if (self->_isDebugListEnabled)
     {
         RebuildDebugList(self);
     }
     WorldCollisionInternal_UpdateTriggers(self);
+}
+
+void WorldCollisionInternal_RebuildDebugList(WorldCollision* self)
+{
+    if (self->_isDebugListEnabled)
+    {
+        RebuildDebugList(self);
+    }
 }
 
 const WorldTriggerEvent* WorldCollision_GetTriggerEvents(const WorldCollision* self, size_t* outCount)
@@ -665,6 +893,17 @@ WorldCollisionStats WorldCollision_GetStats(const WorldCollision* self)
     Stats.RebuildCount = self->_rebuildCount;
     Stats.MoveCount = self->_moveCount;
     Stats.Tick = self->_tick;
+    Stats.MoverCount = self->_stepStats.MoverCount;
+    Stats.AwakeCount = self->_stepStats.AwakeCount;
+    Stats.PairCount = self->_stepStats.PairCount;
+    Stats.ContactCount = self->_stepStats.ContactCount;
+    Stats.ContactPairCount = self->_stepStats.ContactPairCount;
+    Stats.SolverIterations = self->_stepStats.SolverIterations;
+    Stats.SubstepCount = self->_stepStats.SubstepCount;
+    Stats.DeepestOverlap = self->_stepStats.DeepestOverlap;
+    Stats.BlockedCount = self->_stepStats.BlockedCount;
+    Stats.CrushedCount = self->_stepStats.CrushedCount;
+    Stats.ResolveCount = self->_stepStats.ResolveCount;
     return Stats;
 }
 
@@ -675,6 +914,22 @@ void WorldCollision_SetDebugListEnabled(WorldCollision* self, bool isEnabled)
     {
         GenericBuffer_Clear(&self->_debugShapes);
     }
+}
+
+void WorldCollision_SetDebugContactsEnabled(WorldCollision* self, bool isEnabled)
+{
+    self->_isDebugContactsEnabled = isEnabled;
+    if (!isEnabled)
+    {
+        GenericBuffer_Clear(&self->_debugContacts);
+    }
+}
+
+const WorldCollisionDebugContact* WorldCollision_GetDebugContacts(const WorldCollision* self, size_t* outCount)
+{
+    *outCount = self->_debugContacts._count;
+    return (self->_debugContacts._count > 0U)
+        ? (const WorldCollisionDebugContact*)(const void*)self->_debugContacts._data : NULL;
 }
 
 const WorldCollisionDebugShape* WorldCollision_GetDebugShapes(const WorldCollision* self, size_t* outCount)

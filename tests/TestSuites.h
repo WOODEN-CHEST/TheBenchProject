@@ -78,6 +78,13 @@ void WorldColliderTests_Run(TestRun* run);
  *  (WorldCollisionTests.c). */
 void WorldCollisionTests_Run(TestRun* run);
 
+/** @brief Moving and pushing (T27): no tunnelling at any speed (a thin wall against fast spheres and boxes, a fast fan
+ *  blade, two fast spheres meeting), pushing many at once (a row and a grid against a wall, stopping or pushing through,
+ *  crushed reports), mass shares, sliding, blocked movers, teleports, the write-back through a parent, carried
+ *  colliders, contact events and their data, motion results (the ground, a moving platform), sleeping and determinism
+ *  (WorldCollisionMotionTests.c). */
+void WorldCollisionMotionTests_Run(TestRun* run);
+
 /** @brief World sprites: the definition's defaults, rules and messages (the rules shared with the sprite component's
  *  rows), loading with the animation as a dependency, the sprite component's override flags and the settings they
  *  resolve to (the draw distance from the placement, the world sprite or the kind), swapping the world sprite, and the

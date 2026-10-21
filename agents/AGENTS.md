@@ -64,8 +64,8 @@ Current module list:
   dependencies. The definition (source/WorldModelDefinition.c) refuses unknown keys and
   checks every rule when it is read. Variants apply to the renderer's per-draw material copies, never to an asset. The
   model component names a world model and overrides its settings per placement with explicit flags.
-* World collision (WorldCollision.md) - Collision for the 3D world (T12): shapes, layers, the collider component and
-  the collision world. Covers:
+* World collision (WorldCollision.md) - Collision for the 3D world (T12, T27): shapes, layers, the collider component
+  and the collision world with its step (moving and pushing). Covers:
   * CollisionShape - Collision shapes as plain values (sphere, capsule, box, cylinder, convex hull, plane bounded or
     infinite, triangle mesh) placed by a centre and a rotation, named sets of them (compounds), convex hulls (quickhull,
     merged coplanar faces, reduced to a vertex budget) and meshes (welded, active edges, a BVH), built from points or
@@ -77,12 +77,20 @@ Current module list:
     with feature ids, rays against every shape, linear casts (exact time of impact) and rotating casts (conservative
     advancement: no contact is ever skipped).
   * WorldColliderComponent - Component type 3: which of its world model's collision sets (or one primitive of its own),
-    the layer, mask and trigger flag (override flags over the world model's defaults), a local offset, rotation and
-    scale, and a rotation mode (full, yaw only, none).
+    the layer, mask, trigger flag and mass (override flags over the world model's defaults), a local offset, rotation
+    and scale, a rotation mode (full, yaw only, none), and how it moves (T27: pushable or kinematic, what a blocked
+    mover does, swept or not, persisting contact reports).
   * WorldCollision - The collision world: every enabled collider in world space, synced once a tick (rebuilt or moved
     only when something changed; static and movable dynamic AABB trees, infinite planes in a list), queries with layer,
     trigger and ignore filters (rays, casts with rotation, overlaps, contact manifolds with local points and triangle
-    data), trigger enter/exit events with hysteresis, counts and a debug list the renderer draws as wireframes.
+    data), trigger enter/exit events with hysteresis, counts and a debug list the renderer draws as wireframes. Since
+    T27 its step (WorldCollision_Step, the tick's collision step; source/WorldCollisionStep.c, the solver in
+    source/WorldCollisionSolver.c, contacts and events in source/WorldCollisionEvents.c) sweeps every collider that
+    moved (nothing tunnels: speculative contacts, then exact casts of every pushed motion), pushes everything that
+    overlaps apart at once (projected Gauss-Seidel shared by mass; pushables slide, kinematic movers push, static
+    colliders hold), stops or pushes through blocked movers, writes the pushes into the objects, and reports contacts
+    (with relative velocities, pushes and ages), begin/persist/end contact events, blocked and crushed events and
+    each object's motion result (push, contacts, ground); teleports skip the sweep and pushables at rest sleep.
   The world model's `collision` section (sets and their defaults, or "bounds") is parsed and loaded by
   source/WorldModelCollisionDefinition.c (World models).
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
@@ -206,7 +214,8 @@ Current module list:
   * NightVision - The eye's dim-light vision as pure maths (private, source/NightVision.h): Hunt's rod share calibrated
     on the game's light scale and the rods' blue-grey; the sky and PBR shaders apply it (shaders/common/night_vision).
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world whose sky follows the frame's game
-    clock and whose colliders it syncs every tick (trigger events logged; F7 shows them, F6 swaps the door's hitbox),
+    clock and whose colliders it steps every tick (trigger, contact and motion events logged; F7 shows the colliders,
+    F8 the contact points, F6 swings the door, F9 sends a wall through a row of crates, F10 moves the door's crate),
     with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,

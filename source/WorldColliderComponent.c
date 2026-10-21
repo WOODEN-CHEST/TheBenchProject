@@ -19,6 +19,10 @@
 #define CATEGORY_OWN_SHAPE ((const unsigned char*)u8"Own shape")
 #define CATEGORY_COLLISION ((const unsigned char*)u8"Collision")
 #define CATEGORY_PLACEMENT ((const unsigned char*)u8"Placement")
+#define CATEGORY_MOTION ((const unsigned char*)u8"Motion")
+/** A mass's rules: above 0 (an inverse mass is taken), at most COLLISION_MAX_MASS. */
+#define MASS_RULES { .HasMinimum = true, .IsMinimumExclusive = true, .Minimum = 0.0, .HasMaximum = true, \
+    .Maximum = (double)COLLISION_MAX_MASS }
 
 
 // Types.
@@ -48,6 +52,12 @@ typedef enum ColliderPropertyEnum
     ColliderProperty_Rotation,
     ColliderProperty_Scale,
     ColliderProperty_RotationMode,
+    ColliderProperty_IsPushable,
+    ColliderProperty_OverridesMass,
+    ColliderProperty_Mass,
+    ColliderProperty_WhenBlocked,
+    ColliderProperty_IsContinuous,
+    ColliderProperty_ReportsPersistingContacts,
     ColliderProperty_Count
 } ColliderProperty;
 
@@ -64,6 +74,18 @@ const PropertyEnumTable WORLD_COLLIDER_ROTATION_MODE_ENUM =
 {
     .Name = u8"rotation_mode", .Entries = RotationModeEntries,
     .EntryCount = sizeof(RotationModeEntries) / sizeof(RotationModeEntries[0])
+};
+
+static const PropertyEnumEntry BlockedModeEntries[] =
+{
+    { .Name = u8"stop", .Value = WorldColliderBlockedMode_Stop },
+    { .Name = u8"push_through", .Value = WorldColliderBlockedMode_PushThrough },
+};
+
+const PropertyEnumTable WORLD_COLLIDER_BLOCKED_MODE_ENUM =
+{
+    .Name = u8"when_blocked", .Entries = BlockedModeEntries,
+    .EntryCount = sizeof(BlockedModeEntries) / sizeof(BlockedModeEntries[0])
 };
 
 /* Every property, in inspector order. The wire ids are the save schema: never renumber or reuse one; a removed
@@ -258,6 +280,55 @@ static const PropertyDescriptor ColliderProperties[ColliderProperty_Count] =
         .Description = u8"full turns the shapes with the object, yaw_only keeps them upright, none keeps them "
             u8"axis-aligned.", .SinceVersion = 1U
     },
+    [ColliderProperty_IsPushable] =
+    {
+        .Key = u8"is_pushable", .WireId = 24U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldColliderComponent, _isPushable), .Default.BoolValue = false,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOTION, .DisplayName = u8"Pushable",
+        .Description = u8"On a movable object: the collision step may push it out of the way (characters, crates). Off, a "
+            u8"movable object's collider is kinematic: it pushes and is never pushed (doors, elevators).",
+        .SinceVersion = 1U
+    },
+    [ColliderProperty_OverridesMass] =
+    {
+        .Key = u8"overrides_mass", .WireId = 25U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldColliderComponent, _overridesMass), .Default.BoolValue = false,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOTION, .DisplayName = u8"Own mass",
+        .Description = u8"Uses the mass below instead of the world model's.", .SinceVersion = 1U
+    },
+    [ColliderProperty_Mass] =
+    {
+        .Key = u8"mass", .WireId = 26U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldColliderComponent, _mass),
+        .Default.FloatValue = COLLISION_DEFAULT_MASS, .Rules = MASS_RULES, .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_MOTION, .DisplayName = u8"Mass",
+        .Description = u8"Kilograms: how pushables share a push (equal masses give way equally, a heavy one barely "
+            u8"moves).", .SinceVersion = 1U
+    },
+    [ColliderProperty_WhenBlocked] =
+    {
+        .Key = u8"when_blocked", .WireId = 27U, .Type = PropertyType_Enum,
+        PROPERTY_MEMBER(WorldColliderComponent, _whenBlocked), .Default.EnumValue = WorldColliderBlockedMode_Stop,
+        .EnumTable = &WORLD_COLLIDER_BLOCKED_MODE_ENUM, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOTION,
+        .DisplayName = u8"When blocked",
+        .Description = u8"A kinematic mover that would squeeze a pushable against something that does not give way: stop "
+            u8"stays where it was this tick, push_through moves on.", .SinceVersion = 1U
+    },
+    [ColliderProperty_IsContinuous] =
+    {
+        .Key = u8"is_continuous", .WireId = 28U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldColliderComponent, _isContinuous), .Default.BoolValue = true,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOTION, .DisplayName = u8"Continuous",
+        .Description = u8"Sweeps the collider's motion so it never passes through anything; off only pushes it out where "
+            u8"it ends up (cheap movers that never go fast).", .SinceVersion = 1U
+    },
+    [ColliderProperty_ReportsPersistingContacts] =
+    {
+        .Key = u8"reports_persisting_contacts", .WireId = 29U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldColliderComponent, _reportsPersistingContacts), .Default.BoolValue = false,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOTION, .DisplayName = u8"Report persisting contacts",
+        .Description = u8"A contact event every tick while it touches something, not only when a touch begins and ends.",
+        .SinceVersion = 1U
+    },
 };
 
 static const PropertyTable ColliderTable =
@@ -322,6 +393,10 @@ static bool TryGetOverrideFlag(WorldColliderComponent* self, WorldColliderSettin
             *outFlag = &self->_overridesIsTrigger;
             *outProperty = ColliderProperty_OverridesIsTrigger;
             return true;
+        case WorldColliderSetting_Mass:
+            *outFlag = &self->_overridesMass;
+            *outProperty = ColliderProperty_OverridesMass;
+            return true;
         case WorldColliderSetting_Count:
             break;
     }
@@ -384,6 +459,7 @@ bool WorldColliderComponent_IsOverridden(const WorldColliderComponent* self, Wor
         case WorldColliderSetting_Layer:        return self->_overridesLayer;
         case WorldColliderSetting_CollidesWith: return self->_overridesCollidesWith;
         case WorldColliderSetting_IsTrigger:    return self->_overridesIsTrigger;
+        case WorldColliderSetting_Mass:         return self->_overridesMass;
         case WorldColliderSetting_Count:        break;
     }
     // Only reachable with a value outside the enum: nothing is overridden.
@@ -427,6 +503,12 @@ void WorldColliderComponent_ResolveSettings(const WorldColliderComponent* self, 
         outSettings->CollidesWith = ((collision != NULL) && collision->_hasCollidesWith) ? collision->_collidesWith
             : CollisionLayer_GetDefaultMask(outSettings->Layer);
     }
+    float DefaultMass = (collision != NULL) ? collision->_mass : COLLISION_DEFAULT_MASS;
+    outSettings->Mass = self->_overridesMass ? self->_mass : DefaultMass;
+    outSettings->IsPushable = self->_isPushable;
+    outSettings->WhenBlocked = self->_whenBlocked;
+    outSettings->IsContinuous = self->_isContinuous;
+    outSettings->ReportsPersistingContacts = self->_reportsPersistingContacts;
     outSettings->UsesOwnShape = self->_usesOwnShape;
     if (self->_usesOwnShape || (collision == NULL))
     {
@@ -618,5 +700,68 @@ Error WorldColliderComponent_SetRotationMode(WorldColliderComponent* self, World
     }
     self->_rotationMode = mode;
     WorldInternal_ComponentAfterSet(self, &ColliderProperties[ColliderProperty_RotationMode]);
+    return Error_CreateSuccess();
+}
+
+Error WorldColliderComponent_SetPushable(WorldColliderComponent* self, bool isPushable)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldColliderComponent_SetPushable");
+    }
+    SetBool(self, &self->_isPushable, isPushable, ColliderProperty_IsPushable);
+    return Error_CreateSuccess();
+}
+
+Error WorldColliderComponent_SetMass(WorldColliderComponent* self, float mass)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldColliderComponent_SetMass");
+    }
+    Error Result = CheckProperty(ColliderProperty_Mass, PropertyValue_FromFloat(mass));
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    self->_mass = mass;
+    WorldInternal_ComponentAfterSet(self, &ColliderProperties[ColliderProperty_Mass]);
+    return Error_CreateSuccess();
+}
+
+Error WorldColliderComponent_SetWhenBlocked(WorldColliderComponent* self, WorldColliderBlockedMode mode)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldColliderComponent_SetWhenBlocked");
+    }
+    Error Result = CheckProperty(ColliderProperty_WhenBlocked, PropertyValue_FromEnum((int32_t)mode));
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    self->_whenBlocked = mode;
+    WorldInternal_ComponentAfterSet(self, &ColliderProperties[ColliderProperty_WhenBlocked]);
+    return Error_CreateSuccess();
+}
+
+Error WorldColliderComponent_SetContinuous(WorldColliderComponent* self, bool isContinuous)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldColliderComponent_SetContinuous");
+    }
+    SetBool(self, &self->_isContinuous, isContinuous, ColliderProperty_IsContinuous);
+    return Error_CreateSuccess();
+}
+
+Error WorldColliderComponent_SetReportsPersistingContacts(WorldColliderComponent* self, bool reportsPersistingContacts)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldColliderComponent_SetReportsPersistingContacts");
+    }
+    SetBool(self, &self->_reportsPersistingContacts, reportsPersistingContacts,
+        ColliderProperty_ReportsPersistingContacts);
     return Error_CreateSuccess();
 }

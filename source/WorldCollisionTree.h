@@ -65,6 +65,9 @@ int32_t CollisionTree_Insert(CollisionTree* self, Vector3 min, Vector3 max, uint
 void CollisionTree_Remove(CollisionTree* self, int32_t proxy);
 /* Moves a proxy to the box [min, max]; re-inserts it only when that box leaves its fat box. True when it was. */
 bool CollisionTree_Move(CollisionTree* self, int32_t proxy, Vector3 min, Vector3 max);
+/* Puts a proxy on the box [min, max] (fattened by the margin) whatever its fat box was: a box widened for a while (a
+ * step's sweep) shrinks back. */
+void CollisionTree_Refit(CollisionTree* self, int32_t proxy, Vector3 min, Vector3 max);
 
 uint64_t CollisionTree_GetUserValue(const CollisionTree* self, int32_t proxy);
 /* The proxy's fat box. */

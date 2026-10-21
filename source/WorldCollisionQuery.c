@@ -78,7 +78,7 @@ static WorldCollisionFilter GetFilter(const WorldCollisionFilter* filter, WorldC
     return (filter != NULL) ? *filter : WorldCollisionFilter_Create(COLLISION_LAYER_MASK_ALL, defaultMode);
 }
 
-static void FillTriangleInfo(const CollisionMesh* mesh, uint32_t triangle, WorldCollisionShapeInfo* info)
+void WorldCollisionInternal_FillTriangleInfo(const CollisionMesh* mesh, uint32_t triangle, WorldCollisionShapeInfo* info)
 {
     const CollisionMeshTriangle* Source = &mesh->_triangles[triangle];
     info->HasTriangle = true;
@@ -199,7 +199,7 @@ static void RecordRayHit(RayQuery* query, const WorldCollisionInstance* instance
     WorldCollisionInternal_FillShapeInfo(instance, shape, &Result.Shape);
     if (shape->Shape->Type == CollisionShapeType_Mesh)
     {
-        FillTriangleInfo(shape->Shape->Mesh, hit->TriangleIndex, &Result.Shape);
+        WorldCollisionInternal_FillTriangleInfo(shape->Shape->Mesh, hit->TriangleIndex, &Result.Shape);
         Result.Shape.Barycentric = hit->Barycentric;
     }
     Result.Point = CollisionMath_AddScaled(query->Origin, query->Direction, hit->T);
@@ -337,7 +337,7 @@ static void EmitContact(ContactRun* run, const CollisionContact* contact, uint32
     }
     if (triangleView != NULL)
     {
-        FillTriangleInfo(run->TargetShape->Shape->Mesh, triangle, &Manifold.ShapeB);
+        WorldCollisionInternal_FillTriangleInfo(run->TargetShape->Shape->Mesh, triangle, &Manifold.ShapeB);
         Manifold.ShapeB.Barycentric = GetTriangleWeights(triangleView, Manifold.Points[0].PositionB);
     }
     GenericBuffer_AddLast(run->Out, &Manifold);
@@ -449,7 +449,7 @@ static void ConsiderCastHit(CastRun* run, const CollisionCastHit* hit, uint32_t 
     WorldCollisionInternal_FillShapeInfo(run->Target, run->TargetShape, &Result.Shape);
     if (triangleView != NULL)
     {
-        FillTriangleInfo(run->TargetShape->Shape->Mesh, triangle, &Result.Shape);
+        WorldCollisionInternal_FillTriangleInfo(run->TargetShape->Shape->Mesh, triangle, &Result.Shape);
         Result.Shape.Barycentric = GetTriangleWeights(triangleView, hit->PointB);
     }
     Result.CastShapeIndex = run->Shape->Index;

@@ -101,10 +101,14 @@ static void TheUITestFrameSharesInputWithTheWorld(TestRun* run)
         GameInput* Input = &Fixture.Input;
         TickWithKey(run, &Fixture, GameKey_W);
         TEST_CHECK(run, GameInput_IsActionDown(Input, GameAction_MoveForward)); // Not a UI key: left to the world.
-        TickWithKey(run, &Fixture, GameKey_F7); // Nor are the world test's collision keys (F7 wireframes, F6 the door).
-        TEST_CHECK(run, GameInput_IsKeyPressed(Input, GameKey_F7));
-        TickWithKey(run, &Fixture, GameKey_F6);
-        TEST_CHECK(run, GameInput_IsKeyPressed(Input, GameKey_F6));
+        // Nor are the world test's collision keys (F7 wireframes, F8 contacts, F6 the door, F9 the pushing wall, F10
+        // the door's crate).
+        const GameKey CollisionKeys[] = { GameKey_F7, GameKey_F8, GameKey_F6, GameKey_F9, GameKey_F10 };
+        for (size_t Index = 0U; Index < (sizeof(CollisionKeys) / sizeof(CollisionKeys[0])); Index++)
+        {
+            TickWithKey(run, &Fixture, CollisionKeys[Index]);
+            TEST_CHECK(run, GameInput_IsKeyPressed(Input, CollisionKeys[Index]));
+        }
 
         TickWithKey(run, &Fixture, GameKey_Tab); // Starts navigation on the menu.
         TEST_CHECK(run, GameInput_IsKeyConsumed(Input, GameKey_Tab));

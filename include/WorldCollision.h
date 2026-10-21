@@ -28,12 +28,13 @@ typedef struct LoggerStruct Logger;
  * collision sets (resolved by name under the collision world's own asset user, AGENTS.md rule 1) or from the
  * collider's own primitive.
  *
- * SYNC. WorldCollision_Sync, once a tick in the collision step (after the transform drivers): it brings the world
- * matrices up to date, then rebuilds only the colliders whose object moved (its transform revision: a parent moving
- * moves it too), whose collider changed (its revision), whose world model changed or whose component was added,
- * removed or replaced. Static colliders (the object and all its ancestors static) sit in one dynamic AABB tree,
- * movable ones in another with fattened bounds; unbounded planes in a list every query checks. A static object that
- * moves is re-inserted, with one warning per object unless the options turn that off (the editor).
+ * SYNC. The first part of WorldCollision_Step, once a tick in the collision step (after the transform drivers), or
+ * WorldCollision_Sync alone: it brings the world matrices up to date, then rebuilds only the colliders whose object
+ * moved (its transform revision: a parent moving moves it too), whose collider changed (its revision), whose world model
+ * changed or whose component was added, removed or replaced. Static colliders (the object and all its ancestors
+ * static) sit in one dynamic AABB tree, movable ones in another with fattened bounds; unbounded planes in a list every
+ * query checks. A static object that moves is re-inserted, with one warning per object unless the options turn that off
+ * (the editor).
  *
  * QUERIES. Each takes a filter (WorldCollisionFilter): the layers it sees, triggers ignored, included or only, and an
  * object to ignore, optionally with its subtree. Rays and casts give the nearest hit; overlaps the objects touched;
@@ -57,9 +58,44 @@ typedef struct LoggerStruct Logger;
  * must collide by layer. Events queue in a deterministic order (by ids) until WorldCollision_ClearTriggerEvents: game
  * logic drains them at one point of the tick (architecture A4).
  *
+ * MOVING AND PUSHING (T27). WorldCollision_Step is the tick's collision step: the sync above, then every collider that
+ * moved since the last step is SWEPT from where it was to where its driver, script, animation or parent put it, turns
+ * included, and one solver pushes everything that overlaps apart at once.
+ * - Who gives way: a static object's collider never moves in play; a movable object's collider that is pushable
+ *   (is_pushable) is pushed, pushables sharing a push by mass; any other movable collider is KINEMATIC (doors,
+ *   elevators): it pushes and is never pushed. The colliders an object carries (its children, unless pushable
+ *   themselves) move with its push; a pushable under it is pushed on its own. Pushes only translate (rotation from
+ *   contacts is T28's), and only along each contact's normal, so a pushed collider slides along walls.
+ * - Nothing passes through anything: contacts are taken before the motion out to how far each pair can close
+ *   (speculative contacts), and every pushed motion longer than WORLD_COLLISION_SPECULATIVE_DISTANCE is checked
+ *   afterwards with exact linear casts against everything around it, both sides moving; what still hits gets a new
+ *   contact and the solver runs again, and a motion no round could resolve stops at its time of impact. Turns are
+ *   covered by the contacts: a tick that turns anything more than WORLD_COLLISION_MAX_SUBSTEP_TURN is split into
+ *   substeps, each with its own.
+ * - What does not fit: a kinematic mover that would squeeze a pushable against something that does not give way is
+ *   BLOCKED: with when_blocked stop it is set back where it was at the step's start (the local transforms that changed
+ *   along its object's chain, so a group moved by its parent stops as one) and the step is solved again (at most
+ *   WORLD_COLLISION_MAX_BLOCK_ROUNDS times; then the movers still blocked push through); with push_through it moves
+ *   on. A pushable left overlapping beyond WORLD_COLLISION_SLOP is CRUSHED.
+ * - The solver writes the pushes into the objects (a child through its parent's inverse): the one place a system other
+ *   than an object's driver writes its transform. A driver reads the correction next tick.
+ * - A TELEPORT (WorldCollision_Teleport: spawning, the editor, a script's "teleport to") skips the sweep: the object
+ *   starts its next step where it is and is only pushed out. New colliders and static objects that moved are
+ *   teleports too.
+ * - Pushables that nothing moved near sleep: a step costs nothing for a pile at rest.
+ *
+ * CONTACTS AND THEIR EVENTS (T27). After each step every pair of colliders, one of them pushable, that lies within
+ * WORLD_COLLISION_CONTACT_DISTANCE (touching) or a little farther (speculative) has a contact per pair of shapes
+ * (WorldContact: T12's manifold at the final poses, plus each point's relative velocity, push, age and whether it
+ * touches). Per OBJECT pair a contact event begins when they first touch, persists every tick while they stay in contact
+ * (only when either collider reports persisting contacts) and ends when they are WORLD_COLLISION_CONTACT_END_MARGIN
+ * beyond touching, or either is removed, disabled or stops qualifying. Blocked and crushed states give motion events
+ * when they begin and end. WorldCollision_GetMotionResult gives each object's feedback for its driver: its push, its
+ * contacts, its ground, blocked or crushed.
+ *
  * THREADS AND LIFETIME. Not thread-safe. The collision world borrows its world, which must outlive it, and must be
- * synced on that world only. Pointers it returns (events, debug shapes, shape names in results) are valid until the
- * next WorldCollision_Sync.
+ * synced on that world only. Pointers it returns (events, contacts, debug lists, shape names in results) are valid until
+ * the next WorldCollision_Sync or WorldCollision_Step; the queued events until they are cleared.
  */
 
 
@@ -70,6 +106,35 @@ typedef struct LoggerStruct Logger;
 #define WORLD_COLLISION_MOVABLE_MARGIN 0.1f
 /** @brief The most shapes one query may cast or test at once (a compound; a query places them on the stack). */
 #define WORLD_COLLISION_MAX_QUERY_SHAPES 32U
+/** @brief The gap the solver keeps between a pushed collider and what it touches (metres): resting shapes lie this far
+ *  apart, so every sweep starts clear of them. */
+#define WORLD_COLLISION_SKIN 0.001f
+/** @brief The overlap the solver may leave without a report (metres): beyond it a pushable is crushed and a mover that
+ *  caused it blocked. */
+#define WORLD_COLLISION_SLOP 0.001f
+/** @brief Contacts this far apart beyond how far a pair can close in a step join the solver before the motion (metres):
+ *  room for the pushes passed on through a crowd. */
+#define WORLD_COLLISION_SPECULATIVE_DISTANCE 0.02f
+/** @brief Shapes at most this far apart touch (metres: the skin and a millimetre). */
+#define WORLD_COLLISION_CONTACT_DISTANCE 0.002f
+/** @brief An object pair in contact stays in contact until its shapes are this much farther apart than touching
+ *  (metres): no flicker for a crate resting on a floor. */
+#define WORLD_COLLISION_CONTACT_END_MARGIN 0.005f
+/** @brief A step turning anything more than this (radians, 15 degrees) is split into substeps, so the solver's straight
+ *  line approximations of turns stay close. */
+#define WORLD_COLLISION_MAX_SUBSTEP_TURN 0.2617994f
+/** @brief The most substeps of one step (a faster turn is solved in this many; the sweeps still catch every contact). */
+#define WORLD_COLLISION_MAX_SUBSTEPS 8U
+/** @brief The most solver iterations per solve (it stops earlier once every contact holds). */
+#define WORLD_COLLISION_SOLVER_ITERATIONS 64U
+/** @brief How many times one solve may add the contacts its sweeps found and run again before the motions that still
+ *  hit are stopped at their time of impact. */
+#define WORLD_COLLISION_SWEEP_ROUNDS 4U
+/** @brief How many rounds of pushing out what still overlaps at the final poses a step may run. */
+#define WORLD_COLLISION_DEPENETRATION_ROUNDS 4U
+/** @brief How many times one step may set blocked movers back and solve again (movers pushing into each other through
+ *  pushables stop one more each time); past it, the movers still blocked push through for that step. */
+#define WORLD_COLLISION_MAX_BLOCK_ROUNDS 8U
 
 
 // Types.
@@ -81,6 +146,9 @@ typedef struct WorldCollisionOptionsStruct
     /** @brief Whether moving a static object logs one warning per object (default true; the editor turns it off, as it
      *  moves static scenery all the time). */
     bool WarnsWhenStaticObjectsMove;
+    /** @brief Whether WorldCollision_Step sweeps motions (default true). Off, every move is a teleport: things are only
+     *  pushed out where they end up (the editor, which places objects rather than moving them). */
+    bool AreMotionsSwept;
 } WorldCollisionOptions;
 
 /**
@@ -264,6 +332,168 @@ typedef struct WorldCollisionDebugShapeStruct
 } WorldCollisionDebugShape;
 
 /**
+ * @brief Extra data of one contact point, matched to WorldContactManifold's point of the same index.
+ */
+typedef struct WorldContactPointDetailStruct
+{
+    /** @brief The relative velocity of B's point against A's along the normal, from the motions over the step (m/s;
+     *  below 0 closing). */
+    float NormalSpeed;
+    /** @brief The rest of the relative velocity, across the normal (m/s): sliding. */
+    Vector3 TangentVelocity;
+    /** @brief How far the solver pushed the two apart at this point this step (metres, at least 0), and that as a speed
+     *  over the step (m/s). Pushes on the pair the solver could not match to a point are only in WorldContact's
+     *  TotalPush. */
+    float Push;
+    float PushSpeed;
+    /** @brief For how many steps this point has existed (matched across steps by its feature id; 0 when new). */
+    uint32_t AgeTicks;
+    /** @brief Whether it touches (separation at most WORLD_COLLISION_CONTACT_DISTANCE) or is speculative (near). */
+    bool IsTouching;
+} WorldContactPointDetail;
+
+/**
+ * @brief One contact between a shape of one object and a shape of another, at the end of a step (T27).
+ */
+typedef struct WorldContactStruct
+{
+    /** @brief T12's manifold at the final poses: A the object with the lower id, the normal from A to B, the points'
+     *  world and local positions, separations and feature ids, triangle data. */
+    WorldContactManifold Manifold;
+    /** @brief One per point of the manifold. */
+    WorldContactPointDetail Points[4];
+    /** @brief How fast the two closed along the normal before the solver pushed them (m/s, at least 0): the motions
+     *  their drivers gave them. The impact speed of a new contact (impact sounds). */
+    float ApproachSpeed;
+    /** @brief Every push on this pair of shapes this step, matched to a point or not (metres). */
+    float TotalPush;
+    /** @brief For how many steps this pair of shapes has been in contact (0 when new). */
+    uint32_t AgeTicks;
+    /** @brief Whether any point touches; otherwise the shapes are near but apart (speculative). */
+    bool IsTouching;
+} WorldContact;
+
+/**
+ * @brief The kinds of contact events. Saved by value (scripts will see them): never renumber.
+ */
+typedef enum WorldContactEventKindEnum
+{
+    /** @brief Two objects started touching. */
+    WorldContactEventKind_Begin = 0,
+    /** @brief They are still in contact (only for colliders that report persisting contacts). */
+    WorldContactEventKind_Persist = 1,
+    /** @brief They stopped (moved apart, one was removed or disabled, or they stopped qualifying). */
+    WorldContactEventKind_End = 2
+} WorldContactEventKind;
+
+/**
+ * @brief A contact event between two objects. Its contacts are copies, valid until WorldCollision_ClearContactEvents.
+ */
+typedef struct WorldContactEventStruct
+{
+    WorldContactEventKind Kind;
+    /** @brief The objects: A the lower id. */
+    uint64_t ObjectIdA;
+    uint64_t ObjectIdB;
+    /** @brief The step that found it (WorldCollisionStats.Tick). */
+    uint64_t Tick;
+    /** @brief For how many steps the two have been in contact (0 at the begin). */
+    uint32_t AgeTicks;
+    /** @brief The impact: how fast the two closed when they began touching (m/s), and the share of that step at which
+     *  they would have touched along their drivers' motions (0 when they started the step touching). */
+    float ApproachSpeed;
+    float TimeOfImpact;
+    /** @brief The pair's contacts (one per pair of shapes): WorldCollision_GetContactEventContacts from FirstContact on,
+     *  ContactCount of them. A begin or persist event has the step's contacts, an end event the last step's. */
+    uint32_t FirstContact;
+    uint32_t ContactCount;
+} WorldContactEvent;
+
+/**
+ * @brief The kinds of motion events. Saved by value (scripts will see them): never renumber.
+ */
+typedef enum WorldMotionEventKindEnum
+{
+    /** @brief A kinematic mover could not push a pushable out of its way: it stopped (when_blocked stop) or moved on
+     *  (push_through). */
+    WorldMotionEventKind_BlockedBegin = 0,
+    /** @brief It is no longer blocked. */
+    WorldMotionEventKind_BlockedEnd = 1,
+    /** @brief A pushable is left overlapping something beyond WORLD_COLLISION_SLOP (pinned between things that do not
+     *  give way). */
+    WorldMotionEventKind_CrushedBegin = 2,
+    /** @brief It is no longer crushed. */
+    WorldMotionEventKind_CrushedEnd = 3
+} WorldMotionEventKind;
+
+/**
+ * @brief A motion event: a mover blocked or a pushable crushed, when the state begins and ends.
+ */
+typedef struct WorldMotionEventStruct
+{
+    WorldMotionEventKind Kind;
+    /** @brief The mover (blocked) or the pushable (crushed). */
+    uint64_t ObjectId;
+    /** @brief The pushable that blocked the mover, or what the pushable is pressed into most deeply (0 at an end). */
+    uint64_t OtherId;
+    /** @brief The overlap left at the begin (metres). */
+    float Depth;
+    /** @brief A blocked mover that was set back (stop). */
+    bool IsStopped;
+    /** @brief The step that found it, or the sync that removed the collider (WorldCollisionStats.Tick then). */
+    uint64_t Tick;
+} WorldMotionEvent;
+
+/**
+ * @brief An object's feedback from the last step, for its driver (T13's character reads it).
+ */
+typedef struct WorldMotionResultStruct
+{
+    /** @brief The step it describes (WorldCollisionStats.Tick right after that step; syncs since then count on). */
+    uint64_t Tick;
+    /** @brief Whether the collider took part in the step's solve (moved, was pushed or is near what did). */
+    bool IsAwake;
+    /** @brief The collider's motion over the step, start pose to final pose, per second (m/s). */
+    Vector3 Velocity;
+    /** @brief Where the step put it against where its driver did (world metres): a pushable's push, or the motion a
+     *  stopped mover lost. */
+    Vector3 Correction;
+    /** @brief Its touching contacts (a pushable's with those of the colliders it carries). */
+    uint32_t ContactCount;
+    /** @brief The most upward-facing of those, as the ground: its object, the normal out of the ground into the object
+     *  (its Y above 0), the point, and the ground point's velocity (a moving platform). */
+    bool HasGround;
+    uint64_t GroundObjectId;
+    Vector3 GroundNormal;
+    Vector3 GroundPoint;
+    Vector3 GroundVelocity;
+    /** @brief A kinematic mover that could not push a pushable out of its way, which one, and whether it was set back. */
+    bool IsBlocked;
+    uint64_t BlockedById;
+    bool IsStopped;
+    /** @brief A pushable left overlapping beyond the slop, by how much (metres) and with what (a pushable's only, not
+     *  repeated by the colliders it carries). */
+    bool IsCrushed;
+    float CrushDepth;
+    uint64_t CrushedById;
+} WorldMotionResult;
+
+/**
+ * @brief A contact point to draw for debugging (WorldCollision_GetDebugContacts).
+ */
+typedef struct WorldCollisionDebugContactStruct
+{
+    /** @brief Midway between the point on A and the point on B. */
+    Vector3 Point;
+    /** @brief The contact's unit normal, from A to B. */
+    Vector3 Normal;
+    /** @brief The point's push as a speed along the normal (m/s; 0 when nothing pushed). */
+    float PushSpeed;
+    /** @brief Whether it touches (else speculative). */
+    bool IsTouching;
+} WorldCollisionDebugContact;
+
+/**
  * @brief Counts for diagnostics and the status line.
  */
 typedef struct WorldCollisionStatsStruct
@@ -281,8 +511,22 @@ typedef struct WorldCollisionStatsStruct
     /** @brief How often an instance's shapes were rebuilt, and how often an instance moved, since construction. */
     uint64_t RebuildCount;
     uint64_t MoveCount;
-    /** @brief The number of syncs so far. */
+    /** @brief The number of syncs and steps so far. */
     uint64_t Tick;
+    /** @brief The last step (T27): colliders that moved, pushables that took part, pairs of shapes the solver looked
+     *  at, contacts (touching ones, and the object pairs in contact), solver iterations, substeps, the deepest overlap
+     *  left (metres), blocked movers, crushed pushables, and how often the step was solved again for stopped movers. */
+    size_t MoverCount;
+    size_t AwakeCount;
+    size_t PairCount;
+    size_t ContactCount;
+    size_t ContactPairCount;
+    uint32_t SolverIterations;
+    uint32_t SubstepCount;
+    float DeepestOverlap;
+    size_t BlockedCount;
+    size_t CrushedCount;
+    uint32_t ResolveCount;
 } WorldCollisionStats;
 
 /** @brief The collision world. Opaque; create with WorldCollision_Create. */
@@ -296,7 +540,7 @@ typedef struct WorldCollisionStruct WorldCollision;
  */
 static inline WorldCollisionOptions WorldCollisionOptions_CreateDefault(void)
 {
-    return (WorldCollisionOptions){ .WarnsWhenStaticObjectsMove = true };
+    return (WorldCollisionOptions){ .WarnsWhenStaticObjectsMove = true, .AreMotionsSwept = true };
 }
 
 /**
@@ -340,11 +584,91 @@ void WorldCollision_Destroy(WorldCollision* self);
  * @brief Brings the collision world in step with its world: world matrices first (World_UpdateTransforms), then each
  *        collider that changed, then the trigger pairs (queuing their events).
  *
- * The tick's collision step (after the transform drivers, before the queued events are handled). Costs one pass over
- * the colliders plus the work for those that changed.
+ * Moves and pushes nothing: the game's tick runs WorldCollision_Step, which syncs first. A sync alone is for tools, the
+ * editor and queries after a change in the middle of a tick; it leaves the motions alone (the next step sweeps from
+ * where each collider was at the last step). Costs one pass over the colliders plus the work for those that changed.
  * @param self The collision world; must not be NULL.
  */
 void WorldCollision_Sync(WorldCollision* self);
+
+/**
+ * @brief The tick's collision step (T27): syncs, sweeps every collider that moved since the last step, pushes apart
+ *        what overlaps, writes the pushes into the objects, then finds the contacts, events and results and the
+ *        trigger pairs.
+ *
+ * Replaces WorldCollision_Sync in the tick (after the transform drivers, before the queued events are handled). The
+ * motions run from each collider's pose at the end of the last step (whatever syncs happened between) to its pose now;
+ * a collider's first step, a teleport and a static object's move start where they are. Costs nothing for colliders
+ * that did not move and are not near anything that did. Writes object transforms: pushed objects' positions, stopped
+ * movers' local transforms.
+ * @param self The collision world; must not be NULL.
+ * @param deltaSeconds The tick's length in seconds (velocities and speeds in contacts and results); above 0.
+ */
+void WorldCollision_Step(WorldCollision* self, float deltaSeconds);
+
+/**
+ * @brief Makes an object and everything under it start its next step where it is then: no sweep of how it got there,
+ *        only the push-out (spawning, the editor, a script's "teleport to"). Call it when moving the object, before
+ *        the step.
+ * @param self The collision world; must not be NULL.
+ * @param objectId The object (an unknown id does nothing).
+ */
+void WorldCollision_Teleport(WorldCollision* self, uint64_t objectId);
+
+/**
+ * @brief Returns the last step's contacts, sorted by object ids, then shapes and triangles.
+ * @param self The collision world; must not be NULL.
+ * @param outCount [out] Receives how many. Must not be NULL.
+ * @returns The contacts (borrowed: valid until the next sync or step), or NULL when there are none.
+ */
+const WorldContact* WorldCollision_GetContacts(const WorldCollision* self, size_t* outCount);
+
+/**
+ * @brief Returns the contact events queued since the last WorldCollision_ClearContactEvents, oldest first (within a step
+ *        by object ids; ends after begins and persists).
+ * @param self The collision world; must not be NULL.
+ * @param outCount [out] Receives how many. Must not be NULL.
+ * @returns The events (borrowed: valid until the next step or clear), or NULL when there are none.
+ */
+const WorldContactEvent* WorldCollision_GetContactEvents(const WorldCollision* self, size_t* outCount);
+
+/**
+ * @brief Returns the contacts the queued contact events index (WorldContactEvent.FirstContact, .ContactCount).
+ * @param self The collision world; must not be NULL.
+ * @param outCount [out] Receives how many. Must not be NULL.
+ * @returns The copies (borrowed: valid until the next step or clear), or NULL when there are none.
+ */
+const WorldContact* WorldCollision_GetContactEventContacts(const WorldCollision* self, size_t* outCount);
+
+/**
+ * @brief Drops the queued contact events and their contacts (after game logic handled them).
+ * @param self The collision world; must not be NULL.
+ */
+void WorldCollision_ClearContactEvents(WorldCollision* self);
+
+/**
+ * @brief Returns the motion events (blocked, crushed) queued since the last WorldCollision_ClearMotionEvents, oldest
+ *        first (within a step by object id).
+ * @param self The collision world; must not be NULL.
+ * @param outCount [out] Receives how many. Must not be NULL.
+ * @returns The events (borrowed: valid until the next step or clear), or NULL when there are none.
+ */
+const WorldMotionEvent* WorldCollision_GetMotionEvents(const WorldCollision* self, size_t* outCount);
+
+/**
+ * @brief Drops the queued motion events.
+ * @param self The collision world; must not be NULL.
+ */
+void WorldCollision_ClearMotionEvents(WorldCollision* self);
+
+/**
+ * @brief An object's feedback from the last step: its push, its contacts and ground, blocked or crushed.
+ * @param self The collision world; must not be NULL.
+ * @param objectId The object.
+ * @param outResult [out] Receives the result (zeroed when false). Must not be NULL.
+ * @returns true when the object has an active collider.
+ */
+bool WorldCollision_GetMotionResult(const WorldCollision* self, uint64_t objectId, WorldMotionResult* outResult);
 
 /**
  * @brief Returns the trigger events queued since the last WorldCollision_ClearTriggerEvents, oldest first (within a
@@ -510,6 +834,21 @@ size_t WorldCollision_CollideObject(WorldCollision* self, uint64_t objectId, flo
  * @param isEnabled Whether to keep the list.
  */
 void WorldCollision_SetDebugListEnabled(WorldCollision* self, bool isEnabled);
+
+/**
+ * @brief Switches the debug contact list on or off: while on, each step lists every contact point for drawing.
+ * @param self The collision world; must not be NULL.
+ * @param isEnabled Whether to keep the list.
+ */
+void WorldCollision_SetDebugContactsEnabled(WorldCollision* self, bool isEnabled);
+
+/**
+ * @brief Returns the debug contact list (empty while it is off): read only.
+ * @param self The collision world; must not be NULL.
+ * @param outCount [out] Receives how many points. Must not be NULL.
+ * @returns The points (borrowed: valid until the next step or sync), or NULL when there are none.
+ */
+const WorldCollisionDebugContact* WorldCollision_GetDebugContacts(const WorldCollision* self, size_t* outCount);
 
 /**
  * @brief Returns the debug list (empty while it is off), for a renderer that draws wireframes: read only.

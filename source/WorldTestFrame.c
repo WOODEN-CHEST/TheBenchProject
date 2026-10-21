@@ -1,5 +1,6 @@
 #include <inttypes.h>
 #include <math.h>
+#include <stdio.h>
 #include "WorldTestFrame.h"
 #include "GameClock.h"
 #include "GameFrame.h"
@@ -69,10 +70,22 @@
 /** The test world's hierarchy (T08): the desk (an empty object holding its parts) and how the J key slides it along X:
  *  back and forth by this many metres either way around where it was loaded, once per period. */
 #define TEST_DESK_OBJECT_NAME ((const unsigned char*)u8"desk")
-/** The test world's door (T12): the F6 key swaps its collider between its world model's two sets. */
+/** The test world's door (T12; it turns since T27): the F6 key swings it open (a quarter turn about its hinge, toward
+ *  +Z) and closed at DOOR_SWING_SPEED radians a second. It stops on the crate pinned in the corner in its way. */
 #define TEST_DOOR_OBJECT_NAME "door"
-#define DOOR_CLOSED_SET ((const unsigned char*)u8"closed")
-#define DOOR_OPEN_SET ((const unsigned char*)u8"open")
+#define DOOR_OPEN_TURN (-0.5f * PI)
+#define DOOR_SWING_SPEED (PI / 3.0f)
+/** The pushing wall (T27): the F9 key sends it PUSHER_TRAVEL metres along +X at PUSHER_SPEED, through a row of five
+ *  pushable crates that it pushes against a stop (where it is blocked and stops), and back; back where it started, the
+ *  crates go back where they were (a teleport). */
+#define TEST_PUSHER_OBJECT_NAME "pusher_wall"
+#define TEST_ROW_CRATE_NAME_FORMAT "row_crate_%u"
+#define ROW_CRATE_COUNT 5U
+#define PUSHER_TRAVEL 2.5f
+#define PUSHER_SPEED 0.6f
+/** The crate the door stops on (T27): the F10 key teleports it out of the door's way and back. */
+#define TEST_DOOR_CRATE_OBJECT_NAME "door_crate"
+#define DOOR_CRATE_ASIDE_SHIFT 1.2f
 #define DESK_SLIDE_DISTANCE 1.2f
 #define DESK_SLIDE_PERIOD_SECONDS 6.0
 /** The test world's variant example (T10): two cubes of the "painted_cube" world model, and how many looks the E key
@@ -151,13 +164,29 @@ typedef struct WorldTestFrameStruct
     size_t _variantStep;
     /** Whether the Z key's zoom is on (the camera at ZOOMED_FOV_Y). */
     bool _isZoomed;
-    /** The world's colliders, synced every tick after the desk moves; owned. Its trigger events are logged. */
+    /** The world's colliders, stepped every tick after the drivers move things; owned. Its trigger, contact and motion
+     *  events are logged. */
     WorldCollision* _collision;
-    /** Whether the F7 key's collider wireframes are shown. */
+    /** Whether the F7 key's collider wireframes and the F8 key's contact points are shown. */
     bool _areCollidersShown;
-    /** The door the F6 key opens and closes (0 if the test world lacks it), and whether its hitbox is the open one. */
+    bool _areContactsShown;
+    /** The door the F6 key swings (0 if the test world lacks it), its turn about Y when loaded (closed), and whether it is
+     *  swinging open (else closed). */
     uint64_t _doorId;
+    float _doorClosedYaw;
     bool _isDoorOpen;
+    /** The pushing wall the F9 key sends out and back (0 if the test world lacks it), where along X it was loaded, and
+     *  whether it is going out; the row's crates (0 for one the world lacks) and where they were loaded. */
+    uint64_t _pusherId;
+    float _pusherHomeX;
+    bool _isPusherOut;
+    bool _isPusherHome;
+    uint64_t _rowCrateIds[ROW_CRATE_COUNT];
+    Vector3 _rowCrateHomes[ROW_CRATE_COUNT];
+    /** The crate the door stops on, where it was loaded, and whether F10 has it aside. */
+    uint64_t _doorCrateId;
+    Vector3 _doorCrateHome;
+    bool _isDoorCrateAside;
 } WorldTestFrame;
 
 
@@ -342,6 +371,15 @@ static void LogCollisionStatus(WorldTestFrame* frame)
         (uint64_t)Stats.InstanceCount, (uint64_t)Stats.StaticInstanceCount, (uint64_t)Stats.MovableInstanceCount,
         (uint64_t)Stats.ShapeCount, (uint64_t)Stats.TriangleCount, (uint64_t)Stats.PlaneCount,
         (uint64_t)Stats.TriggerPairCount, Stats.RebuildCount, Stats.MoveCount, Stats.Tick);
+    Error_Deconstruct(&LogResult);
+    LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+        (const unsigned char*)u8"WorldTest: the last collision step: %" PRIu64 u8" movers, %" PRIu64 u8" pushables awake, %"
+        PRIu64 u8" pairs of shapes, %" PRIu64 u8" touching contacts (%" PRIu64 u8" object pairs in contact), %u solver "
+        u8"iterations in %u substeps (%u solved again), deepest overlap left %.2f mm, %" PRIu64 u8" blocked, %" PRIu64
+        u8" crushed.", (uint64_t)Stats.MoverCount, (uint64_t)Stats.AwakeCount, (uint64_t)Stats.PairCount,
+        (uint64_t)Stats.ContactCount, (uint64_t)Stats.ContactPairCount, Stats.SolverIterations, Stats.SubstepCount,
+        Stats.ResolveCount, (double)(Stats.DeepestOverlap * 1000.0f), (uint64_t)Stats.BlockedCount,
+        (uint64_t)Stats.CrushedCount);
     Error_Deconstruct(&LogResult);
 }
 
@@ -888,46 +926,180 @@ static void LogTriggerEvents(WorldTestFrame* frame)
     WorldCollision_ClearTriggerEvents(frame->_collision);
 }
 
-/* Opens or closes the door: its collider switches to the world model's other set (the model itself does not move). */
-static void ToggleDoor(WorldTestFrame* frame)
+/* The contact events of this tick's step: each begin and end (persists only for colliders that ask), then drops them. */
+static void LogContactEvents(WorldTestFrame* frame)
 {
-    WorldComponent* Component = NULL;
-    if ((frame->_doorId == 0U) || !World_TryGetComponent(&frame->_world, frame->_doorId, WorldComponentType_Collider,
-        &Component))
+    size_t Count = 0U;
+    const WorldContactEvent* Events = WorldCollision_GetContactEvents(frame->_collision, &Count);
+    for (size_t Index = 0U; (Index < Count) && (frame->_services->Logger != NULL); Index++)
     {
-        LogLine(frame, "the test world has no door with a collider.");
+        const WorldContactEvent* Event = &Events[Index];
+        const char* Kind = (Event->Kind == WorldContactEventKind_Begin) ? "begins"
+            : ((Event->Kind == WorldContactEventKind_Persist) ? "goes on" : "ends");
+        Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+            (const unsigned char*)u8"WorldTest: contact %s: object %" PRIu64 u8" (\"%s\") and object %" PRIu64
+            u8" (\"%s\"), %u shape pairs, impact %.2f m/s.", Kind, Event->ObjectIdA,
+            GetNameOf(&frame->_world, Event->ObjectIdA), Event->ObjectIdB, GetNameOf(&frame->_world, Event->ObjectIdB),
+            Event->ContactCount, (double)Event->ApproachSpeed);
+        Error_Deconstruct(&LogResult);
+    }
+    WorldCollision_ClearContactEvents(frame->_collision);
+}
+
+/* The motion events of this tick's step: movers blocked and pushables crushed, when it begins and ends. */
+static void LogMotionEvents(WorldTestFrame* frame)
+{
+    size_t Count = 0U;
+    const WorldMotionEvent* Events = WorldCollision_GetMotionEvents(frame->_collision, &Count);
+    for (size_t Index = 0U; (Index < Count) && (frame->_services->Logger != NULL); Index++)
+    {
+        const WorldMotionEvent* Event = &Events[Index];
+        Error LogResult = Error_CreateSuccess();
+        switch (Event->Kind)
+        {
+            case WorldMotionEventKind_BlockedBegin:
+                LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                    (const unsigned char*)u8"WorldTest: object %" PRIu64 u8" (\"%s\") is blocked by object %" PRIu64
+                    u8" (\"%s\"), which cannot get out of its way; it %s.", Event->ObjectId,
+                    GetNameOf(&frame->_world, Event->ObjectId), Event->OtherId, GetNameOf(&frame->_world, Event->OtherId),
+                    Event->IsStopped ? "stops" : "pushes through");
+                break;
+            case WorldMotionEventKind_BlockedEnd:
+                LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                    (const unsigned char*)u8"WorldTest: object %" PRIu64 u8" (\"%s\") is no longer blocked.",
+                    Event->ObjectId, GetNameOf(&frame->_world, Event->ObjectId));
+                break;
+            case WorldMotionEventKind_CrushedBegin:
+                LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                    (const unsigned char*)u8"WorldTest: object %" PRIu64 u8" (\"%s\") is crushed: pinned %.1f mm into "
+                    u8"object %" PRIu64 u8" (\"%s\").", Event->ObjectId, GetNameOf(&frame->_world, Event->ObjectId),
+                    (double)(Event->Depth * 1000.0f), Event->OtherId, GetNameOf(&frame->_world, Event->OtherId));
+                break;
+            case WorldMotionEventKind_CrushedEnd:
+                LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                    (const unsigned char*)u8"WorldTest: object %" PRIu64 u8" (\"%s\") is no longer crushed.",
+                    Event->ObjectId, GetNameOf(&frame->_world, Event->ObjectId));
+                break;
+        }
+        Error_Deconstruct(&LogResult);
+    }
+    WorldCollision_ClearMotionEvents(frame->_collision);
+}
+
+/* The door's driver: turns it toward open or closed at its swing speed, from where it actually is (the collision step
+ * may have stopped it on something it could not push). */
+static void SwingDoor(WorldTestFrame* frame, float deltaSeconds)
+{
+    WorldObject* Door = NULL;
+    if ((frame->_doorId == 0U) || !World_TryGetObject(&frame->_world, frame->_doorId, &Door))
+    {
         return;
     }
-    WorldColliderComponent* Collider = WorldColliderComponent_FromComponent(Component);
-    bool IsOpen = !frame->_isDoorOpen;
-    Error Result = WorldColliderComponent_SetCollisionSet(Collider, IsOpen ? DOOR_OPEN_SET : DOOR_CLOSED_SET);
-    if (Result.Code == ErrorCode_Success)
+    Vector3 Rotation = WorldObject_GetRotation(Door);
+    float Target = frame->_doorClosedYaw + (frame->_isDoorOpen ? DOOR_OPEN_TURN : 0.0f);
+    float Left = Target - Rotation.y;
+    if (Left == 0.0f)
     {
-        Result = WorldColliderComponent_SetOverridden(Collider, WorldColliderSetting_CollisionSet, true);
+        return;
     }
-    if (Result.Code == ErrorCode_Success)
+    float Step = DOOR_SWING_SPEED * deltaSeconds;
+    Rotation.y = (fabsf(Left) <= Step) ? Target : (Rotation.y + ((Left > 0.0f) ? Step : -Step));
+    Error Result = WorldObject_SetRotation(Door, Rotation);
+    Error_Deconstruct(&Result); // cannot fail: the rotation is finite
+}
+
+/* Puts a crate where it was loaded, as a teleport (no sweep: it is only pushed out of what it lands in). */
+static void TeleportObject(WorldTestFrame* frame, uint64_t id, Vector3 position)
+{
+    WorldObject* Object = NULL;
+    if ((id == 0U) || !World_TryGetObject(&frame->_world, id, &Object))
     {
-        frame->_isDoorOpen = IsOpen;
+        return;
     }
-    Error_Deconstruct(&Result); // cannot fail: the names are valid and the setting exists
-    LogLine(frame, frame->_isDoorOpen ? "the door's hitbox is open (turned 90 degrees about its hinge; the model does "
-        "not move: F7 shows it)." : "the door's hitbox is closed.");
+    Error Result = WorldObject_SetPosition(Object, position);
+    Error_Deconstruct(&Result); // cannot fail: the position is finite
+    WorldCollision_Teleport(frame->_collision, id);
+}
+
+/* The pushing wall's driver: toward its far end or home along X at its speed, from where it actually is (the collision
+ * step stops it when the row it pushes is pinned against the stop). Home again, the row's crates go back. */
+static void MovePusher(WorldTestFrame* frame, float deltaSeconds)
+{
+    WorldObject* Pusher = NULL;
+    if ((frame->_pusherId == 0U) || !World_TryGetObject(&frame->_world, frame->_pusherId, &Pusher))
+    {
+        return;
+    }
+    Vector3 Position = WorldObject_GetPosition(Pusher);
+    float Target = frame->_pusherHomeX + (frame->_isPusherOut ? PUSHER_TRAVEL : 0.0f);
+    float Left = Target - Position.x;
+    if (Left == 0.0f)
+    {
+        if (!frame->_isPusherOut && !frame->_isPusherHome)
+        {
+            frame->_isPusherHome = true;
+            for (size_t Index = 0U; Index < ROW_CRATE_COUNT; Index++)
+            {
+                TeleportObject(frame, frame->_rowCrateIds[Index], frame->_rowCrateHomes[Index]);
+            }
+            LogLine(frame, "the pushing wall is home; the crates are back where they were (teleported).");
+        }
+        return;
+    }
+    float Step = PUSHER_SPEED * deltaSeconds;
+    Position.x = (fabsf(Left) <= Step) ? Target : (Position.x + ((Left > 0.0f) ? Step : -Step));
+    Error Result = WorldObject_SetPosition(Pusher, Position);
+    Error_Deconstruct(&Result); // cannot fail: the position is finite
+}
+
+static void UpdateCollisionDebug(WorldTestFrame* frame)
+{
+    WorldCollision_SetDebugListEnabled(frame->_collision, frame->_areCollidersShown);
+    WorldCollision_SetDebugContactsEnabled(frame->_collision, frame->_areContactsShown);
+    WorldRenderer_SetCollisionDebug(frame->_renderer, (frame->_areCollidersShown || frame->_areContactsShown)
+        ? frame->_collision : NULL);
 }
 
 /* The collision keys: F7 shows and hides the collider wireframes (coloured by layer: world grey, prop orange, triggers
- * violet; static ones darker), F6 opens and closes the door's hitbox. Not R: the UI test frame above takes it. */
+ * violet; static ones darker), F8 the contact points (normals cyan, pushes red); F6 swings the door open and closed, F9
+ * sends the pushing wall out and back, F10 teleports the door's crate aside and back. Not R: the UI test frame above
+ * takes it. */
 static void HandleDebugCollisionInput(WorldTestFrame* frame, const GameInput* input)
 {
     if (GameInput_IsKeyPressed(input, GameKey_F7))
     {
         frame->_areCollidersShown = !frame->_areCollidersShown;
-        WorldCollision_SetDebugListEnabled(frame->_collision, frame->_areCollidersShown);
-        WorldRenderer_SetCollisionDebug(frame->_renderer, frame->_areCollidersShown ? frame->_collision : NULL);
+        UpdateCollisionDebug(frame);
         LogLine(frame, frame->_areCollidersShown ? "collider wireframes ON." : "collider wireframes OFF.");
     }
-    if (GameInput_IsKeyPressed(input, GameKey_F6))
+    if (GameInput_IsKeyPressed(input, GameKey_F8))
     {
-        ToggleDoor(frame);
+        frame->_areContactsShown = !frame->_areContactsShown;
+        UpdateCollisionDebug(frame);
+        LogLine(frame, frame->_areContactsShown ? "contact points ON (white touching, grey near; normals cyan, pushes "
+            "red)." : "contact points OFF.");
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_F6) && (frame->_doorId != 0U))
+    {
+        frame->_isDoorOpen = !frame->_isDoorOpen;
+        LogLine(frame, frame->_isDoorOpen ? "the door swings open (it stops on the crate pinned in its way; F10 moves "
+            "the crate)." : "the door swings closed.");
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_F9) && (frame->_pusherId != 0U))
+    {
+        frame->_isPusherOut = !frame->_isPusherOut;
+        frame->_isPusherHome = false;
+        LogLine(frame, frame->_isPusherOut ? "the pushing wall goes out along +X: it pushes the row of crates against "
+            "the stop." : "the pushing wall goes back home.");
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_F10) && (frame->_doorCrateId != 0U))
+    {
+        frame->_isDoorCrateAside = !frame->_isDoorCrateAside;
+        Vector3 Position = frame->_doorCrateHome;
+        Position.x += frame->_isDoorCrateAside ? DOOR_CRATE_ASIDE_SHIFT : 0.0f;
+        TeleportObject(frame, frame->_doorCrateId, Position);
+        LogLine(frame, frame->_isDoorCrateAside ? "the door's crate is teleported out of its way." : "the door's crate "
+            "is teleported back into its corner (pushed out of the door if they overlap).");
     }
 }
 
@@ -1132,7 +1304,8 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"day, / a week ahead; F full moon / calendar moon, Y seasons; O post effects, B bloom, G sun shafts, "
             u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, N light pollution, X opacity of the "
             u8"centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the desk, "
-            u8"E variants, Z zoom, Q LOD tinting, F7 collider wireframes, F6 open/close the door's hitbox, I renderer, "
+            u8"E variants, Z zoom, Q LOD tinting, F7 collider wireframes, F8 contact points, F6 swing the door, F9 the "
+            u8"pushing wall, F10 move the door's crate, I renderer, "
             u8"game time and collision status, T text sample, F5 save the world (worlds/test.saved.world.json "
             u8"and .ghdf); M frees the "
             u8"mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");
@@ -1167,11 +1340,16 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     }
     ApplyClockToEnvironment(Frame);
 
-    // The tick's order (agents/WorldData.md): the drivers move things (the desk), the collision world follows them (its
-    // sync brings the world matrices up to date first), its queued trigger events are handled, then the animations.
+    // The tick's order (agents/WorldData.md): the drivers move things (the desk, the door, the pushing wall), the
+    // collision step sweeps and pushes (it syncs first and writes the pushes back), its queued trigger, contact and
+    // motion events are handled, then the animations.
     SlideDesk(Frame, time.PassedTime);
-    WorldCollision_Sync(Frame->_collision);
+    SwingDoor(Frame, Delta);
+    MovePusher(Frame, Delta);
+    WorldCollision_Step(Frame->_collision, Delta);
     LogTriggerEvents(Frame);
+    LogContactEvents(Frame);
+    LogMotionEvents(Frame);
     AdvanceSpriteAnimations(&Frame->_world, time.PassedTime);
 
     // The world matrices of everything that moved this tick, so the renderer reads them cached.
@@ -1391,8 +1569,32 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     Frame->_variantStep = 0U;
     Frame->_isZoomed = false;
     Frame->_areCollidersShown = false;
+    Frame->_areContactsShown = false;
     Frame->_doorId = FindObjectId(&Frame->_world, TEST_DOOR_OBJECT_NAME);
+    WorldObject* Door = NULL;
+    Frame->_doorClosedYaw = World_TryGetObject(&Frame->_world, Frame->_doorId, &Door) ? WorldObject_GetRotation(Door).y
+        : 0.0f;
     Frame->_isDoorOpen = false;
+    Frame->_pusherId = FindObjectId(&Frame->_world, TEST_PUSHER_OBJECT_NAME);
+    WorldObject* Pusher = NULL;
+    Frame->_pusherHomeX = World_TryGetObject(&Frame->_world, Frame->_pusherId, &Pusher)
+        ? WorldObject_GetPosition(Pusher).x : 0.0f;
+    Frame->_isPusherOut = false;
+    Frame->_isPusherHome = true;
+    for (unsigned Index = 0U; Index < ROW_CRATE_COUNT; Index++)
+    {
+        char Name[32];
+        snprintf(Name, sizeof(Name), TEST_ROW_CRATE_NAME_FORMAT, Index + 1U);
+        Frame->_rowCrateIds[Index] = FindObjectId(&Frame->_world, Name);
+        WorldObject* Crate = NULL;
+        Frame->_rowCrateHomes[Index] = World_TryGetObject(&Frame->_world, Frame->_rowCrateIds[Index], &Crate)
+            ? WorldObject_GetPosition(Crate) : (Vector3){ 0.0f, 0.0f, 0.0f };
+    }
+    Frame->_doorCrateId = FindObjectId(&Frame->_world, TEST_DOOR_CRATE_OBJECT_NAME);
+    WorldObject* DoorCrate = NULL;
+    Frame->_doorCrateHome = World_TryGetObject(&Frame->_world, Frame->_doorCrateId, &DoorCrate)
+        ? WorldObject_GetPosition(DoorCrate) : (Vector3){ 0.0f, 0.0f, 0.0f };
+    Frame->_isDoorCrateAside = false;
     if (!IsTestWorldLoaded)
     {
         WorldRenderer_SetDebugGridEnabled(Frame->_renderer, true); // an empty world shows the grid, so it is visible

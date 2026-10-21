@@ -268,10 +268,14 @@ primitive of its own instead of the sets) with `shape_type` (`sphere`, `capsule`
 `shape_is_bounded`, `shape_plane_half_extents` and `shape_depth`; `overrides_layer` / `layer` (`prop`),
 `overrides_collides_with` / `collides_with` (an `EnumSet` of layers: prop's default mask), `overrides_is_trigger` /
 `is_trigger`; `offset`, `rotation`, `scale` (a local transform of all its shapes, the scale above 0); `rotation_mode`
-(`full`, `yaw_only`, `none`). Without the flags the world model's `collision` section gives the set, layer, mask and
-trigger flag (`prop`, prop's mask and no trigger without one). `WorldColliderComponent_ResolveSettings(collider,
-collision)` is the pure function that gives the settings in effect; `SetOwnShape` sets the own primitive from a
-`CollisionShape`, all or nothing. No hooks: the collision world watches the revision.
+(`full`, `yaw_only`, `none`). Since T27, in the category "Motion": `is_pushable` (false: a movable object's collider is
+kinematic, it pushes and is never pushed), `overrides_mass` / `mass` (1 kg, above 0, at most `COLLISION_MAX_MASS`),
+`when_blocked` (`stop` or `push_through`), `is_continuous` (true: its motion is swept) and
+`reports_persisting_contacts` (false). Without the flags the world model's `collision` section gives the set, layer,
+mask, trigger flag and mass (`prop`, prop's mask, no trigger and 1 kg without one).
+`WorldColliderComponent_ResolveSettings(collider, collision)` is the pure function that gives the settings in effect;
+`SetOwnShape` sets the own primitive from a `CollisionShape`, all or nothing. No hooks: the collision world watches the
+revision.
 
 ### Light component (`light_component`)
 `_color` (white), `_intensity` (>= 0, default 1), `_range` (>= 0, default 1: how far the light reaches; T05 renamed it
@@ -332,6 +336,12 @@ yet, but the model is ready for them:
   fight over one transform. Adding a driver makes the object movable. A driven object is normally a root object; with
   a parent the driver writes the local transform through the parent's inverse (`WorldTransform_TryGetLocalMatrix`,
   then `WorldTransform_Decompose`).
+- **The collision step corrects drivers (T27).** It is the one system besides an object's driver that writes the
+  object's transform: a driver writes where its object wants to be, `WorldCollision_Step` moves a pushed object's
+  position by its push (a child's through its parent's inverse) and sets a stopped mover's chain back to where it was
+  at the start of the tick, and the driver reads the correction next tick (`WorldCollision_GetMotionResult`). Drivers
+  must therefore read their object's transform each tick rather than keep their own copy (the test frame's door and
+  pushing wall do).
 - **Moving with a parent.** An object under a movable parent moves in play although its own mobility may be static:
   systems that cache static objects must watch the transform revision (it advances when an ancestor moves), not the
   mobility alone (T12).
@@ -348,9 +358,11 @@ yet, but the model is ready for them:
   1. input (`GameInput`, polled by the frame manager);
   2. scripts (later);
   3. transform drivers: characters, vehicles, physics (later);
-  4. collision sync: `WorldCollision_Sync` (T12), which brings the world matrices up to date first;
-  5. queued events: trigger enter and exit (`WorldCollision_GetTriggerEvents`, then `_ClearTriggerEvents`), later
-     contacts (T27; the queued-event rule, architecture A4);
+  4. the collision step: `WorldCollision_Step` (T27), which syncs (T12; the world matrices first), sweeps every
+     collider that moved, pushes apart what overlaps and writes the pushes back;
+  5. queued events: trigger enter and exit (`WorldCollision_GetTriggerEvents`, then `_ClearTriggerEvents`), contacts
+     and motion events (T27: `_GetContactEvents`, `_GetMotionEvents`, then their clears; the queued-event rule,
+     architecture A4);
   6. animation (today: sprite playback, `AdvanceSpriteAnimations` in the test frame, effectively enabled objects only);
   7. `World_UpdateTransforms`: the world matrices of everything that moved this tick (T08);
   8. the renderer, which only reads (AGENTS.md rule 3).
@@ -574,5 +586,5 @@ renderer's side ([WorldRuntime.md](WorldRuntime.md)). They run headless with `sh
 GL context, and world models and world sprites built from JSON over them. `tests/WorldModelTests.c` covers the world
 models and the model component's overrides ([WorldModels.md](WorldModels.md)), `tests/WorldSpriteTests.c` the world
 sprites and the sprite component's overrides ([WorldSprites.md](WorldSprites.md)), `tests/WorldColliderTests.c` the
-collider component and the world models' collision, `tests/WorldCollisionTests.c` the collision world
-([WorldCollision.md](WorldCollision.md)).
+collider component and the world models' collision, `tests/WorldCollisionTests.c` the collision world and
+`tests/WorldCollisionMotionTests.c` its step ([WorldCollision.md](WorldCollision.md)).

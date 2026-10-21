@@ -473,9 +473,11 @@ bool WorldRenderer_AreLightGizmosEnabled(const WorldRenderer* self);
  * @brief Sets the collision world whose shapes are drawn as wireframes (a debug aid), or NULL to draw none (the
  *        default).
  *
- * The renderer only reads the collision world's debug list (WorldCollision_GetDebugShapes, rule 3), so nothing shows
- * until WorldCollision_SetDebugListEnabled turns the list on. The shapes are drawn in the scene pass after the light
- * gizmos, depth-tested, coloured by layer (triggers violet whatever their layer; static shapes darker).
+ * The renderer only reads the collision world's debug lists (WorldCollision_GetDebugShapes and, since T27,
+ * WorldCollision_GetDebugContacts; rule 3), so nothing shows until WorldCollision_SetDebugListEnabled or
+ * WorldCollision_SetDebugContactsEnabled turns a list on. The shapes are drawn in the scene pass after the light gizmos,
+ * depth-tested, coloured by layer (triggers violet whatever their layer; static shapes darker); the contact points as
+ * small crosses (white touching, grey near) with their normals (cyan) and pushes (red, along the normal).
  * @param self The renderer; must not be NULL.
  * @param collision The collision world (borrowed: set NULL before destroying it), or NULL.
  */

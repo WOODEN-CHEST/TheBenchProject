@@ -157,10 +157,11 @@ G17); the maths is the private `source/WorldLod.{h,c}` ([WorldRuntime.md](WorldR
 
 A world model may hold its placements' collision: named **collision sets** (compounds of spheres, capsules, boxes,
 cylinders, convex hulls, planes and meshes, each placed in the model's space, an optional part name each), the set its
-placements use by default, and the placements' default layer, mask and trigger flag. `"collision": "bounds"` is one
-set, `bounds`, holding a box around LOD 0 (exact under its import transform). No section: no collision. The format is in
-`references/asset_structure.md`; the shapes, the collider component that places them and the collision world are in
-[WorldCollision.md](WorldCollision.md).
+placements use by default, and the placements' default layer, mask, trigger flag and mass (T27: how pushables share a
+push; above 0, at most `COLLISION_MAX_MASS`, `COLLISION_DEFAULT_MASS` (1 kg) when left out, also under `"bounds"`).
+`"collision": "bounds"` is one set, `bounds`, holding a box around LOD 0 (exact under its import transform). No
+section: no collision. The format is in `references/asset_structure.md`; the shapes, the collider component that places
+them and the collision world are in [WorldCollision.md](WorldCollision.md).
 - **Parsed with the definition** (`source/WorldModelCollisionDefinition.c`): the same rules as the rest (messages name
   the place, `collision.sets[0].shapes[2].radius`), each shape type refusing the other types' keys, the limits (32 sets,
   128 shapes a set, 1024 in all), point hulls built once to refuse flat ones.

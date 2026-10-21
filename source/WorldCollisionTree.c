@@ -350,6 +350,15 @@ bool CollisionTree_Move(CollisionTree* self, int32_t proxy, Vector3 min, Vector3
     return true;
 }
 
+void CollisionTree_Refit(CollisionTree* self, int32_t proxy, Vector3 min, Vector3 max)
+{
+    RemoveLeaf(self, proxy);
+    CollisionTreeNode* Node = NodeAt(self, proxy);
+    Node->Min = (Vector3){ min.x - self->Margin, min.y - self->Margin, min.z - self->Margin };
+    Node->Max = (Vector3){ max.x + self->Margin, max.y + self->Margin, max.z + self->Margin };
+    InsertLeaf(self, proxy);
+}
+
 uint64_t CollisionTree_GetUserValue(const CollisionTree* self, int32_t proxy)
 {
     return NodeAt(self, proxy)->UserValue;

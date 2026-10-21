@@ -61,6 +61,12 @@ typedef struct GameModelStruct GameModel;
 #define COLLISION_MESH_MAX_TRIANGLES ((uint32_t)1U << 20U)
 /** @brief The size every primitive starts at in CollisionShape_Create: a radius, half height or half extent, metres. */
 #define COLLISION_SHAPE_DEFAULT_SIZE 0.5f
+/** @brief A collider's mass when neither its world model nor its placement gives one, in kilograms (T27: how pushes are
+ *  shared; T28: physics). */
+#define COLLISION_DEFAULT_MASS 1.0f
+/** @brief The largest mass a world model or a collider may give (above 0 up to this, kilograms): a ratio of masses past
+ *  about 1e6 would lose the lighter one's push to float rounding. */
+#define COLLISION_MAX_MASS 1.0e6f
 
 
 // Types.

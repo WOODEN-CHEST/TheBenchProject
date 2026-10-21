@@ -39,10 +39,10 @@ typedef struct GameTextureStruct GameTexture;
  * WorldModel_ApplyVariant changes that copy (textures, then the factors), the same rule as the object's tint.
  *
  * COLLISION (T12). A world model may have collision sets (WorldModelCollision): named compounds of shapes in its own
- * space, one of them the default, and the defaults of its placements' colliders (a layer, a mask, a trigger flag). A
- * placement's collider picks a set and may override each default (WorldColliderComponent.h). Hulls and meshes built
- * from models are the world model's own (their models load as dependencies), shared by every placement. Without a
- * "collision" section a world model has no collision.
+ * space, one of them the default, and the defaults of its placements' colliders (a layer, a mask, a trigger flag and,
+ * since T27, a mass). A placement's collider picks a set and may override each default (WorldColliderComponent.h).
+ * Hulls and meshes built from models are the world model's own (their models load as dependencies), shared by every
+ * placement. Without a "collision" section a world model has no collision.
  *
  * LODS. Each LOD is drawn while the object is nearer than its max distance (at the default 60-degree field of view), the
  * last one until the draw distance; a placement may give its own switch distances, scale them or force a LOD
@@ -197,6 +197,9 @@ typedef struct WorldModelCollisionStruct
     uint32_t _collidesWith;
     /** @brief Whether its placements' colliders are triggers by default. */
     bool _isTrigger;
+    /** @brief The default mass of its placements' colliders, in kilograms (above 0, at most COLLISION_MAX_MASS;
+     *  COLLISION_DEFAULT_MASS when the section gives none): how pushables share a push (T27). */
+    float _mass;
     /** @brief Whether the sets are the built-in "bounds" fallback (one box around LOD 0). */
     bool _isBoundsFallback;
 } WorldModelCollision;

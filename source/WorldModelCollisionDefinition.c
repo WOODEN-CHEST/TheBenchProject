@@ -18,8 +18,9 @@
  *   "collision": {
  *     "default_set": "closed",       the set placements use (default: the first)
  *     "layer": "prop",               the placements' default layer, mask ("collides_with": layer names; left out: the
- *     "collides_with": [...],        layer's default mask) and trigger flag
- *     "is_trigger": false,
+ *     "collides_with": [...],        layer's default mask), trigger flag and mass (kilograms, above 0: how pushables
+ *     "is_trigger": false,           share a push, T27)
+ *     "mass": 1,
  *     "sets": [ { "name": "closed", "shapes": [ { "type": "box", ... }, ... ] }, ... ]
  *   }
  *
@@ -74,6 +75,7 @@ struct WorldModelCollisionDefinitionStruct
     bool HasCollidesWith;
     uint32_t CollidesWith;
     bool IsTrigger;
+    float Mass;
 };
 
 typedef struct ParseContextStruct
@@ -87,7 +89,7 @@ typedef struct ParseContextStruct
 // Fields.
 static const unsigned char* const SectionKeys[] =
 {
-    u8"default_set", u8"layer", u8"collides_with", u8"is_trigger", u8"sets"
+    u8"default_set", u8"layer", u8"collides_with", u8"is_trigger", u8"mass", u8"sets"
 };
 static const unsigned char* const SetKeys[] = { u8"name", u8"shapes" };
 static const unsigned char* const SphereKeys[] = { u8"type", u8"name", u8"center", u8"rotation", u8"radius" };
@@ -546,7 +548,7 @@ static Error ParseSet(ParseContext* context, JSONCompound* compound, size_t inde
     return Result;
 }
 
-/* The placements' defaults: default_set, layer, collides_with, is_trigger. */
+/* The placements' defaults: default_set, layer, collides_with, is_trigger, mass. */
 static Error ParseDefaults(ParseContext* context, JSONCompound* section)
 {
     WorldModelCollisionDefinition* Definition = context->Definition;
@@ -580,6 +582,18 @@ static Error ParseDefaults(ParseContext* context, JSONCompound* section)
     {
         Result = ReadBoolean(context, section, (const unsigned char*)u8"is_trigger", "collision", false,
             &Definition->IsTrigger);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        bool HasMass = false;
+        Result = ReadFloat(context, section, (const unsigned char*)u8"mass", "collision", COLLISION_DEFAULT_MASS,
+            &Definition->Mass, &HasMass);
+        bool IsMassValid = (Definition->Mass > 0.0f) && (Definition->Mass <= COLLISION_MAX_MASS);
+        if ((Result.Code == ErrorCode_Success) && !IsMassValid)
+        {
+            return Fail(context, "collision.mass is %g; it must be above 0 and at most %g (kilograms).",
+                (double)Definition->Mass, (double)COLLISION_MAX_MASS);
+        }
     }
     JSONObjectValue Mask;
     bool HasMask = false;
@@ -786,6 +800,7 @@ Error WorldModelCollisionDefinition_Parse(const char* printableName, JSONCompoun
     WorldModelCollisionDefinition* Definition = Memory_Allocate(sizeof(WorldModelCollisionDefinition));
     Memory_Zero(Definition, sizeof(*Definition));
     Definition->Layer = CollisionLayer_Prop;
+    Definition->Mass = COLLISION_DEFAULT_MASS;
     ParseContext Context = { .Name = printableName, .Definition = Definition, .ShapeTotal = 0U };
     if (Value.Type == JSONValueType_String)
     {
@@ -926,7 +941,7 @@ Error WorldModelCollisionDefinition_Load(const WorldModelCollisionDefinition* se
     {
         ._sets = Sets, ._setCount = (uint32_t)SetCount, ._defaultSet = (uint32_t)self->DefaultSet,
         ._layer = self->Layer, ._hasCollidesWith = self->HasCollidesWith, ._collidesWith = self->CollidesWith,
-        ._isTrigger = self->IsTrigger, ._isBoundsFallback = self->IsBoundsFallback
+        ._isTrigger = self->IsTrigger, ._mass = self->Mass, ._isBoundsFallback = self->IsBoundsFallback
     };
     *outBlock = Block;
     *outCollision = &Block->Collision;

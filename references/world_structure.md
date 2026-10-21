@@ -186,8 +186,10 @@ a plain setting, not an override.
 
 The `collider` component (T12) makes the object collide: with its world model's collision (the model block's world
 model, `references/asset_structure.md`, "World models", `collision`) or with one shape of its own. Without it an object
-does not collide, whatever its world model holds. Its layer, mask and trigger flag come from the world model, each
-overridable with the same two keys as the model block.
+does not collide, whatever its world model holds. Its layer, mask, trigger flag and mass come from the world model, each
+overridable with the same two keys as the model block. Since T27 it also says how the object takes part in the
+collision step: a movable object's collider is pushed (`is_pushable`) or kinematic (it pushes, and is never pushed);
+a static object's collider never moves in play.
 
 | Key | Value (default) | |
 |---|---|---|
@@ -204,6 +206,11 @@ overridable with the same two keys as the model block.
 | `overrides_is_trigger`, `is_trigger` | false, false | A trigger reports what touches it and blocks nothing. |
 | `offset`, `rotation`, `scale` | `[x, y, z]` (none, none, [1, 1, 1]) | A transform of all its shapes on top of the object's; the scale above 0 on every axis. |
 | `rotation_mode` | `full`, `yaw_only`, `none` (`full`) | How the shapes follow the object's turn: fully, only about the up axis (upright), or not at all (axis-aligned). |
+| `is_pushable` | `true` / `false` (false) | On a movable object: the collision step may push it (characters, NPCs, crates). Off, a movable object's collider is kinematic (doors, elevators): it pushes and is never pushed. A static object or a trigger is never pushed. |
+| `overrides_mass`, `mass` | false, kilograms (1) | On: this mass instead of the world model's (above 0, at most 1000000). Pushables share a push by mass: equal masses give way equally. |
+| `when_blocked` | `stop`, `push_through` (`stop`) | A kinematic mover that would squeeze a pushable against something that does not give way: `stop` stays where it was at the start of the tick, `push_through` moves on (the pushable is left overlapping it as little as it can). |
+| `is_continuous` | `true` / `false` (true) | Off: its own motion is not swept, only pushed out where it ends up (cheap movers that never go fast). |
+| `reports_persisting_contacts` | `true` / `false` (false) | On: a contact event every tick while it touches something, not only when a touch begins and ends. |
 
 ```
 "collider": {
@@ -213,6 +220,14 @@ overridable with the same two keys as the model block.
     "layer": "trigger",
     "overrides_is_trigger": true,
     "is_trigger": true
+}
+```
+A crate that a door or a character pushes (its object `movable`), heavier than its world model says:
+```
+"collider": {
+    "is_pushable": true,
+    "overrides_mass": true,
+    "mass": 25.0
 }
 ```
 
