@@ -113,13 +113,27 @@ static bool IsNearRaylibMatrix(const Matrix4Double* matrix, Matrix expected)
     return true;
 }
 
+/* Whether a double vector is raymath's float one within FLOAT_TOLERANCE of @p scale (at least 1, and at least their
+ * largest coordinate): float sums and products round at their inputs' size, not at the result's. */
+static bool IsNearRaylibVectorWithin(Vector3Double vector, Vector3 expected, double scale)
+{
+    Vector3Double Expected = GameMath_FromVector3(expected);
+    double Largest = fmax(fmax(1.0, scale), fmax(fabs(vector.X), fmax(fabs(vector.Y), fabs(vector.Z))));
+    Largest = fmax(Largest, fmax(fabs(Expected.X), fmax(fabs(Expected.Y), fabs(Expected.Z))));
+    return Vector3Double_EqualsClose(vector, Expected, FLOAT_TOLERANCE * Largest);
+}
+
 /* Whether a double vector is raymath's float one within FLOAT_TOLERANCE of their largest coordinate (at least 1). */
 static bool IsNearRaylibVector(Vector3Double vector, Vector3 expected)
 {
-    Vector3Double Expected = GameMath_FromVector3(expected);
-    double Largest = fmax(1.0, fmax(fabs(vector.X), fmax(fabs(vector.Y), fabs(vector.Z))));
-    Largest = fmax(Largest, fmax(fabs(Expected.X), fmax(fabs(Expected.Y), fabs(Expected.Z))));
-    return Vector3Double_EqualsClose(vector, Expected, FLOAT_TOLERANCE * Largest);
+    return IsNearRaylibVectorWithin(vector, expected, 1.0);
+}
+
+/* The same for a scalar. */
+static bool IsNearRaylibScalar(double value, float expected, double scale)
+{
+    double Largest = fmax(fmax(1.0, scale), fmax(fabs(value), fabs((double)expected)));
+    return fabs(value - (double)expected) <= (FLOAT_TOLERANCE * Largest);
 }
 
 /* A random scale on each axis in [0.2, 3] with a mirror now and then, a random turn and a translation up to @p reach
@@ -418,6 +432,650 @@ static void FloatConversionsRoundOnce(TestRun* run)
         TEST_CHECK(run, ((Index >= 12U) && (Index <= 14U)) || (Relative[Index] == Entries[Index]));
     }
     TEST_CHECK(run, Memory_IsEqual(&Relative[12], Out, sizeof(Out)));
+}
+
+
+static void Vectors3DMoreByHand(TestRun* run)
+{
+    // Constants and per-axis arithmetic.
+    Vector3Double V = Vector3Double_Create(1.0, -2.0, 3.0);
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_One(), Vector3Double_Create(1.0, 1.0, 1.0), 0.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_AddValue(V, 0.5), Vector3Double_Create(1.5, -1.5, 3.5), 0.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_SubtractValue(V, 0.5), Vector3Double_Create(0.5, -2.5, 2.5),
+        0.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Divide(Vector3Double_Create(3.0, -8.0, 1.0),
+        Vector3Double_Create(2.0, 4.0, -4.0)), Vector3Double_Create(1.5, -2.0, -0.25), 0.0));
+    Vector3Double ByZero = Vector3Double_Divide(Vector3Double_Create(1.0, 0.0, 2.0), Vector3Double_Create(0.0, 0.0, 1.0));
+    TEST_CHECK(run, (ByZero.X == INFINITY_POS_DOUBLE) && Math_IsNaNDouble(ByZero.Y) && (ByZero.Z == 2.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Invert(Vector3Double_Create(2.0, -0.25, 1.0)),
+        Vector3Double_Create(0.5, -4.0, 1.0), 0.0));
+    TEST_CHECK(run, Vector3Double_Invert(Vector3Double_Create(0.0, 1.0, 1.0)).X == INFINITY_POS_DOUBLE);
+
+    // Perpendicular: across the vector, from the axis it points least along, and long enough to build a basis on.
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Perpendicular(V), Vector3Double_Create(0.0, 3.0, 2.0), 0.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Perpendicular(Vector3Double_Zero()), Vector3Double_Zero(), 0.0));
+    Random Generator;
+    Random_Construct2(&Generator, (RandomState){ .Values = { 0x3D1U, 0x1U, 0x4U, 0x7U } });
+    for (size_t Index = 0U; Index < RANDOM_CASE_COUNT; Index++)
+    {
+        Vector3Double Vector = RandomVector(&Generator, -10.0, 10.0);
+        Vector3Double Across = Vector3Double_Perpendicular(Vector);
+        double Length = Vector3Double_Length(Vector);
+        TEST_CHECK(run, fabs(Vector3Double_Dot(Across, Vector)) <= (1e-14 * Length * Length));
+        TEST_CHECK(run, Vector3Double_Length(Across) >= (sqrt(2.0 / 3.0) * Length * (1.0 - 1e-12)));
+    }
+    Random_Deconstruct1(&Generator);
+
+    // Projection and rejection: onto any length, adding up to the vector, the rest across; nothing to project onto.
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Project(V, Vector3Double_Create(0.0, 0.0, 5.0)),
+        Vector3Double_Create(0.0, 0.0, 3.0), 0.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Reject(V, Vector3Double_Create(0.0, 0.0, -0.001)),
+        Vector3Double_Create(1.0, -2.0, 0.0), 0.0));
+    Vector3Double Diagonal = Vector3Double_Create(1.0, 1.0, 1.0);
+    Vector3Double Along = Vector3Double_Project(Vector3Double_Create(1.0, 2.0, 3.0), Diagonal);
+    Vector3Double Across = Vector3Double_Reject(Vector3Double_Create(1.0, 2.0, 3.0), Diagonal);
+    TEST_CHECK(run, Vector3Double_EqualsClose(Along, Vector3Double_Create(2.0, 2.0, 2.0), HAND_TOLERANCE * 4.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Across, Vector3Double_Create(-1.0, 0.0, 1.0), HAND_TOLERANCE * 4.0));
+    TEST_CHECK(run, fabs(Vector3Double_Dot(Across, Diagonal)) < HAND_TOLERANCE * 4.0);
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Project(V, Vector3Double_Create(1e-200, 0.0, 0.0)),
+        Vector3Double_Create(1.0, 0.0, 0.0), 0.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Project(V, Vector3Double_Zero()), Vector3Double_Zero(), 0.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Reject(V, Vector3Double_Create(NAN_DOUBLE, 0.0, 0.0)), V, 0.0));
+
+    // Reflection off a floor (either side of its normal), and refraction: straight through head on, Snell's law at
+    // 45 degrees from air into glass, and total internal reflection from glass into air at 60 degrees.
+    Vector3Double Up = Vector3Double_Create(0.0, 1.0, 0.0);
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Reflect(V, Up), Vector3Double_Create(1.0, 2.0, 3.0), 0.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Reflect(V, Vector3Double_Negate(Up)),
+        Vector3Double_Create(1.0, 2.0, 3.0), 0.0));
+    Vector3Double Down = Vector3Double_Negate(Up);
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Refract(Down, Up, 1.0 / 1.5), Down, HAND_TOLERANCE));
+    double Half = sqrt(0.5);
+    Vector3Double Slanted = Vector3Double_Refract(Vector3Double_Create(Half, -Half, 0.0), Up, 1.0 / 1.5);
+    double SineOut = Half / 1.5;
+    TEST_CHECK(run, Vector3Double_EqualsClose(Slanted, Vector3Double_Create(SineOut, -sqrt(1.0 - (SineOut * SineOut)), 0.0),
+        HAND_TOLERANCE * 4.0));
+    Vector3Double Steep = Vector3Double_Create(sin(PI_DOUBLE / 3.0), -cos(PI_DOUBLE / 3.0), 0.0);
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Refract(Steep, Up, 1.5), Vector3Double_Zero(), 0.0));
+
+    // Turning about an axis by the right-hand rule, as the matrices turn; any axis length; no axis; length kept.
+    double Quarter = PI_DOUBLE / 2.0;
+    Vector3Double AxisX = Vector3Double_Create(1.0, 0.0, 0.0);
+    Vector3Double AxisY = Vector3Double_Create(0.0, 1.0, 0.0);
+    Vector3Double AxisZ = Vector3Double_Create(0.0, 0.0, 1.0);
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_RotateByAxisAngle(AxisX, AxisZ, Quarter), AxisY,
+        HAND_TOLERANCE));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_RotateByAxisAngle(AxisY, AxisX, Quarter), AxisZ,
+        HAND_TOLERANCE));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_RotateByAxisAngle(AxisZ, Vector3Double_Create(0.0, 7.0, 0.0),
+        Quarter), AxisX, HAND_TOLERANCE));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_RotateByAxisAngle(V, Vector3Double_Zero(), 1.0), V, 0.0));
+    Matrix4Double TurnX = Matrix4Double_FromRotationX(0.7);
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_RotateByAxisAngle(V, AxisX, 0.7),
+        Matrix4Double_TransformDirection(&TurnX, V), HAND_TOLERANCE * 8.0));
+    TEST_CHECK(run, fabs(Vector3Double_Length(Vector3Double_RotateByAxisAngle(V, Vector3Double_Create(0.3, -1.0, 2.0),
+        2.5)) - Vector3Double_Length(V)) < HAND_TOLERANCE * 8.0);
+
+    // The angle between: unsigned, lengths do not matter, exact for tiny angles, a zero vector gives 0.
+    TEST_CHECK(run, fabs(Vector3Double_Angle(AxisX, AxisY) - Quarter) < HAND_TOLERANCE);
+    TEST_CHECK(run, fabs(Vector3Double_Angle(Vector3Double_Scale(AxisX, 1e-200), Vector3Double_Scale(AxisY, 1e300))
+        - Quarter) < HAND_TOLERANCE);
+    TEST_CHECK(run, Vector3Double_Angle(AxisX, Vector3Double_Negate(AxisX)) == PI_DOUBLE);
+    TEST_CHECK(run, Vector3Double_Angle(V, V) == 0.0);
+    TEST_CHECK(run, fabs(Vector3Double_Angle(Vector3Double_Create(1.0, 1.0, 0.0), AxisX) - (PI_DOUBLE / 4.0))
+        < HAND_TOLERANCE);
+    TEST_CHECK(run, fabs(Vector3Double_Angle(AxisX, Vector3Double_Create(1.0, 1e-10, 0.0)) - 1e-10) < 1e-24);
+    TEST_CHECK(run, Vector3Double_Angle(Vector3Double_Zero(), AxisX) == 0.0);
+    // Off the axes, huge and tiny vectors would overflow or underflow their dot and cross products.
+    double Slope = atan2(2.0, 1.0);
+    TEST_CHECK(run, fabs(Vector3Double_Angle(Vector3Double_Create(1e300, 2e300, 0.0), Vector3Double_Create(1e300, 0.0,
+        0.0)) - Slope) < HAND_TOLERANCE * 4.0);
+    TEST_CHECK(run, fabs(Vector3Double_Angle(Vector3Double_Create(1e-200, 2e-200, 0.0), Vector3Double_Create(1e-200, 0.0,
+        0.0)) - Slope) < HAND_TOLERANCE * 4.0);
+
+    // Moving towards a target: short of it, onto it, past it, away from it; 10 000 km out as at the origin.
+    Vector3Double Target = Vector3Double_Create(2.0, 3.0, 6.0);
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_MoveTowards(Vector3Double_Zero(), Target, 1.0),
+        Vector3Double_Create(2.0 / 7.0, 3.0 / 7.0, 6.0 / 7.0), HAND_TOLERANCE));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_MoveTowards(Vector3Double_Zero(), Target, 7.0), Target, 0.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_MoveTowards(Vector3Double_Zero(), Target, 70.0), Target, 0.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_MoveTowards(Vector3Double_Zero(), Target, -7.0),
+        Vector3Double_Negate(Target), HAND_TOLERANCE * 8.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_MoveTowards(Target, Target, -1.0), Target, 0.0));
+    Vector3Double FarStart = Vector3Double_Create(FAR_DISTANCE, -FAR_DISTANCE, FAR_DISTANCE);
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_MoveTowards(FarStart, Vector3Double_Add(FarStart, Target), 1.0),
+        Vector3Double_Add(FarStart, Vector3Double_Create(2.0 / 7.0, 3.0 / 7.0, 6.0 / 7.0)), 4e-9));
+
+    // Clamping per axis and by length; the zero vector keeps no length.
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_Clamp(Vector3Double_Create(5.0, -5.0, 0.5),
+        Vector3Double_Create(-1.0, -2.0, 0.0), Vector3Double_Create(1.0, 2.0, 1.0)), Vector3Double_Create(1.0, -2.0, 0.5),
+        0.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_ClampLength(Target, 0.0, 3.5),
+        Vector3Double_Create(1.0, 1.5, 3.0), HAND_TOLERANCE * 4.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_ClampLength(Target, 14.0, 20.0),
+        Vector3Double_Create(4.0, 6.0, 12.0), HAND_TOLERANCE * 16.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_ClampLength(Target, 1.0, 10.0), Target, 0.0));
+    TEST_CHECK(run, Vector3Double_EqualsClose(Vector3Double_ClampLength(Vector3Double_Zero(), 1.0, 2.0),
+        Vector3Double_Zero(), 0.0));
+
+    // Barycentric weights: the corners, a point inside and one above it (projected), one outside, 10 000 km out,
+    // and a degenerate triangle refused.
+    Vector3Double CornerA = Vector3Double_Zero();
+    Vector3Double CornerB = Vector3Double_Create(4.0, 0.0, 0.0);
+    Vector3Double CornerC = Vector3Double_Create(0.0, 4.0, 0.0);
+    Vector3Double Weights = Vector3Double_Zero();
+    TEST_CHECK(run, Vector3Double_TryGetBarycentric(CornerB, CornerA, CornerB, CornerC, &Weights)
+        && Vector3Double_EqualsClose(Weights, Vector3Double_Create(0.0, 1.0, 0.0), 0.0));
+    TEST_CHECK(run, Vector3Double_TryGetBarycentric(Vector3Double_Create(1.0, 1.0, 0.0), CornerA, CornerB, CornerC,
+        &Weights) && Vector3Double_EqualsClose(Weights, Vector3Double_Create(0.5, 0.25, 0.25), 0.0));
+    TEST_CHECK(run, Vector3Double_TryGetBarycentric(Vector3Double_Create(1.0, 1.0, 5.0), CornerA, CornerB, CornerC,
+        &Weights) && Vector3Double_EqualsClose(Weights, Vector3Double_Create(0.5, 0.25, 0.25), 0.0));
+    TEST_CHECK(run, Vector3Double_TryGetBarycentric(Vector3Double_Create(5.0, 5.0, 0.0), CornerA, CornerB, CornerC,
+        &Weights) && (Weights.X == -1.5));
+    Vector3Double FarA = Vector3Double_Add(FarStart, CornerA);
+    Vector3Double FarB = Vector3Double_Add(FarStart, CornerB);
+    Vector3Double FarC = Vector3Double_Add(FarStart, CornerC);
+    TEST_CHECK(run, Vector3Double_TryGetBarycentric(Vector3Double_Add(FarStart, Vector3Double_Create(1.0, 1.0, 0.0)), FarA,
+        FarB, FarC, &Weights) && Vector3Double_EqualsClose(Weights, Vector3Double_Create(0.5, 0.25, 0.25), 1e-12));
+    Vector3Double Untouched = Vector3Double_Create(7.0, 8.0, 9.0);
+    Weights = Untouched;
+    TEST_CHECK(run, !Vector3Double_TryGetBarycentric(Vector3Double_One(), CornerA, Vector3Double_One(),
+        Vector3Double_Create(2.0, 2.0, 2.0), &Weights) && Vector3Double_EqualsClose(Weights, Untouched, 0.0));
+    TEST_CHECK(run, !Vector3Double_TryGetBarycentric(Vector3Double_Create(NAN_DOUBLE, 0.0, 0.0), CornerA, CornerB,
+        CornerC, &Weights) && Vector3Double_EqualsClose(Weights, Untouched, 0.0));
+}
+
+static void Vectors3DAgreeWithRaymath(TestRun* run)
+{
+    Random Generator;
+    Random_Construct2(&Generator, (RandomState){ .Values = { 0x3D2U, 0x2U, 0x6U, 0x9U } });
+    for (size_t Index = 0U; Index < RANDOM_CASE_COUNT; Index++)
+    {
+        // The same inputs on both sides: floats, widened exactly for the doubles.
+        Vector3 AF = RandomFloatVector(&Generator, -50.0f, 50.0f);
+        Vector3 BF = RandomFloatVector(&Generator, -50.0f, 50.0f);
+        Vector3 CF = RandomFloatVector(&Generator, -50.0f, 50.0f);
+        Vector3 PF = RandomFloatVector(&Generator, -50.0f, 50.0f);
+        Vector3 LowF = Vector3Min(BF, CF);
+        Vector3 HighF = Vector3Max(BF, CF);
+        float ScaleF = RandomFloat(&Generator, -3.0f, 3.0f);
+        float AmountF = RandomFloat(&Generator, -1.0f, 2.0f);
+        float AngleF = RandomFloat(&Generator, -7.0f, 7.0f);
+        float DistanceF = RandomFloat(&Generator, -10.0f, 120.0f);
+        float LowLengthF = RandomFloat(&Generator, 0.0f, 40.0f);
+        float HighLengthF = LowLengthF + RandomFloat(&Generator, 0.0f, 40.0f);
+        float RatioF = RandomFloat(&Generator, 0.5f, 1.5f);
+        Vector3Double A = GameMath_FromVector3(AF);
+        Vector3Double B = GameMath_FromVector3(BF);
+        Vector3Double C = GameMath_FromVector3(CF);
+        Vector3Double P = GameMath_FromVector3(PF);
+        Vector3Double Low = GameMath_FromVector3(LowF);
+        Vector3Double High = GameMath_FromVector3(HighF);
+        Vector3Double UnitA = Vector3Double_NormalizeOr(A, Vector3Double_Zero());
+        Vector3Double UnitB = Vector3Double_NormalizeOr(B, Vector3Double_Zero());
+        double Size = fmax(Vector3Double_Length(A), Vector3Double_Length(B));
+
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Add(A, B), Vector3Add(AF, BF), Size));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Subtract(A, B), Vector3Subtract(AF, BF), Size));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Scale(A, ScaleF), Vector3Scale(AF, ScaleF), Size * 3.0));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Multiply(A, B), Vector3Multiply(AF, BF), Size * Size));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Negate(A), Vector3Negate(AF), Size));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Lerp(A, B, AmountF), Vector3Lerp(AF, BF, AmountF),
+            Size * 3.0));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Min(A, B), Vector3Min(AF, BF), Size));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Max(A, B), Vector3Max(AF, BF), Size));
+        TEST_CHECK(run, IsNearRaylibVector(UnitA, Vector3Normalize(AF)));
+        TEST_CHECK(run, IsNearRaylibScalar(Vector3Double_Dot(A, B), Vector3DotProduct(AF, BF), Size * Size));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Cross(A, B), Vector3CrossProduct(AF, BF), Size * Size));
+        TEST_CHECK(run, IsNearRaylibScalar(Vector3Double_Length(A), Vector3Length(AF), Size));
+        TEST_CHECK(run, IsNearRaylibScalar(Vector3Double_LengthSquared(A), Vector3LengthSqr(AF), Size * Size));
+        TEST_CHECK(run, IsNearRaylibScalar(Vector3Double_Distance(A, B), Vector3Distance(AF, BF), Size * 2.0));
+        TEST_CHECK(run, IsNearRaylibScalar(Vector3Double_DistanceSquared(A, B), Vector3DistanceSqr(AF, BF),
+            Size * Size * 4.0));
+
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_AddValue(A, ScaleF), Vector3AddValue(AF, ScaleF), Size));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_SubtractValue(A, ScaleF), Vector3SubtractValue(AF, ScaleF),
+            Size));
+        TEST_CHECK(run, IsNearRaylibVector(Vector3Double_Divide(A, B), Vector3Divide(AF, BF)));
+        TEST_CHECK(run, IsNearRaylibVector(Vector3Double_Invert(A), Vector3Invert(AF)));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Perpendicular(A), Vector3Perpendicular(AF), Size));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Project(A, B), Vector3Project(AF, BF), Size));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Reject(A, B), Vector3Reject(AF, BF), Size));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Reflect(A, UnitB), Vector3Reflect(AF, Vector3Normalize(BF)),
+            Size));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_RotateByAxisAngle(A, B, AngleF),
+            Vector3RotateByAxisAngle(AF, BF, AngleF), Size));
+        TEST_CHECK(run, IsNearRaylibScalar(Vector3Double_Angle(A, B), Vector3Angle(AF, BF), 1.0));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_MoveTowards(A, B, DistanceF), Vector3MoveTowards(AF, BF,
+            DistanceF), Size + 120.0));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_Clamp(A, Low, High), Vector3Clamp(AF, LowF, HighF), Size));
+        TEST_CHECK(run, IsNearRaylibVectorWithin(Vector3Double_ClampLength(A, LowLengthF, HighLengthF),
+            Vector3ClampValue(AF, LowLengthF, HighLengthF), Size + 80.0));
+
+        // Refraction, away from the edge of total internal reflection (where float and double may part).
+        double Cosine = Vector3Double_Dot(UnitA, UnitB);
+        double Root = 1.0 - ((double)RatioF * (double)RatioF * (1.0 - (Cosine * Cosine)));
+        if (fabs(Root) > 1e-3)
+        {
+            TEST_CHECK(run, IsNearRaylibVector(Vector3Double_Refract(UnitA, UnitB, RatioF),
+                Vector3Refract(Vector3Normalize(AF), Vector3Normalize(BF), RatioF)));
+        }
+
+        // Barycentric weights, on triangles whose edges are not nearly parallel (float weights there are poor); the
+        // tolerance only needs to tell the weights' order and convention apart.
+        Vector3Double Edge0 = Vector3Double_Subtract(B, A);
+        Vector3Double Edge1 = Vector3Double_Subtract(C, A);
+        double Area = Vector3Double_LengthSquared(Vector3Double_Cross(Edge0, Edge1));
+        Vector3Double Weights = Vector3Double_Zero();
+        if (Area > (0.1 * Vector3Double_LengthSquared(Edge0) * Vector3Double_LengthSquared(Edge1)))
+        {
+            Vector3 WeightsF = Vector3Barycenter(PF, AF, BF, CF);
+            TEST_CHECK(run, Vector3Double_TryGetBarycentric(P, A, B, C, &Weights)
+                && IsNearRaylibVectorWithin(Weights, WeightsF, 100.0));
+        }
+    }
+    Random_Deconstruct1(&Generator);
+}
+
+
+// Static functions: 2D vectors.
+/* Whether a double 2D vector is raymath's float one within FLOAT_TOLERANCE of @p scale (at least 1, and at least
+ * their largest coordinate): float sums and products round at their inputs' size, not at the result's. */
+static bool IsNearRaylibVector2(Vector2Double vector, Vector2 expected, double scale)
+{
+    Vector2Double Expected = Vector2Double_Create(expected.x, expected.y);
+    double Largest = fmax(fmax(1.0, scale), fmax(fmax(fabs(vector.X), fabs(vector.Y)), fmax(fabs(Expected.X),
+        fabs(Expected.Y))));
+    return Vector2Double_EqualsClose(vector, Expected, FLOAT_TOLERANCE * Largest);
+}
+
+static void Vectors2DByHand(TestRun* run)
+{
+    Vector2Double A = Vector2Double_Create(1.0, -2.0);
+    Vector2Double B = Vector2Double_Create(-4.0, 0.5);
+    TEST_CHECK(run, (A.X == 1.0) && (A.Y == -2.0));
+    Vector2Double Zero = Vector2Double_Zero();
+    TEST_CHECK(run, (Zero.X == 0.0) && (Zero.Y == 0.0));
+
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Add(A, B), Vector2Double_Create(-3.0, -1.5), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Subtract(A, B), Vector2Double_Create(5.0, -2.5), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Scale(A, -2.0), Vector2Double_Create(-2.0, 4.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Multiply(A, B), Vector2Double_Create(-4.0, -1.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_AddScaled(A, B, 2.0), Vector2Double_Create(-7.0, -1.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Negate(A), Vector2Double_Create(-1.0, 2.0), 0.0));
+    TEST_CHECK(run, Vector2Double_Dot(A, B) == -5.0);
+
+    // The 2D cross product: from X to Y is positive, back is negative, parallel vectors give zero; it is the Z of the
+    // 3D cross product of the two in the XY plane.
+    Vector2Double AxisX = Vector2Double_Create(1.0, 0.0);
+    Vector2Double AxisY = Vector2Double_Create(0.0, 1.0);
+    TEST_CHECK(run, (Vector2Double_Cross(AxisX, AxisY) == 1.0) && (Vector2Double_Cross(AxisY, AxisX) == -1.0));
+    TEST_CHECK(run, Vector2Double_Cross(A, Vector2Double_Scale(A, 3.0)) == 0.0);
+    TEST_CHECK(run, Vector2Double_Cross(A, B) == -7.5);
+    Vector3Double InPlane = Vector3Double_Cross(Vector3Double_Create(A.X, A.Y, 0.0), Vector3Double_Create(B.X, B.Y, 0.0));
+    TEST_CHECK(run, (InPlane.X == 0.0) && (InPlane.Y == 0.0) && (InPlane.Z == Vector2Double_Cross(A, B)));
+
+    // Lengths and distances, also 10 000 km out.
+    TEST_CHECK(run, Vector2Double_Length(Vector2Double_Create(3.0, -4.0)) == 5.0);
+    TEST_CHECK(run, Vector2Double_LengthSquared(Vector2Double_Create(5.0, 12.0)) == 169.0);
+    Vector2Double From = Vector2Double_Create(1.0, 2.0);
+    Vector2Double To = Vector2Double_Create(6.0, 14.0);
+    TEST_CHECK(run, Vector2Double_DistanceSquared(From, To) == 169.0);
+    TEST_CHECK(run, (Vector2Double_Distance(From, To) == 13.0) && (Vector2Double_Distance(To, From) == 13.0));
+    Vector2Double Far = Vector2Double_Create(FAR_DISTANCE, -FAR_DISTANCE);
+    Vector2Double FarMoved = Vector2Double_Add(Far, Vector2Double_Create(0.0, 0.001));
+    TEST_CHECK(run, fabs(Vector2Double_Distance(Far, FarMoved) - 0.001) < 2e-9);
+
+    // Lerp, min, max.
+    Vector2Double Start = Vector2Double_Create(0.0, 10.0);
+    Vector2Double End = Vector2Double_Create(2.0, 20.0);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Lerp(Start, End, 0.0), Start, 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Lerp(Start, End, 1.0), End, 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Lerp(Start, End, 0.5), Vector2Double_Create(1.0, 15.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Lerp(Start, End, 2.0), Vector2Double_Create(4.0, 30.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Lerp(Start, End, -1.0), Vector2Double_Create(-2.0, 0.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Min(A, B), Vector2Double_Create(-4.0, -2.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Max(A, B), Vector2Double_Create(1.0, 0.5), 0.0));
+
+    // Nearly equal on both axes; never for NaN or two equal infinities. Finite on both axes.
+    Vector2Double Near = Vector2Double_Create(1.0, 2.0);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Near, Vector2Double_Create(1.1, 2.0), 0.2));
+    TEST_CHECK(run, !Vector2Double_EqualsClose(Near, Vector2Double_Create(1.1, 2.0), 0.05));
+    TEST_CHECK(run, !Vector2Double_EqualsClose(Near, Vector2Double_Create(1.0, 2.1), 0.05));
+    TEST_CHECK(run, !Vector2Double_EqualsClose(Vector2Double_Create(NAN_DOUBLE, 2.0), Near, INFINITY_POS_DOUBLE));
+    Vector2Double Infinite = Vector2Double_Create(1.0, INFINITY_NEG_DOUBLE);
+    TEST_CHECK(run, !Vector2Double_EqualsClose(Infinite, Infinite, INFINITY_POS_DOUBLE));
+    TEST_CHECK(run, Vector2Double_IsFinite(A) && Vector2Double_IsFinite(Zero));
+    const double Bad[3] = { NAN_DOUBLE, INFINITY_POS_DOUBLE, INFINITY_NEG_DOUBLE };
+    for (size_t Value = 0U; Value < 3U; Value++)
+    {
+        TEST_CHECK(run, !Vector2Double_IsFinite(Vector2Double_Create(Bad[Value], 1.0)));
+        TEST_CHECK(run, !Vector2Double_IsFinite(Vector2Double_Create(1.0, Bad[Value])));
+    }
+
+    // Normalizing: by hand, the vectors without a direction, and lengths that underflow or overflow.
+    Vector2Double Fallback = Vector2Double_Create(7.0, 8.0);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_NormalizeOr(Vector2Double_Create(3.0, 4.0), Fallback),
+        Vector2Double_Create(0.6, 0.8), HAND_TOLERANCE));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_NormalizeOr(Vector2Double_Create(0.0, -5.0), Fallback),
+        Vector2Double_Create(0.0, -1.0), 0.0));
+    const Vector2Double Directionless[4] =
+    {
+        { .X = 0.0, .Y = 0.0 }, { .X = -0.0, .Y = -0.0 }, { .X = NAN_DOUBLE, .Y = 1.0 }, { .X = 1.0, .Y = INFINITY_POS_DOUBLE }
+    };
+    for (size_t Index = 0U; Index < 4U; Index++)
+    {
+        Vector2Double Normalized = Vector2Double_NormalizeOr(Directionless[Index], Fallback);
+        TEST_CHECK(run, Memory_IsEqual(&Normalized, &Fallback, sizeof(Vector2Double)));
+    }
+    double Half = sqrt(0.5);
+    Vector2Double Tiny = Vector2Double_Create(1e-200, -1e-200);
+    TEST_CHECK(run, Vector2Double_Length(Tiny) == 0.0);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_NormalizeOr(Tiny, Fallback), Vector2Double_Create(Half, -Half),
+        HAND_TOLERANCE));
+    Vector2Double Huge = Vector2Double_Create(1e300, 1e300);
+    TEST_CHECK(run, Vector2Double_Length(Huge) == INFINITY_POS_DOUBLE);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_NormalizeOr(Huge, Fallback), Vector2Double_Create(Half, Half),
+        HAND_TOLERANCE));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_NormalizeOr(Vector2Double_Create(0.0, 5e-324), Fallback),
+        Vector2Double_Create(0.0, 1.0), 0.0));
+    Random Generator;
+    Random_Construct2(&Generator, (RandomState){ .Values = { 0x2D1U, 0x4U, 0x5U, 0x6U } });
+    for (size_t Index = 0U; Index < RANDOM_CASE_COUNT; Index++)
+    {
+        double Size = pow(10.0, RandomDouble(&Generator, -300.0, 300.0));
+        Vector2Double Vector = Vector2Double_Scale(Vector2Double_Create(RandomDouble(&Generator, -1.0, 1.0),
+            RandomDouble(&Generator, -1.0, 1.0)), Size);
+        Vector2Double Unit = Vector2Double_NormalizeOr(Vector, Vector2Double_Zero());
+        TEST_CHECK(run, fabs(Vector2Double_Length(Unit) - 1.0) < 1e-15);
+        TEST_CHECK(run, Vector2Double_Dot(Unit, Vector) > 0.0);
+    }
+    Random_Deconstruct1(&Generator);
+
+    // Floats: widened exactly, rounded once, and relative to a far origin.
+    const float Floats[2] = { 1.5f, 0.1f };
+    Vector2Double Widened = Vector2Double_FromFloats(Floats);
+    TEST_CHECK(run, (Widened.X == 1.5) && (Widened.Y == (double)0.1f));
+    float Out[2];
+    Vector2Double_ToFloats(Widened, Out);
+    TEST_CHECK(run, Memory_IsEqual(Out, Floats, sizeof(Floats)));
+    Vector2Double_ToFloats(Vector2Double_Create(0.1, -1e40), Out);
+    TEST_CHECK(run, (Out[0] == 0.1f) && (Out[1] == -INFINITY));
+    Vector2Double_ToFloatsRelative(Vector2Double_Create(5.0, 7.0), Vector2Double_Create(2.0, 10.0), Out);
+    TEST_CHECK(run, (Out[0] == 3.0f) && (Out[1] == -3.0f));
+    Vector2Double_ToFloatsRelative(Vector2Double_Create(FAR_DISTANCE + 0.123456789, -FAR_DISTANCE + 0.5),
+        Vector2Double_Create(FAR_DISTANCE, -FAR_DISTANCE), Out);
+    float Expected = 0.123456789f;
+    TEST_CHECK(run, (fabsf(Out[0] - Expected) <= (nextafterf(Expected, INFINITY) - Expected)) && (Out[1] == 0.5f));
+}
+
+static void Vectors2DAgreeWithRaymath(TestRun* run)
+{
+    Random Generator;
+    Random_Construct2(&Generator, (RandomState){ .Values = { 0x2D2U, 0x9U, 0x8U, 0x7U } });
+    for (size_t Index = 0U; Index < RANDOM_CASE_COUNT; Index++)
+    {
+        // The same inputs on both sides: floats, widened exactly for the doubles.
+        Vector2 AF = { RandomFloat(&Generator, -50.0f, 50.0f), RandomFloat(&Generator, -50.0f, 50.0f) };
+        Vector2 BF = { RandomFloat(&Generator, -50.0f, 50.0f), RandomFloat(&Generator, -50.0f, 50.0f) };
+        float ScaleF = RandomFloat(&Generator, -3.0f, 3.0f);
+        float AmountF = RandomFloat(&Generator, -1.0f, 2.0f);
+        float AngleF = RandomFloat(&Generator, -7.0f, 7.0f);
+        float DistanceF = RandomFloat(&Generator, -10.0f, 120.0f);
+        float LowLengthF = RandomFloat(&Generator, 0.0f, 40.0f);
+        float HighLengthF = LowLengthF + RandomFloat(&Generator, 0.0f, 40.0f);
+        float RatioF = RandomFloat(&Generator, 0.5f, 1.5f);
+        Vector2 CF = { RandomFloat(&Generator, -50.0f, 50.0f), RandomFloat(&Generator, -50.0f, 50.0f) };
+        Vector2 LowF = Vector2Min(BF, CF);
+        Vector2 HighF = Vector2Max(BF, CF);
+        Vector2Double A = Vector2Double_Create(AF.x, AF.y);
+        Vector2Double B = Vector2Double_Create(BF.x, BF.y);
+        Vector2Double Low = Vector2Double_Create(LowF.x, LowF.y);
+        Vector2Double High = Vector2Double_Create(HighF.x, HighF.y);
+        Vector2Double UnitA = Vector2Double_NormalizeOr(A, Vector2Double_Zero());
+        Vector2Double UnitB = Vector2Double_NormalizeOr(B, Vector2Double_Zero());
+        double Size = fmax(Vector2Double_Length(A), Vector2Double_Length(B));
+
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Add(A, B), Vector2Add(AF, BF), Size));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Subtract(A, B), Vector2Subtract(AF, BF), Size));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Scale(A, ScaleF), Vector2Scale(AF, ScaleF), Size * 3.0));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Multiply(A, B), Vector2Multiply(AF, BF), Size * Size));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Negate(A), Vector2Negate(AF), Size));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Lerp(A, B, AmountF), Vector2Lerp(AF, BF, AmountF), Size * 3.0));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Min(A, B), Vector2Min(AF, BF), Size));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Max(A, B), Vector2Max(AF, BF), Size));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_NormalizeOr(A, Vector2Double_Zero()), Vector2Normalize(AF), 1.0));
+        TEST_CHECK(run, IsNearRaylibScalar(Vector2Double_Dot(A, B), Vector2DotProduct(AF, BF), Size * Size));
+        TEST_CHECK(run, IsNearRaylibScalar(Vector2Double_Cross(A, B), Vector2CrossProduct(AF, BF), Size * Size));
+        TEST_CHECK(run, IsNearRaylibScalar(Vector2Double_Length(A), Vector2Length(AF), Size));
+        TEST_CHECK(run, IsNearRaylibScalar(Vector2Double_LengthSquared(A), Vector2LengthSqr(AF), Size * Size));
+        TEST_CHECK(run, IsNearRaylibScalar(Vector2Double_Distance(A, B), Vector2Distance(AF, BF), Size * 2.0));
+        TEST_CHECK(run, IsNearRaylibScalar(Vector2Double_DistanceSquared(A, B), Vector2DistanceSqr(AF, BF),
+            Size * Size * 4.0));
+
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_AddValue(A, ScaleF), Vector2AddValue(AF, ScaleF), Size));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_SubtractValue(A, ScaleF), Vector2SubtractValue(AF, ScaleF),
+            Size));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Divide(A, B), Vector2Divide(AF, BF), 1.0));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Invert(A), Vector2Invert(AF), 1.0));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Reflect(A, UnitB), Vector2Reflect(AF, Vector2Normalize(BF)),
+            Size));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Rotate(A, AngleF), Vector2Rotate(AF, AngleF), Size));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_MoveTowards(A, B, DistanceF), Vector2MoveTowards(AF, BF,
+            DistanceF), Size + 120.0));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Clamp(A, Low, High), Vector2Clamp(AF, LowF, HighF), Size));
+        TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_ClampLength(A, LowLengthF, HighLengthF), Vector2ClampValue(AF,
+            LowLengthF, HighLengthF), Size + 80.0));
+        // The signed angle, modulo a whole turn (float and double may land on either side of +-pi); the heading of the
+        // line from A to B, which raymath's Vector2LineAngle gives negated.
+        TEST_CHECK(run, fabs(remainder(Vector2Double_Angle(A, B) - (double)Vector2Angle(AF, BF), TAU_DOUBLE))
+            <= (FLOAT_TOLERANCE * PI_DOUBLE));
+        TEST_CHECK(run, fabs(remainder(Vector2Double_GetAngle(Vector2Double_Subtract(B, A))
+            + (double)Vector2LineAngle(AF, BF), TAU_DOUBLE)) <= (FLOAT_TOLERANCE * PI_DOUBLE));
+        // A 2D point through a turn about Z and a move, as raymath moves it.
+        Matrix TurnAndMoveR = MatrixMultiply(MatrixRotateZ(AngleF), MatrixTranslate(BF.x, BF.y, 0.0f));
+        Matrix4Double TurnAndMove = GameMath_FromMatrix(TurnAndMoveR);
+        TEST_CHECK(run, IsNearRaylibVector2(Matrix4Double_TransformPoint2D(&TurnAndMove, A), Vector2Transform(AF,
+            TurnAndMoveR), Size * 2.0));
+        // Refraction, away from the edge of total internal reflection (where float and double may part).
+        double Cosine = Vector2Double_Dot(UnitA, UnitB);
+        double Root = 1.0 - ((double)RatioF * (double)RatioF * (1.0 - (Cosine * Cosine)));
+        if (fabs(Root) > 1e-3)
+        {
+            TEST_CHECK(run, IsNearRaylibVector2(Vector2Double_Refract(UnitA, UnitB, RatioF),
+                Vector2Refract(Vector2Normalize(AF), Vector2Normalize(BF), RatioF), 1.0));
+        }
+    }
+    Random_Deconstruct1(&Generator);
+}
+
+static void Vectors2DMoreByHand(TestRun* run)
+{
+    // Constants and per-axis arithmetic.
+    Vector2Double V = Vector2Double_Create(1.0, -2.0);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_One(), Vector2Double_Create(1.0, 1.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_AddValue(V, 0.5), Vector2Double_Create(1.5, -1.5), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_SubtractValue(V, 0.5), Vector2Double_Create(0.5, -2.5), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Divide(Vector2Double_Create(3.0, -8.0),
+        Vector2Double_Create(2.0, 4.0)), Vector2Double_Create(1.5, -2.0), 0.0));
+    Vector2Double ByZero = Vector2Double_Divide(Vector2Double_Create(1.0, 0.0), Vector2Double_Zero());
+    TEST_CHECK(run, (ByZero.X == INFINITY_POS_DOUBLE) && Math_IsNaNDouble(ByZero.Y));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Invert(Vector2Double_Create(2.0, -0.25)),
+        Vector2Double_Create(0.5, -4.0), 0.0));
+    TEST_CHECK(run, Vector2Double_Invert(Vector2Double_Create(0.0, 1.0)).X == INFINITY_POS_DOUBLE);
+
+    // A quarter turn: the X axis to the Y axis; the same length, at right angles, a positive cross product.
+    Vector2Double AxisX = Vector2Double_Create(1.0, 0.0);
+    Vector2Double AxisY = Vector2Double_Create(0.0, 1.0);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Perpendicular(AxisX), AxisY, 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Perpendicular(AxisY), Vector2Double_Negate(AxisX), 0.0));
+    Vector2Double W = Vector2Double_Create(3.0, 4.0);
+    Vector2Double Across = Vector2Double_Perpendicular(W);
+    TEST_CHECK(run, (Vector2Double_Dot(W, Across) == 0.0) && (Vector2Double_Cross(W, Across) == 25.0)
+        && (Vector2Double_Length(Across) == 5.0));
+
+    // Projection and rejection: onto any length, adding up to the vector; nothing to project onto.
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Project(W, Vector2Double_Create(10.0, 0.0)),
+        Vector2Double_Create(3.0, 0.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Reject(W, Vector2Double_Create(10.0, 0.0)),
+        Vector2Double_Create(0.0, 4.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Project(W, Vector2Double_Create(0.0, -0.001)),
+        Vector2Double_Create(0.0, 4.0), 0.0));
+    Vector2Double Diagonal = Vector2Double_One();
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Project(W, Diagonal), Vector2Double_Create(3.5, 3.5),
+        HAND_TOLERANCE * 4.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Reject(W, Diagonal), Vector2Double_Create(-0.5, 0.5),
+        HAND_TOLERANCE * 4.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Project(W, Vector2Double_Create(1e-200, 0.0)),
+        Vector2Double_Create(3.0, 0.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Project(W, Vector2Double_Zero()), Vector2Double_Zero(), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Reject(W, Vector2Double_Create(NAN_DOUBLE, 0.0)), W, 0.0));
+
+    // Reflection off a floor (either side of its normal) and off a 45 degree wall; refraction head on, by Snell's law
+    // at 45 degrees from air into glass, and total internal reflection from glass into air at 60 degrees.
+    Vector2Double Up = Vector2Double_Create(0.0, 1.0);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Reflect(V, Up), Vector2Double_Create(1.0, 2.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Reflect(V, Vector2Double_Negate(Up)),
+        Vector2Double_Create(1.0, 2.0), 0.0));
+    double Half = sqrt(0.5);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Reflect(W, Vector2Double_Create(Half, Half)),
+        Vector2Double_Create(-4.0, -3.0), HAND_TOLERANCE * 8.0));
+    Vector2Double Down = Vector2Double_Negate(Up);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Refract(Down, Up, 1.0 / 1.5), Down, HAND_TOLERANCE));
+    double SineOut = Half / 1.5;
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Refract(Vector2Double_Create(Half, -Half), Up, 1.0 / 1.5),
+        Vector2Double_Create(SineOut, -sqrt(1.0 - (SineOut * SineOut))), HAND_TOLERANCE * 4.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Refract(Vector2Double_Create(sin(PI_DOUBLE / 3.0),
+        -cos(PI_DOUBLE / 3.0)), Up, 1.5), Vector2Double_Zero(), 0.0));
+
+    // Turning: quarter turns, turning back, the length kept.
+    double Quarter = PI_DOUBLE / 2.0;
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Rotate(AxisX, Quarter), AxisY, HAND_TOLERANCE));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Rotate(AxisY, Quarter), Vector2Double_Negate(AxisX),
+        HAND_TOLERANCE));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Rotate(Vector2Double_Rotate(W, 0.9), -0.9), W,
+        HAND_TOLERANCE * 8.0));
+    TEST_CHECK(run, fabs(Vector2Double_Length(Vector2Double_Rotate(W, 2.0)) - 5.0) < HAND_TOLERANCE * 8.0);
+
+    // Signed angles: positive from X to Y, the lengths do not matter, opposite vectors pi, a zero vector 0; turning one
+    // vector by its angle to another lines it up with it.
+    TEST_CHECK(run, fabs(Vector2Double_Angle(AxisX, AxisY) - Quarter) < HAND_TOLERANCE);
+    TEST_CHECK(run, fabs(Vector2Double_Angle(AxisY, AxisX) + Quarter) < HAND_TOLERANCE);
+    TEST_CHECK(run, fabs(Vector2Double_Angle(AxisX, Vector2Double_Negate(AxisX))) == PI_DOUBLE);
+    TEST_CHECK(run, fabs(Vector2Double_Angle(Vector2Double_Scale(AxisX, 1e300), Vector2Double_Scale(AxisY, 1e-300))
+        - Quarter) < HAND_TOLERANCE);
+    TEST_CHECK(run, (Vector2Double_Angle(Vector2Double_Zero(), AxisX) == 0.0) && (Vector2Double_Angle(W, W) == 0.0));
+    // Off the axes, huge and tiny vectors would overflow or underflow their dot and cross products.
+    double Slope = atan2(2.0, 1.0);
+    TEST_CHECK(run, fabs(Vector2Double_Angle(Vector2Double_Create(1e300, 2e300), Vector2Double_Create(1e300, 0.0)) + Slope)
+        < HAND_TOLERANCE * 4.0);
+    TEST_CHECK(run, fabs(Vector2Double_Angle(Vector2Double_Create(1e-200, 2e-200), Vector2Double_Create(1e-200, 0.0))
+        + Slope) < HAND_TOLERANCE * 4.0);
+    Vector2Double From = Vector2Double_Create(3.0, -1.0);
+    Vector2Double To = Vector2Double_Create(-2.0, 5.0);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_NormalizeOr(Vector2Double_Rotate(From,
+        Vector2Double_Angle(From, To)), Vector2Double_Zero()), Vector2Double_NormalizeOr(To, Vector2Double_Zero()),
+        HAND_TOLERANCE * 8.0));
+
+    // Headings: FromAngle and GetAngle undo each other; the axes; the line from one point to another.
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_FromAngle(0.0), AxisX, 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_FromAngle(Quarter), AxisY, HAND_TOLERANCE));
+    TEST_CHECK(run, (Vector2Double_GetAngle(Vector2Double_Create(0.0, 5.0)) == Quarter)
+        && (Vector2Double_GetAngle(Vector2Double_Create(-1.0, 0.0)) == PI_DOUBLE)
+        && (Vector2Double_GetAngle(Vector2Double_Create(0.0, -2.0)) == -Quarter));
+    for (double Angle = -3.0; Angle <= 3.0; Angle += 0.25)
+    {
+        TEST_CHECK(run, fabs(Vector2Double_GetAngle(Vector2Double_FromAngle(Angle)) - Angle) < HAND_TOLERANCE * 4.0);
+    }
+    TEST_CHECK(run, Vector2Double_GetAngle(Vector2Double_Subtract(Vector2Double_Create(1.0, 3.0),
+        Vector2Double_Create(1.0, 1.0))) == Quarter);
+    TEST_CHECK(run, Vector2Double_GetAngle(Vector2Double_Zero()) == 0.0);
+
+    // Moving towards a target: short of it, onto it, past it, away from it; 10 000 km out as at the origin.
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_MoveTowards(Vector2Double_Zero(), W, 1.0),
+        Vector2Double_Create(0.6, 0.8), HAND_TOLERANCE));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_MoveTowards(Vector2Double_Zero(), W, 5.0), W, 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_MoveTowards(Vector2Double_Zero(), W, 50.0), W, 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_MoveTowards(Vector2Double_Zero(), W, -5.0),
+        Vector2Double_Negate(W), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_MoveTowards(W, W, -1.0), W, 0.0));
+    Vector2Double FarStart = Vector2Double_Create(FAR_DISTANCE, -FAR_DISTANCE);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_MoveTowards(FarStart, Vector2Double_Add(FarStart, W), 1.0),
+        Vector2Double_Add(FarStart, Vector2Double_Create(0.6, 0.8)), 4e-9));
+
+    // Clamping per axis and by length; the zero vector keeps no length.
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Clamp(Vector2Double_Create(5.0, -5.0),
+        Vector2Double_Create(-1.0, -2.0), Vector2Double_Create(1.0, 2.0)), Vector2Double_Create(1.0, -2.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_Clamp(Vector2Double_Create(0.5, 0.0),
+        Vector2Double_Create(-1.0, -2.0), Vector2Double_Create(1.0, 2.0)), Vector2Double_Create(0.5, 0.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_ClampLength(W, 0.0, 2.0), Vector2Double_Create(1.2, 1.6),
+        HAND_TOLERANCE * 4.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_ClampLength(W, 10.0, 20.0), Vector2Double_Create(6.0, 8.0),
+        0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_ClampLength(W, 1.0, 10.0), W, 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Vector2Double_ClampLength(Vector2Double_Zero(), 1.0, 2.0),
+        Vector2Double_Zero(), 0.0));
+
+    // Barycentric weights: a corner, a point inside, one outside, 10 000 km out, rebuilding random points, and a
+    // degenerate triangle and NaN refused.
+    Vector2Double CornerA = Vector2Double_Zero();
+    Vector2Double CornerB = Vector2Double_Create(4.0, 0.0);
+    Vector2Double CornerC = Vector2Double_Create(0.0, 4.0);
+    Vector3Double Weights = Vector3Double_Zero();
+    TEST_CHECK(run, Vector2Double_TryGetBarycentric(CornerB, CornerA, CornerB, CornerC, &Weights)
+        && Vector3Double_EqualsClose(Weights, Vector3Double_Create(0.0, 1.0, 0.0), 0.0));
+    TEST_CHECK(run, Vector2Double_TryGetBarycentric(Vector2Double_One(), CornerA, CornerB, CornerC, &Weights)
+        && Vector3Double_EqualsClose(Weights, Vector3Double_Create(0.5, 0.25, 0.25), 0.0));
+    TEST_CHECK(run, Vector2Double_TryGetBarycentric(Vector2Double_Create(5.0, 5.0), CornerA, CornerB, CornerC, &Weights)
+        && (Weights.X == -1.5));
+    TEST_CHECK(run, Vector2Double_TryGetBarycentric(Vector2Double_Add(FarStart, Vector2Double_One()), Vector2Double_Add(
+        FarStart, CornerA), Vector2Double_Add(FarStart, CornerB), Vector2Double_Add(FarStart, CornerC), &Weights)
+        && Vector3Double_EqualsClose(Weights, Vector3Double_Create(0.5, 0.25, 0.25), 1e-12));
+    Random Generator;
+    Random_Construct2(&Generator, (RandomState){ .Values = { 0x2D3U, 0x3U, 0x2U, 0x1U } });
+    for (size_t Index = 0U; Index < RANDOM_CASE_COUNT; Index++)
+    {
+        Vector2Double Corners[3] =
+        {
+            Vector2Double_Create(RandomDouble(&Generator, -10.0, 10.0), RandomDouble(&Generator, -10.0, 10.0)),
+            Vector2Double_Create(RandomDouble(&Generator, -10.0, 10.0), RandomDouble(&Generator, -10.0, 10.0)),
+            Vector2Double_Create(RandomDouble(&Generator, -10.0, 10.0), RandomDouble(&Generator, -10.0, 10.0))
+        };
+        Vector2Double Point = Vector2Double_Create(RandomDouble(&Generator, -10.0, 10.0), RandomDouble(&Generator, -10.0,
+            10.0));
+        if (fabs(Vector2Double_Cross(Vector2Double_Subtract(Corners[1], Corners[0]), Vector2Double_Subtract(Corners[2],
+            Corners[0]))) < 1.0)
+        {
+            continue; // too thin to rebuild the point to 1e-9
+        }
+        if (!TEST_CHECK(run, Vector2Double_TryGetBarycentric(Point, Corners[0], Corners[1], Corners[2], &Weights)))
+        {
+            continue;
+        }
+        Vector2Double Rebuilt = Vector2Double_Add(Vector2Double_Add(Vector2Double_Scale(Corners[0], Weights.X),
+            Vector2Double_Scale(Corners[1], Weights.Y)), Vector2Double_Scale(Corners[2], Weights.Z));
+        TEST_CHECK(run, Vector2Double_EqualsClose(Rebuilt, Point, 1e-9));
+        TEST_CHECK(run, fabs((Weights.X + Weights.Y + Weights.Z) - 1.0) < 1e-12);
+    }
+    Random_Deconstruct1(&Generator);
+    Vector3Double Untouched = Vector3Double_Create(7.0, 8.0, 9.0);
+    Weights = Untouched;
+    TEST_CHECK(run, !Vector2Double_TryGetBarycentric(Vector2Double_One(), CornerA, Vector2Double_One(),
+        Vector2Double_Create(2.0, 2.0), &Weights) && Vector3Double_EqualsClose(Weights, Untouched, 0.0));
+    TEST_CHECK(run, !Vector2Double_TryGetBarycentric(Vector2Double_Create(NAN_DOUBLE, 0.0), CornerA, CornerB, CornerC,
+        &Weights) && Vector3Double_EqualsClose(Weights, Untouched, 0.0));
+
+    // 2D points and directions through a 4x4 matrix: a quarter turn about Z, then a move by (10, 20).
+    const double TurnRows[4][4] = { { 0, -1, 0, 10 }, { 1, 0, 0, 20 }, { 0, 0, 1, 0 }, { 0, 0, 0, 1 } };
+    Matrix4Double Turn = FromRows(TurnRows);
+    TEST_CHECK(run, Vector2Double_EqualsClose(Matrix4Double_TransformPoint2D(&Turn, AxisX), Vector2Double_Create(10.0,
+        21.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Matrix4Double_TransformPoint2D(&Turn, Vector2Double_Create(0.0, 2.0)),
+        Vector2Double_Create(8.0, 20.0), 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Matrix4Double_TransformDirection2D(&Turn, AxisX), AxisY, 0.0));
+    Vector3Double Moved = Matrix4Double_TransformPoint(&Turn, Vector3Double_Create(W.X, W.Y, 0.0));
+    TEST_CHECK(run, Vector2Double_EqualsClose(Matrix4Double_TransformPoint2D(&Turn, W), Vector2Double_Create(Moved.X,
+        Moved.Y), 0.0));
 }
 
 
@@ -1221,6 +1879,11 @@ void WRVectorMathTests_Run(TestRun* run)
         { "vectors_by_hand", VectorsByHand },
         { "normalize_falls_back_only_without_a_direction", NormalizeFallsBackOnlyWithoutADirection },
         { "float_conversions_round_once", FloatConversionsRoundOnce },
+        { "vectors_3d_more_by_hand", Vectors3DMoreByHand },
+        { "vectors_3d_agree_with_raymath", Vectors3DAgreeWithRaymath },
+        { "vectors_2d_by_hand", Vectors2DByHand },
+        { "vectors_2d_more_by_hand", Vectors2DMoreByHand },
+        { "vectors_2d_agree_with_raymath", Vectors2DAgreeWithRaymath },
         { "matrices_by_hand", MatricesByHand },
         { "inversion_by_hand_and_refusals", InversionByHandAndRefusals },
         { "raymath_conventions_hold", RaymathConventionsHold },

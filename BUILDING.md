@@ -23,48 +23,11 @@ non-default raylib configuration.
 | Library | Source | Version | Build |
 |---|---|---|---|
 | raylib | https://github.com/raysan5/raylib (local copy: `../raylib/6.0`) | commit `65abee1` (2026-07-04), reports `6.1-dev` | CMake, see below |
-| WRFramework | `../WRFramework` | commit `8c9af0b06dd65e945f4fc33d92c822407af858cb` plus T31's uncommitted `WRVectorMath` | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
+| WRFramework | `../WRFramework` | commit `e6085fead5630602416729efe00dc4e60d60fa54` | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
 
-`lib/libwr.a`, `include/wr/` and `agents/WRFramework.md` match the commit above, `8c9af0b` (which adds `WRArena`, a
-bump allocator, on top of T09's changes), plus T31's new module `WRVectorMath`, not yet committed in WRFramework. Once
+`lib/libwr.a`, `include/wr/` and `agents/WRFramework.md` match the commit above, `c341ca5` (T31's `WRVectorMath`, on
+top of `8c9af0b`'s `WRArena`), plus `Vector2Double` in the same module, not yet committed in WRFramework (below). Once
 the owner commits it there, this table names that commit.
-
-**What T31 changed in WRFramework** (for large worlds, G25 and G26; uncommitted in `../WRFramework` until the owner
-commits it):
-- A new module, `WRVectorMath` (`include/WRVectorMath.h`, `source/WRVectorMath.c`): `Vector3Double`, `Matrix4Double`
-  and `BoundingBoxDouble`, with raymath's conventions in double (column-major, `Matrix4Double_Multiply(a, b)` applies a
-  first, `Matrix4Double_FromRotationXYZ` is `MatrixRotateXYZ`), inversion that refuses singular matrices, the tight box
-  around a transformed box, a ray slab test, and conversions to floats relative to an origin (subtracted in double,
-  rounded once). It uses no raylib; this project's `GameMath` (`include/GameMath.h`) bridges it to raylib's `Vector3`
-  and `Matrix`.
-- `AGENTS.md`: the module in the module list and a behaviour note ("Large worlds: keep positions in double...").
-- Nothing else changed: every other object in the rebuilt `libwr.a` is byte-identical to the previous build's. The
-  module builds without warnings under the library's script, and also under this project's `-Wconversion -Wshadow`
-  (its header is compiled with them here). Its tests are this project's `tests/WRVectorMathTests.c`.
-
-**What T09 changed in WRFramework** (at the owner's request; committed as `58c1e31`):
-- WRJSON: compounds keep insertion order (every collection view and `JSON_Serialize`; the order is a plain buffer of
-  key pointers, about 90 bytes per compound); a new `JSONSerializeFlags_InlineScalarArrays` keeps arrays of scalars on
-  one line in pretty output; `JSON_DeserializeWithLimits` refuses a document whose parsed tree would pass a byte
-  estimate (`JSONReadLimits`).
-- WRGHDF: a string may declare at most `GHDF_MAX_STRING_LENGTH` (1 GiB) and no more than a seekable stream has left,
-  and is read in 64 KiB chunks (a 28-byte document declaring 2^50 bytes used to abort the process); deconstructing a
-  pool no longer releases the children of containers still borrowed into sub-pools already freed (a use-after-free);
-  `GHDF_ReadWithLimits` (`GHDFReadLimits`) as for JSON.
-- WRObjectPool: sections double up to 1 MiB of objects, borrowing takes a section from a stack of those with a free
-  slot (O(1)) and returning finds the section by binary search on an address-sorted index (O(log sections)). Before,
-  both scanned every 16-object section: 300 000 objects took 1.2 s to borrow and 7.4 s to return in shuffled order,
-  now 0.006 s and 0.014 s. Every JSON and GHDF read and write goes through these pools.
-- WRMemory / WRList: `GenericBuffer` and `IList` sorts are introsorts (median-of-three pivot, recursion into the
-  smaller side, heapsort fallback, insertion sort up to 16). The old quicksort took the last element as its pivot: on
-  sorted input it was quadratic and recursed once per element (saving a world of about 87 000 objects overflowed the
-  stack). The `IList` one also misordered some inputs: its partition kept the pivot's copy in a scratch slot its swaps
-  also used, so after the first swap it compared against whichever element was swapped last.
-- WRBinaryIO: the encoded-integer reader freed nothing of the stream's error it replaced (one leaked message per
-  truncated document).
-- WRFileSystem: `FileSystem_ReplaceEntry` (rename on Linux; `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING |
-  MOVEFILE_WRITE_THROUGH` on Windows), refusing a directory source (rename would move it). The Windows side is only
-  compiled against stub declarations of the Win32 calls: no MinGW on this machine.
 
 The project's `include/raylib/` and `include/wr/` headers must come from the same versions as the libraries.
 To update WRFramework: build it with its own script, then copy its `include/*.h` into `include/wr/`,

@@ -5,9 +5,9 @@
 
 
 /**
- * Double-precision 3D vectors (Vector3Double), 4x4 matrices (Matrix4Double) and axis-aligned boxes
- * (BoundingBoxDouble), for worlds large enough that float positions lose precision: a float's step is 1 mm at 8 km
- * from the origin and 8 mm at 100 km, a double's is 2 nm at 10 000 km.
+ * Double-precision 2D and 3D vectors (Vector2Double, Vector3Double), 4x4 matrices (Matrix4Double) and axis-aligned
+ * boxes (BoundingBoxDouble), for worlds large enough that float positions lose precision: a float's step is 1 mm at
+ * 8 km from the origin and 8 mm at 100 km, a double's is 2 nm at 10 000 km.
  *
  * The conventions are those of raymath (raylib's maths library), in double, so float code written with raymath ports
  * operand for operand:
@@ -27,11 +27,13 @@
  * position, which is what makes a far-away world shake.
  *
  * Every function is a pure function of its arguments: no state, nothing allocated, safe from any thread. Vectors and
- * boxes are passed and returned by value; matrices (128 bytes) are passed by pointer and returned by value. The one
- * fallible operation, inversion, returns a bool and writes its result through an out pointer. Small functions are
- * inline; normalization, the rotations, the determinant, inversion, and the box transform and ray test are in
- * WRVectorMath.c. NaN and infinite components are not checked unless a function says so: test input that may be bad
- * with the IsFinite functions.
+ * boxes are passed and returned by value; matrices (128 bytes) are passed by pointer and returned by value. The
+ * fallible operations (inversion, barycentric weights) return a bool and write their result through an out pointer.
+ * Small functions are inline; the rest are in WRVectorMath.c: normalization and what builds on it (projections,
+ * angles, length clamps, moves towards a target), refraction, the rotations, barycentric weights, the determinant,
+ * inversion, the box transform and the ray test. Angles are in radians and follow the right-hand rule: in 2D a
+ * positive angle turns the X axis towards the Y axis. NaN and infinite components are not checked unless a function
+ * says so: test input that may be bad with the IsFinite functions.
  */
 
 
@@ -41,6 +43,21 @@
 
 
 // Types.
+/**
+ * @brief A 2D vector of doubles: a position, a direction, an offset or a size in a plane.
+ *
+ * A plain value type; copy it freely, it owns nothing. Build one with Vector2Double_Create, or from floats with
+ * Vector2Double_FromFloats. Its functions are Vector3Double's in two dimensions, with the same conventions, plus the
+ * 2D cross product.
+ */
+typedef struct Vector2DoubleStruct
+{
+    /** @brief The X component. */
+    double X;
+    /** @brief The Y component. */
+    double Y;
+} Vector2Double;
+
 /**
  * @brief A 3D vector of doubles: a position, a direction, an offset or a size.
  *
@@ -91,7 +108,514 @@ typedef struct BoundingBoxDoubleStruct
 } BoundingBoxDouble;
 
 
-// Functions: vectors.
+// Functions: 2D vectors.
+/**
+ * @brief Builds a 2D vector from its two components.
+ * @param x The X component.
+ * @param y The Y component.
+ * @returns The vector (x, y).
+ */
+static inline Vector2Double Vector2Double_Create(double x, double y)
+{
+    return (Vector2Double){ .X = x, .Y = y };
+}
+
+/**
+ * @brief Returns the zero 2D vector.
+ * @returns (0, 0).
+ */
+static inline Vector2Double Vector2Double_Zero(void)
+{
+    return (Vector2Double){ .X = 0.0, .Y = 0.0 };
+}
+
+/**
+ * @brief Builds a 2D vector from two floats, each widened to double exactly.
+ * @param values The components in X, Y order. Must not be NULL and must hold 2 floats.
+ * @returns The vector.
+ */
+static inline Vector2Double Vector2Double_FromFloats(const float values[2])
+{
+    return (Vector2Double){ .X = values[0], .Y = values[1] };
+}
+
+/**
+ * @brief Rounds a 2D vector to two floats, each component to the nearest float.
+ *
+ * A float keeps only about seven significant digits (its step is 1 mm at 8 km), so for a position far from the
+ * origin use Vector2Double_ToFloatsRelative instead.
+ * @param self The vector.
+ * @param out [out] Receives the components in X, Y order; a component beyond the float range becomes an infinity.
+ *        Must not be NULL and must hold 2 floats.
+ */
+static inline void Vector2Double_ToFloats(Vector2Double self, float out[2])
+{
+    out[0] = (float)self.X;
+    out[1] = (float)self.Y;
+}
+
+/**
+ * @brief Rounds a 2D vector's offset from an origin to two floats: the difference is taken in double, then rounded
+ *        once to the nearest float.
+ *
+ * This is how a far-away position becomes a float: relative to a nearby origin, so the float keeps the precision of
+ * the offset instead of the absolute position's (see Vector3Double_ToFloatsRelative).
+ * @param self The vector, typically a position.
+ * @param origin The origin to subtract, typically the camera's position.
+ * @param out [out] Receives self - origin in X, Y order. Must not be NULL and must hold 2 floats.
+ */
+static inline void Vector2Double_ToFloatsRelative(Vector2Double self, Vector2Double origin, float out[2])
+{
+    out[0] = (float)(self.X - origin.X);
+    out[1] = (float)(self.Y - origin.Y);
+}
+
+/**
+ * @brief Adds two 2D vectors component by component.
+ * @param a The first vector.
+ * @param b The second vector.
+ * @returns a + b.
+ */
+static inline Vector2Double Vector2Double_Add(Vector2Double a, Vector2Double b)
+{
+    return (Vector2Double){ .X = a.X + b.X, .Y = a.Y + b.Y };
+}
+
+/**
+ * @brief Subtracts one 2D vector from another component by component.
+ * @param a The vector to subtract from.
+ * @param b The vector to subtract.
+ * @returns a - b: for two points, the offset from b to a.
+ */
+static inline Vector2Double Vector2Double_Subtract(Vector2Double a, Vector2Double b)
+{
+    return (Vector2Double){ .X = a.X - b.X, .Y = a.Y - b.Y };
+}
+
+/**
+ * @brief Multiplies both components of a 2D vector by one number.
+ * @param self The vector.
+ * @param scale The factor.
+ * @returns self * scale.
+ */
+static inline Vector2Double Vector2Double_Scale(Vector2Double self, double scale)
+{
+    return (Vector2Double){ .X = self.X * scale, .Y = self.Y * scale };
+}
+
+/**
+ * @brief Multiplies two 2D vectors component by component (a per-axis scale).
+ * @param a The first vector.
+ * @param b The second vector.
+ * @returns (a.X * b.X, a.Y * b.Y).
+ */
+static inline Vector2Double Vector2Double_Multiply(Vector2Double a, Vector2Double b)
+{
+    return (Vector2Double){ .X = a.X * b.X, .Y = a.Y * b.Y };
+}
+
+/**
+ * @brief Adds a scaled 2D vector to another: a point moved along a direction, such as a ray's point at a distance.
+ *
+ * Each component is a + (b * scale), rounded after the product and after the sum.
+ * @param a The vector to add to (the start).
+ * @param b The vector to scale and add (the direction).
+ * @param scale The factor for @p b (the distance along it).
+ * @returns a + b * scale.
+ */
+static inline Vector2Double Vector2Double_AddScaled(Vector2Double a, Vector2Double b, double scale)
+{
+    return (Vector2Double){ .X = a.X + (b.X * scale), .Y = a.Y + (b.Y * scale) };
+}
+
+/**
+ * @brief Negates both components of a 2D vector.
+ * @param self The vector.
+ * @returns -self.
+ */
+static inline Vector2Double Vector2Double_Negate(Vector2Double self)
+{
+    return (Vector2Double){ .X = -self.X, .Y = -self.Y };
+}
+
+/**
+ * @brief The dot product of two 2D vectors.
+ * @param a The first vector.
+ * @param b The second vector.
+ * @returns a.X * b.X + a.Y * b.Y.
+ */
+static inline double Vector2Double_Dot(Vector2Double a, Vector2Double b)
+{
+    return (a.X * b.X) + (a.Y * b.Y);
+}
+
+/**
+ * @brief The 2D cross product of two vectors (raymath's Vector2CrossProduct): the Z component of the 3D cross product
+ *        of (a.X, a.Y, 0) and (b.X, b.Y, 0).
+ *
+ * Positive when the turn from a to b goes the way the X axis turns to the Y axis, negative the other way, zero when
+ * the vectors are parallel (or one is zero). Its magnitude is the area of the parallelogram they span: the sine of the
+ * angle between them times their lengths.
+ * @param a The first vector.
+ * @param b The second vector.
+ * @returns a.X * b.Y - a.Y * b.X.
+ */
+static inline double Vector2Double_Cross(Vector2Double a, Vector2Double b)
+{
+    return (a.X * b.Y) - (a.Y * b.X);
+}
+
+/**
+ * @brief The squared length of a 2D vector: its dot product with itself. Cheaper than the length; compare squared
+ *        lengths against squared limits.
+ * @param self The vector.
+ * @returns The squared length (>= 0, or NaN for a NaN component).
+ */
+static inline double Vector2Double_LengthSquared(Vector2Double self)
+{
+    return Vector2Double_Dot(self, self);
+}
+
+/**
+ * @brief The length of a 2D vector.
+ *
+ * The square root of the squared length, so a vector whose components pass about 1e154 overflows to infinity, one
+ * shorter than about 1e-154 loses precision (its square is subnormal), and one whose components are both below about
+ * 1e-162 reads as 0. Vector2Double_NormalizeOr has none of these limits.
+ * @param self The vector.
+ * @returns The length (>= 0, or NaN for a NaN component).
+ */
+static inline double Vector2Double_Length(Vector2Double self)
+{
+    return Math_SqrtDouble(Vector2Double_Dot(self, self));
+}
+
+/**
+ * @brief The squared distance between two 2D points.
+ * @param a The first point.
+ * @param b The second point.
+ * @returns The squared length of b - a.
+ */
+static inline double Vector2Double_DistanceSquared(Vector2Double a, Vector2Double b)
+{
+    return Vector2Double_LengthSquared(Vector2Double_Subtract(b, a));
+}
+
+/**
+ * @brief The distance between two 2D points.
+ *
+ * The points are subtracted first, so two points 10 000 km from the origin and 1 mm apart are 1 mm apart to within
+ * the doubles' own precision.
+ * @param a The first point.
+ * @param b The second point.
+ * @returns The length of b - a.
+ */
+static inline double Vector2Double_Distance(Vector2Double a, Vector2Double b)
+{
+    return Vector2Double_Length(Vector2Double_Subtract(b, a));
+}
+
+/**
+ * @brief The unit vector in a 2D vector's direction, or a fallback when the vector has no direction.
+ *
+ * The fallback is returned for the zero vector and for a vector with a NaN or infinite component. Every other vector
+ * has a direction, however short or long: it is divided by its larger component's magnitude before its length is
+ * taken, so the length can neither underflow nor overflow. Within a few rounding errors the result's length is 1.
+ * @param self The vector to normalize.
+ * @param fallback The vector to return when @p self has no direction; returned as given (it need not be a unit
+ *        vector).
+ * @returns The unit vector along @p self, or @p fallback.
+ */
+Vector2Double Vector2Double_NormalizeOr(Vector2Double self, Vector2Double fallback);
+
+/**
+ * @brief Interpolates linearly between two 2D vectors: a + (b - a) * amount, component by component.
+ *
+ * The amount is not clamped: 0 gives a, 1 gives b (to within rounding), and amounts outside [0, 1] extrapolate.
+ * @param a The vector at amount 0.
+ * @param b The vector at amount 1.
+ * @param amount The interpolation factor.
+ * @returns The interpolated vector.
+ */
+static inline Vector2Double Vector2Double_Lerp(Vector2Double a, Vector2Double b, double amount)
+{
+    return (Vector2Double){ .X = Math_LerpDouble(a.X, b.X, amount), .Y = Math_LerpDouble(a.Y, b.Y, amount) };
+}
+
+/**
+ * @brief The smaller of two 2D vectors' components, axis by axis.
+ *
+ * NaN components are not special-cased (see Math_MinDouble).
+ * @param a The first vector.
+ * @param b The second vector.
+ * @returns (min(a.X, b.X), min(a.Y, b.Y)).
+ */
+static inline Vector2Double Vector2Double_Min(Vector2Double a, Vector2Double b)
+{
+    return (Vector2Double){ .X = Math_MinDouble(a.X, b.X), .Y = Math_MinDouble(a.Y, b.Y) };
+}
+
+/**
+ * @brief The larger of two 2D vectors' components, axis by axis.
+ *
+ * NaN components are not special-cased (see Math_MaxDouble).
+ * @param a The first vector.
+ * @param b The second vector.
+ * @returns (max(a.X, b.X), max(a.Y, b.Y)).
+ */
+static inline Vector2Double Vector2Double_Max(Vector2Double a, Vector2Double b)
+{
+    return (Vector2Double){ .X = Math_MaxDouble(a.X, b.X), .Y = Math_MaxDouble(a.Y, b.Y) };
+}
+
+/**
+ * @brief Whether two 2D vectors are equal within an absolute margin on both axes.
+ *
+ * Each component is compared as Math_EqualsCloseDouble compares, by |a - b| <= marginOfError, so a NaN component
+ * never compares close, and neither do two equal infinities (their difference is NaN).
+ * @param a The first vector.
+ * @param b The second vector.
+ * @param marginOfError The largest difference allowed per component (>= 0).
+ * @returns true when |a - b| <= marginOfError on both axes.
+ */
+static inline bool Vector2Double_EqualsClose(Vector2Double a, Vector2Double b, double marginOfError)
+{
+    return Math_EqualsCloseDouble(a.X, b.X, marginOfError) && Math_EqualsCloseDouble(a.Y, b.Y, marginOfError);
+}
+
+/**
+ * @brief Whether both components of a 2D vector are finite: neither NaN nor an infinity.
+ * @param self The vector.
+ * @returns true when both components are finite.
+ */
+static inline bool Vector2Double_IsFinite(Vector2Double self)
+{
+    const double Components[2] = { self.X, self.Y };
+    for (size_t Index = 0U; Index < 2U; Index++)
+    {
+        if (Math_IsNaNDouble(Components[Index]) || Math_IsInfinityDouble(Components[Index]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief Returns the 2D vector with both components 1.
+ * @returns (1, 1).
+ */
+static inline Vector2Double Vector2Double_One(void)
+{
+    return (Vector2Double){ .X = 1.0, .Y = 1.0 };
+}
+
+/**
+ * @brief Adds one number to both components of a 2D vector (raymath's Vector2AddValue).
+ * @param self The vector.
+ * @param value The number to add.
+ * @returns (X + value, Y + value).
+ */
+static inline Vector2Double Vector2Double_AddValue(Vector2Double self, double value)
+{
+    return (Vector2Double){ .X = self.X + value, .Y = self.Y + value };
+}
+
+/**
+ * @brief Subtracts one number from both components of a 2D vector (raymath's Vector2SubtractValue).
+ * @param self The vector.
+ * @param value The number to subtract.
+ * @returns (X - value, Y - value).
+ */
+static inline Vector2Double Vector2Double_SubtractValue(Vector2Double self, double value)
+{
+    return (Vector2Double){ .X = self.X - value, .Y = self.Y - value };
+}
+
+/**
+ * @brief Divides two 2D vectors component by component (a per-axis division, raymath's Vector2Divide).
+ *
+ * A zero component of @p b gives an infinity, or NaN for 0 / 0, as a division does.
+ * @param a The vector to divide.
+ * @param b The divisors.
+ * @returns (a.X / b.X, a.Y / b.Y).
+ */
+static inline Vector2Double Vector2Double_Divide(Vector2Double a, Vector2Double b)
+{
+    return (Vector2Double){ .X = a.X / b.X, .Y = a.Y / b.Y };
+}
+
+/**
+ * @brief The reciprocal of each component of a 2D vector (raymath's Vector2Invert): a zero component becomes an
+ *        infinity.
+ * @param self The vector.
+ * @returns (1 / X, 1 / Y).
+ */
+static inline Vector2Double Vector2Double_Invert(Vector2Double self)
+{
+    return (Vector2Double){ .X = 1.0 / self.X, .Y = 1.0 / self.Y };
+}
+
+/**
+ * @brief A 2D vector turned a quarter turn, from the X axis towards the Y axis: (-Y, X).
+ *
+ * The same length, at right angles: the X axis gives the Y axis, and the 2D cross product of the vector with it is
+ * its squared length (positive). The other perpendicular is its negation.
+ * @param self The vector.
+ * @returns (-Y, X).
+ */
+static inline Vector2Double Vector2Double_Perpendicular(Vector2Double self)
+{
+    return (Vector2Double){ .X = -self.Y, .Y = self.X };
+}
+
+/**
+ * @brief The part of a 2D vector along another: @p onto's direction times the vector's component along it.
+ *
+ * @p onto need not be a unit vector, and may be however short or long (it is normalized with
+ * Vector2Double_NormalizeOr). An @p onto without a direction (zero, NaN or infinite) gives the zero vector.
+ * @param self The vector to project.
+ * @param onto The vector whose direction it is projected onto.
+ * @returns The projection; Vector2Double_Reject gives the rest, so the two add up to @p self.
+ */
+Vector2Double Vector2Double_Project(Vector2Double self, Vector2Double onto);
+
+/**
+ * @brief The part of a 2D vector across another: the vector minus its projection onto @p onto.
+ *
+ * What is left of a motion along a wall once its part into the wall's normal is taken out. An @p onto without a
+ * direction (zero, NaN or infinite) gives @p self unchanged.
+ * @param self The vector.
+ * @param onto The vector whose direction is taken out (need not be a unit vector).
+ * @returns self - Vector2Double_Project(self, onto), at right angles to @p onto within rounding.
+ */
+Vector2Double Vector2Double_Reject(Vector2Double self, Vector2Double onto);
+
+/**
+ * @brief A 2D vector mirrored off a surface with the given normal: self - 2 (self . normal) normal (raymath's
+ *        Vector2Reflect).
+ *
+ * A ball's velocity after it bounces off a wall. The normal must be a unit vector (either side of the surface gives
+ * the same result); a longer one scales the reflection.
+ * @param self The incoming vector.
+ * @param normal The surface's unit normal.
+ * @returns The reflected vector.
+ */
+static inline Vector2Double Vector2Double_Reflect(Vector2Double self, Vector2Double normal)
+{
+    double Twice = 2.0 * Vector2Double_Dot(self, normal);
+    return (Vector2Double){ .X = self.X - (normal.X * Twice), .Y = self.Y - (normal.Y * Twice) };
+}
+
+/**
+ * @brief The direction of a ray refracted through a surface, by Snell's law (raymath's Vector2Refract, GLSL's
+ *        refract).
+ * @param self The incoming ray's unit direction.
+ * @param normal The surface's unit normal, facing the side the ray comes from (against @p self).
+ * @param ratio The refractive index of the ray's medium over that of the medium it enters (1 / 1.33 from air into
+ *        water).
+ * @returns The refracted unit direction; the zero vector when the ray is reflected back entirely (total internal
+ *          reflection).
+ */
+Vector2Double Vector2Double_Refract(Vector2Double self, Vector2Double normal, double ratio);
+
+/**
+ * @brief A 2D vector turned by an angle about the origin (raymath's Vector2Rotate).
+ * @param self The vector.
+ * @param angle The angle in radians: positive turns the X axis towards the Y axis.
+ * @returns The turned vector, the same length.
+ */
+Vector2Double Vector2Double_Rotate(Vector2Double self, double angle);
+
+/**
+ * @brief The signed angle from one 2D vector to another (raymath's Vector2Angle): atan2 of their cross and dot
+ *        products.
+ *
+ * Positive when the turn from @p a to @p b goes the way the X axis turns to the Y axis, as Vector2Double_Cross is. The
+ * vectors' lengths do not matter (they are normalized first, so no length overflows); a zero vector gives 0.
+ * Vector2Double_Rotate(a, Vector2Double_Angle(a, b)) points along b.
+ * @param a The vector to measure from.
+ * @param b The vector to measure to.
+ * @returns The angle in radians, in [-pi, pi].
+ */
+double Vector2Double_Angle(Vector2Double a, Vector2Double b);
+
+/**
+ * @brief The unit 2D vector at an angle from the X axis: (cos angle, sin angle).
+ * @param angle The angle in radians: positive turns from the X axis towards the Y axis.
+ * @returns The unit vector; the inverse of Vector2Double_GetAngle.
+ */
+Vector2Double Vector2Double_FromAngle(double angle);
+
+/**
+ * @brief The angle of a 2D vector from the X axis: atan2(Y, X), a heading.
+ *
+ * Positive towards the Y axis. The vector's length does not matter; the zero vector gives atan2's value for zeros (0
+ * for positive zeros). The angle of the line from p to q is the angle of q - p (raymath's Vector2LineAngle returns its
+ * negative).
+ * @param self The vector.
+ * @returns The angle in radians, in [-pi, pi]; the inverse of Vector2Double_FromAngle.
+ */
+double Vector2Double_GetAngle(Vector2Double self);
+
+/**
+ * @brief A 2D point moved towards a target by at most a distance (raymath's Vector2MoveTowards).
+ *
+ * The target itself when it is no farther than @p maxDistance. A negative @p maxDistance moves the point away from
+ * the target by that much (and a point on the target stays there).
+ * @param self The point.
+ * @param target Where it moves to.
+ * @param maxDistance The largest distance it moves.
+ * @returns The moved point.
+ */
+Vector2Double Vector2Double_MoveTowards(Vector2Double self, Vector2Double target, double maxDistance);
+
+/**
+ * @brief Each component of a 2D vector clamped to its axis's range (raymath's Vector2Clamp).
+ * @param self The vector.
+ * @param minimum The least value of each axis.
+ * @param maximum The greatest value of each axis; at least @p minimum on each axis (otherwise the minimum wins).
+ * @returns The clamped vector.
+ */
+static inline Vector2Double Vector2Double_Clamp(Vector2Double self, Vector2Double minimum, Vector2Double maximum)
+{
+    return (Vector2Double)
+    {
+        .X = Math_ClampDouble(self.X, minimum.X, maximum.X),
+        .Y = Math_ClampDouble(self.Y, minimum.Y, maximum.Y)
+    };
+}
+
+/**
+ * @brief A 2D vector scaled so that its length lies in a range, its direction kept (raymath's Vector2ClampValue).
+ *
+ * A speed limit for a velocity. The zero vector stays zero: it has no direction to give a length to.
+ * @param self The vector.
+ * @param minimumLength The shortest length (>= 0).
+ * @param maximumLength The longest length (at least @p minimumLength).
+ * @returns The vector, lengthened or shortened if its length was outside the range.
+ */
+Vector2Double Vector2Double_ClampLength(Vector2Double self, double minimumLength, double maximumLength);
+
+/**
+ * @brief The barycentric weights of a 2D point for a triangle: the (u, v, w) for which u a + v b + w c is the point.
+ *
+ * u + v + w is 1, and the point is in the triangle exactly when all three are in [0, 1] (its edges included, within
+ * rounding). The corners are taken relative to @p a, so a triangle far from the origin keeps its precision. A
+ * degenerate triangle (its corners on one line) is refused; there is no tolerance, so a nearly degenerate one gives
+ * large weights.
+ * @param point The point.
+ * @param a The first corner (weight u).
+ * @param b The second corner (weight v).
+ * @param c The third corner (weight w).
+ * @param outWeights [out] Receives (u, v, w); left unchanged when refused. Must not be NULL.
+ * @returns true on success; false for a degenerate triangle or non-finite input.
+ */
+bool Vector2Double_TryGetBarycentric(Vector2Double point, Vector2Double a, Vector2Double b, Vector2Double c,
+    Vector3Double* outWeights);
+
+
+// Functions: 3D vectors.
 /**
  * @brief Builds a vector from its three components.
  * @param x The X component.
@@ -395,6 +919,213 @@ static inline bool Vector3Double_IsFinite(Vector3Double self)
     return true;
 }
 
+/**
+ * @brief Returns the vector with every component 1.
+ * @returns (1, 1, 1).
+ */
+static inline Vector3Double Vector3Double_One(void)
+{
+    return (Vector3Double){ .X = 1.0, .Y = 1.0, .Z = 1.0 };
+}
+
+/**
+ * @brief Adds one number to every component of a vector (raymath's Vector3AddValue).
+ * @param self The vector.
+ * @param value The number to add.
+ * @returns (X + value, Y + value, Z + value).
+ */
+static inline Vector3Double Vector3Double_AddValue(Vector3Double self, double value)
+{
+    return (Vector3Double){ .X = self.X + value, .Y = self.Y + value, .Z = self.Z + value };
+}
+
+/**
+ * @brief Subtracts one number from every component of a vector (raymath's Vector3SubtractValue).
+ * @param self The vector.
+ * @param value The number to subtract.
+ * @returns (X - value, Y - value, Z - value).
+ */
+static inline Vector3Double Vector3Double_SubtractValue(Vector3Double self, double value)
+{
+    return (Vector3Double){ .X = self.X - value, .Y = self.Y - value, .Z = self.Z - value };
+}
+
+/**
+ * @brief Divides two vectors component by component (a per-axis division, raymath's Vector3Divide).
+ *
+ * A zero component of @p b gives an infinity, or NaN for 0 / 0, as a division does.
+ * @param a The vector to divide.
+ * @param b The divisors.
+ * @returns (a.X / b.X, a.Y / b.Y, a.Z / b.Z).
+ */
+static inline Vector3Double Vector3Double_Divide(Vector3Double a, Vector3Double b)
+{
+    return (Vector3Double){ .X = a.X / b.X, .Y = a.Y / b.Y, .Z = a.Z / b.Z };
+}
+
+/**
+ * @brief The reciprocal of each component of a vector (raymath's Vector3Invert): a zero component becomes an
+ *        infinity.
+ * @param self The vector.
+ * @returns (1 / X, 1 / Y, 1 / Z).
+ */
+static inline Vector3Double Vector3Double_Invert(Vector3Double self)
+{
+    return (Vector3Double){ .X = 1.0 / self.X, .Y = 1.0 / self.Y, .Z = 1.0 / self.Z };
+}
+
+/**
+ * @brief A vector at right angles to the given one (raymath's Vector3Perpendicular): its cross product with the
+ *        coordinate axis it points least along.
+ *
+ * Not normalized: never shorter than sqrt(2/3) of the vector's length, and zero for the zero vector. Of the many
+ * perpendiculars, it is the one that suits building a basis around a direction.
+ * @param self The vector.
+ * @returns A vector perpendicular to @p self.
+ */
+Vector3Double Vector3Double_Perpendicular(Vector3Double self);
+
+/**
+ * @brief The part of a vector along another: @p onto's direction times the vector's component along it (raymath's
+ *        Vector3Project).
+ *
+ * @p onto need not be a unit vector, and may be however short or long (it is normalized with
+ * Vector3Double_NormalizeOr). An @p onto without a direction (zero, NaN or infinite) gives the zero vector.
+ * @param self The vector to project.
+ * @param onto The vector whose direction it is projected onto.
+ * @returns The projection; Vector3Double_Reject gives the rest, so the two add up to @p self.
+ */
+Vector3Double Vector3Double_Project(Vector3Double self, Vector3Double onto);
+
+/**
+ * @brief The part of a vector across another: the vector minus its projection onto @p onto (raymath's
+ *        Vector3Reject).
+ *
+ * What is left of a motion along a wall or a floor once its part into the surface's normal is taken out. An @p onto
+ * without a direction (zero, NaN or infinite) gives @p self unchanged.
+ * @param self The vector.
+ * @param onto The vector whose direction is taken out (need not be a unit vector).
+ * @returns self - Vector3Double_Project(self, onto), at right angles to @p onto within rounding.
+ */
+Vector3Double Vector3Double_Reject(Vector3Double self, Vector3Double onto);
+
+/**
+ * @brief A vector mirrored off a surface with the given normal: self - 2 (self . normal) normal (raymath's
+ *        Vector3Reflect).
+ *
+ * A ball's velocity after it bounces off a wall. The normal must be a unit vector (either side of the surface gives
+ * the same result); a longer one scales the reflection.
+ * @param self The incoming vector.
+ * @param normal The surface's unit normal.
+ * @returns The reflected vector.
+ */
+static inline Vector3Double Vector3Double_Reflect(Vector3Double self, Vector3Double normal)
+{
+    double Twice = 2.0 * Vector3Double_Dot(self, normal);
+    return (Vector3Double)
+    {
+        .X = self.X - (normal.X * Twice),
+        .Y = self.Y - (normal.Y * Twice),
+        .Z = self.Z - (normal.Z * Twice)
+    };
+}
+
+/**
+ * @brief The direction of a ray refracted through a surface, by Snell's law (raymath's Vector3Refract, GLSL's
+ *        refract).
+ * @param self The incoming ray's unit direction.
+ * @param normal The surface's unit normal, facing the side the ray comes from (against @p self).
+ * @param ratio The refractive index of the ray's medium over that of the medium it enters (1 / 1.33 from air into
+ *        water).
+ * @returns The refracted unit direction; the zero vector when the ray is reflected back entirely (total internal
+ *          reflection).
+ */
+Vector3Double Vector3Double_Refract(Vector3Double self, Vector3Double normal, double ratio);
+
+/**
+ * @brief A vector turned about an axis through the origin by an angle (raymath's Vector3RotateByAxisAngle: the
+ *        Euler-Rodrigues formula).
+ *
+ * The turn follows the right-hand rule: with the thumb along the axis, a positive angle turns the way the fingers
+ * curl (about the Z axis, X towards Y). The axis need not be a unit vector; a zero (or non-finite) axis leaves the
+ * vector as it is.
+ * @param self The vector.
+ * @param axis The axis's direction.
+ * @param angle The angle in radians.
+ * @returns The turned vector, the same length.
+ */
+Vector3Double Vector3Double_RotateByAxisAngle(Vector3Double self, Vector3Double axis, double angle);
+
+/**
+ * @brief The angle between two vectors (raymath's Vector3Angle): atan2 of the length of their cross product and their
+ *        dot product, accurate for small angles and for nearly opposite vectors.
+ *
+ * Unsigned: 3D has no side to measure it from (for a signed angle about an axis, project both onto the plane across
+ * it). The vectors' lengths do not matter (they are normalized first, so no length overflows); a zero vector gives 0.
+ * @param a The first vector.
+ * @param b The second vector.
+ * @returns The angle in radians, in [0, pi].
+ */
+double Vector3Double_Angle(Vector3Double a, Vector3Double b);
+
+/**
+ * @brief A point moved towards a target by at most a distance (raymath's Vector3MoveTowards).
+ *
+ * The target itself when it is no farther than @p maxDistance. A negative @p maxDistance moves the point away from
+ * the target by that much (and a point on the target stays there).
+ * @param self The point.
+ * @param target Where it moves to.
+ * @param maxDistance The largest distance it moves.
+ * @returns The moved point.
+ */
+Vector3Double Vector3Double_MoveTowards(Vector3Double self, Vector3Double target, double maxDistance);
+
+/**
+ * @brief Each component of a vector clamped to its axis's range (raymath's Vector3Clamp).
+ * @param self The vector.
+ * @param minimum The least value of each axis.
+ * @param maximum The greatest value of each axis; at least @p minimum on each axis (otherwise the minimum wins).
+ * @returns The clamped vector.
+ */
+static inline Vector3Double Vector3Double_Clamp(Vector3Double self, Vector3Double minimum, Vector3Double maximum)
+{
+    return (Vector3Double)
+    {
+        .X = Math_ClampDouble(self.X, minimum.X, maximum.X),
+        .Y = Math_ClampDouble(self.Y, minimum.Y, maximum.Y),
+        .Z = Math_ClampDouble(self.Z, minimum.Z, maximum.Z)
+    };
+}
+
+/**
+ * @brief A vector scaled so that its length lies in a range, its direction kept (raymath's Vector3ClampValue).
+ *
+ * A speed limit for a velocity. The zero vector stays zero: it has no direction to give a length to.
+ * @param self The vector.
+ * @param minimumLength The shortest length (>= 0).
+ * @param maximumLength The longest length (at least @p minimumLength).
+ * @returns The vector, lengthened or shortened if its length was outside the range.
+ */
+Vector3Double Vector3Double_ClampLength(Vector3Double self, double minimumLength, double maximumLength);
+
+/**
+ * @brief The barycentric weights of a point for a triangle (raymath's Vector3Barycenter): the (u, v, w) for which
+ *        u a + v b + w c is the point, or its projection onto the triangle's plane for a point off it.
+ *
+ * u + v + w is 1, and the projected point is in the triangle exactly when all three are in [0, 1] (its edges included,
+ * within rounding): what a picked point's texture coordinates are interpolated with. The corners are taken relative to
+ * @p a, so a triangle far from the origin keeps its precision. A degenerate triangle (its corners on one line) is
+ * refused; there is no tolerance, so a nearly degenerate one gives large weights.
+ * @param point The point.
+ * @param a The first corner (weight u).
+ * @param b The second corner (weight v).
+ * @param c The third corner (weight w).
+ * @param outWeights [out] Receives (u, v, w); left unchanged when refused. Must not be NULL.
+ * @returns true on success; false for a degenerate triangle or non-finite input.
+ */
+bool Vector3Double_TryGetBarycentric(Vector3Double point, Vector3Double a, Vector3Double b, Vector3Double c,
+    Vector3Double* outWeights);
+
 
 // Functions: matrices.
 /**
@@ -589,6 +1320,44 @@ static inline Vector3Double Matrix4Double_TransformDirection(const Matrix4Double
         .X = ((M[0] * direction.X) + (M[4] * direction.Y)) + (M[8] * direction.Z),
         .Y = ((M[1] * direction.X) + (M[5] * direction.Y)) + (M[9] * direction.Z),
         .Z = ((M[2] * direction.X) + (M[6] * direction.Y)) + (M[10] * direction.Z)
+    };
+}
+
+/**
+ * @brief Moves a 2D point by a matrix: the point (X, Y, 0) through the matrix's linear part and translation, keeping
+ *        the result's X and Y (raymath's Vector2Transform).
+ *
+ * For 2D work on the XY plane with a 4x4 matrix (there is no 3x3 type): a matrix built from FromTranslation,
+ * FromScale and FromRotationZ moves 2D points as a 2D transform would. The matrix is taken as affine, as in
+ * Matrix4Double_TransformPoint.
+ * @param self The matrix. Must not be NULL.
+ * @param point The point.
+ * @returns The moved point's X and Y.
+ */
+static inline Vector2Double Matrix4Double_TransformPoint2D(const Matrix4Double* self, Vector2Double point)
+{
+    const double* M = self->M;
+    return (Vector2Double)
+    {
+        .X = ((M[0] * point.X) + (M[4] * point.Y)) + M[12],
+        .Y = ((M[1] * point.X) + (M[5] * point.Y)) + M[13]
+    };
+}
+
+/**
+ * @brief Moves a 2D direction (or offset) by a matrix's linear part only: the direction (X, Y, 0), keeping the
+ *        result's X and Y. The translation does not apply.
+ * @param self The matrix. Must not be NULL.
+ * @param direction The direction or offset.
+ * @returns The moved direction's X and Y.
+ */
+static inline Vector2Double Matrix4Double_TransformDirection2D(const Matrix4Double* self, Vector2Double direction)
+{
+    const double* M = self->M;
+    return (Vector2Double)
+    {
+        .X = (M[0] * direction.X) + (M[4] * direction.Y),
+        .Y = (M[1] * direction.X) + (M[5] * direction.Y)
     };
 }
 

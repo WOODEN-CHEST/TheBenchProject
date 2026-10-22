@@ -5,7 +5,15 @@
 The bridge between WRFramework's double-precision maths, `WRVectorMath` (`include/wr/WRVectorMath.h`:
 `Vector3Double`, `Matrix4Double`, `BoundingBoxDouble`), and raylib's float `Vector3` and `Matrix`. The double types
 live in WRFramework so other projects can reuse them; WRFramework uses no raylib, so the conversions live here. Owns
-nothing; no lifecycle.
+nothing; no lifecycle. `WRVectorMath` also has a `Vector2Double` (added after T31, for future 2D projects); there is
+no bridge to raylib's `Vector2` yet, since this game has no 2D doubles. Add `GameMath_FromVector2` and its siblings,
+like the `Vector3` ones, when one is needed.
+
+**Look in `WRVectorMath` before writing vector maths.** Both vector types have raymath's operations in double: besides
+the arithmetic, perpendiculars, projection and rejection (a motion along a wall), reflection and refraction, moving
+towards a target, clamping per axis and by length, barycentric weights, angles between vectors (signed in 2D), 2D
+rotation and headings (`Vector2Double_FromAngle`, `_GetAngle`), and 3D rotation about an axis. The list is in
+`agents/WRFramework.md`, the contracts in `include/wr/WRVectorMath.h`.
 
 ## The rule: far positions become floats only relative to an origin
 
