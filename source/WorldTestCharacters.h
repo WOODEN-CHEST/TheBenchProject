@@ -10,6 +10,7 @@
 #include "World.h"
 #include "WorldCharacters.h"
 #include "WorldCollision.h"
+#include "wr/WRVectorMath.h"
 
 /*
  * Private header (source/) of the world test frame's characters (T13): walk mode (the player as an ordinary object with
@@ -92,3 +93,11 @@ void WorldTestCharacters_AfterStep(WorldTestCharacters* self, GameCamera* camera
 
 /** Logs the player's state and what it looks at (the I key's status line), or that walk mode is off. */
 void WorldTestCharacters_LogStatus(WorldTestCharacters* self);
+
+/**
+ * The F11 key's far shift (T32), after the world moved by @p offset (every root object, the characters among them) and
+ * the collision world was synced: places every character of the world again where it now stands, through the character
+ * system's teleport, so its motion starts afresh on its moved ground (the player keeps where it looks, the others where
+ * they face), and moves the test NPCs' patterns by @p offset. Returns how many characters it placed.
+ */
+size_t WorldTestCharacters_Shift(WorldTestCharacters* self, Vector3Double offset);

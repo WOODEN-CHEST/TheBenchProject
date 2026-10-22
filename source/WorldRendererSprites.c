@@ -243,15 +243,16 @@ void WorldRendererSprites_PrepareFrame(WorldRenderer* self, const WorldRenderFra
         return;
     }
 
-    // The camera's own up and forward (the view matrix's rows): a billboard leans its top toward the camera's up.
-    Vector3 CameraPosition = frame->Camera->Position;
+    // In render space: the camera at the origin, each sprite's shape and each light relative to it. The camera's own up
+    // and forward are the view matrix's rows: a billboard leans its top toward the camera's up.
+    Vector3 CameraPosition = { 0.0f, 0.0f, 0.0f };
     Vector3 CameraUp = { frame->View.m1, frame->View.m5, frame->View.m9 };
     Vector3 CameraForward = { -frame->View.m2, -frame->View.m6, -frame->View.m10 };
     SpriteViewer CameraViewer = SpriteViewer_FromPoint(CameraPosition, CameraUp);
     SpriteViewer CascadeViewer = SpriteViewer_FromDirection(frame->ShadowDirection, WorldUp);
     const WorldRenderLight* PointLight = GetPointShadowLight(self, frame);
-    SpriteViewer PointViewer = SpriteViewer_FromPoint((PointLight != NULL) ? PointLight->Position : CameraPosition,
-        WorldUp);
+    SpriteViewer PointViewer = SpriteViewer_FromPoint((PointLight != NULL) ? PointLight->RenderPosition
+        : CameraPosition, WorldUp);
 
     for (size_t Index = 0; Index < SpriteCount; Index++)
     {

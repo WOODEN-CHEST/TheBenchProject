@@ -8,11 +8,11 @@ in vec4 vertexColor;
 
 // Matrices supplied automatically by Raylib's DrawMesh path.
 uniform mat4 mvp;        // model-view-projection
-uniform mat4 matModel;   // model (world) matrix
+uniform mat4 matModel;   // model matrix (into render space: the world's orientation, the camera at the origin)
 uniform mat4 matNormal;  // transpose(inverse(matModel)), for correct normal transform
 
 // Interpolated outputs consumed by the fragment stage.
-out vec3 fragPosition;   // world-space surface position
+out vec3 fragPosition;   // render-space surface position (relative to the camera)
 out vec2 fragTexCoord;
 out vec3 fragNormal;     // world-space surface normal
 out vec4 fragColor;

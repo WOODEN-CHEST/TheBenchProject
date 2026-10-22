@@ -3,6 +3,7 @@
 #include "WorldRenderCache.h"
 #include "WorldObject.h"
 #include "WorldTransform.h"
+#include "GameMath.h"
 #include "Renderer.h"
 #include "Logger.h"
 #include "raylib/raymath.h"
@@ -147,8 +148,10 @@ static void ResolveModel(WorldRenderModel* entry, AssetManager* assets, AssetUse
  * drawn, its tint, its world matrix (scale -> Euler XYZ -> translation, as raylib's DrawModelEx composes them, times its
  * parents'; each LOD is drawn with its import transform inside it) and its world bounding sphere (the world model's,
  * through its own transform composed with the world matrix: conservative also when the hierarchy shears it, and exactly
- * LOD 0's sphere when the world model has no bounds of its own). */
-static void UpdateModel(WorldRenderModel* entry, AssetManager* assets, AssetUserID modelUser, Logger* logger)
+ * LOD 0's sphere when the world model has no bounds of its own), both in double, and both in render space for
+ * @p origin. */
+static void UpdateModel(WorldRenderModel* entry, Vector3Double origin, AssetManager* assets, AssetUserID modelUser,
+    Logger* logger)
 {
     const WorldModelComponent* ModelComponent = entry->Component;
     uint32_t Revision = WorldComponent_GetRevision(&ModelComponent->Base);
@@ -182,10 +185,15 @@ static void UpdateModel(WorldRenderModel* entry, AssetManager* assets, AssetUser
         return;
     }
 
-    entry->WorldMatrix = WorldObject_GetWorldMatrix(Owner);
-    Matrix BoundsToWorld = MatrixMultiply(entry->BoundsTransform, entry->WorldMatrix);
-    entry->Center = Vector3Transform(entry->LocalCenter, BoundsToWorld);
-    entry->Radius = entry->LocalRadius * WorldTransform_GetMaxScale(BoundsToWorld);
+    // TODO: T33 gives the world double positions; these widen the world's float matrix until then.
+    entry->WorldMatrix = GameMath_FromMatrix(WorldObject_GetWorldMatrix(Owner));
+    Matrix4Double BoundsTransform = GameMath_FromMatrix(entry->BoundsTransform);
+    Matrix4Double BoundsToWorld = Matrix4Double_Multiply(&BoundsTransform, &entry->WorldMatrix);
+    entry->Center = Matrix4Double_TransformPoint(&BoundsToWorld, GameMath_FromVector3(entry->LocalCenter));
+    // The stretch reads only the matrix's axes, which a float holds as well as anywhere.
+    entry->Radius = entry->LocalRadius * WorldTransform_GetMaxScale(GameMath_ToMatrix(&BoundsToWorld));
+    entry->RenderMatrix = GameMath_ToMatrixRelative(&entry->WorldMatrix, origin);
+    entry->RenderCenter = GameMath_ToVector3Relative(entry->Center, origin);
 }
 
 /* Re-matches the model entries to the world's current model components, in order: a component keeps its entry (and
@@ -256,19 +264,23 @@ static void GetUvRect(const SpriteAnimationFrame* frame, float outRect[4])
     outRect[3] = frame->_areaInTexture.height / Height;
 }
 
-/* The sprite's quad before a viewer turns it: the object's world position and rotation axes, the world size from the
- * frame's pixels, the pixels per unit and the object's world scale, the pivot and the flips. */
-static SpriteShape GetShape(const WorldSpriteSettings* settings, const WorldObject* owner, Rectangle frameArea)
+/* The sprite's quad before a viewer turns it, in render space: the object's world position relative to @p origin (its
+ * world position goes to @p outPosition, in double) and its rotation axes, the world size from the frame's pixels, the
+ * pixels per unit and the object's world scale, the pivot and the flips. */
+static SpriteShape GetShape(const WorldSpriteSettings* settings, const WorldObject* owner, Rectangle frameArea,
+    Vector3Double origin, Vector3Double* outPosition)
 {
     Vector3 Position;
     Vector3 Rotation;
     Vector3 Scale;
     WorldObject_GetWorldTransform(owner, &Position, &Rotation, &Scale);
+    // TODO: T33 gives the world double positions; this widens the world's float position until then.
+    *outPosition = GameMath_FromVector3(Position);
     Matrix Axes = MatrixRotateXYZ(Rotation);
     return (SpriteShape)
     {
         .Orientation = settings->Orientation,
-        .Position = Position,
+        .Position = GameMath_ToVector3Relative(*outPosition, origin),
         .AxisX = { Axes.m0, Axes.m1, Axes.m2 },
         .AxisY = { Axes.m4, Axes.m5, Axes.m6 },
         .AxisZ = { Axes.m8, Axes.m9, Axes.m10 },
@@ -280,9 +292,9 @@ static SpriteShape GetShape(const WorldSpriteSettings* settings, const WorldObje
 }
 
 /* Lists a sprite when its object is shown and its playback instance has a frame to draw (the world binds its world
- * sprite; a sprite without one, or whose world sprite failed to load, is simply not drawn), with its quad, its frame's
- * place in the texture and the settings in effect the passes read. */
-static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite)
+ * sprite; a sprite without one, or whose world sprite failed to load, is simply not drawn), with its quad in render space
+ * for @p origin, its frame's place in the texture and the settings in effect the passes read. */
+static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite, Vector3Double origin)
 {
     const WorldObject* Owner = WorldComponent_GetOwner(&sprite->Base);
     const WorldSprite* Asset = WorldSpriteComponent_GetBoundWorldSprite(sprite);
@@ -304,7 +316,7 @@ static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite)
     WorldSpriteSettings Settings = WorldSpriteComponent_ResolveSettings(sprite, WorldSprite_GetSettings(Asset));
     Entry.Component = sprite;
     GetUvRect(&Entry.Frame, Entry.UvRect);
-    Entry.Shape = GetShape(&Settings, Owner, Entry.Frame._areaInTexture);
+    Entry.Shape = GetShape(&Settings, Owner, Entry.Frame._areaInTexture, origin, &Entry.Position);
     // A fixed quad does not depend on its viewer.
     SpriteViewer AnyViewer = SpriteViewer_FromPoint(Entry.Shape.Position, (Vector3){ 0.0f, 1.0f, 0.0f });
     Entry.FixedTransform = (Entry.Shape.Orientation == WorldSpriteOrientation_Fixed)
@@ -331,8 +343,9 @@ static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite)
     return Error_CreateSuccess();
 }
 
-/* Lists a point light of a shown object with the values the passes read (it sits at the object's world position). */
-static Error AddLight(WorldRenderCache* self, const WorldLightComponent* light)
+/* Lists a point light of a shown object with the values the passes read (it sits at the object's world position, also
+ * kept in render space for @p origin). */
+static Error AddLight(WorldRenderCache* self, const WorldLightComponent* light, Vector3Double origin)
 {
     const WorldObject* Owner = WorldComponent_GetOwner(&light->Base);
     if (!IsObjectShown(Owner))
@@ -340,10 +353,13 @@ static Error AddLight(WorldRenderCache* self, const WorldLightComponent* light)
         return Error_CreateSuccess();
     }
 
+    // TODO: T33 gives the world double positions; this widens the world's float position until then.
+    Vector3Double Position = GameMath_FromVector3(WorldObject_GetWorldPosition(Owner));
     WorldRenderLight Entry =
     {
         .Component = light,
-        .Position = WorldObject_GetWorldPosition(Owner),
+        .Position = Position,
+        .RenderPosition = GameMath_ToVector3Relative(Position, origin),
         .Range = WorldLightComponent_GetRange(light),
         .Intensity = WorldLightComponent_GetIntensity(light),
         .Color = WorldLightComponent_GetColor(light),
@@ -356,10 +372,11 @@ static Error AddLight(WorldRenderCache* self, const WorldLightComponent* light)
     return Error_CreateSuccess();
 }
 
-/* Brings every model entry up to date. The n-th model component must own the n-th entry; when an entry belongs to
- * another component or id (or the counts differ) it stops with *outAreEntriesAligned false so the caller re-matches. */
-static void UpdateModels(WorldRenderCache* self, World* world, AssetManager* assets, AssetUserID modelUser,
-    Logger* logger, bool* outAreEntriesAligned)
+/* Brings every model entry up to date (in render space for @p origin). The n-th model component must own the n-th
+ * entry; when an entry belongs to another component or id (or the counts differ) it stops with *outAreEntriesAligned
+ * false so the caller re-matches. */
+static void UpdateModels(WorldRenderCache* self, World* world, Vector3Double origin, AssetManager* assets,
+    AssetUserID modelUser, Logger* logger, bool* outAreEntriesAligned)
 {
     *outAreEntriesAligned = false;
     size_t ModelCount = 0;
@@ -378,7 +395,7 @@ static void UpdateModels(WorldRenderCache* self, World* world, AssetManager* ass
         {
             return;
         }
-        UpdateModel(Entry, assets, modelUser, logger);
+        UpdateModel(Entry, origin, assets, modelUser, logger);
     }
     *outAreEntriesAligned = true;
 }
@@ -401,20 +418,21 @@ static void UpdateLod(WorldRenderModel* entry, const WorldRenderLodView* view, f
     {
         entry->Lod = WorldLodState_Create();
     }
-    float Distance = Vector3Distance(view->CameraPosition, entry->Center) * zoomFactor;
+    float Distance = Vector3Distance(view->CameraPosition, entry->RenderCenter) * zoomFactor;
     size_t Lod = WorldLod_Select(&Settings, Distance, view->DistanceScale, entry->Lod.IsStarted,
         WorldLodState_GetDestinationLod(&entry->Lod));
     WorldLodState_Update(&entry->Lod, Lod, view->DeltaSeconds, Settings.FadeSeconds);
 }
 
-/* Rebuilds this frame's sprite and light lists from the world's sprite and light components. */
-static Error BuildSpritesAndLights(WorldRenderCache* self, World* world)
+/* Rebuilds this frame's sprite and light lists from the world's sprite and light components, in render space for
+ * @p origin. */
+static Error BuildSpritesAndLights(WorldRenderCache* self, World* world, Vector3Double origin)
 {
     size_t SpriteCount = 0;
     WorldComponent* const* Sprites = World_GetComponents(world, WorldComponentType_Sprite, &SpriteCount);
     for (size_t Index = 0; Index < SpriteCount; Index++)
     {
-        Error Result = AddSprite(self, WorldSpriteComponent_FromComponent(Sprites[Index]));
+        Error Result = AddSprite(self, WorldSpriteComponent_FromComponent(Sprites[Index]), origin);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
@@ -425,7 +443,7 @@ static Error BuildSpritesAndLights(WorldRenderCache* self, World* world)
     WorldComponent* const* Lights = World_GetComponents(world, WorldComponentType_Light, &LightCount);
     for (size_t Index = 0; Index < LightCount; Index++)
     {
-        Error Result = AddLight(self, WorldLightComponent_FromComponent(Lights[Index]));
+        Error Result = AddLight(self, WorldLightComponent_FromComponent(Lights[Index]), origin);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
@@ -468,8 +486,8 @@ void WorldRenderCache_Reset(WorldRenderCache* self)
     self->_isMatched = false;
 }
 
-Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, AssetManager* assets, AssetUserID modelUser,
-    Logger* logger)
+Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double origin, AssetManager* assets,
+    AssetUserID modelUser, Logger* logger)
 {
     if ((self == NULL) || (world == NULL) || (assets == NULL))
     {
@@ -502,7 +520,7 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, AssetManager* 
             self->_componentSetVersion = Version;
             self->_isMatched = true;
         }
-        UpdateModels(self, world, assets, modelUser, logger, &AreEntriesAligned);
+        UpdateModels(self, world, origin, assets, modelUser, logger, &AreEntriesAligned);
         IsMatchCurrent = false;
     }
     if (!AreEntriesAligned)
@@ -514,7 +532,7 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, AssetManager* 
 
     GenericBuffer_Clear(&self->_sprites);
     GenericBuffer_Clear(&self->_lights);
-    Error BuildResult = BuildSpritesAndLights(self, world);
+    Error BuildResult = BuildSpritesAndLights(self, world, origin);
     if (BuildResult.Code != ErrorCode_Success)
     {
         WorldRenderCache_Reset(self);
@@ -542,6 +560,6 @@ void WorldRenderCache_UpdateLods(WorldRenderCache* self, const WorldRenderLodVie
 Matrix WorldRenderModel_GetLodTransform(const WorldRenderModel* model, size_t lod)
 {
     GameModel* LodModel = WorldRenderModel_GetLodModel(model, lod);
-    return (LodModel != NULL) ? MatrixMultiply(GameModel_GetRaylibModel(LodModel).transform, model->WorldMatrix)
-        : model->WorldMatrix;
+    return (LodModel != NULL) ? MatrixMultiply(GameModel_GetRaylibModel(LodModel).transform, model->RenderMatrix)
+        : model->RenderMatrix;
 }

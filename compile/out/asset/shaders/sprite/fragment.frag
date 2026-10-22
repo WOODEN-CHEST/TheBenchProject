@@ -66,7 +66,7 @@ void main()
     vec3 color;
     if (isLit)
     {
-        vec3 v = normalize(viewPos - fragPosition);
+        vec3 v = normalize(-fragPosition); // render space: the camera at the origin
         vec3 n = FacingNormal(normalize(fragNormal), v);
 
         // The cascades are read on the sprite as their light sees it, with the slope bias of that quad's face toward

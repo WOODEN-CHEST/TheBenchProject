@@ -24,11 +24,10 @@ uniform vec4 uvRect;        // the animation frame's area in its texture, normal
 uniform mat4 matShadowModel;
 uniform mat4 matPointShadowModel;
 // Lit pass only: metres a decal is pushed off its surface along its normal, toward the side the camera is on (0 for
-// every other sprite).
+// every other sprite). The camera sits at the origin of render space, the space every position here is in.
 uniform float decalOffset;
-uniform vec3 viewPos;       // the camera's world position (shared with the fragment stage's lighting)
 
-out vec3 fragPosition;            // world position (with a decal's push)
+out vec3 fragPosition;            // render-space position (with a decal's push)
 out vec2 fragTexCoord;
 out vec3 fragNormal;              // world normal of the quad (not yet turned toward the viewer)
 out vec3 fragShadowPosition;      // where the cascades are read
@@ -52,7 +51,7 @@ void main()
     if (decalOffset > 0.0)
     {
         // A plane has the camera on one side for all of its points, so the four corners move together.
-        float side = (dot(normal, viewPos - world) >= 0.0) ? 1.0 : -1.0;
+        float side = (dot(normal, -world) >= 0.0) ? 1.0 : -1.0;
         world += normal*(side*decalOffset);
         fragPosition = world;
         gl_Position = matProjection*(matView*vec4(world, 1.0));

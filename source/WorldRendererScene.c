@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include "WorldRendererInternal.h"
+#include "GameMath.h"
 #include "Logger.h"
 #include "raylib/rlgl.h"
 
@@ -86,6 +87,16 @@ static Color LinearizeColorBytes(Color color)
         .b = (unsigned char)lroundf(powf((float)color.b / 255.0f, SRGB_GAMMA) * 255.0f),
         .a = color.a
     };
+}
+
+/* Draws the debug reference grid around the world's origin, which sits at minus the frame's origin in render space. */
+static void DrawDebugGrid(const WorldRenderFrame* frame)
+{
+    Vector3 WorldOrigin = GameMath_ToVector3Relative(Vector3Double_Zero(), frame->Origin);
+    rlPushMatrix();
+    rlTranslatef(WorldOrigin.x, WorldOrigin.y, WorldOrigin.z);
+    DrawGrid(DEBUG_GRID_SLICES, DEBUG_GRID_SPACING);
+    rlPopMatrix();
 }
 
 /* Reports the scene-target tier once so it is easy to confirm which pipeline is active from the log. */
@@ -203,11 +214,12 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
     // pixel scale is 1.
     WorldRendererLighting_UploadFrame(self, frame, true, (Vector2){ 1.0f, 1.0f });
 
-    BeginMode3D(frame->RayCamera);
+    // Render space: the camera at the origin, every position relative to it (the render cache's).
+    BeginMode3D(frame->RenderCamera);
 
     if (self->_drawDebugGrid)
     {
-        DrawGrid(DEBUG_GRID_SLICES, DEBUG_GRID_SPACING);
+        DrawDebugGrid(frame);
     }
 
     // Model objects, shaded through the PBR shader (or each material's own default shader when it is
@@ -229,7 +241,7 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
     // Collider wireframes: a debug aid (the collision world's read-only debug list), off unless a collision world is set.
     if (self->_collisionDebug != NULL)
     {
-        WorldRendererCollision_Draw(self);
+        WorldRendererCollision_Draw(self, frame);
     }
 
     EndMode3D();

@@ -10,7 +10,7 @@ in vec2 fragTexCoord;
 
 uniform sampler2D texture0;   // the animation frame's texture
 uniform float alphaCutoff;
-uniform vec3 lightPosition;   // the shadow-casting point light's world position
+uniform vec3 lightPosition;   // the shadow-casting point light's position (render space: relative to the camera)
 uniform float lightFar;       // the light's reach; distances are normalized by this into [0,1]
 
 out vec4 finalColor;

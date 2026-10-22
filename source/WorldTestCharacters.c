@@ -9,6 +9,7 @@
 #include "WorldCharacterComponent.h"
 #include "WorldModelComponent.h"
 #include "WorldObject.h"
+#include "GameMath.h"
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
 
@@ -214,8 +215,10 @@ static void RemoveObject(WorldTestCharacters* self, uint64_t* id)
 // Static functions: walk mode and the NPCs.
 static void StartWalking(WorldTestCharacters* self, const GameCamera* camera)
 {
-    float Ground = FindGroundHeight(self, camera->Position, camera->Position.y);
-    Vector3 Feet = { camera->Position.x, Ground + 0.01f, camera->Position.z };
+    // TODO: T33 gives the world and the characters double positions; until then the camera's is rounded here.
+    Vector3 Above = GameMath_ToVector3(camera->Position);
+    float Ground = FindGroundHeight(self, Above, Above.y);
+    Vector3 Feet = { Above.x, Ground + 0.01f, Above.z };
     self->_playerId = Spawn(self, "player", self->_playerKind, Feet, camera->Yaw, NULL);
     if ((self->_playerId == 0U)
         || !Check(self, PlayerController_SetCharacter(&self->_controller, self->_world, self->_playerId, camera->Yaw,
@@ -253,7 +256,9 @@ static void ToggleNpcs(WorldTestCharacters* self, const GameCamera* camera)
     }
     Vector3 Forward = { sinf(camera->Yaw), 0.0f, cosf(camera->Yaw) };
     Vector3 Right = { -cosf(camera->Yaw), 0.0f, sinf(camera->Yaw) };
-    Vector3 Front = Vector3Add(camera->Position, Vector3Scale(Forward, NPC_SPAWN_DISTANCE));
+    // TODO: T33 gives the world and the characters double positions; until then the spawn point is rounded here.
+    Vector3 Front = GameMath_ToVector3(Vector3Double_AddScaled(camera->Position, GameMath_FromVector3(Forward),
+        NPC_SPAWN_DISTANCE));
     Vector3 Spawned[WORLD_TEST_NPC_COUNT];
     for (size_t Index = 0U; Index < WORLD_TEST_NPC_COUNT; Index++)
     {
@@ -597,6 +602,39 @@ void WorldTestCharacters_AfterStep(WorldTestCharacters* self, GameCamera* camera
         }
     }
     PlayerController_ApplyCamera(&self->_controller, self->_world, camera, deltaSeconds);
+}
+
+size_t WorldTestCharacters_Shift(WorldTestCharacters* self, Vector3Double offset)
+{
+    // Every character, not only the test ones: one the world file placed moved with its object too.
+    size_t Count = 0U;
+    size_t CharacterCount = 0U;
+    WorldComponent* const* Characters = World_GetComponents(self->_world, WorldComponentType_Character,
+        &CharacterCount);
+    for (size_t Index = 0U; Index < CharacterCount; Index++)
+    {
+        const WorldCharacterComponent* Character = WorldCharacterComponent_FromComponent(Characters[Index]);
+        const WorldObject* Object = WorldComponent_GetOwner(Characters[Index]);
+        uint64_t Id = WorldObject_GetId(Object);
+        // The player keeps where it looks (its view must not jump); the others keep facing where they faced.
+        float Yaw = (self->_isWalking && (Id == self->_playerId)) ? WorldCharacterComponent_GetInput(Character)->LookYaw
+            : WorldCharacterComponent_GetState(Character)->FacingYaw;
+        if (Check(self, WorldCharacters_Teleport(self->_characters, Id, WorldObject_GetWorldPosition(Object), Yaw),
+            "placing a character again"))
+        {
+            Count++;
+        }
+    }
+    for (size_t Index = 0U; Index < WORLD_TEST_NPC_COUNT; Index++)
+    {
+        WorldTestNpc* Npc = &self->_npcs[Index];
+        if (Npc->Id != 0U)
+        {
+            // TODO: T33 gives the world double positions; until then the moved centre is rounded here.
+            Npc->Center = GameMath_ToVector3(Vector3Double_Add(GameMath_FromVector3(Npc->Center), offset));
+        }
+    }
+    return Count;
 }
 
 void WorldTestCharacters_LogStatus(WorldTestCharacters* self)

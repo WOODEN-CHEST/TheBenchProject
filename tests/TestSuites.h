@@ -156,6 +156,13 @@ void SpriteTransformTests_Run(TestRun* run);
  *  source/). */
 void WorldVisibilityTests_Run(TestRun* run);
 
+/** @brief Render space (T32): the view a pure rotation wherever the camera is, points 50 km out within a hundredth of a
+ *  scene pixel of a double-precision camera and near the origin where the world-space pipeline put them, the sky's ray
+ *  exact at any distance, the shadow cascades' texels standing still while the camera moves (also for a light near
+ *  straight up) and their grid turning about the camera while the light turns, near the origin and far out; each also
+ *  shows the maths it replaced failing (WorldRenderSpaceTests.c; a private module of source/). */
+void WorldRenderSpaceTests_Run(TestRun* run);
+
 /** @brief LODs: the selection by distance with hysteresis, the scale, the zoom and a forced LOD; the cross-fade's state
  *  (its start, progress, snapping, a fade time of 0, held frames); the two LODs' complementary dither masks
  *  (WorldLodTests.c; a private module of source/). */

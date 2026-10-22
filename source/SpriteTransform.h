@@ -26,6 +26,9 @@
  * The matrix's third column is the quad's normal (unit: it carries no scale), so a shader gets the normal without an
  * inverse transpose. Its determinant is negative when exactly one of the image's axes is mirrored (draw sprites with
  * culling off).
+ *
+ * Positions (the shape's and a point viewer's) may be in any space the two share. The renderer uses render space (T32:
+ * the world's orientation with the camera at the origin), so a billboard facing the camera has the viewer at (0, 0, 0).
  */
 
 
@@ -39,7 +42,7 @@ typedef struct SpriteViewerStruct
 {
     /** @brief true: a directional light, Direction is used; false: a point viewer, Position is used. */
     bool IsDirectional;
-    /** @brief The point viewer's world position. */
+    /** @brief The point viewer's position (in the shape's space). */
     Vector3 Position;
     /** @brief Unit direction TOWARD the directional light. */
     Vector3 Direction;
@@ -55,7 +58,7 @@ typedef struct SpriteShapeStruct
 {
     /** @brief How the quad is turned. */
     WorldSpriteOrientation Orientation;
-    /** @brief World position of the pivot (the object's position). */
+    /** @brief The pivot's position (the object's position; in render space in the renderer). */
     Vector3 Position;
     /** @brief The object's rotation as its local X, Y and Z axes in world space (unit, right-handed): a fixed quad's
      *  basis, an axis billboard's axis (Y), and the facing a billboard falls back to when its viewer gives none (Z). */
@@ -86,7 +89,7 @@ typedef struct SpriteDrawOrderStruct
 // Functions.
 /**
  * @brief Makes a point viewer: the camera, or a point light.
- * @param position The viewer's world position.
+ * @param position The viewer's position, in the shapes' space.
  * @param up The viewer's up; need not be unit or perpendicular to anything, only not zero (world up for lights).
  * @returns The viewer.
  */

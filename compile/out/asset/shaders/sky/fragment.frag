@@ -5,15 +5,17 @@
 // moon's disc and the Milky Way. The eye's night vision (shaders/common/night_vision.glsl) greys the dim sky, not the
 // discs. The stars are a separate pass drawn over this one (shaders/stars).
 // Drawn behind the 3D geometry into the linear-HDR scene buffer; the tonemap post-pass maps it to display.
-// The per-pixel world ray is reconstructed from the inverse view-projection so the sky lines up exactly with
-// the 3D camera. Everything is world space with +Y up, matching WorldEnvironment_GetSunDirection.
+// The per-pixel ray is reconstructed from the inverse view-projection so the sky lines up exactly with the 3D
+// camera. The renderer works in render space (the world's orientation with the camera at the origin), so that matrix
+// is a rotation and a projection: the far plane's point IS the ray, exact however far the camera is from the world's
+// origin. Directions are the world's, with +Y up, matching WorldEnvironment_GetSunDirection. The C mirror of the ray is
+// WorldRenderSpace_GetSkyRay (source/WorldRenderSpace.c).
 
 in vec2 fragTexCoord;
 in vec4 fragColor;
 
 uniform vec2 resolution;       // scene target size in pixels
-uniform mat4 invViewProj;      // inverse(view * proj), matching BeginMode3D
-uniform vec3 cameraPos;        // world-space camera position
+uniform mat4 invViewProj;      // inverse(view * proj) in render space (a rotation and the projection), matching BeginMode3D
 
 uniform vec3 sunDirection;     // unit direction TO the sun (world, +Y up)
 uniform vec3 sunColor;         // linear; tints the sun disc
@@ -107,7 +109,7 @@ void main()
     vec2 uv = gl_FragCoord.xy/resolution;
     vec4 clip = vec4(uv*2.0 - 1.0, 1.0, 1.0);
     vec4 world = invViewProj*clip;
-    vec3 rayDir = normalize(world.xyz/world.w - cameraPos);
+    vec3 rayDir = normalize(world.xyz/world.w); // the camera sits at the origin of render space
 
     // Ground viewer just above the planet surface; the sky dome uses world +Y as up.
     vec3 rayOrigin = vec3(0.0, ATMOSPHERE_R_PLANET + 1.0, 0.0);

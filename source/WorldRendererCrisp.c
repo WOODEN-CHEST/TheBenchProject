@@ -69,7 +69,7 @@ void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* fram
         (frame->SceneHeight > 0) ? ((float)frame->WindowHeight / (float)frame->SceneHeight) : 1.0f
     };
     WorldRendererLighting_UploadFrame(self, frame, false, DitherPixelScale);
-    BeginMode3D(frame->RayCamera);
+    BeginMode3D(frame->RenderCamera);
     bool IsLit = (self->_pbr._shader != NULL);
     WorldRendererGeometry_DrawModels(self, IsLit ? &self->_pbr._passShader : NULL, IsLit,
         WorldRendererPixelFilter_CrispOnly);

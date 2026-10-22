@@ -127,7 +127,6 @@ static int CountShaderPointLights(Shader shader)
 /* Caches every frame-lighting uniform location of a shader that includes common/lighting. */
 static void CacheLitLocations(WorldRendererLitLocations* lit, Shader shader)
 {
-    lit->_locViewPos = GetShaderLocation(shader, "viewPos");
     lit->_locSunDirection = GetShaderLocation(shader, "sunDirection");
     lit->_locSunColor = GetShaderLocation(shader, "sunColor");
     lit->_locSunIntensity = GetShaderLocation(shader, "sunIntensity");
@@ -241,7 +240,7 @@ static void ComputeAmbientColor(const WorldEnvironment* environment, float sunEl
 
 /* Builds this render's forward-light candidates and their linear radiance (colour -> linear x intensity, once
  * per light per frame): every light of the render cache that can light anything, except the cube-shadow light,
- * which the shader shades separately with its shadow. */
+ * which the shader shades separately with its shadow. In render space, like the spheres they are culled against. */
 static void BuildForwardLights(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     GenericBuffer_Clear(&self->_pbr._forwardLights);
@@ -260,7 +259,7 @@ static void BuildForwardLights(WorldRenderer* self, const WorldRenderFrame* fram
 
         WorldCullingLight Candidate =
         {
-            .Position = Light->Position,
+            .Position = Light->RenderPosition,
             .Range = Light->Range,
             .Intensity = Light->Intensity
         };
@@ -418,16 +417,15 @@ static const WorldRenderLight* GetPointShadowLight(const WorldRenderer* self, co
         : NULL;
 }
 
-/* Uploads the frame's lighting values to one lit shader (common/lighting): the camera, the sun and the moon, the
- * ambient, the fog and its sky, the night vision, the cascades' fades, light direction and matrices, the AO switch and
- * the cube-shadow light. The textures are bound once for every lit shader (BindFrameTextures). */
+/* Uploads the frame's lighting values to one lit shader (common/lighting): the sun and the moon, the ambient, the fog
+ * and its sky, the night vision, the cascades' fades, light direction and matrices, the AO switch and the cube-shadow
+ * light. Positions and matrices are in render space, where the camera sits at the origin (so it needs no uniform). The
+ * textures are bound once for every lit shader (BindFrameTextures). */
 static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
     const WorldRendererLitLocations* lit, bool applyScreenAo)
 {
     const WorldEnvironment* Environment = frame->Environment;
 
-    float ViewPos[3] = { frame->Camera->Position.x, frame->Camera->Position.y, frame->Camera->Position.z };
-    SetShaderValue(shader, lit->_locViewPos, ViewPos, SHADER_UNIFORM_VEC3);
     // The two directional lights. The sun's direction is also the fog sky's sun, the moon's the fog sky's moon.
     float SunDir[3] = { frame->SunLight.Direction.x, frame->SunLight.Direction.y, frame->SunLight.Direction.z };
     SetShaderValue(shader, lit->_locSunDirection, SunDir, SHADER_UNIFORM_VEC3);
@@ -504,7 +502,10 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     SetShaderValue(shader, lit->_locPointShadowActive, &PointShadowActive, SHADER_UNIFORM_INT);
     if (PointShadowLight != NULL)
     {
-        float LightPos[3] = { PointShadowLight->Position.x, PointShadowLight->Position.y, PointShadowLight->Position.z };
+        float LightPos[3] =
+        {
+            PointShadowLight->RenderPosition.x, PointShadowLight->RenderPosition.y, PointShadowLight->RenderPosition.z
+        };
         SetShaderValue(shader, lit->_locPointShadowLightPos, LightPos, SHADER_UNIFORM_VEC3);
 
         float Radiance[3];
@@ -645,12 +646,12 @@ void WorldRendererLighting_UploadMaterial(WorldRenderer* self, const Material* m
 }
 
 /* Starts from the frame's base scene luminance (ambient + sun + moon), adds nearby point lights (being near a light
- * raises the estimate -> lowers exposure), then eases the adapted luminance toward it. A non-finite estimate (a
- * corrupt light or environment value) holds the adaptation, so it can never be poisoned for good. */
+ * raises the estimate -> lowers exposure; in render space, the camera at the origin), then eases the adapted luminance
+ * toward it. A non-finite estimate (a corrupt light or environment value) holds the adaptation, so it can never be
+ * poisoned for good. */
 float WorldRendererLighting_UpdateExposure(WorldRenderer* self, const WorldRenderFrame* frame, float deltaSeconds)
 {
     float SceneLuminance = frame->BaseSceneLuminance;
-    Vector3 CameraPosition = frame->Camera->Position;
 
     size_t LightCount = 0;
     const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &LightCount);
@@ -661,7 +662,7 @@ float WorldRendererLighting_UpdateExposure(WorldRenderer* self, const WorldRende
         {
             continue;
         }
-        float Distance = Vector3Distance(Light->Position, CameraPosition);
+        float Distance = Vector3Length(Light->RenderPosition);
         if (Distance >= Light->Range)
         {
             continue;

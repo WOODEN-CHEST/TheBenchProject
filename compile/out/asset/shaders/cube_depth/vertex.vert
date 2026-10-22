@@ -2,7 +2,8 @@
 
 // Vertex stage for the point-light OMNIDIRECTIONAL shadow pass. Renders model geometry from a point light's
 // position into one face of a cube map; the fragment stores the linear distance from the light. Raylib's
-// DrawMesh supplies mvp (per face: light-view * face-projection * model) and matModel (model -> world).
+// DrawMesh supplies mvp (per face: light-view * face-projection * model) and matModel (model -> render space, the
+// world's orientation with the camera at the origin, as the light's position is).
 
 in vec3 vertexPosition;
 

@@ -80,7 +80,7 @@ void main()
         vec3 mapN = texture(normalMap, fragTexCoord).xyz*2.0 - 1.0;
         n = PerturbNormal(n, fragPosition, fragTexCoord, mapN);
     }
-    vec3 v = normalize(viewPos - fragPosition);
+    vec3 v = normalize(-fragPosition); // render space: the camera at the origin
 
     // Base reflectance: 0.04 for dielectrics, the albedo for metals.
     vec3 f0 = mix(vec3(0.04), albedo, metal);

@@ -9,7 +9,9 @@
 #include "WorldSpriteComponent.h"
 #include "Renderer.h"
 #include "raylib/raymath.h"
+#include "wr/WRVectorMath.h"
 #include <math.h>
+#include <string.h>
 
 
 // Macros.
@@ -22,6 +24,12 @@
 #define TEST_FAR 4000.0
 /** The draw distance scale of the list tests: models 30 m, sprites 7.5 m, decals 3 m, each with a 3 m fade band. */
 #define TEST_SCALE 0.05f
+/** How far the render-space test shifts its scene and its camera (20 km along X and Z), and how many lists and LOD states
+ *  it compares. */
+#define SHIFT_DISTANCE 20000.0
+#define SHIFT_MAX_ENTRIES 32U
+/** How close a shifted scene's fades must stay (its floats are rounded to 2 mm out there; a fade band is 3 m). */
+#define SHIFT_FADE_TOLERANCE 2e-3f
 /** A box model's bounding radius at scale 1 (a unit cube's half diagonal). */
 #define BOX_RADIUS 0.8660254f
 /** The test sprites' bounding radius: their frame is 1x1 pixels at 0.5 pixels per unit, so they are 2 m wide and tall
@@ -91,8 +99,8 @@ static void VisibilityFixture_Deconstruct(TestRun* run, VisibilityFixture* self)
 /* Syncs the cache with the world and builds the lists for @p view. */
 static bool VisibilityFixture_Build(TestRun* run, VisibilityFixture* self, const WorldVisibilityView* view)
 {
-    return TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&self->Cache, &self->World, self->Assets.Manager,
-               self->ModelUser, NULL))
+    return TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&self->Cache, &self->World, Vector3Double_Zero(),
+               self->Assets.Manager, self->ModelUser, NULL))
         && TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&self->Visibility, &self->Cache, view));
 }
 
@@ -971,8 +979,8 @@ static void DrawnModelsAreCountedByLod(TestRun* run)
     WorldRenderLodView LodView = { .CameraPosition = CameraPosition, .ZoomFactor = 1.0f, .DistanceScale = 1.0f,
         .DeltaSeconds = 0.1f };
     if ((Near != NULL) && (AlsoNear != NULL) && (Far != NULL) && (Behind != NULL)
-        && TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Fixture.Assets.Manager,
-            Fixture.ModelUser, NULL)))
+        && TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Vector3Double_Zero(),
+            Fixture.Assets.Manager, Fixture.ModelUser, NULL)))
     {
         WorldRenderCache_UpdateLods(&Fixture.Cache, &LodView, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
@@ -1004,6 +1012,182 @@ static void DrawnModelsAreCountedByLod(TestRun* run)
             WorldVisibilityCounts Counts = WorldVisibility_GetCounts(&Fixture.Visibility);
             TEST_CHECK(run, (Counts.DrawnModelCount == 3U) && (Counts.DrawnModelsByLod[0] == 2U)
                 && (Counts.DrawnModelsByLod[1] == 1U) && (Counts.LodFadingCount == 2U));
+        }
+    }
+    VisibilityFixture_Deconstruct(run, &Fixture);
+}
+
+/* What one render-space build gives, for comparing two: every pass's lists, every entry's fade, every model's LOD. */
+typedef struct ShiftSnapshotStruct
+{
+    size_t ModelCounts[WorldVisibilityPass_Count];
+    size_t Models[WorldVisibilityPass_Count][SHIFT_MAX_ENTRIES];
+    size_t SpriteCounts[WorldVisibilityPass_Count];
+    size_t Sprites[WorldVisibilityPass_Count][SHIFT_MAX_ENTRIES];
+    size_t ModelCount;
+    size_t SpriteCount;
+    float ModelFades[SHIFT_MAX_ENTRIES];
+    float SpriteFades[SHIFT_MAX_ENTRIES];
+    WorldLodState Lods[SHIFT_MAX_ENTRIES];
+} ShiftSnapshot;
+
+/* One frame of the render-space test from scratch: the cache synced for the camera at @p origin, the LODs chosen
+ * afresh, the lists built for the camera at render space's origin; then the results into @p outSnapshot. */
+static bool BuildInRenderSpace(TestRun* run, VisibilityFixture* fixture, Vector3Double origin,
+    ShiftSnapshot* outSnapshot)
+{
+    Memory_Zero(outSnapshot, sizeof(*outSnapshot));
+    WorldRenderCache_Reset(&fixture->Cache);
+    WorldVisibilityView View = MakeView((Vector3){ 0.0f, 0.0f, 0.0f });
+    WorldRenderLodView LodView = { .CameraPosition = { 0.0f, 0.0f, 0.0f }, .ZoomFactor = 1.0f, .DistanceScale = 1.0f,
+        .DeltaSeconds = 0.0f };
+    if (!TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&fixture->Cache, &fixture->World, origin,
+        fixture->Assets.Manager, fixture->ModelUser, NULL)))
+    {
+        return false;
+    }
+    WorldRenderCache_UpdateLods(&fixture->Cache, &LodView, NULL);
+    if (!TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&fixture->Visibility, &fixture->Cache, &View)))
+    {
+        return false;
+    }
+    const WorldRenderModel* Models = WorldRenderCache_GetModels(&fixture->Cache, &outSnapshot->ModelCount);
+    WorldRenderCache_GetSprites(&fixture->Cache, &outSnapshot->SpriteCount);
+    if (!TEST_CHECK(run, (outSnapshot->ModelCount <= SHIFT_MAX_ENTRIES) && (outSnapshot->SpriteCount <= SHIFT_MAX_ENTRIES)))
+    {
+        return false;
+    }
+    for (int Pass = 0; Pass < (int)WorldVisibilityPass_Count; Pass++)
+    {
+        const size_t* List = WorldVisibility_GetModels(&fixture->Visibility, &fixture->Cache, (WorldVisibilityPass)Pass,
+            &outSnapshot->ModelCounts[Pass]);
+        Memory_Copy(List, outSnapshot->Models[Pass], outSnapshot->ModelCounts[Pass] * sizeof(size_t));
+        List = WorldVisibility_GetSprites(&fixture->Visibility, &fixture->Cache, (WorldVisibilityPass)Pass,
+            &outSnapshot->SpriteCounts[Pass]);
+        Memory_Copy(List, outSnapshot->Sprites[Pass], outSnapshot->SpriteCounts[Pass] * sizeof(size_t));
+    }
+    for (size_t Index = 0U; Index < outSnapshot->ModelCount; Index++)
+    {
+        outSnapshot->ModelFades[Index] = WorldVisibility_GetModelFade(&fixture->Visibility, Index).Combined;
+        outSnapshot->Lods[Index] = Models[Index].Lod;
+    }
+    for (size_t Index = 0U; Index < outSnapshot->SpriteCount; Index++)
+    {
+        outSnapshot->SpriteFades[Index] = WorldVisibility_GetSpriteFade(&fixture->Visibility, Index).Combined;
+    }
+    return true;
+}
+
+/* Whether two builds drew the same: the same lists and LODs, fades within the rounding of the shifted floats. */
+static bool AreSnapshotsAlike(const ShiftSnapshot* a, const ShiftSnapshot* b)
+{
+    bool IsAlike = (a->ModelCount == b->ModelCount) && (a->SpriteCount == b->SpriteCount)
+        && (memcmp(a->ModelCounts, b->ModelCounts, sizeof(a->ModelCounts)) == 0)
+        && (memcmp(a->Models, b->Models, sizeof(a->Models)) == 0)
+        && (memcmp(a->SpriteCounts, b->SpriteCounts, sizeof(a->SpriteCounts)) == 0)
+        && (memcmp(a->Sprites, b->Sprites, sizeof(a->Sprites)) == 0);
+    for (size_t Index = 0U; IsAlike && (Index < a->ModelCount); Index++)
+    {
+        IsAlike = (fabsf(a->ModelFades[Index] - b->ModelFades[Index]) < SHIFT_FADE_TOLERANCE)
+            && (a->Lods[Index].CurrentLod == b->Lods[Index].CurrentLod)
+            && (a->Lods[Index].TargetLod == b->Lods[Index].TargetLod);
+    }
+    for (size_t Index = 0U; IsAlike && (Index < a->SpriteCount); Index++)
+    {
+        IsAlike = fabsf(a->SpriteFades[Index] - b->SpriteFades[Index]) < SHIFT_FADE_TOLERANCE;
+    }
+    return IsAlike;
+}
+
+/* Render space (T32): a scene's lists, fades and LOD choices are the same with the camera at its place near the origin
+ * and with the scene and the camera shifted together 20 km out (where the world's floats round to 2 mm): the cache syncs
+ * for the camera's position, and the view and the cascades are in render space, around the camera at (0, 0, 0). A scene
+ * left behind (the camera alone moved) is drawn nowhere. */
+static void ListsAndLodsHoldTwentyKilometresOut(TestRun* run)
+{
+    VisibilityFixture Fixture;
+    BoundingBox UnitCube = { .min = { -0.5f, -0.5f, -0.5f }, .max = { 0.5f, 0.5f, 0.5f } };
+    if (!VisibilityFixture_Construct(run, &Fixture)
+        || !TestAssets_AddModel(run, &Fixture.Assets, "box_lod1", UnitCube, NULL)
+        || !TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"stepped\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 10}, {\"model\": \"box_lod1\", \"max_distance\": 30}], \"lod_hysteresis\": 0, "
+            "\"draw_distance\": 600}"))
+    {
+        VisibilityFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    // A scene in front of a camera at (0.3, 1.6, -0.7) looking along +Z, at the list tests' quality scale (models drawn
+    // to 30 m, sprites to 7.5 m, decals to 3 m): LOD models near and past their switch, boxes in view, beside it, behind
+    // it, in their fade band and beyond it, the three sprites near and fading, and a box on a parent.
+    Vector3Double CameraPosition = Vector3Double_Create(0.3, 1.6, -0.7);
+    const Vector3 Stepped[] = { { 0.1f, 1.7f, 4.3f }, { 1.2f, 1.4f, 11.9f }, { -0.6f, 1.9f, 24.1f } };
+    const Vector3 Boxes[] = { { 0.4f, 1.3f, 7.7f }, { 20.3f, 1.6f, 9.3f }, { 0.3f, 1.6f, -10.7f }, { 0.2f, 1.5f, 27.8f },
+        { 0.3f, 1.6f, 40.1f } };
+    bool IsBuilt = true;
+    for (size_t Index = 0U; Index < (sizeof(Stepped) / sizeof(Stepped[0])); Index++)
+    {
+        IsBuilt = IsBuilt && (AddWorldModel(run, &Fixture.World, "stepped", Stepped[Index]) != NULL);
+    }
+    for (size_t Index = 0U; Index < (sizeof(Boxes) / sizeof(Boxes[0])); Index++)
+    {
+        IsBuilt = IsBuilt && (AddBox(run, &Fixture.World, Boxes[Index]) != NULL);
+    }
+    IsBuilt = IsBuilt && (AddSprite(run, &Fixture.World, (Vector3){ 1.3f, 1.1f, 3.3f }, "cutout") != NULL)
+        && (AddSprite(run, &Fixture.World, (Vector3){ -0.7f, 2.1f, 5.3f }, "smoke") != NULL)
+        && (AddSprite(run, &Fixture.World, (Vector3){ 0.3f, 0.01f, 2.3f }, "decal") != NULL)
+        && (AddSprite(run, &Fixture.World, (Vector3){ 0.3f, 1.6f, 6.6f }, "cutout") != NULL);
+    WorldObject* Parent = NULL;
+    WorldModelComponent* Child = AddBox(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, 0.0f });
+    IsBuilt = IsBuilt && (Child != NULL) && TEST_CHECK_SUCCESS(run, World_CreateObject(&Fixture.World, NULL, &Parent))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, (Vector3){ 2.3f, 0.3f, 5.9f }))
+        && TEST_CHECK_SUCCESS(run, World_SetParent(&Fixture.World, WorldObject_GetId(OwnerOfModel(Child)),
+            WorldObject_GetId(Parent), false));
+
+    ShiftSnapshot AtTheOrigin;
+    ShiftSnapshot Shifted;
+    ShiftSnapshot LeftBehind;
+    Vector3Double Shift = Vector3Double_Create(SHIFT_DISTANCE, 0.0, SHIFT_DISTANCE);
+    if (IsBuilt && BuildInRenderSpace(run, &Fixture, CameraPosition, &AtTheOrigin)
+        && BuildInRenderSpace(run, &Fixture, Vector3Double_Add(CameraPosition, Shift), &LeftBehind))
+    {
+        // The scene: drawn, with LOD 1 in use and entries fading, and none of it drawn by a camera that moved away
+        // alone.
+        TEST_CHECK(run, (AtTheOrigin.ModelCounts[WorldVisibilityPass_Camera] >= 5U)
+            && (AtTheOrigin.SpriteCounts[WorldVisibilityPass_Camera] == 4U));
+        bool HasLodOne = false;
+        bool HasFadingModel = false;
+        bool HasFadingSprite = false;
+        for (size_t Index = 0U; Index < AtTheOrigin.ModelCount; Index++)
+        {
+            HasLodOne = HasLodOne || (AtTheOrigin.Lods[Index].IsStarted && (AtTheOrigin.Lods[Index].TargetLod == 1U));
+            HasFadingModel = HasFadingModel
+                || ((AtTheOrigin.ModelFades[Index] > 0.0f) && (AtTheOrigin.ModelFades[Index] < 1.0f));
+        }
+        for (size_t Index = 0U; Index < AtTheOrigin.SpriteCount; Index++)
+        {
+            HasFadingSprite = HasFadingSprite
+                || ((AtTheOrigin.SpriteFades[Index] > 0.0f) && (AtTheOrigin.SpriteFades[Index] < 1.0f));
+        }
+        TEST_CHECK(run, HasLodOne && HasFadingModel && HasFadingSprite);
+        TEST_CHECK(run, (LeftBehind.ModelCounts[WorldVisibilityPass_Camera] == 0U)
+            && (LeftBehind.SpriteCounts[WorldVisibilityPass_Camera] == 0U));
+
+        // Every root moved 20 km (rounded to the floats there), the camera with them.
+        size_t ObjectCount = World_GetObjectCount(&Fixture.World);
+        for (size_t Index = 0U; Index < ObjectCount; Index++)
+        {
+            WorldObject* Object = NULL;
+            if (TEST_CHECK_SUCCESS(run, World_GetObjectByIndex(&Fixture.World, Index, &Object))
+                && (WorldObject_GetParent(Object) == NULL))
+            {
+                Vector3 Position = WorldObject_GetPosition(Object);
+                Vector3 Moved = { (float)((double)Position.x + Shift.X), Position.y, (float)((double)Position.z + Shift.Z) };
+                TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Moved));
+            }
+        }
+        if (BuildInRenderSpace(run, &Fixture, Vector3Double_Add(CameraPosition, Shift), &Shifted))
+        {
+            TEST_CHECK(run, AreSnapshotsAlike(&AtTheOrigin, &Shifted));
         }
     }
     VisibilityFixture_Deconstruct(run, &Fixture);
@@ -1062,6 +1246,7 @@ void WorldVisibilityTests_Run(TestRun* run)
         { "crisp_objects_count_only_in_view", CrispObjectsCountOnlyInView },
         { "lists_follow_their_cache", ListsFollowTheirCache },
         { "drawn_models_are_counted_by_lod", DrawnModelsAreCountedByLod },
+        { "lists_and_lods_hold_twenty_kilometres_out", ListsAndLodsHoldTwentyKilometresOut },
     };
     TestRun_RunSuite(run, "WorldVisibility", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

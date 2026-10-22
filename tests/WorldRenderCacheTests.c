@@ -1,6 +1,7 @@
 #include "TestSuites.h"
 #include "TestAssets.h"
 #include "TestWorld.h"
+#include "GameMath.h"
 #include "Logger.h"
 #include "WorldRenderCache.h"
 #include "WorldTransform.h"
@@ -70,8 +71,8 @@ static void CacheFixture_Deconstruct(TestRun* run, CacheFixture* self)
 
 static bool CacheFixture_Sync(TestRun* run, CacheFixture* self)
 {
-    return TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&self->Cache, &self->World, self->Assets.Manager,
-        self->ModelUser, NULL));
+    return TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&self->Cache, &self->World, Vector3Double_Zero(),
+        self->Assets.Manager, self->ModelUser, NULL));
 }
 
 /* Creates an object at @p position with @p scale and a model component naming the world model @p assetName; returns the
@@ -112,6 +113,12 @@ static bool IsNear(float a, float b)
     return fabsf(a - b) < 1e-4f;
 }
 
+/* IsNear for the cache's world placements, which it keeps in double. */
+static bool IsNearDouble(double a, double b)
+{
+    return fabs(a - b) < 1e-4;
+}
+
 static void ResolvesModelsAndComputesWorldBounds(TestRun* run)
 {
     CacheFixture Fixture;
@@ -124,7 +131,7 @@ static void ResolvesModelsAndComputesWorldBounds(TestRun* run)
         if (TEST_CHECK(run, Count == 1) && TEST_CHECK(run, Models[0].Asset != NULL))
         {
             // Unit cube: local radius = |(0.5, 0.5, 0.5)|; the largest axis scale (4) scales it conservatively.
-            TEST_CHECK(run, IsNear(Models[0].Center.x, 10.0f) && IsNear(Models[0].Center.y, 0.0f));
+            TEST_CHECK(run, IsNearDouble(Models[0].Center.X, 10.0) && IsNearDouble(Models[0].Center.Y, 0.0));
             TEST_CHECK(run, IsNear(Models[0].Radius, 4.0f * sqrtf(0.75f)));
             TEST_CHECK(run, Models[0].IsResolved && Models[0].IsDrawn);
             // Before any LOD update the entry holds no LOD yet: it reads as LOD 0, not fading.
@@ -211,7 +218,7 @@ static void EntriesFollowComponentsAcrossAddsAndRemovals(TestRun* run)
                 TEST_CHECK(run, (Models[0].ObjectId == SecondId) && (Models[0].Component == Second));
                 TEST_CHECK(run, Models[0].IsResolved && (Models[0].Asset == NULL));
                 TEST_CHECK(run, (Models[1].Component == Third) && (Models[1].Asset != NULL));
-                TEST_CHECK(run, IsNear(Models[1].Center.x, 9.0f));
+                TEST_CHECK(run, IsNearDouble(Models[1].Center.X, 9.0));
             }
         }
 
@@ -287,8 +294,8 @@ static void AnotherWorldIsResolvedFromScratch(TestRun* run)
     if (TEST_CHECK_SUCCESS(run, World_Construct2(&Other, &Fixture.Keys, Fixture.Assets.Manager, NULL)))
     {
         if ((AddModel(run, &Other, "crate", Origin, One) != NULL)
-            && TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Other, Fixture.Assets.Manager,
-                Fixture.ModelUser, NULL)))
+            && TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Other, Vector3Double_Zero(),
+                Fixture.Assets.Manager, Fixture.ModelUser, NULL)))
         {
             size_t Count = 0;
             const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
@@ -556,8 +563,8 @@ static void VariantsResolveByNameAndUnknownOnesWarnOnce(TestRun* run)
             TEST_CHECK_SUCCESS(run, WorldModelComponent_SetUsesVariant(ModelComponent, UsesVariant[Step]));
             // An unrelated change (the third step) advances the revision without asking for another variant.
             TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasOutline(ModelComponent, (Step % 2U) == 0U));
-            if (TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Fixture.Assets.Manager,
-                Fixture.ModelUser, &Log)))
+            if (TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Vector3Double_Zero(),
+                Fixture.Assets.Manager, Fixture.ModelUser, &Log)))
             {
                 size_t Count = 0;
                 const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
@@ -646,8 +653,8 @@ static void DerivedBoundsComposeTheImportWithThePlacement(TestRun* run)
         if (TEST_CHECK(run, Count == 1))
         {
             TEST_CHECK(run, IsNear(Models[0].Radius, Expected) && (Models[0].Radius < (0.5f * Separate)));
-            TEST_CHECK(run, IsNear(Models[0].Center.x, 2.0f) && IsNear(Models[0].Center.y, 1.0f)
-                && IsNear(Models[0].Center.z, -3.0f));
+            TEST_CHECK(run, IsNearDouble(Models[0].Center.X, 2.0) && IsNearDouble(Models[0].Center.Y, 1.0)
+                && IsNearDouble(Models[0].Center.Z, -3.0));
             Matrix LodTransform = WorldRenderModel_GetLodTransform(&Models[0], 0U);
             TEST_CHECK(run, memcmp(&LodTransform, &Composed, sizeof(Matrix)) == 0);
         }
@@ -683,11 +690,11 @@ static void BoundsAndTheDrawnLodComeFromTheWorldModel(TestRun* run)
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
     if (TEST_CHECK(run, Count == 2))
     {
-        TEST_CHECK(run, IsNear(Models[0].Center.x, 10.0f) && IsNear(Models[0].Center.y, 2.0f)
+        TEST_CHECK(run, IsNearDouble(Models[0].Center.X, 10.0) && IsNearDouble(Models[0].Center.Y, 2.0)
             && IsNear(Models[0].Radius, 4.0f));
         // LOD 0 is lifted 3 m by its import transform: its sphere and its draw transform both are, scaled by 2. LOD 1
         // (the box) has none: drawn at the object's own place. Past the last LOD the world matrix alone.
-        TEST_CHECK(run, IsNear(Models[1].Center.y, 6.0f) && IsNear(Models[1].Radius, 2.0f * sqrtf(0.75f)));
+        TEST_CHECK(run, IsNearDouble(Models[1].Center.Y, 6.0) && IsNear(Models[1].Radius, 2.0f * sqrtf(0.75f)));
         Matrix Lifted = WorldRenderModel_GetLodTransform(&Models[1], 0U);
         Matrix Plain = WorldRenderModel_GetLodTransform(&Models[1], 1U);
         Matrix Past = WorldRenderModel_GetLodTransform(&Models[1], 2U);
@@ -695,7 +702,7 @@ static void BoundsAndTheDrawnLodComeFromTheWorldModel(TestRun* run)
             && IsNear(Lifted.m13, 6.0f) && IsNear(Lifted.m12, 10.0f));
         TEST_CHECK(run, IsNear(Plain.m13, 0.0f) && IsNear(Plain.m12, 10.0f) && IsNear(Plain.m0, 2.0f)
             && (WorldRenderModel_GetLodModel(&Models[1], 2U) == NULL)
-            && (memcmp(&Past, &Models[1].WorldMatrix, sizeof(Matrix)) == 0));
+            && (memcmp(&Past, &Models[1].RenderMatrix, sizeof(Matrix)) == 0));
         TEST_CHECK(run, Models[1].DrawDistance == 20.0f);
     }
     CacheFixture_Deconstruct(run, &Fixture);
@@ -775,6 +782,75 @@ static void SpriteEntriesCarryTheirQuadAndSettings(TestRun* run)
         TEST_CHECK(run, !Entry->IsDecal && !Entry->IsLit && (Entry->Emission == 4.0f) && Entry->OmitsPixelation);
         TEST_CHECK(run, IsNear(Entry->Shape.Size.x, 1.0f / 32.0f) && (Entry->Shape.Pivot.x == 0.5f));
         TEST_CHECK(run, Entry->DrawDistance == 150.0f);
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+/* Render space (T32): synced for an origin far out, every entry's render-space values are its world placement minus the
+ * origin, subtracted in double and rounded once, and the entry keeps the world placement in double: a model's render
+ * matrix (its LOD's draw transform with it) and its sphere's centre, a light's position, a sprite's pivot and a fixed
+ * sprite's matrix. The origin is not a float out there, so rounding it first would land them a fraction of a
+ * millimetre off. */
+static void RenderSpaceIsTheWorldMinusTheOrigin(TestRun* run)
+{
+    CacheFixture Fixture;
+    if (!CacheFixture_Construct(run, &Fixture)
+        || !TestAssets_AddWorldSprite(run, &Fixture.Assets, "{\"name\": \"sign\", \"sprite_animation\": "
+            "\"walk_animation\", \"orientation\": \"fixed\"}"))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    // 20 km out, where a float's step is 2 mm.
+    Vector3Double Origin = Vector3Double_Create(20000.1234567, 1.6180339, -19999.7654321);
+    Vector3 BoxPosition = { 20001.5f, 3.25f, -19998.75f };
+    Vector3 LightPosition = { 20003.0f, 4.0f, -20001.25f };
+    Vector3 SignPosition = { 19998.25f, 2.5f, -19997.5f };
+    WorldModelComponent* Box = AddModel(run, &Fixture.World, "box", BoxPosition, (Vector3){ 2.0f, 1.0f, 0.5f });
+    WorldComponent* Light = AddComponentObject(run, &Fixture.World, WorldComponentType_Light);
+    WorldSpriteComponent* Sign = WorldSpriteComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+        WorldComponentType_Sprite));
+    bool IsBuilt = (Box != NULL) && (Light != NULL) && (Sign != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(OwnerOf(Box), (Vector3){ 0.2f, 0.7f, 0.0f }))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(Light), LightPosition))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sign, (const unsigned char*)u8"sign"))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(&Sign->Base), SignPosition))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(WorldComponent_GetOwner(&Sign->Base),
+            (Vector3){ 0.0f, PI / 2.0f, 0.0f }));
+    if (IsBuilt && TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Origin,
+        Fixture.Assets.Manager, Fixture.ModelUser, NULL)))
+    {
+        size_t Count = 0;
+        const WorldRenderModel* Entry = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+        Matrix4Double Placement = GameMath_FromMatrix(WorldObject_GetWorldMatrix(OwnerOf(Box)));
+        Matrix Expected = GameMath_ToMatrixRelative(&Placement, Origin);
+        TEST_CHECK(run, (Count == 1) && (memcmp(&Entry->WorldMatrix, &Placement, sizeof(Placement)) == 0)
+            && (memcmp(&Entry->RenderMatrix, &Expected, sizeof(Matrix)) == 0));
+        TEST_CHECK(run, (Entry->RenderMatrix.m12 == (float)((double)BoxPosition.x - Origin.X))
+            && (Entry->RenderMatrix.m12 != (BoxPosition.x - (float)Origin.X)));
+        Matrix Drawn = WorldRenderModel_GetLodTransform(Entry, 0U);
+        TEST_CHECK(run, memcmp(&Drawn, &Entry->RenderMatrix, sizeof(Matrix)) == 0); // the box's import is the identity
+        Vector3 Center = GameMath_ToVector3Relative(Entry->Center, Origin);
+        TEST_CHECK(run, Vector3Equals(Entry->RenderCenter, Center) && IsNearDouble(Entry->Center.X, BoxPosition.x)
+            && IsNearDouble(Entry->Center.Z, BoxPosition.z));
+
+        const WorldRenderLight* Lights = WorldRenderCache_GetLights(&Fixture.Cache, &Count);
+        Vector3Double LightWorld = GameMath_FromVector3(LightPosition);
+        TEST_CHECK(run, (Count == 1) && Vector3Double_EqualsClose(Lights[0].Position, LightWorld, 0.0)
+            && Vector3Equals(Lights[0].RenderPosition, GameMath_ToVector3Relative(LightWorld, Origin)));
+
+        const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&Fixture.Cache, &Count);
+        Vector3Double SignWorld = GameMath_FromVector3(SignPosition);
+        TEST_CHECK(run, (Count == 1) && Vector3Double_EqualsClose(Sprites[0].Position, SignWorld, 0.0)
+            && Vector3Equals(Sprites[0].Shape.Position, GameMath_ToVector3Relative(SignWorld, Origin)));
+        if (Count == 1)
+        {
+            SpriteViewer AnyViewer = SpriteViewer_FromPoint((Vector3){ 9.0f, 9.0f, 9.0f }, (Vector3){ 0.0f, 1.0f, 0.0f });
+            Matrix Fixed = SpriteTransform_GetMatrix(&Sprites[0].Shape, &AnyViewer);
+            TEST_CHECK(run, memcmp(&Fixed, &Sprites[0].FixedTransform, sizeof(Matrix)) == 0);
+            // In render space: the quad's corner lies within its half-size (1.6 cm) of the pivot's relative place.
+            TEST_CHECK(run, fabsf(Sprites[0].FixedTransform.m14 - (float)((double)SignPosition.z - Origin.Z)) < 0.05f);
+        }
     }
     CacheFixture_Deconstruct(run, &Fixture);
 }
@@ -878,15 +954,15 @@ static void ChildrenAreDrawnWhereTheirParentsPutThem(TestRun* run)
             float Shift = (Pass == 0U) ? 0.0f : 5.0f;
             size_t Count = 0;
             const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
-            TEST_CHECK(run, (Count == 1) && Models[0].IsDrawn && IsNear(Models[0].Center.x, 10.0f)
-                && IsNear(Models[0].Center.y, Shift) && IsNear(Models[0].Center.z, -2.0f)
+            TEST_CHECK(run, (Count == 1) && Models[0].IsDrawn && IsNearDouble(Models[0].Center.X, 10.0)
+                && IsNearDouble(Models[0].Center.Y, Shift) && IsNearDouble(Models[0].Center.Z, -2.0)
                 && IsNear(Models[0].Radius, 2.0f * sqrtf(0.75f)));
             Matrix LodTransform = (Count == 1) ? WorldRenderModel_GetLodTransform(&Models[0], 0U) : (Matrix){ 0 };
             TEST_CHECK(run, (Count == 1) && (memcmp(&LodTransform, &(Matrix){ 0 }, sizeof(Matrix)) != 0)
                 && IsNear(LodTransform.m12, 10.0f) && IsNear(LodTransform.m14, -2.0f));
             const WorldRenderLight* Lights = WorldRenderCache_GetLights(&Fixture.Cache, &Count);
-            TEST_CHECK(run, (Count == 1) && IsNear(Lights[0].Position.x, 10.0f)
-                && IsNear(Lights[0].Position.y, 2.0f + Shift) && IsNear(Lights[0].Position.z, 0.0f));
+            TEST_CHECK(run, (Count == 1) && IsNearDouble(Lights[0].Position.X, 10.0)
+                && IsNearDouble(Lights[0].Position.Y, 2.0 + Shift) && IsNearDouble(Lights[0].Position.Z, 0.0));
             const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&Fixture.Cache, &Count);
             TEST_CHECK(run, (Count == 1) && IsNear(Sprites[0].Shape.Position.x, 12.0f)
                 && IsNear(Sprites[0].Shape.Position.y, Shift) && IsNear(Sprites[0].Shape.AxisZ.x, 1.0f)
@@ -1287,6 +1363,7 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "a_replaced_component_gets_its_own_variant", AReplacedComponentGetsItsOwnVariant },
         { "derived_bounds_compose_the_import_with_the_placement", DerivedBoundsComposeTheImportWithThePlacement },
         { "sprite_entries_carry_their_quad_and_settings", SpriteEntriesCarryTheirQuadAndSettings },
+        { "render_space_is_the_world_minus_the_origin", RenderSpaceIsTheWorldMinusTheOrigin },
         { "sprite_entries_carry_their_draw_distance_and_follow_a_swap",
             SpriteEntriesCarryTheirDrawDistanceAndFollowASwap },
         { "reset_forgets_every_entry", ResetForgetsEveryEntry },

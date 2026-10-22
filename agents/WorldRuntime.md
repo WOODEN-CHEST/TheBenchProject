@@ -8,11 +8,12 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 
 | Module | Files | What it is |
 |---|---|---|
-| GameCamera | `include/GameCamera.h`, `source/GameCamera.c` | The 3D camera (position/fov/yaw/pitch/roll), converted to a raylib Camera3D only at render time. |
+| GameCamera | `include/GameCamera.h`, `source/GameCamera.c` | The 3D camera (a double position, fov/yaw/pitch/roll), converted to raylib's render camera at the origin only at render time. |
 | Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, the key registry, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
 | WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, their LOD state, the variant and the settings in effect; sprites with their world sprites' settings in effect; lights), built from the world's per-type component arrays. |
 | WorldLod | `source/WorldLod.h`, `source/WorldLod.c` (private) | Levels of detail as pure maths (see "LODs"): the LOD selection by distance with hysteresis, the scale and a forced LOD, and the cross-fade's state and its two draws. |
+| WorldRenderSpace | `source/WorldRenderSpace.h`, `source/WorldRenderSpace.c` (private) | Render space as pure maths (see "Render space", T32): the frame's origin and its rotation-only view and projection, the C mirror of the sky shader's ray, the shadow cascades snapped to their texel grids, each grid anchored to the last frame's box. |
 | WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
@@ -24,11 +25,62 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 
 Coordinate convention: **+Y up, +Z forward** (yaw=pitch=roll=0 looks toward +Z). Plain value type (no
 Construct/Deconstruct — like ProgramTime); build with `GameCamera_Create`, mutate public fields directly.
+`Position` is a `Vector3Double` (since T32: far from the world's origin a float's steps would shake the view); the
+angles, the field of view and the directions stay floats. Code that moves the camera works in double (the flycam
+adds its float movement to the double position; the player controller widens the character's eyes).
 `GameCamera_GetForward` derives the view dir from yaw/pitch; `GetRight` is the horizontal strafe axis
 (`cross(worldUp, forward)`, roll-independent); `GetUp` rotates world up around forward by roll.
-`GameCamera_ToRaylibCamera` is the single place the raylib `Camera3D` (target = pos+forward, perspective)
-is produced. Instance/runtime data — never saved to a world. With +Z forward and +Y up in raylib's
+`GameCamera_ToRenderCamera` is the single place a raylib `Camera3D` is produced: the camera in render space, at
+(0, 0, 0) with forward as its target (see "Render space"), so `BeginMode3D` loads a view matrix that is a pure
+rotation. Instance/runtime data — never saved to a world. With +Z forward and +Y up in raylib's
 right-handed pipeline, world +X renders on the camera's LEFT; the owner confirmed this is wanted.
+
+## Render space (T32)
+
+The renderer draws in **render space**: the world's orientation with the camera at (0, 0, 0). A float holds a world
+position only to millimetres or worse far from the world's origin (its step is 0.24 mm at 2–4 km, 1 mm past 8 km),
+which made the world and the sky shake there; an offset from the camera keeps a float's full precision near the
+camera, however far out it is. The maths is the private `source/WorldRenderSpace.{h,c}` (tested in
+`tests/WorldRenderSpaceTests.c`).
+- **The origin.** Each frame takes the camera's position, in double, as its origin (`WorldRenderFrame.Origin`). Every
+  position the GPU sees is that position minus the origin, subtracted in double and rounded once
+  (`GameMath_ToVector3Relative`, `GameMath_ToMatrixRelative`, [GameMath.md](GameMath.md)). Never round a far position
+  to float and subtract after: the float keeps the absolute position's error.
+- **One place converts.** `WorldRenderCache_Sync` takes the frame's origin: every entry keeps its world placement in
+  double (`WorldMatrix`, `Center`, the sprites' and lights' `Position`) and the same placement in render space
+  (`RenderMatrix`, `RenderCenter`, the sprites' `Shape` and `FixedTransform`, the lights' `RenderPosition`). The passes,
+  the visibility, the LOD selection, the light culling and the uniforms read only the render-space values. The world
+  still stores floats until T33; the cache widens them, so T33 changes only what the sync reads. Debug draws convert
+  the same way (the collision world's transforms and contact points, the grid around the world's origin).
+- **The view** (`WorldRenderSpace_BuildView`): raylib's camera at the origin looking along the camera's forward, so
+  the view matrix is a pure rotation and the view-projection and its inverse hold no large numbers. The sky's ray is
+  `normalize(invViewProj × far-plane point)` (the C mirror is `WorldRenderSpace_GetSkyRay`), the stars and the sun's
+  place on screen (the sun shafts) are directions projected with w = 0, the outlines' sun is the sun's direction turned
+  by the view. Measured against a double-precision camera 50 km out: points 0.6 m to 30 m away land within 2e-5 scene
+  pixels and the sky's rays within 3e-5 (the world-space floats before missed by 0.9 and 23 pixels).
+- **Stable shadow cascades** (`WorldRenderSpace_GetCascade`, `WorldRenderSpace_StepCascade`): each cascade is a
+  fixed-size box around the camera along the shadow light, its centre kept on the cascade's texel grid (1.6 cm near, 7.8
+  cm far) in the light's frame, in double. Each frame the centre moves from where it was (its anchor, which
+  `WorldRenderSpace_StepCascade` keeps in the cascade's `WorldRenderCascadeGrid`) to the camera by whole texels along
+  the light's right and up axes. While the light holds still the grid stands still in the world, so shadow edges do not
+  crawl while the camera moves (a point keeps its texel; when the centre steps, the map's contents move by one whole
+  texel). While the sun or the moon turns, the grid turns about the anchor, within half a texel of the camera, so edges
+  near the camera slide as they would under a box centred on the camera, wherever the camera is: a point 4 m from a
+  still camera moves 0.24 texels a frame on the near map with a 2-minute day, 0.016 with a 24-minute day, 0.0004 with a
+  24-hour day, from 7 m to 28 km out. (A grid fixed to the world's origin would turn about that origin: 0.38–0.48 texels
+  a frame of shimmer far out, whatever the clock's speed.) Stepping the shadow direction's updates is not done.
+- **The rule for every shader:** "world space" in a shader means render space. `fragPosition` is the fragment's
+  position relative to the camera; light positions (`pointLightPositions`, `pointShadowLightPos`, the cube depth
+  shaders' `lightPosition`) and the shadow matrices (`lightVP`, `lightVPFar`) are in render space; the camera sits at
+  the origin, so there is no camera uniform (`viewPos` and the sky's `cameraPos` are gone): the view vector is
+  `-fragPosition`, the fog's distance `length(fragPosition)`, a decal's side `dot(normal, -position)`. Directions (the
+  sun, the moon, normals) are the world's. Fog, specular and `PerturbNormal` (`dFdx` of the position) work unchanged
+  and lost their large-coordinate error.
+- **Absolute coordinates in a shader** (world-anchored noise, rain streaks wrapping around the camera, wave phases,
+  puddle masks; T14, T17, T18, T19, T21 and T22 will want them): a shader never receives the origin as floats. It gets
+  the origin **wrapped by the pattern's period**, computed in double on the CPU (`fmod(origin, period)` per axis), and
+  adds that to its render-space position: `pattern(fragPosition + wrappedOrigin)` repeats exactly like
+  `pattern(worldPosition)` and stays precise. A pattern without a period is a precision bug far out.
 
 ## WorldRenderer
 
@@ -51,8 +103,8 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
 
 ### Per-component render cache
 
-`WorldRenderCache_Sync` runs at the start of every render and walks the world's per-type component arrays once
-(`World_GetComponents`), never the objects:
+`WorldRenderCache_Sync` runs at the start of every render, for the frame's origin (the camera's position: see
+"Render space"), and walks the world's per-type component arrays once (`World_GetComponents`), never the objects:
 - **Models:** one entry per model component, in the world's order, remembering the owner's id and the component. An
   entry's **world model** ([WorldModels.md](WorldModels.md)) is resolved once (`AssetManager_LoadWorldModel` under the
   model user, which loads its LOD models and variant textures with it); when the component's revision changes the name
@@ -76,7 +128,9 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
   uneven scale, whose axes' dot products round a hair from zero; more under the shear a hierarchy can add, where the
   longest axis fell short), and `IsDrawn`: its world model resolved and its object
   effectively enabled and visible (`WorldObject_IsEffectivelyEnabled` / `_IsEffectivelyVisible`: a disabled or hidden
-  ancestor counts). Passes draw only the `IsDrawn` entries; a hidden object keeps its entry and its world model. Every
+  ancestor counts). The world matrix and the sphere's centre are kept in double (`WorldMatrix`, `Center`) and in render
+  space (`RenderMatrix`, `RenderCenter`: relative to the frame's origin, subtracted in double). Passes draw only the
+  `IsDrawn` entries; a hidden object keeps its entry and its world model. Every
   pass draws a model one LOD at a time through `WorldRendererGeometry_DrawModel`, which applies the entry's variant to
   the per-draw material copy (`WorldModel_ApplyVariant`) before the lit pass uploads the copy's factors.
 - **Sprites:** the sprites of effectively enabled and visible objects whose playback instance has a frame: the current
@@ -91,8 +145,8 @@ right-handed pipeline, world +X renders on the camera's LEFT; the owner confirme
   `WorldSpriteComponent_GetBoundWorldSprite`), or the placement's own while its override flag is on
   (`WorldSpriteComponent_ResolveSettings`, [WorldSprites.md](WorldSprites.md)). A sprite without a bound world sprite is
   not listed.
-- **Lights:** the lights of effectively enabled and visible objects, with their world position, reach (the range),
-  intensity, colour and shadow flag.
+- **Lights:** the lights of effectively enabled and visible objects, with their world position (in double, and in render
+  space: `RenderPosition`), reach (the range), intensity, colour and shadow flag.
 
 Entries follow the components across additions and removals: when the world's component-set version changes, entries
 are re-matched by owner id, and an entry is carried over only if its component still names the model it was
@@ -107,12 +161,14 @@ after asset definitions change).
 Right after the cache's sync, `WorldVisibility_Build` (private `source/WorldVisibility.{h,c}`, tested in
 `tests/WorldVisibilityTests.c`) decides what every pass draws, and every pass iterates its list instead of the cache's
 whole arrays. The lists hold indices into the cache's models and sprites, ascending (so the world's order is kept), and
-are rebuilt every frame without allocating once grown; each entry also gets its fades.
+are rebuilt every frame without allocating once grown; each entry also gets its fades. Everything here is in render
+space (T32): the cache's render-space centres, the camera at (0, 0, 0), the frustum, the cascades' boxes and the cube's
+lamp all relative to the frame's origin.
 - **Frustum culling.** The camera's frustum is extracted once per frame from its view-projection (Gribb and Hartmann, six
   unit inward planes; `WorldVisibility_ExtractFrustum`). The scene, the G-buffer and the crisp overlay draw only what
-  touches it (`WorldVisibility_IsSphereInFrustum`). A model's sphere is its world bounding sphere; a sprite's is the
-  sphere around its pivot that holds its quad in every orientation (`BoundsRadius`: half its diagonal around its centre
-  for the default centre pivot), so one sphere serves the camera and the lights.
+  touches it (`WorldVisibility_IsSphereInFrustum`). A model's sphere is its bounding sphere (around `RenderCenter`); a
+  sprite's is the sphere around its pivot that holds its quad in every orientation (`BoundsRadius`: half its diagonal
+  around its centre for the default centre pivot), so one sphere serves the camera and the lights.
 - **Shadow casters are never culled by the camera:** a caster off screen can still shadow what is on it. Each cascade
   takes the casters in its own orthographic box (its planes, from the light matrices `WorldRendererShadows_PrepareFrame`
   builds once per frame), routed by their shadow tier; the cube shadow takes the casters touching its lamp's reach.
@@ -188,7 +244,8 @@ are rebuilt every frame without allocating once grown; each entry also gets its 
 Every model draws one of its world model's LODs ([WorldModels.md](WorldModels.md), "LODs"), picked each frame by
 `WorldRenderCache_UpdateLods` (right after the frame is built, before the visibility) with the pure maths of the private
 `source/WorldLod.{h,c}` (tested in `tests/WorldLodTests.c`):
-- **Selection** (`WorldLod_Select`): the camera's distance to the entry's bounding-sphere centre times the zoom factor,
+- **Selection** (`WorldLod_Select`): the camera's distance to the entry's bounding-sphere centre (in render space: the
+  length of `RenderCenter`) times the zoom factor,
   against the placement's switch distances in effect (`WorldModelComponent_ResolveLodSettings`) times the config's
   `lod_distance_scale`: LOD i below switch distance i, the last LOD past the last boundary. From the LOD it shows (or
   heads to, `WorldLodState_GetDestinationLod`) an object moves coarser only at a switch distance x (1 + h) and back only
@@ -222,11 +279,12 @@ Every model draws one of its world model's LODs ([WorldModels.md](WorldModels.md
 
 ### Pipeline (one `WorldRenderer_RenderToTarget`)
 
-1. Sync the cache; make sure the targets match the window size and pixelation setting
-   (`WorldRendererScene_EnsureTargets`).
-2. Build the frame context (`WorldRenderFrame`): camera, the scene's view/projection matrices (the projection
-   `BeginMode3D` builds for the scene target, shared by every pass that reconstructs positions or rays) and the camera's
-   frustum from them, the sky
+1. Sync the cache for the frame's origin (the camera's position: every entry in render space); make sure the targets
+   match the window size and pixelation setting (`WorldRendererScene_EnsureTargets`).
+2. Build the frame context (`WorldRenderFrame`): the origin, the render camera, the zoom factor, the scene's
+   rotation-only view and projection matrices (`WorldRenderSpace_BuildView`: the projection `BeginMode3D` builds for the
+   scene target, shared by every pass that reconstructs positions or rays) and the camera's frustum from them, the
+   sky
    (`WorldEnvironment_GetSkyLights`: the sun's and the moon's directions, daylight, the moon's phase and lit fraction,
    the two lights' intensities and the shadow light with its fade), the stars' rotation (`StarsToWorld`), the render
    clock (`TimeSeconds`), sizes, the night sky values (`WorldRendererSky_PrepareFrame`: limiting magnitude, Milky Way
@@ -234,7 +292,7 @@ Every model draws one of its world model's LODs ([WorldModels.md](WorldModels.md
    world's seed or density changed, and the sky textures reloaded if the world names others), every model's LOD and its
    cross-fade (`WorldRenderCache_UpdateLods`, see "LODs"), and every pass decision:
    first which shadow passes run (`DecideShadows`) and their light matrices (`WorldRendererShadows_PrepareFrame`: both
-   cascades' view, projection and box, the cube shadow's lamp and far range), then the frame's visibility (what every
+   cascades' view, projection and box, snapped to their texels; the cube shadow's lamp and far range), then the frame's visibility (what every
    pass draws, see "Visibility"), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
 3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the sun's and the moon's linear colours,
    the ambient colour (with the moonlit sky's fill), the scene luminance for eye adaptation, fog density, shadow
@@ -336,7 +394,8 @@ because raylib's `DrawMesh` draws indexed only while the CPU index array is kept
 **Sky.** `world_sky`: Rayleigh + Mie single scattering (`shaders/common/atmosphere.glsl`) lit by the sun and, at
 night, by the moon; the sun disc, the moon's disc, the Milky Way and light pollution's skyglow, drawn as a full-screen
 pass before the geometry (it writes no depth). Each pixel's ray comes from the inverse of the frame's view-projection,
-so the sky lines up with the 3D camera. Falls back to a CPU gradient clear. Its textures are the ones the world's
+so the sky lines up with the 3D camera; in render space that matrix is a rotation and a projection, so the ray is exact
+at any distance from the world's origin (see "Render space"). Falls back to a CPU gradient clear. Its textures are the ones the world's
 environment names (`MilkyWayTexture`, default `sky_milky_way`; `MoonTexture`, default `sky_moon`): each sky texture
 slot holds its texture under its own asset user, loads it when the environment names it (at `PrepareWorld` or the
 first render after a change) and releases it when the environment names another; a name that fails is logged once
@@ -444,8 +503,9 @@ private `source/NightVision.{h,c}` (tested in `tests/NightVisionTests.c`; its he
   interior at night (its dark corners would grey: its light is not part of the field; revisit with interiors), the
   loss of sharpness in the dark.
 
-**Sun and moon shadows.** Two camera-centred orthographic cascades (2048² depth textures): NEAR (small extent, sharp)
-and FAR (large extent, coarse, optional). Each model component's `WorldShadowTier` (Both / Near / Far) routes which
+**Sun and moon shadows.** Two orthographic cascades around the camera (2048² depth textures), their centres snapped to
+their texel grids so shadow edges stand still while the camera moves (see "Render space"): NEAR (32 m, 1.6 cm texels,
+sharp) and FAR (160 m, 7.8 cm texels, coarse, optional). Each model component's `WorldShadowTier` (Both / Near / Far) routes which
 cascade(s) it casts into, and one with `casts_shadows` off casts into none (nor into the point-light shadow). They are rendered from the frame's shadow light (`WorldEnvironment_GetSkyLights`): the
 brighter of the sun and the moon by luminance, once it stands above 0.05 (the sine of its elevation; full shadows from
 0.15), faded out while the two are about as bright (0 where they are equal, full once one is 4 times the other) and for
@@ -524,6 +584,7 @@ get no AO and no outlines.
 | `WorldRendererCollision.c` | Debug wireframes of a collision world's shapes and (T27) its contact points (`WorldRenderer_SetCollisionDebug`), drawn in the scene pass after the light gizmos from its read-only debug lists ([WorldCollision.md](WorldCollision.md)). |
 | `WorldVisibility.c` (with the cache, not a pass) | The frame's visibility lists (per pass, the entries it draws, and every entry's fades) and the dither's C mirror; see "Visibility". |
 | `WorldLod.c` (with the cache, not a pass) | LOD selection and the cross-fade's state; the cache's `WorldRenderCache_UpdateLods` runs it per entry; see "LODs". |
+| `WorldRenderSpace.c` (pure maths, not a pass) | The frame's origin and its rotation-only view and projection (`BuildFrame` calls it), the sky shader's ray in C, the cascades snapped to their texels and their grids from frame to frame (`WorldRendererShadows_PrepareFrame` calls it); see "Render space". |
 
 The renderer keeps receiving features, so:
 
@@ -533,6 +594,9 @@ The renderer keeps receiving features, so:
   `WorldRenderer.c` beyond orchestration.
 - **Decide once, read the frame.** Per-frame values and pass decisions go into `WorldRenderFrame`, built in
   `RenderToTarget`; passes read it instead of recomputing camera matrices or re-deciding.
+- **Render space everywhere.** A pass, a uniform or a debug draw never takes a world position: it takes the render
+  cache's render-space values, or converts a double position with `GameMath`'s relative functions against
+  `frame->Origin` (see "Render space"). The frame holds no camera pointer, so there is no camera position to misuse.
 - **Draw from the cache.** Passes iterate their visibility list over the render cache's entries
   (`WorldVisibility_GetModels` / `GetSprites` for their pass) and dither each draw by its fade; never walk the world or
   resolve assets by name in a pass.
@@ -631,8 +695,8 @@ All input runs in `Update` at the fixed timestep and comes from `Services.Input`
 the UI test frame above had first refusal: movement through the actions (`move_*`, default WASD + SPACE/CTRL, `sprint`
 default SHIFT), mouse-look (`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured) and the
 debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
-it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key and F1 to F10 and
-F12 are taken already; F11 is free):
+it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key and F1 to F12 are
+taken already):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
   06:00:00.`): P pause/resume the clock; 1–4 jump to dawn/noon/dusk/midnight of the clock's day (06:00, 12:00, 18:00,
@@ -671,6 +735,17 @@ F12 are taken already; F11 is free):
   home again, the crates are teleported back where they were. F10 teleports the door's crate 1.2 m aside, out of the
   door's way, and back into its corner (pushed out of the door if they overlap). Each logged, with the contact and
   motion events;
+- **render space (T32):** F11 moves the test world far away and back: every root object, the player and the test NPCs
+  (through the character system's teleport) and the camera move by (20 000, 0, 20 000) m, 28 km from the world's
+  origin, and back (logged: `WorldTest: far shift on: 38 root objects, 0 characters and the camera moved by (20000, 0,
+  20000) m, as teleports; ...`). The objects move as teleports (the collision step does not sweep 28 km), the collision
+  world is synced before the characters are placed on their ground, and the frame's own places (the desk's slide, the
+  pushing wall's and the crates' homes) move along; the first press also logs the collision world's one-time warning
+  for each static object it moves (static objects are not meant to move in play). The picture out there is the one at
+  the origin; the debug grid stays at the world's origin. Until T33 the world's positions are floats, about 2 mm apart out there: static, so
+  nothing shakes, but walking, the door and the crates wait for T33 (the collision world's 1 mm skin is smaller than a
+  float step), and a trip out and back can leave an object up to 1 mm from where it was. I adds the camera's position
+  and its distance from the world's origin;
 - **the world file (T09):** F5 saves the live world next to the test world, as `worlds/test.saved.world.json` and
   `worlds/test.saved.world.ghdf` (atomically; each logged with its path, gitignored), for round-trip checks: saved at
   noon with nothing changed (2, then F5) the JSON is the shipped file byte for byte; otherwise its diff against

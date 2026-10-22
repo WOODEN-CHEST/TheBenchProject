@@ -303,6 +303,55 @@ static void BlendedListSortsBackToFront(TestRun* run)
 }
 
 
+/* The property render space relies on (T32): a sprite drawn relative to the camera (its pivot minus the camera's
+ * position, the camera at the origin) is the sprite drawn in the world, moved by the camera's position: the same axes,
+ * the translation minus the camera's. For a billboard and an axis billboard facing the camera, and a billboard facing a
+ * lamp (the lamp relative to the camera too). It pins SpriteTransform's maths, not the renderer's use of it: the
+ * renderer's viewers in render space (WorldRendererSprites_PrepareFrame) need a GL context and are checked on the GPU. */
+static void RenderSpaceSpritesAreWorldOnesMoved(TestRun* run)
+{
+    Vector3 CameraPosition = { 2.0f, 1.7f, 4.5f };
+    Vector3 CameraUp = Vector3Normalize((Vector3){ 0.1f, 1.0f, 0.05f });
+    Vector3 Lamp = { 5.0f, 3.0f, -1.0f };
+    Vector3 WorldUp = { 0.0f, 1.0f, 0.0f };
+    const WorldSpriteOrientation Orientations[2] =
+    {
+        WorldSpriteOrientation_Billboard, WorldSpriteOrientation_AxisBillboard
+    };
+    for (size_t Index = 0U; Index < 2U; Index++)
+    {
+        SpriteShape InWorld = MakeShape(Orientations[Index], (Vector3){ 12.5f, 1.5f, -3.25f }, (Vector2){ 2.0f, 3.0f },
+            (Vector2){ 0.5f, 0.0f });
+        SetRotation(&InWorld, (Vector3){ 0.1f, 0.6f, -0.05f });
+        InWorld.IsFlippedX = true;
+        SpriteShape InRenderSpace = InWorld;
+        InRenderSpace.Position = Vector3Subtract(InWorld.Position, CameraPosition);
+
+        const SpriteViewer WorldViewers[2] =
+        {
+            SpriteViewer_FromPoint(CameraPosition, CameraUp), SpriteViewer_FromPoint(Lamp, WorldUp)
+        };
+        const SpriteViewer RenderViewers[2] =
+        {
+            SpriteViewer_FromPoint((Vector3){ 0.0f, 0.0f, 0.0f }, CameraUp),
+            SpriteViewer_FromPoint(Vector3Subtract(Lamp, CameraPosition), WorldUp)
+        };
+        for (size_t Viewer = 0U; Viewer < 2U; Viewer++)
+        {
+            Matrix WorldMatrix = SpriteTransform_GetMatrix(&InWorld, &WorldViewers[Viewer]);
+            Matrix RenderMatrix = SpriteTransform_GetMatrix(&InRenderSpace, &RenderViewers[Viewer]);
+            TEST_CHECK(run, IsNearVector(WidthAxis(RenderMatrix), WidthAxis(WorldMatrix))
+                && IsNearVector(HeightAxis(RenderMatrix), HeightAxis(WorldMatrix))
+                && IsNearVector(SpriteTransform_GetNormal(RenderMatrix), SpriteTransform_GetNormal(WorldMatrix)));
+            TEST_CHECK(run, IsNearVector(Corner(RenderMatrix, 0.0f, 0.0f),
+                    Vector3Subtract(Corner(WorldMatrix, 0.0f, 0.0f), CameraPosition))
+                && IsNearVector(Corner(RenderMatrix, 1.0f, 1.0f),
+                    Vector3Subtract(Corner(WorldMatrix, 1.0f, 1.0f), CameraPosition)));
+        }
+    }
+}
+
+
 // Public functions.
 void SpriteTransformTests_Run(TestRun* run)
 {
@@ -315,6 +364,7 @@ void SpriteTransformTests_Run(TestRun* run)
         { "lights_turn_billboards_toward_themselves", LightsTurnBillboardsTowardThemselves },
         { "size_bounds_and_centre", SizeBoundsAndCentre },
         { "blended_list_sorts_back_to_front", BlendedListSortsBackToFront },
+        { "render_space_sprites_are_world_ones_moved", RenderSpaceSpritesAreWorldOnesMoved },
     };
     TestRun_RunSuite(run, "SpriteTransform", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

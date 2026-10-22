@@ -198,21 +198,29 @@ Current module list:
   names are skipped with one warning per name; objects are written parents first and saves are atomic. The private
   source/WorldFileInternal.h holds the rules both formats share.
 * World runtime layer (WorldRuntime.md) - Camera, renderer, services bundle and bootstrap for viewing a world:
-  * GameCamera - 3D camera (pos/fov/yaw/pitch/roll; +Y up, +Z forward), converted to a raylib camera at render time.
+  * GameCamera - 3D camera (a double position, fov/yaw/pitch/roll; +Y up, +Z forward), converted at render time to
+    raylib's render camera, which sits at the origin and only turns (render space).
   * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, input, GHDF
     pool, key registry).
   * WorldRenderer - Renders a World through a GameCamera (PBR lit by the sun and the moon, HDR, sky with the moon,
     stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, AO, outlines, bloom, sun
     shafts, crisp overlay, lit sprites with decals, sorted transparency and shadows that face the light; frustum
-    culling, draw distances, and dithered fades and opacity; LODs with dithered cross-fades);
-    separate from the world data and never writes to it. Split by render pass into
+    culling, draw distances, and dithered fades and opacity; LODs with dithered cross-fades), in render space since T32:
+    the world's orientation with the camera at the origin, every position relative to the camera (subtracted in double),
+    shadow cascades snapped to their texels; separate from the world data and never writes to it. Split by render pass
+    into
     source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
     WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
   * WorldRenderCache - The renderer's private per-component cache (source/WorldRenderCache.h): one walk over the
-    world's model/sprite/light component arrays per frame builds the lists with the objects' world placements
-    (effectively disabled and hidden objects not drawn); world models are resolved once per component and again only
+    world's model/sprite/light component arrays per frame builds the lists with the objects' world placements (in double,
+    and in render space for the frame's origin: the one place a world position becomes the floats the GPU sees;
+    effectively disabled and hidden objects not drawn); world models are resolved once per component and again only
     when the name changes, variants to an index, and the settings in effect (models' and sprites') every frame; each
     model's LOD state is kept across frames and updated once per frame (WorldRenderCache_UpdateLods).
+  * WorldRenderSpace - Render space as pure maths (private, source/WorldRenderSpace.h; T32): the frame's origin (the
+    camera's double position) with its rotation-only view and projection, the C mirror of the sky shader's ray, and the
+    shadow cascades with their centres snapped to their texel grids in double, each grid kept from frame to frame
+    (anchored to the last frame's box). WorldRuntime.md's "Render space" has the rule every pass and shader follows.
   * WorldLod - Levels of detail as pure maths (private, source/WorldLod.h): the LOD a distance picks (the zoom, the
     config's lod_distance_scale, the placement's switch distances, hysteresis, a forced LOD) and the cross-fade's state
     across frames (progress over the world model's fade time, turning back without a pop, a third LOD from the larger

@@ -8,6 +8,13 @@
 // (SkyLightWrapped, PointLightsWrapped) sprites use, whose diffuse part reaches past the terminator ("wrap lighting",
 // for billboards standing in for round things). They are kept apart on purpose: the plain ones compute exactly what
 // the PBR shader computed before they moved here, so its image did not change by a single bit.
+//
+// RENDER SPACE (T32). "World space" here, and in every shader that includes this file, means render space: the world's
+// orientation with the camera at (0, 0, 0). Fragment positions, light positions and the shadow matrices are relative to
+// the camera (the renderer subtracts its position in double), so the camera needs no uniform: the view vector is
+// -worldPos, the fog's distance length(worldPos). A pattern anchored to the world must not use these positions alone:
+// it gets the camera's position wrapped by the pattern's period, in double, from the renderer (agents/WorldRuntime.md,
+// "Render space").
 
 #include "common/math"
 #include "common/atmosphere"
@@ -15,8 +22,7 @@
 #include "common/night_vision"
 #include "common/distance_packing"
 
-// Camera and lighting, set by WorldRenderer each frame. Light colours are LINEAR.
-uniform vec3 viewPos;          // camera world position
+// Lighting, set by WorldRenderer each frame. Light colours are LINEAR.
 uniform vec3 sunDirection;     // unit direction TO the sun, world space (also the fog sky's sun)
 uniform vec3 sunColor;         // linear
 uniform float sunIntensity;    // the sun's light: daylight included, 0 at night
@@ -30,9 +36,9 @@ uniform float ambientIntensity;
 // cascade is a small, sharp map for close detail; the FAR cascade is a large, coarse map for distant / large casters
 // (each object's WorldShadowTier decides which cascade(s) it was rendered into). A fragment samples the near cascade
 // first and falls back to the far cascade when it lies beyond the near frustum.
-uniform mat4 lightVP;          // world -> near-cascade light-clip space
+uniform mat4 lightVP;          // render space -> near-cascade light-clip space
 uniform sampler2D shadowMap;   // near-cascade directional depth map
-uniform mat4 lightVPFar;       // world -> far-cascade light-clip space
+uniform mat4 lightVPFar;       // render space -> far-cascade light-clip space
 uniform sampler2D shadowMapFar;// far-cascade directional depth map
 uniform bool shadowFarActive;  // whether the far cascade is available this frame
 uniform float shadowStrength;  // 0..1, how much a shadowed light is darkened (the cascades and the point shadow)
@@ -53,14 +59,14 @@ uniform vec2 aoResolution;             // scene-target size in pixels, to map gl
 // clamp to the array size, and the renderer checks the arrays at load and never uploads more than fit.
 #define MAX_POINT_LIGHTS 8
 uniform int pointLightCount;                          // active entries in the arrays below (0..MAX)
-uniform vec3 pointLightPositions[MAX_POINT_LIGHTS];   // world space
+uniform vec3 pointLightPositions[MAX_POINT_LIGHTS];   // render space
 uniform vec3 pointLightRadiances[MAX_POINT_LIGHTS];   // linear colour * intensity
 uniform float pointLightRanges[MAX_POINT_LIGHTS];     // reach radius (attenuation falls to 0 here)
 
 // ONE shadow-casting point light, shaded SEPARATELY from the culled set above (which excludes it) so it can sample its
 // own omnidirectional (cube) shadow map. pointShadowActive false => no shadow-casting point light.
 uniform bool pointShadowActive;
-uniform vec3 pointShadowLightPos;       // world space
+uniform vec3 pointShadowLightPos;       // render space
 uniform vec3 pointShadowLightRadiance;  // linear colour * intensity
 uniform float pointShadowLightRange;    // reach radius
 uniform samplerCube pointShadowCube;    // packed (RGBA8) linear distance from the light, per direction
@@ -404,14 +410,15 @@ vec3 fogSkyColor(vec3 rayDir)
     return sky;
 }
 
-// How much of the view toward a point the fog takes (0 none .. 1 all), with an exponential falloff; 0 without fog.
+// How much of the view toward a point the fog takes (0 none .. 1 all), with an exponential falloff; 0 without fog. The
+// camera sits at the origin of render space.
 float FogFactor(vec3 worldPos)
 {
     if (fogDensity <= 0.0)
     {
         return 0.0;
     }
-    float fragDistance = length(worldPos - viewPos);
+    float fragDistance = length(worldPos);
     return clamp(1.0 - exp(-fragDistance*fogDensity), 0.0, 1.0);
 }
 
@@ -423,7 +430,7 @@ vec3 ApplyFog(vec3 color, vec3 worldPos)
     float fogFactor = FogFactor(worldPos);
     if (fogFactor > 0.001)
     {
-        vec3 viewRay = normalize(worldPos - viewPos);
+        vec3 viewRay = normalize(worldPos);
         vec3 fogSky = NightVisionOf(fogSkyColor(viewRay));
         color = mix(color, fogSky, fogFactor);
     }

@@ -1,6 +1,9 @@
 // The shadow cascades of the sky's shadow light (the sun by day, the moon on bright nights) and the point-light cube
 // shadow, cast by models and by cutout sprites (turned toward the light). Each pass draws the casters the frame's
 // visibility lists for it (its box or its reach), each dithered by its fade, so a fading object's shadow thins with it.
+// Everything is in render space: the cascades' boxes sit around the camera with their centres snapped to their texel
+// grids (WorldRenderSpace_StepCascade), so their edges stand still while the camera moves; the cube sits at its light's
+// render-space position.
 
 #include <math.h>
 #include "WorldRendererInternal.h"
@@ -16,10 +19,11 @@
 /** Asset names of the cutout sprites' alpha-tested variants of the two depth shaders. */
 #define SPRITE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sprite_depth")
 #define SPRITE_CUBE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sprite_cube_depth")
-/** The shadow light (the sun or the moon) casts TWO cascaded orthographic shadow maps, both centred on the camera: a
- *  NEAR cascade with a small extent (sharp shadows for close detail) and a FAR cascade with a large extent (coarse
- *  shadows for big / distant casters). Per-object WorldShadowTier routes which cascade(s) each object casts into.
- *  World-space width/height of each cascade's frustum: */
+/** The shadow light (the sun or the moon) casts TWO cascaded orthographic shadow maps, both around the camera (their
+ *  centres snapped to their texels): a NEAR cascade with a small extent (sharp shadows for close detail; 1.6 cm texels)
+ *  and a FAR cascade with a large extent (coarse shadows for big / distant casters; 7.8 cm texels). Per-object
+ *  WorldShadowTier routes which cascade(s) each object casts into. World-space width/height of each cascade's
+ *  frustum: */
 #define SHADOW_NEAR_ORTHO_SIZE 32.0f
 #define SHADOW_FAR_ORTHO_SIZE 160.0f
 /** Distance the shadow light camera is placed from its focus, along the shadow light's direction. */
@@ -166,23 +170,25 @@ static void DrawSpriteCasters(WorldRenderer* self, Shader shader, const WorldRen
     rlEnableBackfaceCulling();
 }
 
-/* One cascade's light matrices and box for the frame: a camera-centred orthographic frustum of the given world-space
- * extent, looking along the frame's shadow light. An explicit tight frustum around the focus (rather than BeginMode3D,
- * which would force Raylib's global cull distances and make the depth bias unintuitive): depth is linear across
- * SHADOW_NEAR..SHADOW_FAR, so the shader's bias maps to a small, world-relative offset. */
-static WorldRendererCascadeFrame GetCascadeFrame(const WorldRenderFrame* frame, float orthoSize)
+/* One cascade's light matrices and box for the frame, in render space: an orthographic box of the given world-space
+ * extent around the camera, looking along the frame's shadow light, its centre moved from its last place (@p grid,
+ * updated here) to the camera by whole texels (WorldRenderSpace_StepCascade). */
+static WorldRendererCascadeFrame GetCascadeFrame(const WorldRenderFrame* frame, float orthoSize,
+    WorldRenderCascadeGrid* grid)
 {
-    Vector3 LightDirection = frame->ShadowDirection;
-    Vector3 Focus = frame->Camera->Position;
-    Vector3 LightPos = Vector3Add(Focus, Vector3Scale(LightDirection, SHADOW_DISTANCE));
-    // Avoid a degenerate look-at when the light is near straight up.
-    Vector3 Up = (fabsf(LightDirection.y) > 0.99f) ? (Vector3){ 0.0f, 0.0f, 1.0f } : (Vector3){ 0.0f, 1.0f, 0.0f };
-
+    WorldRenderCascadeShape Shape =
+    {
+        .Size = orthoSize,
+        .LightDistance = SHADOW_DISTANCE,
+        .NearPlane = SHADOW_NEAR,
+        .FarPlane = SHADOW_FAR,
+        .MapSize = SHADOW_MAP_SIZE
+    };
+    WorldRenderCascade Snapped = WorldRenderSpace_StepCascade(grid, frame->Origin, frame->ShadowDirection, &Shape);
     WorldRendererCascadeFrame Cascade;
-    Cascade.View = MatrixLookAt(LightPos, Focus, Up);
-    float HalfExtent = orthoSize*0.5f;
-    Cascade.Projection = MatrixOrtho(-HalfExtent, HalfExtent, -HalfExtent, HalfExtent, SHADOW_NEAR, SHADOW_FAR);
-    Cascade.ViewProjection = MatrixMultiply(Cascade.View, Cascade.Projection);
+    Cascade.View = Snapped.View;
+    Cascade.Projection = Snapped.Projection;
+    Cascade.ViewProjection = Snapped.ViewProjection;
     Cascade.Box = WorldVisibility_ExtractFrustum(Cascade.ViewProjection);
     return Cascade;
 }
@@ -326,7 +332,7 @@ void WorldRendererShadows_Unload(WorldRenderer* self)
     }
 }
 
-size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self, Vector3 cameraPosition)
+size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self)
 {
     size_t Best = SIZE_MAX;
     float BestDistance = 0.0f;
@@ -339,7 +345,7 @@ size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self, Vector3 
         {
             continue;
         }
-        float Distance = Vector3Distance(Light->Position, cameraPosition);
+        float Distance = Vector3Length(Light->RenderPosition); // the camera sits at the origin of render space
         if ((Best == SIZE_MAX) || (Distance < BestDistance))
         {
             Best = Index;
@@ -353,8 +359,8 @@ void WorldRendererShadows_PrepareFrame(WorldRenderer* self, WorldRenderFrame* fr
 {
     if (frame->IsCascadeShadowActive)
     {
-        frame->NearCascade = GetCascadeFrame(frame, SHADOW_NEAR_ORTHO_SIZE);
-        frame->FarCascade = GetCascadeFrame(frame, SHADOW_FAR_ORTHO_SIZE);
+        frame->NearCascade = GetCascadeFrame(frame, SHADOW_NEAR_ORTHO_SIZE, &self->_cascades._nearGrid);
+        frame->FarCascade = GetCascadeFrame(frame, SHADOW_FAR_ORTHO_SIZE, &self->_cascades._farGrid);
     }
 
     size_t LightCount = 0;
@@ -367,7 +373,7 @@ void WorldRendererShadows_PrepareFrame(WorldRenderer* self, WorldRenderFrame* fr
         {
             Far = (float)(POINT_SHADOW_NEAR * 2.0);
         }
-        frame->PointShadowPosition = Lights[frame->ShadowLightIndex].Position;
+        frame->PointShadowPosition = Lights[frame->ShadowLightIndex].RenderPosition;
         frame->PointShadowFar = Far;
     }
 }

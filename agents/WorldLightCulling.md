@@ -31,9 +31,11 @@ Once per frame, `WorldRendererLighting_PrepareFrame` builds the candidate array 
 every light except the one casting the cube shadow (the shader shades that light separately, with its shadow),
 plus a parallel array of linear radiance (colour → linear × intensity, once per light per frame). For each model
 object drawn by a lit pass, `WorldRendererLighting_UploadObjectLights` culls the candidates against the object's
-world bounding sphere (from the render cache: the model's mesh-space bounds, computed once at load, transformed
+bounding sphere (from the render cache: the model's mesh-space bounds, computed once at load, transformed
 by the object's matrix, radius scaled by the matrix's largest axis scale) and uploads the selected positions,
-radiances and ranges. The shader shades each with the same Cook-Torrance BRDF as the sun, with a windowed
+radiances and ranges. Since T32 the lights and the spheres are in render space (relative to the camera: the render
+cache's `RenderPosition` and `RenderCenter`, see WorldRuntime.md, "Render space"); the culling itself works in any
+space its inputs share. The shader shades each with the same Cook-Torrance BRDF as the sun, with a windowed
 inverse-square falloff that reaches 0 at the light's range. The cost is O(lights) per drawn object.
 
 ## Notes / future

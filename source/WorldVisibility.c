@@ -170,7 +170,7 @@ static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, con
         // setting unless it is fixed, against the zoomed distance (G17).
         float DrawDistance = WorldVisibility_ScaleDrawDistance(model->DrawDistance, model->IsDrawDistanceFixed,
             view->DrawDistanceScale);
-        Fade = GetFade(view, model->Center, model->Radius, DrawDistance, GetZoomFactor(view), model->Tint);
+        Fade = GetFade(view, model->RenderCenter, model->Radius, DrawDistance, GetZoomFactor(view), model->Tint);
     }
     if (!GenericBuffer_AddLast(&self->_modelFades, &Fade))
     {
@@ -187,7 +187,7 @@ static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, con
     }
 
     bool IsInView = false;
-    if (!AddToCamera(self, &self->_models[WorldVisibilityPass_Camera], view, model->Center, model->Radius,
+    if (!AddToCamera(self, &self->_models[WorldVisibilityPass_Camera], view, model->RenderCenter, model->Radius,
         Fade.Combined, model->OmitsPixelation, index, &self->_counts.DrawnModelCount, &IsInView))
     {
         return false;
@@ -199,7 +199,7 @@ static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, con
         self->_counts.DrawnModelsByLod[(Lod < WORLD_MODEL_MAX_LODS) ? Lod : (WORLD_MODEL_MAX_LODS - 1U)]++;
         self->_counts.LodFadingCount += WorldLodState_IsFading(&model->Lod) ? 1U : 0U;
     }
-    return !model->CastsShadows || AddCaster(self->_models, view, model->Center, model->Radius,
+    return !model->CastsShadows || AddCaster(self->_models, view, model->RenderCenter, model->Radius,
         ModelCastsIntoCascade(model->ShadowTier, true), ModelCastsIntoCascade(model->ShadowTier, false), index);
 }
 

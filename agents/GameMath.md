@@ -74,5 +74,10 @@ The header documents every function; the essentials:
 
 ## Users
 
-None yet in the game. T32 (camera-relative rendering) and T33 (double positions in the world, files, collision and
-characters) are written against these types.
+- **The renderer (T32, render space: WorldRuntime.md):** `GameCamera.Position` is a `Vector3Double`; the render cache
+  (`WorldRenderCache_Sync`) widens each object's world matrix and position to double and makes their render-space floats
+  with `GameMath_ToMatrixRelative` and `GameMath_ToVector3Relative` against the frame's origin; the collision debug
+  draws and the debug grid convert the same way; `WorldRenderSpace` snaps the shadow cascades in double.
+- **The test frame:** the flycam moves the double camera; F11's far shift moves objects in double before rounding them
+  to the world's floats (until T33).
+- T33 (double positions in the world, files, collision and characters) is written against these types.

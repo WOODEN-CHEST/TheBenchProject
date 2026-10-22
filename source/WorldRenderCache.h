@@ -15,6 +15,7 @@
 #include "raylib/raylib.h"
 #include "wr/WRError.h"
 #include "wr/WRMemory.h"
+#include "wr/WRVectorMath.h"
 
 /*
  * Private header (source/): the world renderer's per-object render cache.
@@ -27,6 +28,13 @@
  * instead of walking the world and resolving assets by name themselves. Every placement is the object's world one,
  * through its parents (WorldObject_GetWorldMatrix,
  * WorldObject_GetWorldTransform, WorldObject_GetWorldPosition), read without writing to the world.
+ *
+ * RENDER SPACE (T32, WorldRenderSpace.h). Each entry keeps its world placement in double (WorldMatrix and Center,
+ * Position) and, for the frame the lists are synced for, the same placement in render space: relative to the frame's
+ * origin (the camera's position), subtracted in double and rounded to float once (RenderMatrix, RenderCenter, the
+ * sprites' Shape and FixedTransform, RenderPosition). The passes, the visibility and the LOD selection read only the
+ * render-space values, so this sync is the one place a world position becomes a float the GPU sees. The world still
+ * stores floats (T33 makes them doubles): this sync widens them, which is where T33 changes what it reads.
  *
  * Objects that are disabled or hidden, or under a disabled or hidden ancestor (WorldObject_IsEffectivelyEnabled,
  * WorldObject_IsEffectivelyVisible), are not drawn: their model entries stay (keeping the resolved model) but are not
@@ -47,7 +55,8 @@
  * LODS (T11). Each model entry keeps its LOD state across frames (WorldLod.h: the two LODs of a cross-fade, the fade's
  * progress and direction); WorldRenderCache_UpdateLods, once per frame after the sync, picks every drawn entry's LOD by
  * the camera's distance and moves its cross-fade on. A LOD is drawn with its own import transform inside the object's
- * world matrix (WorldRenderModel_GetLodTransform); the bounding sphere is the world model's, the same for every LOD.
+ * render-space matrix (WorldRenderModel_GetLodTransform); the bounding sphere is the world model's, the same for every
+ * LOD.
  *
  * The cache only reads the world, its objects and components, and never writes to an asset. Every pointer in the lists
  * is borrowed and valid until the world changes; the world models (and with them their LOD models and textures) are
@@ -91,7 +100,7 @@ typedef struct WorldRenderModelStruct
     bool HasVariant;
     size_t VariantIndex;
     /** @brief Centre and radius of the world model's bounding sphere, and the transform from its space to the object's
-     *  (WorldModel_GetBoundsTransform); valid when Asset is not NULL. */
+     *  (WorldModel_GetBoundsTransform), in the object's own space; valid when Asset is not NULL. */
     Vector3 LocalCenter;
     float LocalRadius;
     Matrix BoundsTransform;
@@ -109,13 +118,17 @@ typedef struct WorldRenderModelStruct
      *  applies the scale and the zoom. */
     float DrawDistance;
     bool IsDrawDistanceFixed;
-    /** @brief The object's world matrix (this frame); each LOD is drawn with its own import transform inside it
-     *  (WorldRenderModel_GetLodTransform). Valid when Asset is not NULL. */
-    Matrix WorldMatrix;
-    /** @brief World-space bounding sphere (this frame): conservative under rotation, non-uniform scale and the shear a
-     *  hierarchy can add (WorldTransform_GetMaxScale). Valid when Asset is not NULL. */
-    Vector3 Center;
+    /** @brief The object's world matrix (this frame), in double. Valid when Asset is not NULL. */
+    Matrix4Double WorldMatrix;
+    /** @brief World-space bounding sphere (this frame), its centre in double: conservative under rotation, non-uniform
+     *  scale and the shear a hierarchy can add (WorldTransform_GetMaxScale). Valid when Asset is not NULL. */
+    Vector3Double Center;
     float Radius;
+    /** @brief The world matrix and the sphere's centre in render space (this frame): relative to the origin the lists
+     *  were synced for, subtracted in double and rounded once. Each LOD is drawn with its own import transform inside
+     *  RenderMatrix (WorldRenderModel_GetLodTransform). Valid when Asset is not NULL. */
+    Matrix RenderMatrix;
+    Vector3 RenderCenter;
     /** @brief The object's final tint colour (this frame). */
     Color Tint;
 } WorldRenderModel;
@@ -131,15 +144,18 @@ typedef struct WorldRenderSpriteStruct
     SpriteAnimationFrame Frame;
     /** @brief The frame's area in its texture, normalized: x, y of its top left, width, height (the shader's uvRect). */
     float UvRect[4];
-    /** @brief The quad before a viewer turns it (source/SpriteTransform.h): orientation, the object's world position
-     *  and axes, the world size (the frame's pixels / pixels per unit x the object's world X and Y scale), the pivot,
+    /** @brief The pivot's world position (the object's world position), in double. */
+    Vector3Double Position;
+    /** @brief The quad before a viewer turns it (source/SpriteTransform.h), in render space: orientation, the pivot's
+     *  position relative to the origin the lists were synced for (subtracted in double, rounded once), the object's
+     *  world axes, the world size (the frame's pixels / pixels per unit x the object's world X and Y scale), the pivot,
      *  the flips. */
     SpriteShape Shape;
-    /** @brief The fixed orientation's matrix (it does not depend on the viewer); valid when Shape.Orientation is
-     *  WorldSpriteOrientation_Fixed. */
+    /** @brief The fixed orientation's matrix in render space (it does not depend on the viewer); valid when
+     *  Shape.Orientation is WorldSpriteOrientation_Fixed. */
     Matrix FixedTransform;
-    /** @brief Radius of a sphere around Shape.Position that holds the quad in every orientation (light culling, the
-     *  cube shadow's reach). */
+    /** @brief Radius of a sphere around the pivot that holds the quad in every orientation (light culling, the cube
+     *  shadow's reach). */
     float BoundsRadius;
     /** @brief The object's final tint colour (its alpha is the object's opacity). */
     Color Tint;
@@ -171,8 +187,11 @@ typedef struct WorldRenderLightStruct
 {
     /** @brief The light component (borrowed); valid until the world changes. */
     const WorldLightComponent* Component;
-    /** @brief World-space position (the object's world position). */
-    Vector3 Position;
+    /** @brief World-space position (the object's world position), in double. */
+    Vector3Double Position;
+    /** @brief The position in render space: relative to the origin the lists were synced for (subtracted in double,
+     *  rounded once). */
+    Vector3 RenderPosition;
     /** @brief Reach radius (the light's range). */
     float Range;
     /** @brief Emission intensity. */
@@ -187,7 +206,8 @@ typedef struct WorldRenderLightStruct
  *  time. A plain value type. */
 typedef struct WorldRenderLodViewStruct
 {
-    /** @brief The camera's world position: an object's LOD distance is measured from it to its bounding sphere's
+    /** @brief The camera's position in render space (the space of the entries' RenderCenter: (0, 0, 0) for the camera
+     *  whose position the lists were synced for): an object's LOD distance is measured from it to its bounding sphere's
      *  centre. */
     Vector3 CameraPosition;
     /** @brief The camera's zoom factor (WorldVisibility_GetZoomFactor): the distances are multiplied by it, so zooming in
@@ -248,9 +268,11 @@ void WorldRenderCache_Deconstruct(WorldRenderCache* self);
 void WorldRenderCache_Reset(WorldRenderCache* self);
 
 /**
- * @brief Brings the cache up to date with @p world and rebuilds this frame's lists.
+ * @brief Brings the cache up to date with @p world and rebuilds this frame's lists, in render space for @p origin.
  *
- * One walk over the world's model, sprite and light components. A world other than the last one resets the cache;
+ * One walk over the world's model, sprite and light components. Every entry gets its world placement (in double) and
+ * the same placement relative to @p origin (subtracted in double, rounded to float once): the render-space values the
+ * passes draw with. A world other than the last one resets the cache;
  * entries are re-matched to the model components (by owner id and world model name) when the component-set version
  * changed since the last Sync, or when an entry no longer belongs to the component at its position. A world model whose
  * entry is new or whose name changed is resolved with AssetManager_LoadWorldModel under @p modelUser; a failure is
@@ -260,6 +282,8 @@ void WorldRenderCache_Reset(WorldRenderCache* self);
  * context.
  * @param self The cache; must not be NULL.
  * @param world The world to draw; must not be NULL.
+ * @param origin The frame's origin, render space's (0, 0, 0): the camera's world position (any origin while only the
+ *        world models matter, as when preparing a world).
  * @param assets Resolves the world models; borrowed. Must not be NULL.
  * @param modelUser The asset user the world models are held under; must outlive the entries (see Reset).
  * @param logger Receives one warning per failed world model resolution and per unknown variant; borrowed, may be
@@ -267,8 +291,8 @@ void WorldRenderCache_Reset(WorldRenderCache* self);
  * @returns Success; ErrorCode_IllegalArgument if @p self, @p world or @p assets is NULL;
  *          ErrorCode_InvalidOperation if a list could not grow (the lists are then incomplete).
  */
-Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, AssetManager* assets, AssetUserID modelUser,
-    Logger* logger);
+Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double origin, AssetManager* assets,
+    AssetUserID modelUser, Logger* logger);
 
 /**
  * @brief Picks the LOD every drawn model entry shows this frame and advances its cross-fade (WorldLod.h). Call it once
@@ -279,7 +303,8 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, AssetManager* 
  * distance to its bounding sphere's centre times the zoom factor, WorldLod_Select from the LOD it heads to, then
  * WorldLodState_Update with the frame's seconds. An entry that is not drawn (no world model, a disabled or hidden object)
  * starts afresh when it is drawn again, so it appears at its LOD without a fade. Entries beyond their draw distance or
- * outside the view are still updated: their shadows use their LOD. Main thread only; never writes to the world.
+ * outside the view are still updated: their shadows use their LOD. Distances are measured in render space (the entries'
+ * RenderCenter from the view's CameraPosition). Main thread only; never writes to the world.
  * @param self The cache, synced for this frame; must not be NULL.
  * @param view The camera and the frame; must not be NULL.
  * @param logger Receives the warning when an object's own LOD distances stop fitting its world model; borrowed, may be
@@ -299,10 +324,10 @@ static inline GameModel* WorldRenderModel_GetLodModel(const WorldRenderModel* mo
 }
 
 /**
- * @brief Returns the final transform one LOD of a cached model entry is drawn with this frame: the LOD's import transform
- *        inside the object's world matrix (raylib's DrawModelEx convention).
+ * @brief Returns the final transform one LOD of a cached model entry is drawn with this frame, in render space: the LOD's
+ *        import transform inside the object's render-space matrix (raylib's DrawModelEx convention).
  * @param model The entry; must not be NULL and must have an asset.
- * @param lod The LOD, 0 the finest; past the last LOD the world matrix alone.
+ * @param lod The LOD, 0 the finest; past the last LOD the render-space matrix alone.
  * @returns The transform.
  */
 Matrix WorldRenderModel_GetLodTransform(const WorldRenderModel* model, size_t lod);

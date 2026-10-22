@@ -25,9 +25,9 @@ non-default raylib configuration.
 | raylib | https://github.com/raysan5/raylib (local copy: `../raylib/6.0`) | commit `65abee1` (2026-07-04), reports `6.1-dev` | CMake, see below |
 | WRFramework | `../WRFramework` | commit `e6085fead5630602416729efe00dc4e60d60fa54` | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
 
-`lib/libwr.a`, `include/wr/` and `agents/WRFramework.md` match the commit above, `c341ca5` (T31's `WRVectorMath`, on
-top of `8c9af0b`'s `WRArena`), plus `Vector2Double` in the same module, not yet committed in WRFramework (below). Once
-the owner commits it there, this table names that commit.
+`lib/libwr.a`, `include/wr/` and `agents/WRFramework.md` match the commit above, `e6085fe` (`Vector2Double` and
+raymath's other vector operations, on top of `c341ca5`'s `WRVectorMath` from T31 and `8c9af0b`'s `WRArena`); checked
+file for file on 2026-10-22, at T32, which changed nothing in WRFramework.
 
 The project's `include/raylib/` and `include/wr/` headers must come from the same versions as the libraries.
 To update WRFramework: build it with its own script, then copy its `include/*.h` into `include/wr/`,

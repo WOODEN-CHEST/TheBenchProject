@@ -14,11 +14,13 @@
 #include "WorldSpriteComponent.h"
 #include "NightVision.h"
 #include "SpriteTransform.h"
+#include "WorldRenderSpace.h"
 #include "WorldVisibility.h"
 #include "raylib/raylib.h"
 // rlgl supplies RL_MAX_SHADER_LOCATIONS and the scene near/far cull distances.
 #include "raylib/rlgl.h"
 #include "wr/WRMemory.h"
+#include "wr/WRVectorMath.h"
 
 /*
  * Private header (source/): the WorldRenderer's state and the functions its implementation files share.
@@ -40,6 +42,13 @@
  * plus the per-object render cache (WorldRenderCache.h) and each frame's visibility (WorldVisibility.h: what each pass
  * draws, with every entry's fade). Each pass keeps its shader, uniform locations, targets and toggles in its own state
  * struct below.
+ *
+ * RENDER SPACE (T32, WorldRenderSpace.h). Every pass draws in render space: the world's orientation with the camera at
+ * (0, 0, 0). The frame's Origin is the camera's world position in double; the render cache, synced for it, holds every
+ * position relative to it (subtracted in double, rounded once), and the passes, the uniforms and the debug draws use
+ * only those render-space values and the frame's render-space matrices. Never round a world position to float and
+ * subtract the origin after: convert through GameMath's relative functions (GameMath_ToVector3Relative,
+ * GameMath_ToMatrixRelative).
  *
  * RULES. Render reads the world and shared assets and never writes them: meshes draw with materials built on
  * the stack, and the PBR shader's location table is a copy owned here. Renderer-owned samplers sit on the fixed
@@ -113,14 +122,15 @@ typedef struct WorldRendererDirectionalLightStruct
     float Intensity;
 } WorldRendererDirectionalLight;
 
-/** @brief One shadow cascade's light matrices and box for a frame (WorldRendererShadows_PrepareFrame). */
+/** @brief One shadow cascade's light matrices and box for a frame, in render space (WorldRendererShadows_PrepareFrame:
+ *  WorldRenderSpace_GetCascade). */
 typedef struct WorldRendererCascadeFrameStruct
 {
-    /** @brief The light's view (looking at the camera's position along the shadow light's direction) and its
-     *  orthographic projection. */
+    /** @brief The light's view (looking along the shadow light at the box's centre: the camera's position snapped to the
+     *  cascade's texel grid) and its orthographic projection. */
     Matrix View;
     Matrix Projection;
-    /** @brief World -> light clip (raymath order: MatrixMultiply(View, Projection)): the lit shaders' lightVP or
+    /** @brief Render space -> light clip (raymath order: MatrixMultiply(View, Projection)): the lit shaders' lightVP or
      *  lightVPFar. */
     Matrix ViewProjection;
     /** @brief The cascade's box as six planes (from ViewProjection): its casters are culled against it. */
@@ -159,19 +169,26 @@ typedef struct WorldRenderFrameStruct
     World* World;
     /** @brief The world's environment. */
     const WorldEnvironment* Environment;
-    /** @brief The camera, and the raylib camera made from it. */
-    const GameCamera* Camera;
-    Camera3D RayCamera;
-    /** @brief The scene's view and projection matrices (what BeginMode3D builds for the scene target), the
-     *  projection's inverse, and the inverse of view x projection. */
+    /** @brief The frame's origin (render space's (0, 0, 0)): the camera's world position, in double. The render cache
+     *  was synced for it, so its render-space values are relative to it. */
+    Vector3Double Origin;
+    /** @brief raylib's camera for BeginMode3D: at (0, 0, 0), looking along the camera's forward
+     *  (GameCamera_ToRenderCamera). */
+    Camera3D RenderCamera;
+    /** @brief The camera's zoom factor (WorldVisibility_GetZoomFactor of its field of view): the draw and LOD distances
+     *  are measured against distances times it. */
+    float ZoomFactor;
+    /** @brief The scene's view (render space -> view space: a pure rotation) and projection (what BeginMode3D builds
+     *  for the scene target), the projection's inverse, and the inverse of view x projection (clip -> render space: the
+     *  sky's rays). */
     Matrix View;
     Matrix Projection;
     Matrix InvProjection;
     Matrix InvViewProjection;
-    /** @brief View x projection (raymath order: MatrixMultiply(View, Projection)). */
+    /** @brief View x projection (raymath order: MatrixMultiply(View, Projection)): render space -> clip. */
     Matrix ViewProjection;
-    /** @brief The camera's frustum (from ViewProjection): what the camera's passes (scene, G-buffer, crisp) cull
-     *  against. */
+    /** @brief The camera's frustum in render space (from ViewProjection): what the camera's passes (scene, G-buffer,
+     *  crisp) cull against. */
     WorldFrustum CameraFrustum;
     /** @brief The sky's sun: unit direction to it (the sky, the fog, the sun shafts and the outlines' creases use it),
      *  and how much daylight there is (1 day .. 0 night). */
@@ -222,9 +239,9 @@ typedef struct WorldRenderFrameStruct
      *  IsCascadeShadowActive (the far one is drawn only while its map exists). */
     WorldRendererCascadeFrame NearCascade;
     WorldRendererCascadeFrame FarCascade;
-    /** @brief The cube shadow's light: its position, and the far range its packed distances are normalized by (its reach,
-     *  at least twice the faces' near plane), which is also the reach its casters must touch; valid while
-     *  IsPointShadowActive. */
+    /** @brief The cube shadow's light: its position in render space (its RenderPosition), and the far range its packed
+     *  distances are normalized by (its reach, at least twice the faces' near plane), which is also the reach its
+     *  casters must touch; valid while IsPointShadowActive. */
     Vector3 PointShadowPosition;
     float PointShadowFar;
     /** @brief Lighting shared by the scene and crisp passes (computed once per render): linear ambient colour, the
@@ -314,8 +331,8 @@ typedef struct WorldRendererLitLocationsStruct
     /** @brief How many point lights the shader's uniform arrays hold, capped at WORLD_MAX_FORWARD_LIGHTS
      *  (checked at load; uploads never exceed it). */
     int _maxPointLights;
-    /** @brief The camera, the two directional lights (the sun's direction is also the fog sky's), the ambient. */
-    int _locViewPos;
+    /** @brief The two directional lights (the sun's direction is also the fog sky's), the ambient. (No camera position:
+     *  the camera sits at the origin of render space.) */
     int _locSunDirection;
     int _locSunColor;
     int _locSunIntensity;
@@ -457,7 +474,6 @@ typedef struct WorldRendererSkyStateStruct
     /** @brief Cached world_sky uniform locations (-1 when absent). */
     int _locResolution;
     int _locInvViewProj;
-    int _locCameraPos;
     int _locSunDirection;
     int _locSunColor;
     int _locSunIntensity;
@@ -593,13 +609,19 @@ typedef struct WorldRendererCascadeStateStruct
      *  WorldRenderFrame.NearCascade and FarCascade.) */
     RenderTexture2D _farMap;
     bool _hasFarMap;
+    /** @brief Each cascade's texel grid from frame to frame (WorldRenderSpace_StepCascade: its centre in the world, from
+     *  the last frame the cascades ran): the next frame's centre moves from it by whole texels, so the grid stands still
+     *  while the light does and turns about the camera, not the world's origin, while the light turns. Zeroed with the
+     *  renderer; one pair for the renderer's one camera, like the LOD states. */
+    WorldRenderCascadeGrid _nearGrid;
+    WorldRenderCascadeGrid _farGrid;
 } WorldRendererCascadeState;
 
 /** @brief The cube shadow of the shadow-casting point light. */
 typedef struct WorldRendererPointShadowStateStruct
 {
     /** @brief The cube-depth shader; NULL = no point-light shadow. Cached uniform locations: the shadow light's
-     *  world position and far range, and the dither. */
+     *  position (render space) and far range, and the dither. */
     GameShader* _shader;
     int _locLightPos;
     int _locLightFar;
@@ -993,8 +1015,8 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
 bool WorldRendererGeometry_PassesFilter(bool omitPixelation, WorldRendererPixelFilter filter);
 
 /**
- * @brief Draws one LOD of a cached model mesh by mesh, with the LOD's import transform inside the object's world matrix
- *        (WorldRenderModel_GetLodTransform), each mesh with a material built on the stack (the asset's maps copied, the
+ * @brief Draws one LOD of a cached model mesh by mesh, with the LOD's import transform inside the object's render-space
+ *        matrix (WorldRenderModel_GetLodTransform), each mesh with a material built on the stack (the asset's maps copied, the
  *        entry's variant applied to the copy, @p passShader, the object's tint applied to the copy, times the LOD's
  *        debug colour while the LOD tinting is on), so nothing is written to an asset. The caller uploads the draw's
  *        dither to @p passShader first, and in the lit pass the object's forward point lights.
@@ -1015,14 +1037,16 @@ void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel
 void WorldRendererGeometry_DrawModels(WorldRenderer* self, const Shader* passShader, bool isLit,
     WorldRendererPixelFilter filter);
 
-/** @brief Draws a small wireframe sphere at each light, tinted by its colour (a debug aid). Inside BeginMode3D. */
+/** @brief Draws a small wireframe sphere at each light (its render-space position), tinted by its colour (a debug aid).
+ *  Inside BeginMode3D. */
 void WorldRendererGeometry_DrawLightGizmos(WorldRenderer* self);
 
 
 // WorldRendererCollision.c
 /** @brief Draws the collision world's debug shapes (_collisionDebug) as wireframes in their world placements, coloured by
- *  layer (a debug aid). Inside BeginMode3D; reads only. */
-void WorldRendererCollision_Draw(WorldRenderer* self);
+ *  layer, and its contact points (a debug aid), moved into render space for the frame's origin. Inside BeginMode3D;
+ *  reads only. */
+void WorldRendererCollision_Draw(WorldRenderer* self, const WorldRenderFrame* frame);
 
 
 // WorldRendererSprites.c
@@ -1046,11 +1070,11 @@ void WorldRendererSprites_LoadShaders(WorldRenderer* self);
 bool WorldRendererSprites_IsAvailable(const WorldRenderer* self);
 
 /**
- * @brief Computes each cached sprite's matrices for this frame (facing the camera; facing the cascades' light and the
- *        cube shadow's light while those run) and the draw order of the blended and additive sprites the camera's
- *        passes draw, back to front.
+ * @brief Computes each cached sprite's matrices for this frame, in render space (facing the camera at the origin; facing
+ *        the cascades' light and the cube shadow's light while those run) and the draw order of the blended and additive
+ *        sprites the camera's passes draw, back to front.
  *
- * Needs the frame's camera, IsCascadeShadowActive / ShadowDirection, IsPointShadowActive / PointShadowPosition and the
+ * Needs the frame's View, IsCascadeShadowActive / ShadowDirection, IsPointShadowActive / ShadowLightIndex and the
  * frame's visibility. No allocation once the lists have grown to the sprite count.
  */
 void WorldRendererSprites_PrepareFrame(WorldRenderer* self, const WorldRenderFrame* frame);
@@ -1132,12 +1156,12 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
     Vector2 ditherPixelScale);
 
 /**
- * @brief Reach-culls the frame's forward lights against a world bounding sphere and uploads the strongest few to a lit
- *        shader, for the object drawn next.
+ * @brief Reach-culls the frame's forward lights against a bounding sphere in render space and uploads the strongest few
+ *        to a lit shader, for the object drawn next.
  * @param self The renderer.
  * @param shader The lit shader (its program).
  * @param locations Its locations (WorldRendererLighting_PrepareLitShader).
- * @param center The object's bounding sphere's centre.
+ * @param center The object's bounding sphere's centre, in render space.
  * @param radius Its radius.
  */
 void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader,
@@ -1172,15 +1196,17 @@ void WorldRendererShadows_Unload(WorldRenderer* self);
 
 /**
  * @brief Picks the light that casts the cube shadow: the CastsShadows light with positive intensity and reach
- *        nearest @p cameraPosition.
+ *        nearest the camera (the origin of render space: the shortest RenderPosition).
  * @returns Its index in the render cache's lights, or SIZE_MAX when no light qualifies.
  */
-size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self, Vector3 cameraPosition);
+size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self);
 
 /**
- * @brief Fills the frame's shadow values the passes and the visibility share: both cascades' light matrices and boxes
- *        (while IsCascadeShadowActive; from frame->ShadowDirection, centred on the camera) and the cube shadow's light
- *        position and far range (while IsPointShadowActive). Call after the shadow decisions, before the visibility.
+ * @brief Fills the frame's shadow values the passes and the visibility share, in render space: both cascades' light
+ *        matrices and boxes (while IsCascadeShadowActive; from frame->ShadowDirection, around the camera, each centre
+ *        moved from its last one by whole texels and the new one kept: WorldRenderSpace_StepCascade) and the cube
+ *        shadow's light position and far range (while IsPointShadowActive). Call after the shadow decisions, before the
+ *        visibility; once per frame (it moves the cascades' grids).
  */
 void WorldRendererShadows_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame);
 

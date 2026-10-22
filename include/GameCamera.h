@@ -1,7 +1,8 @@
 #pragma once
-// Vector3 and Camera3D are Raylib types that make up this camera's public API (position and the
-// converted render camera), so this include is unavoidable here.
+// Vector3 and Camera3D are Raylib types that make up this camera's public API (its directions and the converted
+// render camera), so this include is unavoidable here.
 #include "raylib/raylib.h"
+#include "wr/WRVectorMath.h"
 
 
 /**
@@ -13,8 +14,13 @@
  * yaw = pitch = roll = 0 the camera looks toward +Z). Yaw rotates around the world up (+Y), pitch tilts
  * up/down, and roll spins around the forward axis.
  *
+ * Its position is a double (WRVectorMath's Vector3Double): far from the world's origin a float holds a position only to
+ * millimetres or worse (a float's step is 1 mm past 8 km), which would shake the whole view. Its directions stay floats.
+ * The renderer draws relative to the camera (render space: the world's orientation with the camera at (0, 0, 0)), so
+ * the raylib camera made from it, GameCamera_ToRenderCamera, sits at the origin and only turns.
+ *
  * It is deliberately decoupled from Raylib's Camera3D: game code drives this struct, and only at render
- * time is it converted with GameCamera_ToRaylibCamera. The camera is instance/runtime data and is NOT
+ * time is it converted with GameCamera_ToRenderCamera. The camera is instance/runtime data and is NOT
  * part of any saved world.
  *
  * The struct owns no memory and is trivially copyable (like ProgramTime / Int32Vector), so it has no
@@ -34,12 +40,12 @@
  * @brief A 3D camera described by position, vertical FOV, and yaw/pitch/roll (radians).
  *
  * Public fields are mutated directly by game code (movement/look). Convert to a Raylib Camera3D with
- * GameCamera_ToRaylibCamera only when rendering.
+ * GameCamera_ToRenderCamera only when rendering.
  */
 typedef struct GameCameraStruct
 {
-    /** @brief World-space position of the camera. */
-    Vector3 Position;
+    /** @brief World-space position of the camera, in double: the renderer's origin each frame. */
+    Vector3Double Position;
     /** @brief Vertical field of view, in degrees. */
     float FovY;
     /** @brief Yaw around the world up (+Y), in radians; 0 looks toward +Z. */
@@ -58,7 +64,7 @@ typedef struct GameCameraStruct
  * @param fovYDegrees Vertical field of view in degrees.
  * @returns A GameCamera with the given position/FOV and zero yaw/pitch/roll.
  */
-GameCamera GameCamera_Create(Vector3 position, float fovYDegrees);
+GameCamera GameCamera_Create(Vector3Double position, float fovYDegrees);
 
 /**
  * @brief Returns the camera's unit forward direction from its yaw and pitch.
@@ -84,11 +90,14 @@ Vector3 GameCamera_GetRight(const GameCamera* self);
 Vector3 GameCamera_GetUp(const GameCamera* self);
 
 /**
- * @brief Converts the game camera into a Raylib perspective Camera3D for rendering.
+ * @brief Converts the game camera into the Raylib perspective Camera3D the renderer draws with: the camera in render
+ *        space, at (0, 0, 0).
  *
- * Sets position, target (position + forward), the roll-adjusted up vector, the vertical FOV, and a
- * perspective projection. This is the single point where the Raylib camera detail is exposed.
+ * Sets the position to (0, 0, 0), the target to the forward direction, the roll-adjusted up vector, the vertical FOV,
+ * and a perspective projection, so BeginMode3D loads a view matrix that is a pure rotation (no translation, however far
+ * the camera is from the world's origin). The renderer subtracts the camera's Position from everything it draws. This
+ * is the single point where a Raylib camera is made.
  * @param self The camera; must not be NULL.
- * @returns The equivalent Raylib Camera3D (CAMERA_PERSPECTIVE).
+ * @returns The render camera (CAMERA_PERSPECTIVE).
  */
-Camera3D GameCamera_ToRaylibCamera(const GameCamera* self);
+Camera3D GameCamera_ToRenderCamera(const GameCamera* self);

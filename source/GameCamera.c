@@ -9,7 +9,7 @@ static const Vector3 WorldUp = { .x = 0.0f, .y = 1.0f, .z = 0.0f };
 
 
 // Public functions.
-GameCamera GameCamera_Create(Vector3 position, float fovYDegrees)
+GameCamera GameCamera_Create(Vector3Double position, float fovYDegrees)
 {
     return (GameCamera)
     {
@@ -45,13 +45,13 @@ Vector3 GameCamera_GetUp(const GameCamera* self)
     return Vector3RotateByAxisAngle(WorldUp, GameCamera_GetForward(self), self->Roll);
 }
 
-Camera3D GameCamera_ToRaylibCamera(const GameCamera* self)
+Camera3D GameCamera_ToRenderCamera(const GameCamera* self)
 {
     Vector3 Forward = GameCamera_GetForward(self);
     return (Camera3D)
     {
-        .position = self->Position,
-        .target = Vector3Add(self->Position, Forward),
+        .position = { .x = 0.0f, .y = 0.0f, .z = 0.0f },
+        .target = Forward,
         .up = Vector3RotateByAxisAngle(WorldUp, Forward, self->Roll),
         .fovy = self->FovY,
         .projection = CAMERA_PERSPECTIVE

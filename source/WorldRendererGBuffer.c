@@ -240,7 +240,7 @@ void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFr
     BeginTextureMode(self->_gbuffer._target);
     ClearBackground(BLANK); // RGBA (0,0,0,0): A=0 = "not a surface" everywhere the geometry does not draw
     rlDisableColorBlend();  // write RGB (normal) + A (flag) directly; no alpha blend
-    BeginMode3D(frame->RayCamera);
+    BeginMode3D(frame->RenderCamera);
     DrawNormalBufferModels(self, frame->SceneFilter);
     // Cutout sprites into the same G-buffer (alpha-tested) so they get silhouette outlines and AO too.
     DrawNormalBufferSprites(self, frame->SceneFilter);

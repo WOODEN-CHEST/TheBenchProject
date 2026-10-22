@@ -1,12 +1,14 @@
 // Debug wireframes of the collision world's shapes (WorldRenderer_SetCollisionDebug): each shape of the collision world's
 // debug list drawn in its own space under its world transform (uneven scales and shear included, so an ellipsoid looks
 // like one), coloured by layer; and (T27) its debug contacts: each point a small cross, its normal a short line, its
-// push a red line along the normal as long as the push's speed over CONTACT_PUSH_SECONDS. Rule 3: it only reads the
-// lists; nothing here touches the world or the collision world.
+// push a red line along the normal as long as the push's speed over CONTACT_PUSH_SECONDS. Everything is drawn in render
+// space: each transform's translation and each point relative to the frame's origin, in double. Rule 3: it only reads
+// the lists; nothing here touches the world or the collision world.
 
 #include <math.h>
 #include "WorldRendererInternal.h"
 #include "WorldCollision.h"
+#include "GameMath.h"
 #include "raylib/raymath.h"
 
 
@@ -187,14 +189,22 @@ static void DrawShape(const CollisionShape* shape, Color color)
 }
 
 
-static void DrawShapes(const WorldCollisionDebugShape* shapes, size_t count, unsigned char alpha)
+/* A world matrix in render space: its translation relative to the frame's origin. */
+static Matrix ToRenderSpace(Matrix worldTransform, Vector3Double origin)
+{
+    // TODO: T33 gives the collision world double transforms; this widens its float ones until then.
+    Matrix4Double Placement = GameMath_FromMatrix(worldTransform);
+    return GameMath_ToMatrixRelative(&Placement, origin);
+}
+
+static void DrawShapes(const WorldCollisionDebugShape* shapes, size_t count, unsigned char alpha, Vector3Double origin)
 {
     for (size_t Index = 0U; Index < count; Index++)
     {
         Color ShapeColor = GetShapeColor(&shapes[Index]);
         ShapeColor.a = alpha;
         rlPushMatrix();
-        rlMultMatrixf(MatrixToFloat(shapes[Index].Transform));
+        rlMultMatrixf(MatrixToFloat(ToRenderSpace(shapes[Index].Transform, origin)));
         DrawShape(shapes[Index].Shape, ShapeColor);
         rlPopMatrix();
     }
@@ -202,13 +212,15 @@ static void DrawShapes(const WorldCollisionDebugShape* shapes, size_t count, uns
 
 
 /* The contact points: crosses (white touching, grey speculative), normals (cyan) and pushes (red). */
-static void DrawContacts(const WorldCollisionDebugContact* contacts, size_t count, unsigned char alpha)
+static void DrawContacts(const WorldCollisionDebugContact* contacts, size_t count, unsigned char alpha,
+    Vector3Double origin)
 {
     for (size_t Index = 0U; Index < count; Index++)
     {
         const WorldCollisionDebugContact* Contact = &contacts[Index];
         Color Point = Contact->IsTouching ? (Color){ 255, 255, 255, alpha } : (Color){ 140, 140, 140, alpha };
-        Vector3 At = Contact->Point;
+        // TODO: T33 gives the collision world double points; this widens its float ones until then.
+        Vector3 At = GameMath_ToVector3Relative(GameMath_FromVector3(Contact->Point), origin);
         DrawLine3D(Vector3Add(At, (Vector3){ -CONTACT_CROSS_SIZE, 0.0f, 0.0f }),
             Vector3Add(At, (Vector3){ CONTACT_CROSS_SIZE, 0.0f, 0.0f }), Point);
         DrawLine3D(Vector3Add(At, (Vector3){ 0.0f, -CONTACT_CROSS_SIZE, 0.0f }),
@@ -227,7 +239,7 @@ static void DrawContacts(const WorldCollisionDebugContact* contacts, size_t coun
 
 
 // Internal functions (declared in WorldRendererInternal.h).
-void WorldRendererCollision_Draw(WorldRenderer* self)
+void WorldRendererCollision_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     size_t Count = 0U;
     const WorldCollisionDebugShape* Shapes = WorldCollision_GetDebugShapes(self->_collisionDebug, &Count);
@@ -241,10 +253,10 @@ void WorldRendererCollision_Draw(WorldRenderer* self)
     // fight its depth), then solid with it. rlgl batches its lines, so each depth state is drawn out before it changes.
     rlDrawRenderBatchActive();
     rlDisableDepthTest();
-    DrawShapes(Shapes, Count, HIDDEN_ALPHA);
-    DrawContacts(Contacts, ContactCount, HIDDEN_ALPHA);
+    DrawShapes(Shapes, Count, HIDDEN_ALPHA, frame->Origin);
+    DrawContacts(Contacts, ContactCount, HIDDEN_ALPHA, frame->Origin);
     rlDrawRenderBatchActive();
     rlEnableDepthTest();
-    DrawShapes(Shapes, Count, 255);
-    DrawContacts(Contacts, ContactCount, 255);
+    DrawShapes(Shapes, Count, 255, frame->Origin);
+    DrawContacts(Contacts, ContactCount, 255, frame->Origin);
 }

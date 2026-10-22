@@ -123,8 +123,8 @@ void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel
         return; // a LOD past the last: the cache's state keeps its LODs below the count
     }
     // Mesh by mesh, so each material's PBR factors and map flags can be uploaded before its draw (raylib's DrawModel
-    // cannot do that). The transform is the LOD's import transform inside the object's world matrix, matching raylib's
-    // DrawModelEx convention.
+    // cannot do that). The transform is the LOD's import transform inside the object's render-space matrix, matching
+    // raylib's DrawModelEx convention.
     Model RayModel = GameModel_GetRaylibModel(LodModel);
     Matrix LodTransform = WorldRenderModel_GetLodTransform(model, lod);
     LodLook Look = GetLodLook(self, model, lod);
@@ -161,7 +161,7 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, const Shader* passSha
         // by the object's fade (its draw distance, its opacity) and by its part of a LOD cross-fade: the two LODs of a
         // cross-fade keep complementary pixels. A LOD's meshes share its dither.
         WorldRendererLighting_UploadObjectLights(self, GameShader_GetRaylibShader(self->_pbr._shader), &self->_pbr._lit,
-            Entry->Center, Entry->Radius);
+            Entry->RenderCenter, Entry->Radius);
         float Fade = WorldVisibility_GetModelFade(&self->_visibility, Index).Combined;
         WorldLodDraw Draws[WORLD_LOD_MAX_DRAWS];
         size_t DrawCount = WorldLodState_GetDraws(&Entry->Lod, Draws);
@@ -180,6 +180,6 @@ void WorldRendererGeometry_DrawLightGizmos(WorldRenderer* self)
     const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &LightCount);
     for (size_t Index = 0; Index < LightCount; Index++)
     {
-        DrawSphereWires(Lights[Index].Position, LIGHT_GIZMO_RADIUS, 6, 6, Lights[Index].Color);
+        DrawSphereWires(Lights[Index].RenderPosition, LIGHT_GIZMO_RADIUS, 6, 6, Lights[Index].Color);
     }
 }

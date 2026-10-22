@@ -79,7 +79,7 @@ static float ComputeMilkyWayLod(const WorldRenderFrame* frame, Texture2D texture
     {
         return 0.0f;
     }
-    float PixelAngle = frame->RayCamera.fovy * DEG2RAD / (float)frame->SceneHeight;
+    float PixelAngle = frame->RenderCamera.fovy * DEG2RAD / (float)frame->SceneHeight;
     float TexelAngle = 2.0f * PI / (float)texture.width;
     float MaxLod = (texture.mipmaps > 1) ? (float)(texture.mipmaps - 1) : 0.0f;
     return fminf(fmaxf(log2f(PixelAngle / TexelAngle), 0.0f), MaxLod);
@@ -224,7 +224,6 @@ void WorldRendererSky_LoadShader(WorldRenderer* self)
     Shader RayShader = GameShader_GetRaylibShader(self->_sky._shader);
     self->_sky._locResolution = GetShaderLocation(RayShader, "resolution");
     self->_sky._locInvViewProj = GetShaderLocation(RayShader, "invViewProj");
-    self->_sky._locCameraPos = GetShaderLocation(RayShader, "cameraPos");
     self->_sky._locSunDirection = GetShaderLocation(RayShader, "sunDirection");
     self->_sky._locSunColor = GetShaderLocation(RayShader, "sunColor");
     self->_sky._locSunIntensity = GetShaderLocation(RayShader, "sunIntensity");
@@ -304,8 +303,9 @@ bool WorldRendererSky_IsMoonVisible(const WorldRenderFrame* frame)
     return frame->Environment->IsMoonEnabled && (frame->MoonDisc.Opacity > 0.0f);
 }
 
-/* Each pixel's world ray is reconstructed from the inverse of the same view-projection BeginMode3D uses (the
- * frame's), so the sky lines up with the 3D camera per pixel. Outputs linear HDR. */
+/* Each pixel's ray is reconstructed from the inverse of the same view-projection BeginMode3D uses (the frame's, in render
+ * space: a rotation and the projection, so the ray holds no large numbers however far out the camera is), so the sky
+ * lines up with the 3D camera per pixel. Outputs linear HDR. */
 void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     Shader RayShader = GameShader_GetRaylibShader(self->_sky._shader);
@@ -314,9 +314,6 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     float Resolution[2] = { (float)frame->SceneWidth, (float)frame->SceneHeight };
     SetShaderValue(RayShader, self->_sky._locResolution, Resolution, SHADER_UNIFORM_VEC2);
     SetShaderValueMatrix(RayShader, self->_sky._locInvViewProj, frame->InvViewProjection);
-
-    float CameraPos[3] = { frame->Camera->Position.x, frame->Camera->Position.y, frame->Camera->Position.z };
-    SetShaderValue(RayShader, self->_sky._locCameraPos, CameraPos, SHADER_UNIFORM_VEC3);
 
     float SunDir[3] = { frame->SunDirection.x, frame->SunDirection.y, frame->SunDirection.z };
     SetShaderValue(RayShader, self->_sky._locSunDirection, SunDir, SHADER_UNIFORM_VEC3);

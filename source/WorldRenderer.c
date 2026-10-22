@@ -8,7 +8,6 @@
 #include "WorldLightCulling.h"
 #include "NightSky.h"
 #include "Logger.h"
-#include "raylib/raymath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
 
@@ -198,17 +197,16 @@ static void BuildSky(WorldRenderFrame* frame)
     frame->StarsToWorld = WorldEnvironment_GetStarsToWorld(frame->Environment);
 }
 
-/* Fills the frame's world, camera and sky fields and the scene matrices: the projection BeginMode3D builds for
- * the scene target (the camera's vertical FOV, the scene aspect and raylib's cull distances), so every pass that
- * reconstructs positions from depth, or rays from pixels, matches the geometry exactly. */
+/* Fills the frame's world, camera and sky fields and the scene matrices in render space (WorldRenderSpace_BuildView):
+ * the origin (the camera's position), the camera at (0, 0, 0) with its rotation-only view, and the projection
+ * BeginMode3D builds for the scene target (the camera's vertical FOV, the scene aspect and raylib's cull distances), so
+ * every pass that reconstructs positions from depth, or rays from pixels, matches the geometry exactly. */
 static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera* camera, RenderTexture2D target,
     WorldRenderFrame* outFrame)
 {
     *outFrame = (WorldRenderFrame){ 0 };
     outFrame->World = world;
     outFrame->Environment = World_GetEnvironment(world);
-    outFrame->Camera = camera;
-    outFrame->RayCamera = GameCamera_ToRaylibCamera(camera);
     BuildSky(outFrame);
     outFrame->TimeSeconds = (float)self->_renderTimeSeconds;
     outFrame->WindowWidth = target.texture.width;
@@ -219,23 +217,27 @@ static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera
     outFrame->ShadowLightIndex = SIZE_MAX;
 
     double Aspect = (outFrame->SceneHeight > 0) ? ((double)outFrame->SceneWidth / (double)outFrame->SceneHeight) : 1.0;
-    outFrame->View = GetCameraMatrix(outFrame->RayCamera);
-    outFrame->Projection = MatrixPerspective((double)outFrame->RayCamera.fovy * DEG2RAD, Aspect, SCENE_NEAR_PLANE,
-        SCENE_FAR_PLANE);
-    outFrame->InvProjection = MatrixInvert(outFrame->Projection);
-    outFrame->ViewProjection = MatrixMultiply(outFrame->View, outFrame->Projection);
-    outFrame->InvViewProjection = MatrixInvert(outFrame->ViewProjection);
+    WorldRenderView View = WorldRenderSpace_BuildView(camera, Aspect, SCENE_NEAR_PLANE, SCENE_FAR_PLANE);
+    outFrame->Origin = View.Origin;
+    outFrame->RenderCamera = View.Camera;
+    outFrame->ZoomFactor = WorldVisibility_GetZoomFactor(camera->FovY);
+    outFrame->View = View.View;
+    outFrame->Projection = View.Projection;
+    outFrame->InvProjection = View.InvProjection;
+    outFrame->ViewProjection = View.ViewProjection;
+    outFrame->InvViewProjection = View.InvViewProjection;
     outFrame->CameraFrustum = WorldVisibility_ExtractFrustum(outFrame->ViewProjection);
 }
 
 /* Picks every model's LOD for this frame (the camera's distance to it, the camera's zoom, the player's lod_distance_scale)
- * and advances the LOD cross-fades by the frame's real seconds. Before the visibility, which counts the LODs drawn. */
+ * and advances the LOD cross-fades by the frame's real seconds. Before the visibility, which counts the LODs drawn. In
+ * render space: the camera at the origin. */
 static void UpdateLods(WorldRenderer* self, const WorldRenderFrame* frame, double deltaSeconds)
 {
     WorldRenderLodView View =
     {
-        .CameraPosition = frame->Camera->Position,
-        .ZoomFactor = WorldVisibility_GetZoomFactor(frame->Camera->FovY),
+        .CameraPosition = { 0.0f, 0.0f, 0.0f },
+        .ZoomFactor = frame->ZoomFactor,
         .DistanceScale = WorldRendererCommon_ConfigLodDistanceScale(self),
         .DeltaSeconds = (float)deltaSeconds
     };
@@ -257,19 +259,20 @@ static void DecideShadows(WorldRenderer* self, WorldRenderFrame* frame)
         && (frame->ShadowLight != WorldShadowLight_None) && (frame->ShadowFade > 0.0f);
     if (IsPointShadowAvailable(self) && AreShadowsWanted)
     {
-        frame->ShadowLightIndex = WorldRendererShadows_SelectPointLight(self, frame->Camera->Position);
+        frame->ShadowLightIndex = WorldRendererShadows_SelectPointLight(self);
         frame->IsPointShadowActive = (frame->ShadowLightIndex != SIZE_MAX);
     }
 }
 
 /* Builds the frame's visibility from the render cache: what the camera's passes draw (its frustum, the draw distances
  * under the quality setting and the camera's zoom, the opacities) and which casters each shadow pass that runs draws
- * (each cascade's box, the cube's reach). Needs the shadow decisions and WorldRendererShadows_PrepareFrame. */
+ * (each cascade's box, the cube's reach). Needs the shadow decisions and WorldRendererShadows_PrepareFrame. In render
+ * space: the camera at the origin. */
 static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     WorldVisibilityView View =
     {
-        .CameraPosition = frame->Camera->Position,
+        .CameraPosition = { 0.0f, 0.0f, 0.0f },
         .CameraFrustum = frame->CameraFrustum,
         .IsCullingEnabled = self->_isCullingEnabled,
         .IsNearCascadeActive = frame->IsCascadeShadowActive,
@@ -280,7 +283,7 @@ static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
         .PointShadowPosition = frame->PointShadowPosition,
         .PointShadowReach = frame->PointShadowFar,
         .DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self),
-        .ZoomFactor = WorldVisibility_GetZoomFactor(frame->Camera->FovY)
+        .ZoomFactor = frame->ZoomFactor
     };
     return WorldVisibility_Build(&self->_visibility, &self->_cache, &View);
 }
@@ -598,7 +601,9 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
     WorldRenderCache_Reset(&self->_cache);
     self->_modelUser = NewUser;
 
-    Error SyncResult = WorldRenderCache_Sync(&self->_cache, world, self->_assetManager, NewUser, self->_logger);
+    // Any origin will do: this sync resolves the world models, and every render syncs again for its camera.
+    Error SyncResult = WorldRenderCache_Sync(&self->_cache, world, Vector3Double_Zero(), self->_assetManager, NewUser,
+        self->_logger);
     Error RetireResult = AssetManager_RetireUser(self->_assetManager, OldUser);
     if (SyncResult.Code != ErrorCode_Success)
     {
@@ -619,9 +624,10 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
 
     EnsureShaders(self);
 
-    // One walk of the world: resolves new and renamed models (failures logged once) and lists what to draw.
-    Error SyncResult = WorldRenderCache_Sync(&self->_cache, world, self->_assetManager, self->_modelUser,
-        self->_logger);
+    // One walk of the world: resolves new and renamed models (failures logged once) and lists what to draw, in render
+    // space: every position relative to the camera's (the frame's origin).
+    Error SyncResult = WorldRenderCache_Sync(&self->_cache, world, camera->Position, self->_assetManager,
+        self->_modelUser, self->_logger);
     if (SyncResult.Code != ErrorCode_Success)
     {
         return SyncResult;

@@ -11,6 +11,12 @@
  * Private header (source/): what the world renderer draws this frame (frustum culling, draw distances, fades and
  * opacity), as pure maths and per-frame lists, tested headless (tests/WorldVisibilityTests.c).
  *
+ * RENDER SPACE (T32). The lists are built from the render cache's render-space values (RenderCenter, the sprites'
+ * Shape, the lights' RenderPosition: relative to the frame's origin, the camera's position) with the camera's and the
+ * shadows' matrices in that space, so the camera sits at (0, 0, 0) and every distance and test is between small numbers,
+ * however far from the world's origin the camera is. Nothing here depends on that: the maths works in whatever space the
+ * cache's render-space values and the view share.
+ *
  * FRUSTUMS. A view-projection matrix (raymath's order, MatrixMultiply(view, projection); perspective or orthographic)
  * gives six planes (Gribb and Hartmann) with unit normals pointing inward; a sphere is outside when it lies wholly behind
  * one of them. The camera's frustum culls what the scene, G-buffer and crisp passes draw. Shadow casters are never culled
@@ -124,11 +130,13 @@ typedef struct WorldVisibilityFadeStruct
 /**
  * @brief What a build is for: the camera, the shadow passes that run this frame, and the settings.
  *
- * A plain value type the caller fills completely. The frustums of passes that do not run are ignored.
+ * A plain value type the caller fills completely, in the space of the cache's render-space values (render space: the
+ * renderer's camera at (0, 0, 0)). The frustums of passes that do not run are ignored.
  */
 typedef struct WorldVisibilityViewStruct
 {
-    /** @brief The camera's world position (distances are measured from it). */
+    /** @brief The camera's position (distances are measured from it): (0, 0, 0) in render space, for the camera whose
+     *  position the cache was synced for. */
     Vector3 CameraPosition;
     /** @brief The camera's frustum. */
     WorldFrustum CameraFrustum;
@@ -141,7 +149,8 @@ typedef struct WorldVisibilityViewStruct
     /** @brief Whether the far cascade runs, and its box. */
     bool IsFarCascadeActive;
     WorldFrustum FarCascade;
-    /** @brief Whether the cube shadow runs, its light's position and its reach (casters must touch the reach sphere). */
+    /** @brief Whether the cube shadow runs, its light's position (render space: the light's RenderPosition) and its
+     *  reach (casters must touch the reach sphere). */
     bool IsPointShadowActive;
     Vector3 PointShadowPosition;
     float PointShadowReach;
@@ -340,8 +349,9 @@ void WorldVisibility_Deconstruct(WorldVisibility* self);
  *   - a cascade's list when it casts shadows (a model with CastsShadows whose shadow tier routes it to that cascade; a
  *     sprite with WorldRenderSprite_CastsShadows), that cascade runs and its sphere is inside the cascade's box;
  *   - the cube shadow's list when it casts shadows, the cube shadow runs and its sphere touches the light's reach sphere.
- * A model's sphere is its world bounding sphere; a sprite's is the sphere around its pivot that holds its quad in every
- * orientation (WorldRenderSprite.BoundsRadius), so one sphere serves the camera and the lights. With culling off the
+ * A model's sphere is its bounding sphere (around RenderCenter); a sprite's is the sphere around its pivot (Shape.Position)
+ * that holds its quad in every orientation (WorldRenderSprite.BoundsRadius), so one sphere serves the camera and the
+ * lights. Everything is in render space. With culling off the
  * camera's frustum and the cascades' boxes cull nothing. Main thread only; no allocation once the lists have grown.
  * @param self The visibility; must not be NULL.
  * @param cache The render cache, synced for this frame; must not be NULL. Its entries are read, never written.

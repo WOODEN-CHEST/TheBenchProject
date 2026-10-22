@@ -224,7 +224,8 @@ void PlayerController_ApplyCamera(PlayerController* self, World* world, GameCame
         Bob = self->HeadBobAmplitude * self->_headBobWeight * sinf(self->_headBobPhase);
     }
 
-    camera->Position = (Vector3){ Eye.x, Eye.y + Bob, Eye.z };
+    // TODO: T33 gives characters double eyes; this widens the float eye until then.
+    camera->Position = Vector3Double_Create((double)Eye.x, (double)Eye.y + (double)Bob, (double)Eye.z);
     camera->Yaw = Input->LookYaw;
     camera->Pitch = Input->LookPitch;
 }

@@ -15,6 +15,7 @@
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "GameCamera.h"
+#include "GameMath.h"
 #include "WorldRenderer.h"
 #include "Renderer.h"
 #include "Logger.h"
@@ -97,6 +98,13 @@
 /** The vertical field of view the Z key zooms to, in degrees: about 4.4 times closer than the default 60, so models'
  *  draw distances reach 4.4 times as far. */
 #define ZOOMED_FOV_Y 15.0f
+/** The far shift (T32): the F11 key moves the test world, its characters and the camera this far along X and Z (28 km
+ *  from the world's origin) and back, to see that nothing shakes out there (the renderer draws relative to the
+ *  camera). */
+#define FAR_SHIFT_X 20000.0
+#define FAR_SHIFT_Z 20000.0
+/** Metres in a kilometre, for the far shift's log lines. */
+#define METRES_PER_KILOMETRE 1000.0
 /** Default font of the text sample: covers Latvian and Cyrillic. */
 #define TEXT_SAMPLE_FONT_NAME ((const unsigned char*)u8"noto_sans")
 /** Top-left corner of the text sample, in normalized-fitted units. */
@@ -193,6 +201,8 @@ typedef struct WorldTestFrameStruct
     WorldCharacters* _characters;
     /** The test characters: walk mode (F1), the test NPCs (F2) and the player's options (F3, F4, F12); owned. */
     WorldTestCharacters _testCharacters;
+    /** How far the F11 key's far shift has moved the test world, its characters and the camera: zero, or FAR_SHIFT. */
+    Vector3Double _farShift;
 } WorldTestFrame;
 
 
@@ -386,6 +396,21 @@ static void LogCollisionStatus(WorldTestFrame* frame)
         (uint64_t)Stats.ContactCount, (uint64_t)Stats.ContactPairCount, Stats.SolverIterations, Stats.SubstepCount,
         Stats.ResolveCount, (double)(Stats.DeepestOverlap * 1000.0f), (uint64_t)Stats.BlockedCount,
         (uint64_t)Stats.CrushedCount);
+    Error_Deconstruct(&LogResult);
+}
+
+/* The I key's camera line: where the camera is and how far from the world's origin. */
+static void LogCameraStatus(WorldTestFrame* frame)
+{
+    if (frame->_services->Logger == NULL)
+    {
+        return;
+    }
+    Vector3Double Position = frame->_camera.Position;
+    Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+        (const unsigned char*)u8"WorldTest: the camera is at (%.3f, %.3f, %.3f), %.3f km from the world's origin; far "
+        u8"shift %s (F11).", Position.X, Position.Y, Position.Z, Vector3Double_Length(Position) / METRES_PER_KILOMETRE,
+        ((frame->_farShift.X != 0.0) || (frame->_farShift.Z != 0.0)) ? "on" : "off");
     Error_Deconstruct(&LogResult);
 }
 
@@ -693,6 +718,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         LogClockStatus(frame);
         LogCollisionStatus(frame);
         WorldTestCharacters_LogStatus(&frame->_testCharacters);
+        LogCameraStatus(frame);
     }
 
     // T toggles the text sample (checks font drawing, Latvian and Cyrillic glyphs, decorations, inline sprites).
@@ -1111,6 +1137,95 @@ static void HandleDebugCollisionInput(WorldTestFrame* frame, const GameInput* in
 }
 
 
+// Static functions: the far shift (T32).
+/* A point moved by @p offset in double, rounded back to the world's floats. */
+static Vector3 ShiftPoint(Vector3 point, Vector3Double offset)
+{
+    // TODO: T33 gives the world double positions; until then the moved point is rounded here.
+    return GameMath_ToVector3(Vector3Double_Add(GameMath_FromVector3(point), offset));
+}
+
+/* Moves every root object by @p offset (their children follow), the characters too, each as a teleport, so the
+ * collision step does not sweep the move. Everything moves before the collision world syncs again, so no trigger sees
+ * anything leave. Returns how many moved. */
+static size_t ShiftRootObjects(WorldTestFrame* frame, Vector3Double offset)
+{
+    size_t Count = 0U;
+    size_t ObjectCount = World_GetObjectCount(&frame->_world);
+    for (size_t Index = 0U; Index < ObjectCount; Index++)
+    {
+        WorldObject* Object = NULL;
+        Error Result = World_GetObjectByIndex(&frame->_world, Index, &Object);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            continue;
+        }
+        if (WorldObject_GetParent(Object) != NULL)
+        {
+            continue; // children follow their parents
+        }
+        Result = WorldObject_SetPosition(Object, ShiftPoint(WorldObject_GetPosition(Object), offset));
+        Error_Deconstruct(&Result); // cannot fail: the position is finite
+        WorldCollision_Teleport(frame->_collision, WorldObject_GetId(Object));
+        Count++;
+    }
+    return Count;
+}
+
+/* Moves the places the frame's drivers move things around (the desk's slide, the pushing wall's and the crates' homes)
+ * by @p offset, with the objects. */
+static void ShiftHomes(WorldTestFrame* frame, Vector3Double offset)
+{
+    frame->_deskStartX = (float)((double)frame->_deskStartX + offset.X);
+    frame->_pusherHomeX = (float)((double)frame->_pusherHomeX + offset.X);
+    for (size_t Index = 0U; Index < ROW_CRATE_COUNT; Index++)
+    {
+        frame->_rowCrateHomes[Index] = ShiftPoint(frame->_rowCrateHomes[Index], offset);
+    }
+    frame->_doorCrateHome = ShiftPoint(frame->_doorCrateHome, offset);
+}
+
+/* F11: moves every root object (the characters among them) and the camera between the world's origin and FAR_SHIFT
+ * away, so the picture can be compared out there. The objects move as teleports; then the collision world is synced and
+ * every character is placed again where it now stands, through the character system, so its motion starts afresh on its
+ * moved ground. Until T33 the world's positions are floats, rounded to about 2 mm out there (once, so nothing shakes),
+ * and a trip out and back can leave an object up to 1 mm from where it was. */
+static void ToggleFarShift(WorldTestFrame* frame)
+{
+    bool IsShifted = (frame->_farShift.X != 0.0) || (frame->_farShift.Y != 0.0) || (frame->_farShift.Z != 0.0);
+    Vector3Double Target = IsShifted ? Vector3Double_Zero() : Vector3Double_Create(FAR_SHIFT_X, 0.0, FAR_SHIFT_Z);
+    Vector3Double Offset = Vector3Double_Subtract(Target, frame->_farShift);
+    size_t ObjectCount = ShiftRootObjects(frame, Offset);
+    WorldCollision_Sync(frame->_collision);
+    size_t CharacterCount = WorldTestCharacters_Shift(&frame->_testCharacters, Offset);
+    ShiftHomes(frame, Offset);
+    frame->_camera.Position = Vector3Double_Add(frame->_camera.Position, Offset);
+    frame->_farShift = Target;
+    if (frame->_services->Logger != NULL)
+    {
+        Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+            (const unsigned char*)u8"WorldTest: far shift %s: %" PRIu64 u8" root objects and the camera moved by (%.0f, "
+            u8"%.0f, %.0f) m, as teleports, and %" PRIu64 u8" characters placed again on their ground; the camera is %.2f "
+            u8"km from the world's origin%s",
+            IsShifted ? "off" : "on", (uint64_t)ObjectCount, Offset.X, Offset.Y, Offset.Z, (uint64_t)CharacterCount,
+            Vector3Double_Length(frame->_camera.Position) / METRES_PER_KILOMETRE,
+            IsShifted ? "." : " (F11 brings everything back). Until T33 the world's positions are floats, about 2 mm "
+                "apart out there.");
+        Error_Deconstruct(&LogResult);
+    }
+}
+
+/* The far shift's key (T32): F11 moves everything 28 km out and back. */
+static void HandleDebugFarShiftInput(WorldTestFrame* frame, const GameInput* input)
+{
+    if (GameInput_IsKeyPressed(input, GameKey_F11))
+    {
+        ToggleFarShift(frame);
+    }
+}
+
+
 // Static functions: the text sample.
 /* Tears down the sample's layout, document and component factory (in that order: the layout points into the
  * document, and the document returns its tree to the factory). */
@@ -1288,7 +1403,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     if (!IsWalking && ((Movement.x != 0.0f) || (Movement.y != 0.0f) || (Movement.z != 0.0f)))
     {
         Movement = Vector3Scale(Vector3Normalize(Movement), Speed * deltaSeconds);
-        frame->_camera.Position = Vector3Add(frame->_camera.Position, Movement);
+        frame->_camera.Position = Vector3Double_Add(frame->_camera.Position, GameMath_FromVector3(Movement));
     }
 
     // Debug controls (edge-triggered keys are reliable here: input is polled per update tick).
@@ -1298,6 +1413,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     HandleDebugDeskInput(frame, input);
     HandleDebugModelInput(frame, input);
     HandleDebugCollisionInput(frame, input);
+    HandleDebugFarShiftInput(frame, input);
 }
 
 
@@ -1318,12 +1434,11 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, N light pollution, X opacity of the "
             u8"centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the desk, "
             u8"E variants, Z zoom, Q LOD tinting, F7 collider wireframes, F8 contact points, F6 swing the door, F9 the "
-            u8"pushing wall, F10 move the door's crate; F1 walk (the player as a character: WASD, SHIFT run, SPACE jump, "
-            u8"CTRL crouch, E use), F2 the test NPCs (a human, a dog, a pigeon), F3 fly, F4 the player's kind, F12 head "
-            u8"bob; I renderer, "
-            u8"game time and collision status, T text sample, F5 save the world (worlds/test.saved.world.json "
-            u8"and .ghdf); M frees the "
-            u8"mouse for the UI (click the world to capture it again); ESC quits (once the UI lets go of it).");
+            u8"pushing wall, F10 move the door's crate, F11 far shift (everything 28 km out and back); F1 walk (the "
+            u8"player as a character: WASD, SHIFT run, SPACE jump, CTRL crouch, E use), F2 the test NPCs (a human, a dog, "
+            u8"a pigeon), F3 fly, F4 the player's kind, F12 head bob; I renderer, game time, collision and camera status, "
+            u8"T text sample, F5 save the world (worlds/test.saved.world.json and .ghdf); M frees the mouse for the UI "
+            u8"(click the world to capture it again); ESC quits (once the UI lets go of it).");
         Error_Deconstruct(&LogResult);
     }
     return Error_CreateSuccess();
@@ -1636,11 +1751,12 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     Frame->_doorCrateHome = World_TryGetObject(&Frame->_world, Frame->_doorCrateId, &DoorCrate)
         ? WorldObject_GetPosition(DoorCrate) : (Vector3){ 0.0f, 0.0f, 0.0f };
     Frame->_isDoorCrateAside = false;
+    Frame->_farShift = Vector3Double_Zero();
     if (!IsTestWorldLoaded)
     {
         WorldRenderer_SetDebugGridEnabled(Frame->_renderer, true); // an empty world shows the grid, so it is visible
     }
-    Frame->_camera = GameCamera_Create((Vector3){ .x = 0.0f, .y = 2.5f, .z = -7.0f }, GAME_CAMERA_DEFAULT_FOV_Y);
+    Frame->_camera = GameCamera_Create(Vector3Double_Create(0.0, 2.5, -7.0), GAME_CAMERA_DEFAULT_FOV_Y);
     Frame->_camera.Pitch = -0.2f;
     Frame->_cursorCaptured = false;
 

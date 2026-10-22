@@ -39,7 +39,8 @@
  */
 typedef struct WorldCullingLightStruct
 {
-    /** @brief World-space position of the light. */
+    /** @brief Position of the light, in the same space as the spheres it is culled against (the renderer's render space:
+     *  relative to the camera). */
     Vector3 Position;
     /** @brief Reach radius (the light component's range); a light with Range <= 0 is never selected. */
     float Range;
@@ -59,7 +60,7 @@ typedef struct WorldCullingLightStruct
  * descending-influence order. Does not allocate; O(lightCount * min(capacity, WORLD_MAX_FORWARD_LIGHTS)).
  * @param lights The candidate lights; may be NULL only when @p lightCount is 0.
  * @param lightCount Number of entries in @p lights.
- * @param center World-space centre of the object's bounding sphere.
+ * @param center Centre of the object's bounding sphere, in the lights' space.
  * @param radius Radius of the object's bounding sphere; negative values are treated as 0.
  * @param outIndices [out] Receives indices into @p lights, most influential first. Must not be NULL and must have
  *        room for at least @p capacity entries.

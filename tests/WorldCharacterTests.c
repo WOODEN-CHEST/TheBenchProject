@@ -5,6 +5,7 @@
 #include "AssetManager.h"
 #include "CharacterAsset.h"
 #include "GameInput.h"
+#include "GameMath.h"
 #include "PlayerController.h"
 #include "CharacterInternal.h"
 #include "World.h"
@@ -2351,10 +2352,10 @@ static void ThePlayerControllerFillsTheCharactersInput(TestRun* run)
         TEST_CHECK(run, IsNear(Driven->MoveDirection.y, 1.0f, 1e-6f) && !Driven->WantsJump);
 
         // The camera sits at the eyes and looks where the character looks.
-        GameCamera View = GameCamera_Create((Vector3){ 0 }, 60.0f);
+        GameCamera View = GameCamera_Create(Vector3Double_Zero(), 60.0f);
         PlayerController_ApplyCamera(&Controller, &Scene.World, &View, TEST_DELTA);
         Vector3 Eye = WorldCharacterComponent_GetEyePosition(Character);
-        TEST_CHECK(run, Vector3Equals(View.Position, Eye) && (View.Yaw == Driven->LookYaw));
+        TEST_CHECK(run, Vector3Equals(GameMath_ToVector3(View.Position), Eye) && (View.Yaw == Driven->LookYaw));
 
         // Letting go.
         TEST_CHECK_SUCCESS(run, PlayerController_SetCharacter(&Controller, &Scene.World, 0U, 0.0f, 0.0f));

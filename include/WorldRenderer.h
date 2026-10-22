@@ -29,6 +29,11 @@
  * depth/normal-edge outlines; bloom and sun shafts (added in HDR); the tonemap with eye adaptation; and last
  * the crisp overlay, which draws OmitPixelation objects at window resolution over the pixelated image.
  *
+ * RENDER SPACE. Everything is drawn relative to the camera: the camera's position (a double) is each frame's origin,
+ * every position the GPU sees is a position minus that origin, subtracted in double and rounded once, and the view only
+ * turns. So nothing shakes far from the world's origin (the sky's rays come from the rotation alone), and the shadow
+ * cascades, centred on the camera, snap to their texel grids so their edges stand still while the camera moves.
+ *
  * VISIBILITY. Each frame the camera's passes draw only what is in the camera's view; each shadow cascade draws the
  * casters in its own box (a caster behind the camera still shadows what is in view), the cube shadow the casters in its
  * light's reach. Every object has its own draw distance (its world model's or world sprite's, a sprite's kind's when
@@ -245,8 +250,8 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world);
 /**
  * @brief Renders the world from the camera through the full pipeline and blits the result into @p target.
  *
- * Brings the per-object cache up to date (new objects and renamed models are resolved here, failures logged
- * once), draws the 3D world into the internal scene target (recreating the targets if the frame size or the
+ * Brings the per-object cache up to date for the camera's position (new objects and renamed models are resolved here,
+ * failures logged once; every position relative to the camera), draws the 3D world into the internal scene target (recreating the targets if the frame size or the
  * pixelation setting changed), then tonemaps it into @p target (point-upscaled when pixelation is enabled).
  * Opens and closes all its own render passes, so it must NOT be called inside an active render pass.
  * @param self The renderer; must not be NULL.

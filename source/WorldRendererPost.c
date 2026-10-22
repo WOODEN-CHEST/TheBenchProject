@@ -216,13 +216,11 @@ void WorldRendererPost_RenderOutlines(WorldRenderer* self, const WorldRenderFram
     SetShaderValueMatrix(RayShader, self->_outline._locInvProjection, frame->InvProjection);
 
     // Sun direction in VIEW space for the sun-aware crease colouring. The G-buffer stores view-space normals,
-    // so transforming the (world-space) sun direction by the same view matrix's rotation makes the shader's
-    // sun test a plain dot product. Subtract the transformed origin to drop the translation (a direction, not
-    // a point).
+    // so turning the sun's direction by the same view makes the shader's sun test a plain dot product. In render space
+    // the view is a pure rotation (no translation to drop).
     // TODO: on moonlit nights the moon is the key light, so the creases could follow the frame's shadow light; that
     // needs a smooth hand-over (the switch would flip which side of a crease darkens), so they stay on the sun for now.
-    Vector3 ViewSun = Vector3Normalize(Vector3Subtract(Vector3Transform(frame->SunDirection, frame->View),
-        Vector3Transform((Vector3){ 0.0f, 0.0f, 0.0f }, frame->View)));
+    Vector3 ViewSun = Vector3Normalize(Vector3Transform(frame->SunDirection, frame->View));
     float SunDirView[3] = { ViewSun.x, ViewSun.y, ViewSun.z };
     SetShaderValue(RayShader, self->_outline._locSunDirectionView, SunDirView, SHADER_UNIFORM_VEC3);
 
@@ -329,13 +327,12 @@ bool WorldRendererPost_ComputeSunScreenUv(const WorldRenderFrame* frame, Vector2
         return false; // sun set / too low
     }
 
-    // A point far along the direction TO the sun from the camera; project it to clip space (world -> clip is
-    // the inverse of the sky's invViewProj).
-    Matrix ViewProj = MatrixMultiply(frame->View, frame->Projection);
-    Vector3 SunPoint = Vector3Add(frame->Camera->Position, Vector3Scale(SunDirection, 100000.0f));
-    float ClipX = ViewProj.m0*SunPoint.x + ViewProj.m4*SunPoint.y + ViewProj.m8*SunPoint.z + ViewProj.m12;
-    float ClipY = ViewProj.m1*SunPoint.x + ViewProj.m5*SunPoint.y + ViewProj.m9*SunPoint.z + ViewProj.m13;
-    float ClipW = ViewProj.m3*SunPoint.x + ViewProj.m7*SunPoint.y + ViewProj.m11*SunPoint.z + ViewProj.m15;
+    // The sun is a point at infinity: its direction projected with w = 0 (render space -> clip, the inverse of the sky's
+    // invViewProj), so the camera's position plays no part.
+    const Matrix* ViewProj = &frame->ViewProjection;
+    float ClipX = ViewProj->m0*SunDirection.x + ViewProj->m4*SunDirection.y + ViewProj->m8*SunDirection.z;
+    float ClipY = ViewProj->m1*SunDirection.x + ViewProj->m5*SunDirection.y + ViewProj->m9*SunDirection.z;
+    float ClipW = ViewProj->m3*SunDirection.x + ViewProj->m7*SunDirection.y + ViewProj->m11*SunDirection.z;
     if (ClipW <= 1e-4f)
     {
         return false; // sun behind the camera
