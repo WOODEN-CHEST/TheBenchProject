@@ -1,13 +1,19 @@
 {
     "name": "test_human",
     "radius": 0.3,
-    "height": 1.75,
-    "eye_height": 1.62,
+    "height": 1.8,
+    "eye_height": 1.68,
     "mass": 75.0,
-    "walk_speed": 1.4,
-    "run_speed": 3.5,
+    "walk_speed": 2.0,
+    "run_speed": 5.0,
     "crouch_height": 1.15,
     "crouch_eye_height": 1.0,
     "can_jump": true,
-    "jump_speed": 3.2
+    "jump_speed": 5,
+    "run_jump_boost": 1.0,
+
+    "acceleration": 48,
+    "ground_friction": 16,
+
+    "air_acceleration": 4
 }

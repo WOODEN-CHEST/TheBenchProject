@@ -717,10 +717,11 @@ value. Gravity itself is the world's (the environment's `gravity`); a character 
     "can_run": true,                    // [OPTIONAL] default true
     "run_speed": 3.5,                   // [OPTIONAL] default 3.5 m/s
     "acceleration": 8.0,                // [OPTIONAL] default 8 m/s²
-    "deceleration": 10.0,               // [OPTIONAL] default 10 m/s²
+    "ground_friction": 10.0,            // [OPTIONAL] default 10 m/s²
+    "ground_control": "steer",          // [OPTIONAL] default "steer"; or "push"
     "step_height": 0.35,                // [OPTIONAL] default 0.35 m
     "slope_limit": 45,                  // [OPTIONAL] default 45 degrees
-    "ground_snap_distance": 0.35,       // [OPTIONAL] default 0.35 m
+    "ground_snap_distance": 0.0,        // [OPTIONAL] default 0 m: it falls off every step
     "turn_speed": 360,                  // [OPTIONAL] default 360 degrees per second
     "is_turn_instant": false,           // [OPTIONAL] default false
     "can_crouch": true,                 // [OPTIONAL] default true
@@ -733,8 +734,13 @@ value. Gravity itself is the world's (the environment's `gravity`); a character 
     "can_jump_while_crouched": false,   // [OPTIONAL] default false
     "coyote_seconds": 0.1,              // [OPTIONAL] default 0.1
     "jump_buffer_seconds": 0.1,         // [OPTIONAL] default 0.1
+    "walk_jump_boost": 0.0,             // [OPTIONAL] default 0 m/s
+    "run_jump_boost": 0.0,              // [OPTIONAL] default 0 m/s
+    "can_auto_jump": true,              // [OPTIONAL] default true
+    "auto_jump_delay_seconds": 0.25,    // [OPTIONAL] default 0.25
     "gravity_multiplier": 1.0,          // [OPTIONAL] default 1
-    "air_acceleration": 2.0,            // [OPTIONAL] default 2 m/s²
+    "air_acceleration": 0.0,            // [OPTIONAL] default 0 m/s²: no air control
+    "air_drag": 0.004,                  // [OPTIONAL] default 0.004 per metre
     "max_fall_speed": 55.0,             // [OPTIONAL] default 55 m/s
     "can_fly": false,                   // [OPTIONAL] default false
     "fly_speed": 5.0,                   // [OPTIONAL] default 5 m/s
@@ -756,10 +762,12 @@ value. Gravity itself is the world's (the environment's `gravity`); a character 
 | `collides_with` | list of layer names | The collision layers it collides with (`world`, `prop`, `character`, `vehicle`, `dynamic`, `trigger`, `interaction`). |
 | `walk_speed`, `run_speed` | metres per second, 0 to 1000 | Walking and running speeds. |
 | `can_run` | boolean | Whether it may run (asking to run walks otherwise). |
-| `acceleration`, `deceleration` | metres per second squared, above 0, at most 10000 | How fast it speeds up on the ground, and how fast it slows down and turns around. |
+| `acceleration` | metres per second squared, above 0, at most 10000 | How hard its movement keys change its motion on the ground, toward the wished speed in their direction: speeding up, a turn, a turn back. |
+| `ground_friction` | metres per second squared, 0 to 10000 | How fast the ground slows it, a constant deceleration: it stops when the keys let go, and loses the speed they do not drive (above the walking or running speed after a sprint-jump). 0 slides like ice. |
+| `ground_control` | `"steer"` or `"push"` | How the keys act on the ground. `steer` turns the whole motion toward them (turns as quick as a turn back; a wall pressed into at a slant is slid along at the walk's share along it). `push` adds motion along their direction and leaves the rest to friction (Quake's way: a turn sideways slides; against a wall at a slant it slides at full speed, or sticks pushing nearly straight in): momentum, for ice or a heavy animal. Either way the keys never raise the speed past the walking or running speed. |
 | `step_height` | metres, 0 to 100 | The highest step it walks up; anything higher is a wall. |
 | `slope_limit` | degrees, 0 to below 90 | The steepest ground it walks on; steeper ground is a wall it slides down. |
-| `ground_snap_distance` | metres, 0 to 100 | How far down it follows the ground (stairs, slopes) instead of falling. |
+| `ground_snap_distance` | metres, 0 to 100 | How far down it steps without falling, at once (a stair's riser). 0: it falls off every step, stairs too, like Minecraft. Walkable slopes are followed whatever this is. |
 | `turn_speed` | degrees per second, above 0 | How fast its body turns (toward where it moves or looks, as its input asks). |
 | `is_turn_instant` | boolean | Turns its body at once instead. |
 | `can_crouch` | boolean | Whether it may crouch. |
@@ -772,8 +780,12 @@ value. Gravity itself is the world's (the environment's `gravity`); a character 
 | `can_jump_while_crouched` | boolean | Whether a crouched character may jump. |
 | `coyote_seconds` | seconds, 0 to 60 | How long after walking off an edge a jump still starts. |
 | `jump_buffer_seconds` | seconds, 0 to 60 | How long a jump asked for just before landing waits for the ground. |
+| `walk_jump_boost`, `run_jump_boost` | metres per second, 0 to 1000 | The speed a jump adds along the movement keys while walking, and while running (sprint-jumping): never past the walking or running speed plus the boost, so jumps in a row do not add up. |
+| `can_auto_jump` | boolean | Whether a jump held down jumps again whenever it is on the ground. |
+| `auto_jump_delay_seconds` | seconds, 0 to 60 | The least time from one jump to the next that a held jump starts: with jumps longer than it, a held jump hops again as it lands. |
 | `gravity_multiplier` | 0 to 100 | Times the world's gravity while walking and falling (flying has none). |
-| `air_acceleration` | metres per second squared, 0 to 10000 | How fast it steers in the air; 0 none. |
+| `air_acceleration` | metres per second squared, 0 to 10000 | How hard its movement keys push it in the air, along their direction up to the walking or running speed: they steer and brake, never speed it up past that (or past what it has). 0: no air control, only gravity and the air move it. |
+| `air_drag` | per metre, 0 to 100 | How much the air slows it: a deceleration of this times its speed squared. 0.004 gives a person's 50 m/s terminal speed on Earth and is hardly felt at running speed. |
 | `max_fall_speed` | metres per second, above 0 | The fastest it falls. |
 | `can_fly` | boolean | Whether it may fly (birds). |
 | `fly_speed`, `fly_fast_speed` | metres per second, 0 to 1000 | Flying speed, and while running. |
@@ -791,6 +803,7 @@ the rule (`Character "dog": character.radius (Radius) must be finite and in ...`
 `height` (`Character "dog": character: height (0.5 m) must be at least twice the radius (0.3 m): ...`). A placement whose
 overrides break them gets the nearest heights that fit. Unknown keys are rejected, with the keys allowed.
 
-The test characters are in `characters/test_world/`: `test_human` (the defaults, but it may jump), `test_dog` (0.28 m by
+The test characters are in `characters/test_world/`: `test_human` (the owner's tuning: 1.8 m tall, walks at 2 and runs at
+5 m/s, jumps at 5 m/s with a 1 m/s running boost, acceleration 64, friction 16, air control 4), `test_dog` (0.28 m by
 0.7 m, 25 kg, runs at 6 m/s, lies down as its crouch) and `test_pigeon` (0.1 m by 0.3 m, 0.35 kg, flies at 6 m/s and
 cannot crouch).

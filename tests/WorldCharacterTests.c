@@ -307,8 +307,13 @@ static void EveryOverrideResolves(TestRun* run)
                 case PropertyType_EnumSet:
                     Value.Data.EnumSetValue = COLLISION_LAYER_BIT(CollisionLayer_World);
                     break;
+                case PropertyType_Enum:
+                    // The ground control's other value.
+                    Value.Data.EnumValue = (Row->Default.EnumValue == 0) ? 1 : 0;
+                    break;
                 default:
-                    Value.Data.FloatValue = Row->Default.FloatValue * 0.5f;
+                    // Half the default, or a little when the default is 0 (no snap, no boost, no air control).
+                    Value.Data.FloatValue = (Row->Default.FloatValue > 0.0f) ? (Row->Default.FloatValue * 0.5f) : 0.5f;
                     break;
             }
             TEST_CHECK_SUCCESS(run, WorldCharacterComponent_OverrideSetting(Character, (CharacterSetting)Index,
@@ -537,18 +542,24 @@ static void ALowStepIsClimbedAndAHighOneIsNot(TestRun* run)
     TEST_CHECK(run, IsGrounded && (High.x < (1.5f - TEST_RADIUS)) && (High.y < 0.003f));
 }
 
-/* A ramp of @p degrees rising along +X whose top surface leaves the floor at x = 1. */
-static void AddRamp(TestRun* run, CharacterScene* scene, float degrees)
+/* A ramp of @p degrees rising along +X whose top surface starts at x = 1, @p lift above the floor. */
+static void AddRaisedRamp(TestRun* run, CharacterScene* scene, float degrees, float lift)
 {
     float Angle = degrees * DEG2RAD;
     float HalfLength = 3.0f;
     float HalfThickness = 0.1f;
-    // The top surface passes through (1, 0, 0): the box's centre is half its length up the slope from there, and half
-    // its thickness below the surface.
+    // The top surface passes through (1, lift, 0): the box's centre is half its length up the slope from there, and
+    // half its thickness below the surface.
     Vector3 Center = { 1.0f + (HalfLength * cosf(Angle)) + (HalfThickness * sinf(Angle)),
-        (HalfLength * sinf(Angle)) - (HalfThickness * cosf(Angle)), 0.0f };
+        lift + (HalfLength * sinf(Angle)) - (HalfThickness * cosf(Angle)), 0.0f };
     AddBox(run, scene, Center, (Vector3){ HalfLength, HalfThickness, 2.0f }, (Vector3){ 0.0f, 0.0f, Angle },
         TestBoxKind_Static);
+}
+
+/* A ramp of @p degrees rising along +X whose top surface leaves the floor at x = 1. */
+static void AddRamp(TestRun* run, CharacterScene* scene, float degrees)
+{
+    AddRaisedRamp(run, scene, degrees, 0.0f);
 }
 
 static void AGentleSlopeIsWalkedAndASteepOneIsNot(TestRun* run)
@@ -592,13 +603,18 @@ static void AGentleSlopeIsWalkedAndASteepOneIsNot(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
-static void WalkingDownStairsStaysOnTheGround(TestRun* run)
+/* Walks a character down a flight of five 0.18 m steps (a landing 0.9 m high ending at x = 1, then steps 0.3 m deep)
+ * for three seconds, with its step-down distance overridden to @p snap when @p isSnapOverridden: returns its feet, its
+ * ground events and its ticks in the air. */
+static Vector3 WalkDownStairs(TestRun* run, bool isSnapOverridden, float snap, EventCounts* outCounts,
+    uint32_t* outAirborneTicks)
 {
+    Vector3 Feet = { 0 };
+    *outAirborneTicks = 0U;
     CharacterScene Scene;
     if (Scene_Construct(run, &Scene))
     {
         AddFloor(run, &Scene);
-        // A landing 0.9 m high ending at x = 1, then five steps of 0.18 m down, 0.3 m deep.
         AddBox(run, &Scene, (Vector3){ -1.0f, 0.45f, 0.0f }, (Vector3){ 2.0f, 0.45f, 2.0f }, (Vector3){ 0 },
             TestBoxKind_Static);
         for (uint32_t Step = 1U; Step < 5U; Step++)
@@ -608,27 +624,41 @@ static void WalkingDownStairsStaysOnTheGround(TestRun* run)
                 (Vector3){ 0.15f, 0.5f * Top, 2.0f }, (Vector3){ 0 }, TestBoxKind_Static);
         }
         uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.9f, 0.0f });
+        if (isSnapOverridden)
+        {
+            OverrideFloat(run, &Scene, Id, CharacterSetting_GroundSnapDistance, snap);
+        }
         TickFor(&Scene, 10U);
-        EventCounts Counts = { 0 };
-        TakeEvents(&Scene, Id, &Counts);
+        EventCounts Placing = { 0 };
+        TakeEvents(&Scene, Id, &Placing);
         CharacterInput Input = CreateWalk((Vector3){ 1.0f, 0.0f, 0.0f });
         SetInput(run, &Scene, Id, &Input);
-        uint32_t AirborneTicks = 0U;
         for (uint32_t Index = 0U; Index < (3U * TICKS_PER_SECOND); Index++)
         {
             Tick(&Scene);
-            if (!GetState(&Scene, Id)->IsGrounded)
-            {
-                AirborneTicks++;
-            }
+            *outAirborneTicks += GetState(&Scene, Id)->IsGrounded ? 0U : 1U;
         }
-        TakeEvents(&Scene, Id, &Counts);
-        Vector3 Feet = GetFeet(&Scene, Id);
-        TEST_CHECK(run, (Feet.x > 3.0f) && (Feet.y < 0.003f));
-        TEST_CHECK(run, AirborneTicks == 0U);
-        TEST_CHECK(run, Counts.Counts[WorldCharacterEventKind_LeftGround] == 0U);
+        TakeEvents(&Scene, Id, outCounts);
+        Feet = GetFeet(&Scene, Id);
     }
     Scene_Deconstruct(run, &Scene);
+    return Feet;
+}
+
+/* By default a walker falls off every step, stairs too (T13's first tuning); a step-down distance keeps it on them. */
+static void WalkingDownStairsFallsOffEachStepUnlessItStepsDown(TestRun* run)
+{
+    EventCounts Counts = { 0 };
+    uint32_t AirborneTicks = 0U;
+    Vector3 Feet = WalkDownStairs(run, false, 0.0f, &Counts, &AirborneTicks);
+    TEST_CHECK(run, (Feet.x > 3.0f) && (Feet.y < 0.003f));
+    TEST_CHECK(run, (Counts.Counts[WorldCharacterEventKind_LeftGround] == 5U)
+        && (Counts.Counts[WorldCharacterEventKind_Landed] == 5U) && (AirborneTicks > 0U));
+
+    EventCounts Stepping = { 0 };
+    Feet = WalkDownStairs(run, true, 0.2f, &Stepping, &AirborneTicks);
+    TEST_CHECK(run, (Feet.x > 3.0f) && (Feet.y < 0.003f));
+    TEST_CHECK(run, (AirborneTicks == 0U) && (Stepping.Counts[WorldCharacterEventKind_LeftGround] == 0U));
 }
 
 static void SteppingOffALedgeFallsAndLands(TestRun* run)
@@ -651,8 +681,9 @@ static void SteppingOffALedgeFallsAndLands(TestRun* run)
         TEST_CHECK(run, (Feet.x > 1.5f) && (Feet.y < 0.003f) && GetState(&Scene, Id)->IsGrounded);
         TEST_CHECK(run, (Counts.Counts[WorldCharacterEventKind_LeftGround] == 1U)
             && (Counts.Counts[WorldCharacterEventKind_Landed] == 1U));
-        // Most of a metre's fall (the round bottom rolled off the edge first).
-        TEST_CHECK(run, (Counts.LastLandingSpeed > 3.0f) && (Counts.LastLandingSpeed < 4.5f));
+        // A metre's fall (the round bottom rolled off the edge first, its downward speed kept).
+        float Fall = sqrtf(2.0f * WORLD_ENVIRONMENT_DEFAULT_GRAVITY);
+        TEST_CHECK(run, (Counts.LastLandingSpeed > (0.95f * Fall)) && (Counts.LastLandingSpeed < (1.01f * Fall)));
     }
     Scene_Deconstruct(run, &Scene);
 }
@@ -825,6 +856,7 @@ static float MeasureJump(TestRun* run, bool canJump, size_t* outJumps)
         AddFloor(run, &Scene);
         uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f });
         OverrideBool(run, &Scene, Id, CharacterSetting_CanJump, canJump);
+        OverrideBool(run, &Scene, Id, CharacterSetting_CanAutoJump, false);
         TickFor(&Scene, 10U);
         float Start = GetFeet(&Scene, Id).y;
         CharacterInput Input = CharacterInput_CreateDefault();
@@ -838,7 +870,7 @@ static float MeasureJump(TestRun* run, bool canJump, size_t* outJumps)
         EventCounts Counts = { 0 };
         TakeEvents(&Scene, Id, &Counts);
         *outJumps = Counts.Counts[WorldCharacterEventKind_Jumped];
-        // Held, the request does not jump again: one jump, one landing.
+        // Held without auto-jumping, the request does not jump again: one jump, one landing.
         TEST_CHECK(run, Counts.Counts[WorldCharacterEventKind_Landed] == *outJumps);
     }
     Scene_Deconstruct(run, &Scene);
@@ -849,6 +881,7 @@ static void AJumpReachesItsHeightOnlyWhenAllowed(TestRun* run)
 {
     size_t Jumps = 0U;
     float Height = MeasureJump(run, true, &Jumps);
+    // The air's drag takes a few millimetres.
     float Expected = (3.2f * 3.2f) / (2.0f * WORLD_ENVIRONMENT_DEFAULT_GRAVITY);
     TEST_CHECK(run, (Jumps == 1U) && IsNear(Height, Expected, 0.01f));
     Height = MeasureJump(run, false, &Jumps);
@@ -895,8 +928,9 @@ static void LateAndEarlyJumpsCount(TestRun* run)
         AddFloor(run, &Scene);
         uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.5f, 0.0f });
         OverrideBool(run, &Scene, Id, CharacterSetting_CanJump, true);
-        // A 0.5 m fall takes about 0.32 s: press at 0.28 s.
-        TickFor(&Scene, (TICKS_PER_SECOND * 28U) / 100U);
+        // Pressed 0.04 s before the 0.5 m fall ends (within the 0.1 s buffer).
+        float FallSeconds = sqrtf((2.0f * 0.5f) / WORLD_ENVIRONMENT_DEFAULT_GRAVITY);
+        TickFor(&Scene, (uint32_t)((FallSeconds - 0.04f) * (float)TICKS_PER_SECOND));
         EventCounts Counts = { 0 };
         TakeEvents(&Scene, Id, &Counts);
         TEST_CHECK(run, Counts.Counts[WorldCharacterEventKind_Landed] == 0U);
@@ -1128,7 +1162,7 @@ static void DropOntoAPushable(TestRun* run, float drop, bool isOntoAHead)
 }
 
 /* Pushables were left to the collision step: a falling character sank into a crate or a head and was pushed back up
- * tick after tick, landing late or never. (Drops beyond the ground snap distance: nearer, it is placed on it.) */
+ * tick after tick, landing late or never. (Drops beyond the step height: nearer, the placement stands it on it.) */
 static void ACharacterDroppedOntoACrateOrAHeadLandsOnIt(TestRun* run)
 {
     static const float Drops[] = { 0.5f, 1.1f, 3.1f };
@@ -1575,6 +1609,402 @@ static void ARunAlongATurnedWallNeverStallsAndNothingPushesTheWalker(TestRun* ru
 }
 
 
+// Static functions: T13's first tuning (2026-10-22).
+/* The horizontal speed of a character's last move. */
+static float GetGroundSpeed(CharacterScene* scene, uint64_t id)
+{
+    Vector3 Velocity = GetState(scene, id)->Velocity;
+    return sqrtf((Velocity.x * Velocity.x) + (Velocity.z * Velocity.z));
+}
+
+/* Walking off a block 0.3 m high, the round bottom rolled down its edge while the walker stayed on the ground, and the
+ * ground snap (then 0.35 m) dropped it the rest in a tick. It rolls only as far as the contact stays walkable (r (1 -
+ * cos 45 degrees): 8.8 cm), and then falls. */
+static void WalkingOffABlockRollsALittleThenFalls(TestRun* run)
+{
+    for (uint32_t Running = 0U; Running < 2U; Running++)
+    {
+        CharacterScene Scene;
+        if (Scene_Construct(run, &Scene))
+        {
+            AddFloor(run, &Scene);
+            AddBox(run, &Scene, (Vector3){ -1.0f, 0.15f, 0.0f }, (Vector3){ 2.0f, 0.15f, 2.0f }, (Vector3){ 0 },
+                TestBoxKind_Static);
+            uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.3f, 0.0f });
+            TickFor(&Scene, 10U);
+            EventCounts Placing = { 0 };
+            TakeEvents(&Scene, Id, &Placing);
+            CharacterInput Input = CreateWalk((Vector3){ 1.0f, 0.0f, 0.0f });
+            Input.IsRunning = Running == 1U;
+            SetInput(run, &Scene, Id, &Input);
+            float LargestDrop = 0.0f;
+            float LowestOnTheEdge = FLT_MAX;
+            Vector3 Last = GetFeet(&Scene, Id);
+            for (uint32_t Index = 0U; Index < (2U * TICKS_PER_SECOND); Index++)
+            {
+                Tick(&Scene);
+                Vector3 Feet = GetFeet(&Scene, Id);
+                LargestDrop = Math_MaxFloat(LargestDrop, Last.y - Feet.y);
+                if (GetState(&Scene, Id)->IsGrounded && (Feet.x > 1.0f) && (Feet.y > 0.1f))
+                {
+                    LowestOnTheEdge = Math_MinFloat(LowestOnTheEdge, Feet.y);
+                }
+                Last = Feet;
+            }
+            EventCounts Counts = { 0 };
+            TakeEvents(&Scene, Id, &Counts);
+            float Roll = TEST_RADIUS * (1.0f - cosf(0.25f * PI));
+            TEST_CHECK(run, LowestOnTheEdge >= (0.3f - Roll - 0.003f));
+            // No drop of more than a centimetre in a tick: the roll and the fall, never a snap.
+            TEST_CHECK(run, LargestDrop < 0.01f);
+            TEST_CHECK(run, (Counts.Counts[WorldCharacterEventKind_LeftGround] == 1U)
+                && (Counts.Counts[WorldCharacterEventKind_Landed] == 1U) && (Last.y < 0.003f));
+        }
+        Scene_Deconstruct(run, &Scene);
+    }
+}
+
+/* Running off a ledge higher than the step height, the walker kept the downward speed of its roll over the edge, as
+ * fast as it ran: it dived. A fall from the top of the edge sets the most it keeps, so a metre's drop lands at a
+ * metre's fall. */
+static void RunningOffALedgeLandsAsFromItsTop(TestRun* run)
+{
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        AddBox(run, &Scene, (Vector3){ -1.0f, 0.5f, 0.0f }, (Vector3){ 2.0f, 0.5f, 2.0f }, (Vector3){ 0 },
+            TestBoxKind_Static);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ -2.5f, 1.0f, 0.0f });
+        TickFor(&Scene, 10U);
+        EventCounts Counts = { 0 };
+        TakeEvents(&Scene, Id, &Counts);
+        CharacterInput Input = CreateWalk((Vector3){ 1.0f, 0.0f, 0.0f });
+        Input.IsRunning = true;
+        SetInput(run, &Scene, Id, &Input);
+        TickFor(&Scene, 2U * TICKS_PER_SECOND);
+        TakeEvents(&Scene, Id, &Counts);
+        float Fall = sqrtf(2.0f * WORLD_ENVIRONMENT_DEFAULT_GRAVITY);
+        TEST_CHECK(run, (Counts.Counts[WorldCharacterEventKind_Landed] == 1U)
+            && (Counts.LastLandingSpeed > (0.97f * Fall)) && (Counts.LastLandingSpeed < (1.01f * Fall)));
+    }
+    Scene_Deconstruct(run, &Scene);
+}
+
+/* Running down a ramp that ends in the air, the walker keeps falling at about the ramp's rate (it does not stop to
+ * fall from rest, nor dive at the rate of its roll over the ramp's end). */
+static void RunningOffARampsEndKeepsItsDescent(TestRun* run)
+{
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        AddRaisedRamp(run, &Scene, 30.0f, 2.0f);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 4.0f, 2.0f + (3.0f * tanf(30.0f * DEG2RAD)) + 0.05f,
+            0.0f });
+        TickFor(&Scene, 10U);
+        TEST_CHECK(run, GetState(&Scene, Id)->IsGrounded);
+        CharacterInput Input = CreateWalk((Vector3){ -1.0f, 0.0f, 0.0f });
+        Input.IsRunning = true;
+        SetInput(run, &Scene, Id, &Input);
+        for (uint32_t Index = 0U; (Index < (3U * TICKS_PER_SECOND)) && GetState(&Scene, Id)->IsGrounded; Index++)
+        {
+            Tick(&Scene);
+        }
+        // Its first move in the air (the tick it left still rolled over the ramp's end). The ramp's descent at a run is
+        // 3.5 tan 30 degrees, about 2 m/s.
+        Tick(&Scene);
+        float Descent = -GetState(&Scene, Id)->Velocity.y;
+        float Ramp = CharacterSettings_CreateDefault().RunSpeed * tanf(30.0f * DEG2RAD);
+        TEST_CHECK(run, !GetState(&Scene, Id)->IsGrounded && (Descent > (0.9f * Ramp)) && (Descent < (1.4f * Ramp)));
+    }
+    Scene_Deconstruct(run, &Scene);
+}
+
+/* Holding jump, a character hops again as soon as it is back on the ground, but never sooner than the auto-jump delay
+ * after its last jump. */
+static void AHeldJumpJumpsAgainOnceTheDelayHasPassed(TestRun* run)
+{
+    static const float Delays[] = { 0.25f, 1.0f };
+    float Hop = (2.0f * CharacterSettings_CreateDefault().JumpSpeed) / WORLD_ENVIRONMENT_DEFAULT_GRAVITY;
+    for (size_t Delay = 0U; Delay < (sizeof(Delays) / sizeof(Delays[0])); Delay++)
+    {
+        CharacterScene Scene;
+        if (Scene_Construct(run, &Scene))
+        {
+            AddFloor(run, &Scene);
+            uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f });
+            OverrideBool(run, &Scene, Id, CharacterSetting_CanJump, true);
+            OverrideFloat(run, &Scene, Id, CharacterSetting_AutoJumpDelaySeconds, Delays[Delay]);
+            TickFor(&Scene, 10U);
+            WorldCharacters_ClearEvents(Scene.Characters);
+            CharacterInput Input = CharacterInput_CreateDefault();
+            Input.WantsJump = true;
+            SetInput(run, &Scene, Id, &Input);
+            uint64_t JumpTicks[16];
+            size_t JumpCount = 0U;
+            for (uint32_t Index = 0U; Index < (3U * TICKS_PER_SECOND); Index++)
+            {
+                Tick(&Scene);
+                size_t Count = 0U;
+                const WorldCharacterEvent* Events = WorldCharacters_GetEvents(Scene.Characters, &Count);
+                for (size_t Event = 0U; Event < Count; Event++)
+                {
+                    if ((Events[Event].Kind == WorldCharacterEventKind_Jumped) && (JumpCount < 16U))
+                    {
+                        JumpTicks[JumpCount++] = Events[Event].Tick;
+                    }
+                }
+                WorldCharacters_ClearEvents(Scene.Characters);
+            }
+            // A hop lands, and the next jump waits for the delay when the hop was shorter (a tick or two of rounding).
+            float Expected = Math_MaxFloat(Hop, Delays[Delay]) * (float)TICKS_PER_SECOND;
+            TEST_CHECK(run, JumpCount >= 3U);
+            for (size_t Jump = 1U; Jump < JumpCount; Jump++)
+            {
+                TEST_CHECK(run, IsNear((float)(JumpTicks[Jump] - JumpTicks[Jump - 1U]), Expected, 3.0f));
+            }
+        }
+        Scene_Deconstruct(run, &Scene);
+    }
+}
+
+/* A sprint-jump adds the running jump boost along the keys, up to the running speed plus the boost: jumps in a row do
+ * not add up. Without a boost (the default) a jump keeps the speed it had. */
+static void ASprintJumpAddsItsBoostWithoutAddingUp(TestRun* run)
+{
+    for (uint32_t Boosted = 0U; Boosted < 2U; Boosted++)
+    {
+        CharacterScene Scene;
+        if (Scene_Construct(run, &Scene))
+        {
+            AddFloor(run, &Scene);
+            uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f });
+            OverrideBool(run, &Scene, Id, CharacterSetting_CanJump, true);
+            if (Boosted == 1U)
+            {
+                OverrideFloat(run, &Scene, Id, CharacterSetting_RunJumpBoost, 1.0f);
+            }
+            CharacterInput Input = CreateWalk((Vector3){ 1.0f, 0.0f, 0.0f });
+            Input.IsRunning = true;
+            SetInput(run, &Scene, Id, &Input);
+            TickFor(&Scene, TICKS_PER_SECOND);
+            Input.WantsJump = true;
+            SetInput(run, &Scene, Id, &Input);
+            float Fastest = 0.0f;
+            for (uint32_t Index = 0U; Index < (4U * TICKS_PER_SECOND); Index++)
+            {
+                Tick(&Scene);
+                Fastest = Math_MaxFloat(Fastest, GetGroundSpeed(&Scene, Id));
+            }
+            float Run = CharacterSettings_CreateDefault().RunSpeed;
+            TEST_CHECK(run, IsNear(Fastest, Run + ((Boosted == 1U) ? 1.0f : 0.0f), 0.02f));
+        }
+        Scene_Deconstruct(run, &Scene);
+    }
+}
+
+/* Jumps a character running at full speed along +X, then holds @p keys (nothing, along -X or along +Z) in the air;
+ * returns its velocity across the ground after @p seconds in the air, and the fastest it went there. */
+static Vector3 SteerInTheAir(TestRun* run, float airAcceleration, Vector3 keys, bool isRunning, float seconds,
+    float* outFastest)
+{
+    Vector3 Velocity = { 0 };
+    *outFastest = 0.0f;
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f });
+        OverrideBool(run, &Scene, Id, CharacterSetting_CanJump, true);
+        OverrideFloat(run, &Scene, Id, CharacterSetting_JumpSpeed, 6.0f);
+        OverrideFloat(run, &Scene, Id, CharacterSetting_AirAcceleration, airAcceleration);
+        CharacterInput Input = CreateWalk((Vector3){ isRunning ? 1.0f : 0.0f, 0.0f, 0.0f });
+        Input.IsRunning = isRunning;
+        SetInput(run, &Scene, Id, &Input);
+        TickFor(&Scene, TICKS_PER_SECOND);
+        Input.WantsJump = true;
+        SetInput(run, &Scene, Id, &Input);
+        Tick(&Scene);
+        Input = CreateWalk(keys);
+        Input.IsRunning = isRunning;
+        SetInput(run, &Scene, Id, &Input);
+        for (uint32_t Index = 0U; Index < (uint32_t)(seconds * (float)TICKS_PER_SECOND); Index++)
+        {
+            Tick(&Scene);
+            *outFastest = Math_MaxFloat(*outFastest, GetGroundSpeed(&Scene, Id));
+        }
+        TEST_CHECK(run, !GetState(&Scene, Id)->IsGrounded);
+        Velocity = GetState(&Scene, Id)->Velocity;
+        Velocity.y = 0.0f;
+    }
+    Scene_Deconstruct(run, &Scene);
+    return Velocity;
+}
+
+/* In the air the keys did all a walker's acceleration did, braking it toward a standstill when let go. Now, by
+ * default, they do nothing; with air control they push along their direction up to the wished speed, steering and
+ * braking but never raising the speed across the ground past it (or past what it had). */
+static void TheAirKeysSteerAndBrakeButNeverSpeedUp(TestRun* run)
+{
+    float Run = CharacterSettings_CreateDefault().RunSpeed;
+    float Walk = CharacterSettings_CreateDefault().WalkSpeed;
+    float Fastest = 0.0f;
+    // Let go in the air, without air control: the run carries on (the air's drag, on a jump's 7 m/s, takes 5 cm/s).
+    Vector3 Velocity = SteerInTheAir(run, 0.0f, (Vector3){ 0 }, true, 0.5f, &Fastest);
+    TEST_CHECK(run, (Velocity.x > (Run - 0.1f)) && (Velocity.x <= Run));
+    // From a standing jump, forward: it speeds up at the air acceleration, to the walking speed and no further.
+    Velocity = SteerInTheAir(run, 4.0f, (Vector3){ 1.0f, 0.0f, 0.0f }, false, 0.25f, &Fastest);
+    TEST_CHECK(run, IsNear(Velocity.x, 1.0f, 0.02f));
+    Velocity = SteerInTheAir(run, 4.0f, (Vector3){ 1.0f, 0.0f, 0.0f }, false, 0.7f, &Fastest);
+    TEST_CHECK(run, IsNear(Velocity.x, Walk, 0.01f) && (Fastest <= (Walk + 1e-3f)));
+    // Sideways at a run: it turns toward the keys, no faster.
+    Velocity = SteerInTheAir(run, 4.0f, (Vector3){ 0.0f, 0.0f, 1.0f }, true, 0.5f, &Fastest);
+    TEST_CHECK(run, (Velocity.z > 1.0f) && (Velocity.x < (Run - 0.1f)) && (Fastest <= (Run + 1e-3f)));
+    // Back: it brakes at the air acceleration.
+    Velocity = SteerInTheAir(run, 4.0f, (Vector3){ -1.0f, 0.0f, 0.0f }, true, 0.25f, &Fastest);
+    TEST_CHECK(run, IsNear(Velocity.x, Run - 1.0f, 0.03f));
+}
+
+/* A long fall slows to the speed where the air's drag (the drag times the speed squared) matches gravity. */
+static void AFallReachesTheAirsTerminalSpeed(TestRun* run)
+{
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 500.0f, 0.0f });
+        OverrideFloat(run, &Scene, Id, CharacterSetting_AirDrag, 0.05f);
+        TickFor(&Scene, 6U * TICKS_PER_SECOND);
+        float Terminal = sqrtf(WORLD_ENVIRONMENT_DEFAULT_GRAVITY / 0.05f);
+        TEST_CHECK(run, !GetState(&Scene, Id)->IsGrounded
+            && IsNear(-GetState(&Scene, Id)->Velocity.y, Terminal, 0.01f * Terminal));
+    }
+    Scene_Deconstruct(run, &Scene);
+}
+
+/* Walks a character with ground control @p control (acceleration 64, friction 16) diagonally into a wall along Z for
+ * two seconds; returns its speed along the wall. */
+static float SlideAlongAWall(TestRun* run, CharacterGroundControl control)
+{
+    float Speed = 0.0f;
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        AddBox(run, &Scene, (Vector3){ 1.1f, 1.0f, 0.0f }, (Vector3){ 0.1f, 1.0f, 10.0f }, (Vector3){ 0 },
+            TestBoxKind_Static);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f });
+        Override(run, &Scene, Id, CharacterSetting_GroundControl, PropertyValue_FromEnum((int32_t)control));
+        OverrideFloat(run, &Scene, Id, CharacterSetting_Acceleration, 64.0f);
+        OverrideFloat(run, &Scene, Id, CharacterSetting_GroundFriction, 16.0f);
+        CharacterInput Input = CreateWalk(Vector3Normalize((Vector3){ 1.0f, 0.0f, 1.0f }));
+        SetInput(run, &Scene, Id, &Input);
+        TickFor(&Scene, 2U * TICKS_PER_SECOND);
+        Speed = GetState(&Scene, Id)->Velocity.z;
+    }
+    Scene_Deconstruct(run, &Scene);
+    return Speed;
+}
+
+/* Pressed diagonally into a wall, a walker slides along it: steering at the walk's share along the wall (cos 45
+ * degrees), pushing at the walking speed, never past it (without the cap, the walking speed over cos 45). */
+static void BothGroundControlsSlideAlongAWallNoFasterThanTheyWalk(TestRun* run)
+{
+    float Walk = CharacterSettings_CreateDefault().WalkSpeed;
+    TEST_CHECK(run, IsNear(SlideAlongAWall(run, CharacterGroundControl_Steer), 0.70710678f * Walk, 0.01f));
+    float Pushed = SlideAlongAWall(run, CharacterGroundControl_Push);
+    TEST_CHECK(run, (Pushed > (0.95f * Walk)) && (Pushed <= (Walk + 1e-3f)));
+}
+
+/* Runs a character with ground control @p control (acceleration 64, friction 16) along +X, then holds the keys along
+ * +Z for @p seconds; returns its velocity. */
+static Vector3 TurnAtARun(TestRun* run, CharacterGroundControl control, float seconds)
+{
+    Vector3 Velocity = { 0 };
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f });
+        Override(run, &Scene, Id, CharacterSetting_GroundControl, PropertyValue_FromEnum((int32_t)control));
+        OverrideFloat(run, &Scene, Id, CharacterSetting_Acceleration, 64.0f);
+        OverrideFloat(run, &Scene, Id, CharacterSetting_GroundFriction, 16.0f);
+        CharacterInput Input = CreateWalk((Vector3){ 1.0f, 0.0f, 0.0f });
+        Input.IsRunning = true;
+        SetInput(run, &Scene, Id, &Input);
+        TickFor(&Scene, TICKS_PER_SECOND);
+        Input.MoveDirection = (Vector3){ 0.0f, 0.0f, 1.0f };
+        SetInput(run, &Scene, Id, &Input);
+        TickFor(&Scene, (uint32_t)(seconds * (float)TICKS_PER_SECOND));
+        Velocity = GetState(&Scene, Id)->Velocity;
+    }
+    Scene_Deconstruct(run, &Scene);
+    return Velocity;
+}
+
+/* A quarter turn at a run: steering takes the old motion at the acceleration, pushing leaves more of it to friction
+ * (it slides wider); either has turned within a fifth of a second. Letting go, friction stops a run in its own time. */
+static void SteeringTurnsQuickerThanPushingAndFrictionStops(TestRun* run)
+{
+    float Run = CharacterSettings_CreateDefault().RunSpeed;
+    Vector3 Steered = TurnAtARun(run, CharacterGroundControl_Steer, 0.05f);
+    Vector3 Pushed = TurnAtARun(run, CharacterGroundControl_Push, 0.05f);
+    TEST_CHECK(run, Steered.x < Pushed.x);
+    Steered = TurnAtARun(run, CharacterGroundControl_Steer, 0.2f);
+    Pushed = TurnAtARun(run, CharacterGroundControl_Push, 0.2f);
+    TEST_CHECK(run, (fabsf(Steered.x) < 0.01f) && IsNear(Steered.z, Run, 0.01f));
+    TEST_CHECK(run, (fabsf(Pushed.x) < (0.05f * Run)) && (Pushed.z > (0.95f * Run)));
+
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f });
+        OverrideFloat(run, &Scene, Id, CharacterSetting_GroundFriction, 16.0f);
+        CharacterInput Input = CreateWalk((Vector3){ 1.0f, 0.0f, 0.0f });
+        Input.IsRunning = true;
+        SetInput(run, &Scene, Id, &Input);
+        TickFor(&Scene, TICKS_PER_SECOND);
+        Input = CharacterInput_CreateDefault();
+        SetInput(run, &Scene, Id, &Input);
+        // A run slowed at 16 m/s squared stops in run / 16 seconds.
+        uint32_t Stopping = (uint32_t)((Run / 16.0f) * (float)TICKS_PER_SECOND);
+        TickFor(&Scene, Stopping - 2U);
+        TEST_CHECK(run, GetGroundSpeed(&Scene, Id) > 0.0f);
+        TickFor(&Scene, 4U);
+        TEST_CHECK(run, GetGroundSpeed(&Scene, Id) == 0.0f);
+    }
+    Scene_Deconstruct(run, &Scene);
+}
+
+/* The eyes go down fast at first and slow as they near the crouched height, there after the crouch time (a linear ease
+ * looked mechanical). */
+static void TheEyesEaseIntoACrouch(TestRun* run)
+{
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f });
+        TickFor(&Scene, 10U);
+        CharacterInput Input = CharacterInput_CreateDefault();
+        Input.WantsCrouch = true;
+        SetInput(run, &Scene, Id, &Input);
+        // Half the crouch time leaves a tenth of the way (a linear ease, half).
+        TickFor(&Scene, TICKS_PER_SECOND / 10U);
+        TEST_CHECK(run, IsNear(GetState(&Scene, Id)->CrouchAmount, 0.9f, 0.01f));
+        // There at the crouch time (0.2 s, 96 ticks), give or take a tick of rounding.
+        TickFor(&Scene, (TICKS_PER_SECOND / 10U) - 2U);
+        TEST_CHECK(run, GetState(&Scene, Id)->CrouchAmount < 1.0f);
+        TickFor(&Scene, 4U);
+        TEST_CHECK(run, (GetState(&Scene, Id)->CrouchAmount == 1.0f)
+            && (GetState(&Scene, Id)->EyeHeight == CharacterSettings_CreateDefault().CrouchEyeHeight));
+    }
+    Scene_Deconstruct(run, &Scene);
+}
+
+
 // Static functions: looking and using.
 static void TheLookRayFindsTheNearestThingAndUsesIt(TestRun* run)
 {
@@ -2014,7 +2444,8 @@ void WorldCharacterTests_Run(TestRun* run)
         { "an_inside_corner_stops_without_jitter", AnInsideCornerStopsWithoutJitter },
         { "a_low_step_is_climbed_and_a_high_one_is_not", ALowStepIsClimbedAndAHighOneIsNot },
         { "a_gentle_slope_is_walked_and_a_steep_one_is_not", AGentleSlopeIsWalkedAndASteepOneIsNot },
-        { "walking_down_stairs_stays_on_the_ground", WalkingDownStairsStaysOnTheGround },
+        { "walking_down_stairs_falls_off_each_step_unless_it_steps_down",
+            WalkingDownStairsFallsOffEachStepUnlessItStepsDown },
         { "stepping_off_a_ledge_falls_and_lands", SteppingOffALedgeFallsAndLands },
         { "a_moving_platform_carries_a_character", AMovingPlatformCarriesACharacter },
         { "a_turning_platform_turns_the_character", ATurningPlatformTurnsTheCharacter },
@@ -2051,6 +2482,17 @@ void WorldCharacterTests_Run(TestRun* run)
         { "the_character_let_go_of_stops_walking", TheCharacterLetGoOfStopsWalking },
         { "a_run_along_a_turned_wall_never_stalls_and_nothing_pushes_the_walker",
             ARunAlongATurnedWallNeverStallsAndNothingPushesTheWalker },
+        { "walking_off_a_block_rolls_a_little_then_falls", WalkingOffABlockRollsALittleThenFalls },
+        { "running_off_a_ledge_lands_as_from_its_top", RunningOffALedgeLandsAsFromItsTop },
+        { "running_off_a_ramps_end_keeps_its_descent", RunningOffARampsEndKeepsItsDescent },
+        { "a_held_jump_jumps_again_once_the_delay_has_passed", AHeldJumpJumpsAgainOnceTheDelayHasPassed },
+        { "a_sprint_jump_adds_its_boost_without_adding_up", ASprintJumpAddsItsBoostWithoutAddingUp },
+        { "the_air_keys_steer_and_brake_but_never_speed_up", TheAirKeysSteerAndBrakeButNeverSpeedUp },
+        { "a_fall_reaches_the_airs_terminal_speed", AFallReachesTheAirsTerminalSpeed },
+        { "both_ground_controls_slide_along_a_wall_no_faster_than_they_walk",
+            BothGroundControlsSlideAlongAWallNoFasterThanTheyWalk },
+        { "steering_turns_quicker_than_pushing_and_friction_stops", SteeringTurnsQuickerThanPushingAndFrictionStops },
+        { "the_eyes_ease_into_a_crouch", TheEyesEaseIntoACrouch },
     };
     TestRun_RunSuite(run, "WorldCharacter", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

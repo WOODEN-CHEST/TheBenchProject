@@ -11,10 +11,13 @@
  * (WorldCharacterMotion.c), used by the system's update (WorldCharacters.c). Positions are the capsule's FEET (the
  * bottom of its bottom cap); the capsule stands upright above them.
  *
- * SUPPORT. What a walking capsule stands on: a contact whose normal is walkable (within the slope limit), or the edge
- * of something walkable under its round bottom (a step's edge, a ledge): the contact's own normal is then steep, so a
- * short ray down just inside the contact looks at the face the edge belongs to. Standing on an edge is how the round
- * bottom rolls over a step's edge while climbing it, and off a ledge or a stair while going down.
+ * SUPPORT. What a walking capsule stands on: a contact whose normal is walkable (within the slope limit), or, while it
+ * climbs a step, the step's edge under its round bottom: the contact's own normal is then steep, so a short ray down
+ * just inside the contact looks at the face the edge belongs to. Standing on such an edge is how the round bottom
+ * rolls over a step's edge after a step up lands on it. Only a climb does: going off a ledge or down a stair, the round
+ * bottom rolls over the edge only as far as the contact stays walkable (a human's 0.3 m radius and 45 degree slope
+ * limit sink it 8.8 cm), and then the walker falls (T13's first tuning: rolling on down the edge kept a walker on the
+ * ground while it sank most of its radius, and the ground snap then dropped it the rest in a tick).
  *
  * STEPS. A walker's ground is also the plane its moves are measured from: an edge (a contact that is not on a face)
  * higher than the step height above that plane, measured straight up, is a wall to the slide and no support to the
@@ -106,6 +109,9 @@ typedef struct CharacterSupportStruct
     Vector3 Normal;
     /** The contact point. */
     Vector3 Point;
+    /** Whether it holds the capsule by an edge whose contact is steeper than the slope limit (the face under the edge
+     *  is walkable): a step a step up landed on, until the walker stands on walkable ground (the file comment). */
+    bool IsSteepEdge;
 } CharacterSupport;
 
 /**
@@ -149,9 +155,17 @@ CharacterSupport CharacterSupport_CreateNone(void);
 bool CharacterMotion_Sweep(const CharacterBody* body, Vector3 from, Vector3 to, const WorldCollisionFilter* filter,
     WorldCastHit* outHit);
 
-/** Whether a cast's contact is something to stand on (see the file comment): a walkable contact, or an edge whose face
- *  below is walkable. */
-CharacterSupport CharacterMotion_EvaluateSupport(const CharacterBody* body, const WorldCastHit* hit);
+/** Whether a cast's contact is something to stand on (see the file comment): a walkable contact, or, with
+ *  @p isSteepEdgeAllowed (a step being climbed), an edge whose face below is walkable. */
+CharacterSupport CharacterMotion_EvaluateSupport(const CharacterBody* body, const WorldCastHit* hit,
+    bool isSteepEdgeAllowed);
+
+/** The normal of the face a support's contact belongs to: the walkable face just inside the contact when it holds by
+ *  an edge (the top of a step whose rim the round bottom rolls over), its own normal on a face. */
+Vector3 CharacterMotion_GetFaceNormal(const CharacterBody* body, const CharacterSupport* support);
+
+/** Whether walkable ground lies straight below @p feet within @p distance (a ray down the capsule's axis). */
+bool CharacterMotion_HasGroundBelow(const CharacterBody* body, Vector3 feet, float distance);
 
 /** @p vector without the parts that go into any of @p planes (unit normals): clipped against one plane when that is
  *  enough, along the crease of two, or zero in a corner of three. */
@@ -176,8 +190,9 @@ CharacterMove CharacterMotion_MoveAndSlide(const CharacterBody* body, Vector3 fe
 /**
  * Follows the ground down from @p feet by at most @p distance, sliding off rims, until something supports the capsule.
  * With the @p ground a walker walked on (NULL: placing, landing, a flyer's probe), an edge above the step height is a
- * rim (the file comment). Supported: the new feet and the support are written. Otherwise the outputs are untouched:
- * Unsupported (nothing within reach) or Unsure (a pushable overlapping it from the side hid the ground).
+ * rim (the file comment), and so is a steep edge unless that ground is one (a climb goes on). Supported: the new feet
+ * and the support are written. Otherwise the outputs are untouched: Unsupported (nothing within reach) or Unsure (a
+ * pushable overlapping it from the side hid the ground).
  */
 CharacterGround CharacterMotion_FollowGround(const CharacterBody* body, Vector3 feet, float distance,
     const CharacterSupport* ground, Vector3* outFeet, CharacterSupport* outSupport);

@@ -21,6 +21,14 @@
 #define CHARACTER_FACING_MIN_SPEED 0.05f
 /** A push (the collision step moving the character) shorter than this is rounding, metres. */
 #define CHARACTER_PUSH_EPSILON 1e-5f
+/** Movement keys pushed less far than this are let go (no direction to push along). */
+#define CHARACTER_MIN_WISH 1e-6f
+/** The steepest drop per metre across the ground that a walker's ground follow reaches down for: the tangent of its
+ *  slope limit, but at most this (about 76 degrees; a limit near 90 would let it drop far in a tick). */
+#define CHARACTER_MAX_FOLLOW_SLOPE 4.0f
+/** The eyes ease toward the stance's eye height leaving this share of the way after the crouch time, and are there
+ *  once that close. */
+#define CHARACTER_EYE_EASE_REMAINDER 0.01f
 /** The buffers' first capacities. */
 #define INITIAL_EVENT_CAPACITY ((size_t)16)
 #define INITIAL_ID_CAPACITY ((size_t)8)
@@ -56,6 +64,8 @@ typedef struct CharacterStepStruct
     CharacterBody Body;
     float DeltaSeconds;
     float Gravity;
+    /** The collision step's push since the last update (ReadPush). */
+    Vector3 Push;
 } CharacterStep;
 
 
@@ -90,12 +100,49 @@ static Vector3 MoveTowards(Vector3 current, Vector3 target, float maxStep)
 }
 
 /* Speeds up toward @p wish at @p acceleration, or slows down at @p deceleration when the change works against the
- * velocity (stopping, turning, reversing). */
+ * velocity (stopping, turning, reversing): flying. */
 static Vector3 Approach(Vector3 velocity, Vector3 wish, float acceleration, float deceleration, float deltaSeconds)
 {
     Vector3 Change = Vector3Subtract(wish, velocity);
     float Rate = (Vector3DotProduct(Change, velocity) < 0.0f) ? deceleration : acceleration;
     return MoveTowards(velocity, wish, Rate * deltaSeconds);
+}
+
+/* @p velocity slowed by a constant @p deceleration over the tick, not past a standstill. */
+static Vector3 Decelerate(Vector3 velocity, float deceleration, float deltaSeconds)
+{
+    float Speed = Vector3Length(velocity);
+    float Drop = deceleration * deltaSeconds;
+    if (Speed <= Drop)
+    {
+        return (Vector3){ 0.0f, 0.0f, 0.0f };
+    }
+    return Vector3Scale(velocity, (Speed - Drop) / Speed);
+}
+
+/* @p velocity (across the ground) pushed along @p direction (unit, or zero) at @p acceleration until its part along it
+ * reaches @p wishSpeed (a part against it is pushed back first: a turn back), never raising its speed past the wished
+ * speed or past what it had. A push across the motion turns it rather than adding to it, and a wall pushed into at a
+ * slant, which takes the part into it every move, is slid along no faster (without the cap, as fast as the wished speed
+ * over the cosine of the slant). */
+static Vector3 PushAlong(Vector3 velocity, Vector3 direction, float wishSpeed, float acceleration, float deltaSeconds)
+{
+    float Room = wishSpeed - Vector3DotProduct(velocity, direction);
+    if (Room <= 0.0f)
+    {
+        return velocity;
+    }
+    float Before = Vector3Length(velocity);
+    Vector3 Pushed = Vector3Add(velocity, Vector3Scale(direction, Math_MinFloat(acceleration * deltaSeconds, Room)));
+    float Most = Math_MaxFloat(wishSpeed, Before);
+    float After = Vector3Length(Pushed);
+    return (After > Most) ? Vector3Scale(Pushed, Most / After) : Pushed;
+}
+
+/* The length of @p vector across the ground (its horizontal part). */
+static float GetHorizontalLength(Vector3 vector)
+{
+    return sqrtf((vector.x * vector.x) + (vector.z * vector.z));
 }
 
 static bool AreMatricesEqual(const Matrix* a, const Matrix* b)
@@ -347,29 +394,34 @@ static void WriteTransform(CharacterStep* step, Vector3 feet, float yaw)
 
 
 // Static functions: the update's parts.
-static void SetGround(WorldCharacterState* state, const CharacterSupport* support)
+static void SetGround(WorldCharacterComponent* character, const CharacterSupport* support)
 {
-    state->IsGrounded = true;
-    state->IsTouchingGround = true;
-    state->GroundObjectId = support->ObjectId;
-    state->GroundNormal = support->Normal;
-    state->GroundPoint = support->Point;
-    state->TimeInAir = 0.0f;
+    WorldCharacterState* State = &character->_state;
+    State->IsGrounded = true;
+    State->IsTouchingGround = true;
+    State->GroundObjectId = support->ObjectId;
+    State->GroundNormal = support->Normal;
+    State->GroundPoint = support->Point;
+    State->TimeInAir = 0.0f;
+    character->_runtime._isClimbing = support->IsSteepEdge;
 }
 
-static void ClearGround(WorldCharacterState* state)
+static void ClearGround(WorldCharacterComponent* character)
 {
-    state->IsGrounded = false;
-    state->GroundObjectId = 0U;
-    state->GroundNormal = WorldUp;
-    state->GroundPoint = (Vector3){ 0.0f, 0.0f, 0.0f };
+    WorldCharacterState* State = &character->_state;
+    State->IsGrounded = false;
+    State->GroundObjectId = 0U;
+    State->GroundNormal = WorldUp;
+    State->GroundPoint = (Vector3){ 0.0f, 0.0f, 0.0f };
+    character->_runtime._isClimbing = false;
 }
 
 /* The ground a grounded walker stands on, as the support its moves and steps are measured from. */
-static CharacterSupport GetGround(const WorldCharacterState* state)
+static CharacterSupport GetGround(const WorldCharacterComponent* character)
 {
-    return (CharacterSupport){ .IsSupported = true, .ObjectId = state->GroundObjectId, .Normal = state->GroundNormal,
-        .Point = state->GroundPoint };
+    const WorldCharacterState* State = &character->_state;
+    return (CharacterSupport){ .IsSupported = true, .ObjectId = State->GroundObjectId, .Normal = State->GroundNormal,
+        .Point = State->GroundPoint, .IsSteepEdge = character->_runtime._isClimbing };
 }
 
 /* Leaving the ground (a jump, walking off, taking off): the ground's own velocity is kept, now part of its own. */
@@ -378,34 +430,38 @@ static void LeaveGround(WorldCharacterComponent* character)
     WorldCharacterState* State = &character->_state;
     character->_runtime._velocity = Vector3Add(character->_runtime._velocity, State->GroundVelocity);
     State->GroundVelocity = (Vector3){ 0.0f, 0.0f, 0.0f };
-    ClearGround(State);
+    ClearGround(character);
     State->TimeInAir = 0.0f;
 }
 
-/* The reach of a look for the ground that keeps a character on it: its snap distance, but at least the landing probe's,
- * which reaches past the skin it rests above (a snap distance of 0 still finds the ground it stands on). */
-static float GetGroundReach(const CharacterSettings* settings)
+/* How far down a walker on the ground looks for it after going @p distance metres across it: as far as a slope at its
+ * slope limit drops over that, and the landing probe's reach past the skin it rests above (so a walker standing still
+ * finds the ground it stands on); or its step-down distance, when that is more. A steeper drop it falls down. */
+static float GetGroundReach(const CharacterSettings* settings, float distance)
 {
-    return Math_MaxFloat(settings->GroundSnapDistance, CHARACTER_LANDING_PROBE_DISTANCE);
+    float Slope = Math_MinFloat(tanf(settings->SlopeLimit), CHARACTER_MAX_FOLLOW_SLOPE);
+    return Math_MaxFloat(settings->GroundSnapDistance, (distance * Slope) + CHARACTER_LANDING_PROBE_DISTANCE);
 }
 
-/* A character placed (its first update, a teleport): on the ground found within its reach below, or in the air without a
- * late jump (the coyote time is for walking off edges). */
+/* A character placed (its first update, a teleport): on the ground found within its step height (or its step-down
+ * distance) below, so a placement a little above the floor (a spawn point set high) stands on it at once; otherwise
+ * in the air without a late jump (the coyote time is for walking off edges). */
 static void Settle(CharacterStep* step, Vector3* feet)
 {
     WorldCharacterState* State = &step->Character->_state;
     CharacterSupport Support;
     Vector3 Settled;
     bool IsWalking = State->Mode == CharacterMovementMode_Walking;
-    if (IsWalking && (CharacterMotion_FollowGround(&step->Body, *feet, GetGroundReach(&step->Settings), NULL, &Settled,
-        &Support) == CharacterGround_Supported))
+    float Reach = Math_MaxFloat(GetGroundReach(&step->Settings, 0.0f), step->Settings.StepHeight);
+    if (IsWalking && (CharacterMotion_FollowGround(&step->Body, *feet, Reach, NULL, &Settled, &Support)
+        == CharacterGround_Supported))
     {
         *feet = Settled;
-        SetGround(State, &Support);
+        SetGround(step->Character, &Support);
         step->Character->_runtime._hasJumpedSinceGrounded = false;
         return;
     }
-    ClearGround(State);
+    ClearGround(step->Character);
     State->TimeInAir = 0.0f;
     step->Character->_runtime._hasJumpedSinceGrounded = true;
 }
@@ -420,6 +476,8 @@ static void Start(CharacterStep* step, Vector3* feet)
     State->EyeHeight = step->Settings.EyeHeight;
     State->CrouchAmount = 0.0f;
     step->Body.Height = State->Height;
+    // Long since any jump: a jump held from the start jumps at once.
+    step->Character->_runtime._secondsSinceJump = (float)CHARACTER_MAX_SECONDS;
     Settle(step, feet);
     step->Character->_runtime._isStarted = true;
 }
@@ -455,7 +513,7 @@ static void UpdateMode(CharacterStep* step)
     else if (!WantsToFly && (State->Mode == CharacterMovementMode_Flying))
     {
         State->Mode = CharacterMovementMode_Walking;
-        ClearGround(State);
+        ClearGround(step->Character);
         State->TimeInAir = 0.0f;
         // No late jump out of a flight: the coyote time is for walking off edges.
         step->Character->_runtime._hasJumpedSinceGrounded = true;
@@ -533,7 +591,14 @@ static void UpdateStance(CharacterStep* step, Vector3 feet)
     step->Body.Height = State->Height;
 }
 
-/* The speed a walker wants: crouched, running or walking. */
+/* Whether a walker runs now: asked, allowed and standing. */
+static bool IsRunningNow(const CharacterStep* step)
+{
+    return step->Character->_input.IsRunning && step->Settings.CanRun
+        && (step->Character->_state.Stance != CharacterStance_Crouching);
+}
+
+/* The speed a walker wants with its keys pushed all the way: crouched, running or walking. */
 static float GetWalkingSpeed(const CharacterStep* step)
 {
     const CharacterSettings* Settings = &step->Settings;
@@ -541,7 +606,69 @@ static float GetWalkingSpeed(const CharacterStep* step)
     {
         return Settings->CrouchSpeed;
     }
-    return (step->Character->_input.IsRunning && Settings->CanRun) ? Settings->RunSpeed : Settings->WalkSpeed;
+    return IsRunningNow(step) ? Settings->RunSpeed : Settings->WalkSpeed;
+}
+
+/* The movement keys across the ground: their direction (unit; zero when let go) and how far they are pushed (0 to
+ * 1). */
+static Vector3 GetWishDirection(const CharacterInput* input, float* outAmount)
+{
+    Vector3 Direction = { input->MoveDirection.x, 0.0f, input->MoveDirection.z };
+    float Length = Vector3Length(Direction);
+    if (!(Length > CHARACTER_MIN_WISH))
+    {
+        *outAmount = 0.0f;
+        return (Vector3){ 0.0f, 0.0f, 0.0f };
+    }
+    *outAmount = Math_MinFloat(Length, 1.0f);
+    return Vector3Scale(Direction, 1.0f / Length);
+}
+
+/* A walker's velocity across the ground with the push control: the ground's friction takes what the keys do not drive
+ * (the motion across their direction or against it, and along it past the wished speed; all of it when they let go),
+ * then the keys push along their direction. A turn back meets both; a turn sideways slides until friction takes the
+ * old motion. */
+// TODO: a wall pressed into at a slant turns the keys' push into motion along it, which this friction takes as
+// undriven: the walker slides at the wished speed or, pushing nearly straight in, sticks. Telling the wall's part
+// apart needs the walls it touches (a sweep along the keys each tick, or the last move's planes kept while it stays
+// against them); steering has no such case and is the default.
+static Vector3 PushOnGround(Vector3 velocity, Vector3 direction, float wishSpeed, const CharacterSettings* settings,
+    float deltaSeconds)
+{
+    float Driven = Math_ClampFloat(Vector3DotProduct(velocity, direction), 0.0f, wishSpeed);
+    Vector3 Undriven = Vector3Subtract(velocity, Vector3Scale(direction, Driven));
+    Undriven = Decelerate(Undriven, settings->GroundFriction, deltaSeconds);
+    Vector3 Slowed = Vector3Add(Vector3Scale(direction, Driven), Undriven);
+    return PushAlong(Slowed, direction, wishSpeed, settings->Acceleration, deltaSeconds);
+}
+
+/* The same with the steer control: the keys turn the whole motion toward their direction at the acceleration; speed
+ * past the wished speed is the friction's to take, and all of it when they let go. */
+static Vector3 SteerOnGround(Vector3 velocity, Vector3 direction, float wishSpeed, const CharacterSettings* settings,
+    float deltaSeconds)
+{
+    if (wishSpeed <= 0.0f)
+    {
+        return Decelerate(velocity, settings->GroundFriction, deltaSeconds);
+    }
+    float Speed = Math_MaxFloat(wishSpeed, Vector3Length(velocity) - (settings->GroundFriction * deltaSeconds));
+    return MoveTowards(velocity, Vector3Scale(direction, Speed), settings->Acceleration * deltaSeconds);
+}
+
+/* A walker's velocity in the air: the keys push along their direction at the air acceleration (none by default), never
+ * raising the speed across the ground past the wished speed or past what it had (they steer and brake); gravity pulls;
+ * the air drags (a deceleration of the drag times the speed squared along the motion, solved over the tick); the fall
+ * is capped. */
+static Vector3 MoveInAir(Vector3 velocity, Vector3 direction, float wishSpeed, const CharacterSettings* settings,
+    float gravity, float deltaSeconds)
+{
+    Vector3 Horizontal = { velocity.x, 0.0f, velocity.z };
+    Horizontal = PushAlong(Horizontal, direction, wishSpeed, settings->AirAcceleration, deltaSeconds);
+    Vector3 Velocity = { Horizontal.x, velocity.y - (gravity * deltaSeconds), Horizontal.z };
+    float Speed = Vector3Length(Velocity);
+    Velocity = Vector3Scale(Velocity, 1.0f / (1.0f + (settings->AirDrag * Speed * deltaSeconds)));
+    Velocity.y = Math_MaxFloat(Velocity.y, -settings->MaxFallSpeed);
+    return Velocity;
 }
 
 /* Whether a jump may start now: allowed, walking, in a stance that may jump, on the ground or within the coyote time
@@ -565,6 +692,39 @@ static bool CanJumpNow(const CharacterStep* step)
     return !step->Character->_runtime._hasJumpedSinceGrounded && (State->TimeInAir <= Settings->CoyoteSeconds);
 }
 
+/* Whether a jump held down asks again: auto-jumping allowed, on the ground, and the delay passed since the last jump
+ * (with jumps longer than the delay, it hops again as it lands). */
+static bool IsAutoJumpDue(const CharacterStep* step)
+{
+    const WorldCharacterComponent* Character = step->Character;
+    return Character->_input.WantsJump && step->Settings.CanAutoJump && Character->_state.IsGrounded
+        && (Character->_runtime._secondsSinceJump >= step->Settings.AutoJumpDelaySeconds);
+}
+
+/* A jump's boost: the running or walking boost, times how far the keys are pushed (@p amount), along their
+ * @p direction; never past the wished speed plus the boost, or the speed it already had, so jumps in a row do not add
+ * up. */
+static void AddJumpBoost(CharacterStep* step, Vector3 direction, float amount)
+{
+    const CharacterSettings* Settings = &step->Settings;
+    float Boost = amount * (IsRunningNow(step) ? Settings->RunJumpBoost : Settings->WalkJumpBoost);
+    if (Boost <= 0.0f)
+    {
+        return;
+    }
+    Vector3* Velocity = &step->Character->_runtime._velocity;
+    Vector3 Horizontal = { Velocity->x, 0.0f, Velocity->z };
+    float Most = Math_MaxFloat((amount * GetWalkingSpeed(step)) + Boost, Vector3Length(Horizontal));
+    Horizontal = Vector3Add(Horizontal, Vector3Scale(direction, Boost));
+    float Speed = Vector3Length(Horizontal);
+    if (Speed > Most)
+    {
+        Horizontal = Vector3Scale(Horizontal, Most / Speed);
+    }
+    Velocity->x = Horizontal.x;
+    Velocity->z = Horizontal.z;
+}
+
 /* The velocity: a walker's on the ground (and its jump) or in the air, or a flyer's. */
 static void UpdateVelocity(CharacterStep* step)
 {
@@ -583,29 +743,34 @@ static void UpdateVelocity(CharacterStep* step)
         return;
     }
 
-    Vector3 WishDirection = { Input->MoveDirection.x, 0.0f, Input->MoveDirection.z };
-    float WishLength = Vector3Length(WishDirection);
-    if (WishLength > 1.0f)
-    {
-        WishDirection = Vector3Scale(WishDirection, 1.0f / WishLength);
-    }
-    Vector3 Wish = Vector3Scale(WishDirection, GetWalkingSpeed(step));
-    Vector3 Horizontal = { Runtime->_velocity.x, 0.0f, Runtime->_velocity.z };
+    float Amount = 0.0f;
+    Vector3 Direction = GetWishDirection(Input, &Amount);
+    float WishSpeed = Amount * GetWalkingSpeed(step);
     if (State->IsGrounded)
     {
-        Horizontal = Approach(Horizontal, Wish, Settings->Acceleration, Settings->Deceleration, Delta);
+        Vector3 Horizontal = { Runtime->_velocity.x, 0.0f, Runtime->_velocity.z };
+        switch (Settings->GroundControl)
+        {
+            case CharacterGroundControl_Push:
+                Horizontal = PushOnGround(Horizontal, Direction, WishSpeed, Settings, Delta);
+                break;
+            case CharacterGroundControl_Steer:
+                Horizontal = SteerOnGround(Horizontal, Direction, WishSpeed, Settings, Delta);
+                break;
+        }
         Runtime->_velocity = Horizontal;
     }
     else
     {
-        Horizontal = MoveTowards(Horizontal, Wish, Settings->AirAcceleration * Delta);
-        float Vertical = Runtime->_velocity.y - (step->Gravity * Settings->GravityMultiplier * Delta);
-        Runtime->_velocity = (Vector3){ Horizontal.x, Math_MaxFloat(Vertical, -Settings->MaxFallSpeed), Horizontal.z };
+        Runtime->_velocity = MoveInAir(Runtime->_velocity, Direction, WishSpeed, Settings,
+            step->Gravity * Settings->GravityMultiplier, Delta);
         State->TimeInAir += Delta;
     }
 
     if (Runtime->_hasJumpRequest && CanJumpNow(step))
     {
+        // The boost first: on the ground it is measured against the walker's own speed, not its ground's.
+        AddJumpBoost(step, Direction, Amount);
         if (State->IsGrounded)
         {
             // From the ground: the jump adds to the ground's own velocity (a rising lift throws it higher).
@@ -619,6 +784,7 @@ static void UpdateVelocity(CharacterStep* step)
         }
         Runtime->_hasJumpRequest = false;
         Runtime->_hasJumpedSinceGrounded = true;
+        Runtime->_secondsSinceJump = 0.0f;
         QueueEvent(step->System, WorldCharacterEventKind_Jumped, step->Id, 0U, 0.0f);
     }
     if (Runtime->_hasJumpRequest)
@@ -631,27 +797,62 @@ static void UpdateVelocity(CharacterStep* step)
     }
 }
 
-/* After a walker's move: on the ground it follows the ground down (stairs, slopes) or leaves it (@p ground: what it
- * walked on); in the air it lands on support while not rising. */
-static void UpdateWalkingGround(CharacterStep* step, Vector3* feet, const CharacterMove* move,
+/* The vertical speed a walker that walked off its @p ground keeps: @p moveSpeed, what its last move went down (or up)
+ * with, as off a slope or down a stair. Off an edge with no walkable ground within its step height below the face it
+ * walked on (a ledge, not a stair), though, it falls no faster than dropping from that face would have made it: its
+ * round bottom rolls down over the rim faster than gravity at a run, and a 5 m/s run off a 1 m ledge would otherwise
+ * dive, landing in half the time a fall takes. */
+static float GetWalkOffSpeed(const CharacterStep* step, const CharacterSupport* ground, Vector3 feet, float moveSpeed)
+{
+    Vector3 Face = CharacterMotion_GetFaceNormal(&step->Body, ground);
+    if (Face.y < 1e-3f)
+    {
+        return moveSpeed;
+    }
+    // How far it went down past where it stood on the face (its bottom cap's centre a radius from the face's plane),
+    // rolling over the face's rim; none on the face itself.
+    float Radius = step->Body.Radius;
+    Vector3 Center = { feet.x, feet.y + Radius, feet.z };
+    float Sink = (Radius - Vector3DotProduct(Face, Vector3Subtract(Center, ground->Point))) / Face.y;
+    if ((Sink <= 0.0f) || CharacterMotion_HasGroundBelow(&step->Body, feet, step->Settings.StepHeight - Sink))
+    {
+        return moveSpeed;
+    }
+    // The face's own rise or fall under the velocity across it, and a drop from it to where the feet are.
+    Vector3 Velocity = step->Character->_runtime._velocity;
+    float FaceSpeed = -((Face.x * Velocity.x) + (Face.z * Velocity.z)) / Face.y;
+    float Gravity = step->Gravity * step->Settings.GravityMultiplier;
+    return Math_MaxFloat(moveSpeed, FaceSpeed - sqrtf(2.0f * Gravity * Sink));
+}
+
+/* After a walker's move from @p start: on the ground it follows the ground down a walkable slope (or within its
+ * step-down distance) or leaves it (@p ground: what it walked on), keeping the vertical speed it moved with
+ * (GetWalkOffSpeed); in the air it lands on support while not rising. */
+static void UpdateWalkingGround(CharacterStep* step, Vector3 start, Vector3* feet, const CharacterMove* move,
     const CharacterSupport* ground, float fallSpeed)
 {
-    WorldCharacterState* State = &step->Character->_state;
+    WorldCharacterComponent* Character = step->Character;
+    WorldCharacterState* State = &Character->_state;
     CharacterSupport Support;
     Vector3 Settled;
     if ((ground != NULL) && State->IsGrounded)
     {
         if (move->HasStepped)
         {
-            SetGround(State, &move->StepSupport);
+            SetGround(Character, &move->StepSupport);
             return;
         }
-        CharacterGround Ground = CharacterMotion_FollowGround(&step->Body, *feet, GetGroundReach(&step->Settings),
-            ground, &Settled, &Support);
+        // How far it went across the ground since the last look: its move and the collision step's push. The ground's
+        // own move this tick comes on top: the collision world still holds the ground where the last collision step
+        // left it, so a rising lift is a tick lower there than its carry put the walker.
+        float Across = GetHorizontalLength(Vector3Subtract(*feet, start)) + GetHorizontalLength(step->Push);
+        float Reach = GetGroundReach(&step->Settings, Across)
+            + (Vector3Length(State->GroundVelocity) * step->DeltaSeconds);
+        CharacterGround Ground = CharacterMotion_FollowGround(&step->Body, *feet, Reach, ground, &Settled, &Support);
         if (Ground == CharacterGround_Supported)
         {
             *feet = Settled;
-            SetGround(State, &Support);
+            SetGround(Character, &Support);
             return;
         }
         if (Ground == CharacterGround_Unsure)
@@ -659,19 +860,21 @@ static void UpdateWalkingGround(CharacterStep* step, Vector3* feet, const Charac
             // A pushable pressing on its side hid the ground: it keeps the ground it had until the step parts them.
             return;
         }
-        LeaveGround(step->Character);
+        float MoveSpeed = (feet->y - start.y) / step->DeltaSeconds;
+        Character->_runtime._velocity.y = GetWalkOffSpeed(step, ground, *feet, MoveSpeed);
+        LeaveGround(Character);
         QueueEvent(step->System, WorldCharacterEventKind_LeftGround, step->Id, 0U, 0.0f);
         return;
     }
 
-    if ((step->Character->_runtime._velocity.y <= 0.0f)
+    if ((Character->_runtime._velocity.y <= 0.0f)
         && (CharacterMotion_FollowGround(&step->Body, *feet, CHARACTER_LANDING_PROBE_DISTANCE, NULL, &Settled, &Support)
             == CharacterGround_Supported))
     {
         *feet = Settled;
-        SetGround(State, &Support);
-        step->Character->_runtime._velocity.y = 0.0f;
-        step->Character->_runtime._hasJumpedSinceGrounded = false;
+        SetGround(Character, &Support);
+        Character->_runtime._velocity.y = 0.0f;
+        Character->_runtime._hasJumpedSinceGrounded = false;
         QueueEvent(step->System, WorldCharacterEventKind_Landed, step->Id, Support.ObjectId, fallSpeed);
     }
 }
@@ -685,18 +888,19 @@ static void Move(CharacterStep* step, Vector3* feet)
     bool IsOnGround = IsWalking && State->IsGrounded;
     float FallSpeed = Math_MaxFloat(0.0f, -Velocity->y);
     Vector3 Displacement = Vector3Scale(*Velocity, step->DeltaSeconds);
-    CharacterSupport Ground = GetGround(State);
+    CharacterSupport Ground = GetGround(step->Character);
     if (IsOnGround)
     {
         Displacement = CharacterMotion_ProjectOnGround(Displacement, State->GroundNormal);
     }
+    Vector3 Start = *feet;
     CharacterMove Moved = CharacterMotion_MoveAndSlide(&step->Body, *feet, Displacement, Velocity,
         IsOnGround ? &Ground : NULL);
     *feet = Moved.Feet;
 
     if (IsWalking)
     {
-        UpdateWalkingGround(step, feet, &Moved, IsOnGround ? &Ground : NULL, FallSpeed);
+        UpdateWalkingGround(step, Start, feet, &Moved, IsOnGround ? &Ground : NULL, FallSpeed);
         return;
     }
     // Flying: no ground, but brains land birds by whether ground is right below.
@@ -744,8 +948,9 @@ static void UpdateFacing(CharacterStep* step)
     State->TurnRate = Turn / step->DeltaSeconds;
 }
 
-/* Eases the eyes toward the stance's eye height over the crouch time. Eyes outside the two heights (the settings
- * changed: another kind of character, a script) move into their range at once. */
+/* Eases the eyes toward the stance's eye height: fast at first, slowing as they near it (each moment they close the
+ * same share of what is left), there after the crouch time from the other height. Eyes outside the two heights (the
+ * settings changed: another kind of character, a script) move into their range at once. */
 static void UpdateEyes(CharacterStep* step)
 {
     WorldCharacterState* State = &step->Character->_state;
@@ -754,17 +959,14 @@ static void UpdateEyes(CharacterStep* step)
     float Span = Settings->EyeHeight - Settings->CrouchEyeHeight;
     State->EyeHeight = Math_ClampFloat(State->EyeHeight, Math_MinFloat(Settings->EyeHeight, Settings->CrouchEyeHeight),
         Math_MaxFloat(Settings->EyeHeight, Settings->CrouchEyeHeight));
-    if (Settings->CrouchTransitionSeconds <= 0.0f)
+    float Eased = Target;
+    if (Settings->CrouchTransitionSeconds > 0.0f)
     {
-        State->EyeHeight = Target;
+        // The rate that leaves the remainder's share of the whole way after the crouch time.
+        float Rate = logf(1.0f / CHARACTER_EYE_EASE_REMAINDER) / Settings->CrouchTransitionSeconds;
+        Eased = Target - ((Target - State->EyeHeight) * expf(-Rate * step->DeltaSeconds));
     }
-    else
-    {
-        float Rate = Math_MaxFloat(fabsf(Span), 1e-3f) / Settings->CrouchTransitionSeconds;
-        float Step = Rate * step->DeltaSeconds;
-        State->EyeHeight = (fabsf(Target - State->EyeHeight) <= Step) ? Target
-            : State->EyeHeight + ((Target > State->EyeHeight) ? Step : -Step);
-    }
+    State->EyeHeight = (fabsf(Target - Eased) <= (CHARACTER_EYE_EASE_REMAINDER * fabsf(Span))) ? Target : Eased;
     if (fabsf(Span) > 1e-5f)
     {
         State->CrouchAmount = Math_ClampFloat((Settings->EyeHeight - State->EyeHeight) / Span, 0.0f, 1.0f);
@@ -838,13 +1040,16 @@ static void UpdateCharacter(WorldCharacters* self, WorldCharacterComponent* char
         Start(&Step, &Feet);
     }
     Vector3 Push = ReadPush(&Step, Feet);
+    Step.Push = Push;
 
-    // The input's presses (a held request acts once).
+    // The input's presses (a held request acts once), and a held jump again on the ground once the auto-jump delay
+    // has passed since the last jump.
+    Runtime->_secondsSinceJump = Math_MinFloat(Runtime->_secondsSinceJump + deltaSeconds, (float)CHARACTER_MAX_SECONDS);
     bool IsJumpPressed = Input->WantsJump && !Runtime->_wasJumpWanted;
     bool IsUsePressed = Input->WantsUse && !Runtime->_wasUseWanted;
     Runtime->_wasJumpWanted = Input->WantsJump;
     Runtime->_wasUseWanted = Input->WantsUse;
-    if (IsJumpPressed)
+    if (IsJumpPressed || IsAutoJumpDue(&Step))
     {
         Runtime->_hasJumpRequest = true;
         Runtime->_jumpRequestSeconds = Step.Settings.JumpBufferSeconds;
@@ -868,7 +1073,7 @@ static void UpdateCharacter(WorldCharacters* self, WorldCharacterComponent* char
     }
     else
     {
-        ClearGround(State);
+        ClearGround(character);
     }
 
     WriteTransform(&Step, Feet, State->FacingYaw);
@@ -958,6 +1163,7 @@ Error WorldCharacters_Teleport(WorldCharacters* self, uint64_t objectId, Vector3
     CharacterSettings_GetBodyHeights(&Step.Settings, &Step.StandingHeight, &Step.CrouchHeight);
     Step.DeltaSeconds = 0.0f;
     Step.Gravity = 0.0f;
+    Step.Push = (Vector3){ 0.0f, 0.0f, 0.0f };
     BuildBody(&Step);
 
     WorldCharacterState* State = &Character->_state;

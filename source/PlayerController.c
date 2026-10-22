@@ -204,6 +204,9 @@ void PlayerController_ApplyCamera(PlayerController* self, World* world, GameCame
     const WorldCharacterState* State = WorldCharacterComponent_GetState(Character);
     Vector3 Eye = WorldCharacterComponent_GetEyePosition(Character);
 
+    // TODO: rework the head bob (the owner, 2026-10-22: it reads badly). It is a plain up-and-down sine a step long,
+    // one amplitude at every speed: no sway from side to side, no dip as a foot lands, and it fades out on every short
+    // fall (each stair step now). Tie it to the footfalls once characters have animated models (T29, T30).
     float Bob = 0.0f;
     if (self->IsHeadBobEnabled && (self->HeadBobStepLength > 0.0f))
     {

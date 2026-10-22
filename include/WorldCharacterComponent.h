@@ -90,7 +90,8 @@ typedef enum CharacterFacingEnum
  *        kept by the component until changed (WorldCharacterComponent_SetInput).
  *
  * The requests are HELD states, not one-shot commands: a jump or a use happens when its flag turns on (a press), so a
- * driver that keeps setting the same input does not jump again and again.
+ * driver that keeps setting the same input does not use again and again. A jump held down jumps again on the ground
+ * once the character's auto-jump delay has passed since its last jump, when it may auto-jump (hopping).
  */
 typedef struct CharacterInputStruct
 {
@@ -101,7 +102,8 @@ typedef struct CharacterInputStruct
     bool IsRunning;
     /** @brief Crouch while held, when the character may; standing up waits for room. */
     bool WantsCrouch;
-    /** @brief Jump: a press asks for one jump, kept for the character's jump buffer time until it can. */
+    /** @brief Jump: a press asks for one jump, kept for the character's jump buffer time until it can; held on the
+     *  ground, it asks again once the auto-jump delay has passed since the last jump (CanAutoJump). */
     bool WantsJump;
     /** @brief Fly while held, when the character may; letting go walks again (and falls if in the air). */
     bool WantsToFly;
@@ -182,6 +184,11 @@ typedef struct WorldCharacterRuntimeStruct
     float _jumpRequestSeconds;
     /** Whether it jumped since it last stood on the ground (no second jump in the coyote time). */
     bool _hasJumpedSinceGrounded;
+    /** Seconds since its last jump (a held jump jumps again once the auto-jump delay has passed). */
+    float _secondsSinceJump;
+    /** Whether it is climbing a step: from a step up until it stands on walkable ground. Only then does the edge of a
+     *  step whose contact is steeper than its slope limit hold it; walking off an edge, it falls instead. */
+    bool _isClimbing;
     /** The ground object's world matrix at the last update, for carrying the character with it. */
     bool _hasGroundMatrix;
     uint64_t _groundMatrixObjectId;

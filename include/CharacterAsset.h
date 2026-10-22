@@ -62,7 +62,8 @@
 // Types.
 /**
  * @brief One setting of a character: the index of its override flag on the component and of its row in the settings
- *        table. Values follow the table's order; they are not saved (the keys are), so they may change between builds.
+ *        table. The values give the settings' GHDF wire ids (CharacterInternal.h), so they are the save schema: never
+ *        renumber one; a new setting goes at the end (an inspector groups the rows by their category).
  */
 typedef enum CharacterSettingEnum
 {
@@ -84,15 +85,16 @@ typedef enum CharacterSettingEnum
     CharacterSetting_CanRun,
     /** @brief run_speed: metres per second. */
     CharacterSetting_RunSpeed,
-    /** @brief acceleration: speeding up on the ground, metres per second squared. */
+    /** @brief acceleration: how fast the movement keys push it on the ground, metres per second squared. */
     CharacterSetting_Acceleration,
-    /** @brief deceleration: slowing down on the ground, metres per second squared. */
-    CharacterSetting_Deceleration,
+    /** @brief ground_friction: how fast the ground slows it, metres per second squared (was deceleration: the same
+     *  wire id). */
+    CharacterSetting_GroundFriction,
     /** @brief step_height: the highest step it climbs, metres. */
     CharacterSetting_StepHeight,
     /** @brief slope_limit: the steepest walkable ground, radians. */
     CharacterSetting_SlopeLimit,
-    /** @brief ground_snap_distance: how far it follows the ground down without falling, metres. */
+    /** @brief ground_snap_distance: how far down it steps without falling, metres (0: it falls off every step). */
     CharacterSetting_GroundSnapDistance,
     /** @brief turn_speed: radians per second. */
     CharacterSetting_TurnSpeed,
@@ -120,7 +122,7 @@ typedef enum CharacterSettingEnum
     CharacterSetting_JumpBufferSeconds,
     /** @brief gravity_multiplier: times the world's gravity. */
     CharacterSetting_GravityMultiplier,
-    /** @brief air_acceleration: steering in the air, metres per second squared. */
+    /** @brief air_acceleration: how fast the movement keys push it in the air, metres per second squared (0: none). */
     CharacterSetting_AirAcceleration,
     /** @brief max_fall_speed: metres per second. */
     CharacterSetting_MaxFallSpeed,
@@ -138,9 +140,39 @@ typedef enum CharacterSettingEnum
     CharacterSetting_InteractionReach,
     /** @brief interaction_layers: the layers its interaction ray sees. */
     CharacterSetting_InteractionLayers,
+    /** @brief ground_control: how the movement keys act on the ground (CharacterGroundControl). */
+    CharacterSetting_GroundControl,
+    /** @brief walk_jump_boost: the speed a jump adds along the movement while walking, metres per second. */
+    CharacterSetting_WalkJumpBoost,
+    /** @brief run_jump_boost: the speed a jump adds along the movement while running, metres per second. */
+    CharacterSetting_RunJumpBoost,
+    /** @brief can_auto_jump: whether a held jump jumps again on the ground. */
+    CharacterSetting_CanAutoJump,
+    /** @brief auto_jump_delay_seconds: the least time from one jump to the next a held jump starts. */
+    CharacterSetting_AutoJumpDelaySeconds,
+    /** @brief air_drag: the air's drag, per metre (a deceleration of this times the speed squared). */
+    CharacterSetting_AirDrag,
     /** @brief The number of settings; not a setting. */
     CharacterSetting_Count
 } CharacterSetting;
+
+/**
+ * @brief How the movement keys act on a character on the ground (the ground_control setting). Saved by value: never
+ *        renumber.
+ */
+typedef enum CharacterGroundControlEnum
+{
+    /** @brief The keys push along their own direction, up to the wished speed along it and never past it in all
+     *  (Quake's and Source's way, capped), and the ground friction takes the rest: a reversal meets both, a turn
+     *  sideways slides until friction takes the old motion. Pressed into a wall at a slant, it slides along the wall at
+     *  the wished speed, or sticks when pushing nearly straight in (friction takes the motion the wall turns aside;
+     *  the higher the friction against the acceleration, the sooner). Momentum: ice, a heavy animal. */
+    CharacterGroundControl_Push = 0,
+    /** @brief The keys steer the whole velocity toward the wished one at the acceleration: turns are as quick as
+     *  reversals, a wall pressed into at a slant is slid along at the wished speed's share along it; the friction
+     *  takes only what lies beyond the wished speed (and everything when the keys let go). The default. */
+    CharacterGroundControl_Steer = 1
+} CharacterGroundControl;
 
 /**
  * @brief Everything a placed character can override: as a character asset sets it (the defaults of its placements), or
@@ -172,16 +204,22 @@ typedef struct CharacterSettingsStruct
     bool CanRun;
     /** @brief The running speed (at least 0). */
     float RunSpeed;
-    /** @brief How fast it speeds up toward the wished speed on the ground (above 0). */
+    /** @brief How fast the movement keys change its motion on the ground (above 0), toward the wished speed in their
+     *  direction, a turn back too (GroundControl says how). */
     float Acceleration;
-    /** @brief How fast it slows down on the ground: without input, or toward a lower or opposite wished velocity (above
-     *  0). */
-    float Deceleration;
+    /** @brief How fast the ground's friction slows it (at least 0: 0 slides like ice): it stops a character whose keys
+     *  let go, and takes what the keys do not drive (speed above walking after a sprint-jump; with the push control,
+     *  an old direction after a turn). A constant deceleration. */
+    // TODO: scale it by the ground's material (ice, mud) once colliders have one (T28).
+    float GroundFriction;
+    /** @brief How the movement keys act on the ground. */
+    CharacterGroundControl GroundControl;
     /** @brief The highest step it climbs while walking (at least 0). */
     float StepHeight;
     /** @brief The steepest ground it walks on, in [0, pi/2): steeper ground is a wall while walking and slides it down. */
     float SlopeLimit;
-    /** @brief How far down it follows the ground (slopes, stairs) without leaving it (at least 0). */
+    /** @brief How far down it steps without falling (at least 0; 0, the default, falls off every step: stairs too).
+     *  Walkable slopes are followed whatever this is. */
     float GroundSnapDistance;
     /** @brief How fast its body turns toward its facing target, radians per second (above 0). */
     float TurnSpeed;
@@ -209,10 +247,26 @@ typedef struct CharacterSettingsStruct
     float CoyoteSeconds;
     /** @brief How long a jump asked for just before landing waits for the ground (at least 0). */
     float JumpBufferSeconds;
+    /** @brief The speed a jump adds along the movement keys' direction while walking (at least 0): not past the walking
+     *  speed plus this, so jumps in a row do not add up. */
+    float WalkJumpBoost;
+    /** @brief The same while running (sprint-jumping; at least 0). */
+    float RunJumpBoost;
+    /** @brief Whether a jump held down jumps again whenever it is on the ground (and AutoJumpDelaySeconds have passed
+     *  since its last jump). */
+    bool CanAutoJump;
+    /** @brief The least time from one jump to the next that a held jump starts (at least 0). */
+    float AutoJumpDelaySeconds;
     /** @brief Times the world's gravity while walking or falling (at least 0); flying has none. */
     float GravityMultiplier;
-    /** @brief How fast it steers toward the wished velocity in the air (at least 0: no air control). */
+    /** @brief How fast the movement keys push it in the air (at least 0; 0, the default, gives no control: only
+     *  gravity and the air move it). They push only up to the wished speed along their direction, and never raise the
+     *  speed across the ground above that speed (or above what it already has): they steer and brake, never speed it
+     *  up past walking or running. */
     float AirAcceleration;
+    /** @brief The air's drag on it, per metre (at least 0): a deceleration of this times its speed squared, so a long
+     *  fall reaches a terminal speed of the root of gravity over this. */
+    float AirDrag;
     /** @brief The fastest it falls (above 0). */
     float MaxFallSpeed;
     /** @brief Whether it may fly. */
@@ -239,6 +293,11 @@ typedef struct CharacterAssetStruct
     /** @brief The defaults of its placements. */
     CharacterSettings _settings;
 } CharacterAsset;
+
+
+// Fields.
+/** @brief The ground_control setting's values and their JSON names ("push", "steer"). */
+extern const PropertyEnumTable CHARACTER_GROUND_CONTROL_ENUM;
 
 
 // Functions.

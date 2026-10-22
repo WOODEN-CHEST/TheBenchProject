@@ -60,6 +60,8 @@
 #define CHARACTER_MAX_GRAVITY_MULTIPLIER 100.0
 /** A quarter turn in radians: the slope limit stays below it. */
 #define CHARACTER_QUARTER_TURN 1.5707963267948966
+/** The largest air drag, per metre (a terminal speed of a third of a metre per second on Earth). */
+#define CHARACTER_MAX_AIR_DRAG 100.0
 
 
 // Macros: the rows (in the table's order, CharacterSetting's).
@@ -123,13 +125,15 @@
     .Key = u8"acceleration", .Type = PropertyType_Float, .Default.FloatValue = 8.0f, \
     .Rules = CHARACTER_RULES_POSITIVE_ACCELERATION, .Flags = PROPERTY_FLAGS_SETTING, \
     .Category = CHARACTER_CATEGORY_WALKING, .DisplayName = u8"Acceleration", \
-    .Description = u8"How quickly it speeds up on the ground, in metres per second squared."
+    .Description = u8"How hard its movement keys push it on the ground, in metres per second squared, in whatever " \
+        u8"direction they point: a turn back too."
 
-#define CHARACTER_ROW_DECELERATION \
-    .Key = u8"deceleration", .Type = PropertyType_Float, .Default.FloatValue = 10.0f, \
-    .Rules = CHARACTER_RULES_POSITIVE_ACCELERATION, .Flags = PROPERTY_FLAGS_SETTING, \
-    .Category = CHARACTER_CATEGORY_WALKING, .DisplayName = u8"Deceleration", \
-    .Description = u8"How quickly it slows down and turns around on the ground, in metres per second squared."
+#define CHARACTER_ROW_GROUND_FRICTION \
+    .Key = u8"ground_friction", .Type = PropertyType_Float, .Default.FloatValue = 10.0f, \
+    .Rules = CHARACTER_RULES_ACCELERATION, .Flags = PROPERTY_FLAGS_SETTING, .Category = CHARACTER_CATEGORY_WALKING, \
+    .DisplayName = u8"Ground friction", \
+    .Description = u8"How quickly the ground slows it, in metres per second squared: it stops when the keys let go, " \
+        u8"and loses speed the keys do not drive. 0 slides like ice."
 
 #define CHARACTER_ROW_STEP_HEIGHT \
     .Key = u8"step_height", .Type = PropertyType_Float, .Default.FloatValue = 0.35f, .Rules = CHARACTER_RULES_LENGTH, \
@@ -143,10 +147,11 @@
     .Description = u8"The steepest ground it walks on, in degrees (below 90); steeper ground is a wall it slides down."
 
 #define CHARACTER_ROW_GROUND_SNAP_DISTANCE \
-    .Key = u8"ground_snap_distance", .Type = PropertyType_Float, .Default.FloatValue = 0.35f, \
+    .Key = u8"ground_snap_distance", .Type = PropertyType_Float, .Default.FloatValue = 0.0f, \
     .Rules = CHARACTER_RULES_LENGTH, .Flags = PROPERTY_FLAGS_SETTING, .Category = CHARACTER_CATEGORY_WALKING, \
-    .DisplayName = u8"Ground snap", \
-    .Description = u8"How far down, in metres, it follows the ground (stairs, slopes) instead of falling."
+    .DisplayName = u8"Step down", \
+    .Description = u8"How far down, in metres, it steps without falling (a stair's riser, at once); 0 falls off " \
+        u8"every step. Walkable slopes are followed whatever this is."
 
 #define CHARACTER_ROW_TURN_SPEED \
     .Key = u8"turn_speed", .Type = PropertyType_Angle, .Default.FloatValue = 6.28318531f, \
@@ -222,10 +227,11 @@
     .Description = u8"Times the world's gravity while walking and falling; flying has none."
 
 #define CHARACTER_ROW_AIR_ACCELERATION \
-    .Key = u8"air_acceleration", .Type = PropertyType_Float, .Default.FloatValue = 2.0f, \
+    .Key = u8"air_acceleration", .Type = PropertyType_Float, .Default.FloatValue = 0.0f, \
     .Rules = CHARACTER_RULES_ACCELERATION, .Flags = PROPERTY_FLAGS_SETTING, .Category = CHARACTER_CATEGORY_FALLING, \
     .DisplayName = u8"Air control", \
-    .Description = u8"How quickly it steers in the air, in metres per second squared; 0 none."
+    .Description = u8"How hard its movement keys push it in the air, in metres per second squared; 0, none: only " \
+        u8"gravity and the air move it. They steer and brake, never speed it up past walking or running."
 
 #define CHARACTER_ROW_MAX_FALL_SPEED \
     .Key = u8"max_fall_speed", .Type = PropertyType_Float, .Default.FloatValue = 55.0f, \
@@ -270,3 +276,43 @@
     .Default.EnumSetValue = CHARACTER_DEFAULT_INTERACTION_LAYERS, .EnumTable = &COLLISION_LAYER_ENUM, \
     .Flags = PROPERTY_FLAGS_SETTING, .Category = CHARACTER_CATEGORY_INTERACTION, .DisplayName = u8"Sees", \
     .Description = u8"The collision layers its look and use ray sees; triggers are never seen."
+
+// Added in T13's first tuning (2026-10-22), at the end of the settings (their wire ids follow the enum).
+#define CHARACTER_ROW_GROUND_CONTROL \
+    .Key = u8"ground_control", .Type = PropertyType_Enum, .Default.EnumValue = CharacterGroundControl_Steer, \
+    .EnumTable = &CHARACTER_GROUND_CONTROL_ENUM, .Flags = PROPERTY_FLAGS_SETTING, \
+    .Category = CHARACTER_CATEGORY_WALKING, .DisplayName = u8"Ground control", \
+    .Description = u8"How its movement keys act on the ground: steer turns the whole motion toward them; push adds " \
+        u8"motion along their direction and friction takes the rest, so turns slide (momentum: ice, a heavy animal)."
+
+#define CHARACTER_ROW_WALK_JUMP_BOOST \
+    .Key = u8"walk_jump_boost", .Type = PropertyType_Float, .Default.FloatValue = 0.0f, \
+    .Rules = CHARACTER_RULES_SPEED, .Flags = PROPERTY_FLAGS_SETTING, .Category = CHARACTER_CATEGORY_JUMPING, \
+    .DisplayName = u8"Walking jump boost", \
+    .Description = u8"Metres per second a jump adds along the movement while walking; never past the walking speed " \
+        u8"plus this, so jumps in a row do not add up."
+
+#define CHARACTER_ROW_RUN_JUMP_BOOST \
+    .Key = u8"run_jump_boost", .Type = PropertyType_Float, .Default.FloatValue = 0.0f, \
+    .Rules = CHARACTER_RULES_SPEED, .Flags = PROPERTY_FLAGS_SETTING, .Category = CHARACTER_CATEGORY_JUMPING, \
+    .DisplayName = u8"Running jump boost", \
+    .Description = u8"Metres per second a jump adds along the movement while running (sprint-jumping); never past " \
+        u8"the running speed plus this."
+
+#define CHARACTER_ROW_CAN_AUTO_JUMP \
+    .Key = u8"can_auto_jump", .Type = PropertyType_Bool, .Default.BoolValue = true, \
+    .Flags = PROPERTY_FLAGS_SETTING, .Category = CHARACTER_CATEGORY_JUMPING, .DisplayName = u8"Auto-jump", \
+    .Description = u8"Whether a jump held down jumps again whenever it is on the ground."
+
+#define CHARACTER_ROW_AUTO_JUMP_DELAY_SECONDS \
+    .Key = u8"auto_jump_delay_seconds", .Type = PropertyType_Float, .Default.FloatValue = 0.25f, \
+    .Rules = CHARACTER_RULES_SECONDS, .Flags = PROPERTY_FLAGS_SETTING, .Category = CHARACTER_CATEGORY_JUMPING, \
+    .DisplayName = u8"Auto-jump delay", \
+    .Description = u8"The least seconds from one jump to the next that a held jump starts."
+
+#define CHARACTER_ROW_AIR_DRAG \
+    .Key = u8"air_drag", .Type = PropertyType_Float, .Default.FloatValue = 0.004f, \
+    .Rules = PROPERTY_RULES_BETWEEN(0.0, CHARACTER_MAX_AIR_DRAG), .Flags = PROPERTY_FLAGS_SETTING, \
+    .Category = CHARACTER_CATEGORY_FALLING, .DisplayName = u8"Air drag", \
+    .Description = u8"How much the air slows it, per metre: a deceleration of this times its speed squared. 0.004 " \
+        u8"gives a person's 50 m/s terminal speed on Earth; at walking and running speeds it is hardly felt."

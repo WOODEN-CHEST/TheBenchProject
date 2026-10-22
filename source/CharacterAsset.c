@@ -17,6 +17,18 @@
 
 
 // Fields.
+static const PropertyEnumEntry GroundControlEntries[] =
+{
+    { .Name = u8"push", .Value = CharacterGroundControl_Push },
+    { .Name = u8"steer", .Value = CharacterGroundControl_Steer },
+};
+
+const PropertyEnumTable CHARACTER_GROUND_CONTROL_ENUM =
+{
+    .Name = u8"character_ground_control", .Entries = GroundControlEntries,
+    .EntryCount = sizeof(GroundControlEntries) / sizeof(GroundControlEntries[0])
+};
+
 /* The keys of a definition, one per CharacterSetting in its order. Character assets are JSON only; each row takes the
  * component's wire id for the same setting's value. */
 static const PropertyDescriptor SettingsProperties[CharacterSetting_Count] =
@@ -31,7 +43,7 @@ static const PropertyDescriptor SettingsProperties[CharacterSetting_Count] =
     SETTINGS_ROW(CharacterSetting_CanRun, CHARACTER_ROW_CAN_RUN, CanRun),
     SETTINGS_ROW(CharacterSetting_RunSpeed, CHARACTER_ROW_RUN_SPEED, RunSpeed),
     SETTINGS_ROW(CharacterSetting_Acceleration, CHARACTER_ROW_ACCELERATION, Acceleration),
-    SETTINGS_ROW(CharacterSetting_Deceleration, CHARACTER_ROW_DECELERATION, Deceleration),
+    SETTINGS_ROW(CharacterSetting_GroundFriction, CHARACTER_ROW_GROUND_FRICTION, GroundFriction),
     SETTINGS_ROW(CharacterSetting_StepHeight, CHARACTER_ROW_STEP_HEIGHT, StepHeight),
     SETTINGS_ROW(CharacterSetting_SlopeLimit, CHARACTER_ROW_SLOPE_LIMIT, SlopeLimit),
     SETTINGS_ROW(CharacterSetting_GroundSnapDistance, CHARACTER_ROW_GROUND_SNAP_DISTANCE, GroundSnapDistance),
@@ -58,6 +70,13 @@ static const PropertyDescriptor SettingsProperties[CharacterSetting_Count] =
     SETTINGS_ROW(CharacterSetting_FlyDeceleration, CHARACTER_ROW_FLY_DECELERATION, FlyDeceleration),
     SETTINGS_ROW(CharacterSetting_InteractionReach, CHARACTER_ROW_INTERACTION_REACH, InteractionReach),
     SETTINGS_ROW(CharacterSetting_InteractionLayers, CHARACTER_ROW_INTERACTION_LAYERS, InteractionLayers),
+    SETTINGS_ROW(CharacterSetting_GroundControl, CHARACTER_ROW_GROUND_CONTROL, GroundControl),
+    SETTINGS_ROW(CharacterSetting_WalkJumpBoost, CHARACTER_ROW_WALK_JUMP_BOOST, WalkJumpBoost),
+    SETTINGS_ROW(CharacterSetting_RunJumpBoost, CHARACTER_ROW_RUN_JUMP_BOOST, RunJumpBoost),
+    SETTINGS_ROW(CharacterSetting_CanAutoJump, CHARACTER_ROW_CAN_AUTO_JUMP, CanAutoJump),
+    SETTINGS_ROW(CharacterSetting_AutoJumpDelaySeconds, CHARACTER_ROW_AUTO_JUMP_DELAY_SECONDS,
+        AutoJumpDelaySeconds),
+    SETTINGS_ROW(CharacterSetting_AirDrag, CHARACTER_ROW_AIR_DRAG, AirDrag),
 };
 
 static const PropertyTable SettingsTable =

@@ -1247,6 +1247,51 @@ static void CrossedCapsulesTouchAtOnePoint(TestRun* run)
     TEST_CHECK(run, CollisionGeometry_Collide(&Lower, &Beside, 0.0f, &Contact) && (Contact.PointCount == 2U));
 }
 
+/* A capsule standing beside a box of twelve mesh triangles (raylib's OBJ fans, as the test world's glowing cube is),
+ * pressed 5 mm into its side, is pushed out sideways by every triangle it touches: the witness point of a contact on
+ * the box's bottom or top edge was read as inside the bottom or top triangle, whose face normal and plane distance then
+ * pushed the capsule down or up by most of its height (T13's first tuning: jumping against the cube threw the player
+ * up and down). */
+static void ACapsuleBesideAMeshBoxIsPushedOutSideways(TestRun* run)
+{
+    static const float Vertices[] = { 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f, 0.5f, 0.5f,
+        -0.5f, -0.5f, -0.5f, -0.5f, 0.5f, -0.5f, -0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f };
+    static const unsigned short Indices[] = { 0U, 1U, 3U, 0U, 3U, 2U, 2U, 3U, 7U, 2U, 7U, 6U, 6U, 7U, 5U, 6U, 5U, 4U,
+        4U, 5U, 1U, 4U, 1U, 0U, 2U, 6U, 4U, 2U, 4U, 0U, 7U, 3U, 1U, 7U, 1U, 5U };
+    CollisionMeshPart Part = { .Vertices = Vertices, .VertexCount = 8U, .Indices = Indices, .TriangleCount = 12U,
+        .MaterialIndex = 0 };
+    CollisionMesh* Cube = NULL;
+    if (!TEST_CHECK_SUCCESS(run, CollisionMesh_Create(&Part, 1U, MatrixIdentity(), &Cube)))
+    {
+        return;
+    }
+    // A character's capsule (0.3 m by 1.75 m) beside the +X face, its axis from well below the cube to well above it,
+    // and along the face from its middle to past its corner.
+    CollisionAffine Identity = CollisionAffine_Identity();
+    uint32_t Wrong = 0U;
+    for (int Height = -60; Height <= 60; Height++)
+    {
+        for (int Along = 0; Along <= 4; Along++)
+        {
+            Vector3 Center = V3(0.5f + 0.3f - 0.005f, 0.025f * (float)Height, 0.15f * (float)Along);
+            CollisionConvex Body = Capsule(Center, 0.3f, 0.575f, V3(0.0f, 0.0f, 0.0f));
+            for (uint32_t Triangle = 0U; Triangle < Cube->_triangleCount; Triangle++)
+            {
+                CollisionConvex Face;
+                CollisionConvex_FromMeshTriangle(Cube, Triangle, &Identity, true, &Face);
+                CollisionContact Contact;
+                if (CollisionGeometry_Collide(&Face, &Body, 0.05f, &Contact))
+                {
+                    // At most the 5 mm it is pressed in (and only the side face pushes it in; edges may tilt the push).
+                    Wrong += ((Contact.Separation < -0.006f) || (Contact.Normal.x < 0.0f)) ? 1U : 0U;
+                }
+            }
+        }
+    }
+    TEST_CHECK(run, Wrong == 0U);
+    CollisionMesh_Destroy(Cube);
+}
+
 /* Rays at a gently bumpy grid's shared edges and corners never slip between its triangles. */
 static void RaysDoNotSlipBetweenMeshTriangles(TestRun* run)
 {
@@ -1407,6 +1452,7 @@ void CollisionGeometryTests_Run(TestRun* run)
         { "thin_hulls_keep_their_thickness", ThinHullsKeepTheirThickness },
         { "crossed_capsules_touch_at_one_point", CrossedCapsulesTouchAtOnePoint },
         { "rays_do_not_slip_between_mesh_triangles", RaysDoNotSlipBetweenMeshTriangles },
+        { "a_capsule_beside_a_mesh_box_is_pushed_out_sideways", ACapsuleBesideAMeshBoxIsPushedOutSideways },
         { "random_cast_hits_are_where_the_shapes_meet", RandomCastHitsAreWhereTheShapesMeet },
         { "turning_drops_land_on_bounded_floors", TurningDropsLandOnBoundedFloors },
     };

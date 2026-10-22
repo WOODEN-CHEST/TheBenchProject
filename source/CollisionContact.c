@@ -30,6 +30,8 @@
 #define CYLINDER_CAP_COSINE 0.5f
 /** A triangle offers its face when its normal is within about 78 degrees of the direction, else its best edge. */
 #define TRIANGLE_FACE_COSINE 0.2f
+/** A point on a triangle whose barycentric weight for a corner is at most this lies on the edge opposite it. */
+#define TRIANGLE_BOUNDARY_WEIGHT 1e-5f
 /** Two segments side by side give their overlap's two ends when their directions are within about 8 degrees; crossed
  *  ones touch at one point (GJK's). */
 #define SEGMENT_PARALLEL_COSINE 0.99f
@@ -566,6 +568,38 @@ static void BuildManifold(const CollisionConvex* a, const CollisionConvex* b, Ve
 
 
 // Static functions: triangles.
+/* The feature of a triangle a point ON it lies on, from its barycentric weights (u, v, w) for (a, b, c): an edge where
+ * one weight vanishes, a corner where two do, numbered as CollisionMath_GetClosestTrianglePoint's regions (1..3 the
+ * edges ab, bc, ca, 4..6 the corners a, b, c), 0 inside. That function calls a point exactly on the boundary inside (its
+ * tests tie there), and a contact's witness point on the triangle lies exactly on the edge it touches. */
+static uint32_t GetBoundaryRegion(Vector3 weights)
+{
+    bool IsOnBc = weights.x <= TRIANGLE_BOUNDARY_WEIGHT;
+    bool IsOnCa = weights.y <= TRIANGLE_BOUNDARY_WEIGHT;
+    bool IsOnAb = weights.z <= TRIANGLE_BOUNDARY_WEIGHT;
+    if (IsOnAb && IsOnCa)
+    {
+        return 4U;
+    }
+    if (IsOnAb && IsOnBc)
+    {
+        return 5U;
+    }
+    if (IsOnBc && IsOnCa)
+    {
+        return 6U;
+    }
+    if (IsOnAb)
+    {
+        return 1U;
+    }
+    if (IsOnBc)
+    {
+        return 2U;
+    }
+    return IsOnCa ? 3U : 0U;
+}
+
 /* Applies a triangle's sides and active edges to a contact's normal and points; false when there is no contact (the
  * other shape lies behind a one-sided triangle, or past the separation along the face normal). */
 static bool AdjustForTriangle(const CollisionConvex* a, const CollisionConvex* b, float maxSeparation, Vector3* normal,
@@ -586,6 +620,13 @@ static bool AdjustForTriangle(const CollisionConvex* a, const CollisionConvex* b
     Vector3 Weights;
     uint32_t Region = 0U;
     CollisionMath_GetClosestTrianglePoint(V[0], V[1], V[2], IsTriangleA ? *pointA : *pointB, &Weights, &Region);
+    if (Region == 0U)
+    {
+        // Read as inside, the contact's feature would take the face normal and the face's plane distance: for a
+        // capsule beside a mesh box's convex edge, a push-out of most of its height (T13's first tuning: the test
+        // world's glowing cube threw a player jumping against it up and down).
+        Region = GetBoundaryRegion(Weights);
+    }
     uint8_t Active = Triangle->ActiveEdges;
     bool UsesFace = false;
     switch (Region)

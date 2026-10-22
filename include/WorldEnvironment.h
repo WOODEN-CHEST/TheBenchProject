@@ -58,8 +58,8 @@
  *  moon's (about 1/400000), so that at the night exposure a full-moon night is clearly lighter than a new-moon one,
  *  with soft shadows, and still reads as night (tuned on rendered frames: 8% lit the test world nearly like day). */
 #define WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY 0.02f
-/** @brief The default gravity, in metres per second squared: the Earth's standard gravity. */
-#define WORLD_ENVIRONMENT_DEFAULT_GRAVITY 9.81f
+/** @brief The default gravity, in metres per second squared. */
+#define WORLD_ENVIRONMENT_DEFAULT_GRAVITY 15.0f
 /** @brief The largest gravity a world may set, in metres per second squared (a bound for hostile content). */
 #define WORLD_ENVIRONMENT_MAX_GRAVITY 1000.0
 /** @brief The most bytes a texture name (MilkyWayTexture, MoonTexture) may have, without the terminator. */

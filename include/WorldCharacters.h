@@ -23,12 +23,13 @@ typedef struct LoggerStruct Logger;
  * WorldCollision_Step, which then pushes characters and pushables apart by mass. For each enabled character it:
  * 1. switches between walking and flying, and between standing and crouching (standing up only where there is room);
  * 2. carries a grounded character with the object it stands on (its move and its turn since the last update);
- * 3. turns the input into a velocity: speeding up and slowing down on the ground, jumps (buffered, with coyote time),
- *    gravity and air control, or flight;
+ * 3. turns the input into a velocity: the keys steering (or pushing) it on the ground and the ground's friction, jumps
+ *    (buffered, with coyote time, auto-jump and a jump boost), gravity, the air's drag and air control, or flight;
  * 4. moves and slides the capsule against static and kinematic colliders (pushables are left to the collision step),
  *    keeping the skin to everything it passes; while walking, steep ground and edges higher than its step height
  *    count as walls, and steps up to its step height are climbed;
- * 5. keeps a walking character on the ground (slopes, stairs) within its snap distance, or lets it fall and land;
+ * 5. keeps a walking character on walkable slopes (and within its step-down distance), or lets it fall off (every step,
+ *    by default) and land;
  * 6. turns its body, eases its eyes between the standing and the crouched height, and writes its object's transform;
  * 7. answers a use press with a "used" event naming what it looks at.
  * It also gives every character a capsule collider (added when its object has none) and keeps that collider's shape,
@@ -127,7 +128,7 @@ void WorldCharacters_Update(WorldCharacters* self, float deltaSeconds);
 
 /**
  * @brief Places a character: feet at @p feetPosition, facing and looking along @p yaw, at rest; without a sweep (a
- *        spawn, a script's teleport). It is settled on walkable ground within its snap distance below, or falls.
+ *        spawn, a script's teleport). It is settled on walkable ground within its step height below, or falls.
  * @param self The system; must not be NULL.
  * @param objectId The character's object.
  * @param feetPosition Where its feet go, in world space.

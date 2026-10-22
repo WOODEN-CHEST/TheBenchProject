@@ -75,7 +75,12 @@ space, an optional part `Name`, and the sizes its type uses. Build one with `Col
   - each part's triangles go through the transform;
   - vertices with exactly equal positions are welded and degenerate triangles skipped (at most 2^20 triangles);
   - each edge is marked **active** or not: an edge shared across a flat or concave seam is inactive, so contacts on it
-    take the face's normal and shapes slide over seams without catching;
+    take the face's normal and shapes slide over seams without catching. A contact's witness point lies exactly on the
+    edge it touches, which the closest-point region test calls inside (its tests tie there): the contact reads its
+    feature from the point's barycentric weights (a weight of at most 1e-5 puts it on the opposite edge,
+    `TRIANGLE_BOUNDARY_WEIGHT`), so a contact on an active edge keeps its own normal (T13's first tuning: read as
+    inside, a capsule beside a mesh box's bottom or top edge took that face's normal and plane distance, a push of
+    most of its height, and the test world's glowing cube threw a player jumping against it up and down);
   - a median-split BVH is built.
 
   Each triangle keeps its model part and its index there (`_part`, `_sourceIndex`; with a hit's barycentrics, T19 finds

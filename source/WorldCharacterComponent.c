@@ -51,7 +51,7 @@ const PropertyEnumTable CHARACTER_FACING_ENUM =
 
 /* Every property, in inspector order: the name, then each setting's override flag right before the value it switches
  * on. The wire ids are the save schema: never renumber or reuse one (CharacterInternal.h: setting i's flag 2 + 2i, its
- * value 3 + 2i); a removed property's id goes into the table's retired list. The next free wire id is 74. */
+ * value 3 + 2i); a removed property's id goes into the table's retired list. The next free wire id is 86. */
 static const PropertyDescriptor CharacterProperties[CHARACTER_PROPERTY_COUNT] =
 {
     [CHARACTER_PROPERTY_NAME] =
@@ -83,14 +83,14 @@ static const PropertyDescriptor CharacterProperties[CHARACTER_PROPERTY_COUNT] =
         CHARACTER_CATEGORY_WALKING, "running speed"),
     CHARACTER_PROPERTY_PAIR(CharacterSetting_Acceleration, "acceleration", CHARACTER_ROW_ACCELERATION, Acceleration,
         CHARACTER_CATEGORY_WALKING, "acceleration"),
-    CHARACTER_PROPERTY_PAIR(CharacterSetting_Deceleration, "deceleration", CHARACTER_ROW_DECELERATION, Deceleration,
-        CHARACTER_CATEGORY_WALKING, "deceleration"),
+    CHARACTER_PROPERTY_PAIR(CharacterSetting_GroundFriction, "ground_friction", CHARACTER_ROW_GROUND_FRICTION,
+        GroundFriction, CHARACTER_CATEGORY_WALKING, "ground friction"),
     CHARACTER_PROPERTY_PAIR(CharacterSetting_StepHeight, "step_height", CHARACTER_ROW_STEP_HEIGHT, StepHeight,
         CHARACTER_CATEGORY_WALKING, "step height"),
     CHARACTER_PROPERTY_PAIR(CharacterSetting_SlopeLimit, "slope_limit", CHARACTER_ROW_SLOPE_LIMIT, SlopeLimit,
         CHARACTER_CATEGORY_WALKING, "slope limit"),
     CHARACTER_PROPERTY_PAIR(CharacterSetting_GroundSnapDistance, "ground_snap_distance",
-        CHARACTER_ROW_GROUND_SNAP_DISTANCE, GroundSnapDistance, CHARACTER_CATEGORY_WALKING, "ground snap"),
+        CHARACTER_ROW_GROUND_SNAP_DISTANCE, GroundSnapDistance, CHARACTER_CATEGORY_WALKING, "step down"),
     CHARACTER_PROPERTY_PAIR(CharacterSetting_TurnSpeed, "turn_speed", CHARACTER_ROW_TURN_SPEED, TurnSpeed,
         CHARACTER_CATEGORY_TURNING, "turn speed"),
     CHARACTER_PROPERTY_PAIR(CharacterSetting_IsTurnInstant, "is_turn_instant", CHARACTER_ROW_IS_TURN_INSTANT,
@@ -136,6 +136,18 @@ static const PropertyDescriptor CharacterProperties[CHARACTER_PROPERTY_COUNT] =
         InteractionReach, CHARACTER_CATEGORY_INTERACTION, "reach"),
     CHARACTER_PROPERTY_PAIR(CharacterSetting_InteractionLayers, "interaction_layers",
         CHARACTER_ROW_INTERACTION_LAYERS, InteractionLayers, CHARACTER_CATEGORY_INTERACTION, "seen layers"),
+    CHARACTER_PROPERTY_PAIR(CharacterSetting_GroundControl, "ground_control", CHARACTER_ROW_GROUND_CONTROL,
+        GroundControl, CHARACTER_CATEGORY_WALKING, "ground control"),
+    CHARACTER_PROPERTY_PAIR(CharacterSetting_WalkJumpBoost, "walk_jump_boost", CHARACTER_ROW_WALK_JUMP_BOOST,
+        WalkJumpBoost, CHARACTER_CATEGORY_JUMPING, "walking jump boost"),
+    CHARACTER_PROPERTY_PAIR(CharacterSetting_RunJumpBoost, "run_jump_boost", CHARACTER_ROW_RUN_JUMP_BOOST,
+        RunJumpBoost, CHARACTER_CATEGORY_JUMPING, "running jump boost"),
+    CHARACTER_PROPERTY_PAIR(CharacterSetting_CanAutoJump, "can_auto_jump", CHARACTER_ROW_CAN_AUTO_JUMP,
+        CanAutoJump, CHARACTER_CATEGORY_JUMPING, "auto-jumping permission"),
+    CHARACTER_PROPERTY_PAIR(CharacterSetting_AutoJumpDelaySeconds, "auto_jump_delay_seconds",
+        CHARACTER_ROW_AUTO_JUMP_DELAY_SECONDS, AutoJumpDelaySeconds, CHARACTER_CATEGORY_JUMPING, "auto-jump delay"),
+    CHARACTER_PROPERTY_PAIR(CharacterSetting_AirDrag, "air_drag", CHARACTER_ROW_AIR_DRAG, AirDrag,
+        CHARACTER_CATEGORY_FALLING, "air drag"),
 };
 
 static const PropertyTable CharacterTable =

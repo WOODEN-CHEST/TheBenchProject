@@ -106,19 +106,19 @@ static bool SweepForGround(const CharacterBody* body, Vector3 from, Vector3 to, 
     return IsHit;
 }
 
-/* The face under a contact on the capsule's round bottom: a short ray down just inside the contact (the contact's
- * normal points from it toward the capsule, so inside is the other way). False when the contact is straight below the
- * capsule's axis (no inside to look at), or nothing is found there. */
-static bool ProbeFaceUnder(const CharacterBody* body, const WorldCastHit* hit, WorldRayHit* outFace)
+/* The face under a contact at @p point of @p normal on the capsule's round bottom: a short ray down just inside the
+ * contact (the contact's normal points from it toward the capsule, so inside is the other way). False when the contact
+ * is straight below the capsule's axis (no inside to look at), or nothing is found there. */
+static bool ProbeFaceUnder(const CharacterBody* body, Vector3 point, Vector3 normal, WorldRayHit* outFace)
 {
-    Vector3 Inward = { -hit->Normal.x, 0.0f, -hit->Normal.z };
+    Vector3 Inward = { -normal.x, 0.0f, -normal.z };
     float InwardLength = Vector3Length(Inward);
     if (InwardLength < 1e-6f)
     {
         return false;
     }
     Inward = Vector3Scale(Inward, 1.0f / InwardLength);
-    Vector3 Origin = Vector3Add(hit->Point, Vector3Scale(Inward, CHARACTER_EDGE_PROBE_INSET));
+    Vector3 Origin = Vector3Add(point, Vector3Scale(Inward, CHARACTER_EDGE_PROBE_INSET));
     Origin.y += CHARACTER_EDGE_PROBE_LIFT;
     return WorldCollision_Raycast(body->Collision, Origin, (Vector3){ 0.0f, -1.0f, 0.0f },
         CHARACTER_EDGE_PROBE_LIFT + CHARACTER_EDGE_PROBE_DEPTH, &body->GroundFilter, outFace) && !outFace->IsStartInside;
@@ -147,7 +147,7 @@ static bool IsEdgeAboveStep(const CharacterBody* body, const CharacterSupport* g
         return false;
     }
     WorldRayHit Face;
-    if (!ProbeFaceUnder(body, hit, &Face))
+    if (!ProbeFaceUnder(body, hit->Point, hit->Normal, &Face))
     {
         return hit->Normal.y < 1.0f - 1e-6f;
     }
@@ -168,7 +168,7 @@ static bool FindRestingGround(const CharacterBody* body, Vector3 feet, const Cha
         return false;
     }
     *outSupport = (CharacterSupport){ .IsSupported = true, .ObjectId = Hit.Shape.ObjectId, .Normal = Hit.Normal,
-        .Point = Hit.Point };
+        .Point = Hit.Point, .IsSteepEdge = false };
     return true;
 }
 
@@ -241,7 +241,8 @@ static bool TryStepUp(const CharacterBody* body, const CharacterSupport* ground,
         // Back on the level it started from: no step there, only a wall.
         return false;
     }
-    CharacterSupport Support = CharacterMotion_EvaluateSupport(body, &Hit);
+    // The climb itself may land on the step's edge with a steep contact: the round bottom rolls over it next.
+    CharacterSupport Support = CharacterMotion_EvaluateSupport(body, &Hit, true);
     if (!Support.IsSupported || (GetHeightAboveGround(ground, Support.Point) > (body->StepHeight + CHARACTER_SKIN)))
     {
         return false;
@@ -255,7 +256,8 @@ static bool TryStepUp(const CharacterBody* body, const CharacterSupport* ground,
 // Functions (WorldCharacterInternal.h).
 CharacterSupport CharacterSupport_CreateNone(void)
 {
-    return (CharacterSupport){ .IsSupported = false, .ObjectId = 0U, .Normal = WorldUp, .Point = { 0.0f, 0.0f, 0.0f } };
+    return (CharacterSupport){ .IsSupported = false, .ObjectId = 0U, .Normal = WorldUp, .Point = { 0.0f, 0.0f, 0.0f },
+        .IsSteepEdge = false };
 }
 
 bool CharacterMotion_Sweep(const CharacterBody* body, Vector3 from, Vector3 to, const WorldCollisionFilter* filter,
@@ -265,7 +267,8 @@ bool CharacterMotion_Sweep(const CharacterBody* body, Vector3 from, Vector3 to, 
         body->Radius + CHARACTER_SKIN, body->Height + (2.0f * CHARACTER_SKIN), filter, outHit);
 }
 
-CharacterSupport CharacterMotion_EvaluateSupport(const CharacterBody* body, const WorldCastHit* hit)
+CharacterSupport CharacterMotion_EvaluateSupport(const CharacterBody* body, const WorldCastHit* hit,
+    bool isSteepEdgeAllowed)
 {
     CharacterSupport Support = CharacterSupport_CreateNone();
     Vector3 Normal = hit->Normal;
@@ -277,14 +280,14 @@ CharacterSupport CharacterMotion_EvaluateSupport(const CharacterBody* body, cons
         Support.Point = hit->Point;
         return Support;
     }
-    if (Normal.y <= CHARACTER_EDGE_MIN_NORMAL_Y)
+    if (!isSteepEdgeAllowed || (Normal.y <= CHARACTER_EDGE_MIN_NORMAL_Y))
     {
         return Support;
     }
 
     // An edge (or a steep face) under the round bottom: the face just inside the contact decides.
     WorldRayHit Face;
-    if (!ProbeFaceUnder(body, hit, &Face) || (Face.Normal.y < body->WalkableNormalY))
+    if (!ProbeFaceUnder(body, hit->Point, hit->Normal, &Face) || (Face.Normal.y < body->WalkableNormalY))
     {
         return Support;
     }
@@ -292,7 +295,32 @@ CharacterSupport CharacterMotion_EvaluateSupport(const CharacterBody* body, cons
     Support.ObjectId = hit->Shape.ObjectId;
     Support.Normal = Face.Normal;
     Support.Point = hit->Point;
+    Support.IsSteepEdge = true;
     return Support;
+}
+
+Vector3 CharacterMotion_GetFaceNormal(const CharacterBody* body, const CharacterSupport* support)
+{
+    WorldRayHit Face;
+    if (ProbeFaceUnder(body, support->Point, support->Normal, &Face) && (Face.Normal.y >= body->WalkableNormalY))
+    {
+        return Face.Normal;
+    }
+    return support->Normal;
+}
+
+bool CharacterMotion_HasGroundBelow(const CharacterBody* body, Vector3 feet, float distance)
+{
+    if (distance <= 0.0f)
+    {
+        return false;
+    }
+    // From a little above the feet: the capsule rests the skin and the rest gap above its ground.
+    Vector3 Origin = { feet.x, feet.y + CHARACTER_EDGE_PROBE_LIFT, feet.z };
+    WorldRayHit Hit;
+    return WorldCollision_Raycast(body->Collision, Origin, (Vector3){ 0.0f, -1.0f, 0.0f },
+        CHARACTER_EDGE_PROBE_LIFT + distance + CHARACTER_SKIN + CHARACTER_REST_GAP, &body->GroundFilter, &Hit)
+        && !Hit.IsStartInside && (Hit.Normal.y >= body->WalkableNormalY);
 }
 
 Vector3 CharacterMotion_ClipToPlanes(Vector3 vector, const Vector3* planes, size_t planeCount)
@@ -465,7 +493,9 @@ CharacterGround CharacterMotion_FollowGround(const CharacterBody* body, Vector3 
         Position = Vector3Add(Position, Vector3Scale(Direction, Advance));
         // A walker's ground holds it only within its step height above the ground it walked on: a taller step's edge
         // under its round bottom is a rim like any other (otherwise it would walk up the edge as up a slope).
-        CharacterSupport Support = CharacterMotion_EvaluateSupport(body, &Hit);
+        // A steep edge holds only a walker climbing a step (its ground is one): walking off an edge, it falls instead
+        // of rolling down it.
+        CharacterSupport Support = CharacterMotion_EvaluateSupport(body, &Hit, (ground != NULL) && ground->IsSteepEdge);
         bool IsStepEdge = Support.IsSupported && (ground != NULL) && IsEdgeAboveStep(body, ground, &Hit);
         if (Support.IsSupported && !IsStepEdge)
         {
