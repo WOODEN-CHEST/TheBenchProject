@@ -18,6 +18,7 @@ int main(void)
 
     GameJSONTests_Run(&Run);
     WRFrameworkTests_Run(&Run);
+    WRVectorMathTests_Run(&Run);
     GameGHDFTests_Run(&Run);
     ConfigTests_Run(&Run);
     AssetManagerTests_Run(&Run);

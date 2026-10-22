@@ -301,6 +301,11 @@ Current module list:
 * GameGHDF (GameGHDF.md) - The GHDF counterpart: integers written in the smallest GHDF type that holds them and read
   from any integer type whose value fits (arrays refused), and strings without NULs inside. Used by the property
   tables, the data values and the world files.
+* GameMath (GameMath.md) - The bridge between WRFramework's double-precision maths (WRVectorMath: Vector3Double,
+  Matrix4Double, BoundingBoxDouble, added in T31 for large worlds) and raylib's Vector3 and Matrix: conversions both
+  ways, field by field (raylib declares Matrix's fields row by row), and relative to an origin (subtracted in double,
+  rounded once), which is how a far-away position becomes the floats raylib and the GPU take. Header-only. GameMath.md
+  also sums up WRVectorMath's conventions (raymath's, in double) and its precision far from the origin.
 * Text component serialization (TextComponentSerialization.md) - Text component trees to and from the game's three
   formats. JSON (references/text_component_structure.md) and GHDF share ONE codec (source/TextComponentCodec.c,
   private) that lists every type's fields once, validates every value, names the key and the component's path in

@@ -125,6 +125,8 @@ The modules are (in alphabetical order):
   - Functions: [create empty, load from file, load from stream, deconstruct]
 - WRUserData: A fixed 128-byte value type for caller-attached data (holds either a pointer or a small inline value). Header-only.
   - Functions: [create empty, from pointer, get pointer]
+- WRVectorMath: Double-precision 3D vectors (Vector3Double), 4x4 matrices (Matrix4Double) and axis-aligned boxes (BoundingBoxDouble) for worlds where float positions lose precision, with raymath's conventions in double (column-major, Multiply(a, b) applies a first) and conversions to floats relative to an origin (subtracted in double, rounded once). Uses no raylib.
+  - Functions: [Vector3Double create, zero, from floats, to floats, to floats relative to an origin, add, subtract, scale, multiply, add scaled, negate, dot, cross, length, length squared, distance, distance squared, normalize or fallback, lerp, min, max, equals close, is finite, Matrix4Double identity, from floats, to floats, to floats relative to an origin, from translation, from scale, from rotation X, from rotation Y, from rotation Z, from rotation XYZ, multiply, transform point, transform direction, transpose, get determinant, try invert, try invert affine, get translation, set translation, equals close, is finite, BoundingBoxDouble from corners, union, union point, expand, contains point, contains box, overlaps, get center, get extents, get size, get surface area, transform, intersects ray]
 
 Where the framework uses interfaces or abstract classes, it is generally recommended to pass around the non-concrete type
 rather than the concrete one. For storing the object in a variable or struct member, it's context dependent, as
@@ -504,6 +506,16 @@ in usage converted to UTF-8.
   without counting it (the convention `StringBuilder`'s buffers use), so the result reads as a C string and the next
   append continues it. (They used to count the NUL, so anything appended after a number landed behind it.)
   `GenericBuffer_NullTerminate`, by contrast, appends a counted NUL.
+- **Large worlds: keep positions in double, make floats of them relative to an origin.** `WRVectorMath` matches
+  raymath: `Matrix4Double` is column-major (row r of column c is `M[c * 4 + r]`, the translation `M[12..14]`, the order
+  of `MatrixToFloatV`), `Matrix4Double_Multiply(a, b)` applies a first, `Matrix4Double_FromRotationXYZ` is
+  `MatrixRotateXYZ`, and points, directions and boxes ignore the bottom row. A far position becomes floats only through
+  `Vector3Double_ToFloatsRelative` / `Matrix4Double_ToFloatsRelative` (the origin subtracted in double, then one
+  rounding); rounding first keeps the absolute position's float error (1 m at 10 000 km). Matrices are passed by
+  pointer, vectors and boxes by value. Inversion has no tolerance: it refuses singular matrices and the few of extreme
+  scale whose determinant or its reciprocal overflows, never merely nearly singular ones. Far out, a matrix times its
+  inverse cancels terms as large as the translation: to place one object relative to another, subtract their
+  translations first.
 - **Arenas free all at once.** Memory from an `Arena` comes back only through `Arena_Clear` or `Arena_RewindToMarker`
   (markers nest like a stack), so use arenas for memory that dies together (per-frame scratch, per-level data) and
   `ObjectPool` or the heap for objects freed one at a time. `Arena_Clear` merges a grown arena's blocks into one, so a

@@ -23,10 +23,24 @@ non-default raylib configuration.
 | Library | Source | Version | Build |
 |---|---|---|---|
 | raylib | https://github.com/raysan5/raylib (local copy: `../raylib/6.0`) | commit `65abee1` (2026-07-04), reports `6.1-dev` | CMake, see below |
-| WRFramework | `../WRFramework` | commit `8c9af0b06dd65e945f4fc33d92c822407af858cb` | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
+| WRFramework | `../WRFramework` | commit `8c9af0b06dd65e945f4fc33d92c822407af858cb` plus T31's uncommitted `WRVectorMath` | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
 
-`lib/libwr.a`, `include/wr/` and `agents/WRFramework.md` match the commit above, `8c9af0b`, which adds `WRArena` (a
-bump allocator) on top of T09's changes.
+`lib/libwr.a`, `include/wr/` and `agents/WRFramework.md` match the commit above, `8c9af0b` (which adds `WRArena`, a
+bump allocator, on top of T09's changes), plus T31's new module `WRVectorMath`, not yet committed in WRFramework. Once
+the owner commits it there, this table names that commit.
+
+**What T31 changed in WRFramework** (for large worlds, G25 and G26; uncommitted in `../WRFramework` until the owner
+commits it):
+- A new module, `WRVectorMath` (`include/WRVectorMath.h`, `source/WRVectorMath.c`): `Vector3Double`, `Matrix4Double`
+  and `BoundingBoxDouble`, with raymath's conventions in double (column-major, `Matrix4Double_Multiply(a, b)` applies a
+  first, `Matrix4Double_FromRotationXYZ` is `MatrixRotateXYZ`), inversion that refuses singular matrices, the tight box
+  around a transformed box, a ray slab test, and conversions to floats relative to an origin (subtracted in double,
+  rounded once). It uses no raylib; this project's `GameMath` (`include/GameMath.h`) bridges it to raylib's `Vector3`
+  and `Matrix`.
+- `AGENTS.md`: the module in the module list and a behaviour note ("Large worlds: keep positions in double...").
+- Nothing else changed: every other object in the rebuilt `libwr.a` is byte-identical to the previous build's. The
+  module builds without warnings under the library's script, and also under this project's `-Wconversion -Wshadow`
+  (its header is compiled with them here). Its tests are this project's `tests/WRVectorMathTests.c`.
 
 **What T09 changed in WRFramework** (at the owner's request; committed as `58c1e31`):
 - WRJSON: compounds keep insertion order (every collection view and `JSON_Serialize`; the order is a plain buffer of

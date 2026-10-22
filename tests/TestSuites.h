@@ -14,6 +14,12 @@ void GameJSONTests_Run(TestRun* run);
  *  strings read in chunks and refused when they declare more than the data holds, pools freeing borrowed containers,
  *  truncated documents leaving nothing behind, atomic file replacement (WRFrameworkTests.c). */
 void WRFrameworkTests_Run(TestRun* run);
+/** @brief WRFramework's double-precision maths (WRVectorMath, T31) and the GameMath bridge to raylib: every operation by
+ *  hand, raymath's conventions on the same inputs (multiply order, rotations, points and directions, inversion), the
+ *  column-major layout against MatrixToFloatV and raylib's Matrix fields, conversions relative to a far origin,
+ *  inverses 10 000 km out, boxes around transformed boxes and the ray slab test against a face by face check
+ *  (WRVectorMathTests.c). */
+void WRVectorMathTests_Run(TestRun* run);
 /** @brief GameGHDF: integers in the smallest type, read from any integer type in range, strings without NULs
  *  (GameGHDFTests.c). */
 void GameGHDFTests_Run(TestRun* run);
