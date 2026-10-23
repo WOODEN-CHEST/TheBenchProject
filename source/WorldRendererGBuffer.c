@@ -8,6 +8,8 @@
 /** Asset name of the normal/mask G-buffer shader: writes a view-space normal (RGB) + surface/outline flag (A)
  *  that the outline pass edge-detects and the AO pass reads. */
 #define NORMAL_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal")
+/** Asset name of its skinned twin (T29): the same fragment stage over a vertex stage that skins. */
+#define NORMAL_SKINNED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal_skinned")
 /** Asset name of the sprite normal/mask shader: writes cutout sprites into the G-buffer with an alpha test at their
  *  cutoff (so the outline follows the sprite's shape, not its quad's rectangle) and their quad's view normal. */
 #define NORMAL_SPRITE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal_sprite")
@@ -77,6 +79,10 @@ static bool IsSolidInGBuffer(float fade)
 static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter filter)
 {
     Shader NormalShader = GameShader_GetRaylibShader(self->_gbuffer._shader);
+    bool HasSkinned = (self->_gbuffer._skinnedShader != NULL);
+    Shader SkinnedShader = HasSkinned ? GameShader_GetRaylibShader(self->_gbuffer._skinnedShader) : NormalShader;
+    WorldRendererMeshShaders Shaders = { .Rigid = &NormalShader, .Skinned = HasSkinned ? &SkinnedShader : NULL,
+        .Palette = &self->_gbuffer._skinnedPalette };
     size_t ModelCount = 0;
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&self->_cache, &ModelCount);
     size_t VisibleCount = 0;
@@ -93,7 +99,11 @@ static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter
         }
         float OutlineFlag = Entry->HasOutline ? 1.0f : 0.0f;
         SetShaderValue(NormalShader, self->_gbuffer._locOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
-        WorldRendererGeometry_DrawModel(self, Entry, WorldLodState_GetSolidLod(&Entry->Lod), &NormalShader, false);
+        if (HasSkinned && (Entry->Pose != NULL))
+        {
+            SetShaderValue(SkinnedShader, self->_gbuffer._skinnedLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
+        }
+        WorldRendererGeometry_DrawModel(self, Entry, WorldLodState_GetSolidLod(&Entry->Lod), &Shaders, false);
     }
 }
 
@@ -159,6 +169,18 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
         Shader RayShader = GameShader_GetRaylibShader(self->_gbuffer._shader);
         self->_gbuffer._locOutlineFlag = GetShaderLocation(RayShader, "outlineFlag");
         WorldRendererCommon_PrepareDither(RayShader, &self->_gbuffer._dither); // stays solid (IsSolidInGBuffer)
+    }
+
+    // Its skinned twin (T29). Optional: without it skinned meshes draw their bind pose into the G-buffer.
+    self->_gbuffer._skinnedShader = (self->_gbuffer._shader != NULL)
+        ? WorldRendererCommon_LoadShader(self, NORMAL_SKINNED_SHADER_ASSET_NAME) : NULL;
+    self->_gbuffer._skinnedPalette = (WorldRendererPalette){ ._location = -1 };
+    if (self->_gbuffer._skinnedShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_gbuffer._skinnedShader);
+        self->_gbuffer._skinnedLocOutlineFlag = GetShaderLocation(RayShader, "outlineFlag");
+        WorldRendererCommon_PrepareDither(RayShader, &self->_gbuffer._skinnedDither); // stays solid like its twin
+        WorldRendererCommon_PreparePalette(RayShader, &self->_gbuffer._skinnedPalette);
     }
 
     // AO pre-pass shader. Optional (without it, or without a samplable-depth G-buffer, AO is simply off).

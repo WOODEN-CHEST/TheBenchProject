@@ -62,12 +62,15 @@ static const unsigned char* const ModelExtensionList[] = { u8"obj", u8"gltf", u8
 static const unsigned char* const FontExtensionList[] = { u8"ttf", u8"otf" };
 static const unsigned char* const SoundExtensionList[] = { u8"wav", u8"ogg", u8"mp3", u8"qoa" };
 static const unsigned char* const ShaderStageExtensionList[] = { u8"vert", u8"frag", u8"vs", u8"fs", u8"glsl" };
+static const unsigned char* const AnimationLibraryExtensionList[] = { u8"gltf", u8"glb" };
 
 const AssetExtensionFilter ASSET_EXTENSIONS_TEXTURE = { TextureExtensionList, ARRAY_LENGTH(TextureExtensionList) };
 const AssetExtensionFilter ASSET_EXTENSIONS_MODEL = { ModelExtensionList, ARRAY_LENGTH(ModelExtensionList) };
 const AssetExtensionFilter ASSET_EXTENSIONS_FONT = { FontExtensionList, ARRAY_LENGTH(FontExtensionList) };
 const AssetExtensionFilter ASSET_EXTENSIONS_SOUND = { SoundExtensionList, ARRAY_LENGTH(SoundExtensionList) };
 const AssetExtensionFilter ASSET_EXTENSIONS_SHADER_STAGE = { ShaderStageExtensionList, ARRAY_LENGTH(ShaderStageExtensionList) };
+const AssetExtensionFilter ASSET_EXTENSIONS_ANIMATION_LIBRARY = { AnimationLibraryExtensionList,
+    ARRAY_LENGTH(AnimationLibraryExtensionList) };
 
 
 // Static functions.

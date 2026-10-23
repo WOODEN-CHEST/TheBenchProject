@@ -163,6 +163,26 @@ void WorldVisibilityTests_Run(TestRun* run);
  *  shows the maths it replaced failing (WorldRenderSpaceTests.c; a private module of source/). */
 void WorldRenderSpaceTests_Run(TestRun* run);
 
+/** @brief Animation libraries (T29): the placeholder files' bones and clips, clip settings (names, loops, speeds),
+ *  sampling (the ends held, the last key exact, step, linear, cubic splines, the shorter arc, normalized integers),
+ *  node matrices, unsorted parents, skipped clips, hostile files and limits, the definition's rules and the asset
+ *  loading its file (AnimationLibraryTests.c). */
+void AnimationLibraryTests_Run(TestRun* run);
+
+/** @brief Skeletal animation's runtime maths (T29): transforms composed and taken apart (a non-uniform scale under a turn
+ *  too), skeletons from raylib models (rest and bind poses, order, names, broken ones, meshes the GPU cannot skin, the
+ *  same bones), the rest pose's palette and bounds, blends, pose bounds holding every skinned vertex, bindings by name
+ *  (unmatched bones, folded ancestors, the height ratio, a shorter figure keeping its bone lengths, a clip on its own
+ *  skeleton as authored) and the mixer (cross-fades keeping the weights' sum, loops and ends, replays, weights alone, a
+ *  full mixer, the blended pose) (SkeletalAnimationTests.c). */
+void SkeletalAnimationTests_Run(TestRun* run);
+
+/** @brief The animation system (T29): animators bound on demand to their world models' skeletons and libraries, the
+ *  clip row (phase, cross-fades, speed, pause, loop override), clips played from code over the rows, the libraries'
+ *  override, rebinding, sockets in double (also 173 km out), disabled objects, one-time reports and the animator's rows
+ *  (WorldAnimationTests.c). */
+void WorldAnimationTests_Run(TestRun* run);
+
 /** @brief LODs: the selection by distance with hysteresis, the scale, the zoom and a forced LOD; the cross-fade's state
  *  (its start, progress, snapping, a fade time of 0, held frames); the two LODs' complementary dither masks
  *  (WorldLodTests.c; a private module of source/). */

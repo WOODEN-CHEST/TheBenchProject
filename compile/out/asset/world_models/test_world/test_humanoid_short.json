@@ -1,0 +1,7 @@
+{
+    "name": "test_humanoid_short",
+    "lods": [
+        { "model": "test_humanoid_short", "max_distance": 80 }
+    ],
+    "animation_libraries": [ "test_humanoid_motions" ]
+}

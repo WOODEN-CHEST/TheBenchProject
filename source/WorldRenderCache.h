@@ -5,6 +5,7 @@
 #include "AssetManager.h"
 #include "GameModel.h"
 #include "World.h"
+#include "WorldAnimatorComponent.h"
 #include "WorldModel.h"
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
@@ -51,6 +52,12 @@
  * names the world model it was resolved for (an id can come back with another object). A different world resets the
  * cache; the per-frame walk also checks each entry's component, so a world rebuilt at the same address is caught as soon
  * as a component differs.
+ *
+ * POSES (T29). An entry whose object has an animator posed for the entry's world model (the animator's pose names that
+ * asset: WorldAnimatorComponent_GetPose) takes the pose (Pose): the passes skin its skinned meshes with it, and unless
+ * the world model gives bounds of its own its bounding sphere is the pose's box, through the skeleton LOD's import
+ * transform, instead of LOD 0's bind pose (WorldModel_HasOwnBounds). A pose made for another world model (the animator
+ * not yet rebound after a change) is not taken.
  *
  * LODS (T11). Each model entry keeps its LOD state across frames (WorldLod.h: the two LODs of a cross-fade, the fade's
  * progress and direction); WorldRenderCache_UpdateLods, once per frame after the sync, picks every drawn entry's LOD by
@@ -131,6 +138,10 @@ typedef struct WorldRenderModelStruct
     Vector3 RenderCenter;
     /** @brief The object's final tint colour (this frame). */
     Color Tint;
+    /** @brief The object's animator's pose (this frame; borrowed from the animator, valid until the animation system's
+     *  next update) when it was made for this entry's world model, or NULL: no animator, no pose, or another world model
+     *  (T29). */
+    const WorldAnimatorPose* Pose;
 } WorldRenderModel;
 
 /** @brief A sprite component that has a frame to draw this frame, with everything the passes need. Its settings are the

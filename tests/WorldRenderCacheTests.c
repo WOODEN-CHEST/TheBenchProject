@@ -1,8 +1,11 @@
 #include "TestSuites.h"
+#include "TestAnimation.h"
 #include "TestAssets.h"
 #include "TestWorld.h"
 #include "GameMath.h"
 #include "Logger.h"
+#include "WorldAnimation.h"
+#include "WorldAnimatorComponent.h"
 #include "WorldRenderCache.h"
 #include "WorldTransform.h"
 #include "SpriteTransform.h"
@@ -712,6 +715,115 @@ static void BoundsAndTheDrawnLodComeFromTheWorldModel(TestRun* run)
     CacheFixture_Deconstruct(run, &Fixture);
 }
 
+/* T29: an object whose animator is posed for its world model takes the pose, and its bounds are the pose's box (through
+ * the skeleton LOD's import transform) unless the world model gives its own; a pose made for another world model is not
+ * taken. */
+static void PosedObjectsTakeTheirPoseAndItsBounds(TestRun* run)
+{
+    // Three bones, a 5 cm box around each: the root at the floor, the spine 1 m up, the head 2 m up. "up" holds the
+    // spine 1 m higher, so the posed box reaches 3.05 m.
+    static const TestSkeletonBone Bones[3] =
+    {
+        { .Name = "root", .Parent = -1, .Bind = { .translation = { 0.0f, 0.0f, 0.0f },
+            .rotation = { 0.0f, 0.0f, 0.0f, 1.0f }, .scale = { 1.0f, 1.0f, 1.0f } } },
+        { .Name = "spine", .Parent = 0, .Bind = { .translation = { 0.0f, 1.0f, 0.0f },
+            .rotation = { 0.0f, 0.0f, 0.0f, 1.0f }, .scale = { 1.0f, 1.0f, 1.0f } } },
+        { .Name = "head", .Parent = 1, .Bind = { .translation = { 0.0f, 2.0f, 0.0f },
+            .rotation = { 0.0f, 0.0f, 0.0f, 1.0f }, .scale = { 1.0f, 1.0f, 1.0f } } },
+    };
+    static const float Times[] = { 0.0f, 1.0f };
+    static const float Up[] = { 0.0f, 2.0f, 0.0f, 0.0f, 2.0f, 0.0f };
+    TestGltfNode Nodes[3] =
+    {
+        { .Name = "root", .Parent = -1, .Rest = TestAnimation_Identity() },
+        { .Name = "spine", .Parent = 0, .Rest = TestAnimation_Translation(0.0f, 1.0f, 0.0f) },
+        { .Name = "head", .Parent = 1, .Rest = TestAnimation_Translation(0.0f, 1.0f, 0.0f) },
+    };
+    TestGltfChannel Channel = { .Node = 1, .Path = "translation", .Interpolation = "LINEAR", .Times = Times,
+        .KeyCount = 2U, .Values = Up, .ValueComponents = 3U };
+    TestGltfClip Clip = { .Name = "up", .Channels = &Channel, .ChannelCount = 1U };
+    GenericBuffer Gltf;
+    TestGltf_Write(Nodes, 3U, &Clip, 1U, &Gltf);
+
+    CacheFixture Fixture;
+    WorldModelComponent* Posed = NULL;
+    WorldModelComponent* Bounded = NULL;
+    WorldModelComponent* Unposed = NULL;
+    WorldAnimation* Animation = NULL;
+    Vector3 Position = { 10.0f, 0.0f, 0.0f };
+    Vector3 Scale = { 1.0f, 1.0f, 1.0f };
+    bool IsBuilt = CacheFixture_Construct(run, &Fixture)
+        && TestAssets_AddSkinnedModel(run, &Fixture.Assets, "figure_model", Bones, 3, 0.2f,
+            MatrixTranslate(0.0f, 0.5f, 0.0f), NULL)
+        && TestAssets_AddAnimationLibrary(run, &Fixture.Assets, "motions", (const char*)Gltf._data, NULL, 0U, NULL)
+        && TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"figure\", \"lods\": [{\"model\": "
+            "\"figure_model\", \"max_distance\": 50}], \"animation_libraries\": [\"motions\"]}")
+        && TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"bounded_figure\", \"lods\": [{\"model\": "
+            "\"figure_model\", \"max_distance\": 50}], \"animation_libraries\": [\"motions\"], \"bounds\": "
+            "{\"center\": [0, 1, 0], \"radius\": 4}}")
+        && ((Posed = AddModel(run, &Fixture.World, "figure", Position, Scale)) != NULL)
+        && ((Bounded = AddModel(run, &Fixture.World, "bounded_figure", Position, Scale)) != NULL)
+        && ((Unposed = AddModel(run, &Fixture.World, "figure", Position, Scale)) != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldAnimation_Create(&Fixture.World, Fixture.Assets.Manager, NULL, &Animation));
+    Memory_Free(Gltf._data);
+    WorldComponent* PosedAnimator = NULL;
+    WorldComponent* BoundedAnimator = NULL;
+    IsBuilt = IsBuilt
+        && TEST_CHECK_SUCCESS(run, World_AddComponent(&Fixture.World, IdOf(Posed), WorldComponentType_Animator,
+            &PosedAnimator))
+        && TEST_CHECK_SUCCESS(run, World_AddComponent(&Fixture.World, IdOf(Bounded), WorldComponentType_Animator,
+            &BoundedAnimator));
+    WorldAnimatorComponent* Animators[2] =
+    {
+        WorldAnimatorComponent_FromComponent(PosedAnimator), WorldAnimatorComponent_FromComponent(BoundedAnimator)
+    };
+    for (size_t Index = 0U; IsBuilt && (Index < 2U); Index++)
+    {
+        IsBuilt = TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetClip(Animators[Index], (const unsigned char*)u8"up"))
+            && TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetPlaysClip(Animators[Index], true));
+    }
+    if (IsBuilt)
+    {
+        WorldAnimation_Update(Animation, 0.1f);
+        size_t Count = 0U;
+        const WorldRenderModel* Models = NULL;
+        if (CacheFixture_Sync(run, &Fixture))
+        {
+            Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+        }
+        if (TEST_CHECK(run, Count == 3U))
+        {
+            // The posed box: x and z within 0.05 m, y from -0.05 to 3.05 in mesh space, raised 0.5 m by the import
+            // transform: centred 2 m up at the object (10, 0, 0), half its diagonal across.
+            float Radius = Vector3Length((Vector3){ 0.05f, 1.55f, 0.05f });
+            TEST_CHECK(run, (Models[0].Pose == WorldAnimatorComponent_GetPose(Animators[0])) && (Models[0].Pose != NULL));
+            TEST_CHECK(run, IsNearDouble(Models[0].Center.X, 10.0) && IsNearDouble(Models[0].Center.Y, 2.0)
+                && IsNearDouble(Models[0].Center.Z, 0.0) && IsNear(Models[0].Radius, Radius));
+            // The world model's own bounds hold whatever its placements do: kept.
+            TEST_CHECK(run, (Models[1].Pose != NULL) && IsNearDouble(Models[1].Center.Y, 1.0)
+                && IsNear(Models[1].Radius, 4.0f));
+            // Without an animator: no pose, and the bind pose's box (y from -0.05 to 2.05, raised 0.5 m).
+            TEST_CHECK(run, (Models[2].Pose == NULL) && IsNearDouble(Models[2].Center.Y, 1.5)
+                && IsNear(Models[2].Radius, Vector3Length((Vector3){ 0.05f, 1.05f, 0.05f })));
+        }
+
+        // Another world model before the animation's next update: the pose was made for the old one and is not taken.
+        if (TEST_CHECK_SUCCESS(run, WorldModelComponent_SetWorldModel(Posed, (const unsigned char*)u8"bounded_figure"))
+            && CacheFixture_Sync(run, &Fixture))
+        {
+            Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+            TEST_CHECK(run, (Count == 3U) && (Models[0].Pose == NULL));
+            WorldAnimation_Update(Animation, 0.1f);
+            TEST_CHECK(run, CacheFixture_Sync(run, &Fixture));
+            Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+            TEST_CHECK(run, (Count == 3U) && (Models[0].Pose == WorldAnimatorComponent_GetPose(Animators[0]))
+                && (Models[0].Pose != NULL));
+        }
+    }
+    WorldAnimation_Destroy(Animation);
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
 /* A sprite entry carries its quad (the world size from the frame's pixels, the pixels per unit and the object's scale;
  * the object's axes; the pivot and flips), the fixed matrix, its bounds and its drawing settings, all as they are in
  * effect: the world sprite's, with the placement's own where it overrides them. A decal needs the fixed orientation, and
@@ -1381,6 +1493,7 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "the_placement_and_the_player_move_the_switches", ThePlacementAndThePlayerMoveTheSwitches },
         { "an_object_drawn_again_appears_at_its_lod", AnObjectDrawnAgainAppearsAtItsLod },
         { "a_camera_turning_back_turns_the_fade_around", ACameraTurningBackTurnsTheFadeAround },
+        { "posed_objects_take_their_pose_and_its_bounds", PosedObjectsTakeTheirPoseAndItsBounds },
     };
     TestRun_RunSuite(run, "WorldRenderCache", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

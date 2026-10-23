@@ -1,9 +1,11 @@
 // Drawing of world model objects and light gizmos for the renderer's passes, from the render cache's lists. Meshes draw
 // with materials built on the stack, so no pass writes into a shared model asset. A model is drawn one LOD at a time:
-// the lit passes draw both LODs of a cross-fade with complementary dithers (WorldLod.h). Sprites have their own file
+// the lit passes draw both LODs of a cross-fade with complementary dithers (WorldLod.h). A posed object's skinned meshes
+// draw with each pass's skinned shader and the pose's palette (T29). Sprites have their own file
 // (WorldRendererSprites.c).
 
 #include "WorldRendererInternal.h"
+#include "GameSkeleton.h"
 #include "wr/WRMemory.h"
 
 
@@ -15,6 +17,8 @@
 /** How strongly a tinted LOD past LOD 0 glows in its colour (linear emissive intensity): faint by day, where the
  *  albedo's tint shows, and clear at night, where the eye's night vision greys reflected colour but not emitted light. */
 #define LOD_TINT_GLOW_INTENSITY 0.05f
+/** Asset name of the unlit fallback's skinned shader (T29). */
+#define UNLIT_SKINNED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_unlit_skinned")
 
 
 // Types.
@@ -53,11 +57,11 @@ static Color MultiplyColor(Color a, Color b)
 /* Draws one mesh of a model entry's LOD with a material built on the stack. The asset material's maps are copied, so the
  * variant (its maps and factors for this material slot), the tint, the LOD tinting's glow and the pass shader land on the
  * copy and nothing is written to the shared assets (raylib's DrawModel instead writes the tint into the asset's maps for
- * the duration of the draw). The lit pass uploads the copy's PBR factors and map flags before the draw. A NULL
- * @p passShader keeps the material's own shader. DrawMesh still binds the maps' textures, through the shader's location
- * table. */
-static void DrawMeshWithCopiedMaterial(WorldRenderer* self, const WorldRenderModel* model, Model rayModel,
-    int meshIndex, Matrix transform, const LodLook* look, const Shader* passShader, bool isLit)
+ * the duration of the draw). In the lit pass @p litProgram is the PBR program @p passShader belongs to: the copy's PBR
+ * factors and map flags are uploaded to it before the draw. A NULL @p passShader keeps the material's own shader.
+ * DrawMesh still binds the maps' textures, through the shader's location table. */
+static void DrawMeshWithCopiedMaterial(const WorldRenderModel* model, Model rayModel, int meshIndex, Matrix transform,
+    const LodLook* look, const Shader* passShader, const WorldRendererPbrProgram* litProgram)
 {
     int MaterialIndex = rayModel.meshMaterial[meshIndex];
     const Material* AssetMaterial = &rayModel.materials[MaterialIndex];
@@ -76,9 +80,9 @@ static void DrawMeshWithCopiedMaterial(WorldRenderer* self, const WorldRenderMod
 
     Material DrawMaterial = *AssetMaterial;
     DrawMaterial.maps = Maps;
-    if (isLit)
+    if (litProgram != NULL)
     {
-        WorldRendererLighting_UploadMaterial(self, &DrawMaterial);
+        WorldRendererLighting_UploadMaterial(litProgram, &DrawMaterial);
     }
     Maps[MATERIAL_MAP_ALBEDO].color = MultiplyColor(Maps[MATERIAL_MAP_ALBEDO].color, look->Tint);
     if (passShader != NULL)
@@ -101,7 +105,43 @@ static LodLook GetLodLook(const WorldRenderer* self, const WorldRenderModel* mod
 }
 
 
+/* Whether a LOD's skinned meshes can bend with the entry's pose in a pass: the entry has a pose, the LOD's model has a
+ * skeleton with the pose's bones (every skinned LOD of a world model shares its bind poses, WorldModel.h), and the pass's
+ * skinned shader holds the pose's palette (uploaded here when it does not yet). */
+static bool CanSkin(const WorldRenderModel* model, const GameSkeleton* skeleton, const WorldRendererMeshShaders* shaders)
+{
+    return (model->Pose != NULL) && (skeleton != NULL) && (shaders->Skinned != NULL) && (shaders->Palette != NULL)
+        && (GameSkeleton_GetBoneCount(skeleton) == model->Pose->_boneCount)
+        && WorldRendererCommon_UploadPalette(*shaders->Skinned, shaders->Palette, model->Pose);
+}
+
+
 // Internal functions (declared in WorldRendererInternal.h).
+void WorldRendererGeometry_LoadShaders(WorldRenderer* self)
+{
+    self->_unlit._skinnedShader = WorldRendererCommon_LoadShader(self, UNLIT_SKINNED_SHADER_ASSET_NAME);
+    self->_unlit._skinnedPalette = (WorldRendererPalette){ ._location = -1 };
+    if (self->_unlit._skinnedShader != NULL)
+    {
+        WorldRendererCommon_PreparePalette(GameShader_GetRaylibShader(self->_unlit._skinnedShader),
+            &self->_unlit._skinnedPalette);
+    }
+}
+
+void WorldRendererGeometry_ResetPalettes(WorldRenderer* self)
+{
+    WorldRendererPalette* Palettes[] =
+    {
+        &self->_pbr._skinned._palette, &self->_unlit._skinnedPalette, &self->_gbuffer._skinnedPalette,
+        &self->_cascades._skinnedPalette, &self->_pointShadow._skinnedPalette
+    };
+    for (size_t Index = 0U; Index < (sizeof(Palettes) / sizeof(Palettes[0])); Index++)
+    {
+        Palettes[Index]->_pose = NULL;
+        Palettes[Index]->_revision = 0U;
+    }
+}
+
 bool WorldRendererGeometry_PassesFilter(bool omitPixelation, WorldRendererPixelFilter filter)
 {
     switch (filter)
@@ -115,7 +155,7 @@ bool WorldRendererGeometry_PassesFilter(bool omitPixelation, WorldRendererPixelF
 }
 
 void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel* model, size_t lod,
-    const Shader* passShader, bool isLit)
+    const WorldRendererMeshShaders* shaders, bool isLit)
 {
     GameModel* LodModel = WorldRenderModel_GetLodModel(model, lod);
     if (LodModel == NULL)
@@ -128,15 +168,34 @@ void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel
     Model RayModel = GameModel_GetRaylibModel(LodModel);
     Matrix LodTransform = WorldRenderModel_GetLodTransform(model, lod);
     LodLook Look = GetLodLook(self, model, lod);
+    const GameSkeleton* Skeleton = GameModel_GetSkeleton(LodModel);
+    bool IsPosed = CanSkin(model, Skeleton, shaders);
     for (int MeshIndex = 0; MeshIndex < RayModel.meshCount; MeshIndex++)
     {
-        DrawMeshWithCopiedMaterial(self, model, RayModel, MeshIndex, LodTransform, &Look, passShader, isLit);
+        bool IsSkinned = IsPosed && GameSkeleton_IsMeshSkinned(Skeleton, (uint32_t)MeshIndex);
+        const WorldRendererPbrProgram* LitProgram = NULL;
+        if (isLit)
+        {
+            LitProgram = IsSkinned ? &self->_pbr._skinned : &self->_pbr._rigid;
+        }
+        DrawMeshWithCopiedMaterial(model, RayModel, MeshIndex, LodTransform, &Look,
+            IsSkinned ? shaders->Skinned : shaders->Rigid, LitProgram);
     }
 }
 
-void WorldRendererGeometry_DrawModels(WorldRenderer* self, const Shader* passShader, bool isLit,
-    WorldRendererPixelFilter filter)
+void WorldRendererGeometry_DrawModels(WorldRenderer* self, WorldRendererPixelFilter filter)
 {
+    // The lit pass draws with the PBR programs; without them the materials' own shaders draw (the unlit skinned one for
+    // skinned meshes).
+    bool IsLit = (self->_pbr._rigid._shader != NULL);
+    bool HasLitSkinned = IsLit && (self->_pbr._skinned._shader != NULL);
+    Shader UnlitSkinned = (self->_unlit._skinnedShader != NULL)
+        ? GameShader_GetRaylibShader(self->_unlit._skinnedShader) : (Shader){ 0 };
+    WorldRendererMeshShaders Shaders = IsLit
+        ? (WorldRendererMeshShaders){ .Rigid = &self->_pbr._rigid._passShader,
+            .Skinned = HasLitSkinned ? &self->_pbr._skinned._passShader : NULL, .Palette = &self->_pbr._skinned._palette }
+        : (WorldRendererMeshShaders){ .Rigid = NULL, .Skinned = (self->_unlit._skinnedShader != NULL) ? &UnlitSkinned
+            : NULL, .Palette = &self->_unlit._skinnedPalette };
     size_t ModelCount = 0;
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&self->_cache, &ModelCount);
     size_t VisibleCount = 0;
@@ -151,25 +210,37 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, const Shader* passSha
             continue;
         }
         // Without the PBR shader the materials' own shaders draw the model solid: one LOD, the one with the larger share.
-        if (!isLit)
+        if (!IsLit)
         {
-            WorldRendererGeometry_DrawModel(self, Entry, WorldLodState_GetSolidLod(&Entry->Lod), passShader, false);
+            WorldRendererGeometry_DrawModel(self, Entry, WorldLodState_GetSolidLod(&Entry->Lod), &Shaders, false);
             continue;
         }
 
         // The lit pass reach-culls the object's point lights and uploads them once for its LODs, then dithers each LOD
         // by the object's fade (its draw distance, its opacity) and by its part of a LOD cross-fade: the two LODs of a
-        // cross-fade keep complementary pixels. A LOD's meshes share its dither.
-        WorldRendererLighting_UploadObjectLights(self, GameShader_GetRaylibShader(self->_pbr._shader), &self->_pbr._lit,
+        // cross-fade keep complementary pixels. A LOD's meshes share its dither. A posed object's skinned meshes draw
+        // with the skinned program, which gets the same.
+        bool IsPosed = HasLitSkinned && (Entry->Pose != NULL);
+        WorldRendererLighting_UploadObjectLights(self, self->_pbr._rigid._passShader, &self->_pbr._rigid._lit,
             Entry->RenderCenter, Entry->Radius);
+        if (IsPosed)
+        {
+            WorldRendererLighting_UploadObjectLights(self, self->_pbr._skinned._passShader, &self->_pbr._skinned._lit,
+                Entry->RenderCenter, Entry->Radius);
+        }
         float Fade = WorldVisibility_GetModelFade(&self->_visibility, Index).Combined;
         WorldLodDraw Draws[WORLD_LOD_MAX_DRAWS];
         size_t DrawCount = WorldLodState_GetDraws(&Entry->Lod, Draws);
         for (size_t Draw = 0; Draw < DrawCount; Draw++)
         {
-            WorldRendererCommon_SetDither(self->_pbr._passShader, &self->_pbr._dither, Fade, Draws[Draw].Progress,
-                Draws[Draw].IsIncoming);
-            WorldRendererGeometry_DrawModel(self, Entry, Draws[Draw].Lod, passShader, true);
+            WorldRendererCommon_SetDither(self->_pbr._rigid._passShader, &self->_pbr._rigid._dither, Fade,
+                Draws[Draw].Progress, Draws[Draw].IsIncoming);
+            if (IsPosed)
+            {
+                WorldRendererCommon_SetDither(self->_pbr._skinned._passShader, &self->_pbr._skinned._dither, Fade,
+                    Draws[Draw].Progress, Draws[Draw].IsIncoming);
+            }
+            WorldRendererGeometry_DrawModel(self, Entry, Draws[Draw].Lod, &Shaders, true);
         }
     }
 }

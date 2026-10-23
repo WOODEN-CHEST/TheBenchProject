@@ -9,6 +9,7 @@
 #include "GameTexture.h"
 #include "GameCamera.h"
 #include "World.h"
+#include "WorldAnimatorComponent.h"
 #include "WorldEnvironment.h"
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
@@ -299,6 +300,41 @@ typedef struct WorldRendererDitherLocationsStruct
     int _locPixelScale;
 } WorldRendererDitherLocations;
 
+/**
+ * @brief A skinned shader's bone palette (T29, shaders/common/skinning.glsl): where it goes, how many bones it holds,
+ *        and which pose it holds this frame, so the meshes of one object upload it once per pass.
+ *
+ * Filled by WorldRendererCommon_PreparePalette; WorldRendererCommon_UploadPalette fills it from a pose. Every frame
+ * starts by forgetting the pose (WorldRendererGeometry_ResetPalettes): by then another animator's pose may live where
+ * the last one did.
+ */
+typedef struct WorldRendererPaletteStruct
+{
+    /** @brief The palette's location (bonePalette), -1 when the shader has none. */
+    int _location;
+    /** @brief How many bones it holds (the array's length over 3, read from the program): an object whose skeleton has
+     *  more draws its skinned meshes in their bind pose. */
+    uint32_t _maxBones;
+    /** @brief The pose it holds and that pose's revision; NULL from the start of each frame to the first upload. */
+    const WorldAnimatorPose* _pose;
+    uint32_t _revision;
+} WorldRendererPalette;
+
+/**
+ * @brief The shaders one geometry pass draws an object's meshes with (T29): its rigid meshes with Rigid, its skinned ones
+ *        (GameSkeleton_IsMeshSkinned) with Skinned while the object has a pose (WorldRenderModel.Pose) that Palette can
+ *        hold. A plain value type; everything in it is borrowed for the pass.
+ */
+typedef struct WorldRendererMeshShadersStruct
+{
+    /** @brief The shader rigid meshes draw with, or NULL: each material's own. */
+    const Shader* Rigid;
+    /** @brief The shader skinned meshes draw with, or NULL: they draw as rigid ones, in their bind pose. */
+    const Shader* Skinned;
+    /** @brief Skinned's palette; may be NULL while Skinned is. */
+    WorldRendererPalette* Palette;
+} WorldRendererMeshShaders;
+
 /** @brief The scene render target the 3D world is drawn into (pixel resolution when pixelating). */
 typedef struct WorldRendererSceneStateStruct
 {
@@ -388,10 +424,11 @@ typedef struct WorldRendererLitLocationsStruct
     int _locNightVisionTint;
 } WorldRendererLitLocations;
 
-/** @brief The PBR shader that shades model objects, its uniform locations, and this render's forward lights. */
-typedef struct WorldRendererPbrStateStruct
+/** @brief One PBR program that shades model objects, and its uniform locations: the rigid one (world_pbr) or the skinned
+ *  one (world_pbr_skinned, T29: world_pbr's fragment stage over a vertex stage that skins). */
+typedef struct WorldRendererPbrProgramStruct
 {
-    /** @brief The PBR shader asset (held under the shader user); NULL = unavailable (models draw unlit). */
+    /** @brief The shader asset (held under the shader user); NULL = unavailable. */
     GameShader* _shader;
     /** @brief The renderer's own copy of the shader's location table: the asset's table with the material map
      *  samplers pointed at mraMap/normalMap/emissiveMap, so DrawMesh binds each material's maps without the
@@ -413,6 +450,18 @@ typedef struct WorldRendererPbrStateStruct
     int _locHasMraMap;
     int _locHasNormalMap;
     int _locHasEmissiveMap;
+    /** @brief The skinned program's bone palette (location -1 in the rigid program's). */
+    WorldRendererPalette _palette;
+} WorldRendererPbrProgram;
+
+/** @brief The PBR programs that shade model objects, and this render's forward lights. */
+typedef struct WorldRendererPbrStateStruct
+{
+    /** @brief The program for rigid meshes; its shader NULL = PBR unavailable (models draw unlit). */
+    WorldRendererPbrProgram _rigid;
+    /** @brief The program for skinned meshes (T29); its shader NULL = skinned meshes draw with the rigid one, in their
+     *  bind pose. Every lit upload of the rigid program goes to it too. */
+    WorldRendererPbrProgram _skinned;
     /** @brief This render's forward-light candidates (WorldCullingLight), which every lit shader (models and sprites)
      *  picks each object's lights from: every light of the render cache except the cube-shadow light, which is shaded on
      *  its own. */
@@ -420,6 +469,15 @@ typedef struct WorldRendererPbrStateStruct
     /** @brief The candidates' linear radiance (WorldRendererRadiance), parallel to _forwardLights. */
     GenericBuffer _forwardRadiances;
 } WorldRendererPbrState;
+
+/** @brief The unlit fallback's skinned shader (T29). Without the PBR shader models draw with their materials' own shaders
+ *  (raylib's default), and skinned meshes with this one, which shades as raylib's default does. */
+typedef struct WorldRendererUnlitStateStruct
+{
+    /** @brief The shader (world_unlit_skinned) and its palette; NULL = skinned meshes draw their bind pose unlit. */
+    GameShader* _skinnedShader;
+    WorldRendererPalette _skinnedPalette;
+} WorldRendererUnlitState;
 
 /** @brief HDR eye adaptation (auto-exposure) state. */
 typedef struct WorldRendererExposureStateStruct
@@ -594,6 +652,11 @@ typedef struct WorldRendererCascadeStateStruct
     /** @brief The depth-only shader used for the cascades, and its dither uniforms; NULL = no sun or moon shadows. */
     GameShader* _depthShader;
     WorldRendererDitherLocations _dither;
+    /** @brief Its skinned twin (world_depth_skinned, T29), its dither and its palette; NULL = skinned meshes cast the
+     *  shadow of their bind pose. */
+    GameShader* _skinnedDepthShader;
+    WorldRendererDitherLocations _skinnedDither;
+    WorldRendererPalette _skinnedPalette;
     /** @brief The alpha-tested depth shader for cutout sprites (world_sprite_depth) and its locations; NULL = sprites
      *  cast no sun or moon shadow. */
     GameShader* _spriteDepthShader;
@@ -626,6 +689,13 @@ typedef struct WorldRendererPointShadowStateStruct
     int _locLightPos;
     int _locLightFar;
     WorldRendererDitherLocations _dither;
+    /** @brief Its skinned twin (world_cube_depth_skinned, T29) and the same locations, and its palette; NULL = skinned
+     *  meshes cast the shadow of their bind pose. */
+    GameShader* _skinnedShader;
+    int _skinnedLocLightPos;
+    int _skinnedLocLightFar;
+    WorldRendererDitherLocations _skinnedDither;
+    WorldRendererPalette _skinnedPalette;
     /** @brief The alpha-tested cube-depth shader for cutout sprites (world_sprite_cube_depth) and its locations; NULL =
      *  sprites cast no point-light shadow. */
     GameShader* _spriteShader;
@@ -655,6 +725,12 @@ typedef struct WorldRendererGBufferStateStruct
      *  object solid below WORLD_VISIBILITY_GBUFFER_FADE_LIMIT and skips it above). */
     WorldRendererDitherLocations _dither;
     WorldRendererDitherLocations _spriteDither;
+    /** @brief The model shader's skinned twin (world_normal_skinned, T29), its outline flag, its dither (solid like the
+     *  model shader's) and its palette; NULL = skinned meshes draw their bind pose into the G-buffer. */
+    GameShader* _skinnedShader;
+    int _skinnedLocOutlineFlag;
+    WorldRendererDitherLocations _skinnedDither;
+    WorldRendererPalette _skinnedPalette;
     /** @brief The G-buffer shader for cutout sprites (alpha-tested at each sprite's cutoff); NULL = sprites get no
      *  outlines and no AO of their own. */
     GameShader* _spriteShader;
@@ -845,6 +921,7 @@ struct WorldRendererStruct
     /** @brief Per-pass state (shader, uniform locations, targets, toggles). */
     WorldRendererSceneState _scene;
     WorldRendererPbrState _pbr;
+    WorldRendererUnlitState _unlit;
     WorldRendererExposureState _exposure;
     WorldRendererTonemapState _tonemap;
     WorldRendererSkyState _sky;
@@ -915,6 +992,25 @@ void WorldRendererCommon_SetDither(Shader shader, const WorldRendererDitherLocat
  */
 void WorldRendererCommon_SetDitherPixelScale(Shader shader, const WorldRendererDitherLocations* locations,
     Vector2 pixelScale);
+
+/**
+ * @brief Finds a skinned shader's bone palette (bonePalette, shaders/common/skinning.glsl): its location and how many
+ *        bones its array holds, read from the program. Call once at load.
+ * @param shader The shader (its program).
+ * @param outPalette [out] Receives the palette, holding no pose (location -1 and no bones for a shader without one).
+ */
+void WorldRendererCommon_PreparePalette(Shader shader, WorldRendererPalette* outPalette);
+
+/**
+ * @brief Uploads a pose's skinning palette into a skinned shader, unless the shader holds it already (the same pose at
+ *        the same revision since the frame began).
+ * @param shader The shader (its program).
+ * @param palette Its palette (WorldRendererCommon_PreparePalette).
+ * @param pose The pose; must not be NULL.
+ * @returns Whether the shader holds the pose's palette now: false when it has no palette or the pose has more bones
+ *          than it holds (the object's skinned meshes then draw in their bind pose).
+ */
+bool WorldRendererCommon_UploadPalette(Shader shader, WorldRendererPalette* palette, const WorldAnimatorPose* pose);
 
 /**
  * @brief Converts an 8-bit sRGB colour to linear light in [0,1]^3 (alpha ignored).
@@ -1015,27 +1111,44 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
 bool WorldRendererGeometry_PassesFilter(bool omitPixelation, WorldRendererPixelFilter filter);
 
 /**
+ * @brief Loads the unlit fallback's skinned shader (world_unlit_skinned, T29) and finds its palette. Without it skinned
+ *        meshes draw their bind pose while the PBR shader is unavailable.
+ */
+void WorldRendererGeometry_LoadShaders(WorldRenderer* self);
+
+/** @brief Makes every skinned shader's palette forget the pose it holds (at the start of each frame, before the passes:
+ *  WorldRendererPalette). */
+void WorldRendererGeometry_ResetPalettes(WorldRenderer* self);
+
+/**
  * @brief Draws one LOD of a cached model mesh by mesh, with the LOD's import transform inside the object's render-space
  *        matrix (WorldRenderModel_GetLodTransform), each mesh with a material built on the stack (the asset's maps copied, the
- *        entry's variant applied to the copy, @p passShader, the object's tint applied to the copy, times the LOD's
+ *        entry's variant applied to the copy, the pass's shader, the object's tint applied to the copy, times the LOD's
  *        debug colour while the LOD tinting is on), so nothing is written to an asset. The caller uploads the draw's
- *        dither to @p passShader first, and in the lit pass the object's forward point lights.
+ *        dither to the pass's shaders first (both, while the entry has a pose), and in the lit pass the object's forward
+ *        point lights.
+ *
+ * SKINNING (T29). While the entry has a pose (WorldRenderModel.Pose) and the LOD's model has a skeleton with its bones,
+ * the pose's palette is uploaded into @p shaders' skinned shader (once per pose per frame) and the LOD's skinned meshes
+ * (GameSkeleton_IsMeshSkinned) draw with it; its other meshes draw with the rigid shader. Without a pose, a skinned
+ * shader or room in its palette, every mesh draws with the rigid shader (skinned ones in their bind pose).
  *
  * Must run inside a 3D mode (BeginMode3D or explicit rlgl matrices). A LOD past the world model's last draws nothing.
  * @param self The renderer.
  * @param model The cached model; must have an asset.
  * @param lod The LOD to draw (the entry's LOD state says which: WorldLod.h).
- * @param passShader The shader to draw with, or NULL to keep each material's own shader.
- * @param isLit Whether this is the lit (PBR) pass: then each material's PBR factors are uploaded before its meshes.
+ * @param shaders The pass's shaders; must not be NULL.
+ * @param isLit Whether this is the lit (PBR) pass: then each material's PBR factors are uploaded before its meshes, into
+ *        the program the mesh draws with.
  */
 void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel* model, size_t lod,
-    const Shader* passShader, bool isLit);
+    const WorldRendererMeshShaders* shaders, bool isLit);
 
-/** @brief Draws the camera's models (the visibility's camera list) that pass @p filter. When @p isLit (the PBR pass) it
- *  uploads each object's forward point lights and draws its LODs (both during a cross-fade) dithered by its fade and
- *  its part of the cross-fade; otherwise (the materials' own shaders) it draws the LOD with the larger share, solid. */
-void WorldRendererGeometry_DrawModels(WorldRenderer* self, const Shader* passShader, bool isLit,
-    WorldRendererPixelFilter filter);
+/** @brief Draws the camera's models (the visibility's camera list) that pass @p filter. With the PBR shader (the lit
+ *  pass) it uploads each object's forward point lights and draws its LODs (both during a cross-fade) dithered by its fade
+ *  and its part of the cross-fade; otherwise (the materials' own shaders, the unlit skinned one for skinned meshes) it
+ *  draws the LOD with the larger share, solid. */
+void WorldRendererGeometry_DrawModels(WorldRenderer* self, WorldRendererPixelFilter filter);
 
 /** @brief Draws a small wireframe sphere at each light (its render-space position), tinted by its colour (a debug aid).
  *  Inside BeginMode3D. */
@@ -1113,10 +1226,12 @@ void WorldRendererSprites_DrawLit(WorldRenderer* self, WorldRendererPixelFilter 
 
 // WorldRendererLighting.c
 /**
- * @brief Loads the PBR shader, caches its uniform locations, builds the renderer's location table and pass
- *        shader, points its samplers at their fixed units, and checks how many point lights it supports.
+ * @brief Loads the PBR programs, the rigid one and the skinned one (T29): caches each one's uniform locations, builds its
+ *        location table and pass shader, points its samplers at their fixed units, checks how many point lights it
+ *        supports, and finds the skinned one's palette.
  *
- * Without it models draw unlit with Raylib's default shader.
+ * Without the rigid one models draw unlit with their materials' own shaders; without the skinned one skinned meshes draw
+ * with the rigid one, in their bind pose.
  */
 void WorldRendererLighting_LoadShader(WorldRenderer* self);
 
@@ -1144,7 +1259,7 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
 void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame);
 
 /**
- * @brief Uploads the frame's lighting uniforms to every lit shader the renderer has (the PBR shader and the sprite
+ * @brief Uploads the frame's lighting uniforms to every lit shader the renderer has (the two PBR programs and the sprite
  *        shader), with the pass's dither pixel scale, and binds the shadow maps, the cube shadow and (when
  *        @p applyScreenAo) the AO map to their fixed units.
  *
@@ -1168,12 +1283,14 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
     const WorldRendererLitLocations* locations, Vector3 center, float radius);
 
 /**
- * @brief Uploads one material's PBR scalar factors and map-presence flags, for its meshes drawn next.
+ * @brief Uploads one material's PBR scalar factors and map-presence flags to a PBR program, for its meshes drawn next.
  *
  * DrawMesh uploads colDiffuse and binds the maps itself, but not these. Pass the per-draw copy, after the variant was
  * applied to it, so its factors and maps are the ones drawn.
+ * @param program The program the meshes draw with (the rigid one or the skinned one).
+ * @param material The material.
  */
-void WorldRendererLighting_UploadMaterial(WorldRenderer* self, const Material* material);
+void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program, const Material* material);
 
 /**
  * @brief Eases the adapted luminance toward the frame's scene luminance (plus nearby point lights) and returns

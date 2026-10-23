@@ -19,6 +19,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
 | WorldColliderComponent | `include/WorldColliderComponent.h`, `source/WorldColliderComponent.c` | How the object collides (T12, [WorldCollision.md](WorldCollision.md)): its world model's collision set (or one primitive of its own), its layer, mask and trigger flag (each overriding the world model's default with an explicit flag), a local offset, rotation and scale, and a rotation mode, with the pure function that resolves the settings in effect. |
 | WorldCharacterComponent | `include/WorldCharacterComponent.h`, `source/WorldCharacterComponent.c` | The player or an NPC (T13, [Characters.md](Characters.md)): a character asset by name and every setting this placement overrides (explicit flags next to its own values), the input its driver gives it and the state it is in; the first transform driver. |
+| WorldAnimatorComponent | `include/WorldAnimatorComponent.h`, `source/WorldAnimatorComponent.c` | What plays the object's skeletal animation (T29, [Animation.md](Animation.md)): the clip row and how it plays, the placement's own libraries, and the pose the animation system publishes. |
 | WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
 | World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index), `source/WorldHierarchy.c` (parents, world matrices, effective flags, subtrees; also the `WorldObject_` functions about them) | Owns the objects and their components, mints ids, keeps the id map, the hierarchy and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
 | WorldTransform (private) | `source/WorldTransform.h`, `source/WorldTransform.c` | The pure maths of transforms, in double (T33): compose (DrawModelEx's order), the one decomposition back to position / Euler XYZ / scale, a local matrix under a parent, a bound on a matrix's stretch. Used by the hierarchy, the renderer's cache, collision and the characters. |
@@ -179,6 +180,7 @@ carries **at most one component of each type**; a street lamp is one object with
 | `WorldComponentType_Light` | 2 | `light` | `WorldLightComponent` |
 | `WorldComponentType_Collider` | 3 | `collider` | `WorldColliderComponent` (T12) |
 | `WorldComponentType_Character` | 4 | `character` | `WorldCharacterComponent` (T13, a transform driver; [Characters.md](Characters.md)) |
+| `WorldComponentType_Animator` | 5 | `animator` | `WorldAnimatorComponent` (T29; [Animation.md](Animation.md)) |
 
 The values are explicit and never renumbered (world files will save them). `WorldComponentType_Count` is the number
 of standard types; `WORLD_MAX_COMPONENT_TYPES` (16) is how many a world can hold, room for the types later tasks add
@@ -320,6 +322,15 @@ shares with the character asset's table. Its input (`CharacterInput`) and its st
 **transform driver**: the character system (`WorldCharacters`) writes its object's position (the feet) and yaw once a
 tick, and gives the object a capsule collider whose shape and motion rows it keeps in step.
 
+### Animator component (`animator_component`)
+What plays the object's skeletal animation (T29; everything about animation is in [Animation.md](Animation.md)):
+`plays_clip` and `clip` (the clip it plays from the start), `phase` (where it starts, a share of its length), `speed`,
+`is_paused`, `fade_seconds` (a clip change's cross-fade), `overrides_is_looped` / `is_looped`, and
+`overrides_animation_libraries` / `animation_libraries` (the placement's own libraries instead of its world model's).
+The playback (clip times, weights, fades) and the pose are runtime only: the animation system (`WorldAnimation`) keeps
+them in the component (its runtime, freed with the component) and publishes the pose for the renderer and sockets. Not
+a transform driver: it bends the object's model, never moves the object.
+
 ### Light component (`light_component`)
 `_color` (white), `_intensity` (>= 0, default 1), `_range` (>= 0, default 1: how far the light reaches; T05 renamed it
 from `Size`), `_castsShadows` (false). It uses its object's world position (a lamp carries its light); rotation, scale
@@ -408,7 +419,9 @@ The model is ready for them:
   5. queued events: trigger enter and exit (`WorldCollision_GetTriggerEvents`, then `_ClearTriggerEvents`), contacts
      and motion events (T27: `_GetContactEvents`, `_GetMotionEvents`, then their clears; the queued-event rule,
      architecture A4);
-  6. animation (today: sprite playback, `AdvanceSpriteAnimations` in the test frame, effectively enabled objects only);
+  6. animation, effectively enabled objects only: the skeletons' poses (`WorldAnimation_Update`, T29: the animators'
+     rows, clips and poses, [Animation.md](Animation.md)), then sprite playback (`AdvanceSpriteAnimations` in the test
+     frame);
   7. `World_UpdateTransforms`: the world matrices of everything that moved this tick (T08);
   8. the renderer, which only reads (AGENTS.md rule 3).
 
@@ -497,7 +510,9 @@ did the same to the sprite component: wire 1 `sprite_animation` became `world_sp
 values behind their flags (wires 17 to 31), and the draw distance rows came new (32 to 36); its next free wire id is 37. The sprite's value rows
 share their key, type, default, rules and texts with the world sprite's tables (`source/WorldSpriteInternal.h`,
 [WorldSprites.md](WorldSprites.md)). Each override flag sits right before its value, in table order (the inspector's and
-the JSON writer's order), and `PropertyTable_Check` checks the pairing.
+the JSON writer's order), and `PropertyTable_Check` checks the pairing. The collider's table is in
+[WorldCollision.md](WorldCollision.md), the character's in [Characters.md](Characters.md) and the animator's (T29) in
+[Animation.md](Animation.md).
 
 The object table's wire ids start at 3: 1 and 2 are the world file's own entries per object (the id and the
 components, [WorldFile.md](WorldFile.md)). T24 added `data` (one row: the tags and the values are one map, written as two JSON keys, `tags` and

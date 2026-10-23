@@ -2,10 +2,31 @@
 // and render-target constructors.
 
 #include <math.h>
+#include <stdio.h>
 #include "WorldRendererInternal.h"
 #include "Config.h"
+#include "GameSkeleton.h"
 #include "Logger.h"
+#include "SkeletalAnimation.h"
 #include "raylib/rlgl.h"
+
+
+// Macros.
+/** Room for the name of one palette element ("bonePalette[N]") when probing a shader. */
+#define PALETTE_UNIFORM_NAME_CAPACITY 32
+/** The palette rows a shader could hold at most: three per bone of the largest skeleton a model may have. */
+#define PALETTE_MAX_ROWS ((int)(GAME_SKELETON_MAX_BONES * 3U))
+
+
+// Static functions.
+/* Whether the shader's palette array has an element @p row (the array is indexed dynamically, so every element of its
+ * declared size is active). */
+static bool HasPaletteRow(Shader shader, int row)
+{
+    char Name[PALETTE_UNIFORM_NAME_CAPACITY];
+    snprintf(Name, sizeof(Name), "bonePalette[%d]", row);
+    return GetShaderLocation(shader, Name) >= 0;
+}
 
 
 // Internal functions (declared in WorldRendererInternal.h).
@@ -68,6 +89,54 @@ void WorldRendererCommon_SetDitherPixelScale(Shader shader, const WorldRendererD
 {
     float Scale[2] = { pixelScale.x, pixelScale.y };
     SetShaderValue(shader, locations->_locPixelScale, Scale, SHADER_UNIFORM_VEC2);
+}
+
+void WorldRendererCommon_PreparePalette(Shader shader, WorldRendererPalette* outPalette)
+{
+    *outPalette = (WorldRendererPalette){ ._location = GetShaderLocation(shader, "bonePalette"), ._maxBones = 0U,
+        ._pose = NULL, ._revision = 0U };
+    if ((outPalette->_location < 0) || !HasPaletteRow(shader, 0))
+    {
+        outPalette->_location = -1;
+        return;
+    }
+    // The array's length, by halving the range between a row it has and one past the most a shader could hold.
+    int Present = 0;
+    int Absent = PALETTE_MAX_ROWS;
+    if (HasPaletteRow(shader, Absent - 1))
+    {
+        Present = Absent - 1;
+    }
+    while ((Absent - Present) > 1)
+    {
+        int Middle = Present + ((Absent - Present) / 2);
+        if (HasPaletteRow(shader, Middle))
+        {
+            Present = Middle;
+        }
+        else
+        {
+            Absent = Middle;
+        }
+    }
+    outPalette->_maxBones = (uint32_t)(Present + 1) / 3U;
+}
+
+bool WorldRendererCommon_UploadPalette(Shader shader, WorldRendererPalette* palette, const WorldAnimatorPose* pose)
+{
+    if ((palette->_location < 0) || (pose->_boneCount == 0U) || (pose->_boneCount > palette->_maxBones))
+    {
+        return false;
+    }
+    if ((palette->_pose == pose) && (palette->_revision == pose->_revision))
+    {
+        return true;
+    }
+    SetShaderValueV(shader, palette->_location, pose->_palette, SHADER_UNIFORM_VEC4,
+        (int)(pose->_boneCount * (SKELETAL_PALETTE_FLOATS_PER_BONE / 4U)));
+    palette->_pose = pose;
+    palette->_revision = pose->_revision;
+    return true;
 }
 
 /* Light/ambient colours must be linear before they enter the PBR maths; the shader linearizes textured albedo

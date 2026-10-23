@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include "AssetTypesStandard.h"
 #include "AssetDefinitionCommon.h"
+#include "AnimationLibrary.h"
 #include "GameJSON.h"
 #include "GameModel.h"
 #include "GameTexture.h"
@@ -28,7 +29,8 @@
  * dependencies, and the variants, their overrides and their names live in one allocation the asset owns. Nothing in it
  * points into the definition, which may be replaced while the asset is loaded. The "collision" section (T12) is parsed
  * and loaded by source/WorldModelCollisionDefinition.c: its sets live in a second block the asset owns, with the hulls
- * and meshes built from models that load as further dependencies.
+ * and meshes built from models that load as further dependencies. The animation libraries (T29) are dependencies too;
+ * the skeleton is the first skinned LOD's, which every other skinned LOD must share.
  */
 
 
@@ -89,6 +91,8 @@ typedef struct WorldModelDefinitionStruct
     WorldModelVariantDefinition* Variants; // owned array
     size_t VariantCount;
     WorldModelCollisionDefinition* Collision; // owned, NULL without a "collision" section
+    unsigned char* AnimationLibraries[WORLD_MODEL_MAX_ANIMATION_LIBRARIES]; // owned asset names
+    size_t AnimationLibraryCount;
 } WorldModelDefinition;
 
 /* The definition being read and its name in printable form, for messages. */
@@ -103,6 +107,7 @@ typedef struct WorldModelLoadedStruct
     WorldModel Model;     // Asset points here
     void* VariantBlock;   // owned: the variants, their overrides and their names in one block (NULL without variants)
     void* CollisionBlock; // owned: the collision sets, shapes, hulls and meshes (NULL without collision)
+    void* LibraryBlock;   // owned: the animation libraries' names in one block (NULL without libraries)
 } WorldModelLoaded;
 
 
@@ -110,7 +115,7 @@ typedef struct WorldModelLoadedStruct
 static const unsigned char* const RootKeys[] =
 {
     u8"name", u8"lods", u8"draw_distance", u8"is_draw_distance_fixed", u8"lod_fade_seconds", u8"lod_hysteresis",
-    u8"render", u8"variants", u8"bounds", u8"collision"
+    u8"render", u8"variants", u8"bounds", u8"collision", u8"animation_libraries"
 };
 static const unsigned char* const LodKeys[] = { u8"model", u8"max_distance" };
 static const unsigned char* const RenderKeys[] =
@@ -683,6 +688,60 @@ static Error ParseBounds(const ParseContext* context, JSONCompound* root)
     return Error_CreateSuccess();
 }
 
+/* "animation_libraries": up to WORLD_MODEL_MAX_ANIMATION_LIBRARIES animation library asset names, each once (T29). */
+static Error ParseAnimationLibraries(const ParseContext* context, JSONCompound* root)
+{
+    JSONArray* Libraries = NULL;
+    Error Result = GetOptionalArray(context, root, (const unsigned char*)u8"animation_libraries", "the definition",
+        &Libraries);
+    if ((Result.Code != ErrorCode_Success) || (Libraries == NULL))
+    {
+        return Result;
+    }
+    size_t Count = JSONArray_GetElementCount(Libraries);
+    if (Count > WORLD_MODEL_MAX_ANIMATION_LIBRARIES)
+    {
+        return Fail(context, "\"animation_libraries\" names %" PRIu64 " libraries; at most %" PRIu64 " are allowed.",
+            (uint64_t)Count, (uint64_t)WORLD_MODEL_MAX_ANIMATION_LIBRARIES);
+    }
+    WorldModelDefinition* Definition = context->Definition;
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        JSONObjectValue Element;
+        unsigned char* Name = NULL;
+        Result = JSONArray_GetVerified(Libraries, Index, JSONValueType_String, &Element);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = AssetJSON_ValueToOwnedString(&Element, &Name);
+        }
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return Fail(context, "animation_libraries[%" PRIu64 "] must be the name of an animation library.",
+                (uint64_t)Index);
+        }
+        // Kept before it is checked, so the definition's teardown frees it.
+        Definition->AnimationLibraries[Index] = Name;
+        Definition->AnimationLibraryCount = Index + 1U;
+        char PrintableName[NAME_PRINT_CAPACITY];
+        if (!AssetManager_IsValidAssetName(Name))
+        {
+            return Fail(context, "animation_libraries[%" PRIu64 "] \"%s\" is not a valid asset name ([a-z][a-z0-9_.-]*).",
+                (uint64_t)Index, Printable(Name, PrintableName, sizeof(PrintableName)));
+        }
+        for (size_t Earlier = 0U; Earlier < Index; Earlier++)
+        {
+            if (StringUTF8_GetByteLength(Definition->AnimationLibraries[Earlier]) == StringUTF8_GetByteLength(Name)
+                && Memory_IsEqual(Definition->AnimationLibraries[Earlier], Name, StringUTF8_GetByteLength(Name)))
+            {
+                return Fail(context, "animation_libraries names \"%s\" twice.",
+                    Printable(Name, PrintableName, sizeof(PrintableName)));
+            }
+        }
+    }
+    return Error_CreateSuccess();
+}
+
 /* Reads everything after the name, in the reference's order. */
 static Error ParseDefinition(WorldModelDefinition* definition, JSONCompound* root)
 {
@@ -720,6 +779,10 @@ static Error ParseDefinition(WorldModelDefinition* definition, JSONCompound* roo
     {
         Result = WorldModelCollisionDefinition_Parse(Context.Name, root, &definition->Collision);
     }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ParseAnimationLibraries(&Context, root);
+    }
     return Result;
 }
 
@@ -731,6 +794,7 @@ static void WorldModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
     WorldModelLoaded* Loaded = self->DestroyContext;
     Memory_Free(Loaded->VariantBlock);
     WorldModelCollision_DestroyBlock(Loaded->CollisionBlock);
+    Memory_Free(Loaded->LibraryBlock);
     Memory_Free(Loaded);
 }
 
@@ -773,11 +837,124 @@ static Error LoadLods(const WorldModelDefinition* definition, AssetManager* mana
     return Result;
 }
 
+/* The skeleton (T29): the first LOD whose model has one; every other LOD with one must have the same bones bound the same
+ * way, so one pose's palette skins them all. */
+static Error FindSkeleton(const WorldModelDefinition* definition, WorldModel* model)
+{
+    model->_skeleton = NULL;
+    model->_skeletonLod = 0U;
+    for (size_t Index = 0U; Index < model->_lodCount; Index++)
+    {
+        const GameSkeleton* Skeleton = GameModel_GetSkeleton(model->_lods[Index]._model);
+        if (Skeleton == NULL)
+        {
+            continue;
+        }
+        if (model->_skeleton == NULL)
+        {
+            model->_skeleton = Skeleton;
+            model->_skeletonLod = Index;
+            continue;
+        }
+        if (!GameSkeleton_HasSameBindPoses(model->_skeleton, Skeleton))
+        {
+            return Error_Construct3(ErrorCode_InvalidAssetData, u8"World model \"%s\": LOD %" PRIu64 u8" (model \"%s\") "
+                u8"has another skeleton than LOD %" PRIu64 u8" (model \"%s\"): skinned LODs share one skeleton, the same "
+                u8"bones bound the same way.", definition->Base.Name, (uint64_t)Index, definition->Lods[Index].Model,
+                (uint64_t)model->_skeletonLod, definition->Lods[model->_skeletonLod].Model);
+        }
+    }
+    return Error_CreateSuccess();
+}
+
+/* Copies the animation libraries' names into one block (*outBlock, owned by the caller) the world model points into. */
+static void CopyAnimationLibraryNames(const WorldModelDefinition* definition, WorldModel* model, void** outBlock)
+{
+    // At most WORLD_MODEL_MAX_ANIMATION_LIBRARIES names of at most an asset name's length: no overflow.
+    size_t ByteCount = 0U;
+    for (size_t Index = 0U; Index < definition->AnimationLibraryCount; Index++)
+    {
+        ByteCount += StringUTF8_GetByteLength(definition->AnimationLibraries[Index]) + 1U;
+    }
+    unsigned char* Block = Memory_Allocate(ByteCount);
+    unsigned char* Cursor = Block;
+    for (size_t Index = 0U; Index < definition->AnimationLibraryCount; Index++)
+    {
+        size_t Length = StringUTF8_GetByteLength(definition->AnimationLibraries[Index]) + 1U;
+        Memory_Copy(definition->AnimationLibraries[Index], Cursor, Length);
+        model->_animationLibraryNames[Index] = Cursor;
+        Cursor += Length;
+    }
+    *outBlock = Block;
+}
+
+/* Loads the animation libraries as dependencies and checks that no clip name repeats across them (T29); on success
+ * *outNameBlock holds their names (owned by the caller; NULL without libraries). */
+static Error LoadAnimationLibraries(const WorldModelDefinition* definition, AssetManager* manager,
+    AssetUserID dependencyUser, WorldModel* model, void** outNameBlock)
+{
+    *outNameBlock = NULL;
+    model->_animationLibraryCount = 0U;
+    if (definition->AnimationLibraryCount == 0U)
+    {
+        return Error_CreateSuccess();
+    }
+    AssetTypeID LibraryType = ASSET_TYPE_ID_INVALID;
+    Error Result = GetTypeId(manager, ASSET_TYPE_NAME_ANIMATION_LIBRARY, &LibraryType);
+    for (size_t Index = 0U; (Index < definition->AnimationLibraryCount) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        void* Asset = NULL;
+        Result = AssetManager_LoadAssetSingle(manager, LibraryType, definition->AnimationLibraries[Index], dependencyUser,
+            &Asset);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error Wrapped = Error_Construct3(Result.Code, u8"World model \"%s\": animation library \"%s\": %s",
+                definition->Base.Name, definition->AnimationLibraries[Index],
+                (Result.Message != NULL) ? Result.Message : (const unsigned char*)u8"it did not load.");
+            Error_Deconstruct(&Result);
+            return Wrapped;
+        }
+        model->_animationLibraries[Index] = Asset;
+        model->_animationLibraryCount = Index + 1U;
+    }
+    for (size_t First = 0U; (First < model->_animationLibraryCount) && (Result.Code == ErrorCode_Success); First++)
+    {
+        const AnimationLibrary* Library = model->_animationLibraries[First];
+        for (uint32_t Clip = 0U; Clip < AnimationLibrary_GetClipCount(Library); Clip++)
+        {
+            const unsigned char* Name = AnimationClip_GetName(AnimationLibrary_GetClip(Library, Clip));
+            for (size_t Second = First + 1U; Second < model->_animationLibraryCount; Second++)
+            {
+                if (AnimationLibrary_TryFindClip(model->_animationLibraries[Second], Name, NULL))
+                {
+                    return Error_Construct3(ErrorCode_InvalidAssetData, u8"World model \"%s\": clip \"%s\" is in both "
+                        u8"animation library \"%s\" and \"%s\"; a world model's clips need names of their own.",
+                        definition->Base.Name, Name, definition->AnimationLibraries[First],
+                        definition->AnimationLibraries[Second]);
+                }
+            }
+        }
+    }
+    if ((Result.Code == ErrorCode_Success) && (model->_skeleton == NULL) && (AssetManager_GetLogger(manager) != NULL))
+    {
+        Error LogResult = Logger_LogWarningFormatted(AssetManager_GetLogger(manager), (const unsigned char*)u8"World "
+            u8"model \"%s\" names animation libraries, but none of its LOD models has a skeleton: its placements play "
+            u8"nothing.", (const char*)definition->Base.Name);
+        Error_Deconstruct(&LogResult);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        CopyAnimationLibraryNames(definition, model, outNameBlock);
+    }
+    return Result;
+}
+
 /* The bounding sphere: the definition's, in the object's own space, or the sphere around LOD 0's mesh bounds in its
  * mesh space with LOD 0's import transform to take it to the object's (the user composes that with the world matrix
  * before taking the stretch, so an uneven import scale and an uneven placement scale do not multiply up). */
 static void SetBounds(const WorldModelDefinition* definition, WorldModel* model)
 {
+    model->_hasOwnBounds = definition->HasBounds;
     if (definition->HasBounds)
     {
         model->_boundsCenter = definition->BoundsCenter;
@@ -968,9 +1145,18 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
     WorldModel Built;
     Memory_Zero(&Built, sizeof(Built));
 
-    // Every failure frees what this call allocated before it returns (the variant block when the collision fails); the
-    // manager releases the dependency user's holds when the load fails.
+    // Every failure frees what this call allocated before it returns (the name and variant blocks when a later step
+    // fails); the manager releases the dependency user's holds when the load fails.
     Error Result = LoadLods(Definition, manager, dependencyUser, &Built);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = FindSkeleton(Definition, &Built);
+    }
+    void* LibraryBlock = NULL;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = LoadAnimationLibraries(Definition, manager, dependencyUser, &Built, &LibraryBlock);
+    }
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
@@ -979,6 +1165,7 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
     Result = LoadVariants(Definition, manager, dependencyUser, &Built, &VariantBlock);
     if (Result.Code != ErrorCode_Success)
     {
+        Memory_Free(LibraryBlock);
         return Result;
     }
     void* CollisionBlock = NULL;
@@ -989,6 +1176,7 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
         if (Result.Code != ErrorCode_Success)
         {
             Memory_Free(VariantBlock);
+            Memory_Free(LibraryBlock);
             return Result;
         }
     }
@@ -1002,6 +1190,7 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
     Loaded->Model = Built;
     Loaded->VariantBlock = VariantBlock;
     Loaded->CollisionBlock = CollisionBlock;
+    Loaded->LibraryBlock = LibraryBlock;
     outLoaded->Asset = &Loaded->Model;
     outLoaded->VTable = &WorldModelLoadedVTable;
     outLoaded->DestroyContext = Loaded;
@@ -1030,6 +1219,10 @@ static void WorldModelDefinition_Destroy(void* self)
     }
     Memory_Free(Definition->Variants);
     WorldModelCollisionDefinition_Destroy(Definition->Collision);
+    for (size_t Index = 0U; Index < Definition->AnimationLibraryCount; Index++)
+    {
+        Memory_Free(Definition->AnimationLibraries[Index]);
+    }
     Memory_Free(Definition->Base.Name);
     Memory_Free(Definition);
 }

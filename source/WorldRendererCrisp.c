@@ -70,9 +70,7 @@ void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* fram
     };
     WorldRendererLighting_UploadFrame(self, frame, false, DitherPixelScale);
     BeginMode3D(frame->RenderCamera);
-    bool IsLit = (self->_pbr._shader != NULL);
-    WorldRendererGeometry_DrawModels(self, IsLit ? &self->_pbr._passShader : NULL, IsLit,
-        WorldRendererPixelFilter_CrispOnly);
+    WorldRendererGeometry_DrawModels(self, WorldRendererPixelFilter_CrispOnly);
     // Crisp sprites (OmitPixelation on cutout sprites) render full-res here too, so they stay sharp like crisp models.
     WorldRendererSprites_DrawLit(self, WorldRendererPixelFilter_CrispOnly, false);
     EndMode3D();

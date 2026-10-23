@@ -46,6 +46,7 @@ static void EnsureShaders(WorldRenderer* self)
     self->_shadersLoadAttempted = true;
 
     WorldRendererLighting_LoadShader(self);
+    WorldRendererGeometry_LoadShaders(self);
     WorldRendererPost_LoadShaders(self);
     WorldRendererCrisp_LoadShader(self);
     WorldRendererSprites_LoadShaders(self);
@@ -59,17 +60,17 @@ static void EnsureShaders(WorldRenderer* self)
 // is wanted this frame.
 static bool IsCascadeShadowAvailable(const WorldRenderer* self)
 {
-    return self->_cascades._hasNearMap && (self->_cascades._depthShader != NULL) && (self->_pbr._shader != NULL);
+    return self->_cascades._hasNearMap && (self->_cascades._depthShader != NULL) && (self->_pbr._rigid._shader != NULL);
 }
 
 static bool IsPointShadowAvailable(const WorldRenderer* self)
 {
-    return self->_pointShadow._hasCube && (self->_pointShadow._shader != NULL) && (self->_pbr._shader != NULL);
+    return self->_pointShadow._hasCube && (self->_pointShadow._shader != NULL) && (self->_pbr._rigid._shader != NULL);
 }
 
 static bool IsAoAvailable(const WorldRenderer* self)
 {
-    return (self->_pbr._shader != NULL) && (self->_ao._shader != NULL) && (self->_gbuffer._shader != NULL)
+    return (self->_pbr._rigid._shader != NULL) && (self->_ao._shader != NULL) && (self->_gbuffer._shader != NULL)
         && self->_gbuffer._hasTarget && self->_gbuffer._isDepthSamplable && self->_ao._hasTarget;
 }
 
@@ -93,7 +94,7 @@ static bool AreSunshaftsAvailable(const WorldRenderer* self)
 
 static bool IsCrispAvailable(const WorldRenderer* self)
 {
-    return (self->_crisp._compositeShader != NULL) && (self->_pbr._shader != NULL) && self->_crisp._hasTarget
+    return (self->_crisp._compositeShader != NULL) && (self->_pbr._rigid._shader != NULL) && self->_crisp._hasTarget
         && self->_scene._isDepthSamplable;
 }
 
@@ -114,12 +115,12 @@ static bool IsMoonAvailable(const WorldRenderer* self)
 
 static bool IsMoonlightAvailable(const WorldRenderer* self)
 {
-    return self->_pbr._shader != NULL;
+    return self->_pbr._rigid._shader != NULL;
 }
 
 static bool IsNightVisionAvailable(const WorldRenderer* self)
 {
-    return (self->_pbr._shader != NULL) || (self->_sky._shader != NULL); // the passes that apply it (sprites too)
+    return (self->_pbr._rigid._shader != NULL) || (self->_sky._shader != NULL); // the passes that apply it (sprites too)
 }
 
 static bool AreSpriteShadowsAvailable(const WorldRenderer* self)
@@ -352,7 +353,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->IsSceneHdr = self->_scene._isHdr;
     Status->IsSceneDepthSamplable = self->_scene._isDepthSamplable;
 
-    bool HasPbr = (self->_pbr._shader != NULL);
+    bool HasPbr = (self->_pbr._rigid._shader != NULL);
     bool HasSky = (self->_sky._shader != NULL);
     bool HasTonemap = (self->_tonemap._shader != NULL);
     bool HasSprites = WorldRendererSprites_IsAvailable(self);
@@ -387,6 +388,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&self->_cache, &ModelCount);
     Status->ModelCount = 0;
     Status->ModelWithoutAssetCount = 0;
+    Status->PosedModelCount = 0;
     for (size_t Index = 0; Index < ModelCount; Index++)
     {
         if (Models[Index].Asset != NULL)
@@ -397,7 +399,17 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
         {
             Status->ModelWithoutAssetCount++;
         }
+        if (Models[Index].IsDrawn && (Models[Index].Pose != NULL))
+        {
+            Status->PosedModelCount++;
+        }
     }
+    // Skinning needs the skinned twin of the shader models draw with: the PBR one, or the unlit one without PBR.
+    bool HasSkinning = HasPbr
+        ? ((self->_pbr._skinned._shader != NULL) && (self->_pbr._skinned._palette._location >= 0))
+        : ((self->_unlit._skinnedShader != NULL) && (self->_unlit._skinnedPalette._location >= 0));
+    Status->Features[WorldRendererFeature_Skinning] = StateOf(HasSkinning, HasSkinning
+        && (Status->PosedModelCount > 0U));
     size_t SpriteCount = 0;
     const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&self->_cache, &SpriteCount);
     Status->SpriteCount = SpriteCount;
@@ -632,6 +644,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     {
         return SyncResult;
     }
+    // The skinned shaders' palettes hold no pose yet this frame (an animator's memory may be another's since the last).
+    WorldRendererGeometry_ResetPalettes(self);
     // Recreates the targets after a resize or a pixelation change; only a missing scene target is fatal.
     Error TargetResult = WorldRendererScene_EnsureTargets(self, target.texture.width, target.texture.height);
     if (TargetResult.Code != ErrorCode_Success)
@@ -755,6 +769,7 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_NightVision:      return (const unsigned char*)u8"night vision";
         case WorldRendererFeature_SpriteLighting:   return (const unsigned char*)u8"sprite lighting";
         case WorldRendererFeature_SpriteShadows:    return (const unsigned char*)u8"sprite shadows";
+        case WorldRendererFeature_Skinning:         return (const unsigned char*)u8"skinning";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -783,13 +798,14 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     const char* Tier = !Status->IsSceneHdr ? "8-bit"
         : (Status->IsSceneDepthSamplable ? "HDR with samplable depth" : "HDR without samplable depth");
     Error LogResult = Logger_LogInfoFormatted(self->_logger,
-        (const unsigned char*)u8"WorldRenderer: %s scene; %" PRIu64 u8" models (%" PRIu64 u8" without a world model), %"
-        PRIu64 u8" sprites (%" PRIu64 u8" decals, %" PRIu64 u8" blended or additive), %" PRIu64 u8" lights, %" PRIu64
-        u8" stars; drawn %" PRIu64 u8" models and %" PRIu64 u8" sprites (%" PRIu64 u8" fading; models by LOD %s, %"
-        PRIu64 u8" cross-fading%s), culled %" PRIu64 u8" outside the view%s and %" PRIu64 u8" faded out (draw "
-        u8"distance, opacity); %s.",
-        Tier, (uint64_t)Status->ModelCount, (uint64_t)Status->ModelWithoutAssetCount, (uint64_t)Status->SpriteCount,
-        (uint64_t)Status->DecalCount, (uint64_t)Status->TransparentSpriteCount, (uint64_t)Status->LightCount,
+        (const unsigned char*)u8"WorldRenderer: %s scene; %" PRIu64 u8" models (%" PRIu64 u8" without a world model, %"
+        PRIu64 u8" posed), %" PRIu64 u8" sprites (%" PRIu64 u8" decals, %" PRIu64 u8" blended or additive), %" PRIu64
+        u8" lights, %" PRIu64 u8" stars; drawn %" PRIu64 u8" models and %" PRIu64 u8" sprites (%" PRIu64 u8" fading; "
+        u8"models by LOD %s, %" PRIu64 u8" cross-fading%s), culled %" PRIu64 u8" outside the view%s and %" PRIu64
+        u8" faded out (draw distance, opacity); %s.",
+        Tier, (uint64_t)Status->ModelCount, (uint64_t)Status->ModelWithoutAssetCount, (uint64_t)Status->PosedModelCount,
+        (uint64_t)Status->SpriteCount, (uint64_t)Status->DecalCount, (uint64_t)Status->TransparentSpriteCount,
+        (uint64_t)Status->LightCount,
         (uint64_t)Status->StarCount, (uint64_t)Status->DrawnModelCount, (uint64_t)Status->DrawnSpriteCount,
         (uint64_t)Status->FadingCount, AreLodsBuilt ? (const char*)Lods._data : "?",
         (uint64_t)Status->LodFadingCount, Status->IsLodTintingEnabled ? ", LOD tinting on" : "",

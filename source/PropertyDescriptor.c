@@ -120,6 +120,8 @@ static size_t GetStorageSize(PropertyType type)
             return sizeof(PropertyFloatList*);
         case PropertyType_EnumSet:
             return sizeof(uint32_t);
+        case PropertyType_AssetNameList:
+            return sizeof(PropertyAssetNameList*);
         case PropertyType_Enum:
             return 0U;
     }
@@ -155,6 +157,10 @@ static const void* GetOwnedData(PropertyType type, const PropertyData* data)
     {
         return data->DataMapValue;
     }
+    if (type == PropertyType_AssetNameList)
+    {
+        return data->AssetNameListValue;
+    }
     return (type == PropertyType_FloatList) ? (const void*)data->FloatListValue : (const void*)data->StringValue;
 }
 
@@ -164,6 +170,10 @@ static void* CloneOwned(PropertyType type, const void* value)
     if (type == PropertyType_DataMap)
     {
         return DataMap_Clone(value);
+    }
+    if (type == PropertyType_AssetNameList)
+    {
+        return PropertyAssetNameList_Clone(value);
     }
     return (type == PropertyType_FloatList) ? (void*)PropertyFloatList_Clone(value) : (void*)CloneString(value);
 }
@@ -433,6 +443,31 @@ static Error CheckFloatList(const PropertyTable* table, const PropertyDescriptor
 }
 
 
+/* "hold at most 4 names", "have every name an asset name ... at most 64 bytes long" */
+static Error CheckAssetNameList(const PropertyTable* table, const PropertyDescriptor* descriptor,
+    const PropertyAssetNameList* list)
+{
+    size_t Count = PropertyAssetNameList_GetCount(list);
+    char Text[PROPERTY_RULE_TEXT_SIZE + 64U];
+    if (Count > descriptor->Rules.MaxCount)
+    {
+        snprintf(Text, sizeof(Text), "hold at most %" PRIu64 " names", (uint64_t)descriptor->Rules.MaxCount);
+        return MakeRuleError(table, descriptor, Text);
+    }
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        const unsigned char* Name = PropertyAssetNameList_GetName(list, Index);
+        if ((StringUTF8_GetByteLength(Name) > descriptor->Rules.MaxLength) || !AssetManager_IsValidAssetName(Name))
+        {
+            snprintf(Text, sizeof(Text), "have every name an asset name matching " PROPERTY_ASSET_NAME_GRAMMAR
+                " of at most %" PRIu64 " bytes", (uint64_t)descriptor->Rules.MaxLength);
+            return MakeRuleError(table, descriptor, Text);
+        }
+    }
+    return Error_CreateSuccess();
+}
+
+
 // Static functions: the table check.
 static Error TableError(const PropertyTable* table, const PropertyDescriptor* descriptor, const char* problem)
 {
@@ -586,9 +621,20 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
     bool IsString = PropertyInternal_IsStringType(descriptor->Type);
     bool IsMap = descriptor->Type == PropertyType_DataMap;
     bool IsList = descriptor->Type == PropertyType_FloatList;
+    bool IsNameList = descriptor->Type == PropertyType_AssetNameList;
     if (IsString && (Rules->MaxLength == 0U))
     {
         return TableError(table, descriptor, "a string needs a MaxLength");
+    }
+    if (IsNameList && ((Rules->MaxCount == 0U) || (Rules->MaxCount > PROPERTY_ASSET_NAME_LIST_MAX_COUNT)
+        || (Rules->MaxLength == 0U) || (Rules->MaxLength > PROPERTY_ASSET_NAME_LIST_MAX_LENGTH)))
+    {
+        return TableError(table, descriptor, "an asset name list needs a MaxCount of 1 to "
+            "PROPERTY_ASSET_NAME_LIST_MAX_COUNT and a MaxLength of 1 to PROPERTY_ASSET_NAME_LIST_MAX_LENGTH");
+    }
+    if (IsNameList && (descriptor->Default.AssetNameListValue != NULL))
+    {
+        return TableError(table, descriptor, "an asset name list must default to empty (NULL)");
     }
     if (IsMap && ((Rules->MaxLength == 0U) || (Rules->MaxCount == 0U)))
     {
@@ -598,13 +644,14 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
     {
         return TableError(table, descriptor, "a float list needs a MaxCount of 1 to PROPERTY_FLOAT_LIST_MAX_COUNT");
     }
-    if ((!IsString && !IsMap && (Rules->MaxLength != 0U)) || (!IsString && Rules->IsNullAllowed))
+    if ((!IsString && !IsMap && !IsNameList && (Rules->MaxLength != 0U)) || (!IsString && Rules->IsNullAllowed))
     {
-        return TableError(table, descriptor, "only strings take MaxLength and IsNullAllowed (and data maps MaxLength)");
+        return TableError(table, descriptor, "only strings take MaxLength and IsNullAllowed (and data maps and asset "
+            "name lists MaxLength)");
     }
-    if (!IsMap && !IsList && (Rules->MaxCount != 0U))
+    if (!IsMap && !IsList && !IsNameList && (Rules->MaxCount != 0U))
     {
-        return TableError(table, descriptor, "only data maps and float lists take a MaxCount");
+        return TableError(table, descriptor, "only data maps, float lists and asset name lists take a MaxCount");
     }
     if (!IsList && Rules->IsStrictlyIncreasing)
     {
@@ -742,7 +789,8 @@ bool PropertyInternal_IsStringType(PropertyType type)
 
 bool PropertyInternal_IsOwnedType(PropertyType type)
 {
-    return PropertyInternal_IsStringType(type) || (type == PropertyType_DataMap) || (type == PropertyType_FloatList);
+    return PropertyInternal_IsStringType(type) || (type == PropertyType_DataMap) || (type == PropertyType_FloatList)
+        || (type == PropertyType_AssetNameList);
 }
 
 PropertyFloatList* PropertyInternal_AllocateFloatList(size_t count)
@@ -796,6 +844,11 @@ void PropertyInternal_AdoptOwned(const PropertyDescriptor* descriptor, void* ins
     if (descriptor->Type == PropertyType_FloatList)
     {
         PropertyFloatList_Destroy(Previous);
+        return;
+    }
+    if (descriptor->Type == PropertyType_AssetNameList)
+    {
+        PropertyAssetNameList_Destroy(Previous);
         return;
     }
     Memory_Free(Previous);
@@ -852,6 +905,8 @@ bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, con
             return PropertyFloatList_Equals(a->FloatListValue, b->FloatListValue);
         case PropertyType_EnumSet:
             return a->EnumSetValue == b->EnumSetValue;
+        case PropertyType_AssetNameList:
+            return PropertyAssetNameList_Equals(a->AssetNameListValue, b->AssetNameListValue);
     }
     return false;
 }
@@ -959,6 +1014,8 @@ Error PropertyInternal_CheckData(const PropertyTable* table, const PropertyDescr
             return CheckFloatList(table, descriptor, data->FloatListValue);
         case PropertyType_EnumSet:
             return CheckEnumSet(table, descriptor, data->EnumSetValue);
+        case PropertyType_AssetNameList:
+            return CheckAssetNameList(table, descriptor, data->AssetNameListValue);
     }
     return MakeRuleError(table, descriptor, "have a known property type");
 }
@@ -1106,6 +1163,8 @@ const unsigned char* PropertyType_GetName(PropertyType type)
             return u8"float_list";
         case PropertyType_EnumSet:
             return u8"enum_set";
+        case PropertyType_AssetNameList:
+            return u8"asset_name_list";
     }
     return u8"unknown";
 }
@@ -1422,4 +1481,95 @@ Error Properties_Set(const PropertyTable* table, void* instance, const unsigned 
         table->AfterSet(instance, Descriptor);
     }
     return Error_CreateSuccess();
+}
+
+Error PropertyAssetNameList_Create(const unsigned char* const* names, size_t count, PropertyAssetNameList** outList)
+{
+    if (outList == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "PropertyAssetNameList_Create: outList must not be NULL.");
+    }
+    *outList = NULL;
+    if (count == 0U)
+    {
+        return Error_CreateSuccess();
+    }
+    if (names == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "PropertyAssetNameList_Create: names must not be NULL when count is above 0.");
+    }
+    if (count > PROPERTY_ASSET_NAME_LIST_MAX_COUNT)
+    {
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange,
+            "PropertyAssetNameList_Create: a list holds at most %" PRIu64 " names, not %" PRIu64 ".",
+            (uint64_t)PROPERTY_ASSET_NAME_LIST_MAX_COUNT, (uint64_t)count);
+    }
+    // Every name is at most PROPERTY_ASSET_NAME_LIST_MAX_LENGTH bytes and there are at most
+    // PROPERTY_ASSET_NAME_LIST_MAX_COUNT of them, so the block's size cannot overflow.
+    size_t NameBytes = 0U;
+    for (size_t Index = 0U; Index < count; Index++)
+    {
+        if (names[Index] == NULL)
+        {
+            return Error_Construct2(ErrorCode_IllegalArgument, "PropertyAssetNameList_Create: a name is NULL.");
+        }
+        size_t Length = StringUTF8_GetByteLength(names[Index]);
+        if (Length > PROPERTY_ASSET_NAME_LIST_MAX_LENGTH)
+        {
+            return Error_Construct4(ErrorCode_ArgumentOutOfRange,
+                "PropertyAssetNameList_Create: a name is longer than %" PRIu64 " bytes.",
+                (uint64_t)PROPERTY_ASSET_NAME_LIST_MAX_LENGTH);
+        }
+        NameBytes += Length + 1U;
+    }
+    size_t PointerBytes = count * sizeof(const unsigned char*);
+    PropertyAssetNameList* List = Memory_Allocate(sizeof(PropertyAssetNameList) + PointerBytes + NameBytes);
+    List->_count = count;
+    unsigned char* Text = (unsigned char*)List + sizeof(PropertyAssetNameList) + PointerBytes;
+    for (size_t Index = 0U; Index < count; Index++)
+    {
+        size_t Bytes = StringUTF8_GetByteLength(names[Index]) + 1U;
+        Memory_Copy(names[Index], Text, Bytes);
+        List->_names[Index] = Text;
+        Text += Bytes;
+    }
+    *outList = List;
+    return Error_CreateSuccess();
+}
+
+void PropertyAssetNameList_Destroy(PropertyAssetNameList* list)
+{
+    // The count, the pointers and the names are one block.
+    Memory_Free(list);
+}
+
+PropertyAssetNameList* PropertyAssetNameList_Clone(const PropertyAssetNameList* list)
+{
+    if (list == NULL)
+    {
+        return NULL;
+    }
+    PropertyAssetNameList* Copy = NULL;
+    Error Result = PropertyAssetNameList_Create(list->_names, list->_count, &Copy);
+    // A list that exists already passed every limit Create checks, so the copy cannot fail.
+    Error_Deconstruct(&Result);
+    return Copy;
+}
+
+bool PropertyAssetNameList_Equals(const PropertyAssetNameList* a, const PropertyAssetNameList* b)
+{
+    size_t Count = PropertyAssetNameList_GetCount(a);
+    if (Count != PropertyAssetNameList_GetCount(b))
+    {
+        return false;
+    }
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        if (!AreStringsEqual(a->_names[Index], b->_names[Index]))
+        {
+            return false;
+        }
+    }
+    return true;
 }

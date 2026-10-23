@@ -1,5 +1,7 @@
 #include "TestAssets.h"
+#include "AnimationLibrary.h"
 #include "GameModel.h"
+#include "GameSkeleton.h"
 #include "GameFont.h"
 #include "GameTexture.h"
 #include "SpriteAnimation.h"
@@ -59,6 +61,34 @@ typedef struct TestModelLoadedStruct
     GameModel Model;
     TestAssetCounters* Counters;
 } TestModelLoaded;
+
+typedef struct TestSkinnedModelDefinitionStruct
+{
+    AssetDefinition Base;
+    TestSkeletonBone* Bones;  // owned copies, their names pointing into Names
+    unsigned char** Names;    // owned
+    int BoneCount;
+    float BoxSize;
+    Matrix Transform;
+    TestAssetCounters* Counters;
+} TestSkinnedModelDefinition;
+
+typedef struct TestLibraryDefinitionStruct
+{
+    AssetDefinition Base;
+    unsigned char* Gltf;              // owned copy of the file's text
+    size_t ByteCount;
+    AnimationClipSettings* Settings;  // owned, their strings pointing into Strings
+    unsigned char** Strings;          // owned: each clip's source, then its name
+    size_t ClipCount;
+    TestAssetCounters* Counters;
+} TestLibraryDefinition;
+
+typedef struct TestLibraryLoadedStruct
+{
+    AnimationLibrary* Library;
+    TestAssetCounters* Counters;
+} TestLibraryLoaded;
 
 typedef struct TestTextureDefinitionStruct
 {
@@ -299,6 +329,136 @@ static void TestModelDefinition_Destroy(void* self)
 
 static const AssetDefinitionVTable TestModelVTable = { TestModel_LoadAsset, TestModelDefinition_Destroy };
 
+static void TestSkinnedModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
+{
+    UNUSED(manager);
+    TestModelLoaded* Loaded = self->DestroyContext;
+    if (Loaded->Counters != NULL)
+    {
+        Loaded->Counters->UnloadCount++;
+    }
+    GameSkeleton_Destroy(Loaded->Model._skeleton);
+    TestSkeletonModel_Destroy(&Loaded->Model._rayModel);
+    Memory_Free(Loaded);
+}
+
+static const LoadedAssetVTable TestSkinnedModelLoadedVTable = { TestSkinnedModelLoaded_Destroy };
+
+// A skinned model as LoadModel keeps one (CPU arrays and bone buffer ids, here fake) with its skeleton.
+static Error TestSkinnedModel_LoadAsset(void* self, AssetManager* manager, AssetUserID dependencyUser,
+    LoadedAsset* outLoaded)
+{
+    UNUSED(manager);
+    UNUSED(dependencyUser);
+    TestSkinnedModelDefinition* Definition = self;
+
+    TestModelLoaded* Loaded = Memory_Allocate(sizeof(TestModelLoaded));
+    Memory_Zero(Loaded, sizeof(*Loaded));
+    Loaded->Model._rayModel = TestSkeletonModel_Create(Definition->Bones, Definition->BoneCount, Definition->BoxSize);
+    Loaded->Model._rayModel.transform = Definition->Transform;
+    const Mesh* Built = &Loaded->Model._rayModel.meshes[0];
+    for (int Vertex = 0; Vertex < Built->vertexCount; Vertex++)
+    {
+        Vector3 Point = { Built->vertices[(Vertex * 3)], Built->vertices[(Vertex * 3) + 1],
+            Built->vertices[(Vertex * 3) + 2] };
+        Loaded->Model._localBounds.min = (Vertex == 0) ? Point : Vector3Min(Loaded->Model._localBounds.min, Point);
+        Loaded->Model._localBounds.max = (Vertex == 0) ? Point : Vector3Max(Loaded->Model._localBounds.max, Point);
+    }
+    Error Result = GameSkeleton_Create(&Loaded->Model._rayModel, Definition->Base.Name, NULL, &Loaded->Model._skeleton);
+    if (Result.Code != ErrorCode_Success)
+    {
+        TestSkeletonModel_Destroy(&Loaded->Model._rayModel);
+        Memory_Free(Loaded);
+        return Result;
+    }
+    Loaded->Counters = Definition->Counters;
+    if (Loaded->Counters != NULL)
+    {
+        Loaded->Counters->LoadCount++;
+    }
+    outLoaded->Asset = &Loaded->Model;
+    outLoaded->VTable = &TestSkinnedModelLoadedVTable;
+    outLoaded->DestroyContext = Loaded;
+    return Error_CreateSuccess();
+}
+
+static void TestSkinnedModelDefinition_Destroy(void* self)
+{
+    TestSkinnedModelDefinition* Definition = self;
+    for (int Index = 0; Index < Definition->BoneCount; Index++)
+    {
+        Memory_Free(Definition->Names[Index]);
+    }
+    Memory_Free(Definition->Names);
+    Memory_Free(Definition->Bones);
+    TestDefinition_Destroy(self);
+}
+
+static const AssetDefinitionVTable TestSkinnedModelVTable =
+{
+    TestSkinnedModel_LoadAsset, TestSkinnedModelDefinition_Destroy
+};
+
+static void TestLibraryLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
+{
+    UNUSED(manager);
+    TestLibraryLoaded* Loaded = self->DestroyContext;
+    if (Loaded->Counters != NULL)
+    {
+        Loaded->Counters->UnloadCount++;
+    }
+    AnimationLibrary_Destroy(Loaded->Library);
+    Memory_Free(Loaded);
+}
+
+static const LoadedAssetVTable TestLibraryLoadedVTable = { TestLibraryLoaded_Destroy };
+
+// The file is read when the library loads, as the real definition reads its file.
+static Error TestLibrary_LoadAsset(void* self, AssetManager* manager, AssetUserID dependencyUser,
+    LoadedAsset* outLoaded)
+{
+    UNUSED(manager);
+    UNUSED(dependencyUser);
+    TestLibraryDefinition* Definition = self;
+
+    AnimationLibraryReadOptions Options =
+    {
+        .Clips = Definition->Settings, .ClipCount = Definition->ClipCount, .Description = Definition->Base.Name
+    };
+    AnimationLibrary* Library = NULL;
+    Error Result = AnimationLibrary_CreateFromGltf(Definition->Gltf, Definition->ByteCount, &Options, &Library);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    TestLibraryLoaded* Loaded = Memory_Allocate(sizeof(TestLibraryLoaded));
+    Loaded->Library = Library;
+    Loaded->Counters = Definition->Counters;
+    if (Loaded->Counters != NULL)
+    {
+        Loaded->Counters->LoadCount++;
+    }
+    outLoaded->Asset = Library;
+    outLoaded->VTable = &TestLibraryLoadedVTable;
+    outLoaded->DestroyContext = Loaded;
+    return Error_CreateSuccess();
+}
+
+static void TestLibraryDefinition_Destroy(void* self)
+{
+    TestLibraryDefinition* Definition = self;
+    for (size_t Index = 0U; Index < (Definition->ClipCount * 2U); Index++)
+    {
+        Memory_Free(Definition->Strings[Index]);
+    }
+    Memory_Free(Definition->Strings);
+    Memory_Free(Definition->Settings);
+    Memory_Free(Definition->Gltf);
+    TestDefinition_Destroy(self);
+}
+
+static const AssetDefinitionVTable TestLibraryVTable = { TestLibrary_LoadAsset, TestLibraryDefinition_Destroy };
+
 static void TestTextureLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
 {
     UNUSED(manager);
@@ -458,6 +618,59 @@ bool TestAssets_AddMeshModel(TestRun* run, TestAssetFixture* fixture, const char
         Memory_Copy(indices, Definition->Indices, IndexBytes);
         Definition->TriangleCount = triangleCount;
     }
+    return TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, &Definition->Base));
+}
+
+bool TestAssets_AddSkinnedModel(TestRun* run, TestAssetFixture* fixture, const char* name, const TestSkeletonBone* bones,
+    int boneCount, float boxSize, Matrix transform, TestAssetCounters* counters)
+{
+    TestSkinnedModelDefinition* Definition = Memory_Allocate(sizeof(TestSkinnedModelDefinition));
+    Memory_Zero(Definition, sizeof(*Definition));
+    Definition->Base.VTable = &TestSkinnedModelVTable;
+    Definition->Base.Type = fixture->Types.Model;
+    Definition->Base.Name = CloneName(name);
+    Definition->Bones = Memory_Allocate((size_t)boneCount * sizeof(TestSkeletonBone));
+    Definition->Names = Memory_Allocate((size_t)boneCount * sizeof(unsigned char*));
+    for (int Index = 0; Index < boneCount; Index++)
+    {
+        Definition->Names[Index] = CloneName(bones[Index].Name);
+        Definition->Bones[Index] = bones[Index];
+        Definition->Bones[Index].Name = (const char*)Definition->Names[Index];
+    }
+    Definition->BoneCount = boneCount;
+    Definition->BoxSize = boxSize;
+    Definition->Transform = transform;
+    Definition->Counters = counters;
+    return TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, &Definition->Base));
+}
+
+bool TestAssets_AddAnimationLibrary(TestRun* run, TestAssetFixture* fixture, const char* name, const char* gltf,
+    const AnimationClipSettings* clips, size_t clipCount, TestAssetCounters* counters)
+{
+    TestLibraryDefinition* Definition = Memory_Allocate(sizeof(TestLibraryDefinition));
+    Memory_Zero(Definition, sizeof(*Definition));
+    Definition->Base.VTable = &TestLibraryVTable;
+    Definition->Base.Type = fixture->Types.AnimationLibrary;
+    Definition->Base.Name = CloneName(name);
+    Definition->ByteCount = strlen(gltf);
+    Definition->Gltf = CloneName(gltf);
+    Definition->ClipCount = clipCount;
+    if (clipCount > 0U)
+    {
+        Definition->Settings = Memory_Allocate(clipCount * sizeof(AnimationClipSettings));
+        Definition->Strings = Memory_Allocate(clipCount * 2U * sizeof(unsigned char*));
+        for (size_t Index = 0U; Index < clipCount; Index++)
+        {
+            Definition->Strings[Index * 2U] = CloneName((const char*)clips[Index].Source);
+            Definition->Strings[(Index * 2U) + 1U] = CloneName((const char*)clips[Index].Name);
+            Definition->Settings[Index] = (AnimationClipSettings)
+            {
+                .Source = Definition->Strings[Index * 2U], .Name = Definition->Strings[(Index * 2U) + 1U],
+                .IsLooped = clips[Index].IsLooped, .Speed = clips[Index].Speed
+            };
+        }
+    }
+    Definition->Counters = counters;
     return TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, &Definition->Base));
 }
 

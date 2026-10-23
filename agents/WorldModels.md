@@ -25,7 +25,8 @@ as dependencies; world sprites, T26, do the same for sprite animations: [WorldSp
   `draw_distance` at least the last `max_distance` (left out, it is that distance); `lod_fade_seconds` >= 0;
   `lod_hysteresis` in [0, 1); `render`'s four settings; at most `WORLD_MODEL_MAX_VARIANTS` (64) variants with unique
   names (`[a-z][a-z0-9_.-]*`, at most 128 bytes) and at most `WORLD_MODEL_MAX_VARIANT_OVERRIDES` (32) material
-  overrides each, one per slot; `bounds` with a centre and a radius >= 0. **Unknown keys are refused** in every object
+  overrides each, one per slot; `bounds` with a centre and a radius >= 0; `animation_libraries` (T29) at most
+  `WORLD_MODEL_MAX_ANIMATION_LIBRARIES` (16) unique asset names. **Unknown keys are refused** in every object
   the definition defines: the root, each LOD, `render`, each variant, each material override and `bounds`
   (`AssetJSON_RejectUnknownKeys`: the message names the key, where it is and the keys allowed there; a key from a file
   is shown as printable ASCII only). Values of the shared shapes (a vector, a colour) follow the shared GameJSON
@@ -38,19 +39,28 @@ as dependencies; world sprites, T26, do the same for sprite animations: [WorldSp
   loaded. The variants, their overrides and their names are one allocation the asset owns; the `GameModel` and
   `GameTexture` pointers in it are borrowed from the dependencies. A variant override whose slot no LOD model has is
   logged once at load (it changes nothing).
+- **Animation (T29, [Animation.md](Animation.md)):** the world model's **skeleton** is the first skinned LOD's
+  (`WorldModel_GetSkeleton`, `_GetSkeletonLod`); every other LOD with bones must have its bones and bind poses
+  (`GameSkeleton_HasSameBindPoses`), or the world model is refused, so one pose bends every skinned LOD (a coarse LOD may
+  be rigid: it draws as it is). Its `animation_libraries` load as dependencies too (`_GetAnimationLibraryCount`,
+  `_GetAnimationLibrary`, `_GetAnimationLibraryName`: the names are the world model's own copies); two of them may not
+  hold a clip of the same name, and naming libraries without a skinned LOD is logged once at load (its placements play
+  nothing).
 - **Bounds:** the definition's sphere, authored in the object's own space, or the sphere around LOD 0's mesh bounds in
   LOD 0's mesh space; `WorldModel_GetBoundsTransform` takes either to the object's space (identity, or LOD 0's import
   transform). The renderer composes that with the object's world matrix first and scales the radius by the product's
   stretch (`WorldTransform_GetMaxScale`), so the derived sphere is exactly the drawn model's, as before world models:
   bounding the import and the placement separately would multiply an uneven import scale by an uneven placement scale
-  (five or ten times too large, the review found).
+  (five or ten times too large, the review found). `WorldModel_HasOwnBounds` says which: a posed placement (T29) keeps
+  the definition's sphere, and otherwise is bounded by its pose instead of LOD 0's bind pose.
 
 ## The loaded `WorldModel`
 
 Pure data, read-only, owned by the asset manager (never keep it past your asset user). Accessors:
 `WorldModel_GetLodCount`, `_GetLodModel(index)` (the `GameModel*`), `_GetLodMaxDistance(index)`, `_GetSettings` (the
 placements' defaults, a `WorldModelSettings`: outline, crisp, shadow tier, casts shadows, draw distance, fixed),
-`_GetLodFadeSeconds`, `_GetLodHysteresis`, `_GetBoundsCenter` / `_GetBoundsRadius` / `_GetBoundsTransform`,
+`_GetLodFadeSeconds`, `_GetLodHysteresis`, `_GetBoundsCenter` / `_GetBoundsRadius` / `_GetBoundsTransform` /
+`_HasOwnBounds`, the animation's `_GetSkeleton`, `_GetSkeletonLod` and libraries (T29),
 `_GetVariantCount`,
 `_GetVariantName(index)`, `WorldModel_TryFindVariant(name, &index)` and `WorldModel_ApplyVariant`.
 `WorldShadowTier` and its names (`WORLD_SHADOW_TIER_ENUM`, which the component's `shadow_tier` row uses too) live in
@@ -198,6 +208,10 @@ Since T12 the world models collide: `test`, `pbr_metal` and `painted_cube` with 
 hull of `lod_test_lod0` (64 vertices), `pbr_demo` with a mesh of its own model (layer `world`); and `test_door` (the test
 cube through the model `test_door`'s import transform, a 1 x 2 m panel hinged at its origin) has a `closed` and an
 `open` set, a panel and a named handle each ([WorldCollision.md](WorldCollision.md), "Debugging and the test content").
+
+Since T29 two world models animate ([Animation.md](Animation.md), "Test content"): `test_humanoid` (the placeholder
+figure, LOD 0 `test_humanoid` to 12 m, then the coarser `test_humanoid_lod1` to 80 m, both skinned on one skeleton) and
+`test_humanoid_short` (one LOD), each playing `test_humanoid_motions`.
 
 ## Known limits
 

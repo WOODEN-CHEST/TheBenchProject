@@ -16,6 +16,9 @@
 #define DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_depth")
 /** Asset name of the point-light omnidirectional (cube) shadow depth shader (stores packed linear distance). */
 #define CUBE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_cube_depth")
+/** Asset names of the two depth shaders' skinned twins (T29): the same fragment stages over vertex stages that skin. */
+#define DEPTH_SKINNED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_depth_skinned")
+#define CUBE_DEPTH_SKINNED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_cube_depth_skinned")
 /** Asset names of the cutout sprites' alpha-tested variants of the two depth shaders. */
 #define SPRITE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sprite_depth")
 #define SPRITE_CUBE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sprite_cube_depth")
@@ -114,11 +117,12 @@ static void LoadPointShadowCube(WorldRenderer* self)
     self->_pointShadow._hasCube = true;
 }
 
-/* Draws the depth of a shadow pass's model casters (its visibility list) through @p shader, each dithered by its fade.
- * A caster mid LOD cross-fade casts the LOD it heads to, solid (no cross-fade dither), so its shadow changes once per
- * change and never shimmers. Ignores the pixelation filter (every pixelation state casts). The sprites are
- * DrawSpriteCasters'. */
-static void DrawShadowCasters(WorldRenderer* self, Shader shader, const WorldRendererDitherLocations* dither,
+/* Draws the depth of a shadow pass's model casters (its visibility list) through @p shaders, each dithered by its fade
+ * (into the skinned shader too, through @p skinnedDither, while the caster has a pose). A caster mid LOD cross-fade casts
+ * the LOD it heads to, solid (no cross-fade dither), so its shadow changes once per change and never shimmers. Ignores
+ * the pixelation filter (every pixelation state casts). The sprites are DrawSpriteCasters'. */
+static void DrawShadowCasters(WorldRenderer* self, const WorldRendererMeshShaders* shaders,
+    const WorldRendererDitherLocations* dither, const WorldRendererDitherLocations* skinnedDither,
     WorldVisibilityPass pass)
 {
     size_t ModelCount = 0;
@@ -129,9 +133,13 @@ static void DrawShadowCasters(WorldRenderer* self, Shader shader, const WorldRen
     {
         size_t Index = Casters[Position];
         const WorldRenderModel* Entry = &Models[Index];
-        WorldRendererCommon_SetDither(shader, dither, WorldVisibility_GetModelFade(&self->_visibility, Index).Combined,
-            0.0f, false);
-        WorldRendererGeometry_DrawModel(self, Entry, WorldLodState_GetShadowLod(&Entry->Lod), &shader, false);
+        float Fade = WorldVisibility_GetModelFade(&self->_visibility, Index).Combined;
+        WorldRendererCommon_SetDither(*shaders->Rigid, dither, Fade, 0.0f, false);
+        if ((shaders->Skinned != NULL) && (Entry->Pose != NULL))
+        {
+            WorldRendererCommon_SetDither(*shaders->Skinned, skinnedDither, Fade, 0.0f, false);
+        }
+        WorldRendererGeometry_DrawModel(self, Entry, WorldLodState_GetShadowLod(&Entry->Lod), shaders, false);
     }
 }
 
@@ -199,6 +207,10 @@ static void RenderShadowCascade(WorldRenderer* self, RenderTexture2D map, const 
     WorldVisibilityPass pass)
 {
     Shader DepthShader = GameShader_GetRaylibShader(self->_cascades._depthShader);
+    bool HasSkinned = (self->_cascades._skinnedDepthShader != NULL);
+    Shader SkinnedShader = HasSkinned ? GameShader_GetRaylibShader(self->_cascades._skinnedDepthShader) : DepthShader;
+    WorldRendererMeshShaders Shaders = { .Rigid = &DepthShader, .Skinned = HasSkinned ? &SkinnedShader : NULL,
+        .Palette = &self->_cascades._skinnedPalette };
 
     BeginTextureMode(map);
     ClearBackground(WHITE); // clears depth to the far plane (colour is irrelevant on the depth-only target)
@@ -208,7 +220,7 @@ static void RenderShadowCascade(WorldRenderer* self, RenderTexture2D map, const 
     // Render BACK faces into the shadow map (cull front). The lit front faces then sit well in front of the
     // stored depth, which removes most self-shadowing acne without a large (peter-panning) depth bias.
     rlSetCullFace(RL_CULL_FACE_FRONT);
-    DrawShadowCasters(self, DepthShader, &self->_cascades._dither, pass);
+    DrawShadowCasters(self, &Shaders, &self->_cascades._dither, &self->_cascades._skinnedDither, pass);
     rlSetCullFace(RL_CULL_FACE_BACK);  // restore the default culling for the scene pass
     // Cutout sprites, facing the light, alpha-tested.
     if (self->_cascades._spriteDepthShader != NULL)
@@ -267,6 +279,16 @@ void WorldRendererShadows_LoadShaders(WorldRenderer* self)
     {
         CreateCascadeMaps(self);
     }
+    // Its skinned twin (T29; optional: without it skinned meshes cast the shadow of their bind pose).
+    self->_cascades._skinnedDepthShader = (self->_cascades._depthShader != NULL)
+        ? WorldRendererCommon_LoadShader(self, DEPTH_SKINNED_SHADER_ASSET_NAME) : NULL;
+    self->_cascades._skinnedPalette = (WorldRendererPalette){ ._location = -1 };
+    if (self->_cascades._skinnedDepthShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_cascades._skinnedDepthShader);
+        WorldRendererCommon_PrepareDither(RayShader, &self->_cascades._skinnedDither);
+        WorldRendererCommon_PreparePalette(RayShader, &self->_cascades._skinnedPalette);
+    }
 
     // The cutout sprites' alpha-tested depth shader for the cascades (optional: without it sprites cast no sun or moon
     // shadow).
@@ -299,6 +321,17 @@ void WorldRendererShadows_LoadShaders(WorldRenderer* self)
         self->_pointShadow._locLightPos = GetShaderLocation(RayShader, "lightPosition");
         self->_pointShadow._locLightFar = GetShaderLocation(RayShader, "lightFar");
         WorldRendererCommon_PrepareDither(RayShader, &self->_pointShadow._dither);
+        // Its skinned twin (T29; optional: without it skinned meshes cast the shadow of their bind pose).
+        self->_pointShadow._skinnedShader = WorldRendererCommon_LoadShader(self, CUBE_DEPTH_SKINNED_SHADER_ASSET_NAME);
+        self->_pointShadow._skinnedPalette = (WorldRendererPalette){ ._location = -1 };
+        if (self->_pointShadow._skinnedShader != NULL)
+        {
+            Shader SkinnedShader = GameShader_GetRaylibShader(self->_pointShadow._skinnedShader);
+            self->_pointShadow._skinnedLocLightPos = GetShaderLocation(SkinnedShader, "lightPosition");
+            self->_pointShadow._skinnedLocLightFar = GetShaderLocation(SkinnedShader, "lightFar");
+            WorldRendererCommon_PrepareDither(SkinnedShader, &self->_pointShadow._skinnedDither);
+            WorldRendererCommon_PreparePalette(SkinnedShader, &self->_pointShadow._skinnedPalette);
+        }
         if (!self->_pointShadow._hasCube)
         {
             LoadPointShadowCube(self);
@@ -404,6 +437,15 @@ void WorldRendererShadows_RenderPointLight(WorldRenderer* self, const WorldRende
     float LightPosArr[3] = { LightPos.x, LightPos.y, LightPos.z };
     SetShaderValue(CubeShader, self->_pointShadow._locLightPos, LightPosArr, SHADER_UNIFORM_VEC3);
     SetShaderValue(CubeShader, self->_pointShadow._locLightFar, &Far, SHADER_UNIFORM_FLOAT);
+    bool HasSkinned = (self->_pointShadow._skinnedShader != NULL);
+    Shader SkinnedShader = HasSkinned ? GameShader_GetRaylibShader(self->_pointShadow._skinnedShader) : CubeShader;
+    if (HasSkinned)
+    {
+        SetShaderValue(SkinnedShader, self->_pointShadow._skinnedLocLightPos, LightPosArr, SHADER_UNIFORM_VEC3);
+        SetShaderValue(SkinnedShader, self->_pointShadow._skinnedLocLightFar, &Far, SHADER_UNIFORM_FLOAT);
+    }
+    WorldRendererMeshShaders Shaders = { .Rigid = &CubeShader, .Skinned = HasSkinned ? &SkinnedShader : NULL,
+        .Palette = &self->_pointShadow._skinnedPalette };
     bool HasSpriteShader = (self->_pointShadow._spriteShader != NULL);
     Shader SpriteCubeShader = HasSpriteShader ? GameShader_GetRaylibShader(self->_pointShadow._spriteShader)
         : CubeShader;
@@ -450,7 +492,8 @@ void WorldRendererShadows_RenderPointLight(WorldRenderer* self, const WorldRende
         // Default (back-face) culling + the PBR shader's slope-scaled bias handles acne; front-face culling
         // here caused peter-panning + seam artifacts, so it is intentionally not used. The casters are those within the
         // light's reach (the visibility's cube list).
-        DrawShadowCasters(self, CubeShader, &self->_pointShadow._dither, WorldVisibilityPass_PointShadow);
+        DrawShadowCasters(self, &Shaders, &self->_pointShadow._dither, &self->_pointShadow._skinnedDither,
+            WorldVisibilityPass_PointShadow);
         if (HasSpriteShader)
         {
             DrawSpriteCasters(self, SpriteCubeShader, &self->_pointShadow._spriteDither,

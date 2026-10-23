@@ -70,8 +70,11 @@ typedef enum WorldComponentTypeEnum
     WorldComponentType_Collider = 3,
     /** @brief A character: the player or an NPC, a transform driver (WorldCharacterComponent.h, T13). */
     WorldComponentType_Character = 4,
+    /** @brief An animator: what plays the skeletal animation of the object's skinned model (WorldAnimatorComponent.h,
+     *  T29). */
+    WorldComponentType_Animator = 5,
     /** @brief The number of standard types (not a type). */
-    WorldComponentType_Count = 5
+    WorldComponentType_Count = 6
 } WorldComponentType;
 
 /**

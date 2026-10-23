@@ -46,10 +46,11 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, and registers the ten standard types. Read its lifetime rules before touching assets.
+  caches failed loads, and registers the eleven standard types. Read its lifetime rules before touching assets.
 * Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader, GameSound and GameTexture: the manager-owned
   wrappers for the standard font, model, shader, sound and texture types, with their ownership rules, accessors and
-  pitfalls. GameModel.h also holds GameMaterialFactors (source/GameModel.c): the PBR factors a material override sets,
+  pitfalls; a skinned model carries its GameSkeleton (Animation.md). GameModel.h also holds GameMaterialFactors
+  (source/GameModel.c): the PBR factors a material override sets,
   shared by the model type's material_overrides and world model variants (one parser, one apply). GameFont (source/GameFont.c) adds sorted glyph lookup with the '?' fallback; fonts load at a
   definition-chosen size and codepoint set (source/FontCodepoints.c, private) and warn once about glyphs their file
   lacks. Shader stages may `#include "common/..."` shared GLSL from shaders/common/, expanded with #line directives so
@@ -111,6 +112,24 @@ Current module list:
     (source/WorldCharacterInternal.h).
   * PlayerController - The player's side: GameInput actions and the mouse into a character's input, the camera at its
     eyes (optional head bob), what the player looks at.
+* Animation (Animation.md) - Skeletal animation (T29): skinned models posed per placed object, clips from separate
+  libraries retargeted onto every model of a skeleton layout, cross-fades, sockets, and skinning in every render pass.
+  Covers:
+  * AnimationLibrary - The animation_library asset type (a standard type, JSON in animation_libraries/, a .glb or .gltf
+    file): bones and clips read by our own glTF reader (cgltf, the file treated as hostile;
+    source/AnimationLibraryGltf.c), clip settings (name, source, loop, speed) from the definition
+    (source/AnimationLibraryDefinition.c), sampling as glTF says (STEP, LINEAR, CUBICSPLINE).
+  * GameSkeleton - A skinned model's skeleton, built when the model loads: evaluation order, bind and inverse bind
+    matrices, rest poses, which meshes the GPU skins, each bone's vertex box.
+  * SkeletalAnimation - The runtime maths: binding a library to a skeleton by bone name (rotations from the clip,
+    translations scaled by the height ratio, unmatched ancestors folded), blending, the mixer (8 clips, cross-fades,
+    weights, loops), bone matrices, the skinning palette, the pose's bounds; transforms taken apart by columns.
+  * WorldAnimatorComponent - Component type 5 (`animator`): the clip row with phase, speed, pause, fade, a loop override
+    and the placement's own libraries, and the pose the system publishes for the renderer and sockets.
+  * WorldAnimation - The animation system: once a tick, after the collision step's events, it binds every animator to
+    its world model's skeleton and libraries, applies its rows, advances its clips and poses it; code plays clips
+    through it; a bone's world matrix in double (sockets). Its per-animator state is the private
+    source/WorldAnimationInternal.h.
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -205,7 +224,8 @@ Current module list:
   * WorldRenderer - Renders a World through a GameCamera (PBR lit by the sun and the moon, HDR, sky with the moon,
     stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, AO, outlines, bloom, sun
     shafts, crisp overlay, lit sprites with decals, sorted transparency and shadows that face the light; frustum
-    culling, draw distances, and dithered fades and opacity; LODs with dithered cross-fades), in render space since T32:
+    culling, draw distances, and dithered fades and opacity; LODs with dithered cross-fades; skinned models posed by
+    their animators in every pass, T29), in render space since T32:
     the world's orientation with the camera at the origin, every position relative to the camera (subtracted in double),
     shadow cascades snapped to their texels; separate from the world data and never writes to it. Split by render pass
     into
@@ -244,7 +264,9 @@ Current module list:
     F8 the contact points, F6 swings the door, F9 sends a wall through a row of crates, F10 moves the door's crate),
     with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world. Since T13 its
     characters move every tick: F1 walk mode (the player as a character), F2 test NPCs (a human, a dog, a pigeon), F3
-    flight, F4 the player's kind, F12 head bob (the private source/WorldTestCharacters.{h,c}).
+    flight, F4 the player's kind, F12 head bob (the private source/WorldTestCharacters.{h,c}). Since T29 it ticks the
+    animation system: 5 steps the showcase figure through the clips, 6 a crowd of 100 walking figures, 7 slow motion
+    (the private source/WorldTestAnimation.{h,c}).
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
@@ -254,7 +276,9 @@ Current module list:
   hand-written codecs. A FloatList
   type (PropertyFloatList: an owned list of floats with a maximum count, per-value bounds and an optional rising rule)
   carries lists such as a placement's LOD distances; an EnumSet type (a uint32 mask of an enum's entries, JSON an
-  array of names) carries a collider's layer mask. A setting a placement overrides is two rows, a Bool
+  array of names) carries a collider's layer mask; an AssetNameList type (PropertyAssetNameList: an owned list of
+  asset names, JSON an array of strings) carries an animator's own animation libraries. A setting a placement overrides
+  is two rows, a Bool
   `overrides_<key>` and the value `<key>` (the table check enforces the pairing). A DataMap property (tags and typed
   data) is written as two JSON keys.
 * GameCalendar (GameCalendar.md) - The game's calendar: pure functions over day numbers (days since 0001-01-01, an

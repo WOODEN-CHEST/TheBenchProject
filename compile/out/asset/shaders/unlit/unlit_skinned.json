@@ -1,0 +1,5 @@
+{
+    "name": "world_unlit_skinned",
+    "vertex_location": "unlit/skinned",
+    "fragment_location": "unlit/fragment"
+}

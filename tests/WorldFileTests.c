@@ -8,6 +8,7 @@
 #include "NamespacedKey.h"
 #include "PropertyDescriptor.h"
 #include "World.h"
+#include "WorldAnimatorComponent.h"
 #include "WorldColliderComponent.h"
 #include "WorldComponent.h"
 #include "WorldEnvironment.h"
@@ -166,7 +167,8 @@ static PropertyValue MakeCandidate(const PropertyDescriptor* row, size_t attempt
         }
         case PropertyType_DataMap:
         case PropertyType_FloatList:
-            break; // FillData and FillFloatList build these
+        case PropertyType_AssetNameList:
+            break; // FillData, FillFloatList and FillAssetNameList build these
     }
     return Value;
 }
@@ -189,6 +191,20 @@ static void FillFloatList(TestRun* run, const PropertyTable* table, void* instan
     }
 }
 
+/* Sets an asset name list row to valid names within its count: "test_list.a", "test_list.b" (or fewer). */
+static void FillAssetNameList(TestRun* run, const PropertyTable* table, void* instance, const PropertyDescriptor* row)
+{
+    const unsigned char* Names[2] = { (const unsigned char*)u8"test_list.a", (const unsigned char*)u8"test_list.b" };
+    size_t Count = (row->Rules.MaxCount < 2U) ? row->Rules.MaxCount : 2U;
+    PropertyAssetNameList* List = NULL;
+    if (TEST_CHECK_SUCCESS(run, PropertyAssetNameList_Create(Names, Count, &List)))
+    {
+        PropertyValue Value = PropertyValue_FromAssetNameList(List);
+        TEST_CHECK_SUCCESS(run, Properties_Set(table, instance, row->Key, &Value));
+        PropertyAssetNameList_Destroy(List);
+    }
+}
+
 /* Sets every settable row of @p table (all but the ReadOnly ones, which go through the world) to a value that is not
  * its default and passes its rules. */
 static void FillTable(TestRun* run, const PropertyTable* table, void* instance)
@@ -203,6 +219,11 @@ static void FillTable(TestRun* run, const PropertyTable* table, void* instance)
         if (Descriptor->Type == PropertyType_FloatList)
         {
             FillFloatList(run, table, instance, Descriptor);
+            continue;
+        }
+        if (Descriptor->Type == PropertyType_AssetNameList)
+        {
+            FillAssetNameList(run, table, instance, Descriptor);
             continue;
         }
         bool IsSet = false;
@@ -1476,8 +1497,20 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 44U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 48U);
             TEST_CHECK(run, AreNamesEqual(World_GetName(&Loaded), (const unsigned char*)u8"test"));
+            // The animation examples (T29): four placeholder figures, each animator playing a clip of its own; the short
+            // one waves in a loop its library does not give the clip (the placement's loop override).
+            size_t AnimatorCount = 0U;
+            World_GetComponents(&Loaded, WorldComponentType_Animator, &AnimatorCount);
+            TEST_CHECK(run, AnimatorCount == 4U);
+            WorldComponent* Waver = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 47U, WorldComponentType_Animator, &Waver)
+                && WorldAnimatorComponent_PlaysClip(WorldAnimatorComponent_FromComponent(Waver))
+                && AreNamesEqual(WorldAnimatorComponent_GetClip(WorldAnimatorComponent_FromComponent(Waver)),
+                    (const unsigned char*)u8"wave")
+                && WorldAnimatorComponent_OverridesIsLooped(WorldAnimatorComponent_FromComponent(Waver))
+                && WorldAnimatorComponent_IsLooped(WorldAnimatorComponent_FromComponent(Waver)));
             // The LOD examples (T11): a row of lod_test spheres, one forcing its coarsest LOD, one with its own distances.
             WorldComponent* Forced = NULL;
             WorldComponent* OwnDistances = NULL;
@@ -1682,16 +1715,17 @@ static void PositionsAreDoublesAndOldSavesLoad(TestRun* run)
         if (TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, "compile/out/worlds/test.world.json", &Path))
             && TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &FromJSON)))
         {
-            size_t Count = World_GetObjectCount(&FromJSON);
-            TEST_CHECK(run, (Count == 44U) && (World_GetObjectCount(&Loaded) == Count));
+            // The fixture holds the 44 objects the world had then (T29 added more after them).
+            size_t Count = World_GetObjectCount(&Loaded);
+            TEST_CHECK(run, (Count == 44U) && (World_GetObjectCount(&FromJSON) > Count));
             size_t Exact = 0U;
             size_t Widened = 0U;
             for (size_t Index = 0U; Index < Count; Index++)
             {
                 WorldObject* Text = NULL;
                 WorldObject* Old = NULL;
-                if (!TEST_CHECK_SUCCESS(run, World_GetObjectByIndex(&FromJSON, Index, &Text))
-                    || !TEST_CHECK(run, World_TryGetObject(&Loaded, WorldObject_GetId(Text), &Old)))
+                if (!TEST_CHECK_SUCCESS(run, World_GetObjectByIndex(&Loaded, Index, &Old))
+                    || !TEST_CHECK(run, World_TryGetObject(&FromJSON, WorldObject_GetId(Old), &Text)))
                 {
                     continue;
                 }

@@ -50,6 +50,9 @@ int main(void)
     WorldVisibilityTests_Run(&Run);
     WorldRenderSpaceTests_Run(&Run);
     WorldLodTests_Run(&Run);
+    AnimationLibraryTests_Run(&Run);
+    SkeletalAnimationTests_Run(&Run);
+    WorldAnimationTests_Run(&Run);
     LoggerTests_Run(&Run);
     TextComponentTests_Run(&Run);
     TextComponentCodecTests_Run(&Run);

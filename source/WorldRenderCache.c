@@ -143,12 +143,22 @@ static void ResolveModel(WorldRenderModel* entry, AssetManager* assets, AssetUse
     ResolveVariant(entry, logger);
 }
 
+/* The pose of the object's animator when it was made for @p asset (T29), or NULL. */
+static const WorldAnimatorPose* GetPose(const WorldObject* owner, const WorldModel* asset)
+{
+    const WorldAnimatorComponent* Animator = WorldAnimatorComponent_FromComponent(WorldObject_GetComponent(owner,
+        WorldComponentType_Animator));
+    const WorldAnimatorPose* Pose = (Animator != NULL) ? WorldAnimatorComponent_GetPose(Animator) : NULL;
+    return ((Pose != NULL) && (Pose->_worldModel == asset)) ? Pose : NULL;
+}
+
 /* Brings one model entry up to date for this frame: re-resolves its world model if its name changed (or its variant if
  * that changed), then takes the settings in effect (WorldModelComponent_ResolveSettings) and recomputes whether it is
  * drawn, its tint, its world matrix (scale -> Euler XYZ -> translation, as raylib's DrawModelEx composes them, times its
- * parents'; each LOD is drawn with its import transform inside it) and its world bounding sphere (the world model's,
- * through its own transform composed with the world matrix: conservative also when the hierarchy shears it, and exactly
- * LOD 0's sphere when the world model has no bounds of its own), both in double, and both in render space for
+ * parents'; each LOD is drawn with its import transform inside it), its pose (T29) and its world bounding sphere (the
+ * world model's, or its pose's box's when it has a pose and the world model no bounds of its own, through its own
+ * transform composed with the world matrix: conservative also when the hierarchy shears it, and exactly LOD 0's sphere
+ * when the world model has no bounds of its own and the object no pose), both in double, and both in render space for
  * @p origin. */
 static void UpdateModel(WorldRenderModel* entry, Vector3Double origin, AssetManager* assets, AssetUserID modelUser,
     Logger* logger)
@@ -180,16 +190,31 @@ static void UpdateModel(WorldRenderModel* entry, Vector3Double origin, AssetMana
     const WorldObject* Owner = WorldComponent_GetOwner(&ModelComponent->Base);
     entry->Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Owner));
     entry->IsDrawn = (entry->Asset != NULL) && IsObjectShown(Owner);
+    entry->Pose = NULL;
     if (entry->Asset == NULL)
     {
         return;
     }
 
+    entry->Pose = GetPose(Owner, entry->Asset);
+    Vector3 LocalCenter = entry->LocalCenter;
+    float LocalRadius = entry->LocalRadius;
+    Matrix LocalTransform = entry->BoundsTransform;
+    if ((entry->Pose != NULL) && entry->Pose->_hasBounds && !WorldModel_HasOwnBounds(entry->Asset))
+    {
+        // The pose's box, in the skeleton's mesh space: the skeleton LOD's import transform takes it to the object's.
+        BoundingBox Box = entry->Pose->_bounds;
+        LocalCenter = Vector3Scale(Vector3Add(Box.min, Box.max), 0.5f);
+        LocalRadius = Vector3Length(Vector3Scale(Vector3Subtract(Box.max, Box.min), 0.5f));
+        LocalTransform = GameModel_GetRaylibModel(WorldModel_GetLodModel(entry->Asset,
+            WorldModel_GetSkeletonLod(entry->Asset))).transform;
+    }
+
     entry->WorldMatrix = WorldObject_GetWorldMatrix(Owner);
-    Matrix4Double BoundsTransform = GameMath_FromMatrix(entry->BoundsTransform);
+    Matrix4Double BoundsTransform = GameMath_FromMatrix(LocalTransform);
     Matrix4Double BoundsToWorld = Matrix4Double_Multiply(&BoundsTransform, &entry->WorldMatrix);
-    entry->Center = Matrix4Double_TransformPoint(&BoundsToWorld, GameMath_FromVector3(entry->LocalCenter));
-    entry->Radius = (float)((double)entry->LocalRadius * WorldTransform_GetMaxScale(&BoundsToWorld));
+    entry->Center = Matrix4Double_TransformPoint(&BoundsToWorld, GameMath_FromVector3(LocalCenter));
+    entry->Radius = (float)((double)LocalRadius * WorldTransform_GetMaxScale(&BoundsToWorld));
     entry->RenderMatrix = GameMath_ToMatrixRelative(&entry->WorldMatrix, origin);
     entry->RenderCenter = GameMath_ToVector3Relative(entry->Center, origin);
 }

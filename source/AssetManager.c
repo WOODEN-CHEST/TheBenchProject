@@ -1730,6 +1730,8 @@ Error AssetManager_CreateStandardAssetTypes(AssetManager* self, StandardAssetTyp
             &outTypes->WorldSprite },
         { ASSET_TYPE_NAME_CHARACTER, ASSET_TYPE_DIRECTORY_CHARACTER, CharacterDefinition_Construct,
             &outTypes->Character },
+        { ASSET_TYPE_NAME_ANIMATION_LIBRARY, ASSET_TYPE_DIRECTORY_ANIMATION_LIBRARY,
+            AnimationLibraryDefinition_Construct, &outTypes->AnimationLibrary },
     };
 
     for (size_t i = 0; i < (sizeof(Standard) / sizeof(Standard[0])); i++)
@@ -2588,6 +2590,13 @@ Error AssetManager_LoadCharacter(AssetManager* self, const unsigned char* name, 
 {
     return LoadStandard(self, (self != NULL) ? self->_standardTypes.Character : ASSET_TYPE_ID_INVALID, name, user,
         (void**)outAsset);
+}
+
+Error AssetManager_LoadAnimationLibrary(AssetManager* self, const unsigned char* name, AssetUserID user,
+    AnimationLibrary** outAsset)
+{
+    return LoadStandard(self, (self != NULL) ? self->_standardTypes.AnimationLibrary : ASSET_TYPE_ID_INVALID, name,
+        user, (void**)outAsset);
 }
 
 // TODO: Bulk operations are complete but unused: no frame drives them from its stepped load yet (GameFrame's

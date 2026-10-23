@@ -119,6 +119,53 @@ static Error PutRenderColor(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEn
     return Result;
 }
 
+/* A String array of the list's names (empty for the empty list). */
+static Error PutAssetNameList(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id,
+    const PropertyAssetNameList* list)
+{
+    GHDFArray* Array = NULL;
+    Error Result = GHDFObjectPool_BorrowArray(pool, GHDFValueType_String, &Array);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    for (size_t Index = 0; (Index < PropertyAssetNameList_GetCount(list)) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        GenericBuffer* Buffer = NULL;
+        Result = GHDFObjectPool_BorrowString(pool, &Buffer);
+        if (Result.Code != ErrorCode_Success)
+        {
+            break;
+        }
+        if (!GenericBuffer_AppendString(Buffer, PropertyAssetNameList_GetName(list, Index))
+            || !GenericBuffer_NullTerminate(Buffer))
+        {
+            Error ReturnResult = GHDFObjectPool_ReturnString(pool, Buffer);
+            Error_Deconstruct(&ReturnResult);
+            Result = Error_Construct2(ErrorCode_EncodeError, "Could not build a string buffer.");
+            break;
+        }
+        GHDFObjectValue Element = GHDFObjectValue_CreateString(Buffer);
+        Result = GHDFArray_AddValue(Array, &Element);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error ReturnResult = GHDFObjectPool_ReturnString(pool, Buffer);
+            Error_Deconstruct(&ReturnResult);
+        }
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        GHDFObjectValue ArrayValue = GHDFObjectValue_CreateArray(Array, GHDFValueType_String);
+        Result = GHDFCompound_SetValue(compound, id, GHDF_CreateArrayType(GHDFValueType_String), &ArrayValue);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = GHDFObjectPool_ReturnArray(pool, Array, true);
+        Error_Deconstruct(&ReturnResult);
+    }
+    return Result;
+}
+
 /* A Float array of the list's values (empty for the empty list). */
 static Error PutFloatList(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id, const PropertyFloatList* list)
 {
@@ -223,6 +270,8 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
             return PutFloatList(pool, compound, Id, data->FloatListValue);
         case PropertyType_EnumSet:
             return GameGHDF_PutUnsigned(compound, Id, (uint64_t)data->EnumSetValue);
+        case PropertyType_AssetNameList:
+            return PutAssetNameList(pool, compound, Id, data->AssetNameListValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -438,6 +487,56 @@ static Error ReadFloatList(GHDFCompound* compound, const PropertyDescriptor* des
     return Error_CreateSuccess();
 }
 
+/* An asset name list from its String array, its length and each name's checked before the list is built (the names'
+ * rules are checked when the read commits); an empty array is the empty list. */
+static Error ReadAssetNameList(GHDFCompound* compound, const PropertyDescriptor* descriptor, void* target)
+{
+    GHDFObjectValue Entry;
+    bool IsFound = false;
+    Error Result = GHDFCompound_GetOptionalVerified(compound, (GHDFEntryID)descriptor->WireId,
+        GHDF_CreateArrayType(GHDFValueType_String), &Entry, &IsFound);
+    if ((Result.Code != ErrorCode_Success) || !IsFound)
+    {
+        return Result;
+    }
+    size_t Count = GHDFArray_GetElementCount(Entry.Value.Array);
+    if (Count > descriptor->Rules.MaxCount)
+    {
+        return Error_Construct4(ErrorCode_Deserialize, "The list has %" PRIu64 " names; at most %" PRIu64
+            " are allowed.", (uint64_t)Count, (uint64_t)descriptor->Rules.MaxCount);
+    }
+    const unsigned char* Names[PROPERTY_ASSET_NAME_LIST_MAX_COUNT];
+    for (size_t Index = 0; (Index < Count) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        GHDFObjectValue Element = { .Type = GHDFValueType_None };
+        Result = GHDFArray_Get(Entry.Value.Array, Index, &Element);
+        if (Result.Code != ErrorCode_Success)
+        {
+            break;
+        }
+        // The reader leaves its terminator past the bytes it read, counted; a NUL before it would cut the name short.
+        GenericBuffer* Buffer = Element.Value.String;
+        if ((Buffer == NULL) || (Buffer->_count == 0U) || (StringUTF8_GetByteLength(Buffer->_data) != (Buffer->_count - 1U))
+            || ((Buffer->_count - 1U) > descriptor->Rules.MaxLength))
+        {
+            return Error_Construct4(ErrorCode_Deserialize, "An asset name is not a string of at most %" PRIu64
+                " bytes without NUL characters.", (uint64_t)descriptor->Rules.MaxLength);
+        }
+        Names[Index] = Buffer->_data;
+    }
+    PropertyAssetNameList* List = NULL;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = PropertyAssetNameList_Create(Names, Count, &List);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    PropertyInternal_AdoptOwned(descriptor, target, List);
+    return Error_CreateSuccess();
+}
+
 /* Reads a scalar entry of @p type into *outEntry; *outFound false when absent, and on an error. */
 static Error GetScalar(GHDFCompound* compound, GHDFEntryID id, GHDFValueType type, GHDFObjectValue* outEntry,
     bool* outFound)
@@ -540,6 +639,8 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
             return Error_Construct2(ErrorCode_InvalidState, "Data maps are read separately.");
         case PropertyType_FloatList:
             return Error_Construct2(ErrorCode_InvalidState, "Float lists are read separately.");
+        case PropertyType_AssetNameList:
+            return Error_Construct2(ErrorCode_InvalidState, "Asset name lists are read separately.");
         case PropertyType_EnumSet:
         {
             // Bits outside the enum are refused when the read commits, like every rule.
@@ -563,6 +664,10 @@ static Error ReadEntry(const PropertyTable* table, GHDFCompound* compound, const
     else if (descriptor->Type == PropertyType_FloatList)
     {
         Result = ReadFloatList(compound, descriptor, target);
+    }
+    else if (descriptor->Type == PropertyType_AssetNameList)
+    {
+        Result = ReadAssetNameList(compound, descriptor, target);
     }
     else if (PropertyInternal_IsStringType(descriptor->Type))
     {

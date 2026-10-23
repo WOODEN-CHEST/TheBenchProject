@@ -1,6 +1,8 @@
 #include "TestSuites.h"
 #include "AssetManager.h"
+#include "GameSkeleton.h"
 #include "ShaderSource.h"
+#include "SkeletalAnimation.h"
 #include "WorldVisibility.h"
 #include "wr/WRJSON.h"
 #include <math.h>
@@ -455,6 +457,43 @@ static void ShippedGeometryShadersShareOneDither(TestRun* run)
 }
 
 
+/* Every skinned vertex stage (T29) skins through the one shared include, once: the bone attributes raylib binds, the
+ * palette of three rows per bone the C side fills (SKELETAL_PALETTE_FLOATS_PER_BONE), no larger than the largest
+ * skeleton the renderer probes for (GAME_SKELETON_MAX_BONES). */
+static void ShippedSkinnedStagesShareOneSkinning(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        TEST_CHECK(run, SKELETAL_PALETTE_FLOATS_PER_BONE == 12U);
+        const char* const Stages[] = { "pbr/skinned", "normal/skinned", "depth/skinned", "cube_depth/skinned",
+            "unlit/skinned" };
+        for (size_t Index = 0U; Index < (sizeof(Stages) / sizeof(Stages[0])); Index++)
+        {
+            if (!ExpandShippedStage(run, &Fixture, Stages[Index]))
+            {
+                continue;
+            }
+            const char* Define = strstr((const char*)Fixture.Text._data, "#define SKINNING_MAX_BONES ");
+            long MaxBones = (Define != NULL) ? strtol(Define + strlen("#define SKINNING_MAX_BONES "), NULL, 10) : 0L;
+            bool IsShared = BufferContains(&Fixture.SourceList, "\"common/skinning\"")
+                && (CountOccurrences(&Fixture.Text, "uniform vec4 bonePalette[SKINNING_MAX_BONES*3];") == 1U)
+                && (CountOccurrences(&Fixture.Text, "in vec4 vertexBoneIndices;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "in vec4 vertexBoneWeights;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "Skinning_GetRows(row0, row1, row2);") == 1U)
+                && (MaxBones > 0L) && (MaxBones <= (long)GAME_SKELETON_MAX_BONES);
+            if (!TEST_CHECK(run, IsShared))
+            {
+                printf("    in \"%s\"\n", Stages[Index]);
+            }
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+
 // Public functions.
 void ShaderSourceTests_Run(TestRun* run)
 {
@@ -472,6 +511,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "failure_leaves_the_output_as_it_was", FailureLeavesTheOutputAsItWas },
         { "shipped_sky_and_pbr_share_one_atmosphere", ShippedSkyAndPbrShareOneAtmosphere },
         { "shipped_geometry_shaders_share_one_dither", ShippedGeometryShadersShareOneDither },
+        { "shipped_skinned_stages_share_one_skinning", ShippedSkinnedStagesShareOneSkinning },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

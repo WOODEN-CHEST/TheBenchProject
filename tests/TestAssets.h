@@ -1,7 +1,9 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include "TestAnimation.h"
 #include "TestFramework.h"
+#include "AnimationLibrary.h"
 #include "AssetManager.h"
 #include "raylib/raylib.h"
 
@@ -11,6 +13,8 @@
  * exercise code that holds real assets (the world's sprite animations, the renderer's per-object cache):
  *  - a sprite animation with one texture-less frame, or with several frames and running playback;
  *  - a model without meshes whose mesh-space bounds are given (enough for anything that does not draw);
+ *  - a skinned model with its skeleton, its mesh in CPU memory only (enough to pose it, T29);
+ *  - an animation library read from a glTF file written in memory (TestGltf_Write), by the real reader;
  *  - a monospace font of the printable ASCII glyphs with metrics but no texture (enough to measure text);
  *  - a texture that names a made-up GPU id and was never uploaded (enough for anything that only copies it);
  *  - world models built from JSON by the real "world_model" type, over the code-built models and textures above;
@@ -122,6 +126,30 @@ bool TestAssets_AddModelWithMaterials(TestRun* run, TestAssetFixture* fixture, c
  */
 bool TestAssets_AddMeshModel(TestRun* run, TestAssetFixture* fixture, const char* name, const float* vertices,
     int vertexCount, const unsigned short* indices, int triangleCount, Matrix transform, TestAssetCounters* counters);
+
+/**
+ * @brief Registers a model definition named @p name whose asset is a skinned model built in code
+ *        (TestSkeletonModel_Create: the bones' skeleton and one mesh with a box of @p boxSize per bone, never uploaded)
+ *        with its skeleton (GameSkeleton_Create, as the model type makes it), the import transform @p transform and the
+ *        boxes' box as its mesh-space bounds: what the animation system and the render cache read from a real one.
+ * @param bones The bones (copied, names too).
+ * @param counters Counts its loads and unloads; may be NULL. Must outlive the fixture's manager.
+ * @returns true when it was registered.
+ */
+bool TestAssets_AddSkinnedModel(TestRun* run, TestAssetFixture* fixture, const char* name, const TestSkeletonBone* bones,
+    int boneCount, float boxSize, Matrix transform, TestAssetCounters* counters);
+
+/**
+ * @brief Registers an animation library definition named @p name, of the standard "animation_library" type, whose asset
+ *        is read when it loads from the glTF file text @p gltf with the clip settings @p clips
+ *        (AnimationLibrary_CreateFromGltf), as the real definition reads its file.
+ * @param gltf The file's text (copied; TestGltf_Write writes one).
+ * @param clips The clip settings (copied, strings too); may be NULL when @p clipCount is 0.
+ * @param counters Counts its loads and unloads; may be NULL. Must outlive the fixture's manager.
+ * @returns true when it was registered.
+ */
+bool TestAssets_AddAnimationLibrary(TestRun* run, TestAssetFixture* fixture, const char* name, const char* gltf,
+    const AnimationClipSettings* clips, size_t clipCount, TestAssetCounters* counters);
 
 /**
  * @brief Registers a texture definition named @p name whose asset names the GPU texture id @p textureId without

@@ -57,7 +57,8 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
 
 ## GameModel (`GameModel.h`)
 
-- `GameModel { Model _rayModel; }`. `GameModel_GetRaylibModel(self)` returns the raylib `Model` **by value**, but its
+- `GameModel { Model _rayModel; BoundingBox _localBounds; GameSkeleton* _skeleton; }`. `GameModel_GetRaylibModel(self)`
+  returns the raylib `Model` **by value**, but its
   `meshes`, `materials`, `meshMaterial` and each material's `maps` still point into the asset: changing the copy's
   `transform` is local, writing through those pointers changes the shared asset.
 - Loading (`ModelDefinition.c`): `LoadModel` on the resolved file (`obj` `gltf` `glb` `iqm` `vox` `m3d`); a result with no
@@ -91,7 +92,13 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
 - **Imported textured models shade wrong:** glTF's metallic texture and OBJ's `map_Ks` land in the METALNESS slot,
   which the PBR shader reads as packed ORM (red = occlusion). Normalising imported materials is deferred
   (`handoff/2026-10_code_review/FIX_PLAN.md`, "Not in this pass").
-- No skeletal animation; the `rig` key in the reference is not read.
+- **Skinned models (T29, [Animation.md](Animation.md)):** a model whose file has a skin gets its `GameSkeleton` when it
+  loads (`GameModel_GetSkeleton`, NULL for a rigid model): bones in evaluation order, bind and inverse bind matrices,
+  rest poses, which meshes the GPU skins (bone indices and weights uploaded, raylib built with `SUPPORT_GPU_SKINNING`:
+  BUILDING.md) and each bone's vertex box. A skeleton that fails its checks (parents out of range or in a cycle) fails
+  the model; a mesh that cannot be skinned (an index past the bones, weights not finite) is counted with the meshes that
+  do not bend. The asset owns it; nobody poses the shared model: poses are per object (the animator component). The
+  `rig` key in the reference is not read.
 - `GameMesh { Mesh _rayMesh; }` is declared in the same header, but the manager does not produce it and nothing uses
   it yet. Whoever builds one releases it with `UnloadMesh`.
 

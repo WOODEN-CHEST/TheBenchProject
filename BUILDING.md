@@ -45,12 +45,21 @@ To update WRFramework: build it with its own script, then copy its `include/*.h`
    - leave `config.h` untouched and configure CMake with
      `-DCUSTOMIZE_BUILD=ON -DSUPPORT_CUSTOM_FRAME_CONTROL=ON`. `CUSTOMIZE_BUILD` turns every `config.h` flag
      into a CMake option that defaults to its `config.h` value, so nothing else changes.
-2. **Build type `Release`: pass `-DCMAKE_BUILD_TYPE=Release`.**
+2. **`SUPPORT_GPU_SKINNING` must be enabled (T29).** Skinned models bend on the GPU: the world renderer's skinned
+   vertex stages read each vertex's bone indices and weights, which raylib uploads (vertex buffers 7 and 8) only when
+   built with it, and every object's pose stays its own (a palette per draw), where raylib's CPU skinning would pose
+   the shared model in place. Without it skinned models load, but their meshes draw as bound and never bend; the game
+   logs that once per model (`...: its meshes have bone weights the GPU does not have (raylib was built without
+   SUPPORT_GPU_SKINNING, see BUILDING.md); they draw as they are bound and do not bend.`). The same two ways as above:
+   `#define SUPPORT_GPU_SKINNING 1` in `src/config.h` (what the current library was built with), or
+   `-DCUSTOMIZE_BUILD=ON -DSUPPORT_GPU_SKINNING=ON` (raylib's CMake reads every option's default from `config.h`, so
+   with `CUSTOMIZE_BUILD` an edited `config.h` still counts).
+3. **Build type `Release`: pass `-DCMAKE_BUILD_TYPE=Release`.**
    raylib's CMake only picks a default build type (Debug) when `src/` is configured as the top-level
    project. Configured from the repository root (the normal way) it prints *"Default build type is not set
    (CMAKE_BUILD_TYPE)"* and builds with **no optimisation flags at all**. raylib's own Makefile defaults to a
    release build; the CMake path does not.
-3. **Keep the other defaults.** In particular:
+4. **Keep the other defaults.** In particular:
    - `SUPPORT_WINMM_HIGHRES_TIMER` (Windows): sets the 1 ms timer resolution the main loop's idle sleeps
      rely on.
    - The default image formats: png, bmp, gif, qoi and dds. jpg, tga, psd and hdr are off, and the asset
@@ -59,13 +68,17 @@ To update WRFramework: build it with its own script, then copy its `include/*.h`
      exactly that many maps into each per-draw material and keeps its own samplers on texture units 12–15,
      above raylib's material units: `WORLD_RENDERER_MATERIAL_MAP_COUNT` in `source/WorldRendererInternal.h`
      must match it.
+   - glTF support (`SUPPORT_FILEFORMAT_GLTF`): the animation library reader (`source/AnimationLibraryGltf.c`, T29)
+     calls the cgltf that raylib compiles into `libraylib.a`, through a copy of raylib's `src/external/cgltf.h` in
+     `include/raylib/cgltf.h` (cgltf 1.15, MIT: `licenses/cgltf/`). Keep the two the same version: copy the header
+     again whenever raylib is updated.
 
 Linux commands (from the raylib source directory):
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DPLATFORM=Desktop \
       -DGLFW_BUILD_X11=ON -DGLFW_BUILD_WAYLAND=OFF -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF \
-      -DCUSTOMIZE_BUILD=ON -DSUPPORT_CUSTOM_FRAME_CONTROL=ON   # or omit this line if config.h is edited
+      -DCUSTOMIZE_BUILD=ON -DSUPPORT_CUSTOM_FRAME_CONTROL=ON -DSUPPORT_GPU_SKINNING=ON   # or omit if config.h is edited
 cmake --build build -j
 cp build/raylib/libraylib.a /path/to/TheBenchProject/lib/
 ```
@@ -84,13 +97,17 @@ Reusing an existing build directory works too: re-run the `cmake -B build ...` l
 
 - **Optimisation:** check the build directory, not the archive: `grep CMAKE_BUILD_TYPE build/CMakeCache.txt`
   should say `Release`, and `build/raylib/CMakeFiles/raylib.dir/flags.make` should contain `-O3`.
+- **GPU skinning:** run the game (or the windowless harness) with the test world: the log must not carry the
+  "bone weights the GPU does not have" warning above, and `WorldRenderer_LogStatus` (the I key) lists `skinning` as
+  active.
 
 ### Current state
 
-`lib/libraylib.a` was rebuilt on 2026-10-17 as **Release** (`-O3 -DNDEBUG`) from `../raylib/6.0` (commit
-`65abee1` with the `config.h` edit), reusing its existing `build/` directory: `cmake -B build
--DCMAKE_BUILD_TYPE=Release`, then `cmake --build build --target raylib`. The check above confirms custom frame
-control. Until then it had been built with an empty build type, i.e. unoptimised.
+`lib/libraylib.a` was rebuilt on 2026-10-23 (T29) as **Release** (`-O3 -DNDEBUG`) from `../raylib/6.0` (commit
+`65abee1` with both `config.h` edits: custom frame control, and GPU skinning since T29), reusing its existing `build/`
+directory: `cmake --build build --target raylib`, then copied to `lib/`. The checks above confirm custom frame control
+and GPU skinning (the test world's figures bend, no warning). The 2026-10-17 build (Release, custom frame control, no
+GPU skinning) was the one before; until that one it had been built with an empty build type, i.e. unoptimised.
 
 ## Windows notes (for when the Windows build is set up)
 

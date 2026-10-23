@@ -9,6 +9,7 @@
 #include "WorldCharacters.h"
 #include "WorldColliderComponent.h"
 #include "WorldCollision.h"
+#include "WorldTestAnimation.h"
 #include "WorldTestCharacters.h"
 #include "WorldFile.h"
 #include "WorldObject.h"
@@ -198,6 +199,9 @@ typedef struct WorldTestFrameStruct
     WorldCharacters* _characters;
     /** The test characters: walk mode (F1), the test NPCs (F2) and the player's options (F3, F4, F12); owned. */
     WorldTestCharacters _testCharacters;
+    /** The animation system, ticked after the collision step's events (T29), and its debug keys: the showcase's clips
+     *  (5), the crowd (6), slow motion (7); owned. */
+    WorldTestAnimation _testAnimation;
     /** Where the F11 key's far shift has moved the test world, its characters and the camera: an index into FarShifts
      *  (0: not moved). */
     size_t _farShiftIndex;
@@ -726,6 +730,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         LogClockStatus(frame);
         LogCollisionStatus(frame);
         WorldTestCharacters_LogStatus(&frame->_testCharacters);
+        WorldTestAnimation_LogStatus(&frame->_testAnimation);
         LogCameraStatus(frame);
     }
 
@@ -1413,6 +1418,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     HandleDebugModelInput(frame, input);
     HandleDebugCollisionInput(frame, input);
     HandleDebugFarShiftInput(frame, input);
+    WorldTestAnimation_HandleInput(&frame->_testAnimation, input, &frame->_camera);
 }
 
 
@@ -1473,7 +1479,8 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     // The tick's order (agents/WorldData.md): the NPCs' brains set their inputs (the scripts' slot), the drivers move
     // things (the desk, the door, the pushing wall, then the characters, so what moved this tick carries them), the
     // collision step sweeps and pushes (it syncs first and writes the pushes back), its queued trigger, contact and
-    // motion events and the characters' events are handled, then the animations.
+    // motion events and the characters' events are handled, then the animations (the skeletons' poses, T29, and the
+    // sprites').
     WorldTestCharacters_UpdateBrains(&Frame->_testCharacters, Delta);
     SlideDesk(Frame, time.PassedTime);
     SwingDoor(Frame, Delta);
@@ -1483,6 +1490,7 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     LogTriggerEvents(Frame);
     LogContactEvents(Frame);
     LogMotionEvents(Frame);
+    WorldTestAnimation_Update(&Frame->_testAnimation, Delta);
     AdvanceSpriteAnimations(&Frame->_world, time.PassedTime);
 
     // The world matrices of everything that moved this tick, so the renderer reads them cached; then the camera at the
@@ -1575,7 +1583,8 @@ static void WorldTestFrame_Destroy(void* self)
         Error_Deconstruct(&RendererResult);
     }
     // The characters borrow the collision world, which borrows the world (and the renderer borrowed it): they go after
-    // the renderer, before the world.
+    // the renderer, before the world, as the animation system does.
+    WorldTestAnimation_Deconstruct(&Frame->_testAnimation);
     WorldTestCharacters_Deconstruct(&Frame->_testCharacters);
     WorldCharacters_Destroy(Frame->_characters);
     WorldCollision_Destroy(Frame->_collision);
@@ -1706,6 +1715,23 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     }
     WorldTestCharacters_Construct(&Frame->_testCharacters, &Frame->_world, Frame->_collision, Frame->_characters,
         services->Logger);
+    Error AnimationResult = WorldTestAnimation_Construct(&Frame->_testAnimation, &Frame->_world, services->Assets,
+        services->Logger);
+    if (AnimationResult.Code != ErrorCode_Success)
+    {
+        WorldTestCharacters_Deconstruct(&Frame->_testCharacters);
+        WorldCharacters_Destroy(Frame->_characters);
+        DeconstructTextSample(Frame);
+        WorldCollision_Destroy(Frame->_collision);
+        Error Cleanup = WorldRenderer_Deconstruct(Frame->_renderer);
+        Error_Deconstruct(&Cleanup);
+        Cleanup = World_Deconstruct(&Frame->_world);
+        Error_Deconstruct(&Cleanup);
+        GameClock_Deconstruct(&Frame->_clock);
+        GameFrame_Deconstruct(&Frame->Base);
+        Memory_Free(Frame);
+        return AnimationResult;
+    }
 
     Frame->_services = services;
     for (size_t Index = 0U; Index < OPACITY_TEST_OBJECT_COUNT; Index++)

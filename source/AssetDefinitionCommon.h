@@ -62,6 +62,8 @@ extern const AssetExtensionFilter ASSET_EXTENSIONS_FONT;
 extern const AssetExtensionFilter ASSET_EXTENSIONS_SOUND;
 /** @brief Shader stage sources (read as text): vert, frag, vs, fs, glsl. */
 extern const AssetExtensionFilter ASSET_EXTENSIONS_SHADER_STAGE;
+/** @brief Animation libraries (read with cgltf, AnimationLibrary.h): gltf, glb. */
+extern const AssetExtensionFilter ASSET_EXTENSIONS_ANIMATION_LIBRARY;
 
 
 /**

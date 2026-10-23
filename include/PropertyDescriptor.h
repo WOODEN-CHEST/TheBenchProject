@@ -66,6 +66,7 @@ typedef struct DataMapStruct DataMap;
  * | DataMap     | DataMap*, owned, NULL while empty | two keys: TagsKey ["key", ...] and Key {"key": value} | Compound array of entries |
  * | FloatList   | PropertyFloatList*, owned, NULL while empty | [a, b, ...]                  | Float array                   |
  * | EnumSet     | uint32_t mask (bit N: the entry of value N) | ["name", ...] (table order)    | smallest unsigned type (*)    |
+ * | AssetNameList | PropertyAssetNameList*, owned, NULL while empty | ["name", ...]              | String array                  |
  *
  * (*) Written in the smallest GHDF integer type that holds the value (a parent id of 12 is one UInt8 byte; GameGHDF.h);
  * read from any GHDF integer type, fixed width or encoded, whose value fits the property's type.
@@ -81,7 +82,9 @@ typedef struct DataMapStruct DataMap;
  * collider's layer mask) is a set of an enum table's entries, whose values are their bit indices (0 to 31): JSON
  * names them in an array, GHDF stores the mask. A Vector3Double (an object's position, T33) writes each component as
  * the shortest text that reads back to the same double, so a float written by a Vector3 row reads back as the double
- * that prints the same text; its GHDF reader also takes a Float array of 3, the form a Vector3 row wrote.
+ * that prints the same text; its GHDF reader also takes a Float array of 3, the form a Vector3 row wrote. An
+ * AssetNameList (a placement's animation libraries, T29) is a list of valid asset names, each at most Rules.MaxLength
+ * bytes: an empty list is NULL, written [] in JSON and as an empty String array in GHDF when defaults are written.
  *
  * Not thread-safe: tables are immutable static data, but instances are plain structs with no locking.
  */
@@ -128,6 +131,13 @@ typedef struct DataMapStruct DataMap;
 /** @brief The most values any FloatList may hold, whatever its rules say (a row's Rules.MaxCount must not pass it), so a
  *         list's size never overflows and no single list can take much memory. */
 #define PROPERTY_FLOAT_LIST_MAX_COUNT ((size_t)4096)
+/** @brief Rules for an AssetNameList: at most @p maxCount names (at most PROPERTY_ASSET_NAME_LIST_MAX_COUNT), each a valid
+ *         asset name of at most @p maxLength bytes. */
+#define PROPERTY_RULES_ASSET_NAME_LIST(maxCount, maxLength) { .MaxLength = (maxLength), .MaxCount = (maxCount) }
+/** @brief The most names any AssetNameList may hold, whatever its rules say. */
+#define PROPERTY_ASSET_NAME_LIST_MAX_COUNT ((size_t)64)
+/** @brief The longest name any AssetNameList may hold, in bytes, whatever its rules say. */
+#define PROPERTY_ASSET_NAME_LIST_MAX_LENGTH ((size_t)256)
 
 /** @brief The flags of a creator setting: saved, shown in the editor's inspector and reachable from scripts. */
 #define PROPERTY_FLAGS_SETTING ((uint32_t)(PropertyFlags_Persistent | PropertyFlags_Editable | PropertyFlags_Script))
@@ -205,7 +215,11 @@ typedef enum PropertyTypeEnum
     PropertyType_FloatList,
     /** @brief A set of an enum's entries: a uint32_t mask, bit N set for the entry of value N. The descriptor's
      *  EnumTable (required) gives the names, its values 0 to 31; a set bit must name an entry. Takes no other rules. */
-    PropertyType_EnumSet
+    PropertyType_EnumSet,
+    /** @brief A list of asset names: an owned `PropertyAssetNameList*`, NULL while empty, which is its only default. Every
+     *  name is a valid asset name (AssetManager_IsValidAssetName) of at most Rules.MaxLength bytes (required, at most
+     *  PROPERTY_ASSET_NAME_LIST_MAX_LENGTH); Rules.MaxCount (required) bounds the count. */
+    PropertyType_AssetNameList
 } PropertyType;
 
 /**
@@ -241,6 +255,22 @@ typedef struct PropertyFloatListStruct
     /** @brief The values, _count of them. */
     float _values[];
 } PropertyFloatList;
+
+/**
+ * @brief A list of asset names: the value of a PropertyType_AssetNameList property, one heap block holding its count,
+ *        a pointer to each name and the names themselves (each NUL-terminated).
+ *
+ * An empty list is NULL. Create one with PropertyAssetNameList_Create and release it with PropertyAssetNameList_Destroy;
+ * the instance whose field holds a list owns it, and Properties_Set copies the list it is given. Immutable once created:
+ * read it through PropertyAssetNameList_GetCount and PropertyAssetNameList_GetName.
+ */
+typedef struct PropertyAssetNameListStruct
+{
+    /** @brief The number of names: 1 to PROPERTY_ASSET_NAME_LIST_MAX_COUNT. */
+    size_t _count;
+    /** @brief The names, _count of them, pointing into the block past this array. */
+    const unsigned char* _names[];
+} PropertyAssetNameList;
 
 /**
  * @brief The data of a property value; the active member is selected by the property's PropertyType.
@@ -288,6 +318,9 @@ typedef union PropertyDataUnion
     const PropertyFloatList* FloatListValue;
     /** @brief PropertyType_EnumSet: the mask (bit N: the entry of value N). */
     uint32_t EnumSetValue;
+    /** @brief PropertyType_AssetNameList: the list, or NULL for an empty one. Borrowed, as FloatListValue: NULL in a
+     *  default, the instance's own from Properties_Get, copied by Properties_Set. */
+    const PropertyAssetNameList* AssetNameListValue;
 } PropertyData;
 
 /**
@@ -309,7 +342,8 @@ typedef struct PropertyValueStruct
  * Build with the PROPERTY_RULES_* macros. Bounds apply to Int32, UInt32, Float, Double, Angle (radians), to every
  * component of Vector2, Vector3, Vector3Double and AngleVector3 (radians) and to every value of a FloatList; the string
  * rules to String
- * and AssetName; MaxCount and MaxLength (bytes) to a DataMap; MaxCount and IsStrictlyIncreasing to a FloatList.
+ * and AssetName; MaxCount and MaxLength (bytes) to a DataMap; MaxCount and IsStrictlyIncreasing to a FloatList; MaxCount
+ * and MaxLength (bytes per name) to an AssetNameList.
  * PropertyTable_Check rejects rules that do not fit the type.
  */
 typedef struct PropertyRulesStruct
@@ -660,6 +694,13 @@ static inline PropertyValue PropertyValue_FromFloatList(const PropertyFloatList*
     return (PropertyValue){ .Type = PropertyType_FloatList, .Data.FloatListValue = list };
 }
 
+/** @brief Makes an AssetNameList value. @param list The list (borrowed; Properties_Set copies it), or NULL for an empty
+ *  one. @returns The typed value. */
+static inline PropertyValue PropertyValue_FromAssetNameList(const PropertyAssetNameList* list)
+{
+    return (PropertyValue){ .Type = PropertyType_AssetNameList, .Data.AssetNameListValue = list };
+}
+
 /** @brief Makes an EnumSet value. @param mask The set (bit N: the enum entry of value N). @returns The typed value. */
 static inline PropertyValue PropertyValue_FromEnumSet(uint32_t mask)
 {
@@ -728,6 +769,65 @@ static inline size_t PropertyFloatList_GetCount(const PropertyFloatList* list)
 static inline const float* PropertyFloatList_GetValues(const PropertyFloatList* list)
 {
     return (list != NULL) ? list->_values : NULL;
+}
+
+
+// Functions: asset name lists.
+/**
+ * @brief Creates an asset name list holding copies of @p count names (one allocation).
+ *
+ * The names are copied as they are; whether they suit a property (valid asset names, short enough) is that property's
+ * rules' business (Properties_CheckValue).
+ * @param names The names (NUL-terminated UTF-8); may be NULL only when @p count is 0; no entry may be NULL.
+ * @param count The number of names, 0 to PROPERTY_ASSET_NAME_LIST_MAX_COUNT; 0 gives the empty list, NULL.
+ * @param outList [out] Receives the new list (the caller owns it: PropertyAssetNameList_Destroy), or NULL for an empty
+ *        one. Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p outList is NULL, or @p names (or one of them) is NULL with a count
+ *          above 0; ErrorCode_ArgumentOutOfRange for a count above PROPERTY_ASSET_NAME_LIST_MAX_COUNT or a name longer
+ *          than PROPERTY_ASSET_NAME_LIST_MAX_LENGTH bytes (*outList is NULL then).
+ */
+Error PropertyAssetNameList_Create(const unsigned char* const* names, size_t count, PropertyAssetNameList** outList);
+
+/**
+ * @brief Releases an asset name list.
+ * @param list The list, or NULL (nothing happens).
+ */
+void PropertyAssetNameList_Destroy(PropertyAssetNameList* list);
+
+/**
+ * @brief Copies an asset name list.
+ * @param list The list to copy; NULL (the empty list) gives NULL.
+ * @returns The copy, owned by the caller (PropertyAssetNameList_Destroy).
+ */
+PropertyAssetNameList* PropertyAssetNameList_Clone(const PropertyAssetNameList* list);
+
+/**
+ * @brief Reports whether two asset name lists hold the same names in the same order (byte for byte).
+ * @param a The first list; NULL is the empty list.
+ * @param b The second list; NULL is the empty list.
+ * @returns true when they are equal.
+ */
+bool PropertyAssetNameList_Equals(const PropertyAssetNameList* a, const PropertyAssetNameList* b);
+
+/**
+ * @brief Returns how many names an asset name list holds.
+ * @param list The list; NULL is the empty list.
+ * @returns The count (0 for NULL).
+ */
+static inline size_t PropertyAssetNameList_GetCount(const PropertyAssetNameList* list)
+{
+    return (list != NULL) ? list->_count : 0U;
+}
+
+/**
+ * @brief Returns one name of an asset name list.
+ * @param list The list; must not be NULL.
+ * @param index Below PropertyAssetNameList_GetCount.
+ * @returns The name (borrowed: valid while the list is).
+ */
+static inline const unsigned char* PropertyAssetNameList_GetName(const PropertyAssetNameList* list, size_t index)
+{
+    return list->_names[index];
 }
 
 

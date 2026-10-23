@@ -398,8 +398,16 @@ A stage source may pull in shared GLSL with a line of its own:
   the load with an error naming the include, the including file and the line.
 
 Shared files today: `common/math` (`PI`), `common/atmosphere` (the Rayleigh + Mie sky that the sky pass draws and
-the PBR shader's distance fog fades toward) and `common/night_sky` (the air mass and extinction near the horizon, and
-the profile of light pollution's skyglow).
+the PBR shader's distance fog fades toward), `common/night_sky` (the air mass and extinction near the horizon, and
+the profile of light pollution's skyglow), `common/night_vision`, `common/lighting`, `common/distance_packing`,
+`common/dither` and `common/skinning` (T29: the bone attributes, the bone palette and a vertex's blended skinning rows,
+included by every skinned vertex stage; `agents/Animation.md`).
+
+**Skinned twins (T29).** Every world geometry shader that draws models has a twin for skinned meshes, named with
+`_skinned`: `world_pbr_skinned`, `world_normal_skinned`, `world_depth_skinned`, `world_cube_depth_skinned` (each its
+directory's `skinned.vert` with the rigid shader's own fragment stage) and `world_unlit_skinned` (`unlit/`, for
+models drawn without the PBR shader). A resource pack that replaces a rigid shader's fragment stage changes its twin
+with it; one that replaces a vertex stage should replace the twin's too.
 
 
 ## Models.
@@ -449,10 +457,16 @@ the profile of light pollution's skyglow).
                                          // can't be inferred from bytes. Reference models must be
                                          // self-contained single files (.glb recommended).
 
-    "rig": "none"                        // [OPTIONAL, GLTF only] "none" (default) | "skinned"
-                                         // present only if/when skeletal support lands; OBJ ignores it
+    "rig": "none"                        // [OPTIONAL, GLTF only] not read: a file with a skin is skinned (below)
 }
 ```
+
+**Skinned models (T29).** A glTF (`gltf`, `glb`) file with a skin loads its skeleton and each vertex's bone
+indices and weights (at most four bones a vertex) with it: such a model bends with the pose of the object it is placed
+on, playing an animation library's clips (`agents/Animation.md`). The skeleton is checked when the model loads (at most
+256 bones, every parent a bone listed in the file and no cycle); a mesh with an index past the bones or a weight that is
+not a number is drawn as it is (rigid). Bones are found by **name**, so the skeletons of every model that plays one
+library must name their bones alike (a tall and a short human with the same bone names play the same walk).
 
 
 A value outside its range (a metallic of 1.5, a negative intensity) rejects the definition with a message naming the key.
@@ -536,7 +550,8 @@ default setting of this file for that one placement: an explicit override flag n
             "material_overrides": [ { "slot": 0, "albedo": "office_desk_dark_albedo", "tint": "#d0c0b0" } ]
         }
     ],
-    "bounds": { "center": [0, 0.4, 0], "radius": 1.1 }  // [OPTIONAL] default: LOD 0's
+    "bounds": { "center": [0, 0.4, 0], "radius": 1.1 }, // [OPTIONAL] default: LOD 0's (a posed object's: its pose's)
+    "animation_libraries": [ "human_motions" ]     // [OPTIONAL] at most 16 (T29)
 }
 ```
 
@@ -549,7 +564,8 @@ default setting of this file for that one placement: an explicit override flag n
 | `lod_hysteresis` | in [0, 1) | A LOD switches to a coarser one at its switch distance x (1 + h) and back at x (1 - h), so an object standing at a boundary does not flicker. |
 | `render` | object | The default render settings of the placements: `has_outline` (default true: a 1-pixel outline), `omit_pixelation` (default false: true draws it at full resolution over the pixelated image, for readable screens), `shadow_tier` (`both` (default), `near`: only the sharp near shadow, for small props, `far`: only the coarse far one, for big objects) and `casts_shadows` (default true). |
 | `variants` | at most 64 `{ "name", "material_overrides" }` | Other looks of the same meshes (dark wood, a red car). `name`: `[a-z][a-z0-9_.-]*`, at most 128 bytes, unique in the world model. `material_overrides` (optional; at most 32, one per slot): what the variant changes in each material slot, below. A placed object picks one with `uses_variant` and `variant`. |
-| `bounds` | `{ "center": [x, y, z], "radius": metres >= 0 }` | The bounding sphere culling and draw distances use, in the object's own space (after each LOD's import transform). Left out, it is the sphere around LOD 0's mesh bounds. |
+| `bounds` | `{ "center": [x, y, z], "radius": metres >= 0 }` | The bounding sphere culling and draw distances use, in the object's own space (after each LOD's import transform). Left out, it is the sphere around LOD 0's mesh bounds, or for an object an animator poses (T29) the sphere around its pose. Give it to keep one fixed sphere whatever the pose. |
+| `animation_libraries` | at most 16 asset names, each once | The animation libraries (below, "Animation libraries") whose clips the placements play (T29), loaded with the world model as its dependencies. Two of them may not hold a clip of the same name. The skinned LODs must share one skeleton: every LOD with bones must have the first one's bones and bind poses, or the world model is rejected (a coarse LOD may be rigid). A placement may play its own libraries instead (`references/world_structure.md`, the animator block). |
 
 **A variant's material override** takes the same keys as a model's `material_overrides` and reads them with the same
 parser, with one difference: the maps name **texture assets** (`textures/`, see "Textures"), so a texture several
@@ -807,3 +823,46 @@ The test characters are in `characters/test_world/`: `test_human` (the owner's t
 5 m/s, jumps at 5 m/s with a 1 m/s running boost, acceleration 64, friction 16, air control 4), `test_dog` (0.28 m by
 0.7 m, 25 kg, runs at 6 m/s, lies down as its crouch) and `test_pigeon` (0.1 m by 0.3 m, 0.35 kg, flies at 6 m/s and
 cannot crouch).
+
+
+## Animation libraries.
+An animation library (T29) is a file of animation clips, kept apart from the models that play it, so one library plays
+on every model whose skeleton names its bones alike: the humans of every height and build share one walk. Definitions
+live under `animation_libraries/`, next to their `.glb` or `.gltf` file (a `.gltf`'s buffer files beside it). How clips
+play on a model, retargeted to its bone lengths, is in `agents/Animation.md`.
+
+```
+{
+    "name": "human_motions",
+    "location": "humans/motions",                  // the glTF file (gltf / glb)
+    "format": "glb",                               // [OPTIONAL] see "Format"
+    "clips": [                                     // [OPTIONAL] at most 256, each name and each source once
+        { "name": "walk", "is_looped": true },
+        { "name": "sprint", "source": "Run.001", "is_looped": true, "speed": 1.25 },
+        { "name": "wave" }
+    ]
+}
+```
+
+| Key | Value | Meaning |
+|---|---|---|
+| `location` | asset location | The file. A model file with its mesh and skin works, and so does a file of the clips alone (Blender's export of the actions: its armature object becomes a bone no skeleton has, which costs nothing). |
+| `clips` | array | What the definition sets for the file's clips. A clip it does not list keeps its name in the file (when that is a valid clip name; otherwise it is skipped with a warning), does not loop and plays at speed 1. |
+| `clips[].name` | `[a-z][a-z0-9_.-]*`, at most 64 bytes | The name the clip plays under (an animator's `clip`, the game's code). Unique in the library; a world model's libraries may not share one. |
+| `clips[].source` | text, at most 256 bytes; default: `name` | The clip's name in the file (any text, as Blender names actions). It must be a clip of the file. |
+| `clips[].is_looped` | boolean; default false | Whether the clip loops; a clip that does not stops at its end and holds its last pose. A placement may override it. |
+| `clips[].speed` | above 0, at most 100; default 1 | How fast the clip plays (an animator's speed multiplies it). |
+
+**The file is checked as hostile** when the library loads (not when the definition is read): it must parse and validate
+as glTF 2.0; its buffers are inside it (`.glb`, data URIs) or files beside it (no absolute paths, `..`, backslashes,
+drive letters or NUL, percent escapes decoded first), declare 1 byte or more, at most 256 MiB together, and a buffer
+file holds at least its declared length; buffer views fit in their buffers with glTF's strides (none, or 4 to 252 bytes
+in fours; meshopt compression is not read); accessors fit in their views, aligned to their components (a sparse one's
+replacements too, 1 to its count of them); a `.glb`'s chunks are padded to four bytes; a clip's channels must sample
+floats of the right shape (rotations may be normalized integers); key times must be finite, at least 0, rising, and at
+most 3600 s; values finite, rotations of a length above 0; at most 256 bones (animated nodes and their ancestors) and
+4 194 304 floats of keys. Morph target weights are ignored (with a warning per clip). Interpolation is glTF's: `STEP`,
+`LINEAR` (rotations along the shorter arc) and `CUBICSPLINE`. Unknown keys are rejected.
+
+The test library is `animation_libraries/placeholder_humanoid/motions.json`: `test_humanoid_motions`, the placeholder
+figure's nine clips (idle, walk, run, crouch_idle, crouch_walk and fall looped; jump, land and wave once).

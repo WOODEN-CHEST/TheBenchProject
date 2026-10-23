@@ -96,7 +96,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `mobility` | `"static"` / `"movable"` | |
 | `tags` | array of keys | See "Tags and data". |
 | `data` | object | See "Tags and data". |
-| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component` in `agents/WorldData.md` and `agents/Characters.md`). |
+| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`, `animator`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component`, `animator_component` in `agents/WorldData.md`, `agents/Characters.md` and `agents/Animation.md`). |
 
 An object has at most one component of each type. A block whose values are all defaults is still written (`"light":
 {}`): the component is there.
@@ -256,6 +256,34 @@ A placed NPC that is a dog that walks slower than dogs do:
 ```
 Characters made at runtime (the player, spawned NPCs) are not written into world files (below).
 
+### The animator block
+
+The `animator` component (T29) plays the object's skeletal animation: its model component's world model must have a
+skinned LOD and animation libraries (`references/asset_structure.md`, "World models" and "Animation libraries";
+`agents/Animation.md`). What it plays right now (clip times, weights, fades) is not saved; these keys say how it starts
+and how it plays.
+
+| Key | Value (default) | |
+|---|---|---|
+| `plays_clip` | `true` / `false` (false) | Plays `clip` from the start. Off, it plays only what the game plays on it. |
+| `clip` | a clip name, at most 64 bytes, or `null` (null) | The clip, from the libraries. A name they lack plays nothing (logged once). Changing it in play cross-fades. |
+| `phase` | 0 to just below 1 (0) | Where the clip starts, a share of its length, so placements of one model move out of step. |
+| `speed` | 0 to 100 (1) | Times every clip's own speed; 0 holds the pose. |
+| `is_paused` | `true` / `false` (false) | Holds the pose: clips and cross-fades stand still. |
+| `fade_seconds` | 0 to 60 (0.2) | How long a change of `clip` cross-fades. |
+| `overrides_is_looped`, `is_looped` | false, false | Whether the clip loops, instead of its library's setting. |
+| `overrides_animation_libraries`, `animation_libraries` | false, `[]` (at most 16 asset names) | The placement's own animation libraries instead of its world model's. |
+
+A placed figure that waves in a loop, though its library plays the wave once:
+```
+"animator": {
+    "plays_clip": true,
+    "clip": "wave",
+    "overrides_is_looped": true,
+    "is_looped": true
+}
+```
+
 ### Values
 
 - Numbers: integers or decimals; a float keeps its fraction when written (`2.0`). Angles are degrees.
@@ -314,7 +342,7 @@ Every object can carry tags and typed data under namespaced keys (`agents/Object
 
 - Only values that differ from their defaults, so files stay short and pick up changed defaults.
 - Keys in table order: `id` first, then the object table's keys, `components` last; component blocks in type order
-  (`model`, `sprite`, `light`, `collider`, `character`); tags and data keys alphabetically.
+  (`model`, `sprite`, `light`, `collider`, `character`, `animator`); tags and data keys alphabetically.
 - Not the runtime objects: the player and NPCs made during play (`WorldObject_IsPersistent` off) are left out with
   everything under them. The game state will save them on its own.
 - The objects **parents first**: the roots in id order, each followed by its subtree depth first, the children in the
@@ -340,7 +368,7 @@ every integer in the smallest GHDF type that holds it.
 | Object entry | Value |
 |---|---|
 | 1 | The id (an unsigned integer). |
-| 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`, 5 `character`), each a compound keyed by the type's wire ids. |
+| 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`, 5 `character`, 6 `animator`), each a compound keyed by the type's wire ids. |
 | 3 and up | The `world_object` table's wire ids: 3 `name`, 4 `position`, 5 `rotation`, 6 `scale`, 7 `tint`, 8 `is_enabled`, 9 `is_visible`, 10 `mobility`, 11 the tags and data, 12 `parent`. |
 
 How each type is stored (`agents/PropertyDescriptors.md`, "Types"): integers in the smallest integer type (readers take

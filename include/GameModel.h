@@ -3,6 +3,7 @@
 // raylib.h is needed for Model and Mesh, which these wrappers hold by value, and for the Color and MaterialMap of the
 // material factors.
 #include "raylib/raylib.h"
+#include "GameSkeleton.h"
 
 /**
  * @file GameModel.h
@@ -11,7 +12,10 @@
  *
  * A GameModel holds a loaded Raylib Model (meshes + materials, with its import transform baked into the
  * Model's transform matrix). It is the static-state model asset produced by the asset manager's model type
- * (load one with AssetManager_LoadModel).
+ * (load one with AssetManager_LoadModel). A model whose file has a skin also holds its skeleton (GameSkeleton.h, T29):
+ * what a pose needs to bend its meshes, which are then drawn by the world renderer's skinned shaders. The asset is never
+ * posed itself (raylib's UpdateModelAnimation would pose the shared model for everyone): each animated object keeps its
+ * own pose (WorldAnimatorComponent.h).
  *
  * GameMaterialFactors are the scalar part of a material override: the model type's "material_overrides" apply them to
  * the model's own materials while it loads, and world model variants (WorldModel.h) to the renderer's per-draw copy of
@@ -43,6 +47,8 @@ typedef struct GameModelStruct
     /** @brief Axis-aligned bounds of all meshes in mesh space (before the import transform), computed once at
      *         load. */
     BoundingBox _localBounds;
+    /** @brief The skeleton of a skinned model (owned by the asset, freed with it), or NULL for a model without bones. */
+    GameSkeleton* _skeleton;
 } GameModel;
 
 /**
@@ -113,6 +119,16 @@ static inline Model GameModel_GetRaylibModel(GameModel* self)
 static inline BoundingBox GameModel_GetLocalBounds(const GameModel* self)
 {
     return self->_localBounds;
+}
+
+/**
+ * @brief Returns the model's skeleton (GameSkeleton.h): its bones and which of its meshes bend with them.
+ * @param self The game model to read; must not be NULL.
+ * @returns The skeleton (owned by the asset, valid while it is loaded), or NULL for a model without bones.
+ */
+static inline const GameSkeleton* GameModel_GetSkeleton(const GameModel* self)
+{
+    return self->_skeleton;
 }
 
 /**

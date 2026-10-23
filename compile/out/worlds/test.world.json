@@ -1,7 +1,7 @@
 {
     "format_version": 1,
     "name": "test",
-    "next_object_id": 45,
+    "next_object_id": 49,
     "environment": {},
     "objects": [
         {
@@ -573,6 +573,71 @@
                     "world_model": "test"
                 },
                 "collider": {}
+            }
+        },
+        {
+            "id": 45,
+            "name": "humanoid_showcase",
+            "position": [-1.9, 0.05, 2.0],
+            "rotation": [0.0, 180.0, 0.0],
+            "components": {
+                "model": {
+                    "world_model": "test_humanoid"
+                },
+                "animator": {
+                    "plays_clip": true,
+                    "clip": "idle",
+                    "fade_seconds": 0.3
+                }
+            }
+        },
+        {
+            "id": 46,
+            "name": "humanoid_walker",
+            "position": [-5.2, 0.05, 2.0],
+            "rotation": [0.0, 180.0, 0.0],
+            "components": {
+                "model": {
+                    "world_model": "test_humanoid"
+                },
+                "animator": {
+                    "plays_clip": true,
+                    "clip": "walk",
+                    "phase": 0.25
+                }
+            }
+        },
+        {
+            "id": 47,
+            "name": "humanoid_short_waver",
+            "position": [-2.8, 0.05, 2.0],
+            "rotation": [0.0, 180.0, 0.0],
+            "components": {
+                "model": {
+                    "world_model": "test_humanoid_short"
+                },
+                "animator": {
+                    "plays_clip": true,
+                    "clip": "wave",
+                    "overrides_is_looped": true,
+                    "is_looped": true
+                }
+            }
+        },
+        {
+            "id": 48,
+            "name": "humanoid_runner",
+            "position": [-6.1, 0.05, 2.0],
+            "rotation": [0.0, 180.0, 0.0],
+            "components": {
+                "model": {
+                    "world_model": "test_humanoid"
+                },
+                "animator": {
+                    "plays_clip": true,
+                    "clip": "run",
+                    "speed": 0.5
+                }
             }
         }
     ]

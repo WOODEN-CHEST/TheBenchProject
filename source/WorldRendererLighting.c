@@ -15,6 +15,8 @@
 // Macros.
 /** Asset name of the world PBR (metallic/roughness) shader used to shade model objects. */
 #define PBR_SHADER_ASSET_NAME ((const unsigned char*)u8"world_pbr")
+/** Asset name of its skinned twin (T29): the same fragment stage over a vertex stage that skins. */
+#define PBR_SKINNED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_pbr_skinned")
 /** Base shadow depth bias (normalized light-clip depth) to combat acne; slope-scaled in the shader. Tuned
  *  for the shadow frustum's near..far range: ~0.0009 * (far-near) is the world-space offset (a few cm here). */
 #define SHADOW_BIAS 0.0009f
@@ -179,18 +181,45 @@ static void CacheLitLocations(WorldRendererLitLocations* lit, Shader shader)
     lit->_locNightVisionTint = GetShaderLocation(shader, "nightVisionTint");
 }
 
-/* Caches the PBR shader's per-material scalar-factor and map-presence locations, uploaded per material by the mesh
- * draw loop. */
-static void CacheMaterialLocations(WorldRendererPbrState* pbr, Shader shader)
+/* Caches a PBR program's per-material scalar-factor and map-presence locations, uploaded per material by the mesh draw
+ * loop. */
+static void CacheMaterialLocations(WorldRendererPbrProgram* program, Shader shader)
 {
-    pbr->_locMetallic = GetShaderLocation(shader, "metallic");
-    pbr->_locRoughness = GetShaderLocation(shader, "roughness");
-    pbr->_locAo = GetShaderLocation(shader, "ao");
-    pbr->_locEmissiveColor = GetShaderLocation(shader, "emissiveColor");
-    pbr->_locEmissiveIntensity = GetShaderLocation(shader, "emissiveIntensity");
-    pbr->_locHasMraMap = GetShaderLocation(shader, "hasMraMap");
-    pbr->_locHasNormalMap = GetShaderLocation(shader, "hasNormalMap");
-    pbr->_locHasEmissiveMap = GetShaderLocation(shader, "hasEmissiveMap");
+    program->_locMetallic = GetShaderLocation(shader, "metallic");
+    program->_locRoughness = GetShaderLocation(shader, "roughness");
+    program->_locAo = GetShaderLocation(shader, "ao");
+    program->_locEmissiveColor = GetShaderLocation(shader, "emissiveColor");
+    program->_locEmissiveIntensity = GetShaderLocation(shader, "emissiveIntensity");
+    program->_locHasMraMap = GetShaderLocation(shader, "hasMraMap");
+    program->_locHasNormalMap = GetShaderLocation(shader, "hasNormalMap");
+    program->_locHasEmissiveMap = GetShaderLocation(shader, "hasEmissiveMap");
+}
+
+/* Loads one PBR program and prepares it: its lit locations and constants, its material locations, its dither, its own
+ * location table and pass shader, and its palette (none in the rigid program). */
+static void LoadPbrProgram(WorldRenderer* self, WorldRendererPbrProgram* program, const unsigned char* assetName)
+{
+    program->_shader = WorldRendererCommon_LoadShader(self, assetName);
+    program->_palette = (WorldRendererPalette){ ._location = -1 };
+    if (program->_shader == NULL)
+    {
+        return;
+    }
+    Shader RayShader = GameShader_GetRaylibShader(program->_shader);
+    WorldRendererLighting_PrepareLitShader(self, RayShader, assetName, &program->_lit);
+    CacheMaterialLocations(program, RayShader);
+    WorldRendererCommon_PrepareDither(RayShader, &program->_dither);
+    WorldRendererCommon_PreparePalette(RayShader, &program->_palette);
+
+    // The renderer's own location table: the asset's, with the material map samplers pointed at the PBR
+    // shader's sampler names, so DrawMesh binds each material's textures to their conventional units (albedo
+    // -> 0 is already raylib's default "texture0"). The METALNESS slot carries the packed ORM map, matching where
+    // ModelDefinition stores the mra texture. Patching a copy leaves the shared shader asset's table untouched.
+    Memory_Copy(RayShader.locs, program->_locs, sizeof(program->_locs));
+    program->_locs[SHADER_LOC_MAP_METALNESS] = GetShaderLocation(RayShader, "mraMap");
+    program->_locs[SHADER_LOC_MAP_NORMAL] = GetShaderLocation(RayShader, "normalMap");
+    program->_locs[SHADER_LOC_MAP_EMISSION] = GetShaderLocation(RayShader, "emissiveMap");
+    program->_passShader = (Shader){ .id = RayShader.id, .locs = program->_locs };
 }
 
 /* Builds the ambient skylight colour (linear RGB) so it TRACKS the sky's timing, driven by the sun's elevation
@@ -321,25 +350,17 @@ static float ExposureFromAdapted(float adapted)
 // Internal functions (declared in WorldRendererInternal.h).
 void WorldRendererLighting_LoadShader(WorldRenderer* self)
 {
-    self->_pbr._shader = WorldRendererCommon_LoadShader(self, PBR_SHADER_ASSET_NAME);
-    if (self->_pbr._shader == NULL)
+    LoadPbrProgram(self, &self->_pbr._rigid, PBR_SHADER_ASSET_NAME);
+    if (self->_pbr._rigid._shader == NULL)
     {
-        return;
+        return; // skinned meshes need the lit pass too
     }
-    Shader RayShader = GameShader_GetRaylibShader(self->_pbr._shader);
-    WorldRendererLighting_PrepareLitShader(self, RayShader, PBR_SHADER_ASSET_NAME, &self->_pbr._lit);
-    CacheMaterialLocations(&self->_pbr, RayShader);
-    WorldRendererCommon_PrepareDither(RayShader, &self->_pbr._dither);
-
-    // The renderer's own location table: the asset's, with the material map samplers pointed at the PBR
-    // shader's sampler names, so DrawMesh binds each material's textures to their conventional units (albedo
-    // -> 0 is already raylib's default "texture0"). The METALNESS slot carries the packed ORM map, matching where
-    // ModelDefinition stores the mra texture. Patching a copy leaves the shared shader asset's table untouched.
-    Memory_Copy(RayShader.locs, self->_pbr._locs, sizeof(self->_pbr._locs));
-    self->_pbr._locs[SHADER_LOC_MAP_METALNESS] = GetShaderLocation(RayShader, "mraMap");
-    self->_pbr._locs[SHADER_LOC_MAP_NORMAL] = GetShaderLocation(RayShader, "normalMap");
-    self->_pbr._locs[SHADER_LOC_MAP_EMISSION] = GetShaderLocation(RayShader, "emissiveMap");
-    self->_pbr._passShader = (Shader){ .id = RayShader.id, .locs = self->_pbr._locs };
+    LoadPbrProgram(self, &self->_pbr._skinned, PBR_SKINNED_SHADER_ASSET_NAME);
+    if ((self->_pbr._skinned._shader != NULL) && (self->_pbr._skinned._palette._location < 0))
+    {
+        WorldRendererCommon_Warn(self, (const unsigned char*)u8"WorldRenderer: \"world_pbr_skinned\" has no bone "
+            u8"palette (bonePalette); skinned models draw in their bind pose.");
+    }
 }
 
 void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, const unsigned char* assetName,
@@ -551,17 +572,26 @@ static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame
     }
 }
 
+/* Uploads the frame's lighting and the pass's dither pixel scale to a PBR program, when it loaded. */
+static void UploadPbrFrame(WorldRenderer* self, const WorldRenderFrame* frame, const WorldRendererPbrProgram* program,
+    bool applyScreenAo, Vector2 ditherPixelScale)
+{
+    if (program->_shader == NULL)
+    {
+        return;
+    }
+    Shader RayShader = GameShader_GetRaylibShader(program->_shader);
+    UploadLitUniforms(self, frame, RayShader, &program->_lit, applyScreenAo);
+    WorldRendererCommon_SetDitherPixelScale(RayShader, &program->_dither, ditherPixelScale);
+}
+
 void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo,
     Vector2 ditherPixelScale)
 {
-    bool HasPbr = (self->_pbr._shader != NULL);
+    bool HasPbr = (self->_pbr._rigid._shader != NULL);
     bool HasSprites = (self->_sprites._shader != NULL);
-    if (HasPbr)
-    {
-        Shader PbrShader = GameShader_GetRaylibShader(self->_pbr._shader);
-        UploadLitUniforms(self, frame, PbrShader, &self->_pbr._lit, applyScreenAo);
-        WorldRendererCommon_SetDitherPixelScale(PbrShader, &self->_pbr._dither, ditherPixelScale);
-    }
+    UploadPbrFrame(self, frame, &self->_pbr._rigid, applyScreenAo, ditherPixelScale);
+    UploadPbrFrame(self, frame, &self->_pbr._skinned, applyScreenAo, ditherPixelScale);
     if (HasSprites)
     {
         Shader SpriteShader = GameShader_GetRaylibShader(self->_sprites._shader);
@@ -621,9 +651,9 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
  * pass shader's table), but NOT the scalar factors or the has*Map guards, so this does that. A map flag is true
  * only when the slot actually holds a texture; the shader must not sample an unbound map sampler (it would read
  * texture unit 0 = albedo — the silent-fallback bug seen across the post passes). */
-void WorldRendererLighting_UploadMaterial(WorldRenderer* self, const Material* material)
+void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program, const Material* material)
 {
-    Shader RayShader = GameShader_GetRaylibShader(self->_pbr._shader);
+    Shader RayShader = GameShader_GetRaylibShader(program->_shader);
     float Metallic = material->maps[MATERIAL_MAP_METALNESS].value;
     float Roughness = material->maps[MATERIAL_MAP_ROUGHNESS].value;
     float Ao = material->maps[MATERIAL_MAP_OCCLUSION].value;
@@ -635,14 +665,14 @@ void WorldRendererLighting_UploadMaterial(WorldRenderer* self, const Material* m
     int HasNormal = (material->maps[MATERIAL_MAP_NORMAL].texture.id > 0) ? 1 : 0;
     int HasEmissive = (material->maps[MATERIAL_MAP_EMISSION].texture.id > 0) ? 1 : 0;
 
-    SetShaderValue(RayShader, self->_pbr._locMetallic, &Metallic, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_pbr._locRoughness, &Roughness, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_pbr._locAo, &Ao, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_pbr._locEmissiveColor, EmissiveColor, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_pbr._locEmissiveIntensity, &EmissiveIntensity, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_pbr._locHasMraMap, &HasMra, SHADER_UNIFORM_INT);
-    SetShaderValue(RayShader, self->_pbr._locHasNormalMap, &HasNormal, SHADER_UNIFORM_INT);
-    SetShaderValue(RayShader, self->_pbr._locHasEmissiveMap, &HasEmissive, SHADER_UNIFORM_INT);
+    SetShaderValue(RayShader, program->_locMetallic, &Metallic, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, program->_locRoughness, &Roughness, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, program->_locAo, &Ao, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, program->_locEmissiveColor, EmissiveColor, SHADER_UNIFORM_VEC3);
+    SetShaderValue(RayShader, program->_locEmissiveIntensity, &EmissiveIntensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, program->_locHasMraMap, &HasMra, SHADER_UNIFORM_INT);
+    SetShaderValue(RayShader, program->_locHasNormalMap, &HasNormal, SHADER_UNIFORM_INT);
+    SetShaderValue(RayShader, program->_locHasEmissiveMap, &HasEmissive, SHADER_UNIFORM_INT);
 }
 
 /* Starts from the frame's base scene luminance (ambient + sun + moon), adds nearby point lights (being near a light

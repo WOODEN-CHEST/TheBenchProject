@@ -134,7 +134,11 @@ camera, however far out it is. The maths is the private `source/WorldRenderSpace
   space (`RenderMatrix`, `RenderCenter`: relative to the frame's origin, subtracted in double). Passes draw only the
   `IsDrawn` entries; a hidden object keeps its entry and its world model. Every
   pass draws a model one LOD at a time through `WorldRendererGeometry_DrawModel`, which applies the entry's variant to
-  the per-draw material copy (`WorldModel_ApplyVariant`) before the lit pass uploads the copy's factors.
+  the per-draw material copy (`WorldModel_ApplyVariant`) before the lit pass uploads the copy's factors. Since T29 an
+  entry also takes its object's **pose** (`Pose`: the animator's, when it was made for the entry's world model,
+  [Animation.md](Animation.md)); then, unless the world model gives bounds of its own (`WorldModel_HasOwnBounds`), its
+  sphere is the one around the pose's box, moved by the skeleton LOD's import transform, so culling, shadows and LOD
+  distances follow the pose.
 - **Sprites:** the sprites of effectively enabled and visible objects whose playback instance has a frame: the current
   frame and its area in its texture (normalized: the shaders' `uvRect`), the quad before a viewer turns it
   (`SpriteShape`: the orientation, the object's world position and rotation axes, the world size from the frame's
@@ -562,7 +566,9 @@ get no AO and no outlines.
   eye's night vision (active while it changes something: dusk and night, with a strength above 0), "sprite shading" the
   sprites at all (unavailable without the sprite shader or quad: then no sprite is drawn), "sprite lighting" the lit
   sprites (inactive while switched off with the K key's toggle), "sprite shadows" the shadows of cutout sprites
-  (active while one casts into a running shadow; unavailable without the sprite depth shaders). It also counts what the
+  (active while one casts into a running shadow; unavailable without the sprite depth shaders), "skinning" the posed
+  models' skinned meshes (T29: available with the skinned twin of the shader models draw with, active while a shown
+  model has a pose; the status line counts the posed models). It also counts what the
   camera's passes drew and what culling and fading removed (see "Visibility"). The renderer logs the status once after its
   first render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame).
 
@@ -574,9 +580,9 @@ get no AO and no outlines.
 | `WorldRendererInternal.h` | The renderer state (one state struct per pass), `WorldRenderFrame`, fixed texture units, shared constants, and every internal function, documented. |
 | `WorldRendererCommon.c` | Config multipliers, colour conversion, shader loading, one-time warnings, render-target constructors. |
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
-| `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes), the LOD tinting, light gizmos, the pixelation filter. |
+| `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette (T29); the unlit fallback's skinned shader; the LOD tinting, light gizmos, the pixelation filter. |
 | `WorldRendererSprites.c` | The sprites: the unit quad, the lit sprite shader, each frame's sprite matrices (camera, cascades' light, cube's lamp) and transparent draw order, the lit cutout / decal / sorted transparent draws. The G-buffer and shadow passes draw sprites with this file's quad and matrices. |
-| `WorldRendererLighting.c` | The PBR shader and its location table, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: the PBR and the sprite shader, the night vision's among them), forward point lights, per-material factors, eye adaptation. |
+| `WorldRendererLighting.c` | The two PBR programs (rigid and, T29, skinned: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: both PBR programs and the sprite shader, the night vision's among them), forward point lights, per-material factors, eye adaptation. |
 | `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow (models, and cutout sprites through alpha-tested depth shaders). |
 | `WorldRendererGBuffer.c` | The normal/flag G-buffer (models and cutout sprites) and the AO pre-pass. |
 | `WorldRendererSky.c` | The atmospheric sky with the moon, the moonlit sky, the Milky Way and light pollution's skyglow; the sky textures the world names; the night sky values and the moon's disc for the frame. |
@@ -612,7 +618,16 @@ The renderer keeps receiving features, so:
   `rlActiveTextureSlot` binds only work for 3D `DrawMesh` draws.
 - **Constants shared with GLSL.** `MAX_POINT_LIGHTS` in `pbr/fragment.frag` should equal
   `WORLD_MAX_FORWARD_LIGHTS`; the shader clamps its loop and the renderer checks the arrays at load (and logs if
-  the shader holds fewer), so a mismatch costs lights, never memory safety.
+  the shader holds fewer), so a mismatch costs lights, never memory safety. The bone palette's size
+  (`SKINNING_MAX_BONES` in `common/skinning`) is read from each skinned program at load the same way
+  (`WorldRendererCommon_PreparePalette`).
+- **Every geometry pass skins (T29).** A pass that draws models has a skinned twin of its shader (the same fragment
+  stage over a vertex stage that includes `common/skinning`), passes both to `WorldRendererGeometry_DrawModel`
+  (`WorldRendererMeshShaders`) and sets every per-object uniform on both while the entry has a pose (dither, outline
+  flag, forward lights; the PBR factors go to the program the mesh draws with). A palette is uploaded once per pose per
+  pass (`WorldRendererPalette`), and every frame starts by forgetting which pose each palette holds
+  (`WorldRendererGeometry_ResetPalettes`). A new geometry pass follows the same pattern, or its skinned meshes draw in
+  their bind pose.
 - **Failures degrade loudly once.** A missing shader or target falls back with one log line, never silently
   and never per frame.
 
@@ -625,7 +640,10 @@ so a paired shader's two source files need DISTINCT stems: `world_pbr` uses `sha
 `shaders/pbr/fragment.frag`, referenced as `"pbr/vertex"` and `"pbr/fragment"`. The `world_normal` G-buffer shader
 is a second such pair. The four sprite shaders (`world_sprite`, `world_normal_sprite`, `world_sprite_depth`,
 `world_sprite_cube_depth`) share one vertex stage, `sprite/vertex` (the quad, `uvRect`, a decal's lift, the shadow
-lookups' light-facing quads), each with its own fragment stage in its own directory. Each renderer shader lives in its own directory under `asset/shaders/`. GLSL shared between
+lookups' light-facing quads), each with its own fragment stage in its own directory. The skinned twins (T29:
+`world_pbr_skinned`, `world_normal_skinned`, `world_depth_skinned`, `world_cube_depth_skinned` and the unlit fallback's
+`world_unlit_skinned`) sit beside their rigid shaders, each a `skinned.vert` with the rigid shader's fragment stage
+(`unlit/` has its own, raylib's default). Each renderer shader lives in its own directory under `asset/shaders/`. GLSL shared between
 shaders lives in `asset/shaders/common/` and is pulled in with `#include "common/<name>"` (no `#version` in shared
 files; rules in GameAssets.md, "GameShader"): `common/math` (`PI`), `common/atmosphere` (Rayleigh + Mie single
 scattering lit by the sun or the moon, with an overload that also gives the view ray's transmittance; used by
@@ -634,9 +652,10 @@ used by `world_sky`, `world_stars` and the PBR fog) and `common/night_vision` (t
 and the blend into their grey; used by `world_sky` and `common/lighting`), `common/lighting` (the frame's lighting: its
 uniforms, the BRDF and its wrapped variant, the cascades' shadow, point lights and the cube shadow, the screen AO, the
 night vision and the fog; used by `world_pbr` and `world_sprite`), `common/distance_packing` (the cube shadow's
-packed distance; used by `world_cube_depth`, `world_sprite_cube_depth` and `common/lighting`) and `common/dither` (the
+packed distance; used by `world_cube_depth`, `world_sprite_cube_depth` and `common/lighting`), `common/dither` (the
 dithered fades: the draw's fade and its part of a LOD cross-fade; used by every world geometry shader, see
-"Visibility"). Put new shared lighting or noise code there
+"Visibility") and `common/skinning` (T29: the bone attributes and the palette, and a vertex's blended rows; used by
+every skinned vertex stage, [Animation.md](Animation.md)). Put new shared lighting or noise code there
 instead of copying it between shaders.
 
 ## WorldTestFrame
@@ -670,8 +689,12 @@ kinematic mover that stops when blocked) on the right of the start view, and a `
 a trigger) at the end of the desk's slide; the desk is movable. The T27 content (all own boxes, every crate pushable
 and movable): a `pusher_wall` (id 35, kinematic) behind a row of five crates `row_crate_1` to `_5` (ids 36 to 40) on
 z = -1.5, a static `row_stop` (id 41) at the row's far end, and a `door_crate` (id 42) pinned in the corner of two
-static posts (`door_post_west`, `door_post_north`, ids 43 and 44) in the door's swing. Edit the file and restart to
-change the test world.
+static posts (`door_post_west`, `door_post_north`, ids 43 and 44) in the door's swing. Its animation (T29,
+[Animation.md](Animation.md)): four placeholder figures in a row at z = 2, facing the start view, each animator playing
+a clip of its own: `humanoid_showcase` (id 45, x = -1.9: idle with a 0.3 s fade, the one the 5 key steps),
+`humanoid_walker` (id 46, x = -5.2: walk from a quarter of the way in), `humanoid_short_waver` (id 47, x = -2.8: the
+short figure waving, looped by its placement's override) and `humanoid_runner` (id 48, x = -6.1: run at half speed).
+Edit the file and restart to change the test world.
 The frame owns a `WorldCollision` too, created after the world, and since T13 a `WorldCharacters` (the character
 system, [Characters.md](Characters.md)) created after that, with its test characters (the private
 `source/WorldTestCharacters.{h,c}`: walk mode, the test NPCs and their scripted brains, the player controller, the
@@ -684,7 +707,9 @@ characters (`WorldCharacters_Update`, last among the drivers), the collision ste
 (`WorldCollision_Step`), the queued events of that step, logged and cleared (`WorldTest: trigger 34
 ("desk_trigger_zone") enter: object 16 ("desk_top").`, `WorldTest: contact begins: object 33 ("door") and object 42
 ("door_crate"), 1 shape pairs, impact 0.71 m/s.`, `WorldTest: object 33 ("door") is blocked by object 42
-("door_crate"), which cannot get out of its way; it stops.`), then advances the sprites of effectively enabled objects
+("door_crate"), which cannot get out of its way; it stops.`), then the animation system (`WorldAnimation_Update`, T29:
+the animators' rows, clips and poses; slowed to a quarter while the 7 key's slow motion is on), then advances the
+sprites of effectively enabled objects
 (`World_GetComponents(world, WorldComponentType_Sprite)`), calls `World_UpdateTransforms` (the tick's
 world-matrix step), so the renderer reads cached matrices, and last logs the characters' events, updates the player's
 look target and, in walk mode, puts the camera at the player's eyes.
@@ -697,8 +722,8 @@ All input runs in `Update` at the fixed timestep and comes from `Services.Input`
 the UI test frame above had first refusal: movement through the actions (`move_*`, default WASD + SPACE/CTRL, `sprint`
 default SHIFT), mouse-look (`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured) and the
 debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
-it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key and F1 to F12 are
-taken already):
+it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F12 and the
+digits 1 to 7 are taken already; 8, 9, 0, minus, equals and the keypad are free):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
   06:00:00.`): P pause/resume the clock; 1–4 jump to dawn/noon/dusk/midnight of the clock's day (06:00, 12:00, 18:00,
@@ -766,6 +791,13 @@ taken already):
   bob. The log names what you look at whenever it changes and every character event (jumped, landed with its speed,
   left the ground, crouched, stood up, took off, stopped flying, used); I adds `WorldTest: you: a human (test_human),
   walking, standing, on object 2 ("ground"), 1.40 m/s, eyes 1.62 m up; looking at ...`;
+- **animation (T29, [Animation.md](Animation.md); the private `source/WorldTestAnimation.{h,c}`):** 5 steps the
+  showcase figure (`humanoid_showcase`) through the placeholder's clips (idle, walk, run, crouch_idle, crouch_walk,
+  jump, fall, land, wave), each a cross-fade over its animator's 0.3 s (logged); 6 brings out a crowd of 100 figures
+  (runtime objects, never saved; tall and short alternating) in a square in front of the camera, facing it, each
+  walking at its own phase and a little faster or slower, and takes it away; 7 slows every animation to a quarter and
+  back (logged). I adds `WorldTest: animation: 104 animators (104 posed), 104 clips playing, 1976 bones posed in 182 us;
+  the showcase plays "idle" (5); crowd out (6); slow motion off (7).`;
 - T toggles the text sample.
 
 M frees the cursor for the UI (and captures it again); a left click the UI did not take captures it again. An

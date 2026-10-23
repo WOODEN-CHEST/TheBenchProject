@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "AssetTypesStandard.h"
 #include "AssetDefinitionCommon.h"
 #include "GameModel.h"
@@ -11,8 +12,9 @@
  * Static-model loader: loads meshes + materials, bakes an optional import transform into the model's
  * transform matrix, seeds sensible PBR scalar defaults, and applies optional material overrides (rebinding a
  * slot's albedo / normal / ORM (occlusion-roughness-metallic) / emissive textures and its tint + metallic /
- * roughness / emissive scalar factors). Skeletal animation and material addressing by name are out of scope
- * for now (slots are addressed by index).
+ * roughness / emissive scalar factors). A model with bones also gets its skeleton (GameSkeleton.h, T29); the clips it
+ * plays are animation library assets of their own. Material addressing by name is out of scope for now (slots are
+ * addressed by index).
  *
  * TEXTURE OWNERSHIP. raylib's UnloadModel only unloads the meshes and frees each material's map array; it
  * never unloads textures or shaders. The loaded asset therefore lists the GPU texture ids it owns: every
@@ -355,6 +357,7 @@ static void DiscardModel(Model* model, GenericBuffer* ownedTextureIds)
 static void ModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
 {
     ModelLoaded* Loaded = self->DestroyContext;
+    GameSkeleton_Destroy(Loaded->Model._skeleton);
     DiscardModel(&Loaded->Model._rayModel, Loaded->OwnedTextureIds);
     Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, Loaded->OwnedTextureIds);
     Error_Deconstruct(&ReturnResult);
@@ -551,10 +554,27 @@ static Error ModelDefinition_LoadAsset(void* self, AssetManager* manager, AssetU
     // Importer textures replaced by an override are referenced by no material any more.
     PruneUnreferencedTextures(&RayModel, OwnedTextureIds);
 
+    // A skinned model's skeleton (none without bones). A broken skeleton fails the model, as a broken mesh would.
+    GameSkeleton* Skeleton = NULL;
+    char Description[160];
+    char PrintableName[129];
+    AssetJSON_CopyPrintable(Definition->Base.Name, PrintableName, sizeof(PrintableName));
+    snprintf(Description, sizeof(Description), "Model \"%s\"", PrintableName);
+    Result = GameSkeleton_Create(&RayModel, (const unsigned char*)Description, AssetManager_GetLogger(manager),
+        &Skeleton);
+    if (Result.Code != ErrorCode_Success)
+    {
+        DiscardModel(&RayModel, OwnedTextureIds);
+        Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, OwnedTextureIds);
+        Error_Deconstruct(&ReturnResult);
+        return Result;
+    }
+
     ModelLoaded* Loaded = Memory_Allocate(sizeof(ModelLoaded));
     Memory_Zero(Loaded, sizeof(*Loaded));
     Loaded->Model._rayModel = RayModel;
     Loaded->Model._localBounds = ComputeLocalBounds(RayModel);
+    Loaded->Model._skeleton = Skeleton;
     Loaded->OwnedTextureIds = OwnedTextureIds;
 
     outLoaded->Asset = &Loaded->Model;

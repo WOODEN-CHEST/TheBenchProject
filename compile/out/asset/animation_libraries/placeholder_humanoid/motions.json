@@ -1,0 +1,15 @@
+{
+    "name": "test_humanoid_motions",
+    "location": "placeholder_humanoid/motions",
+    "clips": [
+        { "name": "idle", "is_looped": true },
+        { "name": "walk", "is_looped": true },
+        { "name": "run", "is_looped": true },
+        { "name": "crouch_idle", "is_looped": true },
+        { "name": "crouch_walk", "is_looped": true },
+        { "name": "jump" },
+        { "name": "fall", "is_looped": true },
+        { "name": "land" },
+        { "name": "wave" }
+    ]
+}

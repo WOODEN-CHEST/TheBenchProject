@@ -745,7 +745,7 @@ static void DataMapRowsAreChecked(TestRun* run)
     CheckBrokenMapDescriptor(run, 1U, BreakTagsKeyToOtherKey, "key is used twice");
     CheckBrokenMapDescriptor(run, 1U, BreakMapCount, "MaxCount and a MaxLength");
     CheckBrokenMapDescriptor(run, 1U, BreakMapDefault, "default to empty");
-    CheckBrokenMapDescriptor(run, 0U, BreakCountOnInteger, "only data maps and float lists take a MaxCount");
+    CheckBrokenMapDescriptor(run, 0U, BreakCountOnInteger, "only data maps, float lists and asset name lists take a MaxCount");
     CheckBrokenMapDescriptor(run, 0U, BreakTagsKeyOnInteger, "only data maps take a TagsKey");
 }
 
@@ -2169,6 +2169,218 @@ static void EnvironmentGHDFRoundTrip(TestRun* run)
 
 
 // Public functions.
+/* An asset name list's own record (T29): a list row and a flag row. */
+typedef struct NameListRecordStruct
+{
+    PropertyAssetNameList* Libraries;
+    bool IsOn;
+} NameListRecord;
+
+static const PropertyDescriptor NameListProperties[] =
+{
+    { .Key = u8"libraries", .WireId = 1U, .Type = PropertyType_AssetNameList, PROPERTY_MEMBER(NameListRecord, Libraries),
+        .Default.AssetNameListValue = NULL, .Rules = PROPERTY_RULES_ASSET_NAME_LIST(3U, 16U),
+        .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"is_on", .WireId = 2U, .Type = PropertyType_Bool, PROPERTY_MEMBER(NameListRecord, IsOn),
+        .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+};
+
+static const PropertyTable NameListTable =
+{
+    .Name = u8"test_name_list", .Version = 1U, .StructSize = sizeof(NameListRecord), .Descriptors = NameListProperties,
+    .DescriptorCount = sizeof(NameListProperties) / sizeof(NameListProperties[0]), .RetiredWireIds = NULL,
+    .RetiredWireIdCount = 0U, .AfterSet = NULL, .Migrate = NULL
+};
+
+static Error ReadNameListFromText(TestRun* run, JSONObjectPool* pool, const char* text, NameListRecord* record)
+{
+    JSONObjectValue Value;
+    if (!TestText_ParseJSON(run, pool, text, &Value))
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, "the test's JSON did not parse");
+    }
+    Error Result = Properties_ReadJSON(&NameListTable, Value.Value.Compound, record, NULL);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(pool, &Value));
+    return Result;
+}
+
+/* Puts a String array of @p count copies of @p name under the list's wire id. */
+static void PutNameArray(TestRun* run, GHDFObjectPool* pool, GHDFCompound* compound, const char* name, size_t count)
+{
+    GHDFArray* Array = NULL;
+    if (!TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowArray(pool, GHDFValueType_String, &Array)))
+    {
+        return;
+    }
+    for (size_t Index = 0U; Index < count; Index++)
+    {
+        GenericBuffer* Buffer = NULL;
+        if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowString(pool, &Buffer)))
+        {
+            GenericBuffer_AppendString(Buffer, (const unsigned char*)name);
+            GenericBuffer_NullTerminate(Buffer);
+            GHDFObjectValue Element = GHDFObjectValue_CreateString(Buffer);
+            TEST_CHECK_SUCCESS(run, GHDFArray_AddValue(Array, &Element));
+        }
+    }
+    GHDFObjectValue ArrayValue = GHDFObjectValue_CreateArray(Array, GHDFValueType_String);
+    TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(compound, 1U, GHDF_CreateArrayType(GHDFValueType_String), &ArrayValue));
+}
+
+static void AssetNameListsGoThroughTheTables(TestRun* run)
+{
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(&NameListTable));
+    const unsigned char* Names[] = { (const unsigned char*)u8"human_basic", (const unsigned char*)u8"human.office" };
+    PropertyAssetNameList* List = NULL;
+    TEST_CHECK_SUCCESS(run, PropertyAssetNameList_Create(Names, 0U, &List));
+    TEST_CHECK(run, (List == NULL) && (PropertyAssetNameList_GetCount(NULL) == 0U));
+    TEST_CHECK_ERROR(run, PropertyAssetNameList_Create(NULL, 2U, &List), ErrorCode_IllegalArgument);
+    TEST_CHECK_ERROR(run, PropertyAssetNameList_Create(Names, PROPERTY_ASSET_NAME_LIST_MAX_COUNT + 1U, &List),
+        ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, PropertyAssetNameList_Create(Names, 1U, NULL), ErrorCode_IllegalArgument);
+    if (!TEST_CHECK_SUCCESS(run, PropertyAssetNameList_Create(Names, 2U, &List)))
+    {
+        return;
+    }
+    PropertyAssetNameList* Copy = PropertyAssetNameList_Clone(List);
+    TEST_CHECK(run, (Copy != List) && PropertyAssetNameList_Equals(Copy, List) && (PropertyAssetNameList_GetCount(Copy) == 2U)
+        && (strcmp((const char*)PropertyAssetNameList_GetName(Copy, 1U), "human.office") == 0));
+    TEST_CHECK(run, PropertyAssetNameList_Equals(NULL, NULL) && !PropertyAssetNameList_Equals(List, NULL)
+        && (PropertyAssetNameList_Clone(NULL) == NULL));
+
+    NameListRecord Record;
+    NameListRecord Other;
+    JSONObjectPool* Pool = NULL;
+    GHDFObjectPool* BinaryPool = NULL;
+    if (TEST_CHECK_SUCCESS(run, Properties_Construct(&NameListTable, &Record))
+        && TEST_CHECK_SUCCESS(run, Properties_Construct(&NameListTable, &Other))
+        && TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)) && TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&BinaryPool)))
+    {
+        // Set copies; the rules check every name; a deep copy has its own list.
+        PropertyValue Value = PropertyValue_FromAssetNameList(List);
+        TEST_CHECK_SUCCESS(run, Properties_Set(&NameListTable, &Record, u8"libraries", &Value));
+        TEST_CHECK(run, (Record.Libraries != NULL) && (Record.Libraries != List)
+            && PropertyAssetNameList_Equals(Record.Libraries, List));
+        const unsigned char* Bad[] = { (const unsigned char*)u8"Human" };
+        const unsigned char* TooLong[] = { (const unsigned char*)u8"a_name_of_seventeen" };
+        const unsigned char* Four[] = { (const unsigned char*)u8"a", (const unsigned char*)u8"b",
+            (const unsigned char*)u8"c", (const unsigned char*)u8"d" };
+        const unsigned char* const* Refused[] = { Bad, TooLong, Four };
+        const size_t RefusedCounts[] = { 1U, 1U, 4U };
+        for (size_t Index = 0U; Index < 3U; Index++)
+        {
+            PropertyAssetNameList* Wrong = NULL;
+            if (TEST_CHECK_SUCCESS(run, PropertyAssetNameList_Create(Refused[Index], RefusedCounts[Index], &Wrong)))
+            {
+                PropertyValue WrongValue = PropertyValue_FromAssetNameList(Wrong);
+                TEST_CHECK_ERROR(run, Properties_Set(&NameListTable, &Record, u8"libraries", &WrongValue),
+                    ErrorCode_ArgumentOutOfRange);
+                PropertyAssetNameList_Destroy(Wrong);
+            }
+        }
+        TEST_CHECK(run, PropertyAssetNameList_Equals(Record.Libraries, List));
+        TEST_CHECK_SUCCESS(run, Properties_CopyTo(&NameListTable, &Record, &Other));
+        TEST_CHECK(run, (Other.Libraries != Record.Libraries) && Properties_Equals(&NameListTable, &Record, &Other));
+
+        // JSON: an array of strings, read back the same; [] is the empty list; wrong entries change nothing.
+        JSONCompound* Compound = NULL;
+        if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
+        {
+            TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&NameListTable, &Record, Pool, Compound, NULL));
+            JSONObjectValue Array;
+            if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"libraries", JSONValueType_Array, &Array)))
+            {
+                JSONObjectValue Element;
+                TEST_CHECK(run, (JSONArray_GetElementCount(Array.Value.Array) == 2U)
+                    && TEST_CHECK_SUCCESS(run, JSONArray_Get(Array.Value.Array, 0U, &Element))
+                    && (Element.Type == JSONValueType_String));
+            }
+            TEST_CHECK_SUCCESS(run, Properties_ReadJSON(&NameListTable, Compound, &Other, NULL));
+            TEST_CHECK(run, PropertyAssetNameList_Equals(Other.Libraries, List));
+            TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Compound, true));
+        }
+        TEST_CHECK_SUCCESS(run, ReadNameListFromText(run, Pool, "{\"libraries\": []}", &Other));
+        TEST_CHECK(run, Other.Libraries == NULL);
+        TEST_CHECK_SUCCESS(run, ReadNameListFromText(run, Pool, "{\"libraries\": [\"dog_basic\"]}", &Other));
+        TEST_CHECK(run, (PropertyAssetNameList_GetCount(Other.Libraries) == 1U)
+            && (strcmp((const char*)PropertyAssetNameList_GetName(Other.Libraries, 0U), "dog_basic") == 0));
+        static const char* const RefusedTexts[] =
+        {
+            "{\"libraries\": \"dog_basic\"}", "{\"libraries\": [1]}", "{\"libraries\": [\"Dog\"]}",
+            "{\"libraries\": [\"a\", \"b\", \"c\", \"d\"]}", "{\"libraries\": [\"a_name_of_seventeen\"]}",
+        };
+        for (size_t Index = 0U; Index < sizeof(RefusedTexts) / sizeof(RefusedTexts[0]); Index++)
+        {
+            Error Result = ReadNameListFromText(run, Pool, RefusedTexts[Index], &Other);
+            if (!TEST_CHECK(run, Result.Code != ErrorCode_Success))
+            {
+                printf("      (read: %s)\n", RefusedTexts[Index]);
+            }
+            Error_Deconstruct(&Result);
+            TEST_CHECK(run, PropertyAssetNameList_GetCount(Other.Libraries) == 1U);
+        }
+
+        // GHDF: a String array; an empty one is the empty list; too long, wrong names or another type are refused.
+        GHDFCompound* Binary = NULL;
+        if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Binary)))
+        {
+            TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&NameListTable, &Record, BinaryPool, Binary, NULL));
+            GHDFObjectValue Entry;
+            TEST_CHECK(run, TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Binary, 1U,
+                GHDF_CreateArrayType(GHDFValueType_String), &Entry)) && (GHDFArray_GetElementCount(Entry.Value.Array) == 2U));
+            TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&NameListTable, Binary, &Other, NULL));
+            TEST_CHECK(run, PropertyAssetNameList_Equals(Other.Libraries, Record.Libraries));
+            PutNameArray(run, BinaryPool, Binary, "human_basic", 4U);
+            TEST_CHECK_ERROR(run, Properties_ReadGHDF(&NameListTable, Binary, &Other, NULL), ErrorCode_Deserialize);
+            PutNameArray(run, BinaryPool, Binary, "Human", 1U);
+            Error Refusal = Properties_ReadGHDF(&NameListTable, Binary, &Other, NULL);
+            TEST_CHECK(run, Refusal.Code != ErrorCode_Success);
+            Error_Deconstruct(&Refusal);
+            PutNameArray(run, BinaryPool, Binary, "a_name_of_seventeen", 1U);
+            TEST_CHECK_ERROR(run, Properties_ReadGHDF(&NameListTable, Binary, &Other, NULL), ErrorCode_Deserialize);
+            TEST_CHECK(run, PropertyAssetNameList_Equals(Other.Libraries, Record.Libraries));
+            PutNameArray(run, BinaryPool, Binary, "human_basic", 0U);
+            TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&NameListTable, Binary, &Other, NULL));
+            TEST_CHECK(run, Other.Libraries == NULL);
+            TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Binary, true));
+        }
+    }
+    Properties_Deconstruct(&NameListTable, &Record);
+    Properties_Deconstruct(&NameListTable, &Other);
+    TEST_CHECK(run, (Record.Libraries == NULL) && (Other.Libraries == NULL));
+    if (BinaryPool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(BinaryPool));
+    }
+    if (Pool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    }
+    PropertyAssetNameList_Destroy(Copy);
+    PropertyAssetNameList_Destroy(List);
+}
+
+static void AssetNameListRowsAreChecked(TestRun* run)
+{
+    PropertyDescriptor Rows[1] = { NameListProperties[0] };
+    PropertyTable Table = NameListTable;
+    Table.Descriptors = Rows;
+    Table.DescriptorCount = 1U;
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(&Table));
+    Rows[0].Rules = (PropertyRules)PROPERTY_RULES_ASSET_NAME_LIST(0U, 16U);
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument);
+    Rows[0].Rules = (PropertyRules)PROPERTY_RULES_ASSET_NAME_LIST(PROPERTY_ASSET_NAME_LIST_MAX_COUNT + 1U, 16U);
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument);
+    Rows[0].Rules = (PropertyRules)PROPERTY_RULES_ASSET_NAME_LIST(3U, 0U);
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument);
+    Rows[0].Rules = (PropertyRules)PROPERTY_RULES_ASSET_NAME_LIST(3U, PROPERTY_ASSET_NAME_LIST_MAX_LENGTH + 1U);
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument);
+    Rows[0].Rules = (PropertyRules)PROPERTY_RULES_ASSET_NAME_LIST(3U, 16U);
+    Rows[0].Rules.IsNullAllowed = true;
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument);
+    TEST_CHECK(run, strcmp((const char*)PropertyType_GetName(PropertyType_AssetNameList), "asset_name_list") == 0);
+}
+
 void PropertyDescriptorTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
@@ -2191,6 +2403,8 @@ void PropertyDescriptorTests_Run(TestRun* run)
         { "copies_are_deep", CopiesAreDeep },
         { "get_and_set_by_key", GetAndSetByKey },
         { "float_lists_go_through_the_tables", FloatListsGoThroughTheTables },
+        { "asset_name_lists_go_through_the_tables", AssetNameListsGoThroughTheTables },
+        { "asset_name_list_rows_are_checked", AssetNameListRowsAreChecked },
         { "enum_sets_go_through_the_tables", EnumSetsGoThroughTheTables },
         { "big_structs_read_through_a_heap_scratch", BigStructsReadThroughAHeapScratch },
         { "migration_runs_for_older_data", MigrationRunsForOlderData },

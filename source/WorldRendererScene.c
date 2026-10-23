@@ -224,8 +224,7 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
 
     // Model objects, shaded through the PBR shader (or each material's own default shader when it is
     // unavailable). Filtered by OmitPixelation: crisp objects are drawn by the crisp overlay pass instead.
-    bool IsLit = (self->_pbr._shader != NULL);
-    WorldRendererGeometry_DrawModels(self, IsLit ? &self->_pbr._passShader : NULL, IsLit, frame->SceneFilter);
+    WorldRendererGeometry_DrawModels(self, frame->SceneFilter);
 
     // Sprites, lit like the models: the cutout ones (opaque, writing depth), then the decals over the opaque world, then
     // the blended and additive ones back to front.

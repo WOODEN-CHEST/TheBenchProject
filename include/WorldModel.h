@@ -13,6 +13,8 @@
 
 /** @brief A standalone texture asset (GameTexture.h); variants name textures as dependencies. */
 typedef struct GameTextureStruct GameTexture;
+/** @brief An animation library asset (AnimationLibrary.h); a world model names the ones its placements play. */
+typedef struct AnimationLibraryStruct AnimationLibrary;
 
 
 /**
@@ -49,6 +51,12 @@ typedef struct GameTextureStruct GameTexture;
  * (WorldModelComponent_ResolveLodSettings). The renderer picks the LOD by the camera's distance with the hysteresis
  * stored here, and cross-fades a change over the fade time with a dither (T11).
  *
+ * ANIMATION (T29). A world model whose LOD models are skinned has a skeleton (WorldModel_GetSkeleton: every skinned LOD
+ * shares it, bones and bind poses alike, so one pose bends them all; LODs without bones draw as they are), and it may
+ * name animation libraries (AnimationLibrary.h) whose clips its placements play: an animator component on the object
+ * (WorldAnimatorComponent.h) plays them, matched to the skeleton by bone name. The libraries load as dependencies, and
+ * their clips' names must not repeat across them.
+ *
  * Every field is read-only (underscore-prefixed): read them through the accessors.
  */
 
@@ -69,6 +77,8 @@ typedef struct GameTextureStruct GameTexture;
 /** @brief The draw distance of WorldModelSettings_CreateDefault, in metres: what a model component's own draw distance
  *  starts at (its override is off by default). A world model's own draw distance defaults to its last LOD's. */
 #define WORLD_MODEL_DEFAULT_DRAW_DISTANCE 600.0f
+/** @brief The most animation libraries a world model may name (T29). */
+#define WORLD_MODEL_MAX_ANIMATION_LIBRARIES ((size_t)16)
 
 
 // Types.
@@ -226,11 +236,26 @@ typedef struct WorldModelStruct
     /** @brief From the bounding sphere's space to the object's own: identity for the definition's "bounds", LOD 0's
      *  import transform for its mesh bounds. */
     Matrix _boundsTransform;
+    /** @brief Whether the sphere is the definition's "bounds" (otherwise the one around LOD 0's mesh bounds, which a
+     *  posed placement replaces with its pose's: T29). */
+    bool _hasOwnBounds;
     /** @brief The variants (owned), and their count (0 to WORLD_MODEL_MAX_VARIANTS). */
     const WorldModelVariant* _variants;
     size_t _variantCount;
     /** @brief The collision (owned), or NULL: no collision. */
     const WorldModelCollision* _collision;
+    /** @brief The skeleton its skinned LODs share (owned by that LOD's model), or NULL when no LOD has bones (T29). */
+    const GameSkeleton* _skeleton;
+    /** @brief The first LOD with that skeleton (valid while _skeleton is not NULL): its import transform places the
+     *  skeleton's mesh space in the object's own space. */
+    size_t _skeletonLod;
+    /** @brief The animation libraries its placements play (held under the world model's dependency user), the first
+     *  _animationLibraryCount entries. */
+    const AnimationLibrary* _animationLibraries[WORLD_MODEL_MAX_ANIMATION_LIBRARIES];
+    /** @brief Their asset names (owned by the world model), in the same order. */
+    const unsigned char* _animationLibraryNames[WORLD_MODEL_MAX_ANIMATION_LIBRARIES];
+    /** @brief How many it names (0 to WORLD_MODEL_MAX_ANIMATION_LIBRARIES). */
+    size_t _animationLibraryCount;
 } WorldModel;
 
 
@@ -247,6 +272,56 @@ extern const PropertyEnumTable WORLD_SHADOW_TIER_ENUM;
  * @returns The settings.
  */
 WorldModelSettings WorldModelSettings_CreateDefault(void);
+
+/**
+ * @brief Returns the skeleton the world model's skinned LODs share (T29).
+ * @param self The world model; must not be NULL.
+ * @returns The skeleton (valid while the world model is loaded), or NULL when no LOD has bones.
+ */
+static inline const GameSkeleton* WorldModel_GetSkeleton(const WorldModel* self)
+{
+    return self->_skeleton;
+}
+
+/**
+ * @brief Returns the first LOD with the skeleton: its import transform (its model's transform) takes the skeleton's mesh
+ *        space to the object's own space, for bone sockets.
+ * @param self The world model; must not be NULL (and with a skeleton).
+ * @returns The LOD's index.
+ */
+static inline size_t WorldModel_GetSkeletonLod(const WorldModel* self)
+{
+    return self->_skeletonLod;
+}
+
+/** @brief Returns how many animation libraries the world model names (T29). @param self The world model; must not be
+ *  NULL. */
+static inline size_t WorldModel_GetAnimationLibraryCount(const WorldModel* self)
+{
+    return self->_animationLibraryCount;
+}
+
+/**
+ * @brief Returns one of the animation libraries the world model names.
+ * @param self The world model; must not be NULL.
+ * @param index Below WorldModel_GetAnimationLibraryCount.
+ * @returns The library (valid while the world model is loaded).
+ */
+static inline const AnimationLibrary* WorldModel_GetAnimationLibrary(const WorldModel* self, size_t index)
+{
+    return self->_animationLibraries[index];
+}
+
+/**
+ * @brief Returns the asset name of one of the animation libraries the world model names.
+ * @param self The world model; must not be NULL.
+ * @param index Below WorldModel_GetAnimationLibraryCount.
+ * @returns The name (valid while the world model is loaded).
+ */
+static inline const unsigned char* WorldModel_GetAnimationLibraryName(const WorldModel* self, size_t index)
+{
+    return self->_animationLibraryNames[index];
+}
 
 /**
  * @brief Returns the number of LODs.
@@ -345,6 +420,17 @@ static inline float WorldModel_GetBoundsRadius(const WorldModel* self)
 static inline Matrix WorldModel_GetBoundsTransform(const WorldModel* self)
 {
     return self->_boundsTransform;
+}
+
+/**
+ * @brief Returns whether the bounding sphere is the definition's own ("bounds"), which holds whatever its placements do:
+ *        a posed placement's renderer then keeps it, and otherwise bounds the placement by its pose (T29).
+ * @param self The world model; must not be NULL.
+ * @returns Whether the definition gives the sphere.
+ */
+static inline bool WorldModel_HasOwnBounds(const WorldModel* self)
+{
+    return self->_hasOwnBounds;
 }
 
 /**

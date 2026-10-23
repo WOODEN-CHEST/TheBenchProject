@@ -11,11 +11,12 @@ The definition JSON format is specified in `references/asset_structure.md`.
 
 Loads, shares and unloads game assets. The manager stores **definitions** (named recipes, normally JSON files
 under the asset search roots) and builds an asset from its definition the first time someone loads it. Asset
-types are registered at runtime (`AssetManager_CreateAssetType`); the ten standard types (sprite sheet, sprite
-animation, sound, font, shader, model, texture, world model, world sprite, character) are registered together by
-`AssetManager_CreateStandardAssetTypes`. The wrappers it hands out are documented in [SpriteSheet.md](SpriteSheet.md),
-[SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md), [WorldModels.md](WorldModels.md),
-[WorldSprites.md](WorldSprites.md) and [Characters.md](Characters.md).
+types are registered at runtime (`AssetManager_CreateAssetType`); the eleven standard types (sprite sheet, sprite
+animation, sound, font, shader, model, texture, world model, world sprite, character, animation library) are
+registered together by `AssetManager_CreateStandardAssetTypes`. The wrappers it hands out are documented in
+[SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md),
+[WorldModels.md](WorldModels.md), [WorldSprites.md](WorldSprites.md), [Characters.md](Characters.md) and
+[Animation.md](Animation.md).
 
 ## Lifetime rules (read first)
 
@@ -118,7 +119,8 @@ Error_Deconstruct(&RetireResult);
 ```
 
 The typed loaders (`AssetManager_LoadSpriteSheet`, `LoadSpriteAnimation`, `LoadSound`, `LoadFont`, `LoadShader`,
-`LoadModel`, `LoadTexture`, `LoadWorldModel`) return `ErrorCode_InvalidState` if the standard types were never
+`LoadModel`, `LoadTexture`, `LoadWorldModel`, `LoadWorldSprite`, `LoadCharacter`, `LoadAnimationLibrary`) return
+`ErrorCode_InvalidState` if the standard types were never
 registered. Custom types use
 `AssetManager_LoadAssetSingle(self, typeId, name, user, &AssetPointer)` with a `void*` result.
 

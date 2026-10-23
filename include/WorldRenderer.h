@@ -138,6 +138,11 @@ typedef enum WorldRendererFeatureEnum
     WorldRendererFeature_SpriteLighting,
     /** @brief Shadows cast by cutout sprites, facing the light (inactive while no sprite casts or no shadow runs). */
     WorldRendererFeature_SpriteShadows,
+    /** @brief Skinned models bending with their animators' poses (T29): available with the skinned twin of the shader
+     *  models draw with (world_pbr_skinned, or world_unlit_skinned while PBR lighting is unavailable) and its bone
+     *  palette, active while a shown model has a pose. Without it skinned meshes draw in their bind pose (also in a
+     *  pass whose own skinned twin is missing: the G-buffer's, a shadow's). */
+    WorldRendererFeature_Skinning,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -173,6 +178,8 @@ typedef struct WorldRendererStatusStruct
     size_t ModelCount;
     /** @brief Model components that draw nothing: no model name, or a model that failed to load (logged once). */
     size_t ModelWithoutAssetCount;
+    /** @brief Of the shown models, those with a pose (T29): their skinned meshes bend with their animators. */
+    size_t PosedModelCount;
     /** @brief Sprite components with a frame to draw, on enabled and visible objects. */
     size_t SpriteCount;
     /** @brief Of those, the decals. */

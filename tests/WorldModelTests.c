@@ -1011,7 +1011,10 @@ static void ThePlacementPicksItsLodSettings(TestRun* run)
 /* The game's world models (compile/out/asset/world_models) are all read without a skipped file. */
 static void TheShippedWorldModelsAreRead(TestRun* run)
 {
-    static const char* const Names[] = { "test", "pbr_demo", "pbr_metal", "painted_cube", "lod_test", "test_door" };
+    static const char* const Names[] =
+    {
+        "test", "pbr_demo", "pbr_metal", "painted_cube", "lod_test", "test_door", "test_humanoid", "test_humanoid_short"
+    };
     TestAssetFixture Fixture;
     GenericBuffer Root;
     GenericBuffer_AllocateVariable(&Root, WORLD_MODEL_TEST_TEXT_CAPACITY, sizeof(unsigned char));

@@ -117,6 +117,34 @@ static Error CreateFloatListValue(JSONObjectPool* pool, const PropertyFloatList*
     return Error_CreateSuccess();
 }
 
+/* An asset name list as an array of strings; [] when empty. */
+static Error CreateAssetNameListValue(JSONObjectPool* pool, const PropertyAssetNameList* list, JSONObjectValue* outValue)
+{
+    JSONArray* Array = NULL;
+    Error Result = JSONObjectPool_BorrowArray(pool, &Array);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    for (size_t Index = 0; (Index < PropertyAssetNameList_GetCount(list)) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        JSONObjectValue Element;
+        Result = GameJSON_CreateStringValue(pool, PropertyAssetNameList_GetName(list, Index), &Element);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = JSONArray_Add(Array, &Element);
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = JSONObjectPool_ReturnArray(pool, Array, true);
+        Error_Deconstruct(&ReturnResult);
+        return Result;
+    }
+    *outValue = JSONObjectValue_CreateArray(Array);
+    return Error_CreateSuccess();
+}
+
 /* An enum set as an array of its entries' names, in the enum table's order. */
 static Error CreateEnumSetValue(JSONObjectPool* pool, const PropertyEnumTable* table, uint32_t mask,
     JSONObjectValue* outValue)
@@ -230,6 +258,8 @@ static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descrip
             return CreateFloatListValue(pool, data->FloatListValue, outValue);
         case PropertyType_EnumSet:
             return CreateEnumSetValue(pool, descriptor->EnumTable, data->EnumSetValue, outValue);
+        case PropertyType_AssetNameList:
+            return CreateAssetNameListValue(pool, data->AssetNameListValue, outValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -440,6 +470,8 @@ static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectVa
             return Error_Construct2(ErrorCode_InvalidState, "Float lists are read separately.");
         case PropertyType_EnumSet:
             return ReadEnumSet(descriptor, value, &outData->EnumSetValue);
+        case PropertyType_AssetNameList:
+            return Error_Construct2(ErrorCode_InvalidState, "Asset name lists are read separately.");
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -477,6 +509,68 @@ static Error ReadFloatList(const PropertyDescriptor* descriptor, const JSONObjec
     if (Result.Code != ErrorCode_Success)
     {
         PropertyFloatList_Destroy(List);
+        return Result;
+    }
+    PropertyInternal_AdoptOwned(descriptor, target, List);
+    return Error_CreateSuccess();
+}
+
+/* An array of strings, its length and each string's checked before the list is built (the names' rules are checked when
+ * the read commits); [] is the empty list. */
+static Error ReadAssetNameList(const PropertyDescriptor* descriptor, const JSONObjectValue* value, void* target)
+{
+    if (value->Type != JSONValueType_Array)
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, "Expected an array of asset names.");
+    }
+    size_t Count = JSONArray_GetElementCount(value->Value.Array);
+    if (Count > descriptor->Rules.MaxCount)
+    {
+        return Error_Construct4(ErrorCode_InvalidJSON, "The list has %" PRIu64 " names; at most %" PRIu64
+            " are allowed.", (uint64_t)Count, (uint64_t)descriptor->Rules.MaxCount);
+    }
+    unsigned char* Names[PROPERTY_ASSET_NAME_LIST_MAX_COUNT];
+    size_t NameCount = 0U;
+    Error Result = Error_CreateSuccess();
+    for (size_t Index = 0; (Index < Count) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        JSONObjectValue Element;
+        Result = JSONArray_Get(value->Value.Array, Index, &Element);
+        if ((Result.Code == ErrorCode_Success) && (Element.Type != JSONValueType_String))
+        {
+            Result = Error_Construct2(ErrorCode_InvalidJSON, "Expected every entry to be an asset name (a string).");
+        }
+        size_t ByteCount = ((Result.Code == ErrorCode_Success) && (Element.Value.String != NULL))
+            ? Element.Value.String->_count : 0U;
+        if ((Result.Code == ErrorCode_Success) && (ByteCount > descriptor->Rules.MaxLength))
+        {
+            Result = Error_Construct4(ErrorCode_InvalidJSON, "An asset name is longer than the %" PRIu64
+                " bytes allowed.", (uint64_t)descriptor->Rules.MaxLength);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = GameJSON_ValueToOwnedString(&Element, &Names[NameCount]);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            NameCount++;
+            if (StringUTF8_GetByteLength(Names[NameCount - 1U]) != ByteCount)
+            {
+                Result = Error_Construct2(ErrorCode_InvalidJSON, "An asset name must not contain NUL characters.");
+            }
+        }
+    }
+    PropertyAssetNameList* List = NULL;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = PropertyAssetNameList_Create((const unsigned char* const*)Names, NameCount, &List);
+    }
+    for (size_t Index = 0U; Index < NameCount; Index++)
+    {
+        Memory_Free(Names[Index]);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
         return Result;
     }
     PropertyInternal_AdoptOwned(descriptor, target, List);
@@ -528,6 +622,10 @@ static Error ReadValue(const PropertyTable* table, const PropertyDescriptor* des
     else if (descriptor->Type == PropertyType_FloatList)
     {
         Result = ReadFloatList(descriptor, value, target);
+    }
+    else if (descriptor->Type == PropertyType_AssetNameList)
+    {
+        Result = ReadAssetNameList(descriptor, value, target);
     }
     else
     {

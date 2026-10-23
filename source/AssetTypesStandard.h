@@ -46,6 +46,10 @@
  *  it moves). */
 #define ASSET_TYPE_NAME_CHARACTER      ((const unsigned char*)u8"character")
 #define ASSET_TYPE_DIRECTORY_CHARACTER ((const unsigned char*)u8"characters")
+/** @brief Standard animation library type name / directory (AnimationLibrary.h: the skeletal animation clips of a glTF
+ *  file, which world models name for their placements to play). */
+#define ASSET_TYPE_NAME_ANIMATION_LIBRARY      ((const unsigned char*)u8"animation_library")
+#define ASSET_TYPE_DIRECTORY_ANIMATION_LIBRARY ((const unsigned char*)u8"animation_libraries")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -90,4 +94,9 @@ Error WorldSpriteDefinition_Construct(AssetManager* manager, const UserData* use
 
 /** @brief Builds a character definition from a JSON blob (CharacterDefinition.c). See AssetDefinitionConstructor. */
 Error CharacterDefinition_Construct(AssetManager* manager, const UserData* userData,
+    const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+
+/** @brief Builds an animation library definition from a JSON blob (AnimationLibraryDefinition.c). See
+ *  AssetDefinitionConstructor. */
+Error AnimationLibraryDefinition_Construct(AssetManager* manager, const UserData* userData,
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
