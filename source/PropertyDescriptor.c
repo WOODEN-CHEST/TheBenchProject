@@ -105,6 +105,8 @@ static size_t GetStorageSize(PropertyType type)
         case PropertyType_Vector3:
         case PropertyType_AngleVector3:
             return sizeof(Vector3);
+        case PropertyType_Vector3Double:
+            return sizeof(Vector3Double);
         case PropertyType_Color:
             return sizeof(Color);
         case PropertyType_RenderColor:
@@ -129,7 +131,8 @@ static bool IsBoundedType(PropertyType type)
 {
     return (type == PropertyType_Int32) || (type == PropertyType_UInt32) || (type == PropertyType_Float)
         || (type == PropertyType_Double) || (type == PropertyType_Angle) || (type == PropertyType_Vector2)
-        || (type == PropertyType_Vector3) || (type == PropertyType_AngleVector3) || (type == PropertyType_FloatList);
+        || (type == PropertyType_Vector3) || (type == PropertyType_Vector3Double) || (type == PropertyType_AngleVector3)
+        || (type == PropertyType_FloatList);
 }
 
 static bool IsValidType(PropertyType type)
@@ -288,17 +291,22 @@ static Error CheckFloats(const PropertyTable* table, const PropertyDescriptor* d
     return Error_CreateSuccess();
 }
 
-static Error CheckDouble(const PropertyTable* table, const PropertyDescriptor* descriptor, double value)
+static Error CheckDoubles(const PropertyTable* table, const PropertyDescriptor* descriptor, const double* components,
+    size_t count)
 {
-    if (!Math_IsNaNDouble(value) && !Math_IsInfinityDouble(value) && IsWithinBounds(&descriptor->Rules, value))
+    for (size_t Index = 0; Index < count; Index++)
     {
-        return Error_CreateSuccess();
+        double Value = components[Index];
+        if (Math_IsNaNDouble(Value) || Math_IsInfinityDouble(Value) || !IsWithinBounds(&descriptor->Rules, Value))
+        {
+            char Rule[PROPERTY_RULE_TEXT_SIZE];
+            char Text[PROPERTY_RULE_TEXT_SIZE + 32U];
+            FormatRuleText(&descriptor->Rules, true, Rule, sizeof(Rule));
+            snprintf(Text, sizeof(Text), (count > 1U) ? "have every component %s" : "be %s", Rule);
+            return MakeRuleError(table, descriptor, Text);
+        }
     }
-    char Rule[PROPERTY_RULE_TEXT_SIZE];
-    char Text[PROPERTY_RULE_TEXT_SIZE + 8U];
-    FormatRuleText(&descriptor->Rules, true, Rule, sizeof(Rule));
-    snprintf(Text, sizeof(Text), "be %s", Rule);
-    return MakeRuleError(table, descriptor, Text);
+    return Error_CreateSuccess();
 }
 
 static Error CheckInteger(const PropertyTable* table, const PropertyDescriptor* descriptor, int64_t value)
@@ -538,7 +546,7 @@ static bool IsBoundValid(PropertyType type, double bound)
     {
         return false;
     }
-    if (type == PropertyType_Double)
+    if ((type == PropertyType_Double) || (type == PropertyType_Vector3Double))
     {
         return true;
     }
@@ -816,6 +824,10 @@ bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, con
         case PropertyType_AngleVector3:
             return (a->Vector3Value.x == b->Vector3Value.x) && (a->Vector3Value.y == b->Vector3Value.y)
                 && (a->Vector3Value.z == b->Vector3Value.z);
+        case PropertyType_Vector3Double:
+            return (a->Vector3DoubleValue.X == b->Vector3DoubleValue.X)
+                && (a->Vector3DoubleValue.Y == b->Vector3DoubleValue.Y)
+                && (a->Vector3DoubleValue.Z == b->Vector3DoubleValue.Z);
         case PropertyType_Color:
             return (a->ColorValue.r == b->ColorValue.r) && (a->ColorValue.g == b->ColorValue.g)
                 && (a->ColorValue.b == b->ColorValue.b) && (a->ColorValue.a == b->ColorValue.a);
@@ -905,7 +917,7 @@ Error PropertyInternal_CheckData(const PropertyTable* table, const PropertyDescr
         case PropertyType_Angle:
             return CheckFloats(table, descriptor, &data->FloatValue, 1U);
         case PropertyType_Double:
-            return CheckDouble(table, descriptor, data->DoubleValue);
+            return CheckDoubles(table, descriptor, &data->DoubleValue, 1U);
         case PropertyType_Date:
             return GameCalendar_IsDayNumberValid(data->DateValue) ? Error_CreateSuccess()
                 : MakeRuleError(table, descriptor, "be a date in the years 1 to 9999");
@@ -919,6 +931,12 @@ Error PropertyInternal_CheckData(const PropertyTable* table, const PropertyDescr
         {
             const float Components[3] = { data->Vector3Value.x, data->Vector3Value.y, data->Vector3Value.z };
             return CheckFloats(table, descriptor, Components, 3U);
+        }
+        case PropertyType_Vector3Double:
+        {
+            const double Components[3] = { data->Vector3DoubleValue.X, data->Vector3DoubleValue.Y,
+                data->Vector3DoubleValue.Z };
+            return CheckDoubles(table, descriptor, Components, 3U);
         }
         case PropertyType_RenderColor:
         {
@@ -1064,6 +1082,8 @@ const unsigned char* PropertyType_GetName(PropertyType type)
             return u8"vector2";
         case PropertyType_Vector3:
             return u8"vector3";
+        case PropertyType_Vector3Double:
+            return u8"vector3_double";
         case PropertyType_AngleVector3:
             return u8"angle_vector3";
         case PropertyType_Color:

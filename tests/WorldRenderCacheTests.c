@@ -82,7 +82,7 @@ static WorldModelComponent* AddModel(TestRun* run, World* world, const char* ass
     WorldObject* Object = NULL;
     WorldComponent* Component = NULL;
     if (!TEST_CHECK_SUCCESS(run, World_CreateObject(world, NULL, &Object))
-        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, position))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, GameMath_FromVector3(position)))
         || !TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Object, scale))
         || !TEST_CHECK_SUCCESS(run, World_AddComponent(world, WorldObject_GetId(Object), WorldComponentType_Model,
             &Component)))
@@ -648,8 +648,12 @@ static void DerivedBoundsComposeTheImportWithThePlacement(TestRun* run)
         Matrix Placement = MatrixMultiply(MatrixScale(Scale.x, Scale.y, Scale.z),
             MatrixTranslate(Position.x, Position.y, Position.z));
         Matrix Composed = MatrixMultiply(Import, Placement);
-        float Expected = sqrtf(0.75f) * WorldTransform_GetMaxScale(Composed);
-        float Separate = sqrtf(0.75f) * WorldTransform_GetMaxScale(Import) * WorldTransform_GetMaxScale(Placement);
+        Matrix4Double ComposedDouble = GameMath_FromMatrix(Composed);
+        Matrix4Double ImportDouble = GameMath_FromMatrix(Import);
+        Matrix4Double PlacementDouble = GameMath_FromMatrix(Placement);
+        float Expected = (float)(sqrt(0.75) * WorldTransform_GetMaxScale(&ComposedDouble));
+        float Separate = (float)(sqrt(0.75) * WorldTransform_GetMaxScale(&ImportDouble)
+            * WorldTransform_GetMaxScale(&PlacementDouble));
         if (TEST_CHECK(run, Count == 1))
         {
             TEST_CHECK(run, IsNear(Models[0].Radius, Expected) && (Models[0].Radius < (0.5f * Separate)));
@@ -734,7 +738,7 @@ static void SpriteEntriesCarryTheirQuadAndSettings(TestRun* run)
         && TEST_CHECK_SUCCESS(run, WorldObject_SetScale(WorldComponent_GetOwner(&Sign->Base),
             (Vector3){ 2.0f, 3.0f, 9.0f }))
         && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(&Sign->Base),
-            (Vector3){ 1.0f, 2.0f, 3.0f }))
+            Vector3Double_Create(1.0, 2.0, 3.0)))
         && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(WorldComponent_GetOwner(&Sign->Base),
             (Vector3){ 0.0f, PI / 2.0f, 0.0f }))
         // The sign's own look comes from its world sprite; this placement mirrors it.
@@ -812,9 +816,11 @@ static void RenderSpaceIsTheWorldMinusTheOrigin(TestRun* run)
         WorldComponentType_Sprite));
     bool IsBuilt = (Box != NULL) && (Light != NULL) && (Sign != NULL)
         && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(OwnerOf(Box), (Vector3){ 0.2f, 0.7f, 0.0f }))
-        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(Light), LightPosition))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(Light),
+            GameMath_FromVector3(LightPosition)))
         && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetWorldSprite(Sign, (const unsigned char*)u8"sign"))
-        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(&Sign->Base), SignPosition))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(&Sign->Base),
+            GameMath_FromVector3(SignPosition)))
         && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(WorldComponent_GetOwner(&Sign->Base),
             (Vector3){ 0.0f, PI / 2.0f, 0.0f }));
     if (IsBuilt && TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Origin,
@@ -822,7 +828,7 @@ static void RenderSpaceIsTheWorldMinusTheOrigin(TestRun* run)
     {
         size_t Count = 0;
         const WorldRenderModel* Entry = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
-        Matrix4Double Placement = GameMath_FromMatrix(WorldObject_GetWorldMatrix(OwnerOf(Box)));
+        Matrix4Double Placement = WorldObject_GetWorldMatrix(OwnerOf(Box));
         Matrix Expected = GameMath_ToMatrixRelative(&Placement, Origin);
         TEST_CHECK(run, (Count == 1) && (memcmp(&Entry->WorldMatrix, &Placement, sizeof(Placement)) == 0)
             && (memcmp(&Entry->RenderMatrix, &Expected, sizeof(Matrix)) == 0));
@@ -914,7 +920,8 @@ static WorldComponent* AddChildComponent(TestRun* run, World* world, const World
     if ((Component == NULL)
         || !TEST_CHECK_SUCCESS(run, World_SetParent(world, WorldObject_GetId(WorldComponent_GetOwner(Component)),
             WorldObject_GetId(parent), false))
-        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(Component), position)))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(Component),
+            GameMath_FromVector3(position))))
     {
         return NULL;
     }
@@ -929,7 +936,7 @@ static void ChildrenAreDrawnWhereTheirParentsPutThem(TestRun* run)
     WorldObject* Parent = NULL;
     if (!CacheFixture_Construct(run, &Fixture)
         || !TEST_CHECK_SUCCESS(run, World_CreateObject(&Fixture.World, NULL, &Parent))
-        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, (Vector3){ 10.0f, 0.0f, 0.0f }))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, Vector3Double_Create(10.0, 0.0, 0.0)))
         || !TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Parent, (Vector3){ 0.0f, PI / 2.0f, 0.0f }))
         || !TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Parent, (Vector3){ 2.0f, 2.0f, 2.0f })))
     {
@@ -969,7 +976,7 @@ static void ChildrenAreDrawnWhereTheirParentsPutThem(TestRun* run)
                 && IsNear(Sprites[0].Shape.AxisX.z, -1.0f) && IsNear(Sprites[0].Shape.Size.x, 2.0f / 32.0f));
 
             // Then the parent rises; the next sync finds the children with it (the matrices cached this time).
-            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, (Vector3){ 10.0f, 5.0f, 0.0f }));
+            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, Vector3Double_Create(10.0, 5.0, 0.0)));
             World_UpdateTransforms(&Fixture.World);
         }
     }

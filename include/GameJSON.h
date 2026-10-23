@@ -1,11 +1,13 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
-// Color/Vector2 come from Raylib; RenderColor from the renderer; the JSON value types from WRJSON.
+// Color/Vector2 come from Raylib; RenderColor from the renderer; the JSON value types from WRJSON; Vector3Double (a
+// position far from the world's origin) from WRVectorMath.
 #include "raylib/raylib.h"
 #include "Renderer.h"
 #include "wr/WRJSON.h"
 #include "wr/WRError.h"
+#include "wr/WRVectorMath.h"
 
 
 /**
@@ -151,6 +153,17 @@ Error GameJSON_ParseVector3(const JSONObjectValue* value, Vector3* outVector);
  *       full set.
  */
 Error GameJSON_ParseVector3Doubles(const JSONObjectValue* value, double* outComponents);
+
+/**
+ * @brief Parses a 3D vector of doubles (a position far from the world's origin): the forms GameJSON_ParseVector3
+ *        accepts, each component kept as the finite double its text reads as.
+ * @param value The JSON value; must not be NULL.
+ * @param outVector [out] Receives the vector. Must not be NULL. Unchanged on failure.
+ * @returns Success; ErrorCode_InvalidJSON on a malformed vector or a component that is not a finite decimal.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error GameJSON_ParseVector3Double(const JSONObjectValue* value, Vector3Double* outVector);
 
 /**
  * @brief Parses an integer 2D vector from a JSON value (compound {x,y} or array [x,y]).
@@ -311,3 +324,19 @@ Error GameJSON_CreateVector2Value(JSONObjectPool* pool, Vector2 vector, JSONObje
  *       full set.
  */
 Error GameJSON_CreateVector3Value(JSONObjectPool* pool, Vector3 vector, JSONObjectValue* outValue);
+
+/**
+ * @brief Makes a JSON array [x, y, z] for a 3D vector of doubles: each component a real number, which JSON_Serialize
+ *        writes as the shortest text that reads back to the same double.
+ *
+ * A float's shortest text (GameJSON_CreateFloatValue) has at most 9 significant digits, so a double read from it
+ * prints that same text again: a vector a float writer wrote is written back unchanged.
+ * @param pool The pool to borrow the array from; must not be NULL.
+ * @param vector The vector (finite components).
+ * @param outValue [out] Receives the array value, owned by the caller (store it in a container or return it to
+ *        @p pool). Must not be NULL. Nothing stays borrowed on failure.
+ * @returns Success; ErrorCode_IllegalArgument if @p pool or @p outValue is NULL.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the
+ *       full set.
+ */
+Error GameJSON_CreateVector3DoubleValue(JSONObjectPool* pool, Vector3Double vector, JSONObjectValue* outValue);

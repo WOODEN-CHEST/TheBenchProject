@@ -74,10 +74,14 @@ static const PropertyDescriptor ObjectProperties[ObjectProperty_Count] =
     },
     [ObjectProperty_Position] =
     {
-        .Key = u8"position", .WireId = 4U, .Type = PropertyType_Vector3, PROPERTY_MEMBER(WorldObject, _position),
-        .Default.Vector3Value = { 0.0f, 0.0f, 0.0f }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_TRANSFORM,
-        .DisplayName = u8"Position",
-        .Description = u8"Where the object is, in world units (+Y up), relative to its parent.", .SinceVersion = 1U
+        // In double (T33): worlds reach far from their origin. GHDF files written before, as a Float array, still read.
+        .Key = u8"position", .WireId = 4U, .Type = PropertyType_Vector3Double, PROPERTY_MEMBER(WorldObject, _position),
+        .Default.Vector3DoubleValue = { 0.0, 0.0, 0.0 },
+        .Rules = PROPERTY_RULES_BETWEEN(-WORLD_POSITION_LIMIT, WORLD_POSITION_LIMIT), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_TRANSFORM, .DisplayName = u8"Position",
+        .Description = u8"Where the object is, in metres (+Y up), relative to its parent; at most 10 000 km from the "
+            u8"parent's origin on each axis.",
+        .SinceVersion = 1U
     },
     [ObjectProperty_Rotation] =
     {
@@ -242,9 +246,9 @@ void WorldObject_Deconstruct(WorldObject* self)
     Properties_Deconstruct(&ObjectTable, self);
 }
 
-Error WorldObject_CheckTransform(Vector3 position, Vector3 rotation, Vector3 scale)
+Error WorldObject_CheckTransform(Vector3Double position, Vector3 rotation, Vector3 scale)
 {
-    Error Result = CheckProperty(ObjectProperty_Position, PropertyValue_FromVector3(position));
+    Error Result = CheckProperty(ObjectProperty_Position, PropertyValue_FromVector3Double(position));
     if (Result.Code == ErrorCode_Success)
     {
         Result = CheckProperty(ObjectProperty_Rotation, PropertyValue_FromAngleVector3(rotation));
@@ -282,13 +286,13 @@ Error WorldObject_SetName(WorldObject* self, const unsigned char* name)
     return Error_CreateSuccess();
 }
 
-Error WorldObject_SetPosition(WorldObject* self, Vector3 position)
+Error WorldObject_SetPosition(WorldObject* self, Vector3Double position)
 {
     if (self == NULL)
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "WorldObject_SetPosition: self must not be NULL.");
     }
-    Error CheckResult = CheckProperty(ObjectProperty_Position, PropertyValue_FromVector3(position));
+    Error CheckResult = CheckProperty(ObjectProperty_Position, PropertyValue_FromVector3Double(position));
     if (CheckResult.Code != ErrorCode_Success)
     {
         return CheckResult;

@@ -75,9 +75,16 @@ The header documents every function; the essentials:
 ## Users
 
 - **The renderer (T32, render space: WorldRuntime.md):** `GameCamera.Position` is a `Vector3Double`; the render cache
-  (`WorldRenderCache_Sync`) widens each object's world matrix and position to double and makes their render-space floats
+  (`WorldRenderCache_Sync`) reads each object's double world matrix and position and makes their render-space floats
   with `GameMath_ToMatrixRelative` and `GameMath_ToVector3Relative` against the frame's origin; the collision debug
   draws and the debug grid convert the same way; `WorldRenderSpace` snaps the shadow cascades in double.
-- **The test frame:** the flycam moves the double camera; F11's far shift moves objects in double before rounding them
-  to the world's floats (until T33).
-- T33 (double positions in the world, files, collision and characters) is written against these types.
+- **The world (T33, WorldData.md, "Positions are doubles"):** objects' positions and world matrices, the hierarchy and
+  `WorldTransform` are doubles; queries compare distances in double; files and `vector3` data values keep doubles.
+- **Collision (T33, WorldCollision.md):** placements and poses are double; before every narrowphase call the world
+  makes them relative to an origin near the test (`GameMath_ToVector3Relative`, and the collision world's own
+  `WorldCollisionInternal_ToRelative` built on it); `GameMath_FromMatrix` widens a shape's float transform to compose it
+  in double.
+- **Characters (T33, Characters.md):** the feet, ground points and eyes are doubles; moves (floats) are added with
+  `GameMath_FromVector3`, and differences of positions come back as floats with `GameMath_ToVector3Relative`.
+- **The test frame:** the flycam moves the double camera; F11's far shift moves objects, the camera and the frame's
+  own places in double.

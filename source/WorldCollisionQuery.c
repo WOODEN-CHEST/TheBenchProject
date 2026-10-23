@@ -15,28 +15,34 @@
  * CONVENTIONS. In every manifold A is the query's shape (or the object's own collider) and B the world's; the normal
  * points from A to B. A cast's result gives the hit surface's normal facing the moving shape (the narrowphase's normal
  * negated).
+ *
+ * ORIGINS (T33). Every query runs the narrowphase relative to its own origin: a ray's origin, a cast's start, an
+ * overlap's or a contact query's position, an object's shape. The world's shapes are placed relative to it
+ * (WorldCollisionInternal_PlaceShapeRelative), the query's own shapes and boxes are relative to it, and the points that
+ * come back become world positions when the origin is added back in double.
  */
 
 
 // Types.
-/* One of a query's shapes, placed in the world. */
+/* One of a query's shapes, placed relative to the query's origin. */
 typedef struct QueryShapeStruct
 {
     const CollisionShape* Shape;
     uint32_t Index;
     bool IsPlane;
-    CollisionConvex Convex;      /* placed at the query's pose (the start pose for casts) */
+    CollisionConvex Convex;      /* placed at the query's pose (the start pose for casts), relative to its origin */
     CollisionConvex ConvexInPose; /* relative to the pose (rotating casts) */
     CollisionPlaneView Plane;
     Vector3 Min;
     Vector3 Max;
 } QueryShape;
 
-/* A query's pose and shapes. */
+/* A query's origin, its pose and shapes relative to it, and their box relative to it. */
 typedef struct QueryStruct
 {
     QueryShape Shapes[WORLD_COLLISION_MAX_QUERY_SHAPES];
     uint32_t Count;
+    Vector3Double Origin;
     CollisionAffine PoseToWorld;
     CollisionAffine WorldToPose;
     Vector3 Min;
@@ -47,7 +53,8 @@ typedef struct RayQueryStruct
 {
     WorldCollision* Self;
     const WorldCollisionFilter* Filter;
-    Vector3 Origin;
+    /** The ray's origin, in the world: the narrowphase runs relative to it (the ray starts at zero there). */
+    Vector3Double Origin;
     Vector3 Direction;
     float MaxDistance;
     bool IsAll;
@@ -110,14 +117,18 @@ static void FillQueryShapeInfo(const QueryShape* shape, WorldCollisionShapeInfo*
 
 
 // Static functions: building queries.
-static bool BuildQuery(const CollisionShape* shapes, uint32_t shapeCount, Vector3 position, Quaternion rotation,
+/* The query's shapes at a pose whose position is @p origin (an overlap's position, a cast's start): everything the
+ * query measures is relative to it, so the pose itself sits at zero. */
+static bool BuildQuery(const CollisionShape* shapes, uint32_t shapeCount, Vector3Double origin, Quaternion rotation,
     bool allowsPlanes, Query* outQuery)
 {
-    if ((shapes == NULL) || (shapeCount == 0U) || (shapeCount > WORLD_COLLISION_MAX_QUERY_SHAPES))
+    if ((shapes == NULL) || (shapeCount == 0U) || (shapeCount > WORLD_COLLISION_MAX_QUERY_SHAPES)
+        || !Vector3Double_IsFinite(origin))
     {
         return false;
     }
-    CollisionPose Pose = { .Position = position, .Rotation = QuaternionNormalize(rotation) };
+    outQuery->Origin = origin;
+    CollisionPose Pose = { .Position = { 0.0f, 0.0f, 0.0f }, .Rotation = QuaternionNormalize(rotation) };
     outQuery->PoseToWorld = CollisionPose_ToAffine(&Pose);
     CollisionAffine_TryInvert(&outQuery->PoseToWorld, &outQuery->WorldToPose);
     outQuery->Count = 0U;
@@ -177,14 +188,18 @@ static bool VisitTriangle(void* context, uint32_t triangle)
     return Triangles->Visit(Triangles->Context, &View, triangle);
 }
 
-/* Visits the triangles of a mesh shape whose boxes meet the world box [min, max]. */
-static void ForEachTriangle(const WorldCollisionShape* target, Vector3 min, Vector3 max,
+/* Visits the triangles of a mesh shape whose boxes meet the box [min, max] (relative to @p origin), as views
+ * relative to it. */
+static void ForEachTriangle(const WorldCollisionShape* target, Vector3Double origin, Vector3 min, Vector3 max,
     bool (*visit)(void* context, const CollisionConvex* triangle, uint32_t triangleIndex), void* context)
 {
+    CollisionAffine MeshToWorld;
+    CollisionAffine WorldToMesh;
+    WorldCollisionInternal_PlaceShapeRelative(target, origin, &MeshToWorld, &WorldToMesh);
     Vector3 LocalMin;
     Vector3 LocalMax;
-    CollisionAffine_TransformBounds(&target->WorldToShape, min, max, &LocalMin, &LocalMax);
-    TriangleContext Triangles = { .Mesh = target->Shape->Mesh, .MeshToWorld = &target->ShapeToWorld,
+    CollisionAffine_TransformBounds(&WorldToMesh, min, max, &LocalMin, &LocalMax);
+    TriangleContext Triangles = { .Mesh = target->Shape->Mesh, .MeshToWorld = &MeshToWorld,
         .IsTwoSided = target->Shape->IsTwoSided, .Visit = visit, .Context = context };
     CollisionGeometry_QueryMesh(target->Shape->Mesh, LocalMin, LocalMax, VisitTriangle, &Triangles);
 }
@@ -202,7 +217,7 @@ static void RecordRayHit(RayQuery* query, const WorldCollisionInstance* instance
         WorldCollisionInternal_FillTriangleInfo(shape->Shape->Mesh, hit->TriangleIndex, &Result.Shape);
         Result.Shape.Barycentric = hit->Barycentric;
     }
-    Result.Point = CollisionMath_AddScaled(query->Origin, query->Direction, hit->T);
+    Result.Point = Vector3Double_AddScaled(query->Origin, GameMath_FromVector3(query->Direction), (double)hit->T);
     Result.Normal = hit->Normal;
     Result.Distance = hit->T;
     Result.Fraction = hit->T / query->MaxDistance;
@@ -229,9 +244,16 @@ static float TestRayShape(RayQuery* query, uint64_t key, float maxDistance)
         return maxDistance;
     }
     const WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(Instance, WorldCollisionInternal_GetKeyShape(key));
+    if (!Shape->IsValid)
+    {
+        return maxDistance;
+    }
+    CollisionAffine ShapeToWorld;
+    CollisionAffine WorldToShape;
+    WorldCollisionInternal_PlaceShapeRelative(Shape, query->Origin, &ShapeToWorld, &WorldToShape);
     CollisionRayHit Hit;
-    if (!Shape->IsValid || !CollisionGeometry_RaycastShape(Shape->Shape, &Shape->ShapeToWorld, &Shape->WorldToShape,
-        query->Origin, query->Direction, query->IsAll ? query->MaxDistance : maxDistance, &Hit))
+    if (!CollisionGeometry_RaycastShape(Shape->Shape, &ShapeToWorld, &WorldToShape, CollisionMath_Vector(0.0f, 0.0f,
+        0.0f), query->Direction, query->IsAll ? query->MaxDistance : maxDistance, &Hit))
     {
         return maxDistance;
     }
@@ -247,11 +269,11 @@ static float RayVisitor(void* context, int32_t proxy, uint64_t userValue, float 
     return fmaxf(Distance, 1e-30f);
 }
 
-static size_t RunRay(WorldCollision* self, Vector3 origin, Vector3 direction, float maxDistance,
+static size_t RunRay(WorldCollision* self, Vector3Double origin, Vector3 direction, float maxDistance,
     const WorldCollisionFilter* filter, bool isAll, GenericBuffer* hits, RayQuery* outQuery)
 {
     float Length = CollisionMath_Length(direction);
-    if (!(Length > 0.0f) || !(maxDistance > 0.0f) || !CollisionMath_IsFinite(origin))
+    if (!(Length > 0.0f) || !(maxDistance > 0.0f) || !Vector3Double_IsFinite(origin))
     {
         return 0U;
     }
@@ -297,10 +319,13 @@ static ComparisonResult CompareRayHits(GenericBuffer* buffer, GenericBufferEleme
 typedef struct ContactRunStruct
 {
     WorldCollision* Self;
+    /* What the convex shape and every placement are relative to. */
+    Vector3Double Origin;
     const WorldCollisionInstance* Target;
     const WorldCollisionShape* TargetShape;
     const CollisionConvex* Convex;   /* A: the query's (or the object's) convex shape */
     WorldCollisionShapeInfo InfoA;
+    /* A's space from positions relative to the origin (the query's pose, or A's object). */
     const CollisionAffine* WorldToA;
     float MaxSeparation;
     bool IsSwapped;                  /* the narrowphase ran with the world's shape as A: flip the result */
@@ -328,17 +353,20 @@ static void EmitContact(ContactRun* run, const CollisionContact* contact, uint32
     {
         const CollisionContactPoint* Source = &contact->Points[Point];
         WorldContactPoint* Target = &Manifold.Points[Point];
-        Target->PositionA = run->IsSwapped ? Source->PositionB : Source->PositionA;
-        Target->PositionB = run->IsSwapped ? Source->PositionA : Source->PositionB;
+        Vector3 RelativeA = run->IsSwapped ? Source->PositionB : Source->PositionA;
+        Vector3 RelativeB = run->IsSwapped ? Source->PositionA : Source->PositionB;
+        Target->PositionA = Vector3Double_Add(run->Origin, GameMath_FromVector3(RelativeA));
+        Target->PositionB = Vector3Double_Add(run->Origin, GameMath_FromVector3(RelativeB));
         Target->Separation = Source->Separation;
         Target->FeatureId = Source->FeatureId;
-        Target->LocalPositionA = CollisionAffine_TransformPoint(run->WorldToA, Target->PositionA);
-        Target->LocalPositionB = CollisionAffine_TransformPoint(&run->Target->WorldToObject, Target->PositionB);
+        Target->LocalPositionA = CollisionAffine_TransformPoint(run->WorldToA, RelativeA);
+        Target->LocalPositionB = WorldCollisionInternal_ToObjectSpace(run->Target, Target->PositionB);
     }
     if (triangleView != NULL)
     {
         WorldCollisionInternal_FillTriangleInfo(run->TargetShape->Shape->Mesh, triangle, &Manifold.ShapeB);
-        Manifold.ShapeB.Barycentric = GetTriangleWeights(triangleView, Manifold.Points[0].PositionB);
+        Manifold.ShapeB.Barycentric = GetTriangleWeights(triangleView, run->IsSwapped ? contact->Points[0].PositionA
+            : contact->Points[0].PositionB);
     }
     GenericBuffer_AddLast(run->Out, &Manifold);
 }
@@ -355,10 +383,12 @@ static bool ContactTriangle(void* context, const CollisionConvex* triangle, uint
     return (Run->Out != NULL) || !Run->HasContact;
 }
 
-/* The contacts of the run's convex shape with one world shape (any kind). */
+/* The contacts of the run's convex shape with one world shape (any kind); [min, max] is the convex shape's box,
+ * relative to the run's origin. */
 static void ContactWithShape(ContactRun* run, Vector3 min, Vector3 max)
 {
     const WorldCollisionShape* Target = run->TargetShape;
+    CollisionAffine TargetToWorld = WorldCollisionInternal_ToRelative(&Target->ShapeToWorld, run->Origin);
     CollisionContact Contact;
     switch (Target->Shape->Type)
     {
@@ -366,7 +396,7 @@ static void ContactWithShape(ContactRun* run, Vector3 min, Vector3 max)
         {
             CollisionPlaneView Plane;
             run->IsSwapped = true;
-            if (CollisionPlaneView_FromShape(Target->Shape, &Target->ShapeToWorld, &Plane)
+            if (CollisionPlaneView_FromShape(Target->Shape, &TargetToWorld, &Plane)
                 && CollisionGeometry_CollidePlane(&Plane, run->Convex, run->MaxSeparation, &Contact))
             {
                 EmitContact(run, &Contact, 0U, NULL);
@@ -378,8 +408,8 @@ static void ContactWithShape(ContactRun* run, Vector3 min, Vector3 max)
             if (Target->Shape->Mesh != NULL)
             {
                 Vector3 Margin = { run->MaxSeparation, run->MaxSeparation, run->MaxSeparation };
-                ForEachTriangle(Target, CollisionMath_Subtract(min, Margin), CollisionMath_Add(max, Margin),
-                    ContactTriangle, run);
+                ForEachTriangle(Target, run->Origin, CollisionMath_Subtract(min, Margin),
+                    CollisionMath_Add(max, Margin), ContactTriangle, run);
             }
             return;
         case CollisionShapeType_Sphere:
@@ -389,7 +419,7 @@ static void ContactWithShape(ContactRun* run, Vector3 min, Vector3 max)
         case CollisionShapeType_ConvexHull:
         {
             CollisionConvex Convex;
-            if (CollisionConvex_FromShape(Target->Shape, &Target->ShapeToWorld, &Convex)
+            if (CollisionConvex_FromShape(Target->Shape, &TargetToWorld, &Convex)
                 && CollisionGeometry_Collide(run->Convex, &Convex, run->MaxSeparation, &Contact))
             {
                 EmitContact(run, &Contact, 0U, NULL);
@@ -401,21 +431,24 @@ static void ContactWithShape(ContactRun* run, Vector3 min, Vector3 max)
     }
 }
 
-/* A plane query shape (overlaps) against one world shape: only convex targets (planes and meshes do not pair). */
-static bool DoesPlaneTouch(const CollisionPlaneView* plane, const WorldCollisionShape* target, float maxSeparation)
+/* A plane query shape (overlaps, relative to @p origin) against one world shape: only convex targets (planes and meshes
+ * do not pair). */
+static bool DoesPlaneTouch(const CollisionPlaneView* plane, Vector3Double origin, const WorldCollisionShape* target,
+    float maxSeparation)
 {
+    CollisionAffine TargetToWorld = WorldCollisionInternal_ToRelative(&target->ShapeToWorld, origin);
     CollisionConvex Convex;
     CollisionContact Contact;
     return (target->Shape->Type != CollisionShapeType_Plane) && (target->Shape->Type != CollisionShapeType_Mesh)
-        && CollisionConvex_FromShape(target->Shape, &target->ShapeToWorld, &Convex)
+        && CollisionConvex_FromShape(target->Shape, &TargetToWorld, &Convex)
         && CollisionGeometry_CollidePlane(plane, &Convex, maxSeparation, &Contact);
 }
 
-/* Collects the candidate keys for [min, max] widened by @p margin into _candidates. */
-static void Collect(WorldCollision* self, Vector3 min, Vector3 max, float margin)
+/* Collects the candidate keys for [min, max] (relative to @p origin) widened by @p margin into _candidates. */
+static void Collect(WorldCollision* self, Vector3Double origin, Vector3 min, Vector3 max, float margin)
 {
-    Vector3 Margin = { margin, margin, margin };
-    WorldCollisionInternal_CollectCandidates(self, CollisionMath_Subtract(min, Margin), CollisionMath_Add(max, Margin));
+    BoundingBoxDouble Box = WorldCollisionInternal_ToWorldBox(min, max, origin);
+    WorldCollisionInternal_CollectCandidates(self, BoundingBoxDouble_Expand(Box, (double)margin));
 }
 
 
@@ -423,6 +456,8 @@ static void Collect(WorldCollision* self, Vector3 min, Vector3 max, float margin
 typedef struct CastRunStruct
 {
     WorldCollision* Self;
+    /* The cast's start: its poses, shapes and every placement are relative to it. */
+    Vector3Double Origin;
     const QueryShape* Shape;
     const CollisionPose* From;
     const CollisionPose* To;
@@ -455,8 +490,8 @@ static void ConsiderCastHit(CastRun* run, const CollisionCastHit* hit, uint32_t 
     Result.CastShapeIndex = run->Shape->Index;
     Result.Fraction = hit->Fraction;
     Result.Distance = hit->Fraction * CollisionMath_Length(run->Translation);
-    Result.Point = hit->PointB;
-    Result.PointOnCast = hit->PointA;
+    Result.Point = Vector3Double_Add(run->Origin, GameMath_FromVector3(hit->PointB));
+    Result.PointOnCast = Vector3Double_Add(run->Origin, GameMath_FromVector3(hit->PointA));
     Result.Normal = CollisionMath_Negate(hit->Normal);
     Result.IsStartPenetrating = hit->IsStartPenetrating;
     Result.PenetrationDepth = hit->PenetrationDepth;
@@ -481,16 +516,18 @@ static bool CastTriangle(void* context, const CollisionConvex* triangle, uint32_
     return true;
 }
 
+/* One query shape cast against one world shape; [sweptMin, sweptMax] is the cast's box, relative to its origin. */
 static void CastAgainstShape(CastRun* run, Vector3 sweptMin, Vector3 sweptMax)
 {
     const WorldCollisionShape* Target = run->TargetShape;
+    CollisionAffine TargetToWorld = WorldCollisionInternal_ToRelative(&Target->ShapeToWorld, run->Origin);
     CollisionCastHit Hit;
     switch (Target->Shape->Type)
     {
         case CollisionShapeType_Plane:
         {
             CollisionPlaneView Plane;
-            if (!CollisionPlaneView_FromShape(Target->Shape, &Target->ShapeToWorld, &Plane))
+            if (!CollisionPlaneView_FromShape(Target->Shape, &TargetToWorld, &Plane))
             {
                 return;
             }
@@ -506,7 +543,7 @@ static void CastAgainstShape(CastRun* run, Vector3 sweptMin, Vector3 sweptMax)
         case CollisionShapeType_Mesh:
             if (Target->Shape->Mesh != NULL)
             {
-                ForEachTriangle(Target, sweptMin, sweptMax, CastTriangle, run);
+                ForEachTriangle(Target, run->Origin, sweptMin, sweptMax, CastTriangle, run);
             }
             return;
         case CollisionShapeType_Sphere:
@@ -516,8 +553,8 @@ static void CastAgainstShape(CastRun* run, Vector3 sweptMin, Vector3 sweptMax)
         case CollisionShapeType_ConvexHull:
         {
             CollisionConvex Convex;
-            if (CollisionConvex_FromShape(Target->Shape, &Target->ShapeToWorld, &Convex) && CastAgainstConvex(run,
-                &Convex, &Hit))
+            if (CollisionConvex_FromShape(Target->Shape, &TargetToWorld, &Convex) && CastAgainstConvex(run, &Convex,
+                &Hit))
             {
                 ConsiderCastHit(run, &Hit, 0U, NULL);
             }
@@ -637,12 +674,12 @@ void WorldCollisionInternal_FillShapeInfo(const WorldCollisionInstance* instance
     outInfo->MaterialIndex = -1;
 }
 
-void WorldCollisionInternal_CollectCandidates(WorldCollision* self, Vector3 min, Vector3 max)
+void WorldCollisionInternal_CollectCandidates(WorldCollision* self, BoundingBoxDouble box)
 {
     GenericBuffer_Clear(&self->_candidates);
     BoxCollect Collect = { .Candidates = &self->_candidates };
-    CollisionTree_QueryBox(&self->_staticTree, min, max, CollectVisitor, &Collect);
-    CollisionTree_QueryBox(&self->_movableTree, min, max, CollectVisitor, &Collect);
+    CollisionTree_QueryBox(&self->_staticTree, box, CollectVisitor, &Collect);
+    CollisionTree_QueryBox(&self->_movableTree, box, CollectVisitor, &Collect);
     GenericBuffer_AddLastRange(&self->_candidates, self->_planes._data, self->_planes._count);
 }
 
@@ -674,21 +711,27 @@ bool WorldCollisionInternal_DoInstancesTouch(WorldCollision* self, const WorldCo
             }
             const WorldCollisionInstance* Probe = IsConvexA ? a : b;
             const WorldCollisionShape* ProbeShape = IsConvexA ? ShapeA : ShapeB;
+            Vector3Double Origin = ProbeShape->ShapeToWorld.Translation;
+            CollisionAffine ProbeToWorld = WorldCollisionInternal_ToRelative(&ProbeShape->ShapeToWorld, Origin);
             CollisionConvex Convex;
-            if (!CollisionConvex_FromShape(ProbeShape->Shape, &ProbeShape->ShapeToWorld, &Convex))
+            if (!CollisionConvex_FromShape(ProbeShape->Shape, &ProbeToWorld, &Convex))
             {
                 continue;
             }
+            CollisionAffine WorldToProbe = WorldCollisionInternal_ToRelativeInverse(&Probe->ObjectToWorld,
+                &Probe->WorldToObjectAxes, Origin);
             ContactRun Run;
             Memory_Zero(&Run, sizeof(Run));
             Run.Self = self;
+            Run.Origin = Origin;
             Run.Target = IsConvexA ? b : a;
             Run.TargetShape = IsConvexA ? ShapeB : ShapeA;
             Run.Convex = &Convex;
-            Run.WorldToA = &Probe->WorldToObject;
+            Run.WorldToA = &WorldToProbe;
             Run.MaxSeparation = margin;
             Run.Out = NULL;
-            ContactWithShape(&Run, ProbeShape->Min, ProbeShape->Max);
+            ContactWithShape(&Run, GameMath_ToVector3Relative(ProbeShape->Box.Min, Origin),
+                GameMath_ToVector3Relative(ProbeShape->Box.Max, Origin));
             if (Run.HasContact)
             {
                 return true;
@@ -700,7 +743,7 @@ bool WorldCollisionInternal_DoInstancesTouch(WorldCollision* self, const WorldCo
 
 
 // Public functions: rays.
-bool WorldCollision_Raycast(WorldCollision* self, Vector3 origin, Vector3 direction, float maxDistance,
+bool WorldCollision_Raycast(WorldCollision* self, Vector3Double origin, Vector3 direction, float maxDistance,
     const WorldCollisionFilter* filter, WorldRayHit* outHit)
 {
     RayQuery Probe;
@@ -712,7 +755,7 @@ bool WorldCollision_Raycast(WorldCollision* self, Vector3 origin, Vector3 direct
     return true;
 }
 
-size_t WorldCollision_RaycastAll(WorldCollision* self, Vector3 origin, Vector3 direction, float maxDistance,
+size_t WorldCollision_RaycastAll(WorldCollision* self, Vector3Double origin, Vector3 direction, float maxDistance,
     const WorldCollisionFilter* filter, GenericBuffer* outHits)
 {
     size_t Before = outHits->_count;
@@ -733,19 +776,21 @@ size_t WorldCollision_RaycastAll(WorldCollision* self, Vector3 origin, Vector3 d
 
 // Public functions: casts.
 bool WorldCollision_CastShape(WorldCollision* self, const CollisionShape* shapes, uint32_t shapeCount,
-    Vector3 startPosition, Quaternion startRotation, Vector3 endPosition, Quaternion endRotation,
+    Vector3Double startPosition, Quaternion startRotation, Vector3Double endPosition, Quaternion endRotation,
     const WorldCollisionFilter* filter, WorldCastHit* outHit)
 {
+    // Everything relative to the start: the cast begins at zero there, however far out it is.
     Query Start;
-    if (!BuildQuery(shapes, shapeCount, startPosition, startRotation, false, &Start))
+    if (!Vector3Double_IsFinite(endPosition)
+        || !BuildQuery(shapes, shapeCount, startPosition, startRotation, false, &Start))
     {
         return false;
     }
-    CollisionPose From = { .Position = startPosition, .Rotation = QuaternionNormalize(startRotation) };
-    CollisionPose To = { .Position = endPosition, .Rotation = QuaternionNormalize(endRotation) };
+    Vector3 Translation = GameMath_ToVector3Relative(endPosition, startPosition);
+    CollisionPose From = { .Position = { 0.0f, 0.0f, 0.0f }, .Rotation = QuaternionNormalize(startRotation) };
+    CollisionPose To = { .Position = Translation, .Rotation = QuaternionNormalize(endRotation) };
     float Turn = CollisionPose_GetRotationAngle(&From, &To);
     bool IsTurning = Turn > 1e-6f;
-    Vector3 Translation = CollisionMath_Subtract(endPosition, startPosition);
 
     // The swept box: the shapes at both ends; turning, everything within reach of the moving pose's origin.
     Vector3 SweptMin = CollisionMath_Min(Start.Min, CollisionMath_Add(Start.Min, Translation));
@@ -759,16 +804,18 @@ bool WorldCollision_CastShape(WorldCollision* self, const CollisionShape* shapes
             Reach = fmaxf(Reach, CollisionMath_Length(InPose->Transform.Translation) + InPose->BoundingRadius);
         }
         Vector3 Radius = { Reach, Reach, Reach };
-        SweptMin = CollisionMath_Min(SweptMin, CollisionMath_Subtract(CollisionMath_Min(startPosition, endPosition),
+        SweptMin = CollisionMath_Min(SweptMin, CollisionMath_Subtract(CollisionMath_Min(From.Position, To.Position),
             Radius));
-        SweptMax = CollisionMath_Max(SweptMax, CollisionMath_Add(CollisionMath_Max(startPosition, endPosition), Radius));
+        SweptMax = CollisionMath_Max(SweptMax, CollisionMath_Add(CollisionMath_Max(From.Position, To.Position),
+            Radius));
     }
     WorldCollisionFilter Filter = GetFilter(filter, WorldCollisionTriggerMode_Ignore);
-    Collect(self, SweptMin, SweptMax, 0.0f);
+    Collect(self, Start.Origin, SweptMin, SweptMax, 0.0f);
 
     CastRun Run;
     Memory_Zero(&Run, sizeof(Run));
     Run.Self = self;
+    Run.Origin = Start.Origin;
     Run.From = &From;
     Run.To = &To;
     Run.Translation = Translation;
@@ -804,7 +851,7 @@ bool WorldCollision_CastShape(WorldCollision* self, const CollisionShape* shapes
     return true;
 }
 
-bool WorldCollision_SweepSphere(WorldCollision* self, Vector3 start, Vector3 end, float radius,
+bool WorldCollision_SweepSphere(WorldCollision* self, Vector3Double start, Vector3Double end, float radius,
     const WorldCollisionFilter* filter, WorldCastHit* outHit)
 {
     CollisionShape Shape = CollisionShape_Create(CollisionShapeType_Sphere);
@@ -813,8 +860,8 @@ bool WorldCollision_SweepSphere(WorldCollision* self, Vector3 start, Vector3 end
         outHit);
 }
 
-bool WorldCollision_SweepCapsule(WorldCollision* self, Vector3 start, Vector3 end, float radius, float height,
-    const WorldCollisionFilter* filter, WorldCastHit* outHit)
+bool WorldCollision_SweepCapsule(WorldCollision* self, Vector3Double start, Vector3Double end, float radius,
+    float height, const WorldCollisionFilter* filter, WorldCastHit* outHit)
 {
     CollisionShape Shape = CollisionShape_Create(CollisionShapeType_Capsule);
     Shape.Radius = radius;
@@ -823,8 +870,8 @@ bool WorldCollision_SweepCapsule(WorldCollision* self, Vector3 start, Vector3 en
         outHit);
 }
 
-bool WorldCollision_SweepBox(WorldCollision* self, Vector3 start, Vector3 end, Vector3 halfExtents, Quaternion rotation,
-    const WorldCollisionFilter* filter, WorldCastHit* outHit)
+bool WorldCollision_SweepBox(WorldCollision* self, Vector3Double start, Vector3Double end, Vector3 halfExtents,
+    Quaternion rotation, const WorldCollisionFilter* filter, WorldCastHit* outHit)
 {
     CollisionShape Shape = CollisionShape_Create(CollisionShapeType_Box);
     Shape.HalfExtents = halfExtents;
@@ -844,7 +891,7 @@ static ComparisonResult CompareIds(GenericBuffer* buffer, GenericBufferElementDa
 }
 
 size_t WorldCollision_OverlapShape(WorldCollision* self, const CollisionShape* shapes, uint32_t shapeCount,
-    Vector3 position, Quaternion rotation, const WorldCollisionFilter* filter, GenericBuffer* outObjectIds)
+    Vector3Double position, Quaternion rotation, const WorldCollisionFilter* filter, GenericBuffer* outObjectIds)
 {
     Query Shapes;
     if (!BuildQuery(shapes, shapeCount, position, rotation, true, &Shapes))
@@ -852,7 +899,7 @@ size_t WorldCollision_OverlapShape(WorldCollision* self, const CollisionShape* s
         return 0U;
     }
     WorldCollisionFilter Filter = GetFilter(filter, WorldCollisionTriggerMode_Include);
-    Collect(self, Shapes.Min, Shapes.Max, 0.0f);
+    Collect(self, Shapes.Origin, Shapes.Min, Shapes.Max, 0.0f);
     size_t Before = outObjectIds->_count;
     for (size_t Candidate = 0U; Candidate < self->_candidates._count; Candidate++)
     {
@@ -871,12 +918,13 @@ size_t WorldCollision_OverlapShape(WorldCollision* self, const CollisionShape* s
             const QueryShape* Shape = &Shapes.Shapes[Index];
             if (Shape->IsPlane)
             {
-                IsTouching = DoesPlaneTouch(&Shape->Plane, Target, 0.0f);
+                IsTouching = DoesPlaneTouch(&Shape->Plane, Shapes.Origin, Target, 0.0f);
                 continue;
             }
             ContactRun Run;
             Memory_Zero(&Run, sizeof(Run));
             Run.Self = self;
+            Run.Origin = Shapes.Origin;
             Run.Target = Instance;
             Run.TargetShape = Target;
             Run.Convex = &Shape->Convex;
@@ -914,7 +962,7 @@ size_t WorldCollision_OverlapShape(WorldCollision* self, const CollisionShape* s
     return Unique;
 }
 
-size_t WorldCollision_OverlapSphere(WorldCollision* self, Vector3 center, float radius,
+size_t WorldCollision_OverlapSphere(WorldCollision* self, Vector3Double center, float radius,
     const WorldCollisionFilter* filter, GenericBuffer* outObjectIds)
 {
     CollisionShape Shape = CollisionShape_Create(CollisionShapeType_Sphere);
@@ -922,7 +970,7 @@ size_t WorldCollision_OverlapSphere(WorldCollision* self, Vector3 center, float 
     return WorldCollision_OverlapShape(self, &Shape, 1U, center, QuaternionIdentity(), filter, outObjectIds);
 }
 
-size_t WorldCollision_OverlapCapsule(WorldCollision* self, Vector3 center, float radius, float height,
+size_t WorldCollision_OverlapCapsule(WorldCollision* self, Vector3Double center, float radius, float height,
     const WorldCollisionFilter* filter, GenericBuffer* outObjectIds)
 {
     CollisionShape Shape = CollisionShape_Create(CollisionShapeType_Capsule);
@@ -931,7 +979,7 @@ size_t WorldCollision_OverlapCapsule(WorldCollision* self, Vector3 center, float
     return WorldCollision_OverlapShape(self, &Shape, 1U, center, QuaternionIdentity(), filter, outObjectIds);
 }
 
-size_t WorldCollision_OverlapBox(WorldCollision* self, Vector3 center, Vector3 halfExtents, Quaternion rotation,
+size_t WorldCollision_OverlapBox(WorldCollision* self, Vector3Double center, Vector3 halfExtents, Quaternion rotation,
     const WorldCollisionFilter* filter, GenericBuffer* outObjectIds)
 {
     CollisionShape Shape = CollisionShape_Create(CollisionShapeType_Box);
@@ -942,7 +990,7 @@ size_t WorldCollision_OverlapBox(WorldCollision* self, Vector3 center, Vector3 h
 
 // Public functions: contacts.
 size_t WorldCollision_CollideShape(WorldCollision* self, const CollisionShape* shapes, uint32_t shapeCount,
-    Vector3 position, Quaternion rotation, float maxSeparation, const WorldCollisionFilter* filter,
+    Vector3Double position, Quaternion rotation, float maxSeparation, const WorldCollisionFilter* filter,
     GenericBuffer* outManifolds)
 {
     Query Shapes;
@@ -951,7 +999,7 @@ size_t WorldCollision_CollideShape(WorldCollision* self, const CollisionShape* s
         return 0U;
     }
     WorldCollisionFilter Filter = GetFilter(filter, WorldCollisionTriggerMode_Ignore);
-    Collect(self, Shapes.Min, Shapes.Max, maxSeparation);
+    Collect(self, Shapes.Origin, Shapes.Min, Shapes.Max, maxSeparation);
     size_t Before = outManifolds->_count;
     for (size_t Candidate = 0U; Candidate < self->_candidates._count; Candidate++)
     {
@@ -970,6 +1018,7 @@ size_t WorldCollision_CollideShape(WorldCollision* self, const CollisionShape* s
             ContactRun Run;
             Memory_Zero(&Run, sizeof(Run));
             Run.Self = self;
+            Run.Origin = Shapes.Origin;
             Run.Target = Instance;
             Run.TargetShape = Target;
             Run.Convex = &Shape->Convex;
@@ -1003,14 +1052,20 @@ size_t WorldCollision_CollideObject(WorldCollision* self, uint64_t objectId, flo
     {
         const WorldCollisionShape* Own = WorldCollisionInternal_GetShape(Source, Index);
         bool IsConvex = (Own->Shape->Type != CollisionShapeType_Plane) && (Own->Shape->Type != CollisionShapeType_Mesh);
+        Vector3Double Origin = Own->ShapeToWorld.Translation;
+        CollisionAffine OwnToWorld = WorldCollisionInternal_ToRelative(&Own->ShapeToWorld, Origin);
         CollisionConvex Convex;
-        if (!Own->IsValid || !IsConvex || !CollisionConvex_FromShape(Own->Shape, &Own->ShapeToWorld, &Convex))
+        if (!Own->IsValid || !IsConvex || !CollisionConvex_FromShape(Own->Shape, &OwnToWorld, &Convex))
         {
             // TODO: an object whose own shape is a plane or a mesh against the convex shapes around it (T27 needs it
             // only for movers, which are convex).
             continue;
         }
-        Collect(self, Own->Min, Own->Max, maxSeparation);
+        Vector3 OwnMin = GameMath_ToVector3Relative(Own->Box.Min, Origin);
+        Vector3 OwnMax = GameMath_ToVector3Relative(Own->Box.Max, Origin);
+        CollisionAffine WorldToSource = WorldCollisionInternal_ToRelativeInverse(&Source->ObjectToWorld,
+            &Source->WorldToObjectAxes, Origin);
+        Collect(self, Origin, OwnMin, OwnMax, maxSeparation);
         for (size_t Candidate = 0U; Candidate < self->_candidates._count; Candidate++)
         {
             uint64_t Key = ((const uint64_t*)(const void*)self->_candidates._data)[Candidate];
@@ -1027,14 +1082,15 @@ size_t WorldCollision_CollideObject(WorldCollision* self, uint64_t objectId, flo
             ContactRun Run;
             Memory_Zero(&Run, sizeof(Run));
             Run.Self = self;
+            Run.Origin = Origin;
             Run.Target = Instance;
             Run.TargetShape = Target;
             Run.Convex = &Convex;
             WorldCollisionInternal_FillShapeInfo(Source, Own, &Run.InfoA);
-            Run.WorldToA = &Source->WorldToObject;
+            Run.WorldToA = &WorldToSource;
             Run.MaxSeparation = maxSeparation;
             Run.Out = outManifolds;
-            ContactWithShape(&Run, Own->Min, Own->Max);
+            ContactWithShape(&Run, OwnMin, OwnMax);
         }
     }
     return outManifolds->_count - Before;

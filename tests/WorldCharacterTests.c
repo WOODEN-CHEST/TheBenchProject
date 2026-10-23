@@ -90,7 +90,8 @@ static WorldObject* GetObject(CharacterScene* scene, uint64_t id)
     return Object;
 }
 
-/* A box of @p halfExtents at @p center turned by @p rotation (Euler XYZ, radians), with one own-shape collider. */
+/* A box of @p halfExtents at @p center of the scene (TestWorld_At: shifted in the far run) turned by @p rotation (Euler
+ * XYZ, radians), with one own-shape collider. */
 static uint64_t AddBox(TestRun* run, CharacterScene* scene, Vector3 center, Vector3 halfExtents, Vector3 rotation,
     TestBoxKind kind)
 {
@@ -100,7 +101,7 @@ static uint64_t AddBox(TestRun* run, CharacterScene* scene, Vector3 center, Vect
         return 0U;
     }
     uint64_t Id = WorldObject_GetId(Object);
-    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, center));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, TestWorld_At(center)));
     TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Object, rotation));
     TEST_CHECK_SUCCESS(run, WorldObject_SetMobility(Object, (kind == TestBoxKind_Static) ? WorldMobility_Static
         : WorldMobility_Movable));
@@ -132,8 +133,8 @@ static WorldCharacterComponent* GetCharacter(CharacterScene* scene, uint64_t id)
         ? WorldCharacterComponent_FromComponent(Component) : NULL;
 }
 
-/* A character (the default settings) with its feet placed at @p feet. Syncs the collision world first, so the
- * placement sees the scene. */
+/* A character (the default settings) with its feet placed at @p feet of the scene. Syncs the collision world first,
+ * so the placement sees the scene. */
 static uint64_t AddCharacter(TestRun* run, CharacterScene* scene, Vector3 feet)
 {
     WorldObject* Object = NULL;
@@ -148,7 +149,7 @@ static uint64_t AddCharacter(TestRun* run, CharacterScene* scene, Vector3 feet)
         return Id;
     }
     WorldCollision_Sync(scene->Collision);
-    TEST_CHECK_SUCCESS(run, WorldCharacters_Teleport(scene->Characters, Id, feet, 0.0f));
+    TEST_CHECK_SUCCESS(run, WorldCharacters_Teleport(scene->Characters, Id, TestWorld_At(feet), 0.0f));
     return Id;
 }
 
@@ -180,9 +181,10 @@ static CharacterInput CreateWalk(Vector3 direction)
     return Input;
 }
 
+/* Where a character's feet are in the scene. */
 static Vector3 GetFeet(CharacterScene* scene, uint64_t id)
 {
-    return WorldObject_GetWorldPosition(GetObject(scene, id));
+    return TestWorld_ToScene(WorldObject_GetWorldPosition(GetObject(scene, id)));
 }
 
 static const WorldCharacterState* GetState(CharacterScene* scene, uint64_t id)
@@ -439,6 +441,115 @@ static void ACharacterGetsACapsuleColliderAndStandsStill(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
+/* T33: a character standing on the floor keeps its feet the skin and the rest gap (2 mm) above it, to a micrometre, and
+ * does not drift for 10 000 ticks: 173 km from the world's origin in the far run, where a float's step is 8 mm. (Its
+ * ground follow lets the feet wobble about a tenth of a micrometre up and down, the same at the origin; across, they
+ * stay put.) */
+static void AStandingCharacterKeepsItsFeet2MmUpWithoutDrifting(TestRun* run)
+{
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        // Across, the feet stay where they were put.
+        Vector3Double Placed = TestWorld_At((Vector3){ 1.234f, 0.0f, -2.345f });
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 1.234f, 0.0f, -2.345f });
+        TickFor(&Scene, TICKS_PER_SECOND);
+        double Rest = (double)CHARACTER_SKIN + (double)CHARACTER_REST_GAP;
+        double WorstHeight = 0.0;
+        double Across = 0.0;
+        bool IsAlwaysGrounded = true;
+        for (uint32_t Index = 0U; Index <= 10000U; Index++)
+        {
+            Vector3Double Feet = WorldObject_GetWorldPosition(GetObject(&Scene, Id));
+            WorstHeight = fmax(WorstHeight, fabs(Feet.Y - Placed.Y - Rest));
+            Across = fmax(Across, hypot(Feet.X - Placed.X, Feet.Z - Placed.Z));
+            IsAlwaysGrounded = IsAlwaysGrounded && GetState(&Scene, Id)->IsGrounded;
+            Tick(&Scene);
+        }
+        TEST_CHECK(run, (WorstHeight < 1e-6) && (Across == 0.0) && IsAlwaysGrounded);
+    }
+    Scene_Deconstruct(run, &Scene);
+}
+
+/* The ticks of the square walk (WalkSquare): its five legs. */
+#define SQUARE_WALK_TICKS (12U * TICKS_PER_SECOND)
+
+/* A walk around the square, tick by tick: the character's feet and reported velocity, in the scene, and where the
+ * crate it pushed ended. */
+typedef struct SquareWalkStruct
+{
+    Vector3 Feet[SQUARE_WALK_TICKS];
+    Vector3 Velocity[SQUARE_WALK_TICKS];
+    Vector3 CrateEnd;
+} SquareWalk;
+
+/* Walks a character around a square on the floor, the scene shifted by @p offset: up a ramp turned 0.2 rad and off its
+ * high end (a 0.6 m drop), across, back into a pushable crate it shoves along, and home; then it stops. The ramp's
+ * slope and edge and the crate's pushes reach the parts of the motion a flat floor does not (the height above a slanted
+ * ground, the speed walking off an edge, the collision step's pushes read back). */
+static void WalkSquare(TestRun* run, Vector3Double offset, SquareWalk* outWalk)
+{
+    Vector3Double Previous = TestWorld_SetOffset(offset);
+    Memory_Zero(outWalk, sizeof(*outWalk));
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        AddBox(run, &Scene, (Vector3){ 1.5f, -0.3f, 0.0f }, (Vector3){ 2.0f, 0.5f, 1.5f },
+            (Vector3){ 0.0f, 0.0f, 0.2f }, TestBoxKind_Static);
+        uint64_t Crate = AddBox(run, &Scene, (Vector3){ 2.0f, 0.3f, 3.04f }, (Vector3){ 0.3f, 0.3f, 0.3f },
+            (Vector3){ 0 }, TestBoxKind_Pushable);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ -1.513f, 0.0f, 0.237f });
+        const Vector3 Legs[] = { { 1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 1.0f }, { -1.0f, 0.0f, 0.0f },
+            { 0.0f, 0.0f, -1.0f }, { 0.0f, 0.0f, 0.0f } };
+        const uint32_t Seconds[] = { 4U, 2U, 3U, 2U, 1U };
+        size_t Step = 0U;
+        for (size_t Leg = 0U; Leg < (sizeof(Legs) / sizeof(Legs[0])); Leg++)
+        {
+            CharacterInput Input = CreateWalk(Legs[Leg]);
+            SetInput(run, &Scene, Id, &Input);
+            for (uint32_t Index = 0U; Index < (Seconds[Leg] * TICKS_PER_SECOND); Index++)
+            {
+                Tick(&Scene);
+                outWalk->Feet[Step] = GetFeet(&Scene, Id);
+                outWalk->Velocity[Step] = GetState(&Scene, Id)->Velocity;
+                Step++;
+            }
+        }
+        outWalk->CrateEnd = TestWorld_ToScene(WorldObject_GetWorldPosition(GetObject(&Scene, Crate)));
+    }
+    Scene_Deconstruct(run, &Scene);
+    TestWorld_SetOffset(Previous);
+}
+
+/* T33: the same walk around a square, at the world's origin and 173 km from it (where a float's step is 8 mm), goes
+ * the same way tick by tick and ends at the same place of its scene, the crate it shoved too. */
+static void ASquareWalkedFarAwayEndsWhereItEndsAtTheOrigin(TestRun* run)
+{
+    static SquareWalk AtOrigin;
+    static SquareWalk FarAway;
+    WalkSquare(run, Vector3Double_Zero(), &AtOrigin);
+    WalkSquare(run, Vector3Double_Create(TEST_WORLD_FAR_OFFSET_X, TEST_WORLD_FAR_OFFSET_Y, TEST_WORLD_FAR_OFFSET_Z),
+        &FarAway);
+    float WorstFeet = 0.0f;
+    float WorstVelocity = 0.0f;
+    float Highest = 0.0f;
+    for (size_t Index = 0U; Index < SQUARE_WALK_TICKS; Index++)
+    {
+        WorstFeet = fmaxf(WorstFeet, Vector3Distance(AtOrigin.Feet[Index], FarAway.Feet[Index]));
+        WorstVelocity = fmaxf(WorstVelocity, Vector3Distance(AtOrigin.Velocity[Index], FarAway.Velocity[Index]));
+        Highest = fmaxf(Highest, AtOrigin.Feet[Index].y);
+    }
+    // It went up the ramp, shoved the crate along and came home; far away the same, to a hundredth of a millimetre
+    // (measured: within a micrometre). The reported velocity is a tick's move over the tick, so a micrometre between
+    // the two walks reads as a few tenths of a millimetre a second; a float far out would read metres a second.
+    TEST_CHECK(run, (Highest > 0.5f) && (AtOrigin.CrateEnd.x < 0.0f)
+        && (Vector3Distance(AtOrigin.Feet[SQUARE_WALK_TICKS - 1U], (Vector3){ -1.513f, 0.0f, 0.237f }) < 2.0f));
+    TEST_CHECK(run, (WorstFeet < 1e-5f) && (WorstVelocity < 1e-3f)
+        && (Vector3Distance(AtOrigin.CrateEnd, FarAway.CrateEnd) < 1e-5f));
+}
+
 static void WalkingIntoAWallStopsJustShortOfIt(TestRun* run)
 {
     CharacterScene Scene;
@@ -594,7 +705,8 @@ static void AGentleSlopeIsWalkedAndASteepOneIsNot(TestRun* run)
         TEST_CHECK(run, (Feet.x < 1.0f) && (Feet.y < 0.05f));
 
         // Dropped onto the steep slope, it slides down to the floor.
-        TEST_CHECK_SUCCESS(run, WorldCharacters_Teleport(Scene.Characters, Id, (Vector3){ 2.0f, 2.5f, 0.0f }, 0.0f));
+        TEST_CHECK_SUCCESS(run, WorldCharacters_Teleport(Scene.Characters, Id,
+            TestWorld_At((Vector3){ 2.0f, 2.5f, 0.0f }), 0.0f));
         Input = CharacterInput_CreateDefault();
         SetInput(run, &Scene, Id, &Input);
         TickFor(&Scene, 3U * TICKS_PER_SECOND);
@@ -704,9 +816,9 @@ static void AMovingPlatformCarriesACharacter(TestRun* run)
         for (uint32_t Index = 0U; Index < TICKS_PER_SECOND; Index++)
         {
             WorldObject* Object = GetObject(&Scene, Platform);
-            Vector3 Position = WorldObject_GetPosition(Object);
-            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Add(Position,
-                (Vector3){ TEST_DELTA, 0.25f * TEST_DELTA, 0.0f })));
+            Vector3Double Position = WorldObject_GetPosition(Object);
+            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Double_Add(Position,
+                GameMath_FromVector3((Vector3){ TEST_DELTA, 0.25f * TEST_DELTA, 0.0f }))));
             Tick(&Scene);
         }
         Vector3 Feet = GetFeet(&Scene, Id);
@@ -1052,8 +1164,8 @@ static void ACharacterNobodyDrivesFallsAndRides(TestRun* run)
         for (uint32_t Index = 0U; Index < TICKS_PER_SECOND; Index++)
         {
             WorldObject* Object = GetObject(&Scene, Platform);
-            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Add(WorldObject_GetPosition(Object),
-                (Vector3){ 0.0f, 0.0f, 0.5f * TEST_DELTA })));
+            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Double_Add(WorldObject_GetPosition(Object),
+                GameMath_FromVector3((Vector3){ 0.0f, 0.0f, 0.5f * TEST_DELTA }))));
             Tick(&Scene);
         }
         TEST_CHECK(run, IsNear(GetFeet(&Scene, Id).z, 0.5f, 0.01f));
@@ -1248,8 +1360,8 @@ static float JumpOffALift(TestRun* run, float liftSpeed)
             Input.WantsJump = Index == (TICKS_PER_SECOND / 4U);
             SetInput(run, &Scene, Id, &Input);
             WorldObject* Object = GetObject(&Scene, Lift);
-            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Add(WorldObject_GetPosition(Object),
-                (Vector3){ 0.0f, liftSpeed * TEST_DELTA, 0.0f })));
+            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Double_Add(WorldObject_GetPosition(Object),
+                GameMath_FromVector3((Vector3){ 0.0f, liftSpeed * TEST_DELTA, 0.0f }))));
             Tick(&Scene);
         }
         Input.WantsJump = false;
@@ -1470,8 +1582,8 @@ static void AReenabledCharacterIsNotThrownByWhatMovedMeanwhile(TestRun* run)
         for (uint32_t Index = 0U; Index < TICKS_PER_SECOND; Index++)
         {
             WorldObject* Object = GetObject(&Scene, Platform);
-            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Add(WorldObject_GetPosition(Object),
-                (Vector3){ 2.0f * TEST_DELTA, 0.0f, 0.0f })));
+            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Double_Add(WorldObject_GetPosition(Object),
+                GameMath_FromVector3((Vector3){ 2.0f * TEST_DELTA, 0.0f, 0.0f }))));
             Tick(&Scene);
         }
         TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(GetObject(&Scene, Id), true));
@@ -1489,6 +1601,59 @@ static void AReenabledCharacterIsNotThrownByWhatMovedMeanwhile(TestRun* run)
 
 /* A character teleported while in the air after a jump kept the jump's mark: walking off the next edge, its late jump
  * was refused. A teleport places it afresh. */
+/* T33: a teleport refuses a place the world cannot hold (not finite, or where the object's position, its local one
+ * under a parent, would pass WORLD_POSITION_LIMIT, which the object's position row would refuse, leaving it where it
+ * was without a word): the character stays put. */
+static void ATeleportRefusesPlacesTheWorldCannotHold(TestRun* run)
+{
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 1.0f, 0.0f, 2.0f });
+        TickFor(&Scene, 10U);
+        Vector3Double Before = WorldObject_GetWorldPosition(GetObject(&Scene, Id));
+        const Vector3Double Refused[] =
+        {
+            { .X = NAN, .Y = 0.0, .Z = 0.0 }, { .X = 0.0, .Y = INFINITY, .Z = 0.0 },
+            { .X = nextafter(WORLD_POSITION_LIMIT, INFINITY), .Y = 0.0, .Z = 0.0 },
+            { .X = 0.0, .Y = 0.0, .Z = -nextafter(WORLD_POSITION_LIMIT, INFINITY) },
+        };
+        for (size_t Index = 0U; Index < (sizeof(Refused) / sizeof(Refused[0])); Index++)
+        {
+            TEST_CHECK_ERROR(run, WorldCharacters_Teleport(Scene.Characters, Id, Refused[Index], 0.0f),
+                ErrorCode_ArgumentOutOfRange);
+        }
+        TEST_CHECK_ERROR(run, WorldCharacters_Teleport(Scene.Characters, Id, Before, NAN),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK(run, Vector3Double_Distance(WorldObject_GetWorldPosition(GetObject(&Scene, Id)), Before) == 0.0);
+        // At the limit itself it goes (a root's world position is its own).
+        Vector3Double Edge = Vector3Double_Create(WORLD_POSITION_LIMIT, 0.0, -WORLD_POSITION_LIMIT);
+        TEST_CHECK_SUCCESS(run, WorldCharacters_Teleport(Scene.Characters, Id, Edge, 0.0f));
+        TEST_CHECK(run, Vector3Double_Distance(WorldObject_GetWorldPosition(GetObject(&Scene, Id)), Edge) == 0.0);
+
+        // Under a parent the row checks the local position: a world place within the limit whose local position is
+        // not is refused, one nearer the parent goes; a parent flattened to nothing cannot take a place at all.
+        TEST_CHECK_SUCCESS(run, WorldCharacters_Teleport(Scene.Characters, Id, Before, 0.0f));
+        WorldObject* Holder = NULL;
+        if (TEST_CHECK_SUCCESS(run, World_CreateObject(&Scene.World, (const unsigned char*)u8"holder", &Holder))
+            && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Holder, Vector3Double_Create(-9.0e6, 0.0, 0.0)))
+            && TEST_CHECK_SUCCESS(run, World_SetParent(&Scene.World, Id, WorldObject_GetId(Holder), true)))
+        {
+            TEST_CHECK_ERROR(run, WorldCharacters_Teleport(Scene.Characters, Id, Vector3Double_Create(9.0e6, 0.0, 0.0),
+                0.0f), ErrorCode_ArgumentOutOfRange);
+            TEST_CHECK(run, Vector3Double_Distance(WorldObject_GetWorldPosition(GetObject(&Scene, Id)), Before) < 1e-6);
+            Vector3Double Near = Vector3Double_Create(-8.5e6, 0.0, 0.0);
+            TEST_CHECK_SUCCESS(run, WorldCharacters_Teleport(Scene.Characters, Id, Near, 0.0f));
+            TEST_CHECK(run, Vector3Double_Distance(WorldObject_GetWorldPosition(GetObject(&Scene, Id)), Near) < 1e-6);
+            TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Holder, (Vector3){ 1.0f, 0.0f, 1.0f }));
+            TEST_CHECK_ERROR(run, WorldCharacters_Teleport(Scene.Characters, Id, Near, 0.0f),
+                ErrorCode_InvalidOperation);
+        }
+    }
+    Scene_Deconstruct(run, &Scene);
+}
+
 static void ATeleportGivesBackTheLateJump(TestRun* run)
 {
     CharacterScene Scene;
@@ -1506,7 +1671,8 @@ static void ATeleportGivesBackTheLateJump(TestRun* run)
         SetInput(run, &Scene, Id, &Input);
         TickFor(&Scene, 20U);
         TEST_CHECK(run, !GetState(&Scene, Id)->IsGrounded);
-        TEST_CHECK_SUCCESS(run, WorldCharacters_Teleport(Scene.Characters, Id, (Vector3){ 0.0f, 2.0f, 0.0f }, 0.0f));
+        TEST_CHECK_SUCCESS(run, WorldCharacters_Teleport(Scene.Characters, Id,
+            TestWorld_At((Vector3){ 0.0f, 2.0f, 0.0f }), 0.0f));
         Input = CreateWalk((Vector3){ 1.0f, 0.0f, 0.0f });
         SetInput(run, &Scene, Id, &Input);
         uint32_t Guard = 0U;
@@ -2239,7 +2405,7 @@ static void TheFilterSkipsPushablesAndWhatIgnoresTheLayer(TestRun* run)
                 true));
         }
         WorldCollision_Sync(Scene.Collision);
-        Vector3 Origin = { 0.0f, 1.0f, 0.0f };
+        Vector3Double Origin = TestWorld_At((Vector3){ 0.0f, 1.0f, 0.0f });
         WorldRayHit Hit;
         WorldCollisionFilter Filter = WorldCollisionFilter_Create(COLLISION_LAYER_MASK_ALL,
             WorldCollisionTriggerMode_Ignore);
@@ -2354,8 +2520,8 @@ static void ThePlayerControllerFillsTheCharactersInput(TestRun* run)
         // The camera sits at the eyes and looks where the character looks.
         GameCamera View = GameCamera_Create(Vector3Double_Zero(), 60.0f);
         PlayerController_ApplyCamera(&Controller, &Scene.World, &View, TEST_DELTA);
-        Vector3 Eye = WorldCharacterComponent_GetEyePosition(Character);
-        TEST_CHECK(run, Vector3Equals(GameMath_ToVector3(View.Position), Eye) && (View.Yaw == Driven->LookYaw));
+        Vector3Double Eye = WorldCharacterComponent_GetEyePosition(Character);
+        TEST_CHECK(run, Vector3Double_EqualsClose(View.Position, Eye, 1e-6) && (View.Yaw == Driven->LookYaw));
 
         // Letting go.
         TEST_CHECK_SUCCESS(run, PlayerController_SetCharacter(&Controller, &Scene.World, 0U, 0.0f, 0.0f));
@@ -2440,6 +2606,9 @@ void WorldCharacterTests_Run(TestRun* run)
         { "the_body_rules_hold_across_settings", TheBodyRulesHoldAcrossSettings },
         { "the_input_is_checked_and_normalised", TheInputIsCheckedAndNormalised },
         { "a_character_gets_a_capsule_collider_and_stands_still", ACharacterGetsACapsuleColliderAndStandsStill },
+        { "a_standing_character_keeps_its_feet_2_mm_up_without_drifting",
+            AStandingCharacterKeepsItsFeet2MmUpWithoutDrifting },
+        { "a_square_walked_far_away_ends_where_it_ends_at_the_origin", ASquareWalkedFarAwayEndsWhereItEndsAtTheOrigin },
         { "walking_into_a_wall_stops_just_short_of_it", WalkingIntoAWallStopsJustShortOfIt },
         { "walking_diagonally_slides_along_a_wall", WalkingDiagonallySlidesAlongAWall },
         { "an_inside_corner_stops_without_jitter", AnInsideCornerStopsWithoutJitter },
@@ -2480,6 +2649,7 @@ void WorldCharacterTests_Run(TestRun* run)
         { "a_reenabled_character_is_not_thrown_by_what_moved_meanwhile",
             AReenabledCharacterIsNotThrownByWhatMovedMeanwhile },
         { "a_teleport_gives_back_the_late_jump", ATeleportGivesBackTheLateJump },
+        { "a_teleport_refuses_places_the_world_cannot_hold", ATeleportRefusesPlacesTheWorldCannotHold },
         { "the_character_let_go_of_stops_walking", TheCharacterLetGoOfStopsWalking },
         { "a_run_along_a_turned_wall_never_stalls_and_nothing_pushes_the_walker",
             ARunAlongATurnedWallNeverStallsAndNothingPushesTheWalker },
@@ -2495,5 +2665,5 @@ void WorldCharacterTests_Run(TestRun* run)
         { "steering_turns_quicker_than_pushing_and_friction_stops", SteeringTurnsQuickerThanPushingAndFrictionStops },
         { "the_eyes_ease_into_a_crouch", TheEyesEaseIntoACrouch },
     };
-    TestRun_RunSuite(run, "WorldCharacter", Cases, sizeof(Cases) / sizeof(Cases[0]));
+    TestWorld_RunSuite(run, "WorldCharacter", "WorldCharacterFar", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

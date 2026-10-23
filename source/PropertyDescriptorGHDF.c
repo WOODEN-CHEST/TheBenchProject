@@ -19,7 +19,7 @@
 /** Channels written per color: RGBA for a color, RGB for a render color's tint (its alpha is not part of it). */
 #define PROPERTY_GHDF_COLOR_CHANNEL_COUNT 4U
 #define PROPERTY_GHDF_TINT_CHANNEL_COUNT 3U
-/** The most components of a written float array (a Vector3). */
+/** The most components of a written float or double array (a Vector3, a Vector3Double). */
 #define PROPERTY_GHDF_MAX_VECTOR_COMPONENTS 3U
 
 
@@ -64,6 +64,17 @@ static Error PutFloats(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID
         Elements[Index] = GHDFObjectValue_CreateFloat(components[Index]);
     }
     return PutArray(pool, compound, id, GHDFValueType_Float, Elements, count);
+}
+
+static Error PutDoubles(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id, const double* components,
+    size_t count)
+{
+    GHDFObjectValue Elements[PROPERTY_GHDF_MAX_VECTOR_COMPONENTS];
+    for (size_t Index = 0; Index < count; Index++)
+    {
+        Elements[Index] = GHDFObjectValue_CreateDouble(components[Index]);
+    }
+    return PutArray(pool, compound, id, GHDFValueType_Double, Elements, count);
 }
 
 static Error PutChannels(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id, Color color, size_t count)
@@ -190,6 +201,12 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
             const float Components[3] = { data->Vector3Value.x, data->Vector3Value.y, data->Vector3Value.z };
             return PutFloats(pool, compound, Id, Components, 3U);
         }
+        case PropertyType_Vector3Double:
+        {
+            const double Components[3] = { data->Vector3DoubleValue.X, data->Vector3DoubleValue.Y,
+                data->Vector3DoubleValue.Z };
+            return PutDoubles(pool, compound, Id, Components, 3U);
+        }
         case PropertyType_Color:
             return PutChannels(pool, compound, Id, data->ColorValue, PROPERTY_GHDF_COLOR_CHANNEL_COUNT);
         case PropertyType_RenderColor:
@@ -241,6 +258,31 @@ static Error GetFloats(GHDFCompound* compound, GHDFEntryID id, float* outCompone
         if (Result.Code == ErrorCode_Success)
         {
             outComponents[Index] = Element.Value.Float;
+        }
+    }
+    return Result;
+}
+
+/* A Double array of @p count elements, or a Float array of them (written by a float row before the property became
+ * double: each float widens exactly). */
+static Error GetDoubles(GHDFCompound* compound, GHDFEntryID id, double* outComponents, size_t count, bool* outFound)
+{
+    GHDFObjectValue Entry = { .Type = GHDFValueType_None };
+    Error Result = GHDFCompound_GetOptional(compound, id, &Entry, outFound);
+    if ((Result.Code != ErrorCode_Success) || !*outFound)
+    {
+        return Result;
+    }
+    bool IsFloat = Entry.Type == GHDFValueType_Float;
+    GHDFArray* Array = NULL;
+    Result = GetArray(compound, id, IsFloat ? GHDFValueType_Float : GHDFValueType_Double, count, &Array, outFound);
+    for (size_t Index = 0; (Index < count) && (Result.Code == ErrorCode_Success) && *outFound; Index++)
+    {
+        GHDFObjectValue Element = { .Type = GHDFValueType_None };
+        Result = GHDFArray_Get(Array, Index, &Element);
+        if (Result.Code == ErrorCode_Success)
+        {
+            outComponents[Index] = IsFloat ? (double)Element.Value.Float : Element.Value.Double;
         }
     }
     return Result;
@@ -469,6 +511,13 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
             float Components[3] = { 0.0f, 0.0f, 0.0f };
             Result = GetFloats(compound, Id, Components, 3U, outFound);
             outData->Vector3Value = (Vector3){ .x = Components[0], .y = Components[1], .z = Components[2] };
+            return Result;
+        }
+        case PropertyType_Vector3Double:
+        {
+            double Components[3] = { 0.0, 0.0, 0.0 };
+            Result = GetDoubles(compound, Id, Components, 3U, outFound);
+            outData->Vector3DoubleValue = Vector3Double_Create(Components[0], Components[1], Components[2]);
             return Result;
         }
         case PropertyType_Color:

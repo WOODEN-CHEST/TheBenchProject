@@ -59,7 +59,7 @@
  * @code
  *     WorldObject* Lamp = NULL;
  *     World_CreateObject(&world, u8"lamp", &Lamp);
- *     WorldObject_SetPosition(Lamp, (Vector3){ 2.0f, 0.0f, 1.0f });
+ *     WorldObject_SetPosition(Lamp, Vector3Double_Create(2.0, 0.0, 1.0));
  *     WorldComponent* Light = NULL;
  *     World_AddComponent(&world, WorldObject_GetId(Lamp), WorldComponentType_Light, &Light);
  *     WorldLightComponent_SetRange(WorldLightComponent_FromComponent(Light), 6.0f);
@@ -404,24 +404,24 @@ Error World_GetParent(World* self, uint64_t id, uint64_t* outParentId);
 Error World_GetChildren(World* self, uint64_t id, GenericBuffer* outIds);
 
 /**
- * @brief Gives an object's world matrix (WorldObject_GetWorldMatrix): its local transform times its parent's world
- *        matrix. Reading never changes the world.
+ * @brief Gives an object's world matrix in double (WorldObject_GetWorldMatrix): its local transform times its parent's
+ *        world matrix. Reading never changes the world.
  * @param self The world; must not be NULL.
  * @param id The object's id.
  * @param outMatrix [out] Receives the matrix. Must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self or @p outMatrix is NULL or @p id is 0;
  *          ErrorCode_InvalidOperation if no object has @p id.
  */
-Error World_GetWorldMatrix(World* self, uint64_t id, Matrix* outMatrix);
+Error World_GetWorldMatrix(World* self, uint64_t id, Matrix4Double* outMatrix);
 
 /**
- * @brief Gives an object's position in world space (WorldObject_GetWorldPosition).
+ * @brief Gives an object's position in world space, in double (WorldObject_GetWorldPosition).
  * @param self The world; must not be NULL.
  * @param id The object's id.
  * @param outPosition [out] Receives the position. Must not be NULL.
  * @returns As World_GetWorldMatrix.
  */
-Error World_GetWorldPosition(World* self, uint64_t id, Vector3* outPosition);
+Error World_GetWorldPosition(World* self, uint64_t id, Vector3Double* outPosition);
 
 /**
  * @brief Gives an object's rotation in world space as Euler XYZ angles in radians (WorldObject_GetWorldTransform: a

@@ -80,13 +80,14 @@ static Error PutArray(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID 
     return Result;
 }
 
-/* Adds @p count floats to @p array. */
-static Error AddFloats(GHDFArray* array, const float* values, size_t count)
+/* Adds the three components of @p vector to @p array (a Double array). */
+static Error AddVector3(GHDFArray* array, Vector3Double vector)
 {
+    const double Components[GHDF_VECTOR3_COMPONENTS] = { vector.X, vector.Y, vector.Z };
     Error Result = Error_CreateSuccess();
-    for (size_t Index = 0U; (Index < count) && (Result.Code == ErrorCode_Success); Index++)
+    for (size_t Index = 0U; (Index < GHDF_VECTOR3_COMPONENTS) && (Result.Code == ErrorCode_Success); Index++)
     {
-        GHDFObjectValue Element = GHDFObjectValue_CreateFloat(values[Index]);
+        GHDFObjectValue Element = GHDFObjectValue_CreateDouble(Components[Index]);
         Result = GHDFArray_AddValue(array, &Element);
     }
     return Result;
@@ -166,7 +167,7 @@ static GHDFValueType GetListArrayType(const DataValue* list, DataType elementTyp
         case DataType_Key:
             return GHDFValueType_String;
         case DataType_Vector3:
-            return GHDFValueType_Float;
+            return GHDFValueType_Double;
         case DataType_Color:
             return GHDFValueType_UInt8;
         case DataType_DateTime:
@@ -224,11 +225,7 @@ static Error AddListElement(const DataValue* element, const KeyRegistry* keys, G
             return Result;
         }
         case DataType_Vector3:
-        {
-            const float Components[GHDF_VECTOR3_COMPONENTS] =
-                { element->Vector3Value.x, element->Vector3Value.y, element->Vector3Value.z };
-            return AddFloats(array, Components, GHDF_VECTOR3_COMPONENTS);
-        }
+            return AddVector3(array, element->Vector3Value);
         case DataType_Color:
             return AddChannels(array, element->ColorValue);
         case DataType_List:
@@ -327,7 +324,7 @@ static Error PutCompound(const DataValue* value, const KeyRegistry* keys, GHDFOb
 
 static Error PutFixedArray(GHDFObjectPool* pool, GHDFCompound* compound, const DataValue* value)
 {
-    GHDFValueType ElementType = (value->Type == DataType_Vector3) ? GHDFValueType_Float : GHDFValueType_UInt8;
+    GHDFValueType ElementType = (value->Type == DataType_Vector3) ? GHDFValueType_Double : GHDFValueType_UInt8;
     GHDFArray* Array = NULL;
     Error Result = GHDFObjectPool_BorrowArray(pool, ElementType, &Array);
     if (Result.Code != ErrorCode_Success)
@@ -336,9 +333,7 @@ static Error PutFixedArray(GHDFObjectPool* pool, GHDFCompound* compound, const D
     }
     if (value->Type == DataType_Vector3)
     {
-        const float Components[GHDF_VECTOR3_COMPONENTS] =
-            { value->Vector3Value.x, value->Vector3Value.y, value->Vector3Value.z };
-        Result = AddFloats(Array, Components, GHDF_VECTOR3_COMPONENTS);
+        Result = AddVector3(Array, value->Vector3Value);
     }
     else
     {
@@ -379,17 +374,16 @@ static Error ChargeValue(const GHDFRead* read, DataValue* value)
     return Result;
 }
 
-/* Whether every component of a vector3 is finite: a GHDF Float can hold NaN and the infinities, a vector3 may not. */
-static bool AreComponentsFinite(const float* components)
+/* Whether a GHDF array type can hold vector3 components: Double since T33, Float as written before. */
+static bool IsVector3ArrayType(GHDFValueType type)
 {
-    for (size_t Index = 0U; Index < GHDF_VECTOR3_COMPONENTS; Index++)
-    {
-        if (Math_IsNaNFloat(components[Index]) || Math_IsInfinityFloat(components[Index]))
-        {
-            return false;
-        }
-    }
-    return true;
+    return (type == GHDFValueType_Double) || (type == GHDFValueType_Float);
+}
+
+/* One vector3 component from an element of a Double or Float array (a float widens exactly). */
+static double GetVector3Component(const GHDFObjectValue* element)
+{
+    return (element->Type == GHDFValueType_Float) ? (double)element->Value.Float : element->Value.Double;
 }
 
 static Error CollectEntries(GHDFCompound* compound, GHDFValueEntries* outEntries)
@@ -543,17 +537,19 @@ static Error ReadScalar(const GHDFRead* read, DataType type, const GHDFObjectVal
     return PathError(read, "the value has the wrong shape for its type");
 }
 
-/* A vector3 or color: a Float array of 3 or a UInt8 array of 4. */
+/* A vector3 or color: a Double (or Float) array of 3 or a UInt8 array of 4. */
 static Error ReadFixedArray(const GHDFRead* read, DataType type, GHDFArray* array, DataValue* outValue)
 {
     bool IsVector = type == DataType_Vector3;
     size_t Expected = IsVector ? GHDF_VECTOR3_COMPONENTS : GHDF_COLOR_CHANNELS;
-    GHDFValueType ElementType = IsVector ? GHDFValueType_Float : GHDFValueType_UInt8;
-    if ((GHDFArray_GetElementType(array) != ElementType) || (GHDFArray_GetElementCount(array) != Expected))
+    GHDFValueType ArrayType = GHDFArray_GetElementType(array);
+    bool IsTypeValid = IsVector ? IsVector3ArrayType(ArrayType) : (ArrayType == GHDFValueType_UInt8);
+    if (!IsTypeValid || (GHDFArray_GetElementCount(array) != Expected))
     {
-        return PathError(read, IsVector ? "a vector3 must be a Float array of 3" : "a color must be a UInt8 array of 4");
+        return PathError(read, IsVector ? "a vector3 must be a Double (or Float) array of 3"
+            : "a color must be a UInt8 array of 4");
     }
-    float Components[GHDF_COLOR_CHANNELS] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    double Components[GHDF_VECTOR3_COMPONENTS] = { 0.0, 0.0, 0.0 };
     uint8_t Channels[GHDF_COLOR_CHANNELS] = { 0U, 0U, 0U, 0U };
     for (size_t Index = 0U; Index < Expected; Index++)
     {
@@ -563,14 +559,21 @@ static Error ReadFixedArray(const GHDFRead* read, DataType type, GHDFArray* arra
         {
             return DataPath_WrapError(read->Path, ErrorCode_Deserialize, &Result);
         }
-        Components[Index] = IsVector ? Element.Value.Float : 0.0f;
-        Channels[Index] = IsVector ? 0U : Element.Value.UInt8;
+        if (IsVector)
+        {
+            Components[Index] = GetVector3Component(&Element);
+        }
+        else
+        {
+            Channels[Index] = Element.Value.UInt8;
+        }
     }
-    if (IsVector && !AreComponentsFinite(Components))
+    Vector3Double Vector = Vector3Double_Create(Components[0], Components[1], Components[2]);
+    if (IsVector && !Vector3Double_IsFinite(Vector))
     {
         return PathError(read, "every component of a vector3 must be finite");
     }
-    *outValue = IsVector ? DataValue_FromVector3((Vector3){ Components[0], Components[1], Components[2] })
+    *outValue = IsVector ? DataValue_FromVector3(Vector)
         : DataValue_FromColor((Color){ Channels[0], Channels[1], Channels[2], Channels[3] });
     return Error_CreateSuccess();
 }
@@ -596,7 +599,7 @@ static bool DoesArrayFit(DataType elementType, GHDFValueType arrayType, size_t* 
             return arrayType == GHDFValueType_String;
         case DataType_Vector3:
             *outStride = GHDF_VECTOR3_COMPONENTS;
-            return arrayType == GHDFValueType_Float;
+            return IsVector3ArrayType(arrayType);
         case DataType_Color:
             *outStride = GHDF_COLOR_CHANNELS;
             return arrayType == GHDFValueType_UInt8;
@@ -635,7 +638,7 @@ static Error ReadListElement(GHDFRead* read, GHDFArray* array, size_t index, siz
         return (Result.Code == ErrorCode_Success) ? ChargeValue(read, outElement) : Result;
     }
 
-    float Components[GHDF_COLOR_CHANNELS] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    double Components[GHDF_VECTOR3_COMPONENTS] = { 0.0, 0.0, 0.0 };
     uint8_t Channels[GHDF_COLOR_CHANNELS] = { 0U, 0U, 0U, 0U };
     for (size_t Part = 0U; Part < stride; Part++)
     {
@@ -645,15 +648,21 @@ static Error ReadListElement(GHDFRead* read, GHDFArray* array, size_t index, siz
         {
             return DataPath_WrapError(read->Path, ErrorCode_Deserialize, &Result);
         }
-        Components[Part] = (elementType == DataType_Vector3) ? Element.Value.Float : 0.0f;
-        Channels[Part] = (elementType == DataType_Color) ? Element.Value.UInt8 : 0U;
+        if (elementType == DataType_Vector3)
+        {
+            Components[Part] = GetVector3Component(&Element);
+        }
+        else
+        {
+            Channels[Part] = Element.Value.UInt8;
+        }
     }
-    if ((elementType == DataType_Vector3) && !AreComponentsFinite(Components))
+    Vector3Double Vector = Vector3Double_Create(Components[0], Components[1], Components[2]);
+    if ((elementType == DataType_Vector3) && !Vector3Double_IsFinite(Vector))
     {
         return PathError(read, "every component of a vector3 must be finite");
     }
-    *outElement = (elementType == DataType_Vector3)
-        ? DataValue_FromVector3((Vector3){ Components[0], Components[1], Components[2] })
+    *outElement = (elementType == DataType_Vector3) ? DataValue_FromVector3(Vector)
         : DataValue_FromColor((Color){ Channels[0], Channels[1], Channels[2], Channels[3] });
     return ChargeValue(read, outElement);
 }
@@ -823,7 +832,7 @@ static Error ReadAnyValue(GHDFRead* read, GHDFCompound* compound, size_t level, 
         case DataType_Color:
             return (Entries.HasValue && Entries.Value.EntryType.IsArray)
                 ? ReadFixedArray(read, Type, Entries.Value.Value.Value.Array, outValue)
-                : PathError(read, (Type == DataType_Vector3) ? "a vector3 must be a Float array of 3"
+                : PathError(read, (Type == DataType_Vector3) ? "a vector3 must be a Double (or Float) array of 3"
                     : "a color must be a UInt8 array of 4");
         case DataType_Bool:
         case DataType_Int:

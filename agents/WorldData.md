@@ -21,7 +21,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldCharacterComponent | `include/WorldCharacterComponent.h`, `source/WorldCharacterComponent.c` | The player or an NPC (T13, [Characters.md](Characters.md)): a character asset by name and every setting this placement overrides (explicit flags next to its own values), the input its driver gives it and the state it is in; the first transform driver. |
 | WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
 | World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index), `source/WorldHierarchy.c` (parents, world matrices, effective flags, subtrees; also the `WorldObject_` functions about them) | Owns the objects and their components, mints ids, keeps the id map, the hierarchy and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
-| WorldTransform (private) | `source/WorldTransform.h`, `source/WorldTransform.c` | The pure maths of transforms: compose (DrawModelEx's order), the one decomposition back to position / Euler XYZ / scale, a local matrix under a parent, a bound on a matrix's stretch. Used by the hierarchy and the renderer's cache. |
+| WorldTransform (private) | `source/WorldTransform.h`, `source/WorldTransform.c` | The pure maths of transforms, in double (T33): compose (DrawModelEx's order), the one decomposition back to position / Euler XYZ / scale, a local matrix under a parent, a bound on a matrix's stretch. Used by the hierarchy, the renderer's cache, collision and the characters. |
 | WorldQuery | `include/WorldQuery.h`, `source/WorldQuery.c` | Searches over the objects by tags, data, components, flags and place ([ObjectData.md](ObjectData.md)). |
 
 `source/WorldInternal.h` is the layer's private header: the object's construction (objects are made by the world only),
@@ -42,8 +42,9 @@ components). Every object has:
   `WORLD_OBJECT_NAME_MAX_LENGTH` = 256 bytes of valid UTF-8);
 - `_parentId` (0 for a root) and the hierarchy's links (`_parent`, `_firstChild`, `_lastChild`, `_previousSibling`,
   `_nextSibling`, `_childCount`); see "Hierarchy";
-- the transform, **relative to the parent** (world values for a root): `_position`, `_rotation` (Euler XYZ in radians,
-  degrees in JSON), `_scale`; the cached `_worldMatrix` with `_isWorldMatrixDirty`, and `_transformRevision`;
+- the transform, **relative to the parent** (world values for a root): `_position` (a `Vector3Double`, see "Positions
+  are doubles"), `_rotation` (Euler XYZ in radians, degrees in JSON), `_scale`; the cached `_worldMatrix` (a
+  `Matrix4Double`) with `_isWorldMatrixDirty`, and `_transformRevision`;
 - `_tint`: a `RenderColor` (brightness and opacity in [0, 1]; the renderer draws the opacity as a dither, and blended or
   additive sprites as alpha: WorldRuntime.md, "Visibility");
 - `_isEnabled` (default true): false makes **every system** skip the object and its subtree: the renderer, later
@@ -83,15 +84,17 @@ The world keeps the links (`source/WorldHierarchy.c`); the persisted value is th
   changed (`ErrorCode_InvalidOperation`): an unknown object or parent; the object itself; a parent inside the object's
   own subtree (a cycle); a hierarchy of more than **`WORLD_HIERARCHY_MAX_DEPTH` = 64 levels** (a root is level 1; a
   moved subtree counts with its own height; AGENTS.md rule 5). With `keepWorldTransform` (the editor's default) the
-  object's local transform is rewritten so its world placement stays (within float precision; under a parent that
-  would shear it, its nearest unsheared form); that is refused for a new parent whose world matrix cannot be inverted
-  (a zero scale on an axis). Without it the local values stay, so the object moves with the change.
+  object's local transform is rewritten so its world placement stays (within a few of a double's steps: 2 nm at
+  10 000 km; under a parent that would shear it, its nearest unsheared form); that is refused for a new parent whose
+  world matrix cannot be inverted (a zero scale on an axis), and for one so far away that the local position would pass
+  `WORLD_POSITION_LIMIT`. Without it the local values stay, so the object moves with the change.
 - **Reading it:** `World_GetParent(world, id, &parentId)` (0 for a root), `World_GetChildren(world, id, outIds)`
   (appends the ids in attach order), and the pointer walk `WorldObject_GetParent`, `_GetFirstChild`,
   `_GetNextSibling`, `_GetChildCount` (valid until the hierarchy changes; do not change it while walking).
-- **World matrices.** `WorldObject_GetWorldMatrix(object)` is the object's local matrix (`WorldTransform_Compose`:
-  scale, then the Euler XYZ rotation, then the translation, raylib's `DrawModelEx` order) times its parent's world
-  matrix (raylib's `MatrixMultiply(local, parentWorld)`); a root's is its local one. Each object caches its own:
+- **World matrices.** `WorldObject_GetWorldMatrix(object)` (a `Matrix4Double`) is the object's local matrix
+  (`WorldTransform_Compose`: scale, then the Euler XYZ rotation, then the translation, raylib's `DrawModelEx` order)
+  times its parent's world matrix (`Matrix4Double_Multiply(&local, &parentWorld)`, raylib's order, in double); a root's
+  is its local one. Each object caches its own:
   - a change of a transform row (a setter or any table write: `Properties_Set`, a read, a copy) or of the parent marks
     the object and its **whole subtree** dirty and advances each one's `_transformRevision`
     (`WorldObject_GetTransformRevision`: equal values mean the world matrix is the one a system saw; T12's collision
@@ -136,6 +139,33 @@ The world keeps the links (`source/WorldHierarchy.c`); the persisted value is th
   refusal is logged (once per world). Tables check each value alone, so this is where a loader learns of a bad parent
   (T09). A copy from an object of **another** world brings that world's parent id, which here names another object or
   none: copy within one world, or set the parent afterwards.
+
+## Positions are doubles
+
+Decided as G25 and G26, built in T31 to T33. A float's step is 8 mm at 100 km and a metre at 10 000 km, so
+everything that says **where** something is in the world is a double: an object's `_position` (`Vector3Double`), its
+world matrix (`Matrix4Double`), and everything systems derive from them (the render cache's placements, query origins
+and results, collision placements and poses, contact and hit points, characters' feet, ground points and eyes, the
+camera's position). The types and their operations are WRFramework's (`wr/WRVectorMath.h`); `GameMath` converts to
+and from raylib's types ([GameMath.md](GameMath.md)). **Rotations, scales, directions, normals, velocities, sizes and
+offsets stay floats**: they mean the same anywhere.
+
+- **The limit.** A position is refused beyond **`WORLD_POSITION_LIMIT` = 1e7 m** (10 000 km) on any axis, by the
+  `position` row's rule, so setters, table writes, file reads and `World_SetParent`'s keeping of the place all check
+  it. It applies to the local value (a child's position relative to its parent); a world 10 000 km across is far
+  larger than anything the game builds, and doubles keep it to 2 nm there.
+- **Converting to float.** Code that needs floats (the GPU, the narrowphase, a character's move) takes positions
+  **relative to an origin near what it computes**, subtracted in double and rounded once
+  (`GameMath_ToVector3Relative`, `GameMath_ToMatrixRelative`): the renderer relative to the camera (T32,
+  [WorldRuntime.md](WorldRuntime.md)), the collision world relative to a query's start or a pair's first body
+  ([WorldCollision.md](WorldCollision.md)), the characters relative to their feet ([Characters.md](Characters.md)).
+  `GameMath_ToVector3` of an absolute position is only for values known to be small (a child's local position).
+- **Files** write positions as doubles: JSON with the shortest text that reads back the same double (a float written
+  before T33 prints the same), GHDF as Double arrays; Float arrays from older saves still read
+  ([WorldFile.md](WorldFile.md)). `vector3` data values are doubles too ([ObjectData.md](ObjectData.md)).
+- **Far from the origin** a world plays as it does at it: the test frame's F11 moves everything 28 km and 141 km out,
+  and the headless suites of the hierarchy, world files, collision, motion and characters run a second time shifted
+  about 100 km along each axis (see "Tests").
 
 ## Components
 
@@ -391,7 +421,7 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 |---|---|---|---|---|
 | `world_object` | `name` | 3 | String (256, null allowed) | null |
 | | `parent` | 12 | ObjectId, ReadOnly for `Properties_Set` (reads and copies relink through the world) | 0 (a root) |
-| | `position` | 4 | Vector3 | (0, 0, 0) |
+| | `position` | 4 | Vector3Double, each axis within ±`WORLD_POSITION_LIMIT` (1e7 m) | (0, 0, 0) |
 | | `rotation` | 5 | AngleVector3 (degrees in JSON) | (0, 0, 0) |
 | | `scale` | 6 | Vector3 | (1, 1, 1) |
 | | `tint` | 7 | RenderColor | white |
@@ -584,8 +614,17 @@ levels deep (on the fly and cached, the same products), reparenting with and wit
 the refusal under a flattened parent), dirty propagation counted through `WorldInternal_GetWorldMatrixRecomputeCount`,
 reads that never store, the attach order, subtree removal (components, arrays in order, dirty counts) with the detach
 hooks children first, effective flags, and the `parent` row (ReadOnly, JSON reads attach or are refused and logged
-once, a copy brings the parent). `tests/WorldTransformTests.c` covers the maths (round trips of 2000 random transforms,
-mirrors, zero scales, gimbal lock, shear, local matrices, singular parents, the stretch bound). `tests/WorldTests.c`: objects (ids unique and never 0, loader ids advance the counter, an exhausted counter, the
+once, a copy brings the parent), and far placements (a child 0.5 mm from its parent at 10 000 km keeps it;
+re-parenting there keeps the place within 5e-9 m, 100 km out within 1e-9 m; a place past the limit is refused).
+`tests/WorldTransformTests.c` covers the maths (round trips of 2000 random transforms, mirrors, zero scales, gimbal
+lock, shear, local matrices, singular parents, the stretch bound, far placements). The hierarchy, world file,
+collision, motion and character suites run **twice** (`TestWorld_RunSuite`, `tests/TestWorld.h`): as they are, then
+as `<Suite>Far` with every scene shifted by (100 000.37, 100 000.21, -100 000.53) m, with the same tolerances: about
+100 km along each axis and off the float grid, since a whole number of float steps (100 000 is one) would carry scene
+values on a 1/128 m grid out there without any rounding and hide a forgotten float. A test places its scene
+through `TestWorld_At` (root objects, query origins, rays, casts, teleports) and compares what the world reports after
+`TestWorld_ToScene`; children's local positions are not shifted. It is the test that finds a forgotten float.
+`tests/WorldTests.c`: objects (ids unique and never 0, loader ids advance the counter, an exhausted counter, the
 object-set version, validated setters and table writes advancing the revision, rotation in degrees in JSON),
 components (add, find, remove; one per type; removing an object removes its components; the per-type arrays stay in
 order across interleaved adds and removes; types by name; revisions), the sprite binding (no assets, a shared world

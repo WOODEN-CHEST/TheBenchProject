@@ -80,7 +80,7 @@ static DataValue BuildEveryType(TestRun* run, KeyRegistry* keys)
     Put(run, &Root, "name", MakeString(run, DATA_TEST_NAME));
     Put(run, &Root, "kind", DataValue_FromKey(Intern(run, keys, "town:street_lamp")));
     Put(run, &Root, "owner", DataValue_FromObject(12U));
-    Put(run, &Root, "spawn", DataValue_FromVector3((Vector3){ 1.0f, -2.5f, 3.25f }));
+    Put(run, &Root, "spawn", DataValue_FromVector3(Vector3Double_Create(100000.123456789, -2.5, 3.25)));
     Put(run, &Root, "shade", DataValue_FromColor((Color){ 255, 204, 0, 128 }));
     Put(run, &Root, "due", DataValue_FromDateTime(DATA_TEST_DUE));
     Put(run, &Root, "$type", DataValue_FromKey(Intern(run, keys, "town:delivery")));
@@ -107,8 +107,8 @@ static DataValue BuildEveryType(TestRun* run, KeyRegistry* keys)
     Add(run, &Objects, DataValue_FromObject(70000U));
     Put(run, &Root, "objects", Objects);
     DataValue Vectors = MakeList(run, DataType_Vector3);
-    Add(run, &Vectors, DataValue_FromVector3((Vector3){ 1.0f, 2.0f, 3.0f }));
-    Add(run, &Vectors, DataValue_FromVector3((Vector3){ 0.1f, -0.0f, 1e-7f }));
+    Add(run, &Vectors, DataValue_FromVector3(Vector3Double_Create(1.0, 2.0, 3.0)));
+    Add(run, &Vectors, DataValue_FromVector3(Vector3Double_Create(0.1, -0.0, 1e-7)));
     Put(run, &Root, "vectors", Vectors);
     DataValue Colors = MakeList(run, DataType_Color);
     Add(run, &Colors, DataValue_FromColor((Color){ 1, 2, 3, 255 }));
@@ -259,7 +259,7 @@ static void EqualityHoldsAcrossEveryType(TestRun* run)
     {
         DataValue_CreateTag(), DataValue_FromBool(true), DataValue_FromInt(3), DataValue_FromFloat(3.0),
         MakeString(run, "3"), DataValue_FromKey(Intern(run, &Keys, "town:three")), DataValue_FromObject(3U),
-        DataValue_FromVector3((Vector3){ 3.0f, 3.0f, 3.0f }), DataValue_FromColor((Color){ 3, 3, 3, 3 }),
+        DataValue_FromVector3(Vector3Double_Create(3.0, 3.0, 3.0)), DataValue_FromColor((Color){ 3, 3, 3, 3 }),
         DataValue_FromDateTime(3), MakeList(run, DataType_Int), MakeCompound(run),
     };
     for (size_t First = 0U; First < DATA_TYPE_COUNT; First++)
@@ -477,7 +477,7 @@ static void ValidationNamesTheProblem(TestRun* run)
     TEST_CHECK_SUCCESS(run, DataValue_Validate(&Key, NULL)); // no registry: keys not checked
     DataValue Date = DataValue_FromDateTime(-1);
     TEST_CHECK_ERROR(run, DataValue_Validate(&Date, &Keys), ErrorCode_ArgumentOutOfRange);
-    DataValue Spot = DataValue_FromVector3((Vector3){ 0.0f, INFINITY, 0.0f });
+    DataValue Spot = DataValue_FromVector3(Vector3Double_Create(0.0, INFINITY, 0.0));
     TEST_CHECK_ERROR(run, DataValue_Validate(&Spot, &Keys), ErrorCode_ArgumentOutOfRange);
     DataValue Corrupt = { .Type = (DataType)77, .IntValue = 0 };
     TEST_CHECK_ERROR(run, DataValue_Validate(&Corrupt, &Keys), ErrorCode_ArgumentOutOfRange);
@@ -495,11 +495,11 @@ static void ByteSizesCountTheData(TestRun* run)
     DataValue Tag = DataValue_CreateTag();
     DataValue Flag = DataValue_FromBool(true);
     DataValue Count = DataValue_FromInt(1);
-    DataValue Spot = DataValue_FromVector3((Vector3){ 0.0f, 0.0f, 0.0f });
+    DataValue Spot = DataValue_FromVector3(Vector3Double_Zero());
     DataValue Shade = DataValue_FromColor((Color){ 0, 0, 0, 0 });
     DataValue Key = DataValue_FromKey(Intern(run, &Keys, "town:lamp")); // 9 bytes of text
     TEST_CHECK(run, (DataValue_GetByteSize(&Tag, &Keys) == 0U) && (DataValue_GetByteSize(&Flag, &Keys) == 1U));
-    TEST_CHECK(run, (DataValue_GetByteSize(&Count, &Keys) == 8U) && (DataValue_GetByteSize(&Spot, &Keys) == 12U));
+    TEST_CHECK(run, (DataValue_GetByteSize(&Count, &Keys) == 8U) && (DataValue_GetByteSize(&Spot, &Keys) == 24U));
     TEST_CHECK(run, (DataValue_GetByteSize(&Shade, &Keys) == 4U) && (DataValue_GetByteSize(&Key, &Keys) == 9U));
     TEST_CHECK(run, DataValue_GetByteSize(&Key, NULL) == NAMESPACED_KEY_MAX_LENGTH);
 
@@ -554,6 +554,7 @@ static void JSONRoundTripKeepsEveryType(TestRun* run)
         TEST_CHECK(run, strstr(Written, "\"owner\":{\"$object\":12}") != NULL);
         TEST_CHECK(run, strstr(Written, "\"empty\":{\"$list\":\"string\"}") != NULL);
         TEST_CHECK(run, strstr(Written, "\"floats\":[1.5,2.0]") != NULL);
+        TEST_CHECK(run, strstr(Written, "\"spawn\":{\"$vector3\":[100000.123456789,-2.5,3.25]}") != NULL);
 
         DataValue ReadBack = DataValue_CreateTag();
         if (TEST_CHECK_SUCCESS(run, ReadJSONText(run, Written, &Keys, &ReadBack)))
@@ -925,9 +926,24 @@ static void GHDFRefusesNonFiniteVectors(TestRun* run)
     GHDFCompound* Fine = MakeArrayValueCompound(run, Pool, DataType_Vector3, DataType_Tag,
         MakeFloatArray(run, Pool, Finite, 3U));
     TEST_CHECK(run, TEST_CHECK_SUCCESS(run, DataValue_ReadGHDF(Fine, &Keys, &Value))
-        && (Value.Type == DataType_Vector3) && (Value.Vector3Value.y == 2.0f));
+        && (Value.Type == DataType_Vector3) && (Value.Vector3Value.Y == 2.0));
 
-    GHDFCompound* const Compounds[] = { Single, List, Fine };
+    // Double arrays, which the writer writes since T33, likewise.
+    GHDFArray* InfiniteDoubles = NULL;
+    if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowArray(Pool, GHDFValueType_Double, &InfiniteDoubles)))
+    {
+        const double Components[] = { 1.0, 2.0, -INFINITY };
+        for (size_t Index = 0U; Index < 3U; Index++)
+        {
+            GHDFObjectValue Element = GHDFObjectValue_CreateDouble(Components[Index]);
+            TEST_CHECK_SUCCESS(run, GHDFArray_AddValue(InfiniteDoubles, &Element));
+        }
+    }
+    GHDFCompound* Doubles = MakeArrayValueCompound(run, Pool, DataType_Vector3, DataType_Tag, InfiniteDoubles);
+    DataValue_Deconstruct(&Value);
+    TestText_CheckErrorMessage(run, DataValue_ReadGHDF(Doubles, &Keys, &Value), ErrorCode_Deserialize, NotFinite);
+
+    GHDFCompound* const Compounds[] = { Single, List, Fine, Doubles };
     for (size_t Index = 0U; Index < (sizeof(Compounds) / sizeof(Compounds[0])); Index++)
     {
         if (Compounds[Index] != NULL)
@@ -935,6 +951,101 @@ static void GHDFRefusesNonFiniteVectors(TestRun* run)
             TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Compounds[Index], true));
         }
     }
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Pool));
+    KeyRegistry_Deconstruct(&Keys);
+}
+
+/* T33: a vector3 is three doubles (it often holds a far position), written as a Double array; the Float arrays and the
+ * JSON floats written before read as the same numbers. */
+static void Vector3sAreDoublesAndOldFormsRead(TestRun* run)
+{
+    KeyRegistry Keys;
+    GHDFObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys)) || !TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&Pool)))
+    {
+        KeyRegistry_Deconstruct(&Keys);
+        return;
+    }
+
+    // Fifteen significant digits round-trip through both forms exactly.
+    DataValue Far = DataValue_FromVector3(Vector3Double_Create(9876543.21098765, -0.000123456789012345,
+        -9999999.99999999));
+    DataValue ReadBack = DataValue_CreateTag();
+    TEST_CHECK(run, RoundTripGHDF(run, &Far, &Keys, &ReadBack) && DataValue_Equals(&Far, &ReadBack));
+    DataValue_Deconstruct(&ReadBack);
+    GenericBuffer Text;
+    GenericBuffer_AllocateVariable(&Text, DATA_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    if (WriteJSONText(run, &Far, &Keys, &Text))
+    {
+        TEST_CHECK(run, strcmp((const char*)Text._data,
+            "{\"$vector3\":[9876543.21098765,-0.000123456789012345,-9999999.99999999]}") == 0);
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, ReadJSONText(run, (const char*)Text._data, &Keys, &ReadBack))
+            && DataValue_Equals(&Far, &ReadBack));
+        DataValue_Deconstruct(&ReadBack);
+    }
+
+    // The writer's value entry is a Double array: of 3 for a vector3, of 3 per element for a list of them.
+    GHDFCompound* Written = NULL;
+    DataValue List = MakeList(run, DataType_Vector3);
+    Add(run, &List, DataValue_FromVector3(Vector3Double_Create(1.0, 2.0, 3.0)));
+    Add(run, &List, DataValue_FromVector3(Vector3Double_Create(0.1, 0.2, 0.3)));
+    const DataValue* const Values[] = { &Far, &List };
+    const size_t Counts[] = { 3U, 6U };
+    for (size_t Index = 0U; Index < 2U; Index++)
+    {
+        if (!TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Pool, &Written)))
+        {
+            continue;
+        }
+        GHDFObjectValue Entry;
+        bool IsFound = false;
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, DataValue_WriteGHDF(Values[Index], &Keys, Pool, Written))
+            && TEST_CHECK_SUCCESS(run, GHDFCompound_GetOptionalVerified(Written, (GHDFEntryID)3,
+                GHDF_CreateArrayType(GHDFValueType_Double), &Entry, &IsFound))
+            && IsFound && (GHDFArray_GetElementCount(Entry.Value.Array) == Counts[Index]));
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Written, true));
+    }
+    DataValue_Deconstruct(&List);
+
+    // A Float array, as saves wrote before T33, reads as those floats widened exactly; alone and in a list.
+    const float Old[] = { 0.1f, -2.5f, 16777217.0f };
+    GHDFCompound* Single = MakeArrayValueCompound(run, Pool, DataType_Vector3, DataType_Tag,
+        MakeFloatArray(run, Pool, Old, 3U));
+    TEST_CHECK(run, TEST_CHECK_SUCCESS(run, DataValue_ReadGHDF(Single, &Keys, &ReadBack))
+        && (ReadBack.Type == DataType_Vector3) && (ReadBack.Vector3Value.X == (double)0.1f)
+        && (ReadBack.Vector3Value.Y == -2.5) && (ReadBack.Vector3Value.Z == (double)16777217.0f));
+    DataValue_Deconstruct(&ReadBack);
+    const float OldList[] = { 1.0f, 2.0f, 3.0f, 0.25f, 0.5f, 0.75f };
+    GHDFCompound* Listed = MakeArrayValueCompound(run, Pool, DataType_List, DataType_Vector3,
+        MakeFloatArray(run, Pool, OldList, 6U));
+    if (TEST_CHECK_SUCCESS(run, DataValue_ReadGHDF(Listed, &Keys, &ReadBack))
+        && TEST_CHECK(run, DataValue_GetListCount(&ReadBack) == 2U))
+    {
+        const DataValue* Second = DataValue_GetListElement(&ReadBack, 1U);
+        TEST_CHECK(run, (Second->Vector3Value.X == 0.25) && (Second->Vector3Value.Z == 0.75));
+    }
+    DataValue_Deconstruct(&ReadBack);
+
+    // JSON a float writer wrote (each number the shortest text of its float) reads as the doubles that print the same
+    // text again.
+    const char* OldText = "{\"$vector3\":[0.1,-2.5,123456.7]}";
+    if (TEST_CHECK_SUCCESS(run, ReadJSONText(run, OldText, &Keys, &ReadBack)))
+    {
+        TEST_CHECK(run, (ReadBack.Vector3Value.X == 0.1) && (ReadBack.Vector3Value.Z == 123456.7));
+        GenericBuffer_Clear(&Text);
+        TEST_CHECK(run, WriteJSONText(run, &ReadBack, &Keys, &Text) && (strcmp((const char*)Text._data, OldText) == 0));
+    }
+    DataValue_Deconstruct(&ReadBack);
+
+    GHDFCompound* const Compounds[] = { Single, Listed };
+    for (size_t Index = 0U; Index < (sizeof(Compounds) / sizeof(Compounds[0])); Index++)
+    {
+        if (Compounds[Index] != NULL)
+        {
+            TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Compounds[Index], true));
+        }
+    }
+    Memory_Free(Text._data);
     TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Pool));
     KeyRegistry_Deconstruct(&Keys);
 }
@@ -1006,6 +1117,7 @@ void DataValueTests_Run(TestRun* run)
         { "ghdf_round_trip_keeps_every_type", GHDFRoundTripKeepsEveryType },
         { "ghdf_refuses_hostile_input", GHDFRefusesHostileInput },
         { "ghdf_refuses_non_finite_vectors", GHDFRefusesNonFiniteVectors },
+        { "vector3s_are_doubles_and_old_forms_read", Vector3sAreDoublesAndOldFormsRead },
         { "refused_reads_forget_their_keys", RefusedReadsForgetTheirKeys },
     };
     TestRun_RunSuite(run, "DataValue", Cases, sizeof(Cases) / sizeof(Cases[0]));

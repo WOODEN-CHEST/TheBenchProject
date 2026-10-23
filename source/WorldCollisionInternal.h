@@ -1,7 +1,9 @@
 #pragma once
+#include <float.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include "CollisionGeometry.h"
+#include "GameMath.h"
 #include "WorldCollision.h"
 #include "WorldCollisionTree.h"
 #include "WorldColliderComponent.h"
@@ -21,6 +23,16 @@
  * the world's dense collider array to its slot, so a sync is one walk in the world's order; _lookup (sorted by object
  * id) finds an object's instance for the queries. Every instance holds its shapes in world space (WorldCollisionShape:
  * the transform both ways, the box, the proxy).
+ *
+ * DOUBLES OUTSIDE, FLOATS INSIDE (T33, as Jolt's double-precision build). Everything that says where something is in
+ * the world is a double: the shapes' and objects' placements (WorldCollisionPlacement: float axes, a double
+ * translation), the motion poses (WorldCollisionPose: a double position), the trees' boxes and the step's swept boxes
+ * (BoundingBoxDouble). The narrowphase (source/CollisionGeometry.h) stays in float: before each call the world layer
+ * picks an ORIGIN near what it tests (a query's start, a pair's first body's pose) and hands it affines and poses
+ * relative to it, subtracted in double and rounded once (WorldCollisionInternal_ToRelative, _ToRelativeInverse,
+ * _ToRelativePose); what comes back is relative to that origin and becomes a world position when the origin is added
+ * back in double. A step's manifold keeps the origin its points are relative to. Directions, normals, separations,
+ * pushes and sizes stay floats: they mean the same anywhere.
  *
  * THE STEP (T27). Each instance keeps its motion frame (Pose: its object's world position and its turn by the rotation
  * mode, rigid) and where that was at the end of the last step (LastPose); each shape keeps its transform relative to the
@@ -44,6 +56,25 @@
 
 
 // Types.
+/** An affine placement in the world: point p goes to X * p.x + Y * p.y + Z * p.z + Translation. The axes are floats
+ *  (they mean the same anywhere); the translation is a double, so a far placement keeps a double's precision. */
+typedef struct WorldCollisionPlacementStruct
+{
+    /** The images of the local X, Y and Z axes (the linear part's columns). */
+    Vector3 X;
+    Vector3 Y;
+    Vector3 Z;
+    /** Where the local origin goes, in the world. */
+    Vector3Double Translation;
+} WorldCollisionPlacement;
+
+/** A rigid pose in the world: a position in double and a unit rotation. */
+typedef struct WorldCollisionPoseStruct
+{
+    Vector3Double Position;
+    Quaternion Rotation;
+} WorldCollisionPose;
+
 /** One shape of an instance, in world space. */
 typedef struct WorldCollisionShapeStruct
 {
@@ -51,9 +82,10 @@ typedef struct WorldCollisionShapeStruct
     const CollisionShape* Shape;
     /** Its index in its set (0 for an own shape). */
     uint32_t ShapeIndex;
-    /** Shape space to world and back. */
-    CollisionAffine ShapeToWorld;
-    CollisionAffine WorldToShape;
+    /** Shape space to the world, and the inverse of its axes (no translation): WorldCollisionInternal_PlaceShape gives
+     *  both ways relative to an origin. */
+    WorldCollisionPlacement ShapeToWorld;
+    CollisionAffine WorldToShapeAxes;
     /** Whether its sizes are valid: always for a world model's shapes (checked at load), by CollisionShape_Validate for
      *  an own shape (its rows allow a cylinder of half height 0, which is flat). */
     bool IsSizeValid;
@@ -62,8 +94,7 @@ typedef struct WorldCollisionShapeStruct
     /** An unbounded plane: no box and no proxy (it is in the planes list). */
     bool IsUnbounded;
     /** The world box (fat for nothing: the tree fattens its own copy). */
-    Vector3 Min;
-    Vector3 Max;
+    BoundingBoxDouble Box;
     /** Its proxy in the instance's tree, or COLLISION_TREE_NULL. */
     int32_t Proxy;
     /** Shape space to the instance's pose (T27): the shape placed at any pose P is P * ShapeToPose. */
@@ -107,9 +138,9 @@ typedef struct WorldCollisionInstanceStruct
     CollisionShape* OwnShape;
     /** WorldCollisionShape elements. */
     GenericBuffer Shapes;
-    /** The object's world matrix both ways (local contact positions). */
-    CollisionAffine ObjectToWorld;
-    CollisionAffine WorldToObject;
+    /** The object's world placement and the inverse of its axes (local contact positions). */
+    WorldCollisionPlacement ObjectToWorld;
+    CollisionAffine WorldToObjectAxes;
     /** Set while the component set is re-matched: whether a collider still names this instance. */
     bool IsMatched;
     /** Warnings given once per instance. */
@@ -123,8 +154,8 @@ typedef struct WorldCollisionInstanceStruct
     /* T27: motion. */
     /** The motion frame now (rigid: the object's world position, its turn by the rotation mode), and at the end of the
      *  last step (valid while HasLastPose: from the instance's first placement; cleared when it leaves the trees). */
-    CollisionPose Pose;
-    CollisionPose LastPose;
+    WorldCollisionPose Pose;
+    WorldCollisionPose LastPose;
     bool HasLastPose;
     /** How far its valid shapes reach from the pose's origin (a turn sweeps them within it), metres. */
     float Reach;
@@ -184,8 +215,8 @@ typedef struct WorldCollisionBodyStruct
     /** 1 / mass of its owner (0 without one). */
     float InverseMass;
     /** Its own motion this step: the pose at the last step's end and the pose now (equal when it does not move). */
-    CollisionPose StepFrom;
-    CollisionPose StepTo;
+    WorldCollisionPose StepFrom;
+    WorldCollisionPose StepTo;
     bool IsMoving;
     float Turn;
     /** Whether its motion is swept (its collider's is_continuous; a body that does not move counts as swept). */
@@ -193,8 +224,8 @@ typedef struct WorldCollisionBodyStruct
     /** The running solve's motion: From (its start, the pushes so far included) to To (its target, without the solve's
      *  push); Final = To + the owner's Correction. PhaseTurn is the turn from From to To (To's rotation times From's
      *  inverse), while IsPhaseTurning. */
-    CollisionPose From;
-    CollisionPose To;
+    WorldCollisionPose From;
+    WorldCollisionPose To;
     Quaternion PhaseTurn;
     float PhaseTurnAngle;
     bool IsPhaseTurning;
@@ -209,9 +240,9 @@ typedef struct WorldCollisionBodyStruct
     Vector3 Correction;
     Vector3 Accumulated;
     Vector3 IterationCorrection;
-    /** The box of its shapes over the step's motion (with the reach of a turn), for pairs. */
-    Vector3 SweptMin;
-    Vector3 SweptMax;
+    /** The box of its shapes over the step's motion (with the reach of a turn), for pairs; inverted (Min above Max)
+     *  for a body without a bounded shape. */
+    BoundingBoxDouble Swept;
     /** Kinematic movers: blocked by a pushable (which, how deep), and whether it was set back (stop). */
     bool IsBlocked;
     uint64_t BlockedById;
@@ -281,7 +312,9 @@ typedef struct WorldCollisionManifoldStruct
     uint32_t BodyB;
     /** B's triangle, or WORLD_COLLISION_NO_TRIANGLE. */
     uint32_t Triangle;
+    /** The contact, its points relative to Origin (the narrowphase ran there). */
     CollisionContact Contact;
+    Vector3Double Origin;
 } WorldCollisionManifold;
 
 /** The key of a contact across steps: the objects (A the lower id), their shapes and B's triangle... or A's: the
@@ -329,7 +362,8 @@ typedef struct WorldCollisionChainRecordStruct
 {
     uint64_t ObjectId;
     uint64_t ParentId;
-    Vector3 Position;
+    /** In double, as the object holds it: set back exactly. */
+    Vector3Double Position;
     Vector3 Rotation;
     Vector3 Scale;
 } WorldCollisionChainRecord;
@@ -447,19 +481,97 @@ bool WorldCollisionInternal_FindSlot(const WorldCollision* self, uint64_t object
 bool WorldCollisionInternal_PassesFilter(WorldCollision* self, const WorldCollisionInstance* instance,
     const WorldCollisionFilter* filter);
 
-/* Whether a candidate the trees found (by fattened or widened boxes) really reaches the box [min, max]: an instance that
- * takes part in the running step always does (its tree boxes cover its motion), any other one by its shape's own box
- * (an unbounded plane reaches everything). */
+/* Whether a candidate the trees found (by fattened or widened boxes) really reaches @p box: an instance that takes part
+ * in the running step always does (its tree boxes cover its motion), any other one by its shape's own box (an unbounded
+ * plane reaches everything). */
 static inline bool WorldCollisionInternal_IsCandidateNear(const WorldCollisionInstance* instance,
-    const WorldCollisionShape* shape, Vector3 min, Vector3 max)
+    const WorldCollisionShape* shape, BoundingBoxDouble box)
 {
     if ((instance->Body != WORLD_COLLISION_NO_BODY) || shape->IsUnbounded)
     {
         return true;
     }
-    return (shape->Min.x <= max.x) && (shape->Max.x >= min.x) && (shape->Min.y <= max.y) && (shape->Max.y >= min.y)
-        && (shape->Min.z <= max.z) && (shape->Max.z >= min.z);
+    return BoundingBoxDouble_Overlaps(shape->Box, box);
 }
+
+
+// Functions: doubles outside, floats inside (T33).
+/* A placement relative to @p origin, for the narrowphase: its axes, and its translation less the origin, subtracted in
+ * double and rounded once. */
+static inline CollisionAffine WorldCollisionInternal_ToRelative(const WorldCollisionPlacement* placement,
+    Vector3Double origin)
+{
+    return (CollisionAffine){ .X = placement->X, .Y = placement->Y, .Z = placement->Z,
+        .Translation = GameMath_ToVector3Relative(placement->Translation, origin) };
+}
+
+/* The inverse of a placement relative to @p origin, from the inverse of its axes (@p inverseAxes, no translation): a
+ * point relative to the origin goes to inverseAxes * (point - (translation - origin)). */
+static inline CollisionAffine WorldCollisionInternal_ToRelativeInverse(const WorldCollisionPlacement* placement,
+    const CollisionAffine* inverseAxes, Vector3Double origin)
+{
+    CollisionAffine Result = *inverseAxes;
+    Result.Translation = CollisionMath_Negate(CollisionAffine_TransformVector(inverseAxes,
+        GameMath_ToVector3Relative(placement->Translation, origin)));
+    return Result;
+}
+
+/* A shape's synced placement both ways, relative to @p origin. */
+static inline void WorldCollisionInternal_PlaceShapeRelative(const WorldCollisionShape* shape, Vector3Double origin,
+    CollisionAffine* outToWorld, CollisionAffine* outFromWorld)
+{
+    *outToWorld = WorldCollisionInternal_ToRelative(&shape->ShapeToWorld, origin);
+    *outFromWorld = WorldCollisionInternal_ToRelativeInverse(&shape->ShapeToWorld, &shape->WorldToShapeAxes, origin);
+}
+
+/* Where a world position lies in an object's space (its placement's inverse): the position less the object's
+ * translation, subtracted in double, then turned by the inverse axes. */
+static inline Vector3 WorldCollisionInternal_ToObjectSpace(const WorldCollisionInstance* instance, Vector3Double point)
+{
+    return CollisionAffine_TransformVector(&instance->WorldToObjectAxes, GameMath_ToVector3Relative(point,
+        instance->ObjectToWorld.Translation));
+}
+
+/* A pose relative to @p origin, for the narrowphase. */
+static inline CollisionPose WorldCollisionInternal_ToRelativePose(const WorldCollisionPose* pose, Vector3Double origin)
+{
+    return (CollisionPose){ .Position = GameMath_ToVector3Relative(pose->Position, origin),
+        .Rotation = pose->Rotation };
+}
+
+static inline bool WorldCollisionInternal_ArePosesEqual(const WorldCollisionPose* a, const WorldCollisionPose* b)
+{
+    return (a->Position.X == b->Position.X) && (a->Position.Y == b->Position.Y) && (a->Position.Z == b->Position.Z)
+        && (a->Rotation.x == b->Rotation.x) && (a->Rotation.y == b->Rotation.y) && (a->Rotation.z == b->Rotation.z)
+        && (a->Rotation.w == b->Rotation.w);
+}
+
+/* A box relative to @p origin (floats, from the narrowphase's maths) as a world box. */
+static inline BoundingBoxDouble WorldCollisionInternal_ToWorldBox(Vector3 min, Vector3 max, Vector3Double origin)
+{
+    return (BoundingBoxDouble){ .Min = Vector3Double_Add(origin, GameMath_FromVector3(min)),
+        .Max = Vector3Double_Add(origin, GameMath_FromVector3(max)) };
+}
+
+/* A box with nothing in it (Min above Max): the start of a union. */
+static inline BoundingBoxDouble WorldCollisionInternal_GetEmptyBox(void)
+{
+    return (BoundingBoxDouble){ .Min = { .X = DBL_MAX, .Y = DBL_MAX, .Z = DBL_MAX },
+        .Max = { .X = -DBL_MAX, .Y = -DBL_MAX, .Z = -DBL_MAX } };
+}
+
+static inline bool WorldCollisionInternal_IsBoxEmpty(BoundingBoxDouble box)
+{
+    return !(box.Min.X <= box.Max.X);
+}
+
+/* The pose at the share @p t of the motion from @p from to @p to: the position lerped in double, the rotation as
+ * CollisionPose_Interpolate turns it (a slerp along the shorter arc). */
+WorldCollisionPose WorldCollisionInternal_InterpolatePose(const WorldCollisionPose* from, const WorldCollisionPose* to,
+    float t);
+
+/* The angle, in radians in [0, pi], the motion from @p from to @p to turns through. */
+float WorldCollisionInternal_GetTurn(const WorldCollisionPose* from, const WorldCollisionPose* to);
 
 /* Fills what a result says about an instance's shape (no triangle). */
 void WorldCollisionInternal_FillShapeInfo(const WorldCollisionInstance* instance, const WorldCollisionShape* shape,
@@ -469,9 +581,9 @@ void WorldCollisionInternal_FillShapeInfo(const WorldCollisionInstance* instance
  * barycentrics). */
 void WorldCollisionInternal_FillTriangleInfo(const CollisionMesh* mesh, uint32_t triangle, WorldCollisionShapeInfo* info);
 
-/* Collects into _candidates the keys of every shape whose box overlaps [min, max] (both trees) and every unbounded
+/* Collects into _candidates the keys of every shape whose box overlaps @p box (both trees) and every unbounded
  * plane. */
-void WorldCollisionInternal_CollectCandidates(WorldCollision* self, Vector3 min, Vector3 max);
+void WorldCollisionInternal_CollectCandidates(WorldCollision* self, BoundingBoxDouble box);
 
 /* The trigger step of a sync: this tick's pairs against the last tick's, their events queued. */
 void WorldCollisionInternal_UpdateTriggers(WorldCollision* self);
@@ -492,9 +604,8 @@ void WorldCollisionInternal_RebuildDebugList(WorldCollision* self);
 /* Puts every valid shape's tree proxy back on its box (after a step widened them to swept boxes). */
 void WorldCollisionInternal_RestoreProxy(WorldCollision* self, WorldCollisionInstance* instance);
 
-/* Widens an instance's shape proxies to the box [min, max] (a step's swept box) so the trees find it on its way. */
-void WorldCollisionInternal_WidenProxies(WorldCollision* self, WorldCollisionInstance* instance, Vector3 min,
-    Vector3 max);
+/* Widens an instance's shape proxies to @p box (a step's swept box) so the trees find it on its way. */
+void WorldCollisionInternal_WidenProxies(WorldCollision* self, WorldCollisionInstance* instance, BoundingBoxDouble box);
 
 /* Widens the proxies of an instance's shapes that a push of @p shift (from where the sync placed them) takes past their
  * tree boxes, to cover where it takes them. */

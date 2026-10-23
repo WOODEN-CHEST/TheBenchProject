@@ -202,7 +202,7 @@ void PlayerController_ApplyCamera(PlayerController* self, World* world, GameCame
     }
     const CharacterInput* Input = WorldCharacterComponent_GetInput(Character);
     const WorldCharacterState* State = WorldCharacterComponent_GetState(Character);
-    Vector3 Eye = WorldCharacterComponent_GetEyePosition(Character);
+    Vector3Double Eye = WorldCharacterComponent_GetEyePosition(Character);
 
     // TODO: rework the head bob (the owner, 2026-10-22: it reads badly). It is a plain up-and-down sine a step long,
     // one amplitude at every speed: no sway from side to side, no dip as a foot lands, and it fades out on every short
@@ -224,8 +224,7 @@ void PlayerController_ApplyCamera(PlayerController* self, World* world, GameCame
         Bob = self->HeadBobAmplitude * self->_headBobWeight * sinf(self->_headBobPhase);
     }
 
-    // TODO: T33 gives characters double eyes; this widens the float eye until then.
-    camera->Position = Vector3Double_Create((double)Eye.x, (double)Eye.y + (double)Bob, (double)Eye.z);
+    camera->Position = Vector3Double_Create(Eye.X, Eye.Y + (double)Bob, Eye.Z);
     camera->Yaw = Input->LookYaw;
     camera->Pitch = Input->LookPitch;
 }

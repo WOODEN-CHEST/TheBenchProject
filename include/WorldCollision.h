@@ -2,9 +2,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-// Vector3, Quaternion and Matrix are raylib types in the queries' arguments and results (positions, rotations, the
-// debug shapes' transforms); this include is unavoidable here.
+// Vector3 and Quaternion are raylib types in the queries' arguments and results (directions, normals, rotations); this
+// include is unavoidable here. Positions are WRVectorMath's doubles (T33).
 #include "raylib/raylib.h"
+#include "wr/WRVectorMath.h"
 #include "AssetManager.h"
 #include "CollisionLayer.h"
 #include "CollisionShape.h"
@@ -92,6 +93,17 @@ typedef struct LoggerStruct Logger;
  * beyond touching, or either is removed, disabled or stops qualifying. Blocked and crushed states give motion events
  * when they begin and end. WorldCollision_GetMotionResult gives each object's feedback for its driver: its push, its
  * contacts, its ground, blocked or crushed.
+ *
+ * DOUBLES OUTSIDE, FLOATS INSIDE (T33). Every position the collision world takes or gives is a double (Vector3Double:
+ * query origins and poses, hit and contact points, grounds, the debug list's placements), so worlds hundreds of
+ * kilometres across collide as they do at their origin: the skin, the rest gaps and the sweep thresholds (millimetres)
+ * mean the same everywhere. Directions, normals, velocities, pushes, sizes and local positions stay floats. Inside, the
+ * shapes' own maths runs in float relative to an origin near what it tests (a query's start, a pair's first shape), as
+ * Jolt's double-precision build does. Shapes keep their vertices in their own space as floats: a triangle mesh loses
+ * precision at its far end when it is very large (1 mm at 8 km from its object's origin), so big terrain is built from
+ * tiles, each its own object. A plane's point is its object's origin: a level unbounded plane is exact anywhere, a
+ * tilted one moves by up to the float step at its distance from that origin (agents/WorldCollision.md, "Known
+ * limits").
  *
  * THREADS AND LIFETIME. Not thread-safe. The collision world borrows its world, which must outlive it, and must be
  * synced on that world only. Pointers it returns (events, contacts, debug lists, shape names in results) are valid until
@@ -229,8 +241,8 @@ typedef struct WorldRayHitStruct
 {
     /** @brief The shape hit. */
     WorldCollisionShapeInfo Shape;
-    /** @brief The hit point. */
-    Vector3 Point;
+    /** @brief The hit point, in the world (double). */
+    Vector3Double Point;
     /** @brief The surface's unit normal there, facing the ray (against the ray when it started inside). */
     Vector3 Normal;
     /** @brief The distance from the origin, in metres. */
@@ -254,9 +266,9 @@ typedef struct WorldCastHitStruct
     float Fraction;
     /** @brief The distance the cast's position moved up to the contact, in metres. */
     float Distance;
-    /** @brief The contact point on the surface hit, and on the cast shape. */
-    Vector3 Point;
-    Vector3 PointOnCast;
+    /** @brief The contact point on the surface hit, and on the cast shape, in the world (double). */
+    Vector3Double Point;
+    Vector3Double PointOnCast;
     /** @brief The surface hit's unit normal, facing the cast shape: the direction to slide along or push it out. */
     Vector3 Normal;
     /** @brief The cast shape was already inside at the start (Fraction 0): PenetrationDepth along Normal pushes it out.
@@ -271,9 +283,9 @@ typedef struct WorldCastHitStruct
  */
 typedef struct WorldContactPointStruct
 {
-    /** @brief World positions on A's and on B's surface. */
-    Vector3 PositionA;
-    Vector3 PositionB;
+    /** @brief World positions on A's and on B's surface (double). */
+    Vector3Double PositionA;
+    Vector3Double PositionB;
     /** @brief The same points in A's space (the query's pose, or A's object's space) and in B's object's space: where the
      *  contact sits on each body, for matching and anchoring across ticks. */
     Vector3 LocalPositionA;
@@ -334,8 +346,9 @@ typedef struct WorldCollisionDebugShapeStruct
 {
     /** @brief The shape (its sizes, hull or mesh; borrowed until the next sync). */
     const CollisionShape* Shape;
-    /** @brief From the shape's own space to the world. */
-    Matrix Transform;
+    /** @brief From the shape's own space to the world, in double (its translation far from the world's origin): draw it
+     *  relative to a nearby origin (GameMath_ToMatrixRelative). */
+    Matrix4Double Transform;
     /** @brief The collider's layer and trigger flag, and whether it is static. */
     CollisionLayer Layer;
     bool IsTrigger;
@@ -476,7 +489,8 @@ typedef struct WorldMotionResultStruct
     bool HasGround;
     uint64_t GroundObjectId;
     Vector3 GroundNormal;
-    Vector3 GroundPoint;
+    /** @brief The ground's point, in the world (double). */
+    Vector3Double GroundPoint;
     Vector3 GroundVelocity;
     /** @brief A kinematic mover that could not push a pushable out of its way, which one, and whether it was set back. */
     bool IsBlocked;
@@ -494,8 +508,8 @@ typedef struct WorldMotionResultStruct
  */
 typedef struct WorldCollisionDebugContactStruct
 {
-    /** @brief Midway between the point on A and the point on B. */
-    Vector3 Point;
+    /** @brief Midway between the point on A and the point on B, in the world (double). */
+    Vector3Double Point;
     /** @brief The contact's unit normal, from A to B. */
     Vector3 Normal;
     /** @brief The point's push as a speed along the normal (m/s; 0 when nothing pushed). */
@@ -709,27 +723,27 @@ WorldCollisionStats WorldCollision_GetStats(const WorldCollision* self);
 /**
  * @brief The nearest hit of a ray.
  * @param self The collision world; must not be NULL.
- * @param origin Where the ray starts.
+ * @param origin Where the ray starts, in the world (double: exact there however far from the world's origin).
  * @param direction Its direction (any length but 0; it is normalised).
  * @param maxDistance How far it reaches, in metres (above 0).
  * @param filter What it sees (NULL: every layer, triggers ignored).
  * @param outHit [out] Receives the hit. Must not be NULL.
  * @returns true when the ray hit something.
  */
-bool WorldCollision_Raycast(WorldCollision* self, Vector3 origin, Vector3 direction, float maxDistance,
+bool WorldCollision_Raycast(WorldCollision* self, Vector3Double origin, Vector3 direction, float maxDistance,
     const WorldCollisionFilter* filter, WorldRayHit* outHit);
 
 /**
  * @brief Every hit of a ray (one per shape it hits), nearest first.
  * @param self The collision world; must not be NULL.
- * @param origin Where the ray starts.
+ * @param origin Where the ray starts, in the world.
  * @param direction Its direction (normalised).
  * @param maxDistance How far it reaches.
  * @param filter What it sees (NULL: every layer, triggers ignored).
  * @param outHits [out] Receives WorldRayHit elements, appended (the caller clears it). Must not be NULL.
  * @returns How many hits were appended.
  */
-size_t WorldCollision_RaycastAll(WorldCollision* self, Vector3 origin, Vector3 direction, float maxDistance,
+size_t WorldCollision_RaycastAll(WorldCollision* self, Vector3Double origin, Vector3 direction, float maxDistance,
     const WorldCollisionFilter* filter, GenericBuffer* outHits);
 
 /**
@@ -743,23 +757,23 @@ size_t WorldCollision_RaycastAll(WorldCollision* self, Vector3 origin, Vector3 d
  * @param self The collision world; must not be NULL.
  * @param shapes The shapes (spheres, capsules, boxes, cylinders, hulls); must not be NULL.
  * @param shapeCount How many (1 to WORLD_COLLISION_MAX_QUERY_SHAPES).
- * @param startPosition The pose at the start.
+ * @param startPosition The pose at the start, in the world (double).
  * @param startRotation (unit quaternion).
- * @param endPosition The pose at the end.
+ * @param endPosition The pose at the end, in the world (double).
  * @param endRotation (unit quaternion).
  * @param filter What it sees (NULL: every layer, triggers ignored).
  * @param outHit [out] Receives the first contact. Must not be NULL.
  * @returns true when something was hit.
  */
 bool WorldCollision_CastShape(WorldCollision* self, const CollisionShape* shapes, uint32_t shapeCount,
-    Vector3 startPosition, Quaternion startRotation, Vector3 endPosition, Quaternion endRotation,
+    Vector3Double startPosition, Quaternion startRotation, Vector3Double endPosition, Quaternion endRotation,
     const WorldCollisionFilter* filter, WorldCastHit* outHit);
 
 /**
  * @brief Sweeps a sphere from @p start to @p end (WorldCollision_CastShape for one sphere).
  * @returns true when something was hit (see WorldCollision_CastShape).
  */
-bool WorldCollision_SweepSphere(WorldCollision* self, Vector3 start, Vector3 end, float radius,
+bool WorldCollision_SweepSphere(WorldCollision* self, Vector3Double start, Vector3Double end, float radius,
     const WorldCollisionFilter* filter, WorldCastHit* outHit);
 
 /**
@@ -767,15 +781,15 @@ bool WorldCollision_SweepSphere(WorldCollision* self, Vector3 start, Vector3 end
  * @param height The capsule's whole height, caps included (at least 2 x @p radius).
  * @returns true when something was hit (see WorldCollision_CastShape).
  */
-bool WorldCollision_SweepCapsule(WorldCollision* self, Vector3 start, Vector3 end, float radius, float height,
-    const WorldCollisionFilter* filter, WorldCastHit* outHit);
+bool WorldCollision_SweepCapsule(WorldCollision* self, Vector3Double start, Vector3Double end, float radius,
+    float height, const WorldCollisionFilter* filter, WorldCastHit* outHit);
 
 /**
  * @brief Sweeps a box of @p halfExtents turned by @p rotation from @p start to @p end (not turning on the way).
  * @returns true when something was hit (see WorldCollision_CastShape).
  */
-bool WorldCollision_SweepBox(WorldCollision* self, Vector3 start, Vector3 end, Vector3 halfExtents, Quaternion rotation,
-    const WorldCollisionFilter* filter, WorldCastHit* outHit);
+bool WorldCollision_SweepBox(WorldCollision* self, Vector3Double start, Vector3Double end, Vector3 halfExtents,
+    Quaternion rotation, const WorldCollisionFilter* filter, WorldCastHit* outHit);
 
 /**
  * @brief The objects whose colliders overlap shapes at a pose (touching counts).
@@ -783,7 +797,7 @@ bool WorldCollision_SweepBox(WorldCollision* self, Vector3 start, Vector3 end, V
  * @param shapes The shapes, in the pose's space (any primitive or hull; a bounded plane finds the convex shapes on it,
  *        not planes or meshes; an unbounded plane or a mesh makes the query find nothing); must not be NULL.
  * @param shapeCount How many (1 to WORLD_COLLISION_MAX_QUERY_SHAPES).
- * @param position The pose's position.
+ * @param position The pose's position, in the world (double).
  * @param rotation The pose's rotation (unit quaternion).
  * @param filter What it sees (NULL: every layer, triggers included).
  * @param outObjectIds [out] Receives uint64_t object ids, appended in ascending order, each once (the caller clears
@@ -791,19 +805,19 @@ bool WorldCollision_SweepBox(WorldCollision* self, Vector3 start, Vector3 end, V
  * @returns How many ids were appended.
  */
 size_t WorldCollision_OverlapShape(WorldCollision* self, const CollisionShape* shapes, uint32_t shapeCount,
-    Vector3 position, Quaternion rotation, const WorldCollisionFilter* filter, GenericBuffer* outObjectIds);
+    Vector3Double position, Quaternion rotation, const WorldCollisionFilter* filter, GenericBuffer* outObjectIds);
 
 /** @brief WorldCollision_OverlapShape for one sphere. @returns How many ids were appended. */
-size_t WorldCollision_OverlapSphere(WorldCollision* self, Vector3 center, float radius,
+size_t WorldCollision_OverlapSphere(WorldCollision* self, Vector3Double center, float radius,
     const WorldCollisionFilter* filter, GenericBuffer* outObjectIds);
 
 /** @brief WorldCollision_OverlapShape for one upright capsule of @p height (caps included) around @p center.
  *  @returns How many ids were appended. */
-size_t WorldCollision_OverlapCapsule(WorldCollision* self, Vector3 center, float radius, float height,
+size_t WorldCollision_OverlapCapsule(WorldCollision* self, Vector3Double center, float radius, float height,
     const WorldCollisionFilter* filter, GenericBuffer* outObjectIds);
 
 /** @brief WorldCollision_OverlapShape for one box. @returns How many ids were appended. */
-size_t WorldCollision_OverlapBox(WorldCollision* self, Vector3 center, Vector3 halfExtents, Quaternion rotation,
+size_t WorldCollision_OverlapBox(WorldCollision* self, Vector3Double center, Vector3 halfExtents, Quaternion rotation,
     const WorldCollisionFilter* filter, GenericBuffer* outObjectIds);
 
 /**
@@ -813,7 +827,7 @@ size_t WorldCollision_OverlapBox(WorldCollision* self, Vector3 center, Vector3 h
  * @param shapes The shapes, in the pose's space (spheres, capsules, boxes, cylinders, hulls: a plane or a mesh makes the
  *        query find nothing); must not be NULL.
  * @param shapeCount How many (1 to WORLD_COLLISION_MAX_QUERY_SHAPES).
- * @param position The pose's position.
+ * @param position The pose's position, in the world (double).
  * @param rotation The pose's rotation.
  * @param maxSeparation How far apart shapes may be and still give a manifold, in metres (at least 0; a small skin
  *        gives speculative contacts).
@@ -822,7 +836,7 @@ size_t WorldCollision_OverlapBox(WorldCollision* self, Vector3 center, Vector3 h
  * @returns How many manifolds were appended.
  */
 size_t WorldCollision_CollideShape(WorldCollision* self, const CollisionShape* shapes, uint32_t shapeCount,
-    Vector3 position, Quaternion rotation, float maxSeparation, const WorldCollisionFilter* filter,
+    Vector3Double position, Quaternion rotation, float maxSeparation, const WorldCollisionFilter* filter,
     GenericBuffer* outManifolds);
 
 /**

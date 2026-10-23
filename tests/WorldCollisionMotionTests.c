@@ -3,6 +3,7 @@
 #include "World.h"
 #include "WorldColliderComponent.h"
 #include "WorldCollision.h"
+#include "GameMath.h"
 #include "raylib/raymath.h"
 #include <math.h>
 #include <string.h>
@@ -78,7 +79,8 @@ static WorldColliderComponent* GetCollider(MotionScene* scene, uint64_t id)
         ? WorldColliderComponent_FromComponent(Component) : NULL;
 }
 
-/* An object at @p position with one own-shape collider: static, kinematic (movable) or pushable (movable). */
+/* An object at @p position of the scene (TestWorld_At: shifted in the far run) with one own-shape collider: static,
+ * kinematic (movable) or pushable (movable). */
 static uint64_t AddShapeObject(TestRun* run, MotionScene* scene, Vector3 position, const CollisionShape* shape,
     TestBodyKind kind)
 {
@@ -88,7 +90,7 @@ static uint64_t AddShapeObject(TestRun* run, MotionScene* scene, Vector3 positio
         return 0U;
     }
     uint64_t Id = WorldObject_GetId(Object);
-    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, position));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, TestWorld_At(position)));
     TEST_CHECK_SUCCESS(run, WorldObject_SetMobility(Object, (kind == TestBodyKind_Static) ? WorldMobility_Static
         : WorldMobility_Movable));
     WorldComponent* Component = NULL;
@@ -110,20 +112,24 @@ static WorldObject* GetObject(MotionScene* scene, uint64_t id)
     return Object;
 }
 
+/* An object's world position in the scene. */
 static Vector3 GetPosition(MotionScene* scene, uint64_t id)
 {
-    return WorldObject_GetWorldPosition(GetObject(scene, id));
+    return TestWorld_ToScene(WorldObject_GetWorldPosition(GetObject(scene, id)));
 }
 
-/* The driver: moves an object (a root) to @p position. */
+/* The driver: moves an object (a root) to @p position of the scene. */
 static void MoveTo(TestRun* run, MotionScene* scene, uint64_t id, Vector3 position)
 {
-    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(GetObject(scene, id), position));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(GetObject(scene, id), TestWorld_At(position)));
 }
 
+/* The driver: moves an object (a root, or a child of an unturned, unscaled parent) by @p motion, in double. */
 static void MoveBy(TestRun* run, MotionScene* scene, uint64_t id, Vector3 motion)
 {
-    MoveTo(run, scene, id, Vector3Add(WorldObject_GetPosition(GetObject(scene, id)), motion));
+    WorldObject* Object = GetObject(scene, id);
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Double_Add(WorldObject_GetPosition(Object),
+        GameMath_FromVector3(motion))));
 }
 
 static void Step(MotionScene* scene)
@@ -863,13 +869,14 @@ static void APushedChildIsWrittenBackThroughItsParent(TestRun* run)
     WorldObject* Parent = NULL;
     TEST_CHECK_SUCCESS(run, World_CreateObject(&Scene.World, (const unsigned char*)u8"parent", &Parent));
     uint64_t ParentId = WorldObject_GetId(Parent);
-    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, (Vector3){ 1.0f, 0.0f, 0.0f }));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, TestWorld_At((Vector3){ 1.0f, 0.0f, 0.0f })));
     TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Parent, (Vector3){ 0.0f, 90.0f * DEG2RAD, 0.0f }));
     TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Parent, (Vector3){ 2.0f, 2.0f, 2.0f }));
     TEST_CHECK_SUCCESS(run, WorldObject_SetMobility(Parent, WorldMobility_Movable));
     CollisionShape Ball = MakeSphere(0.05f); // 0.1 m in the world
     uint64_t Child = AddShapeObject(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f }, &Ball, TestBodyKind_Pushable);
     TEST_CHECK_SUCCESS(run, World_SetParent(&Scene.World, Child, ParentId, false));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(GetObject(&Scene, Child), Vector3Double_Zero())); // at its parent
     // A wall whose face at x = 1.05 overlaps the child (world x 0.9 to 1.1) by 5 cm.
     CollisionShape Wall = MakeBox((Vector3){ 0.5f, 1.0f, 1.0f });
     AddShapeObject(run, &Scene, (Vector3){ 1.55f, 0.0f, 0.0f }, &Wall, TestBodyKind_Static);
@@ -878,10 +885,10 @@ static void APushedChildIsWrittenBackThroughItsParent(TestRun* run)
     TEST_CHECK(run, IsNear(Placed.x, 1.05f - 0.1f - WORLD_COLLISION_SKIN));
     TEST_CHECK(run, IsNear(Placed.z, 0.0f));
     // In the parent's space (a quarter turn about Y: its local +Z is the world's +X) at half the length.
-    Vector3 Local = WorldObject_GetPosition(GetObject(&Scene, Child));
+    Vector3 Local = GameMath_ToVector3(WorldObject_GetPosition(GetObject(&Scene, Child)));
     TEST_CHECK(run, IsNear(Local.x, 0.0f) && IsNear(Local.y, 0.0f));
     TEST_CHECK(run, IsNear(Local.z, -0.5f * (0.05f + WORLD_COLLISION_SKIN)));
-    TEST_CHECK(run, IsNear(WorldObject_GetPosition(GetObject(&Scene, ParentId)).x, 1.0f)); // the parent stays
+    TEST_CHECK(run, IsNear(GetPosition(&Scene, ParentId).x, 1.0f)); // the parent stays
     MotionScene_Deconstruct(run, &Scene);
 }
 
@@ -973,7 +980,7 @@ static void AReparentedMoverPushesThroughInsteadOfJumping(TestRun* run)
         &Panel, TestBodyKind_Kinematic);
     WorldObject* Holder = NULL;
     TEST_CHECK_SUCCESS(run, World_CreateObject(&Scene.World, (const unsigned char*)u8"holder", &Holder));
-    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Holder, (Vector3){ -5.0f, 0.0f, 0.0f }));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Holder, TestWorld_At((Vector3){ -5.0f, 0.0f, 0.0f })));
     TEST_CHECK_SUCCESS(run, WorldObject_SetMobility(Holder, WorldMobility_Movable));
     Step(&Scene);
     Step(&Scene);
@@ -990,6 +997,96 @@ static void AReparentedMoverPushesThroughInsteadOfJumping(TestRun* run)
 
 
 // Static functions: events, results, sleeping, determinism.
+/* T33: spheres their drivers push onto a box every tick, one down onto its top and one sideways against its side, rest
+ * the skin from it, to a micrometre, and slide nowhere along it; their contacts and ground points lie where they
+ * touch, to a micrometre; one driven along the top reports the velocity it slides at. 173 km from the world's origin in
+ * the far run, where a float's step is 8 mm. */
+static void SpheresRestingOnABoxStayASkinFromIt(TestRun* run)
+{
+    MotionScene Scene;
+    if (!MotionScene_Construct(run, &Scene))
+    {
+        MotionScene_Deconstruct(run, &Scene);
+        return;
+    }
+    // The box's top at y = 0, its +X side at x = 1.345.
+    CollisionShape Block = MakeBox((Vector3){ 1.0f, 0.5f, 1.0f });
+    Vector3 BoxCenter = { 0.345f, -0.5f, 0.123f };
+    AddShapeObject(run, &Scene, BoxCenter, &Block, TestBodyKind_Static);
+    CollisionShape Ball = MakeSphere(0.25f);
+    const Vector3 Starts[] = { { 0.3f, 0.3f, -0.2f }, { 1.645f, -0.5f, 0.3f } };
+    const Vector3 Pushes[] = { { 0.0f, -0.01f, 0.0f }, { -0.01f, 0.0f, 0.0f } };
+    const Vector3 Faces[] = { { 0.3f, 0.0f, -0.2f }, { 1.345f, -0.5f, 0.3f } }; // the face's point under each centre
+    for (size_t Index = 0U; Index < 2U; Index++)
+    {
+        uint64_t Sphere = AddShapeObject(run, &Scene, Starts[Index], &Ball, TestBodyKind_Pushable);
+        Vector3Double Face = TestWorld_At(Faces[Index]);
+        Vector3Double Normal = Vector3Double_Negate(GameMath_FromVector3(Vector3Normalize(Pushes[Index])));
+        double WorstGap = 0.0;
+        double WorstSlide = 0.0;
+        for (uint32_t Tick = 0U; Tick < 1000U; Tick++)
+        {
+            MoveBy(run, &Scene, Sphere, Pushes[Index]);
+            Step(&Scene);
+            if (Tick >= 10U) // it reaches the box within six ticks
+            {
+                Vector3Double Offset = Vector3Double_Subtract(WorldObject_GetWorldPosition(GetObject(&Scene, Sphere)),
+                    Face);
+                double Gap = Vector3Double_Dot(Offset, Normal) - 0.25;
+                WorstGap = fmax(WorstGap, fabs(Gap - (double)WORLD_COLLISION_SKIN));
+                WorstSlide = fmax(WorstSlide, Vector3Double_Length(Vector3Double_Reject(Offset, Normal)));
+            }
+        }
+        TEST_CHECK(run, (WorstGap < 1e-6) && (WorstSlide < 1e-6));
+
+        // Its contact (A the box, made first): on the face, and on the sphere a skin off it, in the world and in each
+        // object's own space; the top's sphere stands on the box, its ground point on the face.
+        size_t ContactCount = 0U;
+        const WorldContact* Contacts = WorldCollision_GetContacts(Scene.Collision, &ContactCount);
+        Vector3Double OnSphere = Vector3Double_AddScaled(Face, Normal, (double)WORLD_COLLISION_SKIN);
+        Vector3 LocalOnBox = GameMath_ToVector3Relative(Face, TestWorld_At(BoxCenter));
+        Vector3 LocalOnSphere = Vector3Scale(GameMath_ToVector3(Normal), -0.25f);
+        size_t PointCount = 0U;
+        double WorstPoint = 0.0;
+        float WorstLocal = 0.0f;
+        for (size_t Contact = 0U; Contact < ContactCount; Contact++)
+        {
+            for (uint32_t Point = 0U; (Contacts[Contact].Manifold.ShapeB.ObjectId == Sphere)
+                && (Point < Contacts[Contact].Manifold.PointCount); Point++)
+            {
+                const WorldContactPoint* At = &Contacts[Contact].Manifold.Points[Point];
+                WorstPoint = fmax(WorstPoint, fmax(Vector3Double_Distance(At->PositionA, Face),
+                    Vector3Double_Distance(At->PositionB, OnSphere)));
+                WorstLocal = fmaxf(WorstLocal, fmaxf(Vector3Distance(At->LocalPositionA, LocalOnBox),
+                    Vector3Distance(At->LocalPositionB, LocalOnSphere)));
+                PointCount++;
+            }
+        }
+        TEST_CHECK(run, (PointCount == 1U) && (WorstPoint < 1e-6) && (WorstLocal < 1e-6f));
+        WorldMotionResult Result;
+        TEST_CHECK(run, WorldCollision_GetMotionResult(Scene.Collision, Sphere, &Result)
+            && (Result.HasGround == (Index == 0U))
+            && (!Result.HasGround || (Vector3Double_Distance(Result.GroundPoint, Face) < 1e-6)));
+    }
+
+    // A third, driven along the top at 0.5 m/s across while pushed down: its result's velocity is the slide's, to a
+    // millimetre a second (along the shift in the far run, where a float's step a tick would be 3.75 m/s).
+    uint64_t Slider = AddShapeObject(run, &Scene, (Vector3){ -0.5f, 0.3f, 0.4f }, &Ball, TestBodyKind_Pushable);
+    float WorstVelocity = 0.0f;
+    for (uint32_t Tick = 0U; Tick < 600U; Tick++)
+    {
+        MoveBy(run, &Scene, Slider, (Vector3){ 0.5f * TEST_DELTA, -0.01f, 0.0f });
+        Step(&Scene);
+        WorldMotionResult Result;
+        if ((Tick >= 10U) && TEST_CHECK(run, WorldCollision_GetMotionResult(Scene.Collision, Slider, &Result)))
+        {
+            WorstVelocity = fmaxf(WorstVelocity, Vector3Distance(Result.Velocity, (Vector3){ 0.5f, 0.0f, 0.0f }));
+        }
+    }
+    TEST_CHECK(run, WorstVelocity < 1e-3f);
+    MotionScene_Deconstruct(run, &Scene);
+}
+
 static void ContactEventsBeginPersistAndEndOnce(TestRun* run)
 {
     MotionScene Scene;
@@ -1282,6 +1379,7 @@ void WorldCollisionMotionTests_Run(TestRun* run)
         { "a_scaled_collider_pushes_out_and_a_shrunk_one_lets_go", AScaledColliderPushesOutAndAShrunkOneLetsGo },
         { "a_door_stops_on_a_pinned_box_or_pushes_through", ADoorStopsOnAPinnedBoxOrPushesThrough },
         { "teleports_skip_the_sweep_and_are_pushed_out", TeleportsSkipTheSweepAndArePushedOut },
+        { "spheres_resting_on_a_box_stay_a_skin_from_it", SpheresRestingOnABoxStayASkinFromIt },
         { "a_pushed_child_is_written_back_through_its_parent", APushedChildIsWrittenBackThroughItsParent },
         { "a_pushable_carries_its_colliders", APushableCarriesItsColliders },
         { "a_pushable_child_stays_when_its_parent_is_pushed", APushableChildStaysWhenItsParentIsPushed },
@@ -1293,5 +1391,5 @@ void WorldCollisionMotionTests_Run(TestRun* run)
         { "a_pile_at_rest_sleeps", APileAtRestSleeps },
         { "the_same_scene_twice_gives_the_same_poses", TheSameSceneTwiceGivesTheSamePoses },
     };
-    TestRun_RunSuite(run, "WorldCollisionMotion", Cases, sizeof(Cases) / sizeof(Cases[0]));
+    TestWorld_RunSuite(run, "WorldCollisionMotion", "WorldCollisionMotionFar", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

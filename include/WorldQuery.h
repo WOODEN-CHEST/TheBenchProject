@@ -2,10 +2,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-// Vector3 comes from raylib: the query's origin and box are positions.
-#include "raylib/raylib.h"
 #include "wr/WRError.h"
 #include "wr/WRMemory.h"
+// Vector3Double comes from WRVectorMath: the query's origin and box are positions, in double like the objects' (T33).
+#include "wr/WRVectorMath.h"
 #include "DataValue.h"
 #include "World.h"
 #include "WorldComponent.h"
@@ -105,18 +105,18 @@ typedef struct WorldQueryStruct
     bool IsEnabledOnly;
     /** @brief Only visible objects whose ancestors are all visible too (WorldObject_IsEffectivelyVisible). */
     bool IsVisibleOnly;
-    /** @brief The point distances are measured from (finite). */
-    Vector3 Origin;
+    /** @brief The point distances are measured from (finite), in double like the objects' positions. */
+    Vector3Double Origin;
     /** @brief Whether MaximumDistance applies. */
     bool HasMaximumDistance;
-    /** @brief The farthest an object's world position may be from Origin (finite, at least 0). */
+    /** @brief The farthest an object's world position may be from Origin (finite, at least 0); compared in double. */
     float MaximumDistance;
     /** @brief Whether the box applies. */
     bool HasBox;
-    /** @brief The box's lowest corner (finite, every component at most BoxMaximum's). */
-    Vector3 BoxMinimum;
-    /** @brief The box's highest corner; world positions on the faces are inside. */
-    Vector3 BoxMaximum;
+    /** @brief The box's lowest corner (finite, every component at most BoxMaximum's), in double. */
+    Vector3Double BoxMinimum;
+    /** @brief The box's highest corner, in double; world positions on the faces are inside. */
+    Vector3Double BoxMaximum;
     /** @brief true: nearest to Origin first (ties by id); false: object ids ascending. */
     bool IsSortedByDistance;
     /** @brief The most ids to give, after ordering; 0 for no limit. */

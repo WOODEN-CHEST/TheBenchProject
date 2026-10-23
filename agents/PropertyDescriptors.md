@@ -98,6 +98,7 @@ no `inherit` states: a flag cannot collide with a real value, and the editor sho
 | `Double` | `double`, always finite | number (shortest text that reads back) | Double |
 | `Angle` | `float`, **radians** | number, **degrees** (shortest text that reads back to the same radians) | Float, radians |
 | `Vector2` / `Vector3` | raylib vectors | `[x, y]` / `[x, y, z]` | Float array of 2 / 3 |
+| `Vector3Double` (T33) | `Vector3Double` (`wr/WRVectorMath.h`): positions in the world | `[x, y, z]`, each the shortest text that reads back to the same double (a float written before prints the same) | Double array of 3; a Float array of 3 reads too (older saves) |
 | `AngleVector3` | `Vector3`, **radians** (Euler rotations) | `[x, y, z]`, **degrees** (each the shortest text that reads back to the same radians) | Float array of 3, radians |
 | `Color` | raylib `Color` (RGBA all data) | `"#rrggbb"`, `"#rrggbbaa"` when not opaque | UInt8 array of 4 |
 | `RenderColor` | `RenderColor` | `"#rrggbb"` when brightness and opacity are 1, else `{tint: [r,g,b], brightness, opacity}` | Compound {1: UInt8[3] tint, 2: Float brightness, 3: Float opacity} |
@@ -115,12 +116,14 @@ UInt8 byte) and read from any GHDF integer type, fixed width or encoded, whose v
 ([GameGHDF.md](GameGHDF.md)); data written with wider types still reads. `Enum` and `Date` stay encoded integers.
 
 JSON readers go through `GameJSON` ([GameJSON.md](GameJSON.md)), so they accept every form asset definitions accept
-(colors as arrays or `{r,g,b,a}`, vectors as `{x,y,z}`, numbers as numeric strings); `Vector2` and `Vector3` arrays
-must have exactly 2 and 3 elements. A RenderColor's tint alpha is not part of its value: not written, read as 255,
+(colors as arrays or `{r,g,b,a}`, vectors as `{x,y,z}`, numbers as numeric strings); `Vector2`, `Vector3` and
+`Vector3Double` arrays must have exactly 2 and 3 elements (`GameJSON_ParseVector3Double` reads each element as a
+double). A RenderColor's tint alpha is not part of its value: not written, read as 255,
 skipped by comparisons. Colors and vectors in GHDF match what the hand-written world encoder always wrote.
 
 Rules (`PROPERTY_RULES_*`): minimum/maximum, each inclusive or exclusive, for `Int32`, `UInt32`, `Float`, `Double`,
-`Angle` (radians) and every vector component (`AngleVector3` in radians) (floats compare in float precision, so a bound of 0.1 accepts 0.1f;
+`Angle` (radians) and every vector component (`AngleVector3` in radians, `Vector3Double` in double: the object's
+`position` keeps each axis within ±`WORLD_POSITION_LIMIT`) (floats compare in float precision, so a bound of 0.1 accepts 0.1f;
 doubles in double precision); `PROPERTY_RULES_HALF_OPEN(min, max)` is [min, max), for values that wrap at the maximum
 (seconds of a day). `MaxLength` and `IsNullAllowed` for strings. Floats and doubles are always required finite.
 `UInt64`, `ObjectId`, `Bool` and `Color` accept every value; a `Date` takes no bounds, its type's rule is the
@@ -210,7 +213,8 @@ cloned and handed over through `PropertyInternal_AdoptOwned` and `CloneOwned`), 
 and here, and test it in `tests/PropertyDescriptorTests.c` (the test record has one field of every type but
 `DataMap`, which has its own record: it needs a key registry). `Double` and `Date` were added this way in T23,
 `AngleVector3` (an object's rotation) in T05, `DataMap` (tags and typed data) in T24, `FloatList` (a placement's LOD
-distances) in T11, `EnumSet` (a collider's layer mask) in T12.
+distances) in T11, `EnumSet` (a collider's layer mask) in T12, `Vector3Double` (an object's position, named
+`vector3_double`) in T33.
 
 ### Float lists
 

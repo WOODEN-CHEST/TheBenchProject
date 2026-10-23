@@ -32,8 +32,8 @@ typedef struct WorldQueryMatchStruct
 {
     /** The object's id. */
     uint64_t Id;
-    /** Its squared distance from the query's origin. */
-    float DistanceSquared;
+    /** Its squared distance from the query's origin, in double (positions are). */
+    double DistanceSquared;
 } WorldQueryMatch;
 
 
@@ -47,9 +47,10 @@ Error WorldObject_Construct(WorldObject* self, World* world, uint64_t id, const 
 /** Releases what the object owns (its name). Its components must have been destroyed first; not the memory itself. */
 void WorldObject_Deconstruct(WorldObject* self);
 
-/** Checks a transform against the object table's rules for position, rotation and scale (the first broken one fails,
- *  ErrorCode_ArgumentOutOfRange), for code that writes the three fields itself (World_SetParent). */
-Error WorldObject_CheckTransform(Vector3 position, Vector3 rotation, Vector3 scale);
+/** Checks a transform against the object table's rules for position (finite, within WORLD_POSITION_LIMIT), rotation
+ *  and scale (the first broken one fails, ErrorCode_ArgumentOutOfRange), for code that writes the three fields itself
+ *  (World_SetParent). */
+Error WorldObject_CheckTransform(Vector3Double position, Vector3 rotation, Vector3 scale);
 
 
 // Functions: the world (World.c).

@@ -60,10 +60,9 @@ static bool ContainsPair(const GenericBuffer* pairs, const WorldCollisionTrigger
 }
 
 /* The box around a trigger's valid shapes; false when one of them is an unbounded plane (it reaches everything). */
-static bool GetTriggerBounds(const WorldCollisionInstance* trigger, Vector3* outMin, Vector3* outMax)
+static bool GetTriggerBounds(const WorldCollisionInstance* trigger, BoundingBoxDouble* outBox)
 {
-    *outMin = (Vector3){ FLT_MAX, FLT_MAX, FLT_MAX };
-    *outMax = (Vector3){ -FLT_MAX, -FLT_MAX, -FLT_MAX };
+    *outBox = WorldCollisionInternal_GetEmptyBox();
     for (uint32_t Index = 0U; Index < (uint32_t)trigger->Shapes._count; Index++)
     {
         const WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(trigger, Index);
@@ -75,8 +74,7 @@ static bool GetTriggerBounds(const WorldCollisionInstance* trigger, Vector3* out
         {
             return false;
         }
-        *outMin = CollisionMath_Min(*outMin, Shape->Min);
-        *outMax = CollisionMath_Max(*outMax, Shape->Max);
+        *outBox = BoundingBoxDouble_Union(*outBox, Shape->Box);
     }
     return true;
 }
@@ -84,16 +82,14 @@ static bool GetTriggerBounds(const WorldCollisionInstance* trigger, Vector3* out
 /* The pairs of one trigger: every collider around it that qualifies and touches it. */
 static void FindPairs(WorldCollision* self, const WorldCollisionInstance* trigger)
 {
-    Vector3 Min;
-    Vector3 Max;
-    if (!GetTriggerBounds(trigger, &Min, &Max))
+    BoundingBoxDouble Box;
+    if (!GetTriggerBounds(trigger, &Box))
     {
-        Min = (Vector3){ -FLT_MAX, -FLT_MAX, -FLT_MAX };
-        Max = (Vector3){ FLT_MAX, FLT_MAX, FLT_MAX };
+        Box = (BoundingBoxDouble){ .Min = { .X = -DBL_MAX, .Y = -DBL_MAX, .Z = -DBL_MAX },
+            .Max = { .X = DBL_MAX, .Y = DBL_MAX, .Z = DBL_MAX } };
     }
-    Vector3 Margin = { WORLD_COLLISION_TRIGGER_EXIT_MARGIN, WORLD_COLLISION_TRIGGER_EXIT_MARGIN,
-        WORLD_COLLISION_TRIGGER_EXIT_MARGIN };
-    WorldCollisionInternal_CollectCandidates(self, CollisionMath_Subtract(Min, Margin), CollisionMath_Add(Max, Margin));
+    WorldCollisionInternal_CollectCandidates(self, BoundingBoxDouble_Expand(Box,
+        (double)WORLD_COLLISION_TRIGGER_EXIT_MARGIN));
     size_t FirstPair = self->_newTriggerPairs._count;
     for (size_t Candidate = 0U; Candidate < self->_candidates._count; Candidate++)
     {

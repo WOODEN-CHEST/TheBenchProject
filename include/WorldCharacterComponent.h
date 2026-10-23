@@ -8,6 +8,7 @@
 #include "PropertyDescriptor.h"
 #include "WorldComponent.h"
 #include "wr/WRError.h"
+#include "wr/WRVectorMath.h"
 
 
 /**
@@ -134,9 +135,10 @@ typedef struct WorldCharacterStateStruct
     uint64_t GroundObjectId;
     /** @brief The walkable ground's normal (straight up while not grounded). */
     Vector3 GroundNormal;
-    /** @brief Where it touches its ground, world space (under its round bottom: on a slope or an edge, not straight below
-     *  its feet); valid while grounded. The step height is measured from the plane through it along GroundNormal. */
-    Vector3 GroundPoint;
+    /** @brief Where it touches its ground, world space, in double like every world position (under its round bottom: on
+     *  a slope or an edge, not straight below its feet); valid while grounded. The step height is measured from the
+     *  plane through it along GroundNormal. */
+    Vector3Double GroundPoint;
     /** @brief How fast it actually moved in its last update, relative to the ground under it, metres per second: its own
      *  move after walls took their part, and what the collision step pushed it since (what an animation shows: two
      *  characters pressing into each other stand still, one shoved by a door moves). */
@@ -192,10 +194,10 @@ typedef struct WorldCharacterRuntimeStruct
     /** The ground object's world matrix at the last update, for carrying the character with it. */
     bool _hasGroundMatrix;
     uint64_t _groundMatrixObjectId;
-    Matrix _groundMatrix;
+    Matrix4Double _groundMatrix;
     /** Where the update left the feet (the collision step's pushes show as the difference next tick). */
     bool _hasLastPosition;
-    Vector3 _lastPosition;
+    Vector3Double _lastPosition;
     /** Warnings given once per character. */
     bool _hasWarnedScale;
     bool _hasWarnedCollider;
@@ -409,6 +411,6 @@ static inline const WorldCharacterState* WorldCharacterComponent_GetState(const 
 /**
  * @brief Where the character's eyes are: its object's world position plus its eye height, straight up.
  * @param self The component; must not be NULL (and attached).
- * @returns The point, in world space.
+ * @returns The point, in world space, in double like the object's position.
  */
-Vector3 WorldCharacterComponent_GetEyePosition(const WorldCharacterComponent* self);
+Vector3Double WorldCharacterComponent_GetEyePosition(const WorldCharacterComponent* self);

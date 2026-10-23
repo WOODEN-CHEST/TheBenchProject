@@ -1,6 +1,7 @@
 #include <float.h>
 #include <math.h>
 #include "WorldCollisionInternal.h"
+#include "GameMath.h"
 #include "World.h"
 #include "raylib/raymath.h"
 
@@ -31,16 +32,19 @@
 
 
 // Static functions: helpers.
-static bool ArePosesEqual(const CollisionPose* a, const CollisionPose* b)
+static bool ArePosesEqual(const WorldCollisionPose* a, const WorldCollisionPose* b)
 {
-    return (a->Position.x == b->Position.x) && (a->Position.y == b->Position.y) && (a->Position.z == b->Position.z)
-        && (a->Rotation.x == b->Rotation.x) && (a->Rotation.y == b->Rotation.y) && (a->Rotation.z == b->Rotation.z)
-        && (a->Rotation.w == b->Rotation.w);
+    return WorldCollisionInternal_ArePosesEqual(a, b);
 }
 
 static bool AreVectorsEqual(Vector3 a, Vector3 b)
 {
     return (a.x == b.x) && (a.y == b.y) && (a.z == b.z);
+}
+
+static bool ArePositionsEqual(Vector3Double a, Vector3Double b)
+{
+    return (a.X == b.X) && (a.Y == b.Y) && (a.Z == b.Z);
 }
 
 static WorldObject* GetObjectOf(const WorldCollisionInstance* instance)
@@ -49,18 +53,16 @@ static WorldObject* GetObjectOf(const WorldCollisionInstance* instance)
 }
 
 /* The box of an instance's valid, bounded shapes where it is; false when it has none. */
-static bool GetInstanceBox(const WorldCollisionInstance* instance, Vector3* outMin, Vector3* outMax)
+static bool GetInstanceBox(const WorldCollisionInstance* instance, BoundingBoxDouble* outBox)
 {
-    *outMin = CollisionMath_Vector(FLT_MAX, FLT_MAX, FLT_MAX);
-    *outMax = CollisionMath_Vector(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+    *outBox = WorldCollisionInternal_GetEmptyBox();
     bool HasBox = false;
     for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
     {
         const WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(instance, Index);
         if (Shape->IsValid && !Shape->IsUnbounded)
         {
-            *outMin = CollisionMath_Min(*outMin, Shape->Min);
-            *outMax = CollisionMath_Max(*outMax, Shape->Max);
+            *outBox = BoundingBoxDouble_Union(*outBox, Shape->Box);
             HasBox = true;
         }
     }
@@ -69,22 +71,21 @@ static bool GetInstanceBox(const WorldCollisionInstance* instance, Vector3* outM
 
 /* The box an instance's shapes cover over its step's motion: where it is now, where it was (moved back by the step's
  * translation), and for a turn everything within its reach of both positions. False without a bounded shape. */
-static bool GetStepBox(const WorldCollisionInstance* instance, Vector3* outMin, Vector3* outMax)
+static bool GetStepBox(const WorldCollisionInstance* instance, BoundingBoxDouble* outBox)
 {
-    if (!GetInstanceBox(instance, outMin, outMax))
+    if (!GetInstanceBox(instance, outBox))
     {
         return false;
     }
-    Vector3 Back = CollisionMath_Subtract(instance->LastPose.Position, instance->Pose.Position);
-    *outMin = CollisionMath_Min(*outMin, CollisionMath_Add(*outMin, Back));
-    *outMax = CollisionMath_Max(*outMax, CollisionMath_Add(*outMax, Back));
-    if (CollisionPose_GetRotationAngle(&instance->LastPose, &instance->Pose) > 0.0f)
+    Vector3Double Back = Vector3Double_Subtract(instance->LastPose.Position, instance->Pose.Position);
+    BoundingBoxDouble Before = { .Min = Vector3Double_Add(outBox->Min, Back),
+        .Max = Vector3Double_Add(outBox->Max, Back) };
+    *outBox = BoundingBoxDouble_Union(*outBox, Before);
+    if (WorldCollisionInternal_GetTurn(&instance->LastPose, &instance->Pose) > 0.0f)
     {
-        Vector3 Radius = { instance->Reach, instance->Reach, instance->Reach };
-        Vector3 Low = CollisionMath_Min(instance->LastPose.Position, instance->Pose.Position);
-        Vector3 High = CollisionMath_Max(instance->LastPose.Position, instance->Pose.Position);
-        *outMin = CollisionMath_Min(*outMin, CollisionMath_Subtract(Low, Radius));
-        *outMax = CollisionMath_Max(*outMax, CollisionMath_Add(High, Radius));
+        BoundingBoxDouble Turned = BoundingBoxDouble_Expand(BoundingBoxDouble_FromCorners(instance->LastPose.Position,
+            instance->Pose.Position), (double)instance->Reach);
+        *outBox = BoundingBoxDouble_Union(*outBox, Turned);
     }
     return true;
 }
@@ -271,7 +272,7 @@ static uint32_t AddBody(WorldCollision* self, uint32_t slot)
     Body.StepFrom = Instance->LastPose;
     Body.StepTo = Instance->Pose;
     Body.IsMoving = !ArePosesEqual(&Body.StepFrom, &Body.StepTo);
-    Body.Turn = Body.IsMoving ? CollisionPose_GetRotationAngle(&Body.StepFrom, &Body.StepTo) : 0.0f;
+    Body.Turn = Body.IsMoving ? WorldCollisionInternal_GetTurn(&Body.StepFrom, &Body.StepTo) : 0.0f;
     bool IsPushed = IsPushable || (Owner != WORLD_COLLISION_NO_BODY);
     Body.IsContinuous = (IsPushed || Body.IsMoving) ? Instance->Settings.IsContinuous : true;
     Body.From = Body.StepFrom;
@@ -282,10 +283,9 @@ static uint32_t AddBody(WorldCollision* self, uint32_t slot)
     Body.Owner = Owner;
     Body.InverseMass = IsPushable ? (1.0f / Instance->Settings.Mass)
         : ((Owner != WORLD_COLLISION_NO_BODY) ? WorldCollisionInternal_GetBodyAt(self, Owner)->InverseMass : 0.0f);
-    if (!GetStepBox(Instance, &Body.SweptMin, &Body.SweptMax))
+    if (!GetStepBox(Instance, &Body.Swept))
     {
-        Body.SweptMin = CollisionMath_Vector(FLT_MAX, FLT_MAX, FLT_MAX);
-        Body.SweptMax = CollisionMath_Vector(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+        Body.Swept = WorldCollisionInternal_GetEmptyBox();
     }
     uint32_t Index = (uint32_t)self->_bodies._count;
     if (IsPushable)
@@ -294,9 +294,9 @@ static uint32_t AddBody(WorldCollision* self, uint32_t slot)
     }
     GenericBuffer_AddLast(&self->_bodies, &Body);
     Instance->Body = Index;
-    if ((Body.IsMoving || IsPushed) && (Body.SweptMin.x <= Body.SweptMax.x))
+    if ((Body.IsMoving || IsPushed) && !WorldCollisionInternal_IsBoxEmpty(Body.Swept))
     {
-        WorldCollisionInternal_WidenProxies(self, Instance, Body.SweptMin, Body.SweptMax);
+        WorldCollisionInternal_WidenProxies(self, Instance, Body.Swept);
     }
     if (IsPushed)
     {
@@ -318,25 +318,20 @@ static void Enqueue(WorldCollision* self, uint32_t slot)
 static void WakeNear(WorldCollision* self, uint32_t slot)
 {
     const WorldCollisionInstance* Source = WorldCollisionInternal_GetInstance(self, slot);
-    Vector3 Min;
-    Vector3 Max;
+    BoundingBoxDouble Box = WorldCollisionInternal_GetEmptyBox();
     bool HasBox = (Source->Body != WORLD_COLLISION_NO_BODY)
-        ? (WorldCollisionInternal_GetBodyAt(self, Source->Body)->SweptMin.x
-            <= WorldCollisionInternal_GetBodyAt(self, Source->Body)->SweptMax.x)
-        : GetInstanceBox(Source, &Min, &Max);
+        ? !WorldCollisionInternal_IsBoxEmpty(WorldCollisionInternal_GetBodyAt(self, Source->Body)->Swept)
+        : GetInstanceBox(Source, &Box);
     if (!HasBox)
     {
         return;
     }
     if (Source->Body != WORLD_COLLISION_NO_BODY)
     {
-        Min = WorldCollisionInternal_GetBodyAt(self, Source->Body)->SweptMin;
-        Max = WorldCollisionInternal_GetBodyAt(self, Source->Body)->SweptMax;
+        Box = WorldCollisionInternal_GetBodyAt(self, Source->Body)->Swept;
     }
-    float Margin = WORLD_COLLISION_SPECULATIVE_DISTANCE + WORLD_COLLISION_SKIN;
-    Min = CollisionMath_Subtract(Min, CollisionMath_Vector(Margin, Margin, Margin));
-    Max = CollisionMath_Add(Max, CollisionMath_Vector(Margin, Margin, Margin));
-    WorldCollisionInternal_CollectCandidates(self, Min, Max);
+    Box = BoundingBoxDouble_Expand(Box, (double)(WORLD_COLLISION_SPECULATIVE_DISTANCE + WORLD_COLLISION_SKIN));
+    WorldCollisionInternal_CollectCandidates(self, Box);
     for (size_t Candidate = 0U; Candidate < self->_candidates._count; Candidate++)
     {
         uint64_t Key = ((const uint64_t*)(const void*)self->_candidates._data)[Candidate];
@@ -344,7 +339,7 @@ static void WakeNear(WorldCollision* self, uint32_t slot)
         const WorldCollisionInstance* Other = WorldCollisionInternal_GetInstance(self, OtherSlot);
         if ((OtherSlot == slot) || !Other->IsUsed || !Other->IsActive || (Other->OwnerSlot == WORLD_COLLISION_NO_SLOT)
             || !WorldCollisionInternal_IsCandidateNear(Other, WorldCollisionInternal_GetShape(Other,
-                WorldCollisionInternal_GetKeyShape(Key)), Min, Max)
+                WorldCollisionInternal_GetKeyShape(Key)), Box)
             || !WorldCollisionInternal_DoBlock(Source, Other)
             || (WorldCollisionInternal_GetInstance(self, Other->OwnerSlot)->Body != WORLD_COLLISION_NO_BODY))
         {
@@ -434,7 +429,7 @@ static void RevertChain(WorldCollision* self, const WorldCollisionInstance* inst
             continue;
         }
         Error Results[3] = { Error_CreateSuccess(), Error_CreateSuccess(), Error_CreateSuccess() };
-        if (!AreVectorsEqual(WorldObject_GetPosition(Object), Record->Position))
+        if (!ArePositionsEqual(WorldObject_GetPosition(Object), Record->Position))
         {
             Results[0] = WorldObject_SetPosition(Object, Record->Position);
         }
@@ -471,7 +466,7 @@ static bool StopBlockedMovers(WorldCollision* self)
         Result->IsBlocked = true;
         Result->IsStopped = true;
         Result->BlockedById = Body->BlockedById;
-        Result->Correction = CollisionMath_Subtract(Body->StepFrom.Position, Body->StepTo.Position);
+        Result->Correction = GameMath_ToVector3Relative(Body->StepFrom.Position, Body->StepTo.Position);
         self->_stepStats.BlockedCount++; // counted here: once set back it often has no body left to count
         HasStopped = true;
     }
@@ -507,7 +502,9 @@ static bool WriteBack(WorldCollision* self)
         Vector3 Local = Push;
         if (Parent != NULL)
         {
-            CollisionAffine ParentToWorld = CollisionAffine_FromMatrix(WorldObject_GetWorldMatrix(Parent));
+            // Only the parent's axes turn a push (an offset): they round to floats as well near or far from the origin.
+            Matrix4Double ParentWorld = WorldObject_GetWorldMatrix(Parent);
+            CollisionAffine ParentToWorld = CollisionAffine_FromMatrix(GameMath_ToMatrix(&ParentWorld));
             CollisionAffine WorldToParent;
             if (!CollisionAffine_TryInvert(&ParentToWorld, &WorldToParent))
             {
@@ -521,7 +518,9 @@ static bool WriteBack(WorldCollision* self)
             }
             Local = CollisionAffine_TransformVector(&WorldToParent, Push);
         }
-        Error Result = WorldObject_SetPosition(Object, CollisionMath_Add(WorldObject_GetPosition(Object), Local));
+        // The push (millimetres to metres, in float) moves the double position: the same push near or far out.
+        Error Result = WorldObject_SetPosition(Object, Vector3Double_Add(WorldObject_GetPosition(Object),
+            GameMath_FromVector3(Local)));
         Error_Deconstruct(&Result);
         HasWritten = true;
     }
@@ -539,7 +538,7 @@ static void FinishResults(WorldCollision* self)
         WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, Body->Slot);
         WorldMotionResult* Result = WorldCollisionInternal_TouchResult(self, Instance);
         Result->IsAwake = true;
-        Result->Velocity = CollisionMath_Scale(CollisionMath_Subtract(Instance->Pose.Position,
+        Result->Velocity = CollisionMath_Scale(GameMath_ToVector3Relative(Instance->Pose.Position,
             Instance->LastPose.Position), InverseDelta);
         self->_stepStats.MoverCount += Body->IsMoving ? 1U : 0U;
         if (Body->Owner != WORLD_COLLISION_NO_BODY)
@@ -642,7 +641,7 @@ bool WorldCollisionInternal_CanStopMover(const WorldCollision* self, const World
         {
             return false; // another hierarchy now: the recorded local transforms would put it somewhere else
         }
-        IsChanged = IsChanged || !AreVectorsEqual(WorldObject_GetPosition(Object), Record->Position)
+        IsChanged = IsChanged || !ArePositionsEqual(WorldObject_GetPosition(Object), Record->Position)
             || !AreVectorsEqual(WorldObject_GetRotation(Object), Record->Rotation)
             || !AreVectorsEqual(WorldObject_GetScale(Object), Record->Scale);
     }

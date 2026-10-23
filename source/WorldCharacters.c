@@ -5,6 +5,7 @@
 #include "WorldCharacterInternal.h"
 #include "WorldColliderComponent.h"
 #include "WorldEnvironment.h"
+#include "GameMath.h"
 #include "WorldObject.h"
 #include "WorldTransform.h"
 #include "World.h"
@@ -145,9 +146,9 @@ static float GetHorizontalLength(Vector3 vector)
     return sqrtf((vector.x * vector.x) + (vector.z * vector.z));
 }
 
-static bool AreMatricesEqual(const Matrix* a, const Matrix* b)
+static bool AreMatricesEqual(const Matrix4Double* a, const Matrix4Double* b)
 {
-    return Memory_IsEqual(a, b, sizeof(Matrix));
+    return Memory_IsEqual(a, b, sizeof(Matrix4Double));
 }
 
 /* Exact equality (raymath's Vector3Equals allows a relative error, which would skip slow moves far from the origin). */
@@ -347,26 +348,40 @@ static void EnsureCollider(CharacterStep* step)
 
 
 // Static functions: the transform.
+/* The local transform that places a character's object with its feet at @p feet facing @p yaw, upright, scale 1: those
+ * values for a root, through the parent's inverse for a child. False when the parent's world matrix cannot be inverted
+ * (a zero scale). */
+static bool GetLocalTransform(const WorldObject* object, Vector3Double feet, float yaw, Vector3Double* outPosition,
+    Vector3* outRotation, Vector3* outScale)
+{
+    *outPosition = feet;
+    *outRotation = (Vector3){ 0.0f, yaw, 0.0f };
+    *outScale = (Vector3){ 1.0f, 1.0f, 1.0f };
+    const WorldObject* Parent = WorldObject_GetParent(object);
+    if (Parent == NULL)
+    {
+        return true;
+    }
+    Matrix4Double Wanted = WorldTransform_Compose(feet, *outRotation, *outScale);
+    Matrix4Double ParentWorld = WorldObject_GetWorldMatrix(Parent);
+    Matrix4Double Local;
+    return WorldTransform_TryGetLocalMatrix(&Wanted, &ParentWorld, &Local)
+        && WorldTransform_Decompose(&Local, *outScale, outPosition, outRotation, outScale);
+}
+
 /* Writes the character's placement (feet and yaw, upright, scale 1) into its object, only what changed: directly for a
  * root, through the parent's inverse for a child. */
-static void WriteTransform(CharacterStep* step, Vector3 feet, float yaw)
+static void WriteTransform(CharacterStep* step, Vector3Double feet, float yaw)
 {
     WorldObject* Object = step->Object;
-    Vector3 Rotation = { 0.0f, yaw, 0.0f };
-    Vector3 Position = feet;
-    Vector3 Scale = { 1.0f, 1.0f, 1.0f };
-    WorldObject* Parent = WorldObject_GetParent(Object);
-    if (Parent != NULL)
+    Vector3Double Position;
+    Vector3 Rotation;
+    Vector3 Scale;
+    if (!GetLocalTransform(Object, feet, yaw, &Position, &Rotation, &Scale))
     {
-        Matrix Wanted = WorldTransform_Compose(feet, Rotation, Scale);
-        Matrix Local;
-        if (!WorldTransform_TryGetLocalMatrix(Wanted, WorldObject_GetWorldMatrix(Parent), &Local)
-            || !WorldTransform_Decompose(Local, Scale, &Position, &Rotation, &Scale))
-        {
-            return;
-        }
+        return;
     }
-    else if (!AreVectorsEqual(WorldObject_GetScale(Object), Scale))
+    if ((WorldObject_GetParent(Object) == NULL) && !AreVectorsEqual(WorldObject_GetScale(Object), Scale))
     {
         // A scaled character's collider and model are scaled too, its sweeps are not: say so once, leave the scale.
         WarnOnce(step->System, &step->Character->_runtime._hasWarnedScale, step->Id,
@@ -375,7 +390,8 @@ static void WriteTransform(CharacterStep* step, Vector3 feet, float yaw)
     }
 
     // The setters validate (finite values); a refused value leaves the object where it was.
-    if (!AreVectorsEqual(WorldObject_GetPosition(Object), Position))
+    Vector3Double Current = WorldObject_GetPosition(Object);
+    if ((Current.X != Position.X) || (Current.Y != Position.Y) || (Current.Z != Position.Z))
     {
         Error Result = WorldObject_SetPosition(Object, Position);
         Error_Deconstruct(&Result);
@@ -412,7 +428,7 @@ static void ClearGround(WorldCharacterComponent* character)
     State->IsGrounded = false;
     State->GroundObjectId = 0U;
     State->GroundNormal = WorldUp;
-    State->GroundPoint = (Vector3){ 0.0f, 0.0f, 0.0f };
+    State->GroundPoint = Vector3Double_Zero();
     character->_runtime._isClimbing = false;
 }
 
@@ -446,11 +462,11 @@ static float GetGroundReach(const CharacterSettings* settings, float distance)
 /* A character placed (its first update, a teleport): on the ground found within its step height (or its step-down
  * distance) below, so a placement a little above the floor (a spawn point set high) stands on it at once; otherwise
  * in the air without a late jump (the coyote time is for walking off edges). */
-static void Settle(CharacterStep* step, Vector3* feet)
+static void Settle(CharacterStep* step, Vector3Double* feet)
 {
     WorldCharacterState* State = &step->Character->_state;
     CharacterSupport Support;
-    Vector3 Settled;
+    Vector3Double Settled;
     bool IsWalking = State->Mode == CharacterMovementMode_Walking;
     float Reach = Math_MaxFloat(GetGroundReach(&step->Settings, 0.0f), step->Settings.StepHeight);
     if (IsWalking && (CharacterMotion_FollowGround(&step->Body, *feet, Reach, NULL, &Settled, &Support)
@@ -468,7 +484,7 @@ static void Settle(CharacterStep* step, Vector3* feet)
 
 /* The first update: the body at its standing height, the eyes at theirs, settled on the ground below if there is any
  * within reach. */
-static void Start(CharacterStep* step, Vector3* feet)
+static void Start(CharacterStep* step, Vector3Double* feet)
 {
     WorldCharacterState* State = &step->Character->_state;
     State->Stance = CharacterStance_Standing;
@@ -484,7 +500,7 @@ static void Start(CharacterStep* step, Vector3* feet)
 
 /* What moved the character since its last update besides itself: the collision step's pushes (zero below rounding, or
  * before a first update). It is part of how fast the character moved, not of the velocity it drives with. */
-static Vector3 ReadPush(const CharacterStep* step, Vector3 feet)
+static Vector3 ReadPush(const CharacterStep* step, Vector3Double feet)
 {
     const WorldCharacterRuntime* Runtime = &step->Character->_runtime;
     Vector3 None = { 0.0f, 0.0f, 0.0f };
@@ -492,7 +508,7 @@ static Vector3 ReadPush(const CharacterStep* step, Vector3 feet)
     {
         return None;
     }
-    Vector3 Push = Vector3Subtract(feet, Runtime->_lastPosition);
+    Vector3 Push = GameMath_ToVector3Relative(feet, Runtime->_lastPosition);
     return (Vector3Length(Push) < CHARACTER_PUSH_EPSILON) ? None : Push;
 }
 
@@ -521,9 +537,22 @@ static void UpdateMode(CharacterStep* step)
     }
 }
 
+/* Where the ground's move from @p before to @p after (its world matrices; @p beforeInverse inverts @p before) takes a
+ * world @p point: the point in the ground's old frame, put back with its new one. Relative to the ground's
+ * translations, as WRVectorMath advises: far from the origin, the old inverse times the new matrix would cancel terms
+ * as large as the ground's position, off by a few of a double's steps there; this way only the result's own rounding
+ * is. */
+static Vector3Double CarryPoint(const Matrix4Double* before, const Matrix4Double* beforeInverse,
+    const Matrix4Double* after, Vector3Double point)
+{
+    Vector3Double Local = Matrix4Double_TransformDirection(beforeInverse,
+        Vector3Double_Subtract(point, Matrix4Double_GetTranslation(before)));
+    return Vector3Double_Add(Matrix4Double_GetTranslation(after), Matrix4Double_TransformDirection(after, Local));
+}
+
 /* Carries a grounded character with what it stands on: the ground's move and turn since the last update, applied to
  * the feet (exact for turning platforms) and to the facing and the look. */
-static void CarryWithGround(CharacterStep* step, Vector3* feet)
+static void CarryWithGround(CharacterStep* step, Vector3Double* feet)
 {
     WorldCharacterState* State = &step->Character->_state;
     WorldCharacterRuntime* Runtime = &step->Character->_runtime;
@@ -537,29 +566,33 @@ static void CarryWithGround(CharacterStep* step, Vector3* feet)
     {
         return;
     }
-    Matrix Now = WorldObject_GetWorldMatrix(Ground);
-    if (AreMatricesEqual(&Now, &Runtime->_groundMatrix))
+    Matrix4Double Now = WorldObject_GetWorldMatrix(Ground);
+    Matrix4Double Before = Runtime->_groundMatrix;
+    Matrix4Double BeforeInverse;
+    if (AreMatricesEqual(&Now, &Before) || !Matrix4Double_TryInvertAffine(&Before, &BeforeInverse))
     {
         return;
     }
-    // The ground's change since then: its old placement undone, its new one applied.
-    Matrix Change = MatrixMultiply(MatrixInvert(Runtime->_groundMatrix), Now);
-    Vector3 Carried = Vector3Transform(*feet, Change);
-    float YawChange = atan2f(Change.m8, Change.m10);
-    if (!isfinite(Carried.x) || !isfinite(Carried.y) || !isfinite(Carried.z) || !isfinite(YawChange))
+    // The ground's change since then: its old placement undone, its new one applied. The turn is where it takes the
+    // forward axis.
+    Vector3Double Carried = CarryPoint(&Before, &BeforeInverse, &Now, *feet);
+    Vector3Double Forward = Matrix4Double_TransformDirection(&Now,
+        Matrix4Double_TransformDirection(&BeforeInverse, Vector3Double_Create(0.0, 0.0, 1.0)));
+    float YawChange = (float)atan2(Forward.X, Forward.Z);
+    if (!Vector3Double_IsFinite(Carried) || !isfinite(YawChange))
     {
         return;
     }
-    State->GroundVelocity = Vector3Scale(Vector3Subtract(Carried, *feet), 1.0f / step->DeltaSeconds);
+    State->GroundVelocity = Vector3Scale(GameMath_ToVector3Relative(Carried, *feet), 1.0f / step->DeltaSeconds);
     *feet = Carried;
-    State->GroundPoint = Vector3Transform(State->GroundPoint, Change);
+    State->GroundPoint = CarryPoint(&Before, &BeforeInverse, &Now, State->GroundPoint);
     State->FacingYaw = WrapAngle(State->FacingYaw + YawChange);
     step->Character->_input.LookYaw = WrapAngle(step->Character->_input.LookYaw + YawChange);
 }
 
 /* Standing or crouching: crouching while asked, allowed and on the ground; standing up once the input lets go (or
  * crouching is no longer allowed) and the standing capsule fits. The capsule changes at once, its feet in place. */
-static void UpdateStance(CharacterStep* step, Vector3 feet)
+static void UpdateStance(CharacterStep* step, Vector3Double feet)
 {
     WorldCharacterState* State = &step->Character->_state;
     bool WantsCrouch = step->Character->_input.WantsCrouch && step->Settings.CanCrouch
@@ -802,7 +835,8 @@ static void UpdateVelocity(CharacterStep* step)
  * walked on (a ledge, not a stair), though, it falls no faster than dropping from that face would have made it: its
  * round bottom rolls down over the rim faster than gravity at a run, and a 5 m/s run off a 1 m ledge would otherwise
  * dive, landing in half the time a fall takes. */
-static float GetWalkOffSpeed(const CharacterStep* step, const CharacterSupport* ground, Vector3 feet, float moveSpeed)
+static float GetWalkOffSpeed(const CharacterStep* step, const CharacterSupport* ground, Vector3Double feet,
+    float moveSpeed)
 {
     Vector3 Face = CharacterMotion_GetFaceNormal(&step->Body, ground);
     if (Face.y < 1e-3f)
@@ -810,10 +844,10 @@ static float GetWalkOffSpeed(const CharacterStep* step, const CharacterSupport* 
         return moveSpeed;
     }
     // How far it went down past where it stood on the face (its bottom cap's centre a radius from the face's plane),
-    // rolling over the face's rim; none on the face itself.
+    // rolling over the face's rim; none on the face itself. The centre is measured from the contact.
     float Radius = step->Body.Radius;
-    Vector3 Center = { feet.x, feet.y + Radius, feet.z };
-    float Sink = (Radius - Vector3DotProduct(Face, Vector3Subtract(Center, ground->Point))) / Face.y;
+    Vector3 Center = Vector3Add(GameMath_ToVector3Relative(feet, ground->Point), (Vector3){ 0.0f, Radius, 0.0f });
+    float Sink = (Radius - Vector3DotProduct(Face, Center)) / Face.y;
     if ((Sink <= 0.0f) || CharacterMotion_HasGroundBelow(&step->Body, feet, step->Settings.StepHeight - Sink))
     {
         return moveSpeed;
@@ -828,13 +862,13 @@ static float GetWalkOffSpeed(const CharacterStep* step, const CharacterSupport* 
 /* After a walker's move from @p start: on the ground it follows the ground down a walkable slope (or within its
  * step-down distance) or leaves it (@p ground: what it walked on), keeping the vertical speed it moved with
  * (GetWalkOffSpeed); in the air it lands on support while not rising. */
-static void UpdateWalkingGround(CharacterStep* step, Vector3 start, Vector3* feet, const CharacterMove* move,
-    const CharacterSupport* ground, float fallSpeed)
+static void UpdateWalkingGround(CharacterStep* step, Vector3Double start, Vector3Double* feet,
+    const CharacterMove* move, const CharacterSupport* ground, float fallSpeed)
 {
     WorldCharacterComponent* Character = step->Character;
     WorldCharacterState* State = &Character->_state;
     CharacterSupport Support;
-    Vector3 Settled;
+    Vector3Double Settled;
     if ((ground != NULL) && State->IsGrounded)
     {
         if (move->HasStepped)
@@ -845,7 +879,7 @@ static void UpdateWalkingGround(CharacterStep* step, Vector3 start, Vector3* fee
         // How far it went across the ground since the last look: its move and the collision step's push. The ground's
         // own move this tick comes on top: the collision world still holds the ground where the last collision step
         // left it, so a rising lift is a tick lower there than its carry put the walker.
-        float Across = GetHorizontalLength(Vector3Subtract(*feet, start)) + GetHorizontalLength(step->Push);
+        float Across = GetHorizontalLength(GameMath_ToVector3Relative(*feet, start)) + GetHorizontalLength(step->Push);
         float Reach = GetGroundReach(&step->Settings, Across)
             + (Vector3Length(State->GroundVelocity) * step->DeltaSeconds);
         CharacterGround Ground = CharacterMotion_FollowGround(&step->Body, *feet, Reach, ground, &Settled, &Support);
@@ -860,7 +894,7 @@ static void UpdateWalkingGround(CharacterStep* step, Vector3 start, Vector3* fee
             // A pushable pressing on its side hid the ground: it keeps the ground it had until the step parts them.
             return;
         }
-        float MoveSpeed = (feet->y - start.y) / step->DeltaSeconds;
+        float MoveSpeed = (float)(feet->Y - start.Y) / step->DeltaSeconds;
         Character->_runtime._velocity.y = GetWalkOffSpeed(step, ground, *feet, MoveSpeed);
         LeaveGround(Character);
         QueueEvent(step->System, WorldCharacterEventKind_LeftGround, step->Id, 0U, 0.0f);
@@ -880,7 +914,7 @@ static void UpdateWalkingGround(CharacterStep* step, Vector3 start, Vector3* fee
 }
 
 /* Moves the capsule by its velocity (along the ground while walking on it) and finds its ground afterwards. */
-static void Move(CharacterStep* step, Vector3* feet)
+static void Move(CharacterStep* step, Vector3Double* feet)
 {
     WorldCharacterState* State = &step->Character->_state;
     Vector3* Velocity = &step->Character->_runtime._velocity;
@@ -893,7 +927,7 @@ static void Move(CharacterStep* step, Vector3* feet)
     {
         Displacement = CharacterMotion_ProjectOnGround(Displacement, State->GroundNormal);
     }
-    Vector3 Start = *feet;
+    Vector3Double Start = *feet;
     CharacterMove Moved = CharacterMotion_MoveAndSlide(&step->Body, *feet, Displacement, Velocity,
         IsOnGround ? &Ground : NULL);
     *feet = Moved.Feet;
@@ -905,7 +939,7 @@ static void Move(CharacterStep* step, Vector3* feet)
     }
     // Flying: no ground, but brains land birds by whether ground is right below.
     CharacterSupport Support;
-    Vector3 Below;
+    Vector3Double Below;
     State->IsTouchingGround = CharacterMotion_FollowGround(&step->Body, *feet, CHARACTER_TOUCH_PROBE_DISTANCE, NULL,
         &Below, &Support) == CharacterGround_Supported;
     State->TimeInAir = 0.0f;
@@ -1034,7 +1068,7 @@ static void UpdateCharacter(WorldCharacters* self, WorldCharacterComponent* char
     State->Height = (State->Stance == CharacterStance_Crouching) ? Step.CrouchHeight : Step.StandingHeight;
     BuildBody(&Step);
 
-    Vector3 Feet = WorldObject_GetWorldPosition(Object);
+    Vector3Double Feet = WorldObject_GetWorldPosition(Object);
     if (!Runtime->_isStarted)
     {
         Start(&Step, &Feet);
@@ -1057,14 +1091,14 @@ static void UpdateCharacter(WorldCharacters* self, WorldCharacterComponent* char
 
     UpdateMode(&Step);
     CarryWithGround(&Step, &Feet);
-    Vector3 Carried = Feet;
+    Vector3Double Carried = Feet;
     UpdateStance(&Step, Feet);
     EnsureCollider(&Step);
     UpdateVelocity(&Step);
     Move(&Step, &Feet);
     // How fast it moved: its own move this update and the collision step's push since the last (the carry is the
     // ground's).
-    State->Velocity = Vector3Scale(Vector3Add(Vector3Subtract(Feet, Carried), Push), 1.0f / deltaSeconds);
+    State->Velocity = Vector3Scale(Vector3Add(GameMath_ToVector3Relative(Feet, Carried), Push), 1.0f / deltaSeconds);
     UpdateFacing(&Step);
     UpdateEyes(&Step);
     if (State->Mode == CharacterMovementMode_Walking)
@@ -1140,7 +1174,7 @@ void WorldCharacters_Update(WorldCharacters* self, float deltaSeconds)
     }
 }
 
-Error WorldCharacters_Teleport(WorldCharacters* self, uint64_t objectId, Vector3 feetPosition, float yaw)
+Error WorldCharacters_Teleport(WorldCharacters* self, uint64_t objectId, Vector3Double feetPosition, float yaw)
 {
     WorldComponent* Component = NULL;
     if ((self == NULL) || !World_TryGetComponent(self->_world, objectId, WorldComponentType_Character, &Component))
@@ -1148,10 +1182,27 @@ Error WorldCharacters_Teleport(WorldCharacters* self, uint64_t objectId, Vector3
         return Error_Construct2(ErrorCode_IllegalArgument,
             "WorldCharacters_Teleport: self must not be NULL and the object must have a character component.");
     }
-    if (!isfinite(feetPosition.x) || !isfinite(feetPosition.y) || !isfinite(feetPosition.z) || !isfinite(yaw))
+    if (!Vector3Double_IsFinite(feetPosition) || !isfinite(yaw))
     {
         return Error_Construct2(ErrorCode_ArgumentOutOfRange,
             "WorldCharacters_Teleport: the position and the yaw must be finite.");
+    }
+    // Refused before anything changes: the object's position row would refuse a place beyond the limit (its local one,
+    // under a parent: WorldObject.h) and leave the character where it was, without a word.
+    Vector3Double Local;
+    Vector3 LocalRotation;
+    Vector3 LocalScale;
+    if (!GetLocalTransform(WorldComponent_GetOwner(Component), feetPosition, yaw, &Local, &LocalRotation, &LocalScale))
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation,
+            "WorldCharacters_Teleport: the object's parent cannot be inverted (a zero scale): it cannot be placed.");
+    }
+    if ((fabs(Local.X) > WORLD_POSITION_LIMIT) || (fabs(Local.Y) > WORLD_POSITION_LIMIT)
+        || (fabs(Local.Z) > WORLD_POSITION_LIMIT))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
+            "WorldCharacters_Teleport: the object's position there (under a parent, its local one) would pass "
+            "WORLD_POSITION_LIMIT.");
     }
     WorldCharacterComponent* Character = WorldCharacterComponent_FromComponent(Component);
     CharacterStep Step;
@@ -1177,7 +1228,7 @@ Error WorldCharacters_Teleport(WorldCharacters* self, uint64_t objectId, Vector3
     Character->_runtime._hasGroundMatrix = false;
     Character->_runtime._hasJumpRequest = false;
 
-    Vector3 Feet = feetPosition;
+    Vector3Double Feet = feetPosition;
     if (!Character->_runtime._isStarted)
     {
         Start(&Step, &Feet);
@@ -1207,7 +1258,7 @@ bool WorldCharacters_FindLookTarget(WorldCharacters* self, uint64_t objectId, Wo
     WorldCollisionFilter Filter = WorldCollisionFilter_Create(Layers, WorldCollisionTriggerMode_Ignore);
     Filter.IgnoredObjectId = objectId;
     Filter.IsIgnoredSubtree = true;
-    Vector3 Eye = WorldCharacterComponent_GetEyePosition(Character);
+    Vector3Double Eye = WorldCharacterComponent_GetEyePosition(Character);
     Vector3 Direction = CharacterInput_GetLookDirection(WorldCharacterComponent_GetInput(Character));
     return WorldCollision_Raycast(self->_collision, Eye, Direction, Settings->InteractionReach, &Filter, outHit);
 }

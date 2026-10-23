@@ -1,8 +1,8 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
-// Vector2 and Vector3 are raylib types held by value (the own shape's sizes, the local transform), and Matrix is
-// returned by value; this include is unavoidable here.
+// Vector2 and Vector3 are raylib types held by value (the own shape's sizes, the local transform); this include is
+// unavoidable here. The local transform's matrix is a double one (WRVectorMath), like the objects' world matrices.
 #include "raylib/raylib.h"
 #include "CollisionLayer.h"
 #include "CollisionShape.h"
@@ -10,6 +10,7 @@
 #include "WorldComponent.h"
 #include "WorldModel.h"
 #include "wr/WRError.h"
+#include "wr/WRVectorMath.h"
 
 
 /**
@@ -366,9 +367,10 @@ CollisionShape WorldColliderComponent_GetOwnShape(const WorldColliderComponent* 
 /**
  * @brief The collider's local transform: its scale, then its rotation, then its offset (the order of an object's own).
  * @param self The component; must not be NULL.
- * @returns The matrix (raylib's convention).
+ * @returns The matrix, in double like the objects' world matrices it is multiplied with (WRVectorMath's conventions,
+ *          raylib's order: Matrix4Double_Multiply(local, objectWorld) applies it first).
  */
-Matrix WorldColliderComponent_GetLocalTransform(const WorldColliderComponent* self);
+Matrix4Double WorldColliderComponent_GetLocalTransform(const WorldColliderComponent* self);
 
 /**
  * @brief The settings in effect: which shapes (an own shape, or which of the world model's sets), the layer, the mask

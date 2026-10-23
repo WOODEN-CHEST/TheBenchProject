@@ -33,8 +33,8 @@
  * Position) and, for the frame the lists are synced for, the same placement in render space: relative to the frame's
  * origin (the camera's position), subtracted in double and rounded to float once (RenderMatrix, RenderCenter, the
  * sprites' Shape and FixedTransform, RenderPosition). The passes, the visibility and the LOD selection read only the
- * render-space values, so this sync is the one place a world position becomes a float the GPU sees. The world still
- * stores floats (T33 makes them doubles): this sync widens them, which is where T33 changes what it reads.
+ * render-space values, so this sync is the one place a world position becomes a float the GPU sees. The world stores
+ * its positions and world matrices in double (T33), which this sync reads as they are.
  *
  * Objects that are disabled or hidden, or under a disabled or hidden ancestor (WorldObject_IsEffectivelyEnabled,
  * WorldObject_IsEffectivelyVisible), are not drawn: their model entries stay (keeping the resolved model) but are not

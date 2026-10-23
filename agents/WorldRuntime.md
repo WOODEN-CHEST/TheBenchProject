@@ -27,7 +27,8 @@ Coordinate convention: **+Y up, +Z forward** (yaw=pitch=roll=0 looks toward +Z).
 Construct/Deconstruct — like ProgramTime); build with `GameCamera_Create`, mutate public fields directly.
 `Position` is a `Vector3Double` (since T32: far from the world's origin a float's steps would shake the view); the
 angles, the field of view and the directions stay floats. Code that moves the camera works in double (the flycam
-adds its float movement to the double position; the player controller widens the character's eyes).
+adds its float movement to the double position; the player controller puts it at the character's eyes, a double
+since T33).
 `GameCamera_GetForward` derives the view dir from yaw/pitch; `GetRight` is the horizontal strafe axis
 (`cross(worldUp, forward)`, roll-independent); `GetUp` rotates world up around forward by roll.
 `GameCamera_ToRenderCamera` is the single place a raylib `Camera3D` is produced: the camera in render space, at
@@ -49,9 +50,10 @@ camera, however far out it is. The maths is the private `source/WorldRenderSpace
 - **One place converts.** `WorldRenderCache_Sync` takes the frame's origin: every entry keeps its world placement in
   double (`WorldMatrix`, `Center`, the sprites' and lights' `Position`) and the same placement in render space
   (`RenderMatrix`, `RenderCenter`, the sprites' `Shape` and `FixedTransform`, the lights' `RenderPosition`). The passes,
-  the visibility, the LOD selection, the light culling and the uniforms read only the render-space values. The world
-  still stores floats until T33; the cache widens them, so T33 changes only what the sync reads. Debug draws convert
-  the same way (the collision world's transforms and contact points, the grid around the world's origin).
+  the visibility, the LOD selection, the light culling and the uniforms read only the render-space values. Since T33
+  the world's positions and world matrices are doubles ([WorldData.md](WorldData.md), "Positions are doubles"), and the
+  sync reads them as they are. Debug draws convert the same way (the collision world's double transforms and contact
+  points, the grid around the world's origin).
 - **The view** (`WorldRenderSpace_BuildView`): raylib's camera at the origin looking along the camera's forward, so
   the view matrix is a pure rotation and the view-projection and its inverse hold no large numbers. The sky's ray is
   `normalize(invViewProj × far-plane point)` (the C mirror is `WorldRenderSpace_GetSkyRay`), the stars and the sun's
@@ -735,17 +737,18 @@ taken already):
   home again, the crates are teleported back where they were. F10 teleports the door's crate 1.2 m aside, out of the
   door's way, and back into its corner (pushed out of the door if they overlap). Each logged, with the contact and
   motion events;
-- **render space (T32):** F11 moves the test world far away and back: every root object, the player and the test NPCs
-  (through the character system's teleport) and the camera move by (20 000, 0, 20 000) m, 28 km from the world's
-  origin, and back (logged: `WorldTest: far shift on: 38 root objects, 0 characters and the camera moved by (20000, 0,
-  20000) m, as teleports; ...`). The objects move as teleports (the collision step does not sweep 28 km), the collision
-  world is synced before the characters are placed on their ground, and the frame's own places (the desk's slide, the
-  pushing wall's and the crates' homes) move along; the first press also logs the collision world's one-time warning
-  for each static object it moves (static objects are not meant to move in play). The picture out there is the one at
-  the origin; the debug grid stays at the world's origin. Until T33 the world's positions are floats, about 2 mm apart out there: static, so
-  nothing shakes, but walking, the door and the crates wait for T33 (the collision world's 1 mm skin is smaller than a
-  float step), and a trip out and back can leave an object up to 1 mm from where it was. I adds the camera's position
-  and its distance from the world's origin;
+- **render space and double positions (T32, T33):** F11 steps the test world through the far shift's places
+  (`FarShifts`): out to (20 000, 0, 20 000) m, 28 km from the world's origin, then to (100 000, 0, -100 000) m, 141 km
+  out, then back to the start. Every root object, the player and the test NPCs (through the character system's
+  teleport) and the camera move along (logged: `WorldTest: far shift 1 of 2: 38 root objects and the camera moved by
+  (20000, 0, 20000) m, as teleports, and 0 characters placed again on their ground; ...`). The objects move as
+  teleports (the collision step does not sweep 28 km), the collision world is synced before the characters are placed
+  on their ground, and the frame's own places (the desk's slide, the pushing wall's and the crates' homes, the NPCs'
+  circles) move along; the first press also logs the collision world's one-time warning for each static object it
+  moves (static objects are not meant to move in play). Out there everything looks and plays as at the origin
+  (positions are doubles: walking, jumping, crouching, the door, the crates and the NPCs), and a trip out and back
+  returns everything to within a double's step (1.5e-11 m at 100 km); the debug grid stays at the world's origin. I
+  adds the camera's position, its distance from the world's origin and the far shift;
 - **the world file (T09):** F5 saves the live world next to the test world, as `worlds/test.saved.world.json` and
   `worlds/test.saved.world.ghdf` (atomically; each logged with its path, gitignored), for round-trip checks: saved at
   noon with nothing changed (2, then F5) the JSON is the shipped file byte for byte; otherwise its diff against

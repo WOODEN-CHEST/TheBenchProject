@@ -185,13 +185,11 @@ static void UpdateModel(WorldRenderModel* entry, Vector3Double origin, AssetMana
         return;
     }
 
-    // TODO: T33 gives the world double positions; these widen the world's float matrix until then.
-    entry->WorldMatrix = GameMath_FromMatrix(WorldObject_GetWorldMatrix(Owner));
+    entry->WorldMatrix = WorldObject_GetWorldMatrix(Owner);
     Matrix4Double BoundsTransform = GameMath_FromMatrix(entry->BoundsTransform);
     Matrix4Double BoundsToWorld = Matrix4Double_Multiply(&BoundsTransform, &entry->WorldMatrix);
     entry->Center = Matrix4Double_TransformPoint(&BoundsToWorld, GameMath_FromVector3(entry->LocalCenter));
-    // The stretch reads only the matrix's axes, which a float holds as well as anywhere.
-    entry->Radius = entry->LocalRadius * WorldTransform_GetMaxScale(GameMath_ToMatrix(&BoundsToWorld));
+    entry->Radius = (float)((double)entry->LocalRadius * WorldTransform_GetMaxScale(&BoundsToWorld));
     entry->RenderMatrix = GameMath_ToMatrixRelative(&entry->WorldMatrix, origin);
     entry->RenderCenter = GameMath_ToVector3Relative(entry->Center, origin);
 }
@@ -270,12 +268,9 @@ static void GetUvRect(const SpriteAnimationFrame* frame, float outRect[4])
 static SpriteShape GetShape(const WorldSpriteSettings* settings, const WorldObject* owner, Rectangle frameArea,
     Vector3Double origin, Vector3Double* outPosition)
 {
-    Vector3 Position;
     Vector3 Rotation;
     Vector3 Scale;
-    WorldObject_GetWorldTransform(owner, &Position, &Rotation, &Scale);
-    // TODO: T33 gives the world double positions; this widens the world's float position until then.
-    *outPosition = GameMath_FromVector3(Position);
+    WorldObject_GetWorldTransform(owner, outPosition, &Rotation, &Scale);
     Matrix Axes = MatrixRotateXYZ(Rotation);
     return (SpriteShape)
     {
@@ -353,8 +348,7 @@ static Error AddLight(WorldRenderCache* self, const WorldLightComponent* light, 
         return Error_CreateSuccess();
     }
 
-    // TODO: T33 gives the world double positions; this widens the world's float position until then.
-    Vector3Double Position = GameMath_FromVector3(WorldObject_GetWorldPosition(Owner));
+    Vector3Double Position = WorldObject_GetWorldPosition(Owner);
     WorldRenderLight Entry =
     {
         .Component = light,

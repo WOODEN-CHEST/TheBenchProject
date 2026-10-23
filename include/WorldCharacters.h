@@ -5,6 +5,7 @@
 // Vector3 is a raylib type held by value (positions); this include is unavoidable here.
 #include "raylib/raylib.h"
 #include "wr/WRError.h"
+#include "wr/WRVectorMath.h"
 #include "WorldCollision.h"
 
 // Forward declarations (World.h, Logger.h).
@@ -131,12 +132,14 @@ void WorldCharacters_Update(WorldCharacters* self, float deltaSeconds);
  *        spawn, a script's teleport). It is settled on walkable ground within its step height below, or falls.
  * @param self The system; must not be NULL.
  * @param objectId The character's object.
- * @param feetPosition Where its feet go, in world space.
+ * @param feetPosition Where its feet go, in world space (double, like every world position).
  * @param yaw Its facing, radians.
  * @returns Success; ErrorCode_IllegalArgument for a NULL @p self or an object without a character component;
- *          ErrorCode_ArgumentOutOfRange for a position or yaw that is not finite.
+ *          ErrorCode_ArgumentOutOfRange for a yaw or a position that is not finite, or a position where the object's
+ *          own (its local one, under a parent) would pass WORLD_POSITION_LIMIT on an axis; ErrorCode_InvalidOperation
+ *          under a parent whose world matrix cannot be inverted (a zero scale). Refused, nothing changes.
  */
-Error WorldCharacters_Teleport(WorldCharacters* self, uint64_t objectId, Vector3 feetPosition, float yaw);
+Error WorldCharacters_Teleport(WorldCharacters* self, uint64_t objectId, Vector3Double feetPosition, float yaw);
 
 /**
  * @brief What a character looks at: a ray from its eyes along its input's look direction, out to its reach, on its

@@ -6,6 +6,7 @@
 #include "WorldComponent.h"
 #include "WorldInternal.h"
 #include "WorldTransform.h"
+#include "GameMath.h"
 #include "Logger.h"
 #include "raylib/raymath.h"
 #include "wr/WRCompile.h"
@@ -20,7 +21,7 @@
 /** Initial capacity of path and text buffers; they grow as needed. */
 #define HIERARCHY_TEST_TEXT_CAPACITY ((size_t)256)
 /** How close two matrices must be, relative to their largest entry. */
-#define MATRIX_TOLERANCE 2e-5f
+#define MATRIX_TOLERANCE 2e-5
 /** The most detach hooks the recording type keeps. */
 #define MAX_RECORDED_DETACHES 16U
 
@@ -51,7 +52,7 @@ static const PropertyTable RecorderTable =
 /* The ids of the objects whose recorder component was detached, in order, with where each hook saw its object and
  * whether it saw it shown (test-only state, reset by each user). */
 static uint64_t RecordedDetaches[MAX_RECORDED_DETACHES];
-static Vector3 RecordedPositions[MAX_RECORDED_DETACHES];
+static Vector3Double RecordedPositions[MAX_RECORDED_DETACHES];
 static bool RecordedVisibilities[MAX_RECORDED_DETACHES];
 static size_t RecordedDetachCount = 0U;
 
@@ -111,32 +112,68 @@ static uint64_t IdOf(const WorldObject* object)
 }
 
 /* Sets an object's whole local transform; returns whether every setter succeeded. */
-static bool Place(TestRun* run, WorldObject* object, Vector3 position, Vector3 rotation, Vector3 scale)
+static bool SetTransform(TestRun* run, WorldObject* object, Vector3Double position, Vector3 rotation, Vector3 scale)
 {
     return (object != NULL) && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(object, position))
         && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(object, rotation))
         && TEST_CHECK_SUCCESS(run, WorldObject_SetScale(object, scale));
 }
 
-static Matrix LocalOf(const WorldObject* object)
+/* Places an object, the position given in floats: a root's is a place of the scene (TestWorld_At: shifted in the far
+ * run), a child's its place on its parent. */
+static bool Place(TestRun* run, WorldObject* object, Vector3 position, Vector3 rotation, Vector3 scale)
+{
+    bool IsRoot = (object != NULL) && (WorldObject_GetParent(object) == NULL);
+    return SetTransform(run, object, IsRoot ? TestWorld_At(position) : GameMath_FromVector3(position), rotation,
+        scale);
+}
+
+/* Places an object with its position as given, never shifted: a root about to become a child that keeps its local
+ * values. */
+static bool PlaceLocal(TestRun* run, WorldObject* object, Vector3 position, Vector3 rotation, Vector3 scale)
+{
+    return SetTransform(run, object, GameMath_FromVector3(position), rotation, scale);
+}
+
+/* A world matrix in the test's scene: its translation less the run's offset, in double (so the far run compares world
+ * matrices with the tolerances of the near one). */
+static Matrix4Double SceneOf(Matrix4Double world)
+{
+    Matrix4Double_SetTranslation(&world, Vector3Double_Subtract(Matrix4Double_GetTranslation(&world),
+        TestWorld_GetOffset()));
+    return world;
+}
+
+static Matrix4Double LocalOf(const WorldObject* object)
 {
     return WorldTransform_Compose(WorldObject_GetPosition(object), WorldObject_GetRotation(object),
         WorldObject_GetScale(object));
 }
 
-/* Whether two affine matrices agree within MATRIX_TOLERANCE of their largest entry (at least 1). */
-static bool AreMatricesNear(Matrix a, Matrix b)
+/* @p a, then @p b (raymath's order), by value for short checks. */
+static Matrix4Double Multiply(Matrix4Double a, Matrix4Double b)
 {
-    const float A[12] = { a.m0, a.m1, a.m2, a.m4, a.m5, a.m6, a.m8, a.m9, a.m10, a.m12, a.m13, a.m14 };
-    const float B[12] = { b.m0, b.m1, b.m2, b.m4, b.m5, b.m6, b.m8, b.m9, b.m10, b.m12, b.m13, b.m14 };
-    float Largest = 1.0f;
+    return Matrix4Double_Multiply(&a, &b);
+}
+
+/* The rotation matrix of Euler XYZ angles, in double. */
+static Matrix4Double TurnOf(Vector3 rotation)
+{
+    return Matrix4Double_FromRotationXYZ(GameMath_FromVector3(rotation));
+}
+
+/* Whether two affine matrices agree within MATRIX_TOLERANCE of their largest entry (at least 1). */
+static bool AreMatricesNear(Matrix4Double a, Matrix4Double b)
+{
+    const size_t Indices[12] = { 0U, 1U, 2U, 4U, 5U, 6U, 8U, 9U, 10U, 12U, 13U, 14U };
+    double Largest = 1.0;
     for (size_t Index = 0U; Index < 12U; Index++)
     {
-        Largest = fmaxf(Largest, fmaxf(fabsf(A[Index]), fabsf(B[Index])));
+        Largest = fmax(Largest, fmax(fabs(a.M[Indices[Index]]), fabs(b.M[Indices[Index]])));
     }
     for (size_t Index = 0U; Index < 12U; Index++)
     {
-        if (!(fabsf(A[Index] - B[Index]) <= (MATRIX_TOLERANCE * Largest)))
+        if (!(fabs(a.M[Indices[Index]] - b.M[Indices[Index]]) <= (MATRIX_TOLERANCE * Largest)))
         {
             return false;
         }
@@ -144,9 +181,9 @@ static bool AreMatricesNear(Matrix a, Matrix b)
     return true;
 }
 
-static bool AreMatricesEqual(Matrix a, Matrix b)
+static bool AreMatricesEqual(Matrix4Double a, Matrix4Double b)
 {
-    return Memory_IsEqual(&a, &b, sizeof(Matrix));
+    return Memory_IsEqual(&a, &b, sizeof(Matrix4Double));
 }
 
 /* Checks that @p parent's children are @p expected, in order, through every way of reading them. */
@@ -310,7 +347,7 @@ static void HierarchiesHaveAtMost64Levels(TestRun* run)
         TEST_CHECK_SUCCESS(run, World_SetParent(&TestWorld, IdOf(Extra), Chain[61], false));
 
         // The deepest object's world matrix still reads, and the whole chain is removed with its root.
-        TEST_CHECK(run, AreMatricesNear(WorldObject_GetWorldMatrix(Leaf), MatrixIdentity()));
+        TEST_CHECK(run, AreMatricesNear(WorldObject_GetWorldMatrix(Leaf), Matrix4Double_Identity()));
         World_UpdateTransforms(&TestWorld);
         TEST_CHECK_SUCCESS(run, World_RemoveObject(&TestWorld, Chain[0]));
         TEST_CHECK(run, World_GetObjectCount(&TestWorld) == 0U);
@@ -335,13 +372,13 @@ static void WorldMatricesMultiplyDownThreeLevels(TestRun* run)
         && Place(run, B, (Vector3){ 1.0f, 0.0f, 0.0f }, (Vector3){ 0.3f, 0.0f, 0.0f }, (Vector3){ 1.0f, 0.5f, 1.0f })
         && Place(run, C, (Vector3){ 0.0f, 1.0f, 0.0f }, (Vector3){ 0.0f, 0.0f, 0.7f }, (Vector3){ 1.0f, 1.0f, 1.0f }))
     {
-        Matrix WorldA = LocalOf(A);
-        Matrix WorldB = MatrixMultiply(LocalOf(B), WorldA);
-        Matrix WorldC = MatrixMultiply(LocalOf(C), WorldB);
+        Matrix4Double WorldA = LocalOf(A);
+        Matrix4Double WorldB = Multiply(LocalOf(B), WorldA);
+        Matrix4Double WorldC = Multiply(LocalOf(C), WorldB);
         // Computed on the fly while dirty, then cached: the same products either way.
         for (size_t Pass = 0U; Pass < 2U; Pass++)
         {
-            Matrix Read = MatrixIdentity();
+            Matrix4Double Read = Matrix4Double_Identity();
             TEST_CHECK(run, AreMatricesEqual(WorldObject_GetWorldMatrix(A), WorldA));
             TEST_CHECK(run, AreMatricesEqual(WorldObject_GetWorldMatrix(B), WorldB));
             TEST_CHECK(run, TEST_CHECK_SUCCESS(run, World_GetWorldMatrix(&TestWorld, IdOf(C), &Read))
@@ -350,22 +387,23 @@ static void WorldMatricesMultiplyDownThreeLevels(TestRun* run)
         }
 
         // c sits at b's local point (0, 1, 0); a point of c lands where the matrices put it.
-        Vector3 Position = Vector3Zero();
+        Vector3Double Position = Vector3Double_Zero();
         TEST_CHECK(run, TEST_CHECK_SUCCESS(run, World_GetWorldPosition(&TestWorld, IdOf(C), &Position))
-            && (Vector3Distance(Position, Vector3Transform((Vector3){ 0.0f, 1.0f, 0.0f }, WorldB)) < 1e-5f));
-        TEST_CHECK(run, Vector3Distance(WorldObject_GetWorldPosition(A), (Vector3){ 1.0f, 2.0f, 3.0f }) == 0.0f);
+            && (Vector3Double_Distance(Position, Matrix4Double_TransformPoint(&WorldB, Vector3Double_Create(0.0, 1.0,
+                0.0))) < 1e-12));
+        TEST_CHECK(run, Vector3Double_Distance(WorldObject_GetWorldPosition(A), TestWorld_At((Vector3){ 1.0f, 2.0f,
+            3.0f })) == 0.0);
 
         // A root's world rotation is its own; a child's turns with its parent (a uniform scale keeps it exact).
         Vector3 Rotation = Vector3Zero();
         TEST_CHECK(run, TEST_CHECK_SUCCESS(run, World_GetWorldRotation(&TestWorld, IdOf(A), &Rotation))
             && (Rotation.y == 0.5f) && (Rotation.x == 0.0f));
-        Vector3 WorldPosition;
+        Vector3Double WorldPosition;
         Vector3 WorldRotation;
         Vector3 WorldScale;
         WorldObject_GetWorldTransform(B, &WorldPosition, &WorldRotation, &WorldScale);
-        Matrix Expected = MatrixMultiply(MatrixRotateXYZ((Vector3){ 0.3f, 0.0f, 0.0f }),
-            MatrixRotateXYZ((Vector3){ 0.0f, 0.5f, 0.0f }));
-        TEST_CHECK(run, AreMatricesNear(MatrixRotateXYZ(WorldRotation), Expected));
+        Matrix4Double Expected = Multiply(TurnOf((Vector3){ 0.3f, 0.0f, 0.0f }), TurnOf((Vector3){ 0.0f, 0.5f, 0.0f }));
+        TEST_CHECK(run, AreMatricesNear(TurnOf(WorldRotation), Expected));
         TEST_CHECK(run, Vector3Distance(WorldScale, (Vector3){ 2.0f, 1.0f, 2.0f }) < 1e-5f);
         TEST_CHECK_ERROR(run, World_GetWorldMatrix(&TestWorld, 99U, &Expected), ErrorCode_InvalidOperation);
         TEST_CHECK_ERROR(run, World_GetWorldPosition(&TestWorld, IdOf(A), NULL), ErrorCode_IllegalArgument);
@@ -391,28 +429,97 @@ static void ReparentingKeepsTheWorldPlacementWhenAsked(TestRun* run)
         && Place(run, Mover, (Vector3){ 1.0f, 2.0f, 3.0f }, (Vector3){ 0.3f, 0.2f, 0.1f }, (Vector3){ 1.0f, 2.0f, 3.0f })
         && Place(run, Rider, (Vector3){ 0.0f, 1.0f, 0.0f }, Vector3Zero(), (Vector3){ 1.0f, 1.0f, 1.0f }))
     {
-        Matrix MoverBefore = WorldObject_GetWorldMatrix(Mover);
-        Matrix RiderBefore = WorldObject_GetWorldMatrix(Rider);
-        Vector3 RiderLocal = WorldObject_GetPosition(Rider);
+        Matrix4Double MoverBefore = WorldObject_GetWorldMatrix(Mover);
+        Matrix4Double RiderBefore = WorldObject_GetWorldMatrix(Rider);
+        Vector3Double RiderLocal = WorldObject_GetPosition(Rider);
 
         // Under the second parent, then as a root: the mover (and the rider on it) stay where they are.
         TEST_CHECK_SUCCESS(run, World_SetParent(&TestWorld, IdOf(Mover), IdOf(Second), true));
         TEST_CHECK(run, (WorldObject_GetParent(Mover) == Second) && (WorldObject_GetParent(Rider) == Mover));
-        TEST_CHECK(run, AreMatricesNear(WorldObject_GetWorldMatrix(Mover), MoverBefore));
-        TEST_CHECK(run, AreMatricesNear(WorldObject_GetWorldMatrix(Rider), RiderBefore));
-        TEST_CHECK(run, Vector3Distance(WorldObject_GetPosition(Rider), RiderLocal) == 0.0f); // its local is untouched
+        TEST_CHECK(run, AreMatricesNear(SceneOf(WorldObject_GetWorldMatrix(Mover)), SceneOf(MoverBefore)));
+        TEST_CHECK(run, AreMatricesNear(SceneOf(WorldObject_GetWorldMatrix(Rider)), SceneOf(RiderBefore)));
+        // Its local is untouched.
+        TEST_CHECK(run, Vector3Double_Distance(WorldObject_GetPosition(Rider), RiderLocal) == 0.0);
         World_UpdateTransforms(&TestWorld);
-        TEST_CHECK(run, AreMatricesNear(WorldObject_GetWorldMatrix(Rider), RiderBefore));
+        TEST_CHECK(run, AreMatricesNear(SceneOf(WorldObject_GetWorldMatrix(Rider)), SceneOf(RiderBefore)));
 
         TEST_CHECK_SUCCESS(run, World_SetParent(&TestWorld, IdOf(Mover), 0U, true));
-        TEST_CHECK(run, AreMatricesNear(WorldObject_GetWorldMatrix(Mover), MoverBefore));
-        Vector3 Position;
+        TEST_CHECK(run, AreMatricesNear(SceneOf(WorldObject_GetWorldMatrix(Mover)), SceneOf(MoverBefore)));
+        Vector3Double Position;
         Vector3 Rotation;
         Vector3 Scale;
-        WorldTransform_Decompose(MoverBefore, (Vector3){ 1.0f, 1.0f, 1.0f }, &Position, &Rotation, &Scale);
-        TEST_CHECK(run, (Vector3Distance(WorldObject_GetPosition(Mover), Position) < 1e-4f)
+        WorldTransform_Decompose(&MoverBefore, (Vector3){ 1.0f, 1.0f, 1.0f }, &Position, &Rotation, &Scale);
+        TEST_CHECK(run, (Vector3Double_Distance(WorldObject_GetPosition(Mover), Position) < 1e-9)
             && (Vector3Distance(WorldObject_GetScale(Mover), Scale) < 1e-4f)
-            && AreMatricesNear(MatrixRotateXYZ(WorldObject_GetRotation(Mover)), MatrixRotateXYZ(Rotation)));
+            && AreMatricesNear(TurnOf(WorldObject_GetRotation(Mover)), TurnOf(Rotation)));
+    }
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
+}
+
+/* T33: far from the world's origin the hierarchy keeps a double's precision. A child 0.5 mm from its parent at
+ * 10 000 km keeps its 0.5 mm in the world matrix; moved under another parent there, keeping its place, it stays within
+ * a few double steps (1.9 nm there); 100 km out, within 1e-9 m. A float would round both to a metre and a centimetre.
+ * A parent so far away that the local position would pass WORLD_POSITION_LIMIT is refused. */
+static void FarPlacementsKeepTheirPrecision(TestRun* run)
+{
+    World TestWorld;
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
+    {
+        return;
+    }
+    const double Distances[] = { WORLD_POSITION_LIMIT, 1.0e5 };
+    const double Tolerances[] = { 5e-9, 1e-9 };
+    for (size_t Index = 0U; Index < 2U; Index++)
+    {
+        double Far = Distances[Index];
+        WorldObject* Parent = CreateObject(run, &TestWorld, "parent", 0U);
+        WorldObject* Other = CreateObject(run, &TestWorld, "other", 0U);
+        WorldObject* Antipode = CreateObject(run, &TestWorld, "antipode", 0U);
+        WorldObject* Child = CreateObject(run, &TestWorld, "child", IdOf(Parent));
+        if ((Parent == NULL) || (Other == NULL) || (Antipode == NULL) || (Child == NULL)
+            || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, Vector3Double_Create(Far, 0.123456789, -Far)))
+            || !TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Parent, (Vector3){ 0.3f, -1.1f, 2.4f }))
+            || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Other, Vector3Double_Create(Far - 3.0, 2.5,
+                7.25 - Far)))
+            || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Antipode, Vector3Double_Create(-Far, 0.0, Far)))
+            || !TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Other, (Vector3){ -0.7f, 0.4f, 1.3f }))
+            || !TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Other, (Vector3){ 2.0f, 2.0f, 2.0f }))
+            || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Child, Vector3Double_Create(0.0005, 0.0, 0.0))))
+        {
+            break;
+        }
+        Vector3Double ParentAt = WorldObject_GetWorldPosition(Parent);
+        Vector3Double ChildAt = WorldObject_GetWorldPosition(Child);
+        TEST_CHECK(run, fabs(Vector3Double_Distance(ChildAt, ParentAt) - 0.0005) < Tolerances[Index]);
+        World_UpdateTransforms(&TestWorld);
+        TEST_CHECK(run, Vector3Double_Distance(WorldObject_GetWorldPosition(Child), ChildAt) == 0.0); // cached the same
+
+        // Under the other parent, keeping its place: its world position comes back within a few steps; back under the
+        // first parent, the 0.5 mm again.
+        TEST_CHECK_SUCCESS(run, World_SetParent(&TestWorld, IdOf(Child), IdOf(Other), true));
+        TEST_CHECK(run, Vector3Double_Distance(WorldObject_GetWorldPosition(Child), ChildAt) < Tolerances[Index]);
+        TEST_CHECK_SUCCESS(run, World_SetParent(&TestWorld, IdOf(Child), IdOf(Parent), true));
+        TEST_CHECK(run, Vector3Double_Distance(WorldObject_GetWorldPosition(Child), ChildAt) < Tolerances[Index]);
+        TEST_CHECK(run, Vector3Double_Distance(WorldObject_GetPosition(Child), Vector3Double_Create(0.0005, 0.0, 0.0))
+            < Tolerances[Index]);
+
+        // At the limit, under the antipode (twice the limit away), keeping its place would need a local position past
+        // the limit: refused, nothing changes. Without keeping it, it moves there.
+        if (Far == WORLD_POSITION_LIMIT)
+        {
+            uint32_t Revision = WorldObject_GetRevision(Child);
+            const char* const BeyondLimit[] = { "world_object.position", "1e+07", NULL };
+            TestText_CheckErrorMessage(run, World_SetParent(&TestWorld, IdOf(Child), IdOf(Antipode), true),
+                ErrorCode_ArgumentOutOfRange, BeyondLimit);
+            TEST_CHECK(run, (WorldObject_GetParent(Child) == Parent) && (WorldObject_GetRevision(Child) == Revision));
+            TEST_CHECK_SUCCESS(run, World_SetParent(&TestWorld, IdOf(Child), IdOf(Antipode), false));
+            TEST_CHECK(run, Vector3Double_Distance(WorldObject_GetWorldPosition(Child), Vector3Double_Create(
+                0.0005 - Far, 0.0, Far)) < Tolerances[Index]);
+        }
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&TestWorld, IdOf(Parent)));
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&TestWorld, IdOf(Other)));
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&TestWorld, IdOf(Antipode)));
     }
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
@@ -430,12 +537,14 @@ static void ReparentingWithoutKeepingKeepsTheLocalValues(TestRun* run)
     WorldObject* Child = CreateObject(run, &TestWorld, "child", 0U);
     if (Place(run, Parent, (Vector3){ 10.0f, 0.0f, -2.0f }, (Vector3){ 0.0f, 1.5f, 0.0f }, (Vector3){ 1.0f, 1.0f, 1.0f })
         && Place(run, Flat, Vector3Zero(), Vector3Zero(), (Vector3){ 1.0f, 0.0f, 1.0f })
-        && Place(run, Child, (Vector3){ 1.0f, 2.0f, 3.0f }, (Vector3){ 0.1f, 0.2f, 0.3f }, (Vector3){ 1.0f, 1.0f, 1.0f }))
+        && PlaceLocal(run, Child, (Vector3){ 1.0f, 2.0f, 3.0f }, (Vector3){ 0.1f, 0.2f, 0.3f },
+            (Vector3){ 1.0f, 1.0f, 1.0f }))
     {
-        Matrix Local = LocalOf(Child);
+        // The child's values are the local ones it keeps under the parent, not a place of the scene.
+        Matrix4Double Local = LocalOf(Child);
         TEST_CHECK_SUCCESS(run, World_SetParent(&TestWorld, IdOf(Child), IdOf(Parent), false));
         TEST_CHECK(run, AreMatricesEqual(LocalOf(Child), Local));
-        TEST_CHECK(run, AreMatricesEqual(WorldObject_GetWorldMatrix(Child), MatrixMultiply(Local, LocalOf(Parent))));
+        TEST_CHECK(run, AreMatricesEqual(WorldObject_GetWorldMatrix(Child), Multiply(Local, LocalOf(Parent))));
 
         // Keeping the place under a parent flattened to nothing is impossible: refused, nothing changes.
         uint32_t Revision = WorldObject_GetRevision(Child);
@@ -445,7 +554,7 @@ static void ReparentingWithoutKeepingKeepsTheLocalValues(TestRun* run)
         TEST_CHECK(run, (WorldObject_GetParent(Child) == Parent) && (WorldObject_GetRevision(Child) == Revision)
             && AreMatricesEqual(LocalOf(Child), Local));
         TEST_CHECK_SUCCESS(run, World_SetParent(&TestWorld, IdOf(Child), IdOf(Flat), false));
-        TEST_CHECK(run, WorldObject_GetWorldMatrix(Child).m13 == 0.0f); // flattened onto the parent's plane
+        TEST_CHECK(run, SceneOf(WorldObject_GetWorldMatrix(Child)).M[13] == 0.0); // flattened onto the parent's plane
     }
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
@@ -472,7 +581,7 @@ static void MovingAParentRecomputesOnlyItsSubtree(TestRun* run)
 
         WorldObject* All[] = { A, B, C, D, E };
         uint32_t Revisions[5];
-        Matrix Before[5];
+        Matrix4Double Before[5];
         for (size_t Index = 0U; Index < 5U; Index++)
         {
             Revisions[Index] = WorldObject_GetTransformRevision(All[Index]);
@@ -480,7 +589,7 @@ static void MovingAParentRecomputesOnlyItsSubtree(TestRun* run)
         }
 
         // Moving a moves its whole subtree (a, b, c, d) and nothing else.
-        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(A, (Vector3){ 0.0f, 3.0f, 0.0f }));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(A, TestWorld_At((Vector3){ 0.0f, 3.0f, 0.0f })));
         for (size_t Index = 0U; Index < 5U; Index++)
         {
             bool IsMoved = Index < 4U;
@@ -489,7 +598,8 @@ static void MovingAParentRecomputesOnlyItsSubtree(TestRun* run)
         }
         World_UpdateTransforms(&TestWorld);
         TEST_CHECK(run, WorldInternal_GetWorldMatrixRecomputeCount(&TestWorld) == (Count + 4U));
-        TEST_CHECK(run, (WorldObject_GetWorldMatrix(D).m13 == 3.0f) && (WorldObject_GetWorldMatrix(C).m13 == 3.0f));
+        TEST_CHECK(run, (fabs(SceneOf(WorldObject_GetWorldMatrix(D)).M[13] - 3.0) < 1e-9)
+            && (fabs(SceneOf(WorldObject_GetWorldMatrix(C)).M[13] - 3.0) < 1e-9));
         TEST_CHECK(run, AreMatricesEqual(WorldObject_GetWorldMatrix(E), Before[4]));
         World_UpdateTransforms(&TestWorld);
         TEST_CHECK(run, WorldInternal_GetWorldMatrixRecomputeCount(&TestWorld) == (Count + 4U));
@@ -522,19 +632,21 @@ static void ReadsComputeDirtyMatricesWithoutStoringThem(TestRun* run)
     }
     WorldObject* Parent = CreateObject(run, &TestWorld, "parent", 0U);
     WorldObject* Child = CreateObject(run, &TestWorld, "child", IdOf(Parent));
-    if ((Child != NULL) && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Child, (Vector3){ 1.0f, 0.0f, 0.0f })))
+    if ((Child != NULL) && Place(run, Parent, Vector3Zero(), Vector3Zero(), (Vector3){ 1.0f, 1.0f, 1.0f })
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Child, Vector3Double_Create(1.0, 0.0, 0.0))))
     {
         World_UpdateTransforms(&TestWorld);
         uint64_t Count = WorldInternal_GetWorldMatrixRecomputeCount(&TestWorld);
         TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Parent, (Vector3){ 0.0f, PI / 2.0f, 0.0f }));
 
-        Matrix Expected = MatrixMultiply(LocalOf(Child), LocalOf(Parent));
-        Matrix Read = MatrixIdentity();
+        Matrix4Double Expected = Multiply(LocalOf(Child), LocalOf(Parent));
+        Matrix4Double Read = Matrix4Double_Identity();
         TEST_CHECK(run, AreMatricesEqual(WorldObject_GetWorldMatrix(Child), Expected));
         TEST_CHECK(run, TEST_CHECK_SUCCESS(run, World_GetWorldMatrix(&TestWorld, IdOf(Child), &Read))
             && AreMatricesEqual(Read, Expected));
         // Turned a quarter about Y, the parent takes the child's +X to -Z.
-        TEST_CHECK(run, Vector3Distance(WorldObject_GetWorldPosition(Child), (Vector3){ 0.0f, 0.0f, -1.0f }) < 1e-6f);
+        TEST_CHECK(run, Vector3Double_Distance(WorldObject_GetWorldPosition(Child), TestWorld_At((Vector3){ 0.0f, 0.0f,
+            -1.0f })) < 1e-6);
         TEST_CHECK(run, Child->_isWorldMatrixDirty && Parent->_isWorldMatrixDirty
             && (WorldInternal_GetWorldMatrixRecomputeCount(&TestWorld) == Count));
 
@@ -646,7 +758,8 @@ static void RemovingAnObjectRemovesItsSubtree(TestRun* run)
         uint64_t IdLeaf = IdOf(Leaf);
         uint64_t IdSide = IdOf(Side);
         World_UpdateTransforms(&TestWorld);
-        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Root, (Vector3){ 1.0f, 0.0f, 0.0f })); // four dirty
+        // Four dirty.
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Root, TestWorld_At((Vector3){ 1.0f, 0.0f, 0.0f })));
         uint64_t Count = WorldInternal_GetWorldMatrixRecomputeCount(&TestWorld);
         uint64_t ObjectVersion = World_GetObjectSetVersion(&TestWorld);
         uint64_t ComponentVersion = World_GetComponentSetVersion(&TestWorld);
@@ -764,10 +877,10 @@ static void DetachHooksSeeTheHierarchyInPlace(TestRun* run)
     WorldObject* Lamp = CreateObject(run, &TestWorld, "lamp", 0U);
     WorldObject* Desk = CreateObject(run, &TestWorld, "desk", 0U);
     bool IsBuilt = (Lamp != NULL) && (Desk != NULL) && (Cup != NULL)
-        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Desk, (Vector3){ 10.0f, 0.0f, 0.0f }))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Desk, TestWorld_At((Vector3){ 10.0f, 0.0f, 0.0f })))
         && TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Desk, false))
-        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Lamp, (Vector3){ 0.5f, 0.0f, 0.0f }))
-        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Cup, (Vector3){ 0.25f, 0.0f, 0.0f }))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Lamp, Vector3Double_Create(0.5, 0.0, 0.0)))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Cup, Vector3Double_Create(0.25, 0.0, 0.0)))
         && TEST_CHECK_SUCCESS(run, World_SetParent(&TestWorld, IdOf(Lamp), IdOf(Desk), false))
         && TEST_CHECK_SUCCESS(run, World_SetParent(&TestWorld, IdOf(Cup), IdOf(Desk), false))
         && AddRecorder(run, &TestWorld, Lamp) && AddRecorder(run, &TestWorld, Desk) && AddRecorder(run, &TestWorld, Cup);
@@ -775,8 +888,8 @@ static void DetachHooksSeeTheHierarchyInPlace(TestRun* run)
     {
         World_UpdateTransforms(&TestWorld);
         TEST_CHECK_SUCCESS(run, World_RemoveObject(&TestWorld, IdOf(Lamp)));
-        TEST_CHECK(run, (RecordedDetachCount == 1U) && (fabsf(RecordedPositions[0].x - 10.5f) < 1e-6f)
-            && !RecordedVisibilities[0]);
+        TEST_CHECK(run, (RecordedDetachCount == 1U)
+            && (fabs(RecordedPositions[0].X - TestWorld_GetOffset().X - 10.5) < 1e-12) && !RecordedVisibilities[0]);
     }
     // The cup was made before the desk it sits on: destroying the world still runs its hook first, with the desk alive.
     RecordedDetachCount = 0U;
@@ -786,7 +899,7 @@ static void DetachHooksSeeTheHierarchyInPlace(TestRun* run)
     if (IsBuilt)
     {
         TEST_CHECK(run, (RecordedDetachCount == 2U) && (RecordedDetaches[0] == IdCup) && (RecordedDetaches[1] == IdDesk)
-            && (fabsf(RecordedPositions[0].x - 10.25f) < 1e-6f) && !RecordedVisibilities[0]);
+            && (fabs(RecordedPositions[0].X - TestWorld_GetOffset().X - 10.25) < 1e-12) && !RecordedVisibilities[0]);
     }
     RecordedDetachCount = 0U;
 }
@@ -806,7 +919,8 @@ static void WorldScalesKeepTheSignsOfTheirChain(TestRun* run)
     WorldObject* Upside = CreateObject(run, &TestWorld, "upside down", IdOf(Plain));
     WorldObject* Turned = CreateObject(run, &TestWorld, "turned half", IdOf(Plain));
     WorldObject* Sign = CreateObject(run, &TestWorld, "sign", IdOf(Room));
-    if (Place(run, Room, Vector3Zero(), Vector3Zero(), (Vector3){ 1.0f, 1.0f, -1.0f })
+    if (Place(run, Plain, Vector3Zero(), Vector3Zero(), (Vector3){ 1.0f, 1.0f, 1.0f })
+        && Place(run, Room, Vector3Zero(), Vector3Zero(), (Vector3){ 1.0f, 1.0f, -1.0f })
         && Place(run, Upside, Vector3Zero(), Vector3Zero(), (Vector3){ 1.0f, -1.0f, 1.0f })
         && Place(run, Turned, Vector3Zero(), Vector3Zero(), (Vector3){ -1.0f, -1.0f, 1.0f }) && (Sign != NULL))
     {
@@ -814,7 +928,7 @@ static void WorldScalesKeepTheSignsOfTheirChain(TestRun* run)
         const Vector3 Expected[] = { { 1.0f, -1.0f, 1.0f }, { -1.0f, -1.0f, 1.0f }, { 1.0f, 1.0f, -1.0f } };
         for (size_t Index = 0U; Index < 3U; Index++)
         {
-            Vector3 Position;
+            Vector3Double Position;
             Vector3 Rotation;
             Vector3 Scale;
             WorldObject_GetWorldTransform(Objects[Index], &Position, &Rotation, &Scale);
@@ -823,11 +937,11 @@ static void WorldScalesKeepTheSignsOfTheirChain(TestRun* run)
 
         // Out of the mirrored room into a plain one, keeping its place: the sign carries the mirror itself now. Then into
         // the room again: the room's mirror is taken back out of it.
-        Matrix Before = WorldObject_GetWorldMatrix(Sign);
+        Matrix4Double Before = WorldObject_GetWorldMatrix(Sign);
         TEST_CHECK_SUCCESS(run, World_SetParent(&TestWorld, IdOf(Sign), IdOf(Plain), true));
         TEST_CHECK(run, (Vector3Distance(WorldObject_GetScale(Sign), (Vector3){ 1.0f, 1.0f, -1.0f }) < 1e-6f)
             && (Vector3Length(WorldObject_GetRotation(Sign)) < 1e-6f)
-            && AreMatricesNear(WorldObject_GetWorldMatrix(Sign), Before));
+            && AreMatricesNear(SceneOf(WorldObject_GetWorldMatrix(Sign)), SceneOf(Before)));
         TEST_CHECK_SUCCESS(run, World_SetParent(&TestWorld, IdOf(Sign), IdOf(Room), true));
         TEST_CHECK(run, (Vector3Distance(WorldObject_GetScale(Sign), (Vector3){ 1.0f, 1.0f, 1.0f }) < 1e-6f)
             && (Vector3Length(WorldObject_GetRotation(Sign)) < 1e-6f));
@@ -896,7 +1010,7 @@ static void TheParentRowIsReadOnlyAndReadsAttachOrAreRefused(TestRun* run)
         WorldObject* Saucer = CreateObject(run, &TestWorld, "saucer", 0U);
         char Text[128];
         if ((Desk != NULL) && (Cup != NULL) && (Saucer != NULL)
-            && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Desk, (Vector3){ 2.0f, 0.0f, 0.0f })))
+            && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Desk, TestWorld_At((Vector3){ 2.0f, 0.0f, 0.0f }))))
         {
             // Read through the table; set only through the world.
             PropertyValue Value = PropertyValue_FromObjectId(IdOf(Desk));
@@ -907,7 +1021,8 @@ static void TheParentRowIsReadOnlyAndReadsAttachOrAreRefused(TestRun* run)
             snprintf(Text, sizeof(Text), "{\"parent\": %llu, \"position\": [0, 1, 0]}", (unsigned long long)IdOf(Desk));
             TEST_CHECK_SUCCESS(run, ReadObjectJSON(run, Cup, Text));
             TEST_CHECK(run, (WorldObject_GetParent(Cup) == Desk)
-                && (Vector3Distance(WorldObject_GetWorldPosition(Cup), (Vector3){ 2.0f, 1.0f, 0.0f }) < 1e-6f));
+                && (Vector3Double_Distance(WorldObject_GetWorldPosition(Cup),
+                    TestWorld_At((Vector3){ 2.0f, 1.0f, 0.0f })) < 1e-12));
             TEST_CHECK_SUCCESS(run, Properties_Get(Table, Cup, u8"parent", &Value));
             TEST_CHECK(run, Value.Data.ObjectIdValue == IdOf(Desk));
             TEST_CHECK(run, World_GetRefusedParentCount(&TestWorld) == 0U);
@@ -915,7 +1030,7 @@ static void TheParentRowIsReadOnlyAndReadsAttachOrAreRefused(TestRun* run)
             // A missing parent and a cycle are refused: the object keeps its parent; the first refusal is logged.
             TEST_CHECK_SUCCESS(run, ReadObjectJSON(run, Cup, "{\"parent\": 999, \"position\": [0, 2, 0]}"));
             TEST_CHECK(run, (WorldObject_GetParent(Cup) == Desk) && (WorldObject_GetParentId(Cup) == IdOf(Desk))
-                && (WorldObject_GetPosition(Cup).y == 2.0f) && (World_GetRefusedParentCount(&TestWorld) == 1U));
+                && (WorldObject_GetPosition(Cup).Y == 2.0) && (World_GetRefusedParentCount(&TestWorld) == 1U));
             snprintf(Text, sizeof(Text), "{\"parent\": %llu}", (unsigned long long)IdOf(Cup));
             TEST_CHECK_SUCCESS(run, ReadObjectJSON(run, Desk, Text));
             TEST_CHECK(run, (WorldObject_GetParent(Desk) == NULL) && (World_GetRefusedParentCount(&TestWorld) == 2U));
@@ -948,6 +1063,7 @@ void WorldHierarchyTests_Run(TestRun* run)
         { "hierarchies_have_at_most_64_levels", HierarchiesHaveAtMost64Levels },
         { "world_matrices_multiply_down_three_levels", WorldMatricesMultiplyDownThreeLevels },
         { "reparenting_keeps_the_world_placement_when_asked", ReparentingKeepsTheWorldPlacementWhenAsked },
+        { "far_placements_keep_their_precision", FarPlacementsKeepTheirPrecision },
         { "reparenting_without_keeping_keeps_the_local_values", ReparentingWithoutKeepingKeepsTheLocalValues },
         { "moving_a_parent_recomputes_only_its_subtree", MovingAParentRecomputesOnlyItsSubtree },
         { "reads_compute_dirty_matrices_without_storing_them", ReadsComputeDirtyMatricesWithoutStoringThem },
@@ -960,5 +1076,5 @@ void WorldHierarchyTests_Run(TestRun* run)
         { "the_parent_row_is_read_only_and_reads_attach_or_are_refused",
             TheParentRowIsReadOnlyAndReadsAttachOrAreRefused },
     };
-    TestRun_RunSuite(run, "WorldHierarchy", Cases, sizeof(Cases) / sizeof(Cases[0]));
+    TestWorld_RunSuite(run, "WorldHierarchy", "WorldHierarchyFar", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

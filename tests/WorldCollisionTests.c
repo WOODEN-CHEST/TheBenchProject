@@ -3,10 +3,12 @@
 #include "TestWorld.h"
 #include "CollisionGeometry.h"
 #include "CollisionMath.h"
+#include "GameMath.h"
 #include "Logger.h"
 #include "World.h"
 #include "WorldColliderComponent.h"
 #include "WorldCollision.h"
+#include "WorldCollisionInternal.h"
 #include "WorldModelComponent.h"
 #include "raylib/raymath.h"
 #include "wr/WRFileSystem.h"
@@ -38,13 +40,14 @@ typedef struct CollisionSceneStruct
     bool IsWorldBuilt;
 } CollisionScene;
 
-/* One object's own shape placed as the collision world places it (the brute force of the tree test). */
+/* One object's own shape placed as the collision world places it (the brute force of the tree test): float axes and a
+ * double translation, and the inverse of the axes. */
 typedef struct PlacedOwnShapeStruct
 {
     uint64_t Id;
     CollisionShape Shape;
-    CollisionAffine ToWorld;
-    CollisionAffine FromWorld;
+    WorldCollisionPlacement ToWorld;
+    CollisionAffine InverseAxes;
 } PlacedOwnShape;
 
 
@@ -130,6 +133,7 @@ static void CollisionScene_Deconstruct(TestRun* run, CollisionScene* self)
     TestAssetFixture_Deconstruct(run, &self->Fixture);
 }
 
+/* An object at @p position of the scene (TestWorld_At: shifted in the far run). */
 static WorldObject* AddObject(TestRun* run, World* world, Vector3 position, WorldMobility mobility)
 {
     WorldObject* Object = NULL;
@@ -137,7 +141,23 @@ static WorldObject* AddObject(TestRun* run, World* world, Vector3 position, Worl
     {
         return NULL;
     }
-    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, position));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, TestWorld_At(position)));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetMobility(Object, mobility));
+    return Object;
+}
+
+/* An object under @p parent at @p localPosition (a child's place is its parent's: not shifted). */
+static WorldObject* AddChild(TestRun* run, World* world, const WorldObject* parent, Vector3 localPosition,
+    WorldMobility mobility)
+{
+    WorldObject* Object = NULL;
+    if (!TEST_CHECK_SUCCESS(run, World_CreateObject(world, (const unsigned char*)u8"thing", &Object))
+        || !TEST_CHECK_SUCCESS(run, World_SetParent(world, WorldObject_GetId(Object), WorldObject_GetId(parent),
+            false)))
+    {
+        return NULL;
+    }
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, GameMath_FromVector3(localPosition)));
     TEST_CHECK_SUCCESS(run, WorldObject_SetMobility(Object, mobility));
     return Object;
 }
@@ -200,12 +220,12 @@ static void SetLayer(TestRun* run, WorldColliderComponent* collider, CollisionLa
     }
 }
 
-/* The distance of a ray's nearest hit, or -1 when it hits nothing. */
+/* The distance of a ray's nearest hit from @p origin of the scene, or -1 when it hits nothing. */
 static float CastRay(WorldCollision* collision, Vector3 origin, Vector3 direction, const WorldCollisionFilter* filter,
     WorldRayHit* outHit)
 {
     WorldRayHit Hit;
-    if (!WorldCollision_Raycast(collision, origin, direction, 100.0f, filter, &Hit))
+    if (!WorldCollision_Raycast(collision, TestWorld_At(origin), direction, 100.0f, filter, &Hit))
     {
         return -1.0f;
     }
@@ -284,10 +304,11 @@ static void SyncFollowsTheWorld(TestRun* run)
     TEST_CHECK(run, (Hit.Shape.ObjectId == WorldObject_GetId(Crate)) && (Hit.Shape.ShapeIndex == 0U)
         && (Hit.Shape.ShapeType == CollisionShapeType_Box) && (Hit.Shape.Layer == CollisionLayer_Prop)
         && !Hit.Shape.IsTrigger && !Hit.Shape.HasTriangle && IsNearVector(Hit.Normal, (Vector3){ 0.0f, 1.0f, 0.0f })
-        && IsNearVector(Hit.Point, (Vector3){ 0.0f, 1.0f, 0.0f }) && IsNear(Hit.Fraction, 0.09f) && !Hit.IsStartInside);
+        && IsNearVector(TestWorld_ToScene(Hit.Point), (Vector3){ 0.0f, 1.0f, 0.0f }) && IsNear(Hit.Fraction, 0.09f)
+        && !Hit.IsStartInside);
 
     // A move moves the shapes without rebuilding them; a sync without changes does nothing.
-    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Crate, (Vector3){ 10.0f, 0.0f, 0.0f }));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Crate, TestWorld_At((Vector3){ 10.0f, 0.0f, 0.0f })));
     WorldCollision_Sync(Collision);
     WorldCollision_Sync(Collision);
     Stats = WorldCollision_GetStats(Collision);
@@ -327,7 +348,7 @@ static void SyncFollowsTheWorld(TestRun* run)
         WorldCollision_Sync(Collision);
         TEST_CHECK(run, IsNear(CastDown(Collision, 10.0f, 0.0f), 8.0f));
         // A parent's move moves the child's collider.
-        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, (Vector3){ 0.0f, 0.0f, 5.0f }));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, TestWorld_At((Vector3){ 0.0f, 0.0f, 5.0f })));
         WorldCollision_Sync(Collision);
         TEST_CHECK(run, IsNear(CastDown(Collision, 10.0f, 5.0f), 8.0f) && (CastDown(Collision, 10.0f, 0.0f) < 0.0f));
     }
@@ -409,13 +430,13 @@ static void CollidersFollowTheirRotationModeAndTransform(TestRun* run)
     // yaw_only keeps exactly the yaw of the object's forward (its local +Z in the world), and stays upright.
     TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Turned, (Vector3){ 0.3f, 0.7f, 0.0f }));
     WorldCollision_Sync(Collision);
-    Matrix ObjectWorld = WorldObject_GetWorldMatrix(Turned);
-    float Yaw = atan2f(ObjectWorld.m8, ObjectWorld.m10);
+    Matrix4Double ObjectWorld = WorldObject_GetWorldMatrix(Turned);
+    float Yaw = (float)atan2(ObjectWorld.M[8], ObjectWorld.M[10]);
     size_t DebugCount = 0U;
     const WorldCollisionDebugShape* Debug = WorldCollision_GetDebugShapes(Collision, &DebugCount);
     if (TEST_CHECK(run, (Debug != NULL) && (DebugCount == 1U)))
     {
-        Matrix Placed = Debug[0].Transform;
+        Matrix Placed = TestWorld_ToSceneMatrix(&Debug[0].Transform);
         TEST_CHECK(run, (fabsf(Yaw - 0.7f) > 0.01f) // the pitch turns the forward too: not the Euler angle
             && IsNearVector((Vector3){ Placed.m0, Placed.m1, Placed.m2 }, (Vector3){ cosf(Yaw), 0.0f, -sinf(Yaw) })
             && IsNearVector((Vector3){ Placed.m4, Placed.m5, Placed.m6 }, (Vector3){ 0.0f, 1.0f, 0.0f }));
@@ -438,8 +459,8 @@ static void CollidersFollowTheirRotationModeAndTransform(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetRotationMode(Collider, Modes[Mode]));
         WorldCollision_Sync(Collision);
         Debug = WorldCollision_GetDebugShapes(Collision, &DebugCount);
-        TEST_CHECK(run, (DebugCount == 1U) && IsNearVector((Vector3){ Debug[0].Transform.m12, Debug[0].Transform.m13,
-            Debug[0].Transform.m14 }, (Vector3){ 1.0f, 0.0f, -2.0f }));
+        TEST_CHECK(run, (DebugCount == 1U) && IsNearVector(TestWorld_ToScene(Matrix4Double_GetTranslation(
+            &Debug[0].Transform)), (Vector3){ 1.0f, 0.0f, -2.0f }));
     }
     TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Turned, (Vector3){ 1.0f, 1.0f, 1.0f }));
     TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetRotationMode(Collider, WorldColliderRotationMode_YawOnly));
@@ -466,9 +487,11 @@ static void CollidersFollowTheirRotationModeAndTransform(TestRun* run)
         && IsNear(CastRay(Collision, (Vector3){ 5.0f, 0.8f, 0.0f }, Left, NULL, NULL), 3.8f));
     GenericBuffer Ids;
     GenericBuffer_AllocateVariable(&Ids, 4U, sizeof(uint64_t));
-    TEST_CHECK(run, WorldCollision_OverlapSphere(Collision, (Vector3){ 1.9f, 0.0f, 0.0f }, 0.05f, NULL, &Ids) == 1U);
+    TEST_CHECK(run, WorldCollision_OverlapSphere(Collision, TestWorld_At((Vector3){ 1.9f, 0.0f, 0.0f }), 0.05f, NULL,
+        &Ids) == 1U);
     GenericBuffer_Clear(&Ids);
-    TEST_CHECK(run, WorldCollision_OverlapSphere(Collision, (Vector3){ 0.0f, 1.1f, 0.0f }, 0.05f, NULL, &Ids) == 0U);
+    TEST_CHECK(run, WorldCollision_OverlapSphere(Collision, TestWorld_At((Vector3){ 0.0f, 1.1f, 0.0f }), 0.05f, NULL,
+        &Ids) == 0U);
     Memory_Free(Ids._data);
 
     // A parent's uneven scale stretches its child's sphere the same way (semi-axes 0.5, 1.5, 0.5 around y = 3).
@@ -480,7 +503,7 @@ static void CollidersFollowTheirRotationModeAndTransform(TestRun* run)
             false)))
     {
         TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Tall, (Vector3){ 1.0f, 3.0f, 1.0f }));
-        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Child, (Vector3){ 0.0f, 1.0f, 0.0f }));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Child, Vector3Double_Create(0.0, 1.0, 0.0)));
         WorldCollision_Sync(Collision);
         TEST_CHECK(run, IsNear(CastDown(Collision, 20.0f, 0.0f), 5.5f));
     }
@@ -515,7 +538,8 @@ static void OwnShapesSurviveGrowthAndQueriesSeeTheLastSync(TestRun* run)
         }
     }
     WorldCollision_Sync(Collision);
-    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(First[3], (Vector3){ 6.0f, 0.0f, 5.0f })); // moved after the growth
+    // Moved after the growth.
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(First[3], TestWorld_At((Vector3){ 6.0f, 0.0f, 5.0f })));
     WorldCollision_Sync(Collision);
     bool AreAllRight = IsNear(CastDown(Collision, 6.0f, 5.0f), 9.5f);
     for (int Index = 0; Index < 20; Index++)
@@ -552,18 +576,32 @@ static void OwnShapesSurviveGrowthAndQueriesSeeTheLastSync(TestRun* run)
 
 
 // Static functions: the trees against brute force.
+/* Composed in double as the collision world composes it (the rotation mode is full), then split into float axes and a
+ * double translation. */
 static void PlaceOwnShape(const WorldObject* object, const WorldColliderComponent* collider, PlacedOwnShape* outPlaced)
 {
     outPlaced->Id = WorldObject_GetId(object);
     outPlaced->Shape = WorldColliderComponent_GetOwnShape(collider);
-    Matrix Frame = MatrixMultiply(WorldColliderComponent_GetLocalTransform(collider), WorldObject_GetWorldMatrix(object));
-    outPlaced->ToWorld = CollisionAffine_FromMatrix(MatrixMultiply(CollisionShape_GetTransform(&outPlaced->Shape),
-        Frame));
-    CollisionAffine_TryInvert(&outPlaced->ToWorld, &outPlaced->FromWorld);
+    Matrix4Double Local = WorldColliderComponent_GetLocalTransform(collider);
+    Matrix4Double ObjectWorld = WorldObject_GetWorldMatrix(object);
+    Matrix4Double Frame = Matrix4Double_Multiply(&Local, &ObjectWorld);
+    Matrix4Double ShapeTransform = GameMath_FromMatrix(CollisionShape_GetTransform(&outPlaced->Shape));
+    Matrix4Double ToWorld = Matrix4Double_Multiply(&ShapeTransform, &Frame);
+    outPlaced->ToWorld = (WorldCollisionPlacement)
+    {
+        .X = { (float)ToWorld.M[0], (float)ToWorld.M[1], (float)ToWorld.M[2] },
+        .Y = { (float)ToWorld.M[4], (float)ToWorld.M[5], (float)ToWorld.M[6] },
+        .Z = { (float)ToWorld.M[8], (float)ToWorld.M[9], (float)ToWorld.M[10] },
+        .Translation = Matrix4Double_GetTranslation(&ToWorld)
+    };
+    CollisionAffine Axes = { .X = outPlaced->ToWorld.X, .Y = outPlaced->ToWorld.Y, .Z = outPlaced->ToWorld.Z,
+        .Translation = { 0.0f, 0.0f, 0.0f } };
+    CollisionAffine_TryInvert(&Axes, &outPlaced->InverseAxes);
 }
 
 /* Compares every query of the collision world with a scan of every placed shape: the nearest ray hits and the objects
- * a sphere overlaps must be the same. Returns how many queries disagreed. */
+ * a sphere overlaps must be the same. The scan works as the narrowphase does, relative to the query's origin (the ray's
+ * start, the sphere's centre), so the distances agree to the bit. Returns how many queries disagreed. */
 static size_t CompareWithBruteForce(TestRun* run, WorldCollision* collision, const PlacedOwnShape* placed,
     size_t placedCount, uint32_t* state)
 {
@@ -583,14 +621,18 @@ static size_t CompareWithBruteForce(TestRun* run, WorldCollision* collision, con
             continue;
         }
         Vector3 Unit = CollisionMath_Scale(Direction, 1.0f / Length);
+        Vector3Double RayOrigin = TestWorld_At(Origin);
         float Best = 40.0f;
         uint64_t BestId = 0U;
         bool IsTied = false;
         for (size_t Index = 0U; Index < placedCount; Index++)
         {
             CollisionRayHit Hit;
-            if (CollisionGeometry_RaycastShape(&placed[Index].Shape, &placed[Index].ToWorld, &placed[Index].FromWorld,
-                Origin, Unit, 40.0f, &Hit) && (Hit.T <= Best))
+            CollisionAffine ToWorld = WorldCollisionInternal_ToRelative(&placed[Index].ToWorld, RayOrigin);
+            CollisionAffine FromWorld = WorldCollisionInternal_ToRelativeInverse(&placed[Index].ToWorld,
+                &placed[Index].InverseAxes, RayOrigin);
+            if (CollisionGeometry_RaycastShape(&placed[Index].Shape, &ToWorld, &FromWorld,
+                (Vector3){ 0.0f, 0.0f, 0.0f }, Unit, 40.0f, &Hit) && (Hit.T <= Best))
             {
                 IsTied = (BestId != 0U) && (Hit.T == Best);
                 Best = Hit.T;
@@ -598,7 +640,7 @@ static size_t CompareWithBruteForce(TestRun* run, WorldCollision* collision, con
             }
         }
         WorldRayHit Found;
-        bool IsHit = WorldCollision_Raycast(collision, Origin, Direction, 40.0f, NULL, &Found);
+        bool IsHit = WorldCollision_Raycast(collision, RayOrigin, Direction, 40.0f, NULL, &Found);
         bool IsSame = (IsHit == (BestId != 0U)) && (!IsHit || ((Found.Distance == Best)
             && (IsTied || (Found.Shape.ObjectId == BestId))));
         Disagreements += IsSame ? 0U : 1U;
@@ -606,8 +648,9 @@ static size_t CompareWithBruteForce(TestRun* run, WorldCollision* collision, con
         // The objects a sphere touches.
         Vector3 Center = RandomVector(state, RANDOM_SCENE_HALF_SIZE + 2.0f);
         float Radius = RandomRange(state, 0.2f, 3.0f);
+        Vector3Double SphereCenter = TestWorld_At(Center);
         CollisionShape Probe = MakeSphere(Radius);
-        CollisionPose Pose = { .Position = Center, .Rotation = QuaternionIdentity() };
+        CollisionPose Pose = { .Position = { 0.0f, 0.0f, 0.0f }, .Rotation = QuaternionIdentity() };
         CollisionAffine PoseToWorld = CollisionPose_ToAffine(&Pose);
         CollisionAffine Local = CollisionAffine_FromCenterRotation(Probe.Center, Probe.Rotation);
         CollisionAffine ProbeToWorld = CollisionAffine_Multiply(&PoseToWorld, &Local);
@@ -618,7 +661,8 @@ static size_t CompareWithBruteForce(TestRun* run, WorldCollision* collision, con
         {
             CollisionConvex Target;
             CollisionContact Contact;
-            if (CollisionConvex_FromShape(&placed[Index].Shape, &placed[Index].ToWorld, &Target)
+            CollisionAffine ToWorld = WorldCollisionInternal_ToRelative(&placed[Index].ToWorld, SphereCenter);
+            if (CollisionConvex_FromShape(&placed[Index].Shape, &ToWorld, &Target)
                 && CollisionGeometry_Collide(&ProbeView, &Target, 0.0f, &Contact))
             {
                 uint64_t Id = placed[Index].Id; // ids ascend: the objects were made in order
@@ -626,7 +670,7 @@ static size_t CompareWithBruteForce(TestRun* run, WorldCollision* collision, con
             }
         }
         GenericBuffer_Clear(&Ids);
-        WorldCollision_OverlapSphere(collision, Center, Radius, NULL, &Ids);
+        WorldCollision_OverlapSphere(collision, SphereCenter, Radius, NULL, &Ids);
         Disagreements += AreIdsEqual(&Ids, (const uint64_t*)(const void*)Expected._data, Expected._count) ? 0U : 1U;
     }
     Memory_Free(Ids._data);
@@ -698,7 +742,7 @@ static void TheTreesAgreeWithBruteForce(TestRun* run)
         for (uint32_t Index = 0U; Index < RANDOM_OBJECT_COUNT; Index++)
         {
             uint32_t Choice = NextRandom(&State) % 8U;
-            Vector3 Position = WorldObject_GetPosition(Objects[Index]);
+            Vector3 Position = TestWorld_ToScene(WorldObject_GetPosition(Objects[Index]));
             if (Choice < 3U)
             {
                 Position = CollisionMath_Add(Position, RandomVector(&State, 0.05f));
@@ -713,7 +757,7 @@ static void TheTreesAgreeWithBruteForce(TestRun* run)
                 TEST_CHECK_SUCCESS(run, WorldObject_SetMobility(Objects[Index], IsStatic ? WorldMobility_Movable
                     : WorldMobility_Static));
             }
-            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Objects[Index], Position));
+            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Objects[Index], TestWorld_At(Position)));
         }
         WorldCollision_Sync(Scene.Collision);
         for (uint32_t Index = 0U; Index < RANDOM_OBJECT_COUNT; Index++)
@@ -779,7 +823,7 @@ static void FiltersChooseWhatAQuerySees(TestRun* run)
     // Every hit along the ray, nearest first; the trigger only when asked for.
     GenericBuffer Hits;
     GenericBuffer_AllocateVariable(&Hits, 4U, sizeof(WorldRayHit));
-    TEST_CHECK(run, WorldCollision_RaycastAll(Collision, Start, Right, 100.0f, NULL, &Hits) == 3U);
+    TEST_CHECK(run, WorldCollision_RaycastAll(Collision, TestWorld_At(Start), Right, 100.0f, NULL, &Hits) == 3U);
     const WorldRayHit* All = (const WorldRayHit*)(const void*)Hits._data;
     TEST_CHECK(run, (Hits._count == 3U) && (All[0].Shape.ObjectId == Prop) && (All[1].Shape.ObjectId == Wall)
         && (All[2].Shape.ObjectId == Person) && IsNear(All[0].Distance, 4.5f) && IsNear(All[2].Distance, 8.5f));
@@ -791,15 +835,15 @@ static void FiltersChooseWhatAQuerySees(TestRun* run)
     Vector3 Middle = { 3.0f, 0.0f, 0.0f };
     Vector3 Wide = { 4.0f, 1.0f, 1.0f };
     uint64_t Everything[] = { Prop, Wall, Person, Zone };
-    WorldCollision_OverlapBox(Collision, Middle, Wide, QuaternionIdentity(), NULL, &Ids);
+    WorldCollision_OverlapBox(Collision, TestWorld_At(Middle), Wide, QuaternionIdentity(), NULL, &Ids);
     TEST_CHECK(run, AreIdsEqual(&Ids, Everything, 4U));
     GenericBuffer_Clear(&Ids);
     Filter = WorldCollisionFilter_Create(COLLISION_LAYER_MASK_ALL, WorldCollisionTriggerMode_Ignore);
-    WorldCollision_OverlapBox(Collision, Middle, Wide, QuaternionIdentity(), &Filter, &Ids);
+    WorldCollision_OverlapBox(Collision, TestWorld_At(Middle), Wide, QuaternionIdentity(), &Filter, &Ids);
     TEST_CHECK(run, AreIdsEqual(&Ids, Everything, 3U));
     GenericBuffer_Clear(&Ids);
     Filter.TriggerMode = WorldCollisionTriggerMode_Only;
-    WorldCollision_OverlapBox(Collision, Middle, Wide, QuaternionIdentity(), &Filter, &Ids);
+    WorldCollision_OverlapBox(Collision, TestWorld_At(Middle), Wide, QuaternionIdentity(), &Filter, &Ids);
     TEST_CHECK(run, AreIdsEqual(&Ids, &Zone, 1U));
 
     // An ignored object, and with its subtree what it carries.
@@ -873,12 +917,11 @@ static void MobilityChoosesTheTreeAndStaticMovesAreWarnedOnce(TestRun* run)
         WorldCollision* Collision = Scene.Collision;
         WorldObject* Statue = AddObject(run, &Scene.World, (Vector3){ 0.0f, 0.0f, 0.0f }, WorldMobility_Static);
         WorldObject* Base = AddObject(run, &Scene.World, (Vector3){ 5.0f, 0.0f, 0.0f }, WorldMobility_Movable);
-        WorldObject* Rider = AddObject(run, &Scene.World, (Vector3){ 0.0f, 0.0f, 0.0f }, WorldMobility_Static);
+        WorldObject* Rider = (Base != NULL) ? AddChild(run, &Scene.World, Base, (Vector3){ 0.0f, 0.0f, 0.0f },
+            WorldMobility_Static) : NULL;
         if ((Statue != NULL) && (Base != NULL) && (Rider != NULL)
             && (AddOwnShape(run, &Scene.World, Statue, &Ball) != NULL)
-            && (AddOwnShape(run, &Scene.World, Rider, &Ball) != NULL)
-            && TEST_CHECK_SUCCESS(run, World_SetParent(&Scene.World, WorldObject_GetId(Rider), WorldObject_GetId(Base),
-                false)))
+            && (AddOwnShape(run, &Scene.World, Rider, &Ball) != NULL))
         {
             WorldCollision_Sync(Collision);
             WorldCollision_Sync(QuietCollision);
@@ -889,7 +932,8 @@ static void MobilityChoosesTheTreeAndStaticMovesAreWarnedOnce(TestRun* run)
             // A static object that moves is found where it went, and warned about once.
             for (int Step = 1; Step <= 3; Step++)
             {
-                TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Statue, (Vector3){ 0.0f, 0.0f, 3.0f * (float)Step }));
+                TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Statue, TestWorld_At((Vector3){ 0.0f, 0.0f,
+                    3.0f * (float)Step })));
                 WorldCollision_Sync(Collision);
                 WorldCollision_Sync(QuietCollision);
             }
@@ -948,7 +992,7 @@ static void TriggersReportEnterAndExitOnce(TestRun* run)
     size_t EventCounts[sizeof(Path) / sizeof(Path[0])];
     for (size_t Step = 0U; Step < (sizeof(Path) / sizeof(Path[0])); Step++)
     {
-        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Visitor, (Vector3){ Path[Step], 0.0f, 0.0f }));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Visitor, TestWorld_At((Vector3){ Path[Step], 0.0f, 0.0f })));
         WorldCollision_Sync(Collision);
         WorldCollision_GetTriggerEvents(Collision, &EventCounts[Step]);
     }
@@ -965,7 +1009,7 @@ static void TriggersReportEnterAndExitOnce(TestRun* run)
     TEST_CHECK(run, (WorldCollision_GetTriggerEvents(Collision, &Count) == NULL) && (Count == 0U));
 
     // Removing the visitor ends its pair; so does disabling the trigger.
-    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Visitor, (Vector3){ 0.0f, 0.0f, 0.0f }));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Visitor, TestWorld_At((Vector3){ 0.0f, 0.0f, 0.0f })));
     WorldCollision_Sync(Collision);
     TEST_CHECK(run, WorldCollision_GetStats(Collision).TriggerPairCount == 1U);
     TEST_CHECK_SUCCESS(run, World_RemoveObject(&Scene.World, VisitorId));
@@ -1013,8 +1057,8 @@ static void TriggersReportEnterAndExitOnce(TestRun* run)
         // Events of one sync come by trigger id, then other id, enters before exits: the ghost, a prop again, moves
         // into the other trigger as the second visitor leaves.
         TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetOverridden(GhostCollider, WorldColliderSetting_Layer, false));
-        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Ghost, (Vector3){ -0.6f, 0.5f, -0.6f }));
-        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Second, (Vector3){ 5.0f, 0.0f, 0.0f }));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Ghost, TestWorld_At((Vector3){ -0.6f, 0.5f, -0.6f })));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Second, TestWorld_At((Vector3){ 5.0f, 0.0f, 0.0f })));
         WorldCollision_Sync(Collision);
         Events = WorldCollision_GetTriggerEvents(Collision, &Count);
         if (TEST_CHECK(run, Count == 3U))
@@ -1077,7 +1121,7 @@ static void QueriesReportShapesPartsAndPushOuts(TestRun* run)
         && (Hit.Shape.Layer == CollisionLayer_World) && IsNearVector(Hit.Normal, (Vector3){ 0.0f, 0.0f, 1.0f }));
     GenericBuffer Hits;
     GenericBuffer_AllocateVariable(&Hits, 4U, sizeof(WorldRayHit));
-    TEST_CHECK(run, WorldCollision_RaycastAll(Collision, Origin, Back, 100.0f, NULL, &Hits) == 2U);
+    TEST_CHECK(run, WorldCollision_RaycastAll(Collision, TestWorld_At(Origin), Back, 100.0f, NULL, &Hits) == 2U);
     const WorldRayHit* All = (const WorldRayHit*)(const void*)Hits._data;
     TEST_CHECK(run, (Hits._count == 2U) && (All[0].Shape.ShapeIndex == 1U) && (All[1].Shape.ShapeIndex == 0U)
         && IsNear(All[1].Distance, 4.95f) && (strcmp((const char*)All[1].Shape.ShapeName, "panel") == 0));
@@ -1085,24 +1129,24 @@ static void QueriesReportShapesPartsAndPushOuts(TestRun* run)
 
     // A fast sphere does not pass through the thin panel: one cast over 200 m stops where it touches.
     WorldCastHit Cast;
-    if (TEST_CHECK(run, WorldCollision_SweepSphere(Collision, (Vector3){ 0.0f, 1.5f, 100.0f },
-        (Vector3){ 0.0f, 1.5f, -100.0f }, 0.1f, NULL, &Cast)))
+    if (TEST_CHECK(run, WorldCollision_SweepSphere(Collision, TestWorld_At((Vector3){ 0.0f, 1.5f, 100.0f }),
+        TestWorld_At((Vector3){ 0.0f, 1.5f, -100.0f }), 0.1f, NULL, &Cast)))
     {
         TEST_CHECK(run, (Cast.Shape.ObjectId == DoorId) && (Cast.Shape.ShapeIndex == 0U) && (Cast.CastShapeIndex == 0U)
             && IsNear(Cast.Distance, 99.85f) && IsNear(Cast.Fraction * 200.0f, 99.85f) && !Cast.IsStartPenetrating
             && IsNearVector(Cast.Normal, (Vector3){ 0.0f, 0.0f, 1.0f })
-            && IsNear(Cast.Point.z, 0.05f) && IsNear(Cast.PointOnCast.z, 0.05f));
+            && IsNear(TestWorld_ToScene(Cast.Point).z, 0.05f) && IsNear(TestWorld_ToScene(Cast.PointOnCast).z, 0.05f));
     }
     // A cast that starts inside reports the push-out.
-    if (TEST_CHECK(run, WorldCollision_SweepSphere(Collision, (Vector3){ -0.2f, 1.5f, 0.02f },
-        (Vector3){ -0.2f, 1.5f, 1.0f }, 0.1f, NULL, &Cast)))
+    if (TEST_CHECK(run, WorldCollision_SweepSphere(Collision, TestWorld_At((Vector3){ -0.2f, 1.5f, 0.02f }),
+        TestWorld_At((Vector3){ -0.2f, 1.5f, 1.0f }), 0.1f, NULL, &Cast)))
     {
         TEST_CHECK(run, Cast.IsStartPenetrating && (Cast.Fraction == 0.0f) && IsNear(Cast.PenetrationDepth, 0.13f)
             && IsNearVector(Cast.Normal, (Vector3){ 0.0f, 0.0f, 1.0f }));
     }
     // A turning stick hits the post on its way round; without the turn it misses.
     CollisionShape Stick = MakeBox((Vector3){ 2.0f, 0.1f, 0.1f });
-    Vector3 Pivot = { 0.0f, 1.5f, 3.0f };
+    Vector3Double Pivot = TestWorld_At((Vector3){ 0.0f, 1.5f, 3.0f });
     Quaternion Turned = QuaternionFromAxisAngle((Vector3){ 0.0f, 1.0f, 0.0f }, PI * 0.5f);
     TEST_CHECK(run, !WorldCollision_CastShape(Collision, &Stick, 1U, Pivot, QuaternionIdentity(), Pivot,
         QuaternionIdentity(), NULL, &Cast));
@@ -1118,11 +1162,11 @@ static void QueriesReportShapesPartsAndPushOuts(TestRun* run)
     GenericBuffer Ids;
     GenericBuffer_AllocateVariable(&Ids, 4U, sizeof(uint64_t));
     uint64_t Both[] = { DoorId, WorldObject_GetId(Post) };
-    WorldCollision_OverlapBox(Collision, (Vector3){ 0.5f, 1.0f, 0.5f }, (Vector3){ 1.0f, 1.0f, 1.5f },
+    WorldCollision_OverlapBox(Collision, TestWorld_At((Vector3){ 0.5f, 1.0f, 0.5f }), (Vector3){ 1.0f, 1.0f, 1.5f },
         QuaternionIdentity(), NULL, &Ids);
     TEST_CHECK(run, AreIdsEqual(&Ids, Both, 2U));
     GenericBuffer_Clear(&Ids);
-    WorldCollision_OverlapCapsule(Collision, (Vector3){ 0.4f, 1.0f, 0.2f }, 0.07f, 0.5f, NULL, &Ids);
+    WorldCollision_OverlapCapsule(Collision, TestWorld_At((Vector3){ 0.4f, 1.0f, 0.2f }), 0.07f, 0.5f, NULL, &Ids);
     TEST_CHECK(run, AreIdsEqual(&Ids, Both, 1U));
     Memory_Free(Ids._data);
 
@@ -1130,7 +1174,7 @@ static void QueriesReportShapesPartsAndPushOuts(TestRun* run)
     GenericBuffer Manifolds;
     GenericBuffer_AllocateVariable(&Manifolds, 4U, sizeof(WorldContactManifold));
     CollisionShape Block = MakeBox((Vector3){ 0.1f, 0.1f, 0.1f });
-    Vector3 Resting = { -0.2f, 1.5f, 0.14f };
+    Vector3Double Resting = TestWorld_At((Vector3){ -0.2f, 1.5f, 0.14f });
     TEST_CHECK(run, WorldCollision_CollideShape(Collision, &Block, 1U, Resting, QuaternionIdentity(), 0.0f, NULL,
         &Manifolds) == 1U);
     const WorldContactManifold* Contact = (const WorldContactManifold*)(const void*)Manifolds._data;
@@ -1150,12 +1194,55 @@ static void QueriesReportShapesPartsAndPushOuts(TestRun* run)
     }
     // Out to a separation: speculative contacts 5 cm away.
     GenericBuffer_Clear(&Manifolds);
-    Vector3 Near = { -0.2f, 1.5f, 0.2f };
+    Vector3Double Near = TestWorld_At((Vector3){ -0.2f, 1.5f, 0.2f });
     TEST_CHECK(run, WorldCollision_CollideShape(Collision, &Block, 1U, Near, QuaternionIdentity(), 0.0f, NULL,
         &Manifolds) == 0U);
     TEST_CHECK(run, (WorldCollision_CollideShape(Collision, &Block, 1U, Near, QuaternionIdentity(), 0.1f, NULL,
         &Manifolds) == 1U) && IsNear(((const WorldContactManifold*)(const void*)Manifolds._data)->Separation, 0.05f));
     Memory_Free(Manifolds._data);
+    CollisionScene_Deconstruct(run, &Scene);
+}
+
+/* T33: a ray finds a 1 cm wall where it is, to a micrometre, straight at its face, slanted across it and half a
+ * millimetre inside its edge: 173 km from the world's origin in the far run, where a float's step is 8 mm. */
+static void ARayFindsAThinWallWhereItIs(TestRun* run)
+{
+    CollisionScene Scene;
+    if (!CollisionScene_Construct(run, &Scene, NULL, NULL))
+    {
+        CollisionScene_Deconstruct(run, &Scene);
+        return;
+    }
+    CollisionShape Board = MakeBox((Vector3){ 0.005f, 1.0f, 1.0f });
+    WorldObject* Wall = AddObject(run, &Scene.World, (Vector3){ 2.345f, 1.0f, 0.123f }, WorldMobility_Static);
+    if ((Wall == NULL) || (AddOwnShape(run, &Scene.World, Wall, &Board) == NULL))
+    {
+        CollisionScene_Deconstruct(run, &Scene);
+        return;
+    }
+    WorldCollision_Sync(Scene.Collision);
+    // The wall's face is at x = 2.34, the rays start at x = 0.
+    const Vector3 Directions[] = { { 1.0f, 0.0f, 0.0f }, { 1.0f, 0.2f, -0.4f } };
+    Vector3Double Origin = TestWorld_At((Vector3){ 0.0f, 0.9f, 0.1f });
+    // Half a millimetre inside the wall's side edge (at z = 1.123): the static tree's box has no margin, so the tree's
+    // walk must measure the ray in double too.
+    WorldRayHit Edge;
+    TEST_CHECK(run, WorldCollision_Raycast(Scene.Collision, TestWorld_At((Vector3){ 0.0f, 0.9f, 1.1225f }),
+        (Vector3){ 1.0f, 0.0f, 0.0f }, 10.0f, NULL, &Edge)
+        && (Vector3Double_Distance(Edge.Point, TestWorld_At((Vector3){ 2.34f, 0.9f, 1.1225f })) < 1e-6));
+    for (size_t Index = 0U; Index < (sizeof(Directions) / sizeof(Directions[0])); Index++)
+    {
+        Vector3 Direction = Directions[Index];
+        WorldRayHit Hit;
+        if (TEST_CHECK(run, WorldCollision_Raycast(Scene.Collision, Origin, Direction, 10.0f, NULL, &Hit)))
+        {
+            double Along = 2.34 / (double)Direction.x;
+            Vector3Double Expected = Vector3Double_AddScaled(Origin, GameMath_FromVector3(Direction), Along);
+            double Distance = Along * (double)Vector3Length(Direction);
+            TEST_CHECK(run, (Vector3Double_Distance(Hit.Point, Expected) < 1e-6)
+                && (fabs((double)Hit.Distance - Distance) < 1e-6));
+        }
+    }
     CollisionScene_Deconstruct(run, &Scene);
 }
 
@@ -1200,7 +1287,7 @@ static void MeshesReportTheirTriangles(TestRun* run)
             const float* Vertex = &PatchVertices[Corners[Corner] * 3U];
             Rebuilt = CollisionMath_AddScaled(Rebuilt, (Vector3){ Vertex[0], Vertex[1], Vertex[2] }, Weight);
         }
-        TEST_CHECK(run, (Hit.Shape.SourceTriangle == 1U) && IsNearVector(Rebuilt, Hit.Point));
+        TEST_CHECK(run, (Hit.Shape.SourceTriangle == 1U) && IsNearVector(Rebuilt, TestWorld_ToScene(Hit.Point)));
     }
     // One-sided: a ray from below passes through.
     TEST_CHECK(run, CastRay(Collision, (Vector3){ 21.0f, -3.0f, 1.0f }, (Vector3){ 0.0f, 1.0f, 0.0f }, NULL, NULL)
@@ -1208,18 +1295,18 @@ static void MeshesReportTheirTriangles(TestRun* run)
 
     // A character's capsule lands on it.
     WorldCastHit Cast;
-    if (TEST_CHECK(run, WorldCollision_SweepCapsule(Collision, (Vector3){ 20.0f, 5.0f, 0.5f },
-        (Vector3){ 20.0f, -5.0f, 0.5f }, 0.3f, 1.8f, NULL, &Cast)))
+    if (TEST_CHECK(run, WorldCollision_SweepCapsule(Collision, TestWorld_At((Vector3){ 20.0f, 5.0f, 0.5f }),
+        TestWorld_At((Vector3){ 20.0f, -5.0f, 0.5f }), 0.3f, 1.8f, NULL, &Cast)))
     {
         TEST_CHECK(run, Cast.Shape.HasTriangle && IsNear(Cast.Distance, 4.1f) && IsNear(Cast.Fraction, 0.41f)
-            && IsNearVector(Cast.Normal, (Vector3){ 0.0f, 1.0f, 0.0f }) && IsNear(Cast.Point.y, 0.0f)
+            && IsNearVector(Cast.Normal, (Vector3){ 0.0f, 1.0f, 0.0f }) && IsNear(TestWorld_ToScene(Cast.Point).y, 0.0f)
             && (Cast.Shape.MaterialIndex == 0));
     }
     // A box sunk 1 cm across the seam touches both triangles, with no ghost contact along the flat seam.
     GenericBuffer Manifolds;
     GenericBuffer_AllocateVariable(&Manifolds, 4U, sizeof(WorldContactManifold));
     CollisionShape Crate = MakeBox((Vector3){ 0.5f, 0.5f, 0.5f });
-    size_t Found = WorldCollision_CollideShape(Collision, &Crate, 1U, (Vector3){ 20.0f, 0.49f, 0.0f },
+    size_t Found = WorldCollision_CollideShape(Collision, &Crate, 1U, TestWorld_At((Vector3){ 20.0f, 0.49f, 0.0f }),
         QuaternionIdentity(), 0.0f, NULL, &Manifolds);
     TEST_CHECK(run, Found == 2U);
     const WorldContactManifold* Contacts = (const WorldContactManifold*)(const void*)Manifolds._data;
@@ -1269,11 +1356,11 @@ static void PlanesAreBoundedOrInfinite(TestRun* run)
     GenericBuffer_AllocateVariable(&Ids, 4U, sizeof(uint64_t));
     uint64_t GroundId = WorldObject_GetId(Ground);
     uint64_t BoardId = WorldObject_GetId(Board);
-    WorldCollision_OverlapSphere(Collision, (Vector3){ 500.0f, -10.2f, 500.0f }, 0.1f, NULL, &Ids);
+    WorldCollision_OverlapSphere(Collision, TestWorld_At((Vector3){ 500.0f, -10.2f, 500.0f }), 0.1f, NULL, &Ids);
     TEST_CHECK(run, AreIdsEqual(&Ids, &GroundId, 1U));
     WorldCastHit Cast;
-    TEST_CHECK(run, WorldCollision_SweepSphere(Collision, (Vector3){ 300.0f, 0.0f, 0.0f },
-        (Vector3){ 300.0f, -20.0f, 0.0f }, 0.5f, NULL, &Cast) && (Cast.Shape.ObjectId == GroundId)
+    TEST_CHECK(run, WorldCollision_SweepSphere(Collision, TestWorld_At((Vector3){ 300.0f, 0.0f, 0.0f }),
+        TestWorld_At((Vector3){ 300.0f, -20.0f, 0.0f }), 0.5f, NULL, &Cast) && (Cast.Shape.ObjectId == GroundId)
         && IsNear(Cast.Distance, 9.5f) && IsNearVector(Cast.Normal, (Vector3){ 0.0f, 1.0f, 0.0f }));
 
     // The rectangle: hit from the front inside its extents only, never from behind.
@@ -1286,10 +1373,10 @@ static void PlanesAreBoundedOrInfinite(TestRun* run)
         < 0.0f));
     // A ball resting on it touches it; one coming up from behind does not (one-way at depth 0).
     GenericBuffer_Clear(&Ids);
-    WorldCollision_OverlapSphere(Collision, (Vector3){ 0.0f, 5.09f, 10.0f }, 0.1f, NULL, &Ids);
+    WorldCollision_OverlapSphere(Collision, TestWorld_At((Vector3){ 0.0f, 5.09f, 10.0f }), 0.1f, NULL, &Ids);
     TEST_CHECK(run, AreIdsEqual(&Ids, &BoardId, 1U));
     GenericBuffer_Clear(&Ids);
-    WorldCollision_OverlapSphere(Collision, (Vector3){ 0.0f, 4.95f, 10.0f }, 0.1f, NULL, &Ids);
+    WorldCollision_OverlapSphere(Collision, TestWorld_At((Vector3){ 0.0f, 4.95f, 10.0f }), 0.1f, NULL, &Ids);
     TEST_CHECK(run, Ids._count == 0U);
     // A query's own plane finds what rests on it (a plane never pairs with a plane).
     WorldObject* Marble = AddObject(run, &Scene.World, (Vector3){ 0.5f, 5.05f, 10.5f }, WorldMobility_Movable);
@@ -1299,8 +1386,8 @@ static void PlanesAreBoundedOrInfinite(TestRun* run)
         WorldCollision_Sync(Collision);
         uint64_t MarbleId = WorldObject_GetId(Marble);
         GenericBuffer_Clear(&Ids);
-        WorldCollision_OverlapShape(Collision, &Shelf, 1U, (Vector3){ 0.0f, 5.0f, 10.0f }, QuaternionIdentity(), NULL,
-            &Ids);
+        WorldCollision_OverlapShape(Collision, &Shelf, 1U, TestWorld_At((Vector3){ 0.0f, 5.0f, 10.0f }),
+            QuaternionIdentity(), NULL, &Ids);
         TEST_CHECK(run, AreIdsEqual(&Ids, &MarbleId, 1U));
     }
     Memory_Free(Ids._data);
@@ -1338,7 +1425,7 @@ static void TheDebugListShowsEveryActiveShape(TestRun* run)
     bool HasZone = false;
     for (size_t Index = 0U; Index < Count; Index++)
     {
-        Vector3 Center = Vector3Transform((Vector3){ 0.0f, 0.0f, 0.0f }, Shapes[Index].Transform);
+        Vector3 Center = TestWorld_ToScene(Matrix4Double_GetTranslation(&Shapes[Index].Transform));
         if (Shapes[Index].Shape->Type == CollisionShapeType_Sphere)
         {
             HasHandle = IsNearVector(Center, (Vector3){ 3.4f, 1.0f, 0.1f }) && Shapes[Index].IsStatic
@@ -1431,10 +1518,11 @@ void WorldCollisionTests_Run(TestRun* run)
             MobilityChoosesTheTreeAndStaticMovesAreWarnedOnce },
         { "triggers_report_enter_and_exit_once", TriggersReportEnterAndExitOnce },
         { "queries_report_shapes_parts_and_push_outs", QueriesReportShapesPartsAndPushOuts },
+        { "a_ray_finds_a_thin_wall_where_it_is", ARayFindsAThinWallWhereItIs },
         { "meshes_report_their_triangles", MeshesReportTheirTriangles },
         { "planes_are_bounded_or_infinite", PlanesAreBoundedOrInfinite },
         { "the_debug_list_shows_every_active_shape", TheDebugListShowsEveryActiveShape },
         { "problems_are_warned_once", ProblemsAreWarnedOnce },
     };
-    TestRun_RunSuite(run, "WorldCollision", Cases, sizeof(Cases) / sizeof(Cases[0]));
+    TestWorld_RunSuite(run, "WorldCollision", "WorldCollisionFar", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

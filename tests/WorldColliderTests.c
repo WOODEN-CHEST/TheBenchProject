@@ -540,10 +540,10 @@ static void TheColliderSettersCheckTheirValues(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetMass(Collider, COLLISION_MAX_MASS));
         TEST_CHECK_SUCCESS(run, WorldColliderComponent_SetLocalTransform(Collider, (Vector3){ 0.0f, 0.5f, 0.0f },
             (Vector3){ 0.0f, PI * 0.5f, 0.0f }, (Vector3){ 2.0f, 1.0f, 1.0f }));
-        Matrix Local = WorldColliderComponent_GetLocalTransform(Collider);
-        Vector3 Moved = Vector3Transform((Vector3){ 1.0f, 0.0f, 0.0f }, Local);
+        Matrix4Double Local = WorldColliderComponent_GetLocalTransform(Collider);
+        Vector3Double Moved = Matrix4Double_TransformPoint(&Local, Vector3Double_Create(1.0, 0.0, 0.0));
         // Scale first (x 2), then the turn (X to -Z), then the offset.
-        TEST_CHECK(run, IsNear(Moved.x, 0.0f) && IsNear(Moved.y, 0.5f) && IsNear(Moved.z, -2.0f));
+        TEST_CHECK(run, IsNear((float)Moved.X, 0.0f) && IsNear((float)Moved.Y, 0.5f) && IsNear((float)Moved.Z, -2.0f));
     }
     TestWorld_Deconstruct(run, &TestWorld, &Keys);
 }

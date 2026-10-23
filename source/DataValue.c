@@ -14,7 +14,7 @@
  *  bound how many values there are: an empty string counts its end, a list or compound its own byte. */
 #define DATA_SIZE_BOOL ((size_t)1)
 #define DATA_SIZE_EIGHT_BYTES ((size_t)8)
-#define DATA_SIZE_VECTOR3 ((size_t)12)
+#define DATA_SIZE_VECTOR3 ((size_t)24)
 #define DATA_SIZE_COLOR ((size_t)4)
 #define DATA_SIZE_TYPE_BYTE ((size_t)1)
 #define DATA_SIZE_STRING_END ((size_t)1)
@@ -44,11 +44,6 @@ static bool IsKnownType(DataType type)
 static bool IsFinite(double value)
 {
     return !Math_IsNaNDouble(value) && !Math_IsInfinityDouble(value);
-}
-
-static bool IsFloatFinite(float value)
-{
-    return !Math_IsNaNFloat(value) && !Math_IsInfinityFloat(value);
 }
 
 /* Byte order of two names, the shorter first when one is a prefix of the other. */
@@ -418,8 +413,7 @@ Error DataValueInternal_Validate(const DataValue* value, const KeyRegistry* keys
             return ((keys == NULL) || (KeyRegistry_GetText(keys, value->KeyValue) != NULL)) ? Error_CreateSuccess()
                 : DataPath_MakeError(path, ErrorCode_ArgumentOutOfRange, "the key is not an id of the key registry");
         case DataType_Vector3:
-            return (IsFloatFinite(value->Vector3Value.x) && IsFloatFinite(value->Vector3Value.y)
-                && IsFloatFinite(value->Vector3Value.z)) ? Error_CreateSuccess()
+            return Vector3Double_IsFinite(value->Vector3Value) ? Error_CreateSuccess()
                 : DataPath_MakeError(path, ErrorCode_ArgumentOutOfRange, "every component of the vector3 must be finite");
         case DataType_DateTime:
             return GameCalendar_IsDateTimeValid(value->DateTimeValue) ? Error_CreateSuccess()
@@ -702,8 +696,8 @@ bool DataValue_Equals(const DataValue* a, const DataValue* b)
         case DataType_Object:
             return a->ObjectValue == b->ObjectValue;
         case DataType_Vector3:
-            return (a->Vector3Value.x == b->Vector3Value.x) && (a->Vector3Value.y == b->Vector3Value.y)
-                && (a->Vector3Value.z == b->Vector3Value.z);
+            return (a->Vector3Value.X == b->Vector3Value.X) && (a->Vector3Value.Y == b->Vector3Value.Y)
+                && (a->Vector3Value.Z == b->Vector3Value.Z);
         case DataType_Color:
             return (a->ColorValue.r == b->ColorValue.r) && (a->ColorValue.g == b->ColorValue.g)
                 && (a->ColorValue.b == b->ColorValue.b) && (a->ColorValue.a == b->ColorValue.a);

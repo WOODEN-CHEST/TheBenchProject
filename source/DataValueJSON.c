@@ -182,8 +182,8 @@ static Error ReadWrapper(JSONRead* read, const unsigned char* name, const JSONOb
             Result = GameJSON_ValueToUInt64(json, &outValue->ObjectValue);
             break;
         case JSONWrapper_Vector3:
-            *outValue = DataValue_FromVector3((Vector3){ 0.0f, 0.0f, 0.0f });
-            Result = GameJSON_ParseVector3(json, &outValue->Vector3Value);
+            *outValue = DataValue_FromVector3(Vector3Double_Zero());
+            Result = GameJSON_ParseVector3Double(json, &outValue->Vector3Value);
             break;
         case JSONWrapper_Color:
             *outValue = DataValue_FromColor((Color){ 0, 0, 0, 0 });
@@ -577,7 +577,7 @@ Error DataValueInternal_WriteJSON(const DataValue* value, const KeyRegistry* key
             Result = GameJSON_CreateUInt64Value(pool, value->ObjectValue, &Inner);
             return (Result.Code == ErrorCode_Success) ? CreateWrapper(pool, JSONWrapper_Object, &Inner, outJSON) : Result;
         case DataType_Vector3:
-            Result = GameJSON_CreateVector3Value(pool, value->Vector3Value, &Inner);
+            Result = GameJSON_CreateVector3DoubleValue(pool, value->Vector3Value, &Inner);
             return (Result.Code == ErrorCode_Success) ? CreateWrapper(pool, JSONWrapper_Vector3, &Inner, outJSON) : Result;
         case DataType_Color:
             Result = GameJSON_CreateColorValue(pool, value->ColorValue, &Inner);

@@ -230,14 +230,14 @@ static float WrapAngle(float angle)
 /* The yaw an object's world matrix faces: its +Z axis turned about +Y. */
 static float GetObjectYaw(const WorldObject* object)
 {
-    Matrix WorldMatrix = WorldObject_GetWorldMatrix(object);
-    float ForwardX = WorldMatrix.m8;
-    float ForwardZ = WorldMatrix.m10;
-    if ((fabsf(ForwardX) < 1e-6f) && (fabsf(ForwardZ) < 1e-6f))
+    Matrix4Double WorldMatrix = WorldObject_GetWorldMatrix(object);
+    double ForwardX = WorldMatrix.M[8];
+    double ForwardZ = WorldMatrix.M[10];
+    if ((fabs(ForwardX) < 1e-6) && (fabs(ForwardZ) < 1e-6))
     {
         return 0.0f;
     }
-    return atan2f(ForwardX, ForwardZ);
+    return (float)atan2(ForwardX, ForwardZ);
 }
 
 
@@ -515,8 +515,8 @@ Error WorldCharacterComponent_SetInput(WorldCharacterComponent* self, const Char
     return Error_CreateSuccess();
 }
 
-Vector3 WorldCharacterComponent_GetEyePosition(const WorldCharacterComponent* self)
+Vector3Double WorldCharacterComponent_GetEyePosition(const WorldCharacterComponent* self)
 {
-    Vector3 Feet = WorldObject_GetWorldPosition(WorldComponent_GetOwner(&self->Base));
-    return (Vector3){ Feet.x, Feet.y + self->_state.EyeHeight, Feet.z };
+    Vector3Double Feet = WorldObject_GetWorldPosition(WorldComponent_GetOwner(&self->Base));
+    return Vector3Double_Create(Feet.X, Feet.Y + (double)self->_state.EyeHeight, Feet.Z);
 }

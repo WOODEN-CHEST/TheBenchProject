@@ -4,7 +4,7 @@
 
 /*
  * The dynamic bounding volume tree (source/WorldCollisionTree.h), after Box2D's b2DynamicTree: surface-area-guided
- * insertion, AVL rotations on the way back up, a free list of nodes in one array.
+ * insertion, AVL rotations on the way back up, a free list of nodes in one array. Boxes in double (T33).
  */
 
 
@@ -14,35 +14,13 @@
 
 
 // Static functions: boxes.
-static Vector3 MinVector(Vector3 a, Vector3 b)
-{
-    return (Vector3){ .x = fminf(a.x, b.x), .y = fminf(a.y, b.y), .z = fminf(a.z, b.z) };
-}
-
-static Vector3 MaxVector(Vector3 a, Vector3 b)
-{
-    return (Vector3){ .x = fmaxf(a.x, b.x), .y = fmaxf(a.y, b.y), .z = fmaxf(a.z, b.z) };
-}
-
 /* Half the surface area of a box (the insertion cost). */
-static float GetArea(Vector3 min, Vector3 max)
+static double GetArea(BoundingBoxDouble box)
 {
-    float X = max.x - min.x;
-    float Y = max.y - min.y;
-    float Z = max.z - min.z;
+    double X = box.Max.X - box.Min.X;
+    double Y = box.Max.Y - box.Min.Y;
+    double Z = box.Max.Z - box.Min.Z;
     return (X * Y) + (Y * Z) + (Z * X);
-}
-
-static bool Overlaps(Vector3 minA, Vector3 maxA, Vector3 minB, Vector3 maxB)
-{
-    return (minA.x <= maxB.x) && (maxA.x >= minB.x) && (minA.y <= maxB.y) && (maxA.y >= minB.y)
-        && (minA.z <= maxB.z) && (maxA.z >= minB.z);
-}
-
-static bool Contains(Vector3 outerMin, Vector3 outerMax, Vector3 innerMin, Vector3 innerMax)
-{
-    return (outerMin.x <= innerMin.x) && (outerMin.y <= innerMin.y) && (outerMin.z <= innerMin.z)
-        && (innerMax.x <= outerMax.x) && (innerMax.y <= outerMax.y) && (innerMax.z <= outerMax.z);
 }
 
 
@@ -96,8 +74,7 @@ static void Refit(CollisionTree* self, int32_t index)
     CollisionTreeNode* Node = NodeAt(self, index);
     const CollisionTreeNode* Child1 = NodeAt(self, Node->Child1);
     const CollisionTreeNode* Child2 = NodeAt(self, Node->Child2);
-    Node->Min = MinVector(Child1->Min, Child2->Min);
-    Node->Max = MaxVector(Child1->Max, Child2->Max);
+    Node->Box = BoundingBoxDouble_Union(Child1->Box, Child2->Box);
     Node->Height = 1 + ((Child1->Height > Child2->Height) ? Child1->Height : Child2->Height);
 }
 
@@ -193,26 +170,25 @@ static void InsertLeaf(CollisionTree* self, int32_t leaf)
         NodeAt(self, leaf)->Parent = COLLISION_TREE_NULL;
         return;
     }
-    Vector3 LeafMin = NodeAt(self, leaf)->Min;
-    Vector3 LeafMax = NodeAt(self, leaf)->Max;
+    BoundingBoxDouble LeafBox = NodeAt(self, leaf)->Box;
 
     // The sibling that grows the tree's surface the least.
     int32_t Index = self->Root;
     while (!IsLeaf(NodeAt(self, Index)))
     {
         const CollisionTreeNode* Node = NodeAt(self, Index);
-        float Area = GetArea(Node->Min, Node->Max);
-        float CombinedArea = GetArea(MinVector(Node->Min, LeafMin), MaxVector(Node->Max, LeafMax));
-        float Cost = 2.0f * CombinedArea;
-        float InheritanceCost = 2.0f * (CombinedArea - Area);
-        float ChildCosts[2];
+        double Area = GetArea(Node->Box);
+        double CombinedArea = GetArea(BoundingBoxDouble_Union(Node->Box, LeafBox));
+        double Cost = 2.0 * CombinedArea;
+        double InheritanceCost = 2.0 * (CombinedArea - Area);
+        double ChildCosts[2];
         int32_t Children[2] = { Node->Child1, Node->Child2 };
         for (size_t Child = 0U; Child < 2U; Child++)
         {
             const CollisionTreeNode* ChildNode = NodeAt(self, Children[Child]);
-            float Grown = GetArea(MinVector(ChildNode->Min, LeafMin), MaxVector(ChildNode->Max, LeafMax));
+            double Grown = GetArea(BoundingBoxDouble_Union(ChildNode->Box, LeafBox));
             ChildCosts[Child] = IsLeaf(ChildNode) ? (Grown + InheritanceCost)
-                : ((Grown - GetArea(ChildNode->Min, ChildNode->Max)) + InheritanceCost);
+                : ((Grown - GetArea(ChildNode->Box)) + InheritanceCost);
         }
         if ((Cost < ChildCosts[0]) && (Cost < ChildCosts[1]))
         {
@@ -228,8 +204,7 @@ static void InsertLeaf(CollisionTree* self, int32_t leaf)
     CollisionTreeNode* Parent = NodeAt(self, NewParent);
     const CollisionTreeNode* SiblingNode = NodeAt(self, Sibling);
     Parent->Parent = OldParent;
-    Parent->Min = MinVector(LeafMin, SiblingNode->Min);
-    Parent->Max = MaxVector(LeafMax, SiblingNode->Max);
+    Parent->Box = BoundingBoxDouble_Union(LeafBox, SiblingNode->Box);
     Parent->Height = SiblingNode->Height + 1;
     Parent->Child1 = Sibling;
     Parent->Child2 = leaf;
@@ -314,13 +289,11 @@ void CollisionTree_Clear(CollisionTree* self)
     self->ProxyCount = 0U;
 }
 
-int32_t CollisionTree_Insert(CollisionTree* self, Vector3 min, Vector3 max, uint64_t userValue)
+int32_t CollisionTree_Insert(CollisionTree* self, BoundingBoxDouble box, uint64_t userValue)
 {
     int32_t Proxy = AllocateNode(self);
     CollisionTreeNode* Node = NodeAt(self, Proxy);
-    Vector3 Margin = { self->Margin, self->Margin, self->Margin };
-    Node->Min = (Vector3){ min.x - Margin.x, min.y - Margin.y, min.z - Margin.z };
-    Node->Max = (Vector3){ max.x + Margin.x, max.y + Margin.y, max.z + Margin.z };
+    Node->Box = BoundingBoxDouble_Expand(box, (double)self->Margin);
     Node->UserValue = userValue;
     Node->Height = 0;
     InsertLeaf(self, Proxy);
@@ -335,27 +308,25 @@ void CollisionTree_Remove(CollisionTree* self, int32_t proxy)
     self->ProxyCount--;
 }
 
-bool CollisionTree_Move(CollisionTree* self, int32_t proxy, Vector3 min, Vector3 max)
+bool CollisionTree_Move(CollisionTree* self, int32_t proxy, BoundingBoxDouble box)
 {
     CollisionTreeNode* Node = NodeAt(self, proxy);
-    if (Contains(Node->Min, Node->Max, min, max))
+    if (BoundingBoxDouble_ContainsBox(Node->Box, box))
     {
         return false;
     }
     RemoveLeaf(self, proxy);
     Node = NodeAt(self, proxy);
-    Node->Min = (Vector3){ min.x - self->Margin, min.y - self->Margin, min.z - self->Margin };
-    Node->Max = (Vector3){ max.x + self->Margin, max.y + self->Margin, max.z + self->Margin };
+    Node->Box = BoundingBoxDouble_Expand(box, (double)self->Margin);
     InsertLeaf(self, proxy);
     return true;
 }
 
-void CollisionTree_Refit(CollisionTree* self, int32_t proxy, Vector3 min, Vector3 max)
+void CollisionTree_Refit(CollisionTree* self, int32_t proxy, BoundingBoxDouble box)
 {
     RemoveLeaf(self, proxy);
     CollisionTreeNode* Node = NodeAt(self, proxy);
-    Node->Min = (Vector3){ min.x - self->Margin, min.y - self->Margin, min.z - self->Margin };
-    Node->Max = (Vector3){ max.x + self->Margin, max.y + self->Margin, max.z + self->Margin };
+    Node->Box = BoundingBoxDouble_Expand(box, (double)self->Margin);
     InsertLeaf(self, proxy);
 }
 
@@ -364,10 +335,9 @@ uint64_t CollisionTree_GetUserValue(const CollisionTree* self, int32_t proxy)
     return NodeAt(self, proxy)->UserValue;
 }
 
-void CollisionTree_GetBounds(const CollisionTree* self, int32_t proxy, Vector3* outMin, Vector3* outMax)
+BoundingBoxDouble CollisionTree_GetBounds(const CollisionTree* self, int32_t proxy)
 {
-    *outMin = NodeAt(self, proxy)->Min;
-    *outMax = NodeAt(self, proxy)->Max;
+    return NodeAt(self, proxy)->Box;
 }
 
 uint32_t CollisionTree_GetProxyCount(const CollisionTree* self)
@@ -380,7 +350,7 @@ int32_t CollisionTree_GetHeight(const CollisionTree* self)
     return (self->Root == COLLISION_TREE_NULL) ? 0 : NodeAt(self, self->Root)->Height;
 }
 
-void CollisionTree_QueryBox(const CollisionTree* self, Vector3 min, Vector3 max, CollisionTreeVisitor visit,
+void CollisionTree_QueryBox(const CollisionTree* self, BoundingBoxDouble box, CollisionTreeVisitor visit,
     void* context)
 {
     int32_t Stack[COLLISION_TREE_STACK_CAPACITY];
@@ -394,7 +364,7 @@ void CollisionTree_QueryBox(const CollisionTree* self, Vector3 min, Vector3 max,
     {
         int32_t Index = Stack[--Count];
         const CollisionTreeNode* Node = NodeAt(self, Index);
-        if (!Overlaps(Node->Min, Node->Max, min, max))
+        if (!BoundingBoxDouble_Overlaps(Node->Box, box))
         {
             continue;
         }
@@ -414,48 +384,51 @@ void CollisionTree_QueryBox(const CollisionTree* self, Vector3 min, Vector3 max,
     }
 }
 
-void CollisionTree_QueryRay(const CollisionTree* self, Vector3 origin, Vector3 direction, float maxDistance,
+void CollisionTree_QueryRay(const CollisionTree* self, Vector3Double origin, Vector3 direction, float maxDistance,
     CollisionTreeRayVisitor visit, void* context)
 {
     if (self->Root == COLLISION_TREE_NULL)
     {
         return;
     }
-    Vector3 Inverse = { (fabsf(direction.x) > 1e-12f) ? (1.0f / direction.x) : copysignf(FLT_MAX, direction.x),
-        (fabsf(direction.y) > 1e-12f) ? (1.0f / direction.y) : copysignf(FLT_MAX, direction.y),
-        (fabsf(direction.z) > 1e-12f) ? (1.0f / direction.z) : copysignf(FLT_MAX, direction.z) };
+    const double Direction[3] = { direction.x, direction.y, direction.z };
+    const double Origin[3] = { origin.X, origin.Y, origin.Z };
+    double Inverse[3];
+    for (size_t Axis = 0U; Axis < 3U; Axis++)
+    {
+        Inverse[Axis] = (fabs(Direction[Axis]) > 1e-12) ? (1.0 / Direction[Axis]) : copysign(DBL_MAX, Direction[Axis]);
+    }
     int32_t Stack[COLLISION_TREE_STACK_CAPACITY];
     size_t Count = 0U;
     Stack[Count++] = self->Root;
-    float Length = maxDistance;
+    double Length = (double)maxDistance;
     while (Count > 0U)
     {
         int32_t Index = Stack[--Count];
         const CollisionTreeNode* Node = NodeAt(self, Index);
-        float T1 = (Node->Min.x - origin.x) * Inverse.x;
-        float T2 = (Node->Max.x - origin.x) * Inverse.x;
-        float Near = fminf(T1, T2);
-        float Far = fmaxf(T1, T2);
-        T1 = (Node->Min.y - origin.y) * Inverse.y;
-        T2 = (Node->Max.y - origin.y) * Inverse.y;
-        Near = fmaxf(Near, fminf(T1, T2));
-        Far = fminf(Far, fmaxf(T1, T2));
-        T1 = (Node->Min.z - origin.z) * Inverse.z;
-        T2 = (Node->Max.z - origin.z) * Inverse.z;
-        Near = fmaxf(Near, fminf(T1, T2));
-        Far = fminf(Far, fmaxf(T1, T2));
-        if ((Far < fmaxf(Near, 0.0f)) || (Near > Length))
+        const double Mins[3] = { Node->Box.Min.X, Node->Box.Min.Y, Node->Box.Min.Z };
+        const double Maxes[3] = { Node->Box.Max.X, Node->Box.Max.Y, Node->Box.Max.Z };
+        double Near = -DBL_MAX;
+        double Far = DBL_MAX;
+        for (size_t Axis = 0U; Axis < 3U; Axis++)
+        {
+            double T1 = (Mins[Axis] - Origin[Axis]) * Inverse[Axis];
+            double T2 = (Maxes[Axis] - Origin[Axis]) * Inverse[Axis];
+            Near = fmax(Near, fmin(T1, T2));
+            Far = fmin(Far, fmax(T1, T2));
+        }
+        if ((Far < fmax(Near, 0.0)) || (Near > Length))
         {
             continue;
         }
         if (IsLeaf(Node))
         {
-            float NewLength = visit(context, Index, Node->UserValue, Length);
+            float NewLength = visit(context, Index, Node->UserValue, (float)Length);
             if (NewLength <= 0.0f)
             {
                 return;
             }
-            Length = fminf(Length, NewLength);
+            Length = fmin(Length, (double)NewLength);
             continue;
         }
         if ((Count + 2U) <= COLLISION_TREE_STACK_CAPACITY)

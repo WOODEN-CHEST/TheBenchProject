@@ -1,5 +1,6 @@
 #include "TestSuites.h"
 #include "TestText.h"
+#include "TestWorld.h"
 #include "DataMap.h"
 #include "DataValue.h"
 #include "GameGHDF.h"
@@ -114,6 +115,15 @@ static PropertyValue MakeCandidate(const PropertyDescriptor* row, size_t attempt
         case PropertyType_AngleVector3:
             Value.Data.Vector3Value = CandidateVector3(row->Default.Vector3Value, attempt, Rules);
             break;
+        case PropertyType_Vector3Double:
+        {
+            // A third, so a float would not hold it: the files must keep every digit.
+            Vector3Double Default = row->Default.Vector3DoubleValue;
+            Value.Data.Vector3DoubleValue = Vector3Double_Create(
+                CandidateNumber(Default.X, attempt, Rules) + (1.0 / 3.0),
+                CandidateNumber(Default.Y, attempt, Rules) - (1.0 / 3.0), CandidateNumber(Default.Z, attempt, Rules));
+            break;
+        }
         case PropertyType_Color:
         {
             Color Default = row->Default.ColorValue;
@@ -253,7 +263,7 @@ static void FillData(TestRun* run, World* world, uint64_t id, uint64_t otherId, 
     SetData(run, world, id, keys, "town:kind", &Value);
     Value = DataValue_FromObject(otherId);
     SetData(run, world, id, keys, "town:switch", &Value);
-    Value = DataValue_FromVector3((Vector3){ 1.5f, -2.0f, 1.0f / 3.0f });
+    Value = DataValue_FromVector3(Vector3Double_Create(1.5, -2.0, 1.0 / 3.0));
     SetData(run, world, id, keys, "town:spawn", &Value);
     Value = DataValue_FromColor((Color){ 1, 2, 3, 4 });
     SetData(run, world, id, keys, "town:shade", &Value);
@@ -313,10 +323,28 @@ static WorldObject* CreateObject(TestRun* run, World* world)
     return Object;
 }
 
+/* Moves every root object by the run's offset (TestWorld_GetOffset): in the far run the files hold positions 173 km
+ * out, which must keep every digit (the plain object's position is then not its default). */
+static void ShiftRoots(TestRun* run, World* world)
+{
+    Vector3Double Offset = TestWorld_GetOffset();
+    for (size_t Index = 0U; Index < World_GetObjectCount(world); Index++)
+    {
+        WorldObject* Object = NULL;
+        if (TEST_CHECK_SUCCESS(run, World_GetObjectByIndex(world, Index, &Object))
+            && (WorldObject_GetParent(Object) == NULL))
+        {
+            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Double_Add(WorldObject_GetPosition(Object),
+                Offset)));
+        }
+    }
+}
+
 /* A world that uses every property of every table with values that are not their defaults: the environment, a name, a
  * raised id counter, a hierarchy three levels deep whose file order is not the id order (an older object under a newer
  * one, children not attached in id order), every component type, and tags and data of every value type. Ids: 1 base, 2
- * middle (under 1), 3 leaf (under 2), 4 older (under 5), 5 newer, 6 plain (all defaults), 7 late (under 1, before 2). */
+ * middle (under 1), 3 leaf (under 2), 4 older (under 5), 5 newer, 6 plain (all defaults), 7 late (under 1, before 2).
+ * The roots are shifted by the run's offset (ShiftRoots). */
 static bool BuildFullWorld(TestRun* run, World* world, KeyRegistry* keys)
 {
     if (!TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(keys)))
@@ -353,6 +381,7 @@ static bool BuildFullWorld(TestRun* run, World* world, KeyRegistry* keys)
     TEST_CHECK_SUCCESS(run, World_SetParent(world, 4U, 5U, false));
     FillData(run, world, 1U, 5U, keys);
     FillData(run, world, 3U, 1U, keys);
+    ShiftRoots(run, world);
     World_EnsureNextObjectIdAtLeast(world, WORLD_FILE_TEST_NEXT_ID);
     return true;
 }
@@ -774,7 +803,7 @@ static void WrittenJSONLeavesOutDefaultsInTableOrder(TestRun* run)
         TEST_CHECK_SUCCESS(run, World_AddComponent(&Source, 1U, WorldComponentType_Light, &Component));
         // Set out of table order: the file still lists name, position, scale.
         TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Lamp, (Vector3){ 2.0f, 2.0f, 2.0f }));
-        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Lamp, (Vector3){ 1.0f, 2.0f, 3.0f }));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Lamp, Vector3Double_Create(1.0, 2.0, 3.0)));
         TEST_CHECK_SUCCESS(run, Properties_Set(WorldObject_GetPropertyTable(), Lamp, u8"name",
             &(PropertyValue){ .Type = PropertyType_String, .Data.StringValue = u8"lamp" }));
         if (TEST_CHECK_SUCCESS(run, World_AddComponent(&Source, 2U, WorldComponentType_Model, &Component)))
@@ -901,7 +930,7 @@ static void AFailedWriteAppendsNothing(TestRun* run)
         WorldObject* Broken = CreateObject(run, &Source);
         if (Broken != NULL)
         {
-            Broken->_position.x = NAN;
+            Broken->_position.X = NAN;
         }
         GenericBuffer Bytes;
         GenericBuffer_AllocateVariable(&Bytes, WORLD_FILE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
@@ -1522,6 +1551,168 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
     Memory_Free(Path._data);
 }
 
+/* Puts a position entry (wire id 4) of three doubles into an object compound, replacing what was there. */
+static void PutGHDFPosition(TestRun* run, GHDFObjectPool* pool, GHDFCompound* object, const double* components)
+{
+    GHDFArray* Array = NULL;
+    if (!TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowArray(pool, GHDFValueType_Double, &Array)))
+    {
+        return;
+    }
+    for (size_t Index = 0U; Index < 3U; Index++)
+    {
+        GHDFObjectValue Element = GHDFObjectValue_CreateDouble(components[Index]);
+        TEST_CHECK_SUCCESS(run, GHDFArray_AddValue(Array, &Element));
+    }
+    GHDFObjectValue Value = GHDFObjectValue_CreateArray(Array, GHDFValueType_Double);
+    TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(object, 4U, GHDF_CreateArrayType(GHDFValueType_Double), &Value));
+}
+
+/* T33: positions are doubles. Far positions keep every digit through both formats; one beyond the limit or not finite
+ * is refused; a GHDF save written before T33 (positions as Float arrays) loads, each position the float it held. */
+static void PositionsAreDoublesAndOldSavesLoad(TestRun* run)
+{
+    KeyRegistry Keys;
+    World Source;
+    if (!TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys)))
+    {
+        return;
+    }
+    if (!TEST_CHECK_SUCCESS(run, World_Construct1(&Source, &Keys)))
+    {
+        KeyRegistry_Deconstruct(&Keys);
+        return;
+    }
+    const Vector3Double Positions[] =
+    {
+        { 9999999.12345678, -1234567.89012345, 0.000123456789012345 },
+        { -WORLD_POSITION_LIMIT, WORLD_POSITION_LIMIT, 1.0 / 3.0 },
+        { 100000.0000001, 2.5, -100000.0000002 }
+    };
+    for (size_t Index = 0U; Index < 3U; Index++)
+    {
+        WorldObject* Object = CreateObject(run, &Source);
+        TEST_CHECK(run, (Object != NULL) && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Positions[Index])));
+    }
+
+    GenericBuffer Bytes;
+    GenericBuffer_AllocateVariable(&Bytes, WORLD_FILE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    World Loaded;
+    for (size_t Format = 0U; Format < 2U; Format++)
+    {
+        GenericBuffer_Clear(&Bytes);
+        bool IsJSON = Format == 0U;
+        if (!TEST_CHECK_SUCCESS(run, IsJSON ? WorldFile_WriteJSON(&Source, &Bytes)
+            : WorldFile_WriteGHDF(&Source, &Bytes)))
+        {
+            continue;
+        }
+        if (IsJSON && TEST_CHECK(run, GenericBuffer_NullTerminate(&Bytes)))
+        {
+            // Every digit is in the text, the shortest that reads back to the same double.
+            const char* Text = (const char*)Bytes._data;
+            TEST_CHECK(run, strstr(Text, "[9999999.12345678, -1234567.89012345, 0.000123456789012345]") != NULL);
+            TEST_CHECK(run, strstr(Text, "[100000.0000001, 2.5, -100000.0000002]") != NULL);
+            GenericBuffer_RemoveLast(&Bytes);
+        }
+        WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
+        Error Result = IsJSON ? WorldFile_ReadJSON(Bytes._data, Bytes._count, &Options, &Loaded)
+            : WorldFile_ReadGHDF(Bytes._data, Bytes._count, &Options, &Loaded);
+        if (!TEST_CHECK_SUCCESS(run, Result))
+        {
+            continue;
+        }
+        for (uint64_t Id = 1U; Id <= 3U; Id++)
+        {
+            WorldObject* Object = NULL;
+            Vector3Double Expected = Positions[Id - 1U];
+            Vector3Double Position = World_TryGetObject(&Loaded, Id, &Object) ? WorldObject_GetPosition(Object)
+                : Vector3Double_Zero();
+            TEST_CHECK(run, (Position.X == Expected.X) && (Position.Y == Expected.Y) && (Position.Z == Expected.Z));
+        }
+        TEST_CHECK_SUCCESS(run, World_Deconstruct(&Loaded));
+    }
+
+    // Beyond the limit or not finite: refused, in both formats.
+    const char* const Beyond[] = { "object 1: world_object.position", "[-1e+07, 1e+07]", NULL };
+    CheckRefusedJSON(run, &Keys, "{\"format_version\": 1, \"objects\": [{\"id\": 1, \"position\": "
+        "[10000000.000000002, 0, 0]}]}", Beyond);
+    // JSON has no infinities: a text that says one is not a number.
+    const char* const NotANumber[] = { "object 1: world_object.position", "decimal", NULL };
+    CheckRefusedJSON(run, &Keys, "{\"format_version\": 1, \"objects\": [{\"id\": 1, \"position\": "
+        "[0, \"inf\", 0]}]}", NotANumber);
+    const char* const NotFinite[] = { "object 1: world_object.position", "finite", NULL };
+    GHDFObjectPool* Pool = NULL;
+    GHDFCompound* Root = NULL;
+    GenericBuffer_Clear(&Bytes);
+    if (TEST_CHECK_SUCCESS(run, WorldFile_WriteGHDF(&Source, &Bytes))
+        && TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&Pool)) && ReadGHDFTree(run, Pool, &Bytes, &Root))
+    {
+        GHDFCompound* First = GetFirstGHDFObject(run, Root);
+        const double Broken[2][3] = { { 0.0, 0.0, -2.0e7 }, { NAN, 0.0, 0.0 } };
+        const char* const* Messages[2] = { Beyond, NotFinite };
+        for (size_t Index = 0U; (Index < 2U) && (First != NULL); Index++)
+        {
+            PutGHDFPosition(run, Pool, First, Broken[Index]);
+            GenericBuffer Cut;
+            GenericBuffer_AllocateVariable(&Cut, WORLD_FILE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+            if (WriteGHDFTree(run, Root, &Cut))
+            {
+                CheckRefusedGHDF(run, &Keys, &Cut, Messages[Index]);
+            }
+            Memory_Free(Cut._data);
+        }
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Root, true));
+    }
+    if (Pool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Pool));
+    }
+
+    // The shipped test world as HEAD's code saved it before T33 (positions as Float arrays): it loads, and each
+    // position is the float the JSON's text rounds to, exactly.
+    GenericBuffer Path;
+    GenericBuffer_AllocateVariable(&Path, WORLD_FILE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    World FromJSON;
+    WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
+    if (TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, "tests/data/test_world_before_t33.world.ghdf", &Path))
+        && TEST_CHECK_SUCCESS(run, WorldFile_LoadGHDF(Path._data, &Options, &Loaded)))
+    {
+        GenericBuffer_Clear(&Path);
+        if (TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, "compile/out/worlds/test.world.json", &Path))
+            && TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &FromJSON)))
+        {
+            size_t Count = World_GetObjectCount(&FromJSON);
+            TEST_CHECK(run, (Count == 44U) && (World_GetObjectCount(&Loaded) == Count));
+            size_t Exact = 0U;
+            size_t Widened = 0U;
+            for (size_t Index = 0U; Index < Count; Index++)
+            {
+                WorldObject* Text = NULL;
+                WorldObject* Old = NULL;
+                if (!TEST_CHECK_SUCCESS(run, World_GetObjectByIndex(&FromJSON, Index, &Text))
+                    || !TEST_CHECK(run, World_TryGetObject(&Loaded, WorldObject_GetId(Text), &Old)))
+                {
+                    continue;
+                }
+                Vector3Double A = WorldObject_GetPosition(Text);
+                Vector3Double B = WorldObject_GetPosition(Old);
+                Exact += ((B.X == (double)(float)A.X) && (B.Y == (double)(float)A.Y) && (B.Z == (double)(float)A.Z))
+                    ? 1U : 0U;
+                Widened += ((A.X != B.X) || (A.Y != B.Y) || (A.Z != B.Z)) ? 1U : 0U;
+            }
+            TEST_CHECK(run, Exact == Count);
+            TEST_CHECK(run, Widened > 0U); // the fixture really holds floats: 0.1f is not 0.1
+            TEST_CHECK_SUCCESS(run, World_Deconstruct(&FromJSON));
+        }
+        TEST_CHECK_SUCCESS(run, World_Deconstruct(&Loaded));
+    }
+    Memory_Free(Path._data);
+    Memory_Free(Bytes._data);
+    TEST_CHECK_SUCCESS(run, World_Deconstruct(&Source));
+    KeyRegistry_Deconstruct(&Keys);
+}
+
 /* Appends the text of the @p index'th ```json block of a Markdown text to @p outText, NUL-terminated. */
 static bool ExtractJSONBlock(const char* markdown, size_t index, GenericBuffer* outText)
 {
@@ -1830,6 +2021,7 @@ static const TestCase WorldFileTestCases[] =
     { "next_object_id_is_raised_when_too_low", NextObjectIdIsRaisedWhenTooLow },
     { "files_and_memory_buffers_hold_the_same_world", FilesAndMemoryBuffersHoldTheSameWorld },
     { "the_shipped_test_world_loads_and_is_written_the_same", TheShippedTestWorldLoadsAndIsWrittenTheSame },
+    { "positions_are_doubles_and_old_saves_load", PositionsAreDoublesAndOldSavesLoad },
     { "the_reference_examples_load", TheReferenceExamplesLoad },
     { "every_table_in_a_world_file_is_at_its_first_version", EveryTableInAWorldFileIsAtItsFirstVersion },
     { "world_names_are_validated", WorldNamesAreValidated },
@@ -1842,5 +2034,6 @@ static const TestCase WorldFileTestCases[] =
 // Public functions.
 void WorldFileTests_Run(TestRun* run)
 {
-    TestRun_RunSuite(run, "WorldFile", WorldFileTestCases, sizeof(WorldFileTestCases) / sizeof(WorldFileTestCases[0]));
+    TestWorld_RunSuite(run, "WorldFile", "WorldFileFar", WorldFileTestCases,
+        sizeof(WorldFileTestCases) / sizeof(WorldFileTestCases[0]));
 }

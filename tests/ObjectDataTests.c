@@ -42,7 +42,7 @@ typedef struct DataFixtureStruct
 typedef struct OracleMatchStruct
 {
     uint64_t Id;
-    float DistanceSquared;
+    double DistanceSquared;
 } OracleMatch;
 
 
@@ -65,7 +65,7 @@ static uint32_t Key(TestRun* run, DataFixture* fixture, const char* text)
 }
 
 /* Creates an object at @p position; returns its id (0 with a failed check). */
-static uint64_t AddObject(TestRun* run, World* world, const char* name, Vector3 position)
+static uint64_t AddObject(TestRun* run, World* world, const char* name, Vector3Double position)
 {
     WorldObject* Object = NULL;
     if (!TEST_CHECK_SUCCESS(run, World_CreateObject(world, (const unsigned char*)name, &Object))
@@ -164,7 +164,7 @@ static void SetGetOverwriteAndRemove(TestRun* run)
         return;
     }
     World* TestWorld = &Fixture.World;
-    uint64_t Desk = AddObject(run, TestWorld, "desk", (Vector3){ 0.0f, 0.0f, 0.0f });
+    uint64_t Desk = AddObject(run, TestWorld, "desk", Vector3Double_Create(0.0, 0.0, 0.0));
     uint32_t Visits = Key(run, &Fixture, "town:visits");
     TEST_CHECK(run, WorldObject_GetData(GetObject(TestWorld, Desk)) == NULL); // NULL while empty
 
@@ -210,7 +210,7 @@ static void TagsAreEntriesWithoutAValue(TestRun* run)
         return;
     }
     World* TestWorld = &Fixture.World;
-    uint64_t Lamp = AddObject(run, TestWorld, "lamp", (Vector3){ 0.0f, 0.0f, 0.0f });
+    uint64_t Lamp = AddObject(run, TestWorld, "lamp", Vector3Double_Create(0.0, 0.0, 0.0));
     uint32_t StreetLamp = Key(run, &Fixture, "town:street_lamp");
     uint32_t Power = Key(run, &Fixture, "town:power");
 
@@ -246,7 +246,7 @@ static void TheDataRevisionMovesAlone(TestRun* run)
         return;
     }
     World* TestWorld = &Fixture.World;
-    uint64_t Desk = AddObject(run, TestWorld, "desk", (Vector3){ 0.0f, 0.0f, 0.0f });
+    uint64_t Desk = AddObject(run, TestWorld, "desk", Vector3Double_Create(0.0, 0.0, 0.0));
     WorldObject* Object = GetObject(TestWorld, Desk);
     uint32_t Visits = Key(run, &Fixture, "town:visits");
     uint32_t Revision = WorldObject_GetRevision(Object);
@@ -261,7 +261,7 @@ static void TheDataRevisionMovesAlone(TestRun* run)
     TEST_CHECK(run, (WorldObject_GetDataRevision(Object) == (DataRevision + 3U)) && (WorldObject_GetRevision(Object) == Revision));
 
     // A property change is the render revision's alone.
-    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, (Vector3){ 1.0f, 0.0f, 0.0f }));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Double_Create(1.0, 0.0, 0.0)));
     TEST_CHECK(run, (WorldObject_GetRevision(Object) == (Revision + 1U)) && (WorldObject_GetDataRevision(Object) == (DataRevision + 3U)));
     Fixture_Deconstruct(run, &Fixture);
 }
@@ -281,7 +281,7 @@ static void ObjectLimitsAreRefusedAndLoggedOnce(TestRun* run)
     if (Fixture_Construct(run, &Fixture, &Log))
     {
         World* TestWorld = &Fixture.World;
-        uint64_t Crate = AddObject(run, TestWorld, "crate", (Vector3){ 0.0f, 0.0f, 0.0f });
+        uint64_t Crate = AddObject(run, TestWorld, "crate", Vector3Double_Create(0.0, 0.0, 0.0));
         char Text[64];
         bool AreAllSet = true;
         for (size_t Index = 0U; Index < WORLD_OBJECT_DATA_MAX_ENTRIES; Index++)
@@ -300,7 +300,7 @@ static void ObjectLimitsAreRefusedAndLoggedOnce(TestRun* run)
         TEST_CHECK(run, DataMap_GetCount(WorldObject_GetData(GetObject(TestWorld, Crate))) == WORLD_OBJECT_DATA_MAX_ENTRIES);
 
         // Bytes: sixteen 4096-byte strings pass 65536 bytes (each entry also counts its key and a type byte).
-        uint64_t Shelf = AddObject(run, TestWorld, "shelf", (Vector3){ 0.0f, 0.0f, 0.0f });
+        uint64_t Shelf = AddObject(run, TestWorld, "shelf", Vector3Double_Create(0.0, 0.0, 0.0));
         DataValue Long = MakeLongString(run, DATA_VALUE_MAX_STRING_LENGTH);
         size_t Stored = 0U;
         for (size_t Index = 0U; Index < 16U; Index++)
@@ -346,7 +346,7 @@ static void TheWorldLimitCountsEveryObject(TestRun* run)
     uint64_t Last = 0U;
     while (!IsRefused && (ObjectCount < 300U))
     {
-        Last = AddObject(run, TestWorld, "box", (Vector3){ 0.0f, 0.0f, 0.0f });
+        Last = AddObject(run, TestWorld, "box", Vector3Double_Create(0.0, 0.0, 0.0));
         ObjectCount++;
         for (size_t Index = 0U; (Index < 15U) && !IsRefused; Index++)
         {
@@ -396,11 +396,11 @@ static void BuildQueryWorld(TestRun* run, DataFixture* fixture, QueryWorld* out)
     out->Office = Key(run, fixture, "game:office");
     out->Power = Key(run, fixture, "town:power");
     out->Opened = Key(run, fixture, "town:opened");
-    out->Lamp = AddObject(run, TestWorld, "lamp", (Vector3){ 10.0f, 0.0f, 0.0f });
-    out->Bench = AddObject(run, TestWorld, "bench", (Vector3){ 2.0f, 0.0f, 0.0f });
-    out->Desk = AddObject(run, TestWorld, "desk", (Vector3){ 0.0f, 0.0f, 3.0f });
-    out->Clock = AddObject(run, TestWorld, "clock", (Vector3){ -4.0f, 5.0f, 0.0f });
-    out->Ghost = AddObject(run, TestWorld, "ghost", (Vector3){ 1.0f, 0.0f, 0.0f });
+    out->Lamp = AddObject(run, TestWorld, "lamp", Vector3Double_Create(10.0, 0.0, 0.0));
+    out->Bench = AddObject(run, TestWorld, "bench", Vector3Double_Create(2.0, 0.0, 0.0));
+    out->Desk = AddObject(run, TestWorld, "desk", Vector3Double_Create(0.0, 0.0, 3.0));
+    out->Clock = AddObject(run, TestWorld, "clock", Vector3Double_Create(-4.0, 5.0, 0.0));
+    out->Ghost = AddObject(run, TestWorld, "ghost", Vector3Double_Create(1.0, 0.0, 0.0));
 
     TEST_CHECK_SUCCESS(run, World_AddTag(TestWorld, out->Lamp, out->Town));
     TEST_CHECK_SUCCESS(run, World_AddTag(TestWorld, out->Lamp, out->StreetLamp));
@@ -512,8 +512,8 @@ static void QueriesFilterByEachField(TestRun* run)
     CheckQuery(run, TestWorld, &Query, Near, 3U);
     Query = WorldQuery_Create();
     Query.HasBox = true;
-    Query.BoxMinimum = (Vector3){ 1.0f, -1.0f, -1.0f };
-    Query.BoxMaximum = (Vector3){ 10.0f, 1.0f, 1.0f };
+    Query.BoxMinimum = Vector3Double_Create(1.0, -1.0, -1.0);
+    Query.BoxMaximum = Vector3Double_Create(10.0, 1.0, 1.0);
     const uint64_t InBox[] = { Q.Lamp, Q.Bench, Q.Ghost };
     CheckQuery(run, TestWorld, &Query, InBox, 3U);
     Query.AllOfTags = &Q.Town;
@@ -539,7 +539,8 @@ static void QueriesSortByDistanceAndLimit(TestRun* run)
     }
     QueryWorld Q;
     BuildQueryWorld(run, &Fixture, &Q);
-    uint64_t Twin = AddObject(run, &Fixture.World, "twin", (Vector3){ -1.0f, 0.0f, 0.0f }); // as near as the ghost
+    // As near as the ghost.
+    uint64_t Twin = AddObject(run, &Fixture.World, "twin", Vector3Double_Create(-1.0, 0.0, 0.0));
     World* TestWorld = &Fixture.World;
 
     WorldQuery Query = WorldQuery_Create();
@@ -548,7 +549,7 @@ static void QueriesSortByDistanceAndLimit(TestRun* run)
     CheckQuery(run, TestWorld, &Query, Nearest, 6U);
     Query.Limit = 2U;
     CheckQuery(run, TestWorld, &Query, Nearest, 2U);
-    Query.Origin = (Vector3){ 10.0f, 0.0f, 0.0f };
+    Query.Origin = Vector3Double_Create(10.0, 0.0, 0.0);
     Query.Limit = 1U;
     CheckQuery(run, TestWorld, &Query, &Q.Lamp, 1U);
 
@@ -570,6 +571,39 @@ static void QueriesSortByDistanceAndLimit(TestRun* run)
     TEST_CHECK(run, (Ids._count == 3U) && (((const uint64_t*)Ids._data)[0] == 77U));
     Memory_Free(Ids._data);
     Fixture_Deconstruct(run, &Fixture);
+}
+
+/* T33: places are compared in double, as positions are. 100 km out a float steps by 7.8 mm, so these two objects a
+ * millimetre apart would be one point: the distance, the box and the order still tell them apart. */
+static void QueriesCompareFarPlacesInDouble(TestRun* run)
+{
+    World TestWorld;
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
+    {
+        return;
+    }
+    uint64_t Second = AddObject(run, &TestWorld, "second", Vector3Double_Create(100000.0015, 0.0, -100000.0));
+    uint64_t First = AddObject(run, &TestWorld, "first", Vector3Double_Create(100000.0005, 0.0, -100000.0));
+    if ((First != 0U) && (Second != 0U))
+    {
+        WorldQuery Query = WorldQuery_Create();
+        Query.Origin = Vector3Double_Create(100000.0, 0.0, -100000.0);
+        Query.HasMaximumDistance = true;
+        Query.MaximumDistance = 0.001f;
+        CheckQuery(run, &TestWorld, &Query, &First, 1U);
+        Query = WorldQuery_Create();
+        Query.HasBox = true;
+        Query.BoxMinimum = Vector3Double_Create(100000.001, -1.0, -100001.0);
+        Query.BoxMaximum = Vector3Double_Create(100000.002, 1.0, -99999.0);
+        CheckQuery(run, &TestWorld, &Query, &Second, 1U);
+        Query = WorldQuery_Create();
+        Query.Origin = Vector3Double_Create(100000.0, 0.0, -100000.0);
+        Query.IsSortedByDistance = true;
+        const uint64_t Nearest[] = { First, Second };
+        CheckQuery(run, &TestWorld, &Query, Nearest, 2U);
+    }
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
 static void MalformedQueriesAreRefused(TestRun* run)
@@ -611,7 +645,7 @@ static void MalformedQueriesAreRefused(TestRun* run)
     Query.ComponentTypeCount = 1U;
     TEST_CHECK_ERROR(run, World_Query(TestWorld, &Query, &Ids), ErrorCode_IllegalArgument);
     Query = WorldQuery_Create();
-    Query.Origin = (Vector3){ NAN, 0.0f, 0.0f };
+    Query.Origin = Vector3Double_Create(NAN, 0.0, 0.0);
     TEST_CHECK_ERROR(run, World_Query(TestWorld, &Query, &Ids), ErrorCode_IllegalArgument);
     Query = WorldQuery_Create();
     Query.HasMaximumDistance = true;
@@ -619,7 +653,7 @@ static void MalformedQueriesAreRefused(TestRun* run)
     TEST_CHECK_ERROR(run, World_Query(TestWorld, &Query, &Ids), ErrorCode_IllegalArgument);
     Query = WorldQuery_Create();
     Query.HasBox = true;
-    Query.BoxMinimum = (Vector3){ 1.0f, 0.0f, 0.0f };
+    Query.BoxMinimum = Vector3Double_Create(1.0, 0.0, 0.0);
     TEST_CHECK_ERROR(run, World_Query(TestWorld, &Query, &Ids), ErrorCode_IllegalArgument);
 
     GenericBuffer Wrong;
@@ -650,9 +684,9 @@ static void TheTagIndexFollowsEveryChange(TestRun* run)
     }
     World* TestWorld = &Fixture.World;
     uint32_t Lamp = Key(run, &Fixture, "town:street_lamp");
-    uint64_t A = AddObject(run, TestWorld, "a", (Vector3){ 0.0f, 0.0f, 0.0f });
-    uint64_t B = AddObject(run, TestWorld, "b", (Vector3){ 0.0f, 0.0f, 0.0f });
-    uint64_t C = AddObject(run, TestWorld, "c", (Vector3){ 0.0f, 0.0f, 0.0f });
+    uint64_t A = AddObject(run, TestWorld, "a", Vector3Double_Create(0.0, 0.0, 0.0));
+    uint64_t B = AddObject(run, TestWorld, "b", Vector3Double_Create(0.0, 0.0, 0.0));
+    uint64_t C = AddObject(run, TestWorld, "c", Vector3Double_Create(0.0, 0.0, 0.0));
 
     TEST_CHECK_SUCCESS(run, World_AddTag(TestWorld, C, Lamp));
     TEST_CHECK_SUCCESS(run, World_AddTag(TestWorld, A, Lamp));
@@ -672,7 +706,7 @@ static void TheTagIndexFollowsEveryChange(TestRun* run)
 
     // Table writes replace the whole data behind the world's back: copies and reads re-index.
     TEST_CHECK_SUCCESS(run, World_AddTag(TestWorld, A, Lamp));
-    uint64_t D = AddObject(run, TestWorld, "d", (Vector3){ 0.0f, 0.0f, 0.0f });
+    uint64_t D = AddObject(run, TestWorld, "d", Vector3Double_Create(0.0, 0.0, 0.0));
     const PropertyTable* Table = WorldObject_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, Properties_CopyTo(Table, GetObject(TestWorld, A), GetObject(TestWorld, D)));
     const uint64_t AD[] = { A, D };
@@ -759,20 +793,20 @@ static bool OracleMatches(const WorldObject* object, const WorldQuery* query)
         }
         IsMatch = IsMatch && Holds;
     }
-    Matrix Placement = WorldObject_GetWorldMatrix(object);
-    Vector3 Position = { Placement.m12, Placement.m13, Placement.m14 };
-    float X = Position.x - query->Origin.x;
-    float Y = Position.y - query->Origin.y;
-    float Z = Position.z - query->Origin.z;
+    Matrix4Double Placement = WorldObject_GetWorldMatrix(object);
+    double X = Placement.M[12] - query->Origin.X;
+    double Y = Placement.M[13] - query->Origin.Y;
+    double Z = Placement.M[14] - query->Origin.Z;
+    double MaximumDistance = (double)query->MaximumDistance;
     if (query->HasMaximumDistance)
     {
-        IsMatch = IsMatch && (((X * X) + (Y * Y) + (Z * Z)) <= (query->MaximumDistance * query->MaximumDistance));
+        IsMatch = IsMatch && (((X * X) + (Y * Y) + (Z * Z)) <= (MaximumDistance * MaximumDistance));
     }
     if (query->HasBox)
     {
-        IsMatch = IsMatch && (Position.x >= query->BoxMinimum.x) && (Position.x <= query->BoxMaximum.x)
-            && (Position.y >= query->BoxMinimum.y) && (Position.y <= query->BoxMaximum.y)
-            && (Position.z >= query->BoxMinimum.z) && (Position.z <= query->BoxMaximum.z);
+        IsMatch = IsMatch && (Placement.M[12] >= query->BoxMinimum.X) && (Placement.M[12] <= query->BoxMaximum.X)
+            && (Placement.M[13] >= query->BoxMinimum.Y) && (Placement.M[13] <= query->BoxMaximum.Y)
+            && (Placement.M[14] >= query->BoxMinimum.Z) && (Placement.M[14] <= query->BoxMaximum.Z);
     }
     return IsMatch && HasAny;
 }
@@ -790,13 +824,12 @@ static void RunOracle(World* world, const WorldQuery* query, GenericBuffer* outI
         {
             continue;
         }
-        Matrix Placement = WorldObject_GetWorldMatrix(Object);
-        Vector3 Position = { Placement.m12, Placement.m13, Placement.m14 };
-        float X = Position.x - query->Origin.x;
-        float Y = Position.y - query->Origin.y;
-        float Z = Position.z - query->Origin.z;
+        Matrix4Double Placement = WorldObject_GetWorldMatrix(Object);
+        double X = Placement.M[12] - query->Origin.X;
+        double Y = Placement.M[13] - query->Origin.Y;
+        double Z = Placement.M[14] - query->Origin.Z;
         OracleMatch Match = { .Id = WorldObject_GetId(Object),
-            .DistanceSquared = query->IsSortedByDistance ? ((X * X) + (Y * Y) + (Z * Z)) : 0.0f };
+            .DistanceSquared = query->IsSortedByDistance ? ((X * X) + (Y * Y) + (Z * Z)) : 0.0 };
         size_t Slot = Count++;
         while ((Slot > 0U) && ((Matches[Slot - 1U].DistanceSquared > Match.DistanceSquared)
             || ((Matches[Slot - 1U].DistanceSquared == Match.DistanceSquared) && (Matches[Slot - 1U].Id > Match.Id))))
@@ -834,9 +867,9 @@ static size_t PickTags(Random* random, const uint32_t* tags, uint32_t* outTags)
     return Picked;
 }
 
-static float RandomCoordinate(Random* random)
+static double RandomCoordinate(Random* random)
 {
-    return (float)Random_NextInt32InRange(random, -500, 501) / 10.0f;
+    return (double)Random_NextInt32InRange(random, -500, 501) / 10.0;
 }
 
 static void BuildRandomWorld(TestRun* run, Random* random, DataFixture* fixture, const uint32_t* tags, uint32_t power,
@@ -845,8 +878,8 @@ static void BuildRandomWorld(TestRun* run, Random* random, DataFixture* fixture,
     World* TestWorld = &fixture->World;
     for (size_t Index = 0U; Index < RANDOM_OBJECT_COUNT; Index++)
     {
-        uint64_t Id = AddObject(run, TestWorld, "random", (Vector3){ RandomCoordinate(random), RandomCoordinate(random),
-            RandomCoordinate(random) });
+        uint64_t Id = AddObject(run, TestWorld, "random", Vector3Double_Create(RandomCoordinate(random),
+            RandomCoordinate(random), RandomCoordinate(random)));
         for (size_t Tag = 0U; Tag < RANDOM_TAG_COUNT; Tag++)
         {
             if (Random_NextInt32InLimit(random, 10) < 3)
@@ -905,8 +938,8 @@ static void BuildRandomWorld(TestRun* run, Random* random, DataFixture* fixture,
         WorldObject* Object = NULL;
         if (TEST_CHECK_SUCCESS(run, World_GetObjectByIndex(TestWorld, Index * 7U, &Object)))
         {
-            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, (Vector3){ RandomCoordinate(random),
-                RandomCoordinate(random), RandomCoordinate(random) }));
+            TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Double_Create(RandomCoordinate(random),
+                RandomCoordinate(random), RandomCoordinate(random))));
         }
     }
 
@@ -983,13 +1016,15 @@ static void QueriesEqualABruteForceScan(TestRun* run)
         Query.ComponentTypeCount = (Random_NextInt32InLimit(&Generator, 4) == 0) ? 1U : 0U;
         Query.IsEnabledOnly = Random_NextBool(&Generator);
         Query.IsVisibleOnly = Random_NextInt32InLimit(&Generator, 4) == 0;
-        Query.Origin = (Vector3){ RandomCoordinate(&Generator), RandomCoordinate(&Generator), RandomCoordinate(&Generator) };
+        Query.Origin = Vector3Double_Create(RandomCoordinate(&Generator), RandomCoordinate(&Generator),
+            RandomCoordinate(&Generator));
         Query.HasMaximumDistance = Random_NextInt32InLimit(&Generator, 3) == 0;
         Query.MaximumDistance = (float)Random_NextInt32InLimit(&Generator, 80);
         Query.HasBox = Random_NextInt32InLimit(&Generator, 5) == 0;
-        Vector3 Corner = { RandomCoordinate(&Generator), RandomCoordinate(&Generator), RandomCoordinate(&Generator) };
-        Query.BoxMinimum = (Vector3){ Corner.x - 30.0f, Corner.y - 30.0f, Corner.z - 30.0f };
-        Query.BoxMaximum = (Vector3){ Corner.x + 30.0f, Corner.y + 30.0f, Corner.z + 30.0f };
+        Vector3Double Corner = Vector3Double_Create(RandomCoordinate(&Generator), RandomCoordinate(&Generator),
+            RandomCoordinate(&Generator));
+        Query.BoxMinimum = Vector3Double_SubtractValue(Corner, 30.0);
+        Query.BoxMaximum = Vector3Double_AddValue(Corner, 30.0);
         Query.IsSortedByDistance = Random_NextInt32InLimit(&Generator, 3) == 0;
         Query.Limit = Random_NextBool(&Generator) ? 0U : (size_t)Random_NextInt32InRange(&Generator, 1, 20);
 
@@ -1028,7 +1063,7 @@ static void FillObjectData(TestRun* run, DataFixture* fixture, uint64_t id)
     {
         MakeString(run, "Bob"), DataValue_FromFloat(1.5), DataValue_FromFloat(2.0), DataValue_FromBool(true),
         DataValue_FromKey(Key(run, fixture, "town:desk")), DataValue_FromObject(id),
-        DataValue_FromVector3((Vector3){ 1.0f, 2.0f, 3.0f }), DataValue_FromColor((Color){ 255, 204, 0, 255 }),
+        DataValue_FromVector3(Vector3Double_Create(1.0, 2.0, 3.0)), DataValue_FromColor((Color){ 255, 204, 0, 255 }),
         DataValue_FromDateTime(GAME_CALENDAR_MICROSECONDS_PER_DAY * 739906LL), DataValue_CreateTag(),
         DataValue_CreateTag(),
     };
@@ -1103,7 +1138,7 @@ static void ObjectTablesRoundTripTagsAndData(TestRun* run)
         return;
     }
     World* TestWorld = &Fixture.World;
-    uint64_t Lamp = AddObject(run, TestWorld, "lamp", (Vector3){ 0.0f, 0.0f, 0.0f });
+    uint64_t Lamp = AddObject(run, TestWorld, "lamp", Vector3Double_Create(0.0, 0.0, 0.0));
     FillObjectData(run, &Fixture, Lamp);
     WorldObject* Source = GetObject(TestWorld, Lamp);
 
@@ -1145,7 +1180,7 @@ static void ObjectTablesRoundTripTagsAndData(TestRun* run)
     {
         IOStream* StreamInterface = MemoryStream_AsIOStream(&Stream);
         GHDFCompound* ReadBack = NULL;
-        uint64_t Bench = AddObject(run, TestWorld, "bench", (Vector3){ 0.0f, 0.0f, 0.0f });
+        uint64_t Bench = AddObject(run, TestWorld, "bench", Vector3Double_Create(0.0, 0.0, 0.0));
         PropertyReadOptions Options = PropertyReadOptions_CreateDefault();
         Options.Keys = &Fixture.Keys;
         if (TEST_CHECK_SUCCESS(run, GHDF_Write(Compound, StreamInterface))
@@ -1175,7 +1210,7 @@ static void ObjectTablesRoundTripTagsAndData(TestRun* run)
     }
 
     // Keys written without a namespace get the reader's default one.
-    uint64_t Sign = AddObject(run, TestWorld, "sign", (Vector3){ 0.0f, 0.0f, 0.0f });
+    uint64_t Sign = AddObject(run, TestWorld, "sign", Vector3Double_Create(0.0, 0.0, 0.0));
     TEST_CHECK_SUCCESS(run, ReadObjectJSON(run, GetObject(TestWorld, Sign), &Fixture.Keys,
         "{\"tags\": [\"lamp\"], \"data\": {\"visits\": 1}}", (const unsigned char*)u8"town"));
     TEST_CHECK(run, World_HasTag(TestWorld, Sign, Key(run, &Fixture, "town:lamp")));
@@ -1189,7 +1224,7 @@ static void ObjectTablesRoundTripTagsAndData(TestRun* run)
  * the key registry without the keys the read interned. */
 static void CheckReadRefused(TestRun* run, DataFixture* fixture, const char* text, const char* const* fragments)
 {
-    uint64_t Id = AddObject(run, &fixture->World, "target", (Vector3){ 0.0f, 0.0f, 0.0f });
+    uint64_t Id = AddObject(run, &fixture->World, "target", Vector3Double_Create(0.0, 0.0, 0.0));
     TEST_CHECK_SUCCESS(run, World_AddTag(&fixture->World, Id, Key(run, fixture, "test:kept")));
     size_t KeyCount = KeyRegistry_GetCount(&fixture->Keys);
     TestText_CheckErrorMessage(run, ReadObjectJSON(run, GetObject(&fixture->World, Id), &fixture->Keys, text, NULL),
@@ -1260,7 +1295,7 @@ static void ObjectFilesRefuseHostileData(TestRun* run)
     Memory_Free(Text._data);
 
     // Without the key registry, data cannot be read; GHDF refuses keys that are not full, and keys listed twice.
-    uint64_t Plain = AddObject(run, &Fixture.World, "plain", (Vector3){ 0.0f, 0.0f, 0.0f });
+    uint64_t Plain = AddObject(run, &Fixture.World, "plain", Vector3Double_Create(0.0, 0.0, 0.0));
     const char* const NoKeys[] = { "PropertyReadOptions.Keys", NULL };
     TestText_CheckErrorMessage(run, ReadObjectJSON(run, GetObject(&Fixture.World, Plain), NULL,
         "{\"tags\": [\"town:x\"]}", NULL), ErrorCode_InvalidJSON, NoKeys);
@@ -1312,7 +1347,7 @@ static void TheDataRowIsReadOnly(TestRun* run)
     World* TestWorld = &Fixture.World;
     const PropertyTable* Table = WorldObject_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(Table));
-    uint64_t Lamp = AddObject(run, TestWorld, "lamp", (Vector3){ 0.0f, 0.0f, 0.0f });
+    uint64_t Lamp = AddObject(run, TestWorld, "lamp", Vector3Double_Create(0.0, 0.0, 0.0));
     TEST_CHECK_SUCCESS(run, World_AddTag(TestWorld, Lamp, Key(run, &Fixture, "town:lamp")));
     WorldObject* Object = GetObject(TestWorld, Lamp);
 
@@ -1429,7 +1464,7 @@ static void ValuesFromTheSameDataAreCopiedFirst(TestRun* run)
         return;
     }
     World* TestWorld = &Fixture.World;
-    uint64_t Desk = AddObject(run, TestWorld, "desk", (Vector3){ 0.0f, 0.0f, 0.0f });
+    uint64_t Desk = AddObject(run, TestWorld, "desk", Vector3Double_Create(0.0, 0.0, 0.0));
     const uint64_t Only[] = { Desk };
 
     // Four tags fill the data's first allocation, so a fifth entry moves every entry, the one copied from included.
@@ -1491,8 +1526,8 @@ static void TheDocumentedExampleReads(TestRun* run)
         return;
     }
     World* TestWorld = &Fixture.World;
-    uint64_t Lamp = AddObject(run, TestWorld, "lamp", (Vector3){ 0.0f, 0.0f, 0.0f });
-    uint64_t Copy = AddObject(run, TestWorld, "copy", (Vector3){ 0.0f, 0.0f, 0.0f });
+    uint64_t Lamp = AddObject(run, TestWorld, "lamp", Vector3Double_Create(0.0, 0.0, 0.0));
+    uint64_t Copy = AddObject(run, TestWorld, "copy", Vector3Double_Create(0.0, 0.0, 0.0));
     GenericBuffer Text;
     GenericBuffer_AllocateVariable(&Text, DATA_TEST_TEXT_CAPACITY, sizeof(unsigned char));
     if (TEST_CHECK_SUCCESS(run, ReadObjectJSON(run, GetObject(TestWorld, Lamp), &Fixture.Keys, DocumentedExample, NULL)))
@@ -1529,6 +1564,7 @@ void ObjectDataTests_Run(TestRun* run)
         { "the_world_limit_counts_every_object", TheWorldLimitCountsEveryObject },
         { "queries_filter_by_each_field", QueriesFilterByEachField },
         { "queries_sort_by_distance_and_limit", QueriesSortByDistanceAndLimit },
+        { "queries_compare_far_places_in_double", QueriesCompareFarPlacesInDouble },
         { "malformed_queries_are_refused", MalformedQueriesAreRefused },
         { "the_tag_index_follows_every_change", TheTagIndexFollowsEveryChange },
         { "queries_equal_a_brute_force_scan", QueriesEqualABruteForceScan },

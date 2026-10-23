@@ -28,7 +28,7 @@ the data map cases of `tests/PropertyDescriptorTests.c`.
 | `string` | 4 | UTF-8, at most `DATA_VALUE_MAX_STRING_LENGTH` (4096) bytes, no NUL. |
 | `key` | 5 | A namespaced key (a `KeyRegistry` id): a reference to an asset, a preset, a tag ... |
 | `object` | 6 | A world object by id (0 = none). |
-| `vector3` | 7 | Three finite floats (the engine's `Vector3`). |
+| `vector3` | 7 | Three finite doubles (a `Vector3Double`, T33: a position in the world keeps every digit, as an object's does). |
 | `color` | 8 | RGBA bytes. |
 | `date_time` | 9 | Microseconds since 0001-01-01T00:00:00, inside the calendar (see [GameCalendar.md](GameCalendar.md)). |
 | `list` | 10 | One element type (fixed at creation, never `tag`), at most `DATA_VALUE_MAX_ELEMENT_COUNT` (4096) elements. |
@@ -65,7 +65,7 @@ saved.
 - **Equality** (`DataValue_Equals`): same type and value, deeply; floats by value (0 equals -0); an int never equals a
   float; compounds compare as maps (their order is canonical); lists compare element type, count and elements.
 - **Size** (`DataValue_GetByteSize`): what the limits count, an estimate of the bytes it takes saved: tag 0, bool 1,
-  int/float/object/date_time 8, vector3 12, color 4, string its bytes and 1 (its end), key its text; a list 1 plus its
+  int/float/object/date_time 8, vector3 24, color 4, string its bytes and 1 (its end), key its text; a list 1 plus its
   elements; a compound 1 plus, per entry, its name's bytes, 1 and the value. Every value but a tag counts at least one
   byte, so a byte limit also caps how many values there are, however they nest: an object's 64 KiB hold at most 65536.
 - **Validation** (`DataValue_Validate(value, keys)`): what the builders cannot check: floats and vector3 components
@@ -135,7 +135,9 @@ recomputed per frame.
   skipped by every system, and the editor leaves it off). Both are effective (T08): an object under a disabled or
   hidden ancestor counts as disabled or hidden;
 - within `MaximumDistance` of `Origin`; inside the box `BoxMinimum`..`BoxMaximum` (faces inside); positions are the
-  objects' world positions (`WorldObject_GetWorldPosition`, through their parents; T08);
+  objects' world positions (`WorldObject_GetWorldPosition`, through their parents; T08). `Origin` and the box are
+  `Vector3Double`s and the distances compare in double (T33), so a query 100 km out tells apart objects millimetres
+  apart; `MaximumDistance` stays a float;
 - the order: object ids ascending, or nearest to `Origin` first (`IsSortedByDistance`, ties by id); then `Limit`.
 
 Malformed queries (a NULL array with a count, key id 0, an ordering operator on a string, a NaN, a negative distance,
@@ -180,9 +182,9 @@ T09 moved it there from here). In short:
 The `data` entry is a Compound array of entry compounds, sorted by key text: entry 1 the key's full text (String),
 2 the type (UInt8), 3 the value (absent for a tag), 4 a list's element type (UInt8). Values: Boolean; ints in the
 smallest of Int8/16/32/64; floats as Float when exact, else Double; strings and keys as String; objects in the smallest
-of UInt8/16/32/64; vector3 as a Float array of 3; color as a UInt8 array of 4; date_time as Int64; a list as one array
-of its elements (the smallest integer type for all of an int list, Float or Double for floats, 3 floats per vector3, 4
-bytes per color, Int64 per date_time, a Compound array of value compounds for lists and compounds); a compound as a
+of UInt8/16/32/64; vector3 as a Double array of 3 (a Float array of 3, as saves before T33 wrote it, still reads); color
+as a UInt8 array of 4; date_time as Int64; a list as one array of its elements (the smallest integer type for all of an
+int list, Float or Double for floats, 3 doubles per vector3 (3 floats read too), 4 bytes per color, Int64 per date_time, a Compound array of value compounds for lists and compounds); a compound as a
 Compound array of entry compounds with names. Readers accept any integer type that holds the value, skip unknown
 entry ids (forward compatibility), require full keys, and refuse duplicates. The integer helpers are shared with the
 property tables and the world files ([GameGHDF.md](GameGHDF.md)).

@@ -39,9 +39,10 @@ typedef struct WorldTestNpcStruct
     /** Seconds into the current part of its pattern, and which part. */
     float Seconds;
     uint32_t Phase;
-    /** The direction it walks in this part (yaw, radians), and the centre of a circle it runs around. */
+    /** The direction it walks in this part (yaw, radians), and the centre of a circle it runs around (in the world,
+     *  double). */
     float Heading;
-    Vector3 Center;
+    Vector3Double Center;
 } WorldTestNpc;
 
 /** The test frame's characters. Borrowed pointers stay valid while the frame lives. */

@@ -189,14 +189,6 @@ static void DrawShape(const CollisionShape* shape, Color color)
 }
 
 
-/* A world matrix in render space: its translation relative to the frame's origin. */
-static Matrix ToRenderSpace(Matrix worldTransform, Vector3Double origin)
-{
-    // TODO: T33 gives the collision world double transforms; this widens its float ones until then.
-    Matrix4Double Placement = GameMath_FromMatrix(worldTransform);
-    return GameMath_ToMatrixRelative(&Placement, origin);
-}
-
 static void DrawShapes(const WorldCollisionDebugShape* shapes, size_t count, unsigned char alpha, Vector3Double origin)
 {
     for (size_t Index = 0U; Index < count; Index++)
@@ -204,7 +196,8 @@ static void DrawShapes(const WorldCollisionDebugShape* shapes, size_t count, uns
         Color ShapeColor = GetShapeColor(&shapes[Index]);
         ShapeColor.a = alpha;
         rlPushMatrix();
-        rlMultMatrixf(MatrixToFloat(ToRenderSpace(shapes[Index].Transform, origin)));
+        // The shape's world placement in render space: its translation relative to the frame's origin.
+        rlMultMatrixf(MatrixToFloat(GameMath_ToMatrixRelative(&shapes[Index].Transform, origin)));
         DrawShape(shapes[Index].Shape, ShapeColor);
         rlPopMatrix();
     }
@@ -219,8 +212,7 @@ static void DrawContacts(const WorldCollisionDebugContact* contacts, size_t coun
     {
         const WorldCollisionDebugContact* Contact = &contacts[Index];
         Color Point = Contact->IsTouching ? (Color){ 255, 255, 255, alpha } : (Color){ 140, 140, 140, alpha };
-        // TODO: T33 gives the collision world double points; this widens its float ones until then.
-        Vector3 At = GameMath_ToVector3Relative(GameMath_FromVector3(Contact->Point), origin);
+        Vector3 At = GameMath_ToVector3Relative(Contact->Point, origin);
         DrawLine3D(Vector3Add(At, (Vector3){ -CONTACT_CROSS_SIZE, 0.0f, 0.0f }),
             Vector3Add(At, (Vector3){ CONTACT_CROSS_SIZE, 0.0f, 0.0f }), Point);
         DrawLine3D(Vector3Add(At, (Vector3){ 0.0f, -CONTACT_CROSS_SIZE, 0.0f }),

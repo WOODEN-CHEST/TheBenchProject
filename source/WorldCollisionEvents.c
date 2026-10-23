@@ -147,26 +147,29 @@ static const WorldCollisionInstance* FindActiveInstance(const WorldCollision* se
 }
 
 /* The velocity of the material point at @p point, while its instance is at its pose now, under the motion from @p from
- * to @p to over the step (m/s). */
+ * to @p to over the step (m/s). The motion's translation and the point's offset from the pose are taken in double
+ * first: they are small, the positions are not. */
 static Vector3 GetPointVelocity(const WorldCollision* self, const WorldCollisionInstance* instance,
-    const CollisionPose* from, const CollisionPose* to, Vector3 point)
+    const WorldCollisionPose* from, const WorldCollisionPose* to, Vector3Double point)
 {
     bool IsTurning = (from->Rotation.x != to->Rotation.x) || (from->Rotation.y != to->Rotation.y)
         || (from->Rotation.z != to->Rotation.z) || (from->Rotation.w != to->Rotation.w);
+    Vector3 Motion = GameMath_ToVector3Relative(to->Position, from->Position);
     if (!IsTurning)
     {
-        return CollisionMath_Scale(CollisionMath_Subtract(to->Position, from->Position), 1.0f / self->_deltaSeconds);
+        return CollisionMath_Scale(Motion, 1.0f / self->_deltaSeconds);
     }
-    Vector3 Local = Vector3RotateByQuaternion(CollisionMath_Subtract(point, instance->Pose.Position),
+    Vector3 Local = Vector3RotateByQuaternion(GameMath_ToVector3Relative(point, instance->Pose.Position),
         QuaternionInvert(instance->Pose.Rotation));
-    Vector3 Before = CollisionMath_Add(from->Position, Vector3RotateByQuaternion(Local, from->Rotation));
-    Vector3 After = CollisionMath_Add(to->Position, Vector3RotateByQuaternion(Local, to->Rotation));
-    return CollisionMath_Scale(CollisionMath_Subtract(After, Before), 1.0f / self->_deltaSeconds);
+    // After less Before: (to + turned by to) - (from + turned by from).
+    Vector3 Change = CollisionMath_Add(Motion, CollisionMath_Subtract(Vector3RotateByQuaternion(Local, to->Rotation),
+        Vector3RotateByQuaternion(Local, from->Rotation)));
+    return CollisionMath_Scale(Change, 1.0f / self->_deltaSeconds);
 }
 
 /* The motion an instance's driver gave it this step (its body's, before pushes), or none without a body. */
-static void GetDriverMotion(const WorldCollision* self, const WorldCollisionInstance* instance, CollisionPose* outFrom,
-    CollisionPose* outTo)
+static void GetDriverMotion(const WorldCollision* self, const WorldCollisionInstance* instance,
+    WorldCollisionPose* outFrom, WorldCollisionPose* outTo)
 {
     if (instance->Body == WORLD_COLLISION_NO_BODY)
     {
@@ -260,9 +263,9 @@ static void MergePushes(WorldCollision* self)
 }
 
 /* Fills a contact's mesh triangle data on the side that is a mesh: its index, part, material and the barycentrics of
- * the contact's first point on it. */
+ * the contact's first point on it (the triangle placed relative to that point). */
 static void FillContactTriangle(const WorldCollisionInstance* instance, uint32_t shapeIndex, uint32_t triangle,
-    Vector3 point, WorldCollisionShapeInfo* info)
+    Vector3Double point, WorldCollisionShapeInfo* info)
 {
     const WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(instance, shapeIndex);
     const CollisionMesh* Triangles = Shape->Shape->Mesh;
@@ -271,11 +274,12 @@ static void FillContactTriangle(const WorldCollisionInstance* instance, uint32_t
         return;
     }
     WorldCollisionInternal_FillTriangleInfo(Triangles, triangle, info);
+    CollisionAffine MeshToWorld = WorldCollisionInternal_ToRelative(&Shape->ShapeToWorld, point);
     CollisionConvex View;
-    CollisionConvex_FromMeshTriangle(Triangles, triangle, &Shape->ShapeToWorld, Shape->Shape->IsTwoSided, &View);
+    CollisionConvex_FromMeshTriangle(Triangles, triangle, &MeshToWorld, Shape->Shape->IsTwoSided, &View);
     uint32_t Region = 0U;
-    CollisionMath_GetClosestTrianglePoint(View.Vertices[0], View.Vertices[1], View.Vertices[2], point,
-        &info->Barycentric, &Region);
+    CollisionMath_GetClosestTrianglePoint(View.Vertices[0], View.Vertices[1], View.Vertices[2],
+        CollisionMath_Vector(0.0f, 0.0f, 0.0f), &info->Barycentric, &Region);
 }
 
 /* A manifold of the solver's as a contact: A the lower object id, local positions, motions and pushes. */
@@ -298,10 +302,10 @@ static void AddStepContact(WorldCollision* self, const WorldCollisionManifold* m
     Manifold->Normal = IsSwapped ? CollisionMath_Negate(manifold->Contact.Normal) : manifold->Contact.Normal;
     Manifold->Separation = manifold->Contact.Separation;
     Manifold->PointCount = manifold->Contact.PointCount;
-    CollisionPose DriverFromA;
-    CollisionPose DriverToA;
-    CollisionPose DriverFromB;
-    CollisionPose DriverToB;
+    WorldCollisionPose DriverFromA;
+    WorldCollisionPose DriverToA;
+    WorldCollisionPose DriverFromB;
+    WorldCollisionPose DriverToB;
     GetDriverMotion(self, InstanceA, &DriverFromA, &DriverToA);
     GetDriverMotion(self, InstanceB, &DriverFromB, &DriverToB);
     for (uint32_t Point = 0U; Point < manifold->Contact.PointCount; Point++)
@@ -309,10 +313,12 @@ static void AddStepContact(WorldCollision* self, const WorldCollisionManifold* m
         const CollisionContactPoint* Source = &manifold->Contact.Points[Point];
         WorldContactPoint* Target = &Manifold->Points[Point];
         WorldContactPointDetail* Detail = &Contact.Points[Point];
-        Target->PositionA = IsSwapped ? Source->PositionB : Source->PositionA;
-        Target->PositionB = IsSwapped ? Source->PositionA : Source->PositionB;
-        Target->LocalPositionA = CollisionAffine_TransformPoint(&InstanceA->WorldToObject, Target->PositionA);
-        Target->LocalPositionB = CollisionAffine_TransformPoint(&InstanceB->WorldToObject, Target->PositionB);
+        Target->PositionA = Vector3Double_Add(manifold->Origin, GameMath_FromVector3(IsSwapped ? Source->PositionB
+            : Source->PositionA));
+        Target->PositionB = Vector3Double_Add(manifold->Origin, GameMath_FromVector3(IsSwapped ? Source->PositionA
+            : Source->PositionB));
+        Target->LocalPositionA = WorldCollisionInternal_ToObjectSpace(InstanceA, Target->PositionA);
+        Target->LocalPositionB = WorldCollisionInternal_ToObjectSpace(InstanceB, Target->PositionB);
         Target->Separation = Source->Separation;
         Target->FeatureId = Source->FeatureId;
         // The relative velocity over the step's motions, and the closing before the pushes (the drivers' motions).
@@ -517,7 +523,7 @@ static void QueueContactEvent(WorldCollision* self, WorldContactEventKind kind, 
 
 /* One side of a touching contact in its object's result: its count, and the ground if it faces up the most. */
 static void AddToResult(WorldCollision* self, WorldCollisionInstance* instance, const WorldCollisionInstance* other,
-    Vector3 pushOut, Vector3 otherPoint)
+    Vector3 pushOut, Vector3Double otherPoint)
 {
     WorldMotionResult* Result = WorldCollisionInternal_TouchResult(self, instance);
     Result->ContactCount++;
@@ -534,7 +540,7 @@ static void AddToResult(WorldCollision* self, WorldCollisionInstance* instance, 
 
 /* One side of a touching contact in its object's result, and in the result of the pushable that carries it. */
 static void AddSideToResults(WorldCollision* self, uint32_t slot, const WorldCollisionInstance* other, Vector3 pushOut,
-    Vector3 otherPoint)
+    Vector3Double otherPoint)
 {
     WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, slot);
     AddToResult(self, Instance, other, pushOut, otherPoint);
@@ -675,7 +681,7 @@ static void RebuildDebugContacts(WorldCollision* self)
             const WorldContactPoint* Source = &Contact->Manifold.Points[Point];
             WorldCollisionDebugContact Debug =
             {
-                .Point = CollisionMath_Scale(CollisionMath_Add(Source->PositionA, Source->PositionB), 0.5f),
+                .Point = Vector3Double_Lerp(Source->PositionA, Source->PositionB, 0.5),
                 .Normal = Contact->Manifold.Normal, .PushSpeed = Contact->Points[Point].PushSpeed,
                 .IsTouching = Contact->Points[Point].IsTouching
             };

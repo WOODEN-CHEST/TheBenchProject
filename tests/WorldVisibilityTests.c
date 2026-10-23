@@ -1,6 +1,7 @@
 #include "TestSuites.h"
 #include "TestAssets.h"
 #include "TestWorld.h"
+#include "GameMath.h"
 #include "WorldVisibility.h"
 #include "WorldRenderCache.h"
 #include "World.h"
@@ -158,7 +159,7 @@ static WorldModelComponent* AddWorldModel(TestRun* run, World* world, const char
     WorldObject* Object = NULL;
     WorldComponent* Component = NULL;
     if (!TEST_CHECK_SUCCESS(run, World_CreateObject(world, NULL, &Object))
-        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, position))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, GameMath_FromVector3(position)))
         || !TEST_CHECK_SUCCESS(run, World_AddComponent(world, WorldObject_GetId(Object), WorldComponentType_Model,
             &Component)))
     {
@@ -183,7 +184,7 @@ static WorldSpriteComponent* AddSprite(TestRun* run, World* world, Vector3 posit
     WorldObject* Object = NULL;
     WorldComponent* Component = NULL;
     if (!TEST_CHECK_SUCCESS(run, World_CreateObject(world, NULL, &Object))
-        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, position))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, GameMath_FromVector3(position)))
         || !TEST_CHECK_SUCCESS(run, World_AddComponent(world, WorldObject_GetId(Object), WorldComponentType_Sprite,
             &Component)))
     {
@@ -1139,7 +1140,7 @@ static void ListsAndLodsHoldTwentyKilometresOut(TestRun* run)
     WorldObject* Parent = NULL;
     WorldModelComponent* Child = AddBox(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, 0.0f });
     IsBuilt = IsBuilt && (Child != NULL) && TEST_CHECK_SUCCESS(run, World_CreateObject(&Fixture.World, NULL, &Parent))
-        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, (Vector3){ 2.3f, 0.3f, 5.9f }))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, Vector3Double_Create(2.3, 0.3, 5.9)))
         && TEST_CHECK_SUCCESS(run, World_SetParent(&Fixture.World, WorldObject_GetId(OwnerOfModel(Child)),
             WorldObject_GetId(Parent), false));
 
@@ -1172,7 +1173,7 @@ static void ListsAndLodsHoldTwentyKilometresOut(TestRun* run)
         TEST_CHECK(run, (LeftBehind.ModelCounts[WorldVisibilityPass_Camera] == 0U)
             && (LeftBehind.SpriteCounts[WorldVisibilityPass_Camera] == 0U));
 
-        // Every root moved 20 km (rounded to the floats there), the camera with them.
+        // Every root moved 20 km (in double, exactly), the camera with them.
         size_t ObjectCount = World_GetObjectCount(&Fixture.World);
         for (size_t Index = 0U; Index < ObjectCount; Index++)
         {
@@ -1180,9 +1181,9 @@ static void ListsAndLodsHoldTwentyKilometresOut(TestRun* run)
             if (TEST_CHECK_SUCCESS(run, World_GetObjectByIndex(&Fixture.World, Index, &Object))
                 && (WorldObject_GetParent(Object) == NULL))
             {
-                Vector3 Position = WorldObject_GetPosition(Object);
-                Vector3 Moved = { (float)((double)Position.x + Shift.X), Position.y, (float)((double)Position.z + Shift.Z) };
-                TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Moved));
+                Vector3Double Position = WorldObject_GetPosition(Object);
+                TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Double_Create(Position.X + Shift.X,
+                    Position.Y, Position.Z + Shift.Z)));
             }
         }
         if (BuildInRenderSpace(run, &Fixture, Vector3Double_Add(CameraPosition, Shift), &Shifted))

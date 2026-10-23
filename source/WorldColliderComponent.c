@@ -481,9 +481,10 @@ CollisionShape WorldColliderComponent_GetOwnShape(const WorldColliderComponent* 
     return Shape;
 }
 
-Matrix WorldColliderComponent_GetLocalTransform(const WorldColliderComponent* self)
+Matrix4Double WorldColliderComponent_GetLocalTransform(const WorldColliderComponent* self)
 {
-    return WorldTransform_Compose(self->_offset, self->_rotation, self->_scale);
+    return WorldTransform_Compose(Vector3Double_Create(self->_offset.x, self->_offset.y, self->_offset.z),
+        self->_rotation, self->_scale);
 }
 
 void WorldColliderComponent_ResolveSettings(const WorldColliderComponent* self, const WorldModelCollision* collision,

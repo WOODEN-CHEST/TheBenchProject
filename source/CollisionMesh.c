@@ -71,7 +71,7 @@ typedef struct BuildRangeStruct
 
 
 // Static functions: welding.
-static uint32_t FloatBits(float value)
+static uint32_t GetFloatBits(float value)
 {
     // +0 and -0 are one position.
     if (value == 0.0f)
@@ -107,7 +107,7 @@ static size_t GetTableCapacity(size_t count)
 /* The welded index of a position, adding it when new. */
 static uint32_t Weld(WeldEntry* table, size_t capacity, Vector3* vertices, uint32_t* vertexCount, Vector3 position)
 {
-    uint32_t Bits[3] = { FloatBits(position.x), FloatBits(position.y), FloatBits(position.z) };
+    uint32_t Bits[3] = { GetFloatBits(position.x), GetFloatBits(position.y), GetFloatBits(position.z) };
     size_t Slot = HashBits(Bits) & (capacity - 1U);
     while (table[Slot].Index != NONE)
     {

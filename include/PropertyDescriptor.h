@@ -6,6 +6,7 @@
 #include "raylib/raylib.h"
 #include "Renderer.h"
 #include "wr/WRError.h"
+#include "wr/WRVectorMath.h"
 #include "wr/WRJSON.h"
 #include "wr/WRGHDF.h"
 
@@ -53,6 +54,7 @@ typedef struct DataMapStruct DataMap;
  * | Angle       | float, radians              | number, DEGREES                        | Float, radians                |
  * | Vector2     | Vector2                     | [x, y]                                 | Float array of 2              |
  * | Vector3     | Vector3                     | [x, y, z]                              | Float array of 3              |
+ * | Vector3Double | Vector3Double, positions  | [x, y, z]                              | Double[3], reads Float[3]     |
  * | AngleVector3 | Vector3, radians          | [x, y, z], DEGREES                     | Float array of 3, radians     |
  * | Color       | Color                       | "#rrggbb" or "#rrggbbaa"               | UInt8 array of 4 (RGBA)       |
  * | RenderColor | RenderColor                 | "#rrggbb" or {tint, brightness, opacity} | Compound {1: UInt8[3] tint, 2: Float brightness, 3: Float opacity} |
@@ -77,7 +79,9 @@ typedef struct DataMapStruct DataMap;
  * registry, to intern the keys. A FloatList (a world model placement's LOD distances) is a list of finite floats: an
  * empty list is NULL, written [] in JSON and as an empty Float array in GHDF when defaults are written. An EnumSet (a
  * collider's layer mask) is a set of an enum table's entries, whose values are their bit indices (0 to 31): JSON
- * names them in an array, GHDF stores the mask.
+ * names them in an array, GHDF stores the mask. A Vector3Double (an object's position, T33) writes each component as
+ * the shortest text that reads back to the same double, so a float written by a Vector3 row reads back as the double
+ * that prints the same text; its GHDF reader also takes a Float array of 3, the form a Vector3 row wrote.
  *
  * Not thread-safe: tables are immutable static data, but instances are plain structs with no locking.
  */
@@ -167,6 +171,9 @@ typedef enum PropertyTypeEnum
     PropertyType_Vector2,
     /** @brief A Vector3; every component finite and within the optional bounds. */
     PropertyType_Vector3,
+    /** @brief A Vector3Double, for positions that need more precision than floats (an object's position, far from the
+     *  world's origin); every component finite and within the optional bounds (compared in double precision). */
+    PropertyType_Vector3Double,
     /** @brief Three angles (Euler rotations): a Vector3 in radians in memory and in GHDF, written in degrees in JSON.
      *  Every component finite and within the optional bounds (in radians). */
     PropertyType_AngleVector3,
@@ -256,6 +263,8 @@ typedef union PropertyDataUnion
     Vector2 Vector2Value;
     /** @brief PropertyType_Vector3, and PropertyType_AngleVector3 in radians. */
     Vector3 Vector3Value;
+    /** @brief PropertyType_Vector3Double. */
+    Vector3Double Vector3DoubleValue;
     /** @brief PropertyType_Color. */
     Color ColorValue;
     /** @brief PropertyType_RenderColor. */
@@ -298,7 +307,8 @@ typedef struct PropertyValueStruct
  *        strings valid UTF-8, asset names valid, enums in their table).
  *
  * Build with the PROPERTY_RULES_* macros. Bounds apply to Int32, UInt32, Float, Double, Angle (radians), to every
- * component of Vector2, Vector3 and AngleVector3 (radians) and to every value of a FloatList; the string rules to String
+ * component of Vector2, Vector3, Vector3Double and AngleVector3 (radians) and to every value of a FloatList; the string
+ * rules to String
  * and AssetName; MaxCount and MaxLength (bytes) to a DataMap; MaxCount and IsStrictlyIncreasing to a FloatList.
  * PropertyTable_Check rejects rules that do not fit the type.
  */
@@ -580,6 +590,12 @@ static inline PropertyValue PropertyValue_FromVector2(Vector2 value)
 static inline PropertyValue PropertyValue_FromVector3(Vector3 value)
 {
     return (PropertyValue){ .Type = PropertyType_Vector3, .Data.Vector3Value = value };
+}
+
+/** @brief Makes a Vector3Double value. @param value The value. @returns The typed value. */
+static inline PropertyValue PropertyValue_FromVector3Double(Vector3Double value)
+{
+    return (PropertyValue){ .Type = PropertyType_Vector3Double, .Data.Vector3DoubleValue = value };
 }
 
 /** @brief Makes an AngleVector3 value. @param radians The angles in radians. @returns The typed value. */

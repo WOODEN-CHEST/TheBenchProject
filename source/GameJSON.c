@@ -742,6 +742,17 @@ Error GameJSON_ParseVector3Doubles(const JSONObjectValue* value, double* outComp
     return Error_CreateSuccess();
 }
 
+Error GameJSON_ParseVector3Double(const JSONObjectValue* value, Vector3Double* outVector)
+{
+    double Components[3] = { 0.0, 0.0, 0.0 };
+    Error Result = GameJSON_ParseVector3Doubles(value, Components);
+    if (Result.Code == ErrorCode_Success)
+    {
+        *outVector = Vector3Double_Create(Components[0], Components[1], Components[2]);
+    }
+    return Result;
+}
+
 Error GameJSON_ParseVector3(const JSONObjectValue* value, Vector3* outVector)
 {
     double Components[3] = { 0.0, 0.0, 0.0 };
@@ -999,4 +1010,34 @@ Error GameJSON_CreateVector3Value(JSONObjectPool* pool, Vector3 vector, JSONObje
 {
     const float Components[3] = { vector.x, vector.y, vector.z };
     return CreateFloatArrayValue(pool, Components, 3U, outValue);
+}
+
+Error GameJSON_CreateVector3DoubleValue(JSONObjectPool* pool, Vector3Double vector, JSONObjectValue* outValue)
+{
+    if ((pool == NULL) || (outValue == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "GameJSON: pool and outValue must not be NULL.");
+    }
+
+    JSONArray* Array = NULL;
+    Error Result = JSONObjectPool_BorrowArray(pool, &Array);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    const double Components[3] = { vector.X, vector.Y, vector.Z };
+    for (size_t Index = 0; (Index < 3U) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        // JSON_Serialize writes a real number as the shortest text that reads back to the same double.
+        JSONObjectValue Element = JSONObjectValue_CreateRealNumber(Components[Index]);
+        Result = JSONArray_Add(Array, &Element);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = JSONObjectPool_ReturnArray(pool, Array, true);
+        Error_Deconstruct(&ReturnResult);
+        return Result;
+    }
+    *outValue = JSONObjectValue_CreateArray(Array);
+    return Error_CreateSuccess();
 }

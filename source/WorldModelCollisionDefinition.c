@@ -7,6 +7,7 @@
 #include "AssetTypesStandard.h"
 #include "CollisionMath.h"
 #include "GameJSON.h"
+#include "GameMath.h"
 #include "WorldTransform.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -739,17 +740,17 @@ static Error BuildBoundsShape(GameModel* lod0, CollisionShape* outShape, Collisi
     Matrix Import = GameModel_GetRaylibModel(lod0).transform;
     Vector3 Center = CollisionMath_Scale(CollisionMath_Add(Bounds.min, Bounds.max), 0.5f);
     Vector3 Half = CollisionMath_Scale(CollisionMath_Subtract(Bounds.max, Bounds.min), 0.5f);
-    Vector3 Position;
+    Matrix4Double ImportDouble = GameMath_FromMatrix(Import);
+    Vector3Double Position;
     Vector3 Rotation;
     Vector3 Scale;
-    WorldTransform_Decompose(Import, CollisionMath_Vector(1.0f, 1.0f, 1.0f), &Position, &Rotation, &Scale);
-    Matrix Recomposed = WorldTransform_Compose(Position, Rotation, Scale);
+    WorldTransform_Decompose(&ImportDouble, CollisionMath_Vector(1.0f, 1.0f, 1.0f), &Position, &Rotation, &Scale);
+    Matrix4Double Recomposed = WorldTransform_Compose(Position, Rotation, Scale);
     bool IsExact = true;
-    const float* A = &Import.m0;
-    const float* B = &Recomposed.m0;
-    for (size_t Index = 0U; Index < 16U; Index++)
+    for (size_t Index = 0U; Index < MATRIX4_DOUBLE_ENTRY_COUNT; Index++)
     {
-        IsExact = IsExact && (fabsf(A[Index] - B[Index]) <= (BOUNDS_DECOMPOSITION_TOLERANCE * (1.0f + fabsf(A[Index]))));
+        IsExact = IsExact && (fabs(ImportDouble.M[Index] - Recomposed.M[Index])
+            <= ((double)BOUNDS_DECOMPOSITION_TOLERANCE * (1.0 + fabs(ImportDouble.M[Index]))));
     }
     float Smallest = 1e-6f;
     if (IsExact)

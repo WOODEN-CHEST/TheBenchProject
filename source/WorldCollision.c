@@ -2,6 +2,7 @@
 #include <math.h>
 #include "WorldCollisionInternal.h"
 #include "AssetManager.h"
+#include "GameMath.h"
 #include "Logger.h"
 #include "World.h"
 #include "WorldInternal.h"
@@ -21,6 +22,9 @@
  * world model's name changed, it moved between the static and the movable tree, or it was just (re)enabled; moved
  * (new transforms, boxes and proxies) when only its object's transform revision changed. Either way its motion pose
  * (T27) follows: the rigid frame its shapes move with, each shape's place relative to it, and how far they reach.
+ *
+ * The placements come from the objects' double world matrices (T33): each shape's transform is composed in double, its
+ * axes rounded to floats and its translation kept in double (WorldCollisionPlacement), its box transformed in double.
  */
 
 
@@ -224,6 +228,43 @@ static void Rematch(WorldCollision* self)
 }
 
 
+// Static functions: placements.
+/* A double matrix as a placement: its axes rounded to floats, its translation kept. */
+static WorldCollisionPlacement MakePlacement(const Matrix4Double* matrix)
+{
+    return (WorldCollisionPlacement)
+    {
+        .X = { (float)matrix->M[0], (float)matrix->M[1], (float)matrix->M[2] },
+        .Y = { (float)matrix->M[4], (float)matrix->M[5], (float)matrix->M[6] },
+        .Z = { (float)matrix->M[8], (float)matrix->M[9], (float)matrix->M[10] },
+        .Translation = Matrix4Double_GetTranslation(matrix)
+    };
+}
+
+/* A placement as a double matrix (the debug list's transforms). */
+static Matrix4Double MakePlacementMatrix(const WorldCollisionPlacement* placement)
+{
+    Matrix4Double Result = Matrix4Double_Identity();
+    const Vector3 Axes[3] = { placement->X, placement->Y, placement->Z };
+    for (size_t Axis = 0U; Axis < 3U; Axis++)
+    {
+        Result.M[Axis * 4U] = (double)Axes[Axis].x;
+        Result.M[(Axis * 4U) + 1U] = (double)Axes[Axis].y;
+        Result.M[(Axis * 4U) + 2U] = (double)Axes[Axis].z;
+    }
+    Matrix4Double_SetTranslation(&Result, placement->Translation);
+    return Result;
+}
+
+/* The inverse of a placement's axes (no translation); false (and the identity) when they are singular or nearly so. */
+static bool TryInvertAxes(const WorldCollisionPlacement* placement, CollisionAffine* outInverse)
+{
+    CollisionAffine Axes = { .X = placement->X, .Y = placement->Y, .Z = placement->Z,
+        .Translation = { 0.0f, 0.0f, 0.0f } };
+    return CollisionAffine_TryInvert(&Axes, outInverse);
+}
+
+
 // Static functions: shapes.
 /* The object and every ancestor static: the instance belongs in the static tree. */
 static bool IsEffectivelyStatic(const WorldObject* object)
@@ -238,16 +279,16 @@ static bool IsEffectivelyStatic(const WorldObject* object)
     return true;
 }
 
-/* The collider's frame in the world: the object's world matrix by the rotation mode, then the collider's own
+/* The collider's frame in the world, in double: the object's world matrix by the rotation mode, then the collider's own
  * transform. yaw_only and none rebuild the frame from the world transform's decomposition (a mirror lives in its scale,
  * so the turn they keep is a proper rotation) with the object's scale along the turned (or the world's) axes. The
  * frame's rigid part is the motion's pose (T27): the object's world position, turned as the shapes turn. */
-static Matrix GetColliderToWorld(const WorldColliderComponent* collider, const WorldObject* object, Matrix objectWorld,
-    CollisionPose* outPose)
+static Matrix4Double GetColliderToWorld(const WorldColliderComponent* collider, const WorldObject* object,
+    const Matrix4Double* objectWorld, WorldCollisionPose* outPose)
 {
-    Matrix Frame = objectWorld;
+    Matrix4Double Frame = *objectWorld;
     WorldColliderRotationMode Mode = WorldColliderComponent_GetRotationMode(collider);
-    Vector3 Position;
+    Vector3Double Position;
     Vector3 Rotation;
     Vector3 Scale;
     WorldObject_GetWorldTransform(object, &Position, &Rotation, &Scale);
@@ -258,17 +299,18 @@ static Matrix GetColliderToWorld(const WorldColliderComponent* collider, const W
         if (Mode == WorldColliderRotationMode_YawOnly)
         {
             // The yaw of the turn's forward (local +Z), or of its right (local +X) when it points straight up or down.
-            Matrix Turned = WorldTransform_Compose((Vector3){ 0.0f, 0.0f, 0.0f }, Rotation,
+            Matrix4Double Turned = WorldTransform_Compose(Vector3Double_Zero(), Rotation,
                 (Vector3){ 1.0f, 1.0f, 1.0f });
-            bool HasForward = ((Turned.m8 * Turned.m8) + (Turned.m10 * Turned.m10)) > 1e-12f;
-            Yaw = HasForward ? atan2f(Turned.m8, Turned.m10) : atan2f(-Turned.m2, Turned.m0);
+            bool HasForward = ((Turned.M[8] * Turned.M[8]) + (Turned.M[10] * Turned.M[10])) > 1e-12;
+            Yaw = (float)(HasForward ? atan2(Turned.M[8], Turned.M[10]) : atan2(-Turned.M[2], Turned.M[0]));
         }
         Turn = (Vector3){ 0.0f, Yaw, 0.0f };
         Frame = WorldTransform_Compose(Position, Turn, Scale);
     }
-    outPose->Position = (Vector3){ objectWorld.m12, objectWorld.m13, objectWorld.m14 };
+    outPose->Position = Matrix4Double_GetTranslation(objectWorld);
     outPose->Rotation = QuaternionNormalize(QuaternionFromMatrix(MatrixRotateXYZ(Turn)));
-    return MatrixMultiply(WorldColliderComponent_GetLocalTransform(collider), Frame);
+    Matrix4Double Local = WorldColliderComponent_GetLocalTransform(collider);
+    return Matrix4Double_Multiply(&Local, &Frame);
 }
 
 /* Whether a shape's place relative to its instance's pose changed beyond rounding. */
@@ -290,19 +332,21 @@ static bool IsShapeFrameChanged(const CollisionAffine* before, const CollisionAf
 
 /* Places each shape relative to the instance's pose and finds how far the valid ones reach from its origin (T27).
  * Returns whether a valid shape's place relative to the pose changed (a scale or a shear: no motion of the pose shows
- * it). */
+ * it). The shapes are taken relative to the pose's position first, in double, so the place holds far out. */
 static bool UpdatePoseShapes(WorldCollisionInstance* instance)
 {
-    CollisionAffine PoseToWorld = CollisionPose_ToAffine(&instance->Pose);
+    CollisionPose Turn = { .Position = { 0.0f, 0.0f, 0.0f }, .Rotation = instance->Pose.Rotation };
+    CollisionAffine TurnToWorld = CollisionPose_ToAffine(&Turn);
     CollisionAffine WorldToPose;
-    CollisionAffine_TryInvert(&PoseToWorld, &WorldToPose);
+    CollisionAffine_TryInvert(&TurnToWorld, &WorldToPose);
     float Reach = 0.0f;
     bool IsReshaped = false;
     for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
     {
         WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(instance, Index);
         CollisionAffine Before = Shape->ShapeToPose;
-        Shape->ShapeToPose = CollisionAffine_Multiply(&WorldToPose, &Shape->ShapeToWorld);
+        CollisionAffine ShapeToWorld = WorldCollisionInternal_ToRelative(&Shape->ShapeToWorld, instance->Pose.Position);
+        Shape->ShapeToPose = CollisionAffine_Multiply(&WorldToPose, &ShapeToWorld);
         IsReshaped = IsReshaped || (Shape->IsValid && IsShapeFrameChanged(&Before, &Shape->ShapeToPose));
         Vector3 LocalMin;
         Vector3 LocalMax;
@@ -321,30 +365,32 @@ static bool UpdatePoseShapes(WorldCollisionInstance* instance)
     return IsReshaped;
 }
 
-/* A shape's transforms and box under the collider's frame; false when the frame flattens it. */
-static bool PlaceShape(WorldCollisionShape* shape, Matrix colliderToWorld)
+/* A shape's placement and box under the collider's frame (composed in double); false when the frame flattens it. */
+static bool PlaceShape(WorldCollisionShape* shape, const Matrix4Double* colliderToWorld)
 {
-    Matrix ShapeToWorld = MatrixMultiply(CollisionShape_GetTransform(shape->Shape), colliderToWorld);
-    shape->ShapeToWorld = CollisionAffine_FromMatrix(ShapeToWorld);
-    bool IsValid = CollisionAffine_TryInvert(&shape->ShapeToWorld, &shape->WorldToShape);
+    Matrix4Double ShapeTransform = GameMath_FromMatrix(CollisionShape_GetTransform(shape->Shape));
+    Matrix4Double ShapeToWorld = Matrix4Double_Multiply(&ShapeTransform, colliderToWorld);
+    shape->ShapeToWorld = MakePlacement(&ShapeToWorld);
+    bool IsValid = TryInvertAxes(&shape->ShapeToWorld, &shape->WorldToShapeAxes);
     shape->IsUnbounded = (shape->Shape->Type == CollisionShapeType_Plane) && !shape->Shape->IsBounded;
     if (IsValid && !shape->IsUnbounded)
     {
         Vector3 LocalMin;
         Vector3 LocalMax;
         CollisionShape_TryGetLocalBounds(shape->Shape, &LocalMin, &LocalMax);
-        CollisionAffine_TransformBounds(&shape->ShapeToWorld, LocalMin, LocalMax, &shape->Min, &shape->Max);
-        IsValid = CollisionMath_IsFinite(shape->Min) && CollisionMath_IsFinite(shape->Max);
+        BoundingBoxDouble Local = { .Min = GameMath_FromVector3(LocalMin), .Max = GameMath_FromVector3(LocalMax) };
+        shape->Box = BoundingBoxDouble_Transform(Local, &ShapeToWorld);
+        IsValid = Vector3Double_IsFinite(shape->Box.Min) && Vector3Double_IsFinite(shape->Box.Max);
     }
     return IsValid;
 }
 
-static void UpdateObjectTransform(WorldCollisionInstance* instance, Matrix objectWorld)
+static void UpdateObjectTransform(WorldCollisionInstance* instance, const Matrix4Double* objectWorld)
 {
-    instance->ObjectToWorld = CollisionAffine_FromMatrix(objectWorld);
-    if (!CollisionAffine_TryInvert(&instance->ObjectToWorld, &instance->WorldToObject))
+    instance->ObjectToWorld = MakePlacement(objectWorld);
+    if (!TryInvertAxes(&instance->ObjectToWorld, &instance->WorldToObjectAxes))
     {
-        instance->WorldToObject = CollisionAffine_Identity();
+        instance->WorldToObjectAxes = CollisionAffine_Identity();
     }
 }
 
@@ -366,7 +412,7 @@ static void Activate(WorldCollision* self, WorldCollisionInstance* instance, uin
             GenericBuffer_AddLast(&self->_planes, &Key);
             continue;
         }
-        Shape->Proxy = CollisionTree_Insert(Tree, Shape->Min, Shape->Max, Key);
+        Shape->Proxy = CollisionTree_Insert(Tree, Shape->Box, Key);
     }
     instance->IsActive = true;
 }
@@ -425,9 +471,9 @@ static void Rebuild(WorldCollision* self, WorldCollisionInstance* instance, uint
             instance->WorldModelName, " has no collision section", NULL);
     }
     const WorldObject* Object = WorldComponent_GetOwner(&instance->Collider->Base);
-    Matrix ObjectWorld = WorldObject_GetWorldMatrix(Object);
-    UpdateObjectTransform(instance, ObjectWorld);
-    Matrix Frame = GetColliderToWorld(instance->Collider, Object, ObjectWorld, &instance->Pose);
+    Matrix4Double ObjectWorld = WorldObject_GetWorldMatrix(Object);
+    UpdateObjectTransform(instance, &ObjectWorld);
+    Matrix4Double Frame = GetColliderToWorld(instance->Collider, Object, &ObjectWorld, &instance->Pose);
     bool HasFlatShape = false;
     for (uint32_t Index = 0U; Index < Count; Index++)
     {
@@ -444,7 +490,7 @@ static void Rebuild(WorldCollision* self, WorldCollisionInstance* instance, uint
             Shape.IsSizeValid = Check.Code == ErrorCode_Success;
             Error_Deconstruct(&Check);
         }
-        Shape.IsValid = PlaceShape(&Shape, Frame) && Shape.IsSizeValid;
+        Shape.IsValid = PlaceShape(&Shape, &Frame) && Shape.IsSizeValid;
         HasFlatShape = HasFlatShape || !Shape.IsValid;
         GenericBuffer_AddLast(&instance->Shapes, &Shape);
     }
@@ -477,15 +523,15 @@ static void Rebuild(WorldCollision* self, WorldCollisionInstance* instance, uint
 static void Move(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot)
 {
     const WorldObject* Object = WorldComponent_GetOwner(&instance->Collider->Base);
-    Matrix ObjectWorld = WorldObject_GetWorldMatrix(Object);
-    UpdateObjectTransform(instance, ObjectWorld);
-    Matrix Frame = GetColliderToWorld(instance->Collider, Object, ObjectWorld, &instance->Pose);
+    Matrix4Double ObjectWorld = WorldObject_GetWorldMatrix(Object);
+    UpdateObjectTransform(instance, &ObjectWorld);
+    Matrix4Double Frame = GetColliderToWorld(instance->Collider, Object, &ObjectWorld, &instance->Pose);
     CollisionTree* Tree = instance->IsStatic ? &self->_staticTree : &self->_movableTree;
     for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
     {
         WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(instance, Index);
         bool WasValid = Shape->IsValid;
-        bool IsValid = PlaceShape(Shape, Frame) && Shape->IsSizeValid;
+        bool IsValid = PlaceShape(Shape, &Frame) && Shape->IsSizeValid;
         if (IsValid != WasValid)
         {
             // A shape became flat or unflattened: rebuild the whole instance (rare).
@@ -494,7 +540,7 @@ static void Move(WorldCollision* self, WorldCollisionInstance* instance, uint32_
         }
         if (IsValid && (Shape->Proxy != COLLISION_TREE_NULL))
         {
-            CollisionTree_Move(Tree, Shape->Proxy, Shape->Min, Shape->Max);
+            CollisionTree_Move(Tree, Shape->Proxy, Shape->Box);
         }
     }
     // A shape whose place relative to the pose changed (a scale) moved in a way no motion of the pose shows: the
@@ -598,7 +644,7 @@ static void RebuildDebugList(WorldCollision* self)
             {
                 continue;
             }
-            WorldCollisionDebugShape Debug = { .Shape = Shape->Shape, .Transform = CollisionAffine_ToMatrix(
+            WorldCollisionDebugShape Debug = { .Shape = Shape->Shape, .Transform = MakePlacementMatrix(
                 &Shape->ShapeToWorld), .Layer = Instance->Settings.Layer, .IsTrigger = Instance->Settings.IsTrigger,
                 .IsStatic = Instance->IsStatic };
             GenericBuffer_AddLast(&self->_debugShapes, &Debug);
@@ -647,8 +693,7 @@ void WorldCollisionInternal_SyncShapes(WorldCollision* self)
     }
 }
 
-void WorldCollisionInternal_WidenProxies(WorldCollision* self, WorldCollisionInstance* instance, Vector3 min,
-    Vector3 max)
+void WorldCollisionInternal_WidenProxies(WorldCollision* self, WorldCollisionInstance* instance, BoundingBoxDouble box)
 {
     instance->IsWidened = true;
     CollisionTree* Tree = instance->IsStatic ? &self->_staticTree : &self->_movableTree;
@@ -657,7 +702,7 @@ void WorldCollisionInternal_WidenProxies(WorldCollision* self, WorldCollisionIns
         WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(instance, Index);
         if (Shape->Proxy != COLLISION_TREE_NULL)
         {
-            CollisionTree_Move(Tree, Shape->Proxy, CollisionMath_Min(min, Shape->Min), CollisionMath_Max(max, Shape->Max));
+            CollisionTree_Move(Tree, Shape->Proxy, BoundingBoxDouble_Union(box, Shape->Box));
         }
     }
 }
@@ -672,17 +717,14 @@ void WorldCollisionInternal_WidenPushedProxies(WorldCollision* self, WorldCollis
         {
             continue;
         }
-        Vector3 FatMin;
-        Vector3 FatMax;
-        Vector3 Min = CollisionMath_Add(Shape->Min, shift);
-        Vector3 Max = CollisionMath_Add(Shape->Max, shift);
-        CollisionTree_GetBounds(Tree, Shape->Proxy, &FatMin, &FatMax);
-        bool IsInside = (Min.x >= FatMin.x) && (Min.y >= FatMin.y) && (Min.z >= FatMin.z) && (Max.x <= FatMax.x)
-            && (Max.y <= FatMax.y) && (Max.z <= FatMax.z);
-        if (!IsInside)
+        Vector3Double Shift = GameMath_FromVector3(shift);
+        BoundingBoxDouble Shifted = { .Min = Vector3Double_Add(Shape->Box.Min, Shift),
+            .Max = Vector3Double_Add(Shape->Box.Max, Shift) };
+        BoundingBoxDouble Fat = CollisionTree_GetBounds(Tree, Shape->Proxy);
+        if (!BoundingBoxDouble_ContainsBox(Fat, Shifted))
         {
             instance->IsWidened = true;
-            CollisionTree_Move(Tree, Shape->Proxy, CollisionMath_Min(Min, FatMin), CollisionMath_Max(Max, FatMax));
+            CollisionTree_Move(Tree, Shape->Proxy, BoundingBoxDouble_Union(Shifted, Fat));
         }
     }
 }
@@ -690,7 +732,7 @@ void WorldCollisionInternal_WidenPushedProxies(WorldCollision* self, WorldCollis
 void WorldCollisionInternal_RestoreProxy(WorldCollision* self, WorldCollisionInstance* instance)
 {
     CollisionTree* Tree = instance->IsStatic ? &self->_staticTree : &self->_movableTree;
-    float Slack = 2.0f * Tree->Margin;
+    double Slack = 2.0 * (double)Tree->Margin;
     for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
     {
         WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(instance, Index);
@@ -699,19 +741,18 @@ void WorldCollisionInternal_RestoreProxy(WorldCollision* self, WorldCollisionIns
             continue;
         }
         // Refitted only when the fat box grew well past the shape's (a sweep widened it); moves inside it cost nothing.
-        Vector3 FatMin;
-        Vector3 FatMax;
-        CollisionTree_GetBounds(Tree, Shape->Proxy, &FatMin, &FatMax);
-        bool IsLoose = ((Shape->Min.x - FatMin.x) > Slack) || ((Shape->Min.y - FatMin.y) > Slack)
-            || ((Shape->Min.z - FatMin.z) > Slack) || ((FatMax.x - Shape->Max.x) > Slack)
-            || ((FatMax.y - Shape->Max.y) > Slack) || ((FatMax.z - Shape->Max.z) > Slack);
+        BoundingBoxDouble Fat = CollisionTree_GetBounds(Tree, Shape->Proxy);
+        const BoundingBoxDouble* Box = &Shape->Box;
+        bool IsLoose = ((Box->Min.X - Fat.Min.X) > Slack) || ((Box->Min.Y - Fat.Min.Y) > Slack)
+            || ((Box->Min.Z - Fat.Min.Z) > Slack) || ((Fat.Max.X - Box->Max.X) > Slack)
+            || ((Fat.Max.Y - Box->Max.Y) > Slack) || ((Fat.Max.Z - Box->Max.Z) > Slack);
         if (IsLoose)
         {
-            CollisionTree_Refit(Tree, Shape->Proxy, Shape->Min, Shape->Max);
+            CollisionTree_Refit(Tree, Shape->Proxy, Shape->Box);
         }
         else
         {
-            CollisionTree_Move(Tree, Shape->Proxy, Shape->Min, Shape->Max);
+            CollisionTree_Move(Tree, Shape->Proxy, Shape->Box);
         }
     }
 }
@@ -719,6 +760,23 @@ void WorldCollisionInternal_RestoreProxy(WorldCollision* self, WorldCollisionIns
 void WorldCollisionInternal_Warn(const WorldCollision* self, const WorldCollisionInstance* instance, const char* text)
 {
     WarnAbout(self, instance, text, NULL, "", NULL);
+}
+
+WorldCollisionPose WorldCollisionInternal_InterpolatePose(const WorldCollisionPose* from, const WorldCollisionPose* to,
+    float t)
+{
+    CollisionPose TurnFrom = { .Position = { 0.0f, 0.0f, 0.0f }, .Rotation = from->Rotation };
+    CollisionPose TurnTo = { .Position = { 0.0f, 0.0f, 0.0f }, .Rotation = to->Rotation };
+    CollisionPose Turned = CollisionPose_Interpolate(&TurnFrom, &TurnTo, t);
+    return (WorldCollisionPose){ .Position = Vector3Double_Lerp(from->Position, to->Position, (double)t),
+        .Rotation = Turned.Rotation };
+}
+
+float WorldCollisionInternal_GetTurn(const WorldCollisionPose* from, const WorldCollisionPose* to)
+{
+    CollisionPose TurnFrom = { .Position = { 0.0f, 0.0f, 0.0f }, .Rotation = from->Rotation };
+    CollisionPose TurnTo = { .Position = { 0.0f, 0.0f, 0.0f }, .Rotation = to->Rotation };
+    return CollisionPose_GetRotationAngle(&TurnFrom, &TurnTo);
 }
 
 

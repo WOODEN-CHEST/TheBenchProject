@@ -2,9 +2,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-// Vector3 and Color come from raylib: vector3 and color values hold them by value.
+// Color comes from raylib and Vector3Double from WRVectorMath: color and vector3 values hold them by value.
 #include "raylib/raylib.h"
 #include "wr/WRError.h"
+#include "wr/WRVectorMath.h"
 #include "wr/WRGHDF.h"
 #include "wr/WRJSON.h"
 #include "NamespacedKey.h"
@@ -49,7 +50,7 @@
  * | string    | owned UTF-8                   | "text"                                       | String                         |
  * | key       | uint32_t id                   | {"$key": "town:x"}                           | String (the full key)          |
  * | object    | uint64_t id, 0 = none         | {"$object": 12}                              | UInt8/16/32/64, the smallest   |
- * | vector3   | Vector3                       | {"$vector3": [1, 2, 3]}                       | Float array of 3               |
+ * | vector3   | Vector3Double, finite         | {"$vector3": [1.0, 2.0, 3.0]}                | Double[3] (reads Float[3] too) |
  * | color     | Color (RGBA)                  | {"$color": "#ffcc00"} ("#rrggbbaa" if not opaque) | UInt8 array of 4          |
  * | date_time | int64_t microseconds          | {"$date_time": "2026-10-18T09:30:00"}        | Int64                          |
  * | list      | owned elements                | [ ... ] (an empty one: {"$list": "int"})     | an array (see below)           |
@@ -65,9 +66,11 @@
  * In GHDF a value is written into a compound: entry 2 its type (UInt8, the DataType value), entry 3 its value (absent
  * for a tag), entry 4 a list's element type (UInt8). A compound's entries are a Compound array whose elements also
  * hold entry 1, their name (String). A list is an array of its elements: Boolean, the smallest integer type for ints
- * (unsigned for objects), Float or Double for floats, String for strings and keys, Float (3 per element) for vector3,
+ * (unsigned for objects), Float or Double for floats, String for strings and keys, Double (3 per element) for vector3,
  * UInt8 (4 per element) for colors, Int64 for date_times, and a Compound array of value compounds (entries 2 to 4) for
- * lists and compounds. Unknown entry ids are skipped (forward compatibility).
+ * lists and compounds. Unknown entry ids are skipped (forward compatibility). A vector3 is three doubles since T33 (it
+ * often holds a position: a waypoint, a spawn point); its readers also take the Float arrays written before, and a JSON
+ * vector3 written then reads as the doubles that print the same text.
  *
  * Not thread-safe.
  */
@@ -107,7 +110,7 @@ typedef enum DataTypeEnum
     /** @brief A world object reference by id (0 = none). It reads as none once that object is removed: ids are never
      *  handed out twice. */
     DataType_Object = 6,
-    /** @brief A Vector3 of finite floats. */
+    /** @brief Three finite doubles (a Vector3Double): positions, directions, offsets. */
     DataType_Vector3 = 7,
     /** @brief An RGBA color. */
     DataType_Color = 8,
@@ -150,7 +153,7 @@ typedef struct DataValueStruct
         /** @brief DataType_Object: an object id, 0 = none. */
         uint64_t ObjectValue;
         /** @brief DataType_Vector3. */
-        Vector3 Vector3Value;
+        Vector3Double Vector3Value;
         /** @brief DataType_Color. */
         Color ColorValue;
         /** @brief DataType_DateTime: microseconds since 0001-01-01T00:00:00. */
@@ -219,7 +222,7 @@ static inline DataValue DataValue_FromObject(uint64_t objectId)
 }
 
 /** @brief Makes a vector3 (its components must be finite to be stored). @param value The value. @returns The value. */
-static inline DataValue DataValue_FromVector3(Vector3 value)
+static inline DataValue DataValue_FromVector3(Vector3Double value)
 {
     return (DataValue){ .Type = DataType_Vector3, .Vector3Value = value };
 }
@@ -310,7 +313,7 @@ size_t DataValue_GetDepth(const DataValue* value);
 /**
  * @brief Returns the bytes a value counts against the data limits: an estimate of what it takes saved.
  *
- * A tag 0, a bool 1, an int, float, object or date_time 8, a vector3 12, a color 4, a string its bytes plus 1, a key
+ * A tag 0, a bool 1, an int, float, object or date_time 8, a vector3 24, a color 4, a string its bytes plus 1, a key
  * its text (NAMESPACED_KEY_MAX_LENGTH when @p keys does not know it); a list 1 plus its elements; a compound 1 plus,
  * per entry, its name's bytes, 1 and the value. Every value but a tag counts at least one byte, so a byte limit also
  * bounds how many values there are. A map entry adds its key's text and 1 (see DataMap.h). Walks the value.

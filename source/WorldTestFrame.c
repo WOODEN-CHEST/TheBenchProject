@@ -98,11 +98,8 @@
 /** The vertical field of view the Z key zooms to, in degrees: about 4.4 times closer than the default 60, so models'
  *  draw distances reach 4.4 times as far. */
 #define ZOOMED_FOV_Y 15.0f
-/** The far shift (T32): the F11 key moves the test world, its characters and the camera this far along X and Z (28 km
- *  from the world's origin) and back, to see that nothing shakes out there (the renderer draws relative to the
- *  camera). */
-#define FAR_SHIFT_X 20000.0
-#define FAR_SHIFT_Z 20000.0
+/** How many places the F11 key's far shift steps through (FarShifts). */
+#define FAR_SHIFT_COUNT 3U
 /** Metres in a kilometre, for the far shift's log lines. */
 #define METRES_PER_KILOMETRE 1000.0
 /** Default font of the text sample: covers Latvian and Cyrillic. */
@@ -165,7 +162,7 @@ typedef struct WorldTestFrameStruct
     /** The desk the J key slides and the H key hides (0 if the test world lacks it), where along X it was loaded (the
      *  slide's centre), and whether it is sliding, for how long it has (within one period). */
     uint64_t _deskId;
-    float _deskStartX;
+    double _deskStartX;
     bool _isDeskSliding;
     double _deskSlideSeconds;
     /** The variant cubes the E key steps (VARIANT_TEST_OBJECT_COUNT; 0 for one the test world lacks), and the step of
@@ -188,21 +185,22 @@ typedef struct WorldTestFrameStruct
     /** The pushing wall the F9 key sends out and back (0 if the test world lacks it), where along X it was loaded, and
      *  whether it is going out; the row's crates (0 for one the world lacks) and where they were loaded. */
     uint64_t _pusherId;
-    float _pusherHomeX;
+    double _pusherHomeX;
     bool _isPusherOut;
     bool _isPusherHome;
     uint64_t _rowCrateIds[ROW_CRATE_COUNT];
-    Vector3 _rowCrateHomes[ROW_CRATE_COUNT];
+    Vector3Double _rowCrateHomes[ROW_CRATE_COUNT];
     /** The crate the door stops on, where it was loaded, and whether F10 has it aside. */
     uint64_t _doorCrateId;
-    Vector3 _doorCrateHome;
+    Vector3Double _doorCrateHome;
     bool _isDoorCrateAside;
     /** The world's characters, moved every tick after the other drivers (T13); owned. */
     WorldCharacters* _characters;
     /** The test characters: walk mode (F1), the test NPCs (F2) and the player's options (F3, F4, F12); owned. */
     WorldTestCharacters _testCharacters;
-    /** How far the F11 key's far shift has moved the test world, its characters and the camera: zero, or FAR_SHIFT. */
-    Vector3Double _farShift;
+    /** Where the F11 key's far shift has moved the test world, its characters and the camera: an index into FarShifts
+     *  (0: not moved). */
+    size_t _farShiftIndex;
 } WorldTestFrame;
 
 
@@ -224,6 +222,15 @@ static const char* const VariantTestObjectNames[VARIANT_TEST_OBJECT_COUNT] =
 static const char* const VariantSteps[VARIANT_STEP_COUNT][VARIANT_TEST_OBJECT_COUNT] =
 {
     { "red", "blue" }, { "blue", "red" }, { NULL, NULL }
+};
+/* The far shift's offsets (FAR_SHIFT_COUNT), in the order the F11 key steps through them and back to the first: none,
+ * 28 km from the world's origin (20 km along X and Z, T32), and 141 km (100 km along X and -Z, T33: the far-away
+ * tests' offset). Out there nothing may shake or sink: the renderer draws relative to the camera, and positions are
+ * doubles. */
+static const Vector3Double FarShifts[FAR_SHIFT_COUNT] =
+{
+    { .X = 0.0, .Y = 0.0, .Z = 0.0 }, { .X = 20000.0, .Y = 0.0, .Z = 20000.0 },
+    { .X = 100000.0, .Y = 0.0, .Z = -100000.0 }
 };
 /* The moon's phases by name, from new moon (phase 0) in eighths of the cycle. */
 static const char* const MoonPhaseNames[MOON_PHASE_NAME_COUNT] =
@@ -407,10 +414,11 @@ static void LogCameraStatus(WorldTestFrame* frame)
         return;
     }
     Vector3Double Position = frame->_camera.Position;
+    Vector3Double Shift = FarShifts[frame->_farShiftIndex];
     Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
         (const unsigned char*)u8"WorldTest: the camera is at (%.3f, %.3f, %.3f), %.3f km from the world's origin; far "
-        u8"shift %s (F11).", Position.X, Position.Y, Position.Z, Vector3Double_Length(Position) / METRES_PER_KILOMETRE,
-        ((frame->_farShift.X != 0.0) || (frame->_farShift.Z != 0.0)) ? "on" : "off");
+        u8"shift (%.0f, %.0f, %.0f) m (F11).", Position.X, Position.Y, Position.Z,
+        Vector3Double_Length(Position) / METRES_PER_KILOMETRE, Shift.X, Shift.Y, Shift.Z);
     Error_Deconstruct(&LogResult);
 }
 
@@ -926,8 +934,8 @@ static void SlideDesk(WorldTestFrame* frame, double deltaSeconds)
     }
     frame->_deskSlideSeconds = fmod(frame->_deskSlideSeconds + deltaSeconds, DESK_SLIDE_PERIOD_SECONDS);
     double Turn = (2.0 * PI * frame->_deskSlideSeconds) / DESK_SLIDE_PERIOD_SECONDS;
-    Vector3 Position = WorldObject_GetPosition(Desk);
-    Position.x = frame->_deskStartX + (DESK_SLIDE_DISTANCE * (float)sin(Turn));
+    Vector3Double Position = WorldObject_GetPosition(Desk);
+    Position.X = frame->_deskStartX + ((double)DESK_SLIDE_DISTANCE * sin(Turn));
     Error Result = WorldObject_SetPosition(Desk, Position);
     Error_Deconstruct(&Result); // cannot fail: the position is finite
 }
@@ -1042,7 +1050,7 @@ static void SwingDoor(WorldTestFrame* frame, float deltaSeconds)
 }
 
 /* Puts a crate where it was loaded, as a teleport (no sweep: it is only pushed out of what it lands in). */
-static void TeleportObject(WorldTestFrame* frame, uint64_t id, Vector3 position)
+static void TeleportObject(WorldTestFrame* frame, uint64_t id, Vector3Double position)
 {
     WorldObject* Object = NULL;
     if ((id == 0U) || !World_TryGetObject(&frame->_world, id, &Object))
@@ -1063,10 +1071,10 @@ static void MovePusher(WorldTestFrame* frame, float deltaSeconds)
     {
         return;
     }
-    Vector3 Position = WorldObject_GetPosition(Pusher);
-    float Target = frame->_pusherHomeX + (frame->_isPusherOut ? PUSHER_TRAVEL : 0.0f);
-    float Left = Target - Position.x;
-    if (Left == 0.0f)
+    Vector3Double Position = WorldObject_GetPosition(Pusher);
+    double Target = frame->_pusherHomeX + (frame->_isPusherOut ? (double)PUSHER_TRAVEL : 0.0);
+    double Left = Target - Position.X;
+    if (Left == 0.0)
     {
         if (!frame->_isPusherOut && !frame->_isPusherHome)
         {
@@ -1079,8 +1087,8 @@ static void MovePusher(WorldTestFrame* frame, float deltaSeconds)
         }
         return;
     }
-    float Step = PUSHER_SPEED * deltaSeconds;
-    Position.x = (fabsf(Left) <= Step) ? Target : (Position.x + ((Left > 0.0f) ? Step : -Step));
+    double Step = (double)(PUSHER_SPEED * deltaSeconds);
+    Position.X = (fabs(Left) <= Step) ? Target : (Position.X + ((Left > 0.0) ? Step : -Step));
     Error Result = WorldObject_SetPosition(Pusher, Position);
     Error_Deconstruct(&Result); // cannot fail: the position is finite
 }
@@ -1128,8 +1136,8 @@ static void HandleDebugCollisionInput(WorldTestFrame* frame, const GameInput* in
     if (GameInput_IsKeyPressed(input, GameKey_F10) && (frame->_doorCrateId != 0U))
     {
         frame->_isDoorCrateAside = !frame->_isDoorCrateAside;
-        Vector3 Position = frame->_doorCrateHome;
-        Position.x += frame->_isDoorCrateAside ? DOOR_CRATE_ASIDE_SHIFT : 0.0f;
+        Vector3Double Position = frame->_doorCrateHome;
+        Position.X += frame->_isDoorCrateAside ? (double)DOOR_CRATE_ASIDE_SHIFT : 0.0;
         TeleportObject(frame, frame->_doorCrateId, Position);
         LogLine(frame, frame->_isDoorCrateAside ? "the door's crate is teleported out of its way." : "the door's crate "
             "is teleported back into its corner (pushed out of the door if they overlap).");
@@ -1138,13 +1146,6 @@ static void HandleDebugCollisionInput(WorldTestFrame* frame, const GameInput* in
 
 
 // Static functions: the far shift (T32).
-/* A point moved by @p offset in double, rounded back to the world's floats. */
-static Vector3 ShiftPoint(Vector3 point, Vector3Double offset)
-{
-    // TODO: T33 gives the world double positions; until then the moved point is rounded here.
-    return GameMath_ToVector3(Vector3Double_Add(GameMath_FromVector3(point), offset));
-}
-
 /* Moves every root object by @p offset (their children follow), the characters too, each as a teleport, so the
  * collision step does not sweep the move. Everything moves before the collision world syncs again, so no trigger sees
  * anything leave. Returns how many moved. */
@@ -1165,7 +1166,7 @@ static size_t ShiftRootObjects(WorldTestFrame* frame, Vector3Double offset)
         {
             continue; // children follow their parents
         }
-        Result = WorldObject_SetPosition(Object, ShiftPoint(WorldObject_GetPosition(Object), offset));
+        Result = WorldObject_SetPosition(Object, Vector3Double_Add(WorldObject_GetPosition(Object), offset));
         Error_Deconstruct(&Result); // cannot fail: the position is finite
         WorldCollision_Teleport(frame->_collision, WorldObject_GetId(Object));
         Count++;
@@ -1177,51 +1178,49 @@ static size_t ShiftRootObjects(WorldTestFrame* frame, Vector3Double offset)
  * by @p offset, with the objects. */
 static void ShiftHomes(WorldTestFrame* frame, Vector3Double offset)
 {
-    frame->_deskStartX = (float)((double)frame->_deskStartX + offset.X);
-    frame->_pusherHomeX = (float)((double)frame->_pusherHomeX + offset.X);
+    frame->_deskStartX += offset.X;
+    frame->_pusherHomeX += offset.X;
     for (size_t Index = 0U; Index < ROW_CRATE_COUNT; Index++)
     {
-        frame->_rowCrateHomes[Index] = ShiftPoint(frame->_rowCrateHomes[Index], offset);
+        frame->_rowCrateHomes[Index] = Vector3Double_Add(frame->_rowCrateHomes[Index], offset);
     }
-    frame->_doorCrateHome = ShiftPoint(frame->_doorCrateHome, offset);
+    frame->_doorCrateHome = Vector3Double_Add(frame->_doorCrateHome, offset);
 }
 
-/* F11: moves every root object (the characters among them) and the camera between the world's origin and FAR_SHIFT
- * away, so the picture can be compared out there. The objects move as teleports; then the collision world is synced and
- * every character is placed again where it now stands, through the character system, so its motion starts afresh on its
- * moved ground. Until T33 the world's positions are floats, rounded to about 2 mm out there (once, so nothing shakes),
- * and a trip out and back can leave an object up to 1 mm from where it was. */
-static void ToggleFarShift(WorldTestFrame* frame)
+/* F11: moves every root object (the characters among them) and the camera to the far shift's next place (FarShifts),
+ * so the picture and the play can be compared out there. The objects move as teleports; then the collision world is
+ * synced and every character is placed again where it now stands, through the character system, so its motion starts
+ * afresh on its moved ground. Positions are doubles (T33): a trip out and back returns everything to within a double's
+ * step out there (1.5e-11 m at 100 km). */
+static void StepFarShift(WorldTestFrame* frame)
 {
-    bool IsShifted = (frame->_farShift.X != 0.0) || (frame->_farShift.Y != 0.0) || (frame->_farShift.Z != 0.0);
-    Vector3Double Target = IsShifted ? Vector3Double_Zero() : Vector3Double_Create(FAR_SHIFT_X, 0.0, FAR_SHIFT_Z);
-    Vector3Double Offset = Vector3Double_Subtract(Target, frame->_farShift);
+    size_t Next = (frame->_farShiftIndex + 1U) % FAR_SHIFT_COUNT;
+    Vector3Double Offset = Vector3Double_Subtract(FarShifts[Next], FarShifts[frame->_farShiftIndex]);
     size_t ObjectCount = ShiftRootObjects(frame, Offset);
     WorldCollision_Sync(frame->_collision);
     size_t CharacterCount = WorldTestCharacters_Shift(&frame->_testCharacters, Offset);
     ShiftHomes(frame, Offset);
     frame->_camera.Position = Vector3Double_Add(frame->_camera.Position, Offset);
-    frame->_farShift = Target;
+    frame->_farShiftIndex = Next;
     if (frame->_services->Logger != NULL)
     {
         Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
-            (const unsigned char*)u8"WorldTest: far shift %s: %" PRIu64 u8" root objects and the camera moved by (%.0f, "
-            u8"%.0f, %.0f) m, as teleports, and %" PRIu64 u8" characters placed again on their ground; the camera is %.2f "
-            u8"km from the world's origin%s",
-            IsShifted ? "off" : "on", (uint64_t)ObjectCount, Offset.X, Offset.Y, Offset.Z, (uint64_t)CharacterCount,
-            Vector3Double_Length(frame->_camera.Position) / METRES_PER_KILOMETRE,
-            IsShifted ? "." : " (F11 brings everything back). Until T33 the world's positions are floats, about 2 mm "
-                "apart out there.");
+            (const unsigned char*)u8"WorldTest: far shift %" PRIu64 u8" of %" PRIu64 u8": %" PRIu64 u8" root objects "
+            u8"and the camera moved by (%.0f, %.0f, %.0f) m, as teleports, and %" PRIu64 u8" characters placed "
+            u8"again on their ground; the camera is %.2f km from the world's origin%s",
+            (uint64_t)Next, (uint64_t)(FAR_SHIFT_COUNT - 1U), (uint64_t)ObjectCount, Offset.X, Offset.Y, Offset.Z,
+            (uint64_t)CharacterCount, Vector3Double_Length(frame->_camera.Position) / METRES_PER_KILOMETRE,
+            (Next == 0U) ? " (back at the start)." : " (F11 goes on; after the last place, back to the start).");
         Error_Deconstruct(&LogResult);
     }
 }
 
-/* The far shift's key (T32): F11 moves everything 28 km out and back. */
+/* The far shift's key (T32, T33): F11 moves everything 28 km out, then 141 km, then back. */
 static void HandleDebugFarShiftInput(WorldTestFrame* frame, const GameInput* input)
 {
     if (GameInput_IsKeyPressed(input, GameKey_F11))
     {
-        ToggleFarShift(frame);
+        StepFarShift(frame);
     }
 }
 
@@ -1432,13 +1431,14 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"P pause/resume the clock, 1-4 = dawn/noon/dusk/midnight (paused), [ ] scrub time, , . previous/next "
             u8"day, / a week ahead; F full moon / calendar moon, Y seasons; O post effects, B bloom, G sun shafts, "
             u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, N light pollution, X opacity of the "
-            u8"centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the desk, "
-            u8"E variants, Z zoom, Q LOD tinting, F7 collider wireframes, F8 contact points, F6 swing the door, F9 the "
-            u8"pushing wall, F10 move the door's crate, F11 far shift (everything 28 km out and back); F1 walk (the "
-            u8"player as a character: WASD, SHIFT run, SPACE jump, CTRL crouch, E use), F2 the test NPCs (a human, a dog, "
-            u8"a pigeon), F3 fly, F4 the player's kind, F12 head bob; I renderer, game time, collision and camera status, "
-            u8"T text sample, F5 save the world (worlds/test.saved.world.json and .ghdf); M frees the mouse for the UI "
-            u8"(click the world to capture it again); ESC quits (once the UI lets go of it).");
+            u8"centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the "
+            u8"desk, E variants, Z zoom, Q LOD tinting, F7 collider wireframes, F8 contact points, F6 swing the door, "
+            u8"F9 the pushing wall, F10 move the door's crate, F11 far shift (everything 28 km out, then 141 km, then "
+            u8"back); F1 walk (the player as a character: WASD, SHIFT run, SPACE jump, CTRL crouch, E use), F2 the "
+            u8"test NPCs (a human, a dog, a pigeon), F3 fly, F4 the player's kind, F12 head bob; I renderer, game "
+            u8"time, collision and camera status, T text sample, F5 save the world (worlds/test.saved.world.json and "
+            u8".ghdf); M frees the mouse for the UI (click the world to capture it again); ESC quits (once the UI lets "
+            u8"go of it).");
         Error_Deconstruct(&LogResult);
     }
     return Error_CreateSuccess();
@@ -1715,7 +1715,8 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     Frame->_opacityStep = 0U;
     Frame->_deskId = FindObjectId(&Frame->_world, (const char*)TEST_DESK_OBJECT_NAME);
     WorldObject* Desk = NULL;
-    Frame->_deskStartX = World_TryGetObject(&Frame->_world, Frame->_deskId, &Desk) ? WorldObject_GetPosition(Desk).x : 0.0f;
+    Frame->_deskStartX = World_TryGetObject(&Frame->_world, Frame->_deskId, &Desk) ? WorldObject_GetPosition(Desk).X
+        : 0.0;
     Frame->_isDeskSliding = false;
     Frame->_deskSlideSeconds = 0.0;
     for (size_t Index = 0U; Index < VARIANT_TEST_OBJECT_COUNT; Index++)
@@ -1734,7 +1735,7 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     Frame->_pusherId = FindObjectId(&Frame->_world, TEST_PUSHER_OBJECT_NAME);
     WorldObject* Pusher = NULL;
     Frame->_pusherHomeX = World_TryGetObject(&Frame->_world, Frame->_pusherId, &Pusher)
-        ? WorldObject_GetPosition(Pusher).x : 0.0f;
+        ? WorldObject_GetPosition(Pusher).X : 0.0;
     Frame->_isPusherOut = false;
     Frame->_isPusherHome = true;
     for (unsigned Index = 0U; Index < ROW_CRATE_COUNT; Index++)
@@ -1744,14 +1745,14 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         Frame->_rowCrateIds[Index] = FindObjectId(&Frame->_world, Name);
         WorldObject* Crate = NULL;
         Frame->_rowCrateHomes[Index] = World_TryGetObject(&Frame->_world, Frame->_rowCrateIds[Index], &Crate)
-            ? WorldObject_GetPosition(Crate) : (Vector3){ 0.0f, 0.0f, 0.0f };
+            ? WorldObject_GetPosition(Crate) : Vector3Double_Zero();
     }
     Frame->_doorCrateId = FindObjectId(&Frame->_world, TEST_DOOR_CRATE_OBJECT_NAME);
     WorldObject* DoorCrate = NULL;
     Frame->_doorCrateHome = World_TryGetObject(&Frame->_world, Frame->_doorCrateId, &DoorCrate)
-        ? WorldObject_GetPosition(DoorCrate) : (Vector3){ 0.0f, 0.0f, 0.0f };
+        ? WorldObject_GetPosition(DoorCrate) : Vector3Double_Zero();
     Frame->_isDoorCrateAside = false;
-    Frame->_farShift = Vector3Double_Zero();
+    Frame->_farShiftIndex = 0U;
     if (!IsTestWorldLoaded)
     {
         WorldRenderer_SetDebugGridEnabled(Frame->_renderer, true); // an empty world shows the grid, so it is visible

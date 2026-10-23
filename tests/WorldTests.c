@@ -343,7 +343,7 @@ static void ObjectSetVersionChangesOnCreateAndRemove(TestRun* run)
         TEST_CHECK(run, AfterCreate != Initial);
 
         // Properties and components are not the object set.
-        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, (Vector3){ 1.0f, 2.0f, 3.0f }));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Double_Create(1.0, 2.0, 3.0)));
         TEST_CHECK(run, AddComponent(run, &TestWorld, Object, WorldComponentType_Light) != NULL);
         TEST_CHECK(run, World_GetObjectSetVersion(&TestWorld) == AfterCreate);
 
@@ -372,7 +372,7 @@ static void ObjectPropertiesValidateAndAdvanceTheRevision(TestRun* run)
         TEST_CHECK(run, (WorldObject_GetTint(Object).Opacity == 1.0f) && (WorldObject_GetTint(Object).Tint.r == 255));
 
         uint32_t Revision = WorldObject_GetRevision(Object);
-        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, (Vector3){ 1.0f, 2.0f, 3.0f }));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, Vector3Double_Create(1.0, 2.0, 3.0)));
         TEST_CHECK(run, WorldObject_GetRevision(Object) != Revision);
         Revision = WorldObject_GetRevision(Object);
         TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Object, (Vector3){ 0.5f, 0.0f, 0.0f }));
@@ -383,8 +383,17 @@ static void ObjectPropertiesValidateAndAdvanceTheRevision(TestRun* run)
 
         // The table's rules: nothing changes on a refusal.
         Revision = WorldObject_GetRevision(Object);
-        TEST_CHECK_ERROR(run, WorldObject_SetPosition(Object, (Vector3){ NAN, 0.0f, 0.0f }),
+        TEST_CHECK_ERROR(run, WorldObject_SetPosition(Object, Vector3Double_Create(NAN, 0.0, 0.0)),
             ErrorCode_ArgumentOutOfRange);
+        // Positions are doubles within WORLD_POSITION_LIMIT (10 000 km) of the parent's origin on every axis (T33).
+        TEST_CHECK_ERROR(run, WorldObject_SetPosition(Object, Vector3Double_Create(0.0, INFINITY, 0.0)),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldObject_SetPosition(Object, Vector3Double_Create(0.0, 0.0, -1.0000001e7)),
+            ErrorCode_ArgumentOutOfRange);
+        const char* const BeyondLimit[] = { "world_object.position (_position) must have every component finite and in "
+            "[-1e+07, 1e+07]", NULL };
+        TestText_CheckErrorMessage(run, WorldObject_SetPosition(Object, Vector3Double_Create(2.0e7, 0.0, 0.0)),
+            ErrorCode_ArgumentOutOfRange, BeyondLimit);
         TEST_CHECK_ERROR(run, WorldObject_SetScale(Object, (Vector3){ 1.0f, INFINITY, 1.0f }),
             ErrorCode_ArgumentOutOfRange);
         RenderColor TooOpaque = RenderColor_White();
@@ -396,13 +405,27 @@ static void ObjectPropertiesValidateAndAdvanceTheRevision(TestRun* run)
         LongName[sizeof(LongName) - 1U] = 0;
         TEST_CHECK_ERROR(run, WorldObject_SetName(Object, LongName), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK(run, WorldObject_GetRevision(Object) == Revision);
-        TEST_CHECK(run, WorldObject_GetPosition(Object).x == 1.0f);
+        TEST_CHECK(run, WorldObject_GetPosition(Object).X == 1.0);
         TEST_CHECK(run, strcmp((const char*)WorldObject_GetName(Object), "renamed") == 0);
 
-        // The table reaches the same fields, and its writes advance the revision too.
-        PropertyValue Value = PropertyValue_FromVector3((Vector3){ 4.0f, 5.0f, 6.0f });
+        // The table reaches the same fields, and its writes advance the revision too. The position is a double: the
+        // limit itself is accepted, a value past it refused, and a float vector is not a position.
+        PropertyValue Value = PropertyValue_FromVector3Double(Vector3Double_Create(4.0, 5.0, 6.0));
         TEST_CHECK_SUCCESS(run, Properties_Set(WorldObject_GetPropertyTable(), Object, u8"position", &Value));
-        TEST_CHECK(run, (WorldObject_GetPosition(Object).y == 5.0f) && (WorldObject_GetRevision(Object) != Revision));
+        TEST_CHECK(run, (WorldObject_GetPosition(Object).Y == 5.0) && (WorldObject_GetRevision(Object) != Revision));
+        Value = PropertyValue_FromVector3Double(Vector3Double_Create(-WORLD_POSITION_LIMIT, WORLD_POSITION_LIMIT,
+            123456.789012345));
+        TEST_CHECK_SUCCESS(run, Properties_Set(WorldObject_GetPropertyTable(), Object, u8"position", &Value));
+        TEST_CHECK(run, (WorldObject_GetPosition(Object).X == -WORLD_POSITION_LIMIT)
+            && (WorldObject_GetPosition(Object).Z == 123456.789012345));
+        Value = PropertyValue_FromVector3Double(Vector3Double_Create(0.0, nextafter(WORLD_POSITION_LIMIT, INFINITY),
+            0.0));
+        TEST_CHECK_ERROR(run, Properties_Set(WorldObject_GetPropertyTable(), Object, u8"position", &Value),
+            ErrorCode_ArgumentOutOfRange);
+        Value = PropertyValue_FromVector3((Vector3){ 4.0f, 5.0f, 6.0f });
+        TEST_CHECK_ERROR(run, Properties_Set(WorldObject_GetPropertyTable(), Object, u8"position", &Value),
+            ErrorCode_IllegalArgument);
+        TEST_CHECK(run, WorldObject_GetPosition(Object).Z == 123456.789012345);
         Value = PropertyValue_FromBool(false);
         TEST_CHECK_SUCCESS(run, Properties_Set(WorldObject_GetPropertyTable(), Object, u8"is_visible", &Value));
         TEST_CHECK(run, !WorldObject_IsVisible(Object));

@@ -108,6 +108,12 @@ with a `Migrate` (and a GHDF migration slot, which the tables do not have yet) a
 - **GHDF:** the root entries 1 to 5 (`WorldFileRootEntry`), objects with entry 1 the id and 2 the components (keyed by
   the type's value + 1, `WorldFileObjectEntry`), the tables' wire ids for the rest; integers in the smallest type
   ([GameGHDF.md](GameGHDF.md)).
+- **Positions are doubles** (T33, [WorldData.md](WorldData.md)): JSON writes each axis as the shortest text that reads
+  back the same double, so every digit survives (`[100001.333333333, 0.5, -99999.25]`) and a position that held a
+  float before T33 prints as it did (the shipped `test.world.json` is written byte for byte as before); GHDF writes a
+  Double array of 3. A GHDF save from before T33 (Float arrays) still loads, each position the float it held. A
+  position that is not finite, or beyond `WORLD_POSITION_LIMIT` (1e7 m) on an axis, is refused like any value outside
+  its row's rules.
 - **Pools:** each read and write makes its own JSON or GHDF pool and destroys it afterwards, the tree with it (not
   returned first, which would walk it once more): a JSON pool keeps a copy of every key until it goes, so a shared one
   would only grow, and a large world's compounds should not stay pooled. Walking a compound uses an enumerator on the

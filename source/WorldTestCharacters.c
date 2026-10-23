@@ -132,7 +132,7 @@ static bool Check(WorldTestCharacters* self, Error result, const char* what)
 
 // Static functions: spawning.
 /* The ground's height under a point (world, prop, vehicle and dynamic layers; characters are skipped), or @p fallback. */
-static float FindGroundHeight(WorldTestCharacters* self, Vector3 above, float fallback)
+static double FindGroundHeight(WorldTestCharacters* self, Vector3Double above, double fallback)
 {
     uint32_t Mask = COLLISION_LAYER_BIT(CollisionLayer_World) | COLLISION_LAYER_BIT(CollisionLayer_Prop)
         | COLLISION_LAYER_BIT(CollisionLayer_Vehicle) | COLLISION_LAYER_BIT(CollisionLayer_Dynamic);
@@ -141,7 +141,7 @@ static float FindGroundHeight(WorldTestCharacters* self, Vector3 above, float fa
     if (WorldCollision_Raycast(self->_collision, above, (Vector3){ 0.0f, -1.0f, 0.0f }, GROUND_SEARCH_DISTANCE, &Filter,
         &Hit) && !Hit.IsStartInside)
     {
-        return Hit.Point.y;
+        return Hit.Point.Y;
     }
     return fallback;
 }
@@ -158,7 +158,7 @@ static uint64_t AddBox(WorldTestCharacters* self, uint64_t parent, const char* n
     }
     uint64_t Id = WorldObject_GetId(Object);
     Vector3 Scale = Vector3Scale(size, 1.0f / TEST_CUBE_SIZE);
-    Check(self, WorldObject_SetPosition(Object, center), "placing a body part");
+    Check(self, WorldObject_SetPosition(Object, GameMath_FromVector3(center)), "placing a body part");
     Check(self, WorldObject_SetScale(Object, Scale), "sizing a body part");
     Check(self, WorldObject_SetTint(Object, (RenderColor){ .Tint = color, .Brightness = 1.0f, .Opacity = 1.0f }),
         "colouring a body part");
@@ -174,7 +174,7 @@ static uint64_t AddBox(WorldTestCharacters* self, uint64_t parent, const char* n
 
 /* A runtime character object (not saved with the world) of @p kind, its feet at @p feet facing @p yaw; with a
  * placeholder body when @p bodyId is given (its trunk's id goes there). */
-static uint64_t Spawn(WorldTestCharacters* self, const char* name, size_t kind, Vector3 feet, float yaw,
+static uint64_t Spawn(WorldTestCharacters* self, const char* name, size_t kind, Vector3Double feet, float yaw,
     uint64_t* bodyId)
 {
     WorldObject* Object = NULL;
@@ -215,10 +215,8 @@ static void RemoveObject(WorldTestCharacters* self, uint64_t* id)
 // Static functions: walk mode and the NPCs.
 static void StartWalking(WorldTestCharacters* self, const GameCamera* camera)
 {
-    // TODO: T33 gives the world and the characters double positions; until then the camera's is rounded here.
-    Vector3 Above = GameMath_ToVector3(camera->Position);
-    float Ground = FindGroundHeight(self, Above, Above.y);
-    Vector3 Feet = { Above.x, Ground + 0.01f, Above.z };
+    Vector3Double Above = camera->Position;
+    Vector3Double Feet = Vector3Double_Create(Above.X, FindGroundHeight(self, Above, Above.Y) + 0.01, Above.Z);
     self->_playerId = Spawn(self, "player", self->_playerKind, Feet, camera->Yaw, NULL);
     if ((self->_playerId == 0U)
         || !Check(self, PlayerController_SetCharacter(&self->_controller, self->_world, self->_playerId, camera->Yaw,
@@ -230,7 +228,7 @@ static void StartWalking(WorldTestCharacters* self, const GameCamera* camera)
     self->_isWalking = true;
     Log(self, "walk mode: you are a %s (%s) at (%.2f, %.2f, %.2f). WASD walk, SHIFT run, SPACE jump, CTRL crouch, E use; "
         "F1 back to the flycam, F3 fly, F4 another kind, F12 head bob.", KindNames[self->_playerKind],
-        KindAssets[self->_playerKind], (double)Feet.x, (double)Feet.y, (double)Feet.z);
+        KindAssets[self->_playerKind], Feet.X, Feet.Y, Feet.Z);
 }
 
 static void StopWalking(WorldTestCharacters* self)
@@ -256,26 +254,25 @@ static void ToggleNpcs(WorldTestCharacters* self, const GameCamera* camera)
     }
     Vector3 Forward = { sinf(camera->Yaw), 0.0f, cosf(camera->Yaw) };
     Vector3 Right = { -cosf(camera->Yaw), 0.0f, sinf(camera->Yaw) };
-    // TODO: T33 gives the world and the characters double positions; until then the spawn point is rounded here.
-    Vector3 Front = GameMath_ToVector3(Vector3Double_AddScaled(camera->Position, GameMath_FromVector3(Forward),
-        NPC_SPAWN_DISTANCE));
-    Vector3 Spawned[WORLD_TEST_NPC_COUNT];
+    Vector3Double Front = Vector3Double_AddScaled(camera->Position, GameMath_FromVector3(Forward), NPC_SPAWN_DISTANCE);
+    Vector3Double Spawned[WORLD_TEST_NPC_COUNT];
     for (size_t Index = 0U; Index < WORLD_TEST_NPC_COUNT; Index++)
     {
         WorldTestNpc* Npc = &self->_npcs[Index];
-        Vector3 Above = Vector3Add(Front, Vector3Scale(Right, NPC_SPACING * ((float)Index - 1.0f)));
-        Vector3 Feet = { Above.x, FindGroundHeight(self, Above, 0.0f) + 0.01f, Above.z };
+        Vector3Double Above = Vector3Double_AddScaled(Front, GameMath_FromVector3(Right),
+            (double)NPC_SPACING * ((double)Index - 1.0));
+        Vector3Double Feet = Vector3Double_Create(Above.X, FindGroundHeight(self, Above, 0.0) + 0.01, Above.Z);
         Memory_Zero(Npc, sizeof(*Npc));
         Npc->Heading = camera->Yaw + PI;
-        Npc->Center = Vector3Add(Feet, Vector3Scale(Forward, DOG_CIRCLE_RADIUS));
+        Npc->Center = Vector3Double_AddScaled(Feet, GameMath_FromVector3(Forward), DOG_CIRCLE_RADIUS);
         Npc->Id = Spawn(self, NpcNames[Index], Index, Feet, Npc->Heading, &Npc->BodyId);
         Spawned[Index] = Feet;
     }
     self->_areNpcsSpawned = true;
     Log(self, "the test NPCs: a human walking a square (crouching every third side) at (%.1f, %.1f, %.1f), a dog running "
         "circles and lying down at (%.1f, %.1f, %.1f), a pigeon walking, flying a loop and landing at (%.1f, %.1f, %.1f). "
-        "F2 removes them.", (double)Spawned[0].x, (double)Spawned[0].y, (double)Spawned[0].z, (double)Spawned[1].x,
-        (double)Spawned[1].y, (double)Spawned[1].z, (double)Spawned[2].x, (double)Spawned[2].y, (double)Spawned[2].z);
+        "F2 removes them.", Spawned[0].X, Spawned[0].Y, Spawned[0].Z, Spawned[1].X, Spawned[1].Y, Spawned[1].Z,
+        Spawned[2].X, Spawned[2].Y, Spawned[2].Z);
 }
 
 /* F4: the player becomes the next kind of character (the same object and component, another asset). */
@@ -325,7 +322,7 @@ static void FitBody(WorldTestCharacters* self, const WorldTestNpc* npc, size_t k
     if (!Vector3Equals(WorldObject_GetScale(Body), Scale))
     {
         Check(self, WorldObject_SetScale(Body, Scale), "squashing a body");
-        Check(self, WorldObject_SetPosition(Body, Position), "placing a body");
+        Check(self, WorldObject_SetPosition(Body, GameMath_FromVector3(Position)), "placing a body");
     }
 }
 
@@ -345,7 +342,7 @@ static void DriveHuman(WorldTestNpc* npc, float deltaSeconds, CharacterInput* in
 }
 
 /* A dog running around a point, then lying down for a while. */
-static void DriveDog(WorldTestNpc* npc, Vector3 feet, float deltaSeconds, CharacterInput* input)
+static void DriveDog(WorldTestNpc* npc, Vector3Double feet, float deltaSeconds, CharacterInput* input)
 {
     npc->Seconds += deltaSeconds;
     bool IsRunning = (npc->Phase % 2U) == 0U;
@@ -361,12 +358,11 @@ static void DriveDog(WorldTestNpc* npc, Vector3 feet, float deltaSeconds, Charac
     {
         return;
     }
-    // Chase a point running around the circle ahead of it.
-    Vector3 Offset = Vector3Subtract(feet, npc->Center);
+    // Chase a point running around the circle ahead of it (both measured from the circle's centre).
+    Vector3 Offset = GameMath_ToVector3Relative(feet, npc->Center);
     float Angle = atan2f(Offset.x, Offset.z) + 0.6f;
-    Vector3 Target = Vector3Add(npc->Center, (Vector3){ DOG_CIRCLE_RADIUS * sinf(Angle), 0.0f,
-        DOG_CIRCLE_RADIUS * cosf(Angle) });
-    Vector3 Toward = Vector3Subtract(Target, feet);
+    Vector3 Target = { DOG_CIRCLE_RADIUS * sinf(Angle), 0.0f, DOG_CIRCLE_RADIUS * cosf(Angle) };
+    Vector3 Toward = Vector3Subtract(Target, Offset);
     Toward.y = 0.0f;
     float Length = Vector3Length(Toward);
     input->MoveDirection = (Length > 1e-4f) ? Vector3Scale(Toward, 1.0f / Length) : (Vector3){ 0.0f, 0.0f, 0.0f };
@@ -374,7 +370,7 @@ static void DriveDog(WorldTestNpc* npc, Vector3 feet, float deltaSeconds, Charac
 }
 
 /* A pigeon: walks, takes off and climbs, circles, glides down until it touches the ground, lands, walks again. */
-static void DrivePigeon(WorldTestNpc* npc, Vector3 feet, const WorldCharacterState* state, float deltaSeconds,
+static void DrivePigeon(WorldTestNpc* npc, Vector3Double feet, const WorldCharacterState* state, float deltaSeconds,
     CharacterInput* input)
 {
     npc->Seconds += deltaSeconds;
@@ -397,13 +393,13 @@ static void DrivePigeon(WorldTestNpc* npc, Vector3 feet, const WorldCharacterSta
             {
                 npc->Seconds = 0.0f;
                 npc->Phase = PigeonPhase_Circle;
-                npc->Center = Vector3Add(feet, (Vector3){ Forward.z * PIGEON_CIRCLE_RADIUS, 0.0f,
-                    -Forward.x * PIGEON_CIRCLE_RADIUS });
+                npc->Center = Vector3Double_Add(feet, GameMath_FromVector3((Vector3){ Forward.z * PIGEON_CIRCLE_RADIUS,
+                    0.0f, -Forward.x * PIGEON_CIRCLE_RADIUS }));
             }
             break;
         case PigeonPhase_Circle:
         {
-            Vector3 Offset = Vector3Subtract(feet, npc->Center);
+            Vector3 Offset = GameMath_ToVector3Relative(feet, npc->Center);
             Vector3 Tangent = Vector3Normalize((Vector3){ -Offset.z, 0.0f, Offset.x });
             input->MoveDirection = Tangent;
             input->IsRunning = true;
@@ -553,8 +549,8 @@ void WorldTestCharacters_UpdateBrains(WorldTestCharacters* self, float deltaSeco
             continue;
         }
         const WorldCharacterState* State = WorldCharacterComponent_GetState(Character);
-        Vector3 Feet = WorldObject_GetWorldPosition(WorldComponent_GetOwner(WorldCharacterComponent_AsComponent(
-            Character)));
+        Vector3Double Feet = WorldObject_GetWorldPosition(WorldComponent_GetOwner(
+            WorldCharacterComponent_AsComponent(Character)));
         CharacterInput Input = CharacterInput_CreateDefault();
         Input.Facing = CharacterFacing_Movement;
         switch (Index)
@@ -630,8 +626,7 @@ size_t WorldTestCharacters_Shift(WorldTestCharacters* self, Vector3Double offset
         WorldTestNpc* Npc = &self->_npcs[Index];
         if (Npc->Id != 0U)
         {
-            // TODO: T33 gives the world double positions; until then the moved centre is rounded here.
-            Npc->Center = GameMath_ToVector3(Vector3Double_Add(GameMath_FromVector3(Npc->Center), offset));
+            Npc->Center = Vector3Double_Add(Npc->Center, offset);
         }
     }
     return Count;

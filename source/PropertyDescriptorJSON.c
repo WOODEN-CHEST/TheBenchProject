@@ -197,6 +197,8 @@ static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descrip
             return GameJSON_CreateVector2Value(pool, data->Vector2Value, outValue);
         case PropertyType_Vector3:
             return GameJSON_CreateVector3Value(pool, data->Vector3Value, outValue);
+        case PropertyType_Vector3Double:
+            return GameJSON_CreateVector3DoubleValue(pool, data->Vector3DoubleValue, outValue);
         case PropertyType_AngleVector3:
             return CreateAngleVector3Value(pool, data->Vector3Value, outValue);
         case PropertyType_Color:
@@ -415,6 +417,8 @@ static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectVa
             return ReadVector2(value, &outData->Vector2Value);
         case PropertyType_Vector3:
             return GameJSON_ParseVector3(value, &outData->Vector3Value);
+        case PropertyType_Vector3Double:
+            return GameJSON_ParseVector3Double(value, &outData->Vector3DoubleValue);
         case PropertyType_AngleVector3:
             return ReadAngleVector3(value, &outData->Vector3Value);
         case PropertyType_Color:

@@ -42,6 +42,10 @@
  * most WORLD_COLLISION_DEPENETRATION_ROUNDS). The contacts found last at the final poses are the step's (_manifolds);
  * the blocked and crushed flags come from them and from the sweeps. A solve that may stop movers ends early once one
  * that stops when blocked is blocked and can be set back: the step sets it back and solves again.
+ *
+ * ORIGINS (T33). The poses are doubles; the narrowphase runs relative to a pair's ORIGIN: its first body's From
+ * position (where the solve's contacts and sweeps of the pair are taken). Contact points, the material points a row
+ * measures and a sweep's points are all relative to it; a manifold keeps its origin for the contacts the step reports.
  */
 
 
@@ -89,11 +93,9 @@ typedef struct MeshCastRunStruct
 
 
 // Static functions: poses and boxes.
-static bool ArePosesEqual(const CollisionPose* a, const CollisionPose* b)
+static bool ArePosesEqual(const WorldCollisionPose* a, const WorldCollisionPose* b)
 {
-    return (a->Position.x == b->Position.x) && (a->Position.y == b->Position.y) && (a->Position.z == b->Position.z)
-        && (a->Rotation.x == b->Rotation.x) && (a->Rotation.y == b->Rotation.y) && (a->Rotation.z == b->Rotation.z)
-        && (a->Rotation.w == b->Rotation.w);
+    return WorldCollisionInternal_ArePosesEqual(a, b);
 }
 
 static bool IsConvexShape(const CollisionShape* shape)
@@ -102,22 +104,23 @@ static bool IsConvexShape(const CollisionShape* shape)
 }
 
 /* A body's pose at the share @p t of its step's motion (exactly its ends at 0 and 1). */
-static CollisionPose GetStepPose(const WorldCollisionBody* body, float t)
+static WorldCollisionPose GetStepPose(const WorldCollisionBody* body, float t)
 {
     if (!body->IsMoving || (t <= 0.0f))
     {
         return body->StepFrom;
     }
-    return (t >= 1.0f) ? body->StepTo : CollisionPose_Interpolate(&body->StepFrom, &body->StepTo, t);
+    return (t >= 1.0f) ? body->StepTo : WorldCollisionInternal_InterpolatePose(&body->StepFrom, &body->StepTo, t);
 }
 
 /* A body's pose at the end of the running solve: its target with its owner's push. */
-static CollisionPose GetFinalPose(const WorldCollision* self, const WorldCollisionBody* body)
+static WorldCollisionPose GetFinalPose(const WorldCollision* self, const WorldCollisionBody* body)
 {
-    CollisionPose Pose = body->To;
+    WorldCollisionPose Pose = body->To;
     if (body->Owner != WORLD_COLLISION_NO_BODY)
     {
-        Pose.Position = CollisionMath_Add(Pose.Position, WorldCollisionInternal_GetBodyAt(self, body->Owner)->Correction);
+        Pose.Position = Vector3Double_Add(Pose.Position,
+            GameMath_FromVector3(WorldCollisionInternal_GetBodyAt(self, body->Owner)->Correction));
     }
     return Pose;
 }
@@ -129,56 +132,61 @@ static Vector3 GetBodyCorrection(const WorldCollision* self, const WorldCollisio
         : CollisionMath_Vector(0.0f, 0.0f, 0.0f);
 }
 
-/* Where a material point that lies at @p point while its body is at From goes with the body's motion to To (no push). */
-static Vector3 MovePoint(const WorldCollisionBody* body, Vector3 point)
+/* Where a material point that lies at @p point (relative to @p origin) while its body is at From goes with the body's
+ * motion to To (no push), relative to the same origin. */
+static Vector3 MovePoint(const WorldCollisionBody* body, Vector3Double origin, Vector3 point)
 {
-    Vector3 Offset = CollisionMath_Subtract(point, body->From.Position);
+    Vector3 Offset = CollisionMath_Subtract(point, GameMath_ToVector3Relative(body->From.Position, origin));
     if (body->IsPhaseTurning)
     {
         Offset = Vector3RotateByQuaternion(Offset, body->PhaseTurn);
     }
-    return CollisionMath_Add(body->To.Position, Offset);
+    return CollisionMath_Add(GameMath_ToVector3Relative(body->To.Position, origin), Offset);
 }
 
-/* Where the material point that lies at @p point while its body is at pose @p at lies once the body is at pose
- * @p to. */
+/* Where the material point that lies at @p point while its body is at pose @p at lies once the body is at pose @p to
+ * (the poses and the point relative to one origin). */
 static Vector3 CarryPoint(const CollisionPose* at, const CollisionPose* to, Vector3 point)
 {
     Vector3 Local = Vector3RotateByQuaternion(CollisionMath_Subtract(point, at->Position), QuaternionInvert(at->Rotation));
     return CollisionMath_Add(to->Position, Vector3RotateByQuaternion(Local, to->Rotation));
 }
 
-/* A shape of an instance placed at @p pose, one way (the synced placement itself while the pose is the instance's own). */
+/* A shape of an instance placed at @p pose, one way, relative to @p origin (the synced placement itself while the pose
+ * is the instance's own). */
 static CollisionAffine PlaceShapeToWorld(const WorldCollisionInstance* instance, const WorldCollisionShape* shape,
-    const CollisionPose* pose)
+    const WorldCollisionPose* pose, Vector3Double origin)
 {
     if (ArePosesEqual(pose, &instance->Pose))
     {
-        return shape->ShapeToWorld;
+        return WorldCollisionInternal_ToRelative(&shape->ShapeToWorld, origin);
     }
-    CollisionAffine PoseToWorld = CollisionPose_ToAffine(pose);
+    CollisionPose Relative = WorldCollisionInternal_ToRelativePose(pose, origin);
+    CollisionAffine PoseToWorld = CollisionPose_ToAffine(&Relative);
     return CollisionAffine_Multiply(&PoseToWorld, &shape->ShapeToPose);
 }
 
-/* A shape of an instance placed at @p pose (the synced placement itself while the pose is the instance's own). */
+/* A shape of an instance placed at @p pose, both ways, relative to @p origin (the synced placement itself while the
+ * pose is the instance's own). */
 static void PlaceShape(const WorldCollisionInstance* instance, const WorldCollisionShape* shape,
-    const CollisionPose* pose, CollisionAffine* outToWorld, CollisionAffine* outFromWorld)
+    const WorldCollisionPose* pose, Vector3Double origin, CollisionAffine* outToWorld, CollisionAffine* outFromWorld)
 {
     if (ArePosesEqual(pose, &instance->Pose))
     {
-        *outToWorld = shape->ShapeToWorld;
-        *outFromWorld = shape->WorldToShape;
+        WorldCollisionInternal_PlaceShapeRelative(shape, origin, outToWorld, outFromWorld);
         return;
     }
-    CollisionAffine PoseToWorld = CollisionPose_ToAffine(pose);
+    CollisionPose Relative = WorldCollisionInternal_ToRelativePose(pose, origin);
+    CollisionAffine PoseToWorld = CollisionPose_ToAffine(&Relative);
     *outToWorld = CollisionAffine_Multiply(&PoseToWorld, &shape->ShapeToPose);
     if (!CollisionAffine_TryInvert(outToWorld, outFromWorld))
     {
-        *outFromWorld = shape->WorldToShape;
+        *outFromWorld = WorldCollisionInternal_ToRelativeInverse(&shape->ShapeToWorld, &shape->WorldToShapeAxes,
+            origin);
     }
 }
 
-/* The world box of a shape under @p toWorld; false for an unbounded plane. */
+/* The box of a shape under @p toWorld (relative to the same origin); false for an unbounded plane. */
 static bool GetPlacedBox(const WorldCollisionShape* shape, const CollisionAffine* toWorld, Vector3* outMin,
     Vector3* outMax)
 {
@@ -199,13 +207,13 @@ static void ExpandBox(Vector3* min, Vector3* max, float margin)
     *max = CollisionMath_Add(*max, Margin);
 }
 
-/* The box of a body's valid, bounded shapes at @p pose; false when it has none. */
-static bool GetBodyBox(const WorldCollision* self, const WorldCollisionBody* body, const CollisionPose* pose,
-    Vector3* outMin, Vector3* outMax)
+/* The world box of a body's valid, bounded shapes at @p pose (worked out relative to the pose's position); false when
+ * it has none. */
+static bool GetBodyBox(const WorldCollision* self, const WorldCollisionBody* body, const WorldCollisionPose* pose,
+    BoundingBoxDouble* outBox)
 {
     const WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, body->Slot);
-    *outMin = CollisionMath_Vector(FLT_MAX, FLT_MAX, FLT_MAX);
-    *outMax = CollisionMath_Vector(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+    *outBox = WorldCollisionInternal_GetEmptyBox();
     bool HasBox = false;
     for (uint32_t Index = 0U; Index < (uint32_t)Instance->Shapes._count; Index++)
     {
@@ -216,37 +224,32 @@ static bool GetBodyBox(const WorldCollision* self, const WorldCollisionBody* bod
         {
             continue;
         }
-        CollisionAffine ToWorld = PlaceShapeToWorld(Instance, Shape, pose);
+        CollisionAffine ToWorld = PlaceShapeToWorld(Instance, Shape, pose, pose->Position);
         if (GetPlacedBox(Shape, &ToWorld, &Min, &Max))
         {
-            *outMin = CollisionMath_Min(*outMin, Min);
-            *outMax = CollisionMath_Max(*outMax, Max);
+            *outBox = BoundingBoxDouble_Union(*outBox, WorldCollisionInternal_ToWorldBox(Min, Max, pose->Position));
             HasBox = true;
         }
     }
     return HasBox;
 }
 
-/* The box a body's shapes cover moving from @p from to @p to (with the reach of a turn around both positions); false
- * when it has no bounded shape. */
-static bool GetMotionBox(const WorldCollision* self, const WorldCollisionBody* body, const CollisionPose* from,
-    const CollisionPose* to, Vector3* outMin, Vector3* outMax)
+/* The world box a body's shapes cover moving from @p from to @p to (with the reach of a turn around both positions);
+ * false when it has no bounded shape. */
+static bool GetMotionBox(const WorldCollision* self, const WorldCollisionBody* body, const WorldCollisionPose* from,
+    const WorldCollisionPose* to, BoundingBoxDouble* outBox)
 {
-    Vector3 EndMin;
-    Vector3 EndMax;
-    if (!GetBodyBox(self, body, from, outMin, outMax) || !GetBodyBox(self, body, to, &EndMin, &EndMax))
+    BoundingBoxDouble End;
+    if (!GetBodyBox(self, body, from, outBox) || !GetBodyBox(self, body, to, &End))
     {
         return false;
     }
-    *outMin = CollisionMath_Min(*outMin, EndMin);
-    *outMax = CollisionMath_Max(*outMax, EndMax);
-    if (CollisionPose_GetRotationAngle(from, to) > TURN_EPSILON)
+    *outBox = BoundingBoxDouble_Union(*outBox, End);
+    if (WorldCollisionInternal_GetTurn(from, to) > TURN_EPSILON)
     {
-        float Reach = WorldCollisionInternal_GetInstance(self, body->Slot)->Reach;
-        Vector3 Radius = { Reach, Reach, Reach };
-        *outMin = CollisionMath_Min(*outMin, CollisionMath_Subtract(CollisionMath_Min(from->Position, to->Position),
-            Radius));
-        *outMax = CollisionMath_Max(*outMax, CollisionMath_Add(CollisionMath_Max(from->Position, to->Position), Radius));
+        double Reach = (double)WorldCollisionInternal_GetInstance(self, body->Slot)->Reach;
+        *outBox = BoundingBoxDouble_Union(*outBox, BoundingBoxDouble_Expand(BoundingBoxDouble_FromCorners(
+            from->Position, to->Position), Reach));
     }
     return true;
 }
@@ -263,11 +266,12 @@ static void SetPhasePoses(WorldCollision* self, float t0, float t1)
         Body->To = GetStepPose(Body, t1);
         if (Body->Owner != WORLD_COLLISION_NO_BODY)
         {
-            Vector3 Pushed = WorldCollisionInternal_GetBodyAt(self, Body->Owner)->Accumulated;
-            Body->From.Position = CollisionMath_Add(Body->From.Position, Pushed);
-            Body->To.Position = CollisionMath_Add(Body->To.Position, Pushed);
+            Vector3Double Pushed = GameMath_FromVector3(WorldCollisionInternal_GetBodyAt(self,
+                Body->Owner)->Accumulated);
+            Body->From.Position = Vector3Double_Add(Body->From.Position, Pushed);
+            Body->To.Position = Vector3Double_Add(Body->To.Position, Pushed);
         }
-        Body->PhaseTurnAngle = CollisionPose_GetRotationAngle(&Body->From, &Body->To);
+        Body->PhaseTurnAngle = WorldCollisionInternal_GetTurn(&Body->From, &Body->To);
         Body->IsPhaseTurning = Body->PhaseTurnAngle > TURN_EPSILON;
         Body->PhaseTurn = Body->IsPhaseTurning
             ? QuaternionMultiply(Body->To.Rotation, QuaternionInvert(Body->From.Rotation)) : QuaternionIdentity();
@@ -284,8 +288,8 @@ static void SetPhasePoses(WorldCollision* self, float t0, float t1)
  * how far their shapes reach. */
 static float GetClosingBound(const WorldCollision* self, const WorldCollisionBody* a, const WorldCollisionBody* b)
 {
-    Vector3 MotionA = CollisionMath_Subtract(a->To.Position, a->From.Position);
-    Vector3 MotionB = CollisionMath_Subtract(b->To.Position, b->From.Position);
+    Vector3 MotionA = GameMath_ToVector3Relative(a->To.Position, a->From.Position);
+    Vector3 MotionB = GameMath_ToVector3Relative(b->To.Position, b->From.Position);
     float Bound = CollisionMath_Length(CollisionMath_Subtract(MotionA, MotionB));
     Bound += a->PhaseTurnAngle * WorldCollisionInternal_GetInstance(self, a->Slot)->Reach;
     Bound += b->PhaseTurnAngle * WorldCollisionInternal_GetInstance(self, b->Slot)->Reach;
@@ -325,10 +329,9 @@ static void AddPair(WorldCollision* self, uint32_t slotA, uint32_t shapeA, uint3
     GenericBuffer_AddLast(&self->_pairs, &Pair);
 }
 
-/* The pairs of one pushed body with the shapes in _candidates near the box [min, max]. A is its convex shape, unless the
- * other is pushed too, convex and of the lower object id: then the other is A (each pair is found from both sides
- * alike). */
-static void AddCandidatePairs(WorldCollision* self, uint32_t slot, Vector3 min, Vector3 max)
+/* The pairs of one pushed body with the shapes in _candidates near @p box. A is its convex shape, unless the other is
+ * pushed too, convex and of the lower object id: then the other is A (each pair is found from both sides alike). */
+static void AddCandidatePairs(WorldCollision* self, uint32_t slot, BoundingBoxDouble box)
 {
     const WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, slot);
     for (size_t Candidate = 0U; Candidate < self->_candidates._count; Candidate++)
@@ -339,8 +342,7 @@ static void AddCandidatePairs(WorldCollision* self, uint32_t slot, Vector3 min, 
         const WorldCollisionInstance* Other = WorldCollisionInternal_GetInstance(self, OtherSlot);
         if ((OtherSlot == slot) || !Other->IsUsed || !Other->IsActive || !WorldCollisionInternal_DoBlock(Instance, Other)
             || !WorldCollisionInternal_GetShape(Other, OtherShape)->IsValid
-            || !WorldCollisionInternal_IsCandidateNear(Other, WorldCollisionInternal_GetShape(Other, OtherShape), min,
-                max))
+            || !WorldCollisionInternal_IsCandidateNear(Other, WorldCollisionInternal_GetShape(Other, OtherShape), box))
         {
             continue;
         }
@@ -379,17 +381,16 @@ static void CollectPairs(WorldCollision* self, bool isAtFinalPoses, float margin
     for (uint32_t Index = 0U; Index < (uint32_t)self->_bodies._count; Index++)
     {
         const WorldCollisionBody* Body = WorldCollisionInternal_GetBodyAt(self, Index);
-        Vector3 Min = Body->SweptMin;
-        Vector3 Max = Body->SweptMax;
-        if ((Body->Owner == WORLD_COLLISION_NO_BODY) || (isAtFinalPoses && !GetBodyBox(self, Body, &Body->From, &Min,
-            &Max)) || (Min.x > Max.x))
+        BoundingBoxDouble Box = Body->Swept;
+        if ((Body->Owner == WORLD_COLLISION_NO_BODY) || (isAtFinalPoses && !GetBodyBox(self, Body, &Body->From, &Box))
+            || WorldCollisionInternal_IsBoxEmpty(Box))
         {
             continue;
         }
         uint32_t Slot = Body->Slot;
-        ExpandBox(&Min, &Max, margin);
-        WorldCollisionInternal_CollectCandidates(self, Min, Max);
-        AddCandidatePairs(self, Slot, Min, Max);
+        Box = BoundingBoxDouble_Expand(Box, (double)margin);
+        WorldCollisionInternal_CollectCandidates(self, Box);
+        AddCandidatePairs(self, Slot, Box);
     }
     if (self->_pairs._count < 2U)
     {
@@ -433,19 +434,22 @@ static bool CollideTriangle(void* context, uint32_t triangle)
 }
 
 /* A pair's contacts at its bodies' From poses, out to @p maxSeparation, appended to _manifolds (one per triangle of a
- * mesh B). */
+ * mesh B), relative to the pair's origin: its A body's From position. */
 static void CollidePair(WorldCollision* self, const WorldCollisionPair* pair, float maxSeparation)
 {
     const WorldCollisionInstance* InstanceA = WorldCollisionInternal_GetInstance(self, pair->SlotA);
     const WorldCollisionInstance* InstanceB = WorldCollisionInternal_GetInstance(self, pair->SlotB);
     const WorldCollisionShape* ShapeA = WorldCollisionInternal_GetShape(InstanceA, pair->ShapeA);
     const WorldCollisionShape* ShapeB = WorldCollisionInternal_GetShape(InstanceB, pair->ShapeB);
+    const WorldCollisionBody* BodyA = WorldCollisionInternal_GetBodyAt(self, pair->BodyA);
+    Vector3Double Origin = BodyA->From.Position;
     CollisionAffine AToWorld;
     CollisionAffine WorldToA;
     CollisionAffine BToWorld;
     CollisionAffine WorldToB;
-    PlaceShape(InstanceA, ShapeA, &WorldCollisionInternal_GetBodyAt(self, pair->BodyA)->From, &AToWorld, &WorldToA);
-    PlaceShape(InstanceB, ShapeB, &WorldCollisionInternal_GetBodyAt(self, pair->BodyB)->From, &BToWorld, &WorldToB);
+    PlaceShape(InstanceA, ShapeA, &BodyA->From, Origin, &AToWorld, &WorldToA);
+    PlaceShape(InstanceB, ShapeB, &WorldCollisionInternal_GetBodyAt(self, pair->BodyB)->From, Origin, &BToWorld,
+        &WorldToB);
     CollisionConvex A;
     if (!CollisionConvex_FromShape(ShapeA->Shape, &AToWorld, &A))
     {
@@ -460,6 +464,7 @@ static void CollidePair(WorldCollision* self, const WorldCollisionPair* pair, fl
     Manifold.BodyA = pair->BodyA;
     Manifold.BodyB = pair->BodyB;
     Manifold.Triangle = WORLD_COLLISION_NO_TRIANGLE;
+    Manifold.Origin = Origin;
     switch (ShapeB->Shape->Type)
     {
         case CollisionShapeType_Plane:
@@ -590,8 +595,8 @@ static void AddManifoldRows(WorldCollision* self)
         for (uint32_t Point = 0U; Point < Manifold->Contact.PointCount; Point++)
         {
             const CollisionContactPoint* Source = &Manifold->Contact.Points[Point];
-            Row.Base = CollisionMath_Dot(CollisionMath_Subtract(MovePoint(BodyB, Source->PositionB),
-                MovePoint(BodyA, Source->PositionA)), Row.Normal);
+            Row.Base = CollisionMath_Dot(CollisionMath_Subtract(MovePoint(BodyB, Manifold->Origin, Source->PositionB),
+                MovePoint(BodyA, Manifold->Origin, Source->PositionA)), Row.Normal);
             Row.FeatureId = Source->FeatureId;
             AddRow(self, &Row);
         }
@@ -612,8 +617,10 @@ static void RecordStarts(WorldCollision* self, float shares)
         for (uint32_t Point = 0U; Point < Manifold->Contact.PointCount; Point++)
         {
             const CollisionContactPoint* Source = &Manifold->Contact.Points[Point];
-            Vector3 MotionA = CollisionMath_Subtract(MovePoint(BodyA, Source->PositionA), Source->PositionA);
-            Vector3 MotionB = CollisionMath_Subtract(MovePoint(BodyB, Source->PositionB), Source->PositionB);
+            Vector3 MotionA = CollisionMath_Subtract(MovePoint(BodyA, Manifold->Origin, Source->PositionA),
+                Source->PositionA);
+            Vector3 MotionB = CollisionMath_Subtract(MovePoint(BodyB, Manifold->Origin, Source->PositionB),
+                Source->PositionB);
             Closing = fmaxf(Closing, -CollisionMath_Dot(CollisionMath_Subtract(MotionB, MotionA),
                 Manifold->Contact.Normal));
         }
@@ -913,7 +920,7 @@ static bool CastAgainstPlaced(const CollisionConvex* a, const WorldCollisionShap
  * - B moving and either turning: none (the substeps' contacts push apart what the turns reach).
  * A B whose motion is not continuous stands where it ends (its final pose): it jumps there, and A must not pass it.
  * With where the contact's material points are at the end of the motions without the solve's push (where its row
- * measures), and B's triangle. */
+ * measures), relative to A's From position (the cast ran there), and B's triangle. */
 static bool CastShapes(WorldCollision* self, const WorldCollisionBody* bodyA, uint32_t shapeA,
     const WorldCollisionBody* bodyB, uint32_t shapeB, CollisionCastHit* outHit, uint32_t* outTriangle,
     Vector3* outEndA, Vector3* outEndB)
@@ -922,27 +929,28 @@ static bool CastShapes(WorldCollision* self, const WorldCollisionBody* bodyA, ui
     const WorldCollisionInstance* InstanceB = WorldCollisionInternal_GetInstance(self, bodyB->Slot);
     const WorldCollisionShape* ShapeA = WorldCollisionInternal_GetShape(InstanceA, shapeA);
     const WorldCollisionShape* ShapeB = WorldCollisionInternal_GetShape(InstanceB, shapeB);
-    CollisionPose FromA = bodyA->From;
-    CollisionPose ToA = GetFinalPose(self, bodyA);
-    CollisionPose ToB = GetFinalPose(self, bodyB);
-    CollisionPose FromB = bodyB->IsContinuous ? bodyB->From : ToB;
-    bool IsTurning = (CollisionPose_GetRotationAngle(&FromA, &ToA) > TURN_EPSILON)
-        || (CollisionPose_GetRotationAngle(&FromB, &ToB) > TURN_EPSILON);
+    WorldCollisionPose FromA = bodyA->From;
+    WorldCollisionPose ToA = GetFinalPose(self, bodyA);
+    WorldCollisionPose ToB = GetFinalPose(self, bodyB);
+    WorldCollisionPose FromB = bodyB->IsContinuous ? bodyB->From : ToB;
+    bool IsTurning = (WorldCollisionInternal_GetTurn(&FromA, &ToA) > TURN_EPSILON)
+        || (WorldCollisionInternal_GetTurn(&FromB, &ToB) > TURN_EPSILON);
     if (IsTurning && !ArePosesEqual(&FromB, &ToB))
     {
         return false;
     }
-    CollisionPose StartA = FromA;
+    Vector3Double Origin = FromA.Position;
+    WorldCollisionPose StartA = FromA;
     StartA.Rotation = ToA.Rotation;
-    Vector3 Relative = CollisionMath_Subtract(CollisionMath_Subtract(ToA.Position, FromA.Position),
-        CollisionMath_Subtract(ToB.Position, FromB.Position));
+    Vector3 Relative = CollisionMath_Subtract(GameMath_ToVector3Relative(ToA.Position, FromA.Position),
+        GameMath_ToVector3Relative(ToB.Position, FromB.Position));
     CollisionAffine AToWorld;
     CollisionAffine WorldToA;
     CollisionAffine BToWorld;
     CollisionAffine WorldToB;
     CollisionConvex A;
-    PlaceShape(InstanceA, ShapeA, &StartA, &AToWorld, &WorldToA);
-    PlaceShape(InstanceB, ShapeB, &FromB, &BToWorld, &WorldToB);
+    PlaceShape(InstanceA, ShapeA, &StartA, Origin, &AToWorld, &WorldToA);
+    PlaceShape(InstanceB, ShapeB, &FromB, Origin, &BToWorld, &WorldToB);
     if (!CollisionConvex_FromShape(ShapeA->Shape, &AToWorld, &A)
         || !CastAgainstPlaced(&A, ShapeA, Relative, ShapeB, &BToWorld, &WorldToB, outHit, outTriangle))
     {
@@ -950,10 +958,11 @@ static bool CastShapes(WorldCollision* self, const WorldCollisionBody* bodyA, ui
     }
     // A's point at the impact lies at A's start moved by its share of the relative motion (B where it starts); both go
     // on with their own motions, without the push, to where the row measures them.
-    CollisionPose ImpactA = StartA;
-    ImpactA.Position = CollisionMath_AddScaled(StartA.Position, Relative, outHit->Fraction);
-    *outEndA = CarryPoint(&ImpactA, &bodyA->To, outHit->PointA);
-    *outEndB = bodyB->IsContinuous ? MovePoint(bodyB, outHit->PointB)
+    CollisionPose ImpactA = WorldCollisionInternal_ToRelativePose(&StartA, Origin);
+    ImpactA.Position = CollisionMath_AddScaled(ImpactA.Position, Relative, outHit->Fraction);
+    CollisionPose EndPoseA = WorldCollisionInternal_ToRelativePose(&bodyA->To, Origin);
+    *outEndA = CarryPoint(&ImpactA, &EndPoseA, outHit->PointA);
+    *outEndB = bodyB->IsContinuous ? MovePoint(bodyB, Origin, outHit->PointB)
         : CollisionMath_Subtract(outHit->PointB, GetBodyCorrection(self, bodyB)); // B at its final pose, less its push
     return true;
 }
@@ -1011,9 +1020,9 @@ static bool IsSweptItself(const WorldCollision* self, const WorldCollisionBody* 
     {
         return false;
     }
-    CollisionPose Final = GetFinalPose(self, body);
-    float Turn = CollisionPose_GetRotationAngle(&body->From, &Final);
-    float Reach = CollisionMath_Length(CollisionMath_Subtract(Final.Position, body->From.Position))
+    WorldCollisionPose Final = GetFinalPose(self, body);
+    float Turn = WorldCollisionInternal_GetTurn(&body->From, &Final);
+    float Reach = CollisionMath_Length(GameMath_ToVector3Relative(Final.Position, body->From.Position))
         + (Turn * WorldCollisionInternal_GetInstance(self, body->Slot)->Reach);
     return Reach > WORLD_COLLISION_SPECULATIVE_DISTANCE;
 }
@@ -1031,18 +1040,17 @@ static bool ShouldSweepAgainst(const WorldCollision* self, uint32_t body, uint32
 static size_t SweepBody(WorldCollision* self, uint32_t bodyIndex, bool addsRows)
 {
     const WorldCollisionBody* Body = WorldCollisionInternal_GetBodyAt(self, bodyIndex);
-    CollisionPose From = Body->From;
-    CollisionPose Final = GetFinalPose(self, Body);
+    WorldCollisionPose From = Body->From;
+    WorldCollisionPose Final = GetFinalPose(self, Body);
     uint32_t Slot = Body->Slot;
     const WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, Slot);
-    Vector3 Min;
-    Vector3 Max;
-    if (!GetMotionBox(self, Body, &From, &Final, &Min, &Max))
+    BoundingBoxDouble Box;
+    if (!GetMotionBox(self, Body, &From, &Final, &Box))
     {
         return 0U;
     }
-    ExpandBox(&Min, &Max, WORLD_COLLISION_SKIN);
-    WorldCollisionInternal_CollectCandidates(self, Min, Max);
+    Box = BoundingBoxDouble_Expand(Box, (double)WORLD_COLLISION_SKIN);
+    WorldCollisionInternal_CollectCandidates(self, Box);
     size_t Hits = 0U;
     for (size_t Candidate = 0U; Candidate < self->_candidates._count; Candidate++)
     {
@@ -1052,8 +1060,7 @@ static size_t SweepBody(WorldCollision* self, uint32_t bodyIndex, bool addsRows)
         const WorldCollisionInstance* Other = WorldCollisionInternal_GetInstance(self, OtherSlot);
         if ((OtherSlot == Slot) || !Other->IsUsed || !Other->IsActive || !WorldCollisionInternal_DoBlock(Instance, Other)
             || !WorldCollisionInternal_GetShape(Other, OtherShape)->IsValid
-            || !WorldCollisionInternal_IsCandidateNear(Other, WorldCollisionInternal_GetShape(Other, OtherShape), Min,
-                Max)
+            || !WorldCollisionInternal_IsCandidateNear(Other, WorldCollisionInternal_GetShape(Other, OtherShape), Box)
             || ((Other->OwnerSlot != WORLD_COLLISION_NO_SLOT)
                 && !IsConvexShape(WorldCollisionInternal_GetShape(Other, OtherShape)->Shape)))
         {
@@ -1140,13 +1147,14 @@ static void StopUnresolved(WorldCollision* self)
             continue;
         }
         // Back along its pushed motion to the skin before the time of impact.
-        Vector3 Motion = CollisionMath_Subtract(CollisionMath_Add(Owner->To.Position, Owner->Correction),
-            Owner->From.Position);
+        Vector3Double Pushed = Vector3Double_Add(Owner->To.Position, GameMath_FromVector3(Owner->Correction));
+        Vector3 Motion = GameMath_ToVector3Relative(Pushed, Owner->From.Position);
         float Length = CollisionMath_Length(Motion);
         float Fraction = (Length > WORLD_COLLISION_SKIN) ? fmaxf(0.0f, Owner->ClampFraction - (WORLD_COLLISION_SKIN
             / Length)) : 0.0f;
-        Vector3 Stopped = CollisionMath_AddScaled(Owner->From.Position, Motion, Fraction);
-        Owner->Correction = CollisionMath_Subtract(Stopped, Owner->To.Position);
+        Vector3Double Stopped = Vector3Double_AddScaled(Owner->From.Position, GameMath_FromVector3(Motion),
+            (double)Fraction);
+        Owner->Correction = GameMath_ToVector3Relative(Stopped, Owner->To.Position);
     }
 }
 

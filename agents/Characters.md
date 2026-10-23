@@ -89,12 +89,12 @@ carries at most one, and adding it makes the object movable.
   wraps the yaw and clamps the pitch. Attaching a character makes it face and look the way its object already faces.
 - **State** (`WorldCharacterComponent_GetState`, runtime only): `Mode` (walking, flying), `Stance` (standing,
   crouching), `IsGrounded` and `IsTouchingGround` (ground right below, also while flying: brains land birds by it),
-  `GroundObjectId`, `GroundNormal`, `GroundPoint` (where it touches its ground: the plane its step height is measured
-  from), `Velocity` (how fast it actually moved in its last update, relative to its ground:
+  `GroundObjectId`, `GroundNormal`, `GroundPoint` (where it touches its ground, a world position in double: the plane
+  its step height is measured from), `Velocity` (how fast it actually moved in its last update, relative to its ground:
   its own move after walls, plus what the collision step pushed it since; two characters pressing into each other
   read 0), `GroundVelocity` (the platform's), `FacingYaw`, `TurnRate`, `Height` (the stance's), `EyeHeight` and
   `CrouchAmount` (eased), `IsStandUpBlocked`, `TimeInAir`. `WorldCharacterComponent_GetEyePosition` is the object's
-  world position plus the eye height.
+  world position plus the eye height (a `Vector3Double`).
 - **Runtime bookkeeping** (`WorldCharacterRuntime`, private to the system): the cached settings (by component revision
   and bound asset), the velocity it drives with, the input's last held requests, a buffered jump, the time since its
   last jump, whether it is climbing a step, the ground's last world matrix, where the update left the feet.
@@ -120,7 +120,8 @@ character, in the world's component order:
    flight walks again (no late jump out of a flight).
 5. **Platforms.** A grounded character whose ground object's world matrix changed since the last update is moved by
    that change (the old matrix undone, the new one applied: exact for turning platforms) and turned by its yaw, its
-   facing and its look too; that change over the tick is its `GroundVelocity`.
+   facing and its look too; that change over the tick is its `GroundVelocity`. The feet and the ground point are taken
+   relative to the ground's old translation first, in double (T33), so far out a carry is as exact as at the origin.
 6. **Stance.** Crouching while asked and allowed, on the ground; standing up once the input lets go (or crouching is
    no longer allowed, or it flies), only where the standing capsule fits (`CharacterMotion_DoesFit`: an overlap of the
    standing capsule a skin narrower, its bottom two skins up so the ground it rests on does not count, pushables
@@ -224,10 +225,20 @@ without them, so a side overlap the step will mend is neither ground nor a reaso
 on, the impact speed), `LeftGround`, `Crouched`, `StoodUp`, `TookOff`, `StoppedFlying`, `Used` (what it used, its
 distance). Each names the character and the update's tick.
 
-**Teleport** (`WorldCharacters_Teleport(characters, id, feet, yaw)`): places a character at rest, facing and looking
-along the yaw, settles it on the ground within its step height below (a spawn point set a little high stands on the
-floor at once; further up it falls), and tells the collision world (`WorldCollision_Teleport`), so the jump is not
-swept.
+**Teleport** (`WorldCharacters_Teleport(characters, id, feet, yaw)`, the feet a `Vector3Double`): places a character at
+rest, facing and looking along the yaw, settles it on the ground within its step height below (a spawn point set a
+little high stands on the floor at once; further up it falls), and tells the collision world
+(`WorldCollision_Teleport`), so the jump is not swept. Refused before anything changes: a position that is not finite,
+or where the object's own position (its local one, under a parent) would pass `WORLD_POSITION_LIMIT`
+(`ErrorCode_ArgumentOutOfRange`: the object's position row would refuse it), and any position under a parent whose
+world matrix cannot be inverted (`ErrorCode_InvalidOperation`).
+
+**Positions are doubles** (T33; [WorldData.md](WorldData.md)): the feet, the ground point, the eyes, the platform
+carry, the sweeps and the look ray's origin. The motion (`WorldCharacterMotion.c`) keeps every position as a double and
+every move, direction, normal and velocity as a float; it adds a move to the feet in double, and its sweeps and rays
+start at the feet (or the eyes), so the collision world measures them relative to the character itself. 173 km from
+the world's origin a character stands 2 mm above its ground, to a micrometre, without drifting, and walks a square to
+the same end as at the origin (the far runs of `tests/WorldCharacterTests.c`). `CharacterInput` stays float.
 
 **The look ray** (`WorldCharacters_FindLookTarget(characters, id, &hit)`): from the eyes along the input's look, out to
 the reach, on its interaction layers, never triggers, never itself or what it carries. Any character may ask; the
@@ -289,7 +300,8 @@ object and the collider only when they change, so a character standing still nev
 The test frame ([WorldRuntime.md](WorldRuntime.md), "WorldTestFrame"): F1 walk mode (the player, a runtime object,
 below the flycam), F2 the test NPCs (a human, a dog and a pigeon with placeholder bodies and scripted brains), F3
 flight, F4 the player's kind, F12 head bob; the log names what the player looks at when it changes and every character
-event; I adds the player's state.
+event; I adds the player's state. F11 (the far shift) places every character again 28 km, then 141 km out, where they
+walk, jump and crouch as at the origin.
 
 ## Known limits
 

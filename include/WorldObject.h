@@ -7,6 +7,7 @@
 #include "raylib/raylib.h"
 #include "Renderer.h"
 #include "wr/WRError.h"
+#include "wr/WRVectorMath.h"
 #include "DataMap.h"
 #include "PropertyDescriptor.h"
 #include "WorldComponent.h"
@@ -20,6 +21,13 @@
  * rotation, per-axis scale) relative to that parent, a render tint, three flags (whether it is enabled, whether it is
  * visible, and its mobility), and its tags and custom data. What an object is comes from its components
  * (WorldComponent.h): a model, a sprite, a light, at most one of each type.
+ *
+ * POSITIONS ARE DOUBLES (T33). Worlds reach tens or hundreds of kilometres from their origin, where a float's step is
+ * millimetres: the position is a Vector3Double and world matrices are Matrix4Doubles (WRVectorMath), exact to a
+ * double's step (2 nm at 10 000 km). Rotations, scales, directions and sizes stay floats. A position must be finite
+ * and within WORLD_POSITION_LIMIT of the parent's origin on every axis. Whatever needs floats (the renderer, the
+ * collision narrowphase) takes positions relative to a nearby origin, subtracted in double and rounded once
+ * (GameMath_ToVector3Relative): never round a far position to a float first.
  *
  * LIFETIME. Objects exist only inside a world: World_CreateObject makes one (the world assigns its id) and
  * World_RemoveObject destroys it with its components and its whole subtree. An object points back to its world, so a
@@ -75,6 +83,9 @@
 #define WORLD_OBJECT_DATA_MAX_BYTES ((size_t)65536)
 /** @brief The most levels a hierarchy may have: a root is level 1, so an object has at most 63 ancestors. */
 #define WORLD_HIERARCHY_MAX_DEPTH ((size_t)64)
+/** @brief How far a position may lie from its parent's origin (the world's, for a root) on each axis, in metres:
+ *  10 000 km, where a double's step is 2 nm. The object table's position row refuses anything beyond it. */
+#define WORLD_POSITION_LIMIT 1.0e7
 
 
 // Types.
@@ -104,8 +115,9 @@ typedef struct WorldObjectStruct
     unsigned char* _name;
     /** @brief The parent's id, 0 for a root: the table's parent row. The world keeps it the id of _parent. */
     uint64_t _parentId;
-    /** @brief Position relative to the parent (world space for a root). */
-    Vector3 _position;
+    /** @brief Position relative to the parent (world space for a root), in metres: finite and within
+     *  WORLD_POSITION_LIMIT on every axis. */
+    Vector3Double _position;
     /** @brief Euler XYZ rotation relative to the parent, in radians (degrees in JSON). */
     Vector3 _rotation;
     /** @brief Per-axis scale, relative to the parent's. */
@@ -142,9 +154,9 @@ typedef struct WorldObjectStruct
     WorldObject* _nextSibling;
     /** @brief How many children it has. */
     size_t _childCount;
-    /** @brief The cached world matrix: the local transform's matrix times the parent's world matrix (for a root, the
-     *  local one). Up to date while _isWorldMatrixDirty is false. */
-    Matrix _worldMatrix;
+    /** @brief The cached world matrix, in double: the local transform's matrix times the parent's world matrix (for a
+     *  root, the local one). Up to date while _isWorldMatrixDirty is false. */
+    Matrix4Double _worldMatrix;
     /** @brief Whether _worldMatrix is out of date: the object's or an ancestor's transform or parent changed since it
      *  was computed. A dirty object's descendants are all dirty too. */
     bool _isWorldMatrixDirty;
@@ -281,11 +293,11 @@ static inline bool WorldObject_HasTag(const WorldObject* self, uint32_t key)
 // Functions: transform and tint.
 /**
  * @brief Returns the object's position relative to its parent (in world space for a root; see
- *        WorldObject_GetWorldPosition).
+ *        WorldObject_GetWorldPosition), in double.
  * @param self The object; must not be NULL.
  * @returns The position.
  */
-static inline Vector3 WorldObject_GetPosition(const WorldObject* self)
+static inline Vector3Double WorldObject_GetPosition(const WorldObject* self)
 {
     return self->_position;
 }
@@ -293,11 +305,11 @@ static inline Vector3 WorldObject_GetPosition(const WorldObject* self)
 /**
  * @brief Sets the object's position relative to its parent (in world space for a root). Its subtree moves with it.
  * @param self The object; must not be NULL.
- * @param position The new position; every component must be finite.
+ * @param position The new position; every component must be finite and within WORLD_POSITION_LIMIT (either sign).
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if any component is
- *          NaN or infinite.
+ *          NaN, infinite or beyond the limit (nothing changes then).
  */
-Error WorldObject_SetPosition(WorldObject* self, Vector3 position);
+Error WorldObject_SetPosition(WorldObject* self, Vector3Double position);
 
 /**
  * @brief Returns the object's Euler XYZ rotation relative to its parent, in radians.
@@ -511,18 +523,20 @@ static inline uint32_t WorldObject_GetTransformRevision(const WorldObject* self)
  * The world's cached matrix when it is up to date; otherwise it is computed from the nearest up-to-date ancestor down
  * (at most WORLD_HIERARCHY_MAX_DEPTH matrix products) and NOT stored: reading never changes the world, so the renderer
  * may read it. World_UpdateTransforms stores them. A world matrix can hold a shear (a child turned inside a parent
- * scaled unevenly).
+ * scaled unevenly). It is a double matrix (column-major, WRVectorMath's conventions); to draw or collide with it, take
+ * it relative to a nearby origin (GameMath_ToMatrixRelative), never rounded as it is.
  * @param self The object; must not be NULL.
  * @returns The world matrix.
  */
-Matrix WorldObject_GetWorldMatrix(const WorldObject* self);
+Matrix4Double WorldObject_GetWorldMatrix(const WorldObject* self);
 
 /**
- * @brief Returns the object's position in world space (its world matrix's translation; a root's own position).
+ * @brief Returns the object's position in world space (its world matrix's translation; a root's own position), in
+ *        double.
  * @param self The object; must not be NULL.
  * @returns The world position.
  */
-Vector3 WorldObject_GetWorldPosition(const WorldObject* self);
+Vector3Double WorldObject_GetWorldPosition(const WorldObject* self);
 
 /**
  * @brief Gives the object's world placement as a position, an Euler XYZ rotation (radians) and a scale.
@@ -533,11 +547,12 @@ Vector3 WorldObject_GetWorldPosition(const WorldObject* self);
  * (billboards flip by them); the rotation is that of the axes made orthonormal. A sheared world matrix has no exact
  * answer and gives the nearest placement without the shear.
  * @param self The object; must not be NULL.
- * @param outPosition [out] Receives the world position. Must not be NULL.
+ * @param outPosition [out] Receives the world position, in double (exactly the world matrix's translation). Must not
+ *        be NULL.
  * @param outRotation [out] Receives the world rotation, Euler XYZ in radians. Must not be NULL.
  * @param outScale [out] Receives the world scale. Must not be NULL.
  */
-void WorldObject_GetWorldTransform(const WorldObject* self, Vector3* outPosition, Vector3* outRotation,
+void WorldObject_GetWorldTransform(const WorldObject* self, Vector3Double* outPosition, Vector3* outRotation,
     Vector3* outScale);
 
 /**

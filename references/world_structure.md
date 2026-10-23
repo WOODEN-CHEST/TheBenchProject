@@ -90,7 +90,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `id` | integer, required | Unique in the world, from 1 to 18446744073709551614. Integers above 9223372036854775807 are written as strings. |
 | `name` | string or `null` | At most 256 bytes; need not be unique. |
 | `parent` | integer | The id of the object this one is placed on; 0 or absent for none. |
-| `position`, `rotation`, `scale` | `[x, y, z]` | Relative to the parent. The rotation is in degrees, applied X, then Y, then Z. |
+| `position`, `rotation`, `scale` | `[x, y, z]` | Relative to the parent. The position is in metres, read and written as doubles (every digit is kept), each axis within ±10 000 000 (10 000 km); the rotation is in degrees, applied X, then Y, then Z. |
 | `tint` | colour | `"#rrggbb"`, or `{"tint": [r, g, b], "brightness": b, "opacity": o}` when brightness or opacity is not 1. |
 | `is_enabled`, `is_visible` | `true` / `false` | |
 | `mobility` | `"static"` / `"movable"` | |
@@ -344,7 +344,8 @@ every integer in the smallest GHDF type that holds it.
 | 3 and up | The `world_object` table's wire ids: 3 `name`, 4 `position`, 5 `rotation`, 6 `scale`, 7 `tint`, 8 `is_enabled`, 9 `is_visible`, 10 `mobility`, 11 the tags and data, 12 `parent`. |
 
 How each type is stored (`agents/PropertyDescriptors.md`, "Types"): integers in the smallest integer type (readers take
-any integer type whose value fits), floats as Float (angles in radians), vectors and float lists as Float arrays,
+any integer type whose value fits), floats as Float (angles in radians), vectors and float lists as Float arrays, but
+positions as Double arrays (files written before positions were doubles hold Float arrays, which still read),
 colours as UInt8 arrays, render colours as a compound, strings as strings, enums and dates as encoded integers, sets of
 enum entries as their mask in the smallest unsigned integer type, the tags
 and data as an array of entry compounds (`agents/ObjectData.md`, "GHDF"). A document must end where its root ends.

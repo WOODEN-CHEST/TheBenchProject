@@ -4,7 +4,6 @@
 #include <math.h>
 #include <stddef.h>
 #include "WorldTransform.h"
-#include "raylib/raymath.h"
 
 
 // Macros.
@@ -79,17 +78,15 @@ static void GetPerpendicular(const double unit[3], double out[3])
 
 // Static functions: matrices.
 /* The axis columns of a matrix's linear part: column c is where the matrix takes the axis c. */
-static void GetColumns(Matrix matrix, double outColumns[3][3])
+static void GetColumns(const Matrix4Double* matrix, double outColumns[3][3])
 {
-    outColumns[0][0] = matrix.m0;
-    outColumns[0][1] = matrix.m1;
-    outColumns[0][2] = matrix.m2;
-    outColumns[1][0] = matrix.m4;
-    outColumns[1][1] = matrix.m5;
-    outColumns[1][2] = matrix.m6;
-    outColumns[2][0] = matrix.m8;
-    outColumns[2][1] = matrix.m9;
-    outColumns[2][2] = matrix.m10;
+    for (size_t Column = 0U; Column < 3U; Column++)
+    {
+        for (size_t Row = 0U; Row < 3U; Row++)
+        {
+            outColumns[Column][Row] = matrix->M[(Column * 4U) + Row];
+        }
+    }
 }
 
 /* A right-handed orthonormal basis as close to the columns as it gets, trusting X, then Y, then Z: X normalized, Y
@@ -186,21 +183,18 @@ static bool IsVectorFinite(Vector3 vector)
     return isfinite(vector.x) && isfinite(vector.y) && isfinite(vector.z);
 }
 
-static float DotFloat(Vector3 a, Vector3 b)
-{
-    return (a.x * b.x) + (a.y * b.y) + (a.z * b.z);
-}
-
-
 // Functions (declared in WorldTransform.h).
-Matrix WorldTransform_Compose(Vector3 position, Vector3 rotation, Vector3 scale)
+Matrix4Double WorldTransform_Compose(Vector3Double position, Vector3 rotation, Vector3 scale)
 {
-    return MatrixMultiply(MatrixMultiply(MatrixScale(scale.x, scale.y, scale.z), MatrixRotateXYZ(rotation)),
-        MatrixTranslate(position.x, position.y, position.z));
+    Matrix4Double Scale = Matrix4Double_FromScale(Vector3Double_Create(scale.x, scale.y, scale.z));
+    Matrix4Double Turn = Matrix4Double_FromRotationXYZ(Vector3Double_Create(rotation.x, rotation.y, rotation.z));
+    Matrix4Double Translation = Matrix4Double_FromTranslation(position);
+    Matrix4Double ScaledTurn = Matrix4Double_Multiply(&Scale, &Turn);
+    return Matrix4Double_Multiply(&ScaledTurn, &Translation);
 }
 
-bool WorldTransform_Decompose(Matrix matrix, Vector3 scaleSigns, Vector3* outPosition, Vector3* outRotation,
-    Vector3* outScale)
+bool WorldTransform_Decompose(const Matrix4Double* matrix, Vector3 scaleSigns, Vector3Double* outPosition,
+    Vector3* outRotation, Vector3* outScale)
 {
     double Columns[3][3];
     GetColumns(matrix, Columns);
@@ -230,14 +224,15 @@ bool WorldTransform_Decompose(Matrix matrix, Vector3 scaleSigns, Vector3* outPos
 
     double Basis[3][3];
     Orthonormalize(Columns, Basis);
-    *outPosition = (Vector3){ matrix.m12, matrix.m13, matrix.m14 };
+    *outPosition = Matrix4Double_GetTranslation(matrix);
     *outRotation = GetEulerXYZ(Basis);
     *outScale = (Vector3){ (float)(Signs[0] * Lengths[0]), (float)(Signs[1] * Lengths[1]),
         (float)(Signs[2] * Lengths[2]) };
-    return IsVectorFinite(*outPosition) && IsVectorFinite(*outRotation) && IsVectorFinite(*outScale);
+    return Vector3Double_IsFinite(*outPosition) && IsVectorFinite(*outRotation) && IsVectorFinite(*outScale);
 }
 
-bool WorldTransform_TryGetLocalMatrix(Matrix world, Matrix parentWorld, Matrix* outLocal)
+bool WorldTransform_TryGetLocalMatrix(const Matrix4Double* world, const Matrix4Double* parentWorld,
+    Matrix4Double* outLocal)
 {
     // The parent's linear part A (columns a, b, c) inverts by its adjugate: the rows of A^-1 are b x c, c x a and a x b,
     // each over det(A) = a . (b x c).
@@ -255,65 +250,48 @@ bool WorldTransform_TryGetLocalMatrix(Matrix world, Matrix parentWorld, Matrix* 
     }
 
     // local = parent^-1 world: its axes are A^-1 times the world's axes, its translation A^-1 times the world's
-    // translation less the parent's.
+    // translation less the parent's (subtracted first: far out, the difference is exact where a product with the whole
+    // inverse would cancel terms as large as the translation).
     double World[3][3];
     GetColumns(world, World);
-    double Offset[3] = { (double)world.m12 - (double)parentWorld.m12, (double)world.m13 - (double)parentWorld.m13,
-        (double)world.m14 - (double)parentWorld.m14 };
-    double Local[3][3];
-    double Translation[3];
+    double Offset[3] = { world->M[12] - parentWorld->M[12], world->M[13] - parentWorld->M[13],
+        world->M[14] - parentWorld->M[14] };
+    Matrix4Double Result = Matrix4Double_Identity();
     for (size_t Row = 0U; Row < 3U; Row++)
     {
         for (size_t Column = 0U; Column < 3U; Column++)
         {
-            Local[Column][Row] = Dot(InverseRows[Row], World[Column]) / Determinant;
+            Result.M[(Column * 4U) + Row] = Dot(InverseRows[Row], World[Column]) / Determinant;
         }
-        Translation[Row] = Dot(InverseRows[Row], Offset) / Determinant;
+        Result.M[12U + Row] = Dot(InverseRows[Row], Offset) / Determinant;
     }
-
-    Matrix Result =
+    if (!Matrix4Double_IsFinite(&Result))
     {
-        .m0 = (float)Local[0][0], .m4 = (float)Local[1][0], .m8 = (float)Local[2][0], .m12 = (float)Translation[0],
-        .m1 = (float)Local[0][1], .m5 = (float)Local[1][1], .m9 = (float)Local[2][1], .m13 = (float)Translation[1],
-        .m2 = (float)Local[0][2], .m6 = (float)Local[1][2], .m10 = (float)Local[2][2], .m14 = (float)Translation[2],
-        .m3 = 0.0f, .m7 = 0.0f, .m11 = 0.0f, .m15 = 1.0f
-    };
-    const float* Values[] = { &Result.m0, &Result.m1, &Result.m2, &Result.m4, &Result.m5, &Result.m6, &Result.m8,
-        &Result.m9, &Result.m10, &Result.m12, &Result.m13, &Result.m14 };
-    for (size_t Index = 0U; Index < (sizeof(Values) / sizeof(Values[0])); Index++)
-    {
-        if (!isfinite(*Values[Index]))
-        {
-            return false;
-        }
+        return false;
     }
     *outLocal = Result;
     return true;
 }
 
-float WorldTransform_GetMaxScale(Matrix matrix)
+double WorldTransform_GetMaxScale(const Matrix4Double* matrix)
 {
     // The stretch is at most the square root of the largest eigenvalue of the columns' Gram matrix, which Gershgorin
     // bounds by each row's diagonal plus its off-diagonal magnitudes. Orthogonal columns leave only the diagonal: the
-    // squared lengths, summed as raymath's Vector3Length sums them.
-    const Vector3 Columns[3] =
-    {
-        { matrix.m0, matrix.m1, matrix.m2 },
-        { matrix.m4, matrix.m5, matrix.m6 },
-        { matrix.m8, matrix.m9, matrix.m10 }
-    };
-    float Largest = 0.0f;
+    // squared lengths.
+    double Columns[3][3];
+    GetColumns(matrix, Columns);
+    double Largest = 0.0;
     for (size_t Row = 0U; Row < 3U; Row++)
     {
-        float Bound = DotFloat(Columns[Row], Columns[Row]);
+        double Bound = Dot(Columns[Row], Columns[Row]);
         for (size_t Column = 0U; Column < 3U; Column++)
         {
             if (Column != Row)
             {
-                Bound += fabsf(DotFloat(Columns[Row], Columns[Column]));
+                Bound += fabs(Dot(Columns[Row], Columns[Column]));
             }
         }
-        Largest = fmaxf(Largest, Bound);
+        Largest = fmax(Largest, Bound);
     }
-    return sqrtf(Largest);
+    return sqrt(Largest);
 }

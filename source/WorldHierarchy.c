@@ -13,7 +13,6 @@
 #include "WorldInternal.h"
 #include "WorldTransform.h"
 #include "Logger.h"
-#include "raylib/raymath.h"
 #include "wr/WRMemory.h"
 
 
@@ -205,26 +204,27 @@ static void LogRefusedParentOnce(World* world, const WorldObject* object, uint64
 }
 
 
-// Static functions: world matrices.
-static Matrix GetLocalMatrix(const WorldObject* object)
+// Static functions: world matrices (in double: positions are, T33).
+static Matrix4Double GetLocalMatrix(const WorldObject* object)
 {
     return WorldTransform_Compose(object->_position, object->_rotation, object->_scale);
 }
 
 /* The object's world matrix: its cache when up to date, otherwise its local matrix times its parent's world matrix,
  * computed the same way and stored nowhere. @p level bounds the walk up. */
-static Matrix ComputeWorldMatrix(const WorldObject* object, size_t level)
+static Matrix4Double ComputeWorldMatrix(const WorldObject* object, size_t level)
 {
     if (!object->_isWorldMatrixDirty)
     {
         return object->_worldMatrix;
     }
-    Matrix Local = GetLocalMatrix(object);
+    Matrix4Double Local = GetLocalMatrix(object);
     if ((object->_parent == NULL) || (level >= WORLD_HIERARCHY_MAX_DEPTH))
     {
         return Local;
     }
-    return MatrixMultiply(Local, ComputeWorldMatrix(object->_parent, level + 1U));
+    Matrix4Double ParentWorld = ComputeWorldMatrix(object->_parent, level + 1U);
+    return Matrix4Double_Multiply(&Local, &ParentWorld);
 }
 
 /* Computes and stores a dirty object's world matrix, its dirty ancestors' first. @p level bounds the walk up. */
@@ -235,8 +235,8 @@ static void RefreshWorldMatrix(World* world, WorldObject* object, size_t level)
     {
         RefreshWorldMatrix(world, Parent, level + 1U);
     }
-    Matrix Local = GetLocalMatrix(object);
-    object->_worldMatrix = (Parent != NULL) ? MatrixMultiply(Local, Parent->_worldMatrix) : Local;
+    Matrix4Double Local = GetLocalMatrix(object);
+    object->_worldMatrix = (Parent != NULL) ? Matrix4Double_Multiply(&Local, &Parent->_worldMatrix) : Local;
     object->_isWorldMatrixDirty = false;
     world->_dirtyTransformCount--;
     world->_worldMatrixRecomputeCount++;
@@ -356,22 +356,22 @@ void WorldInternal_DetachFromParent(WorldObject* object)
 
 
 // Public functions: objects (declared in WorldObject.h).
-Matrix WorldObject_GetWorldMatrix(const WorldObject* self)
+Matrix4Double WorldObject_GetWorldMatrix(const WorldObject* self)
 {
     return ComputeWorldMatrix(self, 0U);
 }
 
-Vector3 WorldObject_GetWorldPosition(const WorldObject* self)
+Vector3Double WorldObject_GetWorldPosition(const WorldObject* self)
 {
     if (self->_parent == NULL)
     {
         return self->_position;
     }
-    Matrix WorldMatrix = ComputeWorldMatrix(self, 0U);
-    return (Vector3){ WorldMatrix.m12, WorldMatrix.m13, WorldMatrix.m14 };
+    Matrix4Double WorldMatrix = ComputeWorldMatrix(self, 0U);
+    return Matrix4Double_GetTranslation(&WorldMatrix);
 }
 
-void WorldObject_GetWorldTransform(const WorldObject* self, Vector3* outPosition, Vector3* outRotation,
+void WorldObject_GetWorldTransform(const WorldObject* self, Vector3Double* outPosition, Vector3* outRotation,
     Vector3* outScale)
 {
     if (self->_parent == NULL)
@@ -381,9 +381,10 @@ void WorldObject_GetWorldTransform(const WorldObject* self, Vector3* outPosition
         *outScale = self->_scale;
         return;
     }
-    // Its result is false only for a world matrix that overflowed the float range, whose values then say so themselves.
-    WorldTransform_Decompose(ComputeWorldMatrix(self, 0U), GetChainScaleSigns(self), outPosition, outRotation,
-        outScale);
+    // Its result is false only for a world matrix whose scales overflowed the float range, whose values then say so
+    // themselves.
+    Matrix4Double WorldMatrix = ComputeWorldMatrix(self, 0U);
+    WorldTransform_Decompose(&WorldMatrix, GetChainScaleSigns(self), outPosition, outRotation, outScale);
 }
 
 bool WorldObject_IsEffectivelyEnabled(const WorldObject* self)
@@ -447,16 +448,18 @@ Error World_SetParent(World* self, uint64_t childId, uint64_t parentId, bool kee
 
     // The placement to keep, worked out before anything changes. Its scale keeps the signs it has in the world, less
     // the new parent's: then it also looks the same where the signs matter on their own (a billboard's flips).
-    Vector3 Position = Child->_position;
+    Vector3Double Position = Child->_position;
     Vector3 Rotation = Child->_rotation;
     Vector3 Scale = Child->_scale;
     if (keepWorldTransform)
     {
-        Matrix Local = ComputeWorldMatrix(Child, 0U);
+        Matrix4Double Local = ComputeWorldMatrix(Child, 0U);
         Vector3 Signs = GetChainScaleSigns(Child);
         if (Parent != NULL)
         {
-            if (!WorldTransform_TryGetLocalMatrix(Local, ComputeWorldMatrix(Parent, 0U), &Local))
+            Matrix4Double ChildWorld = Local;
+            Matrix4Double ParentWorld = ComputeWorldMatrix(Parent, 0U);
+            if (!WorldTransform_TryGetLocalMatrix(&ChildWorld, &ParentWorld, &Local))
             {
                 return Error_Construct4(ErrorCode_InvalidOperation,
                     "World_SetParent: object %" PRIu64 "'s world matrix cannot be inverted (a zero scale on an axis), "
@@ -465,7 +468,7 @@ Error World_SetParent(World* self, uint64_t childId, uint64_t parentId, bool kee
             Vector3 ParentSigns = GetChainScaleSigns(Parent);
             Signs = (Vector3){ Signs.x * ParentSigns.x, Signs.y * ParentSigns.y, Signs.z * ParentSigns.z };
         }
-        WorldTransform_Decompose(Local, Signs, &Position, &Rotation, &Scale);
+        WorldTransform_Decompose(&Local, Signs, &Position, &Rotation, &Scale);
         Error TransformResult = WorldObject_CheckTransform(Position, Rotation, Scale);
         if (TransformResult.Code != ErrorCode_Success)
         {
@@ -520,7 +523,7 @@ Error World_GetChildren(World* self, uint64_t id, GenericBuffer* outIds)
     return Error_CreateSuccess();
 }
 
-Error World_GetWorldMatrix(World* self, uint64_t id, Matrix* outMatrix)
+Error World_GetWorldMatrix(World* self, uint64_t id, Matrix4Double* outMatrix)
 {
     WorldObject* Object = NULL;
     Error Result = FindForGetter(self, id, outMatrix, "World_GetWorldMatrix", &Object);
@@ -531,7 +534,7 @@ Error World_GetWorldMatrix(World* self, uint64_t id, Matrix* outMatrix)
     return Result;
 }
 
-Error World_GetWorldPosition(World* self, uint64_t id, Vector3* outPosition)
+Error World_GetWorldPosition(World* self, uint64_t id, Vector3Double* outPosition)
 {
     WorldObject* Object = NULL;
     Error Result = FindForGetter(self, id, outPosition, "World_GetWorldPosition", &Object);
@@ -548,7 +551,7 @@ Error World_GetWorldRotation(World* self, uint64_t id, Vector3* outRotation)
     Error Result = FindForGetter(self, id, outRotation, "World_GetWorldRotation", &Object);
     if (Result.Code == ErrorCode_Success)
     {
-        Vector3 Position;
+        Vector3Double Position;
         Vector3 Scale;
         WorldObject_GetWorldTransform(Object, &Position, outRotation, &Scale);
     }

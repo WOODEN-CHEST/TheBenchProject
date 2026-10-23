@@ -4,12 +4,15 @@
 #include <stdint.h>
 #include "raylib/raylib.h"
 #include "wr/WRMemory.h"
+#include "wr/WRVectorMath.h"
 #include "WorldCollision.h"
 
 /*
  * Private header (source/) of the character system: the capsule's motion against the collision world
  * (WorldCharacterMotion.c), used by the system's update (WorldCharacters.c). Positions are the capsule's FEET (the
- * bottom of its bottom cap); the capsule stands upright above them.
+ * bottom of its bottom cap); the capsule stands upright above them. Positions are doubles (T33: feet, contact and
+ * support points, as the collision world gives them), so a character 100 km out moves as one at the origin;
+ * displacements, directions, normals and velocities are floats.
  *
  * SUPPORT. What a walking capsule stands on: a contact whose normal is walkable (within the slope limit), or, while it
  * climbs a step, the step's edge under its round bottom: the contact's own normal is then steep, so a short ray down
@@ -107,8 +110,8 @@ typedef struct CharacterSupportStruct
     /** The walkable ground's normal (the contact's, or the face's under an edge with a steep contact; up while not
      *  supported). */
     Vector3 Normal;
-    /** The contact point. */
-    Vector3 Point;
+    /** The contact point, in the world (double). */
+    Vector3Double Point;
     /** Whether it holds the capsule by an edge whose contact is steeper than the slope limit (the face under the edge
      *  is walkable): a step a step up landed on, until the walker stands on walkable ground (the file comment). */
     bool IsSteepEdge;
@@ -133,8 +136,8 @@ typedef enum CharacterGroundEnum
  */
 typedef struct CharacterMoveStruct
 {
-    /** Where the feet ended. */
-    Vector3 Feet;
+    /** Where the feet ended (double). */
+    Vector3Double Feet;
     /** Whether the move climbed a step (then StepSupport is what it landed on). */
     bool HasStepped;
     CharacterSupport StepSupport;
@@ -152,8 +155,8 @@ CharacterSupport CharacterSupport_CreateNone(void);
  *  so a move that stops short of the sweep's distance keeps the collision step's skin to everything it passes, not only
  *  to what it stops at (a curb's edge beside the floor a walker settles on). Within the skin at the start is a start
  *  penetration whose depth is how far short of the skin it is. */
-bool CharacterMotion_Sweep(const CharacterBody* body, Vector3 from, Vector3 to, const WorldCollisionFilter* filter,
-    WorldCastHit* outHit);
+bool CharacterMotion_Sweep(const CharacterBody* body, Vector3Double from, Vector3Double to,
+    const WorldCollisionFilter* filter, WorldCastHit* outHit);
 
 /** Whether a cast's contact is something to stand on (see the file comment): a walkable contact, or, with
  *  @p isSteepEdgeAllowed (a step being climbed), an edge whose face below is walkable. */
@@ -165,7 +168,7 @@ CharacterSupport CharacterMotion_EvaluateSupport(const CharacterBody* body, cons
 Vector3 CharacterMotion_GetFaceNormal(const CharacterBody* body, const CharacterSupport* support);
 
 /** Whether walkable ground lies straight below @p feet within @p distance (a ray down the capsule's axis). */
-bool CharacterMotion_HasGroundBelow(const CharacterBody* body, Vector3 feet, float distance);
+bool CharacterMotion_HasGroundBelow(const CharacterBody* body, Vector3Double feet, float distance);
 
 /** @p vector without the parts that go into any of @p planes (unit normals): clipped against one plane when that is
  *  enough, along the crease of two, or zero in a corner of three. */
@@ -184,7 +187,7 @@ Vector3 CharacterMotion_ProjectOnGround(Vector3 move, Vector3 normal);
  * filter): the collision step pushes them apart, and a character falling into one comes out on top of it in its ground
  * follow (CharacterMotion_FollowGround).
  */
-CharacterMove CharacterMotion_MoveAndSlide(const CharacterBody* body, Vector3 feet, Vector3 displacement,
+CharacterMove CharacterMotion_MoveAndSlide(const CharacterBody* body, Vector3Double feet, Vector3 displacement,
     Vector3* velocity, const CharacterSupport* ground);
 
 /**
@@ -194,9 +197,9 @@ CharacterMove CharacterMotion_MoveAndSlide(const CharacterBody* body, Vector3 fe
  * and the support are written. Otherwise the outputs are untouched: Unsupported (nothing within reach) or Unsure (a
  * pushable overlapping it from the side hid the ground).
  */
-CharacterGround CharacterMotion_FollowGround(const CharacterBody* body, Vector3 feet, float distance,
-    const CharacterSupport* ground, Vector3* outFeet, CharacterSupport* outSupport);
+CharacterGround CharacterMotion_FollowGround(const CharacterBody* body, Vector3Double feet, float distance,
+    const CharacterSupport* ground, Vector3Double* outFeet, CharacterSupport* outSupport);
 
 /** Whether a capsule of @p height fits at @p feet: the capsule a skin narrower, its bottom two skins above the feet (so
  *  resting on the ground does not count), touching nothing. @p scratchIds holds uint64_t ids; it is cleared and reused. */
-bool CharacterMotion_DoesFit(const CharacterBody* body, Vector3 feet, float height, GenericBuffer* scratchIds);
+bool CharacterMotion_DoesFit(const CharacterBody* body, Vector3Double feet, float height, GenericBuffer* scratchIds);

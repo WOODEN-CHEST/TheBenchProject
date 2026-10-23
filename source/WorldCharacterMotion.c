@@ -4,6 +4,7 @@
 #include <math.h>
 #include "WorldCharacterInternal.h"
 #include "WorldCharacters.h"
+#include "GameMath.h"
 #include "raylib/raymath.h"
 #include "wr/WRMath.h"
 
@@ -19,9 +20,15 @@
 static const Vector3 WorldUp = { 0.0f, 1.0f, 0.0f };
 
 /* The capsule's centre over its feet. */
-static Vector3 GetCenter(const CharacterBody* body, Vector3 feet)
+static Vector3Double GetCenter(const CharacterBody* body, Vector3Double feet)
 {
-    return (Vector3){ feet.x, feet.y + (0.5f * body->Height), feet.z };
+    return Vector3Double_Create(feet.X, feet.Y + (0.5 * (double)body->Height), feet.Z);
+}
+
+/* @p point moved by @p offset (a displacement in float, added in double). */
+static Vector3Double Offset(Vector3Double point, Vector3 offset)
+{
+    return Vector3Double_Add(point, GameMath_FromVector3(offset));
 }
 
 /* How far along a move of @p direction (unit) to go toward a contact @p distance away (where the sweep's wider capsule
@@ -39,7 +46,8 @@ static float GetAdvance(Vector3 direction, Vector3 normal, float distance)
  * it by rounding, a little every tick). Nothing else gives the gap back, the collision step pushing only within the
  * skin, and a capsule left touching stalls on moves that only roll along a contact. A walker backs away from a wall
  * level, not up the edge it cannot climb. */
-static Vector3 KeepRestGap(Vector3 feet, Vector3 direction, float advance, const WorldCastHit* hit, Vector3 away)
+static Vector3Double KeepRestGap(Vector3Double feet, Vector3 direction, float advance, const WorldCastHit* hit,
+    Vector3 away)
 {
     float Approach = -Vector3DotProduct(direction, hit->Normal);
     if (Approach <= 0.0f)
@@ -54,7 +62,7 @@ static Vector3 KeepRestGap(Vector3 feet, Vector3 direction, float advance, const
         return feet;
     }
     float Share = Math_MaxFloat(Vector3DotProduct(away, hit->Normal), CHARACTER_MIN_APPROACH);
-    return Vector3Add(feet, Vector3Scale(away, (Wanted - Gap) / Share));
+    return Offset(feet, Vector3Scale(away, (Wanted - Gap) / Share));
 }
 
 /* Whether @p vector goes into none of @p planes by more than @p tolerance. */
@@ -83,7 +91,8 @@ static Vector3 ClipToPlane(Vector3 vector, Vector3 plane)
  * character it walks into, which the collision step will push) is neither ground nor a reason to move, and
  * @p outIsHidden says that pushable may have hidden the ground. Only an overlap with what does not give way is then
  * handed back, for the caller to get out of. */
-static bool SweepForGround(const CharacterBody* body, Vector3 from, Vector3 to, WorldCastHit* outHit, bool* outIsHidden)
+static bool SweepForGround(const CharacterBody* body, Vector3Double from, Vector3Double to, WorldCastHit* outHit,
+    bool* outIsHidden)
 {
     if (!CharacterMotion_Sweep(body, from, to, &body->GroundFilter, outHit))
     {
@@ -109,7 +118,7 @@ static bool SweepForGround(const CharacterBody* body, Vector3 from, Vector3 to, 
 /* The face under a contact at @p point of @p normal on the capsule's round bottom: a short ray down just inside the
  * contact (the contact's normal points from it toward the capsule, so inside is the other way). False when the contact
  * is straight below the capsule's axis (no inside to look at), or nothing is found there. */
-static bool ProbeFaceUnder(const CharacterBody* body, Vector3 point, Vector3 normal, WorldRayHit* outFace)
+static bool ProbeFaceUnder(const CharacterBody* body, Vector3Double point, Vector3 normal, WorldRayHit* outFace)
 {
     Vector3 Inward = { -normal.x, 0.0f, -normal.z };
     float InwardLength = Vector3Length(Inward);
@@ -118,22 +127,22 @@ static bool ProbeFaceUnder(const CharacterBody* body, Vector3 point, Vector3 nor
         return false;
     }
     Inward = Vector3Scale(Inward, 1.0f / InwardLength);
-    Vector3 Origin = Vector3Add(point, Vector3Scale(Inward, CHARACTER_EDGE_PROBE_INSET));
-    Origin.y += CHARACTER_EDGE_PROBE_LIFT;
+    Vector3Double Origin = Offset(point, Vector3Add(Vector3Scale(Inward, CHARACTER_EDGE_PROBE_INSET),
+        (Vector3){ 0.0f, CHARACTER_EDGE_PROBE_LIFT, 0.0f }));
     return WorldCollision_Raycast(body->Collision, Origin, (Vector3){ 0.0f, -1.0f, 0.0f },
         CHARACTER_EDGE_PROBE_LIFT + CHARACTER_EDGE_PROBE_DEPTH, &body->GroundFilter, outFace) && !outFace->IsStartInside;
 }
 
 /* How far @p point is above the plane of @p ground (through its contact, along its normal), measured straight up: the
  * height of a step above the ground a walker walks on, a slope's or a crest's edge on that plane being none. */
-static float GetHeightAboveGround(const CharacterSupport* ground, Vector3 point)
+static float GetHeightAboveGround(const CharacterSupport* ground, Vector3Double point)
 {
-    Vector3 Offset = Vector3Subtract(point, ground->Point);
+    Vector3 Above = GameMath_ToVector3Relative(point, ground->Point);
     if (ground->Normal.y < 1e-3f)
     {
-        return Offset.y;
+        return Above.y;
     }
-    return Vector3DotProduct(ground->Normal, Offset) / ground->Normal.y;
+    return Vector3DotProduct(ground->Normal, Above) / ground->Normal.y;
 }
 
 /* Whether a contact is an edge higher than the step height above the plane of the @p ground a walker walks on: the
@@ -156,10 +165,10 @@ static bool IsEdgeAboveStep(const CharacterBody* body, const CharacterSupport* g
 
 /* The walkable ground a walker at @p feet rests on now: a ray from its bottom cap's centre along its @p ground's normal,
  * reaching as far as the cap rests from that ground (its radius, the skin and the rest gap) and a skin more. */
-static bool FindRestingGround(const CharacterBody* body, Vector3 feet, const CharacterSupport* ground,
+static bool FindRestingGround(const CharacterBody* body, Vector3Double feet, const CharacterSupport* ground,
     CharacterSupport* outSupport)
 {
-    Vector3 Origin = { feet.x, feet.y + body->Radius, feet.z };
+    Vector3Double Origin = Offset(feet, (Vector3){ 0.0f, body->Radius, 0.0f });
     float Reach = body->Radius + (2.0f * CHARACTER_SKIN) + CHARACTER_REST_GAP;
     WorldRayHit Hit;
     if (!WorldCollision_Raycast(body->Collision, Origin, Vector3Negate(ground->Normal), Reach, &body->GroundFilter, &Hit)
@@ -180,8 +189,8 @@ static bool FindRestingGround(const CharacterBody* body, Vector3 feet, const Cha
  * something to stand on within the climb. Accepted only when it lands supported, higher than it started, on something
  * no higher than the step height above the @p ground it walks on: a step's edge counts (the round bottom then rolls
  * over it in the following ticks), a taller step's edge does not. */
-static bool TryStepUp(const CharacterBody* body, const CharacterSupport* ground, Vector3 feet, Vector3 direction,
-    float remaining, float gap, Vector3* outFeet, CharacterSupport* outSupport)
+static bool TryStepUp(const CharacterBody* body, const CharacterSupport* ground, Vector3Double feet, Vector3 direction,
+    float remaining, float gap, Vector3Double* outFeet, CharacterSupport* outSupport)
 {
     Vector3 Flat = { direction.x, 0.0f, direction.z };
     float FlatShare = Vector3Length(Flat);
@@ -194,16 +203,17 @@ static bool TryStepUp(const CharacterBody* body, const CharacterSupport* ground,
 
     // Up, stopping under a ceiling.
     WorldCastHit Hit;
-    Vector3 Raised = Vector3Add(feet, (Vector3){ 0.0f, body->StepHeight, 0.0f });
+    float Climb = body->StepHeight;
+    Vector3Double Raised = Offset(feet, (Vector3){ 0.0f, Climb, 0.0f });
     if (CharacterMotion_Sweep(body, feet, Raised, &body->MoveFilter, &Hit))
     {
         if (Hit.IsStartPenetrating)
         {
             return false;
         }
-        Raised = Vector3Add(feet, (Vector3){ 0.0f, GetAdvance(WorldUp, Hit.Normal, Hit.Distance), 0.0f });
+        Climb = GetAdvance(WorldUp, Hit.Normal, Hit.Distance);
+        Raised = Offset(feet, (Vector3){ 0.0f, Climb, 0.0f });
     }
-    float Climb = Raised.y - feet.y;
     if (Climb < CHARACTER_MIN_STEP_CLIMB)
     {
         return false;
@@ -211,8 +221,8 @@ static bool TryStepUp(const CharacterBody* body, const CharacterSupport* ground,
 
     // Forward, as far as the move had left (looking further, as the slide does).
     Vector3 Direction = Vector3Scale(Horizontal, 1.0f / HorizontalLength);
-    Vector3 Forward = Vector3Add(Raised, Horizontal);
-    Vector3 Probe = Vector3Add(Forward, Vector3Scale(Direction, CHARACTER_REST_GAP / CHARACTER_MIN_APPROACH));
+    Vector3Double Forward = Offset(Raised, Horizontal);
+    Vector3Double Probe = Offset(Forward, Vector3Scale(Direction, CHARACTER_REST_GAP / CHARACTER_MIN_APPROACH));
     if (CharacterMotion_Sweep(body, Raised, Probe, &body->MoveFilter, &Hit))
     {
         if (Hit.IsStartPenetrating)
@@ -224,19 +234,19 @@ static bool TryStepUp(const CharacterBody* body, const CharacterSupport* ground,
         {
             return false;
         }
-        Forward = Vector3Add(Raised, Vector3Scale(Direction, Advance));
+        Forward = Offset(Raised, Vector3Scale(Direction, Advance));
     }
 
     // Down onto the step: back to the starting height, and a skin or two further.
-    Vector3 Lowered = Vector3Subtract(Forward, (Vector3){ 0.0f, Climb + (2.0f * CHARACTER_SKIN), 0.0f });
+    Vector3Double Lowered = Offset(Forward, (Vector3){ 0.0f, -(Climb + (2.0f * CHARACTER_SKIN)), 0.0f });
     bool IsHidden = false;
     if (!SweepForGround(body, Forward, Lowered, &Hit, &IsHidden) || Hit.IsStartPenetrating)
     {
         return false;
     }
-    Vector3 Landed = Vector3Subtract(Forward, (Vector3){ 0.0f, GetAdvance((Vector3){ 0.0f, -1.0f, 0.0f }, Hit.Normal,
+    Vector3Double Landed = Offset(Forward, (Vector3){ 0.0f, -GetAdvance((Vector3){ 0.0f, -1.0f, 0.0f }, Hit.Normal,
         Hit.Distance), 0.0f });
-    if (Landed.y < (feet.y + CHARACTER_MIN_STEP_RISE))
+    if (Landed.Y < (feet.Y + (double)CHARACTER_MIN_STEP_RISE))
     {
         // Back on the level it started from: no step there, only a wall.
         return false;
@@ -256,12 +266,12 @@ static bool TryStepUp(const CharacterBody* body, const CharacterSupport* ground,
 // Functions (WorldCharacterInternal.h).
 CharacterSupport CharacterSupport_CreateNone(void)
 {
-    return (CharacterSupport){ .IsSupported = false, .ObjectId = 0U, .Normal = WorldUp, .Point = { 0.0f, 0.0f, 0.0f },
+    return (CharacterSupport){ .IsSupported = false, .ObjectId = 0U, .Normal = WorldUp, .Point = { 0.0, 0.0, 0.0 },
         .IsSteepEdge = false };
 }
 
-bool CharacterMotion_Sweep(const CharacterBody* body, Vector3 from, Vector3 to, const WorldCollisionFilter* filter,
-    WorldCastHit* outHit)
+bool CharacterMotion_Sweep(const CharacterBody* body, Vector3Double from, Vector3Double to,
+    const WorldCollisionFilter* filter, WorldCastHit* outHit)
 {
     return WorldCollision_SweepCapsule(body->Collision, GetCenter(body, from), GetCenter(body, to),
         body->Radius + CHARACTER_SKIN, body->Height + (2.0f * CHARACTER_SKIN), filter, outHit);
@@ -309,14 +319,14 @@ Vector3 CharacterMotion_GetFaceNormal(const CharacterBody* body, const Character
     return support->Normal;
 }
 
-bool CharacterMotion_HasGroundBelow(const CharacterBody* body, Vector3 feet, float distance)
+bool CharacterMotion_HasGroundBelow(const CharacterBody* body, Vector3Double feet, float distance)
 {
     if (distance <= 0.0f)
     {
         return false;
     }
     // From a little above the feet: the capsule rests the skin and the rest gap above its ground.
-    Vector3 Origin = { feet.x, feet.y + CHARACTER_EDGE_PROBE_LIFT, feet.z };
+    Vector3Double Origin = Offset(feet, (Vector3){ 0.0f, CHARACTER_EDGE_PROBE_LIFT, 0.0f });
     WorldRayHit Hit;
     return WorldCollision_Raycast(body->Collision, Origin, (Vector3){ 0.0f, -1.0f, 0.0f },
         CHARACTER_EDGE_PROBE_LIFT + distance + CHARACTER_SKIN + CHARACTER_REST_GAP, &body->GroundFilter, &Hit)
@@ -375,7 +385,7 @@ Vector3 CharacterMotion_ProjectOnGround(Vector3 move, Vector3 normal)
     return (Vector3){ move.x, Rise, move.z };
 }
 
-CharacterMove CharacterMotion_MoveAndSlide(const CharacterBody* body, Vector3 feet, Vector3 displacement,
+CharacterMove CharacterMotion_MoveAndSlide(const CharacterBody* body, Vector3Double feet, Vector3 displacement,
     Vector3* velocity, const CharacterSupport* ground)
 {
     CharacterMove Move = { .Feet = feet, .HasStepped = false, .StepSupport = CharacterSupport_CreateNone(),
@@ -397,8 +407,8 @@ CharacterMove CharacterMotion_MoveAndSlide(const CharacterBody* body, Vector3 fe
         // into it instead of creeping into the gap. A hit further on does not stop the move.
         WorldCastHit Hit;
         Vector3 Direction = Vector3Scale(Remaining, 1.0f / Length);
-        Vector3 Target = Vector3Add(Move.Feet, Remaining);
-        Vector3 Probe = Vector3Add(Target, Vector3Scale(Direction, CHARACTER_REST_GAP / CHARACTER_MIN_APPROACH));
+        Vector3Double Target = Offset(Move.Feet, Remaining);
+        Vector3Double Probe = Offset(Target, Vector3Scale(Direction, CHARACTER_REST_GAP / CHARACTER_MIN_APPROACH));
         if (!CharacterMotion_Sweep(body, Move.Feet, Probe, &body->MoveFilter, &Hit))
         {
             Move.Feet = Target;
@@ -408,7 +418,7 @@ CharacterMove CharacterMotion_MoveAndSlide(const CharacterBody* body, Vector3 fe
         {
             // Within the skin of something already (a spawn, something moved into it): out first, then the rest.
             Move.HasHit = true;
-            Move.Feet = Vector3Add(Move.Feet, Vector3Scale(Hit.Normal, Hit.PenetrationDepth + CHARACTER_REST_GAP));
+            Move.Feet = Offset(Move.Feet, Vector3Scale(Hit.Normal, Hit.PenetrationDepth + CHARACTER_REST_GAP));
             continue;
         }
 
@@ -420,7 +430,7 @@ CharacterMove CharacterMotion_MoveAndSlide(const CharacterBody* body, Vector3 fe
             break;
         }
         Move.HasHit = true;
-        Move.Feet = Vector3Add(Move.Feet, Vector3Scale(Direction, Advance));
+        Move.Feet = Offset(Move.Feet, Vector3Scale(Direction, Advance));
         Remaining = Vector3Scale(Direction, Length - Advance);
         bool IsSteep = (Normal.y < body->WalkableNormalY)
             || ((ground != NULL) && IsEdgeAboveStep(body, ground, &Hit));
@@ -431,7 +441,7 @@ CharacterMove CharacterMotion_MoveAndSlide(const CharacterBody* body, Vector3 fe
             if (!HasTriedStep && (Normal.y > -CHARACTER_EDGE_MIN_NORMAL_Y))
             {
                 HasTriedStep = true;
-                Vector3 Stepped;
+                Vector3Double Stepped;
                 CharacterSupport StepSupport;
                 if (TryStepUp(body, ground, Move.Feet, Direction, Length - Advance,
                     Math_MaxFloat(0.0f, Hit.Distance - Advance), &Stepped, &StepSupport))
@@ -463,10 +473,10 @@ CharacterMove CharacterMotion_MoveAndSlide(const CharacterBody* body, Vector3 fe
     return Move;
 }
 
-CharacterGround CharacterMotion_FollowGround(const CharacterBody* body, Vector3 feet, float distance,
-    const CharacterSupport* ground, Vector3* outFeet, CharacterSupport* outSupport)
+CharacterGround CharacterMotion_FollowGround(const CharacterBody* body, Vector3Double feet, float distance,
+    const CharacterSupport* ground, Vector3Double* outFeet, CharacterSupport* outSupport)
 {
-    Vector3 Position = feet;
+    Vector3Double Position = feet;
     Vector3 Remaining = { 0.0f, -distance, 0.0f };
     bool IsHidden = false;
     bool IsBlockedByStep = false;
@@ -478,19 +488,19 @@ CharacterGround CharacterMotion_FollowGround(const CharacterBody* body, Vector3 
             break;
         }
         WorldCastHit Hit;
-        if (!SweepForGround(body, Position, Vector3Add(Position, Remaining), &Hit, &IsHidden))
+        if (!SweepForGround(body, Position, Offset(Position, Remaining), &Hit, &IsHidden))
         {
             break;
         }
         if (Hit.IsStartPenetrating)
         {
             // Within the skin of ground it sank into (out upward) or of something that does not give way: out first.
-            Position = Vector3Add(Position, Vector3Scale(Hit.Normal, Hit.PenetrationDepth + CHARACTER_REST_GAP));
+            Position = Offset(Position, Vector3Scale(Hit.Normal, Hit.PenetrationDepth + CHARACTER_REST_GAP));
             continue;
         }
         Vector3 Direction = Vector3Scale(Remaining, 1.0f / Length);
         float Advance = GetAdvance(Direction, Hit.Normal, Hit.Distance);
-        Position = Vector3Add(Position, Vector3Scale(Direction, Advance));
+        Position = Offset(Position, Vector3Scale(Direction, Advance));
         // A walker's ground holds it only within its step height above the ground it walked on: a taller step's edge
         // under its round bottom is a rim like any other (otherwise it would walk up the edge as up a slope).
         // A steep edge holds only a walker climbing a step (its ground is one): walking off an edge, it falls instead
@@ -525,7 +535,7 @@ CharacterGround CharacterMotion_FollowGround(const CharacterBody* body, Vector3 
     return IsHidden ? CharacterGround_Unsure : CharacterGround_Unsupported;
 }
 
-bool CharacterMotion_DoesFit(const CharacterBody* body, Vector3 feet, float height, GenericBuffer* scratchIds)
+bool CharacterMotion_DoesFit(const CharacterBody* body, Vector3Double feet, float height, GenericBuffer* scratchIds)
 {
     // The capsule a skin narrower, its bottom two skins above the feet: resting on the ground (a skin below the feet)
     // does not count, anything else it would touch does.
@@ -535,7 +545,7 @@ bool CharacterMotion_DoesFit(const CharacterBody* body, Vector3 feet, float heig
     {
         return true;
     }
-    Vector3 Center = { feet.x, feet.y + (0.5f * height) + CHARACTER_SKIN, feet.z };
+    Vector3Double Center = Offset(feet, (Vector3){ 0.0f, (0.5f * height) + CHARACTER_SKIN, 0.0f });
     GenericBuffer_Clear(scratchIds);
     return WorldCollision_OverlapCapsule(body->Collision, Center, Radius, TestHeight, &body->GroundFilter,
         scratchIds) == 0U;

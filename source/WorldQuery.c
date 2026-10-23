@@ -12,12 +12,6 @@
 
 
 // Static functions: checking the query.
-static bool IsFiniteVector(Vector3 vector)
-{
-    return WorldInternal_IsFloatFinite(vector.x) && WorldInternal_IsFloatFinite(vector.y)
-        && WorldInternal_IsFloatFinite(vector.z);
-}
-
 /* An array may be NULL only when empty, and holds no key id 0. */
 static bool AreKeysValid(const uint32_t* keys, size_t count)
 {
@@ -92,10 +86,10 @@ static Error CheckQuery(const World* world, const WorldQuery* query)
     }
     bool IsDistanceValid = !query->HasMaximumDistance
         || (WorldInternal_IsFloatFinite(query->MaximumDistance) && (query->MaximumDistance >= 0.0f));
-    bool IsBoxValid = !query->HasBox || (IsFiniteVector(query->BoxMinimum) && IsFiniteVector(query->BoxMaximum)
-        && (query->BoxMinimum.x <= query->BoxMaximum.x) && (query->BoxMinimum.y <= query->BoxMaximum.y)
-        && (query->BoxMinimum.z <= query->BoxMaximum.z));
-    if (!IsFiniteVector(query->Origin) || !IsDistanceValid || !IsBoxValid)
+    bool IsBoxValid = !query->HasBox || (Vector3Double_IsFinite(query->BoxMinimum)
+        && Vector3Double_IsFinite(query->BoxMaximum) && (query->BoxMinimum.X <= query->BoxMaximum.X)
+        && (query->BoxMinimum.Y <= query->BoxMaximum.Y) && (query->BoxMinimum.Z <= query->BoxMaximum.Z));
+    if (!Vector3Double_IsFinite(query->Origin) || !IsDistanceValid || !IsBoxValid)
     {
         return Error_Construct2(ErrorCode_IllegalArgument,
             "World_Query: the origin must be finite, the distance finite and at least 0, and the box finite and ordered.");
@@ -234,29 +228,23 @@ static bool MatchesData(const WorldObject* object, const WorldQuery* query)
     return true;
 }
 
-static float GetDistanceSquared(Vector3 a, Vector3 b)
-{
-    float X = a.x - b.x;
-    float Y = a.y - b.y;
-    float Z = a.z - b.z;
-    return (X * X) + (Y * Y) + (Z * Z);
-}
-
+/* In double, as the positions are (T33): far from the world's origin a float would round both to millimetres. */
 static bool MatchesPlace(const WorldObject* object, const WorldQuery* query)
 {
     if (!query->HasMaximumDistance && !query->HasBox)
     {
         return true;
     }
-    Vector3 Position = WorldObject_GetWorldPosition(object);
+    Vector3Double Position = WorldObject_GetWorldPosition(object);
+    double MaximumDistance = (double)query->MaximumDistance;
     if (query->HasMaximumDistance
-        && (GetDistanceSquared(Position, query->Origin) > (query->MaximumDistance * query->MaximumDistance)))
+        && (Vector3Double_DistanceSquared(Position, query->Origin) > (MaximumDistance * MaximumDistance)))
     {
         return false;
     }
-    return !query->HasBox || ((Position.x >= query->BoxMinimum.x) && (Position.x <= query->BoxMaximum.x)
-        && (Position.y >= query->BoxMinimum.y) && (Position.y <= query->BoxMaximum.y)
-        && (Position.z >= query->BoxMinimum.z) && (Position.z <= query->BoxMaximum.z));
+    return !query->HasBox || ((Position.X >= query->BoxMinimum.X) && (Position.X <= query->BoxMaximum.X)
+        && (Position.Y >= query->BoxMinimum.Y) && (Position.Y <= query->BoxMaximum.Y)
+        && (Position.Z >= query->BoxMinimum.Z) && (Position.Z <= query->BoxMaximum.Z));
 }
 
 static bool Matches(const WorldObject* object, const WorldQuery* query)
@@ -357,7 +345,7 @@ static bool KeepMatch(World* world, const WorldQuery* query, const WorldObject* 
 {
     WorldQueryMatch Match = { .Id = WorldObject_GetId(object),
         .DistanceSquared = query->IsSortedByDistance
-            ? GetDistanceSquared(WorldObject_GetWorldPosition(object), query->Origin) : 0.0f };
+            ? Vector3Double_DistanceSquared(WorldObject_GetWorldPosition(object), query->Origin) : 0.0 };
     GenericBuffer_AddLast(&world->_queryMatches, &Match);
     bool IsFull = (query->Limit > 0U) && (world->_queryMatches._count >= query->Limit);
     return !(IsFull && areCandidatesOrdered && !query->IsSortedByDistance);

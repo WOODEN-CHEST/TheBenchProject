@@ -18,7 +18,7 @@ Collision for the 3D world, built in T12 and T27 (decisions G13, G18–G20). The
   - `source/WorldCollision.c`: lifetime, sync, the debug list;
   - `source/WorldCollisionQuery.c`: the queries;
   - `source/WorldCollisionTrigger.c`: trigger events;
-  - `source/WorldCollisionTree.{h,c}`: the dynamic AABB tree;
+  - `source/WorldCollisionTree.{h,c}`: the dynamic AABB tree (its boxes in double, T33);
   - `source/WorldCollisionStep.c` (T27): the step: motions, bodies, the wake walk, blocked movers, the write-back,
     results;
   - `source/WorldCollisionSolver.c` (T27): the push-out solver, its sweeps and the depenetration;
@@ -28,9 +28,14 @@ Collision for the 3D world, built in T12 and T27 (decisions G13, G18–G20). The
 Tests:
 - `tests/CollisionGeometryTests.c`: the maths, with seeded fuzz tests that casts never miss a contact;
 - `tests/WorldColliderTests.c`: the `collision` section and the collider;
-- `tests/WorldCollisionTests.c`: the collision world, including the trees against brute force on a moving random scene;
+- `tests/WorldCollisionTests.c`: the collision world, including the trees against brute force on a moving random scene
+  (the brute force places the shapes as the world does, in double, and works relative to each query's origin, so the
+  distances agree to the bit), and a ray finding a 1 cm wall to a micrometre;
 - `tests/WorldCollisionMotionTests.c` (T27): the step: tunnelling, push-out at once, masses, sliding, blocked movers,
-  teleports, the hierarchy, contact events, results, sleeping and determinism.
+  teleports, the hierarchy, contact events, results, sleeping and determinism, and spheres resting a skin from a box to
+  a micrometre;
+- both run twice, the second time as `WorldCollisionFar` and `WorldCollisionMotionFar` with every scene shifted about
+  100 km along each axis ([WorldData.md](WorldData.md), "Tests").
 
 The formats: `references/asset_structure.md` ("World models", `collision`) and `references/world_structure.md` (the
 `collider` component).
@@ -157,6 +162,28 @@ it. It resolves world models by name under its own asset user (rule 1), as the r
 only own shapes collide. `WorldCollision_Destroy` releases them. The world models it resolved stay held until then, like
 the render cache's.
 
+### Doubles outside, floats inside (T33)
+
+As Jolt's double-precision build does it, so a world 100 km across collides as it does at its origin.
+- **Outside**, every position the collision world takes or gives is a double (`Vector3Double`): query origins and
+  positions, hit and cast points, contact positions (`WorldContactPoint.PositionA` and `PositionB`), a result's
+  `GroundPoint`, the debug list's transforms (`Matrix4Double`) and debug contact points. Directions, normals, distances,
+  separations, velocities, pushes, sizes and local positions (`LocalPositionA` and `B`) stay floats.
+- **Inside**, each shape's placement is float axes and a double translation, each motion pose a double position and a
+  float turn, and the trees' and the step's swept boxes are doubles. The narrowphase (`CollisionGeometry`) stays in
+  float: before each call the world layer picks an **origin** near what it tests (a ray's or cast's start, an overlap's
+  position, a pair's first body's start in the step) and hands it the placements relative to it, subtracted in double
+  and rounded once; what comes back has the origin added back in double. A step's manifold keeps its origin.
+- **What it buys.** The skin (1 mm), the 2 cm sweep threshold, the speculative distances and the characters' 2 mm rest
+  mean the same anywhere: 173 km out, a ray finds a 1 cm wall to a micrometre and a pushed sphere rests on a box a skin
+  above it to a micrometre, as at the origin. Nearby things that differ by rounding (a double's step is 1.5e-11 m at
+  100 km) may still make a decision on a threshold go the other way a tick later: a character sliding along a wall sits
+  exactly at the 2 mm contact distance, so a contact event can begin a tick apart in two runs at different places.
+- **Meshes keep their vertices as floats in their own space,** so a very large mesh loses precision at its far end
+  (1 mm at 8 km from its object's origin): build big terrain from tiles, each its own object (see "Known limits").
+  Planes are placed by their object's origin too: a level unbounded plane (the usual ground) is exact anywhere, a
+  tilted one far from its object's origin is not (see "Known limits").
+
 ### Sync
 
 The sync is the first part of `WorldCollision_Step`, the tick's collision step (see "Tick order").
@@ -215,15 +242,16 @@ Every query takes a `WorldCollisionFilter` (`WorldCollisionFilter_Create(layerMa
 - **Every result** has a `WorldCollisionShapeInfo`: object id, shape index, part name, shape type, layer and trigger
   flag. On a mesh it adds the triangle index, the model part and its triangle, the material index and the barycentric
   weights of the triangle's corners.
-- **A ray hit:** point, normal facing the ray, distance, fraction, and whether the ray started inside.
-- **A cast hit:** which cast shape hit, fraction and distance, the point on each surface, and the hit surface's normal
-  facing the cast shape. When the cast started inside: the depth, with the normal as the push-out.
+- **A ray hit:** point (in double), normal facing the ray, distance, fraction, and whether the ray started inside.
+- **A cast hit:** which cast shape hit, fraction and distance, the point on each surface (in double), and the hit
+  surface's normal facing the cast shape. When the cast started inside: the depth, with the normal as the push-out.
 - **A manifold** (A the query's shape or the object's collider, B the world's):
   - the normal from A to B and the deepest separation (negative: penetrating; A moves by -separation along -normal to
     separate);
   - 1 to 4 points from clipping the supporting faces (a box resting on a box gets its 4 corners), each with its world
-    position on both surfaces, its local position in A's and in B's object space (for anchoring and matching across
-    ticks: T27), its own separation and a feature id that stays the same while the contact keeps its topology.
+    position on both surfaces (in double), its local position in A's and in B's object space (floats, for anchoring
+    and matching across ticks: T27), its own separation and a feature id that stays the same while the contact keeps
+    its topology.
 
 **Pointers** in results (part names) and the debug list are valid until the next sync.
 
@@ -476,7 +504,8 @@ events are logged, then the sprites animate.
 
 **Wireframes.**
 - `WorldCollision_SetDebugListEnabled(collision, true)` makes each sync list every active shape with its world
-  transform, layer, trigger flag and side (`WorldCollision_GetDebugShapes`).
+  transform (a `Matrix4Double`), layer, trigger flag and side (`WorldCollision_GetDebugShapes`); the renderer draws it
+  relative to the camera, so far out the wireframes sit as exactly as at the origin.
 - `WorldRenderer_SetCollisionDebug(renderer, collision)` draws that list in the scene pass, read-only, after the light
   gizmos:
   - colours by layer: world grey, prop orange, character green, vehicle blue, dynamic yellow, interaction cyan;
@@ -512,6 +541,14 @@ motion events are logged, and the I key's status lines add the counts and the la
 - **Shapes hundreds of metres across lose millimetres in GJK.** A direction off by float rounding (about 1e-7 of the
   coordinates) bounds a gap short by that times the shape's size: 2.8 mm next to a box 400 m wide. Up to 120 m the
   distance is right to 0.04 mm. Make a huge ground a plane or a mesh, not one box.
+- **A triangle mesh much larger than a few kilometres loses precision at its far end** (T33): its vertices are floats in
+  its own space, 1 mm apart at 8 km from its object's origin. Build big terrain from tiles, each its own object (the
+  placements are doubles, so tiles meet exactly anywhere). Nothing splits a mesh automatically.
+- **A tilted unbounded plane far from its object's origin** (T33): the narrowphase takes a plane's point from its
+  object's origin, made relative to the query and rounded once, so 100 km from that origin the point is off by up to
+  a float's step there (8 mm) and a plane tilted from level moves by that times the sine of its tilt. A level one (the
+  usual ground) is exact anywhere. Put a tilted half-space's object near where it is used. A bounded plane (a
+  rectangle) is placed by its centre, like a mesh: one much larger than a few kilometres loses precision at its edges.
 - **Queries see the colliders of the last sync.** A driver that queries (the characters, T13) sees a platform moved by
   an earlier driver in the same tick where the last step left it: a sync between them would also advance the tick
   stamped on every event.
