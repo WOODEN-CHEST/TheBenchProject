@@ -245,3 +245,27 @@ void UITestFrameTests_Run(TestRun* run);
 /** @brief The frame manager's PrepareRender slot (T30, G35): its order and which frames it skips
  *  (GameFrameManagerTests.c). */
 void GameFrameManagerTests_Run(TestRun* run);
+
+/** @brief Terrain meshes (B01): the position grid, the chunks (each triangle by its centre, exact positions relative to a
+ *  centre, bounds), smooth normals over the whole mesh, holes, face materials, the limits and their messages, active
+ *  edges over the whole terrain, the setters and the rebuild of only what they touch, and the binary form (bit for bit
+ *  round trips, hostile documents) (TerrainMeshTests.c). */
+void TerrainMeshTests_Run(TestRun* run);
+
+/** @brief The terrain's glTF import (B01): positions through the node's transform (mirrors turn the winding), welding and
+ *  averaged seams, colour attributes of every kind (bytes, shorts, floats; scalars, RGB, RGBA) into weights and
+ *  densities, material slots into face flags, imported normals keeping hard edges, hostile files refused by the shared
+ *  checks, and an import written and read back bit for bit (TerrainGltfTests.c). */
+void TerrainGltfTests_Run(TestRun* run);
+
+/** @brief The terrain asset and component (B01): definitions (the defaults, every key, each rule refused with its
+ *  message), loading the .glb and the binary form through the asset manager (counts checked against the definition,
+ *  broken files named), the component's override flags next to their values, the settings they resolve (the mask
+ *  falling back to the layer's default) and a terrain object in a world file (TerrainAssetTests.c). */
+void TerrainAssetTests_Run(TestRun* run);
+
+/** @brief Terrain in the collision world (B01): rays and casts hit each chunk where it is, naming the chunk and the
+ *  terrain's triangle, and pass through holes and from below; seams between chunks do not catch (a ball's contacts, a
+ *  walk compared with one on a box); T13's slope limit; only changed chunks rebuilt; a collider wins over a terrain on
+ *  one object; problems warned once; run again 173 km out (WorldTerrainCollisionTests.c). */
+void WorldTerrainCollisionTests_Run(TestRun* run);

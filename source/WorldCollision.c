@@ -1,5 +1,6 @@
 #include <inttypes.h>
 #include <math.h>
+#include <stdio.h>
 #include "WorldCollisionInternal.h"
 #include "AssetManager.h"
 #include "GameMath.h"
@@ -7,6 +8,7 @@
 #include "World.h"
 #include "WorldInternal.h"
 #include "WorldModelComponent.h"
+#include "WorldTerrainComponent.h"
 #include "WorldTransform.h"
 #include "raylib/raymath.h"
 
@@ -16,12 +18,21 @@
  * source/WorldCollisionStep.c with source/WorldCollisionSolver.c and source/WorldCollisionEvents.c; the shared state in
  * source/WorldCollisionInternal.h.
  *
- * A SYNC walks the world's colliders in its own order (_order maps each to its instance's slot; re-matched by object
- * id whenever the world's component set changes, so an added, removed or replaced component is noticed) and for each:
- * out of the trees when it or an ancestor is disabled; its shapes rebuilt when the collider changed (its revision), its
- * world model's name changed, it moved between the static and the movable tree, or it was just (re)enabled; moved
- * (new transforms, boxes and proxies) when only its object's transform revision changed. Either way its motion pose
- * (T27) follows: the rigid frame its shapes move with, each shape's place relative to it, and how far they reach.
+ * A SYNC walks the world's colliders, then its terrains (B01), in its own order (_order maps each to its instance's
+ * slot; re-matched by object id whenever the world's component set changes, so an added, removed or replaced component
+ * is noticed) and for each: out of the trees when it or an ancestor is disabled; its shapes rebuilt when the collider
+ * changed (its revision), its world model's name changed, it moved between the static and the movable tree, or it was
+ * just (re)enabled; moved (new transforms, boxes and proxies) when only its object's transform revision changed. Either
+ * way its motion pose (T27) follows: the rigid frame its shapes move with, each shape's place relative to it, and how
+ * far they reach.
+ *
+ * A TERRAIN (B01) is an object's source when it has no collider (with both, the collider wins: warned once). Its
+ * instance keeps a record per chunk of its terrain's mesh: the chunk's collision mesh (TerrainMesh.h,
+ * TerrainMesh_CreateChunkCollisionMesh: the terrain's own active edges, so seams do not catch) in a one-sided mesh shape
+ * at the chunk's centre, one shape per chunk in chunk order. The meshes are cut again when the terrain or its chunk
+ * layout changes, and rebuilt one by one when a chunk's revision moves (the editor's changes); the shapes are placed
+ * again when the object moves and rebuilt, the meshes kept, when a setting changes or the instance comes back. The
+ * layer, the mask and "collides" are the terrain's settings in effect (WorldTerrainComponent_ResolveSettings).
  *
  * The placements come from the objects' double world matrices (T33): each shape's transform is composed in double, its
  * axes rounded to floats and its translation kept in double (WorldCollisionPlacement), its box transformed in double.
@@ -52,7 +63,7 @@ static void WarnAbout(const WorldCollision* self, const WorldCollisionInstance* 
 {
     if (self->_logger != NULL)
     {
-        const WorldObject* Object = WorldComponent_GetOwner(&instance->Collider->Base);
+        const WorldObject* Object = WorldComponent_GetOwner(WorldCollisionInternal_GetComponent(instance));
         bool HasCause = (cause != NULL) && (cause->Message != NULL);
         Error LogResult = Logger_LogWarningFormatted(self->_logger,
             (const unsigned char*)u8"WorldCollision: object %" PRIu64 u8" (\"%s\") %s%s%s%s%s%s%s", instance->ObjectId,
@@ -123,6 +134,20 @@ static void Deactivate(WorldCollision* self, WorldCollisionInstance* instance, u
     instance->IsActive = false;
 }
 
+/* Releases a terrain instance's chunk records and their meshes, and the shapes that point into them (which must be out
+ * of the trees). */
+static void FreeTerrainChunks(WorldCollisionInstance* instance)
+{
+    GenericBuffer_Clear(&instance->Shapes);
+    for (uint32_t Chunk = 0U; Chunk < instance->TerrainChunkCount; Chunk++)
+    {
+        CollisionMesh_Destroy(instance->TerrainChunks[Chunk].Mesh);
+    }
+    Memory_Free(instance->TerrainChunks);
+    instance->TerrainChunks = NULL;
+    instance->TerrainChunkCount = 0U;
+}
+
 static void FreeSlot(WorldCollision* self, uint32_t slot)
 {
     WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, slot);
@@ -141,8 +166,10 @@ static void FreeSlot(WorldCollision* self, uint32_t slot)
         GenericBuffer_AddLast(&self->_motionEvents, &Ends[1]);
     }
     Deactivate(self, Instance, slot);
+    FreeTerrainChunks(Instance);
     Memory_Free(Instance->Shapes._data);
     Memory_Free(Instance->WorldModelName);
+    Memory_Free(Instance->TerrainName);
     Memory_Free(Instance->OwnShape);
     Memory_Zero(Instance, sizeof(*Instance));
     Instance->NextFree = self->_freeSlot;
@@ -160,8 +187,55 @@ static ComparisonResult CompareLookups(GenericBuffer* buffer, GenericBufferEleme
         : ((A->ObjectId > B->ObjectId) ? ComparisonResult_AGreaterThanB : ComparisonResult_AEqualsB);
 }
 
-/* Matches the world's colliders to instances by object id after its component set changed: new colliders get slots,
- * a replaced component starts its instance afresh, instances whose collider is gone are freed. */
+/* Finds or makes the instance of a source (a collider, or a terrain: the other is NULL) by its object's id and appends
+ * it to the order. A replaced component starts its instance afresh; a source of the other kind (a terrain whose object
+ * gained a collider) gets a new instance. Returns the slot. */
+static uint32_t MatchSource(WorldCollision* self, WorldComponent* component, WorldColliderComponent* collider,
+    WorldTerrainComponent* terrain)
+{
+    uint64_t ObjectId = WorldObject_GetId(WorldComponent_GetOwner(component));
+    uint64_t Serial = WorldComponent_GetSerial(component);
+    uint32_t Slot = WORLD_COLLISION_NO_SLOT;
+    bool IsKnown = WorldCollisionInternal_FindSlot(self, ObjectId, &Slot)
+        && WorldCollisionInternal_GetInstance(self, Slot)->IsUsed;
+    if (IsKnown && ((WorldCollisionInternal_GetInstance(self, Slot)->Collider != NULL) != (collider != NULL)))
+    {
+        FreeSlot(self, Slot);
+        IsKnown = false;
+    }
+    if (!IsKnown)
+    {
+        Slot = AllocateSlot(self);
+        WorldCollisionInstance* Fresh = WorldCollisionInternal_GetInstance(self, Slot);
+        Fresh->ObjectId = ObjectId;
+        Fresh->Collider = collider;
+        Fresh->Terrain = terrain;
+        Fresh->ComponentSerial = Serial;
+    }
+    WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, Slot);
+    if ((WorldCollisionInternal_GetComponent(Instance) != component) || (Instance->ComponentSerial != Serial))
+    {
+        // A replaced component (often at its predecessor's address): nothing the old one resolved or saw carries
+        // over.
+        Deactivate(self, Instance, Slot);
+        Instance->Collider = collider;
+        Instance->Terrain = terrain;
+        Instance->ComponentSerial = Serial;
+        Instance->HasSeen = false;
+        Instance->HasWarnedSet = false;
+        Instance->HasWarnedNoShapes = false;
+        Instance->HasWarnedFlatShape = false;
+        Instance->HasWarnedTerrainChunk = false;
+        Instance->HasWarnedTerrainIgnored = false;
+    }
+    Instance->IsMatched = true;
+    GenericBuffer_AddLast(&self->_order, &Slot);
+    return Slot;
+}
+
+/* Matches the world's colliders, then its terrains, to instances by object id after its component set changed: new
+ * sources get slots, a replaced component starts its instance afresh, instances whose source is gone are freed. A
+ * terrain on an object with a collider is no source: the collider wins (warned once, on the collider's instance). */
 static void Rematch(WorldCollision* self)
 {
     size_t Count = 0U;
@@ -173,35 +247,26 @@ static void Rematch(WorldCollision* self)
     GenericBuffer_Clear(&self->_order);
     for (size_t Index = 0U; Index < Count; Index++)
     {
-        WorldColliderComponent* Collider = WorldColliderComponent_FromComponent(Colliders[Index]);
-        uint64_t ObjectId = WorldObject_GetId(WorldComponent_GetOwner(Colliders[Index]));
-        uint32_t Slot = WORLD_COLLISION_NO_SLOT;
-        bool IsKnown = WorldCollisionInternal_FindSlot(self, ObjectId, &Slot)
-            && WorldCollisionInternal_GetInstance(self, Slot)->IsUsed;
-        if (!IsKnown)
-        {
-            Slot = AllocateSlot(self);
-            WorldCollisionInstance* Fresh = WorldCollisionInternal_GetInstance(self, Slot);
-            Fresh->ObjectId = ObjectId;
-            Fresh->Collider = Collider;
-            Fresh->ColliderSerial = WorldComponent_GetSerial(Colliders[Index]);
-        }
+        uint32_t Slot = MatchSource(self, Colliders[Index], WorldColliderComponent_FromComponent(Colliders[Index]),
+            NULL);
         WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, Slot);
-        uint64_t Serial = WorldComponent_GetSerial(Colliders[Index]);
-        if ((Instance->Collider != Collider) || (Instance->ColliderSerial != Serial))
+        bool HasTerrain = WorldObject_GetComponent(WorldComponent_GetOwner(Colliders[Index]), WorldComponentType_Terrain)
+            != NULL;
+        if (HasTerrain && !Instance->HasWarnedTerrainIgnored)
         {
-            // A replaced component (often at its predecessor's address): nothing the old one resolved or saw carries
-            // over.
-            Deactivate(self, Instance, Slot);
-            Instance->Collider = Collider;
-            Instance->ColliderSerial = Serial;
-            Instance->HasSeen = false;
-            Instance->HasWarnedSet = false;
-            Instance->HasWarnedNoShapes = false;
-            Instance->HasWarnedFlatShape = false;
+            Instance->HasWarnedTerrainIgnored = true;
+            WarnAbout(self, Instance, "has a collider and a terrain: it collides as its collider says, and its terrain "
+                "does not collide", NULL, "", NULL);
         }
-        Instance->IsMatched = true;
-        GenericBuffer_AddLast(&self->_order, &Slot);
+    }
+    size_t TerrainCount = 0U;
+    WorldComponent* const* Terrains = World_GetComponents(self->_world, WorldComponentType_Terrain, &TerrainCount);
+    for (size_t Index = 0U; Index < TerrainCount; Index++)
+    {
+        if (WorldObject_GetComponent(WorldComponent_GetOwner(Terrains[Index]), WorldComponentType_Collider) == NULL)
+        {
+            MatchSource(self, Terrains[Index], NULL, WorldTerrainComponent_FromComponent(Terrains[Index]));
+        }
     }
     for (uint32_t Slot = 0U; Slot < (uint32_t)self->_instances._count; Slot++)
     {
@@ -279,15 +344,18 @@ static bool IsEffectivelyStatic(const WorldObject* object)
     return true;
 }
 
-/* The collider's frame in the world, in double: the object's world matrix by the rotation mode, then the collider's own
- * transform. yaw_only and none rebuild the frame from the world transform's decomposition (a mirror lives in its scale,
- * so the turn they keep is a proper rotation) with the object's scale along the turned (or the world's) axes. The
- * frame's rigid part is the motion's pose (T27): the object's world position, turned as the shapes turn. */
-static Matrix4Double GetColliderToWorld(const WorldColliderComponent* collider, const WorldObject* object,
+/* The frame an instance's shapes hang in, in the world, in double: for a collider the object's world matrix by the
+ * rotation mode, then the collider's own transform; for a terrain (no collider) the object's world matrix. yaw_only and
+ * none rebuild the frame from the world transform's decomposition (a mirror lives in its scale, so the turn they keep is
+ * a proper rotation) with the object's scale along the turned (or the world's) axes. The frame's rigid part is the
+ * motion's pose (T27): the object's world position, turned as the shapes turn. */
+static Matrix4Double GetInstanceFrame(const WorldCollisionInstance* instance, const WorldObject* object,
     const Matrix4Double* objectWorld, WorldCollisionPose* outPose)
 {
+    const WorldColliderComponent* Collider = instance->Collider;
     Matrix4Double Frame = *objectWorld;
-    WorldColliderRotationMode Mode = WorldColliderComponent_GetRotationMode(collider);
+    WorldColliderRotationMode Mode = (Collider != NULL) ? WorldColliderComponent_GetRotationMode(Collider)
+        : WorldColliderRotationMode_Full;
     Vector3Double Position;
     Vector3 Rotation;
     Vector3 Scale;
@@ -309,7 +377,11 @@ static Matrix4Double GetColliderToWorld(const WorldColliderComponent* collider, 
     }
     outPose->Position = Matrix4Double_GetTranslation(objectWorld);
     outPose->Rotation = QuaternionNormalize(QuaternionFromMatrix(MatrixRotateXYZ(Turn)));
-    Matrix4Double Local = WorldColliderComponent_GetLocalTransform(collider);
+    if (Collider == NULL)
+    {
+        return Frame;
+    }
+    Matrix4Double Local = WorldColliderComponent_GetLocalTransform(Collider);
     return Matrix4Double_Multiply(&Local, &Frame);
 }
 
@@ -445,10 +517,41 @@ static const CollisionShape* GetSourceShapes(WorldCollisionInstance* instance, u
     return CollisionSet_GetShape(Set, 0U);
 }
 
+/* The end of a rebuild: the tree the instance belongs in, its shapes' places relative to its pose, the step's view of it
+ * (changed; a static one starts every step where it is, unowned) and its shapes into the tree. */
+static void FinishRebuild(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot, bool isStatic,
+    bool hasShapes)
+{
+    instance->IsStatic = isStatic;
+    UpdatePoseShapes(instance);
+    instance->IsChanged = true;
+    instance->ChainCount = 0U; // a chain recorded before may name other objects now
+    if (isStatic)
+    {
+        // A static collider never sweeps and nothing pushes it (T27): it starts every step where it is, unowned.
+        instance->LastPose = instance->Pose;
+        instance->HasLastPose = true;
+        instance->OwnerSlot = WORLD_COLLISION_NO_SLOT;
+        instance->PushableAboveSlot = WORLD_COLLISION_NO_SLOT;
+    }
+    if (hasShapes)
+    {
+        Activate(self, instance, slot);
+    }
+    self->_rebuildCount++;
+}
+
+static void RebuildTerrainShapes(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot, bool isStatic);
+
 /* Rebuilds an instance's shapes from its settings in effect and puts them into the right tree. Its motion goes on: the
  * next step sweeps the new shapes from where the last step left the instance. */
 static void Rebuild(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot, bool isStatic)
 {
+    if (instance->Terrain != NULL)
+    {
+        RebuildTerrainShapes(self, instance, slot, isStatic);
+        return;
+    }
     bool HadLastPose = instance->HasLastPose;
     Deactivate(self, instance, slot);
     instance->HasLastPose = HadLastPose;
@@ -473,7 +576,7 @@ static void Rebuild(WorldCollision* self, WorldCollisionInstance* instance, uint
     const WorldObject* Object = WorldComponent_GetOwner(&instance->Collider->Base);
     Matrix4Double ObjectWorld = WorldObject_GetWorldMatrix(Object);
     UpdateObjectTransform(instance, &ObjectWorld);
-    Matrix4Double Frame = GetColliderToWorld(instance->Collider, Object, &ObjectWorld, &instance->Pose);
+    Matrix4Double Frame = GetInstanceFrame(instance, Object, &ObjectWorld, &instance->Pose);
     bool HasFlatShape = false;
     for (uint32_t Index = 0U; Index < Count; Index++)
     {
@@ -500,32 +603,16 @@ static void Rebuild(WorldCollision* self, WorldCollisionInstance* instance, uint
         WarnAbout(self, instance, "has a collision shape that its transform flattens (a zero scale) or that has no "
             "size; it collides with nothing", NULL, "", NULL);
     }
-    instance->IsStatic = isStatic;
-    UpdatePoseShapes(instance);
-    instance->IsChanged = true;
-    instance->ChainCount = 0U; // a chain recorded before may name other objects now
-    if (isStatic)
-    {
-        // A static collider never sweeps and nothing pushes it (T27): it starts every step where it is, unowned.
-        instance->LastPose = instance->Pose;
-        instance->HasLastPose = true;
-        instance->OwnerSlot = WORLD_COLLISION_NO_SLOT;
-        instance->PushableAboveSlot = WORLD_COLLISION_NO_SLOT;
-    }
-    if (Count > 0U)
-    {
-        Activate(self, instance, slot);
-    }
-    self->_rebuildCount++;
+    FinishRebuild(self, instance, slot, isStatic, Count > 0U);
 }
 
 /* Moves an instance's shapes with its object (the trees re-insert what left its box). */
 static void Move(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot)
 {
-    const WorldObject* Object = WorldComponent_GetOwner(&instance->Collider->Base);
+    const WorldObject* Object = WorldComponent_GetOwner(WorldCollisionInternal_GetComponent(instance));
     Matrix4Double ObjectWorld = WorldObject_GetWorldMatrix(Object);
     UpdateObjectTransform(instance, &ObjectWorld);
-    Matrix4Double Frame = GetColliderToWorld(instance->Collider, Object, &ObjectWorld, &instance->Pose);
+    Matrix4Double Frame = GetInstanceFrame(instance, Object, &ObjectWorld, &instance->Pose);
     CollisionTree* Tree = instance->IsStatic ? &self->_staticTree : &self->_movableTree;
     for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
     {
@@ -558,8 +645,9 @@ static void Move(WorldCollision* self, WorldCollisionInstance* instance, uint32_
         if (self->_options.WarnsWhenStaticObjectsMove && !instance->HasWarnedStaticMove)
         {
             instance->HasWarnedStaticMove = true;
-            WarnAbout(self, instance, "is static but moved; its collider was moved in the static tree (mark the object "
-                "movable if it moves in play)", NULL, "", NULL);
+            WarnAbout(self, instance, (instance->Terrain != NULL) ? "is static but moved; its terrain was moved in the "
+                "static tree (mark the object movable if it moves in play)" : "is static but moved; its collider was "
+                "moved in the static tree (mark the object movable if it moves in play)", NULL, "", NULL);
         }
     }
     self->_moveCount++;
@@ -588,10 +676,239 @@ static void ResolveWorldModel(WorldCollision* self, WorldCollisionInstance* inst
     WarnAbout(self, instance, "has no collision from its world model", name, "", &Result);
 }
 
-/* Brings one instance in step with its collider and object. */
+// Static functions: terrains (B01).
+/* Resolves a terrain instance's terrain for a new name (a failure is warned about once and not retried until the name
+ * changes again). The old terrain's chunk records go: they were cut from its mesh. */
+static void ResolveTerrain(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot,
+    const unsigned char* name)
+{
+    Deactivate(self, instance, slot);
+    FreeTerrainChunks(instance);
+    Memory_Free(instance->TerrainName);
+    instance->TerrainName = WorldInternal_CloneString(name);
+    instance->TerrainAsset = NULL;
+    instance->HasWarnedTerrainChunk = false;
+    if ((name == NULL) || (self->_assets == NULL))
+    {
+        return;
+    }
+    TerrainAsset* Asset = NULL;
+    Error Result = AssetManager_LoadTerrain(self->_assets, name, self->_assetUser, &Asset);
+    if (Result.Code == ErrorCode_Success)
+    {
+        instance->TerrainAsset = Asset;
+        return;
+    }
+    WarnAbout(self, instance, "has no collision from its terrain", name, "", &Result);
+}
+
+/* Builds one chunk's record from the terrain's mesh: its collision mesh (none for a chunk of holes only; a chunk whose
+ * mesh cannot be built has none either, warned once) in a one-sided mesh shape at the chunk's centre. */
+static void BuildTerrainChunk(WorldCollision* self, WorldCollisionInstance* instance, const TerrainMesh* mesh,
+    uint32_t chunk)
+{
+    WorldCollisionTerrainChunk* Record = &instance->TerrainChunks[chunk];
+    const TerrainChunk* Source = TerrainMesh_GetChunk(mesh, chunk);
+    CollisionMesh_Destroy(Record->Mesh);
+    Record->Mesh = NULL;
+    Error Result = TerrainMesh_CreateChunkCollisionMesh(mesh, chunk, &Record->Mesh);
+    if ((Result.Code != ErrorCode_Success) && !instance->HasWarnedTerrainChunk)
+    {
+        instance->HasWarnedTerrainChunk = true;
+        char Text[96];
+        snprintf(Text, sizeof(Text), "has a terrain chunk (chunk %" PRIu32 ") without collision, which lets everything "
+            "through", chunk);
+        WarnAbout(self, instance, Text, NULL, "", &Result);
+    }
+    else
+    {
+        Error_Deconstruct(&Result);
+    }
+    Record->Shape = CollisionShape_Create(CollisionShapeType_Mesh);
+    // On the position grid, within the extent: exact in float.
+    Vector3Double Center = TerrainChunk_GetCenter(Source);
+    Record->Shape.Center = (Vector3){ (float)Center.X, (float)Center.Y, (float)Center.Z };
+    Record->Shape.Mesh = Record->Mesh;
+    Record->Shape.IsTwoSided = false;
+    Record->Revision = TerrainChunk_GetRevision(Source);
+    self->_terrainChunkBuildCount++;
+}
+
+/* Cuts a terrain instance's chunk records afresh from its terrain's mesh, one per chunk (its old shapes, which point
+ * into the old records, go first; its motion goes on). */
+static void BuildTerrainChunks(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot,
+    const TerrainMesh* mesh)
+{
+    bool HadLastPose = instance->HasLastPose;
+    Deactivate(self, instance, slot);
+    instance->HasLastPose = HadLastPose;
+    FreeTerrainChunks(instance);
+    uint32_t Count = TerrainMesh_GetChunkCount(mesh);
+    instance->TerrainChunks = Memory_Allocate(((Count > 0U) ? (size_t)Count : 1U) * sizeof(WorldCollisionTerrainChunk));
+    Memory_Zero(instance->TerrainChunks, ((Count > 0U) ? (size_t)Count : 1U) * sizeof(WorldCollisionTerrainChunk));
+    instance->TerrainChunkCount = Count;
+    for (uint32_t Chunk = 0U; Chunk < Count; Chunk++)
+    {
+        BuildTerrainChunk(self, instance, mesh, Chunk);
+    }
+    instance->SeenTerrainLayoutRevision = TerrainMesh_GetLayoutRevision(mesh);
+    instance->SeenTerrainRevision = TerrainMesh_GetRevision(mesh);
+}
+
+/* Places a terrain instance's shapes afresh, one per chunk record (shape index = chunk), and puts them into the right
+ * tree. Its motion goes on, as a collider's rebuild. */
+static void RebuildTerrainShapes(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot, bool isStatic)
+{
+    bool HadLastPose = instance->HasLastPose;
+    Deactivate(self, instance, slot);
+    instance->HasLastPose = HadLastPose;
+    GenericBuffer_Clear(&instance->Shapes);
+    const WorldObject* Object = WorldComponent_GetOwner(&instance->Terrain->Base);
+    Matrix4Double ObjectWorld = WorldObject_GetWorldMatrix(Object);
+    UpdateObjectTransform(instance, &ObjectWorld);
+    Matrix4Double Frame = GetInstanceFrame(instance, Object, &ObjectWorld, &instance->Pose);
+    bool HasFlatShape = false;
+    for (uint32_t Chunk = 0U; Chunk < instance->TerrainChunkCount; Chunk++)
+    {
+        WorldCollisionShape Shape;
+        Memory_Zero(&Shape, sizeof(Shape));
+        Shape.Shape = &instance->TerrainChunks[Chunk].Shape;
+        Shape.ShapeIndex = Chunk;
+        Shape.Proxy = COLLISION_TREE_NULL;
+        Shape.IsSizeValid = instance->TerrainChunks[Chunk].Mesh != NULL;
+        bool IsPlaced = PlaceShape(&Shape, &Frame);
+        Shape.IsValid = IsPlaced && Shape.IsSizeValid;
+        HasFlatShape = HasFlatShape || (Shape.IsSizeValid && !IsPlaced);
+        GenericBuffer_AddLast(&instance->Shapes, &Shape);
+    }
+    if (HasFlatShape && !instance->HasWarnedFlatShape)
+    {
+        instance->HasWarnedFlatShape = true;
+        WarnAbout(self, instance, "has a terrain that its transform flattens (a zero scale); it collides with nothing",
+            NULL, "", NULL);
+    }
+    FinishRebuild(self, instance, slot, isStatic, instance->TerrainChunkCount > 0U);
+}
+
+/* Rebuilds the collision meshes of the chunks whose revision moved. With @p isPlacing (the instance is in the trees and
+ * keeps its other shapes) each rebuilt chunk's shape is placed again and put back into its tree, and the instance is
+ * changed (T27: the step wakes what is near it); otherwise the caller rebuilds every shape. */
+static void UpdateTerrainChunks(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot,
+    const TerrainMesh* mesh, bool isPlacing)
+{
+    const WorldObject* Object = WorldComponent_GetOwner(&instance->Terrain->Base);
+    Matrix4Double ObjectWorld = WorldObject_GetWorldMatrix(Object);
+    WorldCollisionPose Pose;
+    Matrix4Double Frame = GetInstanceFrame(instance, Object, &ObjectWorld, &Pose);
+    CollisionTree* Tree = instance->IsStatic ? &self->_staticTree : &self->_movableTree;
+    bool IsAnyRebuilt = false;
+    for (uint32_t Chunk = 0U; Chunk < instance->TerrainChunkCount; Chunk++)
+    {
+        if (instance->TerrainChunks[Chunk].Revision == TerrainChunk_GetRevision(TerrainMesh_GetChunk(mesh, Chunk)))
+        {
+            continue;
+        }
+        WorldCollisionShape* Shape = isPlacing ? WorldCollisionInternal_GetShape(instance, Chunk) : NULL;
+        if ((Shape != NULL) && (Shape->Proxy != COLLISION_TREE_NULL))
+        {
+            CollisionTree_Remove(Tree, Shape->Proxy);
+            Shape->Proxy = COLLISION_TREE_NULL;
+        }
+        BuildTerrainChunk(self, instance, mesh, Chunk);
+        IsAnyRebuilt = true;
+        if (Shape != NULL)
+        {
+            Shape->IsSizeValid = instance->TerrainChunks[Chunk].Mesh != NULL;
+            Shape->IsValid = PlaceShape(Shape, &Frame) && Shape->IsSizeValid;
+            if (Shape->IsValid)
+            {
+                Shape->Proxy = CollisionTree_Insert(Tree, Shape->Box, WorldCollisionInternal_MakeKey(slot, Chunk));
+            }
+        }
+    }
+    instance->SeenTerrainRevision = TerrainMesh_GetRevision(mesh);
+    if (IsAnyRebuilt && isPlacing)
+    {
+        UpdatePoseShapes(instance);
+        instance->IsChanged = true;
+    }
+}
+
+/* A terrain's settings in effect as the settings a collider's instance has: its layer and mask, never a trigger nor
+ * pushed (a movable terrain is a kinematic mover that stops when blocked, as a collider by default). */
+static void SetTerrainSettings(WorldCollisionInstance* instance, const TerrainSettings* settings)
+{
+    Memory_Zero(&instance->Settings, sizeof(instance->Settings));
+    instance->Settings.Layer = settings->Collision.Layer;
+    instance->Settings.CollidesWith = settings->Collision.CollidesWith;
+    instance->Settings.Mass = COLLISION_DEFAULT_MASS;
+    instance->Settings.WhenBlocked = WorldColliderBlockedMode_Stop;
+    instance->Settings.IsContinuous = true;
+}
+
+/* Brings a terrain's instance in step with its component, its terrain's mesh and its object (see the file comment). */
+static void RefreshTerrain(WorldCollision* self, uint32_t slot)
+{
+    WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, slot);
+    WorldTerrainComponent* Terrain = Instance->Terrain;
+    const WorldObject* Object = WorldComponent_GetOwner(&Terrain->Base);
+    Instance->IsOnSocket = WorldObject_GetParentSocket(Object) != NULL;
+    const unsigned char* Name = WorldTerrainComponent_GetTerrain(Terrain);
+    if (!WorldInternal_AreStringsEqual(Name, Instance->TerrainName))
+    {
+        ResolveTerrain(self, Instance, slot, Name);
+        Instance->HasSeen = false;
+    }
+    TerrainSettings Defaults = TerrainSettings_CreateDefault();
+    TerrainSettings Settings = WorldTerrainComponent_ResolveSettings(Terrain, (Instance->TerrainAsset != NULL)
+        ? TerrainAsset_GetSettings(Instance->TerrainAsset) : &Defaults);
+    if ((Instance->TerrainAsset == NULL) || !Settings.Collision.IsEnabled || !WorldObject_IsEffectivelyEnabled(Object))
+    {
+        // Out of the trees; its chunk meshes stay for when it comes back.
+        Deactivate(self, Instance, slot);
+        Instance->HasSeen = false;
+        return;
+    }
+    const TerrainMesh* Ground = TerrainAsset_GetMesh(Instance->TerrainAsset);
+    uint32_t ComponentRevision = WorldComponent_GetRevision(&Terrain->Base);
+    uint32_t TransformRevision = WorldObject_GetTransformRevision(Object);
+    bool IsStatic = IsEffectivelyStatic(Object);
+    bool IsCut = (Instance->TerrainChunks != NULL)
+        && (Instance->SeenTerrainLayoutRevision == TerrainMesh_GetLayoutRevision(Ground));
+    bool NeedsShapes = !IsCut || !Instance->HasSeen || (ComponentRevision != Instance->SeenComponentRevision)
+        || (IsStatic != Instance->IsStatic);
+    if (!IsCut)
+    {
+        BuildTerrainChunks(self, Instance, slot, Ground);
+    }
+    else if (TerrainMesh_GetRevision(Ground) != Instance->SeenTerrainRevision)
+    {
+        UpdateTerrainChunks(self, Instance, slot, Ground, !NeedsShapes && Instance->IsActive);
+    }
+    if (NeedsShapes)
+    {
+        SetTerrainSettings(Instance, &Settings);
+        RebuildTerrainShapes(self, Instance, slot, IsStatic);
+    }
+    else if ((TransformRevision != Instance->SeenTransformRevision) && Instance->IsActive)
+    {
+        Move(self, Instance, slot);
+    }
+    Instance->HasSeen = true;
+    Instance->SeenComponentRevision = ComponentRevision;
+    Instance->SeenTransformRevision = TransformRevision;
+}
+
+
+/* Brings one instance in step with its source and object. */
 static void Refresh(WorldCollision* self, uint32_t slot)
 {
     WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, slot);
+    if (Instance->Terrain != NULL)
+    {
+        RefreshTerrain(self, slot);
+        return;
+    }
     WorldColliderComponent* Collider = Instance->Collider;
     const WorldObject* Object = WorldComponent_GetOwner(&Collider->Base);
     Instance->IsOnSocket = WorldObject_GetParentSocket(Object) != NULL;
@@ -612,7 +929,7 @@ static void Refresh(WorldCollision* self, uint32_t slot)
     uint32_t ColliderRevision = WorldComponent_GetRevision(&Collider->Base);
     uint32_t TransformRevision = WorldObject_GetTransformRevision(Object);
     bool IsStatic = IsEffectivelyStatic(Object);
-    bool NeedsRebuild = !Instance->HasSeen || IsRenamed || (ColliderRevision != Instance->SeenColliderRevision)
+    bool NeedsRebuild = !Instance->HasSeen || IsRenamed || (ColliderRevision != Instance->SeenComponentRevision)
         || (IsStatic != Instance->IsStatic);
     if (NeedsRebuild)
     {
@@ -624,7 +941,7 @@ static void Refresh(WorldCollision* self, uint32_t slot)
         Move(self, Instance, slot);
     }
     Instance->HasSeen = true;
-    Instance->SeenColliderRevision = ColliderRevision;
+    Instance->SeenComponentRevision = ColliderRevision;
     Instance->SeenTransformRevision = TransformRevision;
 }
 
@@ -854,8 +1171,10 @@ void WorldCollision_Destroy(WorldCollision* self)
         WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, Slot);
         if (Instance->IsUsed)
         {
+            FreeTerrainChunks(Instance);
             Memory_Free(Instance->Shapes._data);
             Memory_Free(Instance->WorldModelName);
+            Memory_Free(Instance->TerrainName);
             Memory_Free(Instance->OwnShape);
         }
     }
@@ -951,6 +1270,7 @@ WorldCollisionStats WorldCollision_GetStats(const WorldCollision* self)
     Stats.TriggerPairCount = self->_triggerPairs._count;
     Stats.RebuildCount = self->_rebuildCount;
     Stats.MoveCount = self->_moveCount;
+    Stats.TerrainChunkBuildCount = self->_terrainChunkBuildCount;
     Stats.Tick = self->_tick;
     Stats.MoverCount = self->_stepStats.MoverCount;
     Stats.AwakeCount = self->_stepStats.AwakeCount;

@@ -40,6 +40,8 @@
  *   WorldRendererStars.c     the star field (the seeded catalogue as one-pixel quads)
  *   WorldRendererPost.c      outlines, bloom, sun shafts and the tonemap
  *   WorldRendererCrisp.c     the crisp overlay for OmitPixelation objects
+ *   WorldRendererTerrain.c   the terrain (B01): its chunks' GPU meshes, the lit terrain shader, its draws in every pass
+ *                            and the chunk key
  * plus the per-object render cache (WorldRenderCache.h) and each frame's visibility (WorldVisibility.h: what each pass
  * draws, with every entry's fade). Each pass keeps its shader, uniform locations, targets and toggles in its own state
  * struct below.
@@ -849,6 +851,53 @@ typedef struct WorldRendererSunshaftStateStruct
     bool _isTargetFailureReported;
 } WorldRendererSunshaftState;
 
+/** @brief One part of a terrain chunk's GPU mesh (B01): a raylib mesh of at most 65536 vertices (its indices are unsigned
+ *  shorts) with positions, normals and indices, and the buffer of its weights in its vertex array (four normalized
+ *  bytes at each of the attribute locations 9 to 12). Its CPU arrays are freed after the upload, but for the indices:
+ *  raylib's DrawMesh draws a mesh without them as an unindexed one. */
+typedef struct WorldRendererTerrainPartStruct
+{
+    Mesh _mesh;
+    unsigned int _weightBuffer;
+} WorldRendererTerrainPart;
+
+/** @brief A terrain chunk's GPU mesh (B01): its parts (none for a chunk without a surface), and the chunk revision they
+ *  were built from (0: not built yet). */
+typedef struct WorldRendererTerrainChunkMeshStruct
+{
+    WorldRendererTerrainPart* _parts;
+    uint32_t _partCount;
+    uint32_t _revision;
+} WorldRendererTerrainChunkMesh;
+
+/** @brief The GPU meshes of one terrain's chunks (B01), one per chunk of the layout revision they were cut for, kept while
+ *  a cache entry resolves the terrain. */
+typedef struct WorldRendererTerrainMeshesStruct
+{
+    /** @brief The terrain (borrowed under the model user: the meshes go with it, WorldRendererTerrain_ReleaseMeshes). */
+    const TerrainAsset* _asset;
+    uint32_t _layoutRevision;
+    WorldRendererTerrainChunkMesh* _chunks;
+    uint32_t _chunkCount;
+    /** @brief Set while a cache entry resolves the terrain this frame. */
+    bool _isUsed;
+} WorldRendererTerrainMeshes;
+
+/** @brief The terrain (B01): the lit terrain shader, the chunks' GPU meshes and the chunk key. */
+typedef struct WorldRendererTerrainStateStruct
+{
+    /** @brief The lit terrain shader (world_terrain); NULL = the chunks draw unlit with raylib's default shader. Its frame
+     *  lighting locations, its dither and the chunk key's colour (chunkTint). */
+    GameShader* _shader;
+    WorldRendererLitLocations _lit;
+    WorldRendererDitherLocations _dither;
+    int _locChunkTint;
+    /** @brief WorldRendererTerrainMeshes, one per terrain a cache entry resolves. */
+    GenericBuffer _meshes;
+    /** @brief Whether the chunk key is on: each chunk tinted by its cell, and the terrain's wireframe. */
+    bool _isDebugEnabled;
+} WorldRendererTerrainState;
+
 /** @brief The crisp overlay (un-pixelated OmitPixelation objects composited over the pixelated frame). */
 typedef struct WorldRendererCrispStateStruct
 {
@@ -938,6 +987,7 @@ struct WorldRendererStruct
     WorldRendererBloomState _bloom;
     WorldRendererSunshaftState _sunshaft;
     WorldRendererCrispState _crisp;
+    WorldRendererTerrainState _terrain;
 };
 
 
@@ -1462,6 +1512,60 @@ void WorldRendererPost_RenderSunshafts(WorldRenderer* self, const WorldRenderFra
  */
 void WorldRendererPost_Tonemap(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D source,
     RenderTexture2D target);
+
+
+// WorldRendererTerrain.c
+/** @brief Constructs the terrain's CPU state (its list of GPU meshes). Called once by WorldRenderer_Create; pair with
+ *  WorldRendererTerrain_Deconstruct. */
+void WorldRendererTerrain_Construct(WorldRenderer* self);
+
+/** @brief Unloads every GPU mesh and frees the list. Called once by WorldRenderer_Deconstruct, with the GL context alive,
+ *  before the model user is retired. */
+void WorldRendererTerrain_Deconstruct(WorldRenderer* self);
+
+/** @brief Loads the lit terrain shader (world_terrain) and prepares its lighting, dither and chunk key uniforms.
+ *  Optional: without it the chunks draw unlit with raylib's default shader. */
+void WorldRendererTerrain_LoadShader(WorldRenderer* self);
+
+/** @brief Unloads every GPU mesh: before the model user the terrains are held under is replaced (an address may hold
+ *  another terrain then). Needs the GL context. */
+void WorldRendererTerrain_ReleaseMeshes(WorldRenderer* self);
+
+/**
+ * @brief Brings the GPU meshes up to date with the render cache, synced for this frame: a terrain whose chunk layout
+ *        changed gets new meshes, a chunk whose revision changed is uploaded again (only the listed chunks: those of
+ *        shown terrains), and the meshes of terrains no cache entry resolves any more are unloaded. Cheap when nothing
+ *        changed. Needs the GL context. Render reads: the terrains' meshes are only read.
+ */
+void WorldRendererTerrain_PrepareFrame(WorldRenderer* self);
+
+/**
+ * @brief The scene pass's terrain: the camera's chunks (the visibility's list) through the lit terrain shader, each with
+ *        its forward lights (by its sphere), its dither (its fade) and, while the chunk key is on, its cell's colour; then
+ *        the key's wireframe. Without the shader they draw unlit with raylib's default shader, solid. Call after
+ *        WorldRendererLighting_UploadFrame, inside BeginMode3D, before the sprites (decals lie on the terrain).
+ */
+void WorldRendererTerrain_DrawLit(WorldRenderer* self);
+
+/**
+ * @brief Draws the camera's chunks solid enough for the G-buffer (fade below WORLD_VISIBILITY_GBUFFER_FADE_LIMIT) with
+ *        @p shader (world_normal), each with its outline flag.
+ * @param self The renderer.
+ * @param shader The G-buffer shader (its program).
+ * @param locOutlineFlag Its outline flag's location.
+ */
+void WorldRendererTerrain_DrawNormals(WorldRenderer* self, Shader shader, int locOutlineFlag);
+
+/**
+ * @brief Draws a shadow pass's chunk casters (its visibility list) with @p shader (world_depth or world_cube_depth), each
+ *        dithered by its fade. Inside the pass's matrices and culling.
+ * @param self The renderer.
+ * @param shader The depth shader (its program).
+ * @param dither Its dither locations.
+ * @param pass The shadow pass.
+ */
+void WorldRendererTerrain_DrawCasters(WorldRenderer* self, Shader shader, const WorldRendererDitherLocations* dither,
+    WorldVisibilityPass pass);
 
 
 // WorldRendererCrisp.c

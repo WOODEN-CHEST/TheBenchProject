@@ -153,6 +153,17 @@ camera, however far out it is. The maths is the private `source/WorldRenderSpace
   not listed.
 - **Lights:** the lights of effectively enabled and visible objects, with their world position (in double, and in render
   space: `RenderPosition`), reach (the range), intensity, colour and shadow flag.
+- **Terrains** (B01, [Terrain.md](Terrain.md)): one entry per terrain component (`WorldRenderTerrain`), kept across
+  frames and matched by owner id and component serial; its terrain is resolved as a model's world model is
+  (`AssetManager_LoadTerrain` under the model user, again only when the name changes; a failure logged once, `...
+  draws nothing: terrain ...`). Every frame each **chunk** with a surface of a terrain whose object is shown is listed
+  (`WorldRenderTerrainChunk`, `WorldRenderCache_GetTerrainChunks`), terrain by terrain, in chunk order: the owner's id
+  and serial, the asset and the chunk index, its surface's triangle count, the settings in effect
+  (`WorldTerrainComponent_ResolveSettings`: outline, shadow tier, casts shadows, the draw distance times the multiplier,
+  fixed or not; terrain is never crisp), the chunk's world matrix (the object's world matrix times the translation to
+  the chunk's centre: the chunk's positions are relative to it) and its sphere through it (scaled by
+  `WorldTransform_GetMaxScale`), both in double and in render space, and the object's tint. The GPU meshes are the
+  renderer's (`WorldRendererTerrain.c`, see "Renderer structure"): the cache lists, the renderer uploads.
 
 Entries follow the components across additions and removals: when the world's component-set version changes, entries
 are re-matched by owner id, and an entry is carried over only if its component still names the model it was
@@ -166,8 +177,8 @@ after asset definitions change).
 
 Right after the cache's sync, `WorldVisibility_Build` (private `source/WorldVisibility.{h,c}`, tested in
 `tests/WorldVisibilityTests.c`) decides what every pass draws, and every pass iterates its list instead of the cache's
-whole arrays. The lists hold indices into the cache's models and sprites, ascending (so the world's order is kept), and
-are rebuilt every frame without allocating once grown; each entry also gets its fades. Everything here is in render
+whole arrays. The lists hold indices into the cache's models, sprites and (B01) terrain chunks, ascending (so the
+world's order is kept), and are rebuilt every frame without allocating once grown; each entry also gets its fades. Everything here is in render
 space (T32): the cache's render-space centres, the camera at (0, 0, 0), the frustum, the cascades' boxes and the cube's
 lamp all relative to the frame's origin.
 - **Frustum culling.** The camera's frustum is extracted once per frame from its view-projection (Gribb and Hartmann, six
@@ -204,7 +215,7 @@ lamp all relative to the frame's origin.
   outline and the AO switch off once, at mid-fade. The outline pass reads the G-buffer's depth for the same reason.
 - **The dither** (`shaders/common/dither.glsl`, included by every world geometry shader: `world_pbr`, `world_normal`,
   `world_depth`, `world_cube_depth`, `world_sprite`, `world_normal_sprite`, `world_sprite_depth`,
-  `world_sprite_cube_depth`; each tests `DitherDiscard()` once). Uniforms `ditherFade` (this draw's fade: 0 solid .. 1
+  `world_sprite_cube_depth`, `world_terrain`; each tests `DitherDiscard()` once). Uniforms `ditherFade` (this draw's fade: 0 solid .. 1
   gone), `ditherLodProgress` and `ditherIsIncomingLod` (its part of a LOD cross-fade, T11: the share of the pixels the
   incoming LOD takes, and whether this draw is that LOD; 0 and false for every other draw) and `ditherPixelScale` (the
   pass's pixels per scene pixel: 1 in the scene-resolution passes and in the shadow maps, on their texel grid; window /
@@ -235,12 +246,19 @@ lamp all relative to the frame's origin.
   pixel grid as the rest.
   Shaders that take derivatives or sample mipmapped textures test it after those (the PBR shader last), so they stay
   defined for the pixels that are drawn.
+- **Terrain chunks** (B01) enter every list as models do, each by its own sphere: the camera's frustum, each
+  cascade's box by the terrain's shadow tier (when it casts), the cube's reach, the draw distance (4 km and fixed by
+  default, so the quality setting never thins the hills; the zoom factor applies) and the fade, which their draws
+  dither (and the G-buffer's limit) like a model's. Their lists are their own
+  (`WorldVisibility_GetTerrainChunks(visibility, cache, pass)`, the fades `WorldVisibility_GetTerrainChunkFade`), and
+  their counts too: a chunk is not counted as a model.
 - **A/B.** `WorldRenderer_SetCullingEnabled` (U in the test frame) switches the camera's frustum and the cascades' boxes
   off: everything within its draw distance is drawn, as before culling existed, and the image must not change. The
   draw distances, fades and the cube's reach stay.
 - **Status.** The status line (after the first render, the I key) gives what the camera's passes drew (models, sprites,
   how many of them fading; the models by LOD and how many cross-fade), how many entries lay outside the view, and how
-  many faded out (beyond their draw distance or fully transparent).
+  many faded out (beyond their draw distance or fully transparent); since B01 the terrains placed (and those without a
+  terrain), the chunks drawn of all listed and their triangles, and whether the chunk key is on.
 - **Known limits.** The cube shadow of a fading object is grainy: its 20-tap PCF spreads over about 17 texels and samples
   the dither pattern unevenly (the cascades' 2x2 PCF always takes one texel of each quarter of the pattern, so their
   shadows thin smoothly). The far plane is extracted from a float matrix, about 10 m uncertain at 4 km.
@@ -285,8 +303,9 @@ Every model draws one of its world model's LODs ([WorldModels.md](WorldModels.md
 
 ### Pipeline (one `WorldRenderer_RenderToTarget`)
 
-1. Sync the cache for the frame's origin (the camera's position: every entry in render space); make sure the targets
-   match the window size and pixelation setting (`WorldRendererScene_EnsureTargets`).
+1. Sync the cache for the frame's origin (the camera's position: every entry in render space); upload the terrain
+   chunks that are new or changed (`WorldRendererTerrain_PrepareFrame`, B01); make sure the targets match the window
+   size and pixelation setting (`WorldRendererScene_EnsureTargets`).
 2. Build the frame context (`WorldRenderFrame`): the origin, the render camera, the zoom factor, the scene's
    rotation-only view and projection matrices (`WorldRenderSpace_BuildView`: the projection `BeginMode3D` builds for the
    scene target, shared by every pass that reconstructs positions or rays) and the camera's frustum from them, the
@@ -307,14 +326,17 @@ Every model draws one of its world model's LODs ([WorldModels.md](WorldModels.md
    and each sprite's matrices (`WorldRendererSprites_PrepareFrame`: facing the camera, facing the cascades' light and the
    cube shadow's lamp while those run) with the blended and additive sprites sorted back to front.
 4. The shadow cascades of the shadow light (the sun or the moon), then the point-light cube shadow, each drawing its
-   visibility list (the casters in its box; within the light's reach). Models (the LOD they show or fade to) and cutout
-   sprites cast; sprites turned toward the light; each caster dithered by its fade.
-5. The normal/flag G-buffer (the camera's models, the LOD with the larger share, and cutout sprites, solid below half
-   their fade) and the AO pre-pass, when AO or outlines run.
+   visibility list (the casters in its box; within the light's reach). Models (the LOD they show or fade to), terrain
+   chunks (B01; their back faces in the cascades, as the models') and cutout sprites cast; sprites turned toward the
+   light; each caster dithered by its fade.
+5. The normal/flag G-buffer (the camera's models, the LOD with the larger share, terrain chunks and cutout sprites,
+   solid below half their fade) and the AO pre-pass, when AO or outlines run.
 6. The scene pass: clear, atmospheric sky (with the moonlit sky, the moon's disc, the Milky Way and light pollution's
    skyglow), the stars (none behind the moon), debug grid, the camera's PBR models (each dithered by its fade, both LODs
    of a cross-fade with complementary dithers; the sun and the moon; per object: up to
-   `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), the camera's lit sprites
+   `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), the camera's terrain
+   chunks (B01: the `world_terrain` shader, lit as the models, with up to `WORLD_MAX_FORWARD_LIGHTS` lights per chunk;
+   before the sprites, so decals lie on it), the camera's lit sprites
    (the cutout ones, then decals, then blended and additive ones back to front), light gizmos, and collider wireframes
    and contact points while a collision world is set (T12, T27). The sky's glow and the models' and lit sprites' reflected light go through the
    eye's night vision.
@@ -568,7 +590,9 @@ get no AO and no outlines.
   sprites (inactive while switched off with the K key's toggle), "sprite shadows" the shadows of cutout sprites
   (active while one casts into a running shadow; unavailable without the sprite depth shaders), "skinning" the posed
   models' skinned meshes (T29: available with the skinned twin of the shader models draw with, active while a shown
-  model has a pose; the status line counts the posed models). It also counts what the
+  model has a pose; the status line counts the posed models), "terrain shading" the lit terrain shader (B01: unavailable
+  without `world_terrain`, when the chunks draw unlit; the status counts the terrains placed, those without a terrain,
+  the chunks drawn of all listed and their triangles, and whether the chunk key is on). It also counts what the
   camera's passes drew and what culling and fading removed (see "Visibility"). The renderer logs the status once after its
   first render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame).
 
@@ -582,9 +606,10 @@ get no AO and no outlines.
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
 | `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette (T29); the unlit fallback's skinned shader; the LOD tinting, light gizmos, the pixelation filter. |
 | `WorldRendererSprites.c` | The sprites: the unit quad, the lit sprite shader, each frame's sprite matrices (camera, cascades' light, cube's lamp) and transparent draw order, the lit cutout / decal / sorted transparent draws. The G-buffer and shadow passes draw sprites with this file's quad and matrices. |
-| `WorldRendererLighting.c` | The two PBR programs (rigid and, T29, skinned: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: both PBR programs and the sprite shader, the night vision's among them), forward point lights, per-material factors, eye adaptation. |
-| `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow (models, and cutout sprites through alpha-tested depth shaders). |
-| `WorldRendererGBuffer.c` | The normal/flag G-buffer (models and cutout sprites) and the AO pre-pass. |
+| `WorldRendererLighting.c` | The two PBR programs (rigid and, T29, skinned: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: both PBR programs, the sprite shader and, B01, the terrain shader, the night vision's among them), forward point lights, per-material factors, eye adaptation. |
+| `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow (models, terrain chunks, and cutout sprites through alpha-tested depth shaders). |
+| `WorldRendererGBuffer.c` | The normal/flag G-buffer (models, terrain chunks and cutout sprites) and the AO pre-pass. |
+| `WorldRendererTerrain.c` | The terrain's chunks (B01, [Terrain.md](Terrain.md)): their GPU meshes, kept by the renderer per terrain asset and chunk and uploaded again when a chunk's revision changes (all of them when the chunk layout changes; those of terrains no entry resolves any more unloaded); the `world_terrain` shader and its lit draw (per-chunk lights and dither; the unlit fallback with raylib's default shader); the G-buffer's and the shadow passes' draws with their shared shaders; the chunk key (the minus key: a colour per chunk and the wireframe). |
 | `WorldRendererSky.c` | The atmospheric sky with the moon, the moonlit sky, the Milky Way and light pollution's skyglow; the sky textures the world names; the night sky values and the moon's disc for the frame. |
 | `WorldRendererStars.c` | The star field: the catalogue's mesh (rebuilt when the seed or density changes) and its draw (none behind the moon). |
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
@@ -606,8 +631,8 @@ The renderer keeps receiving features, so:
   cache's render-space values, or converts a double position with `GameMath`'s relative functions against
   `frame->Origin` (see "Render space"). The frame holds no camera pointer, so there is no camera position to misuse.
 - **Draw from the cache.** Passes iterate their visibility list over the render cache's entries
-  (`WorldVisibility_GetModels` / `GetSprites` for their pass) and dither each draw by its fade; never walk the world or
-  resolve assets by name in a pass.
+  (`WorldVisibility_GetModels` / `GetSprites` / `GetTerrainChunks` for their pass) and dither each draw by its fade;
+  never walk the world or resolve assets by name in a pass.
 - **Render reads, it never writes.** No writes to world objects or shared assets: per-draw material copies, the
   renderer's own location tables, and per-object render data in the cache.
 - **Fixed texture units.** Renderer-owned samplers use `WorldRendererTextureUnit` (units 12–15, above raylib's
@@ -633,6 +658,18 @@ The renderer keeps receiving features, so:
   pass (`WorldRendererPalette`), and every frame starts by forgetting which pose each palette holds
   (`WorldRendererGeometry_ResetPalettes`). A new geometry pass follows the same pattern, or its skinned meshes draw in
   their bind pose.
+- **Terrain never skins and is never instanced** (B01): its chunks draw with one rigid shader per pass and need no
+  skinned twin.
+- **Vertex attributes (the budget).** GL 3.3 guarantees 16 attribute locations (0 to 15). raylib binds 0 to 12
+  (`RL_DEFAULT_SHADER_ATTRIB_LOCATION_*` in `rlgl.h`): 0 position, 1 texcoord, 2 normal, 3 colour, 4 tangent,
+  5 texcoord2, 7 bone indices, 8 bone weights, 9 to 12 the instance transform (a mat4 takes four). 6 is named for the
+  indices but only marks the element buffer's slot: `rlLoadShaderProgram` binds no attribute there, so it is free too. A shader that declares its own attribute picks a location no mesh it draws fills otherwise:
+  - **9 to 12: the terrain's weights** (B01): sixteen palette weights as four normalized `u8 x 4` attributes
+    (`vertexWeights0..3` in `terrain/vertex.vert`, filled by `WorldRendererTerrain.c` with `rlSetVertexAttribute`). A
+    terrain mesh is never instanced, so the instance transform's locations are free there.
+  - **13 to 15: free.** B03's instanced shaders will take raylib's instance transform at 9 to 12 and the tint and the
+    random value at 13 and 14 (its task file); 15 is the last one left. A new attribute takes a location here, or
+    shares one with a kind of mesh that never meets it in one shader, and is written into this list.
 - **Failures degrade loudly once.** A missing shader or target falls back with one log line, never silently
   and never per frame.
 
@@ -732,7 +769,8 @@ the UI test frame above had first refusal: movement through the actions (`move_*
 default SHIFT), mouse-look (`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured) and the
 debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11 and the
-digits are taken already; F12, minus, equals and the keypad are free):
+digits are taken already, and minus since B01; equals and the keypad are free. Leave F12 free: raylib's `EndDrawing`
+takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
   06:00:00.`): P pause/resume the clock; 1–4 jump to dawn/noon/dusk/midnight of the clock's day (06:00, 12:00, 18:00,
@@ -748,8 +786,9 @@ digits are taken already; F12, minus, equals and the keypad are free):
   within its draw distance; the image must not change; logged), I log the renderer status (with the drawn, culled and
   fading counts), then the game time (`WorldTest: game time
   Sun 2026-10-18 12:00:00, running, 720 game seconds per real second (a day takes 2 real minutes); seasons off.`), the
-  moon, the collision world's counts (`WorldTest: collision: 34 colliders (21 static, 13 movable), 35 shapes (12 mesh
-  triangles, 0 infinite planes), 0 trigger pairs; 34 rebuilds and 6 moves in 12 syncs.`) and its last step's (T27:
+  moon, the collision world's counts (`WorldTest: collision: 37 colliders (23 static, 14 movable), 293 shapes (61180
+  mesh triangles, 0 infinite planes), 0 trigger pairs; 37 rebuilds and 6 moves in 3 syncs.`: since B01 the terrain is
+  one static instance of 256 chunk shapes) and its last step's (T27:
   `WorldTest: the last collision step: 0 movers, 0 pushables awake, 0 pairs of shapes, 6 touching contacts (6 object
   pairs in contact), 0 solver iterations in 1 substeps (0 solved again), deepest overlap left 0.00 mm, 0 blocked, 0
   crushed.`);
@@ -821,6 +860,9 @@ digits are taken already; F12, minus, equals and the keypad are free):
   walking at its own phase and a little faster or slower, and takes it away; 7 slows every animation to a quarter and
   back (logged). I adds `WorldTest: animation: 104 animators (104 posed), 104 clips playing, 1976 bones posed in 182 us;
   the showcase plays "idle" (5); crowd out (6); slow motion off (7).`;
+- **the terrain (B01, [Terrain.md](Terrain.md)):** minus (`-`) shows and hides the chunk key (logged): each chunk takes a
+  colour by its cell (neighbours always differ) mixed into its lit colour, and the wireframe of the chunks in view is
+  drawn over it, a hair toward the camera. The status line (I) counts the chunks drawn and their triangles;
 - T toggles the text sample.
 
 M frees the cursor for the UI (and captures it again); a left click the UI did not take captures it again. An

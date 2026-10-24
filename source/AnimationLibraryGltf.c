@@ -5,6 +5,7 @@
 #include <string.h>
 #include "AnimationLibrary.h"
 #include "AssetManager.h"
+#include "GltfChecks.h"
 #include "SkeletalAnimation.h"
 #include "raylib/cgltf.h"
 #include "raylib/raymath.h"
@@ -15,13 +16,9 @@
 /*
  * Reads an animation library from glTF (AnimationLibrary.h) with cgltf, the glTF parser raylib bundles (its
  * implementation is compiled into libraylib.a; include/raylib/cgltf.h is the same version's header). Every file is
- * hostile. cgltf's validation does its sums without overflow checks and its loader allocates every buffer's declared
- * length, so this reader checks the file's structure first, in overflow-safe sums (CheckStructure: buffer lengths
- * against the file limit and their data, views within their buffers with glTF's strides, accessors and their sparse
- * replacements within their views, aligned; buffer paths after their percent escapes are decoded), lets cgltf load the
- * buffers (a buffer
- * file must hold its declared length) and validate (an acyclic node tree, sampler output counts), and then checks the
- * rest (accessor shapes, key times and values, limits) before it trusts a number.
+ * hostile: source/GltfChecks.h checks the file's structure before cgltf loads its buffers and validates it (since B01 the
+ * terrain's import shares those checks), and this reader then checks the rest (accessor shapes, key times and values,
+ * limits) before it trusts a number.
  *
  * Two passes: the plan (which nodes are bones, which clips are kept, how many keys and floats, where each shared key
  * time accessor goes) and then the fill, into one block sized by the plan: the library, its clips, their tracks, the
@@ -50,15 +47,6 @@
 #define CUBIC_VALUES_PER_KEY 3U
 /** Rotations shorter than this have no direction. */
 #define MIN_ROTATION_LENGTH 1e-12f
-/** glTF's limits on a buffer view's stride, in bytes between elements (0: tightly packed): 4 to 252, in fours. */
-#define MIN_VIEW_STRIDE ((cgltf_size)4)
-#define MAX_VIEW_STRIDE ((cgltf_size)252)
-#define VIEW_STRIDE_STEP ((cgltf_size)4)
-/** The alignment a buffer's data must have, so cgltf's float and integer reads are aligned (glTF pads to four). */
-#define BUFFER_DATA_ALIGNMENT ((uintptr_t)4)
-/** Bytes a data URI's base64 holds for every four of its characters (and a group a partial one may add). */
-#define BASE64_BYTES_PER_GROUP ((size_t)3)
-#define BASE64_CHARACTERS_PER_GROUP ((size_t)4)
 
 
 // Types.
@@ -130,327 +118,8 @@ static void Warn(const Reader* reader, const char* format, ...)
     Error_Deconstruct(&LogResult);
 }
 
-/* A name from the file in printable form (printable ASCII; anything else as '?'), for a message. */
-static const char* Printable(const char* text, char* buffer, size_t capacity)
-{
-    size_t Length = 0U;
-    for (const char* Cursor = text; (Cursor != NULL) && (*Cursor != '\0') && ((Length + 1U) < capacity); Cursor++)
-    {
-        unsigned char Character = (unsigned char)*Cursor;
-        buffer[Length] = ((Character >= 0x20U) && (Character < 0x7FU)) ? (char)Character : '?';
-        Length++;
-    }
-    buffer[Length] = '\0';
-    return buffer;
-}
 
-
-// Static functions: cgltf's memory and files.
-static void* AllocateForCgltf(void* user, cgltf_size size)
-{
-    (void)user;
-    return Memory_Allocate((size > 0U) ? size : 1U);
-}
-
-static void FreeForCgltf(void* user, void* pointer)
-{
-    (void)user;
-    Memory_Free(pointer);
-}
-
-/* Reads a whole file of at most @p limit bytes into @p destination (cleared first by the caller). */
-static Error ReadLimitedFile(const unsigned char* path, size_t limit, GenericBuffer* destination)
-{
-    FileSystemEntryInfo Info;
-    Memory_Zero(&Info, sizeof(Info));
-    Error Result = FileSystem_GetEntryInfo(path, &Info);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-    bool IsFile = Info._entryType == FileSystemEntryType_File;
-    size_t Size = Info._sizeInBytes;
-    FileSystemEntryInfo_Deconstruct(&Info);
-    if (!IsFile)
-    {
-        return Error_Construct3(ErrorCode_IO, u8"\"%s\" is not a file.", path);
-    }
-    if (Size > limit)
-    {
-        return Error_Construct3(ErrorCode_BufferTooLarge, u8"\"%s\" has %" PRIu64 u8" bytes; at most %" PRIu64
-            u8" are read.", path, (uint64_t)Size, (uint64_t)limit);
-    }
-    Result = FileSystem_ReadAllBytes(path, destination);
-    if ((Result.Code == ErrorCode_Success) && (destination->_count > limit))
-    {
-        return Error_Construct3(ErrorCode_BufferTooLarge, u8"\"%s\" grew past %" PRIu64 u8" bytes while it was read.",
-            path, (uint64_t)limit);
-    }
-    return Result;
-}
-
-/* cgltf's file reader for a buffer in a file of its own, through WRFileSystem (UTF-8 paths on every platform). cgltf
- * asks for the buffer's declared length (0: any) and checks every view against that length, so, as its own reader does,
- * a file shorter than it is refused and only the declared bytes are kept. */
-static cgltf_result ReadBufferFileForCgltf(const cgltf_memory_options* memory, const cgltf_file_options* file,
-    const char* path, cgltf_size* size, void** data)
-{
-    (void)file;
-    GenericBuffer Bytes;
-    GenericBuffer_AllocateVariable(&Bytes, 0U, sizeof(unsigned char));
-    Error Result = ReadLimitedFile((const unsigned char*)path, ANIMATION_LIBRARY_MAX_FILE_BYTES, &Bytes);
-    if (Result.Code != ErrorCode_Success)
-    {
-        cgltf_result Answer = cgltf_result_io_error;
-        if (Result.Code == ErrorCode_BufferTooLarge)
-        {
-            Answer = cgltf_result_data_too_short;
-        }
-        else if ((Result.Code == ErrorCode_FileNotFound) || (Result.Code == ErrorCode_DirectoryNotFound))
-        {
-            Answer = cgltf_result_file_not_found;
-        }
-        Error_Deconstruct(&Result);
-        Memory_Free(Bytes._data);
-        return Answer;
-    }
-    size_t Wanted = (*size > 0U) ? (size_t)*size : Bytes._count;
-    if (Bytes._count < Wanted)
-    {
-        Memory_Free(Bytes._data);
-        return cgltf_result_data_too_short;
-    }
-    void* Copy = memory->alloc_func(memory->user_data, (Wanted > 0U) ? Wanted : 1U);
-    if (Wanted > 0U)
-    {
-        Memory_Copy(Bytes._data, Copy, Wanted);
-    }
-    *size = Wanted;
-    *data = Copy;
-    Memory_Free(Bytes._data);
-    return cgltf_result_success;
-}
-
-static void ReleaseBufferFileForCgltf(const cgltf_memory_options* memory, const cgltf_file_options* file, void* data,
-    cgltf_size size)
-{
-    (void)file;
-    (void)size;
-    memory->free_func(memory->user_data, data);
-}
-
-/* A decoded buffer path stays next to the library: relative, no ".." segment, no drive or backslash. */
-static bool IsBufferPathSafe(const char* uri)
-{
-    if ((uri[0] == '/') || (strchr(uri, '\\') != NULL) || (strchr(uri, ':') != NULL))
-    {
-        return false;
-    }
-    const char* Segment = uri;
-    while (true)
-    {
-        const char* Slash = strchr(Segment, '/');
-        size_t Length = (Slash != NULL) ? (size_t)(Slash - Segment) : strlen(Segment);
-        if ((Length == 2U) && (Segment[0] == '.') && (Segment[1] == '.'))
-        {
-            return false;
-        }
-        if (Slash == NULL)
-        {
-            return true;
-        }
-        Segment = Slash + 1;
-    }
-}
-
-/* A buffer file's URI is checked as cgltf opens it: with its percent escapes decoded (so "%2e%2e/" is ".."), and with no
- * escaped NUL cutting it short. */
-static bool IsBufferUriSafe(const char* uri)
-{
-    size_t Length = strlen(uri);
-    char* Decoded = Memory_Allocate(Length + 1U);
-    Memory_Copy(uri, Decoded, Length + 1U);
-    size_t DecodedLength = cgltf_decode_uri(Decoded);
-    bool IsSafe = (strlen(Decoded) == DecodedLength) && IsBufferPathSafe(Decoded);
-    Memory_Free(Decoded);
-    return IsSafe;
-}
-
-static const char* DescribeCgltfResult(cgltf_result result)
-{
-    switch (result)
-    {
-        case cgltf_result_success: return "no error";
-        case cgltf_result_data_too_short: return "its data is too short";
-        case cgltf_result_unknown_format: return "it is not glTF (or names a buffer it cannot read)";
-        case cgltf_result_invalid_json: return "its JSON is invalid";
-        case cgltf_result_invalid_gltf: return "it breaks the glTF rules";
-        case cgltf_result_invalid_options: return "the reader's options are invalid";
-        case cgltf_result_file_not_found: return "a buffer file is missing";
-        case cgltf_result_io_error: return "a buffer file cannot be read";
-        case cgltf_result_out_of_memory: return "it needs too much memory";
-        case cgltf_result_legacy_gltf: return "it is glTF 1.0, not 2.0";
-        case cgltf_result_max_enum: return "an unknown error";
-    }
-    return "an unknown error";
-}
-
-/* The buffers, before cgltf loads them: each declares at least a byte, together at most the file limit, and a data URI
- * no more than its base64 holds (cgltf allocates the declared length before it decodes). */
-static Error CheckBuffers(Reader* reader)
-{
-    const cgltf_data* Data = reader->Data;
-    size_t TotalBytes = 0U;
-    for (cgltf_size Index = 0U; Index < Data->buffers_count; Index++)
-    {
-        const cgltf_buffer* Buffer = &Data->buffers[Index];
-        if ((Buffer->size == 0U) || (Buffer->size > (ANIMATION_LIBRARY_MAX_FILE_BYTES - TotalBytes)))
-        {
-            return Fail(reader, ErrorCode_InvalidAssetData, "buffer %" PRIu64 " declares %" PRIu64 " bytes; the "
-                "buffers hold 1 to %" PRIu64 " bytes together.", (uint64_t)Index, (uint64_t)Buffer->size,
-                (uint64_t)ANIMATION_LIBRARY_MAX_FILE_BYTES);
-        }
-        TotalBytes += Buffer->size;
-        if ((Buffer->uri != NULL) && (strncmp(Buffer->uri, "data:", 5U) == 0))
-        {
-            const char* Comma = strchr(Buffer->uri, ',');
-            size_t Characters = (Comma != NULL) ? strlen(Comma + 1) : 0U;
-            size_t MostBytes = ((Characters / BASE64_CHARACTERS_PER_GROUP) + 1U) * BASE64_BYTES_PER_GROUP;
-            if (Buffer->size > MostBytes)
-            {
-                return Fail(reader, ErrorCode_InvalidAssetData, "buffer %" PRIu64 " declares %" PRIu64 " bytes, more "
-                    "than its data holds.", (uint64_t)Index, (uint64_t)Buffer->size);
-            }
-        }
-    }
-    return Error_CreateSuccess();
-}
-
-/* The buffer views: each within its buffer, its stride glTF's (4 to 252 bytes, in fours, or packed), not compressed. */
-static Error CheckBufferViews(Reader* reader)
-{
-    const cgltf_data* Data = reader->Data;
-    for (cgltf_size Index = 0U; Index < Data->buffer_views_count; Index++)
-    {
-        const cgltf_buffer_view* View = &Data->buffer_views[Index];
-        if ((View->buffer == NULL) || (View->size == 0U) || (View->size > View->buffer->size)
-            || (View->offset > (View->buffer->size - View->size)))
-        {
-            return Fail(reader, ErrorCode_InvalidAssetData, "buffer view %" PRIu64 " (%" PRIu64 " bytes from %" PRIu64
-                ") does not fit in its buffer.", (uint64_t)Index, (uint64_t)View->size, (uint64_t)View->offset);
-        }
-        if ((View->stride != 0U) && ((View->stride < MIN_VIEW_STRIDE) || (View->stride > MAX_VIEW_STRIDE)
-            || ((View->stride % VIEW_STRIDE_STEP) != 0U)))
-        {
-            return Fail(reader, ErrorCode_InvalidAssetData, "buffer view %" PRIu64 " has a stride of %" PRIu64 " bytes; "
-                "glTF allows %" PRIu64 " to %" PRIu64 ", in fours.", (uint64_t)Index, (uint64_t)View->stride,
-                (uint64_t)MIN_VIEW_STRIDE, (uint64_t)MAX_VIEW_STRIDE);
-        }
-        if (View->has_meshopt_compression)
-        {
-            return Fail(reader, ErrorCode_InvalidAssetData, "buffer view %" PRIu64 " is meshopt-compressed, which the "
-                "game does not read.", (uint64_t)Index);
-        }
-    }
-    return Error_CreateSuccess();
-}
-
-/* Whether @p count packed elements of @p elementSize bytes from @p offset fit in a view (reckoned without overflow). */
-static bool FitsInView(const cgltf_buffer_view* view, cgltf_size offset, cgltf_size elementSize, cgltf_size count)
-{
-    return (view != NULL) && (elementSize > 0U) && (count > 0U) && (offset <= view->size)
-        && (count <= ((view->size - offset) / elementSize));
-}
-
-/* A sparse accessor's replacements (glTF's rules, which bound every sum and loop cgltf makes over them): 1 to the
- * accessor's count of them, indices of an unsigned integer type, indices and values packed inside their views and
- * aligned to their components. */
-static Error CheckSparse(Reader* reader, cgltf_size index, const cgltf_accessor* accessor, cgltf_size elementSize,
-    cgltf_size componentSize)
-{
-    const cgltf_accessor_sparse* Sparse = &accessor->sparse;
-    cgltf_component_type IndexType = Sparse->indices_component_type;
-    cgltf_size IndexSize = cgltf_component_size(IndexType);
-    bool IsIndexTypeValid = (IndexType == cgltf_component_type_r_8u) || (IndexType == cgltf_component_type_r_16u)
-        || (IndexType == cgltf_component_type_r_32u);
-    if (!IsIndexTypeValid || (Sparse->count == 0U) || (Sparse->count > accessor->count)
-        || !FitsInView(Sparse->indices_buffer_view, Sparse->indices_byte_offset, IndexSize, Sparse->count)
-        || !FitsInView(Sparse->values_buffer_view, Sparse->values_byte_offset, elementSize, Sparse->count))
-    {
-        return Fail(reader, ErrorCode_InvalidAssetData, "accessor %" PRIu64 "'s %" PRIu64 " sparse replacements do not "
-            "fit in their buffer views (or are more than its %" PRIu64 " elements).", (uint64_t)index,
-            (uint64_t)Sparse->count, (uint64_t)accessor->count);
-    }
-    if ((((Sparse->indices_buffer_view->offset + Sparse->indices_byte_offset) % IndexSize) != 0U)
-        || (((Sparse->values_buffer_view->offset + Sparse->values_byte_offset) % componentSize) != 0U))
-    {
-        return Fail(reader, ErrorCode_InvalidAssetData, "accessor %" PRIu64 "'s sparse replacements are not aligned to "
-            "their components.", (uint64_t)index);
-    }
-    return Error_CreateSuccess();
-}
-
-/* The accessors: a valid type, at least one element, every element inside its view (the last one's end reckoned
- * without overflow), aligned to its components, and sparse replacements within theirs. An accessor without a view
- * reads as zeros (its count is bounded where a clip uses it: the key limit). */
-static Error CheckAccessors(Reader* reader)
-{
-    const cgltf_data* Data = reader->Data;
-    for (cgltf_size Index = 0U; Index < Data->accessors_count; Index++)
-    {
-        const cgltf_accessor* Accessor = &Data->accessors[Index];
-        cgltf_size ElementSize = cgltf_calc_size(Accessor->type, Accessor->component_type);
-        cgltf_size ComponentSize = cgltf_component_size(Accessor->component_type);
-        if ((ElementSize == 0U) || (ComponentSize == 0U) || (Accessor->count == 0U))
-        {
-            return Fail(reader, ErrorCode_InvalidAssetData, "accessor %" PRIu64 " has no valid type or no elements.",
-                (uint64_t)Index);
-        }
-        if (Accessor->is_sparse)
-        {
-            Error Sparse = CheckSparse(reader, Index, Accessor, ElementSize, ComponentSize);
-            if (Sparse.Code != ErrorCode_Success)
-            {
-                return Sparse;
-            }
-        }
-        const cgltf_buffer_view* View = Accessor->buffer_view;
-        if (View == NULL)
-        {
-            continue;
-        }
-        if ((Accessor->stride < ElementSize) || (ElementSize > View->size)
-            || (Accessor->offset > (View->size - ElementSize))
-            || ((Accessor->count - 1U) > ((View->size - ElementSize - Accessor->offset) / Accessor->stride)))
-        {
-            return Fail(reader, ErrorCode_InvalidAssetData, "accessor %" PRIu64 " (%" PRIu64 " elements of %" PRIu64
-                " bytes) does not fit in its buffer view.", (uint64_t)Index, (uint64_t)Accessor->count,
-                (uint64_t)ElementSize);
-        }
-        if ((((View->offset + Accessor->offset) % ComponentSize) != 0U) || ((Accessor->stride % ComponentSize) != 0U))
-        {
-            return Fail(reader, ErrorCode_InvalidAssetData, "accessor %" PRIu64 " is not aligned to its %" PRIu64
-                "-byte components.", (uint64_t)Index, (uint64_t)ComponentSize);
-        }
-    }
-    return Error_CreateSuccess();
-}
-
-/* Every loaded buffer's data starts aligned (a .glb's binary chunk sits where its JSON chunk's length puts it). */
-static Error CheckBufferAlignment(Reader* reader)
-{
-    const cgltf_data* Data = reader->Data;
-    for (cgltf_size Index = 0U; Index < Data->buffers_count; Index++)
-    {
-        if ((Data->buffers[Index].data != NULL) && (((uintptr_t)Data->buffers[Index].data % BUFFER_DATA_ALIGNMENT) != 0U))
-        {
-            return Fail(reader, ErrorCode_InvalidAssetData, "buffer %" PRIu64 "'s data is not aligned to four bytes (a "
-                ".glb's chunks must be padded to four).", (uint64_t)Index);
-        }
-    }
-    return Error_CreateSuccess();
-}
-
+// Static functions: reading.
 /* Normalizes a rotation's four finite floats in place, its length reckoned in double: a float's square may overflow
  * (a length of 3e19 squares past FLT_MAX, and dividing by the infinite length would leave no rotation at all), its
  * double cannot. Returns false for a rotation without a direction. */
@@ -473,74 +142,14 @@ static bool NormalizeRotation(float* rotation)
     return true;
 }
 
-/* Parses, loads the buffers and validates. */
+/* Parses, loads the buffers and validates (source/GltfChecks.h: the file's structure is checked before cgltf trusts a
+ * number). reader->Data receives the parsed data whenever the parse succeeded; DestroyReader frees it. */
 static Error ParseFile(Reader* reader, const void* data, size_t byteCount)
 {
-    cgltf_options Options;
-    Memory_Zero(&Options, sizeof(Options));
-    Options.memory.alloc_func = AllocateForCgltf;
-    Options.memory.free_func = FreeForCgltf;
-    Options.file.read = ReadBufferFileForCgltf;
-    Options.file.release = ReleaseBufferFileForCgltf;
-
-    cgltf_result Result = cgltf_parse(&Options, data, byteCount, &reader->Data);
-    if (Result != cgltf_result_success)
-    {
-        reader->Data = NULL;
-        return Fail(reader, ErrorCode_InvalidAssetData, "the file cannot be read as glTF 2.0: %s.",
-            DescribeCgltfResult(Result));
-    }
-    for (cgltf_size Index = 0U; Index < reader->Data->buffers_count; Index++)
-    {
-        const char* Uri = reader->Data->buffers[Index].uri;
-        if ((Uri != NULL) && (strncmp(Uri, "data:", 5U) != 0) && !IsBufferUriSafe(Uri))
-        {
-            char Name[NAME_PRINT_CAPACITY];
-            return Fail(reader, ErrorCode_InvalidAssetData, "buffer %" PRIu64 " names the file \"%s\", outside the "
-                "library's directory.", (uint64_t)Index, Printable(Uri, Name, sizeof(Name)));
-        }
-    }
-    // cgltf neither loads nor validates a number this has not checked.
-    Error Checked = CheckBuffers(reader);
-    if (Checked.Code == ErrorCode_Success)
-    {
-        Checked = CheckBufferViews(reader);
-    }
-    if (Checked.Code == ErrorCode_Success)
-    {
-        Checked = CheckAccessors(reader);
-    }
-    if (Checked.Code != ErrorCode_Success)
-    {
-        return Checked;
-    }
-    Result = cgltf_load_buffers(&Options, reader->Data, (const char*)reader->Options->FilePath);
-    if (Result != cgltf_result_success)
-    {
-        ErrorCode Code = ErrorCode_InvalidAssetData;
-        if (Result == cgltf_result_io_error)
-        {
-            Code = ErrorCode_IO;
-        }
-        else if (Result == cgltf_result_file_not_found)
-        {
-            Code = ErrorCode_FileNotFound;
-        }
-        return Fail(reader, Code, "the file's buffers cannot be loaded: %s.", DescribeCgltfResult(Result));
-    }
-    Checked = CheckBufferAlignment(reader);
-    if (Checked.Code != ErrorCode_Success)
-    {
-        return Checked;
-    }
-    Result = cgltf_validate(reader->Data);
-    if (Result != cgltf_result_success)
-    {
-        return Fail(reader, ErrorCode_InvalidAssetData, "the file is not valid glTF: %s.", DescribeCgltfResult(Result));
-    }
-    return Error_CreateSuccess();
+    GltfReadContext Context = { .Description = reader->Description, .MaxBytes = ANIMATION_LIBRARY_MAX_FILE_BYTES,
+        .FilePath = reader->Options->FilePath };
+    return GltfChecks_Parse(&Context, data, byteCount, &reader->Data);
 }
-
 
 // Static functions: the plan.
 static size_t GetNodeIndex(const Reader* reader, const cgltf_node* node)
@@ -723,7 +332,7 @@ static Error PlanChannel(Reader* reader, const cgltf_animation_channel* channel,
 static Error PlanClip(Reader* reader, const cgltf_animation* animation)
 {
     char Name[NAME_PRINT_CAPACITY];
-    Printable(animation->name, Name, sizeof(Name));
+    GltfChecks_Printable(animation->name, Name, sizeof(Name));
     size_t SettingIndex = 0U;
     const AnimationClipSettings* Settings = FindSettings(reader, animation->name, &SettingIndex);
     ClipPlan Plan = { .Animation = animation, .Name = NULL, .IsLooped = false, .Speed = ANIMATION_CLIP_DEFAULT_SPEED,
@@ -820,7 +429,8 @@ static Error PlanClips(Reader* reader)
         {
             char Name[NAME_PRINT_CAPACITY];
             return Fail(reader, ErrorCode_InvalidAssetDefinition, "the definition names clip \"%s\", which the file "
-                "does not have.", Printable((const char*)reader->Options->Clips[Index].Source, Name, sizeof(Name)));
+                "does not have.", GltfChecks_Printable((const char*)reader->Options->Clips[Index].Source, Name,
+                sizeof(Name)));
         }
     }
     for (uint32_t First = 0U; First < reader->ClipCount; First++)
@@ -834,7 +444,7 @@ static Error PlanClips(Reader* reader)
             {
                 char Name[NAME_PRINT_CAPACITY];
                 return Fail(reader, ErrorCode_InvalidAssetData, "two clips are called \"%s\"; give one another name "
-                    "in the definition.", Printable((const char*)A, Name, sizeof(Name)));
+                    "in the definition.", GltfChecks_Printable((const char*)A, Name, sizeof(Name)));
             }
         }
     }
@@ -888,7 +498,7 @@ static Error ReadRest(const Reader* reader, const cgltf_node* node, Transform* o
     {
         char Name[NAME_PRINT_CAPACITY];
         return Fail(reader, ErrorCode_InvalidAssetData, "node \"%s\" has a transform that is not finite or a rotation "
-            "of length 0.", Printable(node->name, Name, sizeof(Name)));
+            "of length 0.", GltfChecks_Printable(node->name, Name, sizeof(Name)));
     }
     Rest.rotation = (Quaternion){ Rotation[0], Rotation[1], Rotation[2], Rotation[3] };
     *outRest = Rest;
@@ -1050,7 +660,7 @@ static Error FillClip(Reader* reader, const ClipPlan* plan, AnimationClip* clip,
     clip->_distance = plan->Distance;
     clip->_bones = tracks;
     char ClipName[NAME_PRINT_CAPACITY];
-    Printable((const char*)plan->Name, ClipName, sizeof(ClipName));
+    GltfChecks_Printable((const char*)plan->Name, ClipName, sizeof(ClipName));
 
     float Duration = 0.0f;
     const cgltf_animation* Animation = plan->Animation;
@@ -1186,7 +796,7 @@ Error AnimationLibrary_CreateFromGltf(const void* data, size_t byteCount, const 
     {
         char Name[NAME_PRINT_CAPACITY];
         snprintf(Self.Description, sizeof(Self.Description), "%s",
-            Printable((const char*)options->Description, Name, sizeof(Name)));
+            GltfChecks_Printable((const char*)options->Description, Name, sizeof(Name)));
     }
     else
     {
@@ -1230,7 +840,7 @@ Error AnimationLibrary_CreateFromFile(const unsigned char* path, const Animation
     *outLibrary = NULL;
     GenericBuffer Bytes;
     GenericBuffer_AllocateVariable(&Bytes, 0U, sizeof(unsigned char));
-    Error Result = ReadLimitedFile(path, ANIMATION_LIBRARY_MAX_FILE_BYTES, &Bytes);
+    Error Result = GltfChecks_ReadLimitedFile(path, ANIMATION_LIBRARY_MAX_FILE_BYTES, &Bytes);
     if (Result.Code == ErrorCode_Success)
     {
         AnimationLibraryReadOptions Options = *options;

@@ -6,9 +6,11 @@
 #include "GameMath.h"
 #include "WorldCollision.h"
 #include "WorldCollisionTree.h"
+#include "TerrainAsset.h"
 #include "WorldColliderComponent.h"
 #include "WorldModel.h"
 #include "WorldObject.h"
+#include "WorldTerrainComponent.h"
 #include "wr/WRMemory.h"
 
 /*
@@ -19,8 +21,10 @@
  * source/WorldCollisionEvents.c (contacts across steps, contact and motion events, the debug contacts).
  *
  * INSTANCES live in slots (one growable array with a free list), so a tree proxy can name its shape by (slot, shape
- * index) for as long as the instance lives. Between changes of the world's component set, _order maps each collider of
- * the world's dense collider array to its slot, so a sync is one walk in the world's order; _lookup (sorted by object
+ * index) for as long as the instance lives. An object has at most one: its collider's, or (B01) its terrain
+ * component's when it has no collider (a terrain instance holds one mesh shape per chunk, its shape index the chunk's).
+ * Between changes of the world's component set, _order maps each collider of the world's dense collider array, then
+ * each terrain of its terrain array, to its slot, so a sync is one walk in the world's order; _lookup (sorted by object
  * id) finds an object's instance for the queries. Every instance holds its shapes in world space (WorldCollisionShape:
  * the transform both ways, the box, the proxy).
  *
@@ -101,7 +105,18 @@ typedef struct WorldCollisionShapeStruct
     CollisionAffine ShapeToPose;
 } WorldCollisionShape;
 
-/** One enabled collider of an effectively enabled object. */
+/** What a terrain instance keeps for one chunk of its terrain's mesh (B01): the chunk's mesh shape, placed at the
+ *  chunk's centre in the terrain's space (exact in float: on the position grid, within the extent), one-sided; its mesh
+ *  (owned; NULL for a chunk of holes only, or one whose mesh could not be built); and the chunk revision it was built
+ *  from. */
+typedef struct WorldCollisionTerrainChunkStruct
+{
+    CollisionShape Shape;
+    CollisionMesh* Mesh;
+    uint32_t Revision;
+} WorldCollisionTerrainChunk;
+
+/** One collision source of an object: its collider, or (B01) its terrain component when it has no collider. */
 typedef struct WorldCollisionInstanceStruct
 {
     /** Whether the slot holds an instance. */
@@ -109,18 +124,31 @@ typedef struct WorldCollisionInstanceStruct
     /** The next free slot while unused. */
     uint32_t NextFree;
     uint64_t ObjectId;
-    /** The collider (borrowed: re-matched whenever the world's component set changes) and its serial (a replaced
-     *  collider often reuses its predecessor's memory: the serial tells them apart). */
+    /** The source: the collider, or the terrain component (one of them is NULL; borrowed: re-matched whenever the
+     *  world's component set changes), and its serial (a replaced component often reuses its predecessor's memory: the
+     *  serial tells them apart). */
     WorldColliderComponent* Collider;
-    uint64_t ColliderSerial;
-    /** What the shapes were built from: the collider's and the object's transform revision, valid while HasSeen. */
+    WorldTerrainComponent* Terrain;
+    uint64_t ComponentSerial;
+    /** What the shapes were built from: the source component's and the object's transform revision, valid while
+     *  HasSeen. */
     bool HasSeen;
-    uint32_t SeenColliderRevision;
+    uint32_t SeenComponentRevision;
     uint32_t SeenTransformRevision;
     /** The world model resolved: an owned copy of its name (NULL: none), and the asset (borrowed under the collision
      *  world's user; NULL when there is none or it failed, which is not retried until the name changes). */
     unsigned char* WorldModelName;
     const WorldModel* WorldModel;
+    /** B01, a terrain instance: its terrain resolved as the world model is (an owned copy of the name and the asset);
+     *  a record per chunk of its mesh (an owned block, which the shapes point into: replaced only with them) for the
+     *  layout revision they were cut from; and the mesh's revision they were last compared with (TerrainMesh_GetRevision:
+     *  while it is unchanged no chunk changed). */
+    unsigned char* TerrainName;
+    const TerrainAsset* TerrainAsset;
+    WorldCollisionTerrainChunk* TerrainChunks;
+    uint32_t TerrainChunkCount;
+    uint32_t SeenTerrainLayoutRevision;
+    uint32_t SeenTerrainRevision;
     /** Whether the shapes are in the trees, and in which. */
     bool IsActive;
     bool IsStatic;
@@ -154,6 +182,10 @@ typedef struct WorldCollisionInstanceStruct
     bool HasWarnedFlatShape;
     bool HasWarnedPushableShape;
     bool HasWarnedWriteBack;
+    /** B01: a terrain chunk whose collision mesh could not be built; on a collider's instance, a terrain component on
+     *  the same object (the collider wins). */
+    bool HasWarnedTerrainChunk;
+    bool HasWarnedTerrainIgnored;
 
     /* T27: motion. */
     /** The motion frame now (rigid: the object's world position, its turn by the rotation mode), and at the end of the
@@ -405,6 +437,8 @@ struct WorldCollisionStruct
     uint64_t _tick;
     uint64_t _rebuildCount;
     uint64_t _moveCount;
+    /** B01: how many terrain chunks' collision meshes were built. */
+    uint64_t _terrainChunkBuildCount;
 
     /* T27: the step. */
     float _deltaSeconds;
@@ -474,6 +508,12 @@ static inline WorldCollisionShape* WorldCollisionInternal_GetShape(const WorldCo
     uint32_t index)
 {
     return &((WorldCollisionShape*)(void*)instance->Shapes._data)[index];
+}
+
+/* The component an instance stands for: its collider's, or its terrain's. */
+static inline WorldComponent* WorldCollisionInternal_GetComponent(const WorldCollisionInstance* instance)
+{
+    return (instance->Collider != NULL) ? &instance->Collider->Base : &instance->Terrain->Base;
 }
 
 /* The slot of an object's instance (used or not); false when it has none. */
@@ -581,9 +621,10 @@ float WorldCollisionInternal_GetTurn(const WorldCollisionPose* from, const World
 void WorldCollisionInternal_FillShapeInfo(const WorldCollisionInstance* instance, const WorldCollisionShape* shape,
     WorldCollisionShapeInfo* outInfo);
 
-/* Fills what a result says about a mesh triangle (its index, model part, source triangle and material; not the
- * barycentrics). */
-void WorldCollisionInternal_FillTriangleInfo(const CollisionMesh* mesh, uint32_t triangle, WorldCollisionShapeInfo* info);
+/* Fills what a result says about a triangle of an instance's mesh shape (its index, model part, source triangle and
+ * material; not the barycentrics). A terrain's part is its chunk and its source triangle the terrain's (B01). */
+void WorldCollisionInternal_FillTriangleInfo(const WorldCollisionInstance* instance, const WorldCollisionShape* shape,
+    uint32_t triangle, WorldCollisionShapeInfo* info);
 
 /* Collects into _candidates the keys of every shape whose box overlaps @p box (both trees) and every unbounded
  * plane. */

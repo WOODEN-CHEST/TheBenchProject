@@ -27,12 +27,17 @@ typedef struct LoggerStruct Logger;
  * affine transform, uneven scales and parents' shear included), its world bounds, its layer, mask and trigger flag
  * (the settings in effect, WorldColliderComponent_ResolveSettings). The shapes come from the object's world model's
  * collision sets (resolved by name under the collision world's own asset user, AGENTS.md rule 1) or from the
- * collider's own primitive.
+ * collider's own primitive. An object with a terrain component (B01) and no collider is a TERRAIN instance: one
+ * one-sided triangle mesh shape per chunk of its terrain (the shape's index is the chunk's; a hit's MeshPart names the
+ * chunk and its SourceTriangle the terrain's triangle) with the terrain's own active edges, so nothing bumps where
+ * chunks meet; its layer, mask and enabled flag are the terrain's settings in effect
+ * (WorldTerrainComponent_ResolveSettings). An object with both is a collider instance alone (one warning).
  *
  * SYNC. The first part of WorldCollision_Step, once a tick in the collision step (after the transform drivers), or
  * WorldCollision_Sync alone: it brings the world matrices up to date, then rebuilds only the colliders whose object
  * moved (its transform revision: a parent moving moves it too), whose collider changed (its revision), whose world model
- * changed or whose component was added, removed or replaced. Static colliders (the object and all its ancestors
+ * changed or whose component was added, removed or replaced. A terrain instance rebuilds only the chunks whose
+ * revision changed, and every chunk when the chunk layout changed. Static colliders (the object and all its ancestors
  * static) sit in one dynamic AABB tree, movable ones in another with fattened bounds; unbounded planes in a list every
  * query checks. A static object that moves is re-inserted, with one warning per object unless the options turn that off
  * (the editor).
@@ -100,10 +105,11 @@ typedef struct LoggerStruct Logger;
  * mean the same everywhere. Directions, normals, velocities, pushes, sizes and local positions stay floats. Inside, the
  * shapes' own maths runs in float relative to an origin near what it tests (a query's start, a pair's first shape), as
  * Jolt's double-precision build does. Shapes keep their vertices in their own space as floats: a triangle mesh loses
- * precision at its far end when it is very large (1 mm at 8 km from its object's origin), so big terrain is built from
- * tiles, each its own object. A plane's point is its object's origin: a level unbounded plane is exact anywhere, a
- * tilted one moves by up to the float step at its distance from that origin (agents/WorldCollision.md, "Known
- * limits").
+ * precision at its far end when it is very large (1 mm at 8 km from its object's origin). A terrain's chunks are shapes
+ * of their own with their vertices relative to the chunk's centre, where its position grid is exact in float
+ * (TerrainMesh.h), so a terrain is exact across its whole extent. A plane's point is its object's origin: a level
+ * unbounded plane is exact anywhere, a tilted one moves by up to the float step at its distance from that origin
+ * (agents/WorldCollision.md, "Known limits").
  *
  * THREADS AND LIFETIME. Not thread-safe. The collision world borrows its world, which must outlive it, and must be
  * synced on that world only. Pointers it returns (events, contacts, debug lists, shape names in results) are valid until
@@ -536,6 +542,9 @@ typedef struct WorldCollisionStatsStruct
     /** @brief How often an instance's shapes were rebuilt, and how often an instance moved, since construction. */
     uint64_t RebuildCount;
     uint64_t MoveCount;
+    /** @brief How many terrain chunks' collision meshes were built since construction (B01: a chunk's again only when it
+     *  changes). */
+    uint64_t TerrainChunkBuildCount;
     /** @brief The number of syncs and steps so far. */
     uint64_t Tick;
     /** @brief The last step (T27): colliders that moved, pushables that took part, pairs of shapes the solver looked

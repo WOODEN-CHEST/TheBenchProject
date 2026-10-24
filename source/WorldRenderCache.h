@@ -11,6 +11,7 @@
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
 #include "WorldLod.h"
+#include "WorldTerrainComponent.h"
 #include "SpriteAnimation.h"
 #include "SpriteTransform.h"
 #include "raylib/raylib.h"
@@ -65,10 +66,18 @@
  * render-space matrix (WorldRenderModel_GetLodTransform); the bounding sphere is the world model's, the same for every
  * LOD.
  *
+ * TERRAINS (B01). Each terrain component has an entry kept across frames (WorldRenderTerrain), resolved as a model's is
+ * (the terrain loaded under the model user when the name changes, a failure logged once), and matched to the world's
+ * terrain components by owner id and component serial. Every frame, each chunk with a surface of a terrain whose object
+ * is shown is listed (WorldRenderTerrainChunk), in the terrain's chunk order, with the terrain's settings in effect
+ * (WorldTerrainComponent_ResolveSettings) and its placement: the object's world matrix times the translation to the
+ * chunk's centre, in double and in render space, and the chunk's bounding sphere through it. The chunks' GPU meshes are
+ * the renderer's (WorldRendererTerrain.c): the cache lists, the renderer uploads.
+ *
  * The cache only reads the world, its objects and components, and never writes to an asset. Every pointer in the lists
- * is borrowed and valid until the world changes; the world models (and with them their LOD models and textures) are
- * held under the asset user passed to Sync, the sprites' world sprites (and their animations) under the world's own,
- * which their components bind.
+ * is borrowed and valid until the world changes; the world models (and with them their LOD models and textures) and the
+ * terrains are held under the asset user passed to Sync, the sprites' world sprites (and their animations) under the
+ * world's own, which their components bind.
  */
 
 
@@ -218,6 +227,61 @@ typedef struct WorldRenderLightStruct
     bool CastsShadows;
 } WorldRenderLight;
 
+/** @brief A terrain component as the cache resolves it (B01), kept across frames. */
+typedef struct WorldRenderTerrainStruct
+{
+    /** @brief Id of the object that carries the component, and the component's serial when the entry was made (a
+     *  replaced component, even with its predecessor's id and address, gets a new entry). */
+    uint64_t ObjectId;
+    uint64_t Serial;
+    /** @brief The terrain component (borrowed); valid until the world changes. */
+    const WorldTerrainComponent* Component;
+    /** @brief The component revision the entry last checked; meaningful once IsResolved is true. */
+    uint32_t Revision;
+    /** @brief Whether a resolution was attempted for the current name, and the hash of that name (0 for none). */
+    bool IsResolved;
+    uint64_t NameHash;
+    /** @brief The resolved terrain, held under the model user passed to Sync; NULL when the component names none or it
+     *  failed to load (then the object draws no terrain). Read-only: the renderer reads its mesh, never writes it. */
+    const TerrainAsset* Asset;
+} WorldRenderTerrain;
+
+/** @brief One chunk of a placed terrain as the passes draw it this frame (B01): every chunk with a surface of a terrain
+ *  whose object is shown (effectively enabled and visible) is listed. */
+typedef struct WorldRenderTerrainChunkStruct
+{
+    /** @brief The terrain's object and its component's serial (with the asset and the chunk: the chunk's identity). */
+    uint64_t ObjectId;
+    uint64_t Serial;
+    /** @brief The terrain (borrowed under the model user) and the chunk's index in its mesh. */
+    const TerrainAsset* Asset;
+    uint32_t ChunkIndex;
+    /** @brief How many triangles its surface has (holes left out). */
+    uint32_t TriangleCount;
+    /** @brief The settings in effect (this frame): the terrain's, or the placement's own while their override flags are
+     *  on (WorldTerrainComponent_ResolveSettings). Terrain is never crisp. */
+    bool HasOutline;
+    WorldShadowTier ShadowTier;
+    bool CastsShadows;
+    /** @brief The draw distance in effect, in metres, times the placement's multiplier (>= 0: +infinity never fades),
+     *  and whether the player's draw_distance_scale leaves it as it is. WorldVisibility applies the scale and the zoom. */
+    float DrawDistance;
+    bool IsDrawDistanceFixed;
+    /** @brief The chunk's world matrix: the object's world matrix times the translation to the chunk's centre (the
+     *  chunk's positions are relative to it), in double. */
+    Matrix4Double WorldMatrix;
+    /** @brief The chunk's bounding sphere in the world, its centre in double: conservative under rotation, uneven scale
+     *  and a hierarchy's shear (WorldTransform_GetMaxScale). */
+    Vector3Double Center;
+    float Radius;
+    /** @brief The world matrix and the sphere's centre in render space (this frame): relative to the origin the lists
+     *  were synced for, subtracted in double and rounded once. */
+    Matrix RenderMatrix;
+    Vector3 RenderCenter;
+    /** @brief The object's final tint colour (its alpha is the object's opacity, as a model's). */
+    Color Tint;
+} WorldRenderTerrainChunk;
+
 /** @brief What a frame's LOD update needs (WorldRenderCache_UpdateLods): the camera, the quality setting and the frame's
  *  time. A plain value type. */
 typedef struct WorldRenderLodViewStruct
@@ -252,6 +316,11 @@ typedef struct WorldRenderCacheStruct
     GenericBuffer _sprites;
     /** @brief WorldRenderLight entries of this frame, in the world's component order. */
     GenericBuffer _lights;
+    /** @brief WorldRenderTerrain entries, one per terrain component, in the world's component order (B01); a scratch
+     *  buffer for re-matching them; and this frame's WorldRenderTerrainChunk entries. */
+    GenericBuffer _terrains;
+    GenericBuffer _terrainRematch;
+    GenericBuffer _terrainChunks;
     /** @brief The world the model entries were matched against (compared by address only; never dereferenced). */
     const World* _world;
     /** @brief That world's component-set version when the entries were matched. */
@@ -303,16 +372,17 @@ void WorldRenderCache_Reset(WorldRenderCache* self);
 /**
  * @brief Brings the cache up to date with @p world and rebuilds this frame's lists, in render space for @p origin.
  *
- * One walk over the world's model, sprite and light components. Every entry gets its world placement (in double) and
- * the same placement relative to @p origin (subtracted in double, rounded to float once): the render-space values the
- * passes draw with. A world other than the last one resets the cache;
+ * One walk over the world's model, sprite, light and terrain components. Every entry gets its world placement (in
+ * double) and the same placement relative to @p origin (subtracted in double, rounded to float once): the render-space
+ * values the passes draw with. A world other than the last one resets the cache;
  * entries are re-matched to the model components (by owner id and world model name) when the component-set version
  * changed since the last Sync, or when an entry no longer belongs to the component at its position. A world model whose
  * entry is new or whose name changed is resolved with AssetManager_LoadWorldModel under @p modelUser; a failure is
  * logged once (warning) and leaves the entry without an asset until the name changes. Variants are resolved with the
- * world model and when the component's variant changes (an unknown one logged once). Every model's settings, transform
- * and bounds are recomputed. Main thread only; resolving a world model loads its LOD models, which needs the GL
- * context.
+ * world model and when the component's variant changes (an unknown one logged once). Terrains are matched (by owner id
+ * and component serial) and resolved the same way (AssetManager_LoadTerrain), and their chunks listed (B01). Every
+ * model's settings, transform and bounds are recomputed. Main thread only; resolving a world model loads its LOD
+ * models, which needs the GL context.
  * @param self The cache; must not be NULL.
  * @param world The world to draw; must not be NULL.
  * @param origin The frame's origin, render space's (0, 0, 0): the camera's world position (any origin while only the
@@ -403,6 +473,35 @@ static inline const WorldRenderLight* WorldRenderCache_GetLights(const WorldRend
 {
     const void* Entries = self->_lights._data;
     *outCount = self->_lights._count;
+    return Entries;
+}
+
+/**
+ * @brief Returns the terrain entries: one per terrain component, in world order, including ones that draw nothing (no
+ *        terrain resolved).
+ * @param self The cache; must not be NULL.
+ * @param outCount [out] Receives the entry count. Must not be NULL.
+ * @returns The entries (borrowed until the next Sync or Reset); NULL when there are none.
+ */
+static inline const WorldRenderTerrain* WorldRenderCache_GetTerrains(const WorldRenderCache* self, size_t* outCount)
+{
+    const void* Entries = self->_terrains._data;
+    *outCount = self->_terrains._count;
+    return Entries;
+}
+
+/**
+ * @brief Returns this frame's terrain chunks: every chunk with a surface of every terrain whose object is shown, terrain
+ *        by terrain in world order, each terrain's chunks in its chunk order.
+ * @param self The cache; must not be NULL.
+ * @param outCount [out] Receives the entry count. Must not be NULL.
+ * @returns The entries (borrowed until the next Sync or Reset); NULL when there are none.
+ */
+static inline const WorldRenderTerrainChunk* WorldRenderCache_GetTerrainChunks(const WorldRenderCache* self,
+    size_t* outCount)
+{
+    const void* Entries = self->_terrainChunks._data;
+    *outCount = self->_terrainChunks._count;
     return Entries;
 }
 

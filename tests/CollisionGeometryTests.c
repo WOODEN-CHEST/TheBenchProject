@@ -705,6 +705,52 @@ static void MeshesMarkTheirSeamsInactive(TestRun* run)
     CollisionMesh_Destroy(Quad);
 }
 
+/* A part may give its triangles' active edges and the source indices their hits report (a terrain chunk does: its
+ * border edges keep what the neighbour across the cut gives them): both are kept as given, even where the mesh's own
+ * triangles would say otherwise, while a part that gives nothing has its edges computed and its own indices. */
+static void GivenActiveEdgesAndSourceIndicesAreKept(TestRun* run)
+{
+    static const float Vertices[] = { -1.0f, 0.0f, -1.0f, 1.0f, 0.0f, -1.0f, 1.0f, 0.0f, 1.0f, -1.0f, 0.0f, 1.0f };
+    static const float Shifted[] = { 4.0f, 0.0f, -1.0f, 6.0f, 0.0f, -1.0f, 6.0f, 0.0f, 1.0f, 4.0f, 0.0f, 1.0f };
+    static const unsigned short Indices[] = { 0U, 2U, 1U, 0U, 3U, 2U };
+    // The flat diagonal given active on the first triangle, and only the first edge active on the second.
+    static const uint8_t Given[] = { 0x7U, 0x1U };
+    static const uint32_t Sources[] = { 40U, 41U };
+    CollisionMeshPart Parts[2] =
+    {
+        { .Vertices = Vertices, .VertexCount = 4U, .Indices = Indices, .TriangleCount = 2U, .MaterialIndex = 0,
+            .ActiveEdges = Given, .SourceIndices = Sources },
+        { .Vertices = Shifted, .VertexCount = 4U, .Indices = Indices, .TriangleCount = 2U, .MaterialIndex = 0 },
+    };
+    CollisionMesh* Built = NULL;
+    if (!TEST_CHECK_SUCCESS(run, CollisionMesh_Create(Parts, 2U, MatrixIdentity(), &Built)))
+    {
+        return;
+    }
+    TEST_CHECK(run, Built->_triangleCount == 4U);
+    uint32_t GivenFound = 0U;
+    uint32_t ComputedFound = 0U;
+    for (uint32_t Triangle = 0U; Triangle < Built->_triangleCount; Triangle++)
+    {
+        const CollisionMeshTriangle* Entry = &Built->_triangles[Triangle];
+        if (Entry->_part == 0U)
+        {
+            TEST_CHECK(run, ((Entry->_sourceIndex == 40U) && (Entry->_activeEdges == 0x7U))
+                || ((Entry->_sourceIndex == 41U) && (Entry->_activeEdges == 0x1U)));
+            GivenFound++;
+        }
+        else
+        {
+            // Computed: the diagonal inactive (bit 0 of the first triangle, (0, 2); bit 2 of the second, (2, 0)).
+            TEST_CHECK(run, ((Entry->_sourceIndex == 0U) && (Entry->_activeEdges == 0x6U))
+                || ((Entry->_sourceIndex == 1U) && (Entry->_activeEdges == 0x3U)));
+            ComputedFound++;
+        }
+    }
+    TEST_CHECK(run, (GivenFound == 2U) && (ComputedFound == 2U));
+    CollisionMesh_Destroy(Built);
+}
+
 static void MeshQueriesMatchBruteForce(TestRun* run)
 {
     // A bumpy 30 x 30 grid of quads.
@@ -1439,6 +1485,7 @@ void CollisionGeometryTests_Run(TestRun* run)
         { "hulls_have_their_faces", HullsHaveTheirFaces },
         { "fine_hulls_are_reduced_keeping_their_extremes", FineHullsAreReducedKeepingTheirExtremes },
         { "meshes_mark_their_seams_inactive", MeshesMarkTheirSeamsInactive },
+        { "given_active_edges_and_source_indices_are_kept", GivenActiveEdgesAndSourceIndicesAreKept },
         { "mesh_queries_match_brute_force", MeshQueriesMatchBruteForce },
         { "random_distances_and_push_outs_agree", RandomDistancesAndPushOutsAgree },
         { "random_casts_never_miss_a_contact", RandomCastsNeverMissAContact },

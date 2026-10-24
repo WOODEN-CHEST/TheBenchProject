@@ -264,6 +264,9 @@ void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFr
     rlDisableColorBlend();  // write RGB (normal) + A (flag) directly; no alpha blend
     BeginMode3D(frame->RenderCamera);
     DrawNormalBufferModels(self, frame->SceneFilter);
+    // The terrain's chunks (B01), with their outline flags.
+    WorldRendererTerrain_DrawNormals(self, GameShader_GetRaylibShader(self->_gbuffer._shader),
+        self->_gbuffer._locOutlineFlag);
     // Cutout sprites into the same G-buffer (alpha-tested) so they get silhouette outlines and AO too.
     DrawNormalBufferSprites(self, frame->SceneFilter);
     EndMode3D();

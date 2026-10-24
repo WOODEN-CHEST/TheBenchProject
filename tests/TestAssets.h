@@ -5,6 +5,7 @@
 #include "TestFramework.h"
 #include "AnimationLibrary.h"
 #include "AssetManager.h"
+#include "TerrainAsset.h"
 #include "raylib/raylib.h"
 
 
@@ -18,7 +19,8 @@
  *  - a monospace font of the printable ASCII glyphs with metrics but no texture (enough to measure text);
  *  - a texture that names a made-up GPU id and was never uploaded (enough for anything that only copies it);
  *  - world models built from JSON by the real "world_model" type, over the code-built models and textures above;
- *  - world sprites built from JSON by the real "world_sprite" type, over the code-built sprite animations above.
+ *  - world sprites built from JSON by the real "world_sprite" type, over the code-built sprite animations above;
+ *  - a terrain whose mesh is a copy of one built in code, read again from its binary form at every load (B01).
  * Each definition can count how often its asset is loaded and unloaded, which shows when an asset user really
  * releases it.
  */
@@ -203,3 +205,15 @@ bool TestAssets_AddCharacter(TestRun* run, TestAssetFixture* fixture, const char
  * @returns true when it was built and registered.
  */
 bool TestAssets_AddAnimationGraph(TestRun* run, TestAssetFixture* fixture, const char* json);
+
+/**
+ * @brief Registers a terrain definition named @p name, of the standard "terrain" type, whose asset is a copy of @p mesh
+ *        (its binary form, read again at every load as the real type reads its file, with the same chunk size), with
+ *        @p settings and palette names "m0" to "m15" and density channel names "d0" to "d7".
+ * @param mesh The mesh (copied; the caller keeps it).
+ * @param settings Its placements' defaults; NULL for TerrainSettings_CreateDefault.
+ * @param counters Counts its loads and unloads; may be NULL. Must outlive the fixture's manager.
+ * @returns true when it was registered.
+ */
+bool TestAssets_AddTerrain(TestRun* run, TestAssetFixture* fixture, const char* name, const TerrainMesh* mesh,
+    const TerrainSettings* settings, TestAssetCounters* counters);

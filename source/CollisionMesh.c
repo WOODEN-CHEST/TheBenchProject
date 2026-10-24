@@ -13,8 +13,10 @@
  *
  * ACTIVE EDGES. A shape sliding over a mesh touches the edges between triangles; taking such an edge's own normal would
  * make it catch on a flat floor's seams (a "ghost" collision). An edge shared by two triangles is inactive when the two
- * lie flat (normals within FLAT_EDGE_COSINE) or fold concave; contacts on inactive edges then take the face normal.
- * Border edges, convex folds and edges shared by more than two triangles stay active.
+ * lie flat (normals within FLAT_EDGE_COSINE) or fold concave (CollisionMesh_IsSharedEdgeActive); contacts on inactive
+ * edges then take the face normal. Border edges, convex folds and edges shared by more than two triangles stay active.
+ * A part may give its triangles' activity itself (a terrain chunk, whose border edges have neighbours in the next
+ * chunk): those triangles keep it.
  *
  * BVH. Median splits along the longest axis of the triangles' centres, at most LEAF_TRIANGLES per leaf, depth-first
  * with the first child next to its parent, built with an explicit stack (no recursion).
@@ -32,6 +34,10 @@
 #define DEGENERATE_SINE 1e-6f
 /** The deepest a BVH can be: a median split halves the triangles, so log2 of the most triangles plus room. */
 #define MAX_BVH_DEPTH 64U
+/** A triangle whose part gives no active edges (they are computed). */
+#define GIVEN_ACTIVE_NONE 0xFFU
+/** Every edge bit of a triangle's active edges. */
+#define ALL_EDGE_BITS 0x7U
 
 
 // Types.
@@ -46,6 +52,8 @@ typedef struct BuildTriangleStruct
     uint32_t Indices[3];
     uint32_t Part;
     uint32_t SourceIndex;
+    /** The active edges its part gave it, or GIVEN_ACTIVE_NONE: computed. */
+    uint8_t GivenActive;
     Vector3 Centroid;
     Vector3 Min;
     Vector3 Max;
@@ -236,7 +244,9 @@ static bool CollectTriangles(const CollisionMeshPart* parts, size_t partCount, M
             Built->Indices[1] = Corners[1];
             Built->Indices[2] = Corners[2];
             Built->Part = (uint32_t)Part;
-            Built->SourceIndex = Triangle;
+            Built->SourceIndex = (Source->SourceIndices != NULL) ? Source->SourceIndices[Triangle] : Triangle;
+            Built->GivenActive = (Source->ActiveEdges != NULL)
+                ? (uint8_t)(Source->ActiveEdges[Triangle] & ALL_EDGE_BITS) : (uint8_t)GIVEN_ACTIVE_NONE;
             Built->Min = CollisionMath_Min(vertices[Corners[0]], CollisionMath_Min(vertices[Corners[1]],
                 vertices[Corners[2]]));
             Built->Max = CollisionMath_Max(vertices[Corners[0]], CollisionMath_Max(vertices[Corners[1]],
@@ -293,21 +303,25 @@ static bool IsEdgeActive(const Vector3* vertices, const BuildTriangle* first, ui
     {
         return true;
     }
-    Vector3 FirstNormal = GetNormal(vertices, first->Indices);
-    Vector3 SecondNormal = GetNormal(vertices, second->Indices);
-    if (CollisionMath_Dot(FirstNormal, SecondNormal) > FLAT_EDGE_COSINE)
-    {
-        return false;
-    }
-    Vector3 Opposite = vertices[second->Indices[(secondEdge + 2U) % 3U]];
-    Vector3 OnEdge = vertices[first->Indices[firstEdge]];
-    return CollisionMath_Dot(FirstNormal, CollisionMath_Subtract(Opposite, OnEdge)) < 0.0f;
+    return CollisionMesh_IsSharedEdgeActive(GetNormal(vertices, first->Indices), GetNormal(vertices, second->Indices),
+        vertices[first->Indices[firstEdge]], vertices[second->Indices[(secondEdge + 2U) % 3U]]);
 }
 
-/* Each triangle's active edge bits. */
+/* Each triangle's active edge bits: the ones its part gave, the rest computed from the mesh's own triangles. */
 static void FindActiveEdges(const Vector3* vertices, const BuildTriangle* triangles, uint32_t triangleCount,
     uint8_t* outActive)
 {
+    bool IsAnyComputed = false;
+    for (uint32_t Triangle = 0U; Triangle < triangleCount; Triangle++)
+    {
+        outActive[Triangle] = (triangles[Triangle].GivenActive != GIVEN_ACTIVE_NONE) ? triangles[Triangle].GivenActive
+            : (uint8_t)ALL_EDGE_BITS;
+        IsAnyComputed = IsAnyComputed || (triangles[Triangle].GivenActive == GIVEN_ACTIVE_NONE);
+    }
+    if (!IsAnyComputed)
+    {
+        return;
+    }
     size_t Capacity = GetTableCapacity((size_t)triangleCount * 3U);
     EdgeEntry* Table = Memory_Allocate(Capacity * sizeof(EdgeEntry));
     for (size_t Slot = 0U; Slot < Capacity; Slot++)
@@ -316,7 +330,6 @@ static void FindActiveEdges(const Vector3* vertices, const BuildTriangle* triang
     }
     for (uint32_t Triangle = 0U; Triangle < triangleCount; Triangle++)
     {
-        outActive[Triangle] = 0x7U;
         for (uint32_t Edge = 0U; Edge < 3U; Edge++)
         {
             AddEdge(Table, Capacity, triangles[Triangle].Indices[Edge], triangles[Triangle].Indices[(Edge + 1U) % 3U],
@@ -334,8 +347,16 @@ static void FindActiveEdges(const Vector3* vertices, const BuildTriangle* triang
         const BuildTriangle* Second = &triangles[Entry->SecondTriangle];
         if (!IsEdgeActive(vertices, First, Entry->Edge, Second, Entry->SecondEdge))
         {
-            outActive[Entry->Triangle] = (uint8_t)(outActive[Entry->Triangle] & ~(1U << Entry->Edge));
-            outActive[Entry->SecondTriangle] = (uint8_t)(outActive[Entry->SecondTriangle] & ~(1U << Entry->SecondEdge));
+            // A triangle whose part gave its edges keeps them.
+            if (First->GivenActive == GIVEN_ACTIVE_NONE)
+            {
+                outActive[Entry->Triangle] = (uint8_t)(outActive[Entry->Triangle] & ~(1U << Entry->Edge));
+            }
+            if (Second->GivenActive == GIVEN_ACTIVE_NONE)
+            {
+                outActive[Entry->SecondTriangle] = (uint8_t)(outActive[Entry->SecondTriangle]
+                    & ~(1U << Entry->SecondEdge));
+            }
         }
     }
     Memory_Free(Table);
@@ -470,6 +491,15 @@ static void BuildNodes(const BuildTriangle* triangles, uint32_t* order, uint32_t
 
 
 // Public functions.
+bool CollisionMesh_IsSharedEdgeActive(Vector3 normal, Vector3 otherNormal, Vector3 edgePoint, Vector3 otherOpposite)
+{
+    if (CollisionMath_Dot(normal, otherNormal) > FLAT_EDGE_COSINE)
+    {
+        return false;
+    }
+    return CollisionMath_Dot(normal, CollisionMath_Subtract(otherOpposite, edgePoint)) < 0.0f;
+}
+
 Error CollisionMesh_Create(const CollisionMeshPart* parts, size_t partCount, Matrix transform, CollisionMesh** outMesh)
 {
     *outMesh = NULL;

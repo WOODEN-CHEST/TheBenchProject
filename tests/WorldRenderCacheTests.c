@@ -1,6 +1,7 @@
 #include "TestSuites.h"
 #include "TestAnimation.h"
 #include "TestAssets.h"
+#include "TestTerrain.h"
 #include "TestWorld.h"
 #include "GameMath.h"
 #include "Logger.h"
@@ -15,6 +16,7 @@
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
+#include "WorldTerrainComponent.h"
 #include "raylib/raymath.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRPath.h"
@@ -1612,6 +1614,202 @@ static void ResetForgetsEveryEntry(TestRun* run)
 }
 
 
+// Tests: terrains (B01).
+static float TerrainTilt(float x, float z)
+{
+    return (0.25f * x) - (0.125f * z);
+}
+
+/* A 16 m terrain in 8 m chunks, its chunk of cell (1, 1) all holes: registered as "field" (one material). */
+static bool AddFieldTerrain(TestRun* run, CacheFixture* fixture, const char* name)
+{
+    TestTerrainGrid Grid;
+    TestTerrain_BuildGrid(&Grid, 16U, 16U, 1.0f, 0.0f, 0.0f, TerrainTilt);
+    for (uint32_t J = 8U; J < 16U; J++)
+    {
+        for (uint32_t I = 8U; I < 16U; I++)
+        {
+            Grid.Flags[TestTerrain_Triangle(&Grid, I, J)] = TERRAIN_TRIANGLE_FLAG_HOLE;
+            Grid.Flags[TestTerrain_Triangle(&Grid, I, J) + 1U] = TERRAIN_TRIANGLE_FLAG_HOLE;
+        }
+    }
+    TerrainMesh* Ground = TestTerrain_CreateMesh(run, &Grid, 1U, 0U, 8.0f);
+    bool IsAdded = (Ground != NULL) && TestAssets_AddTerrain(run, &fixture->Assets, name, Ground, NULL, NULL);
+    TerrainMesh_Destroy(Ground);
+    TestTerrain_FreeGrid(&Grid);
+    return IsAdded;
+}
+
+/* An object at @p position placing the terrain @p name. */
+static WorldTerrainComponent* AddTerrainObject(TestRun* run, World* world, const char* name, Vector3 position)
+{
+    WorldComponent* Component = AddComponentObject(run, world, WorldComponentType_Terrain);
+    if (Component == NULL)
+    {
+        return NULL;
+    }
+    WorldTerrainComponent* Terrain = WorldTerrainComponent_FromComponent(Component);
+    TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetTerrain(Terrain, (const unsigned char*)name));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(Component), GameMath_FromVector3(position)));
+    return Terrain;
+}
+
+/* Every chunk with a surface is listed (the holed one is not), each with the terrain's default settings, the object's
+ * tint, its placement (the object's world matrix times the translation to its centre: its vertices land where the object
+ * puts the terrain's), its sphere through it, and both in render space for the sync's origin. */
+static void TerrainChunksAreListedWhereTheirObjectPutsThem(TestRun* run)
+{
+    CacheFixture Fixture;
+    WorldTerrainComponent* Terrain = NULL;
+    if (CacheFixture_Construct(run, &Fixture) && AddFieldTerrain(run, &Fixture, "field"))
+    {
+        Terrain = AddTerrainObject(run, &Fixture.World, "field", (Vector3){ 100.25f, 2.0f, -50.0f });
+    }
+    WorldObject* Owner = (Terrain != NULL) ? WorldComponent_GetOwner(&Terrain->Base) : NULL;
+    Vector3Double Origin = { .X = 90.0, .Y = 0.5, .Z = -40.0 };
+    if ((Owner != NULL) && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Owner, (Vector3){ 0.0f, PI / 2.0f, 0.0f }))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Owner, (Vector3){ 2.0f, 1.0f, 1.0f }))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetTint(Owner, (RenderColor){ .Tint = { 200, 180, 160, 255 },
+            .Brightness = 1.0f, .Opacity = 0.5f }))
+        && TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Origin, Fixture.Assets.Manager,
+            Fixture.ModelUser, NULL)))
+    {
+        size_t TerrainCount = 0U;
+        const WorldRenderTerrain* Terrains = WorldRenderCache_GetTerrains(&Fixture.Cache, &TerrainCount);
+        size_t ChunkCount = 0U;
+        const WorldRenderTerrainChunk* Chunks = WorldRenderCache_GetTerrainChunks(&Fixture.Cache, &ChunkCount);
+        if (TEST_CHECK(run, (TerrainCount == 1U) && (Terrains[0].Asset != NULL) && (ChunkCount == 3U)))
+        {
+            const TerrainMesh* Ground = TerrainAsset_GetMesh(Terrains[0].Asset);
+            Matrix4Double ObjectWorld = WorldObject_GetWorldMatrix(Owner);
+            uint32_t Holed = UINT32_MAX;
+            TEST_CHECK(run, TerrainMesh_TryFindChunk(Ground, 1, 1, &Holed));
+            for (size_t Index = 0U; Index < ChunkCount; Index++)
+            {
+                const WorldRenderTerrainChunk* Entry = &Chunks[Index];
+                const TerrainChunk* Source = TerrainMesh_GetChunk(Ground, Entry->ChunkIndex);
+                TEST_CHECK(run, (Entry->ObjectId == WorldObject_GetId(Owner))
+                    && (Entry->Serial == WorldComponent_GetSerial(&Terrain->Base)) && (Entry->Asset == Terrains[0].Asset)
+                    && (Entry->ChunkIndex != Holed)
+                    && ((Index == 0U) || (Entry->ChunkIndex > Chunks[Index - 1U].ChunkIndex))
+                    && (Entry->TriangleCount == TerrainChunk_GetSurfaceTriangleCount(Source)));
+                Color Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Owner));
+                TEST_CHECK(run, Entry->HasOutline && (Entry->ShadowTier == WorldShadowTier_Both) && Entry->CastsShadows
+                    && (Entry->DrawDistance == TERRAIN_DEFAULT_DRAW_DISTANCE) && Entry->IsDrawDistanceFixed
+                    && (Entry->Tint.r == Tint.r) && (Entry->Tint.a == Tint.a) && (Tint.a < 200));
+                // A surface vertex through the chunk's matrix is the terrain's vertex through the object's.
+                Vector3 Local = TerrainChunk_GetPositions(Source)[0];
+                Vector3 Terrainwise = TerrainMesh_GetPosition(Ground, TerrainChunk_GetVertexSources(Source)[0]);
+                Vector3Double ByChunk = Matrix4Double_TransformPoint(&Entry->WorldMatrix, GameMath_FromVector3(Local));
+                Vector3Double ByObject = Matrix4Double_TransformPoint(&ObjectWorld, GameMath_FromVector3(Terrainwise));
+                TEST_CHECK(run, IsNearDouble(ByChunk.X, ByObject.X) && IsNearDouble(ByChunk.Y, ByObject.Y)
+                    && IsNearDouble(ByChunk.Z, ByObject.Z));
+                // The sphere: the chunk's, through its matrix, its radius times the largest scale (2).
+                Vector3 SphereCenter;
+                float SphereRadius = 0.0f;
+                TerrainChunk_GetSphere(Source, &SphereCenter, &SphereRadius);
+                Vector3Double Center = Matrix4Double_TransformPoint(&Entry->WorldMatrix,
+                    GameMath_FromVector3(SphereCenter));
+                TEST_CHECK(run, IsNearDouble(Entry->Center.X, Center.X) && IsNearDouble(Entry->Center.Z, Center.Z)
+                    && IsNear(Entry->Radius, 2.0f * SphereRadius));
+                // Render space: the same, less the origin.
+                TEST_CHECK(run, IsNear(Entry->RenderMatrix.m12, (float)(Entry->WorldMatrix.M[12] - Origin.X))
+                    && IsNear(Entry->RenderMatrix.m13, (float)(Entry->WorldMatrix.M[13] - Origin.Y))
+                    && IsNear(Entry->RenderMatrix.m14, (float)(Entry->WorldMatrix.M[14] - Origin.Z))
+                    && IsNear(Entry->RenderCenter.x, (float)(Entry->Center.X - Origin.X))
+                    && IsNear(Entry->RenderCenter.z, (float)(Entry->Center.Z - Origin.Z)));
+            }
+        }
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+/* The terrain entries follow their components: a hidden object lists no chunks (its entry stays resolved), the
+ * placement's settings are taken every frame, a name that fails resolves nothing until it changes (logged once), a
+ * replaced component gets a new entry, a removed one none. */
+static void TerrainEntriesFollowTheirComponents(TestRun* run)
+{
+    GenericBuffer Directory;
+    GenericBuffer_AllocateVariable(&Directory, CACHE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    Logger Log;
+    if (!TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "terrain_cache", &Directory))
+        || !TEST_CHECK_SUCCESS(run, Logger_Construct(&Log, Directory._data)))
+    {
+        Memory_Free(Directory._data);
+        return;
+    }
+    CacheFixture Fixture;
+    WorldTerrainComponent* Terrain = NULL;
+    if (CacheFixture_Construct(run, &Fixture) && AddFieldTerrain(run, &Fixture, "field"))
+    {
+        Terrain = AddTerrainObject(run, &Fixture.World, "field", (Vector3){ 0.0f, 0.0f, 0.0f });
+    }
+    WorldObject* Owner = (Terrain != NULL) ? WorldComponent_GetOwner(&Terrain->Base) : NULL;
+    bool IsRun = Owner != NULL;
+    size_t ChunkCount = 0U;
+    size_t TerrainCount = 0U;
+    for (int Step = 0; IsRun && (Step < 9); Step++)
+    {
+        switch (Step)
+        {
+            case 1: TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Owner, false)); break;
+            case 2: TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Owner, true)); break;
+            case 3:
+                TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetOverridden(Terrain, WorldTerrainSetting_HasOutline,
+                    true));
+                TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetHasOutline(Terrain, false));
+                TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetDrawDistanceMultiplier(Terrain, 0.5f));
+                break;
+            case 4: TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetTerrain(Terrain, (const unsigned char*)u8"nowhere"));
+                break;
+            case 5: break;
+            case 6: TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetTerrain(Terrain, (const unsigned char*)u8"field"));
+                break;
+            case 7:
+            {
+                // Replaced: the same object and type, a new component (a new serial), a new entry.
+                uint64_t Id = WorldObject_GetId(Owner);
+                WorldComponent* Again = NULL;
+                TEST_CHECK_SUCCESS(run, World_RemoveComponent(&Fixture.World, Id, WorldComponentType_Terrain));
+                TEST_CHECK_SUCCESS(run, World_AddComponent(&Fixture.World, Id, WorldComponentType_Terrain, &Again));
+                Terrain = WorldTerrainComponent_FromComponent(Again);
+                TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetTerrain(Terrain, (const unsigned char*)u8"field"));
+                break;
+            }
+            case 8: TEST_CHECK_SUCCESS(run, World_RemoveComponent(&Fixture.World, WorldObject_GetId(Owner),
+                WorldComponentType_Terrain)); break;
+            default: break;
+        }
+        IsRun = TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Vector3Double_Zero(),
+            Fixture.Assets.Manager, Fixture.ModelUser, &Log));
+        const WorldRenderTerrain* Terrains = WorldRenderCache_GetTerrains(&Fixture.Cache, &TerrainCount);
+        const WorldRenderTerrainChunk* Chunks = WorldRenderCache_GetTerrainChunks(&Fixture.Cache, &ChunkCount);
+        bool IsResolved = (TerrainCount == 1U) && (Terrains[0].Asset != NULL);
+        switch (Step)
+        {
+            case 0: case 2: TEST_CHECK(run, IsResolved && (ChunkCount == 3U) && Chunks[0].HasOutline
+                && (Chunks[0].DrawDistance == TERRAIN_DEFAULT_DRAW_DISTANCE)); break;
+            case 1: TEST_CHECK(run, IsResolved && (ChunkCount == 0U)); break;
+            // Resolved again under the old name, it keeps the placement's own settings.
+            case 3: case 6: TEST_CHECK(run, IsResolved && (ChunkCount == 3U) && !Chunks[0].HasOutline
+                && (Chunks[0].DrawDistance == (0.5f * TERRAIN_DEFAULT_DRAW_DISTANCE))); break;
+            case 4: case 5: TEST_CHECK(run, (TerrainCount == 1U) && (Terrains[0].Asset == NULL) && (ChunkCount == 0U));
+                break;
+            case 7: TEST_CHECK(run, IsResolved && (Terrains[0].Serial == WorldComponent_GetSerial(&Terrain->Base))
+                && (ChunkCount == 3U) && Chunks[0].HasOutline); break;
+            case 8: TEST_CHECK(run, (TerrainCount == 0U) && (ChunkCount == 0U)); break;
+            default: break;
+        }
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+    TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
+    if (Owner != NULL)
+    {
+        TEST_CHECK(run, CountInLatestLog(run, Directory._data, "draws no terrain: terrain \"nowhere\"") == 1U);
+    }
+    Memory_Free(Directory._data);
+}
+
 // Public functions.
 void WorldRenderCacheTests_Run(TestRun* run)
 {
@@ -1644,6 +1842,8 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "a_camera_turning_back_turns_the_fade_around", ACameraTurningBackTurnsTheFadeAround },
         { "posed_objects_take_their_pose_and_its_bounds", PosedObjectsTakeTheirPoseAndItsBounds },
         { "the_first_person_object_hides_its_bones_from_the_camera", TheFirstPersonObjectHidesItsBonesFromTheCamera },
+        { "terrain_chunks_are_listed_where_their_object_puts_them", TerrainChunksAreListedWhereTheirObjectPutsThem },
+        { "terrain_entries_follow_their_components", TerrainEntriesFollowTheirComponents },
     };
     TestRun_RunSuite(run, "WorldRenderCache", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

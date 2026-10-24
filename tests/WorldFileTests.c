@@ -9,6 +9,7 @@
 #include "PropertyDescriptor.h"
 #include "World.h"
 #include "WorldAnimatorComponent.h"
+#include "WorldTerrainComponent.h"
 #include "WorldColliderComponent.h"
 #include "WorldComponent.h"
 #include "WorldEnvironment.h"
@@ -1498,7 +1499,12 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 50U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 51U);
+            // The terrain (B01): one object placing the placeholder terrain around the ground slab.
+            WorldComponent* Ground = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 51U, WorldComponentType_Terrain, &Ground)
+                && AreNamesEqual(WorldTerrainComponent_GetTerrain(WorldTerrainComponent_FromComponent(Ground)),
+                    (const unsigned char*)u8"placeholder_terrain"));
             TEST_CHECK(run, AreNamesEqual(World_GetName(&Loaded), (const unsigned char*)u8"test"));
             // The animation examples (T29): four placeholder figures, each animator playing a clip of its own; the short
             // one waves in a loop its library does not give the clip (the placement's loop override).

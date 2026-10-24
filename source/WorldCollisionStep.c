@@ -49,7 +49,7 @@ static bool ArePositionsEqual(Vector3Double a, Vector3Double b)
 
 static WorldObject* GetObjectOf(const WorldCollisionInstance* instance)
 {
-    return WorldComponent_GetOwner(&instance->Collider->Base);
+    return WorldComponent_GetOwner(WorldCollisionInternal_GetComponent(instance));
 }
 
 /* The box of an instance's valid, bounded shapes where it is; false when it has none. */

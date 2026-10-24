@@ -73,8 +73,10 @@ typedef enum WorldComponentTypeEnum
     /** @brief An animator: what plays the skeletal animation of the object's skinned model (WorldAnimatorComponent.h,
      *  T29). */
     WorldComponentType_Animator = 5,
+    /** @brief A terrain: places a terrain asset's mesh, drawn in chunks and solid (WorldTerrainComponent.h, B01). */
+    WorldComponentType_Terrain = 6,
     /** @brief The number of standard types (not a type). */
-    WorldComponentType_Count = 6
+    WorldComponentType_Count = 7
 } WorldComponentType;
 
 /**

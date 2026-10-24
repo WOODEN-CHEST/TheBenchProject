@@ -11,13 +11,13 @@ The definition JSON format is specified in `references/asset_structure.md`.
 
 Loads, shares and unloads game assets. The manager stores **definitions** (named recipes, normally JSON files
 under the asset search roots) and builds an asset from its definition the first time someone loads it. Asset
-types are registered at runtime (`AssetManager_CreateAssetType`); the twelve standard types (sprite sheet, sprite
+types are registered at runtime (`AssetManager_CreateAssetType`); the thirteen standard types (sprite sheet, sprite
 animation, sound, font, shader, model, texture, world model, world sprite, character, animation library, animation
-graph) are
+graph, terrain) are
 registered together by `AssetManager_CreateStandardAssetTypes`. The wrappers it hands out are documented in
 [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md),
-[WorldModels.md](WorldModels.md), [WorldSprites.md](WorldSprites.md), [Characters.md](Characters.md) and
-[Animation.md](Animation.md).
+[WorldModels.md](WorldModels.md), [WorldSprites.md](WorldSprites.md), [Characters.md](Characters.md),
+[Animation.md](Animation.md) and [Terrain.md](Terrain.md).
 
 ## Lifetime rules (read first)
 
@@ -248,7 +248,7 @@ Only reference resources loaded through `AssetManager_AcquireResourcePath` use i
 
 ## Standard types
 
-All ten read JSON definitions (`.json`) and parse them with the shared `JSONObjectPool` from
+All of them read JSON definitions (`.json`) and parse them with the shared `JSONObjectPool` from
 `AssetManager_CreateStandardAssetTypes`. Every `texture_properties` key goes through one parser,
 `AssetJSON_ReadTextureProperties` (filtering, wrap, mipmaps); the texture type and model material maps apply all three
 with `TextureProperties_Apply`, the sprite sheet, sprite animation and font loaders only the filter (and reject
@@ -266,9 +266,11 @@ with `TextureProperties_Apply`, the sprite sheet, sprite animation and font load
 | `world_model` (`world_models`) | `AssetManager_LoadWorldModel` | `WorldModel` | Only its own data: the variants, their overrides and names in one block. Its LOD models and its variants' textures are held under its dependency user and unload right after it. Unknown keys are refused anywhere in its definition. |
 | `world_sprite` (`world_sprites`) | `AssetManager_LoadWorldSprite` | `WorldSprite` | Only its own data (the settings). Its sprite animation is held under its dependency user and unloads right after it. Its settings are read through property tables whose rows the sprite component shares; unknown keys are refused in the root and in `render`. |
 | `character` (`characters`) | `AssetManager_LoadCharacter` | `CharacterAsset` | Only its own data (the settings); no dependencies. Its settings are read through a property table whose rows the character component shares; unknown keys are refused, and the heights must fit the radius ([Characters.md](Characters.md)). |
+| `terrain` (`terrains`) | `AssetManager_LoadTerrain` | `TerrainAsset` | Its mesh (`TerrainMesh`: CPU data, no GL; the renderer keeps the GPU copies) and its names; no dependencies until B02 makes the palette's materials its own. The mesh is imported from a `.glb` (`source: model`) or read from its binary form (`.ghdf`, `source: data`) when it loads, both treated as hostile; unknown keys are refused everywhere in the definition ([Terrain.md](Terrain.md)). |
 
 Details per type: [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md),
-[WorldModels.md](WorldModels.md), [WorldSprites.md](WorldSprites.md).
+[WorldModels.md](WorldModels.md), [WorldSprites.md](WorldSprites.md), [Terrain.md](Terrain.md). The table lacks the
+two animation types; [Animation.md](Animation.md) has them.
 
 ## Bulk operations (stepped loading)
 

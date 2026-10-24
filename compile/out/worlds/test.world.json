@@ -1,7 +1,7 @@
 {
     "format_version": 1,
     "name": "test",
-    "next_object_id": 51,
+    "next_object_id": 52,
     "environment": {},
     "objects": [
         {
@@ -673,6 +673,15 @@
                     "world_model": "test_bench"
                 },
                 "collider": {}
+            }
+        },
+        {
+            "id": 51,
+            "name": "terrain",
+            "components": {
+                "terrain": {
+                    "terrain": "placeholder_terrain"
+                }
             }
         }
     ]

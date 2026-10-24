@@ -70,10 +70,12 @@ static void Clear(WorldVisibility* self)
 {
     GenericBuffer_Clear(&self->_modelFades);
     GenericBuffer_Clear(&self->_spriteFades);
+    GenericBuffer_Clear(&self->_terrainChunkFades);
     for (int Pass = 0; Pass < (int)WorldVisibilityPass_Count; Pass++)
     {
         GenericBuffer_Clear(&self->_models[Pass]);
         GenericBuffer_Clear(&self->_sprites[Pass]);
+        GenericBuffer_Clear(&self->_terrainChunks[Pass]);
     }
     self->_counts = (WorldVisibilityCounts){ 0 };
     self->_hasCrispObjects = false;
@@ -234,6 +236,36 @@ static bool AddSprite(WorldVisibility* self, const WorldVisibilityView* view, co
         || AddCaster(self->_sprites, view, sprite->Shape.Position, sprite->BoundsRadius, true, true, index);
 }
 
+/* One terrain chunk entry (B01; the cache lists only chunks of shown terrains): its fades, then the camera's list when it
+ * is in view (counted with its triangles), and the shadow passes' lists by its shadow tier, as a model's. */
+static bool AddTerrainChunk(WorldVisibility* self, const WorldVisibilityView* view, const WorldRenderTerrainChunk* chunk,
+    size_t index)
+{
+    float DrawDistance = WorldVisibility_ScaleDrawDistance(chunk->DrawDistance, chunk->IsDrawDistanceFixed,
+        view->DrawDistanceScale);
+    WorldVisibilityFade Fade = GetFade(view, chunk->RenderCenter, chunk->Radius, DrawDistance, GetZoomFactor(view),
+        chunk->Tint);
+    if (!GenericBuffer_AddLast(&self->_terrainChunkFades, &Fade))
+    {
+        return false;
+    }
+    if (!(Fade.Combined < 1.0f))
+    {
+        return true;
+    }
+    if (IsInVolume(view, &view->CameraFrustum, chunk->RenderCenter, chunk->Radius))
+    {
+        if (!AddIndex(&self->_terrainChunks[WorldVisibilityPass_Camera], index))
+        {
+            return false;
+        }
+        self->_counts.DrawnTerrainChunkCount++;
+        self->_counts.DrawnTerrainTriangleCount += chunk->TriangleCount;
+    }
+    return !chunk->CastsShadows || AddCaster(self->_terrainChunks, view, chunk->RenderCenter, chunk->Radius,
+        ModelCastsIntoCascade(chunk->ShadowTier, true), ModelCastsIntoCascade(chunk->ShadowTier, false), index);
+}
+
 /* Whether a pass value names a list. */
 static bool IsPass(WorldVisibilityPass pass)
 {
@@ -362,10 +394,12 @@ void WorldVisibility_Construct(WorldVisibility* self)
 {
     GenericBuffer_AllocateVariable(&self->_modelFades, INITIAL_LIST_CAPACITY, sizeof(WorldVisibilityFade));
     GenericBuffer_AllocateVariable(&self->_spriteFades, INITIAL_LIST_CAPACITY, sizeof(WorldVisibilityFade));
+    GenericBuffer_AllocateVariable(&self->_terrainChunkFades, INITIAL_LIST_CAPACITY, sizeof(WorldVisibilityFade));
     for (int Pass = 0; Pass < (int)WorldVisibilityPass_Count; Pass++)
     {
         GenericBuffer_AllocateVariable(&self->_models[Pass], INITIAL_LIST_CAPACITY, sizeof(size_t));
         GenericBuffer_AllocateVariable(&self->_sprites[Pass], INITIAL_LIST_CAPACITY, sizeof(size_t));
+        GenericBuffer_AllocateVariable(&self->_terrainChunks[Pass], INITIAL_LIST_CAPACITY, sizeof(size_t));
     }
     self->_counts = (WorldVisibilityCounts){ 0 };
     self->_hasCrispObjects = false;
@@ -379,10 +413,12 @@ void WorldVisibility_Deconstruct(WorldVisibility* self)
     }
     Memory_Free(self->_modelFades._data);
     Memory_Free(self->_spriteFades._data);
+    Memory_Free(self->_terrainChunkFades._data);
     for (int Pass = 0; Pass < (int)WorldVisibilityPass_Count; Pass++)
     {
         Memory_Free(self->_models[Pass]._data);
         Memory_Free(self->_sprites[Pass]._data);
+        Memory_Free(self->_terrainChunks[Pass]._data);
     }
 }
 
@@ -414,6 +450,18 @@ Error WorldVisibility_Build(WorldVisibility* self, const WorldRenderCache* cache
         {
             Clear(self);
             return Error_Construct2(ErrorCode_InvalidOperation, "WorldVisibility: could not grow a sprite list.");
+        }
+    }
+
+    size_t ChunkCount = 0;
+    const WorldRenderTerrainChunk* Chunks = WorldRenderCache_GetTerrainChunks(cache, &ChunkCount);
+    for (size_t Index = 0; Index < ChunkCount; Index++)
+    {
+        if (!AddTerrainChunk(self, view, &Chunks[Index], Index))
+        {
+            Clear(self);
+            return Error_Construct2(ErrorCode_InvalidOperation, "WorldVisibility: could not grow a terrain chunk "
+                "list.");
         }
     }
     return Error_CreateSuccess();
@@ -449,6 +497,21 @@ const size_t* WorldVisibility_GetSprites(const WorldVisibility* self, const Worl
     return Entries;
 }
 
+const size_t* WorldVisibility_GetTerrainChunks(const WorldVisibility* self, const WorldRenderCache* cache,
+    WorldVisibilityPass pass, size_t* outCount)
+{
+    size_t ChunkCount = 0;
+    WorldRenderCache_GetTerrainChunks(cache, &ChunkCount);
+    *outCount = 0;
+    if (!IsPass(pass) || (ChunkCount != self->_terrainChunkFades._count) || (self->_terrainChunks[pass]._count == 0))
+    {
+        return NULL;
+    }
+    *outCount = self->_terrainChunks[pass]._count;
+    const void* Entries = self->_terrainChunks[pass]._data;
+    return Entries;
+}
+
 WorldVisibilityFade WorldVisibility_GetModelFade(const WorldVisibility* self, size_t index)
 {
     if (index >= self->_modelFades._count)
@@ -467,6 +530,17 @@ WorldVisibilityFade WorldVisibility_GetSpriteFade(const WorldVisibility* self, s
         return (WorldVisibilityFade){ .Distance = 1.0f, .Combined = 1.0f };
     }
     const void* FadeData = self->_spriteFades._data;
+    const WorldVisibilityFade* Fades = FadeData;
+    return Fades[index];
+}
+
+WorldVisibilityFade WorldVisibility_GetTerrainChunkFade(const WorldVisibility* self, size_t index)
+{
+    if (index >= self->_terrainChunkFades._count)
+    {
+        return (WorldVisibilityFade){ .Distance = 1.0f, .Combined = 1.0f };
+    }
+    const void* FadeData = self->_terrainChunkFades._data;
     const WorldVisibilityFade* Fades = FadeData;
     return Fades[index];
 }

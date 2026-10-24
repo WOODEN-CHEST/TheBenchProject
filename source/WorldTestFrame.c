@@ -875,6 +875,19 @@ static void HandleDebugModelInput(WorldTestFrame* frame, const GameInput* input)
             Error_Deconstruct(&LogResult);
         }
     }
+    // Minus shows the terrain's chunk key (B01): each chunk tinted by its cell, and the terrain's wireframe. Not F12:
+    // raylib's EndDrawing takes a screenshot on it (SUPPORT_SCREEN_CAPTURE).
+    if (GameInput_IsKeyPressed(input, GameKey_Minus))
+    {
+        bool IsEnabled = !WorldRenderer_IsTerrainKeyEnabled(frame->_renderer);
+        WorldRenderer_SetTerrainKeyEnabled(frame->_renderer, IsEnabled);
+        if (Log != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(Log, (const unsigned char*)u8"WorldTest: terrain chunk key %s.",
+                IsEnabled ? "ON (each chunk its own colour, the wireframe over it)" : "OFF");
+            Error_Deconstruct(&LogResult);
+        }
+    }
     // Q colours every model by the LOD it shows (0 white, 1 green, 2 yellow, 3 red, coarser magenta), to watch the
     // switches along the lod_test row.
     if (GameInput_IsKeyPressed(input, GameKey_Q))
@@ -1447,7 +1460,8 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the "
             u8"desk, E variants, Z zoom, Q LOD tinting, F7 collider wireframes, F8 contact points, F6 swing the door, "
             u8"F9 the pushing wall, F10 move the door's crate, F11 far shift (everything 28 km out, then 141 km, then "
-            u8"back); F1 walk (the player as a character: WASD, SHIFT run, SPACE jump, CTRL crouch, E use: sit on the "
+            u8"back), - the terrain's chunk key; F1 walk (the player as a character: WASD, SHIFT run, SPACE jump, "
+            u8"CTRL crouch, E use: sit on the "
             u8"bench, pick up the coffee cup, open the door, E again to stand up; 9 put down, 0 wave), F2 the test NPCs "
             u8"(a human, a dog, a pigeon), 8 the NPC human sits on the bench and gets up, F3 fly, F4 the player's kind; "
             u8"5 the showcase's next clip, 6 the crowd, 7 slow motion; I renderer, game "

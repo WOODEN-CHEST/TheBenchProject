@@ -63,6 +63,8 @@ static const unsigned char* const FontExtensionList[] = { u8"ttf", u8"otf" };
 static const unsigned char* const SoundExtensionList[] = { u8"wav", u8"ogg", u8"mp3", u8"qoa" };
 static const unsigned char* const ShaderStageExtensionList[] = { u8"vert", u8"frag", u8"vs", u8"fs", u8"glsl" };
 static const unsigned char* const AnimationLibraryExtensionList[] = { u8"gltf", u8"glb" };
+static const unsigned char* const TerrainModelExtensionList[] = { u8"gltf", u8"glb" };
+static const unsigned char* const TerrainDataExtensionList[] = { u8"ghdf" };
 
 const AssetExtensionFilter ASSET_EXTENSIONS_TEXTURE = { TextureExtensionList, ARRAY_LENGTH(TextureExtensionList) };
 const AssetExtensionFilter ASSET_EXTENSIONS_MODEL = { ModelExtensionList, ARRAY_LENGTH(ModelExtensionList) };
@@ -71,6 +73,10 @@ const AssetExtensionFilter ASSET_EXTENSIONS_SOUND = { SoundExtensionList, ARRAY_
 const AssetExtensionFilter ASSET_EXTENSIONS_SHADER_STAGE = { ShaderStageExtensionList, ARRAY_LENGTH(ShaderStageExtensionList) };
 const AssetExtensionFilter ASSET_EXTENSIONS_ANIMATION_LIBRARY = { AnimationLibraryExtensionList,
     ARRAY_LENGTH(AnimationLibraryExtensionList) };
+const AssetExtensionFilter ASSET_EXTENSIONS_TERRAIN_MODEL = { TerrainModelExtensionList,
+    ARRAY_LENGTH(TerrainModelExtensionList) };
+const AssetExtensionFilter ASSET_EXTENSIONS_TERRAIN_DATA = { TerrainDataExtensionList,
+    ARRAY_LENGTH(TerrainDataExtensionList) };
 
 
 // Static functions.

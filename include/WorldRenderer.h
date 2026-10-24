@@ -143,6 +143,9 @@ typedef enum WorldRendererFeatureEnum
      *  palette, active while a shown model has a pose. Without it skinned meshes draw in their bind pose (also in a
      *  pass whose own skinned twin is missing: the G-buffer's, a shadow's). */
     WorldRendererFeature_Skinning,
+    /** @brief The lit terrain shader (world_terrain, B01): terrain chunks lit like models. Without it they draw unlit with
+     *  raylib's default shader. */
+    WorldRendererFeature_TerrainShading,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -209,6 +212,17 @@ typedef struct WorldRendererStatusStruct
     size_t LodFadingCount;
     /** @brief Whether the LOD tinting was on (WorldRenderer_SetLodTintingEnabled). */
     bool IsLodTintingEnabled;
+    /** @brief Terrain components with a usable terrain, and those that draw none (no terrain named, or one that failed
+     *  to load: logged once) (B01). */
+    size_t TerrainCount;
+    size_t TerrainWithoutAssetCount;
+    /** @brief The chunks of the terrains on enabled and visible objects, those the camera's passes drew, and the
+     *  triangles of the drawn ones. */
+    size_t TerrainChunkCount;
+    size_t DrawnTerrainChunkCount;
+    size_t DrawnTerrainTriangleCount;
+    /** @brief Whether the chunk key was on (WorldRenderer_SetTerrainKeyEnabled). */
+    bool IsTerrainKeyEnabled;
 } WorldRendererStatus;
 
 
@@ -406,6 +420,23 @@ void WorldRenderer_SetLodTintingEnabled(WorldRenderer* self, bool enabled);
  * @returns true if enabled.
  */
 bool WorldRenderer_IsLodTintingEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Enables or disables the terrain's chunk key (B01): every terrain chunk tinted by its cell (neighbouring chunks
+ *        always differ) and the terrain's wireframe drawn over it, to see how a terrain is cut and how dense it is.
+ *
+ * A debug aid. Default disabled. Applied on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to show the chunk key.
+ */
+void WorldRenderer_SetTerrainKeyEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the terrain's chunk key is enabled (see WorldRenderer_SetTerrainKeyEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true if enabled.
+ */
+bool WorldRenderer_IsTerrainKeyEnabled(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables the bloom pass (a blurred bright-pass of the scene added back in HDR).

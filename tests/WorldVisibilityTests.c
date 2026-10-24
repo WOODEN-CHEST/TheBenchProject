@@ -1,5 +1,6 @@
 #include "TestSuites.h"
 #include "TestAssets.h"
+#include "TestTerrain.h"
 #include "TestWorld.h"
 #include "GameMath.h"
 #include "WorldVisibility.h"
@@ -8,6 +9,7 @@
 #include "WorldObject.h"
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
+#include "WorldTerrainComponent.h"
 #include "Renderer.h"
 #include "raylib/raymath.h"
 #include "wr/WRVectorMath.h"
@@ -1226,6 +1228,112 @@ static void ListsFollowTheirCache(TestRun* run)
 }
 
 
+// Tests: terrain chunks (B01).
+/* Places the terrain @p name at @p position; returns its object (NULL with a failed check). */
+static WorldObject* AddTerrainObject(TestRun* run, World* world, const char* name, Vector3 position)
+{
+    WorldObject* Object = NULL;
+    WorldComponent* Component = NULL;
+    if (!TEST_CHECK_SUCCESS(run, World_CreateObject(world, NULL, &Object))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, GameMath_FromVector3(position)))
+        || !TEST_CHECK_SUCCESS(run, World_AddComponent(world, WorldObject_GetId(Object), WorldComponentType_Terrain,
+            &Component))
+        || !TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetTerrain(WorldTerrainComponent_FromComponent(Component),
+            (const unsigned char*)name)))
+    {
+        return NULL;
+    }
+    return Object;
+}
+
+/* Whether a pass's chunk list holds the (one) chunk of @p object's terrain. */
+static bool HasChunkOf(const VisibilityFixture* fixture, WorldVisibilityPass pass, const WorldObject* object)
+{
+    size_t ChunkCount = 0U;
+    const WorldRenderTerrainChunk* Chunks = WorldRenderCache_GetTerrainChunks(&fixture->Cache, &ChunkCount);
+    size_t Count = 0U;
+    const size_t* List = WorldVisibility_GetTerrainChunks(&fixture->Visibility, &fixture->Cache, pass, &Count);
+    for (size_t Position = 0U; Position < Count; Position++)
+    {
+        if (Chunks[List[Position]].ObjectId == WorldObject_GetId(object))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Terrain chunks join the passes as models do: the camera's list in view, the cascades by their shadow tier, none
+ * without casting, none beyond their own draw distance (fixed by default: the quality setting leaves it) or with their
+ * object fully transparent; they are counted on their own, with their triangles. */
+static void TerrainChunksJoinThePassesAsModelsDo(TestRun* run)
+{
+    VisibilityFixture Fixture;
+    TestTerrainGrid Grid;
+    // A 2 m patch of 1 m quads from its object's origin: one 8 m chunk of eight triangles.
+    TestTerrain_BuildGrid(&Grid, 2U, 2U, 1.0f, 0.0f, 0.0f, NULL);
+    TerrainMesh* Ground = NULL;
+    bool IsReady = VisibilityFixture_Construct(run, &Fixture)
+        && ((Ground = TestTerrain_CreateMesh(run, &Grid, 1U, 0U, 8.0f)) != NULL)
+        && TestAssets_AddTerrain(run, &Fixture.Assets, "patch", Ground, NULL, NULL);
+    WorldObject* InFront = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ 0.0f, 0.0f, 10.0f }) : NULL;
+    WorldObject* Distant = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ 0.0f, 0.0f, 300.0f })
+        : NULL;
+    WorldObject* Behind = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ 0.0f, 0.0f, -10.0f })
+        : NULL;
+    WorldObject* NearOnly = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ -1.0f, 0.0f, -3.0f })
+        : NULL;
+    WorldObject* NonCaster = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ 3.0f, 0.0f, -5.0f })
+        : NULL;
+    WorldObject* Beyond = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ 0.0f, 0.0f, 4100.0f })
+        : NULL;
+    WorldObject* Clear = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ 2.0f, 0.0f, 12.0f }) : NULL;
+    WorldVisibilityView View = MakeView((Vector3){ 0.0f, 1.0f, 0.0f });
+    if ((InFront != NULL) && (Distant != NULL) && (Behind != NULL) && (NearOnly != NULL) && (NonCaster != NULL)
+        && (Beyond != NULL) && (Clear != NULL) && SetOpacity(run, Clear, 0.0f))
+    {
+        WorldTerrainComponent* Near = WorldTerrainComponent_FromComponent(WorldObject_GetComponent(NearOnly,
+            WorldComponentType_Terrain));
+        WorldTerrainComponent* Unshadowed = WorldTerrainComponent_FromComponent(WorldObject_GetComponent(NonCaster,
+            WorldComponentType_Terrain));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetOverridden(Near, WorldTerrainSetting_ShadowTier, true));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetShadowTier(Near, WorldShadowTier_Near));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetOverridden(Unshadowed, WorldTerrainSetting_CastsShadows, true));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetCastsShadows(Unshadowed, false));
+        if (VisibilityFixture_Build(run, &Fixture, &View))
+        {
+            TEST_CHECK(run, HasChunkOf(&Fixture, WorldVisibilityPass_Camera, InFront)
+                && HasChunkOf(&Fixture, WorldVisibilityPass_NearCascade, InFront)
+                && HasChunkOf(&Fixture, WorldVisibilityPass_FarCascade, InFront));
+            // 300 m out: past the models' 4 km scaled by the quality setting (200 m), drawn as its distance is fixed.
+            TEST_CHECK(run, HasChunkOf(&Fixture, WorldVisibilityPass_Camera, Distant));
+            TEST_CHECK(run, !HasChunkOf(&Fixture, WorldVisibilityPass_Camera, Behind)
+                && HasChunkOf(&Fixture, WorldVisibilityPass_NearCascade, Behind)
+                && HasChunkOf(&Fixture, WorldVisibilityPass_FarCascade, Behind));
+            TEST_CHECK(run, HasChunkOf(&Fixture, WorldVisibilityPass_NearCascade, NearOnly)
+                && !HasChunkOf(&Fixture, WorldVisibilityPass_FarCascade, NearOnly));
+            TEST_CHECK(run, !HasChunkOf(&Fixture, WorldVisibilityPass_NearCascade, NonCaster)
+                && !HasChunkOf(&Fixture, WorldVisibilityPass_FarCascade, NonCaster));
+            for (int Pass = 0; Pass < (int)WorldVisibilityPass_Count; Pass++)
+            {
+                TEST_CHECK(run, !HasChunkOf(&Fixture, (WorldVisibilityPass)Pass, Beyond)
+                    && !HasChunkOf(&Fixture, (WorldVisibilityPass)Pass, Clear));
+            }
+            // Counted apart from the models and sprites: the two in view, eight triangles each.
+            WorldVisibilityCounts Counts = WorldVisibility_GetCounts(&Fixture.Visibility);
+            TEST_CHECK(run, (Counts.DrawnTerrainChunkCount == 2U) && (Counts.DrawnTerrainTriangleCount == 16U)
+                && (Counts.DrawnModelCount == 0U) && (Counts.OutsideViewCount == 0U) && (Counts.FadedOutCount == 0U));
+            size_t ChunkCount = 0U;
+            WorldRenderCache_GetTerrainChunks(&Fixture.Cache, &ChunkCount);
+            TEST_CHECK(run, (ChunkCount == 7U)
+                && (WorldVisibility_GetTerrainChunkFade(&Fixture.Visibility, ChunkCount).Combined == 1.0f));
+        }
+    }
+    TerrainMesh_Destroy(Ground);
+    VisibilityFixture_Deconstruct(run, &Fixture);
+    TestTerrain_FreeGrid(&Grid);
+}
+
 // Public functions.
 void WorldVisibilityTests_Run(TestRun* run)
 {
@@ -1248,6 +1356,7 @@ void WorldVisibilityTests_Run(TestRun* run)
         { "lists_follow_their_cache", ListsFollowTheirCache },
         { "drawn_models_are_counted_by_lod", DrawnModelsAreCountedByLod },
         { "lists_and_lods_hold_twenty_kilometres_out", ListsAndLodsHoldTwentyKilometresOut },
+        { "terrain_chunks_join_the_passes_as_models_do", TerrainChunksJoinThePassesAsModelsDo },
     };
     TestRun_RunSuite(run, "WorldVisibility", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

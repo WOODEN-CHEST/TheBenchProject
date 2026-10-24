@@ -20,6 +20,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldColliderComponent | `include/WorldColliderComponent.h`, `source/WorldColliderComponent.c` | How the object collides (T12, [WorldCollision.md](WorldCollision.md)): its world model's collision set (or one primitive of its own), its layer, mask and trigger flag (each overriding the world model's default with an explicit flag), a local offset, rotation and scale, and a rotation mode, with the pure function that resolves the settings in effect. |
 | WorldCharacterComponent | `include/WorldCharacterComponent.h`, `source/WorldCharacterComponent.c` | The player or an NPC (T13, [Characters.md](Characters.md)): a character asset by name and every setting this placement overrides (explicit flags next to its own values), the input its driver gives it and the state it is in; the first transform driver. |
 | WorldAnimatorComponent | `include/WorldAnimatorComponent.h`, `source/WorldAnimatorComponent.c` | What plays the object's skeletal animation (T29, [Animation.md](Animation.md)): the clip row and how it plays, the placement's own libraries, and the pose the animation system publishes. |
+| WorldTerrainComponent | `include/WorldTerrainComponent.h`, `source/WorldTerrainComponent.c` | A terrain asset by name (B01, [Terrain.md](Terrain.md)) and the settings this placement overrides (explicit flags next to its own values: outline, shadow tier, casts shadows, draw distance, fixed draw distance, collision enabled, layer and mask; a draw distance multiplier), with the pure function that resolves the settings in effect. |
 | WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
 | World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index), `source/WorldHierarchy.c` (parents, world matrices, effective flags, subtrees; also the `WorldObject_` functions about them) | Owns the objects and their components, mints ids, keeps the id map, the hierarchy and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
 | WorldTransform (private) | `source/WorldTransform.h`, `source/WorldTransform.c` | The pure maths of transforms, in double (T33): compose (DrawModelEx's order), the one decomposition back to position / Euler XYZ / scale, a local matrix under a parent, a bound on a matrix's stretch. Used by the hierarchy, the renderer's cache, collision and the characters. |
@@ -192,10 +193,11 @@ carries **at most one component of each type**; a street lamp is one object with
 | `WorldComponentType_Collider` | 3 | `collider` | `WorldColliderComponent` (T12) |
 | `WorldComponentType_Character` | 4 | `character` | `WorldCharacterComponent` (T13, a transform driver; [Characters.md](Characters.md)) |
 | `WorldComponentType_Animator` | 5 | `animator` | `WorldAnimatorComponent` (T29; [Animation.md](Animation.md)) |
+| `WorldComponentType_Terrain` | 6 | `terrain` | `WorldTerrainComponent` (B01; [Terrain.md](Terrain.md)) |
 
 The values are explicit and never renumbered (world files will save them). `WorldComponentType_Count` is the number
 of standard types; `WORLD_MAX_COMPONENT_TYPES` (16) is how many a world can hold, room for the types later tasks add
-(ambient zone T14, screen T19) and for test-only types.
+(7 is B03's, then the ambient zone T14 and the screen T19) and for test-only types.
 
 **The registry.** Each type has one `WorldComponentTypeInfo` (a static constant of its module, handed out by
 `Xxx_GetTypeInfo`; `WorldComponent_GetStandardTypeInfo(type)` maps the standard types): `Type`, `Name` (the key of its
@@ -343,6 +345,18 @@ The playback (clip times, weights, fades, the graph's states, the action) and th
 system (`WorldAnimation`) keeps them in the component (its runtime, freed with the component; removing the component
 ends its action first, freeing its character) and publishes the pose for the renderer and sockets. Not a transform
 driver: it bends the object's model, never moves the object.
+
+### Terrain component (`terrain_component`)
+Places a terrain (B01; everything about terrain is in [Terrain.md](Terrain.md)): `terrain` (the asset name of a
+terrain, `terrains/`; none places nothing), then the override pairs over the asset's defaults, as the model
+component's: `overrides_has_outline` / `has_outline`, `overrides_shadow_tier` / `shadow_tier`,
+`overrides_casts_shadows` / `casts_shadows`, `overrides_draw_distance` / `draw_distance`, `draw_distance_multiplier`
+(above 0, default 1), `overrides_is_draw_distance_fixed` / `is_draw_distance_fixed`, and the collision's,
+`overrides_is_collision_enabled` / `is_collision_enabled`, `overrides_collision_layer` / `collision_layer`,
+`overrides_collides_with` / `collides_with`. `WorldTerrainComponent_ResolveSettings` gives the settings in effect (a
+mask neither the asset nor the placement gives is the layer in effect's default). The object's transform places the
+terrain's space; the object is static by default, and moving it works (the collision world moves the chunks, with the
+static-move warning). Not a transform driver. An object with a collider as well collides through its collider alone.
 
 ### Light component (`light_component`)
 `_color` (white), `_intensity` (>= 0, default 1), `_range` (>= 0, default 1: how far the light reaches; T05 renamed it

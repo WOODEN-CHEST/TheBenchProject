@@ -103,6 +103,35 @@ typedef struct TestTextureLoadedStruct
     TestAssetCounters* Counters;
 } TestTextureLoaded;
 
+typedef struct TestTerrainDefinitionStruct
+{
+    AssetDefinition Base;
+    /** The mesh's binary form (TerrainMesh_WriteGHDF), read again at every load, and its chunk size. */
+    GenericBuffer Bytes;
+    float ChunkSize;
+    TerrainSettings Settings;
+    TestAssetCounters* Counters;
+} TestTerrainDefinition;
+
+typedef struct TestTerrainLoadedStruct
+{
+    TerrainAsset Terrain;
+    TestAssetCounters* Counters;
+} TestTerrainLoaded;
+
+
+// Fields.
+/** The names a test terrain's palette and density channels have. */
+static const unsigned char* const TestTerrainMaterialNames[TERRAIN_MAX_MATERIALS] =
+{
+    u8"m0", u8"m1", u8"m2", u8"m3", u8"m4", u8"m5", u8"m6", u8"m7", u8"m8", u8"m9", u8"m10", u8"m11", u8"m12", u8"m13",
+    u8"m14", u8"m15"
+};
+static const unsigned char* const TestTerrainChannelNames[TERRAIN_MAX_DENSITY_CHANNELS] =
+{
+    u8"d0", u8"d1", u8"d2", u8"d3", u8"d4", u8"d5", u8"d6", u8"d7"
+};
+
 
 // Static functions.
 static unsigned char* CloneName(const char* name)
@@ -498,6 +527,70 @@ static Error TestTexture_LoadAsset(void* self, AssetManager* manager, AssetUserI
 
 static const AssetDefinitionVTable TestTextureVTable = { TestTexture_LoadAsset, TestDefinition_Destroy };
 
+static void TestTerrainLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
+{
+    UNUSED(manager);
+    TestTerrainLoaded* Loaded = self->DestroyContext;
+    if (Loaded->Counters != NULL)
+    {
+        Loaded->Counters->UnloadCount++;
+    }
+    TerrainMesh_Destroy(Loaded->Terrain._mesh);
+    Memory_Free(Loaded);
+}
+
+static const LoadedAssetVTable TestTerrainLoadedVTable = { TestTerrainLoaded_Destroy };
+
+// The mesh is read from its binary form when the terrain loads, as the real definition reads its file.
+static Error TestTerrain_LoadAsset(void* self, AssetManager* manager, AssetUserID dependencyUser,
+    LoadedAsset* outLoaded)
+{
+    UNUSED(manager);
+    UNUSED(dependencyUser);
+    TestTerrainDefinition* Definition = self;
+    TerrainMesh* Ground = NULL;
+    Error Result = TerrainMesh_ReadGHDF(Definition->Bytes._data, Definition->Bytes._count, Definition->ChunkSize, NULL,
+        &Ground);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    TestTerrainLoaded* Loaded = Memory_Allocate(sizeof(TestTerrainLoaded));
+    Memory_Zero(Loaded, sizeof(*Loaded));
+    Loaded->Terrain._mesh = Ground;
+    Loaded->Terrain._settings = Definition->Settings;
+    Loaded->Terrain._materialCount = TerrainMesh_GetMaterialCount(Ground);
+    Loaded->Terrain._densityChannelCount = TerrainMesh_GetDensityChannelCount(Ground);
+    for (uint32_t Index = 0U; Index < TERRAIN_MAX_MATERIALS; Index++)
+    {
+        Loaded->Terrain._materialNames[Index] = (Index < Loaded->Terrain._materialCount)
+            ? TestTerrainMaterialNames[Index] : NULL;
+    }
+    for (uint32_t Index = 0U; Index < TERRAIN_MAX_DENSITY_CHANNELS; Index++)
+    {
+        Loaded->Terrain._densityChannelNames[Index] = (Index < Loaded->Terrain._densityChannelCount)
+            ? TestTerrainChannelNames[Index] : NULL;
+    }
+    Loaded->Counters = Definition->Counters;
+    if (Loaded->Counters != NULL)
+    {
+        Loaded->Counters->LoadCount++;
+    }
+    outLoaded->Asset = &Loaded->Terrain;
+    outLoaded->VTable = &TestTerrainLoadedVTable;
+    outLoaded->DestroyContext = Loaded;
+    return Error_CreateSuccess();
+}
+
+static void TestTerrainDefinition_Destroy(void* self)
+{
+    TestTerrainDefinition* Definition = self;
+    Memory_Free(Definition->Bytes._data);
+    TestDefinition_Destroy(self);
+}
+
+static const AssetDefinitionVTable TestTerrainVTable = { TestTerrain_LoadAsset, TestTerrainDefinition_Destroy };
+
 
 // Public functions.
 bool TestAssetFixture_Construct(TestRun* run, TestAssetFixture* self)
@@ -685,6 +778,26 @@ bool TestAssets_AddTexture(TestRun* run, TestAssetFixture* fixture, const char* 
     Definition->Base.Name = CloneName(name);
     Definition->TextureId = textureId;
     Definition->Counters = counters;
+    return TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, &Definition->Base));
+}
+
+bool TestAssets_AddTerrain(TestRun* run, TestAssetFixture* fixture, const char* name, const TerrainMesh* mesh,
+    const TerrainSettings* settings, TestAssetCounters* counters)
+{
+    TestTerrainDefinition* Definition = Memory_Allocate(sizeof(TestTerrainDefinition));
+    Memory_Zero(Definition, sizeof(*Definition));
+    Definition->Base.VTable = &TestTerrainVTable;
+    Definition->Base.Type = fixture->Types.Terrain;
+    Definition->Base.Name = CloneName(name);
+    GenericBuffer_AllocateVariable(&Definition->Bytes, 0U, sizeof(unsigned char));
+    Definition->ChunkSize = TerrainMesh_GetChunkSize(mesh);
+    Definition->Settings = (settings != NULL) ? *settings : TerrainSettings_CreateDefault();
+    Definition->Counters = counters;
+    if (!TEST_CHECK_SUCCESS(run, TerrainMesh_WriteGHDF(mesh, &Definition->Bytes)))
+    {
+        TestTerrainDefinition_Destroy(Definition);
+        return false;
+    }
     return TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, &Definition->Base));
 }
 

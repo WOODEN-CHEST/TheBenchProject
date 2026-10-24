@@ -64,6 +64,10 @@ extern const AssetExtensionFilter ASSET_EXTENSIONS_SOUND;
 extern const AssetExtensionFilter ASSET_EXTENSIONS_SHADER_STAGE;
 /** @brief Animation libraries (read with cgltf, AnimationLibrary.h): gltf, glb. */
 extern const AssetExtensionFilter ASSET_EXTENSIONS_ANIMATION_LIBRARY;
+/** @brief A terrain's model (imported with cgltf, TerrainMesh.h): gltf, glb. */
+extern const AssetExtensionFilter ASSET_EXTENSIONS_TERRAIN_MODEL;
+/** @brief A terrain's binary form (TerrainMesh_ReadGHDF): ghdf. */
+extern const AssetExtensionFilter ASSET_EXTENSIONS_TERRAIN_DATA;
 
 
 /**

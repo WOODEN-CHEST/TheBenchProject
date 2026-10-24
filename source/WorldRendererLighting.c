@@ -590,6 +590,7 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
 {
     bool HasPbr = (self->_pbr._rigid._shader != NULL);
     bool HasSprites = (self->_sprites._shader != NULL);
+    bool HasTerrain = (self->_terrain._shader != NULL);
     UploadPbrFrame(self, frame, &self->_pbr._rigid, applyScreenAo, ditherPixelScale);
     UploadPbrFrame(self, frame, &self->_pbr._skinned, applyScreenAo, ditherPixelScale);
     if (HasSprites)
@@ -598,7 +599,13 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
         UploadLitUniforms(self, frame, SpriteShader, &self->_sprites._lit, applyScreenAo);
         WorldRendererCommon_SetDitherPixelScale(SpriteShader, &self->_sprites._dither, ditherPixelScale);
     }
-    if (HasPbr || HasSprites)
+    if (HasTerrain)
+    {
+        Shader TerrainShader = GameShader_GetRaylibShader(self->_terrain._shader);
+        UploadLitUniforms(self, frame, TerrainShader, &self->_terrain._lit, applyScreenAo);
+        WorldRendererCommon_SetDitherPixelScale(TerrainShader, &self->_terrain._dither, ditherPixelScale);
+    }
+    if (HasPbr || HasSprites || HasTerrain)
     {
         BindFrameTextures(self, frame, applyScreenAo);
     }

@@ -25,6 +25,9 @@ int main(void)
     ShaderSourceTests_Run(&Run);
     TextureTests_Run(&Run);
     CollisionGeometryTests_Run(&Run);
+    TerrainMeshTests_Run(&Run);
+    TerrainGltfTests_Run(&Run);
+    TerrainAssetTests_Run(&Run);
     WorldLightCullingTests_Run(&Run);
     NamespacedKeyTests_Run(&Run);
     DataValueTests_Run(&Run);
@@ -33,6 +36,7 @@ int main(void)
     WorldColliderTests_Run(&Run);
     WorldCollisionTests_Run(&Run);
     WorldCollisionMotionTests_Run(&Run);
+    WorldTerrainCollisionTests_Run(&Run);
     WorldCharacterTests_Run(&Run);
     WorldSpriteTests_Run(&Run);
     WorldHierarchyTests_Run(&Run);

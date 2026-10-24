@@ -43,13 +43,16 @@ speed from it, scaled by the height ratio). A clip the
 definition does not name keeps the file's name when that is a valid clip name (`[a-z][a-z0-9_.-]*`), does not loop and
 plays at speed 1. **The reader treats the file as hostile.** cgltf's validation does its sums without overflow checks
 and its loader allocates each buffer's declared length, so before cgltf loads or validates anything the reader checks
-the structure itself, in overflow-safe sums (`CheckBuffers`, `CheckBufferViews`, `CheckAccessors` in
-`source/AnimationLibraryGltf.c`): buffers of 1 byte or more, at most 256 MiB together, a data URI no longer than its
-base64; views inside their buffers with glTF's strides (none, or 4 to 252 bytes in fours) and no meshopt compression;
-accessors with a type and an element, inside their views, aligned to their components, a sparse one's replacements
-(1 to its count) inside theirs. A buffer file's URI is checked as cgltf opens it, with its percent escapes decoded
+the structure itself, in overflow-safe sums (`CheckBuffers`, `CheckBufferViews`, `CheckAccessors`; since B01 in the
+private `source/GltfChecks.c`, which the terrain's import shares): buffers of 1 byte or more, at most 256 MiB together,
+a data URI no longer than its base64; views inside their buffers with glTF's strides (none, or 4 to 252 bytes in
+fours) and no meshopt compression; accessors with a type and an element, inside their views, aligned to their
+components, a sparse one's replacements (1 to its count) inside theirs. A buffer file's URI is checked as cgltf opens it, with its percent escapes decoded
 (`%2e%2e` is `..`): beside the file, no absolute path, `..`, backslash, drive or NUL; the file must hold the buffer's
-declared length (only that is kept), and loaded buffers must start aligned (a `.glb`'s chunks padded to four). Then
+declared length (only that is kept), and loaded buffers must start aligned (a `.glb`'s chunks padded to four).
+cgltf's parse allocates every JSON array's elements before any check can run, so its allocations have a budget
+(B01's review): 64 MiB beyond the file's size for the parse, the 256 MiB limit on top for the buffers; past it the read
+fails with a message instead of exhausting memory. Then
 cgltf validates (the node tree, sampler counts), and key times must be finite, at least 0, rising and at most an hour;
 values finite, rotations of a length above 0 (normalized on reading, the length reckoned in double); limits on bones
 (256), clips (256) and keys (4 194 304 floats' worth). The interpolations are glTF's: STEP, LINEAR (rotations along

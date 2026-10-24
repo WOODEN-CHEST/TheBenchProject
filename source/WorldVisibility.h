@@ -47,8 +47,13 @@
  * WorldVisibility_GetDitherThreshold and WorldVisibility_IsDitherDiscarded are that formula in C, for the tests.
  *
  * LISTS. WorldVisibility_Build fills, from the render cache, one list per pass (WorldVisibilityPass) of the entries it
- * draws, as indices into the cache's models and sprites, plus every entry's fades and the counts the renderer's status
- * reports. The lists are rebuilt every frame and grow with the world; once grown, a build allocates nothing.
+ * draws, as indices into the cache's models, sprites and terrain chunks, plus every entry's fades and the counts the
+ * renderer's status reports. The lists are rebuilt every frame and grow with the world; once grown, a build allocates
+ * nothing.
+ *
+ * TERRAIN CHUNKS (B01) take the models' rules: their own draw distance (the terrain's, 4 km and fixed by default),
+ * the camera's frustum, each cascade by their shadow tier, the cube's reach, the opacity of their object's tint. They
+ * are never crisp, and have counts of their own (not in the models' and sprites').
  */
 
 
@@ -178,6 +183,9 @@ typedef struct WorldVisibilityCountsStruct
     size_t DrawnModelsByLod[WORLD_MODEL_MAX_LODS];
     /** @brief Of the drawn models, those cross-fading between two LODs. */
     size_t LodFadingCount;
+    /** @brief Terrain chunks the camera's passes draw (B01), and the triangles of their surfaces. */
+    size_t DrawnTerrainChunkCount;
+    size_t DrawnTerrainTriangleCount;
 } WorldVisibilityCounts;
 
 /**
@@ -196,6 +204,10 @@ typedef struct WorldVisibilityStruct
     GenericBuffer _models[WorldVisibilityPass_Count];
     /** @brief Per pass, the indices (size_t, ascending) of the cache sprites it draws. */
     GenericBuffer _sprites[WorldVisibilityPass_Count];
+    /** @brief WorldVisibilityFade per cache terrain chunk, and per pass the indices (size_t, ascending) of the chunks it
+     *  draws (B01). */
+    GenericBuffer _terrainChunkFades;
+    GenericBuffer _terrainChunks[WorldVisibilityPass_Count];
     /** @brief The last build's counts. */
     WorldVisibilityCounts _counts;
     /** @brief Whether the camera's list holds an OmitPixelation (crisp) model or sprite. */
@@ -351,7 +363,8 @@ void WorldVisibility_Deconstruct(WorldVisibility* self);
  *   - the cube shadow's list when it casts shadows, the cube shadow runs and its sphere touches the light's reach sphere.
  * A model's sphere is its bounding sphere (around RenderCenter); a sprite's is the sphere around its pivot (Shape.Position)
  * that holds its quad in every orientation (WorldRenderSprite.BoundsRadius), so one sphere serves the camera and the
- * lights. Everything is in render space. With culling off the
+ * lights; a terrain chunk's is its bounding sphere, and it joins the lists as a model does (never crisp). Everything is
+ * in render space. With culling off the
  * camera's frustum and the cascades' boxes cull nothing. Main thread only; no allocation once the lists have grown.
  * @param self The visibility; must not be NULL.
  * @param cache The render cache, synced for this frame; must not be NULL. Its entries are read, never written.
@@ -385,6 +398,18 @@ const size_t* WorldVisibility_GetSprites(const WorldVisibility* self, const Worl
     WorldVisibilityPass pass, size_t* outCount);
 
 /**
+ * @brief Returns a pass's terrain chunk list: indices into @p cache's terrain chunks, ascending (see
+ *        WorldVisibility_GetModels).
+ * @param self The visibility; must not be NULL.
+ * @param cache The cache the lists were built from; must not be NULL.
+ * @param pass The pass.
+ * @param outCount [out] Receives the entry count. Must not be NULL.
+ * @returns The indices (borrowed until the next build); NULL when there are none.
+ */
+const size_t* WorldVisibility_GetTerrainChunks(const WorldVisibility* self, const WorldRenderCache* cache,
+    WorldVisibilityPass pass, size_t* outCount);
+
+/**
  * @brief Returns a cache model's fades this frame.
  * @param self The visibility; must not be NULL.
  * @param index The model's index in the cache (from a list).
@@ -399,6 +424,14 @@ WorldVisibilityFade WorldVisibility_GetModelFade(const WorldVisibility* self, si
  * @returns Its fades; fully faded (1, 1) for an index the last build did not cover.
  */
 WorldVisibilityFade WorldVisibility_GetSpriteFade(const WorldVisibility* self, size_t index);
+
+/**
+ * @brief Returns a cache terrain chunk's fades this frame.
+ * @param self The visibility; must not be NULL.
+ * @param index The chunk's index in the cache (from a list).
+ * @returns Its fades; fully faded (1, 1) for an index the last build did not cover.
+ */
+WorldVisibilityFade WorldVisibility_GetTerrainChunkFade(const WorldVisibility* self, size_t index);
 
 /**
  * @brief Returns the last build's counts.

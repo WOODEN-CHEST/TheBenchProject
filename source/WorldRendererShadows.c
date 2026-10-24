@@ -221,6 +221,8 @@ static void RenderShadowCascade(WorldRenderer* self, RenderTexture2D map, const 
     // stored depth, which removes most self-shadowing acne without a large (peter-panning) depth bias.
     rlSetCullFace(RL_CULL_FACE_FRONT);
     DrawShadowCasters(self, &Shaders, &self->_cascades._dither, &self->_cascades._skinnedDither, pass);
+    // The terrain's chunks (B01) the same way: a hill's far side, facing away from the light, shades what lies behind it.
+    WorldRendererTerrain_DrawCasters(self, DepthShader, &self->_cascades._dither, pass);
     rlSetCullFace(RL_CULL_FACE_BACK);  // restore the default culling for the scene pass
     // Cutout sprites, facing the light, alpha-tested.
     if (self->_cascades._spriteDepthShader != NULL)
@@ -494,6 +496,7 @@ void WorldRendererShadows_RenderPointLight(WorldRenderer* self, const WorldRende
         // light's reach (the visibility's cube list).
         DrawShadowCasters(self, &Shaders, &self->_pointShadow._dither, &self->_pointShadow._skinnedDither,
             WorldVisibilityPass_PointShadow);
+        WorldRendererTerrain_DrawCasters(self, CubeShader, &self->_pointShadow._dither, WorldVisibilityPass_PointShadow);
         if (HasSpriteShader)
         {
             DrawSpriteCasters(self, SpriteCubeShader, &self->_pointShadow._spriteDither,

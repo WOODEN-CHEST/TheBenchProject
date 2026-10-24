@@ -273,7 +273,7 @@ static void FillContactTriangle(const WorldCollisionInstance* instance, uint32_t
     {
         return;
     }
-    WorldCollisionInternal_FillTriangleInfo(Triangles, triangle, info);
+    WorldCollisionInternal_FillTriangleInfo(instance, Shape, triangle, info);
     CollisionAffine MeshToWorld = WorldCollisionInternal_ToRelative(&Shape->ShapeToWorld, point);
     CollisionConvex View;
     CollisionConvex_FromMeshTriangle(Triangles, triangle, &MeshToWorld, Shape->Shape->IsTwoSided, &View);

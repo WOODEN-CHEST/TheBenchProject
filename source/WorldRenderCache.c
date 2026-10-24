@@ -476,6 +476,178 @@ static Error BuildSpritesAndLights(WorldRenderCache* self, World* world, Vector3
 }
 
 
+/* Logs (once, when it happens) that an object's terrain could not be resolved, and releases the error. */
+static void ReportTerrainFailure(Logger* logger, const WorldTerrainComponent* terrain, const unsigned char* assetName,
+    Error* error)
+{
+    if (logger != NULL)
+    {
+        const WorldObject* Owner = WorldComponent_GetOwner(&terrain->Base);
+        const unsigned char* Name = WorldObject_GetName(Owner);
+        Error LogResult = Logger_LogWarningFormatted(logger,
+            (const unsigned char*)u8"WorldRenderer: object %" PRIu64 u8" (\"%s\") draws no terrain: terrain \"%s\" could "
+            u8"not be loaded (%s).", WorldObject_GetId(Owner), (Name != NULL) ? (const char*)Name : "",
+            (const char*)assetName, (error->Message != NULL) ? (const char*)error->Message : "no details");
+        Error_Deconstruct(&LogResult);
+    }
+    Error_Deconstruct(error);
+}
+
+/* Resolves a terrain entry for the component's current name. A component without a name draws nothing (not an error); a
+ * load failure is logged here, once, and not retried until the name changes. */
+static void ResolveTerrain(WorldRenderTerrain* entry, AssetManager* assets, AssetUserID modelUser, Logger* logger)
+{
+    const unsigned char* AssetName = WorldTerrainComponent_GetTerrain(entry->Component);
+    entry->IsResolved = true;
+    entry->NameHash = HashName(AssetName);
+    entry->Asset = NULL;
+    if (AssetName == NULL)
+    {
+        return;
+    }
+    TerrainAsset* Asset = NULL;
+    Error LoadResult = AssetManager_LoadTerrain(assets, AssetName, modelUser, &Asset);
+    if (LoadResult.Code == ErrorCode_Success)
+    {
+        entry->Asset = Asset;
+        return;
+    }
+    ReportTerrainFailure(logger, entry->Component, AssetName, &LoadResult);
+}
+
+/* Re-matches the terrain entries to the world's current terrain components, in order (as RematchModels): a component
+ * keeps its entry (and resolved terrain) when one with its owner's id and its serial exists; otherwise it gets a new,
+ * unresolved one. Entries of removed components are dropped. */
+static Error RematchTerrains(WorldRenderCache* self, World* world)
+{
+    size_t PreviousCount = self->_terrains._count;
+    size_t Cursor = 0;
+    GenericBuffer_Clear(&self->_terrainRematch);
+    size_t TerrainCount = 0;
+    WorldComponent* const* Terrains = World_GetComponents(world, WorldComponentType_Terrain, &TerrainCount);
+    for (size_t Index = 0; Index < TerrainCount; Index++)
+    {
+        uint64_t Id = WorldObject_GetId(WorldComponent_GetOwner(Terrains[Index]));
+        uint64_t Serial = WorldComponent_GetSerial(Terrains[Index]);
+        WorldRenderTerrain Entry = { .ObjectId = Id, .Serial = Serial, .IsResolved = false, .Asset = NULL };
+        for (size_t Search = Cursor; Search < PreviousCount; Search++)
+        {
+            const WorldRenderTerrain* Previous = GenericBuffer_GetPointerToElement(&self->_terrains, Search);
+            if (Previous->ObjectId == Id)
+            {
+                if (Previous->Serial == Serial)
+                {
+                    Entry = *Previous;
+                }
+                Cursor = Search + 1;
+                break;
+            }
+        }
+        Entry.Component = WorldTerrainComponent_FromComponent(Terrains[Index]);
+        if (!GenericBuffer_AddLast(&self->_terrainRematch, &Entry))
+        {
+            return Error_Construct2(ErrorCode_InvalidOperation, "WorldRenderCache: could not grow the terrain list.");
+        }
+    }
+    GenericBuffer_Clear(&self->_terrains);
+    if ((self->_terrainRematch._count > 0)
+        && !GenericBuffer_AddLastRange(&self->_terrains, self->_terrainRematch._data, self->_terrainRematch._count))
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "WorldRenderCache: could not grow the terrain list.");
+    }
+    return Error_CreateSuccess();
+}
+
+/* Lists the chunks of a resolved terrain whose object is shown, with the settings in effect and each chunk's placement:
+ * the object's world matrix times the translation to the chunk's centre (in double, and in render space for @p origin)
+ * and the chunk's sphere through it. Chunks of holes only are left out. */
+static Error AddTerrainChunks(WorldRenderCache* self, const WorldRenderTerrain* entry, Vector3Double origin)
+{
+    const WorldObject* Owner = WorldComponent_GetOwner(&entry->Component->Base);
+    if ((entry->Asset == NULL) || !IsObjectShown(Owner))
+    {
+        return Error_CreateSuccess();
+    }
+    TerrainSettings Settings = WorldTerrainComponent_ResolveSettings(entry->Component,
+        TerrainAsset_GetSettings(entry->Asset));
+    const TerrainMesh* Ground = TerrainAsset_GetMesh(entry->Asset);
+    Matrix4Double ObjectWorld = WorldObject_GetWorldMatrix(Owner);
+    double MaxScale = WorldTransform_GetMaxScale(&ObjectWorld);
+    Color Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Owner));
+    for (uint32_t Chunk = 0U; Chunk < TerrainMesh_GetChunkCount(Ground); Chunk++)
+    {
+        const TerrainChunk* Source = TerrainMesh_GetChunk(Ground, Chunk);
+        if (TerrainChunk_GetSurfaceTriangleCount(Source) == 0U)
+        {
+            continue;
+        }
+        Matrix4Double ToCenter = Matrix4Double_FromTranslation(TerrainChunk_GetCenter(Source));
+        Vector3 SphereCenter;
+        float SphereRadius = 0.0f;
+        TerrainChunk_GetSphere(Source, &SphereCenter, &SphereRadius);
+        WorldRenderTerrainChunk Entry =
+        {
+            .ObjectId = entry->ObjectId, .Serial = entry->Serial, .Asset = entry->Asset, .ChunkIndex = Chunk,
+            .TriangleCount = TerrainChunk_GetSurfaceTriangleCount(Source), .HasOutline = Settings.Render.HasOutline,
+            .ShadowTier = Settings.Render.ShadowTier, .CastsShadows = Settings.Render.CastsShadows,
+            .DrawDistance = Settings.Render.DrawDistance, .IsDrawDistanceFixed = Settings.Render.IsDrawDistanceFixed,
+            .WorldMatrix = Matrix4Double_Multiply(&ToCenter, &ObjectWorld), .Radius = (float)((double)SphereRadius
+                * MaxScale), .Tint = Tint
+        };
+        Entry.Center = Matrix4Double_TransformPoint(&Entry.WorldMatrix, GameMath_FromVector3(SphereCenter));
+        Entry.RenderMatrix = GameMath_ToMatrixRelative(&Entry.WorldMatrix, origin);
+        Entry.RenderCenter = GameMath_ToVector3Relative(Entry.Center, origin);
+        if (!GenericBuffer_AddLast(&self->_terrainChunks, &Entry))
+        {
+            return Error_Construct2(ErrorCode_InvalidOperation, "WorldRenderCache: could not grow the terrain chunk "
+                "list.");
+        }
+    }
+    return Error_CreateSuccess();
+}
+
+/* Brings every terrain entry up to date (resolving it again when its name changed) and lists this frame's chunks, in
+ * render space for @p origin. The n-th terrain component must own the n-th entry; when one does not (or the counts
+ * differ) it stops with *outAreEntriesAligned false so the caller re-matches. */
+static Error UpdateTerrains(WorldRenderCache* self, World* world, Vector3Double origin, AssetManager* assets,
+    AssetUserID modelUser, Logger* logger, bool* outAreEntriesAligned)
+{
+    *outAreEntriesAligned = false;
+    GenericBuffer_Clear(&self->_terrainChunks);
+    size_t TerrainCount = 0;
+    WorldComponent* const* Terrains = World_GetComponents(world, WorldComponentType_Terrain, &TerrainCount);
+    if (TerrainCount != self->_terrains._count)
+    {
+        return Error_CreateSuccess();
+    }
+    for (size_t Index = 0; Index < TerrainCount; Index++)
+    {
+        WorldRenderTerrain* Entry = GenericBuffer_GetPointerToElement(&self->_terrains, Index);
+        if ((Entry->Component != WorldTerrainComponent_FromComponent(Terrains[Index]))
+            || (Entry->Serial != WorldComponent_GetSerial(Terrains[Index])))
+        {
+            GenericBuffer_Clear(&self->_terrainChunks);
+            return Error_CreateSuccess();
+        }
+        uint32_t Revision = WorldComponent_GetRevision(Terrains[Index]);
+        bool IsRenamed = Entry->IsResolved && (Entry->Revision != Revision)
+            && (HashName(WorldTerrainComponent_GetTerrain(Entry->Component)) != Entry->NameHash);
+        if (!Entry->IsResolved || IsRenamed)
+        {
+            ResolveTerrain(Entry, assets, modelUser, logger);
+        }
+        Entry->Revision = Revision;
+        Error Result = AddTerrainChunks(self, Entry, origin);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+    *outAreEntriesAligned = true;
+    return Error_CreateSuccess();
+}
+
+
 // Internal functions (declared in WorldRenderCache.h).
 /* The first-person object's camera pose (T30): its pose with every bone its world model's first_person block hides, and
  * each one's subtree, skinned to its hidden ancestor's joint (every vertex it moves lands on one point: nothing to draw),
@@ -555,6 +727,9 @@ void WorldRenderCache_Construct(WorldRenderCache* self)
     GenericBuffer_AllocateVariable(&self->_rematch, INITIAL_LIST_CAPACITY, sizeof(WorldRenderModel));
     GenericBuffer_AllocateVariable(&self->_sprites, INITIAL_LIST_CAPACITY, sizeof(WorldRenderSprite));
     GenericBuffer_AllocateVariable(&self->_lights, INITIAL_LIST_CAPACITY, sizeof(WorldRenderLight));
+    GenericBuffer_AllocateVariable(&self->_terrains, INITIAL_LIST_CAPACITY, sizeof(WorldRenderTerrain));
+    GenericBuffer_AllocateVariable(&self->_terrainRematch, INITIAL_LIST_CAPACITY, sizeof(WorldRenderTerrain));
+    GenericBuffer_AllocateVariable(&self->_terrainChunks, INITIAL_LIST_CAPACITY, sizeof(WorldRenderTerrainChunk));
     self->_world = NULL;
     self->_componentSetVersion = 0;
     self->_isMatched = false;
@@ -574,6 +749,9 @@ void WorldRenderCache_Deconstruct(WorldRenderCache* self)
     Memory_Free(self->_rematch._data);
     Memory_Free(self->_sprites._data);
     Memory_Free(self->_lights._data);
+    Memory_Free(self->_terrains._data);
+    Memory_Free(self->_terrainRematch._data);
+    Memory_Free(self->_terrainChunks._data);
     Memory_Free(self->_firstPersonPalette);
 }
 
@@ -582,6 +760,8 @@ void WorldRenderCache_Reset(WorldRenderCache* self)
     GenericBuffer_Clear(&self->_models);
     GenericBuffer_Clear(&self->_sprites);
     GenericBuffer_Clear(&self->_lights);
+    GenericBuffer_Clear(&self->_terrains);
+    GenericBuffer_Clear(&self->_terrainChunks);
     self->_world = NULL;
     self->_isMatched = false;
 }
@@ -603,6 +783,7 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double 
 
     uint64_t Version = World_GetComponentSetVersion(world);
     bool IsMatchCurrent = self->_isMatched && (self->_componentSetVersion == Version);
+    bool IsTerrainMatchCurrent = IsMatchCurrent;
     bool AreEntriesAligned = false;
     // A fresh match always lines up with the world, so a second attempt is the most that can be needed: the first
     // only fails when the entries do not follow the world after all (a world rebuilt at the same address).
@@ -630,6 +811,29 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double 
             "WorldRenderCache_Sync: the model entries do not follow the world.");
     }
     UpdateFirstPerson(self);
+
+    // The terrains follow the world's terrain components the same way (B01).
+    bool AreTerrainsAligned = false;
+    for (int Attempt = 0; (Attempt < 2) && !AreTerrainsAligned; Attempt++)
+    {
+        Error Result = IsTerrainMatchCurrent ? Error_CreateSuccess() : RematchTerrains(self, world);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = UpdateTerrains(self, world, origin, assets, modelUser, logger, &AreTerrainsAligned);
+        }
+        if (Result.Code != ErrorCode_Success)
+        {
+            WorldRenderCache_Reset(self);
+            return Result;
+        }
+        IsTerrainMatchCurrent = false;
+    }
+    if (!AreTerrainsAligned)
+    {
+        WorldRenderCache_Reset(self);
+        return Error_Construct2(ErrorCode_InvalidState,
+            "WorldRenderCache_Sync: the terrain entries do not follow the world.");
+    }
 
     GenericBuffer_Clear(&self->_sprites);
     GenericBuffer_Clear(&self->_lights);

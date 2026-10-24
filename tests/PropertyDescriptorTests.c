@@ -12,6 +12,7 @@
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
 #include "WorldColliderComponent.h"
+#include "WorldTerrainComponent.h"
 #include "Logger.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRPath.h"
@@ -619,6 +620,7 @@ static void TablesPassTheirCheck(TestRun* run)
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldSprite_GetRenderPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldLightComponent_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldColliderComponent_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldTerrainComponent_GetPropertyTable()));
     TEST_CHECK_ERROR(run, PropertyTable_Check(NULL), ErrorCode_IllegalArgument);
 }
 

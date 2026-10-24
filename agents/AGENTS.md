@@ -46,7 +46,7 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, and registers the twelve standard types. Read its lifetime rules before touching assets.
+  caches failed loads, and registers the thirteen standard types. Read its lifetime rules before touching assets.
 * Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader, GameSound and GameTexture: the manager-owned
   wrappers for the standard font, model, shader, sound and texture types, with their ownership rules, accessors and
   pitfalls; a skinned model carries its GameSkeleton (Animation.md). GameModel.h also holds GameMaterialFactors
@@ -141,6 +141,28 @@ Current module list:
     sockets; code plays clips, sets parameters and starts actions through it, and its events queue for the game; a
     bone's world matrix in double. Graphs are source/WorldAnimationGraph.c, actions (anchors, attach, detach)
     source/WorldAnimationActions.c, its per-animator state the private source/WorldAnimationInternal.h.
+* Terrain (Terrain.md) - Terrain of any shape (B01; decisions W1, W5, W6): one free-form triangle mesh with painted
+  material weights and densities, holes and face materials, imported from a Blender .glb, cut into 32 m chunks that
+  draw in every pass and collide as triangle meshes. Covers:
+  * TerrainMesh - The mesh as pure data with no GL (include/TerrainMesh.h): the 1/1024 m position grid, the limits,
+    smooth or imported normals, the chunks (each triangle in the cell of its centre; positions relative to an exact
+    centre), active edges over the whole terrain, the editor's setters and the rebuild of only the chunks they touch
+    (source/TerrainMesh.c, source/TerrainMeshChunks.c), the binary GHDF form (source/TerrainMeshFile.c), the glTF
+    import (source/TerrainMeshGltf.c: node transforms in double, welding, colour attributes into weights and
+    densities, material slots into holes and face materials), and a chunk's surface in parts and its collision mesh
+    (source/TerrainMeshCollision.c); private source/TerrainMeshInternal.h.
+  * GltfChecks - The structure checks every glTF reader runs before cgltf trusts a number (private,
+    source/GltfChecks.h): buffers, views, accessors, sparse data, alignment, and buffer files beside the file, shared
+    by the animation library's reader and the terrain's.
+  * TerrainAsset - The terrain asset type (a standard type, JSON in terrains/; include/TerrainAsset.h,
+    source/TerrainAsset.c, the definition in source/TerrainDefinition.c): the mesh from a .glb (source model) or its
+    binary form (source data), the palette's names, the density channels' names, the chunk size, and its placements'
+    default render and collision settings; unknown keys refused everywhere.
+  * WorldTerrainComponent - Component type 6 (`terrain`): a terrain asset by name and the settings this placement
+    overrides (explicit flags next to its own values: outline, shadow tier, casts shadows, draw distance, fixed draw
+    distance, collision enabled, layer, mask; a draw distance multiplier), with the pure function that resolves the
+    settings in effect. The collision world makes each chunk a one-sided mesh shape (WorldCollision.md, "Terrain");
+    the renderer draws the chunks in every pass (source/WorldRendererTerrain.c, WorldRuntime.md).
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -182,7 +204,7 @@ Current module list:
   * WorldQuery - Searches over a world's objects by tags, data comparisons, components, flags, distance and box, ordered
     by id or distance, with a limit: the engine side of selectors.
 * World data layer (WorldData.md) - The rendering-independent 3D world model: one object type made of components, in a
-  hierarchy. Covers eight modules (plus the private source/WorldInternal.h they share):
+  hierarchy. Covers nine modules (plus the private source/WorldInternal.h they share):
   * WorldObject - The one object type: id, name, parent, transform (relative to the parent), tint, enabled, visible,
     mobility (static/movable), a revision, its tags and data (a DataMap, with a data revision), and one slot per
     component type; created by the World only; validating setters and a property table (the parent row is ReadOnly:
@@ -204,6 +226,7 @@ Current module list:
     settings in effect (the draw distance from the placement, the world sprite or the kind).
   * WorldLightComponent - A point light (colour, intensity, range, casts shadows).
   * WorldColliderComponent - How the object collides (World collision, WorldCollision.md).
+  * WorldTerrainComponent - Where a terrain lies and how it draws and collides (Terrain, Terrain.md).
   * WorldEnvironment - Per-world sky/sun/moon/night-sky/fog/effect settings, described by its property table
     (defaults, validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md; it owns its sky texture
     names). Its date and time of day are what the sky shows: the game clock writes them every tick, the environment
@@ -236,14 +259,16 @@ Current module list:
     stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, AO, outlines, bloom, sun
     shafts, crisp overlay, lit sprites with decals, sorted transparency and shadows that face the light; frustum
     culling, draw distances, and dithered fades and opacity; LODs with dithered cross-fades; skinned models posed by
-    their animators in every pass, T29), in render space since T32:
+    their animators in every pass, T29; terrain chunks in every pass with their own GPU meshes, B01), in render space
+    since T32:
     the world's orientation with the camera at the origin, every position relative to the camera (subtracted in double),
     shadow cascades snapped to their texels; separate from the world data and never writes to it. Split by render pass
     into
     source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
     WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
   * WorldRenderCache - The renderer's private per-component cache (source/WorldRenderCache.h): one walk over the
-    world's model/sprite/light component arrays per frame builds the lists with the objects' world placements (in double,
+    world's model/sprite/light/terrain component arrays per frame builds the lists (since B01 every shown terrain's
+    chunks too) with the objects' world placements (in double,
     and in render space for the frame's origin: the one place a world position becomes the floats the GPU sees;
     effectively disabled and hidden objects not drawn); world models are resolved once per component and again only
     when the name changes, variants to an index, and the settings in effect (models' and sprites') every frame; each
@@ -279,7 +304,8 @@ Current module list:
     system: 5 steps the showcase figure through the clips, 6 a crowd of 100 walking figures, 7 slow motion (the private
     source/WorldTestAnimation.{h,c}). Since T30 it poses them in its PrepareRender, the humans wear the animated
     humanoid (the player in first person), E starts the action the object looked at offers (the bench's sit, the coffee
-    cup's pick-up, the door's push), 8 sends the NPC human to the bench, 9 puts down, 0 waves.
+    cup's pick-up, the door's push), 8 sends the NPC human to the bench, 9 puts down, 0 waves. Since B01 its world has
+    a terrain around the slab, and the minus key shows the terrain's chunk key.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown

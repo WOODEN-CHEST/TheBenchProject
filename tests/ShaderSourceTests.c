@@ -425,7 +425,7 @@ static void ShippedGeometryShadersShareOneDither(TestRun* run)
         const char* const Stages[] =
         {
             "pbr/fragment", "normal/fragment", "depth/fragment", "cube_depth/fragment", "sprite/fragment",
-            "normal_sprite/fragment", "sprite_depth/fragment", "sprite_cube_depth/fragment"
+            "normal_sprite/fragment", "sprite_depth/fragment", "sprite_cube_depth/fragment", "terrain/fragment"
         };
         for (size_t Index = 0U; Index < (sizeof(Stages) / sizeof(Stages[0])); Index++)
         {

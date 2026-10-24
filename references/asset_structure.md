@@ -74,6 +74,7 @@ extension is `fragment.frag`.
 | Fonts | `ttf` `otf` |
 | Sounds | `wav` `ogg` `mp3` `qoa` |
 | Shader stages | `vert` `frag` `vs` `fs` `glsl` |
+| Terrains: `source: model` / `source: data` | `glb` `gltf` / `ghdf` |
 
 These are exactly the formats the game's raylib build decodes with the function each loader uses (jpg, tga, psd and
 hdr readers are not compiled in; BMFont `.fnt` and the `xm`/`mod` tracker formats are only read by raylib functions
@@ -876,8 +877,10 @@ in fours; meshopt compression is not read); accessors fit in their views, aligne
 replacements too, 1 to its count of them); a `.glb`'s chunks are padded to four bytes; a clip's channels must sample
 floats of the right shape (rotations may be normalized integers); key times must be finite, at least 0, rising, and at
 most 3600 s; values finite, rotations of a length above 0; at most 256 bones (animated nodes and their ancestors) and
-4 194 304 floats of keys. Morph target weights are ignored (with a warning per clip). Interpolation is glTF's: `STEP`,
-`LINEAR` (rotations along the shorter arc) and `CUBICSPLINE`. Unknown keys are rejected.
+4 194 304 floats of keys; and reading its glTF structure may take at most 64 MiB beyond the file's own size (a small
+file listing millions of empty objects is refused, B01). Morph target weights are ignored (with a warning per clip).
+Interpolation is glTF's: `STEP`, `LINEAR` (rotations along the shorter arc) and `CUBICSPLINE`. Unknown keys are
+rejected.
 
 The test library is `animation_libraries/placeholder_humanoid/motions.json`: `test_humanoid_motions`, the placeholder
 figure's sixteen clips (idle, walk, run, crouch_idle, crouch_walk, fall, sit_idle and hold_r looped; jump, land, wave,
@@ -980,3 +983,105 @@ a right-arm layer (holding what the hand holds, waving), look-at on the neck and
 on a `seat`), `pick_up` (anchored on a `reach`, the grab attaching to `hand_r` by the target's `grip`), `put_down` (the
 release detaching `hand_r`), `open_door` (anchored on an `opener`, its `push` event for the game) and `wave` (the
 right arm, over whatever the body does).
+
+
+## Terrains.
+A terrain (B01) is the ground of a world: one free-form triangle mesh (vertices anywhere, overhangs and caves allowed)
+with painted material weights and vegetation densities per vertex, and holes and hard per-face materials per triangle.
+It is cut into chunks (32 m by default) that draw in every render pass and collide as triangle meshes. Definitions live
+under `terrains/`, next to their `.glb` or their binary file; a world places one with a `terrain` component
+(`references/world_structure.md`, "The terrain block"). How it works inside is in `agents/Terrain.md`.
+
+```
+{
+    "name": "placeholder_terrain",
+    "source": "model",                                   // "model" (a .glb imported when it loads) or "data"
+    "model": "test_world/placeholder_terrain",           // source model: the glTF file (glb / gltf)
+    "materials": [ "grass", "dirt", "rock" ],            // the palette, 1 to 16 terrain material names
+    "density_channels": [ "trees" ],                     // [OPTIONAL] at most 8
+    "weights": [ { "attribute": "COLOR_0", "r": "grass", "g": "dirt", "b": "rock" } ],
+    "densities": [ { "attribute": "_DENSITY_0", "r": "trees" } ],
+    "normals": "smooth",                                 // [OPTIONAL] "smooth" or "imported"
+    "blend_slot": "blend",                               // [OPTIONAL] the slot of the painted faces
+    "chunk_size": 32.0,                                  // [OPTIONAL]
+    "render": { "has_outline": true, "shadow_tier": "both", "casts_shadows": true, "draw_distance": 4000.0,
+        "is_draw_distance_fixed": true },               // [OPTIONAL] each key optional
+    "collision": { "is_enabled": true, "layer": "world" } // [OPTIONAL] each key optional
+}
+```
+
+| Key | Value | Meaning |
+|---|---|---|
+| `source` | `model` or `data`, required | Where the mesh comes from: a glTF file imported when the terrain loads (`model`), or the terrain's binary form (`data`), which the in-game editor will write. |
+| `model` | asset location; `source: model` only | The `.glb` (or `.gltf` with its buffers beside it). `format` (`glb`, `gltf`) narrows it as for models. |
+| `data` | asset location; `source: data` only | The binary form, a `.ghdf` file (`TerrainMesh_SaveGHDF`). |
+| `materials` | 1 to 16 asset names, each once; with `source: model` none named `hole` or as the blend slot (`blend` unless `blend_slot` says) | The palette: each vertex weighs these materials, and a face slot may name one. B02 makes them `terrain_material` assets; until then each palette entry shows as a flat debug colour. |
+| `density_channels` | at most 8 names (`[a-z][a-z0-9_]*`), each once | Vegetation and other densities per vertex, for the scattering (B09). |
+| `weights` | at most one mapping per palette material | Which attribute of the file feeds which palette material: `{ "attribute": "<name in the file>", "r": "<material>", "g": ..., "b": ..., "a": ... }`, any channels left out unused. Each material is fed by one channel at most. Without mappings every weight is 0, and the terrain shows its first material. |
+| `densities` | at most one mapping per density channel | The same for the density channels. |
+| `normals` | `smooth` (default) or `imported`; `source: model` only | `smooth`: computed by the game over the whole welded mesh (no seams between chunks). `imported`: the file's own normals, so hard edges modelled in Blender stay hard (vertices at one position with different normals stay apart). |
+| `blend_slot` | a material slot's name (default `blend`); `source: model` only | The slot whose faces use the painted weights. It may not be `hole` or a palette material's name. |
+| `chunk_size` | metres, 8 to 256 (default 32) | The side of the chunks' square cells in the terrain's X and Z. |
+| `render.has_outline` | boolean (true) | Whether the renderer outlines it. |
+| `render.shadow_tier` | `near`, `far`, `both` (`both`) | Which shadow cascades it casts into. |
+| `render.casts_shadows` | boolean (true) | Off: it casts no shadow; it still receives them. |
+| `render.draw_distance` | metres, above 0 (4000) | How far each chunk is seen before it fades out. |
+| `render.is_draw_distance_fixed` | boolean (true) | On: the player's draw distance setting does not change it, so hills never vanish on low settings. |
+| `collision.is_enabled` | boolean (true) | Off: nothing stands on it. |
+| `collision.layer` | a layer (`world`) | Its chunks' collision layer. |
+| `collision.collides_with` | an array of layers, each once (left out: the layer's default mask) | The layers it blocks and is blocked by. |
+
+A placed terrain may override every `render` and `collision` value (and multiply the draw distance) with the same keys
+in its component, each behind its own `overrides_` flag.
+
+**Material slots** decide each face (`source: model`): a primitive's material is its slot, and its name says what its
+faces are. `blend` (or the `blend_slot`; also a primitive without a material) uses the painted weights; `hole` makes
+holes (not drawn, no collision: cave mouths, basements); a palette material's name gives its faces that material
+outright, with a hard edge along their border (a path, a ploughed field). Any other slot name is refused with the name in
+the message.
+
+**Weights and densities** are read from colour or custom attributes: a scalar, RGB or RGBA of floats (clamped to 0..1)
+or of normalized unsigned bytes or shorts. Weights need not add up to 1: the material mix divides by their sum. Every
+mapped attribute must be on every primitive the file has; a channel mapped past the attribute's own is refused.
+
+**The file is checked as hostile** when the terrain loads, with the same structure checks the animation libraries run
+(see "Animation libraries": buffers, views, accessors, alignment, buffer files beside the file, the structure's memory
+budget), plus: at most 256 MiB; the default scene's node tree at most 256 levels deep; every primitive triangles (glTF
+mode 4; points, lines and strips are refused with the mesh's name) and not Draco-compressed, with float positions and,
+for `imported` normals, float normals; every accessor the terrain reads (positions, indices, normals, mapped
+attributes) stored in the file (an accessor without a buffer view, all zeros of any count, is refused); indices inside
+their vertices; node transforms finite and not flattening (a mirrored node keeps its faces' front side); every position
+inside 8192 m of the origin on each axis, no edge longer than that; at most 8 388 608 vertices in the primitives,
+2 097 152 once welded, and 4 194 304 triangles, filling at most 16 384 chunks (128 x 128 cells: 4 km square at 32 m;
+larger chunks cover more). Each position is taken through its node's
+transform in double and rounded once onto a 1/1024 m grid; vertices at exactly one position (and, with `imported`
+normals, one normal) are welded into one, their weights and densities averaged where the file gave them different
+values (a seam), and triangles left with two corners at one position are dropped (both logged once with counts). A mapping naming an attribute a primitive lacks
+fails the load, naming the mesh and the attribute. The binary form is read with the mesh's limits (the file at most
+192 MiB, its parsed tree at most 256 MiB) and must hold as many materials and density channels as the definition
+names. Unknown keys are
+rejected everywhere in the definition, and a definition that breaks a rule is rejected when it is read, with a message
+naming the rule (`Terrain "hills": weights[0].g is "dirtt", which is not one of its "materials".`).
+
+**From Blender 5** (decision W6). Model the terrain as mesh objects in Blender's usual space (+Z up); the exporter turns
+it into glTF's +Y up, which is the game's.
+1. **Materials:** give the mesh the material slots it needs, named as above: `blend` for the painted ground, `hole`
+   for cave mouths, and a palette material's name (`dirt`) for faces that take one material outright. Assign the faces.
+2. **Weights:** add a colour attribute (Object Data properties, Color Attributes; domain Vertex, type Color) and paint
+   it in Vertex Paint mode, one material per channel: the red, green, blue and alpha channels map to materials in the
+   definition's `weights`. Make it the active colour attribute: it exports as `COLOR_0`.
+3. **More channels** (more than four materials, densities): add more attributes named with a leading underscore in
+   capitals (`_WEIGHTS_1`, `_DENSITY_0`; colour or float attributes, domain Vertex) and map them by that name.
+4. **Export** (File, Export, glTF 2.0): format glTF Binary (`.glb`); Include: Selected Objects if the scene holds more;
+   Transform: +Y Up (on); Data, Mesh: Apply Modifiers (on), Normals (on for `normals: imported`), Attributes (on: it
+   exports the attributes whose names start with `_`); Data, Mesh, Vertex Color: Use Vertex Color **Active** (the
+   default, Material, exports a colour attribute only when a material's node tree uses it); Data, Material: Materials
+   **Export** or Placeholder (No Export merges the primitives and loses the slots).
+5. Put the `.glb` next to the definition and load the world: a refusal names what to fix (a slot, an attribute, a
+   limit). If the game cannot find an attribute, check its name in the file: exporters have changed the case of custom
+   attribute names over the versions, which is why they are written in capitals here.
+
+The test terrain is `terrains/test_world/placeholder_terrain.json` (`placeholder_terrain`), written with its `.glb` by
+`asset_source/scripts/placeholder_terrain.py`: hills around the test world's slab out to about 250 m (1 m triangles near
+the slab, 8 m far out), a valley, a cliff steeper than 35 degrees with an overhang and a cave behind a mouth of `hole`
+faces, a footpath, and a `dirt` patch; `COLOR_0` paints grass, dirt and rock, `_DENSITY_0` the trees.

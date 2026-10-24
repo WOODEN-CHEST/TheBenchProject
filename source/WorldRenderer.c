@@ -54,6 +54,7 @@ static void EnsureShaders(WorldRenderer* self)
     WorldRendererShadows_LoadShaders(self);
     WorldRendererSky_LoadShader(self);
     WorldRendererStars_LoadShader(self);
+    WorldRendererTerrain_LoadShader(self);
 }
 
 // What each optional feature needs to be able to run at all (its shaders and targets), independent of whether it
@@ -361,6 +362,8 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->Features[WorldRendererFeature_Sky] = StateOf(HasSky, HasSky);
     Status->Features[WorldRendererFeature_Tonemap] = StateOf(HasTonemap, HasTonemap);
     Status->Features[WorldRendererFeature_SpriteShading] = StateOf(HasSprites, HasSprites);
+    bool HasTerrain = (self->_terrain._shader != NULL);
+    Status->Features[WorldRendererFeature_TerrainShading] = StateOf(HasTerrain, HasTerrain);
     Status->Features[WorldRendererFeature_SpriteLighting] = StateOf(HasSprites, self->_isSpriteLightingEnabled);
     Status->Features[WorldRendererFeature_SpriteShadows] = StateOf(AreSpriteShadowsAvailable(self),
         DoSpritesCastShadows(self, frame));
@@ -438,6 +441,26 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Memory_Copy(Counts.DrawnModelsByLod, Status->DrawnModelsByLod, sizeof(Status->DrawnModelsByLod));
     Status->LodFadingCount = Counts.LodFadingCount;
     Status->IsLodTintingEnabled = self->_isLodTintingEnabled;
+
+    size_t TerrainCount = 0;
+    const WorldRenderTerrain* Terrains = WorldRenderCache_GetTerrains(&self->_cache, &TerrainCount);
+    Status->TerrainCount = 0;
+    Status->TerrainWithoutAssetCount = 0;
+    for (size_t Index = 0; Index < TerrainCount; Index++)
+    {
+        if (Terrains[Index].Asset != NULL)
+        {
+            Status->TerrainCount++;
+        }
+        else
+        {
+            Status->TerrainWithoutAssetCount++;
+        }
+    }
+    WorldRenderCache_GetTerrainChunks(&self->_cache, &Status->TerrainChunkCount);
+    Status->DrawnTerrainChunkCount = Counts.DrawnTerrainChunkCount;
+    Status->DrawnTerrainTriangleCount = Counts.DrawnTerrainTriangleCount;
+    Status->IsTerrainKeyEnabled = self->_terrain._isDebugEnabled;
 }
 
 /* Appends the drawn models per LOD to the status line's LOD text, LOD 0 first, up to the coarsest LOD drawn: "9 / 3 / 1".
@@ -540,6 +563,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     WorldVisibility_Construct(&Renderer->_visibility);
     WorldRendererSky_Construct(Renderer);
     WorldRendererSprites_Construct(Renderer);
+    WorldRendererTerrain_Construct(Renderer);
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardLights, INITIAL_FORWARD_LIGHT_CAPACITY,
         sizeof(WorldCullingLight));
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardRadiances, INITIAL_FORWARD_LIGHT_CAPACITY,
@@ -566,7 +590,8 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     WorldRendererSprites_Deconstruct(self);
     WorldRendererSky_Deconstruct(self); // retires the sky textures' own asset users
 
-    // The cache's asset pointers die with the model user, so the cache goes first.
+    // The cache's asset pointers die with the model user, so the cache (and the terrains' GPU meshes) go first.
+    WorldRendererTerrain_Deconstruct(self);
     WorldVisibility_Deconstruct(&self->_visibility);
     WorldRenderCache_Deconstruct(&self->_cache);
     Memory_Free(self->_pbr._forwardLights._data);
@@ -611,6 +636,9 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
     }
     AssetUserID OldUser = self->_modelUser;
     WorldRenderCache_Reset(&self->_cache);
+    // The terrains' GPU meshes are keyed by their terrains, which the old user may release: another terrain could then
+    // live at the same address.
+    WorldRendererTerrain_ReleaseMeshes(self);
     self->_modelUser = NewUser;
 
     // Any origin will do: this sync resolves the world models, and every render syncs again for its camera.
@@ -646,6 +674,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     }
     // The skinned shaders' palettes hold no pose yet this frame (an animator's memory may be another's since the last).
     WorldRendererGeometry_ResetPalettes(self);
+    // The terrains' chunks on the GPU: new and changed ones uploaded, those of terrains no longer placed unloaded (B01).
+    WorldRendererTerrain_PrepareFrame(self);
     // Recreates the targets after a resize or a pixelation change; only a missing scene target is fatal.
     Error TargetResult = WorldRendererScene_EnsureTargets(self, target.texture.width, target.texture.height);
     if (TargetResult.Code != ErrorCode_Success)
@@ -770,6 +800,7 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_SpriteLighting:   return (const unsigned char*)u8"sprite lighting";
         case WorldRendererFeature_SpriteShadows:    return (const unsigned char*)u8"sprite shadows";
         case WorldRendererFeature_Skinning:         return (const unsigned char*)u8"skinning";
+        case WorldRendererFeature_TerrainShading:   return (const unsigned char*)u8"terrain shading";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -802,7 +833,8 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
         PRIu64 u8" posed), %" PRIu64 u8" sprites (%" PRIu64 u8" decals, %" PRIu64 u8" blended or additive), %" PRIu64
         u8" lights, %" PRIu64 u8" stars; drawn %" PRIu64 u8" models and %" PRIu64 u8" sprites (%" PRIu64 u8" fading; "
         u8"models by LOD %s, %" PRIu64 u8" cross-fading%s), culled %" PRIu64 u8" outside the view%s and %" PRIu64
-        u8" faded out (draw distance, opacity); %s.",
+        u8" faded out (draw distance, opacity); terrain: %" PRIu64 u8" placed (%" PRIu64 u8" without a terrain), "
+        u8"%" PRIu64 u8" of %" PRIu64 u8" chunks drawn, %" PRIu64 u8" triangles%s; %s.",
         Tier, (uint64_t)Status->ModelCount, (uint64_t)Status->ModelWithoutAssetCount, (uint64_t)Status->PosedModelCount,
         (uint64_t)Status->SpriteCount, (uint64_t)Status->DecalCount, (uint64_t)Status->TransparentSpriteCount,
         (uint64_t)Status->LightCount,
@@ -810,7 +842,10 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
         (uint64_t)Status->FadingCount, AreLodsBuilt ? (const char*)Lods._data : "?",
         (uint64_t)Status->LodFadingCount, Status->IsLodTintingEnabled ? ", LOD tinting on" : "",
         (uint64_t)Status->OutsideViewCount, Status->IsCullingEnabled ? "" : " (frustum culling off)",
-        (uint64_t)Status->FadedOutCount, IsBuilt ? (const char*)Lists._data : "feature list unavailable");
+        (uint64_t)Status->FadedOutCount, (uint64_t)Status->TerrainCount, (uint64_t)Status->TerrainWithoutAssetCount,
+        (uint64_t)Status->DrawnTerrainChunkCount, (uint64_t)Status->TerrainChunkCount,
+        (uint64_t)Status->DrawnTerrainTriangleCount, Status->IsTerrainKeyEnabled ? ", chunk key on" : "",
+        IsBuilt ? (const char*)Lists._data : "feature list unavailable");
     Error_Deconstruct(&LogResult);
     Memory_Free(Lods._data);
     Memory_Free(Lists._data);
@@ -874,6 +909,16 @@ void WorldRenderer_SetLodTintingEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_IsLodTintingEnabled(const WorldRenderer* self)
 {
     return self->_isLodTintingEnabled;
+}
+
+void WorldRenderer_SetTerrainKeyEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_terrain._isDebugEnabled = enabled;
+}
+
+bool WorldRenderer_IsTerrainKeyEnabled(const WorldRenderer* self)
+{
+    return self->_terrain._isDebugEnabled;
 }
 
 void WorldRenderer_SetBloomEnabled(WorldRenderer* self, bool enabled)

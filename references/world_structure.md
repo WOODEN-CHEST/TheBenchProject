@@ -97,7 +97,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `mobility` | `"static"` / `"movable"` | |
 | `tags` | array of keys | See "Tags and data". |
 | `data` | object | See "Tags and data". |
-| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`, `animator`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component`, `animator_component` in `agents/WorldData.md`, `agents/Characters.md` and `agents/Animation.md`). |
+| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`, `animator`, `terrain`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component`, `animator_component`, `terrain_component` in `agents/WorldData.md`, `agents/Characters.md`, `agents/Animation.md` and `agents/Terrain.md`). |
 
 An object has at most one component of each type. A block whose values are all defaults is still written (`"light":
 {}`): the component is there.
@@ -286,6 +286,42 @@ A placed figure that waves in a loop, though its library plays the wave once:
 }
 ```
 
+### The terrain block
+
+The `terrain` component (B01) places a terrain: a `terrain` asset (`references/asset_structure.md`, "Terrains";
+`agents/Terrain.md`) whose mesh lies in the object's space, drawn in chunks and solid. The object is normally `static`
+(the default) and has no other component; a collider on the same object wins (its terrain then does not collide). Every
+render and collision setting of the terrain asset can be overridden with the two keys the model block uses.
+
+| Key | Value (default) | |
+|---|---|---|
+| `terrain` | an asset name or `null` (null) | The terrain. None places nothing; a name that does not load draws and collides nothing (logged once). |
+| `overrides_has_outline`, `has_outline` | false, true | The outline. |
+| `overrides_shadow_tier`, `shadow_tier` | false, `both` | Which cascades it casts into: `near`, `far`, `both`. |
+| `overrides_casts_shadows`, `casts_shadows` | false, true | Off: it casts no shadow (it still receives them). |
+| `overrides_draw_distance`, `draw_distance` | false, 4000 | How far each chunk is seen, in metres (above 0). |
+| `draw_distance_multiplier` | above 0 (1) | Times the draw distance in effect. |
+| `overrides_is_draw_distance_fixed`, `is_draw_distance_fixed` | false, true | On: the player's draw distance setting leaves it as it is. |
+| `overrides_is_collision_enabled`, `is_collision_enabled` | false, true | Off: nothing stands on it or bumps into it. |
+| `overrides_collision_layer`, `collision_layer` | false, `world` | Its chunks' layer. |
+| `overrides_collides_with`, `collides_with` | false, an array of layers (world's default mask) | The layers it blocks and is blocked by; without it, the asset's mask or the layer's default. |
+
+The test world's terrain (object 51), as the shipped file writes it, and a copy that casts no shadow and is seen half as
+far:
+```
+"terrain": {
+    "terrain": "placeholder_terrain"
+}
+```
+```
+"terrain": {
+    "terrain": "placeholder_terrain",
+    "overrides_casts_shadows": true,
+    "casts_shadows": false,
+    "draw_distance_multiplier": 0.5
+}
+```
+
 ### Values
 
 - Numbers: integers or decimals; a float keeps its fraction when written (`2.0`). Angles are degrees.
@@ -344,7 +380,7 @@ Every object can carry tags and typed data under namespaced keys (`agents/Object
 
 - Only values that differ from their defaults, so files stay short and pick up changed defaults.
 - Keys in table order: `id` first, then the object table's keys, `components` last; component blocks in type order
-  (`model`, `sprite`, `light`, `collider`, `character`, `animator`); tags and data keys alphabetically.
+  (`model`, `sprite`, `light`, `collider`, `character`, `animator`, `terrain`); tags and data keys alphabetically.
 - Not the runtime objects: the player and NPCs made during play (`WorldObject_IsPersistent` off) are left out with
   everything under them. The game state will save them on its own.
 - The objects **parents first**: the roots in id order, each followed by its subtree depth first, the children in the
@@ -370,7 +406,7 @@ every integer in the smallest GHDF type that holds it.
 | Object entry | Value |
 |---|---|
 | 1 | The id (an unsigned integer). |
-| 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`, 5 `character`, 6 `animator`), each a compound keyed by the type's wire ids. |
+| 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`, 5 `character`, 6 `animator`, 7 `terrain`), each a compound keyed by the type's wire ids. |
 | 3 and up | The `world_object` table's wire ids: 3 `name`, 4 `position`, 5 `rotation`, 6 `scale`, 7 `tint`, 8 `is_enabled`, 9 `is_visible`, 10 `mobility`, 11 the tags and data, 12 `parent`, 13 `parent_socket` (T30). |
 
 How each type is stored (`agents/PropertyDescriptors.md`, "Types"): integers in the smallest integer type (readers take

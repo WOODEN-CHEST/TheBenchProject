@@ -24,6 +24,9 @@ Collision for the 3D world, built in T12 and T27 (decisions G13, G18–G20). The
   - `source/WorldCollisionSolver.c` (T27): the push-out solver, its sweeps and the depenetration;
   - `source/WorldCollisionEvents.c` (T27): contacts, contact events, motion events.
 - **Debug wireframes and contact points:** `source/WorldRendererCollision.c`.
+- **Terrain** (B01, [Terrain.md](Terrain.md)): `source/TerrainMeshCollision.c` builds a chunk's collision mesh
+  (`TerrainMesh_CreateChunkCollisionMesh`); the collision world's terrain instances live in `source/WorldCollision.c`
+  (see "Terrain").
 
 Tests:
 - `tests/CollisionGeometryTests.c`: the maths, with seeded fuzz tests that casts never miss a contact;
@@ -34,11 +37,15 @@ Tests:
 - `tests/WorldCollisionMotionTests.c` (T27): the step: tunnelling, push-out at once, masses, sliding, blocked movers,
   teleports, the hierarchy, contact events, results, sleeping and determinism, and spheres resting a skin from a box to
   a micrometre;
-- both run twice, the second time as `WorldCollisionFar` and `WorldCollisionMotionFar` with every scene shifted about
-  100 km along each axis ([WorldData.md](WorldData.md), "Tests").
+- `tests/WorldTerrainCollisionTests.c` (B01): terrain chunks: rays and casts naming the chunk and the terrain's
+  triangle, holes, seams that do not catch, T13's slope limit, rebuilds of only the changed chunks, a collider winning
+  over a terrain, the warnings;
+- all three run twice, the second time as `WorldCollisionFar`, `WorldCollisionMotionFar` and
+  `WorldTerrainCollisionFar` with every scene shifted about 100 km along each axis ([WorldData.md](WorldData.md),
+  "Tests").
 
-The formats: `references/asset_structure.md` ("World models", `collision`) and `references/world_structure.md` (the
-`collider` component).
+The formats: `references/asset_structure.md` ("World models", `collision`; "Terrains", `collision`) and
+`references/world_structure.md` (the `collider` and `terrain` components).
 
 **What T12 is and is not.** It gives every collider a place in world space, and queries. The owner's requirements, as
 T12 covers them:
@@ -90,6 +97,11 @@ space, an optional part `Name`, and the sizes its type uses. Build one with `Col
 
   Each triangle keeps its model part and its index there (`_part`, `_sourceIndex`; with a hit's barycentrics, T19 finds
   the UVs).
+- **Given edges and indices** (B01). A `CollisionMeshPart` may bring each triangle's edge flags (`ActiveEdges`: bit 0
+  for (v0, v1), bit 1 for (v1, v2), bit 2 for (v2, v0)) and its own source index (`SourceIndices`) instead: the mesh
+  keeps them as given (the parts' welding and degenerate triangles change neither) and computes nothing for them. The
+  terrain passes the flags it computed over the whole terrain, so a chunk's border edges are active only where the
+  terrain itself has an edge, and its triangle indices, so a hit names the terrain's triangle.
 - **Sets** (`CollisionSet`): a named compound of shapes. Limits: 32 sets in a world model, 128 shapes in a set, 1024 in
   a world model. Names follow `[a-z][a-z0-9_.-]*`, at most 128 bytes (`CollisionShape_IsValidName`).
 - `CollisionShape_GetTransform` gives the shape's own transform (rotation, then centre).
@@ -155,6 +167,36 @@ Component type 3, `collider`, with the table `collider_component`. Its rows:
 - **Exact under any transform.** Every scale applies exactly to every shape: the object's, its parents' and the
   collider's. An unevenly scaled sphere is an ellipsoid; a sheared box is a parallelepiped.
 
+## Terrain (B01)
+
+A terrain component ([Terrain.md](Terrain.md)) is the collision world's second source, next to colliders.
+- **One instance per terrain object without a collider.** An object with both collides through its collider alone (the
+  terrain is ignored, warned once): a terrain is never a collider's shape.
+- **One shape per chunk,** in chunk order (the shape's index is the chunk's): a one-sided `Mesh` shape at the chunk's
+  centre, its mesh from `TerrainMesh_CreateChunkCollisionMesh` (the chunk's surface, holes left out, relative to the
+  centre, cut into parts of at most 65536 vertices as the renderer cuts it). The placement is the object's world matrix
+  times the chunk's translation, in double as every placement is.
+- **Seams do not catch.** Each part brings the terrain's own edge flags (computed over the whole terrain, "Given edges
+  and indices" above): an edge on a chunk's border is inactive where the terrain is smooth across it, so a capsule
+  sliding across it takes the face's normal, exactly as inside a chunk (the tests check a ball's contacts across seams
+  and compare a capsule's walk across them with the same walk on a box).
+- **Hits name the terrain's triangle:** `MeshPart` is the chunk and `SourceTriangle` the terrain's triangle index (T19's
+  picking, B09 and the editor read its weights from it).
+- **One-sided:** the front (counter-clockwise) side collides; rays and casts from below pass through. An overhang's
+  underside faces down, so it is a roof.
+- **Settings:** the layer, the mask and whether it collides are the settings in effect
+  (`WorldTerrainComponent_ResolveSettings`): `world` by default, the layer's default mask.
+- **Static or kinematic, never pushable.** A static terrain object sits in the static tree; a movable one pushes as a
+  kinematic mover (T27) and stops when blocked.
+- **Rebuilds.** The meshes are cut again when the terrain (its name, its asset) or its chunk layout changes; a chunk's
+  mesh is rebuilt alone when its revision moves (`TerrainMesh_RebuildDirtyChunks`, the editor); the shapes are rebuilt
+  from the kept meshes when a setting changes, the object switches between static and movable, or the instance comes
+  back; only placed again when the object moves. `WorldCollisionStats.TerrainChunkBuildCount` counts the chunk meshes
+  built.
+- **Warned once per instance:** a terrain that does not load; a chunk whose mesh cannot be built (more than 2^20
+  triangles: everything falls through it); a transform that flattens it; a collider and a terrain on one object; a
+  static terrain that moved.
+
 ## The collision world (`WorldCollision.h`)
 
 **Lifetime.** `WorldCollision_Create(world, assets, logger, options, &collision)` borrows the world, which must outlive
@@ -180,7 +222,9 @@ As Jolt's double-precision build does it, so a world 100 km across collides as i
   100 km) may still make a decision on a threshold go the other way a tick later: a character sliding along a wall sits
   exactly at the 2 mm contact distance, so a contact event can begin a tick apart in two runs at different places.
 - **Meshes keep their vertices as floats in their own space,** so a very large mesh loses precision at its far end
-  (1 mm at 8 km from its object's origin): build big terrain from tiles, each its own object (see "Known limits").
+  (1 mm at 8 km from its object's origin; see "Known limits"). A terrain's chunks are meshes of their own, their
+  vertices relative to each chunk's centre on the terrain's 1/1024 m grid, where float subtraction is exact (B01): a
+  terrain is exact across its whole extent (8 km each way).
   Planes are placed by their object's origin too: a level unbounded plane (the usual ground) is exact anywhere, a
   tilted one far from its object's origin is not (see "Known limits").
 
@@ -213,8 +257,9 @@ the last step).
   - a world model without a `collision` section under a collider;
   - a shape flattened by a zero scale (it collides with nothing until unflattened);
   - a static object that moved.
+- **Terrains** (B01): see "Terrain" below; a terrain instance rebuilds only the chunks that changed.
 - **Counts:** `WorldCollision_GetStats` gives instances (static, movable), shapes, mesh triangles, planes, trigger
-  pairs, rebuilds, moves and syncs.
+  pairs, rebuilds, moves, syncs and (B01) terrain chunks built.
 
 ### Queries
 
@@ -536,14 +581,18 @@ motion events are logged, and the I key's status lines add the counts and the la
   stop at the row's far end (the wall pushes the row against it and is blocked), and a crate pinned in a corner of two
   static posts in the door's swing (the door stops on it; closing pushes it along).
 
+Since B01 it also has a terrain (object 51, `placeholder_terrain`): the hills around the slab, one static instance of
+256 chunk meshes (61 168 triangles: the terrain's 61 174 less its 6 hole faces; [Terrain.md](Terrain.md), "The test
+terrain").
+
 ## Known limits
 
 - **Shapes hundreds of metres across lose millimetres in GJK.** A direction off by float rounding (about 1e-7 of the
   coordinates) bounds a gap short by that times the shape's size: 2.8 mm next to a box 400 m wide. Up to 120 m the
   distance is right to 0.04 mm. Make a huge ground a plane or a mesh, not one box.
 - **A triangle mesh much larger than a few kilometres loses precision at its far end** (T33): its vertices are floats in
-  its own space, 1 mm apart at 8 km from its object's origin. Build big terrain from tiles, each its own object (the
-  placements are doubles, so tiles meet exactly anywhere). Nothing splits a mesh automatically.
+  its own space, 1 mm apart at 8 km from its object's origin. Nothing splits a model's mesh automatically: split big
+  architecture into objects. Terrain needs nothing: its chunks are meshes of their own (B01).
 - **A tilted unbounded plane far from its object's origin** (T33): the narrowphase takes a plane's point from its
   object's origin, made relative to the query and rounded once, so 100 km from that origin the point is off by up to
   a float's step there (8 mm) and a plane tilted from level moves by that times the sine of its tilt. A level one (the
@@ -554,7 +603,10 @@ motion events are logged, and the I key's status lines add the counts and the la
   stamped on every event.
 - **`WorldCollision_CollideObject` skips an object's own plane and mesh shapes.** It is marked `// TODO:`; T27's movers
   are convex.
-- **A mesh's debug wireframe draws every edge every frame:** fine for test content, slow for a large terrain.
+- **A mesh's debug wireframe draws every edge every frame:** fine for test content; the test terrain's 61 000 triangles
+  are drawn whole with F7 too (the renderer's chunk key, the minus key, draws only the chunks in view).
+- **A terrain chunk with more than 2^20 triangles** gets no collision (warned once: everything falls through it). A
+  32 m chunk holds that many only at triangles a few centimetres across.
 - **World models stay held** by the collision world until it is destroyed, as the render cache holds its own.
 - **Pushes translate only, without friction** (T28): a crate pushed by a turning door slides off it rather than
   turning.

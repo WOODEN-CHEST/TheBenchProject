@@ -85,14 +85,17 @@ static WorldCollisionFilter GetFilter(const WorldCollisionFilter* filter, WorldC
     return (filter != NULL) ? *filter : WorldCollisionFilter_Create(COLLISION_LAYER_MASK_ALL, defaultMode);
 }
 
-void WorldCollisionInternal_FillTriangleInfo(const CollisionMesh* mesh, uint32_t triangle, WorldCollisionShapeInfo* info)
+void WorldCollisionInternal_FillTriangleInfo(const WorldCollisionInstance* instance, const WorldCollisionShape* shape,
+    uint32_t triangle, WorldCollisionShapeInfo* info)
 {
-    const CollisionMeshTriangle* Source = &mesh->_triangles[triangle];
+    const CollisionMesh* Triangles = shape->Shape->Mesh;
+    const CollisionMeshTriangle* Source = &Triangles->_triangles[triangle];
     info->HasTriangle = true;
     info->TriangleIndex = triangle;
-    info->MeshPart = Source->_part;
+    // A terrain's chunk is its part (its mesh's own parts only split a large chunk), its source the terrain's triangle.
+    info->MeshPart = (instance->Terrain != NULL) ? shape->ShapeIndex : Source->_part;
     info->SourceTriangle = Source->_sourceIndex;
-    info->MaterialIndex = (Source->_part < mesh->_partCount) ? mesh->_partMaterials[Source->_part] : -1;
+    info->MaterialIndex = (Source->_part < Triangles->_partCount) ? Triangles->_partMaterials[Source->_part] : -1;
 }
 
 /* The barycentric weights of @p point's nearest spot on a mesh triangle (world corners). */
@@ -214,7 +217,7 @@ static void RecordRayHit(RayQuery* query, const WorldCollisionInstance* instance
     WorldCollisionInternal_FillShapeInfo(instance, shape, &Result.Shape);
     if (shape->Shape->Type == CollisionShapeType_Mesh)
     {
-        WorldCollisionInternal_FillTriangleInfo(shape->Shape->Mesh, hit->TriangleIndex, &Result.Shape);
+        WorldCollisionInternal_FillTriangleInfo(instance, shape, hit->TriangleIndex, &Result.Shape);
         Result.Shape.Barycentric = hit->Barycentric;
     }
     Result.Point = Vector3Double_AddScaled(query->Origin, GameMath_FromVector3(query->Direction), (double)hit->T);
@@ -364,7 +367,7 @@ static void EmitContact(ContactRun* run, const CollisionContact* contact, uint32
     }
     if (triangleView != NULL)
     {
-        WorldCollisionInternal_FillTriangleInfo(run->TargetShape->Shape->Mesh, triangle, &Manifold.ShapeB);
+        WorldCollisionInternal_FillTriangleInfo(run->Target, run->TargetShape, triangle, &Manifold.ShapeB);
         Manifold.ShapeB.Barycentric = GetTriangleWeights(triangleView, run->IsSwapped ? contact->Points[0].PositionA
             : contact->Points[0].PositionB);
     }
@@ -484,7 +487,7 @@ static void ConsiderCastHit(CastRun* run, const CollisionCastHit* hit, uint32_t 
     WorldCollisionInternal_FillShapeInfo(run->Target, run->TargetShape, &Result.Shape);
     if (triangleView != NULL)
     {
-        WorldCollisionInternal_FillTriangleInfo(run->TargetShape->Shape->Mesh, triangle, &Result.Shape);
+        WorldCollisionInternal_FillTriangleInfo(run->Target, run->TargetShape, triangle, &Result.Shape);
         Result.Shape.Barycentric = GetTriangleWeights(triangleView, hit->PointB);
     }
     Result.CastShapeIndex = run->Shape->Index;

@@ -210,6 +210,13 @@ typedef struct CollisionMeshPartStruct
     uint32_t TriangleCount;
     /** @brief The part's material index, reported by ray hits (-1 for none). */
     int32_t MaterialIndex;
+    /** @brief One byte per triangle: its active edges as the caller decided them (CollisionMeshTriangle's bits; a part
+     *  cut from a larger mesh, a terrain chunk, keeps the activity its neighbours across the cut give its border edges),
+     *  or NULL: computed from the mesh's own triangles. Borrowed. */
+    const uint8_t* ActiveEdges;
+    /** @brief One index per triangle: the source index its hits report (a terrain's own triangle), or NULL: its index
+     *  among the part's triangles. Borrowed. */
+    const uint32_t* SourceIndices;
 } CollisionMeshPart;
 
 /**
@@ -356,10 +363,24 @@ void CollisionHull_Destroy(CollisionHull* self);
 
 // Functions: meshes.
 /**
+ * @brief Whether an edge two triangles share is active (see CollisionMeshTriangle): it is, unless the two lie flat
+ *        across it (their normals within 5 degrees) or fold concave seen from the first one's front. The rule every
+ *        collision mesh marks its edges by; a terrain marks its own with it over the whole terrain (TerrainMesh.h).
+ *        The triangles must share the edge with consistent winding (it runs opposite ways in the two); an edge that
+ *        does not is active, which the caller decides.
+ * @param normal The first triangle's unit normal.
+ * @param otherNormal The second triangle's unit normal.
+ * @param edgePoint A point of the edge.
+ * @param otherOpposite The second triangle's corner that is not on the edge.
+ * @returns true when the edge is active.
+ */
+bool CollisionMesh_IsSharedEdgeActive(Vector3 normal, Vector3 otherNormal, Vector3 edgePoint, Vector3 otherOpposite);
+
+/**
  * @brief Builds a collision mesh from parts, each transformed by @p transform.
  *
  * Welds vertices with the same position, skips triangles with a repeated vertex or no area, marks each edge active or
- * not (see CollisionMeshTriangle) and builds the BVH.
+ * not (see CollisionMeshTriangle; a part that gives its own activity keeps it) and builds the BVH.
  * @param parts The parts; borrowed. Must not be NULL unless @p partCount is 0.
  * @param partCount How many.
  * @param transform Applied to every vertex (a model's import transform; MatrixIdentity() for none).
