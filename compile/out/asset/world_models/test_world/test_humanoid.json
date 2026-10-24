@@ -4,5 +4,12 @@
         { "model": "test_humanoid", "max_distance": 12 },
         { "model": "test_humanoid_lod1", "max_distance": 80 }
     ],
-    "animation_libraries": [ "test_humanoid_motions" ]
+    "animation_libraries": [ "test_humanoid_motions" ],
+    "animation_graph": "test_humanoid",
+    "sockets": {
+        "hand_r": { "bone": "hand_r", "position": [ 0.03, -0.07, 0.0 ], "rotation": [ 100.0, 0.0, 0.0 ] },
+        "hand_l": { "bone": "hand_l", "position": [ -0.03, -0.07, 0.0 ], "rotation": [ 100.0, 0.0, 0.0 ] },
+        "eyes": { "bone": "head", "position": [ 0.0, 0.1, 0.1 ] }
+    },
+    "first_person": { "eyes": "eyes", "hidden_bones": [ "neck" ] }
 }

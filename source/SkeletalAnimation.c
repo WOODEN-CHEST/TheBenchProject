@@ -558,6 +558,97 @@ void SkeletalPose_FinishBlend(const SkeletalBlendBone* blend, const GameSkeleton
     }
 }
 
+/* The rotation a fraction of the way from the identity to @p rotation (normalized linear interpolation, the shorter
+ * way). */
+static Quaternion GetPartOfRotation(Quaternion rotation, float share)
+{
+    Quaternion Identity = { 0.0f, 0.0f, 0.0f, 1.0f };
+    if (rotation.w < 0.0f)
+    {
+        rotation = (Quaternion){ -rotation.x, -rotation.y, -rotation.z, -rotation.w };
+    }
+    return QuaternionNlerp(Identity, rotation, share);
+}
+
+/* A bone's rotation in mesh space in a local pose: its ancestors' local rotations composed, root first. */
+static Quaternion GetMeshRotation(const GameSkeleton* skeleton, const Transform* pose, int32_t bone)
+{
+    Quaternion Result = { 0.0f, 0.0f, 0.0f, 1.0f };
+    // A skeleton's parents form a tree (GameSkeleton_Create checks), so the walk ends within its bone count.
+    for (uint32_t Step = 0U; (bone >= 0) && (Step < skeleton->_boneCount); Step++)
+    {
+        Result = QuaternionMultiply(pose[bone].rotation, Result);
+        bone = skeleton->_bones[bone]._parent;
+    }
+    return Result;
+}
+
+void SkeletalPose_BlendOver(const SkeletalBlendBone* blend, float totalWeight, const float* boneWeights,
+    uint32_t boneCount, Transform* inOutPose)
+{
+    if (!isfinite(totalWeight) || !(totalWeight > 0.0f))
+    {
+        return;
+    }
+    float Coverage = (totalWeight < 1.0f) ? totalWeight : 1.0f;
+    float Divisor = 1.0f / totalWeight;
+    for (uint32_t Index = 0U; Index < boneCount; Index++)
+    {
+        float Share = Coverage * ((boneWeights != NULL) ? boneWeights[Index] : 1.0f);
+        if (!(Share > 0.0f))
+        {
+            continue;
+        }
+        const SkeletalBlendBone* Sum = &blend[Index];
+        Transform* Base = &inOutPose[Index];
+        Vector3 Translation = Vector3Scale(Sum->Translation, Divisor);
+        Vector3 Scale = Vector3Scale(Sum->Scale, Divisor);
+        Quaternion Rotation = Sum->Rotation;
+        float Length = sqrtf((Rotation.x * Rotation.x) + (Rotation.y * Rotation.y) + (Rotation.z * Rotation.z)
+            + (Rotation.w * Rotation.w));
+        Rotation = (Length > BLEND_MIN_ROTATION_LENGTH) ? QuaternionScale(Rotation, 1.0f / Length) : Base->rotation;
+        if (Share >= 1.0f)
+        {
+            *Base = (Transform){ Translation, Rotation, Scale };
+            continue;
+        }
+        Base->translation = Vector3Lerp(Base->translation, Translation, Share);
+        Base->scale = Vector3Lerp(Base->scale, Scale, Share);
+        // QuaternionNlerp does not take the shorter way: turn the blend's rotation to the base's hemisphere first.
+        float Alignment = (Base->rotation.x * Rotation.x) + (Base->rotation.y * Rotation.y)
+            + (Base->rotation.z * Rotation.z) + (Base->rotation.w * Rotation.w);
+        if (Alignment < 0.0f)
+        {
+            Rotation = (Quaternion){ -Rotation.x, -Rotation.y, -Rotation.z, -Rotation.w };
+        }
+        Base->rotation = QuaternionNlerp(Base->rotation, Rotation, Share);
+    }
+}
+
+void SkeletalPose_ApplyLookAt(const GameSkeleton* skeleton, Transform* inOutPose, const uint32_t* bones,
+    const float* shares, uint32_t count, Quaternion meshRotation, float weight)
+{
+    if (!isfinite(weight) || !(weight > 0.0f))
+    {
+        return;
+    }
+    float Weight = (weight < 1.0f) ? weight : 1.0f;
+    for (uint32_t Index = 0U; Index < count; Index++)
+    {
+        uint32_t Bone = bones[Index];
+        if (Bone >= skeleton->_boneCount)
+        {
+            continue;
+        }
+        // The bone's mesh rotation becomes Part * Parent * Local, so its new local rotation is
+        // Parent^-1 * Part * Parent * Local (Hamilton products: the right factor applies first).
+        Quaternion Part = GetPartOfRotation(meshRotation, shares[Index] * Weight);
+        Quaternion Parent = GetMeshRotation(skeleton, inOutPose, skeleton->_bones[Bone]._parent);
+        Quaternion Turned = QuaternionMultiply(QuaternionMultiply(QuaternionInvert(Parent), Part), Parent);
+        inOutPose[Bone].rotation = QuaternionNormalize(QuaternionMultiply(Turned, inOutPose[Bone].rotation));
+    }
+}
+
 void SkeletalPose_ComputeModelMatrices(const GameSkeleton* skeleton, const Transform* pose, Matrix* outMatrices)
 {
     for (uint32_t Step = 0U; Step < skeleton->_boneCount; Step++)
@@ -742,8 +833,15 @@ void SkeletalMixer_SamplePose(const SkeletalMixer* self, const SkeletalBinding* 
         return;
     }
 
+    SkeletalPose_ClearBlend(blend, skeleton->_boneCount);
+    float TotalWeight = SkeletalMixer_AddToBlend(self, bindings, bindingCount, skeleton, scratch, blend);
+    SkeletalPose_FinishBlend(blend, skeleton, TotalWeight, outPose);
+}
+
+float SkeletalMixer_AddToBlend(const SkeletalMixer* self, const SkeletalBinding* bindings, uint32_t bindingCount,
+    const GameSkeleton* skeleton, Transform* scratch, SkeletalBlendBone* blend)
+{
     uint32_t BoneCount = skeleton->_boneCount;
-    SkeletalPose_ClearBlend(blend, BoneCount);
     float TotalWeight = 0.0f;
     for (uint32_t Index = 0U; Index < self->StateCount; Index++)
     {
@@ -756,5 +854,5 @@ void SkeletalMixer_SamplePose(const SkeletalMixer* self, const SkeletalBinding* 
         SkeletalPose_AddToBlend(blend, scratch, BoneCount, State->Weight);
         TotalWeight += State->Weight;
     }
-    SkeletalPose_FinishBlend(blend, skeleton, TotalWeight, outPose);
+    return TotalWeight;
 }

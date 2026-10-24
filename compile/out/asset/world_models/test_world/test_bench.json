@@ -1,0 +1,10 @@
+{
+    "name": "test_bench",
+    "lods": [
+        { "model": "test_bench", "max_distance": 120 }
+    ],
+    "collision": "bounds",
+    "sockets": {
+        "seat": { "position": [ 0.0, 0.0, 0.55 ] }
+    }
+}

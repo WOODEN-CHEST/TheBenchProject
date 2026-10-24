@@ -57,6 +57,8 @@
 #define ANIMATION_CLIP_MAX_SPEED 100.0f
 /** @brief The speed of a clip whose definition sets none. */
 #define ANIMATION_CLIP_DEFAULT_SPEED 1.0f
+/** @brief The longest distance a clip may cover per cycle, in metres (its "distance" setting). */
+#define ANIMATION_CLIP_MAX_DISTANCE 1000.0f
 /** @brief The largest library file, and the largest buffer file next to a .gltf, the loader reads (bytes). */
 #define ANIMATION_LIBRARY_MAX_FILE_BYTES ((size_t)256 * 1024 * 1024)
 
@@ -118,6 +120,11 @@ typedef struct AnimationClipStruct
     bool _isLooped;
     /** @brief How fast it plays (time multiplied), in (0, ANIMATION_CLIP_MAX_SPEED]; 1 by default. */
     float _speed;
+    /** @brief Whether the definition says how far the clip covers per cycle (a walk or a run in place), and that
+     *  distance in metres at the library's own size, in (0, ANIMATION_CLIP_MAX_DISTANCE]: an animation graph plays it
+     *  at the speed a character really moves (T30). */
+    bool _hasDistance;
+    float _distance;
     /** @brief One entry per library bone, in the library's bone order. */
     const AnimationBoneTracks* _bones;
 } AnimationClip;
@@ -167,6 +174,10 @@ typedef struct AnimationClipSettingsStruct
     bool IsLooped;
     /** @brief Its speed, in (0, ANIMATION_CLIP_MAX_SPEED]. */
     float Speed;
+    /** @brief Whether Distance is set: the metres the clip covers per cycle at the library's size, in
+     *  (0, ANIMATION_CLIP_MAX_DISTANCE]. */
+    bool HasDistance;
+    float Distance;
 } AnimationClipSettings;
 
 /**
@@ -313,6 +324,21 @@ static inline bool AnimationClip_IsLooped(const AnimationClip* self)
 static inline float AnimationClip_GetSpeed(const AnimationClip* self)
 {
     return self->_speed;
+}
+
+/**
+ * @brief Returns how far the clip covers per cycle, at the library's size, when its definition says.
+ * @param self The clip; must not be NULL.
+ * @param outDistance [out] Receives the metres per cycle when set; may be NULL.
+ * @returns Whether the definition sets it.
+ */
+static inline bool AnimationClip_TryGetDistance(const AnimationClip* self, float* outDistance)
+{
+    if (self->_hasDistance && (outDistance != NULL))
+    {
+        *outDistance = self->_distance;
+    }
+    return self->_hasDistance;
 }
 
 /**

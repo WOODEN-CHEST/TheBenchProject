@@ -26,8 +26,12 @@ as dependencies; world sprites, T26, do the same for sprite animations: [WorldSp
   `lod_hysteresis` in [0, 1); `render`'s four settings; at most `WORLD_MODEL_MAX_VARIANTS` (64) variants with unique
   names (`[a-z][a-z0-9_.-]*`, at most 128 bytes) and at most `WORLD_MODEL_MAX_VARIANT_OVERRIDES` (32) material
   overrides each, one per slot; `bounds` with a centre and a radius >= 0; `animation_libraries` (T29) at most
-  `WORLD_MODEL_MAX_ANIMATION_LIBRARIES` (16) unique asset names. **Unknown keys are refused** in every object
-  the definition defines: the root, each LOD, `render`, each variant, each material override and `bounds`
+  `WORLD_MODEL_MAX_ANIMATION_LIBRARIES` (16) unique asset names; since T30 `animation_graph` (an asset name),
+  `sockets` (at most `WORLD_MODEL_MAX_SOCKETS`, 32, each a name of at most 64 bytes, an optional bone of at most 31, a
+  position and a rotation) and `first_person` (`eyes`, one of its sockets; `hidden_bones`, at most 16; parsed in
+  `source/WorldModelSocketDefinition.c`). **Unknown keys are refused** in every object
+  the definition defines: the root, each LOD, `render`, each variant, each material override, `bounds`, each socket and
+  `first_person`
   (`AssetJSON_RejectUnknownKeys`: the message names the key, where it is and the keys allowed there; a key from a file
   is shown as printable ASCII only). Values of the shared shapes (a vector, a colour) follow the shared GameJSON
   parsers, which ignore extra keys inside their own objects. Messages start with `World model "<name>": ` and name the place
@@ -45,7 +49,14 @@ as dependencies; world sprites, T26, do the same for sprite animations: [WorldSp
   be rigid: it draws as it is). Its `animation_libraries` load as dependencies too (`_GetAnimationLibraryCount`,
   `_GetAnimationLibrary`, `_GetAnimationLibraryName`: the names are the world model's own copies); two of them may not
   hold a clip of the same name, and naming libraries without a skinned LOD is logged once at load (its placements play
-  nothing).
+  nothing). Since T30 its `animation_graph` loads as a dependency too (`_GetAnimationGraph`, `_GetAnimationGraphName`).
+- **Sockets and first person (T30, [Animation.md](Animation.md)):** at load each bone socket is matched to the
+  skeleton by name, and each hidden bone; a bone socket or hidden bones on a world model without a skeleton, or naming a
+  bone it lacks, fail the load. `WorldModel_GetSocketCount`, `_GetSocket(index)`, `WorldModel_TryFindSocket(name)` and
+  `WorldModel_GetSocketMatrix(socket, boneMatrices)` give a socket's frame in the object's own space: its offset times
+  the bone's frame (its matrix in the pose, or in the bind pose for NULL, times the skeleton LOD's import transform)
+  made rigid, so a bone's or an import's scale (a model authored in centimetres) neither scales the offset, which is in
+  metres, nor what hangs on the socket; or its fixed offset. `WorldModel_GetFirstPerson` gives the eyes socket and the hidden bones (skeleton indices).
 - **Bounds:** the definition's sphere, authored in the object's own space, or the sphere around LOD 0's mesh bounds in
   LOD 0's mesh space; `WorldModel_GetBoundsTransform` takes either to the object's space (identity, or LOD 0's import
   transform). The renderer composes that with the object's world matrix first and scales the radius by the product's
@@ -60,7 +71,8 @@ Pure data, read-only, owned by the asset manager (never keep it past your asset 
 `WorldModel_GetLodCount`, `_GetLodModel(index)` (the `GameModel*`), `_GetLodMaxDistance(index)`, `_GetSettings` (the
 placements' defaults, a `WorldModelSettings`: outline, crisp, shadow tier, casts shadows, draw distance, fixed),
 `_GetLodFadeSeconds`, `_GetLodHysteresis`, `_GetBoundsCenter` / `_GetBoundsRadius` / `_GetBoundsTransform` /
-`_HasOwnBounds`, the animation's `_GetSkeleton`, `_GetSkeletonLod` and libraries (T29),
+`_HasOwnBounds`, the animation's `_GetSkeleton`, `_GetSkeletonLod` and libraries (T29), its graph, sockets and
+first-person block (T30),
 `_GetVariantCount`,
 `_GetVariantName(index)`, `WorldModel_TryFindVariant(name, &index)` and `WorldModel_ApplyVariant`.
 `WorldShadowTier` and its names (`WORLD_SHADOW_TIER_ENUM`, which the component's `shadow_tier` row uses too) live in
@@ -211,7 +223,11 @@ cube through the model `test_door`'s import transform, a 1 x 2 m panel hinged at
 
 Since T29 two world models animate ([Animation.md](Animation.md), "Test content"): `test_humanoid` (the placeholder
 figure, LOD 0 `test_humanoid` to 12 m, then the coarser `test_humanoid_lod1` to 80 m, both skinned on one skeleton) and
-`test_humanoid_short` (one LOD), each playing `test_humanoid_motions`.
+`test_humanoid_short` (one LOD), each playing `test_humanoid_motions`. Since T30 both play the graph `test_humanoid`
+and have the sockets `hand_r` and `hand_l` (in the palm, turned so a held cup stands upright in the holding pose) and
+`eyes`, and a first_person block hiding the neck (with the head); `test_bench` (a bench whose `seat` socket stands on
+the floor 0.55 m in front of it, where a sitter's feet go) and `test_cup` (its `grip` on its side, its `reach` 0.52 m
+in front, facing it) are new, both colliding by `"bounds"`; `test_door` has an `opener` socket.
 
 ## Known limits
 

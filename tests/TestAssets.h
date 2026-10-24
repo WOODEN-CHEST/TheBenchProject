@@ -196,3 +196,10 @@ bool TestAssets_AddWorldSpriteOf(TestRun* run, TestAssetFixture* fixture, const 
  * @returns true when it was built and registered.
  */
 bool TestAssets_AddCharacter(TestRun* run, TestAssetFixture* fixture, const char* json);
+
+/**
+ * @brief Builds an animation graph definition from @p json with the real "animation_graph" type
+ *        (AssetManager_BuildDefinition) and registers it (a graph has no dependencies: it loads without a GL context).
+ * @returns true when it was built and registered.
+ */
+bool TestAssets_AddAnimationGraph(TestRun* run, TestAssetFixture* fixture, const char* json);

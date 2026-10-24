@@ -23,19 +23,21 @@ typedef struct WorldCharactersStruct WorldCharacters;
  * body faces the look. A turn the ground gives the character (a turning platform) turns the view too, since the look is
  * read back from the character every tick.
  *
+ * The eyes (T30, G34): a character with a posed body whose world model has a first_person block sees from that block's
+ * eyes socket, so the camera moves as the body does (each step, a crouch, a seat); the renderer leaves out the bones the
+ * block hides (WorldRenderer_SetFirstPersonObject). Without one the camera sits at the character's eye height above
+ * its feet.
+ *
  * Call PlayerController_Update in a frame's Update, after the UI had first refusal and before the characters update;
- * PlayerController_UpdateLookTarget after the tick's collision step; PlayerController_ApplyCamera last, so the camera
- * shows where the character ended up. Input is read only through GameInput, only in Update (AGENTS.md rule 9).
+ * PlayerController_UpdateLookTarget after the tick's collision step; PlayerController_ApplyCamera once per shown frame,
+ * after the pose step (GameFrame's PrepareRender, G35) and World_UpdateTransforms, so the camera shows where the
+ * character and its body ended up. Input is read only through GameInput, only in Update (AGENTS.md rule 9).
  */
 
 
 // Macros.
 /** @brief The default mouse sensitivity: radians the look turns per pixel the mouse moves. */
 #define PLAYER_CONTROLLER_DEFAULT_MOUSE_SENSITIVITY 0.0025f
-/** @brief The default head bob: how far the camera bobs up and down while walking, metres. */
-#define PLAYER_CONTROLLER_DEFAULT_HEAD_BOB_AMPLITUDE 0.03f
-/** @brief The default head bob: metres walked per bob, one bob a step (two a stride). */
-#define PLAYER_CONTROLLER_DEFAULT_HEAD_BOB_STEP_LENGTH 0.7f
 
 
 // Types.
@@ -48,21 +50,12 @@ typedef struct PlayerControllerStruct
     float MouseSensitivity;
     /** @brief Whether the crouch action toggles crouching instead of crouching while held (default false). */
     bool IsCrouchToggled;
-    /** @brief Whether the camera bobs while walking (default false). */
-    bool IsHeadBobEnabled;
-    /** @brief How far the camera bobs, metres (default PLAYER_CONTROLLER_DEFAULT_HEAD_BOB_AMPLITUDE). */
-    float HeadBobAmplitude;
-    /** @brief Metres walked per bob (default PLAYER_CONTROLLER_DEFAULT_HEAD_BOB_STEP_LENGTH; above 0). */
-    float HeadBobStepLength;
     /** @brief Whether the player wants to fly (the character flies only when its settings allow it). */
     bool WantsToFly;
     /** @brief The character's object (0: none). */
     uint64_t _characterId;
     /** @brief Whether toggled crouching is on. */
     bool _isCrouchLatched;
-    /** @brief The head bob's phase, radians, and how much of it shows (eased toward 1 while walking, 0 standing). */
-    float _headBobPhase;
-    float _headBobWeight;
     /** @brief What the player looks at, valid while _hasLookTarget. */
     bool _hasLookTarget;
     WorldRayHit _lookTarget;
@@ -134,11 +127,20 @@ bool PlayerController_UpdateLookTarget(PlayerController* self, WorldCharacters* 
 bool PlayerController_GetLookTarget(const PlayerController* self, WorldRayHit* outHit);
 
 /**
- * @brief Puts the camera at the character's eyes, looking where it looks, with the head bob if enabled (it advances by
- *        how far the character walked on the ground).
+ * @brief Puts the camera at the character's eyes (its body's eyes socket in the current pose, or its eye height above
+ *        its feet: see the file comment), looking where it looks. Does nothing without a character.
  * @param self The controller; must not be NULL.
  * @param world The character's world; must not be NULL.
  * @param camera The camera; must not be NULL.
- * @param deltaSeconds The tick's length, seconds.
  */
-void PlayerController_ApplyCamera(PlayerController* self, World* world, GameCamera* camera, float deltaSeconds);
+void PlayerController_ApplyCamera(const PlayerController* self, World* world, GameCamera* camera);
+
+/**
+ * @brief Finds where a character's eyes are now: its body's eyes socket when its animator's pose has one (its world
+ *        model's first_person block, T30), else its eye height above its feet (WorldCharacterComponent_GetEyePosition).
+ * @param world The world; must not be NULL.
+ * @param characterId The character's object.
+ * @param outEyes [out] Receives the eyes' world position. Must not be NULL.
+ * @returns false (and nothing written) when the object has no character component.
+ */
+bool PlayerController_TryGetEyes(World* world, uint64_t characterId, Vector3Double* outEyes);

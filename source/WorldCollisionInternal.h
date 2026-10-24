@@ -124,6 +124,10 @@ typedef struct WorldCollisionInstanceStruct
     /** Whether the shapes are in the trees, and in which. */
     bool IsActive;
     bool IsStatic;
+    /** Whether its object hangs on a socket of its parent (T30: a crate in someone's hands), as of the last sync: a
+     *  pushable held so is its holder's (WorldCollisionInternal_IsPushable). Kept here so queries never follow the
+     *  collider pointer, which an object removed since the sync has freed. */
+    bool IsOnSocket;
     /** T27, kept beside IsActive and IsStatic (the step's passes over every instance read little else of a static one):
      *  its shapes were rebuilt, or it was placed for the first time, since the last step (it wakes what is near it); a
      *  pushable that stays awake into the next step (left overlapping beyond the slop); whether it was blocked or crushed

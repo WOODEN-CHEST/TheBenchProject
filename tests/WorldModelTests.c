@@ -1009,6 +1009,231 @@ static void ThePlacementPicksItsLodSettings(TestRun* run)
 
 // Tests: the shipped content.
 /* The game's world models (compile/out/asset/world_models) are all read without a skipped file. */
+/* The skinned figure of the socket tests: a root, a spine 1 m up, a head 2 m up, a hand 1 m to the side of the spine. */
+static const TestSkeletonBone SocketFigureBones[4] =
+{
+    { .Name = "root", .Parent = -1, .Bind = { .translation = { 0.0f, 0.0f, 0.0f }, .rotation = { 0.0f, 0.0f, 0.0f, 1.0f },
+        .scale = { 1.0f, 1.0f, 1.0f } } },
+    { .Name = "spine", .Parent = 0, .Bind = { .translation = { 0.0f, 1.0f, 0.0f }, .rotation = { 0.0f, 0.0f, 0.0f, 1.0f },
+        .scale = { 1.0f, 1.0f, 1.0f } } },
+    { .Name = "head", .Parent = 1, .Bind = { .translation = { 0.0f, 2.0f, 0.0f }, .rotation = { 0.0f, 0.0f, 0.0f, 1.0f },
+        .scale = { 1.0f, 1.0f, 1.0f } } },
+    { .Name = "hand", .Parent = 1, .Bind = { .translation = { 1.0f, 1.0f, 0.0f }, .rotation = { 0.0f, 0.0f, 0.0f, 1.0f },
+        .scale = { 1.0f, 1.0f, 1.0f } } },
+};
+
+/* T30: a world model names its animation graph (a dependency), its sockets on bones and fixed ones, and what a
+ * first-person camera rides and hides; bone names resolve against its skeleton when it loads. */
+static void SocketsTheGraphAndTheFirstPersonBlockLoadWithTheSkeleton(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    BoundingBox Box = { .min = { -1.0f, -1.0f, -1.0f }, .max = { 1.0f, 1.0f, 1.0f } };
+    // Raised 0.5 m by its import transform: bone sockets go through it, fixed ones do not.
+    Matrix Raised = MatrixTranslate(0.0f, 0.5f, 0.0f);
+    bool IsBuilt = TestAssetFixture_Construct(run, &Fixture)
+        && TestAssets_AddSkinnedModel(run, &Fixture, "figure_mesh", SocketFigureBones, 4, 0.2f, Raised, NULL)
+        && TestAssets_AddSkinnedModel(run, &Fixture, "half_mesh", SocketFigureBones, 4, 0.2f,
+            MatrixMultiply(MatrixScale(0.5f, 0.5f, 0.5f), MatrixRotateY(0.5f * PI)), NULL)
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"half_figure\", \"lods\": [{\"model\": \"half_mesh\", "
+            "\"max_distance\": 50}], \"sockets\": {\"hand_r\": {\"bone\": \"hand\", \"position\": [0, -0.1, 0.05]}}}")
+        && TestAssets_AddModel(run, &Fixture, "box", Box, NULL)
+        && TestAssets_AddAnimationGraph(run, &Fixture, "{\"name\": \"figure_graph\", \"layers\": [{\"name\": \"body\", "
+            "\"entry\": \"idle\", \"states\": {\"idle\": {\"clip\": \"idle\"}}}]}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"figure\", \"lods\": [{\"model\": \"figure_mesh\", "
+            "\"max_distance\": 50}], \"animation_graph\": \"figure_graph\", \"sockets\": {\"hand_r\": {\"bone\": "
+            "\"hand\", \"position\": [0, -0.1, 0.05]}, \"eyes\": {\"bone\": \"head\", \"position\": [0, 0.1, 0.12]}, "
+            "\"seat\": {\"position\": [0, 0, 0.5], \"rotation\": [0, 180, 0]}}, \"first_person\": {\"eyes\": \"eyes\", "
+            "\"hidden_bones\": [\"head\"]}}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"bad_bone\", \"lods\": [{\"model\": \"figure_mesh\", "
+            "\"max_distance\": 50}], \"sockets\": {\"tail\": {\"bone\": \"tail\"}}}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"rigid_bone\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 50}], \"sockets\": {\"grip\": {\"bone\": \"hand\"}}}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"rigid_fixed\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 50}], \"sockets\": {\"grip\": {\"position\": [0.1, 0.2, 0.3]}}}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"bad_hidden\", \"lods\": [{\"model\": \"figure_mesh\", "
+            "\"max_distance\": 50}], \"sockets\": {\"eyes\": {\"bone\": \"head\"}}, \"first_person\": {\"eyes\": "
+            "\"eyes\", \"hidden_bones\": [\"skull\"]}}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"lost_graph\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 50}], \"animation_graph\": \"nowhere\"}");
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    WorldModel* Figure = IsBuilt ? LoadWorldModel(run, &Fixture, "figure", &User) : NULL;
+    if (Figure != NULL)
+    {
+        TEST_CHECK(run, (WorldModel_GetAnimationGraph(Figure) != NULL)
+            && (strcmp((const char*)WorldModel_GetAnimationGraphName(Figure), "figure_graph") == 0));
+        TEST_CHECK(run, WorldModel_GetSocketCount(Figure) == 3U);
+        uint32_t Hand = 0U;
+        uint32_t Seat = 0U;
+        TEST_CHECK(run, WorldModel_TryFindSocket(Figure, (const unsigned char*)u8"hand_r", &Hand)
+            && WorldModel_TryFindSocket(Figure, (const unsigned char*)u8"seat", &Seat)
+            && !WorldModel_TryFindSocket(Figure, (const unsigned char*)u8"tail", NULL)
+            && !WorldModel_TryFindSocket(Figure, NULL, NULL));
+        const WorldModelSocket* HandSocket = WorldModel_GetSocket(Figure, Hand);
+        TEST_CHECK(run, HandSocket->_hasBone && (HandSocket->_bone == 3U) && !WorldModel_GetSocket(Figure, Seat)->_hasBone);
+        // In the bind pose: the hand's socket 10 cm below the hand and 5 cm in front, raised by the import transform.
+        Matrix HandMatrix = WorldModel_GetSocketMatrix(Figure, Hand, NULL);
+        TEST_CHECK(run, IsNear(HandMatrix.m12, 1.0f) && IsNear(HandMatrix.m13, 1.4f) && IsNear(HandMatrix.m14, 0.05f));
+        // In a pose that lifts the hand 1 m (its bone matrix), the socket follows.
+        Matrix Pose[4];
+        for (int Index = 0; Index < 4; Index++)
+        {
+            Pose[Index] = MatrixTranslate(SocketFigureBones[Index].Bind.translation.x,
+                SocketFigureBones[Index].Bind.translation.y, SocketFigureBones[Index].Bind.translation.z);
+        }
+        Pose[3] = MatrixTranslate(1.0f, 2.0f, 0.0f);
+        HandMatrix = WorldModel_GetSocketMatrix(Figure, Hand, Pose);
+        TEST_CHECK(run, IsNear(HandMatrix.m13, 2.4f));
+        // The seat is fixed in the object's space, turned half round (its +Z faces -Z), the import transform aside.
+        Matrix SeatMatrix = WorldModel_GetSocketMatrix(Figure, Seat, Pose);
+        TEST_CHECK(run, IsNear(SeatMatrix.m12, 0.0f) && IsNear(SeatMatrix.m13, 0.0f) && IsNear(SeatMatrix.m14, 0.5f)
+            && IsNear(SeatMatrix.m10, -1.0f));
+        uint32_t Eyes = 0U;
+        const uint32_t* Hidden = NULL;
+        uint32_t HiddenCount = 0U;
+        TEST_CHECK(run, WorldModel_GetFirstPerson(Figure, &Eyes, &Hidden, &HiddenCount)
+            && (strcmp((const char*)WorldModel_GetSocket(Figure, Eyes)->_name, "eyes") == 0) && (HiddenCount == 1U)
+            && (Hidden != NULL) && (Hidden[0] == 2U));
+        TEST_CHECK_SUCCESS(run, AssetManager_RetireUser(Fixture.Manager, User));
+    }
+    if (IsBuilt)
+    {
+        // An import at half scale, turned a quarter round Y (a model authored in other units and axes): the socket's
+        // frame is rigid (unit axes, the turn kept) and its offset is in metres along the bone's turned axes, on the
+        // bone's joint where the import puts it.
+        AssetUserID Scaled = ASSET_USER_ID_INVALID;
+        WorldModel* Half = LoadWorldModel(run, &Fixture, "half_figure", &Scaled);
+        uint32_t Hand = 0U;
+        if ((Half != NULL) && TEST_CHECK(run, WorldModel_TryFindSocket(Half, (const unsigned char*)u8"hand_r", &Hand)))
+        {
+            Matrix HandMatrix = WorldModel_GetSocketMatrix(Half, Hand, NULL);
+            // The hand's joint (1, 1, 0) halved and turned: (0, 0.5, -0.5); the offset (0, -0.1, 0.05) turned: (0.05, -0.1,
+            // 0).
+            TEST_CHECK(run, IsNear(HandMatrix.m12, 0.05f) && IsNear(HandMatrix.m13, 0.4f) && IsNear(HandMatrix.m14, -0.5f));
+            Vector3 AxisX = { HandMatrix.m0, HandMatrix.m1, HandMatrix.m2 };
+            Vector3 AxisY = { HandMatrix.m4, HandMatrix.m5, HandMatrix.m6 };
+            TEST_CHECK(run, IsNear(Vector3Length(AxisX), 1.0f) && IsNear(Vector3Length(AxisY), 1.0f)
+                && IsNear(AxisX.z, -1.0f) && IsNear(AxisY.y, 1.0f));
+        }
+        if (Scaled != ASSET_USER_ID_INVALID)
+        {
+            TEST_CHECK_SUCCESS(run, AssetManager_RetireUser(Fixture.Manager, Scaled));
+        }
+        // A fixed socket needs no skeleton.
+        AssetUserID Other = ASSET_USER_ID_INVALID;
+        WorldModel* Rigid = LoadWorldModel(run, &Fixture, "rigid_fixed", &Other);
+        TEST_CHECK(run, (Rigid != NULL) && (WorldModel_GetSocketCount(Rigid) == 1U)
+            && !WorldModel_GetFirstPerson(Rigid, NULL, NULL, NULL) && (WorldModel_GetAnimationGraph(Rigid) == NULL));
+        if (Other != ASSET_USER_ID_INVALID)
+        {
+            TEST_CHECK_SUCCESS(run, AssetManager_RetireUser(Fixture.Manager, Other));
+        }
+        // Bones the skeleton lacks, a bone socket without a skeleton and a graph that does not load fail the load.
+        static const struct { const char* Name; const char* Fragment; } Failing[] =
+        {
+            { "bad_bone", "which its skeleton lacks" },
+            { "rigid_bone", "none of its LOD models has a skeleton" },
+            { "bad_hidden", "hidden_bones names \"skull\", which its skeleton lacks" },
+            { "lost_graph", "animation graph \"nowhere\"" },
+        };
+        for (size_t Index = 0U; Index < (sizeof(Failing) / sizeof(Failing[0])); Index++)
+        {
+            AssetUserID Failed = ASSET_USER_ID_INVALID;
+            WorldModel* Loaded = NULL;
+            const char* Fragments[] = { Failing[Index].Fragment, NULL };
+            if (TEST_CHECK_SUCCESS(run, AssetManager_GetNewUserID(Fixture.Manager, &Failed)))
+            {
+                Error Result = AssetManager_LoadWorldModel(Fixture.Manager, (const unsigned char*)Failing[Index].Name,
+                    Failed, &Loaded);
+                bool IsFailed = Result.Code != ErrorCode_Success;
+                TEST_CHECK(run, IsFailed);
+                if (IsFailed)
+                {
+                    TestText_CheckErrorMessage(run, Result, Result.Code, Fragments);
+                }
+                else
+                {
+                    Error_Deconstruct(&Result);
+                }
+                TEST_CHECK_SUCCESS(run, AssetManager_RetireUser(Fixture.Manager, Failed));
+            }
+        }
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+static void SocketAndFirstPersonRulesAreRefused(TestRun* run)
+{
+    static const RefusedDefinition Cases[] =
+    {
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"sockets\": []}",
+            ErrorCode_InvalidAssetDefinition, "\"sockets\" must be a JSON object" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"sockets\": {\"Hand\": {}}}",
+            ErrorCode_InvalidAssetDefinition, "not a valid socket name" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"sockets\": {\"hand\": 3}}",
+            ErrorCode_InvalidAssetDefinition, "sockets.hand must be a JSON object" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"sockets\": {\"hand\": "
+            "{\"offset\": [0, 0, 0]}}}", ErrorCode_InvalidAssetDefinition, "Unknown key \"offset\"" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"sockets\": {\"hand\": "
+            "{\"bone\": \"\"}}}", ErrorCode_InvalidAssetDefinition, "sockets.hand.bone must be a bone's name" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"sockets\": {\"hand\": "
+            "{\"bone\": \"a_bone_name_longer_than_31_bytes\"}}}", ErrorCode_InvalidAssetDefinition,
+            "sockets.hand.bone must be a bone's name" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"sockets\": {\"hand\": "
+            "{\"position\": [0, 0]}}}", ErrorCode_InvalidJSON, "sockets.hand.position" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"first_person\": {}}",
+            ErrorCode_InvalidAssetDefinition, "first_person needs \"eyes\"" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"first_person\": "
+            "{\"eyes\": \"eyes\"}}", ErrorCode_InvalidAssetDefinition, "which is not one of its sockets" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"sockets\": {\"eyes\": {}}, "
+            "\"first_person\": {\"eyes\": \"eyes\", \"hidden\": []}}", ErrorCode_InvalidAssetDefinition,
+            "Unknown key \"hidden\"" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"sockets\": {\"eyes\": {}}, "
+            "\"first_person\": {\"eyes\": \"eyes\", \"hidden_bones\": \"head\"}}", ErrorCode_InvalidAssetDefinition,
+            "hidden_bones must be an array" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"animation_graph\": "
+            "\"Graph\"}", ErrorCode_InvalidAssetDefinition, "animation_graph \"Graph\" is not a valid asset name" },
+    };
+    TestAssetFixture Fixture;
+    if (TestAssetFixture_Construct(run, &Fixture))
+    {
+        for (size_t Index = 0U; Index < (sizeof(Cases) / sizeof(Cases[0])); Index++)
+        {
+            const char* Fragments[] = { Cases[Index].Fragment, NULL };
+            if (!TestText_CheckErrorMessage(run, BuildDefinition(&Fixture, Cases[Index].Json), Cases[Index].Code,
+                Fragments))
+            {
+                printf("    (case %u)\n", (unsigned)Index);
+            }
+        }
+        // 17 hidden bones are one too many.
+        char Json[WORLD_MODEL_TEST_JSON_CAPACITY];
+        size_t Length = (size_t)snprintf(Json, sizeof(Json), "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 40}], \"sockets\": {\"eyes\": {}}, \"first_person\": {\"eyes\": \"eyes\", "
+            "\"hidden_bones\": [");
+        for (size_t Index = 0U; Index <= WORLD_MODEL_MAX_HIDDEN_BONES; Index++)
+        {
+            Length += (size_t)snprintf(Json + Length, sizeof(Json) - Length, "%s\"b%u\"", (Index > 0U) ? ", " : "",
+                (unsigned)Index);
+        }
+        snprintf(Json + Length, sizeof(Json) - Length, "]}}");
+        const char* TooMany[] = { "at most 16", NULL };
+        TestText_CheckErrorMessage(run, BuildDefinition(&Fixture, Json), ErrorCode_InvalidAssetDefinition, TooMany);
+        // 33 sockets are one too many.
+        Length = (size_t)snprintf(Json, sizeof(Json), "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 40}], \"sockets\": {");
+        for (size_t Index = 0U; Index <= WORLD_MODEL_MAX_SOCKETS; Index++)
+        {
+            Length += (size_t)snprintf(Json + Length, sizeof(Json) - Length, "%s\"s%u\": {}", (Index > 0U) ? ", " : "",
+                (unsigned)Index);
+        }
+        snprintf(Json + Length, sizeof(Json) - Length, "}}");
+        const char* TooManySockets[] = { "more than 32 sockets", NULL };
+        TestText_CheckErrorMessage(run, BuildDefinition(&Fixture, Json), ErrorCode_InvalidAssetDefinition,
+            TooManySockets);
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
 static void TheShippedWorldModelsAreRead(TestRun* run)
 {
     static const char* const Names[] =
@@ -1057,6 +1282,9 @@ void WorldModelTests_Run(TestRun* run)
             TheFlagsChooseBetweenTheWorldModelAndThePlacement },
         { "the_component_starts_at_its_defaults", TheComponentStartsAtItsDefaults },
         { "the_placement_picks_its_lod_settings", ThePlacementPicksItsLodSettings },
+        { "sockets_the_graph_and_the_first_person_block_load_with_the_skeleton",
+            SocketsTheGraphAndTheFirstPersonBlockLoadWithTheSkeleton },
+        { "socket_and_first_person_rules_are_refused", SocketAndFirstPersonRulesAreRefused },
         { "the_shipped_world_models_are_read", TheShippedWorldModelsAreRead },
     };
     TestRun_RunSuite(run, "WorldModel", Cases, sizeof(Cases) / sizeof(Cases[0]));

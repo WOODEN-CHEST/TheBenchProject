@@ -1354,6 +1354,30 @@ static void TheSameSceneTwiceGivesTheSamePoses(TestRun* run)
 }
 
 
+/* T30 review: an object removed since the last sync keeps its shapes for queries until the next one, but its collider
+ * and object are freed: a query that skips pushables (every character's move) must not follow them (AddressSanitizer
+ * caught it doing so). The removed pushable reads as pushable still, so it is skipped. */
+static void QueriesSkipARemovedPushableSafely(TestRun* run)
+{
+    MotionScene Scene;
+    if (MotionScene_Construct(run, &Scene))
+    {
+        CollisionShape Box = MakeBox((Vector3){ 0.5f, 0.5f, 0.5f });
+        uint64_t Crate = AddShapeObject(run, &Scene, (Vector3){ 0.0f, 0.5f, 3.0f }, &Box, TestBodyKind_Pushable);
+        uint64_t Wall = AddShapeObject(run, &Scene, (Vector3){ 0.0f, 0.5f, 6.0f }, &Box, TestBodyKind_Static);
+        WorldCollision_Sync(Scene.Collision);
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&Scene.World, Crate));
+        WorldCollisionFilter Filter = WorldCollisionFilter_Create(COLLISION_LAYER_MASK_ALL,
+            WorldCollisionTriggerMode_Ignore);
+        Filter.ArePushablesIgnored = true;
+        WorldRayHit Hit;
+        TEST_CHECK(run, WorldCollision_Raycast(Scene.Collision, TestWorld_At((Vector3){ 0.0f, 0.5f, 0.0f }),
+            (Vector3){ 0.0f, 0.0f, 1.0f }, 20.0f, &Filter, &Hit) && (Hit.Shape.ObjectId == Wall));
+    }
+    MotionScene_Deconstruct(run, &Scene);
+}
+
+
 // Public functions.
 void WorldCollisionMotionTests_Run(TestRun* run)
 {
@@ -1390,6 +1414,7 @@ void WorldCollisionMotionTests_Run(TestRun* run)
         { "a_pushable_result_holds_what_it_carries", APushableResultHoldsWhatItCarries },
         { "a_pile_at_rest_sleeps", APileAtRestSleeps },
         { "the_same_scene_twice_gives_the_same_poses", TheSameSceneTwiceGivesTheSamePoses },
+        { "queries_skip_a_removed_pushable_safely", QueriesSkipARemovedPushableSafely },
     };
     TestWorld_RunSuite(run, "WorldCollisionMotion", "WorldCollisionMotionFar", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

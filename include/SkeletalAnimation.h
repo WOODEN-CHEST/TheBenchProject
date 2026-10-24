@@ -241,6 +241,44 @@ void SkeletalPose_FinishBlend(const SkeletalBlendBone* blend, const GameSkeleton
     Transform* outPose);
 
 /**
+ * @brief Plays a blend over a base pose: the blend's pose (its sums over their weight) replaces the base bone by bone by
+ *        a share, its total weight (at most 1) times the bone's weight. Layers over the body (an arm holding a cup
+ *        while the legs walk: the bone weights are the layer's weight on its mask's bones, 0 elsewhere) and clips played
+ *        over a graph (every bone weight 1) use it.
+ *
+ * A bone takes lerp(base, blend pose, share): translations and scales straight, rotations along the shorter way
+ * (normalized). A total weight of 0 (nothing in the blend) or a bone weight of 0 keeps the base bone; a total above 1
+ * counts as 1.
+ * @param blend The blend's running sums (SkeletalPose_AddToBlend); must not be NULL.
+ * @param totalWeight The sum of the weights added to it.
+ * @param boneWeights One weight per bone in [0, 1], or NULL for 1 on every bone.
+ * @param boneCount How many bones.
+ * @param inOutPose [in,out] The base pose, one local Transform per bone, which receives the result; must not be NULL.
+ */
+void SkeletalPose_BlendOver(const SkeletalBlendBone* blend, float totalWeight, const float* boneWeights,
+    uint32_t boneCount, Transform* inOutPose);
+
+/**
+ * @brief Turns a chain of bones (a neck, then a head) by a rotation given in mesh space, each by its share of it:
+ *        look-at.
+ *
+ * Each bone, parents first, turns about its own joint so that its mesh-space rotation becomes its share of
+ * @p meshRotation (times @p weight) applied after the rotation it had: with shares that add up to 1 the last bone of a
+ * chain ends up turned by the whole rotation (a part of a rotation about one axis composes with the rest). The bones'
+ * translations stay; their children follow. The parents' rotations are read from the pose itself, so the bones may be
+ * in any order as long as a parent comes before its child.
+ * @param skeleton The skeleton; must not be NULL.
+ * @param inOutPose [in,out] One local Transform per bone; must not be NULL.
+ * @param bones The bones to turn (indices below the skeleton's bone count); must not be NULL when @p count is above 0.
+ * @param shares Each bone's share of the rotation, in [0, 1]; must not be NULL when @p count is above 0.
+ * @param count How many bones.
+ * @param meshRotation The whole turn, in mesh space (unit length).
+ * @param weight How much of it applies, in [0, 1] (0 changes nothing).
+ */
+void SkeletalPose_ApplyLookAt(const GameSkeleton* skeleton, Transform* inOutPose, const uint32_t* bones,
+    const float* shares, uint32_t count, Quaternion meshRotation, float weight);
+
+/**
  * @brief Turns a local pose into each bone's matrix in mesh space (the bone's space to mesh space), parents first.
  * @param skeleton The skeleton; must not be NULL.
  * @param pose One local Transform per bone; must not be NULL.
@@ -341,3 +379,18 @@ const SkeletalClipState* SkeletalMixer_FindClip(const SkeletalMixer* self, uint3
  */
 void SkeletalMixer_SamplePose(const SkeletalMixer* self, const SkeletalBinding* bindings, uint32_t bindingCount,
     const GameSkeleton* skeleton, Transform* scratch, SkeletalBlendBone* blend, Transform* outPose);
+
+/**
+ * @brief Adds every playing clip of the mixer to a blend by its weight (the blend is not cleared first): what
+ *        SkeletalMixer_SamplePose blends, without the rest pose filling the rest, so the clips can play over another pose
+ *        (SkeletalPose_BlendOver: clips from code over an animation graph's pose, T30).
+ * @param self The mixer; must not be NULL.
+ * @param bindings The bindings, as SkeletalMixer_SamplePose's.
+ * @param bindingCount How many bindings.
+ * @param skeleton The skeleton the bindings bind to; must not be NULL.
+ * @param scratch [out] Scratch room for one pose; must not be NULL.
+ * @param blend [in,out] The blend's running sums; must not be NULL.
+ * @returns The total weight added (0 when nothing plays).
+ */
+float SkeletalMixer_AddToBlend(const SkeletalMixer* self, const SkeletalBinding* bindings, uint32_t bindingCount,
+    const GameSkeleton* skeleton, Transform* scratch, SkeletalBlendBone* blend);

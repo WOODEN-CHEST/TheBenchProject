@@ -1,0 +1,122 @@
+{
+    "name": "test_humanoid",
+    "fade_seconds": 0.2,
+    "parameters": {
+        "is_placing": { "type": "bool", "default": false }
+    },
+    "look_at": {
+        "bones": [ { "bone": "neck", "share": 0.35 }, { "bone": "head", "share": 0.65 } ],
+        "max_yaw": 70,
+        "max_pitch_up": 40,
+        "max_pitch_down": 55,
+        "turn_speed": 400
+    },
+    "layers": [
+        {
+            "name": "body",
+            "entry": "idle",
+            "states": {
+                "idle": { "clip": "idle", "look_at": 1 },
+                "move": {
+                    "blend": { "parameter": "speed", "points": [ { "clip": "walk", "at": 2.0 }, { "clip": "run", "at": 5.0 } ] },
+                    "match_speed": "speed", "min_rate": 0.3, "max_rate": 3.0, "look_at": 1
+                },
+                "crouch_idle": { "clip": "crouch_idle", "look_at": 1 },
+                "crouch_walk": { "clip": "crouch_walk", "match_speed": "speed", "min_rate": 0.3, "max_rate": 3.0, "look_at": 1 },
+                "jump": { "clip": "jump", "look_at": 0.5 },
+                "fall": { "clip": "fall", "look_at": 0.5 },
+                "land": { "clip": "land", "look_at": 0.5 },
+                "fly": { "clip": "fall", "speed": 0.5, "look_at": 1 },
+                "sit_down": { "clip": "sit_down", "look_at": 0.5 },
+                "sitting": { "clip": "sit_idle", "look_at": 1 },
+                "stand_up": { "clip": "stand_up", "look_at": 0.5 },
+                "pick_up": {
+                    "clip": "pick_up", "look_at": 0.3,
+                    "events": [ { "name": "grab", "time": 0.65, "attach": "hand_r", "grip": "grip" } ]
+                },
+                "put_down": {
+                    "clip": "put_down", "look_at": 0.3,
+                    "events": [
+                        { "name": "placing", "time": 0, "set": { "is_placing": true } },
+                        { "name": "release", "time": 0.8, "detach": "hand_r" },
+                        { "name": "placed", "time": 1.5, "set": { "is_placing": false } }
+                    ]
+                },
+                "open_door": { "clip": "open_door", "look_at": 0.3, "events": [ { "name": "push", "time": 0.55 } ] }
+            },
+            "transitions": [
+                { "from": "any", "to": "jump", "when": [ { "event": "jumped" } ], "fade_seconds": 0.08 },
+                { "from": [ "idle", "move", "crouch_idle", "crouch_walk", "jump", "fall", "land" ], "to": "fly",
+                    "when": [ { "parameter": "is_flying", "is": true } ], "fade_seconds": 0.3 },
+                { "from": "fly", "to": "idle", "when": [ { "parameter": "is_flying", "is": false },
+                    { "parameter": "is_grounded", "is": true } ], "fade_seconds": 0.3 },
+                { "from": "fly", "to": "fall", "when": [ { "parameter": "is_flying", "is": false } ], "fade_seconds": 0.3 },
+                { "from": [ "jump", "fall" ], "to": "land", "when": [ { "event": "landed" } ], "fade_seconds": 0.06 },
+                { "from": "jump", "to": "fall", "exit_time": 1, "when": [ { "parameter": "is_grounded", "is": false } ],
+                    "fade_seconds": 0.2 },
+                { "from": "jump", "to": "idle", "exit_time": 1, "fade_seconds": 0.2 },
+                { "from": [ "idle", "move", "crouch_idle", "crouch_walk", "land" ], "to": "fall",
+                    "when": [ { "parameter": "is_grounded", "is": false }, { "parameter": "time_in_air", "above": 0.3 } ],
+                    "fade_seconds": 0.25 },
+                { "from": "land", "to": "move", "exit_time": 0.4, "when": [ { "parameter": "speed", "above": 0.3 } ],
+                    "fade_seconds": 0.2 },
+                { "from": "land", "to": "idle", "exit_time": 1, "fade_seconds": 0.25 },
+                { "from": [ "idle", "move" ], "to": "crouch_walk", "when": [ { "parameter": "is_crouching", "is": true },
+                    { "parameter": "speed", "above": 0.15 } ], "fade_seconds": 0.25 },
+                { "from": [ "idle", "move" ], "to": "crouch_idle", "when": [ { "parameter": "is_crouching", "is": true } ],
+                    "fade_seconds": 0.25 },
+                { "from": [ "crouch_idle", "crouch_walk" ], "to": "move", "when": [
+                    { "parameter": "is_crouching", "is": false }, { "parameter": "speed", "above": 0.15 } ],
+                    "fade_seconds": 0.25 },
+                { "from": [ "crouch_idle", "crouch_walk" ], "to": "idle", "when": [
+                    { "parameter": "is_crouching", "is": false } ], "fade_seconds": 0.3 },
+                { "from": "crouch_idle", "to": "crouch_walk", "when": [ { "parameter": "speed", "above": 0.15 } ],
+                    "fade_seconds": 0.2 },
+                { "from": "crouch_walk", "to": "crouch_idle", "when": [ { "parameter": "speed", "below": 0.1 } ],
+                    "fade_seconds": 0.25 },
+                { "from": "idle", "to": "move", "when": [ { "parameter": "speed", "above": 0.15 } ], "fade_seconds": 0.25 },
+                { "from": "move", "to": "idle", "when": [ { "parameter": "speed", "below": 0.1 } ], "fade_seconds": 0.3 },
+                { "from": [ "sit_down", "sitting" ], "to": "stand_up", "when": [ { "event": "end_action" } ],
+                    "fade_seconds": 0.2 },
+                { "from": "sit_down", "to": "sitting", "exit_time": 1, "fade_seconds": 0.15 },
+                { "from": "stand_up", "to": "idle", "exit_time": 1, "fade_seconds": 0.2 },
+                { "from": [ "pick_up", "put_down", "open_door" ], "to": "idle", "exit_time": 1, "fade_seconds": 0.25 }
+            ]
+        },
+        {
+            "name": "right_arm",
+            "mask": [ "shoulder_r" ],
+            "entry": "free",
+            "states": {
+                "free": {},
+                "holding": { "clip": "hold_r" },
+                "waving": { "clip": "wave" }
+            },
+            "transitions": [
+                { "from": "free", "to": "holding", "when": [ { "socket": "hand_r", "is_holding": true },
+                    { "parameter": "is_placing", "is": false } ], "fade_seconds": 0.35 },
+                { "from": "holding", "to": "free", "when": [ { "socket": "hand_r", "is_holding": false } ],
+                    "fade_seconds": 0.3 },
+                { "from": "holding", "to": "free", "when": [ { "parameter": "is_placing", "is": true } ],
+                    "fade_seconds": 0.3 },
+                { "from": "waving", "to": "free", "exit_time": 1, "fade_seconds": 0.3 }
+            ]
+        }
+    ],
+    "actions": {
+        "sit": {
+            "layer": "body", "states": [ "sit_down", "sitting", "stand_up" ], "movement": "locked", "target": "required",
+            "anchor": { "socket": "seat", "max_distance": 2.5, "approach_seconds": 0.6 }
+        },
+        "pick_up": {
+            "layer": "body", "states": [ "pick_up" ], "movement": "locked", "target": "required",
+            "anchor": { "socket": "reach", "max_distance": 2.0, "approach_seconds": 0.5 }
+        },
+        "put_down": { "layer": "body", "states": [ "put_down" ], "movement": "no_moving", "target": "none" },
+        "open_door": {
+            "layer": "body", "states": [ "open_door" ], "movement": "locked", "target": "required",
+            "anchor": { "socket": "opener", "max_distance": 2.5, "approach_seconds": 0.6 }
+        },
+        "wave": { "layer": "right_arm", "states": [ "waving" ], "movement": "free", "target": "none" }
+    }
+}

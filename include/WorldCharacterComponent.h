@@ -87,6 +87,56 @@ typedef enum CharacterFacingEnum
 } CharacterFacing;
 
 /**
+ * @brief How much of a character's movement an action locks (T30). Runtime state, not saved; the values are stable (an
+ *        animation graph's actions say it: AnimationGraphMovementLock has the same values).
+ */
+typedef enum CharacterMovementLockEnum
+{
+    /** @brief Nothing: it moves and turns as its driver asks (the default). */
+    CharacterMovementLock_Free = 0,
+    /** @brief It turns but does not move, jump, crouch or take off or land. */
+    CharacterMovementLock_NoMoving = 1,
+    /** @brief It moves but its body does not turn. */
+    CharacterMovementLock_NoTurning = 2,
+    /** @brief Neither: it stays where the action put it. Its look still turns (its head). */
+    CharacterMovementLock_Locked = 3
+} CharacterMovementLock;
+
+/**
+ * @brief Where a character's anchor approach is (T30). Runtime state; the values are stable.
+ */
+typedef enum CharacterApproachEnum
+{
+    /** @brief It has no anchor. */
+    CharacterApproach_None = 0,
+    /** @brief It slides toward its anchor and turns to its facing. */
+    CharacterApproach_Approaching = 1,
+    /** @brief It stands on its anchor, facing its way; held there while its movement is locked. */
+    CharacterApproach_Arrived = 2,
+    /** @brief It could not get there (blocked, or out of time). */
+    CharacterApproach_Failed = 3
+} CharacterApproach;
+
+/**
+ * @brief What an action asks of a character's movement (T30): a lock, and optionally an anchor to slide onto first.
+ *        A plain value type, set by the animation system (WorldCharacterComponent_SetActionControl), runtime only.
+ */
+typedef struct CharacterActionControlStruct
+{
+    /** @brief How much of its movement is locked. */
+    CharacterMovementLock Lock;
+    /** @brief Whether it slides onto an anchor (where its feet go and the way it faces there). */
+    bool HasAnchor;
+    /** @brief Where its feet go, world space, in double like every world position (valid while HasAnchor). */
+    Vector3Double AnchorPosition;
+    /** @brief The way it faces there, a yaw in radians (as FacingYaw; valid while HasAnchor). */
+    float AnchorYaw;
+    /** @brief How long the slide takes, in seconds (0: at once); it fails some time after (CHARACTER_APPROACH_GRACE_
+     *  SECONDS) if it has not arrived. */
+    float ApproachSeconds;
+} CharacterActionControl;
+
+/**
  * @brief What whoever drives a character wants it to do: the same for the player and for NPCs. A plain value type,
  *        kept by the component until changed (WorldCharacterComponent_SetInput).
  *
@@ -159,6 +209,14 @@ typedef struct WorldCharacterStateStruct
     bool IsStandUpBlocked;
     /** @brief Seconds since it left the ground (0 while grounded or flying). */
     float TimeInAir;
+    /** @brief The events its last update raised: bit i set for WorldCharacterEventKind i (WorldCharacters.h), what its
+     *  animation reacts to (T30). */
+    uint32_t Events;
+    /** @brief The impact speed of its last landing, metres per second downward (kept until the next landing; 0 before
+     *  the first). */
+    float LastLandingSpeed;
+    /** @brief Where its action's anchor approach is (T30). */
+    CharacterApproach Approach;
 } WorldCharacterState;
 
 /**
@@ -198,6 +256,8 @@ typedef struct WorldCharacterRuntimeStruct
     /** Where the update left the feet (the collision step's pushes show as the difference next tick). */
     bool _hasLastPosition;
     Vector3Double _lastPosition;
+    /** The anchor approach (T30): its seconds so far. */
+    float _approachSeconds;
     /** Warnings given once per character. */
     bool _hasWarnedScale;
     bool _hasWarnedCollider;
@@ -226,6 +286,8 @@ typedef struct WorldCharacterComponentStruct
     CharacterInput _input;
     /** @brief What it is doing (runtime, not saved). */
     WorldCharacterState _state;
+    /** @brief What its action asks of its movement (runtime, not saved; T30). */
+    CharacterActionControl _actionControl;
     /** @brief The system's bookkeeping (runtime). */
     WorldCharacterRuntime _runtime;
 } WorldCharacterComponent;
@@ -397,6 +459,37 @@ static inline const CharacterInput* WorldCharacterComponent_GetInput(const World
  *          finite or a facing outside its enum (nothing changes).
  */
 Error WorldCharacterComponent_SetInput(WorldCharacterComponent* self, const CharacterInput* input);
+
+/**
+ * @brief A control that asks nothing: free movement, no anchor.
+ * @returns The control.
+ */
+CharacterActionControl CharacterActionControl_CreateFree(void);
+
+/**
+ * @brief Returns what the character's action asks of its movement (T30).
+ * @param self The component; must not be NULL.
+ * @returns The control (borrowed: valid until the next set).
+ */
+static inline const CharacterActionControl* WorldCharacterComponent_GetActionControl(const WorldCharacterComponent* self)
+{
+    return &self->_actionControl;
+}
+
+/**
+ * @brief Sets what an action asks of the character's movement (T30; the animation system does, for the actions of its
+ *        graph), kept until the next set; the system acts on it at its next update.
+ *
+ * A control with an anchor starts an approach (WorldCharacterState.Approach becomes Approaching, even when the same
+ * anchor was set before): the character slides to the anchor, swept against walls, and turns to its yaw over the
+ * approach time, then stands there (Arrived), held (not pushable) while its movement is locked; one it cannot finish
+ * fails. A control without an anchor ends any approach (None). NULL frees the character: no lock, no anchor.
+ * @param self The component; must not be NULL.
+ * @param control The control, or NULL.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL @p self; ErrorCode_ArgumentOutOfRange for a lock outside its
+ *          enum, or an anchor, a yaw or a time that is not finite, or a negative time (nothing changes).
+ */
+Error WorldCharacterComponent_SetActionControl(WorldCharacterComponent* self, const CharacterActionControl* control);
 
 /**
  * @brief Returns what the character is doing.

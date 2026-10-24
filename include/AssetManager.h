@@ -106,6 +106,8 @@ typedef struct WorldModelStruct WorldModel;
 typedef struct WorldSpriteStruct WorldSprite;
 typedef struct CharacterAssetStruct CharacterAsset;
 typedef struct AnimationLibraryStruct AnimationLibrary;
+/** @brief An animation graph asset (AnimationGraph.h). */
+typedef struct AnimationGraphStruct AnimationGraph;
 
 
 // Core identifier types.
@@ -364,6 +366,9 @@ typedef struct StandardAssetTypesStruct
     /** @brief Animation library type id: the skeletal animation clips of a glTF file, which world models name for
      *  their placements to play (AnimationLibrary.h). */
     AssetTypeID AnimationLibrary;
+    /** @brief Animation graph type id: which clip an animated object plays when (layers, states, transitions, special
+     *  actions), which world models name next to their animation libraries (AnimationGraph.h). */
+    AssetTypeID AnimationGraph;
 } StandardAssetTypes;
 
 
@@ -443,8 +448,8 @@ Error AssetManager_CreateAssetType(AssetManager* self, const AssetTypeInfo* info
 /**
  * @brief Registers all standard asset types and a shared JSON pool used to parse their definitions.
  *
- * Registers the eleven standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world model,
- * world sprite, character and animation library), writing their ids into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
+ * Registers the twelve standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world model,
+ * world sprite, character, animation library and animation graph), writing their ids into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
  * ConstructorUserData so all standard definition parsing recycles JSON compounds/arrays/strings instead of
  * reallocating. The caller OWNS @p *outDefinitionPool and must free it with JSONObjectPool_Deconstruct after (or
  * alongside) the manager. The same pool may be reused as the ConstructorUserData of a custom JSON-based type to
@@ -1009,6 +1014,13 @@ Error AssetManager_LoadCharacter(AssetManager* self, const unsigned char* name, 
  */
 Error AssetManager_LoadAnimationLibrary(AssetManager* self, const unsigned char* name, AssetUserID user,
     AnimationLibrary** outAsset);
+
+/**
+ * @brief Loads an animation graph by name (AnimationGraph.h): a copy of the graph its definition holds, checked when the
+ *        definitions were read. See AssetManager_LoadSpriteSheet for semantics.
+ */
+Error AssetManager_LoadAnimationGraph(AssetManager* self, const unsigned char* name, AssetUserID user,
+    AnimationGraph** outAsset);
 
 
 // ---- Bulk load (stepped, main thread) ----

@@ -1732,6 +1732,8 @@ Error AssetManager_CreateStandardAssetTypes(AssetManager* self, StandardAssetTyp
             &outTypes->Character },
         { ASSET_TYPE_NAME_ANIMATION_LIBRARY, ASSET_TYPE_DIRECTORY_ANIMATION_LIBRARY,
             AnimationLibraryDefinition_Construct, &outTypes->AnimationLibrary },
+        { ASSET_TYPE_NAME_ANIMATION_GRAPH, ASSET_TYPE_DIRECTORY_ANIMATION_GRAPH,
+            AnimationGraphDefinition_Construct, &outTypes->AnimationGraph },
     };
 
     for (size_t i = 0; i < (sizeof(Standard) / sizeof(Standard[0])); i++)
@@ -2596,6 +2598,13 @@ Error AssetManager_LoadAnimationLibrary(AssetManager* self, const unsigned char*
     AnimationLibrary** outAsset)
 {
     return LoadStandard(self, (self != NULL) ? self->_standardTypes.AnimationLibrary : ASSET_TYPE_ID_INVALID, name,
+        user, (void**)outAsset);
+}
+
+Error AssetManager_LoadAnimationGraph(AssetManager* self, const unsigned char* name, AssetUserID user,
+    AnimationGraph** outAsset)
+{
+    return LoadStandard(self, (self != NULL) ? self->_standardTypes.AnimationGraph : ASSET_TYPE_ID_INVALID, name,
         user, (void**)outAsset);
 }
 

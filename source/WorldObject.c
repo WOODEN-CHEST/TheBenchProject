@@ -21,6 +21,7 @@ typedef enum ObjectPropertyEnum
 {
     ObjectProperty_Name,
     ObjectProperty_Parent,
+    ObjectProperty_ParentSocket,
     ObjectProperty_Position,
     ObjectProperty_Rotation,
     ObjectProperty_Scale,
@@ -70,6 +71,17 @@ static const PropertyDescriptor ObjectProperties[ObjectProperty_Count] =
         .Category = CATEGORY_TRANSFORM, .DisplayName = u8"Parent",
         .Description = u8"The object this one is placed on (0 for none): its position, rotation and scale are relative "
             u8"to the parent's, and it moves, hides and is disabled with it.",
+        .SinceVersion = 1U
+    },
+    [ObjectProperty_ParentSocket] =
+    {
+        // T30. A new row: files without it read as before (the table's version stays). Next free wire id: 14.
+        .Key = u8"parent_socket", .WireId = 13U, .Type = PropertyType_AssetName,
+        PROPERTY_MEMBER(WorldObject, _parentSocket), .Default.StringValue = NULL,
+        .Rules = PROPERTY_RULES_STRING(WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH, true), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_TRANSFORM, .DisplayName = u8"Parent's socket",
+        .Description = u8"A socket of the parent's model this object hangs on (a hand, a hook): its position, rotation "
+            u8"and scale are then relative to the socket, which may move with the parent's pose. None: the parent itself.",
         .SinceVersion = 1U
     },
     [ObjectProperty_Position] =
@@ -168,7 +180,8 @@ static bool IsTransformRow(const PropertyDescriptor* descriptor)
 {
     return (descriptor == &ObjectProperties[ObjectProperty_Position])
         || (descriptor == &ObjectProperties[ObjectProperty_Rotation])
-        || (descriptor == &ObjectProperties[ObjectProperty_Scale]);
+        || (descriptor == &ObjectProperties[ObjectProperty_Scale])
+        || (descriptor == &ObjectProperties[ObjectProperty_ParentSocket]);
 }
 
 /* A change of the tags and data advances the data revision (and tells the world: its tag index and byte count); any

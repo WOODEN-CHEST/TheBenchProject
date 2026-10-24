@@ -15,6 +15,8 @@
 typedef struct GameTextureStruct GameTexture;
 /** @brief An animation library asset (AnimationLibrary.h); a world model names the ones its placements play. */
 typedef struct AnimationLibraryStruct AnimationLibrary;
+/** @brief An animation graph asset (AnimationGraph.h); a world model names the one its placements play (T30). */
+typedef struct AnimationGraphStruct AnimationGraph;
 
 
 /**
@@ -55,7 +57,15 @@ typedef struct AnimationLibraryStruct AnimationLibrary;
  * shares it, bones and bind poses alike, so one pose bends them all; LODs without bones draw as they are), and it may
  * name animation libraries (AnimationLibrary.h) whose clips its placements play: an animator component on the object
  * (WorldAnimatorComponent.h) plays them, matched to the skeleton by bone name. The libraries load as dependencies, and
- * their clips' names must not repeat across them.
+ * their clips' names must not repeat across them. Since T30 it may name an animation graph (AnimationGraph.h: which
+ * clip plays when, the special actions), a dependency too, that its placements' animators play with those clips.
+ *
+ * SOCKETS (T30). Named places on the model: on a bone (a hand: the place follows the pose, so a held item hangs there)
+ * with an offset in the bone's space, or fixed in the object's own space (a bench's seat: where a sitting character
+ * stands, facing the way it sits). An object hangs on a socket of its parent (WorldObject's parent_socket), and an
+ * action's anchor is a socket of its target. A skinned world model may say what a first-person camera rides and leaves
+ * out (WorldModel_GetFirstPerson): the socket of its eyes and the bones (with their subtrees) the camera's passes hide,
+ * the head (the owner's decision G34).
  *
  * Every field is read-only (underscore-prefixed): read them through the accessors.
  */
@@ -79,6 +89,12 @@ typedef struct AnimationLibraryStruct AnimationLibrary;
 #define WORLD_MODEL_DEFAULT_DRAW_DISTANCE 600.0f
 /** @brief The most animation libraries a world model may name (T29). */
 #define WORLD_MODEL_MAX_ANIMATION_LIBRARIES ((size_t)16)
+/** @brief The most sockets a world model may have (T30). */
+#define WORLD_MODEL_MAX_SOCKETS ((size_t)32)
+/** @brief The most bytes a socket's name may have ([a-z][a-z0-9_.-]*, without the terminator). */
+#define WORLD_MODEL_SOCKET_NAME_MAX_LENGTH ((size_t)64)
+/** @brief The most bones a first-person camera's passes may hide (each with its subtree). */
+#define WORLD_MODEL_MAX_HIDDEN_BONES ((size_t)16)
 
 
 // Types.
@@ -215,6 +231,23 @@ typedef struct WorldModelCollisionStruct
 } WorldModelCollision;
 
 /**
+ * @brief One socket of a world model: a named place on a bone or fixed on the model (T30). Read-only; part of its world
+ *        model.
+ */
+typedef struct WorldModelSocketStruct
+{
+    /** @brief Its name ([a-z][a-z0-9_.-]*, at most WORLD_MODEL_SOCKET_NAME_MAX_LENGTH bytes), unique in its world model. */
+    const unsigned char* _name;
+    /** @brief Whether it sits on a bone of the world model's skeleton (and moves with the pose). */
+    bool _hasBone;
+    /** @brief The bone's index in the skeleton (valid while _hasBone). */
+    uint32_t _bone;
+    /** @brief Its frame: in the bone's space for a bone socket, in the object's own space otherwise (its position and
+     *  its rotation; +Z is the way it faces). */
+    Matrix _offset;
+} WorldModelSocket;
+
+/**
  * @brief A loaded world model. Built and owned by the asset manager (the "world_model" type); read-only.
  */
 typedef struct WorldModelStruct
@@ -256,6 +289,20 @@ typedef struct WorldModelStruct
     const unsigned char* _animationLibraryNames[WORLD_MODEL_MAX_ANIMATION_LIBRARIES];
     /** @brief How many it names (0 to WORLD_MODEL_MAX_ANIMATION_LIBRARIES). */
     size_t _animationLibraryCount;
+    /** @brief The animation graph its placements play (held under its dependency user), or NULL (T30). */
+    const AnimationGraph* _animationGraph;
+    /** @brief The graph's asset name (owned by the world model), or NULL. */
+    const unsigned char* _animationGraphName;
+    /** @brief Its sockets (owned), and how many (0 to WORLD_MODEL_MAX_SOCKETS). */
+    const WorldModelSocket* _sockets;
+    uint32_t _socketCount;
+    /** @brief Whether it says what a first-person camera rides and hides. */
+    bool _hasFirstPerson;
+    /** @brief The socket of the eyes (an index in _sockets; valid while _hasFirstPerson). */
+    uint32_t _eyesSocket;
+    /** @brief The bones the camera's passes hide with their subtrees (skeleton indices, owned), and how many. */
+    const uint32_t* _hiddenBones;
+    uint32_t _hiddenBoneCount;
 } WorldModel;
 
 
@@ -322,6 +369,76 @@ static inline const unsigned char* WorldModel_GetAnimationLibraryName(const Worl
 {
     return self->_animationLibraryNames[index];
 }
+
+/**
+ * @brief Returns the animation graph the world model's placements play (T30).
+ * @param self The world model; must not be NULL.
+ * @returns The graph (valid while the world model is loaded), or NULL when it names none.
+ */
+static inline const AnimationGraph* WorldModel_GetAnimationGraph(const WorldModel* self)
+{
+    return self->_animationGraph;
+}
+
+/**
+ * @brief Returns the asset name of the animation graph the world model names.
+ * @param self The world model; must not be NULL.
+ * @returns The name (valid while the world model is loaded), or NULL.
+ */
+static inline const unsigned char* WorldModel_GetAnimationGraphName(const WorldModel* self)
+{
+    return self->_animationGraphName;
+}
+
+/** @brief Returns how many sockets the world model has (T30). @param self The world model; must not be NULL. */
+static inline uint32_t WorldModel_GetSocketCount(const WorldModel* self)
+{
+    return self->_socketCount;
+}
+
+/**
+ * @brief Returns one of the world model's sockets.
+ * @param self The world model; must not be NULL.
+ * @param index Below WorldModel_GetSocketCount.
+ * @returns The socket (valid while the world model is loaded).
+ */
+static inline const WorldModelSocket* WorldModel_GetSocket(const WorldModel* self, uint32_t index)
+{
+    return &self->_sockets[index];
+}
+
+/**
+ * @brief Finds a socket by name.
+ * @param self The world model; must not be NULL.
+ * @param name The name; NULL finds nothing.
+ * @param outIndex [out] Receives its index when found; may be NULL.
+ * @returns Whether the world model has a socket of that name.
+ */
+bool WorldModel_TryFindSocket(const WorldModel* self, const unsigned char* name, uint32_t* outIndex);
+
+/**
+ * @brief Returns what a first-person camera rides and hides on the world model (T30).
+ * @param self The world model; must not be NULL.
+ * @param outEyesSocket [out] Receives the eyes' socket (an index); may be NULL.
+ * @param outHiddenBones [out] Receives the hidden bones (skeleton indices, valid while the world model is loaded); may
+ *        be NULL.
+ * @param outHiddenBoneCount [out] Receives how many; may be NULL.
+ * @returns Whether the world model says it (its definition has a first_person block).
+ */
+bool WorldModel_GetFirstPerson(const WorldModel* self, uint32_t* outEyesSocket, const uint32_t** outHiddenBones,
+    uint32_t* outHiddenBoneCount);
+
+/**
+ * @brief A socket's frame in the object's own space for a pose: a fixed socket's offset, or a bone socket's offset (in
+ *        metres, along the bone's axes) on the bone's frame in the pose through the skeleton LOD's import transform,
+ *        that frame made rigid (its turn and place: a bone's or an import's scale is left out, so a model authored in
+ *        centimetres takes its offsets in metres and what hangs on it keeps its size).
+ * @param self The world model; must not be NULL.
+ * @param socket The socket's index, below WorldModel_GetSocketCount.
+ * @param boneMatrices The pose's bone matrices in mesh space (WorldAnimatorPose), or NULL for the bind pose.
+ * @returns The socket's space to the object's own space.
+ */
+Matrix WorldModel_GetSocketMatrix(const WorldModel* self, uint32_t socket, const Matrix* boneMatrices);
 
 /**
  * @brief Returns the number of LODs.

@@ -19,6 +19,8 @@
 #define TEST_BUFFER_CAPACITY 512U
 /** The shipped placeholder files (asset_source/scripts/placeholder_humanoid.py writes them). */
 #define MOTIONS_PATH "compile/out/asset/animation_libraries/placeholder_humanoid/motions.glb"
+/** The placeholder library's clips: T29's nine, and T30's seven for the actions. */
+#define PLACEHOLDER_CLIP_COUNT 16U
 #define MODEL_WITH_CLIPS_PATH "tests/data/placeholder_humanoid_with_clips.glb"
 
 
@@ -111,7 +113,7 @@ static void TheMotionsLibraryReadsThePlaceholderClips(TestRun* run)
     }
     // The armature object above the bones (no skin: what Blender exports for actions alone) and its 19 bones.
     TEST_CHECK(run, AnimationLibrary_GetBoneCount(Library) == 20U);
-    TEST_CHECK(run, AnimationLibrary_GetClipCount(Library) == 9U);
+    TEST_CHECK(run, AnimationLibrary_GetClipCount(Library) == PLACEHOLDER_CLIP_COUNT);
     uint32_t Armature = 0U;
     uint32_t Hips = 0U;
     uint32_t Head = 0U;
@@ -125,9 +127,13 @@ static void TheMotionsLibraryReadsThePlaceholderClips(TestRun* run)
 
     static const char* const Names[] =
     {
-        "idle", "walk", "run", "crouch_idle", "crouch_walk", "jump", "fall", "land", "wave"
+        "idle", "walk", "run", "crouch_idle", "crouch_walk", "jump", "fall", "land", "wave", "sit_down", "sit_idle",
+        "stand_up", "pick_up", "hold_r", "put_down", "open_door"
     };
-    static const float Durations[] = { 3.0f, 1.0f, 0.68f, 2.0f, 1.4f, 0.6f, 1.0f, 0.5f, 2.0f };
+    static const float Durations[] =
+    {
+        3.0f, 1.0f, 0.68f, 2.0f, 1.4f, 0.6f, 1.0f, 0.5f, 2.0f, 1.3f, 4.0f, 1.3f, 1.5f, 2.0f, 1.6f, 1.4f
+    };
     for (size_t Index = 0U; Index < sizeof(Names) / sizeof(Names[0]); Index++)
     {
         uint32_t Clip = 0U;
@@ -156,7 +162,7 @@ static void AModelFileWithItsSkinReadsAsALibrary(TestRun* run)
     }
     // The mesh's node is no bone: only the 19 joints, the hips a root.
     TEST_CHECK(run, AnimationLibrary_GetBoneCount(Library) == 19U);
-    TEST_CHECK(run, AnimationLibrary_GetClipCount(Library) == 9U);
+    TEST_CHECK(run, AnimationLibrary_GetClipCount(Library) == PLACEHOLDER_CLIP_COUNT);
     uint32_t Hips = 0U;
     TEST_CHECK(run, AnimationLibrary_TryFindBone(Library, (const unsigned char*)u8"hips", &Hips)
         && (AnimationLibrary_GetBone(Library, Hips)->_parent == -1));
@@ -190,7 +196,7 @@ static void ClipSettingsRenameLoopAndSpeedClips(TestRun* run)
         && AnimationClip_IsLooped(AnimationLibrary_GetClip(Library, Run)));
     TEST_CHECK(run, AnimationLibrary_TryFindClip(Library, (const unsigned char*)u8"wave", &WaveClip)
         && !AnimationClip_IsLooped(AnimationLibrary_GetClip(Library, WaveClip)));
-    TEST_CHECK(run, AnimationLibrary_GetClipCount(Library) == 9U);
+    TEST_CHECK(run, AnimationLibrary_GetClipCount(Library) == PLACEHOLDER_CLIP_COUNT);
     AnimationLibrary_Destroy(Library);
 }
 
@@ -869,7 +875,7 @@ static void TheDefinitionChecksItsClipSettings(TestRun* run)
     AssetDefinition* Definition = NULL;
     TEST_CHECK(run, BuildDefinition(Manager, Types.AnimationLibrary,
         "{\"name\": \"lib\", \"location\": \"a/b\", \"clips\": [{\"name\": \"stroll\", \"source\": \"Walk Cycle\", "
-        "\"is_looped\": true, \"speed\": 2}, {\"name\": \"run\"}]}", &Definition));
+        "\"is_looped\": true, \"speed\": 2, \"distance\": 0.9}, {\"name\": \"run\"}]}", &Definition));
     if (Definition != NULL)
     {
         TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(Manager, Definition));
@@ -883,6 +889,9 @@ static void TheDefinitionChecksItsClipSettings(TestRun* run)
         "{\"name\": \"lib\", \"location\": \"a/b\", \"clips\": [{\"name\": \"Walk\"}]}",
         "{\"name\": \"lib\", \"location\": \"a/b\", \"clips\": [{\"name\": \"walk\", \"speed\": 0}]}",
         "{\"name\": \"lib\", \"location\": \"a/b\", \"clips\": [{\"name\": \"walk\", \"speed\": 101}]}",
+        "{\"name\": \"lib\", \"location\": \"a/b\", \"clips\": [{\"name\": \"walk\", \"distance\": 0}]}",
+        "{\"name\": \"lib\", \"location\": \"a/b\", \"clips\": [{\"name\": \"walk\", \"distance\": 1001}]}",
+        "{\"name\": \"lib\", \"location\": \"a/b\", \"clips\": [{\"name\": \"walk\", \"distance\": \"far\"}]}",
         "{\"name\": \"lib\", \"location\": \"a/b\", \"clips\": [{\"name\": \"walk\", \"source\": \"\"}]}",
         "{\"name\": \"lib\", \"location\": \"a/b\", \"clips\": [{\"name\": \"walk\"}, {\"name\": \"walk\", "
             "\"source\": \"other\"}]}",
@@ -920,7 +929,8 @@ static void TheLibraryAssetLoadsItsFile(TestRun* run)
     bool IsReady = TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "animation_library_asset", &Root))
         && TEST_CHECK_SUCCESS(run, Test_WriteTextFile(Root._data, "animation_libraries/humans/motions.json",
             "{\"name\": \"human_motions\", \"location\": \"humans/motions\", \"clips\": [{\"name\": \"walk\", "
-            "\"is_looped\": true}, {\"name\": \"sprint\", \"source\": \"run\", \"is_looped\": true, \"speed\": 1.25}]}"))
+            "\"is_looped\": true, \"distance\": 1.1}, {\"name\": \"sprint\", \"source\": \"run\", \"is_looped\": true, "
+            "\"speed\": 1.25}]}"))
         && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, MOTIONS_PATH, &Source))
         && TEST_CHECK_SUCCESS(run, FileSystem_ReadAllBytes(Source._data, &Bytes))
         && TEST_CHECK(run, GenericBuffer_AppendString(&Target, Root._data))
@@ -939,11 +949,15 @@ static void TheLibraryAssetLoadsItsFile(TestRun* run)
     {
         uint32_t Walk = 0U;
         uint32_t Sprint = 0U;
-        TEST_CHECK(run, AnimationLibrary_GetClipCount(Library) == 9U);
+        TEST_CHECK(run, AnimationLibrary_GetClipCount(Library) == PLACEHOLDER_CLIP_COUNT);
         TEST_CHECK(run, AnimationLibrary_TryFindClip(Library, (const unsigned char*)u8"walk", &Walk)
             && AnimationClip_IsLooped(AnimationLibrary_GetClip(Library, Walk)));
         TEST_CHECK(run, AnimationLibrary_TryFindClip(Library, (const unsigned char*)u8"sprint", &Sprint)
             && (AnimationClip_GetSpeed(AnimationLibrary_GetClip(Library, Sprint)) == 1.25f));
+        // The distance a clip covers per cycle, when the definition says (T30's speed matching).
+        float Distance = 0.0f;
+        TEST_CHECK(run, AnimationClip_TryGetDistance(AnimationLibrary_GetClip(Library, Walk), &Distance)
+            && (Distance == 1.1f) && !AnimationClip_TryGetDistance(AnimationLibrary_GetClip(Library, Sprint), NULL));
         TEST_CHECK(run, !AnimationLibrary_TryFindClip(Library, (const unsigned char*)u8"run", NULL));
     }
     if (Manager != NULL)
@@ -962,11 +976,14 @@ static void TheLibraryAssetLoadsItsFile(TestRun* run)
 
 
 /* The game's own library definition (compile/out/asset/animation_libraries): it loads its placeholder file through the
- * asset manager with the definition's loops, as the test world's figures play it. */
+ * asset manager with the definition's loops, as the test world's figures play it, and (T30) the metres the gaits cover
+ * per cycle: the placeholder generator's strides (twice the half stride over the stance's share of the cycle). */
 static void TheShippedLibraryDefinitionLoadsItsClips(TestRun* run)
 {
-    static const char* const Looped[] = { "idle", "walk", "run", "crouch_idle", "crouch_walk", "fall" };
-    static const char* const Once[] = { "jump", "land", "wave" };
+    static const char* const Looped[] = { "idle", "walk", "run", "crouch_idle", "crouch_walk", "fall", "sit_idle", "hold_r" };
+    static const char* const Once[] = { "jump", "land", "wave", "sit_down", "stand_up", "pick_up", "put_down", "open_door" };
+    static const char* const Gaits[] = { "walk", "run", "crouch_walk" };
+    static const float Distances[] = { 2.0f * 0.33f / 0.6f, 2.0f * 0.30f / 0.38f, 2.0f * 0.22f / 0.6f };
     GenericBuffer Root;
     GenericBuffer_AllocateVariable(&Root, TEST_BUFFER_CAPACITY, sizeof(unsigned char));
     AssetManager* Manager = NULL;
@@ -985,7 +1002,7 @@ static void TheShippedLibraryDefinitionLoadsItsClips(TestRun* run)
         && TEST_CHECK_SUCCESS(run, AssetManager_LoadAnimationLibrary(Manager,
             (const unsigned char*)u8"test_humanoid_motions", User, &Library)))
     {
-        TEST_CHECK(run, AnimationLibrary_GetClipCount(Library) == 9U);
+        TEST_CHECK(run, AnimationLibrary_GetClipCount(Library) == PLACEHOLDER_CLIP_COUNT);
         for (size_t Index = 0U; Index < (sizeof(Looped) / sizeof(Looped[0])); Index++)
         {
             uint32_t Clip = 0U;
@@ -996,7 +1013,16 @@ static void TheShippedLibraryDefinitionLoadsItsClips(TestRun* run)
         {
             uint32_t Clip = 0U;
             TEST_CHECK(run, AnimationLibrary_TryFindClip(Library, (const unsigned char*)Once[Index], &Clip)
-                && !AnimationClip_IsLooped(AnimationLibrary_GetClip(Library, Clip)));
+                && !AnimationClip_IsLooped(AnimationLibrary_GetClip(Library, Clip))
+                && !AnimationClip_TryGetDistance(AnimationLibrary_GetClip(Library, Clip), NULL));
+        }
+        for (size_t Index = 0U; Index < (sizeof(Gaits) / sizeof(Gaits[0])); Index++)
+        {
+            uint32_t Clip = 0U;
+            float Distance = 0.0f;
+            TEST_CHECK(run, AnimationLibrary_TryFindClip(Library, (const unsigned char*)Gaits[Index], &Clip)
+                && AnimationClip_TryGetDistance(AnimationLibrary_GetClip(Library, Clip), &Distance)
+                && (fabsf(Distance - Distances[Index]) < 1e-3f));
         }
     }
     if (Manager != NULL)

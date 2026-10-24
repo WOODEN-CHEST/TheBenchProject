@@ -142,6 +142,11 @@ typedef struct WorldRenderModelStruct
      *  next update) when it was made for this entry's world model, or NULL: no animator, no pose, or another world model
      *  (T29). */
     const WorldAnimatorPose* Pose;
+    /** @brief The pose the camera's passes draw (T30): Pose, except for the first-person object
+     *  (WorldRenderCache_SetFirstPersonObject), whose world model's first_person block hides bones: a copy of its pose
+     *  (the cache's) with their skinning collapsed to their joint, so the camera riding its eyes does not see them. Its
+     *  shadows keep Pose. */
+    const WorldAnimatorPose* CameraPose;
 } WorldRenderModel;
 
 /** @brief A sprite component that has a frame to draw this frame, with everything the passes need. Its settings are the
@@ -253,6 +258,12 @@ typedef struct WorldRenderCacheStruct
     uint64_t _componentSetVersion;
     /** @brief Whether the entries were matched at least once since construction or the last reset. */
     bool _isMatched;
+    /** @brief The object the camera rides (T30; 0: none), and the copy of its pose its camera passes draw, with its own
+     *  palette (_firstPersonPaletteBones bones of room; owned). */
+    uint64_t _firstPersonObjectId;
+    WorldAnimatorPose _firstPersonPose;
+    float* _firstPersonPalette;
+    uint32_t _firstPersonPaletteBones;
 } WorldRenderCache;
 
 
@@ -268,6 +279,17 @@ void WorldRenderCache_Construct(WorldRenderCache* self);
  * @param self The cache, or NULL.
  */
 void WorldRenderCache_Deconstruct(WorldRenderCache* self);
+
+/**
+ * @brief Names the object the camera rides (T30: the player in first person), or none (0): from the next Sync, its
+ *        entry's CameraPose leaves out the bones its world model's first_person block hides.
+ * @param self The cache; must not be NULL.
+ * @param objectId The object's id, or 0.
+ */
+static inline void WorldRenderCache_SetFirstPersonObject(WorldRenderCache* self, uint64_t objectId)
+{
+    self->_firstPersonObjectId = objectId;
+}
 
 /**
  * @brief Forgets every entry, so the next Sync resolves every model again.

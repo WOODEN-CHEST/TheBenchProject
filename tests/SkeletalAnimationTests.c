@@ -399,6 +399,117 @@ static void BlendsAddPosesByWeight(TestRun* run)
     DestroySkeleton(&Built);
 }
 
+static void ALayerBlendsOverItsBaseByBoneWeights(TestRun* run)
+{
+    // Three bones: a blend of one pose replaces the base where the weights say, by its total weight.
+    Transform Base[3];
+    for (int Index = 0; Index < 3; Index++)
+    {
+        Base[Index] = (Transform){ { (float)Index, 0.0f, 0.0f }, QuaternionIdentity(), { 1.0f, 1.0f, 1.0f } };
+    }
+    Quaternion Quarter = Turn(0.0f, 1.0f, 0.0f, 90.0f);
+    Transform Layer[3];
+    for (int Index = 0; Index < 3; Index++)
+    {
+        // The layer's rotation in the far hemisphere: the blend must still take the shorter way.
+        Layer[Index] = (Transform){ { (float)Index, 4.0f, 0.0f }, QuaternionScale(Quarter, -1.0f), { 3.0f, 3.0f, 3.0f } };
+    }
+    SkeletalBlendBone Blend[3];
+    SkeletalPose_ClearBlend(Blend, 3U);
+    SkeletalPose_AddToBlend(Blend, Layer, 3U, 0.5f);
+    const float Weights[3] = { 0.0f, 1.0f, 0.5f };
+    Transform Result[3];
+    Memory_Copy(Base, Result, sizeof(Base));
+    SkeletalPose_BlendOver(Blend, 0.5f, Weights, 3U, Result);
+    // Bone 0: weight 0, the base. Bone 1: half (the blend's total). Bone 2: a quarter.
+    TEST_CHECK(run, IsNearVector(Result[0].translation, Base[0].translation)
+        && IsSameRotation(Result[0].rotation, QuaternionIdentity()));
+    TEST_CHECK(run, IsNearVector(Result[1].translation, (Vector3){ 1.0f, 2.0f, 0.0f })
+        && IsNearVector(Result[1].scale, (Vector3){ 2.0f, 2.0f, 2.0f })
+        && IsSameRotation(Result[1].rotation, Turn(0.0f, 1.0f, 0.0f, 45.0f)));
+    TEST_CHECK(run, IsNearVector(Result[2].translation, (Vector3){ 2.0f, 1.0f, 0.0f })
+        && IsNear(QuaternionLength(Result[2].rotation), 1.0f));
+    // Every bone weight 1 (NULL) and a full blend: the blend's pose; above a total of 1 it counts as 1.
+    Memory_Copy(Base, Result, sizeof(Base));
+    SkeletalPose_ClearBlend(Blend, 3U);
+    SkeletalPose_AddToBlend(Blend, Layer, 3U, 2.0f);
+    SkeletalPose_BlendOver(Blend, 2.0f, NULL, 3U, Result);
+    TEST_CHECK(run, IsNearVector(Result[2].translation, Layer[2].translation)
+        && IsNearVector(Result[2].scale, Layer[2].scale) && IsSameRotation(Result[2].rotation, Quarter));
+    // An empty blend changes nothing.
+    Memory_Copy(Base, Result, sizeof(Base));
+    SkeletalPose_ClearBlend(Blend, 3U);
+    SkeletalPose_BlendOver(Blend, 0.0f, NULL, 3U, Result);
+    TEST_CHECK(run, Memory_IsEqual(Result, Base, sizeof(Base)));
+}
+
+static void LookAtTurnsAChainByItsShares(TestRun* run)
+{
+    // A spine, a neck turned 30 degrees about X (a slouch) and a head above it, a hand beside the spine.
+    TestSkeletonBone Bones[4] =
+    {
+        { .Name = "spine", .Parent = -1, .Bind = TestAnimation_Translation(0.0f, 1.0f, 0.0f) },
+        { .Name = "neck", .Parent = 0, .Bind = { .translation = { 0.0f, 1.5f, 0.0f }, .rotation = { 0.0f, 0.0f, 0.0f,
+            1.0f }, .scale = { 1.0f, 1.0f, 1.0f } } },
+        { .Name = "head", .Parent = 1, .Bind = TestAnimation_Translation(0.0f, 1.7f, 0.0f) },
+        { .Name = "hand", .Parent = 0, .Bind = TestAnimation_Translation(0.5f, 1.2f, 0.0f) },
+    };
+    TestSkeleton Built;
+    if (!BuildSkeleton(run, Bones, 4, &Built))
+    {
+        TestSkeletonModel_Destroy(&Built.Model);
+        return;
+    }
+    Transform Pose[4];
+    SkeletalPose_SetRest(Built.Skeleton, Pose);
+    Quaternion Slouch = Turn(1.0f, 0.0f, 0.0f, 30.0f);
+    Pose[1].rotation = Slouch;
+    Transform Before[4];
+    Memory_Copy(Pose, Before, sizeof(Pose));
+    Matrix BeforeMatrices[4];
+    SkeletalPose_ComputeModelMatrices(Built.Skeleton, Before, BeforeMatrices);
+
+    // A 60 degree turn about Y, 40% at the neck and 60% at the head: the neck turns 24 degrees, the head the whole 60,
+    // each about its joint (the translations stay); the hand, off the chain, does not move.
+    const uint32_t Chain[2] = { 1U, 2U };
+    const float Shares[2] = { 0.4f, 0.6f };
+    Quaternion Look = Turn(0.0f, 1.0f, 0.0f, 60.0f);
+    SkeletalPose_ApplyLookAt(Built.Skeleton, Pose, Chain, Shares, 2U, Look, 1.0f);
+    Matrix Matrices[4];
+    SkeletalPose_ComputeModelMatrices(Built.Skeleton, Pose, Matrices);
+    Quaternion NeckModel = QuaternionFromMatrix(Matrices[1]);
+    Quaternion HeadModel = QuaternionFromMatrix(Matrices[2]);
+    Quaternion HeadBefore = QuaternionFromMatrix(BeforeMatrices[2]);
+    TEST_CHECK(run, IsSameRotation(NeckModel, QuaternionMultiply(Turn(0.0f, 1.0f, 0.0f, 24.0f), Slouch)));
+    TEST_CHECK(run, IsSameRotation(HeadModel, QuaternionMultiply(Look, HeadBefore)));
+    TEST_CHECK(run, IsNearVector(Pose[1].translation, Before[1].translation)
+        && IsNearVector(Pose[2].translation, Before[2].translation));
+    TEST_CHECK(run, IsNearMatrix(Matrices[3], BeforeMatrices[3]) && IsNearMatrix(Matrices[0], BeforeMatrices[0]));
+    // The head's joint stays where the turned neck carries it: the neck's matrix moves the head's offset with it.
+    Vector3 HeadJoint = { Matrices[2].m12, Matrices[2].m13, Matrices[2].m14 };
+    Vector3 NeckJoint = { Matrices[1].m12, Matrices[1].m13, Matrices[1].m14 };
+    TEST_CHECK(run, IsNear(Vector3Distance(HeadJoint, NeckJoint), Vector3Distance((Vector3){ BeforeMatrices[2].m12,
+        BeforeMatrices[2].m13, BeforeMatrices[2].m14 }, (Vector3){ BeforeMatrices[1].m12, BeforeMatrices[1].m13,
+        BeforeMatrices[1].m14 })));
+
+    // Half the weight: half the turn at the head. A weight of 0 changes nothing.
+    Memory_Copy(Before, Pose, sizeof(Pose));
+    SkeletalPose_ApplyLookAt(Built.Skeleton, Pose, Chain, Shares, 2U, Look, 0.5f);
+    SkeletalPose_ComputeModelMatrices(Built.Skeleton, Pose, Matrices);
+    TEST_CHECK(run, IsSameRotation(QuaternionFromMatrix(Matrices[2]), QuaternionMultiply(Turn(0.0f, 1.0f, 0.0f, 30.0f),
+        HeadBefore)));
+    Memory_Copy(Before, Pose, sizeof(Pose));
+    SkeletalPose_ApplyLookAt(Built.Skeleton, Pose, Chain, Shares, 2U, Look, 0.0f);
+    TEST_CHECK(run, Memory_IsEqual(Pose, Before, sizeof(Pose)));
+    // A rotation in the far hemisphere turns the same short way.
+    Memory_Copy(Before, Pose, sizeof(Pose));
+    SkeletalPose_ApplyLookAt(Built.Skeleton, Pose, Chain, Shares, 2U, QuaternionScale(Look, -1.0f), 1.0f);
+    SkeletalPose_ComputeModelMatrices(Built.Skeleton, Pose, Matrices);
+    TEST_CHECK(run, IsSameRotation(QuaternionFromMatrix(Matrices[1]), QuaternionMultiply(Turn(0.0f, 1.0f, 0.0f, 24.0f),
+        Slouch)));
+    DestroySkeleton(&Built);
+}
+
 static void PoseBoundsHoldEverySkinnedVertex(TestRun* run)
 {
     AnimationLibrary* Library = NULL;
@@ -882,6 +993,8 @@ void SkeletalAnimationTests_Run(TestRun* run)
         { "two_skeletons_have_the_same_bones_by_name_and_parent", TwoSkeletonsHaveTheSameBonesByNameAndParent },
         { "the_rest_pose_skins_nothing", TheRestPoseSkinsNothing },
         { "blends_add_poses_by_weight", BlendsAddPosesByWeight },
+        { "a_layer_blends_over_its_base_by_bone_weights", ALayerBlendsOverItsBaseByBoneWeights },
+        { "look_at_turns_a_chain_by_its_shares", LookAtTurnsAChainByItsShares },
         { "pose_bounds_hold_every_skinned_vertex", PoseBoundsHoldEverySkinnedVertex },
         { "a_binding_matches_bones_by_name", ABindingMatchesBonesByName },
         { "a_clip_on_its_own_skeleton_plays_as_authored", AClipOnItsOwnSkeletonPlaysAsAuthored },

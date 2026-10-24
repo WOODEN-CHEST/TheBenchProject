@@ -16,7 +16,7 @@ jump) and **fly**; a **`character` asset** holds every default of a kind of char
 | CharacterAsset | `include/CharacterAsset.h`, `source/CharacterAsset.c`, `source/CharacterDefinition.c`, `source/CharacterInternal.h` (private) | The `character` asset type: `CharacterSettings`, their property table and defaults, the definition's parser and loader. |
 | WorldCharacterComponent | `include/WorldCharacterComponent.h`, `source/WorldCharacterComponent.c` | Component type 4 (`character`), a transform driver: the asset's name, the placement's overrides, the input, the state. |
 | WorldCharacters | `include/WorldCharacters.h`, `source/WorldCharacters.c`, `source/WorldCharacterMotion.c` and `source/WorldCharacterInternal.h` (private) | The character system: the tick's update, the capsule's motion, the collider, events, teleports, the look ray. |
-| PlayerController | `include/PlayerController.h`, `source/PlayerController.c` | The player's side: input into a character, the camera at its eyes, what the player looks at. |
+| PlayerController | `include/PlayerController.h`, `source/PlayerController.c` | The player's side: input into a character, the camera at its eyes (its body's eyes socket since T30), what the player looks at. |
 
 ## The character asset (`CharacterAsset.h`)
 
@@ -93,8 +93,19 @@ carries at most one, and adding it makes the object movable.
   its step height is measured from), `Velocity` (how fast it actually moved in its last update, relative to its ground:
   its own move after walls, plus what the collision step pushed it since; two characters pressing into each other
   read 0), `GroundVelocity` (the platform's), `FacingYaw`, `TurnRate`, `Height` (the stance's), `EyeHeight` and
-  `CrouchAmount` (eased), `IsStandUpBlocked`, `TimeInAir`. `WorldCharacterComponent_GetEyePosition` is the object's
-  world position plus the eye height (a `Vector3Double`).
+  `CrouchAmount` (eased), `IsStandUpBlocked`, `TimeInAir`; since T30 `Events` (a bit per `WorldCharacterEventKind`
+  raised in its last update: what an animation graph's events read), `LastLandingSpeed` and `Approach` (below).
+  `WorldCharacterComponent_GetEyePosition` is the object's world position plus the eye height (a `Vector3Double`).
+- **Action control (T30)** (`CharacterActionControl`, `WorldCharacterComponent_SetActionControl` / `_GetActionControl`,
+  `CharacterActionControl_CreateFree`; runtime only, set by the animation system for its actions,
+  [Animation.md](Animation.md)): a **lock** (`free`; `no_moving`: its input's movement and jumps are ignored;
+  `no_turning`: its facing stays; `locked`: both) and an optional **anchor** (a world position in double, a yaw, an
+  approach time). Setting an anchor starts an **approach** (`Approach` becomes `Approaching`): the character slides to
+  the anchor across the ground (swept like any move, so a wall stops it; a walker in the air still falls) and turns to
+  its yaw, fast enough to finish in the approach time; within `CHARACTER_ANCHOR_TOLERANCE` (1 cm) and
+  `CHARACTER_ANCHOR_YAW_TOLERANCE` (1°) it has `Arrived` and faces the yaw exactly, and while its movement is locked it
+  is **held** there (its collider not pushable, its velocity 0); not there `CHARACTER_APPROACH_GRACE_SECONDS` (0.5 s)
+  past the approach time, it has `Failed`. NULL (or a control without an anchor) frees it.
 - **Runtime bookkeeping** (`WorldCharacterRuntime`, private to the system): the cached settings (by component revision
   and bound asset), the velocity it drives with, the input's last held requests, a buffered jump, the time since its
   last jump, whether it is climbing a step, the ground's last world matrix, where the update left the feet.
@@ -253,10 +264,12 @@ the character's input: `move_*` relative to the look's yaw (along the full look 
 consumed, so nothing below acts on it), the mouse turns the look (`MouseSensitivity`), the body faces the look. The look
 is read back from the character every tick, so a turning platform turns the view. `PlayerController_UpdateLookTarget`
 (after the collision step) says when what the player looks at changed; `PlayerController_ApplyCamera` puts the camera at
-the eyes, with an optional head bob (`IsHeadBobEnabled`, `HeadBobAmplitude` 3 cm, `HeadBobStepLength` 0.7 m: a bob a
-step on the ground, fading in and out; a placeholder with a `// TODO:` to rework it, the owner finds it reads badly:
-tie it to the footfalls once characters are animated). Input only through `GameInput`, only in `Update` (AGENTS.md
-rule 9).
+the eyes, looking where the character looks. Since T30 (G34) **the eyes are the body's**: when the character's animator
+pose has an eyes socket (its world model's first_person block) the camera rides it as posed
+(`PlayerController_TryGetEyes`: the socket's world matrix), so every step, crouch and seat moves the view; without one
+it sits at the character's eye height above its feet. Call it once per shown frame, after the pose step (the frame's
+`PrepareRender`). The head bob placeholder of T13 is gone: the walk's own motion bobs the head. Input only through
+`GameInput`, only in `Update` (AGENTS.md rule 9).
 
 New actions (`GameInput.h`): `jump` (Space), `crouch` (Left Control), `use` (E); `jump` and `crouch` share their keys
 with `move_up` and `move_down`, which the flycam and flight read.
@@ -265,8 +278,9 @@ with `move_up` and `move_down`, which the flycam and flight read.
 
 From [WorldData.md](WorldData.md): input; scripts (an NPC's brain sets its character's input; the test frame's
 `WorldTestCharacters_UpdateBrains`); the drivers, **characters last** (`WorldCharacters_Update`); the collision step;
-the queued events (collision, then characters'); animation; `World_UpdateTransforms`; the camera (`PlayerController_
-ApplyCamera`) and the renderer.
+the queued events (collision, then characters'); animation; `World_UpdateTransforms`; then once per shown frame the
+pose step, the world matrices again and the camera (`PlayerController_ApplyCamera`, on the posed eyes) in the frame's
+`PrepareRender`, and the renderer.
 
 ## Tolerances
 
@@ -287,6 +301,8 @@ ApplyCamera`) and the renderer.
 | `CHARACTER_MAX_FOLLOW_SLOPE` | 4 (76°) | The steepest drop per metre moved the ground follow reaches down for. |
 | `CHARACTER_EYE_EASE_REMAINDER` | 1% | The share of the eyes' way left after the crouch time; within it they snap there. |
 | `CHARACTER_MAX_DELTA_SECONDS` | 0.1 s | The longest tick stepped. |
+| `CHARACTER_ANCHOR_TOLERANCE` / `_YAW_TOLERANCE` | 1 cm / 1° | How close to its anchor, and to its yaw, an approach has arrived (T30). |
+| `CHARACTER_APPROACH_GRACE_SECONDS` | 0.5 s | How long past its time an approach may take before it has failed (T30). |
 
 ## Cost
 
@@ -298,9 +314,11 @@ object and the collider only when they change, so a character standing still nev
 ## Debugging and the test content
 
 The test frame ([WorldRuntime.md](WorldRuntime.md), "WorldTestFrame"): F1 walk mode (the player, a runtime object,
-below the flycam), F2 the test NPCs (a human, a dog and a pigeon with placeholder bodies and scripted brains), F3
-flight, F4 the player's kind, F12 head bob; the log names what the player looks at when it changes and every character
-event; I adds the player's state. F11 (the far shift) places every character again 28 km, then 141 km out, where they
+below the flycam), F2 the test NPCs (a human, a dog and a pigeon with placeholder bodies and scripted brains; since T30
+the human wears the animated humanoid, as the player does when it is a human), F3 flight, F4 the player's kind; E uses
+what the player looks at (starting the action it offers, T30), 8 sends the NPC human to sit on the bench, 9 puts down,
+0 waves; the log names what the player looks at when it changes, every character event and every action; I adds the
+player's state (and its action and what it holds). F11 (the far shift) places every character again 28 km, then 141 km out, where they
 walk, jump and crouch as at the origin.
 
 ## Known limits

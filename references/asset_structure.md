@@ -551,7 +551,14 @@ default setting of this file for that one placement: an explicit override flag n
         }
     ],
     "bounds": { "center": [0, 0.4, 0], "radius": 1.1 }, // [OPTIONAL] default: LOD 0's (a posed object's: its pose's)
-    "animation_libraries": [ "human_motions" ]     // [OPTIONAL] at most 16 (T29)
+    "animation_libraries": [ "human_motions" ],    // [OPTIONAL] at most 16 (T29)
+    "animation_graph": "human",                    // [OPTIONAL] (T30)
+    "sockets": {                                   // [OPTIONAL] at most 32 (T30)
+        "hand_r": { "bone": "hand_r", "position": [0.03, -0.07, 0], "rotation": [100, 0, 0] },
+        "eyes": { "bone": "head", "position": [0, 0.1, 0.1] },
+        "seat": { "position": [0, 0, 0.55] }      // no bone: fixed in the object's own space
+    },
+    "first_person": { "eyes": "eyes", "hidden_bones": [ "neck" ] } // [OPTIONAL] (T30)
 }
 ```
 
@@ -566,6 +573,9 @@ default setting of this file for that one placement: an explicit override flag n
 | `variants` | at most 64 `{ "name", "material_overrides" }` | Other looks of the same meshes (dark wood, a red car). `name`: `[a-z][a-z0-9_.-]*`, at most 128 bytes, unique in the world model. `material_overrides` (optional; at most 32, one per slot): what the variant changes in each material slot, below. A placed object picks one with `uses_variant` and `variant`. |
 | `bounds` | `{ "center": [x, y, z], "radius": metres >= 0 }` | The bounding sphere culling and draw distances use, in the object's own space (after each LOD's import transform). Left out, it is the sphere around LOD 0's mesh bounds, or for an object an animator poses (T29) the sphere around its pose. Give it to keep one fixed sphere whatever the pose. |
 | `animation_libraries` | at most 16 asset names, each once | The animation libraries (below, "Animation libraries") whose clips the placements play (T29), loaded with the world model as its dependencies. Two of them may not hold a clip of the same name. The skinned LODs must share one skeleton: every LOD with bones must have the first one's bones and bind poses, or the world model is rejected (a coarse LOD may be rigid). A placement may play its own libraries instead (`references/world_structure.md`, the animator block). |
+| `animation_graph` | an asset name | The animation graph (below, "Animation graphs") the placements' animators play with those clips (T30), loaded with the world model as a dependency. A placement may play its own instead (the animator block). |
+| `sockets` | at most 32 `"name": { "bone", "position", "rotation" }` | Named places on the model (T30): where a held item hangs (a hand), where an action's anchor puts a character (a bench's seat, in front of a cup), where a first-person camera sits. The name: `[a-z][a-z0-9_.-]*`, at most 64 bytes. `bone` (optional, at most 31 bytes): a bone of the skeleton the socket follows, its `position` ([x, y, z] metres, default the origin) and `rotation` (degrees about X, Y and Z in that order, default none) along the bone's axes (its frame in the object's space, without any scale a bone or the import transform carries); without a bone the socket is fixed in the object's own space. Its +Z is the way it faces (an anchor turns a character that way). A bone socket on a world model without a skeleton, or on a bone its skeleton lacks, fails the load. |
+| `first_person` | `{ "eyes", "hidden_bones" }` | What a first-person camera does with this body (T30): `eyes` (required) names one of its sockets, the camera's place; `hidden_bones` (at most 16 bone names) the bones the camera's passes leave out, each with its subtree (the head, from inside). Hidden bones need a skeleton that has them. |
 
 **A variant's material override** takes the same keys as a model's `material_overrides` and reads them with the same
 parser, with one difference: the maps name **texture assets** (`textures/`, see "Textures"), so a texture several
@@ -641,7 +651,11 @@ seen 60 m: the placeholder models `lod_test_lod0` to `lod_test_lod2` (`models/pl
 radius 0.5 m at 32x16, 16x8 and 8x4 segments). Since T12 they collide: `test`, `pbr_metal` and `painted_cube` with
 `"bounds"`, `lod_test` with a hull of `lod_test_lod0`, `pbr_demo` with a mesh of its own model; and `test_door` (the
 model `test_door`: the test cube made a 1 x 2 m panel by its import transform, hinged at its origin) has the sets
-`closed` and `open`.
+`closed` and `open`, and since T30 an `opener` socket (where a character stands to push it). Since T29 `test_humanoid`
+and `test_humanoid_short` (the placeholder humanoid; T30 gave them the `test_humanoid` graph, the sockets `hand_r`,
+`hand_l` and `eyes` and a first_person block), and since T30 `test_bench` (the model `test_bench`, collision `bounds`,
+its `seat` socket on the floor 0.55 m in front) and `test_cup` (collision `bounds`, its `grip` on its side and its
+`reach` 0.52 m in front of it, facing it).
 
 
 ## World sprites.
@@ -837,7 +851,7 @@ play on a model, retargeted to its bone lengths, is in `agents/Animation.md`.
     "location": "humans/motions",                  // the glTF file (gltf / glb)
     "format": "glb",                               // [OPTIONAL] see "Format"
     "clips": [                                     // [OPTIONAL] at most 256, each name and each source once
-        { "name": "walk", "is_looped": true },
+        { "name": "walk", "is_looped": true, "distance": 1.1 },
         { "name": "sprint", "source": "Run.001", "is_looped": true, "speed": 1.25 },
         { "name": "wave" }
     ]
@@ -852,6 +866,7 @@ play on a model, retargeted to its bone lengths, is in `agents/Animation.md`.
 | `clips[].source` | text, at most 256 bytes; default: `name` | The clip's name in the file (any text, as Blender names actions). It must be a clip of the file. |
 | `clips[].is_looped` | boolean; default false | Whether the clip loops; a clip that does not stops at its end and holds its last pose. A placement may override it. |
 | `clips[].speed` | above 0, at most 100; default 1 | How fast the clip plays (an animator's speed multiplies it). |
+| `clips[].distance` | metres, above 0, at most 1000; default none | How far the clip carries the body per cycle at speed 1 (a gait's stride length times its steps per cycle, T30): a graph state's `match_speed` plays it at the character's real speed from it, scaled by the skeleton's height ratio. |
 
 **The file is checked as hostile** when the library loads (not when the definition is read): it must parse and validate
 as glTF 2.0; its buffers are inside it (`.glb`, data URIs) or files beside it (no absolute paths, `..`, backslashes,
@@ -865,4 +880,103 @@ most 3600 s; values finite, rotations of a length above 0; at most 256 bones (an
 `LINEAR` (rotations along the shorter arc) and `CUBICSPLINE`. Unknown keys are rejected.
 
 The test library is `animation_libraries/placeholder_humanoid/motions.json`: `test_humanoid_motions`, the placeholder
-figure's nine clips (idle, walk, run, crouch_idle, crouch_walk and fall looped; jump, land and wave once).
+figure's sixteen clips (idle, walk, run, crouch_idle, crouch_walk, fall, sit_idle and hold_r looped; jump, land, wave,
+sit_down, stand_up, pick_up, put_down and open_door once; walk, run and crouch_walk with their distances, 1.1, 1.5789
+and 0.7333 m per cycle).
+
+
+## Animation graphs.
+An animation graph (T30) says what an animated object plays when: layers of states and the transitions between them,
+the parameters and events they read, the special actions, and look-at. Definitions live under `animation_graphs/`
+(JSON only, no file of their own). A world model names its graph (`animation_graph`); an animator may name another. The
+graph names clips, not libraries: they come from the animator's libraries. How a graph plays is in
+`agents/Animation.md` ("Animation graphs", "Actions").
+
+```
+{
+    "name": "human",
+    "fade_seconds": 0.2,                           // [OPTIONAL] the default cross-fade, 0 to 60 s; default 0.2
+    "parameters": {                                // [OPTIONAL] at most 64 custom parameters, 32 of them triggers
+        "mood": { "type": "float", "default": 0, "min": -1, "max": 1 },
+        "is_placing": { "type": "bool", "default": false },
+        "cheer": { "type": "trigger" }
+    },
+    "look_at": {                                   // [OPTIONAL]
+        "bones": [ { "bone": "neck", "share": 0.35 }, { "bone": "head", "share": 0.65 } ],
+        "max_yaw": 70, "max_pitch_up": 40, "max_pitch_down": 55, "turn_speed": 400
+    },
+    "layers": [                                    // 1 to 8; the first is the body
+        {
+            "name": "body",
+            "entry": "idle",                       // the state it starts in
+            "states": {                            // 1 to 64
+                "idle": { "clip": "idle", "look_at": 1 },
+                "move": { "blend": { "parameter": "speed", "points": [ { "clip": "walk", "at": 2 },
+                    { "clip": "run", "at": 5 } ] }, "match_speed": "speed", "min_rate": 0.3, "max_rate": 3 },
+                "pick_up": { "clip": "pick_up", "events": [
+                    { "name": "grab", "time": 0.65, "attach": "hand_r", "grip": "grip" } ] },
+                "sitting": { "clip": "sit_idle" }
+            },
+            "transitions": [                       // at most 256 (a list of states counts once per state)
+                { "from": "any", "to": "jump", "when": [ { "event": "jumped" } ], "fade_seconds": 0.08 },
+                { "from": "idle", "to": "move", "when": [ { "parameter": "speed", "above": 0.15 } ] },
+                { "from": [ "pick_up", "put_down" ], "to": "idle", "exit_time": 1 }
+            ]
+        },
+        { "name": "right_arm", "mask": [ "shoulder_r" ], "weight": 1, "entry": "free",
+          "states": { "free": {}, "holding": { "clip": "hold_r" } },
+          "transitions": [ { "from": "free", "to": "holding", "when": [ { "socket": "hand_r", "is_holding": true } ] } ] }
+    ],
+    "actions": {                                   // [OPTIONAL] at most 64
+        "sit": { "layer": "body", "states": [ "sit_down", "sitting", "stand_up" ], "movement": "locked",
+                 "target": "required", "anchor": { "socket": "seat", "max_distance": 2.5, "approach_seconds": 0.6 } },
+        "wave": { "layer": "right_arm", "states": [ "waving" ], "target": "none" }
+    }
+}
+```
+
+**Names** (layers, states, parameters, events, actions): `[a-z][a-z0-9_.-]*`, at most 64 bytes, each unique in its
+kind (states within their layer); `any` is no state's name. Custom parameters must not take a built-in's name.
+
+| Key | Value | Meaning |
+|---|---|---|
+| `parameters.*.type` | `float`, `bool`, `trigger` | A float has a `default` within its `min` and `max` (default 0, -1e9, 1e9; each within ±1e9), a bool a `default` (false); a trigger is an event code fires (`WorldAnimation_FireTrigger`). The built-in parameters and events are listed in `agents/Animation.md`. |
+| `look_at.bones` | 1 to 8 `{ "bone", "share" }` | The bones look-at turns, each by its share of the turn (above 0; together at most 1). |
+| `look_at.max_yaw`, `max_pitch_up`, `max_pitch_down` | degrees, 0 to 180 (yaw) or 90 (pitch); default 70, 40, 50 | How far the head turns from the body. |
+| `look_at.turn_speed` | degrees a second, above 0, at most 100000; default 360 | How fast it follows the look. |
+| `layers[].mask` | at most 32 bone names | The bones (with their subtrees) the layer plays on; none: every bone. |
+| `layers[].weight` | 0 to 1; default 1 | How strongly the layer covers the ones before it. |
+| `states.*.clip` | a clip's name | One clip. Without `clip` or `blend` the state is empty: it plays nothing (a layer at rest). |
+| `states.*.blend` | `{ "parameter", "points" }` | 2 to 8 clips placed `at` rising values of a parameter; the two around the parameter's value share it, kept in step by phase. |
+| `states.*.speed` | 0 to 100; default 1 | Times the state's rate. |
+| `states.*.speed_parameter` | a parameter | Its value multiplies the rate too. |
+| `states.*.match_speed` | a parameter | The rate becomes the parameter over the clips' natural speed (their libraries' `distance`), within `min_rate` and `max_rate` (default 0.25 and 4; at most 100). |
+| `states.*.is_looped` | boolean | Overrides the clip's loop (a blend loops unless set). |
+| `states.*.look_at` | 0 to 1; default 1 | How much look-at turns the head in this state. |
+| `states.*.events` | at most 16 | Timed events: a `name`, and `time` (seconds into a one-clip state's clip) or `phase` (a share of the cycle, below 1). Effects: `attach` (a socket of this object: the action's target hangs on it; `grip`: the target's socket that lands on it), `detach` (a socket: what hangs on it goes back to the world where it is), `set` (at most 4 custom parameters and values). |
+| `transitions[].from` | a state, a list of states, or `any` | Where it leaves from. |
+| `transitions[].to` | a state | Where it goes. |
+| `transitions[].when` | at most 8 conditions, all must hold | `{ "parameter", "above" / "below" / "at_least" / "at_most" / "is": value }` (`is` compares booleans), `{ "event" }` (fired this tick), `{ "socket", "is_holding" }`. |
+| `transitions[].exit_time` | cycles of the current state, 0 to 1000 | It waits until the state has played this much (1: a one-shot clip's end). |
+| `transitions[].fade_seconds` | 0 to 60 | The cross-fade; default the graph's. |
+| `transitions[].restarts` | boolean; default false | Whether it may enter the state the layer is in, from the start. |
+| `actions.*.layer`, `states` | a layer; 1 to 16 of its states | The action plays these states, entering the first; it ends when the layer leaves them. |
+| `actions.*.fade_seconds` | 0 to 60 | The cross-fade into the first state; default the graph's. |
+| `actions.*.movement` | `free`, `no_moving`, `no_turning`, `locked`; default `free` | How the character's movement is locked while the action plays. |
+| `actions.*.target` | `none`, `optional`, `required`; default `optional` | Whether it takes a target object (what an anchor's socket and an attach refer to). |
+| `actions.*.anchor` | `{ "socket", "max_distance", "approach_seconds" }` | A socket of the target the character slides onto first (within `max_distance` metres, 0 to 100, default 1.5, of its feet; over `approach_seconds`, 0 to 60, default 0.5), facing the socket's +Z. Needs a target. |
+
+**Rules.** The reader treats a definition as hostile (downloaded content): every count has the limit above, every
+reference must resolve (a transition's states, a condition's parameter or event, an event's parameters to set, an
+action's layer and states), and unknown keys are rejected everywhere, with the keys allowed there. A definition that
+breaks a rule is rejected when the definitions are read, with a message naming where (`Animation graph "human":
+layers[0].transitions[2].to names "jumpp", which is not a state of layer "body".`). Clips and bones are matched when an
+animator plays the graph: a clip none of its libraries has plays nothing (for a second, so exit times pass), a mask or
+look-at bone its skeleton lacks is left out, each warned once.
+
+The test graph is `animation_graphs/test_world/test_humanoid.json` (`test_humanoid`): the placeholder humanoid's body
+layer (idle, a walk-run blend matched to the speed, the crouches, jump, fall, land, flight, and the actions' states),
+a right-arm layer (holding what the hand holds, waving), look-at on the neck and head, and the actions `sit` (anchored
+on a `seat`), `pick_up` (anchored on a `reach`, the grab attaching to `hand_r` by the target's `grip`), `put_down` (the
+release detaching `hand_r`), `open_door` (anchored on an `opener`, its `push` event for the game) and `wave` (the
+right arm, over whatever the body does).

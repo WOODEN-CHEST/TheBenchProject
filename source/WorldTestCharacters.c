@@ -1,11 +1,16 @@
 // The world test frame's characters (T13, WorldTestCharacters.h): walk mode, the test NPCs and their scripted brains,
-// the character events, the look target and the status line. Test content only.
+// the character events, the look target and the status line; since T30 the humans' bodies and their actions. Test
+// content only.
 
 #include <inttypes.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include "WorldTestCharacters.h"
+#include "DataMap.h"
+#include "DataValue.h"
+#include "NamespacedKey.h"
 #include "WorldCharacterComponent.h"
 #include "WorldModelComponent.h"
 #include "WorldObject.h"
@@ -39,6 +44,18 @@
 #define PIGEON_CLIMB_SECONDS 1.2f
 #define PIGEON_CIRCLE_SECONDS 5.0f
 #define PIGEON_CIRCLE_RADIUS 3.0f
+/** A human's body (T30): the placeholder humanoid's world model, whose animator plays its graph. */
+#define HUMAN_WORLD_MODEL ((const unsigned char*)u8"test_humanoid")
+/** The data key under which an object offers an action to whoever uses it (text: the action's name), the test world's
+ *  bench, and the socket a human holds things in. */
+#define ACTION_DATA_KEY ((const unsigned char*)u8"tbp:action")
+#define BENCH_OBJECT_NAME ((const unsigned char*)u8"bench")
+#define HAND_SOCKET "hand_r"
+/** The NPC human heading for the bench: how far in front of it it aims, and how near that point it sits down. */
+#define BENCH_APPROACH_DISTANCE 1.0
+#define BENCH_START_DISTANCE 0.4
+/** How far down a released object looks for something to rest on, metres. */
+#define SETTLE_SEARCH_DISTANCE 3.0f
 
 
 // Types.
@@ -172,8 +189,40 @@ static uint64_t AddBox(WorldTestCharacters* self, uint64_t parent, const char* n
     return Id;
 }
 
-/* A runtime character object (not saved with the world) of @p kind, its feet at @p feet facing @p yaw; with a
- * placeholder body when @p bodyId is given (its trunk's id goes there). */
+/* A human's body (T30): the placeholder humanoid on the character's own object, its animator playing the world model's
+ * graph (the camera's passes leave its head out while it is the player's in first person). */
+static void AddHumanBody(WorldTestCharacters* self, uint64_t id)
+{
+    WorldComponent* Component = NULL;
+    if (Check(self, World_AddComponent(self->_world, id, WorldComponentType_Model, &Component), "adding a body"))
+    {
+        Check(self, WorldModelComponent_SetWorldModel(WorldModelComponent_FromComponent(Component), HUMAN_WORLD_MODEL),
+            "naming the body");
+    }
+    Check(self, World_AddComponent(self->_world, id, WorldComponentType_Animator, &Component), "adding an animator");
+}
+
+static void DropHeld(WorldTestCharacters* self, uint64_t holderId);
+
+/* Takes a human's body off (the action it was in ends with its animator); what its hand held is put down first (a
+ * socket without a pose would be the holder's own space: the cup inside a dog). */
+static void RemoveHumanBody(WorldTestCharacters* self, uint64_t id)
+{
+    DropHeld(self, id);
+    WorldComponent* Component = NULL;
+    if (World_TryGetComponent(self->_world, id, WorldComponentType_Animator, &Component))
+    {
+        Check(self, World_RemoveComponent(self->_world, id, WorldComponentType_Animator), "removing an animator");
+    }
+    if (World_TryGetComponent(self->_world, id, WorldComponentType_Model, &Component))
+    {
+        Check(self, World_RemoveComponent(self->_world, id, WorldComponentType_Model), "removing a body");
+    }
+}
+
+/* A runtime character object (not saved with the world) of @p kind, its feet at @p feet facing @p yaw. A human wears
+ * the humanoid body; another kind gets a placeholder body of boxes when @p bodyId is given (its trunk's id goes there,
+ * 0 for a human). */
 static uint64_t Spawn(WorldTestCharacters* self, const char* name, size_t kind, Vector3Double feet, float yaw,
     uint64_t* bodyId)
 {
@@ -192,7 +241,15 @@ static uint64_t Spawn(WorldTestCharacters* self, const char* name, size_t kind, 
     }
     Check(self, WorldCharacterComponent_SetCharacter(WorldCharacterComponent_FromComponent(Component),
         (const unsigned char*)KindAssets[kind]), "naming the character");
-    if (bodyId != NULL)
+    if (kind == TEST_KIND_HUMAN)
+    {
+        AddHumanBody(self, Id);
+        if (bodyId != NULL)
+        {
+            *bodyId = 0U;
+        }
+    }
+    else if (bodyId != NULL)
     {
         const TestBody* Body = &Bodies[kind];
         *bodyId = AddBox(self, Id, "body", Body->TrunkCenter, Body->TrunkSize, Body->TrunkColor);
@@ -202,10 +259,13 @@ static uint64_t Spawn(WorldTestCharacters* self, const char* name, size_t kind, 
     return Id;
 }
 
+/* Removes a test character (a runtime object), putting down what it holds first: its subtree goes with it, and a
+ * world object in its hand (the coffee cup) would go too. */
 static void RemoveObject(WorldTestCharacters* self, uint64_t* id)
 {
     if (*id != 0U)
     {
+        DropHeld(self, *id);
         Check(self, World_RemoveObject(self->_world, *id), "removing a character");
         *id = 0U;
     }
@@ -226,8 +286,9 @@ static void StartWalking(WorldTestCharacters* self, const GameCamera* camera)
         return;
     }
     self->_isWalking = true;
-    Log(self, "walk mode: you are a %s (%s) at (%.2f, %.2f, %.2f). WASD walk, SHIFT run, SPACE jump, CTRL crouch, E use; "
-        "F1 back to the flycam, F3 fly, F4 another kind, F12 head bob.", KindNames[self->_playerKind],
+    Log(self, "walk mode: you are a %s (%s) at (%.2f, %.2f, %.2f). WASD walk, SHIFT run, SPACE jump, CTRL crouch, E use "
+        "(sit on the bench, pick up the coffee cup, open the door; E again stands up), 9 put down, 0 wave; F1 back to the "
+        "flycam, F3 fly, F4 another kind.", KindNames[self->_playerKind],
         KindAssets[self->_playerKind], Feet.X, Feet.Y, Feet.Z);
 }
 
@@ -275,15 +336,25 @@ static void ToggleNpcs(WorldTestCharacters* self, const GameCamera* camera)
         Spawned[2].X, Spawned[2].Y, Spawned[2].Z);
 }
 
-/* F4: the player becomes the next kind of character (the same object and component, another asset). */
+/* F4: the player becomes the next kind of character (the same object and component, another asset); a human wears
+ * the humanoid body, the others none. */
 static void SwitchPlayerKind(WorldTestCharacters* self)
 {
+    size_t Previous = self->_playerKind;
     self->_playerKind = (self->_playerKind + 1U) % TEST_KIND_COUNT;
     WorldCharacterComponent* Character = FindCharacter(self->_world, self->_playerId);
     if (Character != NULL)
     {
         Check(self, WorldCharacterComponent_SetCharacter(Character, (const unsigned char*)KindAssets[self->_playerKind]),
             "changing the player's kind");
+        if (Previous == TEST_KIND_HUMAN)
+        {
+            RemoveHumanBody(self, self->_playerId);
+        }
+        else if (self->_playerKind == TEST_KIND_HUMAN)
+        {
+            AddHumanBody(self, self->_playerId);
+        }
     }
     Log(self, "you are a %s now (%s).", KindNames[self->_playerKind], KindAssets[self->_playerKind]);
 }
@@ -301,6 +372,292 @@ static void TogglePlayerFlight(WorldTestCharacters* self)
     }
     Log(self, self->_controller.WantsToFly ? "flying: WASD along the view, SPACE up, CTRL down; F3 lands you."
         : "not flying: you fall to the ground.");
+}
+
+
+// Static functions: actions (T30).
+/* The first object named @p name, or 0. */
+static uint64_t FindNamedObject(World* world, const unsigned char* name)
+{
+    size_t Count = World_GetObjectCount(world);
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        WorldObject* Object = NULL;
+        Error Result = World_GetObjectByIndex(world, Index, &Object);
+        Error_Deconstruct(&Result);
+        const unsigned char* Candidate = (Object != NULL) ? WorldObject_GetName(Object) : NULL;
+        if ((Candidate != NULL) && (strcmp((const char*)Candidate, (const char*)name) == 0))
+        {
+            return WorldObject_GetId(Object);
+        }
+    }
+    return 0U;
+}
+
+/* What hangs on a holder's hand socket, or 0. */
+static uint64_t FindHeld(WorldTestCharacters* self, uint64_t holderId)
+{
+    WorldObject* Holder = NULL;
+    if ((holderId == 0U) || !World_TryGetObject(self->_world, holderId, &Holder))
+    {
+        return 0U;
+    }
+    for (const WorldObject* Child = WorldObject_GetFirstChild(Holder); Child != NULL;
+        Child = WorldObject_GetNextSibling(Child))
+    {
+        const unsigned char* Socket = WorldObject_GetParentSocket(Child);
+        if ((Socket != NULL) && (strcmp((const char*)Socket, HAND_SOCKET) == 0))
+        {
+            return WorldObject_GetId(Child);
+        }
+    }
+    return 0U;
+}
+
+/* The action an object offers (its tbp:action text, or its nearest ancestor's) and the object that offers it; NULL for
+ * none. */
+static const unsigned char* FindOffer(WorldTestCharacters* self, uint64_t objectId, uint64_t* outOfferingId)
+{
+    uint32_t Key = 0U;
+    WorldObject* Object = NULL;
+    if (!KeyRegistry_TryFind(World_GetKeys(self->_world), ACTION_DATA_KEY, &Key)
+        || !World_TryGetObject(self->_world, objectId, &Object))
+    {
+        return NULL;
+    }
+    while (Object != NULL)
+    {
+        const DataValue* Offer = DataMap_Find(WorldObject_GetData(Object), Key);
+        if ((Offer != NULL) && (Offer->Type == DataType_String))
+        {
+            *outOfferingId = WorldObject_GetId(Object);
+            return Offer->StringValue;
+        }
+        uint64_t ParentId = WorldObject_GetParentId(Object);
+        Object = NULL;
+        if ((ParentId != 0U) && !World_TryGetObject(self->_world, ParentId, &Object))
+        {
+            Object = NULL;
+        }
+    }
+    return NULL;
+}
+
+/* Starts an action on a character's body, logging a refusal (out of reach, no such socket, no body). */
+static bool StartAction(WorldTestCharacters* self, uint64_t characterId, const char* who, const unsigned char* action,
+    uint64_t targetId)
+{
+    if (self->_animation == NULL)
+    {
+        return false;
+    }
+    Error Result = WorldAnimation_StartAction(self->_animation, characterId, action, targetId);
+    if (Result.Code == ErrorCode_Success)
+    {
+        return true;
+    }
+    Log(self, "%s cannot \"%s\": %s", who, (const char*)action, (Result.Message != NULL) ? (const char*)Result.Message
+        : "no details");
+    Error_Deconstruct(&Result);
+    return false;
+}
+
+/* The player used an object (E): in an action, it ends it (standing up from the bench); otherwise it starts the action
+ * the object offers, unless its hand is full and the object would go in it. */
+static void UseObject(WorldTestCharacters* self, uint64_t objectId)
+{
+    if ((self->_animation == NULL) || (self->_playerKind != TEST_KIND_HUMAN))
+    {
+        return;
+    }
+    if (WorldAnimation_EndAction(self->_animation, self->_playerId))
+    {
+        Log(self, "you end what you are doing.");
+        return;
+    }
+    uint64_t Offering = 0U;
+    const unsigned char* Action = (objectId != 0U) ? FindOffer(self, objectId, &Offering) : NULL;
+    if (Action == NULL)
+    {
+        return;
+    }
+    if ((strcmp((const char*)Action, "pick_up") == 0) && (FindHeld(self, self->_playerId) != 0U))
+    {
+        Log(self, "your hand is full: 9 puts down what you hold.");
+        return;
+    }
+    StartAction(self, self->_playerId, "you", Action, Offering);
+}
+
+/* 8: the NPC human heads for the bench to sit, or gets up from it (or stops heading there). */
+static void ToggleNpcSitting(WorldTestCharacters* self)
+{
+    WorldTestNpc* Human = &self->_npcs[TEST_KIND_HUMAN];
+    if (!self->_areNpcsSpawned || (Human->Id == 0U) || (self->_animation == NULL))
+    {
+        Log(self, "8 needs the test NPCs out (F2).");
+        return;
+    }
+    if (Human->WantsToSit)
+    {
+        Human->WantsToSit = false;
+        WorldAnimation_EndAction(self->_animation, Human->Id);
+        Log(self, "the NPC human gets up (or stops heading for the bench).");
+        return;
+    }
+    if (FindNamedObject(self->_world, BENCH_OBJECT_NAME) == 0U)
+    {
+        Log(self, "the test world has no bench.");
+        return;
+    }
+    Human->WantsToSit = true;
+    Log(self, "the NPC human heads for the bench to sit (8 gets it up).");
+}
+
+/* 9: the player puts down what it holds. */
+static void PutDown(WorldTestCharacters* self)
+{
+    if ((self->_playerKind != TEST_KIND_HUMAN) || (FindHeld(self, self->_playerId) == 0U))
+    {
+        Log(self, "you hold nothing to put down.");
+        return;
+    }
+    StartAction(self, self->_playerId, "you", (const unsigned char*)u8"put_down", 0U);
+}
+
+/* 0: the player (a human) and the NPC human wave, over whatever they do. */
+static void WaveHello(WorldTestCharacters* self)
+{
+    if (self->_isWalking && (self->_playerKind == TEST_KIND_HUMAN))
+    {
+        StartAction(self, self->_playerId, "you", (const unsigned char*)u8"wave", 0U);
+    }
+    if (self->_areNpcsSpawned && (self->_npcs[TEST_KIND_HUMAN].Id != 0U))
+    {
+        StartAction(self, self->_npcs[TEST_KIND_HUMAN].Id, "the NPC human", (const unsigned char*)u8"wave", 0U);
+    }
+}
+
+/* The NPC human heading for the bench (its brain while WantsToSit): it walks to a point in front of the bench, then
+ * starts the sit action, which slides it onto the seat; seated it does nothing. Returns false when it does not want
+ * to sit (its usual pattern drives it). */
+static bool DriveToBench(WorldTestCharacters* self, WorldTestNpc* npc, Vector3Double feet, CharacterInput* input)
+{
+    if (!npc->WantsToSit || (self->_animation == NULL))
+    {
+        return false;
+    }
+    if (WorldAnimation_TryGetAction(self->_animation, npc->Id, NULL, NULL))
+    {
+        return true;
+    }
+    uint64_t BenchId = FindNamedObject(self->_world, BENCH_OBJECT_NAME);
+    WorldObject* Bench = NULL;
+    if ((BenchId == 0U) || !World_TryGetObject(self->_world, BenchId, &Bench))
+    {
+        npc->WantsToSit = false;
+        return false;
+    }
+    // In front of the bench: its own +Z, turned by its yaw (radians, as objects keep their rotations).
+    float Yaw = WorldObject_GetRotation(Bench).y;
+    Vector3Double Front = Vector3Double_AddScaled(WorldObject_GetWorldPosition(Bench),
+        Vector3Double_Create((double)sinf(Yaw), 0.0, (double)cosf(Yaw)), BENCH_APPROACH_DISTANCE);
+    Vector3 Toward = GameMath_ToVector3Relative(Front, feet);
+    Toward.y = 0.0f;
+    float Distance = Vector3Length(Toward);
+    if (Distance <= BENCH_START_DISTANCE)
+    {
+        if (!StartAction(self, npc->Id, "the NPC human", (const unsigned char*)u8"sit", BenchId))
+        {
+            npc->WantsToSit = false;
+        }
+        return true;
+    }
+    input->MoveDirection = Vector3Scale(Toward, 1.0f / Distance);
+    input->LookYaw = atan2f(Toward.x, Toward.z);
+    return true;
+}
+
+/* Remembers what a holder took, and forgets it (returning it) when it lets go. */
+static void RememberHeld(WorldTestCharacters* self, uint64_t holderId, uint64_t heldId)
+{
+    for (size_t Index = 0U; Index < WORLD_TEST_MAX_HOLDERS; Index++)
+    {
+        if ((self->_held[Index].HolderId == holderId) || (self->_held[Index].HolderId == 0U))
+        {
+            self->_held[Index] = (WorldTestHeld){ .HolderId = holderId, .HeldId = heldId };
+            return;
+        }
+    }
+}
+
+static uint64_t TakeHeld(WorldTestCharacters* self, uint64_t holderId)
+{
+    for (size_t Index = 0U; Index < WORLD_TEST_MAX_HOLDERS; Index++)
+    {
+        if (self->_held[Index].HolderId == holderId)
+        {
+            uint64_t Held = self->_held[Index].HeldId;
+            self->_held[Index] = (WorldTestHeld){ .HolderId = 0U, .HeldId = 0U };
+            return Held;
+        }
+    }
+    return 0U;
+}
+
+/* An object let go of rests on what is under it, upright (a stand-in for physics: the test world's props do not fall). */
+static void Settle(WorldTestCharacters* self, uint64_t id)
+{
+    WorldObject* Object = NULL;
+    if ((id == 0U) || !World_TryGetObject(self->_world, id, &Object) || (WorldObject_GetParentId(Object) != 0U))
+    {
+        return;
+    }
+    uint32_t Mask = COLLISION_LAYER_BIT(CollisionLayer_World) | COLLISION_LAYER_BIT(CollisionLayer_Prop)
+        | COLLISION_LAYER_BIT(CollisionLayer_Vehicle) | COLLISION_LAYER_BIT(CollisionLayer_Dynamic);
+    WorldCollisionFilter Filter = WorldCollisionFilter_Create(Mask, WorldCollisionTriggerMode_Ignore);
+    Filter.IgnoredObjectId = id;
+    Filter.IsIgnoredSubtree = true;
+    WorldRayHit Hit;
+    Vector3Double From = WorldObject_GetWorldPosition(Object);
+    if (!WorldCollision_Raycast(self->_collision, Vector3Double_Create(From.X, From.Y + 0.05, From.Z),
+        (Vector3){ 0.0f, -1.0f, 0.0f }, SETTLE_SEARCH_DISTANCE, &Filter, &Hit) || Hit.IsStartInside)
+    {
+        return;
+    }
+    Check(self, WorldObject_SetPosition(Object, Vector3Double_Create(From.X, Hit.Point.Y, From.Z)), "settling an object");
+    Check(self, WorldObject_SetRotation(Object, (Vector3){ 0.0f, WorldObject_GetRotation(Object).y, 0.0f }),
+        "settling an object");
+    WorldCollision_Teleport(self->_collision, id);
+    Log(self, "object %" PRIu64 " (\"%s\") is set down at (%.2f, %.2f, %.2f).", id, GetName(self->_world, id), From.X,
+        Hit.Point.Y, From.Z);
+}
+
+/* Who an event is about, for the log: "you", the object's name, or its id once it is gone. */
+/* Puts down what a holder holds, where it is, and sets it on what is under it; forgets the holder's grab. */
+static void DropHeld(WorldTestCharacters* self, uint64_t holderId)
+{
+    uint64_t Held = FindHeld(self, holderId);
+    TakeHeld(self, holderId);
+    if ((Held != 0U) && Check(self, World_SetParent(self->_world, Held, 0U, true), "putting down what was held"))
+    {
+        Settle(self, Held);
+    }
+}
+
+static const char* GetWho(WorldTestCharacters* self, uint64_t id, char* buffer, size_t capacity)
+{
+    if (id == self->_playerId)
+    {
+        return "you";
+    }
+    const char* Name = GetName(self->_world, id);
+    if (Name[0] != '\0')
+    {
+        return Name;
+    }
+    snprintf(buffer, capacity, "object %" PRIu64, id);
+    return buffer;
 }
 
 
@@ -475,6 +832,10 @@ static void LogEvents(WorldTestCharacters* self)
                 {
                     Log(self, "%s used nothing: nothing within reach.", Who);
                 }
+                if (Event->CharacterId == self->_playerId)
+                {
+                    UseObject(self, Event->OtherId);
+                }
                 break;
         }
     }
@@ -500,6 +861,60 @@ void WorldTestCharacters_Deconstruct(WorldTestCharacters* self)
     PlayerController_Deconstruct(&self->_controller);
 }
 
+void WorldTestCharacters_SetAnimation(WorldTestCharacters* self, WorldAnimation* animation)
+{
+    self->_animation = animation;
+}
+
+uint64_t WorldTestCharacters_HandleAnimationEvents(WorldTestCharacters* self)
+{
+    if (self->_animation == NULL)
+    {
+        return 0U;
+    }
+    uint64_t Pushed = 0U;
+    size_t Count = 0U;
+    const WorldAnimationEvent* Events = WorldAnimation_GetEvents(self->_animation, &Count);
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        const WorldAnimationEvent* Event = &Events[Index];
+        char WhoText[32];
+        const char* Who = GetWho(self, Event->ObjectId, WhoText, sizeof(WhoText));
+        const char* Name = (const char*)Event->Name;
+        switch (Event->Kind)
+        {
+            case WorldAnimationEventKind_ActionStarted:
+                Log(self, "%s: action \"%s\" starts (target %" PRIu64 " \"%s\").", Who, Name, Event->TargetId,
+                    GetName(self->_world, Event->TargetId));
+                break;
+            case WorldAnimationEventKind_ActionEnded:
+                Log(self, "%s: action \"%s\" ends.", Who, Name);
+                break;
+            case WorldAnimationEventKind_ActionFailed:
+                Log(self, "%s: action \"%s\" failed (its approach did not arrive).", Who, Name);
+                break;
+            case WorldAnimationEventKind_Graph:
+                Log(self, "%s: \"%s\".", Who, Name);
+                if ((strcmp(Name, "grab") == 0) && (Event->TargetId != 0U)
+                    && (FindHeld(self, Event->ObjectId) == Event->TargetId))
+                {
+                    RememberHeld(self, Event->ObjectId, Event->TargetId);
+                }
+                else if (strcmp(Name, "release") == 0)
+                {
+                    Settle(self, TakeHeld(self, Event->ObjectId));
+                }
+                else if (strcmp(Name, "push") == 0)
+                {
+                    Pushed = Event->TargetId;
+                }
+                break;
+        }
+    }
+    WorldAnimation_ClearEvents(self->_animation);
+    return Pushed;
+}
+
 void WorldTestCharacters_HandleInput(WorldTestCharacters* self, GameInput* input, GameCamera* camera,
     bool isCursorCaptured)
 {
@@ -518,10 +933,13 @@ void WorldTestCharacters_HandleInput(WorldTestCharacters* self, GameInput* input
     {
         ToggleNpcs(self, camera);
     }
-    if (GameInput_IsKeyPressed(input, GameKey_F12))
+    if (GameInput_IsKeyPressed(input, GameKey_8))
     {
-        self->_controller.IsHeadBobEnabled = !self->_controller.IsHeadBobEnabled;
-        Log(self, self->_controller.IsHeadBobEnabled ? "head bob on." : "head bob off.");
+        ToggleNpcSitting(self);
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_0))
+    {
+        WaveHello(self);
     }
     if (!self->_isWalking)
     {
@@ -534,6 +952,10 @@ void WorldTestCharacters_HandleInput(WorldTestCharacters* self, GameInput* input
     if (GameInput_IsKeyPressed(input, GameKey_F4))
     {
         SwitchPlayerKind(self);
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_9))
+    {
+        PutDown(self);
     }
     PlayerController_Update(&self->_controller, input, self->_world, isCursorCaptured);
 }
@@ -556,7 +978,10 @@ void WorldTestCharacters_UpdateBrains(WorldTestCharacters* self, float deltaSeco
         switch (Index)
         {
             case TEST_KIND_HUMAN:
-                DriveHuman(Npc, deltaSeconds, &Input);
+                if (!DriveToBench(self, Npc, Feet, &Input))
+                {
+                    DriveHuman(Npc, deltaSeconds, &Input);
+                }
                 break;
             case TEST_KIND_DOG:
                 DriveDog(Npc, Feet, deltaSeconds, &Input);
@@ -570,7 +995,7 @@ void WorldTestCharacters_UpdateBrains(WorldTestCharacters* self, float deltaSeco
     }
 }
 
-void WorldTestCharacters_AfterStep(WorldTestCharacters* self, GameCamera* camera, float deltaSeconds)
+void WorldTestCharacters_AfterStep(WorldTestCharacters* self)
 {
     LogEvents(self);
     if (!self->_isWalking)
@@ -580,6 +1005,7 @@ void WorldTestCharacters_AfterStep(WorldTestCharacters* self, GameCamera* camera
     if (FindCharacter(self->_world, self->_playerId) == NULL)
     {
         // Something removed the player (a reload): back to the flycam.
+        TakeHeld(self, self->_playerId);
         self->_playerId = 0U;
         StopWalking(self);
         return;
@@ -597,7 +1023,14 @@ void WorldTestCharacters_AfterStep(WorldTestCharacters* self, GameCamera* camera
             Log(self, "you look at nothing within reach.");
         }
     }
-    PlayerController_ApplyCamera(&self->_controller, self->_world, camera, deltaSeconds);
+}
+
+void WorldTestCharacters_PlaceCamera(const WorldTestCharacters* self, GameCamera* camera)
+{
+    if (self->_isWalking)
+    {
+        PlayerController_ApplyCamera(&self->_controller, self->_world, camera);
+    }
 }
 
 size_t WorldTestCharacters_Shift(WorldTestCharacters* self, Vector3Double offset)
@@ -666,11 +1099,25 @@ void WorldTestCharacters_LogStatus(WorldTestCharacters* self)
     {
         snprintf(Looking, sizeof(Looking), "looking at nothing within %.1f m", (double)Settings.InteractionReach);
     }
-    Log(self, "you: a %s (%s), %s, %s%s, %s, %.2f m/s, eyes %.2f m up; %s; head bob %s, %s.",
+    // What the body does (T30): its action (and on what) and what its hand holds.
+    char Doing[200];
+    const unsigned char* Action = NULL;
+    uint64_t ActionTarget = 0U;
+    uint64_t Held = FindHeld(self, self->_playerId);
+    int DoingLength = ((self->_animation != NULL)
+        && WorldAnimation_TryGetAction(self->_animation, self->_playerId, &Action, &ActionTarget))
+        ? snprintf(Doing, sizeof(Doing), "in action \"%s\" (target %" PRIu64 " \"%s\")", (const char*)Action,
+            ActionTarget, GetName(self->_world, ActionTarget))
+        : snprintf(Doing, sizeof(Doing), "in no action");
+    if ((Held != 0U) && (DoingLength > 0) && ((size_t)DoingLength < sizeof(Doing)))
+    {
+        snprintf(Doing + DoingLength, sizeof(Doing) - (size_t)DoingLength, ", holding object %" PRIu64 " (\"%s\")", Held,
+            GetName(self->_world, Held));
+    }
+    Log(self, "you: a %s (%s), %s, %s%s, %s, %.2f m/s, eyes %.2f m up; %s; %s; %s.",
         KindNames[self->_playerKind], KindAssets[self->_playerKind],
         (State->Mode == CharacterMovementMode_Flying) ? "flying" : "walking",
         (State->Stance == CharacterStance_Crouching) ? "crouching" : "standing",
         State->IsStandUpBlocked ? " (no room to stand)" : "", Ground, (double)Speed, (double)State->EyeHeight, Looking,
-        self->_controller.IsHeadBobEnabled ? "on" : "off",
-        self->_areNpcsSpawned ? "the test NPCs are out" : "no test NPCs");
+        Doing, self->_areNpcsSpawned ? "the test NPCs are out" : "no test NPCs");
 }

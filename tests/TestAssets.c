@@ -666,7 +666,8 @@ bool TestAssets_AddAnimationLibrary(TestRun* run, TestAssetFixture* fixture, con
             Definition->Settings[Index] = (AnimationClipSettings)
             {
                 .Source = Definition->Strings[Index * 2U], .Name = Definition->Strings[(Index * 2U) + 1U],
-                .IsLooped = clips[Index].IsLooped, .Speed = clips[Index].Speed
+                .IsLooped = clips[Index].IsLooped, .Speed = clips[Index].Speed,
+                .HasDistance = clips[Index].HasDistance, .Distance = clips[Index].Distance
             };
         }
     }
@@ -722,6 +723,11 @@ bool TestAssets_AddWorldSprite(TestRun* run, TestAssetFixture* fixture, const ch
 bool TestAssets_AddCharacter(TestRun* run, TestAssetFixture* fixture, const char* json)
 {
     return AddFromJSON(run, fixture, fixture->Types.Character, json, "test character");
+}
+
+bool TestAssets_AddAnimationGraph(TestRun* run, TestAssetFixture* fixture, const char* json)
+{
+    return AddFromJSON(run, fixture, fixture->Types.AnimationGraph, json, "test animation graph");
 }
 
 bool TestAssets_AddWorldSpriteOf(TestRun* run, TestAssetFixture* fixture, const char* name, const char* animationName)

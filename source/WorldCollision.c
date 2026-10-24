@@ -594,6 +594,7 @@ static void Refresh(WorldCollision* self, uint32_t slot)
     WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, slot);
     WorldColliderComponent* Collider = Instance->Collider;
     const WorldObject* Object = WorldComponent_GetOwner(&Collider->Base);
+    Instance->IsOnSocket = WorldObject_GetParentSocket(Object) != NULL;
     if (!WorldColliderComponent_IsEnabled(Collider) || !WorldObject_IsEffectivelyEnabled(Object))
     {
         Deactivate(self, Instance, slot);

@@ -69,6 +69,8 @@ typedef struct ClipPlanStruct
     const unsigned char* Name; // borrowed: the settings' name or the file's
     bool IsLooped;
     float Speed;
+    bool HasDistance;
+    float Distance;
 } ClipPlan;
 
 /* Everything one read holds. The arrays are WRMemory allocations freed by DestroyReader. */
@@ -724,13 +726,16 @@ static Error PlanClip(Reader* reader, const cgltf_animation* animation)
     Printable(animation->name, Name, sizeof(Name));
     size_t SettingIndex = 0U;
     const AnimationClipSettings* Settings = FindSettings(reader, animation->name, &SettingIndex);
-    ClipPlan Plan = { .Animation = animation, .Name = NULL, .IsLooped = false, .Speed = ANIMATION_CLIP_DEFAULT_SPEED };
+    ClipPlan Plan = { .Animation = animation, .Name = NULL, .IsLooped = false, .Speed = ANIMATION_CLIP_DEFAULT_SPEED,
+        .HasDistance = false, .Distance = 0.0f };
     if (Settings != NULL)
     {
         reader->IsSettingUsed[SettingIndex] = true;
         Plan.Name = Settings->Name;
         Plan.IsLooped = Settings->IsLooped;
         Plan.Speed = Settings->Speed;
+        Plan.HasDistance = Settings->HasDistance;
+        Plan.Distance = Settings->HasDistance ? Settings->Distance : 0.0f;
     }
     else if ((animation->name != NULL) && IsValidClipName((const unsigned char*)animation->name))
     {
@@ -1041,6 +1046,8 @@ static Error FillClip(Reader* reader, const ClipPlan* plan, AnimationClip* clip,
     clip->_name = name;
     clip->_isLooped = plan->IsLooped;
     clip->_speed = plan->Speed;
+    clip->_hasDistance = plan->HasDistance;
+    clip->_distance = plan->Distance;
     clip->_bones = tracks;
     char ClipName[NAME_PRINT_CAPACITY];
     Printable((const char*)plan->Name, ClipName, sizeof(ClipName));

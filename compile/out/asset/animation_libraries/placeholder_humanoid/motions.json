@@ -3,13 +3,20 @@
     "location": "placeholder_humanoid/motions",
     "clips": [
         { "name": "idle", "is_looped": true },
-        { "name": "walk", "is_looped": true },
-        { "name": "run", "is_looped": true },
+        { "name": "walk", "is_looped": true, "distance": 1.1 },
+        { "name": "run", "is_looped": true, "distance": 1.5789 },
         { "name": "crouch_idle", "is_looped": true },
-        { "name": "crouch_walk", "is_looped": true },
+        { "name": "crouch_walk", "is_looped": true, "distance": 0.7333 },
         { "name": "jump" },
         { "name": "fall", "is_looped": true },
         { "name": "land" },
-        { "name": "wave" }
+        { "name": "wave" },
+        { "name": "sit_down" },
+        { "name": "sit_idle", "is_looped": true },
+        { "name": "stand_up" },
+        { "name": "pick_up" },
+        { "name": "hold_r", "is_looped": true },
+        { "name": "put_down" },
+        { "name": "open_door" }
     ]
 }

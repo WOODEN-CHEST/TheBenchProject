@@ -503,6 +503,25 @@ void WorldRenderer_SetCollisionDebug(WorldRenderer* self, const WorldCollision* 
 const WorldCollision* WorldRenderer_GetCollisionDebug(const WorldRenderer* self);
 
 /**
+ * @brief Names the object the camera rides (T30: the player's body in first person), or none (0).
+ *
+ * From the next frame its world model's first_person block takes effect in the camera's passes (the G-buffer, the lit
+ * pass, the unlit fallback): the bones it hides, and their subtrees, are drawn collapsed to their joint, so the camera
+ * at the eyes does not see the inside of the head. The shadow passes draw the whole body. An object without a pose, or
+ * whose world model has no first_person block, draws as any other.
+ * @param self The renderer; must not be NULL.
+ * @param objectId The object's id, or 0.
+ */
+void WorldRenderer_SetFirstPersonObject(WorldRenderer* self, uint64_t objectId);
+
+/**
+ * @brief Returns the object named by WorldRenderer_SetFirstPersonObject, or 0.
+ * @param self The renderer; must not be NULL.
+ * @returns The object's id, or 0.
+ */
+uint64_t WorldRenderer_GetFirstPersonObject(const WorldRenderer* self);
+
+/**
  * @brief Enables or disables the debug reference grid drawn on the ground plane.
  * @param self The renderer; must not be NULL.
  * @param enabled true to draw the grid, false to hide it.

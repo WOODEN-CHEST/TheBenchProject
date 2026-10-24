@@ -1173,6 +1173,141 @@ static void ACharacterNobodyDrivesFallsAndRides(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
+// Static functions: actions (T30).
+/* A control asking for an anchor at @p feet of the scene facing @p yaw, reached in @p seconds, with @p lock. */
+static CharacterActionControl CreateAnchor(Vector3 feet, float yaw, float seconds, CharacterMovementLock lock)
+{
+    CharacterActionControl Control = CharacterActionControl_CreateFree();
+    Control.Lock = lock;
+    Control.HasAnchor = true;
+    Control.AnchorPosition = TestWorld_At(feet);
+    Control.AnchorYaw = yaw;
+    Control.ApproachSeconds = seconds;
+    return Control;
+}
+
+static void AnAnchorSlidesTheCharacterThereAndFacesItsWay(TestRun* run)
+{
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f });
+        TickFor(&Scene, 10U);
+        // An anchor 1.2 m away facing the other way, in half a second: it slides there and turns, whatever its input
+        // asks (it would walk off the other way).
+        CharacterInput Away = CreateWalk((Vector3){ -1.0f, 0.0f, 0.0f });
+        SetInput(run, &Scene, Id, &Away);
+        CharacterActionControl Control = CreateAnchor((Vector3){ 0.0f, 0.0f, 1.2f }, PI, 0.5f,
+            CharacterMovementLock_Locked);
+        TEST_CHECK_SUCCESS(run, WorldCharacterComponent_SetActionControl(GetCharacter(&Scene, Id), &Control));
+        TEST_CHECK(run, GetState(&Scene, Id)->Approach == CharacterApproach_Approaching);
+        TickFor(&Scene, TICKS_PER_SECOND / 4U);
+        Vector3 Halfway = GetFeet(&Scene, Id);
+        TEST_CHECK(run, (GetState(&Scene, Id)->Approach == CharacterApproach_Approaching) && (Halfway.z > 0.4f)
+            && (Halfway.z < 0.8f) && IsNear(Halfway.x, 0.0f, 1e-3f));
+        TickFor(&Scene, TICKS_PER_SECOND / 3U);
+        Vector3 Feet = GetFeet(&Scene, Id);
+        const WorldCharacterState* State = GetState(&Scene, Id);
+        TEST_CHECK(run, (State->Approach == CharacterApproach_Arrived) && IsNear(Feet.z, 1.2f, CHARACTER_ANCHOR_TOLERANCE)
+            && IsNear(Feet.x, 0.0f, CHARACTER_ANCHOR_TOLERANCE) && State->IsGrounded
+            && IsNear(fabsf(State->FacingYaw), PI, 1e-4f));
+        // Held there, locked: its input does not move it, jumps do not happen, and its collider is not pushable.
+        CharacterInput Jump = CreateWalk((Vector3){ 1.0f, 0.0f, 0.0f });
+        Jump.WantsJump = true;
+        SetInput(run, &Scene, Id, &Jump);
+        TickFor(&Scene, TICKS_PER_SECOND / 2U);
+        EventCounts Counts = { 0 };
+        TakeEvents(&Scene, Id, &Counts);
+        Vector3 Held = GetFeet(&Scene, Id);
+        WorldComponent* Collider = NULL;
+        TEST_CHECK(run, IsNear(Held.x, Feet.x, 1e-4f) && IsNear(Held.z, Feet.z, 1e-4f)
+            && (Counts.Counts[WorldCharacterEventKind_Jumped] == 0U) && GetState(&Scene, Id)->IsGrounded);
+        TEST_CHECK(run, World_TryGetComponent(&Scene.World, Id, WorldComponentType_Collider, &Collider)
+            && !WorldColliderComponent_IsPushable(WorldColliderComponent_FromComponent(Collider)));
+        // Freed: it walks again (and is pushable again).
+        TEST_CHECK_SUCCESS(run, WorldCharacterComponent_SetActionControl(GetCharacter(&Scene, Id), NULL));
+        TEST_CHECK(run, GetState(&Scene, Id)->Approach == CharacterApproach_None);
+        SetInput(run, &Scene, Id, &Jump);
+        TickFor(&Scene, TICKS_PER_SECOND / 2U);
+        TEST_CHECK(run, (GetFeet(&Scene, Id).x > (Held.x + 0.3f))
+            && WorldColliderComponent_IsPushable(WorldColliderComponent_FromComponent(Collider)));
+    }
+    Scene_Deconstruct(run, &Scene);
+}
+
+static void AWallOnTheWayFailsTheApproach(TestRun* run)
+{
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        AddBox(run, &Scene, (Vector3){ 0.0f, 1.0f, 1.0f }, (Vector3){ 3.0f, 1.0f, 0.1f }, (Vector3){ 0 },
+            TestBoxKind_Static);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f });
+        TickFor(&Scene, 10U);
+        CharacterActionControl Control = CreateAnchor((Vector3){ 0.0f, 0.0f, 2.0f }, 0.0f, 0.4f,
+            CharacterMovementLock_Locked);
+        TEST_CHECK_SUCCESS(run, WorldCharacterComponent_SetActionControl(GetCharacter(&Scene, Id), &Control));
+        // The slide stops at the wall (swept like any move), and once its time and the grace are past it fails.
+        TickFor(&Scene, (uint32_t)(0.8f * (float)TICKS_PER_SECOND));
+        TEST_CHECK(run, GetState(&Scene, Id)->Approach == CharacterApproach_Approaching);
+        TickFor(&Scene, (uint32_t)(0.2f * (float)TICKS_PER_SECOND));
+        Vector3 Feet = GetFeet(&Scene, Id);
+        TEST_CHECK(run, (GetState(&Scene, Id)->Approach == CharacterApproach_Failed)
+            && (Feet.z < (0.9f - TEST_RADIUS + 0.01f)));
+        // An anchor control that is not finite, or a lock outside the enum, is refused and changes nothing.
+        Control.AnchorYaw = NAN;
+        TEST_CHECK_ERROR(run, WorldCharacterComponent_SetActionControl(GetCharacter(&Scene, Id), &Control),
+            ErrorCode_ArgumentOutOfRange);
+        Control.AnchorYaw = 0.0f;
+        Control.ApproachSeconds = -1.0f;
+        TEST_CHECK_ERROR(run, WorldCharacterComponent_SetActionControl(GetCharacter(&Scene, Id), &Control),
+            ErrorCode_ArgumentOutOfRange);
+        Control.ApproachSeconds = 0.0f;
+        Control.Lock = (CharacterMovementLock)7;
+        TEST_CHECK_ERROR(run, WorldCharacterComponent_SetActionControl(GetCharacter(&Scene, Id), &Control),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK(run, GetState(&Scene, Id)->Approach == CharacterApproach_Failed);
+        TEST_CHECK_ERROR(run, WorldCharacterComponent_SetActionControl(NULL, NULL), ErrorCode_IllegalArgument);
+    }
+    Scene_Deconstruct(run, &Scene);
+}
+
+static void LocksKeepTheCharacterFromMovingOrTurning(TestRun* run)
+{
+    CharacterScene Scene;
+    if (Scene_Construct(run, &Scene))
+    {
+        AddFloor(run, &Scene);
+        uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f });
+        TickFor(&Scene, 10U);
+        // No moving: it does not walk or crouch, but faces its look.
+        CharacterActionControl Control = CharacterActionControl_CreateFree();
+        Control.Lock = CharacterMovementLock_NoMoving;
+        TEST_CHECK_SUCCESS(run, WorldCharacterComponent_SetActionControl(GetCharacter(&Scene, Id), &Control));
+        CharacterInput Input = CreateWalk((Vector3){ 1.0f, 0.0f, 0.0f });
+        Input.WantsCrouch = true;
+        Input.Facing = CharacterFacing_Look;
+        Input.LookYaw = PI * 0.5f;
+        SetInput(run, &Scene, Id, &Input);
+        TickFor(&Scene, TICKS_PER_SECOND / 2U);
+        TEST_CHECK(run, IsNear(GetFeet(&Scene, Id).x, 0.0f, 1e-4f)
+            && (GetState(&Scene, Id)->Stance == CharacterStance_Standing)
+            && IsNear(GetState(&Scene, Id)->FacingYaw, PI * 0.5f, 1e-3f) && (GetState(&Scene, Id)->Approach
+            == CharacterApproach_None));
+        // No turning: it walks but keeps its facing.
+        Control.Lock = CharacterMovementLock_NoTurning;
+        TEST_CHECK_SUCCESS(run, WorldCharacterComponent_SetActionControl(GetCharacter(&Scene, Id), &Control));
+        Input = CreateWalk((Vector3){ 0.0f, 0.0f, 1.0f });
+        Input.Facing = CharacterFacing_Movement;
+        SetInput(run, &Scene, Id, &Input);
+        TickFor(&Scene, TICKS_PER_SECOND / 2U);
+        TEST_CHECK(run, (GetFeet(&Scene, Id).z > 0.3f) && IsNear(GetState(&Scene, Id)->FacingYaw, PI * 0.5f, 1e-3f));
+    }
+    Scene_Deconstruct(run, &Scene);
+}
+
 static void SettingsChangedAtRuntimeTakeEffect(TestRun* run)
 {
     CharacterScene Scene;
@@ -2519,7 +2654,7 @@ static void ThePlayerControllerFillsTheCharactersInput(TestRun* run)
 
         // The camera sits at the eyes and looks where the character looks.
         GameCamera View = GameCamera_Create(Vector3Double_Zero(), 60.0f);
-        PlayerController_ApplyCamera(&Controller, &Scene.World, &View, TEST_DELTA);
+        PlayerController_ApplyCamera(&Controller, &Scene.World, &View);
         Vector3Double Eye = WorldCharacterComponent_GetEyePosition(Character);
         TEST_CHECK(run, Vector3Double_EqualsClose(View.Position, Eye, 1e-6) && (View.Yaw == Driven->LookYaw));
 
@@ -2631,6 +2766,9 @@ void WorldCharacterTests_Run(TestRun* run)
         { "nothing_tunnels_through_thin_walls_or_floors", NothingTunnelsThroughThinWallsOrFloors },
         { "a_character_nobody_drives_falls_and_rides", ACharacterNobodyDrivesFallsAndRides },
         { "settings_changed_at_runtime_take_effect", SettingsChangedAtRuntimeTakeEffect },
+        { "an_anchor_slides_the_character_there_and_faces_its_way", AnAnchorSlidesTheCharacterThereAndFacesItsWay },
+        { "a_wall_on_the_way_fails_the_approach", AWallOnTheWayFailsTheApproach },
+        { "locks_keep_the_character_from_moving_or_turning", LocksKeepTheCharacterFromMovingOrTurning },
         { "the_look_ray_finds_the_nearest_thing_and_uses_it", TheLookRayFindsTheNearestThingAndUsesIt },
         { "a_definition_reads_its_keys_and_refuses_the_rest", ADefinitionReadsItsKeysAndRefusesTheRest },
         { "a_definition_loads_and_a_placement_uses_it", ADefinitionLoadsAndAPlacementUsesIt },

@@ -3,17 +3,10 @@
 #include "World.h"
 #include "WorldCharacterComponent.h"
 #include "WorldCharacters.h"
+#include "WorldAnimatorComponent.h"
+#include "WorldModel.h"
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
-
-
-// Macros.
-/** A full turn, radians. */
-#define PLAYER_FULL_TURN (2.0f * PI)
-/** How fast the head bob fades in and out, per second. */
-#define PLAYER_HEAD_BOB_EASE_RATE 8.0f
-/** Below this speed on the ground the head does not bob, metres per second. */
-#define PLAYER_HEAD_BOB_MIN_SPEED 0.05f
 
 
 // Static functions.
@@ -49,9 +42,6 @@ void PlayerController_Construct(PlayerController* self)
     Memory_Zero(self, sizeof(*self));
     self->MouseSensitivity = PLAYER_CONTROLLER_DEFAULT_MOUSE_SENSITIVITY;
     self->IsCrouchToggled = false;
-    self->IsHeadBobEnabled = false;
-    self->HeadBobAmplitude = PLAYER_CONTROLLER_DEFAULT_HEAD_BOB_AMPLITUDE;
-    self->HeadBobStepLength = PLAYER_CONTROLLER_DEFAULT_HEAD_BOB_STEP_LENGTH;
 }
 
 void PlayerController_Deconstruct(PlayerController* self)
@@ -85,8 +75,6 @@ Error PlayerController_SetCharacter(PlayerController* self, World* world, uint64
     self->_characterId = 0U;
     self->_isCrouchLatched = false;
     self->_hasLookTarget = false;
-    self->_headBobPhase = 0.0f;
-    self->_headBobWeight = 0.0f;
     if (characterId == 0U)
     {
         return Error_CreateSuccess();
@@ -193,38 +181,37 @@ bool PlayerController_GetLookTarget(const PlayerController* self, WorldRayHit* o
     return self->_hasLookTarget;
 }
 
-void PlayerController_ApplyCamera(PlayerController* self, World* world, GameCamera* camera, float deltaSeconds)
+bool PlayerController_TryGetEyes(World* world, uint64_t characterId, Vector3Double* outEyes)
 {
-    WorldCharacterComponent* Character = FindCharacter(world, self->_characterId);
+    WorldCharacterComponent* Character = FindCharacter(world, characterId);
     if (Character == NULL)
+    {
+        return false;
+    }
+    // The body's eyes socket as posed (G34: the real body; its every step, crouch and seat move the view).
+    WorldComponent* Component = NULL;
+    const WorldAnimatorPose* Pose = World_TryGetComponent(world, characterId, WorldComponentType_Animator, &Component)
+        ? WorldAnimatorComponent_GetPose(WorldAnimatorComponent_FromComponent(Component)) : NULL;
+    Matrix4Double Eyes;
+    if ((Pose != NULL) && (Pose->_eyesSocket < Pose->_socketCount)
+        && World_TryGetSocketWorldMatrix(world, characterId, Pose->_sockets[Pose->_eyesSocket]._name, &Eyes))
+    {
+        *outEyes = Matrix4Double_GetTranslation(&Eyes);
+        return true;
+    }
+    *outEyes = WorldCharacterComponent_GetEyePosition(Character);
+    return true;
+}
+
+void PlayerController_ApplyCamera(const PlayerController* self, World* world, GameCamera* camera)
+{
+    Vector3Double Eyes;
+    if (!PlayerController_TryGetEyes(world, self->_characterId, &Eyes))
     {
         return;
     }
-    const CharacterInput* Input = WorldCharacterComponent_GetInput(Character);
-    const WorldCharacterState* State = WorldCharacterComponent_GetState(Character);
-    Vector3Double Eye = WorldCharacterComponent_GetEyePosition(Character);
-
-    // TODO: rework the head bob (the owner, 2026-10-22: it reads badly). It is a plain up-and-down sine a step long,
-    // one amplitude at every speed: no sway from side to side, no dip as a foot lands, and it fades out on every short
-    // fall (each stair step now). Tie it to the footfalls once characters have animated models (T29, T30).
-    float Bob = 0.0f;
-    if (self->IsHeadBobEnabled && (self->HeadBobStepLength > 0.0f))
-    {
-        // One bob a step while walking on the ground, fading in and out rather than stopping mid-bob.
-        float Speed = sqrtf((State->Velocity.x * State->Velocity.x) + (State->Velocity.z * State->Velocity.z));
-        bool IsWalking = State->IsGrounded && (Speed > PLAYER_HEAD_BOB_MIN_SPEED);
-        if (IsWalking)
-        {
-            self->_headBobPhase = fmodf(self->_headBobPhase
-                + ((PLAYER_FULL_TURN * Speed * deltaSeconds) / self->HeadBobStepLength), PLAYER_FULL_TURN);
-        }
-        float Target = IsWalking ? 1.0f : 0.0f;
-        float Ease = Clamp(PLAYER_HEAD_BOB_EASE_RATE * deltaSeconds, 0.0f, 1.0f);
-        self->_headBobWeight += (Target - self->_headBobWeight) * Ease;
-        Bob = self->HeadBobAmplitude * self->_headBobWeight * sinf(self->_headBobPhase);
-    }
-
-    camera->Position = Vector3Double_Create(Eye.X, Eye.Y + (double)Bob, Eye.Z);
+    const CharacterInput* Input = WorldCharacterComponent_GetInput(FindCharacter(world, self->_characterId));
+    camera->Position = Eyes;
     camera->Yaw = Input->LookYaw;
     camera->Pitch = Input->LookPitch;
 }

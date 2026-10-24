@@ -33,6 +33,12 @@ typedef struct LoggerStruct Logger;
  *    by default) and land;
  * 6. turns its body, eases its eyes between the standing and the crouched height, and writes its object's transform;
  * 7. answers a use press with a "used" event naming what it looks at.
+ * An ACTION (T30) may constrain it (WorldCharacterComponent_SetActionControl, set by the animation system): a movement
+ * lock (no moving: no move, jump, crouch or flight changes; no turning: the body keeps its facing; locked: both, the
+ * look still free), and an ANCHOR: the character slides there instead of walking, swept against walls like any move,
+ * turning to the anchor's facing, over the approach time; within CHARACTER_ANCHOR_TOLERANCE and
+ * CHARACTER_ANCHOR_YAW_TOLERANCE it has arrived, and stays there held (its collider not pushable) while its movement
+ * is locked; past the approach time and CHARACTER_APPROACH_GRACE_SECONDS more it has failed.
  * It also gives every character a capsule collider (added when its object has none) and keeps that collider's shape,
  * layer, mask, mass and motion rows in step with the character.
  *
@@ -51,6 +57,12 @@ typedef struct LoggerStruct Logger;
 #define CHARACTER_SKIN WORLD_COLLISION_SKIN
 /** @brief The most planes one move slides along before it stops. */
 #define CHARACTER_MAX_SLIDE_ITERATIONS 4U
+/** @brief How near its anchor a character's feet must come to have arrived, in metres (T30). */
+#define CHARACTER_ANCHOR_TOLERANCE 0.01f
+/** @brief How near its anchor's facing a character must turn to have arrived, in radians (1 degree). */
+#define CHARACTER_ANCHOR_YAW_TOLERANCE 0.017453292f
+/** @brief How long past its approach time a character may still arrive before the approach fails, in seconds. */
+#define CHARACTER_APPROACH_GRACE_SECONDS 0.5f
 
 
 // Types.

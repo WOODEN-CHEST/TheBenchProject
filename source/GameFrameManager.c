@@ -482,6 +482,37 @@ Error GameFrameManager_Update(GameFrameManager* self, ProgramTime time)
     return Error_CreateSuccess();
 }
 
+Error GameFrameManager_PrepareRender(GameFrameManager* self, ProgramTime time)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "GameFrameManager_PrepareRender: self must not be NULL.");
+    }
+
+    // Top-down, as the update, over the same kind of snapshot: a frame added meanwhile waits for the next render, and
+    // records are destroyed only by the update, so the snapshot's pointers stay valid.
+    GenericBuffer_Clear(&self->_updateOrder);
+    if ((self->_records._count > 0U)
+        && !GenericBuffer_AddLastRange(&self->_updateOrder, self->_records._data, self->_records._count))
+    {
+        return Error_Construct2(ErrorCode_BufferTooSmall, "GameFrameManager_PrepareRender: could not order the frames.");
+    }
+    for (size_t i = self->_updateOrder._count; i-- > 0U;)
+    {
+        GameFrameRecord* Record = *(GameFrameRecord**)GenericBuffer_GetPointerToElement(&self->_updateOrder, i);
+        if ((Record->State != GameFrameState_Active) || !Record->Frame->IsUpdated || !Record->Frame->IsRendered)
+        {
+            continue;
+        }
+        Error PrepareResult = GameFrame_PrepareRender(Record->Frame, time);
+        if (PrepareResult.Code != ErrorCode_Success)
+        {
+            return FailFatally(self, Record->Frame, "prepare render", PrepareResult);
+        }
+    }
+    return Error_CreateSuccess();
+}
+
 Error GameFrameManager_Render(GameFrameManager* self, ProgramTime time)
 {
     if (self == NULL)

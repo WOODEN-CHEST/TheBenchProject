@@ -25,13 +25,15 @@ typedef enum AnimatorPropertyEnum
     AnimatorProperty_IsLooped,
     AnimatorProperty_OverridesAnimationLibraries,
     AnimatorProperty_AnimationLibraries,
+    AnimatorProperty_OverridesAnimationGraph,
+    AnimatorProperty_AnimationGraph,
     AnimatorProperty_Count
 } AnimatorProperty;
 
 
 // Fields.
 /* Every property, in inspector order. The wire ids are the save schema: never renumber or reuse one; a removed
- * property's id goes into the table's retired list. The next free wire id is 11. */
+ * property's id goes into the table's retired list. The next free wire id is 13. */
 static const PropertyDescriptor AnimatorProperties[AnimatorProperty_Count] =
 {
     [AnimatorProperty_PlaysClip] =
@@ -110,6 +112,23 @@ static const PropertyDescriptor AnimatorProperties[AnimatorProperty_Count] =
         .Description = u8"The animation libraries it plays while overridden: their clips, matched to its skeleton by bone "
             u8"name.", .SinceVersion = 1U
     },
+    [AnimatorProperty_OverridesAnimationGraph] =
+    {
+        // T30: added at the end of the table, so files without them read as before (no new table version).
+        .Key = u8"overrides_animation_graph", .WireId = 11U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldAnimatorComponent, _overridesAnimationGraph), .Default.BoolValue = false,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_ANIMATION, .DisplayName = u8"Override animation graph",
+        .Description = u8"Plays the graph below instead of its world model's (none: no graph).", .SinceVersion = 1U
+    },
+    [AnimatorProperty_AnimationGraph] =
+    {
+        .Key = u8"animation_graph", .WireId = 12U, .Type = PropertyType_AssetName,
+        PROPERTY_MEMBER(WorldAnimatorComponent, _animationGraph), .Default.StringValue = NULL,
+        .Rules = PROPERTY_RULES_STRING(WORLD_ANIMATOR_GRAPH_NAME_MAX_LENGTH, true), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_ANIMATION, .DisplayName = u8"Animation graph",
+        .Description = u8"The animation graph it plays while overridden: which clip plays when, and its special actions.",
+        .SinceVersion = 1U
+    },
 };
 
 static const PropertyTable AnimatorTable =
@@ -149,6 +168,14 @@ static void DeconstructAnimator(WorldComponent* component)
     Properties_Deconstruct(&AnimatorTable, Self);
 }
 
+/* An animator leaving its object ends its action first (T30), so the character it locked is not left locked, and what
+ * hangs on its sockets is marked dirty: their frames go with the pose (they fall back to the object's own space). */
+static void DetachAnimator(World* world, WorldObject* object, WorldComponent* component)
+{
+    WorldAnimationInternal_DetachAnimator((WorldAnimatorComponent*)component);
+    WorldInternal_MarkSocketChildrenChanged(world, object);
+}
+
 static Error CreateNullSelfError(const char* function)
 {
     return Error_Construct4(ErrorCode_IllegalArgument, "%s: self must not be NULL.", function);
@@ -176,7 +203,7 @@ static const WorldComponentTypeInfo AnimatorTypeInfo =
     .Construct = ConstructAnimator,
     .Deconstruct = DeconstructAnimator,
     .OnAttach = NULL,
-    .OnDetach = NULL,
+    .OnDetach = DetachAnimator,
     .OnPropertySet = NULL
 };
 
@@ -234,6 +261,19 @@ Error WorldAnimatorComponent_SetLoopOverride(WorldAnimatorComponent* self, bool 
     }
     return SetRow(self, AnimatorProperty_OverridesIsLooped, PropertyValue_FromBool(overridesIsLooped),
         "WorldAnimatorComponent_SetLoopOverride");
+}
+
+Error WorldAnimatorComponent_SetAnimationGraph(WorldAnimatorComponent* self, bool overridesGraph,
+    const unsigned char* graph)
+{
+    Error Result = SetRow(self, AnimatorProperty_AnimationGraph, PropertyValue_FromAssetName(graph),
+        "WorldAnimatorComponent_SetAnimationGraph");
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    return SetRow(self, AnimatorProperty_OverridesAnimationGraph, PropertyValue_FromBool(overridesGraph),
+        "WorldAnimatorComponent_SetAnimationGraph");
 }
 
 Error WorldAnimatorComponent_SetAnimationLibraries(WorldAnimatorComponent* self, bool overridesLibraries,

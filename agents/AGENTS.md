@@ -46,7 +46,7 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, and registers the eleven standard types. Read its lifetime rules before touching assets.
+  caches failed loads, and registers the twelve standard types. Read its lifetime rules before touching assets.
 * Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader, GameSound and GameTexture: the manager-owned
   wrappers for the standard font, model, shader, sound and texture types, with their ownership rules, accessors and
   pitfalls; a skinned model carries its GameSkeleton (Animation.md). GameModel.h also holds GameMaterialFactors
@@ -60,9 +60,10 @@ Current module list:
   definition of a placeable thing, kept apart from its placements. WorldModel (include/WorldModel.h, source/WorldModel.c)
   holds its LOD models and their switch distances (drawn by distance with dithered cross-fades since T11), its draw
   distance and whether it is fixed against the quality
-  setting, the default render settings of its placements, its material variants, its bounds and (since T12) its
-  collision sets; its LOD models, its variants' textures and the models its hulls and meshes are built from load as its
-  dependencies. The definition (source/WorldModelDefinition.c) refuses unknown keys and
+  setting, the default render settings of its placements, its material variants, its bounds, (since T12) its
+  collision sets and (since T29 and T30) its animation libraries, graph, sockets and first-person block (the sockets in
+  source/WorldModelSocketDefinition.c); its LOD models, its variants' textures, libraries, graph and the models its
+  hulls and meshes are built from load as its dependencies. The definition (source/WorldModelDefinition.c) refuses unknown keys and
   checks every rule when it is read. Variants apply to the renderer's per-draw material copies, never to an asset. The
   model component names a world model and overrides its settings per placement with explicit flags.
 * World collision (WorldCollision.md) - Collision for the 3D world (T12, T27): shapes, layers, the collider component
@@ -111,10 +112,11 @@ Current module list:
     and answers what a character looks at; its capsule motion is the private source/WorldCharacterMotion.c
     (source/WorldCharacterInternal.h).
   * PlayerController - The player's side: GameInput actions and the mouse into a character's input, the camera at its
-    eyes (optional head bob), what the player looks at.
+    eyes (since T30 its body's eyes socket as posed), what the player looks at.
 * Animation (Animation.md) - Skeletal animation (T29): skinned models posed per placed object, clips from separate
-  libraries retargeted onto every model of a skeleton layout, cross-fades, sockets, and skinning in every render pass.
-  Covers:
+  libraries retargeted onto every model of a skeleton layout, cross-fades, sockets, and skinning in every render pass;
+  since T30 animation graphs (states, transitions, layers, look-at), special actions with anchors for the player and
+  NPCs alike, held items on sockets, first person on the body's eyes, and posing once per shown frame. Covers:
   * AnimationLibrary - The animation_library asset type (a standard type, JSON in animation_libraries/, a .glb or .gltf
     file): bones and clips read by our own glTF reader (cgltf, the file treated as hostile;
     source/AnimationLibraryGltf.c), clip settings (name, source, loop, speed) from the definition
@@ -124,12 +126,21 @@ Current module list:
   * SkeletalAnimation - The runtime maths: binding a library to a skeleton by bone name (rotations from the clip,
     translations scaled by the height ratio, unmatched ancestors folded), blending, the mixer (8 clips, cross-fades,
     weights, loops), bone matrices, the skinning palette, the pose's bounds; transforms taken apart by columns.
-  * WorldAnimatorComponent - Component type 5 (`animator`): the clip row with phase, speed, pause, fade, a loop override
-    and the placement's own libraries, and the pose the system publishes for the renderer and sockets.
+  * AnimationGraph - The animation_graph asset type (T30, a standard type, JSON in animation_graphs/): parameters,
+    events, layers of states and transitions, actions, look-at, read from a hostile definition into one immutable block
+    of indices (source/AnimationGraphReader.c; the asset type in source/AnimationGraphDefinition.c).
+  * AnimationGraphPlayer - Playing a graph on one skeleton (T30), pure functions over caller memory: binding (clips,
+    masks, look bones), the instance (parameters, events, per-layer cross-fades), the tick's advance (transitions,
+    synced blends, matched speeds, timed events) and the pose (layers by mask, look-at).
+  * WorldAnimatorComponent - Component type 5 (`animator`): the clip row with phase, speed, pause, fade, a loop override,
+    the placement's own libraries and (T30) graph, and the pose the system publishes for the renderer and sockets
+    (with the sockets' frames and the eyes socket).
   * WorldAnimation - The animation system: once a tick, after the collision step's events, it binds every animator to
-    its world model's skeleton and libraries, applies its rows, advances its clips and poses it; code plays clips
-    through it; a bone's world matrix in double (sockets). Its per-animator state is the private
-    source/WorldAnimationInternal.h.
+    its world model's skeleton, libraries and graph, applies its rows, runs its graph and action and advances its
+    clips; once per shown frame (WorldAnimation_Pose, from the frame's PrepareRender) it poses them and publishes their
+    sockets; code plays clips, sets parameters and starts actions through it, and its events queue for the game; a
+    bone's world matrix in double. Graphs are source/WorldAnimationGraph.c, actions (anchors, attach, detach)
+    source/WorldAnimationActions.c, its per-animator state the private source/WorldAnimationInternal.h.
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -153,8 +164,8 @@ Current module list:
   * GameInput - The per-tick input snapshot (keys, mouse, wheel, typed text drained once), polled by the frame manager
     right after PollInputEvents, with consumption (a consumed key reads as not pressed while held) and the action layer
     (GameAction: named actions bound to keys with modifiers; JSON controls file load/save).
-* GameFrame (GameFrame.md) - Abstract base for a game "scene"/section (menu, level, loading screen), with stepped load/unload, logic lifecycle, and per-target rendering.
-* GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop (polls the input, then updates frames top-down so the top frame gets input first), and composites them to the screen; crashes gracefully on frame errors.
+* GameFrame (GameFrame.md) - Abstract base for a game "scene"/section (menu, level, loading screen), with stepped load/unload, logic lifecycle, per-target rendering and (T30) an optional PrepareRender slot: the update side's last step before a render (posing skeletons once per shown frame).
+* GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop (polls the input, then updates frames top-down so the top frame gets input first), runs their PrepareRender before each render (T30), and composites them to the screen; crashes gracefully on frame errors.
 * NamespacedKey (NamespacedKey.md) - Namespaced keys (`namespace:path`, Minecraft's character set, at most 128 bytes,
   a default namespace for keys written without one) and the KeyRegistry that interns them to uint32 ids (one per
   program: main creates it, Services.Keys carries it, every World borrows it), with stable texts and prefix search for
@@ -264,9 +275,11 @@ Current module list:
     F8 the contact points, F6 swings the door, F9 sends a wall through a row of crates, F10 moves the door's crate),
     with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world. Since T13 its
     characters move every tick: F1 walk mode (the player as a character), F2 test NPCs (a human, a dog, a pigeon), F3
-    flight, F4 the player's kind, F12 head bob (the private source/WorldTestCharacters.{h,c}). Since T29 it ticks the
-    animation system: 5 steps the showcase figure through the clips, 6 a crowd of 100 walking figures, 7 slow motion
-    (the private source/WorldTestAnimation.{h,c}).
+    flight, F4 the player's kind (the private source/WorldTestCharacters.{h,c}). Since T29 it ticks the animation
+    system: 5 steps the showcase figure through the clips, 6 a crowd of 100 walking figures, 7 slow motion (the private
+    source/WorldTestAnimation.{h,c}). Since T30 it poses them in its PrepareRender, the humans wear the animated
+    humanoid (the player in first person), E starts the action the object looked at offers (the bench's sit, the coffee
+    cup's pick-up, the door's push), 8 sends the NPC human to the bench, 9 puts down, 0 waves.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown

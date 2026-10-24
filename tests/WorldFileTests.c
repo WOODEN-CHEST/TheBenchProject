@@ -398,7 +398,8 @@ static bool BuildFullWorld(TestRun* run, World* world, KeyRegistry* keys)
     }
     TEST_CHECK_SUCCESS(run, World_SetParent(world, 7U, 1U, false));
     TEST_CHECK_SUCCESS(run, World_SetParent(world, 2U, 1U, false));
-    TEST_CHECK_SUCCESS(run, World_SetParent(world, 3U, 2U, false));
+    // The leaf hangs on a socket of its parent (T30; the parent has no pose: the parent's own space).
+    TEST_CHECK_SUCCESS(run, World_SetParentSocket(world, 3U, 2U, (const unsigned char*)u8"hand_r", false));
     TEST_CHECK_SUCCESS(run, World_SetParent(world, 4U, 5U, false));
     FillData(run, world, 1U, 5U, keys);
     FillData(run, world, 3U, 1U, keys);
@@ -1497,7 +1498,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 48U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 50U);
             TEST_CHECK(run, AreNamesEqual(World_GetName(&Loaded), (const unsigned char*)u8"test"));
             // The animation examples (T29): four placeholder figures, each animator playing a clip of its own; the short
             // one waves in a loop its library does not give the clip (the placement's loop override).
@@ -1542,17 +1543,35 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                 && WorldModelComponent_UsesVariant(WorldModelComponent_FromComponent(Painted))
                 && AreNamesEqual(WorldModelComponent_GetVariant(WorldModelComponent_FromComponent(Painted)),
                     (const unsigned char*)u8"blue"));
-            // The desk holds five parts, the lamp its light; it moves (the J key), so it is movable.
+            // The desk holds six parts (since T30 a coffee cup to pick up), the lamp its light; it moves (the J key), so
+            // it is movable.
             WorldObject* Desk = NULL;
             WorldObject* LampLight = NULL;
-            TEST_CHECK(run, World_TryGetObject(&Loaded, 15U, &Desk) && (WorldObject_GetChildCount(Desk) == 5U)
+            TEST_CHECK(run, World_TryGetObject(&Loaded, 15U, &Desk) && (WorldObject_GetChildCount(Desk) == 6U)
                 && (WorldObject_GetMobility(Desk) == WorldMobility_Movable));
+            // The actions' props (T30): a bench to sit on, the coffee cup and the door, each offering its action as
+            // text under tbp:action (the test frame's stand-in for an interactable component).
+            static const struct { uint64_t Id; const char* Action; } Offers[] =
+            {
+                { 49U, "sit" }, { 50U, "pick_up" }, { 33U, "open_door" }
+            };
+            uint32_t ActionKey = 0U;
+            TEST_CHECK(run, KeyRegistry_TryFind(&Keys, (const unsigned char*)u8"tbp:action", &ActionKey));
+            for (size_t Index = 0U; Index < (sizeof(Offers) / sizeof(Offers[0])); Index++)
+            {
+                WorldObject* Offering = NULL;
+                const DataValue* Offer = World_TryGetObject(&Loaded, Offers[Index].Id, &Offering)
+                    ? DataMap_Find(WorldObject_GetData(Offering), ActionKey) : NULL;
+                TEST_CHECK(run, (Offer != NULL) && (Offer->Type == DataType_String)
+                    && AreNamesEqual(Offer->StringValue, (const unsigned char*)Offers[Index].Action));
+            }
             // The collision examples (T12): 24 colliders, a door of two sets, a trigger zone where the desk slides;
             // since T27 ten more (a pushing wall, a row of five pushable crates, its stop, a crate pinned in a corner
-            // of two posts in the door's swing), and the door turns, so it is movable.
+            // of two posts in the door's swing), and the door turns, so it is movable; since T30 the bench and the
+            // coffee cup.
             size_t ColliderCount = 0U;
             World_GetComponents(&Loaded, WorldComponentType_Collider, &ColliderCount);
-            TEST_CHECK(run, ColliderCount == 34U);
+            TEST_CHECK(run, ColliderCount == 36U);
             WorldObject* Door = NULL;
             TEST_CHECK(run, World_TryGetObject(&Loaded, 33U, &Door)
                 && (WorldObject_GetMobility(Door) == WorldMobility_Movable));

@@ -51,9 +51,17 @@ The lifecycle **state** (Loading/Loaded/Active/…) is tracked by the manager, n
 
 ## Optional vtable slots
 
-`GetLoadProgress` (fraction in `[0;1]` for a loading bar) and `OnResize` may be `NULL`. The
+`GetLoadProgress` (fraction in `[0;1]` for a loading bar), `OnResize` and `PrepareRender` may be `NULL`. The
 `GameFrame_GetLoadProgress` wrapper returns a negative value ("unknown") when unimplemented; the
-`GameFrame_OnResize` wrapper returns success. `Destroy` and all core slots must be non-NULL.
+`GameFrame_OnResize` and `GameFrame_PrepareRender` wrappers return success. `Destroy` and all core slots must be
+non-NULL.
+
+**`PrepareRender(self, time)`** (T30, G35) is the update side's last step before a render: the manager calls it once
+per rendered frame, after that loop iteration's update ticks, for every active frame whose `IsUpdated` and `IsRendered`
+are both set (`GameFrameManager_PrepareRender`). It may change the frame's state, so work only a shown frame needs is
+done once per frame instead of every tick: the world test frame poses its skeletons there (`WorldAnimation_Pose`),
+brings the world matrices up to date and puts the camera on the player's posed eyes. It must not read input (that is
+`Update`'s, AGENTS.md rule 9) or draw; `Render` then only reads (rule 3).
 
 ## Rendering contract
 

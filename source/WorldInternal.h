@@ -89,6 +89,13 @@ const uint64_t* WorldInternal_GetTagMembers(World* world, uint32_t tag, size_t* 
 void WorldInternal_MarkTransformChanged(World* world, WorldObject* object);
 
 /**
+ * After an object's pose changed (T30: the animation system posed or cleared its animator): marks the children hanging
+ * on its sockets changed (WorldInternal_MarkTransformChanged on each), so their world matrices follow the sockets.
+ * Children in the object's own space are left alone. Cheap without such children: one walk over its direct children.
+ */
+void WorldInternal_MarkSocketChildrenChanged(World* world, WorldObject* object);
+
+/**
  * After a read or a copy wrote an object's parent id behind the world's back (the object table's AfterSet): attaches
  * the object under that parent, keeping its local transform, as World_SetParent would. A parent it cannot take (no such
  * object, the object itself, one of its descendants, or a hierarchy deeper than WORLD_HIERARCHY_MAX_DEPTH) is refused:

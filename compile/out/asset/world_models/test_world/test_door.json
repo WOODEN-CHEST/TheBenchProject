@@ -3,6 +3,9 @@
     "lods": [
         { "model": "test_door", "max_distance": 600 }
     ],
+    "sockets": {
+        "opener": { "position": [ 0.762, 0.0, -0.53 ] }
+    },
     "collision": {
         "default_set": "closed",
         "layer": "world",

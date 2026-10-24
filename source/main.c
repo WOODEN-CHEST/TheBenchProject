@@ -193,7 +193,17 @@ static void RunGameLoop(GameFrameManager* frameManager, double targetRenderSecon
             LastRenderSimulationTime = SimulationTime;
             NextRenderTime = AdvanceRenderDeadline(NextRenderTime, CurrentTime, targetRenderSeconds);
 
-            Error RenderResult = GameFrameManager_Render(frameManager, ProgramTime_Create(SimulationTime, SinceRender));
+            // The frames' last update-side step (poses, the camera on a posed head), once per shown frame; the render
+            // only reads.
+            ProgramTime RenderTime = ProgramTime_Create(SimulationTime, SinceRender);
+            Error PrepareResult = GameFrameManager_PrepareRender(frameManager, RenderTime);
+            if (PrepareResult.Code != ErrorCode_Success)
+            {
+                Error_Deconstruct(&PrepareResult);
+                HasFatalError = true;
+                break;
+            }
+            Error RenderResult = GameFrameManager_Render(frameManager, RenderTime);
             if (RenderResult.Code != ErrorCode_Success)
             {
                 Error_Deconstruct(&RenderResult);

@@ -333,6 +333,9 @@ typedef struct WorldRendererMeshShadersStruct
     const Shader* Skinned;
     /** @brief Skinned's palette; may be NULL while Skinned is. */
     WorldRendererPalette* Palette;
+    /** @brief Whether the pass draws the camera's view (the entries' CameraPose: the first-person object without its
+     *  hidden bones, T30) or a light's (their full Pose). */
+    bool IsCameraView;
 } WorldRendererMeshShaders;
 
 /** @brief The scene render target the 3D world is drawn into (pixel resolution when pixelating). */

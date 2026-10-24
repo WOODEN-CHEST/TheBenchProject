@@ -50,6 +50,10 @@
  *  file, which world models name for their placements to play). */
 #define ASSET_TYPE_NAME_ANIMATION_LIBRARY      ((const unsigned char*)u8"animation_library")
 #define ASSET_TYPE_DIRECTORY_ANIMATION_LIBRARY ((const unsigned char*)u8"animation_libraries")
+/** @brief Standard animation graph type name / directory (AnimationGraph.h: which clip an animated object plays when,
+ *  its layers, transitions and special actions, which world models name next to their animation libraries). */
+#define ASSET_TYPE_NAME_ANIMATION_GRAPH      ((const unsigned char*)u8"animation_graph")
+#define ASSET_TYPE_DIRECTORY_ANIMATION_GRAPH ((const unsigned char*)u8"animation_graphs")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -99,4 +103,8 @@ Error CharacterDefinition_Construct(AssetManager* manager, const UserData* userD
 /** @brief Builds an animation library definition from a JSON blob (AnimationLibraryDefinition.c). See
  *  AssetDefinitionConstructor. */
 Error AnimationLibraryDefinition_Construct(AssetManager* manager, const UserData* userData,
+    const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+/** @brief Builds an animation graph definition from a JSON blob (AnimationGraphDefinition.c). See
+ *  AssetDefinitionConstructor. */
+Error AnimationGraphDefinition_Construct(AssetManager* manager, const UserData* userData,
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);

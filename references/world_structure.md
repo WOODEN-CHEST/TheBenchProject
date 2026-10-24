@@ -90,6 +90,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `id` | integer, required | Unique in the world, from 1 to 18446744073709551614. Integers above 9223372036854775807 are written as strings. |
 | `name` | string or `null` | At most 256 bytes; need not be unique. |
 | `parent` | integer | The id of the object this one is placed on; 0 or absent for none. |
+| `parent_socket` | string or `null` | A socket of the parent's world model this object hangs on (T30: a cup in a hand, `[a-z][a-z0-9_.-]*`, at most 64 bytes): its position, rotation and scale are then relative to the socket's frame in the parent's current pose. A socket the parent's pose lacks is the parent's own space. Absent: the parent itself. |
 | `position`, `rotation`, `scale` | `[x, y, z]` | Relative to the parent. The position is in metres, read and written as doubles (every digit is kept), each axis within ±10 000 000 (10 000 km); the rotation is in degrees, applied X, then Y, then Z. |
 | `tint` | colour | `"#rrggbb"`, or `{"tint": [r, g, b], "brightness": b, "opacity": o}` when brightness or opacity is not 1. |
 | `is_enabled`, `is_visible` | `true` / `false` | |
@@ -273,6 +274,7 @@ and how it plays.
 | `fade_seconds` | 0 to 60 (0.2) | How long a change of `clip` cross-fades. |
 | `overrides_is_looped`, `is_looped` | false, false | Whether the clip loops, instead of its library's setting. |
 | `overrides_animation_libraries`, `animation_libraries` | false, `[]` (at most 16 asset names) | The placement's own animation libraries instead of its world model's. |
+| `overrides_animation_graph`, `animation_graph` | false, `null` (an asset name) | The placement's own animation graph instead of its world model's (T30); on with no name: no graph. |
 
 A placed figure that waves in a loop, though its library plays the wave once:
 ```
@@ -369,7 +371,7 @@ every integer in the smallest GHDF type that holds it.
 |---|---|
 | 1 | The id (an unsigned integer). |
 | 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`, 5 `character`, 6 `animator`), each a compound keyed by the type's wire ids. |
-| 3 and up | The `world_object` table's wire ids: 3 `name`, 4 `position`, 5 `rotation`, 6 `scale`, 7 `tint`, 8 `is_enabled`, 9 `is_visible`, 10 `mobility`, 11 the tags and data, 12 `parent`. |
+| 3 and up | The `world_object` table's wire ids: 3 `name`, 4 `position`, 5 `rotation`, 6 `scale`, 7 `tint`, 8 `is_enabled`, 9 `is_visible`, 10 `mobility`, 11 the tags and data, 12 `parent`, 13 `parent_socket` (T30). |
 
 How each type is stored (`agents/PropertyDescriptors.md`, "Types"): integers in the smallest integer type (readers take
 any integer type whose value fits), floats as Float (angles in radians), vectors and float lists as Float arrays, but

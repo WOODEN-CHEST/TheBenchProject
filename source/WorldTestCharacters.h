@@ -8,6 +8,7 @@
 #include "Logger.h"
 #include "PlayerController.h"
 #include "World.h"
+#include "WorldAnimation.h"
 #include "WorldCharacters.h"
 #include "WorldCollision.h"
 #include "wr/WRVectorMath.h"
@@ -18,14 +19,24 @@
  * scripted pattern through the same CharacterInput), the character events, the look target and the status lines.
  * Test content only: WorldTestFrame.c calls it from its tick.
  *
+ * Bodies and actions (T30): a human (the player as one, and the NPC human) wears the placeholder humanoid, whose
+ * animator plays the world model's graph; the dog and the pigeon keep their boxes. The player's use (E) starts the
+ * action the object looked at offers (text data under tbp:action on it or an ancestor: the bench's "sit", the coffee
+ * cup's "pick_up", the door's "open_door"; a stand-in for a later interactable component), or ends the action the
+ * player is in (standing up). Every action goes through the animation system's API, the NPC human's too.
+ *
  * Keys (raw debug keys, read in Update after the UI had first refusal): F1 walk mode on and off, F2 the test NPCs on and
- * off, F3 the player's flight on and off, F4 the player's kind of character (human, dog, pigeon), F12 the head bob.
+ * off, F3 the player's flight on and off, F4 the player's kind of character (human, dog, pigeon); 8 sends the NPC human to
+ * sit on the bench and gets it up again, 9 has the player put down what it holds, 0 has the player and the NPC human
+ * wave (the right arm's layer, over whatever they do).
  */
 
 
 // Macros.
 /** How many test NPCs F2 spawns: a human, a dog and a pigeon. */
 #define WORLD_TEST_NPC_COUNT 3U
+/** How many holders the test characters remember what they hold of (the player and the NPC human, with room). */
+#define WORLD_TEST_MAX_HOLDERS 4U
 
 
 // Types.
@@ -43,7 +54,17 @@ typedef struct WorldTestNpcStruct
      *  double). */
     float Heading;
     Vector3Double Center;
+    /** Whether it heads for the bench to sit (the 8 key; the human only, T30). */
+    bool WantsToSit;
 } WorldTestNpc;
+
+/** What one holder took (its action's "grab"), until a "release" lets it go: the test frame then settles it on what is
+ *  under it (there is no physics yet). */
+typedef struct WorldTestHeldStruct
+{
+    uint64_t HolderId;
+    uint64_t HeldId;
+} WorldTestHeld;
 
 /** The test frame's characters. Borrowed pointers stay valid while the frame lives. */
 typedef struct WorldTestCharactersStruct
@@ -58,6 +79,10 @@ typedef struct WorldTestCharactersStruct
     size_t _playerKind;
     WorldTestNpc _npcs[WORLD_TEST_NPC_COUNT];
     bool _areNpcsSpawned;
+    /** The animation system (borrowed; NULL until WorldTestCharacters_SetAnimation): the bodies' actions (T30). */
+    WorldAnimation* _animation;
+    /** What the holders took, by their grabs (HolderId 0: a free slot). */
+    WorldTestHeld _held[WORLD_TEST_MAX_HOLDERS];
 } WorldTestCharacters;
 
 
@@ -69,6 +94,15 @@ void WorldTestCharacters_Construct(WorldTestCharacters* self, World* world, Worl
 /** Releases what the test characters own (nothing beyond the controller; the objects belong to the world). */
 void WorldTestCharacters_Deconstruct(WorldTestCharacters* self);
 
+/** Gives the test characters the animation system the frame ticks (borrowed), for the bodies' actions (T30). */
+void WorldTestCharacters_SetAnimation(WorldTestCharacters* self, WorldAnimation* animation);
+
+/** The player's object while walking, else 0: the object the renderer's camera rides (WorldRenderer_SetFirstPersonObject). */
+static inline uint64_t WorldTestCharacters_GetPlayer(const WorldTestCharacters* self)
+{
+    return self->_isWalking ? self->_playerId : 0U;
+}
+
 /** Whether walk mode is on (the camera then follows the player's eyes and the flycam does not move). */
 static inline bool WorldTestCharacters_IsWalking(const WorldTestCharacters* self)
 {
@@ -76,9 +110,9 @@ static inline bool WorldTestCharacters_IsWalking(const WorldTestCharacters* self
 }
 
 /**
- * The tick's input, before the drivers: the debug keys (F1 walk mode, F2 NPCs, F3 flight, F4 kind, F12 head bob) and,
- * while walking, the player controller (which consumes the use action's press). @p camera places the player when walk
- * mode starts and the NPCs when they spawn.
+ * The tick's input, before the drivers: the debug keys (F1 walk mode, F2 NPCs, F3 flight, F4 kind, 8 the NPC human
+ * sits or stands, 9 the player puts down, 0 waving) and, while walking, the player controller (which consumes the use
+ * action's press). @p camera places the player when walk mode starts and the NPCs when they spawn.
  */
 void WorldTestCharacters_HandleInput(WorldTestCharacters* self, GameInput* input, GameCamera* camera,
     bool isCursorCaptured);
@@ -87,10 +121,21 @@ void WorldTestCharacters_HandleInput(WorldTestCharacters* self, GameInput* input
 void WorldTestCharacters_UpdateBrains(WorldTestCharacters* self, float deltaSeconds);
 
 /**
- * After the collision step and the world matrices: logs and clears the character events, updates the look target (its
- * changes logged) and, while walking, puts the camera at the player's eyes.
+ * After the collision step and the world matrices: logs and clears the character events (the player's use starts or
+ * ends an action, T30) and updates the look target (its changes logged).
  */
-void WorldTestCharacters_AfterStep(WorldTestCharacters* self, GameCamera* camera, float deltaSeconds);
+void WorldTestCharacters_AfterStep(WorldTestCharacters* self);
+
+/**
+ * After the animation step (T30): logs the actions' starts, ends and failures and the graphs' events, settles what a
+ * "release" let go of onto what is under it, and clears the animation system's queue. Returns the object a "push" event
+ * pushed this tick (the door the frame swings), or 0.
+ */
+uint64_t WorldTestCharacters_HandleAnimationEvents(WorldTestCharacters* self);
+
+/** While walking, puts the camera at the player's eyes (PlayerController_ApplyCamera): once per shown frame, in the
+ *  frame's PrepareRender after the pose step and the world matrices, so it rides the posed body. */
+void WorldTestCharacters_PlaceCamera(const WorldTestCharacters* self, GameCamera* camera);
 
 /** Logs the player's state and what it looks at (the I key's status line), or that walk mode is off. */
 void WorldTestCharacters_LogStatus(WorldTestCharacters* self);

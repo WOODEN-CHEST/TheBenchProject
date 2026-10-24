@@ -82,7 +82,7 @@ static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter
     bool HasSkinned = (self->_gbuffer._skinnedShader != NULL);
     Shader SkinnedShader = HasSkinned ? GameShader_GetRaylibShader(self->_gbuffer._skinnedShader) : NormalShader;
     WorldRendererMeshShaders Shaders = { .Rigid = &NormalShader, .Skinned = HasSkinned ? &SkinnedShader : NULL,
-        .Palette = &self->_gbuffer._skinnedPalette };
+        .Palette = &self->_gbuffer._skinnedPalette, .IsCameraView = true };
     size_t ModelCount = 0;
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&self->_cache, &ModelCount);
     size_t VisibleCount = 0;
@@ -99,7 +99,7 @@ static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter
         }
         float OutlineFlag = Entry->HasOutline ? 1.0f : 0.0f;
         SetShaderValue(NormalShader, self->_gbuffer._locOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
-        if (HasSkinned && (Entry->Pose != NULL))
+        if (HasSkinned && (Entry->CameraPose != NULL))
         {
             SetShaderValue(SkinnedShader, self->_gbuffer._skinnedLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
         }

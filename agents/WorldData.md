@@ -132,6 +132,17 @@ The world keeps the links (`source/WorldHierarchy.c`); the persisted value is th
   objects are destroyed. One call costs one pass over the object list and over each array the subtree used, whatever
   its size. `World_Deconstruct` likewise runs every hook (each root's subtree children first) before destroying
   anything. Hooks must not change the hierarchy (`WorldComponent.h`).
+- **Sockets (T30).** An object may hang on a named **socket** of its parent's world model (a hand, a hook, a seat;
+  [WorldModels.md](WorldModels.md)): **`World_SetParentSocket(world, childId, parentId, socket, keepWorldTransform)`**
+  is `World_SetParent` with a socket (NULL: the parent itself; `World_SetParent` clears it). The object's local matrix
+  is then its transform times the socket's frame in the parent's current pose (its animator publishes the frames,
+  [Animation.md](Animation.md)), so a held cup follows the hand; `keepWorldTransform` keeps the placement relative to
+  the socket's frame as it is now. Each pose step marks the parent's socket children dirty
+  (`WorldInternal_MarkSocketChildrenChanged`). A socket the parent's pose lacks (no animator, no pose yet, another
+  name) is the parent's own space. `World_TryGetSocketWorldMatrix(world, id, socket, &matrix)` reads a socket's world
+  matrix in double. The row is `parent_socket` (wire id 13, an asset name of at most
+  `WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH` = 64 bytes, saved with the object); the next free wire id of the object table is
+  14. In the collision step a pushable on a socket is its holder's (carried, not pushed out of the hand).
 - **The `parent` row** (wire id 12, an `ObjectId`) is `ReadOnly` for `Properties_Set`: scripts and the editor go
   through `World_SetParent`. JSON and GHDF reads and `Properties_CopyTo` still fill it (a copy brings the parent: the
   copy becomes the original's sibling); the object table's `AfterSet` then has the world attach the object to that
@@ -325,11 +336,13 @@ tick, and gives the object a capsule collider whose shape and motion rows it kee
 ### Animator component (`animator_component`)
 What plays the object's skeletal animation (T29; everything about animation is in [Animation.md](Animation.md)):
 `plays_clip` and `clip` (the clip it plays from the start), `phase` (where it starts, a share of its length), `speed`,
-`is_paused`, `fade_seconds` (a clip change's cross-fade), `overrides_is_looped` / `is_looped`, and
-`overrides_animation_libraries` / `animation_libraries` (the placement's own libraries instead of its world model's).
-The playback (clip times, weights, fades) and the pose are runtime only: the animation system (`WorldAnimation`) keeps
-them in the component (its runtime, freed with the component) and publishes the pose for the renderer and sockets. Not
-a transform driver: it bends the object's model, never moves the object.
+`is_paused`, `fade_seconds` (a clip change's cross-fade), `overrides_is_looped` / `is_looped`,
+`overrides_animation_libraries` / `animation_libraries` (the placement's own libraries instead of its world model's)
+and, since T30, `overrides_animation_graph` / `animation_graph` (its own graph).
+The playback (clip times, weights, fades, the graph's states, the action) and the pose are runtime only: the animation
+system (`WorldAnimation`) keeps them in the component (its runtime, freed with the component; removing the component
+ends its action first, freeing its character) and publishes the pose for the renderer and sockets. Not a transform
+driver: it bends the object's model, never moves the object.
 
 ### Light component (`light_component`)
 `_color` (white), `_intensity` (>= 0, default 1), `_range` (>= 0, default 1: how far the light reaches; T05 renamed it
@@ -419,11 +432,15 @@ The model is ready for them:
   5. queued events: trigger enter and exit (`WorldCollision_GetTriggerEvents`, then `_ClearTriggerEvents`), contacts
      and motion events (T27: `_GetContactEvents`, `_GetMotionEvents`, then their clears; the queued-event rule,
      architecture A4);
-  6. animation, effectively enabled objects only: the skeletons' poses (`WorldAnimation_Update`, T29: the animators'
-     rows, clips and poses, [Animation.md](Animation.md)), then sprite playback (`AdvanceSpriteAnimations` in the test
-     frame);
+  6. animation, effectively enabled objects only: the skeletons' playback (`WorldAnimation_Update`, T29: the animators'
+     rows and clips; since T30 their graphs, fed the characters' state, and their actions, [Animation.md](Animation.md)),
+     then its queued events (`WorldAnimation_GetEvents`, then `_ClearEvents`), then sprite playback
+     (`AdvanceSpriteAnimations` in the test frame);
   7. `World_UpdateTransforms`: the world matrices of everything that moved this tick (T08);
-  8. the renderer, which only reads (AGENTS.md rule 3).
+  8. once per shown frame, after the loop's ticks, the frame's **PrepareRender** (G35, [GameFrame.md](GameFrame.md)):
+     the pose step (`WorldAnimation_Pose`: poses, sockets, the socket children marked dirty), `World_UpdateTransforms`
+     again, then whatever rides a posed body (the first-person camera on the eyes socket);
+  9. the renderer, which only reads (AGENTS.md rule 3).
 
 ## Property tables
 

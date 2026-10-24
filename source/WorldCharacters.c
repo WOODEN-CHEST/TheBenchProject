@@ -71,6 +71,49 @@ typedef struct CharacterStepStruct
 
 
 // Static functions: helpers.
+/* Whether the character's action keeps it from moving (no moves, jumps, crouching or flight changes; T30). */
+static bool IsMovingLocked(const WorldCharacterComponent* character)
+{
+    CharacterMovementLock Lock = character->_actionControl.Lock;
+    return (Lock == CharacterMovementLock_NoMoving) || (Lock == CharacterMovementLock_Locked);
+}
+
+/* Whether the character's action keeps its body from turning. */
+static bool IsTurningLocked(const WorldCharacterComponent* character)
+{
+    CharacterMovementLock Lock = character->_actionControl.Lock;
+    return (Lock == CharacterMovementLock_NoTurning) || (Lock == CharacterMovementLock_Locked);
+}
+
+/* Whether the character slides toward its action's anchor. */
+static bool IsApproaching(const WorldCharacterComponent* character)
+{
+    return character->_actionControl.HasAnchor && (character->_state.Approach == CharacterApproach_Approaching);
+}
+
+/* Whether the character stands on its anchor, held there (not pushable) while its movement is locked. */
+static bool IsHeld(const WorldCharacterComponent* character)
+{
+    return character->_actionControl.HasAnchor && (character->_state.Approach == CharacterApproach_Arrived)
+        && IsMovingLocked(character);
+}
+
+/* Queues an event of the character the step updates and notes it in its state (the last update's events, for its
+ * animation; T30). */
+static void RaiseEvent(const CharacterStep* step, WorldCharacterEventKind kind, uint64_t otherId, float value)
+{
+    WorldCharacterState* State = &step->Character->_state;
+    State->Events |= (uint32_t)1U << (uint32_t)kind;
+    if (kind == WorldCharacterEventKind_Landed)
+    {
+        State->LastLandingSpeed = value;
+    }
+    WorldCharacterEvent Event = { .Kind = kind, .CharacterId = step->Id, .OtherId = otherId, .Value = value,
+        .Tick = step->System->_tick };
+    // The buffer grows (running out of memory aborts in Memory_Allocate), so adding cannot fail.
+    (void)GenericBuffer_AddLast(&step->System->_events, &Event);
+}
+
 static const Vector3 WorldUp = { 0.0f, 1.0f, 0.0f };
 
 /* An angle wrapped into (-pi, pi]. */
@@ -157,14 +200,6 @@ static bool AreVectorsEqual(Vector3 a, Vector3 b)
     return (a.x == b.x) && (a.y == b.y) && (a.z == b.z);
 }
 
-static void QueueEvent(WorldCharacters* self, WorldCharacterEventKind kind, uint64_t characterId, uint64_t otherId,
-    float value)
-{
-    WorldCharacterEvent Event = { .Kind = kind, .CharacterId = characterId, .OtherId = otherId, .Value = value,
-        .Tick = self->_tick };
-    // The buffer grows (running out of memory aborts in Memory_Allocate), so adding cannot fail.
-    (void)GenericBuffer_AddLast(&self->_events, &Event);
-}
 
 /* Logs a warning about one character once (the caller keeps the flag). */
 static void WarnOnce(WorldCharacters* self, bool* hasWarned, uint64_t id, const char* problem)
@@ -252,7 +287,8 @@ static void KeepFirstError(Error* first, Error result)
 
 /* Writes the rows a character's collider must hold, each only when it differs (every write advances the collider's
  * revision, which makes the collision world rebuild it). */
-static Error SyncCollider(WorldColliderComponent* collider, const CharacterSettings* settings, float height)
+static Error SyncCollider(WorldColliderComponent* collider, const CharacterSettings* settings, float height,
+    bool isPushable)
 {
     Error First = Error_CreateSuccess();
     if (!WorldColliderComponent_IsEnabled(collider))
@@ -299,9 +335,9 @@ static Error SyncCollider(WorldColliderComponent* collider, const CharacterSetti
     {
         KeepFirstError(&First, WorldColliderComponent_SetRotationMode(collider, WorldColliderRotationMode_YawOnly));
     }
-    if (WorldColliderComponent_IsPushable(collider) != settings->IsPushable)
+    if (WorldColliderComponent_IsPushable(collider) != isPushable)
     {
-        KeepFirstError(&First, WorldColliderComponent_SetPushable(collider, settings->IsPushable));
+        KeepFirstError(&First, WorldColliderComponent_SetPushable(collider, isPushable));
     }
     if (!WorldColliderComponent_IsOverridden(collider, WorldColliderSetting_Mass)
         || (WorldColliderComponent_GetMass(collider) != settings->Mass))
@@ -337,7 +373,9 @@ static void EnsureCollider(CharacterStep* step)
         }
     }
     WorldColliderComponent* Collider = WorldColliderComponent_FromComponent(Component);
-    Error SyncResult = SyncCollider(Collider, &step->Settings, step->Character->_state.Height);
+    // Held on its action's anchor it is not pushed off it (T30).
+    Error SyncResult = SyncCollider(Collider, &step->Settings, step->Character->_state.Height,
+        step->Settings.IsPushable && !IsHeld(step->Character));
     if (SyncResult.Code != ErrorCode_Success)
     {
         Error_Deconstruct(&SyncResult);
@@ -516,6 +554,10 @@ static Vector3 ReadPush(const CharacterStep* step, Vector3Double feet)
 static void UpdateMode(CharacterStep* step)
 {
     WorldCharacterState* State = &step->Character->_state;
+    if (IsMovingLocked(step->Character) || IsApproaching(step->Character))
+    {
+        return;
+    }
     bool WantsToFly = step->Character->_input.WantsToFly && step->Settings.CanFly;
     if (WantsToFly && (State->Mode == CharacterMovementMode_Walking))
     {
@@ -524,7 +566,7 @@ static void UpdateMode(CharacterStep* step)
         {
             LeaveGround(step->Character);
         }
-        QueueEvent(step->System, WorldCharacterEventKind_TookOff, step->Id, 0U, 0.0f);
+        RaiseEvent(step, WorldCharacterEventKind_TookOff, 0U, 0.0f);
     }
     else if (!WantsToFly && (State->Mode == CharacterMovementMode_Flying))
     {
@@ -533,7 +575,7 @@ static void UpdateMode(CharacterStep* step)
         State->TimeInAir = 0.0f;
         // No late jump out of a flight: the coyote time is for walking off edges.
         step->Character->_runtime._hasJumpedSinceGrounded = true;
-        QueueEvent(step->System, WorldCharacterEventKind_StoppedFlying, step->Id, 0U, 0.0f);
+        RaiseEvent(step, WorldCharacterEventKind_StoppedFlying, 0U, 0.0f);
     }
 }
 
@@ -597,12 +639,17 @@ static void UpdateStance(CharacterStep* step, Vector3Double feet)
     WorldCharacterState* State = &step->Character->_state;
     bool WantsCrouch = step->Character->_input.WantsCrouch && step->Settings.CanCrouch
         && (State->Mode == CharacterMovementMode_Walking);
+    if (IsMovingLocked(step->Character) || IsApproaching(step->Character))
+    {
+        // An action holds the stance it found (T30).
+        WantsCrouch = State->Stance == CharacterStance_Crouching;
+    }
     if (State->Stance == CharacterStance_Standing)
     {
         if (WantsCrouch && State->IsGrounded)
         {
             State->Stance = CharacterStance_Crouching;
-            QueueEvent(step->System, WorldCharacterEventKind_Crouched, step->Id, 0U, 0.0f);
+            RaiseEvent(step, WorldCharacterEventKind_Crouched, 0U, 0.0f);
         }
         State->IsStandUpBlocked = false;
     }
@@ -614,7 +661,7 @@ static void UpdateStance(CharacterStep* step, Vector3Double feet)
     {
         State->Stance = CharacterStance_Standing;
         State->IsStandUpBlocked = false;
-        QueueEvent(step->System, WorldCharacterEventKind_StoodUp, step->Id, 0U, 0.0f);
+        RaiseEvent(step, WorldCharacterEventKind_StoodUp, 0U, 0.0f);
     }
     else
     {
@@ -767,10 +814,11 @@ static void UpdateVelocity(CharacterStep* step)
     const CharacterSettings* Settings = &step->Settings;
     float Delta = step->DeltaSeconds;
 
+    bool IsLocked = IsMovingLocked(step->Character);
     if (State->Mode == CharacterMovementMode_Flying)
     {
         float Speed = (Input->IsRunning && Settings->CanRun) ? Settings->FlyFastSpeed : Settings->FlySpeed;
-        Vector3 Wish = Vector3Scale(Input->MoveDirection, Speed);
+        Vector3 Wish = IsLocked ? (Vector3){ 0.0f, 0.0f, 0.0f } : Vector3Scale(Input->MoveDirection, Speed);
         Runtime->_velocity = Approach(Runtime->_velocity, Wish, Settings->FlyAcceleration, Settings->FlyDeceleration,
             Delta);
         return;
@@ -778,6 +826,11 @@ static void UpdateVelocity(CharacterStep* step)
 
     float Amount = 0.0f;
     Vector3 Direction = GetWishDirection(Input, &Amount);
+    if (IsLocked)
+    {
+        Direction = (Vector3){ 0.0f, 0.0f, 0.0f };
+        Amount = 0.0f;
+    }
     float WishSpeed = Amount * GetWalkingSpeed(step);
     if (State->IsGrounded)
     {
@@ -818,7 +871,7 @@ static void UpdateVelocity(CharacterStep* step)
         Runtime->_hasJumpRequest = false;
         Runtime->_hasJumpedSinceGrounded = true;
         Runtime->_secondsSinceJump = 0.0f;
-        QueueEvent(step->System, WorldCharacterEventKind_Jumped, step->Id, 0U, 0.0f);
+        RaiseEvent(step, WorldCharacterEventKind_Jumped, 0U, 0.0f);
     }
     if (Runtime->_hasJumpRequest)
     {
@@ -897,7 +950,7 @@ static void UpdateWalkingGround(CharacterStep* step, Vector3Double start, Vector
         float MoveSpeed = (float)(feet->Y - start.Y) / step->DeltaSeconds;
         Character->_runtime._velocity.y = GetWalkOffSpeed(step, ground, *feet, MoveSpeed);
         LeaveGround(Character);
-        QueueEvent(step->System, WorldCharacterEventKind_LeftGround, step->Id, 0U, 0.0f);
+        RaiseEvent(step, WorldCharacterEventKind_LeftGround, 0U, 0.0f);
         return;
     }
 
@@ -909,7 +962,7 @@ static void UpdateWalkingGround(CharacterStep* step, Vector3Double start, Vector
         SetGround(Character, &Support);
         Character->_runtime._velocity.y = 0.0f;
         Character->_runtime._hasJumpedSinceGrounded = false;
-        QueueEvent(step->System, WorldCharacterEventKind_Landed, step->Id, Support.ObjectId, fallSpeed);
+        RaiseEvent(step, WorldCharacterEventKind_Landed, Support.ObjectId, fallSpeed);
     }
 }
 
@@ -945,12 +998,95 @@ static void Move(CharacterStep* step, Vector3Double* feet)
     State->TimeInAir = 0.0f;
 }
 
+/* While approaching its anchor (T30): turns toward the anchor's facing fast enough to face it by the end of the approach
+ * (at least at its turn speed). */
+static void TurnToAnchor(CharacterStep* step)
+{
+    WorldCharacterState* State = &step->Character->_state;
+    const CharacterActionControl* Control = &step->Character->_actionControl;
+    float Remaining = Math_MaxFloat(Control->ApproachSeconds - step->Character->_runtime._approachSeconds,
+        step->DeltaSeconds);
+    float Gap = WrapAngle(Control->AnchorYaw - State->FacingYaw);
+    float Most = Math_MaxFloat(step->Settings.IsTurnInstant ? fabsf(Gap) : (step->Settings.TurnSpeed * step->DeltaSeconds),
+        (fabsf(Gap) * step->DeltaSeconds) / Remaining);
+    float Turn = Math_ClampFloat(Gap, -Most, Most);
+    State->FacingYaw = WrapAngle(State->FacingYaw + Turn);
+    State->TurnRate = Turn / step->DeltaSeconds;
+}
+
+/* While approaching its anchor (T30): the velocity that takes the feet there across the ground by the end of the
+ * approach (at once for an approach of 0 seconds); a walker in the air still falls. */
+static void SetApproachVelocity(CharacterStep* step, Vector3Double feet)
+{
+    const CharacterActionControl* Control = &step->Character->_actionControl;
+    WorldCharacterRuntime* Runtime = &step->Character->_runtime;
+    float Remaining = Math_MaxFloat(Control->ApproachSeconds - Runtime->_approachSeconds, step->DeltaSeconds);
+    Vector3 Offset = GameMath_ToVector3Relative(Control->AnchorPosition, feet);
+    Runtime->_velocity.x = Offset.x / Remaining;
+    Runtime->_velocity.z = Offset.z / Remaining;
+    const WorldCharacterState* State = &step->Character->_state;
+    if (State->Mode == CharacterMovementMode_Flying)
+    {
+        Runtime->_velocity.y = Offset.y / Remaining;
+    }
+    else if (State->IsGrounded)
+    {
+        Runtime->_velocity.y = 0.0f;
+    }
+    else
+    {
+        Runtime->_velocity.y -= step->Gravity * step->Settings.GravityMultiplier * step->DeltaSeconds;
+    }
+}
+
+/* After the move (T30): an approach that came within the tolerances has arrived (facing the anchor's way exactly);
+ * one past its time and the grace has failed. Either way it stops sliding. */
+static void UpdateApproach(CharacterStep* step, Vector3Double feet)
+{
+    WorldCharacterComponent* Character = step->Character;
+    if (!IsApproaching(Character))
+    {
+        return;
+    }
+    const CharacterActionControl* Control = &Character->_actionControl;
+    WorldCharacterRuntime* Runtime = &Character->_runtime;
+    WorldCharacterState* State = &Character->_state;
+    Runtime->_approachSeconds += step->DeltaSeconds;
+    Vector3 Offset = GameMath_ToVector3Relative(Control->AnchorPosition, feet);
+    float Distance = sqrtf((Offset.x * Offset.x) + (Offset.z * Offset.z));
+    float Gap = WrapAngle(Control->AnchorYaw - State->FacingYaw);
+    if ((Distance <= CHARACTER_ANCHOR_TOLERANCE) && (fabsf(Gap) <= CHARACTER_ANCHOR_YAW_TOLERANCE))
+    {
+        State->Approach = CharacterApproach_Arrived;
+        State->FacingYaw = Control->AnchorYaw;
+    }
+    else if (Runtime->_approachSeconds > (Control->ApproachSeconds + CHARACTER_APPROACH_GRACE_SECONDS))
+    {
+        State->Approach = CharacterApproach_Failed;
+    }
+    else
+    {
+        return;
+    }
+    Runtime->_velocity.x = 0.0f;
+    Runtime->_velocity.z = 0.0f;
+}
+
 /* Turns the body toward its facing target at its turn speed (or at once). */
 static void UpdateFacing(CharacterStep* step)
 {
     WorldCharacterState* State = &step->Character->_state;
     const CharacterInput* Input = &step->Character->_input;
     State->TurnRate = 0.0f;
+    if (IsApproaching(step->Character))
+    {
+        TurnToAnchor(step);
+        return;
+    }
+    if (IsTurningLocked(step->Character))
+    {
+        return;
+    }
     float Target = State->FacingYaw;
     switch (Input->Facing)
     {
@@ -1037,7 +1173,7 @@ static void HandleUse(CharacterStep* step, bool isUsePressed)
     }
     WorldRayHit Hit;
     bool IsHit = WorldCharacters_FindLookTarget(step->System, step->Id, &Hit);
-    QueueEvent(step->System, WorldCharacterEventKind_Used, step->Id, IsHit ? Hit.Shape.ObjectId : 0U,
+    RaiseEvent(step, WorldCharacterEventKind_Used, IsHit ? Hit.Shape.ObjectId : 0U,
         IsHit ? Hit.Distance : 0.0f);
 }
 
@@ -1045,6 +1181,7 @@ static void UpdateCharacter(WorldCharacters* self, WorldCharacterComponent* char
     float gravity)
 {
     WorldObject* Object = WorldComponent_GetOwner(&character->Base);
+    character->_state.Events = 0U;
     if (!WorldObject_IsEffectivelyEnabled(Object))
     {
         // Whatever moves meanwhile is not one tick's carry or push when it comes back.
@@ -1083,10 +1220,15 @@ static void UpdateCharacter(WorldCharacters* self, WorldCharacterComponent* char
     bool IsUsePressed = Input->WantsUse && !Runtime->_wasUseWanted;
     Runtime->_wasJumpWanted = Input->WantsJump;
     Runtime->_wasUseWanted = Input->WantsUse;
-    if (IsJumpPressed || IsAutoJumpDue(&Step))
+    bool CanJumpInAction = !IsMovingLocked(character) && !IsApproaching(character);
+    if (CanJumpInAction && (IsJumpPressed || IsAutoJumpDue(&Step)))
     {
         Runtime->_hasJumpRequest = true;
         Runtime->_jumpRequestSeconds = Step.Settings.JumpBufferSeconds;
+    }
+    if (!CanJumpInAction)
+    {
+        Runtime->_hasJumpRequest = false;
     }
 
     UpdateMode(&Step);
@@ -1095,7 +1237,16 @@ static void UpdateCharacter(WorldCharacters* self, WorldCharacterComponent* char
     UpdateStance(&Step, Feet);
     EnsureCollider(&Step);
     UpdateVelocity(&Step);
+    if (IsApproaching(character))
+    {
+        SetApproachVelocity(&Step, Feet);
+    }
+    else if (IsHeld(character))
+    {
+        Runtime->_velocity = (Vector3){ 0.0f, 0.0f, 0.0f };
+    }
     Move(&Step, &Feet);
+    UpdateApproach(&Step, Feet);
     // How fast it moved: its own move this update and the collision step's push since the last (the carry is the
     // ground's).
     State->Velocity = Vector3Scale(Vector3Add(GameMath_ToVector3Relative(Feet, Carried), Push), 1.0f / deltaSeconds);

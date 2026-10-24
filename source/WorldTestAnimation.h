@@ -11,8 +11,8 @@
 #include "wr/WRError.h"
 
 /*
- * Private header (source/) of the world test frame's animation (T29): the animation system the frame ticks, and its
- * debug keys. Test content only: WorldTestFrame.c calls it from its tick.
+ * Private header (source/) of the world test frame's animation (T29): the animation system the frame ticks and poses,
+ * and its debug keys. Test content only: WorldTestFrame.c calls it from its tick and its PrepareRender.
  *
  * Keys (raw debug keys, read in Update after the UI had first refusal): 5 steps the showcase figure (the test world's
  * "humanoid_showcase") through every clip of the placeholder library, cross-fading over its animator's fade time; 6
@@ -62,6 +62,9 @@ void WorldTestAnimation_HandleInput(WorldTestAnimation* self, const GameInput* i
 
 /** The tick's animation step (after the collision step and its events, before World_UpdateTransforms). */
 void WorldTestAnimation_Update(WorldTestAnimation* self, float deltaSeconds);
+
+/** The pose step, once per shown frame in the frame's PrepareRender (before World_UpdateTransforms and the render). */
+void WorldTestAnimation_Pose(WorldTestAnimation* self);
 
 /** Logs the animation system's last update and the debug state (the I key's status line). */
 void WorldTestAnimation_LogStatus(const WorldTestAnimation* self);

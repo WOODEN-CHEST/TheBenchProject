@@ -1,9 +1,13 @@
 // The world model asset's data functions: the shadow tier's names, the default settings, the variants (lookup by
-// name, and applying one to a per-draw copy of a material's maps) and the collision sets (lookup by name). The
-// definition and the loader are in WorldModelDefinition.c, the collision section's in WorldModelCollisionDefinition.c.
+// name, and applying one to a per-draw copy of a material's maps), the collision sets (lookup by name) and the sockets
+// (lookup by name, a socket's frame in a pose; T30). The definition and the loader are in WorldModelDefinition.c, the
+// collision section's in WorldModelCollisionDefinition.c.
 
 #include "WorldModel.h"
+#include "GameSkeleton.h"
 #include "GameTexture.h"
+#include "raylib/raymath.h"
+#include "wr/WRMemory.h"
 #include "wr/WRString.h"
 
 
@@ -23,6 +27,40 @@ const PropertyEnumTable WORLD_SHADOW_TIER_ENUM =
 
 
 // Static functions.
+/* A transform's turn and place without its scale: its X axis and its Y axis made unit length and square to it, Z their
+ * cross product (a mirrored transform's mirror is dropped too), the translation kept. Axes too short to have a direction
+ * leave the turn out. */
+static Matrix MakeRigid(Matrix transform)
+{
+    Vector3 X = { transform.m0, transform.m1, transform.m2 };
+    Vector3 Y = { transform.m4, transform.m5, transform.m6 };
+    Matrix Rigid = MatrixTranslate(transform.m12, transform.m13, transform.m14);
+    float LengthX = Vector3Length(X);
+    if (!(LengthX > 1e-12f))
+    {
+        return Rigid;
+    }
+    X = Vector3Scale(X, 1.0f / LengthX);
+    Y = Vector3Subtract(Y, Vector3Scale(X, Vector3DotProduct(Y, X)));
+    float LengthY = Vector3Length(Y);
+    if (!(LengthY > 1e-12f))
+    {
+        return Rigid;
+    }
+    Y = Vector3Scale(Y, 1.0f / LengthY);
+    Vector3 Z = Vector3CrossProduct(X, Y);
+    Rigid.m0 = X.x;
+    Rigid.m1 = X.y;
+    Rigid.m2 = X.z;
+    Rigid.m4 = Y.x;
+    Rigid.m5 = Y.y;
+    Rigid.m6 = Y.z;
+    Rigid.m8 = Z.x;
+    Rigid.m9 = Z.y;
+    Rigid.m10 = Z.z;
+    return Rigid;
+}
+
 /* Replaces a map's texture with a texture asset's, when the override names one. */
 static void ApplyTexture(const GameTexture* texture, MaterialMap* map)
 {
@@ -109,4 +147,60 @@ void WorldModel_ApplyVariant(const WorldModel* self, size_t variantIndex, int ma
         GameMaterialFactors_Apply(&Override->_factors, Override->_emissive != NULL, maps);
         return; // one override per slot (the definition refuses a slot twice)
     }
+}
+
+bool WorldModel_TryFindSocket(const WorldModel* self, const unsigned char* name, uint32_t* outIndex)
+{
+    if (name == NULL)
+    {
+        return false;
+    }
+    size_t Length = StringUTF8_GetByteLength(name);
+    for (uint32_t Index = 0U; Index < self->_socketCount; Index++)
+    {
+        const unsigned char* Candidate = self->_sockets[Index]._name;
+        if ((StringUTF8_GetByteLength(Candidate) == Length) && Memory_IsEqual(Candidate, name, Length))
+        {
+            if (outIndex != NULL)
+            {
+                *outIndex = Index;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+bool WorldModel_GetFirstPerson(const WorldModel* self, uint32_t* outEyesSocket, const uint32_t** outHiddenBones,
+    uint32_t* outHiddenBoneCount)
+{
+    if (outEyesSocket != NULL)
+    {
+        *outEyesSocket = self->_eyesSocket;
+    }
+    if (outHiddenBones != NULL)
+    {
+        *outHiddenBones = self->_hiddenBones;
+    }
+    if (outHiddenBoneCount != NULL)
+    {
+        *outHiddenBoneCount = self->_hiddenBoneCount;
+    }
+    return self->_hasFirstPerson;
+}
+
+Matrix WorldModel_GetSocketMatrix(const WorldModel* self, uint32_t socket, const Matrix* boneMatrices)
+{
+    const WorldModelSocket* Socket = &self->_sockets[socket];
+    if (!Socket->_hasBone || (self->_skeleton == NULL))
+    {
+        return Socket->_offset;
+    }
+    // The bone's frame in the object's own space (its space to mesh space: the pose's matrix, or the bind matrix; then
+    // the skeleton LOD's import transform, mesh space to the object's), made rigid: a bone or an import may scale (a
+    // model authored in centimetres), and the offset is in metres, what hangs on the socket keeps its own size.
+    const GameSkeletonBone* Bone = GameSkeleton_GetBone(self->_skeleton, Socket->_bone);
+    Matrix BoneMatrix = (boneMatrices != NULL) ? boneMatrices[Socket->_bone] : Bone->_bind;
+    Matrix Import = GameModel_GetRaylibModel(self->_lods[self->_skeletonLod]._model).transform;
+    return MatrixMultiply(Socket->_offset, MakeRigid(MatrixMultiply(BoneMatrix, Import)));
 }

@@ -413,6 +413,7 @@ static const GameFrameVTable UITestFrameVTable =
     .BeginUnload = UITestFrame_BeginUnload,
     .UnloadStep = UITestFrame_UnloadStep,
     .IsUnloaded = UITestFrame_IsUnloaded,
+    .PrepareRender = NULL,
     .Render = UITestFrame_Render,
     .GetLoadProgress = NULL,
     .OnResize = NULL,

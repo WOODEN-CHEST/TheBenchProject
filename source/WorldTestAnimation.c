@@ -38,7 +38,8 @@
 /* The placeholder library's clips, in the order the 5 key plays them. */
 static const char* const ShowcaseClips[] =
 {
-    "idle", "walk", "run", "crouch_idle", "crouch_walk", "jump", "fall", "land", "wave"
+    "idle", "walk", "run", "crouch_idle", "crouch_walk", "jump", "fall", "land", "wave", "sit_down", "sit_idle", "stand_up",
+    "pick_up", "hold_r", "put_down", "open_door"
 };
 
 
@@ -280,14 +281,20 @@ void WorldTestAnimation_Update(WorldTestAnimation* self, float deltaSeconds)
         : deltaSeconds);
 }
 
+void WorldTestAnimation_Pose(WorldTestAnimation* self)
+{
+    WorldAnimation_Pose(self->_animation);
+}
+
 void WorldTestAnimation_LogStatus(const WorldTestAnimation* self)
 {
     WorldAnimationStatus Status = WorldAnimation_GetStatus(self->_animation);
     const WorldAnimatorComponent* Showcase = FindAnimator(self->_world, self->_showcaseId);
     const unsigned char* Clip = (Showcase != NULL) ? WorldAnimatorComponent_GetClip(Showcase) : NULL;
-    Log(self, "animation: %" PRIu64 " animators (%" PRIu64 " posed), %" PRIu64 " clips playing, %" PRIu64 " bones posed "
-        "in %.0f us; the showcase plays \"%s\" (5); crowd %s (6); slow motion %s (7).", (uint64_t)Status.AnimatorCount,
-        (uint64_t)Status.PosedCount, (uint64_t)Status.ClipCount, (uint64_t)Status.BoneCount, Status.UpdateMicroseconds,
+    Log(self, "animation: %" PRIu64 " animators (%" PRIu64 " posed), %" PRIu64 " clips playing, updated in %.0f us; the "
+        "last frame posed %" PRIu64 " (%" PRIu64 " bones) in %.0f us; the showcase plays \"%s\" (5); crowd %s (6); slow "
+        "motion %s (7).", (uint64_t)Status.AnimatorCount, (uint64_t)Status.PosedCount, (uint64_t)Status.ClipCount,
+        Status.UpdateMicroseconds, (uint64_t)Status.RecomputedCount, (uint64_t)Status.BoneCount, Status.PoseMicroseconds,
         (Clip != NULL) ? (const char*)Clip : "nothing", self->_isCrowdShown ? "out" : "away",
         self->_isSlowMotion ? "on" : "off");
 }

@@ -58,6 +58,14 @@ active at once:
 - **Cross-fade:** keep both scenes active and animate the outgoing frame's `CompositeColor.Opacity` down
   (and/or the incoming one's up); remove the outgoing frame when the fade completes.
 
+## Preparing a render
+
+`GameFrameManager_PrepareRender(manager, time)` (T30, G35) calls each active frame's optional `PrepareRender` slot
+(GameFrame.md), from the top of the z-stack down like the update, skipping frames whose `IsUpdated` or `IsRendered` is
+off (a frozen frame has nothing new to show, a hidden one nothing to show it on) and frames without the slot. It works
+on a snapshot like the update, so a frame added meanwhile waits for the next render. A failure is fatal like every
+frame slot's. Call it once per render, right before `GameFrameManager_Render`, with the same time.
+
 ## Rendering / compositing
 
 `GameFrameManager_Render`:
@@ -108,7 +116,10 @@ while (!WindowShouldClose() && !GameFrameManager_ShouldStop(&Manager))
         Accumulator -= UpdateDelta;
     }
 
-    Error r = GameFrameManager_Render(&Manager, ProgramTime_Create(Now, FrameTime));
+    ProgramTime RenderTime = ProgramTime_Create(Now, FrameTime);
+    Error p = GameFrameManager_PrepareRender(&Manager, RenderTime);   // the update side's last step (T30)
+    if (p.Code != ErrorCode_Success) { Error_Deconstruct(&p); /* stop */ break; }
+    Error r = GameFrameManager_Render(&Manager, RenderTime);
     if (r.Code != ErrorCode_Success) { Error_Deconstruct(&r); /* stop */ break; }
 }
 

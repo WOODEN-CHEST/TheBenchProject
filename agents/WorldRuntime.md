@@ -11,7 +11,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | GameCamera | `include/GameCamera.h`, `source/GameCamera.c` | The 3D camera (a double position, fov/yaw/pitch/roll), converted to raylib's render camera at the origin only at render time. |
 | Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, the key registry, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
-| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, their LOD state, the variant and the settings in effect; sprites with their world sprites' settings in effect; lights), built from the world's per-type component arrays. |
+| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, their LOD state, the variant, the settings in effect and their pose; since T30 the camera's pose, the first-person object's with its hidden bones collapsed; sprites with their world sprites' settings in effect; lights), built from the world's per-type component arrays. |
 | WorldLod | `source/WorldLod.h`, `source/WorldLod.c` (private) | Levels of detail as pure maths (see "LODs"): the LOD selection by distance with hysteresis, the scale and a forced LOD, and the cross-fade's state and its two draws. |
 | WorldRenderSpace | `source/WorldRenderSpace.h`, `source/WorldRenderSpace.c` (private) | Render space as pure maths (see "Render space", T32): the frame's origin and its rotation-only view and projection, the C mirror of the sky shader's ray, the shadow cascades snapped to their texel grids, each grid anchored to the last frame's box. |
 | WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
@@ -624,7 +624,12 @@ The renderer keeps receiving features, so:
 - **Every geometry pass skins (T29).** A pass that draws models has a skinned twin of its shader (the same fragment
   stage over a vertex stage that includes `common/skinning`), passes both to `WorldRendererGeometry_DrawModel`
   (`WorldRendererMeshShaders`) and sets every per-object uniform on both while the entry has a pose (dither, outline
-  flag, forward lights; the PBR factors go to the program the mesh draws with). A palette is uploaded once per pose per
+  flag, forward lights; the PBR factors go to the program the mesh draws with). Since T30 a pass says whether it draws
+  the camera's view (`WorldRendererMeshShaders.IsCameraView`: the G-buffer, the lit pass, the unlit fallback) or a
+  light's (the shadow passes): the camera's draw each entry's `CameraPose`, which for the first-person object
+  (`WorldRenderer_SetFirstPersonObject`) is the render cache's copy of its pose with the bones its world model's
+  first_person block hides, and their subtrees, collapsed onto the hidden bone's joint; the lights' draw `Pose`, the
+  whole body. A palette is uploaded once per pose per
   pass (`WorldRendererPalette`), and every frame starts by forgetting which pose each palette holds
   (`WorldRendererGeometry_ResetPalettes`). A new geometry pass follows the same pattern, or its skinned meshes draw in
   their bind pose.
@@ -708,11 +713,15 @@ characters (`WorldCharacters_Update`, last among the drivers), the collision ste
 ("desk_trigger_zone") enter: object 16 ("desk_top").`, `WorldTest: contact begins: object 33 ("door") and object 42
 ("door_crate"), 1 shape pairs, impact 0.71 m/s.`, `WorldTest: object 33 ("door") is blocked by object 42
 ("door_crate"), which cannot get out of its way; it stops.`), then the animation system (`WorldAnimation_Update`, T29:
-the animators' rows, clips and poses; slowed to a quarter while the 7 key's slow motion is on), then advances the
-sprites of effectively enabled objects
+the animators' rows and clips; since T30 their graphs and actions; slowed to a quarter while the 7 key's slow motion is
+on) and its events (T30: logged; a `push` from the door's action swings the door, a `release` sets the cup down on what
+is under it), then advances the sprites of effectively enabled objects
 (`World_GetComponents(world, WorldComponentType_Sprite)`), calls `World_UpdateTransforms` (the tick's
-world-matrix step), so the renderer reads cached matrices, and last logs the characters' events, updates the player's
-look target and, in walk mode, puts the camera at the player's eyes.
+world-matrix step), so the renderer reads cached matrices, and last logs the characters' events (the player's use
+starting or ending an action, T30) and updates the player's look target. **`PrepareRender`** (T30, G35; GameFrame.md),
+once per shown frame: the pose step (`WorldAnimation_Pose`), `World_UpdateTransforms` again (what the poses moved: held
+items), then, in walk mode, the camera on the player's eyes (its body's eyes socket as posed) and the player named as
+the renderer's first-person object (`WorldRenderer_SetFirstPersonObject`; 0 out of walk mode).
 **Game time:** the clock starts from the world environment's date and time of day (noon, 2026-10-18) at time scale
 720 (a 2-minute day, as the test world had before T23; the clock's own default is 72). Every `Update` advances it,
 logs a new day when it crosses midnight, and writes its time of day and date into the environment, so the sky shows
@@ -722,8 +731,8 @@ All input runs in `Update` at the fixed timestep and comes from `Services.Input`
 the UI test frame above had first refusal: movement through the actions (`move_*`, default WASD + SPACE/CTRL, `sprint`
 default SHIFT), mouse-look (`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured) and the
 debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
-it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F12 and the
-digits 1 to 7 are taken already; 8, 9, 0, minus, equals and the keypad are free):
+it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11 and the
+digits are taken already; F12, minus, equals and the keypad are free):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
   06:00:00.`): P pause/resume the clock; 1–4 jump to dawn/noon/dusk/midnight of the clock's day (06:00, 12:00, 18:00,
@@ -783,17 +792,31 @@ digits 1 to 7 are taken already; 8, 9, 0, minus, equals and the keypad are free)
   sits at its eyes (`PlayerController`: WASD walk relative to the view, SHIFT runs, SPACE jumps (the `jump` action),
   CTRL crouches while held (`crouch`), E uses what you look at (`use`, logged with what it hit; it takes the E press
   from the variants key while walking), the mouse looks around). F2 spawns and removes the test NPCs 3 m in front of
-  the camera: a human (orange) walking a square and crouching every third side, a dog (brown) running circles and
-  lying down, a pigeon (grey-violet) walking, taking off, flying a loop and landing: each a character driven by a
-  scripted pattern through the same `CharacterInput` as the player, wearing a placeholder body of two test cubes (the
-  trunk squashes when it crouches). F3 lets the player fly and lands it (SPACE and CTRL climb and sink while flying), F4
-  turns the player into the next kind (human, dog, pigeon: the same object, another character asset), F12 the head
-  bob. The log names what you look at whenever it changes and every character event (jumped, landed with its speed,
-  left the ground, crouched, stood up, took off, stopped flying, used); I adds `WorldTest: you: a human (test_human),
-  walking, standing, on object 2 ("ground"), 1.40 m/s, eyes 1.62 m up; looking at ...`;
+  the camera: a human walking a square and crouching every third side, a dog (brown) running circles and lying down, a
+  pigeon (grey-violet) walking, taking off, flying a loop and landing: each a character driven by a scripted pattern
+  through the same `CharacterInput` as the player; the dog and the pigeon wear a placeholder body of two test cubes
+  (the trunk squashes when it crouches), the human (since T30) the animated placeholder humanoid. F3 lets the player fly
+  and lands it (SPACE and CTRL climb and sink while flying), F4 turns the player into the next kind (human, dog, pigeon:
+  the same object, another character asset; a human wears the humanoid, and what its hand held is set down when it stops
+  being one). The log names what you look at whenever it changes and every character event (jumped, landed with its
+  speed, left the ground, crouched, stood up, took off, stopped flying, used); I adds `WorldTest: you: a human
+  (test_human), walking, standing, on object 2 ("ground"), 1.40 m/s, eyes 1.62 m up; looking at ...; in no action;
+  ...`;
+- **the bodies and their actions (T30, [Animation.md](Animation.md)):** as a human the player wears the humanoid and
+  sees it in first person (looking down shows the chest, arms and feet, never the head; its shadow has one). E on an
+  object that offers an action (its `tbp:action` text, on it or an ancestor) starts it on the player: the bench (49)
+  `sit` (the player slides onto its seat and sits; E again stands up), the coffee cup on the desk (50) `pick_up` (the
+  player slides in front of it, reaches, takes it in its right hand and holds it; refused while the hand is full) and
+  the door (33) `open_door` (the player slides to it and pushes it: the frame swings it as F6 does). **9** puts down what
+  the player holds (`put_down`: it leaves the hand at the reach and is set down on what is under it), **0** has the
+  player (a human) and the NPC human wave with the right arm over whatever they do, **8** sends the NPC human to the
+  bench: it walks to a point in front of it and starts the same `sit` (8 again gets it up). Every action's start, end or
+  failure and every graph event is logged (`WorldTest: you: action "pick_up" starts (target 50 "coffee_cup").`,
+  `WorldTest: you: "grab".`);
 - **animation (T29, [Animation.md](Animation.md); the private `source/WorldTestAnimation.{h,c}`):** 5 steps the
   showcase figure (`humanoid_showcase`) through the placeholder's clips (idle, walk, run, crouch_idle, crouch_walk,
-  jump, fall, land, wave), each a cross-fade over its animator's 0.3 s (logged); 6 brings out a crowd of 100 figures
+  jump, fall, land, wave, and since T30 sit_down, sit_idle, stand_up, pick_up, hold_r, put_down, open_door), each a
+  cross-fade over its animator's 0.3 s (logged); 6 brings out a crowd of 100 figures
   (runtime objects, never saved; tall and short alternating) in a square in front of the camera, facing it, each
   walking at its own phase and a little faster or slower, and takes it away; 7 slows every animation to a quarter and
   back (logged). I adds `WorldTest: animation: 104 animators (104 posed), 104 clips playing, 1976 bones posed in 182 us;

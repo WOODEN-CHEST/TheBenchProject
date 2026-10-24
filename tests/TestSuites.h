@@ -169,6 +169,19 @@ void WorldRenderSpaceTests_Run(TestRun* run);
  *  loading its file (AnimationLibraryTests.c). */
 void AnimationLibraryTests_Run(TestRun* run);
 
+/** @brief Animation graphs (T30): a graph using every part of the format read back record by record (parameters and
+ *  their indices, layers with masks, blends, clips, empty states, events with their effects, transitions from any state
+ *  and from lists, every kind of condition, look-at, actions with anchors), the defaults, the block copied as bytes, the
+ *  asset type, every rule's refusal naming its reason, and the limits (AnimationGraphTests.c). */
+void AnimationGraphTests_Run(TestRun* run);
+
+/** @brief The graph player (T30): bindings (clips with their natural speeds, masks, look bones, what is missing), the
+ *  playback's start, blends in step matching the speed within their rate limits, transitions (from any state, exit
+ *  times, priority, one a tick), timed events (by phase and time, at the start, once each, "set"), layers over the body
+ *  by mask and weight, socket conditions, look-at's easing, limits, weight and import rotation, cross-fades, full
+ *  layers and missing clips (AnimationGraphPlayerTests.c). */
+void AnimationGraphPlayerTests_Run(TestRun* run);
+
 /** @brief Skeletal animation's runtime maths (T29): transforms composed and taken apart (a non-uniform scale under a turn
  *  too), skeletons from raylib models (rest and bind poses, order, names, broken ones, meshes the GPU cannot skin, the
  *  same bones), the rest pose's palette and bounds, blends, pose bounds holding every skinned vertex, bindings by name
@@ -182,6 +195,13 @@ void SkeletalAnimationTests_Run(TestRun* run);
  *  override, rebinding, sockets in double (also 173 km out), disabled objects, one-time reports and the animator's rows
  *  (WorldAnimationTests.c). */
 void WorldAnimationTests_Run(TestRun* run);
+
+/** @brief The animation system's graphs and actions (T30): a graph from the world model following its character (its
+ *  speeds, ground and events), parameters, triggers and states from code, clips from code over the graph, sockets
+ *  carrying their children with the pose (and the arm layer's socket condition), actions attaching and detaching their
+ *  target, an anchored action sliding the character onto a bench's seat and ended by its driver, what actions refuse,
+ *  and a rebind or the system's end freeing the character; also 173 km out (WorldAnimationGraphTests.c). */
+void WorldAnimationGraphTests_Run(TestRun* run);
 
 /** @brief LODs: the selection by distance with hysteresis, the scale, the zoom and a forced LOD; the cross-fade's state
  *  (its start, progress, snapping, a fade time of 0, held frames); the two LODs' complementary dither masks
@@ -221,3 +241,7 @@ void UIScreenTests_Run(TestRun* run);
 
 /** @brief The UI test frame run headless: how its menu shares input with the world below (UITestFrameTests.c). */
 void UITestFrameTests_Run(TestRun* run);
+
+/** @brief The frame manager's PrepareRender slot (T30, G35): its order and which frames it skips
+ *  (GameFrameManagerTests.c). */
+void GameFrameManagerTests_Run(TestRun* run);

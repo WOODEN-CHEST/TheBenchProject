@@ -10,6 +10,8 @@
 
 /** @brief A world model asset (WorldModel.h): the pose remembers which one it was made for. */
 typedef struct WorldModelStruct WorldModel;
+/** @brief One socket of a world model (WorldModel.h): the pose carries its sockets' places (T30). */
+typedef struct WorldModelSocketStruct WorldModelSocket;
 /** @brief What the animation system keeps per animator (source/WorldAnimationInternal.h, private). */
 typedef struct WorldAnimatorRuntimeStruct WorldAnimatorRuntime;
 
@@ -34,7 +36,9 @@ typedef struct WorldAnimatorRuntimeStruct WorldAnimatorRuntime;
  *
  * Added with World_AddComponent(world, id, WorldComponentType_Animator, &component); reach its fields with
  * WorldAnimatorComponent_FromComponent. Its table ("animator_component") holds plays_clip and clip, phase, speed,
- * is_paused, fade_seconds, overrides_is_looped and is_looped, overrides_animation_libraries and animation_libraries.
+ * is_paused, fade_seconds, overrides_is_looped and is_looped, overrides_animation_libraries and animation_libraries,
+ * and (T30) overrides_animation_graph and animation_graph: the graph it plays (AnimationGraph.h) instead of its world
+ * model's. Clips from the clip row and from code play over the graph, by their weight.
  * The playback itself (times, weights, the pose) is runtime state, never saved.
  */
 
@@ -52,6 +56,8 @@ typedef struct WorldAnimatorRuntimeStruct WorldAnimatorRuntime;
 #define WORLD_ANIMATOR_MAX_FADE_SECONDS 60.0f
 /** @brief The cross-fade time of a new animator, in seconds. */
 #define WORLD_ANIMATOR_DEFAULT_FADE_SECONDS 0.2f
+/** @brief The most bytes the animation graph row may have (an asset name). */
+#define WORLD_ANIMATOR_GRAPH_NAME_MAX_LENGTH ((size_t)128)
 
 
 // Types.
@@ -77,6 +83,14 @@ typedef struct WorldAnimatorPoseStruct
     BoundingBox _bounds;
     /** @brief Whether the model has vertices to bound. */
     bool _hasBounds;
+    /** @brief The world model's sockets (borrowed, as _worldModel: their names and bones), and their frames in this pose
+     *  in the object's own space (the socket's space to the object's), _socketCount of each (T30). */
+    const WorldModelSocket* _sockets;
+    const Matrix* _socketMatrices;
+    uint32_t _socketCount;
+    /** @brief The eyes' socket (an index in _sockets) when the world model has a first_person block (T30, G34): the
+     *  camera of a first-person view rides it. Not below _socketCount without one. */
+    uint32_t _eyesSocket;
     /** @brief Advances (wrapping) whenever the pose changes. */
     uint32_t _revision;
 } WorldAnimatorPose;
@@ -110,6 +124,11 @@ typedef struct WorldAnimatorComponentStruct
     bool _overridesAnimationLibraries;
     /** @brief The placement's own libraries (owned; NULL while empty); used while _overridesAnimationLibraries. */
     PropertyAssetNameList* _animationLibraries;
+    /** @brief Whether _animationGraph replaces the world model's graph (default false; T30). */
+    bool _overridesAnimationGraph;
+    /** @brief The placement's own animation graph (an owned asset name of at most WORLD_ANIMATOR_GRAPH_NAME_MAX_LENGTH
+     *  bytes, or NULL: none); used while _overridesAnimationGraph. */
+    unsigned char* _animationGraph;
     /** @brief The animation system's state for this animator (owned by the component, managed by the system; NULL until
      *  it binds). */
     WorldAnimatorRuntime* _runtime;
@@ -206,6 +225,20 @@ static inline bool WorldAnimatorComponent_OverridesAnimationLibraries(const Worl
     return self->_overridesAnimationLibraries;
 }
 
+/** @brief Returns whether the placement's own graph replaces the world model's. @param self The animator; must not be
+ *  NULL. */
+static inline bool WorldAnimatorComponent_OverridesAnimationGraph(const WorldAnimatorComponent* self)
+{
+    return self->_overridesAnimationGraph;
+}
+
+/** @brief Returns the placement's own graph's name (borrowed until it changes; NULL: none). @param self The animator;
+ *  must not be NULL. */
+static inline const unsigned char* WorldAnimatorComponent_GetAnimationGraph(const WorldAnimatorComponent* self)
+{
+    return self->_animationGraph;
+}
+
 /** @brief Returns the placement's own libraries (borrowed until they change; NULL while empty). @param self The animator;
  *  must not be NULL. */
 static inline const PropertyAssetNameList* WorldAnimatorComponent_GetAnimationLibraries(const WorldAnimatorComponent* self)
@@ -273,6 +306,18 @@ Error WorldAnimatorComponent_SetFadeSeconds(WorldAnimatorComponent* self, float 
  * @returns Success; ErrorCode_IllegalArgument for a NULL @p self.
  */
 Error WorldAnimatorComponent_SetLoopOverride(WorldAnimatorComponent* self, bool overridesIsLooped, bool isLooped);
+
+/**
+ * @brief Sets the placement's own animation graph and whether it replaces its world model's (T30).
+ * @param self The animator; must not be NULL.
+ * @param overridesGraph Whether @p graph replaces the world model's graph (off: the world model's plays).
+ * @param graph The graph's asset name (copied; at most WORLD_ANIMATOR_GRAPH_NAME_MAX_LENGTH bytes), or NULL: no graph
+ *        while overriding.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL @p self; ErrorCode_ArgumentOutOfRange for a name that is not a
+ *          valid asset name or too long.
+ */
+Error WorldAnimatorComponent_SetAnimationGraph(WorldAnimatorComponent* self, bool overridesGraph,
+    const unsigned char* graph);
 
 /**
  * @brief Sets the placement's own animation libraries and whether they replace its world model's.

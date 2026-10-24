@@ -3,6 +3,8 @@
 #include "WorldRenderCache.h"
 #include "WorldObject.h"
 #include "WorldTransform.h"
+#include "GameSkeleton.h"
+#include "SkeletalAnimation.h"
 #include "GameMath.h"
 #include "Renderer.h"
 #include "Logger.h"
@@ -191,12 +193,14 @@ static void UpdateModel(WorldRenderModel* entry, Vector3Double origin, AssetMana
     entry->Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Owner));
     entry->IsDrawn = (entry->Asset != NULL) && IsObjectShown(Owner);
     entry->Pose = NULL;
+    entry->CameraPose = NULL;
     if (entry->Asset == NULL)
     {
         return;
     }
 
     entry->Pose = GetPose(Owner, entry->Asset);
+    entry->CameraPose = entry->Pose;
     Vector3 LocalCenter = entry->LocalCenter;
     float LocalRadius = entry->LocalRadius;
     Matrix LocalTransform = entry->BoundsTransform;
@@ -473,6 +477,78 @@ static Error BuildSpritesAndLights(WorldRenderCache* self, World* world, Vector3
 
 
 // Internal functions (declared in WorldRenderCache.h).
+/* The first-person object's camera pose (T30): its pose with every bone its world model's first_person block hides, and
+ * each one's subtree, skinned to its hidden ancestor's joint (every vertex it moves lands on one point: nothing to draw),
+ * in the cache's own copy of the palette. */
+static void UpdateFirstPerson(WorldRenderCache* self)
+{
+    if (self->_firstPersonObjectId == 0U)
+    {
+        return;
+    }
+    WorldRenderModel* Entries = (WorldRenderModel*)(void*)self->_models._data;
+    for (size_t Index = 0U; Index < self->_models._count; Index++)
+    {
+        WorldRenderModel* Entry = &Entries[Index];
+        const uint32_t* HiddenBones = NULL;
+        uint32_t HiddenCount = 0U;
+        if ((Entry->Pose == NULL) || (Entry->ObjectId != self->_firstPersonObjectId)
+            || !WorldModel_GetFirstPerson(Entry->Asset, NULL, &HiddenBones, &HiddenCount) || (HiddenCount == 0U))
+        {
+            continue;
+        }
+        const WorldAnimatorPose* Pose = Entry->Pose;
+        uint32_t BoneCount = Pose->_boneCount;
+        if (BoneCount > self->_firstPersonPaletteBones)
+        {
+            Memory_Free(self->_firstPersonPalette);
+            self->_firstPersonPalette = Memory_Allocate((size_t)BoneCount * SKELETAL_PALETTE_FLOATS_PER_BONE * sizeof(float));
+            self->_firstPersonPaletteBones = BoneCount;
+        }
+        float* Palette = self->_firstPersonPalette;
+        Memory_Copy(Pose->_palette, Palette, (size_t)BoneCount * SKELETAL_PALETTE_FLOATS_PER_BONE * sizeof(float));
+        // Each bone's hidden ancestor (itself when it is listed), parents first; no hidden one: UINT32_MAX.
+        uint32_t HiddenRoot[GAME_SKELETON_MAX_BONES];
+        const GameSkeleton* Skeleton = Pose->_skeleton;
+        const uint16_t* Order = GameSkeleton_GetOrder(Skeleton);
+        for (uint32_t Bone = 0U; Bone < BoneCount; Bone++)
+        {
+            HiddenRoot[Bone] = UINT32_MAX;
+        }
+        for (uint32_t Listed = 0U; Listed < HiddenCount; Listed++)
+        {
+            if (HiddenBones[Listed] < BoneCount)
+            {
+                HiddenRoot[HiddenBones[Listed]] = HiddenBones[Listed];
+            }
+        }
+        for (uint32_t Step = 0U; Step < BoneCount; Step++)
+        {
+            uint32_t Bone = Order[Step];
+            int32_t Parent = GameSkeleton_GetBone(Skeleton, Bone)->_parent;
+            if ((HiddenRoot[Bone] == UINT32_MAX) && (Parent >= 0))
+            {
+                HiddenRoot[Bone] = HiddenRoot[Parent];
+            }
+            if (HiddenRoot[Bone] == UINT32_MAX)
+            {
+                continue;
+            }
+            // No linear part: the vertices go to the hidden bone's joint, in mesh space.
+            const Matrix* Joint = &Pose->_boneMatrices[HiddenRoot[Bone]];
+            float* Rows = Palette + ((size_t)Bone * SKELETAL_PALETTE_FLOATS_PER_BONE);
+            Memory_Zero(Rows, SKELETAL_PALETTE_FLOATS_PER_BONE * sizeof(float));
+            Rows[3] = Joint->m12;
+            Rows[7] = Joint->m13;
+            Rows[11] = Joint->m14;
+        }
+        self->_firstPersonPose = *Pose;
+        self->_firstPersonPose._palette = Palette;
+        Entry->CameraPose = &self->_firstPersonPose;
+        return;
+    }
+}
+
 void WorldRenderCache_Construct(WorldRenderCache* self)
 {
     GenericBuffer_AllocateVariable(&self->_models, INITIAL_LIST_CAPACITY, sizeof(WorldRenderModel));
@@ -482,6 +558,10 @@ void WorldRenderCache_Construct(WorldRenderCache* self)
     self->_world = NULL;
     self->_componentSetVersion = 0;
     self->_isMatched = false;
+    self->_firstPersonObjectId = 0U;
+    Memory_Zero(&self->_firstPersonPose, sizeof(self->_firstPersonPose));
+    self->_firstPersonPalette = NULL;
+    self->_firstPersonPaletteBones = 0U;
 }
 
 void WorldRenderCache_Deconstruct(WorldRenderCache* self)
@@ -494,6 +574,7 @@ void WorldRenderCache_Deconstruct(WorldRenderCache* self)
     Memory_Free(self->_rematch._data);
     Memory_Free(self->_sprites._data);
     Memory_Free(self->_lights._data);
+    Memory_Free(self->_firstPersonPalette);
 }
 
 void WorldRenderCache_Reset(WorldRenderCache* self)
@@ -548,6 +629,7 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double 
         return Error_Construct2(ErrorCode_InvalidState,
             "WorldRenderCache_Sync: the model entries do not follow the world.");
     }
+    UpdateFirstPerson(self);
 
     GenericBuffer_Clear(&self->_sprites);
     GenericBuffer_Clear(&self->_lights);

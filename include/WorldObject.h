@@ -45,6 +45,12 @@
  *   without storing it, so reading never changes anything (the renderer may read it).
  * - WorldObject_IsEffectivelyEnabled and WorldObject_IsEffectivelyVisible: a disabled parent disables its subtree, an
  *   invisible parent hides it. Systems read these, not the object's own flags.
+ * SOCKETS (T30). An object may hang on a SOCKET of its parent (World_SetParentSocket; the parent_socket row): a named
+ * place of the parent's world model, on a bone (a hand) or fixed (WorldModel.h). Its transform is then relative to the
+ * socket's frame in the parent's current pose (its animator publishes it, WorldAnimatorComponent.h), so a held cup
+ * follows the hand: its world matrix is its local matrix times the socket's frame times the parent's world matrix.
+ * When the pose changes the animation system marks such children dirty. A socket the parent's pose does not have (no
+ * animator, no pose yet, another name) is the parent's own space.
  *
  * PROPERTIES. Every property is a row of the object's property table (WorldObject_GetPropertyTable): name, parent,
  * position, rotation, scale, tint, is_enabled, is_visible, mobility and data. The setters below validate through the
@@ -77,6 +83,8 @@
 // Macros.
 /** @brief The most bytes an object's name may have (without the terminator). */
 #define WORLD_OBJECT_NAME_MAX_LENGTH ((size_t)256)
+/** @brief The most bytes the name of the socket an object hangs on may have ([a-z][a-z0-9_.-]*; T30). */
+#define WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH ((size_t)64)
 /** @brief The most entries (tags included) an object's data may hold. */
 #define WORLD_OBJECT_DATA_MAX_ENTRIES ((size_t)256)
 /** @brief The most bytes an object's data may count (DataMap_GetByteSize): 64 KiB. */
@@ -115,6 +123,9 @@ typedef struct WorldObjectStruct
     unsigned char* _name;
     /** @brief The parent's id, 0 for a root: the table's parent row. The world keeps it the id of _parent. */
     uint64_t _parentId;
+    /** @brief The socket of its parent it hangs on (T30: an owned name of at most WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH
+     *  bytes, [a-z][a-z0-9_.-]*), or NULL: the parent's own space. The table's parent_socket row. */
+    unsigned char* _parentSocket;
     /** @brief Position relative to the parent (world space for a root), in metres: finite and within
      *  WORLD_POSITION_LIMIT on every axis. */
     Vector3Double _position;
@@ -200,9 +211,9 @@ static inline void WorldObject_SetPersistent(WorldObject* self, bool isPersisten
 /**
  * @brief Returns the property table of world objects ("world_object").
  *
- * Its rows: name, parent (an ObjectId, ReadOnly for Properties_Set: World_SetParent changes it), position, rotation (an
- * AngleVector3: degrees in JSON), scale, tint, is_enabled, is_visible, mobility ("static" / "movable") and data (tags
- * and custom data). Its AfterSet advances the object's revision; after a change of the transform it marks the object's
+ * Its rows: name, parent (an ObjectId, ReadOnly for Properties_Set: World_SetParent changes it), parent_socket (the
+ * parent's socket it hangs on, T30), position, rotation (an AngleVector3: degrees in JSON), scale, tint, is_enabled,
+ * is_visible, mobility ("static" / "movable") and data (tags and custom data). Its AfterSet advances the object's revision; after a change of the transform it marks the object's
  * subtree dirty, and after a read or a copy the world attaches the object to the parent it brought (or refuses it). Wire
  * ids start at 3: 1 and 2 are left for the world file's own entries per object (the id and the components).
  * @returns The table (static, immutable).
@@ -456,6 +467,16 @@ static inline WorldComponent* WorldObject_GetComponent(const WorldObject* self, 
 static inline uint64_t WorldObject_GetParentId(const WorldObject* self)
 {
     return self->_parentId;
+}
+
+/**
+ * @brief Returns the socket of its parent the object hangs on (T30).
+ * @param self The object; must not be NULL.
+ * @returns The socket's name (borrowed until it changes), or NULL: it sits in its parent's own space (or is a root).
+ */
+static inline const unsigned char* WorldObject_GetParentSocket(const WorldObject* self)
+{
+    return self->_parentSocket;
 }
 
 /**

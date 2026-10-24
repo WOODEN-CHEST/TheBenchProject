@@ -267,6 +267,7 @@ static Error ConstructCharacter(WorldComponent* component)
     Self->_boundName = NULL;
     Self->_input = CharacterInput_CreateDefault();
     Self->_state = CreateInitialState();
+    Self->_actionControl = CharacterActionControl_CreateFree();
     Memory_Zero(&Self->_runtime, sizeof(Self->_runtime));
     return Error_CreateSuccess();
 }
@@ -473,6 +474,45 @@ CharacterSettings WorldCharacterComponent_GetSettings(const WorldCharacterCompon
 
 
 // Public functions: the input and the state.
+CharacterActionControl CharacterActionControl_CreateFree(void)
+{
+    return (CharacterActionControl){ .Lock = CharacterMovementLock_Free, .HasAnchor = false,
+        .AnchorPosition = { 0.0, 0.0, 0.0 }, .AnchorYaw = 0.0f, .ApproachSeconds = 0.0f };
+}
+
+Error WorldCharacterComponent_SetActionControl(WorldCharacterComponent* self, const CharacterActionControl* control)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldCharacterComponent_SetActionControl: self must not be "
+            "NULL.");
+    }
+    CharacterActionControl Control = (control != NULL) ? *control : CharacterActionControl_CreateFree();
+    if ((unsigned int)Control.Lock > (unsigned int)CharacterMovementLock_Locked)
+    {
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange, "WorldCharacterComponent_SetActionControl: %d is not a "
+            "CharacterMovementLock.", (int)Control.Lock);
+    }
+    if (Control.HasAnchor && (!Vector3Double_IsFinite(Control.AnchorPosition)
+        || !WorldInternal_IsFloatFinite(Control.AnchorYaw) || !WorldInternal_IsFloatFinite(Control.ApproachSeconds)
+        || (Control.ApproachSeconds < 0.0f)))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "WorldCharacterComponent_SetActionControl: the anchor, "
+            "its yaw and its time must be finite, the time at least 0.");
+    }
+    if (!Control.HasAnchor)
+    {
+        Control.AnchorPosition = (Vector3Double){ 0.0, 0.0, 0.0 };
+        Control.AnchorYaw = 0.0f;
+        Control.ApproachSeconds = 0.0f;
+    }
+    Control.AnchorYaw = WrapAngle(Control.AnchorYaw);
+    self->_actionControl = Control;
+    self->_state.Approach = Control.HasAnchor ? CharacterApproach_Approaching : CharacterApproach_None;
+    self->_runtime._approachSeconds = 0.0f;
+    return Error_CreateSuccess();
+}
+
 Error WorldCharacterComponent_SetInput(WorldCharacterComponent* self, const CharacterInput* input)
 {
     if ((self == NULL) || (input == NULL))

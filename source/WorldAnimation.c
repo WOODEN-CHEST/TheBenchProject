@@ -16,9 +16,10 @@
 
 /*
  * The animation system (WorldAnimation.h): binds animators to their world models' skeletons and libraries, applies their
- * rows, advances their clips and poses them, once a tick. Per-animator state is the component's runtime
- * (WorldAnimationInternal.h); the system keeps only its asset user and scratch room for one pose, grown to the largest
- * skeleton it posed.
+ * rows and advances their clips once a tick, and poses them once per shown frame. Per-animator state is the component's
+ * runtime (WorldAnimationInternal.h); the system keeps its asset user, scratch room for one pose (grown to the largest
+ * skeleton it posed) and its queued events. Graphs (T30) are bound and advanced by WorldAnimationGraph.c, actions by
+ * WorldAnimationActions.c.
  */
 
 
@@ -29,25 +30,12 @@
 #define NANOSECONDS_PER_MICROSECOND 1000.0
 
 
-// Types.
-struct WorldAnimationStruct
-{
-    World* _world;
-    AssetManager* _assets;
-    AssetUserID _assetUser;
-    Logger* _logger;
-    /* Scratch room for one pose (the mixed local pose, one clip's sample, the blend's sums), _scratchBoneCount bones. */
-    Transform* _localPose;
-    Transform* _samplePose;
-    SkeletalBlendBone* _blend;
-    uint32_t _scratchBoneCount;
-    WorldAnimationStatus _status;
-};
+/** How many events the queue starts with room for. */
+#define INITIAL_EVENT_CAPACITY 16U
 
 
 // Static functions: messages.
-/* Logs a warning about one animator once (*isWarned is set): "WorldAnimation: the animator of object 12 ("clerk") ...". */
-static void Warn(const WorldAnimation* self, const WorldAnimatorComponent* animator, bool* isWarned,
+void WorldAnimationInternal_Warn(const WorldAnimation* self, const WorldAnimatorComponent* animator, bool* isWarned,
     const char* format, ...)
 {
     if ((self->_logger == NULL) || *isWarned)
@@ -112,8 +100,12 @@ static bool NeedsBind(const WorldAnimatorComponent* animator, const WorldAnimato
     {
         return true;
     }
-    return animator->_overridesAnimationLibraries
-        && !PropertyAssetNameList_Equals(animator->_animationLibraries, runtime->BoundLibraryNames);
+    if (animator->_overridesAnimationLibraries
+        && !PropertyAssetNameList_Equals(animator->_animationLibraries, runtime->BoundLibraryNames))
+    {
+        return true;
+    }
+    return WorldAnimationInternal_DoesGraphNeedBind(animator, runtime);
 }
 
 /* Loads the world model for a new name under the system's user (a failure is warned about once and leaves none). */
@@ -136,7 +128,7 @@ static void ResolveWorldModel(WorldAnimation* self, WorldAnimatorComponent* anim
         runtime->WorldModel = Asset;
         return;
     }
-    Warn(self, animator, &runtime->HasWarnedWorldModel, "plays nothing: world model \"%s\" could not be loaded (%s).",
+    WorldAnimationInternal_Warn(self, animator, &runtime->HasWarnedWorldModel, "plays nothing: world model \"%s\" could not be loaded (%s).",
         (const char*)name, GetErrorText(&Result));
     Error_Deconstruct(&Result);
 }
@@ -168,7 +160,7 @@ static void CollectLibraries(WorldAnimation* self, WorldAnimatorComponent* anima
         Error Result = AssetManager_LoadAnimationLibrary(self->_assets, Name, self->_assetUser, &Library);
         if (Result.Code != ErrorCode_Success)
         {
-            Warn(self, animator, &runtime->HasWarnedLibraries, "plays without animation library \"%s\": it could not be "
+            WorldAnimationInternal_Warn(self, animator, &runtime->HasWarnedLibraries, "plays without animation library \"%s\": it could not be "
                 "loaded (%s).", (const char*)Name, GetErrorText(&Result));
             Error_Deconstruct(&Result);
             continue;
@@ -189,21 +181,26 @@ static void BuildBindings(WorldAnimation* self, WorldAnimatorComponent* animator
     runtime->Block = NULL;
     runtime->BindingBones = NULL;
     runtime->BoneMatrices = NULL;
+    runtime->SocketMatrices = NULL;
+    runtime->SocketCount = 0U;
     runtime->Palette = NULL;
     runtime->BoneCount = (runtime->Skeleton != NULL) ? GameSkeleton_GetBoneCount(runtime->Skeleton) : 0U;
     if (runtime->Skeleton == NULL)
     {
         return;
     }
-    // The bones are at most GAME_SKELETON_MAX_BONES and the libraries WORLD_ANIMATOR_MAX_ANIMATION_LIBRARIES, so the
-    // block's size cannot overflow. Matrices first (the strictest alignment), then the palette, then the bindings.
+    // The bones are at most GAME_SKELETON_MAX_BONES, the sockets WORLD_MODEL_MAX_SOCKETS and the libraries
+    // WORLD_ANIMATOR_MAX_ANIMATION_LIBRARIES, so the block's size cannot overflow. Matrices first (the strictest
+    // alignment: the bones', then the sockets'), then the palette, then the bindings.
     size_t BoneCount = runtime->BoneCount;
-    size_t MatrixBytes = BoneCount * sizeof(Matrix);
+    runtime->SocketCount = WorldModel_GetSocketCount(runtime->WorldModel);
+    size_t MatrixBytes = (BoneCount + (size_t)runtime->SocketCount) * sizeof(Matrix);
     size_t PaletteBytes = BoneCount * SKELETAL_PALETTE_FLOATS_PER_BONE * sizeof(float);
     size_t BindingBytes = (size_t)runtime->LibraryCount * BoneCount * sizeof(SkeletalBindingBone);
     unsigned char* Block = Memory_Allocate(MatrixBytes + PaletteBytes + BindingBytes);
     runtime->Block = Block;
     runtime->BoneMatrices = (Matrix*)(void*)Block;
+    runtime->SocketMatrices = runtime->BoneMatrices + BoneCount;
     runtime->Palette = (float*)(void*)(Block + MatrixBytes);
     runtime->BindingBones = (SkeletalBindingBone*)(void*)(Block + MatrixBytes + PaletteBytes);
     for (uint32_t Index = 0U; Index < runtime->LibraryCount; Index++)
@@ -212,7 +209,7 @@ static void BuildBindings(WorldAnimation* self, WorldAnimatorComponent* animator
             &runtime->Bindings[Index]);
         if (runtime->Bindings[Index].MappedCount == 0U)
         {
-            Warn(self, animator, &runtime->HasWarnedLibraries, "plays nothing from animation library \"%s\": none of its "
+            WorldAnimationInternal_Warn(self, animator, &runtime->HasWarnedLibraries, "plays nothing from animation library \"%s\": none of its "
                 "bones is named like a bone of the skeleton (a library for another skeleton?).",
                 (const char*)runtime->LibraryNames[Index]);
         }
@@ -235,12 +232,18 @@ static void EnsureScratch(WorldAnimation* self, uint32_t boneCount)
     self->_scratchBoneCount = boneCount;
 }
 
-/* Turns the local pose in the scratch room into the runtime's bone matrices and palette, and publishes the pose. */
-static void PublishPose(WorldAnimatorComponent* animator, WorldAnimatorRuntime* runtime, const Transform* localPose)
+/* Turns the local pose in the scratch room into the runtime's bone matrices, socket frames and palette, publishes the
+ * pose, and marks what hangs on the object's sockets changed (T30). */
+static void PublishPose(WorldAnimation* self, WorldAnimatorComponent* animator, WorldAnimatorRuntime* runtime,
+    const Transform* localPose)
 {
     const GameSkeleton* Skeleton = runtime->Skeleton;
     SkeletalPose_ComputeModelMatrices(Skeleton, localPose, runtime->BoneMatrices);
     SkeletalPose_ComputePalette(Skeleton, runtime->BoneMatrices, runtime->Palette);
+    for (uint32_t Socket = 0U; Socket < runtime->SocketCount; Socket++)
+    {
+        runtime->SocketMatrices[Socket] = WorldModel_GetSocketMatrix(runtime->WorldModel, Socket, runtime->BoneMatrices);
+    }
     WorldAnimatorPose* Pose = &animator->_pose;
     Pose->_worldModel = runtime->WorldModel;
     Pose->_skeleton = Skeleton;
@@ -248,14 +251,22 @@ static void PublishPose(WorldAnimatorComponent* animator, WorldAnimatorRuntime* 
     Pose->_palette = runtime->Palette;
     Pose->_boneMatrices = runtime->BoneMatrices;
     Pose->_hasBounds = SkeletalPose_ComputeBounds(Skeleton, runtime->Palette, &Pose->_bounds);
+    Pose->_sockets = (runtime->SocketCount > 0U) ? WorldModel_GetSocket(runtime->WorldModel, 0U) : NULL;
+    Pose->_socketMatrices = runtime->SocketMatrices;
+    Pose->_socketCount = runtime->SocketCount;
+    uint32_t EyesSocket = UINT32_MAX;
+    Pose->_eyesSocket = WorldModel_GetFirstPerson(runtime->WorldModel, &EyesSocket, NULL, NULL) ? EyesSocket
+        : UINT32_MAX;
     Pose->_revision++;
+    WorldInternal_MarkSocketChildrenChanged(self->_world, WorldComponent_GetOwner(&animator->Base));
 }
 
-static void ClearPose(WorldAnimatorComponent* animator)
+static void ClearPose(WorldAnimation* self, WorldAnimatorComponent* animator)
 {
     uint32_t Revision = animator->_pose._revision;
     Memory_Zero(&animator->_pose, sizeof(animator->_pose));
     animator->_pose._revision = Revision + 1U;
+    WorldInternal_MarkSocketChildrenChanged(self->_world, WorldComponent_GetOwner(&animator->Base));
 }
 
 // Static functions: clips and rows.
@@ -318,7 +329,7 @@ static void ApplyRows(WorldAnimation* self, WorldAnimatorComponent* animator, Wo
     SkeletalClipRef Clip;
     if (!FindClip(animator, runtime, animator->_clip, &Clip))
     {
-        Warn(self, animator, &runtime->HasWarnedClip, "has no clip \"%s\" in its animation libraries; it plays nothing "
+        WorldAnimationInternal_Warn(self, animator, &runtime->HasWarnedClip, "has no clip \"%s\" in its animation libraries; it plays nothing "
             "from its clip row.", (const char*)animator->_clip);
         StopRowClip(runtime, Fade);
         runtime->RowClipName = WorldInternal_CloneString(animator->_clip);
@@ -348,6 +359,7 @@ static void ApplyRows(WorldAnimation* self, WorldAnimatorComponent* animator, Wo
     runtime->RowClip = Clip;
     runtime->IsRowClipPlaying = true;
     runtime->IsAtRest = false;
+    runtime->IsPoseStale = true;
 }
 
 /* Every playing clip's speed: its own times the animator's (both may change at any time). */
@@ -367,6 +379,8 @@ static void UpdateSpeeds(const WorldAnimatorComponent* animator, WorldAnimatorRu
 static void Bind(WorldAnimation* self, WorldAnimatorComponent* animator, WorldAnimatorRuntime* runtime,
     const unsigned char* worldModelName)
 {
+    // An action does not survive a bind: its graph may be another (T30).
+    WorldAnimationInternal_StopAction(self, animator, runtime, WorldAnimationEventKind_ActionEnded);
     if (!runtime->IsBound || !WorldInternal_AreStringsEqual(worldModelName, runtime->WorldModelName))
     {
         ResolveWorldModel(self, animator, runtime, worldModelName);
@@ -379,11 +393,19 @@ static void Bind(WorldAnimation* self, WorldAnimatorComponent* animator, WorldAn
     runtime->Skeleton = (runtime->WorldModel != NULL) ? WorldModel_GetSkeleton(runtime->WorldModel) : NULL;
     if ((runtime->WorldModel != NULL) && (runtime->Skeleton == NULL))
     {
-        Warn(self, animator, &runtime->HasWarnedSkeleton, "plays nothing: world model \"%s\" has no skinned LOD (no "
+        WorldAnimationInternal_Warn(self, animator, &runtime->HasWarnedSkeleton, "plays nothing: world model \"%s\" has no skinned LOD (no "
             "skeleton).", (const char*)worldModelName);
     }
     CollectLibraries(self, animator, runtime);
     BuildBindings(self, animator, runtime);
+    runtime->ImportRotation = QuaternionIdentity();
+    if (runtime->Skeleton != NULL)
+    {
+        GameModel* SkeletonModel = WorldModel_GetLodModel(runtime->WorldModel, WorldModel_GetSkeletonLod(runtime->WorldModel));
+        runtime->ImportRotation = SkeletalAnimation_DecomposeMatrix(GameModel_GetRaylibModel(SkeletonModel).transform)
+            .rotation;
+    }
+    WorldAnimationInternal_BindGraph(self, animator, runtime);
 
     SkeletalMixer_Construct(&runtime->Mixer);
     runtime->HasAppliedRows = false;
@@ -393,14 +415,15 @@ static void Bind(WorldAnimation* self, WorldAnimatorComponent* animator, WorldAn
     runtime->HasWarnedClip = false;
     if (runtime->Skeleton == NULL)
     {
-        ClearPose(animator);
+        ClearPose(self, animator);
         runtime->IsAtRest = true;
         return;
     }
     EnsureScratch(self, runtime->BoneCount);
     SkeletalPose_SetRest(runtime->Skeleton, self->_localPose);
-    PublishPose(animator, runtime, self->_localPose);
+    PublishPose(self, animator, runtime, self->_localPose);
     runtime->IsAtRest = true;
+    runtime->IsPoseStale = false;
     // The rows apply at once, so a clip code plays right after the bind cross-fades from the row's clip.
     ApplyRows(self, animator, runtime);
 }
@@ -409,6 +432,7 @@ static void Bind(WorldAnimation* self, WorldAnimatorComponent* animator, WorldAn
 static WorldAnimatorRuntime* EnsureBound(WorldAnimation* self, WorldAnimatorComponent* animator)
 {
     WorldAnimatorRuntime* Runtime = GetRuntime(animator);
+    Runtime->System = self;
     const unsigned char* Name = GetWorldModelName(animator);
     if (NeedsBind(animator, Runtime, Name))
     {
@@ -418,6 +442,7 @@ static WorldAnimatorRuntime* EnsureBound(WorldAnimation* self, WorldAnimatorComp
 }
 
 
+/* The tick's part: binds, applies the rows and advances the clips; the pose waits for the pose step. */
 static void UpdateAnimator(WorldAnimation* self, WorldAnimatorComponent* animator, float deltaSeconds)
 {
     if (!WorldObject_IsEffectivelyEnabled(WorldComponent_GetOwner(&animator->Base)))
@@ -432,20 +457,63 @@ static void UpdateAnimator(WorldAnimation* self, WorldAnimatorComponent* animato
     self->_status.PosedCount++;
     ApplyRows(self, animator, Runtime);
     UpdateSpeeds(animator, Runtime);
-    if (!animator->_isPaused && isfinite(deltaSeconds) && (deltaSeconds > 0.0f))
+    bool IsAdvancing = !animator->_isPaused && isfinite(deltaSeconds) && (deltaSeconds > 0.0f);
+    if (Runtime->GraphBlock != NULL)
+    {
+        // The graph first (its clips under the rows' and code's); paused, it waits as the clips do.
+        self->_status.GraphCount++;
+        if (!animator->_isPaused)
+        {
+            WorldAnimationInternal_UpdateGraph(self, animator, Runtime,
+                IsAdvancing ? ((double)deltaSeconds * (double)animator->_speed) : 0.0);
+        }
+        self->_status.ActionCount += (Runtime->Action.Phase != WorldAnimationActionPhase_None) ? 1U : 0U;
+        Runtime->IsPoseStale = true;
+    }
+    if (IsAdvancing)
     {
         SkeletalMixer_Advance(&Runtime->Mixer, (double)deltaSeconds);
     }
     self->_status.ClipCount += Runtime->Mixer.StateCount;
-    if ((Runtime->Mixer.StateCount == 0U) && Runtime->IsAtRest)
+    // Something plays, or the last clip just faded out (the rest pose is published once more).
+    if ((Runtime->Mixer.StateCount > 0U) || !Runtime->IsAtRest)
+    {
+        Runtime->IsPoseStale = true;
+    }
+}
+
+/* The pose step's part: an animator whose playback changed since its last pose is posed again. */
+static void PoseAnimator(WorldAnimation* self, WorldAnimatorComponent* animator)
+{
+    WorldAnimatorRuntime* Runtime = animator->_runtime;
+    if ((Runtime == NULL) || (Runtime->Skeleton == NULL) || !Runtime->IsPoseStale
+        || !WorldObject_IsEffectivelyEnabled(WorldComponent_GetOwner(&animator->Base)))
     {
         return;
     }
     EnsureScratch(self, Runtime->BoneCount);
-    SkeletalMixer_SamplePose(&Runtime->Mixer, Runtime->Bindings, Runtime->LibraryCount, Runtime->Skeleton,
-        self->_samplePose, self->_blend, self->_localPose);
-    PublishPose(animator, Runtime, self->_localPose);
-    Runtime->IsAtRest = Runtime->Mixer.StateCount == 0U;
+    if (Runtime->GraphBlock != NULL)
+    {
+        // The graph's pose, with the clips from the rows and code over it by their weight.
+        AnimationGraphInstance_SamplePose(&Runtime->GraphInstance, &Runtime->GraphBinding, Runtime->ImportRotation,
+            self->_samplePose, self->_blend, self->_localPose);
+        if (Runtime->Mixer.StateCount > 0U)
+        {
+            SkeletalPose_ClearBlend(self->_blend, Runtime->BoneCount);
+            float Total = SkeletalMixer_AddToBlend(&Runtime->Mixer, Runtime->Bindings, Runtime->LibraryCount,
+                Runtime->Skeleton, self->_samplePose, self->_blend);
+            SkeletalPose_BlendOver(self->_blend, Total, NULL, Runtime->BoneCount, self->_localPose);
+        }
+    }
+    else
+    {
+        SkeletalMixer_SamplePose(&Runtime->Mixer, Runtime->Bindings, Runtime->LibraryCount, Runtime->Skeleton,
+            self->_samplePose, self->_blend, self->_localPose);
+    }
+    PublishPose(self, animator, Runtime, self->_localPose);
+    Runtime->IsAtRest = (Runtime->Mixer.StateCount == 0U) && (Runtime->GraphBlock == NULL);
+    Runtime->IsPoseStale = false;
+    self->_status.RecomputedCount++;
     self->_status.BoneCount += Runtime->BoneCount;
 }
 
@@ -493,7 +561,34 @@ void WorldAnimationInternal_DestroyRuntime(WorldAnimatorRuntime* runtime)
     PropertyAssetNameList_Destroy(runtime->BoundLibraryNames);
     Memory_Free(runtime->RowClipName);
     Memory_Free(runtime->Block);
+    WorldAnimationInternal_ReleaseGraph(runtime);
     Memory_Free(runtime);
+}
+
+void WorldAnimationInternal_DetachAnimator(WorldAnimatorComponent* animator)
+{
+    WorldAnimatorRuntime* Runtime = animator->_runtime;
+    if ((Runtime != NULL) && (Runtime->System != NULL))
+    {
+        WorldAnimationInternal_StopAction(Runtime->System, animator, Runtime, WorldAnimationEventKind_ActionEnded);
+    }
+}
+
+WorldAnimatorComponent* WorldAnimationInternal_FindAnimator(WorldAnimation* self, uint64_t objectId,
+    WorldAnimatorRuntime** outRuntime)
+{
+    WorldComponent* Component = NULL;
+    if ((self == NULL) || !World_TryGetComponent(self->_world, objectId, WorldComponentType_Animator, &Component))
+    {
+        return NULL;
+    }
+    WorldAnimatorComponent* Animator = WorldAnimatorComponent_FromComponent(Component);
+    WorldAnimatorRuntime* Runtime = EnsureBound(self, Animator);
+    if (outRuntime != NULL)
+    {
+        *outRuntime = Runtime;
+    }
+    return Animator;
 }
 
 Error WorldAnimation_Create(World* world, AssetManager* assets, Logger* logger, WorldAnimation** outAnimation)
@@ -519,6 +614,7 @@ Error WorldAnimation_Create(World* world, AssetManager* assets, Logger* logger, 
     Self->_assets = assets;
     Self->_assetUser = User;
     Self->_logger = logger;
+    GenericBuffer_AllocateVariable(&Self->_events, INITIAL_EVENT_CAPACITY, sizeof(WorldAnimationEvent));
     *outAnimation = Self;
     return Error_CreateSuccess();
 }
@@ -535,9 +631,14 @@ void WorldAnimation_Destroy(WorldAnimation* self)
     for (size_t Index = 0U; Index < Count; Index++)
     {
         WorldAnimatorComponent* Animator = WorldAnimatorComponent_FromComponent(Animators[Index]);
+        if (Animator->_runtime != NULL)
+        {
+            // The characters its actions held are freed (T30).
+            WorldAnimationInternal_StopAction(self, Animator, Animator->_runtime, WorldAnimationEventKind_ActionEnded);
+        }
         WorldAnimationInternal_DestroyRuntime(Animator->_runtime);
         Animator->_runtime = NULL;
-        ClearPose(Animator);
+        ClearPose(self, Animator);
     }
     if ((self->_assets != NULL) && (self->_assetUser != ASSET_USER_ID_INVALID))
     {
@@ -547,6 +648,7 @@ void WorldAnimation_Destroy(WorldAnimation* self)
     Memory_Free(self->_localPose);
     Memory_Free(self->_samplePose);
     Memory_Free(self->_blend);
+    Memory_Free(self->_events._data);
     Memory_Free(self);
 }
 
@@ -555,12 +657,32 @@ void WorldAnimation_Update(WorldAnimation* self, float deltaSeconds)
     Stopwatch Clock = Stopwatch_StartNew();
     size_t Count = 0U;
     WorldComponent* const* Animators = World_GetComponents(self->_world, WorldComponentType_Animator, &Count);
-    self->_status = (WorldAnimationStatus){ .AnimatorCount = Count };
+    self->_tick++;
+    self->_status.AnimatorCount = Count;
+    self->_status.PosedCount = 0U;
+    self->_status.ClipCount = 0U;
+    self->_status.GraphCount = 0U;
+    self->_status.ActionCount = 0U;
     for (size_t Index = 0U; Index < Count; Index++)
     {
         UpdateAnimator(self, WorldAnimatorComponent_FromComponent(Animators[Index]), deltaSeconds);
     }
     self->_status.UpdateMicroseconds = (double)Stopwatch_ElapsedNanoseconds(&Clock) / NANOSECONDS_PER_MICROSECOND;
+    Stopwatch_Deconstruct(&Clock);
+}
+
+void WorldAnimation_Pose(WorldAnimation* self)
+{
+    Stopwatch Clock = Stopwatch_StartNew();
+    size_t Count = 0U;
+    WorldComponent* const* Animators = World_GetComponents(self->_world, WorldComponentType_Animator, &Count);
+    self->_status.RecomputedCount = 0U;
+    self->_status.BoneCount = 0U;
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        PoseAnimator(self, WorldAnimatorComponent_FromComponent(Animators[Index]));
+    }
+    self->_status.PoseMicroseconds = (double)Stopwatch_ElapsedNanoseconds(&Clock) / NANOSECONDS_PER_MICROSECOND;
     Stopwatch_Deconstruct(&Clock);
 }
 
@@ -585,6 +707,7 @@ Error WorldAnimation_PlayClip(WorldAnimation* self, uint64_t objectId, const uns
     }
     SkeletalMixer_Play(&Runtime->Mixer, &Clip, fadeSeconds, isRestarted, 0.0);
     Runtime->IsAtRest = false;
+    Runtime->IsPoseStale = true;
     return Error_CreateSuccess();
 }
 
@@ -610,6 +733,7 @@ Error WorldAnimation_SetClipWeight(WorldAnimation* self, uint64_t objectId, cons
     }
     SkeletalMixer_SetWeight(&Runtime->Mixer, &Clip, weight, fadeSeconds, 0.0);
     Runtime->IsAtRest = false;
+    Runtime->IsPoseStale = true;
     return Error_CreateSuccess();
 }
 
@@ -627,6 +751,7 @@ Error WorldAnimation_StopClips(WorldAnimation* self, uint64_t objectId, float fa
     WorldAnimatorRuntime* Runtime = EnsureBound(self, WorldAnimatorComponent_FromComponent(Component));
     SkeletalMixer_StopAll(&Runtime->Mixer, fadeSeconds);
     Runtime->IsAtRest = false;
+    Runtime->IsPoseStale = true;
     return Error_CreateSuccess();
 }
 
@@ -669,4 +794,20 @@ bool WorldAnimation_TryGetBoneWorldMatrix(WorldAnimation* self, uint64_t objectI
 WorldAnimationStatus WorldAnimation_GetStatus(const WorldAnimation* self)
 {
     return self->_status;
+}
+
+const WorldAnimationEvent* WorldAnimation_GetEvents(const WorldAnimation* self, size_t* outCount)
+{
+    *outCount = self->_events._count;
+    return (self->_events._count > 0U) ? (const WorldAnimationEvent*)(const void*)self->_events._data : NULL;
+}
+
+void WorldAnimation_ClearEvents(WorldAnimation* self)
+{
+    GenericBuffer_Clear(&self->_events);
+}
+
+uint64_t WorldAnimation_GetTick(const WorldAnimation* self)
+{
+    return self->_tick;
 }

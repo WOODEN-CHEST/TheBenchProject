@@ -81,6 +81,13 @@ static const float SpinValues[] = { 0.0f, 1.0f, 0.0f, 0.0f, 3.0f, 0.0f };
 
 
 // Static functions: helpers.
+/* One tick and the frame after it: the update, then the pose step (G35: poses are made once per shown frame). */
+static void Tick(AnimationScene* scene, float seconds)
+{
+    WorldAnimation_Update(scene->Animation, seconds);
+    WorldAnimation_Pose(scene->Animation);
+}
+
 static bool IsNear(float a, float b)
 {
     return fabsf(a - b) < TEST_EPSILON;
@@ -355,8 +362,8 @@ static void AnAnimatorBindsOnDemandAndRestsInItsBindPose(TestRun* run)
 
             // A resting animator is counted but not posed again.
             uint32_t Revision = Pose->_revision;
-            WorldAnimation_Update(Scene.Animation, 0.1f);
-            WorldAnimation_Update(Scene.Animation, 0.1f);
+            Tick(&Scene, 0.1f);
+            Tick(&Scene, 0.1f);
             WorldAnimationStatus Status = WorldAnimation_GetStatus(Scene.Animation);
             TEST_CHECK(run, (Status.AnimatorCount == 1U) && (Status.PosedCount == 1U) && (Status.ClipCount == 0U)
                 && (Status.BoneCount == 0U) && (Status.UpdateMicroseconds >= 0.0));
@@ -376,14 +383,14 @@ static void TheClipRowPlaysAtOnceFromItsPhase(TestRun* run)
     {
         // The first update binds and starts the clip at a quarter of its length, at full weight (no fade from the rest
         // pose), then advances it.
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.75f));
         WorldAnimationStatus Status = WorldAnimation_GetStatus(Scene.Animation);
         TEST_CHECK(run, (Status.ClipCount == 1U) && (Status.BoneCount == (size_t)FIGURE_BONE_COUNT));
         const WorldAnimatorPose* Pose = WorldAnimatorComponent_GetPose(Clerk.Animator);
         uint32_t Revision = (Pose != NULL) ? Pose->_revision : 0U;
         // lift does not loop: it holds its last key, and the pose's bounds follow the head up.
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 3.0f));
         TEST_CHECK(run, (Pose != NULL) && (Pose->_revision != Revision));
         TEST_CHECK(run, (Pose != NULL) && IsNear(Pose->_bounds.max.y, 3.05f) && IsNear(Pose->_bounds.min.y, -0.05f));
@@ -399,6 +406,40 @@ static void TheClipRowPlaysAtOnceFromItsPhase(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
+static void PosesWaitForThePoseStepAndComeOncePerChange(TestRun* run)
+{
+    AnimationScene Scene;
+    Figure Clerk;
+    if (Scene_Construct(run, &Scene, NULL) && AddFigure(run, &Scene, "figure", (Vector3){ 0.0f, 0.0f, 0.0f }, &Clerk)
+        && PlayRow(run, &Clerk, "lift", 0.0f))
+    {
+        // The update binds (publishing the rest pose at once) and advances the clip; the pose waits for the pose step.
+        WorldAnimation_Update(Scene.Animation, 0.5f);
+        const WorldAnimatorPose* Pose = WorldAnimatorComponent_GetPose(Clerk.Animator);
+        uint32_t Revision = (Pose != NULL) ? Pose->_revision : 0U;
+        TEST_CHECK(run, (Pose != NULL) && IsNear(GetHeadHeight(&Clerk), 2.0f));
+        // Two ticks between frames: the pose step shows the playback after the last of them, computed once.
+        WorldAnimation_Update(Scene.Animation, 0.25f);
+        WorldAnimation_Pose(Scene.Animation);
+        TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.75f));
+        WorldAnimationStatus Status = WorldAnimation_GetStatus(Scene.Animation);
+        TEST_CHECK(run, (Status.RecomputedCount == 1U) && (Status.BoneCount == (size_t)FIGURE_BONE_COUNT)
+            && (Status.PoseMicroseconds >= 0.0));
+        TEST_CHECK(run, (Pose != NULL) && (Pose->_revision != Revision));
+        // A second pose step with nothing changed computes nothing.
+        Revision = (Pose != NULL) ? Pose->_revision : 0U;
+        WorldAnimation_Pose(Scene.Animation);
+        TEST_CHECK(run, (WorldAnimation_GetStatus(Scene.Animation).RecomputedCount == 0U)
+            && (Pose != NULL) && (Pose->_revision == Revision));
+        // Code playing a clip shows at the next pose step, without waiting for an update.
+        TEST_CHECK_SUCCESS(run, WorldAnimation_PlayClip(Scene.Animation, Clerk.Id, (const unsigned char*)u8"down", 0.0f,
+            false));
+        WorldAnimation_Pose(Scene.Animation);
+        TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 1.0f) && (Pose != NULL) && (Pose->_revision != Revision));
+    }
+    Scene_Deconstruct(run, &Scene);
+}
+
 static void ANewClipRowCrossFadesOverItsFadeTime(TestRun* run)
 {
     AnimationScene Scene;
@@ -406,15 +447,15 @@ static void ANewClipRowCrossFadesOverItsFadeTime(TestRun* run)
     if (Scene_Construct(run, &Scene, NULL) && AddFigure(run, &Scene, "figure", (Vector3){ 0.0f, 0.0f, 0.0f }, &Clerk)
         && PlayRow(run, &Clerk, "up", 1.0f))
     {
-        WorldAnimation_Update(Scene.Animation, 0.1f);
+        Tick(&Scene, 0.1f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 3.0f));
         // Halfway through the fade the spine is halfway between up and down: at its rest.
         if (TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetClip(Clerk.Animator, (const unsigned char*)u8"down")))
         {
-            WorldAnimation_Update(Scene.Animation, 0.5f);
+            Tick(&Scene, 0.5f);
             TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.0f));
             TEST_CHECK(run, WorldAnimation_GetStatus(Scene.Animation).ClipCount == 2U);
-            WorldAnimation_Update(Scene.Animation, 0.5f);
+            Tick(&Scene, 0.5f);
             TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 1.0f));
             // up faded out and stopped.
             TEST_CHECK(run, WorldAnimation_GetStatus(Scene.Animation).ClipCount == 1U);
@@ -430,19 +471,19 @@ static void TurningTheClipRowOffFadesBackToTheRestPose(TestRun* run)
     if (Scene_Construct(run, &Scene, NULL) && AddFigure(run, &Scene, "figure", (Vector3){ 0.0f, 0.0f, 0.0f }, &Clerk)
         && PlayRow(run, &Clerk, "up", 0.5f))
     {
-        WorldAnimation_Update(Scene.Animation, 0.1f);
+        Tick(&Scene, 0.1f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 3.0f));
         if (TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetPlaysClip(Clerk.Animator, false)))
         {
             // Half faded out: the rest pose fills the other half.
-            WorldAnimation_Update(Scene.Animation, 0.25f);
+            Tick(&Scene, 0.25f);
             TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.5f));
-            WorldAnimation_Update(Scene.Animation, 0.25f);
+            Tick(&Scene, 0.25f);
             WorldAnimationStatus Status = WorldAnimation_GetStatus(Scene.Animation);
             TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.0f) && (Status.ClipCount == 0U)
                 && (Status.BoneCount == (size_t)FIGURE_BONE_COUNT));
             // Back at rest, it is not posed again.
-            WorldAnimation_Update(Scene.Animation, 0.25f);
+            Tick(&Scene, 0.25f);
             TEST_CHECK(run, WorldAnimation_GetStatus(Scene.Animation).BoneCount == 0U);
         }
     }
@@ -457,25 +498,25 @@ static void SpeedAndPauseScaleTheClipsTime(TestRun* run)
         && PlayRow(run, &Clerk, "lift", 0.2f)
         && TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetSpeed(Clerk.Animator, 0.5f)))
     {
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.25f));
         // Paused, nothing moves; a speed change and a resume take effect on the next update, without a fade.
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetPaused(Clerk.Animator, true));
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.25f));
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetPaused(Clerk.Animator, false));
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetSpeed(Clerk.Animator, 2.0f));
-        WorldAnimation_Update(Scene.Animation, 0.25f);
+        Tick(&Scene, 0.25f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.75f));
         // Speed 0 holds the pose.
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetSpeed(Clerk.Animator, 0.0f));
-        WorldAnimation_Update(Scene.Animation, 0.25f);
+        Tick(&Scene, 0.25f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.75f));
         // No time passes for a tick of 0 s, a negative one or one that is not a number.
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetSpeed(Clerk.Animator, 1.0f));
-        WorldAnimation_Update(Scene.Animation, 0.0f);
-        WorldAnimation_Update(Scene.Animation, -1.0f);
-        WorldAnimation_Update(Scene.Animation, NAN);
+        Tick(&Scene, 0.0f);
+        Tick(&Scene, -1.0f);
+        Tick(&Scene, NAN);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.75f));
     }
     Scene_Deconstruct(run, &Scene);
@@ -493,20 +534,20 @@ static void TheLibrarysLoopAndSpeedApplyAndTheRowOverridesTheLoop(TestRun* run)
         && TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetLoopOverride(Lifter.Animator, true, true)))
     {
         // bob plays at twice its speed (its definition's setting): 0.125 s is a quarter of it, 0.25 m up.
-        WorldAnimation_Update(Scene.Animation, 0.125f);
+        Tick(&Scene, 0.125f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Bobber), 2.25f));
         // Looped: a whole length later it is there again.
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Bobber), 2.25f));
         // lift does not loop in its library, but the row loops it: 1.125 s in is 0.125 s in.
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Lifter), 2.125f));
 
         // The row's override stops bob's loop, as it plays: it runs to its end and holds it.
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetLoopOverride(Bobber.Animator, true, false));
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Bobber), 2.0f));
-        WorldAnimation_Update(Scene.Animation, 0.125f);
+        Tick(&Scene, 0.125f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Bobber), 2.0f));
     }
     Scene_Deconstruct(run, &Scene);
@@ -543,9 +584,9 @@ static void ProblemsAreReportedOnce(TestRun* run)
         PropertyAssetNameList* Names = MakeNames(run, LostNames, 1U);
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetAnimationLibraries(Lost.Animator, true, Names));
         PropertyAssetNameList_Destroy(Names);
-        for (int Tick = 0; Tick < 3; Tick++)
+        for (int Step = 0; Step < 3; Step++)
         {
-            WorldAnimation_Update(Scene.Animation, 0.1f);
+            Tick(&Scene, 0.1f);
         }
         // What has a skeleton rests in its bind pose; the rest has no pose.
         TEST_CHECK(run, IsNear(GetHeadHeight(&Unknown), 2.0f) && IsNear(GetHeadHeight(&Lost), 2.0f));
@@ -561,9 +602,9 @@ static void ProblemsAreReportedOnce(TestRun* run)
             false), ErrorCode_InvalidOperation);
         // Another unknown clip is a new problem: reported again, once.
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetClip(Unknown.Animator, (const unsigned char*)u8"elsewhere"));
-        WorldAnimation_Update(Scene.Animation, 0.1f);
+        Tick(&Scene, 0.1f);
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetPhase(Unknown.Animator, 0.5f));
-        WorldAnimation_Update(Scene.Animation, 0.1f);
+        Tick(&Scene, 0.1f);
     }
     Scene_Deconstruct(run, &Scene);
     TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
@@ -605,23 +646,23 @@ static void CodePlaysClipsOnTopOfTheRows(TestRun* run)
 
         // Played before the first update, the clip is not undone by the rows: they applied when the animator bound.
         TEST_CHECK_SUCCESS(run, WorldAnimation_PlayClip(Scene.Animation, Clerk.Id, Down, 0.0f, false));
-        WorldAnimation_Update(Scene.Animation, 0.1f);
+        Tick(&Scene, 0.1f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 1.0f));
         // One clip's weight alone: down 1 and up 0.5 add up to 1.5, divided out.
         TEST_CHECK_SUCCESS(run, WorldAnimation_SetClipWeight(Scene.Animation, Clerk.Id, (const unsigned char*)u8"up", 0.5f,
             0.0f));
-        WorldAnimation_Update(Scene.Animation, 0.1f);
+        Tick(&Scene, 0.1f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 1.0f + (2.0f / 3.0f)));
         TEST_CHECK(run, WorldAnimation_GetStatus(Scene.Animation).ClipCount == 2U);
         // Stopped over 0.5 s: after 0.25 s down weighs 0.5 and up 0.25, and the rest pose fills the last quarter.
         TEST_CHECK_SUCCESS(run, WorldAnimation_StopClips(Scene.Animation, Clerk.Id, 0.5f));
-        WorldAnimation_Update(Scene.Animation, 0.25f);
+        Tick(&Scene, 0.25f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 1.0f + ((0.25f * 2.0f) + (0.25f * 1.0f))));
-        WorldAnimation_Update(Scene.Animation, 0.25f);
+        Tick(&Scene, 0.25f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.0f));
         // The rows apply again when they change: a new clip row plays.
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetClip(Clerk.Animator, (const unsigned char*)u8"lift"));
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.5f));
     }
     Scene_Deconstruct(run, &Scene);
@@ -634,19 +675,19 @@ static void ARowSwitchingToAPlayingClipKeepsItsTime(TestRun* run)
     if (Scene_Construct(run, &Scene, NULL) && AddFigure(run, &Scene, "figure", (Vector3){ 0.0f, 0.0f, 0.0f }, &Clerk)
         && PlayRow(run, &Clerk, "up", 0.0f))
     {
-        WorldAnimation_Update(Scene.Animation, 0.1f);
+        Tick(&Scene, 0.1f);
         TEST_CHECK_SUCCESS(run, WorldAnimation_PlayClip(Scene.Animation, Clerk.Id, (const unsigned char*)u8"lift", 0.0f,
             false));
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.5f));
         // The row now names the clip code plays: it goes on from 0.5 s (a restart from the row's phase would jump).
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetClip(Clerk.Animator, (const unsigned char*)u8"lift"));
-        WorldAnimation_Update(Scene.Animation, 0.25f);
+        Tick(&Scene, 0.25f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.75f));
         // Code restarts it on request.
         TEST_CHECK_SUCCESS(run, WorldAnimation_PlayClip(Scene.Animation, Clerk.Id, (const unsigned char*)u8"lift", 0.0f,
             true));
-        WorldAnimation_Update(Scene.Animation, 0.125f);
+        Tick(&Scene, 0.125f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.125f));
     }
     Scene_Deconstruct(run, &Scene);
@@ -662,7 +703,7 @@ static void OverridingTheLibrariesReplacesTheWorldModels(TestRun* run)
     {
         PropertyAssetNameList* Names = MakeNames(run, GestureNames, 1U);
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetAnimationLibraries(Clerk.Animator, true, Names));
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNearVector(GetPosePosition(&Clerk, "hand"), (Vector3){ 1.0f, 2.0f, 0.0f }));
         TEST_CHECK_ERROR(run, WorldAnimation_PlayClip(Scene.Animation, Clerk.Id, (const unsigned char*)u8"lift", 0.0f,
             false), ErrorCode_ArgumentOutOfRange);
@@ -676,20 +717,20 @@ static void OverridingTheLibrariesReplacesTheWorldModels(TestRun* run)
             false));
         TEST_CHECK(run, IsNearVector(GetPosePosition(&Clerk, "hand"), (Vector3){ 1.0f, 1.5f, 0.0f }));
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetAnimationLibraries(Clerk.Animator, true, Names));
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNearVector(GetPosePosition(&Clerk, "hand"), (Vector3){ 1.0f, 2.0f, 0.0f }));
 
         // Off again (the list kept): the world model's libraries play. A rebind starts from the rest pose.
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetAnimationLibraries(Clerk.Animator, false, Names));
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNearVector(GetPosePosition(&Clerk, "hand"), (Vector3){ 1.0f, 1.5f, 0.0f }));
         TEST_CHECK_SUCCESS(run, WorldAnimation_PlayClip(Scene.Animation, Clerk.Id, (const unsigned char*)u8"lift", 0.0f,
             false));
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.5f));
         // A list without the override changes nothing.
         TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetAnimationLibraries(Clerk.Animator, false, NULL));
-        WorldAnimation_Update(Scene.Animation, 0.25f);
+        Tick(&Scene, 0.25f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.75f));
         PropertyAssetNameList_Destroy(Names);
     }
@@ -703,7 +744,7 @@ static void ANewWorldModelRebindsFromTheRestPose(TestRun* run)
     if (Scene_Construct(run, &Scene, NULL) && AddFigure(run, &Scene, "figure", (Vector3){ 3.0f, 0.0f, 4.0f }, &Clerk)
         && PlayRow(run, &Clerk, "lift", 0.0f))
     {
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         const WorldAnimatorPose* Pose = WorldAnimatorComponent_GetPose(Clerk.Animator);
         const WorldModel* Before = (Pose != NULL) ? Pose->_worldModel : NULL;
         TEST_CHECK(run, (Before != NULL) && IsNear(GetHeadHeight(&Clerk), 2.5f));
@@ -712,7 +753,7 @@ static void ANewWorldModelRebindsFromTheRestPose(TestRun* run)
         // raised 0.5 m by its import transform, which the sockets include.
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetWorldModel(Clerk.ModelComponent,
             (const unsigned char*)u8"tall_figure"));
-        WorldAnimation_Update(Scene.Animation, 0.25f);
+        Tick(&Scene, 0.25f);
         Pose = WorldAnimatorComponent_GetPose(Clerk.Animator);
         TEST_CHECK(run, (Pose != NULL) && (Pose->_worldModel != NULL) && (Pose->_worldModel != Before));
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.25f));
@@ -720,7 +761,7 @@ static void ANewWorldModelRebindsFromTheRestPose(TestRun* run)
 
         // No world model: nothing to pose.
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetWorldModel(Clerk.ModelComponent, NULL));
-        WorldAnimation_Update(Scene.Animation, 0.25f);
+        Tick(&Scene, 0.25f);
         TEST_CHECK(run, WorldAnimatorComponent_GetPose(Clerk.Animator) == NULL);
         TEST_CHECK(run, !WorldAnimation_TryFindBone(Scene.Animation, Clerk.Id, (const unsigned char*)u8"head", NULL));
         TEST_CHECK(run, WorldAnimation_GetStatus(Scene.Animation).PosedCount == 0U);
@@ -740,7 +781,7 @@ static void SocketsCarryTheObjectsTransformInDouble(TestRun* run)
         && PlayRow(run, &Clerk, "lift", 0.0f)
         && TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetPhase(Clerk.Animator, 0.5f)))
     {
-        WorldAnimation_Update(Scene.Animation, 0.0f);
+        Tick(&Scene, 0.0f);
         // The hand: (1, 2, 0) in mesh space at lift's middle, then the import transform (twice as big, 0.5 m up):
         // (2, 4.5, 0), then the object's quarter turn about y: (0, 4.5, -2), then its place.
         Matrix Hand;
@@ -770,20 +811,20 @@ static void ADisabledObjectKeepsItsPoseAndItsRowsWait(TestRun* run)
     if (Scene_Construct(run, &Scene, NULL) && AddFigure(run, &Scene, "figure", (Vector3){ 0.0f, 0.0f, 0.0f }, &Clerk)
         && PlayRow(run, &Clerk, "lift", 0.0f))
     {
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.5f));
         if (TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(Clerk.Object, false)))
         {
-            WorldAnimation_Update(Scene.Animation, 0.25f);
+            Tick(&Scene, 0.25f);
             TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.5f));
             WorldAnimationStatus Status = WorldAnimation_GetStatus(Scene.Animation);
             TEST_CHECK(run, (Status.AnimatorCount == 1U) && (Status.PosedCount == 0U));
             // A row changed meanwhile applies once the object is enabled again.
             TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetClip(Clerk.Animator, (const unsigned char*)u8"up"));
-            WorldAnimation_Update(Scene.Animation, 0.25f);
+            Tick(&Scene, 0.25f);
             TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.5f));
             TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(Clerk.Object, true));
-            WorldAnimation_Update(Scene.Animation, 0.25f);
+            Tick(&Scene, 0.25f);
             TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 3.0f));
         }
     }
@@ -799,11 +840,11 @@ static void TheSystemLetsGoOfEveryAnimator(TestRun* run)
         && AddFigure(run, &Scene, "figure", (Vector3){ 2.0f, 0.0f, 0.0f }, &Removed)
         && PlayRow(run, &Clerk, "lift", 0.0f) && PlayRow(run, &Removed, "lift", 0.0f))
     {
-        WorldAnimation_Update(Scene.Animation, 0.5f);
+        Tick(&Scene, 0.5f);
         TEST_CHECK(run, (Clerk.Animator->_runtime != NULL) && (Removed.Animator->_runtime != NULL));
         // An animator removed with its state frees it (the component owns it).
         TEST_CHECK_SUCCESS(run, World_RemoveComponent(&Scene.World, Removed.Id, WorldComponentType_Animator));
-        WorldAnimation_Update(Scene.Animation, 0.25f);
+        Tick(&Scene, 0.25f);
         TEST_CHECK(run, WorldAnimation_GetStatus(Scene.Animation).AnimatorCount == 1U);
 
         // Destroyed, the system leaves no state or pose behind; a new one binds again, from the rows.
@@ -812,7 +853,7 @@ static void TheSystemLetsGoOfEveryAnimator(TestRun* run)
         TEST_CHECK(run, (Clerk.Animator->_runtime == NULL) && (WorldAnimatorComponent_GetPose(Clerk.Animator) == NULL));
         if (TEST_CHECK_SUCCESS(run, WorldAnimation_Create(&Scene.World, Scene.Assets.Manager, NULL, &Scene.Animation)))
         {
-            WorldAnimation_Update(Scene.Animation, 0.25f);
+            Tick(&Scene, 0.25f);
             TEST_CHECK(run, IsNear(GetHeadHeight(&Clerk), 2.25f));
         }
         // A system without assets binds nothing.
@@ -820,7 +861,7 @@ static void TheSystemLetsGoOfEveryAnimator(TestRun* run)
         Scene.Animation = NULL;
         if (TEST_CHECK_SUCCESS(run, WorldAnimation_Create(&Scene.World, NULL, NULL, &Scene.Animation)))
         {
-            WorldAnimation_Update(Scene.Animation, 0.25f);
+            Tick(&Scene, 0.25f);
             TEST_CHECK(run, (WorldAnimatorComponent_GetPose(Clerk.Animator) == NULL)
                 && (WorldAnimation_GetStatus(Scene.Animation).PosedCount == 0U));
         }
@@ -906,6 +947,7 @@ void WorldAnimationTests_Run(TestRun* run)
     {
         { "an_animator_binds_on_demand_and_rests_in_its_bind_pose", AnAnimatorBindsOnDemandAndRestsInItsBindPose },
         { "the_clip_row_plays_at_once_from_its_phase", TheClipRowPlaysAtOnceFromItsPhase },
+        { "poses_wait_for_the_pose_step_and_come_once_per_change", PosesWaitForThePoseStepAndComeOncePerChange },
         { "a_new_clip_row_cross_fades_over_its_fade_time", ANewClipRowCrossFadesOverItsFadeTime },
         { "turning_the_clip_row_off_fades_back_to_the_rest_pose", TurningTheClipRowOffFadesBackToTheRestPose },
         { "speed_and_pause_scale_the_clips_time", SpeedAndPauseScaleTheClipsTime },

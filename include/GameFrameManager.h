@@ -35,8 +35,9 @@
  * frame's CompositeColor opacity to fade the whole frame in or out.
  *
  * LOOP INTEGRATION. The caller owns the main loop and its timing. It calls GameFrameManager_Update once
- * per fixed update tick (with the fixed delta) and GameFrameManager_Render once per render frame (with
- * the real frame delta). If any frame method fails, the manager logs it as CRITICAL and asks the loop to
+ * per fixed update tick (with the fixed delta), then once per render frame GameFrameManager_PrepareRender (the
+ * frames' last update-side step: state only a shown frame needs) followed by GameFrameManager_Render (with the
+ * real frame delta). If any frame method fails, the manager logs it as CRITICAL and asks the loop to
  * stop (GameFrameManager_ShouldStop), turning an error into a graceful shutdown.
  *
  * All manager calls must be made from the main thread (they drive Raylib rendering and, through frames,
@@ -216,6 +217,21 @@ Error GameFrameManager_ActivateFrame(GameFrameManager* self, GameFrame* frame);
  *       full set.
  */
 Error GameFrameManager_Update(GameFrameManager* self, ProgramTime time);
+
+/**
+ * @brief Lets every frame bring its state up to date for the render that follows (GameFrameVTable::PrepareRender).
+ *
+ * Calls PrepareRender, frame by frame from the top of the z-stack down (the update order), on every active frame whose
+ * IsUpdated and IsRendered flags are both set; frames without the slot are skipped. It is the update side's last
+ * step before a render, so state that only a shown frame needs (skeletal poses, a camera on a posed head) is computed
+ * once per shown frame instead of every tick. Call it once per render frame, right before GameFrameManager_Render,
+ * with the same @p time.
+ * @param self The manager. Must not be NULL.
+ * @param time The render-frame time.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL. If a frame's PrepareRender fails, the manager has
+ *          already logged it as CRITICAL and set the stop flag, and that Error is returned.
+ */
+Error GameFrameManager_PrepareRender(GameFrameManager* self, ProgramTime time);
 
 /**
  * @brief Renders all active frames and composites them onto the screen.

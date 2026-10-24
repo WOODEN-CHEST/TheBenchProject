@@ -110,9 +110,11 @@ static LodLook GetLodLook(const WorldRenderer* self, const WorldRenderModel* mod
  * skinned shader holds the pose's palette (uploaded here when it does not yet). */
 static bool CanSkin(const WorldRenderModel* model, const GameSkeleton* skeleton, const WorldRendererMeshShaders* shaders)
 {
-    return (model->Pose != NULL) && (skeleton != NULL) && (shaders->Skinned != NULL) && (shaders->Palette != NULL)
-        && (GameSkeleton_GetBoneCount(skeleton) == model->Pose->_boneCount)
-        && WorldRendererCommon_UploadPalette(*shaders->Skinned, shaders->Palette, model->Pose);
+    // The camera's passes draw the first-person object without the bones it hides (T30); a light's see all of it.
+    const WorldAnimatorPose* Pose = shaders->IsCameraView ? model->CameraPose : model->Pose;
+    return (Pose != NULL) && (skeleton != NULL) && (shaders->Skinned != NULL) && (shaders->Palette != NULL)
+        && (GameSkeleton_GetBoneCount(skeleton) == Pose->_boneCount)
+        && WorldRendererCommon_UploadPalette(*shaders->Skinned, shaders->Palette, Pose);
 }
 
 
@@ -193,9 +195,10 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, WorldRendererPixelFil
         ? GameShader_GetRaylibShader(self->_unlit._skinnedShader) : (Shader){ 0 };
     WorldRendererMeshShaders Shaders = IsLit
         ? (WorldRendererMeshShaders){ .Rigid = &self->_pbr._rigid._passShader,
-            .Skinned = HasLitSkinned ? &self->_pbr._skinned._passShader : NULL, .Palette = &self->_pbr._skinned._palette }
+            .Skinned = HasLitSkinned ? &self->_pbr._skinned._passShader : NULL, .Palette = &self->_pbr._skinned._palette,
+            .IsCameraView = true }
         : (WorldRendererMeshShaders){ .Rigid = NULL, .Skinned = (self->_unlit._skinnedShader != NULL) ? &UnlitSkinned
-            : NULL, .Palette = &self->_unlit._skinnedPalette };
+            : NULL, .Palette = &self->_unlit._skinnedPalette, .IsCameraView = true };
     size_t ModelCount = 0;
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&self->_cache, &ModelCount);
     size_t VisibleCount = 0;
@@ -220,7 +223,7 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, WorldRendererPixelFil
         // by the object's fade (its draw distance, its opacity) and by its part of a LOD cross-fade: the two LODs of a
         // cross-fade keep complementary pixels. A LOD's meshes share its dither. A posed object's skinned meshes draw
         // with the skinned program, which gets the same.
-        bool IsPosed = HasLitSkinned && (Entry->Pose != NULL);
+        bool IsPosed = HasLitSkinned && (Entry->CameraPose != NULL);
         WorldRendererLighting_UploadObjectLights(self, self->_pbr._rigid._passShader, &self->_pbr._rigid._lit,
             Entry->RenderCenter, Entry->Radius);
         if (IsPosed)

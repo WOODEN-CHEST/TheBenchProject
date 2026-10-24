@@ -906,6 +906,16 @@ bool WorldRenderer_IsCrispOverlayEnabled(const WorldRenderer* self)
     return self->_crisp._isEnabled;
 }
 
+void WorldRenderer_SetFirstPersonObject(WorldRenderer* self, uint64_t objectId)
+{
+    WorldRenderCache_SetFirstPersonObject(&self->_cache, objectId);
+}
+
+uint64_t WorldRenderer_GetFirstPersonObject(const WorldRenderer* self)
+{
+    return self->_cache._firstPersonObjectId;
+}
+
 void WorldRenderer_SetDebugGridEnabled(WorldRenderer* self, bool enabled)
 {
     self->_drawDebugGrid = enabled;

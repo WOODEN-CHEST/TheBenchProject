@@ -197,7 +197,8 @@ typedef struct WorldTestFrameStruct
     bool _isDoorCrateAside;
     /** The world's characters, moved every tick after the other drivers (T13); owned. */
     WorldCharacters* _characters;
-    /** The test characters: walk mode (F1), the test NPCs (F2) and the player's options (F3, F4, F12); owned. */
+    /** The test characters: walk mode (F1), the test NPCs (F2), the player's options (F3, F4) and, since T30, the
+     *  bodies' actions (E, 8, 9, 0); owned. */
     WorldTestCharacters _testCharacters;
     /** The animation system, ticked after the collision step's events (T29), and its debug keys: the showcase's clips
      *  (5), the crowd (6), slow motion (7); owned. */
@@ -1054,6 +1055,14 @@ static void SwingDoor(WorldTestFrame* frame, float deltaSeconds)
     Error_Deconstruct(&Result); // cannot fail: the rotation is finite
 }
 
+/* F6, or a character's push (its open_door action, T30): the door swings open, or closed again. */
+static void SwingDoorOpenOrClosed(WorldTestFrame* frame)
+{
+    frame->_isDoorOpen = !frame->_isDoorOpen;
+    LogLine(frame, frame->_isDoorOpen ? "the door swings open (it stops on the crate pinned in its way; F10 moves the "
+        "crate)." : "the door swings closed.");
+}
+
 /* Puts a crate where it was loaded, as a teleport (no sweep: it is only pushed out of what it lands in). */
 static void TeleportObject(WorldTestFrame* frame, uint64_t id, Vector3Double position)
 {
@@ -1127,9 +1136,7 @@ static void HandleDebugCollisionInput(WorldTestFrame* frame, const GameInput* in
     }
     if (GameInput_IsKeyPressed(input, GameKey_F6) && (frame->_doorId != 0U))
     {
-        frame->_isDoorOpen = !frame->_isDoorOpen;
-        LogLine(frame, frame->_isDoorOpen ? "the door swings open (it stops on the crate pinned in its way; F10 moves "
-            "the crate)." : "the door swings closed.");
+        SwingDoorOpenOrClosed(frame);
     }
     if (GameInput_IsKeyPressed(input, GameKey_F9) && (frame->_pusherId != 0U))
     {
@@ -1377,7 +1384,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
         SetCursorCaptured(frame, true);
     }
 
-    // The characters' keys (F1 walk mode, F2 the test NPCs, F3 flight, F4 the player's kind, F12 the head bob) and,
+    // The characters' keys (F1 walk mode, F2 the test NPCs, F3 flight, F4 the player's kind) and,
     // while walking, the player controller: it reads the movement actions and the mouse into the player's character
     // (and takes the use press, so the E debug key below does not see it). The flycam stands still meanwhile.
     WorldTestCharacters_HandleInput(&frame->_testCharacters, input, &frame->_camera, frame->_cursorCaptured);
@@ -1440,8 +1447,10 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the "
             u8"desk, E variants, Z zoom, Q LOD tinting, F7 collider wireframes, F8 contact points, F6 swing the door, "
             u8"F9 the pushing wall, F10 move the door's crate, F11 far shift (everything 28 km out, then 141 km, then "
-            u8"back); F1 walk (the player as a character: WASD, SHIFT run, SPACE jump, CTRL crouch, E use), F2 the "
-            u8"test NPCs (a human, a dog, a pigeon), F3 fly, F4 the player's kind, F12 head bob; I renderer, game "
+            u8"back); F1 walk (the player as a character: WASD, SHIFT run, SPACE jump, CTRL crouch, E use: sit on the "
+            u8"bench, pick up the coffee cup, open the door, E again to stand up; 9 put down, 0 wave), F2 the test NPCs "
+            u8"(a human, a dog, a pigeon), 8 the NPC human sits on the bench and gets up, F3 fly, F4 the player's kind; "
+            u8"5 the showcase's next clip, 6 the crowd, 7 slow motion; I renderer, game "
             u8"time, collision and camera status, T text sample, F5 save the world (worlds/test.saved.world.json and "
             u8".ghdf); M frees the mouse for the UI (click the world to capture it again); ESC quits (once the UI lets "
             u8"go of it).");
@@ -1479,8 +1488,9 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     // The tick's order (agents/WorldData.md): the NPCs' brains set their inputs (the scripts' slot), the drivers move
     // things (the desk, the door, the pushing wall, then the characters, so what moved this tick carries them), the
     // collision step sweeps and pushes (it syncs first and writes the pushes back), its queued trigger, contact and
-    // motion events and the characters' events are handled, then the animations (the skeletons' poses, T29, and the
-    // sprites').
+    // motion events and the characters' events are handled, then the animations (the skeletons' playback and their
+    // graphs and actions, T29 and T30: their poses wait for PrepareRender, once per shown frame) and their events, and
+    // the sprites'.
     WorldTestCharacters_UpdateBrains(&Frame->_testCharacters, Delta);
     SlideDesk(Frame, time.PassedTime);
     SwingDoor(Frame, Delta);
@@ -1491,12 +1501,18 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     LogContactEvents(Frame);
     LogMotionEvents(Frame);
     WorldTestAnimation_Update(&Frame->_testAnimation, Delta);
+    // The animation events (T30): the actions logged, a released cup settled, the door's push swings it.
+    uint64_t Pushed = WorldTestCharacters_HandleAnimationEvents(&Frame->_testCharacters);
+    if ((Pushed != 0U) && (Pushed == Frame->_doorId))
+    {
+        SwingDoorOpenOrClosed(Frame);
+    }
     AdvanceSpriteAnimations(&Frame->_world, time.PassedTime);
 
-    // The world matrices of everything that moved this tick, so the renderer reads them cached; then the camera at the
-    // player's eyes while walking (and the look target, its changes logged).
+    // The world matrices of everything that moved this tick, so the renderer reads them cached; then the look target
+    // (its changes logged). The camera rides the player's eyes from PrepareRender, after the pose step.
     World_UpdateTransforms(&Frame->_world);
-    WorldTestCharacters_AfterStep(&Frame->_testCharacters, &Frame->_camera, Delta);
+    WorldTestCharacters_AfterStep(&Frame->_testCharacters);
 
     // The text sample animates its sprite and is laid out here (laying out loads its fonts); Render only draws it.
     Error TextResult = TextDocument_Update(&Frame->_textSample, time);
@@ -1542,6 +1558,21 @@ static bool WorldTestFrame_IsUnloaded(void* self)
 {
     UNUSED(self);
     return true;
+}
+
+/* The update side's last step before a render (G35): the skeletons are posed once per shown frame, then the world
+ * matrices of what the poses moved are brought up to date, so the render reads them cached, and the camera rides the
+ * player's eyes (its body's eyes socket as posed, T30) while walking. */
+static Error WorldTestFrame_PrepareRender(void* self, ProgramTime time)
+{
+    (void)time;
+    WorldTestFrame* Frame = self;
+    WorldTestAnimation_Pose(&Frame->_testAnimation);
+    World_UpdateTransforms(&Frame->_world);
+    WorldTestCharacters_PlaceCamera(&Frame->_testCharacters, &Frame->_camera);
+    // The player's body is seen from its eyes: the camera's passes leave out its head (G34).
+    WorldRenderer_SetFirstPersonObject(Frame->_renderer, WorldTestCharacters_GetPlayer(&Frame->_testCharacters));
+    return Error_CreateSuccess();
 }
 
 static Error WorldTestFrame_Render(void* self, const FrameRenderContext* context, RenderTexture2D target)
@@ -1611,6 +1642,7 @@ static const GameFrameVTable WorldTestFrameVTable =
     .BeginUnload = WorldTestFrame_BeginUnload,
     .UnloadStep = WorldTestFrame_UnloadStep,
     .IsUnloaded = WorldTestFrame_IsUnloaded,
+    .PrepareRender = WorldTestFrame_PrepareRender,
     .Render = WorldTestFrame_Render,
     .GetLoadProgress = NULL,
     .OnResize = NULL,
@@ -1732,6 +1764,7 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         Memory_Free(Frame);
         return AnimationResult;
     }
+    WorldTestCharacters_SetAnimation(&Frame->_testCharacters, Frame->_testAnimation._animation);
 
     Frame->_services = services;
     for (size_t Index = 0U; Index < OPACITY_TEST_OBJECT_COUNT; Index++)

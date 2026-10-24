@@ -51,8 +51,11 @@ int main(void)
     WorldRenderSpaceTests_Run(&Run);
     WorldLodTests_Run(&Run);
     AnimationLibraryTests_Run(&Run);
+    AnimationGraphTests_Run(&Run);
+    AnimationGraphPlayerTests_Run(&Run);
     SkeletalAnimationTests_Run(&Run);
     WorldAnimationTests_Run(&Run);
+    WorldAnimationGraphTests_Run(&Run);
     LoggerTests_Run(&Run);
     TextComponentTests_Run(&Run);
     TextComponentCodecTests_Run(&Run);
@@ -64,6 +67,7 @@ int main(void)
     UIAnimationTests_Run(&Run);
     UIScreenTests_Run(&Run);
     UITestFrameTests_Run(&Run);
+    GameFrameManagerTests_Run(&Run);
 
     int ExitCode = TestRun_Finish(&Run);
     TestRun_Deconstruct(&Run);

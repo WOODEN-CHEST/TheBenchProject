@@ -153,6 +153,20 @@ typedef struct GameFrameVTableStruct
     bool (*IsUnloaded)(void* self);
 
     /**
+     * @brief OPTIONAL: brings the frame's state up to date for the render that follows. May be NULL.
+     *
+     * Called once right before each render pass, after that loop iteration's update ticks, while the frame is
+     * active and both its IsUpdated and IsRendered flags are set (a frozen frame has nothing new to show, a hidden
+     * one nothing to show it on). It belongs to the update side: it may change the frame's state (pose skeletons
+     * once per shown frame instead of every tick, place a camera on a posed head), which Render, reading only, then
+     * draws. It must not read input (that is Update's) or draw.
+     * @param self The concrete frame.
+     * @param time The render-frame time (the same Render receives next).
+     * @returns Success, or a non-success Error to abort (fatal).
+     */
+    Error (*PrepareRender)(void* self, ProgramTime time);
+
+    /**
      * @brief Renders the frame into the given target.
      *
      * Called each render pass while the frame is active and its IsRendered flag is set. The frame builds
@@ -351,6 +365,22 @@ static inline Error GameFrame_UnloadStep(GameFrame* self)
 static inline bool GameFrame_IsUnloaded(GameFrame* self)
 {
     return self->VTable->IsUnloaded(self);
+}
+
+/**
+ * @brief Brings the frame's state up to date for the next render, or does nothing if unimplemented. See
+ *        GameFrameVTable::PrepareRender.
+ * @param self The frame; must not be NULL.
+ * @param time The render-frame time.
+ * @returns The frame's PrepareRender result, or success when PrepareRender is not implemented.
+ */
+static inline Error GameFrame_PrepareRender(GameFrame* self, ProgramTime time)
+{
+    if (self->VTable->PrepareRender == NULL)
+    {
+        return Error_CreateSuccess();
+    }
+    return self->VTable->PrepareRender(self, time);
 }
 
 /**

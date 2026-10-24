@@ -1,0 +1,11 @@
+{
+    "name": "test_cup",
+    "lods": [
+        { "model": "test_cup", "max_distance": 40 }
+    ],
+    "collision": "bounds",
+    "sockets": {
+        "grip": { "position": [ -0.045, 0.045, 0.0 ] },
+        "reach": { "position": [ -0.213, 0.0, 0.52 ], "rotation": [ 0.0, 180.0, 0.0 ] }
+    }
+}

@@ -6,14 +6,22 @@
 // The links are kept so that no hierarchy has a cycle or more than WORLD_HIERARCHY_MAX_DEPTH levels: World_SetParent
 // and parents brought by reads both check it before linking. Upward walks are bounded by that depth on top; subtree
 // walks follow the child and sibling links without recursion.
+//
+// Sockets (T30): an object hanging on a socket of its parent sits in the socket's frame, which the parent's animator
+// publishes with its pose (object space); its world matrix is local * socket * parent's world.
 
 #include <inttypes.h>
 #include <stdio.h>
+#include "AssetManager.h"
 #include "World.h"
+#include "WorldAnimatorComponent.h"
 #include "WorldInternal.h"
+#include "WorldModel.h"
 #include "WorldTransform.h"
+#include "GameMath.h"
 #include "Logger.h"
 #include "wr/WRMemory.h"
+#include "wr/WRString.h"
 
 
 // Macros.
@@ -205,9 +213,41 @@ static void LogRefusedParentOnce(World* world, const WorldObject* object, uint64
 
 
 // Static functions: world matrices (in double: positions are, T33).
+/* A socket's frame in @p object's own space in its animator's current pose; false when the pose has no such socket (no
+ * animator, no pose, another name). */
+static bool TryGetSocketFrame(const WorldObject* object, const unsigned char* socket, Matrix4Double* outFrame)
+{
+    const WorldComponent* Component = WorldObject_GetComponent(object, WorldComponentType_Animator);
+    const WorldAnimatorPose* Pose = (Component != NULL)
+        ? WorldAnimatorComponent_GetPose(WorldAnimatorComponent_FromComponent((WorldComponent*)Component)) : NULL;
+    if ((Pose == NULL) || (socket == NULL))
+    {
+        return false;
+    }
+    size_t Length = StringUTF8_GetByteLength(socket);
+    for (uint32_t Index = 0U; Index < Pose->_socketCount; Index++)
+    {
+        const unsigned char* Name = Pose->_sockets[Index]._name;
+        if ((StringUTF8_GetByteLength(Name) == Length) && Memory_IsEqual(Name, socket, Length))
+        {
+            *outFrame = GameMath_FromMatrix(Pose->_socketMatrices[Index]);
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The object's local matrix in its parent's own space: its transform, on the socket it hangs on when it has one. */
 static Matrix4Double GetLocalMatrix(const WorldObject* object)
 {
-    return WorldTransform_Compose(object->_position, object->_rotation, object->_scale);
+    Matrix4Double Local = WorldTransform_Compose(object->_position, object->_rotation, object->_scale);
+    Matrix4Double Socket;
+    if ((object->_parentSocket != NULL) && (object->_parent != NULL)
+        && TryGetSocketFrame(object->_parent, object->_parentSocket, &Socket))
+    {
+        return Matrix4Double_Multiply(&Local, &Socket);
+    }
+    return Local;
 }
 
 /* The object's world matrix: its cache when up to date, otherwise its local matrix times its parent's world matrix,
@@ -261,6 +301,17 @@ static Error FindForGetter(World* world, uint64_t id, const void* output, const 
 
 
 // Internal functions (declared in WorldInternal.h).
+void WorldInternal_MarkSocketChildrenChanged(World* world, WorldObject* object)
+{
+    for (WorldObject* Child = object->_firstChild; Child != NULL; Child = Child->_nextSibling)
+    {
+        if (Child->_parentSocket != NULL)
+        {
+            WorldInternal_MarkTransformChanged(world, Child);
+        }
+    }
+}
+
 void WorldInternal_MarkTransformChanged(World* world, WorldObject* object)
 {
     for (WorldObject* Current = object; Current != NULL; Current = GetNextInSubtree(Current, object))
@@ -418,36 +469,50 @@ bool WorldObject_IsEffectivelyVisible(const WorldObject* self)
 }
 
 
-// Public functions: the world (declared in World.h).
-Error World_SetParent(World* self, uint64_t childId, uint64_t parentId, bool keepWorldTransform)
+/* World_SetParent and World_SetParentSocket: places @p childId under @p parentId (0: a root), on @p socket of it (NULL:
+ * none). Messages start with @p caller. */
+static Error SetParent(World* self, uint64_t childId, uint64_t parentId, const unsigned char* socket,
+    bool keepWorldTransform, const char* caller)
 {
     if (self == NULL)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_SetParent: self must not be NULL.");
+        return Error_Construct4(ErrorCode_IllegalArgument, "%s: self must not be NULL.", caller);
     }
     if (childId == 0U)
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "World_SetParent: childId must not be 0.");
+        return Error_Construct4(ErrorCode_IllegalArgument, "%s: childId must not be 0.", caller);
+    }
+    if ((socket != NULL) && ((StringUTF8_GetByteLength(socket) > WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH)
+        || !AssetManager_IsValidAssetName(socket)))
+    {
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange, "%s: a socket's name is [a-z][a-z0-9_.-]*, at most %zu "
+            "bytes.", caller, WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH);
+    }
+    if ((socket != NULL) && (parentId == 0U))
+    {
+        return Error_Construct4(ErrorCode_InvalidOperation, "%s: a root hangs on no socket.", caller);
     }
     WorldObject* Child = WorldInternal_FindObject(self, childId);
     if (Child == NULL)
     {
-        return Error_Construct4(ErrorCode_InvalidOperation, "World_SetParent: no object has the id %" PRIu64 ".",
-            childId);
+        return Error_Construct4(ErrorCode_InvalidOperation, "%s: no object has the id %" PRIu64 ".", caller, childId);
     }
-    if (parentId == Child->_parentId)
+    if ((parentId == Child->_parentId) && WorldInternal_AreStringsEqual(socket, Child->_parentSocket))
     {
         return Error_CreateSuccess();
     }
     WorldObject* Parent = NULL;
-    Error CheckResult = FindNewParent(self, Child, parentId, "World_SetParent: ", &Parent);
+    char Prefix[64];
+    snprintf(Prefix, sizeof(Prefix), "%s: ", caller);
+    Error CheckResult = FindNewParent(self, Child, parentId, Prefix, &Parent);
     if (CheckResult.Code != ErrorCode_Success)
     {
         return CheckResult;
     }
 
     // The placement to keep, worked out before anything changes. Its scale keeps the signs it has in the world, less
-    // the new parent's: then it also looks the same where the signs matter on their own (a billboard's flips).
+    // the new parent's: then it also looks the same where the signs matter on their own (a billboard's flips). Under a
+    // socket it is kept relative to the socket's frame.
     Vector3Double Position = Child->_position;
     Vector3 Rotation = Child->_rotation;
     Vector3 Scale = Child->_scale;
@@ -459,11 +524,16 @@ Error World_SetParent(World* self, uint64_t childId, uint64_t parentId, bool kee
         {
             Matrix4Double ChildWorld = Local;
             Matrix4Double ParentWorld = ComputeWorldMatrix(Parent, 0U);
+            Matrix4Double Socket;
+            if ((socket != NULL) && TryGetSocketFrame(Parent, socket, &Socket))
+            {
+                ParentWorld = Matrix4Double_Multiply(&Socket, &ParentWorld);
+            }
             if (!WorldTransform_TryGetLocalMatrix(&ChildWorld, &ParentWorld, &Local))
             {
                 return Error_Construct4(ErrorCode_InvalidOperation,
-                    "World_SetParent: object %" PRIu64 "'s world matrix cannot be inverted (a zero scale on an axis), "
-                    "so object %" PRIu64 " cannot keep its place under it.", parentId, childId);
+                    "%s: object %" PRIu64 "'s world matrix cannot be inverted (a zero scale on an axis), "
+                    "so object %" PRIu64 " cannot keep its place under it.", caller, parentId, childId);
             }
             Vector3 ParentSigns = GetChainScaleSigns(Parent);
             Signs = (Vector3){ Signs.x * ParentSigns.x, Signs.y * ParentSigns.y, Signs.z * ParentSigns.z };
@@ -477,12 +547,41 @@ Error World_SetParent(World* self, uint64_t childId, uint64_t parentId, bool kee
     }
 
     MoveUnder(Child, Parent);
+    Memory_Free(Child->_parentSocket);
+    Child->_parentSocket = WorldInternal_CloneString(socket);
     Child->_position = Position;
     Child->_rotation = Rotation;
     Child->_scale = Scale;
     Child->_revision++;
     WorldInternal_MarkTransformChanged(self, Child);
     return Error_CreateSuccess();
+}
+
+
+// Public functions: the world (declared in World.h).
+Error World_SetParent(World* self, uint64_t childId, uint64_t parentId, bool keepWorldTransform)
+{
+    return SetParent(self, childId, parentId, NULL, keepWorldTransform, "World_SetParent");
+}
+
+Error World_SetParentSocket(World* self, uint64_t childId, uint64_t parentId, const unsigned char* socket,
+    bool keepWorldTransform)
+{
+    return SetParent(self, childId, parentId, socket, keepWorldTransform, "World_SetParentSocket");
+}
+
+bool World_TryGetSocketWorldMatrix(World* self, uint64_t objectId, const unsigned char* socket,
+    Matrix4Double* outMatrix)
+{
+    WorldObject* Object = NULL;
+    Matrix4Double Frame;
+    if ((outMatrix == NULL) || !World_TryGetObject(self, objectId, &Object) || !TryGetSocketFrame(Object, socket, &Frame))
+    {
+        return false;
+    }
+    Matrix4Double ObjectWorld = ComputeWorldMatrix(Object, 0U);
+    *outMatrix = Matrix4Double_Multiply(&Frame, &ObjectWorld);
+    return true;
 }
 
 Error World_GetParent(World* self, uint64_t id, uint64_t* outParentId)

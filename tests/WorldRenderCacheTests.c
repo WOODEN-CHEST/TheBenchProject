@@ -6,6 +6,7 @@
 #include "Logger.h"
 #include "WorldAnimation.h"
 #include "WorldAnimatorComponent.h"
+#include "SkeletalAnimation.h"
 #include "WorldRenderCache.h"
 #include "WorldTransform.h"
 #include "SpriteTransform.h"
@@ -785,6 +786,7 @@ static void PosedObjectsTakeTheirPoseAndItsBounds(TestRun* run)
     if (IsBuilt)
     {
         WorldAnimation_Update(Animation, 0.1f);
+        WorldAnimation_Pose(Animation);
         size_t Count = 0U;
         const WorldRenderModel* Models = NULL;
         if (CacheFixture_Sync(run, &Fixture))
@@ -814,10 +816,157 @@ static void PosedObjectsTakeTheirPoseAndItsBounds(TestRun* run)
             Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
             TEST_CHECK(run, (Count == 3U) && (Models[0].Pose == NULL));
             WorldAnimation_Update(Animation, 0.1f);
+            WorldAnimation_Pose(Animation);
             TEST_CHECK(run, CacheFixture_Sync(run, &Fixture));
             Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
             TEST_CHECK(run, (Count == 3U) && (Models[0].Pose == WorldAnimatorComponent_GetPose(Animators[0]))
                 && (Models[0].Pose != NULL));
+        }
+    }
+    WorldAnimation_Destroy(Animation);
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+/* Whether a palette's bone is collapsed to a point: no linear part, its translation at @p joint. */
+static bool IsCollapsedTo(const float* palette, uint32_t bone, Vector3 joint)
+{
+    const float* Rows = palette + ((size_t)bone * SKELETAL_PALETTE_FLOATS_PER_BONE);
+    static const uint32_t Linear[9] = { 0U, 1U, 2U, 4U, 5U, 6U, 8U, 9U, 10U };
+    for (uint32_t Index = 0U; Index < 9U; Index++)
+    {
+        if (Rows[Linear[Index]] != 0.0f)
+        {
+            return false;
+        }
+    }
+    return IsNear(Rows[3], joint.x) && IsNear(Rows[7], joint.y) && IsNear(Rows[11], joint.z);
+}
+
+/* T30, G34: the first-person object's camera pose hides the bones its world model's first_person block lists, and their
+ * subtrees, by skinning them to the hidden bone's joint, in a copy: its shadows (Pose) keep the whole body, and every
+ * other entry's camera pose is its pose. Naming another object, one whose world model hides nothing, or none moves it. */
+static void TheFirstPersonObjectHidesItsBonesFromTheCamera(TestRun* run)
+{
+    // The posed test figure with a hat on its head: "up" lifts the spine 1 m, so the head's joint is 3 m up.
+    static const TestSkeletonBone Bones[4] =
+    {
+        { .Name = "root", .Parent = -1, .Bind = { .translation = { 0.0f, 0.0f, 0.0f },
+            .rotation = { 0.0f, 0.0f, 0.0f, 1.0f }, .scale = { 1.0f, 1.0f, 1.0f } } },
+        { .Name = "spine", .Parent = 0, .Bind = { .translation = { 0.0f, 1.0f, 0.0f },
+            .rotation = { 0.0f, 0.0f, 0.0f, 1.0f }, .scale = { 1.0f, 1.0f, 1.0f } } },
+        { .Name = "head", .Parent = 1, .Bind = { .translation = { 0.0f, 2.0f, 0.0f },
+            .rotation = { 0.0f, 0.0f, 0.0f, 1.0f }, .scale = { 1.0f, 1.0f, 1.0f } } },
+        { .Name = "hat", .Parent = 2, .Bind = { .translation = { 0.0f, 2.3f, 0.0f },
+            .rotation = { 0.0f, 0.0f, 0.0f, 1.0f }, .scale = { 1.0f, 1.0f, 1.0f } } },
+    };
+    static const float Times[] = { 0.0f, 1.0f };
+    static const float Up[] = { 0.0f, 2.0f, 0.0f, 0.0f, 2.0f, 0.0f };
+    TestGltfNode Nodes[4] =
+    {
+        { .Name = "root", .Parent = -1, .Rest = TestAnimation_Identity() },
+        { .Name = "spine", .Parent = 0, .Rest = TestAnimation_Translation(0.0f, 1.0f, 0.0f) },
+        { .Name = "head", .Parent = 1, .Rest = TestAnimation_Translation(0.0f, 1.0f, 0.0f) },
+        { .Name = "hat", .Parent = 2, .Rest = TestAnimation_Translation(0.0f, 0.3f, 0.0f) },
+    };
+    TestGltfChannel Channel = { .Node = 1, .Path = "translation", .Interpolation = "LINEAR", .Times = Times,
+        .KeyCount = 2U, .Values = Up, .ValueComponents = 3U };
+    TestGltfClip Clip = { .Name = "up", .Channels = &Channel, .ChannelCount = 1U };
+    GenericBuffer Gltf;
+    TestGltf_Write(Nodes, 4U, &Clip, 1U, &Gltf);
+
+    CacheFixture Fixture;
+    WorldModelComponent* Placements[3] = { NULL, NULL, NULL };
+    WorldAnimation* Animation = NULL;
+    Vector3 Scale = { 1.0f, 1.0f, 1.0f };
+    bool IsBuilt = CacheFixture_Construct(run, &Fixture)
+        && TestAssets_AddSkinnedModel(run, &Fixture.Assets, "figure_model", Bones, 4, 0.2f, MatrixIdentity(), NULL)
+        && TestAssets_AddAnimationLibrary(run, &Fixture.Assets, "motions", (const char*)Gltf._data, NULL, 0U, NULL)
+        && TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"body\", \"lods\": [{\"model\": "
+            "\"figure_model\", \"max_distance\": 50}], \"animation_libraries\": [\"motions\"], \"sockets\": "
+            "{\"eyes\": {\"bone\": \"head\", \"position\": [0, 0.1, 0.1]}}, \"first_person\": {\"eyes\": \"eyes\", "
+            "\"hidden_bones\": [\"head\"]}}")
+        && TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"plain\", \"lods\": [{\"model\": "
+            "\"figure_model\", \"max_distance\": 50}], \"animation_libraries\": [\"motions\"]}")
+        && ((Placements[0] = AddModel(run, &Fixture.World, "body", (Vector3){ 0.0f, 0.0f, 0.0f }, Scale)) != NULL)
+        && ((Placements[1] = AddModel(run, &Fixture.World, "body", (Vector3){ 2.0f, 0.0f, 0.0f }, Scale)) != NULL)
+        && ((Placements[2] = AddModel(run, &Fixture.World, "plain", (Vector3){ 4.0f, 0.0f, 0.0f }, Scale)) != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldAnimation_Create(&Fixture.World, Fixture.Assets.Manager, NULL, &Animation));
+    Memory_Free(Gltf._data);
+    for (size_t Index = 0U; IsBuilt && (Index < 3U); Index++)
+    {
+        WorldComponent* Animator = NULL;
+        IsBuilt = TEST_CHECK_SUCCESS(run, World_AddComponent(&Fixture.World, IdOf(Placements[Index]),
+                WorldComponentType_Animator, &Animator))
+            && TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetClip(WorldAnimatorComponent_FromComponent(Animator),
+                (const unsigned char*)u8"up"))
+            && TEST_CHECK_SUCCESS(run, WorldAnimatorComponent_SetPlaysClip(WorldAnimatorComponent_FromComponent(Animator),
+                true));
+    }
+    if (IsBuilt)
+    {
+        WorldAnimation_Update(Animation, 0.1f);
+        WorldAnimation_Pose(Animation);
+        // Nobody named: every camera pose is the pose.
+        size_t Count = 0U;
+        const WorldRenderModel* Models = CacheFixture_Sync(run, &Fixture)
+            ? WorldRenderCache_GetModels(&Fixture.Cache, &Count) : NULL;
+        if (TEST_CHECK(run, (Count == 3U) && (Models[0].Pose != NULL) && (Models[1].Pose != NULL)
+            && (Models[2].Pose != NULL)))
+        {
+            TEST_CHECK(run, (Models[0].CameraPose == Models[0].Pose) && (Models[1].CameraPose == Models[1].Pose)
+                && (Models[2].CameraPose == Models[2].Pose));
+        }
+
+        // The first named: its head and the hat on it collapse to the head's joint in a copy; the root and the spine
+        // stay as posed, and its shadows keep the head (lifted 1 m, not collapsed).
+        WorldRenderCache_SetFirstPersonObject(&Fixture.Cache, IdOf(Placements[0]));
+        Models = CacheFixture_Sync(run, &Fixture) ? WorldRenderCache_GetModels(&Fixture.Cache, &Count) : NULL;
+        if (TEST_CHECK(run, (Count == 3U) && (Models[0].Pose != NULL) && (Models[0].CameraPose != NULL)
+            && (Models[0].CameraPose != Models[0].Pose)))
+        {
+            const WorldAnimatorPose* Pose = Models[0].Pose;
+            const WorldAnimatorPose* Seen = Models[0].CameraPose;
+            TEST_CHECK(run, (Seen->_boneCount == 4U) && (Seen->_skeleton == Pose->_skeleton)
+                && (Seen->_boneMatrices == Pose->_boneMatrices) && (Seen->_worldModel == Pose->_worldModel)
+                && (Seen->_revision == Pose->_revision) && (Seen->_palette != Pose->_palette));
+            TEST_CHECK(run, memcmp(Seen->_palette, Pose->_palette,
+                2U * SKELETAL_PALETTE_FLOATS_PER_BONE * sizeof(float)) == 0);
+            TEST_CHECK(run, IsCollapsedTo(Seen->_palette, 2U, (Vector3){ 0.0f, 3.0f, 0.0f })
+                && IsCollapsedTo(Seen->_palette, 3U, (Vector3){ 0.0f, 3.0f, 0.0f }));
+            const float* Head = Pose->_palette + (2U * SKELETAL_PALETTE_FLOATS_PER_BONE);
+            TEST_CHECK(run, IsNear(Head[0], 1.0f) && IsNear(Head[5], 1.0f) && IsNear(Head[10], 1.0f)
+                && IsNear(Head[7], 1.0f));
+            TEST_CHECK(run, (Models[1].CameraPose == Models[1].Pose) && (Models[2].CameraPose == Models[2].Pose));
+        }
+
+        // One whose world model hides nothing: drawn as any other.
+        WorldRenderCache_SetFirstPersonObject(&Fixture.Cache, IdOf(Placements[2]));
+        Models = CacheFixture_Sync(run, &Fixture) ? WorldRenderCache_GetModels(&Fixture.Cache, &Count) : NULL;
+        if (TEST_CHECK(run, Count == 3U))
+        {
+            TEST_CHECK(run, (Models[0].CameraPose == Models[0].Pose) && (Models[1].CameraPose == Models[1].Pose)
+                && (Models[2].CameraPose == Models[2].Pose));
+        }
+
+        // The second named (after another pose step): it is collapsed, the first is whole again.
+        WorldRenderCache_SetFirstPersonObject(&Fixture.Cache, IdOf(Placements[1]));
+        WorldAnimation_Update(Animation, 0.1f);
+        WorldAnimation_Pose(Animation);
+        Models = CacheFixture_Sync(run, &Fixture) ? WorldRenderCache_GetModels(&Fixture.Cache, &Count) : NULL;
+        if (TEST_CHECK(run, (Count == 3U) && (Models[1].CameraPose != NULL) && (Models[1].CameraPose != Models[1].Pose)))
+        {
+            TEST_CHECK(run, IsCollapsedTo(Models[1].CameraPose->_palette, 2U, (Vector3){ 0.0f, 3.0f, 0.0f })
+                && IsCollapsedTo(Models[1].CameraPose->_palette, 3U, (Vector3){ 0.0f, 3.0f, 0.0f }));
+            TEST_CHECK(run, (Models[0].CameraPose == Models[0].Pose) && (Models[2].CameraPose == Models[2].Pose));
+        }
+
+        // None: every camera pose is the pose again.
+        WorldRenderCache_SetFirstPersonObject(&Fixture.Cache, 0U);
+        Models = CacheFixture_Sync(run, &Fixture) ? WorldRenderCache_GetModels(&Fixture.Cache, &Count) : NULL;
+        if (TEST_CHECK(run, Count == 3U))
+        {
+            TEST_CHECK(run, (Models[0].CameraPose == Models[0].Pose) && (Models[1].CameraPose == Models[1].Pose)
+                && (Models[2].CameraPose == Models[2].Pose));
         }
     }
     WorldAnimation_Destroy(Animation);
@@ -1494,6 +1643,7 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "an_object_drawn_again_appears_at_its_lod", AnObjectDrawnAgainAppearsAtItsLod },
         { "a_camera_turning_back_turns_the_fade_around", ACameraTurningBackTurnsTheFadeAround },
         { "posed_objects_take_their_pose_and_its_bounds", PosedObjectsTakeTheirPoseAndItsBounds },
+        { "the_first_person_object_hides_its_bones_from_the_camera", TheFirstPersonObjectHidesItsBonesFromTheCamera },
     };
     TestRun_RunSuite(run, "WorldRenderCache", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

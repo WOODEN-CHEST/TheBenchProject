@@ -36,6 +36,8 @@ typedef struct ClipDefinitionStruct
     unsigned char* Source; // owned
     bool IsLooped;
     float Speed;
+    bool HasDistance;
+    float Distance;
 } ClipDefinition;
 
 typedef struct AnimationLibraryDefinitionStruct
@@ -50,7 +52,7 @@ typedef struct AnimationLibraryDefinitionStruct
 
 // Fields.
 static const unsigned char* const RootKeys[] = { u8"name", u8"location", u8"format", u8"clips" };
-static const unsigned char* const ClipKeys[] = { u8"name", u8"source", u8"is_looped", u8"speed" };
+static const unsigned char* const ClipKeys[] = { u8"name", u8"source", u8"is_looped", u8"speed", u8"distance" };
 
 
 // Static functions.
@@ -77,7 +79,7 @@ static bool AreNamesEqual(const unsigned char* a, const unsigned char* b)
 }
 
 /* One clip setting: { "name": the game name, "source": its name in the file (default: the name), "is_looped": false,
- * "speed": 1 }. */
+ * "speed": 1, "distance": the metres it covers per cycle (none by default) }. */
 static Error ParseClip(const unsigned char* libraryName, JSONCompound* compound, size_t index,
     ClipDefinition* outClip)
 {
@@ -146,6 +148,18 @@ static Error ParseClip(const unsigned char* libraryName, JSONCompound* compound,
     {
         return Fail(libraryName, "clips[%" PRIu64 "].speed is %g; it must be above 0 and at most %g.", (uint64_t)index,
             (double)outClip->Speed, (double)ANIMATION_CLIP_MAX_SPEED);
+    }
+    Result = AssetJSON_ReadOptionalFloat(compound, (const unsigned char*)u8"distance", 0.0f, &outClip->Distance,
+        &outClip->HasDistance);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return Fail(libraryName, "clips[%" PRIu64 "].distance must be a number (metres per cycle).", (uint64_t)index);
+    }
+    if (outClip->HasDistance && (!(outClip->Distance > 0.0f) || (outClip->Distance > ANIMATION_CLIP_MAX_DISTANCE)))
+    {
+        return Fail(libraryName, "clips[%" PRIu64 "].distance is %g; the metres it covers per cycle must be above 0 and "
+            "at most %g.", (uint64_t)index, (double)outClip->Distance, (double)ANIMATION_CLIP_MAX_DISTANCE);
     }
     return Error_CreateSuccess();
 }
@@ -254,7 +268,8 @@ static Error AnimationLibraryDefinition_LoadAsset(void* self, AssetManager* mana
             Settings[Index] = (AnimationClipSettings)
             {
                 .Source = Definition->Clips[Index].Source, .Name = Definition->Clips[Index].Name,
-                .IsLooped = Definition->Clips[Index].IsLooped, .Speed = Definition->Clips[Index].Speed
+                .IsLooped = Definition->Clips[Index].IsLooped, .Speed = Definition->Clips[Index].Speed,
+                .HasDistance = Definition->Clips[Index].HasDistance, .Distance = Definition->Clips[Index].Distance
             };
         }
     }

@@ -3,5 +3,12 @@
     "lods": [
         { "model": "test_humanoid_short", "max_distance": 80 }
     ],
-    "animation_libraries": [ "test_humanoid_motions" ]
+    "animation_libraries": [ "test_humanoid_motions" ],
+    "animation_graph": "test_humanoid",
+    "sockets": {
+        "hand_r": { "bone": "hand_r", "position": [ 0.03, -0.06, 0.0 ], "rotation": [ 100.0, 0.0, 0.0 ] },
+        "hand_l": { "bone": "hand_l", "position": [ -0.03, -0.06, 0.0 ], "rotation": [ 100.0, 0.0, 0.0 ] },
+        "eyes": { "bone": "head", "position": [ 0.0, 0.085, 0.1 ] }
+    },
+    "first_person": { "eyes": "eyes", "hidden_bones": [ "neck" ] }
 }

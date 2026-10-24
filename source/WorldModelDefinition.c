@@ -11,6 +11,7 @@
 #include "Logger.h"
 #include "WorldModel.h"
 #include "WorldModelCollisionInternal.h"
+#include "WorldModelSocketInternal.h"
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -30,7 +31,9 @@
  * points into the definition, which may be replaced while the asset is loaded. The "collision" section (T12) is parsed
  * and loaded by source/WorldModelCollisionDefinition.c: its sets live in a second block the asset owns, with the hulls
  * and meshes built from models that load as further dependencies. The animation libraries (T29) are dependencies too;
- * the skeleton is the first skinned LOD's, which every other skinned LOD must share.
+ * the skeleton is the first skinned LOD's, which every other skinned LOD must share. The animation graph (T30) is a
+ * dependency as well; the "sockets" and "first_person" sections (T30) are parsed and loaded by
+ * source/WorldModelSocketDefinition.c into a third block the asset owns.
  */
 
 
@@ -93,6 +96,8 @@ typedef struct WorldModelDefinitionStruct
     WorldModelCollisionDefinition* Collision; // owned, NULL without a "collision" section
     unsigned char* AnimationLibraries[WORLD_MODEL_MAX_ANIMATION_LIBRARIES]; // owned asset names
     size_t AnimationLibraryCount;
+    unsigned char* AnimationGraph;       // owned asset name, NULL without one (T30)
+    WorldModelSocketDefinition* Sockets; // owned, NULL without "sockets" and "first_person" (T30)
 } WorldModelDefinition;
 
 /* The definition being read and its name in printable form, for messages. */
@@ -108,6 +113,8 @@ typedef struct WorldModelLoadedStruct
     void* VariantBlock;   // owned: the variants, their overrides and their names in one block (NULL without variants)
     void* CollisionBlock; // owned: the collision sets, shapes, hulls and meshes (NULL without collision)
     void* LibraryBlock;   // owned: the animation libraries' names in one block (NULL without libraries)
+    void* SocketBlock;    // owned: the sockets, their names and the hidden bones (NULL without them)
+    unsigned char* GraphName; // owned copy of the animation graph's name (NULL without one)
 } WorldModelLoaded;
 
 
@@ -115,7 +122,8 @@ typedef struct WorldModelLoadedStruct
 static const unsigned char* const RootKeys[] =
 {
     u8"name", u8"lods", u8"draw_distance", u8"is_draw_distance_fixed", u8"lod_fade_seconds", u8"lod_hysteresis",
-    u8"render", u8"variants", u8"bounds", u8"collision", u8"animation_libraries"
+    u8"render", u8"variants", u8"bounds", u8"collision", u8"animation_libraries", u8"animation_graph", u8"sockets",
+    u8"first_person"
 };
 static const unsigned char* const LodKeys[] = { u8"model", u8"max_distance" };
 static const unsigned char* const RenderKeys[] =
@@ -783,6 +791,15 @@ static Error ParseDefinition(WorldModelDefinition* definition, JSONCompound* roo
     {
         Result = ParseAnimationLibraries(&Context, root);
     }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadAssetName(&Context, root, (const unsigned char*)u8"animation_graph", false, "the definition",
+            &definition->AnimationGraph);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldModelSocketDefinition_Parse(Context.Name, root, &definition->Sockets);
+    }
     return Result;
 }
 
@@ -795,6 +812,8 @@ static void WorldModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
     Memory_Free(Loaded->VariantBlock);
     WorldModelCollision_DestroyBlock(Loaded->CollisionBlock);
     Memory_Free(Loaded->LibraryBlock);
+    Memory_Free(Loaded->SocketBlock);
+    Memory_Free(Loaded->GraphName);
     Memory_Free(Loaded);
 }
 
@@ -947,6 +966,48 @@ static Error LoadAnimationLibraries(const WorldModelDefinition* definition, Asse
         CopyAnimationLibraryNames(definition, model, outNameBlock);
     }
     return Result;
+}
+
+/* Loads the animation graph as a dependency (T30); on success *outName holds a copy of its name (owned by the caller;
+ * NULL without a graph). */
+static Error LoadAnimationGraph(const WorldModelDefinition* definition, AssetManager* manager, AssetUserID dependencyUser,
+    WorldModel* model, unsigned char** outName)
+{
+    *outName = NULL;
+    model->_animationGraph = NULL;
+    model->_animationGraphName = NULL;
+    if (definition->AnimationGraph == NULL)
+    {
+        return Error_CreateSuccess();
+    }
+    AssetTypeID GraphType = ASSET_TYPE_ID_INVALID;
+    Error Result = GetTypeId(manager, ASSET_TYPE_NAME_ANIMATION_GRAPH, &GraphType);
+    void* Asset = NULL;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AssetManager_LoadAssetSingle(manager, GraphType, definition->AnimationGraph, dependencyUser, &Asset);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error Wrapped = Error_Construct3(Result.Code, u8"World model \"%s\": animation graph \"%s\": %s",
+            definition->Base.Name, definition->AnimationGraph,
+            (Result.Message != NULL) ? Result.Message : (const unsigned char*)u8"it did not load.");
+        Error_Deconstruct(&Result);
+        return Wrapped;
+    }
+    if ((model->_skeleton == NULL) && (AssetManager_GetLogger(manager) != NULL))
+    {
+        Error LogResult = Logger_LogWarningFormatted(AssetManager_GetLogger(manager), (const unsigned char*)u8"World "
+            u8"model \"%s\" names an animation graph, but none of its LOD models has a skeleton: its placements play "
+            u8"nothing.", (const char*)definition->Base.Name);
+        Error_Deconstruct(&LogResult);
+    }
+    size_t Bytes = StringUTF8_GetByteLength(definition->AnimationGraph) + 1U;
+    *outName = Memory_Allocate(Bytes);
+    Memory_Copy(definition->AnimationGraph, *outName, Bytes);
+    model->_animationGraph = Asset;
+    model->_animationGraphName = *outName;
+    return Error_CreateSuccess();
 }
 
 /* The bounding sphere: the definition's, in the object's own space, or the sphere around LOD 0's mesh bounds in its
@@ -1157,14 +1218,28 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
     {
         Result = LoadAnimationLibraries(Definition, manager, dependencyUser, &Built, &LibraryBlock);
     }
+    unsigned char* GraphName = NULL;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = LoadAnimationGraph(Definition, manager, dependencyUser, &Built, &GraphName);
+    }
+    void* SocketBlock = NULL;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldModelSocketDefinition_Load(Definition->Sockets, Definition->Base.Name, &Built, &SocketBlock);
+    }
     if (Result.Code != ErrorCode_Success)
     {
+        Memory_Free(LibraryBlock);
+        Memory_Free(GraphName);
         return Result;
     }
     void* VariantBlock = NULL;
     Result = LoadVariants(Definition, manager, dependencyUser, &Built, &VariantBlock);
     if (Result.Code != ErrorCode_Success)
     {
+        Memory_Free(SocketBlock);
+        Memory_Free(GraphName);
         Memory_Free(LibraryBlock);
         return Result;
     }
@@ -1176,6 +1251,8 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
         if (Result.Code != ErrorCode_Success)
         {
             Memory_Free(VariantBlock);
+            Memory_Free(SocketBlock);
+            Memory_Free(GraphName);
             Memory_Free(LibraryBlock);
             return Result;
         }
@@ -1191,6 +1268,8 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
     Loaded->VariantBlock = VariantBlock;
     Loaded->CollisionBlock = CollisionBlock;
     Loaded->LibraryBlock = LibraryBlock;
+    Loaded->SocketBlock = SocketBlock;
+    Loaded->GraphName = GraphName;
     outLoaded->Asset = &Loaded->Model;
     outLoaded->VTable = &WorldModelLoadedVTable;
     outLoaded->DestroyContext = Loaded;
@@ -1223,6 +1302,8 @@ static void WorldModelDefinition_Destroy(void* self)
     {
         Memory_Free(Definition->AnimationLibraries[Index]);
     }
+    Memory_Free(Definition->AnimationGraph);
+    WorldModelSocketDefinition_Destroy(Definition->Sockets);
     Memory_Free(Definition->Base.Name);
     Memory_Free(Definition);
 }

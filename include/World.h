@@ -32,7 +32,9 @@
  * constructed.
  *
  * HIERARCHY. World_SetParent places an object under another: its position, rotation and scale become relative to the
- * parent, so it follows the parent (a cup on a desk, a light on a lamp, the parts of a door). It refuses unknown ids, an
+ * parent, so it follows the parent (a cup on a desk, a light on a lamp, the parts of a door); World_SetParentSocket
+ * places it on a socket of the parent (T30: a named place of its model, on a bone that moves with its pose: a cup in a
+ * hand). It refuses unknown ids, an
  * object as its own parent, cycles (a parent inside the object's own subtree) and hierarchies of more than
  * WORLD_HIERARCHY_MAX_DEPTH levels; with keepWorldTransform it rewrites the object's local transform so it stays where it
  * is (the editor's default). Removing an object removes its whole subtree, children first. A disabled parent disables
@@ -380,6 +382,38 @@ bool World_TryFindComponentType(const World* self, const unsigned char* name, Wo
  *          ErrorCode_ArgumentOutOfRange if the kept placement breaks the transform's rules (not finite).
  */
 Error World_SetParent(World* self, uint64_t childId, uint64_t parentId, bool keepWorldTransform);
+
+/**
+ * @brief Places an object on a socket of a parent (T30: a cup in a hand, a hat on a head), or under it with @p socket
+ *        NULL as World_SetParent does; its subtree comes with it.
+ *
+ * As World_SetParent, but the object's position, rotation and scale become relative to the socket's frame: a named
+ * place of the parent's world model, which the parent's animator publishes with its pose (WorldAnimatorComponent.h) and
+ * which may move with it. A socket the parent's pose does not have (no animator, no pose yet, another name) is the
+ * parent's own space until it has. Setting the parent and the socket it already has changes nothing.
+ * @param self The world; must not be NULL.
+ * @param childId The object to move.
+ * @param parentId The new parent; 0 makes it a root (then @p socket must be NULL).
+ * @param socket The socket's name ([a-z][a-z0-9_.-]*, at most WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH bytes; copied), or
+ *        NULL for the parent's own space.
+ * @param keepWorldTransform As World_SetParent's, relative to the socket's frame as it is now.
+ * @returns As World_SetParent; ErrorCode_ArgumentOutOfRange for a socket name that breaks its rule;
+ *          ErrorCode_InvalidOperation for a socket with no parent.
+ */
+Error World_SetParentSocket(World* self, uint64_t childId, uint64_t parentId, const unsigned char* socket,
+    bool keepWorldTransform);
+
+/**
+ * @brief Gives a socket's world matrix: the socket's frame in the object's current pose (its animator's, T30) times the
+ *        object's world matrix, in double. Reading never changes the world.
+ * @param self The world; must not be NULL.
+ * @param objectId The object (with an animator whose pose has the socket).
+ * @param socket The socket's name; NULL finds nothing.
+ * @param outMatrix [out] Receives the socket's space to world space. Must not be NULL.
+ * @returns Whether the object exists and its pose has the socket.
+ */
+bool World_TryGetSocketWorldMatrix(World* self, uint64_t objectId, const unsigned char* socket,
+    Matrix4Double* outMatrix);
 
 /**
  * @brief Gives an object's parent.
