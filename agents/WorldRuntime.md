@@ -370,6 +370,15 @@ the same way (`WorldRendererLighting_PrepareLitShader`, `WorldRendererLighting_U
 changing a bit of the PBR image (checked against the previous build on two drivers). Without it models draw unlit with
 raylib's default shader.
 
+**Terrain materials** (B02, [Terrain.md](Terrain.md)). `world_terrain` blends up to sixteen terrain materials per pixel:
+the painted weights (a face material's faces outright), the terrain's rules (slope and height in the world, noise in the
+terrain's space), height blending, and the maps sampled from texture arrays (planar, or triplanar on steep ground)
+in the terrain's own space, the normal maps reoriented onto the surface without mesh tangents and turned into the world;
+lit as `world_pbr`'s dielectric with the map's roughness and AO, through the night vision. The arrays are made once per
+terrain from the materials' pixels and sit on units 9 to 11; without them (no GL support, logged once) each material
+shows its mean colour. The C mirror (`TerrainBlend.h`) gives the same answer on the CPU. The equals key cycles the views
+(shaded, painted weights, rule weights, the dominant material).
+
 **Sprites** (T06; since T26 their settings are their world sprite's, each overridable per placement:
 [WorldSprites.md](WorldSprites.md), [WorldData.md](WorldData.md)). Every sprite is one unit quad
 (`WorldRendererSprites.c`: x and y in [0, 1] from the image's bottom left, z 0, normal +Z; six unindexed vertices,
@@ -592,7 +601,10 @@ get no AO and no outlines.
   models' skinned meshes (T29: available with the skinned twin of the shader models draw with, active while a shown
   model has a pose; the status line counts the posed models), "terrain shading" the lit terrain shader (B01: unavailable
   without `world_terrain`, when the chunks draw unlit; the status counts the terrains placed, those without a terrain,
-  the chunks drawn of all listed and their triangles, and whether the chunk key is on). It also counts what the
+  the chunks drawn of all listed and their triangles, and whether the chunk key is on), "terrain materials" the terrains'
+  texture arrays (B02: active while a drawn terrain has them, unavailable without texture arrays or the terrain shader;
+  the status log adds a line per terrain with its materials and its arrays' sizes, and the status names a debug view
+  while one shows). It also counts what the
   camera's passes drew and what culling and fading removed (see "Visibility"). The renderer logs the status once after its
   first render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame).
 
@@ -609,7 +621,8 @@ get no AO and no outlines.
 | `WorldRendererLighting.c` | The two PBR programs (rigid and, T29, skinned: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: both PBR programs, the sprite shader and, B01, the terrain shader, the night vision's among them), forward point lights, per-material factors, eye adaptation. |
 | `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow (models, terrain chunks, and cutout sprites through alpha-tested depth shaders). |
 | `WorldRendererGBuffer.c` | The normal/flag G-buffer (models, terrain chunks and cutout sprites) and the AO pre-pass. |
-| `WorldRendererTerrain.c` | The terrain's chunks (B01, [Terrain.md](Terrain.md)): their GPU meshes, kept by the renderer per terrain asset and chunk and uploaded again when a chunk's revision changes (all of them when the chunk layout changes; those of terrains no entry resolves any more unloaded); the `world_terrain` shader and its lit draw (per-chunk lights and dither; the unlit fallback with raylib's default shader); the G-buffer's and the shadow passes' draws with their shared shaders; the chunk key (the minus key: a colour per chunk and the wireframe). |
+| `WorldRendererTerrain.c` | The terrain's chunks (B01, [Terrain.md](Terrain.md)): their GPU meshes, kept by the renderer per terrain asset and chunk and uploaded again when a chunk's revision changes (all of them when the chunk layout changes; those of terrains no entry resolves any more unloaded); the `world_terrain` shader and its lit draw (per-chunk lights and dither; the unlit fallback with raylib's default shader); the G-buffer's and the shadow passes' draws with their shared shaders; the chunk key (the minus key: a colour per chunk and the wireframe); since B02 each terrain's materials as texture arrays (made once per terrain through `GLTextureArray`, bound on units 9 to 11), its materials' and rules' uniforms, each chunk's wrapped offsets, and the terrain views (the equals key). |
+| `GLTextureArray.c` (B02, not a pass) | Texture arrays (`GL_TEXTURE_2D_ARRAY`): the project's only direct OpenGL calls (decision W7), through the function pointers raylib's loader resolves (`rlGetProcAddress`), with their GL constants; private (`source/GLTextureArray.h`). |
 | `WorldRendererSky.c` | The atmospheric sky with the moon, the moonlit sky, the Milky Way and light pollution's skyglow; the sky textures the world names; the night sky values and the moon's disc for the frame. |
 | `WorldRendererStars.c` | The star field: the catalogue's mesh (rebuilt when the seed or density changes) and its draw (none behind the moon). |
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
@@ -635,12 +648,25 @@ The renderer keeps receiving features, so:
   never walk the world or resolve assets by name in a pass.
 - **Render reads, it never writes.** No writes to world objects or shared assets: per-draw material copies, the
   renderer's own location tables, and per-object render data in the cache.
-- **Fixed texture units.** Renderer-owned samplers use `WorldRendererTextureUnit` (units 12–15, above raylib's
-  material-map units 0–11 and the 2D batch's 0–4; `WORLD_RENDERER_MATERIAL_MAP_COUNT` must match raylib's
-  `MAX_MATERIAL_MAPS`, see BUILDING.md). Point each sampler at its unit once at load and only bind textures per
-  frame. Never leave a sampler on unit 0: OpenGL forbids samplers of different types on one unit. For 2D
-  (`DrawTexturePro`) passes bind extra samplers with `SetShaderValueTexture` after `BeginShaderMode`; manual
-  `rlActiveTextureSlot` binds only work for 3D `DrawMesh` draws.
+- **Fixed texture units.** Renderer-owned samplers use `WorldRendererTextureUnit`. Point each sampler at its unit once
+  at load and only bind textures per frame. Never leave a sampler on unit 0: OpenGL forbids samplers of different types
+  on one unit. For 2D (`DrawTexturePro`) passes bind extra samplers with `SetShaderValueTexture` after
+  `BeginShaderMode`; manual `rlActiveTextureSlot` binds only work for 3D `DrawMesh` draws. **The budget** (GL 3.3
+  guarantees 16 units; `WORLD_RENDERER_MATERIAL_MAP_COUNT` must match raylib's `MAX_MATERIAL_MAPS`, see BUILDING.md):
+
+  | Units | Who | What |
+  |---|---|---|
+  | 0–11 | raylib's `DrawMesh` | A drawn material's maps, map i on unit i (`GL_TEXTURE_2D`, cubes on 7–9); the 2D batch uses 0–4. Free in a program whose materials carry no maps. |
+  | 9–11 | the terrain program only (B02) | Its material arrays (`sampler2DArray`: albedo and height, normal, roughness and AO). The terrain draws with no raylib maps, and an array sampler reads only a unit's `GL_TEXTURE_2D_ARRAY` target, which nothing else binds, so the models' maps on the same units never meet them. |
+  | 12–15 | every lit program | The frame's textures: the near and far cascades, the cube shadow, the screen's AO. Full. |
+
+  T14 (the sky visibility map), T15 (the atmosphere's lookup tables) and T18 (wetness and puddle masks) will need units
+  in the lit programs too, and 12–15 are full: a frame texture for the model programs takes a unit below 12 that no
+  material map the models use binds (the PBR materials use maps 0, 1, 2 and 5: albedo, the packed ORM, normal, emission;
+  units 3, 4, 6, 10 and 11 are free there, but check `material_overrides` and glTF imports before taking one), and the
+  terrain program keeps 9–11 for its arrays (units 0–8 are free in it). A sampler type different from what a unit's
+  other users bind is safe only through a different target (2D, cube, 2D array); keep each new unit's users in this
+  table.
 - **Constants shared with GLSL.** `MAX_POINT_LIGHTS` in `pbr/fragment.frag` should equal
   `WORLD_MAX_FORWARD_LIGHTS`; the shader clamps its loop and the renderer checks the arrays at load (and logs if
   the shader holds fewer), so a mismatch costs lights, never memory safety. The bone palette's size
@@ -660,6 +686,10 @@ The renderer keeps receiving features, so:
   their bind pose.
 - **Terrain never skins and is never instanced** (B01): its chunks draw with one rigid shader per pass and need no
   skinned twin.
+- **Direct OpenGL calls** (B02, decision W7) live only in `source/GLTextureArray.{h,c}`: raylib has no texture arrays.
+  Anything else that needs GL raylib lacks goes there or into a module like it (its function pointers through
+  `rlGetProcAddress`, its constants defined in it, a missing function or a GL error degrading with one log line), never
+  into a pass.
 - **Vertex attributes (the budget).** GL 3.3 guarantees 16 attribute locations (0 to 15). raylib binds 0 to 12
   (`RL_DEFAULT_SHADER_ATTRIB_LOCATION_*` in `rlgl.h`): 0 position, 1 texcoord, 2 normal, 3 colour, 4 tangent,
   5 texcoord2, 7 bone indices, 8 bone weights, 9 to 12 the instance transform (a mat4 takes four). 6 is named for the
@@ -667,9 +697,12 @@ The renderer keeps receiving features, so:
   - **9 to 12: the terrain's weights** (B01): sixteen palette weights as four normalized `u8 x 4` attributes
     (`vertexWeights0..3` in `terrain/vertex.vert`, filled by `WorldRendererTerrain.c` with `rlSetVertexAttribute`). A
     terrain mesh is never instanced, so the instance transform's locations are free there.
-  - **13 to 15: free.** B03's instanced shaders will take raylib's instance transform at 9 to 12 and the tint and the
-    random value at 13 and 14 (its task file); 15 is the last one left. A new attribute takes a location here, or
-    shares one with a kind of mesh that never meets it in one shader, and is written into this list.
+  - **13: the terrain's vertex flags** (B02): a normalized `u8 x 4` (`vertexFlags`; x 1 on a face material's vertices,
+    whose faces the rules leave alone; y, z, w 0 and free for later terrain flags). Shared with B03's instanced shaders,
+    which never draw a terrain.
+  - **13 to 15 on other meshes: free.** B03's instanced shaders will take raylib's instance transform at 9 to 12 and the
+    tint and the random value at 13 and 14 (its task file); 15 is the last one left. A new attribute takes a location
+    here, or shares one with a kind of mesh that never meets it in one shader, and is written into this list.
 - **Failures degrade loudly once.** A missing shader or target falls back with one log line, never silently
   and never per frame.
 
@@ -769,7 +802,7 @@ the UI test frame above had first refusal: movement through the actions (`move_*
 default SHIFT), mouse-look (`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured) and the
 debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11 and the
-digits are taken already, and minus since B01; equals and the keypad are free. Leave F12 free: raylib's `EndDrawing`
+digits are taken already, minus since B01 and equals since B02; the keypad is free. Leave F12 free: raylib's `EndDrawing`
 takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
@@ -862,7 +895,10 @@ takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png`
   the showcase plays "idle" (5); crowd out (6); slow motion off (7).`;
 - **the terrain (B01, [Terrain.md](Terrain.md)):** minus (`-`) shows and hides the chunk key (logged): each chunk takes a
   colour by its cell (neighbours always differ) mixed into its lit colour, and the wireframe of the chunks in view is
-  drawn over it, a hair toward the camera. The status line (I) counts the chunks drawn and their triangles;
+  drawn over it, a hair toward the camera. The status line (I) counts the chunks drawn and their triangles, and (B02)
+  lists each terrain's materials and its arrays' sizes. **Equals** (`=`, B02) cycles what the terrain shows (logged):
+  shaded, the painted weights (B01's debug colours, before the rules), the weights after the rules, the dominant material
+  after height blending, then shaded again;
 - T toggles the text sample.
 
 M frees the cursor for the UI (and captures it again); a left click the UI did not take captures it again. An

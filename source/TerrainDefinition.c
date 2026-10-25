@@ -15,8 +15,10 @@
  * checks every rule while the definitions are read (unknown keys refused everywhere, the palette's and the channels'
  * names, the attribute mappings against them, the chunk size, the render and collision blocks), and the loader, which
  * imports the .glb (source "model": TerrainMesh_CreateFromGltfFile, the file treated as hostile) or reads the binary form
- * (source "data": TerrainMesh_LoadGHDF) and checks it against the definition. The loaded asset owns its mesh and the
- * names; it has no dependencies (B02 makes the palette's materials its dependencies).
+ * (source "data": TerrainMesh_LoadGHDF) and checks it against the definition, then loads the palette's terrain materials
+ * as its dependencies (B02) and checks that their maps of one kind share one size (a texture array holds one). The
+ * definition's "rules" (B02) are read with the palette's names and copied into the asset. The loaded asset owns its
+ * mesh, the names and the rules.
  */
 
 
@@ -35,6 +37,19 @@
 #define MAX_MAPPINGS TERRAIN_MAX_MATERIALS
 /** The binary form's extension, which a reference location's temp file takes. */
 #define DATA_EXTENSION ((const unsigned char*)u8"ghdf")
+/** A rule's ranges: the slope in degrees (0 flat to 180, an overhang's underside), the height in metres (the world's
+ *  position limit), and the widest ramps. */
+#define RULE_SLOPE_MAX_DEGREES 180.0
+#define RULE_SLOPE_MAX_BLEND 90.0
+#define RULE_HEIGHT_LIMIT 1.0e7
+#define RULE_HEIGHT_MAX_BLEND 10000.0
+/** Room for a rule's place in messages ("rules[7]"), a block's ("rules[7].height") and a "where" suffix built of it. */
+#define RULE_WHERE_CAPACITY ((size_t)32)
+#define RULE_BLOCK_WHERE_CAPACITY ((size_t)48)
+#define RULE_SUFFIX_CAPACITY ((size_t)56)
+/** A rule's noise: its default cell size (metres), and the largest one. */
+#define RULE_NOISE_DEFAULT_SCALE 4.0f
+#define RULE_NOISE_MAX_SCALE 10000.0
 
 
 // Types.
@@ -70,6 +85,9 @@ typedef struct TerrainDefinitionStruct
     size_t AttributeNameCount;
     float ChunkSize;
     TerrainSettings Settings;
+    /** The rules, as the asset gets them. */
+    TerrainRule Rules[TERRAIN_MAX_RULES];
+    uint32_t RuleCount;
 } TerrainDefinition;
 
 
@@ -77,7 +95,7 @@ typedef struct TerrainDefinitionStruct
 static const unsigned char* const RootKeys[] =
 {
     u8"name", u8"source", u8"model", u8"format", u8"data", u8"weights", u8"densities", u8"normals", u8"blend_slot",
-    u8"materials", u8"density_channels", u8"chunk_size", u8"render", u8"collision"
+    u8"materials", u8"density_channels", u8"chunk_size", u8"render", u8"collision", u8"rules"
 };
 static const unsigned char* const ModelOnlyKeys[] =
 {
@@ -89,6 +107,14 @@ static const unsigned char* const RenderKeys[] =
     u8"has_outline", u8"shadow_tier", u8"casts_shadows", u8"draw_distance", u8"is_draw_distance_fixed"
 };
 static const unsigned char* const CollisionKeys[] = { u8"is_enabled", u8"layer", u8"collides_with" };
+static const unsigned char* const RuleKeys[] =
+{
+    u8"material", u8"opacity", u8"only_on", u8"slope", u8"height", u8"noise"
+};
+static const unsigned char* const RangeKeys[] = { u8"min", u8"max", u8"blend" };
+static const unsigned char* const NoiseKeys[] = { u8"scale", u8"strength", u8"seed" };
+/* What the materials' map kinds are called in messages, by TerrainMaterialMapKind. */
+static const char* const MapKindNames[TerrainMaterialMapKind_Count] = { "albedo", "normal", "roughness_ao" };
 static const unsigned char* const ChannelKeys[4] = { u8"r", u8"g", u8"b", u8"a" };
 
 
@@ -644,6 +670,252 @@ static Error ParseCollision(TerrainDefinition* definition, JSONCompound* root)
     return Error_CreateSuccess();
 }
 
+/* An optional float of a rule's block within [lowest, highest]. */
+static Error ReadRuleFloat(const TerrainDefinition* definition, JSONCompound* compound, const char* where,
+    const unsigned char* key, double lowest, double highest, float defaultValue, float* outValue, bool* outFound)
+{
+    Error Result = AssetJSON_ReadOptionalFloat(compound, key, defaultValue, outValue, outFound);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return Fail(definition, "%s.%s must be a number.", where, (const char*)key);
+    }
+    if (((double)*outValue < lowest) || ((double)*outValue > highest))
+    {
+        return Fail(definition, "%s.%s is %g; it must be %g to %g.", where, (const char*)key, (double)*outValue, lowest,
+            highest);
+    }
+    return Error_CreateSuccess();
+}
+
+/* A rule's range block ("slope" or "height"): { "min", "max", "blend" }, at least one bound, the bounds in order. */
+static Error ParseRuleRange(const TerrainDefinition* definition, JSONCompound* rule, const char* where,
+    const unsigned char* key, double lowest, double highest, double maxBlend, TerrainRuleRange* outRange)
+{
+    Memory_Zero(outRange, sizeof(*outRange));
+    JSONCompound* Block = NULL;
+    Error Result = GetOptionalCompound(definition, rule, key, &Block);
+    if ((Result.Code != ErrorCode_Success) || (Block == NULL))
+    {
+        return Result;
+    }
+    char Inner[RULE_BLOCK_WHERE_CAPACITY];
+    snprintf(Inner, sizeof(Inner), "%s.%s", where, (const char*)key);
+    char Where[WHERE_CAPACITY];
+    char Suffix[RULE_SUFFIX_CAPACITY];
+    snprintf(Suffix, sizeof(Suffix), ", %s", Inner);
+    Result = AssetJSON_RejectUnknownKeys(Block, RangeKeys, KEY_COUNT(RangeKeys),
+        FormatWhere(definition, Where, sizeof(Where), Suffix));
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadRuleFloat(definition, Block, Inner, (const unsigned char*)u8"min", lowest, highest, 0.0f,
+            &outRange->Minimum, &outRange->HasMinimum);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadRuleFloat(definition, Block, Inner, (const unsigned char*)u8"max", lowest, highest, 0.0f,
+            &outRange->Maximum, &outRange->HasMaximum);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadRuleFloat(definition, Block, Inner, (const unsigned char*)u8"blend", 0.0, maxBlend, 0.0f,
+            &outRange->Blend, NULL);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (!outRange->HasMinimum && !outRange->HasMaximum)
+    {
+        return Fail(definition, "%s needs a \"min\" or a \"max\".", Inner);
+    }
+    if (outRange->HasMinimum && outRange->HasMaximum && (outRange->Minimum > outRange->Maximum))
+    {
+        return Fail(definition, "%s's min (%g) is above its max (%g).", Inner, (double)outRange->Minimum,
+            (double)outRange->Maximum);
+    }
+    outRange->IsEnabled = true;
+    return Error_CreateSuccess();
+}
+
+/* A rule's "noise": { "scale", "strength", "seed" }, each optional. */
+static Error ParseRuleNoise(const TerrainDefinition* definition, JSONCompound* rule, const char* where,
+    TerrainRuleNoise* outNoise)
+{
+    Memory_Zero(outNoise, sizeof(*outNoise));
+    JSONCompound* Block = NULL;
+    Error Result = GetOptionalCompound(definition, rule, (const unsigned char*)u8"noise", &Block);
+    if ((Result.Code != ErrorCode_Success) || (Block == NULL))
+    {
+        return Result;
+    }
+    char Inner[RULE_BLOCK_WHERE_CAPACITY];
+    snprintf(Inner, sizeof(Inner), "%s.noise", where);
+    char Where[WHERE_CAPACITY];
+    char Suffix[RULE_SUFFIX_CAPACITY];
+    snprintf(Suffix, sizeof(Suffix), ", %s", Inner);
+    Result = AssetJSON_RejectUnknownKeys(Block, NoiseKeys, KEY_COUNT(NoiseKeys),
+        FormatWhere(definition, Where, sizeof(Where), Suffix));
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadRuleFloat(definition, Block, Inner, (const unsigned char*)u8"scale", 0.0, RULE_NOISE_MAX_SCALE,
+            RULE_NOISE_DEFAULT_SCALE, &outNoise->Scale, NULL);
+    }
+    if ((Result.Code == ErrorCode_Success) && !(outNoise->Scale > 0.0f))
+    {
+        Result = Fail(definition, "%s.scale must be above 0 metres.", Inner);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadRuleFloat(definition, Block, Inner, (const unsigned char*)u8"strength", 0.0, 1.0, 1.0f,
+            &outNoise->Strength, NULL);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    int64_t Seed = 0;
+    Result = AssetJSON_ReadOptionalInteger(Block, (const unsigned char*)u8"seed", 0, &Seed);
+    if ((Result.Code != ErrorCode_Success) || (Seed < 0) || (Seed > (int64_t)UINT32_MAX))
+    {
+        Error_Deconstruct(&Result);
+        return Fail(definition, "%s.seed must be a whole number from 0 to %" PRIu32 ".", Inner, UINT32_MAX);
+    }
+    outNoise->Seed = (uint32_t)Seed;
+    outNoise->IsEnabled = true;
+    return Error_CreateSuccess();
+}
+
+/* A rule's "material" (a palette name, required) and "only_on" (palette names, each once). */
+static Error ParseRuleMaterials(const TerrainDefinition* definition, JSONCompound* rule, const char* where,
+    TerrainRule* outRule)
+{
+    unsigned char* Name = NULL;
+    bool IsFound = false;
+    Error Result = AssetJSON_ReadOptionalOwnedString(rule, (const unsigned char*)u8"material", &Name, &IsFound);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        IsFound = false;
+    }
+    int32_t Placed = IsFound ? FindName(definition->MaterialNames, definition->MaterialCount, Name) : -1;
+    char Printable[NAME_PRINT_CAPACITY];
+    AssetJSON_CopyPrintable(Name, Printable, sizeof(Printable));
+    Memory_Free(Name);
+    if (Placed < 0)
+    {
+        return IsFound ? Fail(definition, "%s.material is \"%s\", which is not one of its \"materials\".", where,
+            Printable) : Fail(definition, "%s needs a \"material\": the palette material it puts down.", where);
+    }
+    outRule->Material = (uint32_t)Placed;
+    outRule->CoveredMaterials = TERRAIN_ALL_MATERIALS;
+    JSONArray* OnlyOn = NULL;
+    Result = GetOptionalArray(definition, rule, (const unsigned char*)u8"only_on", &OnlyOn);
+    if ((Result.Code != ErrorCode_Success) || (OnlyOn == NULL))
+    {
+        return Result;
+    }
+    size_t Count = JSONArray_GetElementCount(OnlyOn);
+    if (Count == 0U)
+    {
+        return Fail(definition, "%s.only_on must name at least one palette material.", where);
+    }
+    outRule->CoveredMaterials = 0U;
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        JSONObjectValue Element;
+        unsigned char* Entry = NULL;
+        Result = JSONArray_GetVerified(OnlyOn, Index, JSONValueType_String, &Element);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = AssetJSON_ValueToOwnedString(&Element, &Entry);
+        }
+        bool IsString = Result.Code == ErrorCode_Success;
+        Error_Deconstruct(&Result);
+        int32_t Covered = IsString ? FindName(definition->MaterialNames, definition->MaterialCount, Entry) : -1;
+        AssetJSON_CopyPrintable(Entry, Printable, sizeof(Printable));
+        Memory_Free(Entry);
+        if (Covered < 0)
+        {
+            return IsString ? Fail(definition, "%s.only_on[%" PRIu64 "] is \"%s\", which is not one of its "
+                "\"materials\".", where, (uint64_t)Index, Printable) : Fail(definition, "%s.only_on[%" PRIu64 "] must "
+                "be a palette material's name.", where, (uint64_t)Index);
+        }
+        if ((outRule->CoveredMaterials & (1U << (uint32_t)Covered)) != 0U)
+        {
+            return Fail(definition, "%s.only_on names \"%s\" twice.", where, Printable);
+        }
+        outRule->CoveredMaterials |= 1U << (uint32_t)Covered;
+    }
+    return Error_CreateSuccess();
+}
+
+/* "rules" (B02): at most TERRAIN_MAX_RULES, each { "material", "opacity", "only_on", "slope", "height", "noise" }. */
+static Error ParseRules(TerrainDefinition* definition, JSONCompound* root)
+{
+    JSONArray* Rules = NULL;
+    Error Result = GetOptionalArray(definition, root, (const unsigned char*)u8"rules", &Rules);
+    if ((Result.Code != ErrorCode_Success) || (Rules == NULL))
+    {
+        return Result;
+    }
+    size_t Count = JSONArray_GetElementCount(Rules);
+    if (Count > TERRAIN_MAX_RULES)
+    {
+        return Fail(definition, "\"rules\" holds %" PRIu64 " rules; at most %u are allowed.", (uint64_t)Count,
+            TERRAIN_MAX_RULES);
+    }
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        char RuleWhere[RULE_WHERE_CAPACITY];
+        snprintf(RuleWhere, sizeof(RuleWhere), "rules[%" PRIu64 "]", (uint64_t)Index);
+        JSONObjectValue Element;
+        Result = JSONArray_GetVerified(Rules, Index, JSONValueType_Compound, &Element);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return Fail(definition, "%s must be a JSON object.", RuleWhere);
+        }
+        JSONCompound* Rule = Element.Value.Compound;
+        char Where[WHERE_CAPACITY];
+        char Suffix[RULE_SUFFIX_CAPACITY];
+        snprintf(Suffix, sizeof(Suffix), ", %s", RuleWhere);
+        TerrainRule* Out = &definition->Rules[Index];
+        Memory_Zero(Out, sizeof(*Out));
+        Result = AssetJSON_RejectUnknownKeys(Rule, RuleKeys, KEY_COUNT(RuleKeys),
+            FormatWhere(definition, Where, sizeof(Where), Suffix));
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = ParseRuleMaterials(definition, Rule, RuleWhere, Out);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = ReadRuleFloat(definition, Rule, RuleWhere, (const unsigned char*)u8"opacity", 0.0, 1.0, 1.0f,
+                &Out->Opacity, NULL);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = ParseRuleRange(definition, Rule, RuleWhere, (const unsigned char*)u8"slope", 0.0,
+                RULE_SLOPE_MAX_DEGREES, RULE_SLOPE_MAX_BLEND, &Out->Slope);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = ParseRuleRange(definition, Rule, RuleWhere, (const unsigned char*)u8"height", -RULE_HEIGHT_LIMIT,
+                RULE_HEIGHT_LIMIT, RULE_HEIGHT_MAX_BLEND, &Out->Height);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = ParseRuleNoise(definition, Rule, RuleWhere, &Out->Noise);
+        }
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+        definition->RuleCount = (uint32_t)(Index + 1U);
+    }
+    return Error_CreateSuccess();
+}
+
 static Error ParseDefinition(TerrainDefinition* definition, JSONCompound* root, const unsigned char* sourceDescription)
 {
     char Where[WHERE_CAPACITY];
@@ -706,6 +978,10 @@ static Error ParseDefinition(TerrainDefinition* definition, JSONCompound* root, 
     {
         Result = ParseCollision(definition, root);
     }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ParseRules(definition, root);
+    }
     return Result;
 }
 
@@ -733,7 +1009,7 @@ static const LoadedAssetVTable TerrainLoadedVTable = { TerrainLoaded_Destroy };
 /* The asset around a loaded mesh: the definition's settings and a copy of its names in one block. */
 static TerrainAsset* BuildAsset(const TerrainDefinition* definition, TerrainMesh* mesh)
 {
-    size_t Bytes = 0U;
+    size_t Bytes = StringUTF8_GetByteLength(definition->Base.Name) + 1U;
     for (uint32_t Index = 0U; Index < definition->MaterialCount; Index++)
     {
         Bytes += StringUTF8_GetByteLength(definition->MaterialNames[Index]) + 1U;
@@ -746,8 +1022,12 @@ static TerrainAsset* BuildAsset(const TerrainDefinition* definition, TerrainMesh
     Memory_Zero(Asset, sizeof(*Asset));
     Asset->_mesh = mesh;
     Asset->_settings = definition->Settings;
-    Asset->_names = Memory_Allocate((Bytes > 0U) ? Bytes : 1U);
+    Asset->_names = Memory_Allocate(Bytes);
     unsigned char* Cursor = Asset->_names;
+    size_t NameLength = StringUTF8_GetByteLength(definition->Base.Name) + 1U;
+    Memory_Copy(definition->Base.Name, Cursor, NameLength);
+    Asset->_name = Cursor;
+    Cursor += NameLength;
     for (uint32_t Index = 0U; Index < definition->MaterialCount; Index++)
     {
         size_t Length = StringUTF8_GetByteLength(definition->MaterialNames[Index]) + 1U;
@@ -764,13 +1044,71 @@ static TerrainAsset* BuildAsset(const TerrainDefinition* definition, TerrainMesh
     }
     Asset->_materialCount = definition->MaterialCount;
     Asset->_densityChannelCount = definition->ChannelCount;
+    Memory_Copy(definition->Rules, Asset->_rules, sizeof(definition->Rules));
+    Asset->_ruleCount = definition->RuleCount;
     return Asset;
+}
+
+/* Loads the palette's materials under the terrain's dependency user (the manager releases them with it, also when the
+ * load fails), then checks that their maps of each kind share one size. */
+static Error LoadPaletteMaterials(const TerrainDefinition* definition, AssetManager* manager,
+    AssetUserID dependencyUser, const char* description, TerrainAsset* asset)
+{
+    for (uint32_t Index = 0U; Index < definition->MaterialCount; Index++)
+    {
+        TerrainMaterial* Loaded = NULL;
+        Error Result = AssetManager_LoadTerrainMaterial(manager, definition->MaterialNames[Index], dependencyUser,
+            &Loaded);
+        if (Result.Code != ErrorCode_Success)
+        {
+            char Printable[NAME_PRINT_CAPACITY];
+            AssetJSON_CopyPrintable(definition->MaterialNames[Index], Printable, sizeof(Printable));
+            Error Wrapped = Error_Construct4(Result.Code, "%s: its material \"%s\" (materials[%" PRIu32 "]) could not be "
+                "loaded: %s", description, Printable, Index, (Result.Message != NULL) ? (const char*)Result.Message
+                : "an error.");
+            Error_Deconstruct(&Result);
+            return Wrapped;
+        }
+        asset->_materials[Index] = Loaded;
+    }
+    for (uint32_t Kind = 0U; Kind < (uint32_t)TerrainMaterialMapKind_Count; Kind++)
+    {
+        int32_t First = -1;
+        int32_t FirstWidth = 0;
+        int32_t FirstHeight = 0;
+        for (uint32_t Index = 0U; Index < definition->MaterialCount; Index++)
+        {
+            int32_t Width = 0;
+            int32_t Height = 0;
+            if (TerrainMaterial_GetMap(asset->_materials[Index], (TerrainMaterialMapKind)Kind, &Width, &Height) == NULL)
+            {
+                continue;
+            }
+            if (First < 0)
+            {
+                First = (int32_t)Index;
+                FirstWidth = Width;
+                FirstHeight = Height;
+                continue;
+            }
+            if ((Width != FirstWidth) || (Height != FirstHeight))
+            {
+                char FirstName[NAME_PRINT_CAPACITY];
+                char OtherName[NAME_PRINT_CAPACITY];
+                AssetJSON_CopyPrintable(definition->MaterialNames[First], FirstName, sizeof(FirstName));
+                AssetJSON_CopyPrintable(definition->MaterialNames[Index], OtherName, sizeof(OtherName));
+                return Error_Construct4(ErrorCode_InvalidAssetData, "%s: its materials' %s maps must share one size (a "
+                    "texture array holds one): \"%s\" has %d x %d pixels, \"%s\" %d x %d.", description,
+                    MapKindNames[Kind], FirstName, (int)FirstWidth, (int)FirstHeight, OtherName, (int)Width, (int)Height);
+            }
+        }
+    }
+    return Error_CreateSuccess();
 }
 
 static Error TerrainDefinition_LoadAsset(void* self, AssetManager* manager, AssetUserID dependencyUser,
     LoadedAsset* outLoaded)
 {
-    (void)dependencyUser;
     TerrainDefinition* Definition = self;
     bool IsModel = Definition->Source == TerrainSource_Model;
     const unsigned char* Preferred = IsModel ? Definition->Format : DATA_EXTENSION;
@@ -824,6 +1162,12 @@ static Error TerrainDefinition_LoadAsset(void* self, AssetManager* manager, Asse
         return Result;
     }
     TerrainAsset* Asset = BuildAsset(Definition, Loaded);
+    Result = LoadPaletteMaterials(Definition, manager, dependencyUser, Description, Asset);
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyAsset(Asset);
+        return Result;
+    }
     outLoaded->Asset = Asset;
     outLoaded->VTable = &TerrainLoadedVTable;
     outLoaded->DestroyContext = Asset;

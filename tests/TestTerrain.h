@@ -126,3 +126,28 @@ void TestTerrain_WriteGlb(const TestGltfMesh* mesh, GenericBuffer* outBytes);
  *  padded again); false when @p find is not there. */
 bool TestTerrain_ReplaceInGlbJson(const GenericBuffer* glb, const char* find, const char* replacement,
     GenericBuffer* outBytes);
+
+/** @brief What TestTerrain_WriteMaterialFiles writes for one terrain material (B02) into a pack: square maps of the sizes
+ *  given (0 leaves the map out; the albedo is always written), each a texture named "<name>_<map>". */
+typedef struct TestTerrainMaterialFilesStruct
+{
+    /** @brief The material's asset name. */
+    const char* Name;
+    /** @brief The albedo's side in pixels (at least 1) and its colour (every texel; its alpha 255). */
+    int32_t AlbedoSize;
+    Color Albedo;
+    /** @brief The height map's side (0: none): a ramp along each row in red, texel x = round(255 x / (size - 1)) (one
+     *  texel: 255), green 0 and blue the ramp's complement (a material reads only red). */
+    int32_t HeightSize;
+    /** @brief The normal map's side (0: none): every texel (150, 110, 200) (red and green differ, so a swap shows). */
+    int32_t NormalSize;
+    /** @brief The roughness and AO map's side (0: none): (200, 100, 0). */
+    int32_t RoughnessAoSize;
+    /** @brief More members of the material's JSON (e.g. "\"tile_size\": 3"), or NULL. */
+    const char* Settings;
+} TestTerrainMaterialFiles;
+
+/** @brief Writes a terrain material's files under @p root (a pack's search root): its maps as PNGs (raylib's image
+ *  writer: no GL) with their texture definitions in textures/, and the material's definition in terrain_materials/.
+ *  @returns Success, or the first file error. */
+Error TestTerrain_WriteMaterialFiles(const unsigned char* root, const TestTerrainMaterialFiles* files);

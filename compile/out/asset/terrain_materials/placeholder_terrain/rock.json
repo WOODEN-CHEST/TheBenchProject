@@ -1,0 +1,13 @@
+{
+    "name": "rock",
+    "albedo": "placeholder_terrain_rock_albedo",
+    "height": "placeholder_terrain_rock_height",
+    "normal": "placeholder_terrain_rock_normal",
+    "roughness_ao": "placeholder_terrain_rock_roughness_ao",
+    "tile_size": 4.0,
+    "height_blend_strength": 1.2,
+    "roughness": 1.0,
+    "surface": "rock",
+    "puddles": 0.15,
+    "porosity": 0.25
+}

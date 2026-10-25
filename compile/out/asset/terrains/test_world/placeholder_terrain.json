@@ -2,8 +2,13 @@
     "name": "placeholder_terrain",
     "source": "model",
     "model": "test_world/placeholder_terrain",
-    "materials": [ "grass", "dirt", "rock" ],
+    "materials": [ "grass", "dirt", "rock", "gravel" ],
     "density_channels": [ "trees" ],
-    "weights": [ { "attribute": "COLOR_0", "r": "grass", "g": "dirt", "b": "rock" } ],
-    "densities": [ { "attribute": "_DENSITY_0", "r": "trees" } ]
+    "weights": [ { "attribute": "COLOR_0", "r": "grass", "g": "dirt", "b": "rock", "a": "gravel" } ],
+    "densities": [ { "attribute": "_DENSITY_0", "r": "trees" } ],
+    "rules": [
+        { "material": "rock", "slope": { "min": 35.0, "blend": 8.0 }, "only_on": [ "grass", "dirt" ] },
+        { "material": "dirt", "height": { "max": -4.5, "blend": 2.5 },
+            "noise": { "scale": 2.5, "strength": 0.6, "seed": 11 }, "only_on": [ "grass" ] }
+    ]
 }

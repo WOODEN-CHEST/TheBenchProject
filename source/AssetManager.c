@@ -1,6 +1,7 @@
 #include <inttypes.h>
 #include "AssetManager.h"
 #include "AssetTypesStandard.h"
+#include "GameTexture.h"
 #include "Logger.h"
 #include "wr/WRHashMap.h"
 #include "wr/WRHashSet.h"
@@ -1735,6 +1736,8 @@ Error AssetManager_CreateStandardAssetTypes(AssetManager* self, StandardAssetTyp
         { ASSET_TYPE_NAME_ANIMATION_GRAPH, ASSET_TYPE_DIRECTORY_ANIMATION_GRAPH,
             AnimationGraphDefinition_Construct, &outTypes->AnimationGraph },
         { ASSET_TYPE_NAME_TERRAIN, ASSET_TYPE_DIRECTORY_TERRAIN, TerrainDefinition_Construct, &outTypes->Terrain },
+        { ASSET_TYPE_NAME_TERRAIN_MATERIAL, ASSET_TYPE_DIRECTORY_TERRAIN_MATERIAL, TerrainMaterialDefinition_Construct,
+            &outTypes->TerrainMaterial },
     };
 
     for (size_t i = 0; i < (sizeof(Standard) / sizeof(Standard[0])); i++)
@@ -2613,6 +2616,39 @@ Error AssetManager_LoadTerrain(AssetManager* self, const unsigned char* name, As
 {
     return LoadStandard(self, (self != NULL) ? self->_standardTypes.Terrain : ASSET_TYPE_ID_INVALID, name, user,
         (void**)outAsset);
+}
+
+Error AssetManager_LoadTerrainMaterial(AssetManager* self, const unsigned char* name, AssetUserID user,
+    TerrainMaterial** outAsset)
+{
+    return LoadStandard(self, (self != NULL) ? self->_standardTypes.TerrainMaterial : ASSET_TYPE_ID_INVALID, name, user,
+        (void**)outAsset);
+}
+
+Error AssetManager_LoadTexturePixels(AssetManager* self, const unsigned char* name, int32_t maxSide,
+    TexturePixels* outPixels)
+{
+    if (self == NULL) { return CreateNullError(u8"self"); }
+    if (name == NULL) { return CreateNullError(u8"name"); }
+    if (outPixels == NULL) { return CreateNullError(u8"outPixels"); }
+    Memory_Zero(outPixels, sizeof(*outPixels));
+    if (maxSide < 1)
+    {
+        return Error_Construct3(ErrorCode_IllegalArgument, u8"maxSide is %d; at least one pixel per side must be "
+            u8"allowed.", (int)maxSide);
+    }
+    if (self->_standardTypes.Texture == ASSET_TYPE_ID_INVALID)
+    {
+        return Error_Construct3(ErrorCode_InvalidState, u8"Standard asset types were not registered.");
+    }
+    DefinitionRecord* Record = NULL;
+    if (!TryGetDefinitionRecord(self, self->_standardTypes.Texture, name, &Record))
+    {
+        return Error_Construct3(ErrorCode_InvalidOperation, u8"No texture named \"%s\" is defined.", name);
+    }
+    // The record may move when the definitions map changes; the definition object does not, and reading its file
+    // registers nothing.
+    return TextureDefinition_LoadPixels(Record->Definition, self, maxSide, outPixels);
 }
 
 // TODO: Bulk operations are complete but unused: no frame drives them from its stepped load yet (GameFrame's

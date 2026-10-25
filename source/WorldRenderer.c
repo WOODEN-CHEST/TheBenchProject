@@ -364,6 +364,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->Features[WorldRendererFeature_SpriteShading] = StateOf(HasSprites, HasSprites);
     bool HasTerrain = (self->_terrain._shader != NULL);
     Status->Features[WorldRendererFeature_TerrainShading] = StateOf(HasTerrain, HasTerrain);
+    Status->Features[WorldRendererFeature_TerrainMaterials] = WorldRendererTerrain_GetMaterialsState(self);
     Status->Features[WorldRendererFeature_SpriteLighting] = StateOf(HasSprites, self->_isSpriteLightingEnabled);
     Status->Features[WorldRendererFeature_SpriteShadows] = StateOf(AreSpriteShadowsAvailable(self),
         DoSpritesCastShadows(self, frame));
@@ -461,6 +462,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->DrawnTerrainChunkCount = Counts.DrawnTerrainChunkCount;
     Status->DrawnTerrainTriangleCount = Counts.DrawnTerrainTriangleCount;
     Status->IsTerrainKeyEnabled = self->_terrain._isDebugEnabled;
+    Status->TerrainView = self->_terrain._view;
 }
 
 /* Appends the drawn models per LOD to the status line's LOD text, LOD 0 first, up to the coarsest LOD drawn: "9 / 3 / 1".
@@ -801,6 +803,7 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_SpriteShadows:    return (const unsigned char*)u8"sprite shadows";
         case WorldRendererFeature_Skinning:         return (const unsigned char*)u8"skinning";
         case WorldRendererFeature_TerrainShading:   return (const unsigned char*)u8"terrain shading";
+        case WorldRendererFeature_TerrainMaterials: return (const unsigned char*)u8"terrain materials";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -834,7 +837,7 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
         u8" lights, %" PRIu64 u8" stars; drawn %" PRIu64 u8" models and %" PRIu64 u8" sprites (%" PRIu64 u8" fading; "
         u8"models by LOD %s, %" PRIu64 u8" cross-fading%s), culled %" PRIu64 u8" outside the view%s and %" PRIu64
         u8" faded out (draw distance, opacity); terrain: %" PRIu64 u8" placed (%" PRIu64 u8" without a terrain), "
-        u8"%" PRIu64 u8" of %" PRIu64 u8" chunks drawn, %" PRIu64 u8" triangles%s; %s.",
+        u8"%" PRIu64 u8" of %" PRIu64 u8" chunks drawn, %" PRIu64 u8" triangles%s%s%s; %s.",
         Tier, (uint64_t)Status->ModelCount, (uint64_t)Status->ModelWithoutAssetCount, (uint64_t)Status->PosedModelCount,
         (uint64_t)Status->SpriteCount, (uint64_t)Status->DecalCount, (uint64_t)Status->TransparentSpriteCount,
         (uint64_t)Status->LightCount,
@@ -845,10 +848,15 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
         (uint64_t)Status->FadedOutCount, (uint64_t)Status->TerrainCount, (uint64_t)Status->TerrainWithoutAssetCount,
         (uint64_t)Status->DrawnTerrainChunkCount, (uint64_t)Status->TerrainChunkCount,
         (uint64_t)Status->DrawnTerrainTriangleCount, Status->IsTerrainKeyEnabled ? ", chunk key on" : "",
+        (Status->TerrainView != WorldRendererTerrainView_Shaded) ? ", showing " : "",
+        (Status->TerrainView != WorldRendererTerrainView_Shaded)
+            ? (const char*)WorldRenderer_GetTerrainViewName(Status->TerrainView) : "",
         IsBuilt ? (const char*)Lists._data : "feature list unavailable");
     Error_Deconstruct(&LogResult);
     Memory_Free(Lods._data);
     Memory_Free(Lists._data);
+    // Each terrain's materials and texture arrays (B02).
+    WorldRendererTerrain_LogMaterials(self);
 }
 
 void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled)
@@ -919,6 +927,32 @@ void WorldRenderer_SetTerrainKeyEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_IsTerrainKeyEnabled(const WorldRenderer* self)
 {
     return self->_terrain._isDebugEnabled;
+}
+
+void WorldRenderer_SetTerrainView(WorldRenderer* self, WorldRendererTerrainView view)
+{
+    if ((uint32_t)view < (uint32_t)WorldRendererTerrainView_Count)
+    {
+        self->_terrain._view = view;
+    }
+}
+
+WorldRendererTerrainView WorldRenderer_GetTerrainView(const WorldRenderer* self)
+{
+    return self->_terrain._view;
+}
+
+const unsigned char* WorldRenderer_GetTerrainViewName(WorldRendererTerrainView view)
+{
+    switch (view)
+    {
+        case WorldRendererTerrainView_Shaded:           return (const unsigned char*)u8"shaded";
+        case WorldRendererTerrainView_PaintedWeights:   return (const unsigned char*)u8"painted weights";
+        case WorldRendererTerrainView_RuleWeights:      return (const unsigned char*)u8"rule weights";
+        case WorldRendererTerrainView_DominantMaterial: return (const unsigned char*)u8"dominant material";
+        case WorldRendererTerrainView_Count:            break;
+    }
+    return (const unsigned char*)u8"unknown";
 }
 
 void WorldRenderer_SetBloomEnabled(WorldRenderer* self, bool enabled)

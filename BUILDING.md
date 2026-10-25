@@ -109,6 +109,27 @@ directory: `cmake --build build --target raylib`, then copied to `lib/`. The che
 and GPU skinning (the test world's figures bend, no warning). The 2026-10-17 build (Release, custom frame control, no
 GPU skinning) was the one before; until that one it had been built with an empty build type, i.e. unoptimised.
 
+## Direct OpenGL calls (B02, decision W7)
+
+Everything draws through raylib, with one exception: **texture arrays** (`GL_TEXTURE_2D_ARRAY`), which raylib does not
+have and the terrain's materials need (up to sixteen materials blended per pixel, one array layer each). Their calls live
+in one private module, `source/GLTextureArray.{h,c}`, and nowhere else:
+- the function pointers (`glGenTextures`, `glDeleteTextures`, `glBindTexture`, `glTexImage3D`, `glTexSubImage3D`,
+  `glGenerateMipmap`, `glTexParameteri`, `glTexParameterf`, `glPixelStorei`, `glGetIntegerv`, `glGetFloatv`,
+  `glGetError`) come through raylib's `rlGetProcAddress`, the loader raylib itself was initialized with (GLFW's on the
+  desktop), once, when the renderer loads its terrain shader: **raylib is not rebuilt** and no GL header or loader
+  library is added;
+- the GL constants it uses are defined in `GLTextureArray.c`; the function pointer types carry GL's calling convention
+  (`__stdcall` on Windows, which matters for 32-bit builds);
+- all of them are OpenGL 3.0 core, which raylib's GL 3.3 already requires; anisotropic filtering is used where the
+  driver has the extension (`EXT_texture_filter_anisotropic`, core in 4.6);
+- a failure degrades with one log line: a function the loader cannot find, or a GL error after making an array (a
+  loader may hand out a stub for a missing function, so the error check is what catches it), leaves the terrain showing
+  its materials' mean colours.
+
+Anything else that needs GL raylib lacks belongs in this module or one like it (function pointers through
+`rlGetProcAddress`, constants defined there, one log line on failure), never in a render pass.
+
 ## Windows notes (for when the Windows build is set up)
 
 None of this has been run on Windows yet.

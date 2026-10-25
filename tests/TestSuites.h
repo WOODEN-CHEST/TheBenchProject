@@ -264,6 +264,20 @@ void TerrainGltfTests_Run(TestRun* run);
  *  falling back to the layer's default) and a terrain object in a world file (TerrainAssetTests.c). */
 void TerrainAssetTests_Run(TestRun* run);
 
+/** @brief Terrain materials (B02): definitions read through their property table (the defaults, every key, each rule
+ *  refused with its message), the maps packed as the texture arrays take them (the height in the albedo's alpha), sizes
+ *  checked (the height the albedo's, the limit), missing and code-built textures naming the slot, a texture's pixels
+ *  read as RGBA from any image, and the height sampled bilinearly with repeat (TerrainMaterialTests.c). */
+void TerrainMaterialTests_Run(TestRun* run);
+
+/** @brief The terrain's material blend in C (B02; the terrain shader's mirror): weights from their bytes and normalized
+ *  (none: the first material), rule ranges and their ramps, the slope, the value noise against an independent
+ *  implementation (periodic, deterministic), wrapping, rule strengths, rules in order with only_on, height blending's
+ *  shares (transitions, ties, a single material, monotonic), the dominant material, triplanar weights and each side's
+ *  coordinates, texture coordinates and noise standing still 100 km out, a point of a terrain (painted, ruled, face
+ *  material) and the shaders' constants (TerrainBlendTests.c). */
+void TerrainBlendTests_Run(TestRun* run);
+
 /** @brief Terrain in the collision world (B01): rays and casts hit each chunk where it is, naming the chunk and the
  *  terrain's triangle, and pass through holes and from below; seams between chunks do not catch (a ball's contacts, a
  *  walk compared with one on a box); T13's slope limit; only changed chunks rebuilt; a collider wins over a terrain on

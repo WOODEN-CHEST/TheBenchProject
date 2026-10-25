@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Generates B01's placeholder terrain for the test world, as binary glTF (.glb) the terrain asset imports.
+"""Generates B01's placeholder terrain for the test world, as binary glTF (.glb) the terrain asset imports (repainted
+for B02's materials).
 
 Run it from anywhere (only the Python standard library is needed):
 
@@ -23,10 +24,13 @@ The terrain is a ring around the test world's ground slab (20 m square, its top 
       are long and thin);
     - an outer edge that slopes down to y = 0.
 
-Its data, as the definition maps them: COLOR_0's red, green and blue are the weights of grass, dirt and rock, painted
-from the slope and the place (rock on the steep, dirt on the path east of the slab and on the valley floor, grass
-elsewhere); _DENSITY_0 is the trees' density (on gentle hills, none near the slab, on the path or on the cliff); and a
-patch of faces west of the slab is in the "dirt" slot, so it takes dirt outright, with hard edges.
+Its data, as the definition maps them: COLOR_0's red, green, blue and alpha are the weights of grass, dirt, rock and
+gravel (B02's terrain materials: asset_source/scripts/placeholder_terrain_materials.py), painted by place: dirt on the
+path east of the slab, a round patch of gravel north-east of the slab (soft at its rim), grass elsewhere. The rock on the
+steep and the dirt on the valley floor are not painted: the definition's rules put them there (rock above 35 degrees,
+dirt below 4.5 m under the slab, broken up by noise). _DENSITY_0 is the trees' density (on gentle hills, none near the
+slab, on the path or on the cliff); and a patch of faces west of the slab is in the "dirt" slot, so it takes dirt
+outright, with hard edges.
 
 Conventions: metres, +Y up (glTF's, as Blender's exporter writes it with +Y up), faces counter-clockwise seen from
 their front (up for the ground; inward for the tunnel). One primitive per material slot, each with its own vertices,
@@ -71,6 +75,9 @@ VALLEY_X = (60.0, 120.0)
 VALLEY_FLOOR = -6.0
 PATH_HALF_WIDTH = 1.5
 DIRT_PATCH = ((-30.0, -24.0), (14.0, 20.0))
+# The painted gravel (B02): a round patch north-east of the slab, in the start view: its centre (x, z), its full radius
+# and the soft rim beyond it.
+GRAVEL_PATCH = (6.0, 17.0, 3.5, 3.0)
 
 
 # The grid.
@@ -130,19 +137,22 @@ def vertex_position(x, z):
 
 # Painting.
 def paint(position, normal):
-    """The grass, dirt and rock weights (0..1, summing to 1) and the trees' density at a vertex."""
+    """The grass, dirt, rock and gravel weights (0..1, summing to 1) and the trees' density at a vertex. Rock and the
+    valley's dirt come from the definition's rules, not from the paint."""
     x, y, z = position
     steep = 1.0 - normal[1]  # 0 flat, about 0.18 at 35 degrees
-    rock = smoothstep(0.12, 0.25, steep)
     path = (1.0 - smoothstep(PATH_HALF_WIDTH, PATH_HALF_WIDTH + 1.0, abs(z))) * smoothstep(SLAB_HALF - 1.0,
         SLAB_HALF, x) * (1.0 - smoothstep(38.0, 40.0, x))
     floor = smoothstep(-3.0, -5.5, y)
-    dirt = max(path, floor) * (1.0 - rock)
-    grass = max(0.0, 1.0 - rock - dirt)
+    centre_x, centre_z, radius, rim = GRAVEL_PATCH
+    gravel = 1.0 - smoothstep(radius, radius + rim, math.hypot(x - centre_x, z - centre_z))
+    dirt = path * (1.0 - gravel)
+    rock = 0.0
+    grass = max(0.0, 1.0 - dirt - gravel)
     trees = (1.0 - smoothstep(0.05, 0.12, steep)) * smoothstep(20.0, 40.0, ring_distance(x, z)) * (1.0 - path)
     trees *= (1.0 - floor) * (1.0 - smoothstep(200.0, 240.0, max(abs(x), abs(z))))
     trees *= 0.5 + (0.5 * math.sin(x / 13.0) * math.sin(z / 11.0))
-    return (grass, dirt, rock), max(0.0, min(trees, 1.0))
+    return (grass, dirt, rock, gravel), max(0.0, min(trees, 1.0))
 
 
 # Geometry.
@@ -309,8 +319,7 @@ def write_glb(path, positions, triangles, slots):
         densities = []
         for v in order:
             weights, trees = paint(positions[v], normals[v])
-            colours.append(struct.pack("<4H", *[int(round(min(max(w, 0.0), 1.0) * 65535.0)) for w in weights],
-                65535))
+            colours.append(struct.pack("<4H", *[int(round(min(max(w, 0.0), 1.0) * 65535.0)) for w in weights]))
             densities.append(struct.pack("<f", trees))
         attributes["COLOR_0"] = writer.add_accessor(b"".join(colours), UNSIGNED_SHORT, len(rows), "VEC4",
             ARRAY_BUFFER, normalized=True)
@@ -331,10 +340,15 @@ DEFINITION = """{
     "name": "placeholder_terrain",
     "source": "model",
     "model": "test_world/placeholder_terrain",
-    "materials": [ "grass", "dirt", "rock" ],
+    "materials": [ "grass", "dirt", "rock", "gravel" ],
     "density_channels": [ "trees" ],
-    "weights": [ { "attribute": "COLOR_0", "r": "grass", "g": "dirt", "b": "rock" } ],
-    "densities": [ { "attribute": "_DENSITY_0", "r": "trees" } ]
+    "weights": [ { "attribute": "COLOR_0", "r": "grass", "g": "dirt", "b": "rock", "a": "gravel" } ],
+    "densities": [ { "attribute": "_DENSITY_0", "r": "trees" } ],
+    "rules": [
+        { "material": "rock", "slope": { "min": 35.0, "blend": 8.0 }, "only_on": [ "grass", "dirt" ] },
+        { "material": "dirt", "height": { "max": -4.5, "blend": 2.5 },
+            "noise": { "scale": 2.5, "strength": 0.6, "seed": 11 }, "only_on": [ "grass" ] }
+    ]
 }
 """
 

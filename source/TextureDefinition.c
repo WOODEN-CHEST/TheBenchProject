@@ -4,6 +4,8 @@
 #include "wr/WRMemory.h"
 #include "wr/WRJSON.h"
 #include "wr/WRString.h"
+#include <ctype.h>
+#include <string.h>
 
 /*
  * Standalone texture loader: one image file (png, bmp, gif, qoi or dds) uploaded as a GPU texture of at most
@@ -54,28 +56,59 @@ static void TextureLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
 
 static const LoadedAssetVTable TextureLoadedVTable = { TextureLoaded_Destroy };
 
-/* Decodes the definition's image file and checks its size. On success the caller unloads *outImage with UnloadImage. */
-static Error LoadTextureImage(const TextureDefinition* definition, AssetManager* manager, Image* outImage)
+/* Whether a file path ends in ".dds", in any case (raylib picks its DDS reader by the extension). */
+static bool IsDdsPath(const char* path)
+{
+    const char* Extension = strrchr(path, '.');
+    return (Extension != NULL) && (strlen(Extension) == 4U) && (tolower((unsigned char)Extension[1]) == 'd')
+        && (tolower((unsigned char)Extension[2]) == 'd') && (tolower((unsigned char)Extension[3]) == 's');
+}
+
+/* Decodes the definition's image file and checks its size: 1 to maxSide pixels per side. A DDS file is refused before it
+   is decoded unless readsDds is set. On success the caller unloads *outImage with UnloadImage. */
+static Error LoadTextureImage(const TextureDefinition* definition, AssetManager* manager, int32_t maxSide, bool readsDds,
+    Image* outImage)
 {
     AssetLocation Location = OwnedAssetLocation_View(&definition->Location);
     AssetResourcePath* Handle = NULL;
     Error PathResult = AssetManager_AcquireResourcePath(manager, definition->Base.Type, &Location,
         &ASSET_EXTENSIONS_TEXTURE, NULL, &Handle);
     if (PathResult.Code != ErrorCode_Success) { return PathResult; }
-    Image Decoded = LoadImage((const char*)AssetResourcePath_Get(Handle));
+    const char* Path = (const char*)AssetResourcePath_Get(Handle);
+    Image Decoded;
+    Memory_Zero(&Decoded, sizeof(Decoded));
+    bool IsRefusedDds = !readsDds && IsDdsPath(Path);
+    if (!IsRefusedDds)
+    {
+        Decoded = LoadImage(Path);
+    }
     Error ReleaseResult = AssetManager_ReleaseResourcePath(manager, Handle);
     Error_Deconstruct(&ReleaseResult);
 
+    if (IsRefusedDds)
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetData, u8"Texture \"%s\" (\"%s\") is a DDS file, whose pixels are "
+            u8"not read (raylib's DDS reader trusts the sizes its header claims); use a png, bmp, gif or qoi image.",
+            definition->Base.Name, definition->Location.Value);
+    }
     if (Decoded.data == NULL)
     {
         return Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to decode the image \"%s\" of texture \"%s\".",
             definition->Location.Value, definition->Base.Name);
     }
-    if ((Decoded.width > TEXTURE_MAX_SIDE) || (Decoded.height > TEXTURE_MAX_SIDE))
+    if ((Decoded.width < 1) || (Decoded.height < 1))
+    {
+        Error SizeError = Error_Construct3(ErrorCode_InvalidAssetData,
+            u8"Texture \"%s\" (\"%s\") is %d x %d pixels; an image has at least one per side.", definition->Base.Name,
+            definition->Location.Value, Decoded.width, Decoded.height);
+        UnloadImage(Decoded);
+        return SizeError;
+    }
+    if ((Decoded.width > maxSide) || (Decoded.height > maxSide))
     {
         Error SizeError = Error_Construct3(ErrorCode_InvalidAssetData,
             u8"Texture \"%s\" (\"%s\") is %d x %d pixels; at most %d per side are allowed.", definition->Base.Name,
-            definition->Location.Value, Decoded.width, Decoded.height, TEXTURE_MAX_SIDE);
+            definition->Location.Value, Decoded.width, Decoded.height, (int)maxSide);
         UnloadImage(Decoded);
         return SizeError;
     }
@@ -91,7 +124,7 @@ static Error TextureDefinition_LoadAsset(void* self, AssetManager* manager, Asse
 
     Image Decoded;
     Memory_Zero(&Decoded, sizeof(Decoded));
-    Error Result = LoadTextureImage(Definition, manager, &Decoded);
+    Error Result = LoadTextureImage(Definition, manager, TEXTURE_MAX_SIDE, true, &Decoded);
     if (Result.Code != ErrorCode_Success) { return Result; }
 
     Texture2D RayTexture = LoadTextureFromImage(Decoded);
@@ -130,6 +163,22 @@ static void TextureDefinition_Destroy(void* self)
 
 static const AssetDefinitionVTable TextureDefinitionVTable = { TextureDefinition_LoadAsset, TextureDefinition_Destroy };
 
+/* Converts a decoded image to 8-bit RGBA in place (raylib's ImageFormat, which leaves a compressed image as it is). */
+static Error ConvertToRgba(const TextureDefinition* definition, Image* image)
+{
+    if (image->format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
+    {
+        ImageFormat(image, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+    }
+    if ((image->format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8) || (image->data == NULL))
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetData, u8"The image \"%s\" of texture \"%s\" is compressed (a "
+            u8"DDS's block format); its pixels cannot be read. Save it uncompressed (png, bmp, qoi).",
+            definition->Location.Value, definition->Base.Name);
+    }
+    return Error_CreateSuccess();
+}
+
 /* Reads the optional "color_space": "srgb" (the default) or "linear". */
 static Error ReadColorSpace(JSONCompound* root, bool* outIsSrgb)
 {
@@ -160,6 +209,43 @@ static Error ReadColorSpace(JSONCompound* root, bool* outIsSrgb)
 
 
 // Public functions.
+Error TextureDefinition_LoadPixels(const AssetDefinition* definition, AssetManager* manager, int32_t maxSide,
+    TexturePixels* outPixels)
+{
+    Memory_Zero(outPixels, sizeof(*outPixels));
+    if (definition->VTable != &TextureDefinitionVTable)
+    {
+        return Error_Construct3(ErrorCode_InvalidOperation, u8"Texture \"%s\" is not read from an image file, so its "
+            u8"pixels cannot be read.", definition->Name);
+    }
+    const TextureDefinition* Definition = (const TextureDefinition*)(const void*)definition;
+    Image Decoded;
+    Memory_Zero(&Decoded, sizeof(Decoded));
+    // The size is checked before the conversion, which goes through floats (16 bytes a texel), and DDS files are never
+    // decoded: raylib's DDS reader copies as many bytes as the header claims, past the end of a short file.
+    int32_t Limit = (maxSide < TEXTURE_MAX_SIDE) ? maxSide : TEXTURE_MAX_SIDE;
+    Error Result = LoadTextureImage(Definition, manager, Limit, false, &Decoded);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = ConvertToRgba(Definition, &Decoded);
+    if (Result.Code != ErrorCode_Success)
+    {
+        UnloadImage(Decoded);
+        return Result;
+    }
+    // raylib allocated the image's data; the caller frees ours (Memory_Free), so the pixels are copied once.
+    size_t ByteCount = (size_t)Decoded.width * (size_t)Decoded.height * 4U;
+    outPixels->Pixels = Memory_Allocate(ByteCount);
+    Memory_Copy(Decoded.data, outPixels->Pixels, ByteCount);
+    outPixels->Width = Decoded.width;
+    outPixels->Height = Decoded.height;
+    outPixels->IsSrgb = Definition->IsSrgb;
+    UnloadImage(Decoded);
+    return Error_CreateSuccess();
+}
+
 Error TextureDefinition_Construct(AssetManager* manager, const UserData* userData, const GenericBuffer* rawData,
     const unsigned char* sourceDescription, AssetDefinition** outDefinition)
 {

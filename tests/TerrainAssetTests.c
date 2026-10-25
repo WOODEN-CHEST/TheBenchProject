@@ -110,6 +110,22 @@ static bool CreatePackFiles(TestRun* run, TerrainPack* pack, const char* name, c
     return true;
 }
 
+/* Writes a plain terrain material (B02: a 4 x 4 albedo, no other maps) for each name, so the terrains naming them load:
+ * a terrain loads its palette's materials as its dependencies. */
+static bool WriteMaterials(TestRun* run, const TerrainPack* pack, const char* const* names, size_t count)
+{
+    bool IsWritten = true;
+    for (size_t Index = 0U; IsWritten && (Index < count); Index++)
+    {
+        TestTerrainMaterialFiles Files =
+        {
+            .Name = names[Index], .AlbedoSize = 4, .Albedo = { (unsigned char)(40U * (Index + 1U)), 120, 60, 255 }
+        };
+        IsWritten = TEST_CHECK_SUCCESS(run, TestTerrain_WriteMaterialFiles(pack->Root._data, &Files));
+    }
+    return IsWritten;
+}
+
 /* Makes the pack's manager over its root once its files are written, and a user to load with. */
 static bool OpenPack(TestRun* run, TerrainPack* pack)
 {
@@ -193,7 +209,8 @@ static void AMinimalDefinitionGetsTheDefaults(TestRun* run)
     GenericBuffer_AllocateVariable(&Glb, 0U, sizeof(unsigned char));
     WriteGridGlb(&Grid, Slots, Counts, 1U, NULL, 0U, &Glb);
     TerrainPack Pack;
-    TerrainAsset* Loaded = (CreatePackFiles(run, &Pack, "minimal", Files)
+    static const char* const Palette[] = { "grass" };
+    TerrainAsset* Loaded = (CreatePackFiles(run, &Pack, "minimal", Files) && WriteMaterials(run, &Pack, Palette, 1U)
         && WriteBytes(run, &Pack.Root, "terrains/town/town.glb", &Glb) && OpenPack(run, &Pack))
         ? LoadTerrain(run, &Pack, "town") : NULL;
     if (Loaded != NULL)
@@ -275,7 +292,8 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
     GenericBuffer_AllocateVariable(&Glb, 0U, sizeof(unsigned char));
     WriteGridGlb(&Grid, Slots, Counts, 3U, Attributes, 2U, &Glb);
     TerrainPack Pack;
-    TerrainAsset* Loaded = (CreatePackFiles(run, &Pack, "full", Files)
+    static const char* const Palette[] = { "grass", "dirt", "rock" };
+    TerrainAsset* Loaded = (CreatePackFiles(run, &Pack, "full", Files) && WriteMaterials(run, &Pack, Palette, 3U)
         && WriteBytes(run, &Pack.Root, "terrains/valley.glb", &Glb) && OpenPack(run, &Pack))
         ? LoadTerrain(run, &Pack, "valley") : NULL;
     if (Loaded != NULL)
@@ -454,6 +472,59 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
             ErrorCode_InvalidAssetDefinition, "collision.collides_with[1] must be a layer's name, each named once." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"collision\": {\"collides_with\": [5]}}",
             ErrorCode_InvalidAssetDefinition, "collision.collides_with[0] must be a layer's name" },
+        // The rules (B02).
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": {}}", ErrorCode_InvalidAssetDefinition,
+            "\"rules\" must be an array." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [3]}", ErrorCode_InvalidAssetDefinition,
+            "rules[0] must be a JSON object." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{}]}", ErrorCode_InvalidAssetDefinition,
+            "rules[0] needs a \"material\": the palette material it puts down." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"rock\"}]}", ErrorCode_InvalidAssetDefinition,
+            "rules[0].material is \"rock\", which is not one of its \"materials\"." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"colour\": 1}]}",
+            ErrorCode_InvalidAssetDefinition, "colour" },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"opacity\": 1.5}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].opacity is 1.5; it must be 0 to 1." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"opacity\": \"most\"}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].opacity must be a number." },
+        { DATA_HEAD "\"materials\": [\"g\", \"r\"], \"rules\": [{\"material\": \"r\", \"only_on\": []}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].only_on must name at least one palette material." },
+        { DATA_HEAD "\"materials\": [\"g\", \"r\"], \"rules\": [{\"material\": \"r\", \"only_on\": [\"g\", \"g\"]}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].only_on names \"g\" twice." },
+        { DATA_HEAD "\"materials\": [\"g\", \"r\"], \"rules\": [{\"material\": \"r\", \"only_on\": [\"sand\"]}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].only_on[0] is \"sand\", which is not one of its \"materials\"." },
+        { DATA_HEAD "\"materials\": [\"g\", \"r\"], \"rules\": [{\"material\": \"r\", \"only_on\": [2]}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].only_on[0] must be a palette material's name." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"slope\": {}}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].slope needs a \"min\" or a \"max\"." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"slope\": {\"min\": 50, \"max\": 40}}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].slope's min (50) is above its max (40)." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"slope\": {\"min\": 181}}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].slope.min is 181; it must be 0 to 180." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"slope\": {\"max\": 30, \"blend\": -1}}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].slope.blend is -1; it must be 0 to 90." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"slope\": {\"angle\": 30}}]}",
+            ErrorCode_InvalidAssetDefinition, "angle" },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"slope\": 30}]}",
+            ErrorCode_InvalidAssetDefinition, "\"slope\" must be a JSON object." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"height\": {\"max\": 20000000}}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].height.max is 2e+07; it must be -1e+07 to 1e+07." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"height\": {\"min\": 5, \"max\": -5}}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].height's min (5) is above its max (-5)." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"noise\": {\"scale\": 0}}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].noise.scale must be above 0 metres." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"noise\": {\"strength\": 2}}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].noise.strength is 2; it must be 0 to 1." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"noise\": {\"seed\": -1}}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].noise.seed must be a whole number from 0 to 4294967295." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"noise\": {\"seed\": 4294967296}}]}",
+            ErrorCode_InvalidAssetDefinition, "rules[0].noise.seed must be a whole number from 0 to 4294967295." },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\", \"noise\": {\"octaves\": 3}}]}",
+            ErrorCode_InvalidAssetDefinition, "octaves" },
+        { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [{\"material\": \"g\"}, {\"material\": \"g\"}, "
+            "{\"material\": \"g\"}, {\"material\": \"g\"}, {\"material\": \"g\"}, {\"material\": \"g\"}, "
+            "{\"material\": \"g\"}, {\"material\": \"g\"}, {\"material\": \"g\"}]}",
+            ErrorCode_InvalidAssetDefinition, "\"rules\" holds 9 rules; at most 8 are allowed." },
     };
 #undef MODEL_HEAD
 #undef DATA_HEAD
@@ -487,6 +558,183 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
 }
 
 
+/* The rules (B02) are read in order with every key; left-out keys take their defaults (opacity 1, every material
+ * covered, open bounds, no ramp; noise of 4 m cells, strength 1, seed 0); at the limits they are accepted. */
+static void TheRulesAreReadInOrder(TestRun* run)
+{
+    static const char* const Files[] =
+    {
+        "terrains/ruled.json",
+        "{\"name\": \"ruled\", \"source\": \"data\", \"data\": \"ruled\", \"materials\": [\"grass\", \"dirt\", \"rock\"], "
+            "\"rules\": ["
+            "{\"material\": \"rock\", \"slope\": {\"min\": 35, \"blend\": 8}, \"only_on\": [\"grass\", \"dirt\"]}, "
+            "{\"material\": \"dirt\", \"opacity\": 0.25, \"height\": {\"min\": -12.5, \"max\": -4.5, \"blend\": 2.5}, "
+            "\"noise\": {\"scale\": 2.5, \"strength\": 0.6, \"seed\": 4294967295}}, "
+            "{\"material\": \"grass\", \"noise\": {}, \"slope\": {\"max\": 180, \"blend\": 90}}]}",
+        NULL
+    };
+    TestTerrainGrid Grid;
+    TestTerrain_BuildGrid(&Grid, 2U, 2U, 4.0f, 0.0f, 0.0f, Slope);
+    TerrainMesh* Saved = TestTerrain_CreateMesh(run, &Grid, 3U, 0U, TERRAIN_DEFAULT_CHUNK_SIZE);
+    static const char* const Palette[] = { "grass", "dirt", "rock" };
+    TerrainPack Pack;
+    char Path[TERRAIN_ASSET_TEST_PATH_CAPACITY];
+    bool IsReady = (Saved != NULL) && CreatePackFiles(run, &Pack, "ruled", Files)
+        && WriteMaterials(run, &Pack, Palette, 3U);
+    if (IsReady)
+    {
+        snprintf(Path, sizeof(Path), "%s/terrains/ruled.ghdf", (const char*)Pack.Root._data);
+        IsReady = TEST_CHECK_SUCCESS(run, TerrainMesh_SaveGHDF(Saved, (const unsigned char*)Path)) && OpenPack(run, &Pack);
+    }
+    TerrainAsset* Loaded = IsReady ? LoadTerrain(run, &Pack, "ruled") : NULL;
+    if (Loaded != NULL)
+    {
+        uint32_t Count = 0U;
+        const TerrainRule* Rules = TerrainAsset_GetRules(Loaded, &Count);
+        TEST_CHECK(run, Count == 3U);
+        TEST_CHECK(run, (Rules[0].Material == 2U) && (Rules[0].Opacity == 1.0f) && (Rules[0].CoveredMaterials == 3U)
+            && Rules[0].Slope.IsEnabled && Rules[0].Slope.HasMinimum && (Rules[0].Slope.Minimum == 35.0f)
+            && !Rules[0].Slope.HasMaximum && (Rules[0].Slope.Blend == 8.0f) && !Rules[0].Height.IsEnabled
+            && !Rules[0].Noise.IsEnabled);
+        TEST_CHECK(run, (Rules[1].Material == 1U) && (Rules[1].Opacity == 0.25f)
+            && (Rules[1].CoveredMaterials == TERRAIN_ALL_MATERIALS) && !Rules[1].Slope.IsEnabled
+            && Rules[1].Height.IsEnabled && (Rules[1].Height.Minimum == -12.5f) && (Rules[1].Height.Maximum == -4.5f)
+            && Rules[1].Height.HasMinimum && Rules[1].Height.HasMaximum && (Rules[1].Height.Blend == 2.5f)
+            && Rules[1].Noise.IsEnabled && (Rules[1].Noise.Scale == 2.5f) && (Rules[1].Noise.Strength == 0.6f)
+            && (Rules[1].Noise.Seed == UINT32_MAX));
+        TEST_CHECK(run, (Rules[2].Material == 0U) && Rules[2].Noise.IsEnabled && (Rules[2].Noise.Scale == 4.0f)
+            && (Rules[2].Noise.Strength == 1.0f) && (Rules[2].Noise.Seed == 0U) && Rules[2].Slope.IsEnabled
+            && !Rules[2].Slope.HasMinimum && (Rules[2].Slope.Maximum == 180.0f) && (Rules[2].Slope.Blend == 90.0f));
+        TEST_CHECK(run, AreNamesEqual(TerrainAsset_GetName(Loaded), "ruled"));
+    }
+    if (Saved != NULL)
+    {
+        ClosePack(run, &Pack);
+    }
+    TerrainMesh_Destroy(Saved);
+    TestTerrain_FreeGrid(&Grid);
+}
+
+/* The palette's materials load as the terrain's dependencies (the same assets any other user gets); a material that
+ * cannot load fails the terrain, naming it. */
+static void ThePalettesMaterialsAreItsDependencies(TestRun* run)
+{
+    static const char* const Files[] =
+    {
+        "terrains/meadow.json", "{\"name\": \"meadow\", \"source\": \"data\", \"data\": \"meadow\", "
+            "\"materials\": [\"grass\", \"dirt\"]}",
+        "terrains/stony.json", "{\"name\": \"stony\", \"source\": \"data\", \"data\": \"meadow\", "
+            "\"materials\": [\"grass\", \"stone\"]}",
+        NULL
+    };
+    TestTerrainGrid Grid;
+    TestTerrain_BuildGrid(&Grid, 2U, 2U, 4.0f, 0.0f, 0.0f, Slope);
+    TerrainMesh* Saved = TestTerrain_CreateMesh(run, &Grid, 2U, 0U, TERRAIN_DEFAULT_CHUNK_SIZE);
+    static const char* const Palette[] = { "grass", "dirt" };
+    TerrainPack Pack;
+    char Path[TERRAIN_ASSET_TEST_PATH_CAPACITY];
+    bool IsReady = (Saved != NULL) && CreatePackFiles(run, &Pack, "dependencies", Files)
+        && WriteMaterials(run, &Pack, Palette, 2U);
+    if (IsReady)
+    {
+        snprintf(Path, sizeof(Path), "%s/terrains/meadow.ghdf", (const char*)Pack.Root._data);
+        IsReady = TEST_CHECK_SUCCESS(run, TerrainMesh_SaveGHDF(Saved, (const unsigned char*)Path)) && OpenPack(run, &Pack);
+    }
+    TerrainAsset* Loaded = IsReady ? LoadTerrain(run, &Pack, "meadow") : NULL;
+    if (Loaded != NULL)
+    {
+        TerrainMaterial* Dirt = NULL;
+        TEST_CHECK_SUCCESS(run, AssetManager_LoadTerrainMaterial(Pack.Manager, (const unsigned char*)u8"dirt", Pack.User,
+            &Dirt));
+        TEST_CHECK(run, (TerrainAsset_GetMaterial(Loaded, 0U) != NULL) && (TerrainAsset_GetMaterial(Loaded, 1U) == Dirt)
+            && (TerrainAsset_GetMaterial(Loaded, 2U) == NULL)
+            && AreNamesEqual(TerrainMaterial_GetSettings(Dirt)->Albedo, "dirt_albedo"));
+        TerrainAsset* Stony = NULL;
+        const char* const Fragments[] = { "Terrain \"stony\": its material \"stone\" (materials[1]) could not be loaded: ",
+            NULL };
+        TestText_CheckErrorMessage(run, AssetManager_LoadTerrain(Pack.Manager, (const unsigned char*)u8"stony", Pack.User,
+            &Stony), ErrorCode_InvalidOperation, Fragments);
+        TEST_CHECK(run, Stony == NULL);
+    }
+    if (Saved != NULL)
+    {
+        ClosePack(run, &Pack);
+    }
+    TerrainMesh_Destroy(Saved);
+    TestTerrain_FreeGrid(&Grid);
+}
+
+/* A texture array holds one size, so a terrain's materials' maps of one kind must share one: a mismatch is refused,
+ * naming both materials and sizes; a material without a map of a kind next to one with it is fine. */
+static void MaterialMapsOfOneKindShareOneSize(TestRun* run)
+{
+    static const char* const Files[] =
+    {
+        "terrains/odd_albedo.json", "{\"name\": \"odd_albedo\", \"source\": \"data\", \"data\": \"flat\", "
+            "\"materials\": [\"small\", \"large\"]}",
+        "terrains/odd_normal.json", "{\"name\": \"odd_normal\", \"source\": \"data\", \"data\": \"flat3\", "
+            "\"materials\": [\"small\", \"bumpy\", \"bumpier\"]}",
+        "terrains/mixed.json", "{\"name\": \"mixed\", \"source\": \"data\", \"data\": \"flat\", "
+            "\"materials\": [\"small\", \"bumpy\"]}",
+        NULL
+    };
+    TestTerrainMaterialFiles Materials[4] =
+    {
+        { .Name = "small", .AlbedoSize = 4, .Albedo = WHITE },
+        { .Name = "large", .AlbedoSize = 8, .Albedo = WHITE },
+        { .Name = "bumpy", .AlbedoSize = 4, .Albedo = WHITE, .NormalSize = 2, .HeightSize = 4 },
+        { .Name = "bumpier", .AlbedoSize = 4, .Albedo = WHITE, .NormalSize = 4 },
+    };
+    TestTerrainGrid Grid;
+    TestTerrain_BuildGrid(&Grid, 2U, 2U, 4.0f, 0.0f, 0.0f, Slope);
+    TerrainMesh* TwoMaterials = TestTerrain_CreateMesh(run, &Grid, 2U, 0U, TERRAIN_DEFAULT_CHUNK_SIZE);
+    TerrainMesh* ThreeMaterials = TestTerrain_CreateMesh(run, &Grid, 3U, 0U, TERRAIN_DEFAULT_CHUNK_SIZE);
+    TerrainPack Pack;
+    bool IsReady = (TwoMaterials != NULL) && (ThreeMaterials != NULL) && CreatePackFiles(run, &Pack, "sizes", Files);
+    for (size_t Index = 0U; IsReady && (Index < 4U); Index++)
+    {
+        IsReady = TEST_CHECK_SUCCESS(run, TestTerrain_WriteMaterialFiles(Pack.Root._data, &Materials[Index]));
+    }
+    char Path[TERRAIN_ASSET_TEST_PATH_CAPACITY];
+    if (IsReady)
+    {
+        // The two-material terrains read "flat", the three-material one "flat3".
+        snprintf(Path, sizeof(Path), "%s/terrains/flat.ghdf", (const char*)Pack.Root._data);
+        IsReady = TEST_CHECK_SUCCESS(run, TerrainMesh_SaveGHDF(TwoMaterials, (const unsigned char*)Path));
+    }
+    if (IsReady)
+    {
+        snprintf(Path, sizeof(Path), "%s/terrains/flat3.ghdf", (const char*)Pack.Root._data);
+        IsReady = TEST_CHECK_SUCCESS(run, TerrainMesh_SaveGHDF(ThreeMaterials, (const unsigned char*)Path))
+            && OpenPack(run, &Pack);
+    }
+    if (IsReady)
+    {
+        TerrainAsset* Refused = NULL;
+        const char* const AlbedoFragments[] = { "Terrain \"odd_albedo\": its materials' albedo maps must share one size "
+            "(a texture array holds one): \"small\" has 4 x 4 pixels, \"large\" 8 x 8.", NULL };
+        TestText_CheckErrorMessage(run, AssetManager_LoadTerrain(Pack.Manager, (const unsigned char*)u8"odd_albedo",
+            Pack.User, &Refused), ErrorCode_InvalidAssetData, AlbedoFragments);
+        const char* const NormalFragments[] = { "Terrain \"odd_normal\": its materials' normal maps must share one size "
+            "(a texture array holds one): \"bumpy\" has 2 x 2 pixels, \"bumpier\" 4 x 4.", NULL };
+        TestText_CheckErrorMessage(run, AssetManager_LoadTerrain(Pack.Manager, (const unsigned char*)u8"odd_normal",
+            Pack.User, &Refused), ErrorCode_InvalidAssetData, NormalFragments);
+        TEST_CHECK(run, Refused == NULL);
+        TerrainAsset* Mixed = LoadTerrain(run, &Pack, "mixed");
+        TEST_CHECK(run, (Mixed != NULL) && !TerrainMaterial_HasMap(TerrainAsset_GetMaterial(Mixed, 0U),
+            TerrainMaterialMapKind_Normal) && TerrainMaterial_HasMap(TerrainAsset_GetMaterial(Mixed, 1U),
+            TerrainMaterialMapKind_Normal));
+    }
+    if ((TwoMaterials != NULL) && (ThreeMaterials != NULL))
+    {
+        ClosePack(run, &Pack);
+    }
+    TerrainMesh_Destroy(TwoMaterials);
+    TerrainMesh_Destroy(ThreeMaterials);
+    TestTerrain_FreeGrid(&Grid);
+}
+
+
 // Tests: loading.
 /* Source "data": the binary form a saved mesh wrote loads back as the same mesh; data whose palette or channels do not
  * match the definition's is refused, naming both counts. */
@@ -511,7 +759,9 @@ static void TheBinaryFormLoadsTheSavedMesh(TestRun* run)
     TerrainMesh* Saved = TestTerrain_CreateMesh(run, &Grid, 2U, 1U, 16.0f);
     TerrainPack Pack;
     char Path[TERRAIN_ASSET_TEST_PATH_CAPACITY];
-    bool IsReady = (Saved != NULL) && CreatePackFiles(run, &Pack, "binary", Files);
+    static const char* const Palette[] = { "grass", "dirt" };
+    bool IsReady = (Saved != NULL) && CreatePackFiles(run, &Pack, "binary", Files)
+        && WriteMaterials(run, &Pack, Palette, 2U);
     if (IsReady)
     {
         snprintf(Path, sizeof(Path), "%s/terrains/hills.ghdf", (const char*)Pack.Root._data);
@@ -899,7 +1149,7 @@ static void TheShippedTerrainLoads(TestRun* run)
         const TerrainMesh* Terrain = TerrainAsset_GetMesh(Loaded);
         // The generator's 31337 grid points less the 19 x 19 inside the slab's open square, which no face uses.
         TEST_CHECK(run, (TerrainMesh_GetVertexCount(Terrain) == 30976U)
-            && (TerrainMesh_GetTriangleCount(Terrain) == 61174U) && (TerrainAsset_GetMaterialCount(Loaded) == 3U)
+            && (TerrainMesh_GetTriangleCount(Terrain) == 61174U) && (TerrainAsset_GetMaterialCount(Loaded) == 4U)
             && (TerrainAsset_GetDensityChannelCount(Loaded) == 1U)
             && (TerrainMesh_GetChunkSize(Terrain) == TERRAIN_DEFAULT_CHUNK_SIZE)
             && (TerrainMesh_GetChunkCount(Terrain) == 256U));
@@ -915,14 +1165,44 @@ static void TheShippedTerrainLoads(TestRun* run)
         TEST_CHECK(run, (Holes == 6U) && (Patch == 72U));
         bool AreWeightsWhole = true;
         uint32_t Wooded = 0U;
+        uint32_t Graveled = 0U;
         for (uint32_t Vertex = 0U; Vertex < TerrainMesh_GetVertexCount(Terrain); Vertex++)
         {
             const uint8_t* Weights = TerrainMesh_GetWeights(Terrain, Vertex);
-            int Sum = (int)Weights[0] + (int)Weights[1] + (int)Weights[2];
+            int Sum = (int)Weights[0] + (int)Weights[1] + (int)Weights[2] + (int)Weights[3];
             AreWeightsWhole = AreWeightsWhole && (Sum >= 253) && (Sum <= 257);
             Wooded += (TerrainMesh_GetDensities(Terrain, Vertex)[0] > 0U) ? 1U : 0U;
+            Graveled += (Weights[3] == 255U) ? 1U : 0U;
         }
         TEST_CHECK(run, AreWeightsWhole && (Wooded > 1000U) && (Wooded < TerrainMesh_GetVertexCount(Terrain)));
+        // B02: the painted gravel patch (a 3.5 m disc of 1 m quads is about 40 vertices of pure gravel); the rock and the
+        // valley's dirt come from the rules, so no vertex paints rock.
+        TEST_CHECK(run, (Graveled > 30U) && (Graveled < 60U));
+        bool HasPaintedRock = false;
+        for (uint32_t Vertex = 0U; Vertex < TerrainMesh_GetVertexCount(Terrain); Vertex++)
+        {
+            HasPaintedRock = HasPaintedRock || (TerrainMesh_GetWeights(Terrain, Vertex)[2] != 0U);
+        }
+        TEST_CHECK(run, !HasPaintedRock);
+        // Its materials loaded as its dependencies, every map 256 x 256 (one size per kind), and its two rules.
+        static const char* const Names[4] = { "grass", "dirt", "rock", "gravel" };
+        for (uint32_t Index = 0U; Index < 4U; Index++)
+        {
+            const TerrainMaterial* Palette = TerrainAsset_GetMaterial(Loaded, Index);
+            int32_t Width = 0;
+            int32_t Height = 0;
+            TEST_CHECK(run, (Palette != NULL) && AreNamesEqual(TerrainAsset_GetMaterialName(Loaded, Index),
+                Names[Index]));
+            for (uint32_t Kind = 0U; (Palette != NULL) && (Kind < (uint32_t)TerrainMaterialMapKind_Count); Kind++)
+            {
+                TEST_CHECK(run, (TerrainMaterial_GetMap(Palette, (TerrainMaterialMapKind)Kind, &Width, &Height) != NULL)
+                    && (Width == 256) && (Height == 256));
+            }
+        }
+        uint32_t RuleCount = 0U;
+        const TerrainRule* Rules = TerrainAsset_GetRules(Loaded, &RuleCount);
+        TEST_CHECK(run, (RuleCount == 2U) && (Rules[0].Material == 2U) && Rules[0].Slope.IsEnabled
+            && (Rules[1].Material == 1U) && Rules[1].Height.IsEnabled && Rules[1].Noise.IsEnabled);
         bool AreSurfaced = true;
         for (uint32_t Chunk = 0U; Chunk < TerrainMesh_GetChunkCount(Terrain); Chunk++)
         {
@@ -948,6 +1228,9 @@ void TerrainAssetTests_Run(TestRun* run)
         { "every_override_is_a_flag_next_to_its_value", EveryOverrideIsAFlagNextToItsValue },
         { "the_flags_choose_between_the_terrain_and_the_placement", TheFlagsChooseBetweenTheTerrainAndThePlacement },
         { "a_terrain_object_is_read_from_a_world_file", ATerrainObjectIsReadFromAWorldFile },
+        { "the_rules_are_read_in_order", TheRulesAreReadInOrder },
+        { "the_palettes_materials_are_its_dependencies", ThePalettesMaterialsAreItsDependencies },
+        { "material_maps_of_one_kind_share_one_size", MaterialMapsOfOneKindShareOneSize },
         { "the_shipped_terrain_loads", TheShippedTerrainLoads },
     };
     TestRun_RunSuite(run, "TerrainAsset", Cases, sizeof(Cases) / sizeof(Cases[0]));

@@ -1,0 +1,11 @@
+{
+    "name": "gravel",
+    "albedo": "placeholder_terrain_gravel_albedo",
+    "height": "placeholder_terrain_gravel_height",
+    "normal": "placeholder_terrain_gravel_normal",
+    "roughness_ao": "placeholder_terrain_gravel_roughness_ao",
+    "tile_size": 1.5,
+    "surface": "gravel",
+    "puddles": 0.2,
+    "porosity": 0.4
+}

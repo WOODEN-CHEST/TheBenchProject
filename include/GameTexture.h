@@ -1,7 +1,9 @@
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 // raylib.h is needed for Texture2D, which the wrapper holds by value.
 #include "raylib/raylib.h"
+#include "wr/WRMemory.h"
 
 /**
  * @file GameTexture.h
@@ -57,4 +59,38 @@ static inline Texture2D GameTexture_GetRaylibTexture(const GameTexture* self)
 static inline bool GameTexture_IsSrgb(const GameTexture* self)
 {
     return self->_isSrgb;
+}
+
+
+/**
+ * @brief A texture asset's image decoded into CPU memory as 8-bit RGBA, for code that needs the pixels themselves rather
+ *        than a GPU texture (the terrain materials, whose maps become texture arrays, B02).
+ *
+ * Filled by AssetManager_LoadTexturePixels, which reads the image file the texture's definition names without loading the
+ * texture asset (no hold, nothing uploaded). The caller owns the pixels: release them with TexturePixels_Deconstruct.
+ * The definition's texture_properties (filtering, wrap, mipmaps) do not apply: they describe the GPU texture.
+ */
+typedef struct TexturePixelsStruct
+{
+    /** @brief Width x Height texels of 4 bytes each (red, green, blue, alpha), row by row from the image's top row; a
+     *  greyscale image's grey is in red, green and blue, an image without alpha has alpha 255. Owned (Memory_Allocate). */
+    uint8_t* Pixels;
+    /** @brief The image's width and height in pixels (1 to the reader's limit: the caller's, at most the texture
+     *  type's 8192). */
+    int32_t Width;
+    int32_t Height;
+    /** @brief The definition's "color_space": true for "srgb" (the default), false for "linear". */
+    bool IsSrgb;
+} TexturePixels;
+
+/**
+ * @brief Frees the pixels and empties the struct. Safe on a zeroed or already deconstructed struct.
+ * @param self The pixels to release; must not be NULL.
+ */
+static inline void TexturePixels_Deconstruct(TexturePixels* self)
+{
+    Memory_Free(self->Pixels);
+    self->Pixels = NULL;
+    self->Width = 0;
+    self->Height = 0;
 }

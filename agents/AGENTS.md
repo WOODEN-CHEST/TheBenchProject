@@ -46,7 +46,8 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, and registers the thirteen standard types. Read its lifetime rules before touching assets.
+  caches failed loads, and registers the fourteen standard types; since B02 it also reads a texture asset's image file
+  as CPU pixels without loading it (AssetManager_LoadTexturePixels). Read its lifetime rules before touching assets.
 * Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader, GameSound and GameTexture: the manager-owned
   wrappers for the standard font, model, shader, sound and texture types, with their ownership rules, accessors and
   pitfalls; a skinned model carries its GameSkeleton (Animation.md). GameModel.h also holds GameMaterialFactors
@@ -143,7 +144,9 @@ Current module list:
     source/WorldAnimationActions.c, its per-animator state the private source/WorldAnimationInternal.h.
 * Terrain (Terrain.md) - Terrain of any shape (B01; decisions W1, W5, W6): one free-form triangle mesh with painted
   material weights and densities, holes and face materials, imported from a Blender .glb, cut into 32 m chunks that
-  draw in every pass and collide as triangle meshes. Covers:
+  draw in every pass and collide as triangle meshes; since B02 (W7) dressed in up to sixteen terrain materials blended
+  per pixel (painted weights, face materials, rules by slope, height and noise, height blending, triplanar mapping)
+  through texture arrays. Covers:
   * TerrainMesh - The mesh as pure data with no GL (include/TerrainMesh.h): the 1/1024 m position grid, the limits,
     smooth or imported normals, the chunks (each triangle in the cell of its centre; positions relative to an exact
     centre), active edges over the whole terrain, the editor's setters and the rebuild of only the chunks they touch
@@ -163,6 +166,19 @@ Current module list:
     distance, collision enabled, layer, mask; a draw distance multiplier), with the pure function that resolves the
     settings in effect. The collision world makes each chunk a one-sided mesh shape (WorldCollision.md, "Terrain");
     the renderer draws the chunks in every pass (source/WorldRendererTerrain.c, WorldRuntime.md).
+  * TerrainMaterial - The terrain_material asset type (B02, a standard type, JSON in terrain_materials/;
+    include/TerrainMaterial.h, source/TerrainMaterial.c, the definition in source/TerrainMaterialDefinition.c): one
+    palette material's settings (read through a property table: tile size, tint, roughness, normal strength, height
+    blend strength, triplanar mode and slope, surface key, puddles, porosity) and its maps' pixels, read from texture
+    assets' image files and packed as the texture arrays take them (albedo with height, normal, roughness with AO); a
+    terrain loads its palette's materials as its dependencies.
+  * TerrainBlend - The terrain's material blend in C (B02; include/TerrainBlend.h): the terrain shader's steps mirrored
+    (weights, rules with their periodic value noise, height blending, triplanar projections) and the material at a point
+    of a terrain (a triangle and barycentrics: footsteps, the scattering's limits).
+  * GLTextureArray - Texture arrays (private, source/GLTextureArray.{h,c}; B02, decision W7): the project's only direct
+    OpenGL calls, through the function pointers raylib's rlGetProcAddress resolves (no raylib rebuild), with their GL
+    constants; used by the renderer's terrain pass. Anything else that needs GL raylib lacks belongs in a module like
+    it, never in a pass (BUILDING.md, "Direct OpenGL calls").
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -305,7 +321,9 @@ Current module list:
     source/WorldTestAnimation.{h,c}). Since T30 it poses them in its PrepareRender, the humans wear the animated
     humanoid (the player in first person), E starts the action the object looked at offers (the bench's sit, the coffee
     cup's pick-up, the door's push), 8 sends the NPC human to the bench, 9 puts down, 0 waves. Since B01 its world has
-    a terrain around the slab, and the minus key shows the terrain's chunk key.
+    a terrain around the slab, and the minus key shows the terrain's chunk key; since B02 the terrain wears four
+    placeholder materials and the equals key cycles its views (shaded, painted weights, rule weights, the dominant
+    material).
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown

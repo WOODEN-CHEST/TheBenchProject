@@ -161,6 +161,23 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   mipmaps generated when `texture_properties.mipmaps` is true and the file brought none (a compressed dds without its
   own mip levels fails the load: raylib would count a mip chain the GPU never built), then the wrap mode, then the
   filter (last, because raylib picks the mipmapped GL filter from the mip count). Unloaded with `UnloadTexture`.
+- **Pixels without a texture (B02):** `AssetManager_LoadTexturePixels(manager, name, maxSide, &pixels)` decodes the
+  image file a texture definition names into a `TexturePixels` (8-bit RGBA, row by row from the top; a greyscale image's
+  grey in red, green and blue, alpha 255 without one; the definition's `color_space` as `IsSrgb`), without loading the
+  texture asset, taking a hold or touching the GPU, so it works headless. The caller frees it with
+  `TexturePixels_Deconstruct`. `maxSide` is the caller's size limit (the texture type's 8192 applies above it), checked
+  before the conversion to RGBA, which goes through floats. DDS files are refused before they are decoded (see below), so
+  only png, bmp, gif and qoi pixels are read. The terrain materials read their maps this way (their texture arrays are
+  made from the pixels: [Terrain.md](Terrain.md)); nothing is cached, so read once and keep what you need.
+- **Hostile DDS files (known, not fixed: found by B02's review).** raylib's DDS reader (`rl_load_dds_from_memory` in
+  its `rltexgpu.h`) trusts the header: it copies as many bytes as the header's width, height and format claim (a
+  compressed file's `pitch_or_linear_size`), never comparing them with the file's size, so a short `.dds` file from a
+  hostile pack reads past the end of its buffer (a crash, or the heap's bytes in the image). Every GPU load of a dds
+  file reaches it: textures, sprite sheet images, texture animation frames, model material override maps, and image
+  files a model (glTF, OBJ) names, inside raylib. Only `AssetManager_LoadTexturePixels` refuses dds files. The complete
+  fix is the owner's choice: build raylib without DDS (`SUPPORT_FILEFORMAT_DDS` 0, see `BUILDING.md`) and drop `dds`
+  from `ASSET_EXTENSIONS_TEXTURE`, or check each dds file's header against its size before raylib reads it (which leaves
+  the files models name inside raylib).
 - Shipped: `sky_milky_way` (`textures/sky/milky_way.json`), a generated placeholder panorama
   (`placeholder_milky_way.png`, 1024x512, trilinear, mipmaps) until the owner's art replaces it; the sky pass draws it
   ([WorldRuntime.md](WorldRuntime.md), "Night sky").

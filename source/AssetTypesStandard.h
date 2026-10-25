@@ -58,6 +58,10 @@
  *  channels, and the defaults of its placements; B01). */
 #define ASSET_TYPE_NAME_TERRAIN      ((const unsigned char*)u8"terrain")
 #define ASSET_TYPE_DIRECTORY_TERRAIN ((const unsigned char*)u8"terrains")
+/** @brief Standard terrain material type name / directory (TerrainMaterial.h: one material of a terrain's palette, its
+ *  maps' pixels and settings; B02). */
+#define ASSET_TYPE_NAME_TERRAIN_MATERIAL      ((const unsigned char*)u8"terrain_material")
+#define ASSET_TYPE_DIRECTORY_TERRAIN_MATERIAL ((const unsigned char*)u8"terrain_materials")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -115,3 +119,21 @@ Error AnimationGraphDefinition_Construct(AssetManager* manager, const UserData* 
 /** @brief Builds a terrain definition from a JSON blob (TerrainDefinition.c). See AssetDefinitionConstructor. */
 Error TerrainDefinition_Construct(AssetManager* manager, const UserData* userData,
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+/** @brief Builds a terrain material definition from a JSON blob (TerrainMaterialDefinition.c). See
+ *  AssetDefinitionConstructor. */
+Error TerrainMaterialDefinition_Construct(AssetManager* manager, const UserData* userData,
+    const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+
+/**
+ * @brief Decodes the image file of a texture definition into 8-bit RGBA pixels on the CPU (TextureDefinition.c), the
+ *        body of AssetManager_LoadTexturePixels.
+ * @param definition A texture definition (the manager's record); one not built by the texture type is refused.
+ * @param manager The manager that resolves its file.
+ * @param maxSide The largest width or height to read (at least 1; the texture type's limit applies above it).
+ * @param outPixels [out] Receives the pixels (the caller frees them with TexturePixels_Deconstruct); zeroed on failure.
+ * @returns Success; ErrorCode_InvalidOperation for a definition that is not the texture type's; the file's errors (not
+ *          found, ambiguous, not decodable: ErrorCode_InvalidAssetData, also for a DDS file, which is never decoded, a
+ *          size outside 1 to the limit, checked before the conversion, or a compressed image).
+ */
+Error TextureDefinition_LoadPixels(const AssetDefinition* definition, AssetManager* manager, int32_t maxSide,
+    TexturePixels* outPixels);

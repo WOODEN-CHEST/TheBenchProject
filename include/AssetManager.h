@@ -110,6 +110,10 @@ typedef struct AnimationLibraryStruct AnimationLibrary;
 typedef struct AnimationGraphStruct AnimationGraph;
 /** @brief A terrain asset (TerrainAsset.h). */
 typedef struct TerrainAssetStruct TerrainAsset;
+/** @brief A terrain material asset (TerrainMaterial.h). */
+typedef struct TerrainMaterialStruct TerrainMaterial;
+/** @brief A texture asset's image as CPU pixels (GameTexture.h), filled by AssetManager_LoadTexturePixels. */
+typedef struct TexturePixelsStruct TexturePixels;
 
 
 // Core identifier types.
@@ -374,6 +378,9 @@ typedef struct StandardAssetTypesStruct
     /** @brief Terrain type id: a terrain's free-form mesh with its painted weights and densities, its palette and its
      *  placements' defaults (TerrainAsset.h, B01). */
     AssetTypeID Terrain;
+    /** @brief Terrain material type id: one material of a terrain's palette, its maps' pixels (built on texture assets'
+     *  images) and its settings (TerrainMaterial.h, B02). */
+    AssetTypeID TerrainMaterial;
 } StandardAssetTypes;
 
 
@@ -453,8 +460,8 @@ Error AssetManager_CreateAssetType(AssetManager* self, const AssetTypeInfo* info
 /**
  * @brief Registers all standard asset types and a shared JSON pool used to parse their definitions.
  *
- * Registers the thirteen standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world
- * model, world sprite, character, animation library, animation graph and terrain), writing their ids into
+ * Registers the fourteen standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world
+ * model, world sprite, character, animation library, animation graph, terrain and terrain material), writing their ids into
  * @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
  * ConstructorUserData so all standard definition parsing recycles JSON compounds/arrays/strings instead of
  * reallocating. The caller OWNS @p *outDefinitionPool and must free it with JSONObjectPool_Deconstruct after (or
@@ -1030,10 +1037,47 @@ Error AssetManager_LoadAnimationGraph(AssetManager* self, const unsigned char* n
 
 /**
  * @brief Loads a terrain by name (TerrainAsset.h): its mesh, imported from the .glb its definition names or read from its
- *        binary form, cut into chunks. Requires the standard types (AssetManager_CreateStandardAssetTypes) and that
- *        definitions were read. See AssetManager_LoadSpriteSheet for semantics.
+ *        binary form, cut into chunks, its rules, and its palette's terrain materials as its dependencies (B02; their
+ *        maps of one kind must share one size). Requires the standard types (AssetManager_CreateStandardAssetTypes) and
+ *        that definitions were read. See AssetManager_LoadSpriteSheet for semantics.
  */
 Error AssetManager_LoadTerrain(AssetManager* self, const unsigned char* name, AssetUserID user, TerrainAsset** outAsset);
+
+/**
+ * @brief Loads a terrain material by name (TerrainMaterial.h): its settings and the pixels of its maps, read from the
+ *        image files of the texture assets it names (AssetManager_LoadTexturePixels). A terrain loads its palette's
+ *        materials this way, as its dependencies. See AssetManager_LoadSpriteSheet for semantics.
+ */
+Error AssetManager_LoadTerrainMaterial(AssetManager* self, const unsigned char* name, AssetUserID user,
+    TerrainMaterial** outAsset);
+
+/**
+ * @brief Decodes the image file a texture asset's definition names into 8-bit RGBA pixels on the CPU, for a loader that
+ *        needs the pixels rather than the GPU texture (the terrain materials, whose maps become texture arrays).
+ *
+ * The texture asset is not loaded and no hold is taken: the definition registered under @p name (a pack's override wins,
+ * as for loads) is read, its file resolved and decoded each call, and nothing is cached, neither the pixels nor a
+ * failure. The definition's texture_properties do not apply (they describe the GPU texture); its color_space is
+ * reported. Needs no GL context.
+ *
+ * DDS files are refused before they are decoded: raylib's DDS reader copies as many bytes as the file's header claims,
+ * past the end of a short file (a hostile pack's), so the pixels come from png, bmp, gif and qoi images only. The size is
+ * checked before the image is converted to RGBA.
+ * @param self The manager; must not be NULL.
+ * @param name The texture asset's name; must not be NULL.
+ * @param maxSide The largest width or height to read, in pixels (the caller's limit; at least 1, and the texture type's
+ *        own limit, 8192, applies above it).
+ * @param outPixels [out] Receives the pixels; the caller frees them with TexturePixels_Deconstruct. Zeroed on failure.
+ *        Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL argument or a @p maxSide below 1; ErrorCode_InvalidState if the
+ *          standard types were not registered; ErrorCode_InvalidOperation when no texture of that name is defined, or
+ *          its definition is not read from an image file (one built in code); the file's errors as
+ *          AssetManager_AcquireResourcePath gives them; ErrorCode_InvalidAssetData for a DDS file, an image that cannot
+ *          be decoded, one with no pixels or more than @p maxSide per side (the message names both), or a compressed
+ *          one.
+ */
+Error AssetManager_LoadTexturePixels(AssetManager* self, const unsigned char* name, int32_t maxSide,
+    TexturePixels* outPixels);
 
 
 // ---- Bulk load (stepped, main thread) ----

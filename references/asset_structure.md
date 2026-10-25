@@ -1006,7 +1006,12 @@ under `terrains/`, next to their `.glb` or their binary file; a world places one
     "chunk_size": 32.0,                                  // [OPTIONAL]
     "render": { "has_outline": true, "shadow_tier": "both", "casts_shadows": true, "draw_distance": 4000.0,
         "is_draw_distance_fixed": true },               // [OPTIONAL] each key optional
-    "collision": { "is_enabled": true, "layer": "world" } // [OPTIONAL] each key optional
+    "collision": { "is_enabled": true, "layer": "world" }, // [OPTIONAL] each key optional
+    "rules": [                                           // [OPTIONAL] at most 8, applied in order (B02)
+        { "material": "rock", "slope": { "min": 35.0, "blend": 8.0 }, "only_on": [ "grass", "dirt" ] },
+        { "material": "dirt", "height": { "max": -4.5, "blend": 2.5 },
+            "noise": { "scale": 2.5, "strength": 0.6, "seed": 11 }, "only_on": [ "grass" ] }
+    ]
 }
 ```
 
@@ -1015,7 +1020,7 @@ under `terrains/`, next to their `.glb` or their binary file; a world places one
 | `source` | `model` or `data`, required | Where the mesh comes from: a glTF file imported when the terrain loads (`model`), or the terrain's binary form (`data`), which the in-game editor will write. |
 | `model` | asset location; `source: model` only | The `.glb` (or `.gltf` with its buffers beside it). `format` (`glb`, `gltf`) narrows it as for models. |
 | `data` | asset location; `source: data` only | The binary form, a `.ghdf` file (`TerrainMesh_SaveGHDF`). |
-| `materials` | 1 to 16 asset names, each once; with `source: model` none named `hole` or as the blend slot (`blend` unless `blend_slot` says) | The palette: each vertex weighs these materials, and a face slot may name one. B02 makes them `terrain_material` assets; until then each palette entry shows as a flat debug colour. |
+| `materials` | 1 to 16 asset names, each once; with `source: model` none named `hole` or as the blend slot (`blend` unless `blend_slot` says) | The palette: `terrain_material` assets (see "Terrain materials"), loaded with the terrain as its dependencies. Each vertex weighs them, and a face slot may name one. Their maps of one kind must share one size (a texture array holds one): a mismatch fails the terrain's load, naming both materials and sizes. |
 | `density_channels` | at most 8 names (`[a-z][a-z0-9_]*`), each once | Vegetation and other densities per vertex, for the scattering (B09). |
 | `weights` | at most one mapping per palette material | Which attribute of the file feeds which palette material: `{ "attribute": "<name in the file>", "r": "<material>", "g": ..., "b": ..., "a": ... }`, any channels left out unused. Each material is fed by one channel at most. Without mappings every weight is 0, and the terrain shows its first material. |
 | `densities` | at most one mapping per density channel | The same for the density channels. |
@@ -1030,9 +1035,28 @@ under `terrains/`, next to their `.glb` or their binary file; a world places one
 | `collision.is_enabled` | boolean (true) | Off: nothing stands on it. |
 | `collision.layer` | a layer (`world`) | Its chunks' collision layer. |
 | `collision.collides_with` | an array of layers, each once (left out: the layer's default mask) | The layers it blocks and is blocked by. |
+| `rules` | at most 8 rules (B02) | Put materials down by the ground's slope, its height and noise, per pixel, in order (below). |
 
 A placed terrain may override every `render` and `collision` value (and multiply the draw distance) with the same keys
 in its component, each behind its own `overrides_` flag.
+
+**Rules** (B02) put materials down where the ground's shape says, per pixel, whatever the vertex spacing, and follow the
+shape when it changes. Each rule:
+
+| Key | Value | Meaning |
+|---|---|---|
+| `material` | a palette name, required | The material it puts down. |
+| `opacity` | 0 to 1 (1) | How strongly it applies where its conditions hold fully. |
+| `only_on` | palette names, at least one, each once (left out: every material) | The materials it may cover: "rock on steep slopes, but not over painted gravel". |
+| `slope` | `{ "min", "max", "blend" }` in degrees: bounds 0 to 180, a blend 0 to 90; at least one bound, `min` not above `max` | Where the ground is that steep: 0 flat, 90 a wall, 180 an overhang's underside (the slope of the ground's normal in the world). |
+| `height` | `{ "min", "max", "blend" }` in metres: bounds within 10 000 km, a blend 0 to 10 000; at least one bound, `min` not above `max` | Where the ground is that high: the world's Y (absolute: a snow line stays where it is when the terrain moves). |
+| `noise` | `{ "scale", "strength", "seed" }`: a cell size in metres above 0 up to 10 000 (4), a strength 0 to 1 (1), a whole seed 0 to 4 294 967 295 (0); each key optional | Value noise in the terrain's own space, cells of `scale` metres, scaling the rule's strength by `1 - strength + strength x noise`: patches instead of a smooth band. |
+
+A range is 1 between its bounds and falls to 0 across `blend`, centred on each bound (`min: 35, blend: 8` is 0 below 31
+degrees and 1 above 39); without a blend the step is hard (the bound counts as inside); a bound left out is open. A
+rule's strength is `opacity` times its slope's, height's and noise's factors; every covered material gives up that share
+of its weight to the rule's material, so the weights keep adding up to one. Faces with a face material are left alone
+(they take their material outright). Unknown keys are refused in a rule and in each of its blocks.
 
 **Material slots** decide each face (`source: model`): a primitive's material is its slot, and its name says what its
 faces are. `blend` (or the `blend_slot`; also a primitive without a material) uses the painted weights; `hole` makes
@@ -1084,4 +1108,72 @@ it into glTF's +Y up, which is the game's.
 The test terrain is `terrains/test_world/placeholder_terrain.json` (`placeholder_terrain`), written with its `.glb` by
 `asset_source/scripts/placeholder_terrain.py`: hills around the test world's slab out to about 250 m (1 m triangles near
 the slab, 8 m far out), a valley, a cliff steeper than 35 degrees with an overhang and a cave behind a mouth of `hole`
-faces, a footpath, and a `dirt` patch; `COLOR_0` paints grass, dirt and rock, `_DENSITY_0` the trees.
+faces, a footpath, a round gravel patch and a `dirt` patch; `COLOR_0` paints grass, dirt and gravel (its red, green and
+alpha; its blue maps rock, which only the rules put down: on the cliff above 35 degrees, and dirt on the valley floor
+below 4.5 m under the slab, broken up by noise), `_DENSITY_0` the trees. Its four materials are the placeholders under
+"Terrain materials".
+
+
+## Terrain materials.
+A terrain material (B02) is one material of a terrain's palette: grass, dirt, rock, gravel, asphalt. Its maps are
+texture assets (see "Textures") whose image files are read on the CPU; the game builds one texture array per map kind of
+each terrain, one layer per material (decision W7). Definitions live under `terrain_materials/`; a terrain's `materials`
+name them. How the blend works is in `agents/Terrain.md`.
+
+```
+{
+    "name": "grass",
+    "albedo": "placeholder_terrain_grass_albedo",              // a texture asset: the colour (sRGB)
+    "height": "placeholder_terrain_grass_height",              // [OPTIONAL] a texture asset: the surface's height
+    "normal": "placeholder_terrain_grass_normal",              // [OPTIONAL] a texture asset: a tangent-space normal map
+    "roughness_ao": "placeholder_terrain_grass_roughness_ao",  // [OPTIONAL] a texture asset: roughness (red), AO (green)
+    "tile_size": 2.0,              // [OPTIONAL]
+    "albedo_tint": "#ffffff",      // [OPTIONAL]
+    "roughness": 0.9,              // [OPTIONAL]
+    "normal_strength": 1.0,        // [OPTIONAL]
+    "height_blend_strength": 1.0,  // [OPTIONAL]
+    "triplanar": "steep",          // [OPTIONAL] "off", "steep" or "always"
+    "triplanar_slope": 40.0,       // [OPTIONAL] degrees
+    "surface": "grass",            // [OPTIONAL] a namespaced key
+    "puddles": 0.0,                // [OPTIONAL]
+    "porosity": 0.6                // [OPTIONAL]
+}
+```
+
+| Key | Value (default) | Meaning |
+|---|---|---|
+| `albedo` | a texture asset, required | The colour, read as sRGB. |
+| `height` | a texture asset (none: flat at mid-height) | The surface's height (its red channel), for height blending: where materials meet, the one standing higher wins, so stones poke through grass. The albedo's size. |
+| `normal` | a texture asset (none: flat) | A tangent-space normal map in OpenGL's convention: red toward the image's right, green toward its top (what Blender bakes and glTF uses); blue is rebuilt. |
+| `roughness_ao` | a texture asset (none: roughness 1, no occlusion) | Red the roughness, green the ambient occlusion. |
+| `tile_size` | metres, above 0 up to 1000 (2) | Metres per repeat of the maps, laid along the terrain's own axes (they move with the terrain object). |
+| `albedo_tint` | a colour (white) | Multiplies the colour. |
+| `roughness` | 0 to 1 (0.9) | Multiplies the map's roughness. |
+| `normal_strength` | 0 to 8 (1) | How strongly the normal map tilts the surface; 0 is flat. |
+| `height_blend_strength` | 0 to 10 (1) | How strongly its height wins where it meets another material: its share of a pixel is decided by its weight plus its height times this (0 blends by the weights alone). |
+| `triplanar` | `off`, `steep`, `always` (`steep`) | When the maps are laid from three sides instead of from above, so cliffs are not stretched: never, where the ground is steeper than `triplanar_slope` (blended in over 10 degrees), or everywhere. |
+| `triplanar_slope` | degrees, 0 to 90 (40) | With `steep`: where the three sides take over. |
+| `surface` | a namespaced key (`tbp:ground`; `grass` reads as `tbp:grass`) | What the ground is: footsteps, where scattering may place things (B09), later systems. |
+| `puddles` | 0 to 1 (0) | How much rain's puddles may form on it (asphalt 1, grass 0). Read by the weather (T18). |
+| `porosity` | 0 to 1 (0.5) | How much wetness darkens it. Read by the weather (T18). |
+
+* **Maps.** Each map's slot decides how it is read, whatever its texture's `color_space` says, and the texture's
+  `texture_properties` do not apply: the arrays are mipmapped, filtered trilinearly (and anisotropically where the
+  graphics driver can) and repeat. Each map is at most 1024 pixels per side; the height must be the albedo's size (it
+  is stored in the albedo's alpha). Images are read as 8-bit RGBA (a greyscale image's grey in red, green and blue)
+  from png, bmp, gif or qoi files: a dds file is refused (the image reader trusts the sizes a dds header claims, which a
+  hostile file could use to read past its end).
+* **One size per kind and terrain.** The materials of one terrain's palette must have albedo maps of one size, normal
+  maps of one size and roughness maps of one size (a material without a normal or roughness map is fine: it gets a flat
+  or plain layer). The terrain refuses a mismatch, naming both materials and their sizes. Sizes need not be powers of
+  two; 256 or 512 pixels suit 640 x 360.
+* **Tileable images.** The maps repeat every `tile_size` metres: paint them so their edges meet.
+* Unknown keys are refused, and every rule is checked when the definition is read (`Terrain material "grass":
+  terrain_material.roughness ...`); a texture that is not defined, or not read from an image file, fails the material's
+  load, naming the slot and the texture.
+
+The placeholders, written by `asset_source/scripts/placeholder_terrain_materials.py` (the Python standard library
+only), are `terrain_materials/placeholder_terrain/` (`grass`, `dirt`, `rock`, `gravel`) over 256 x 256 tileable images in
+`textures/placeholder_terrain/` (`<material>_albedo`, `_height`, `_normal`, `_roughness_ao`, each with its texture
+definition). To use your own: give each map a texture definition (as those), point the material at it and keep the sizes
+equal across the terrain's materials.

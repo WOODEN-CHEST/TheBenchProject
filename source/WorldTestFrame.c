@@ -888,6 +888,27 @@ static void HandleDebugModelInput(WorldTestFrame* frame, const GameInput* input)
             Error_Deconstruct(&LogResult);
         }
     }
+    // Equals cycles what the terrain shows (B02): shaded, the painted weights, the weights after the rules, the dominant
+    // material, shaded again.
+    if (GameInput_IsKeyPressed(input, GameKey_Equal))
+    {
+        WorldRendererTerrainView View = (WorldRendererTerrainView)(((uint32_t)WorldRenderer_GetTerrainView(
+            frame->_renderer) + 1U) % (uint32_t)WorldRendererTerrainView_Count);
+        WorldRenderer_SetTerrainView(frame->_renderer, View);
+        if (Log != NULL)
+        {
+            static const char* const Explanations[WorldRendererTerrainView_Count] =
+            {
+                "the materials, blended and shaded",
+                "each palette material's debug colour by its painted weights, before the rules",
+                "the debug colours by the weights after the rules (slope, height, noise)",
+                "each pixel the debug colour of the material with the largest share after height blending"
+            };
+            Error LogResult = Logger_LogInfoFormatted(Log, (const unsigned char*)u8"WorldTest: terrain view: %s (%s).",
+                (const char*)WorldRenderer_GetTerrainViewName(View), Explanations[View]);
+            Error_Deconstruct(&LogResult);
+        }
+    }
     // Q colours every model by the LOD it shows (0 white, 1 green, 2 yellow, 3 red, coarser magenta), to watch the
     // switches along the lod_test row.
     if (GameInput_IsKeyPressed(input, GameKey_Q))
@@ -1460,7 +1481,8 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the "
             u8"desk, E variants, Z zoom, Q LOD tinting, F7 collider wireframes, F8 contact points, F6 swing the door, "
             u8"F9 the pushing wall, F10 move the door's crate, F11 far shift (everything 28 km out, then 141 km, then "
-            u8"back), - the terrain's chunk key; F1 walk (the player as a character: WASD, SHIFT run, SPACE jump, "
+            u8"back), - the terrain's chunk key, = the terrain's views (shaded, painted weights, rule weights, the "
+            u8"dominant material); F1 walk (the player as a character: WASD, SHIFT run, SPACE jump, "
             u8"CTRL crouch, E use: sit on the "
             u8"bench, pick up the coffee cup, open the door, E again to stand up; 9 put down, 0 wave), F2 the test NPCs "
             u8"(a human, a dog, a pigeon), 8 the NPC human sits on the bench and gets up, F3 fly, F4 the player's kind; "

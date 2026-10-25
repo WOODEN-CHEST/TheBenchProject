@@ -3,8 +3,9 @@
 #include <stddef.h>
 #include <stdint.h>
 // CollisionLayer.h for the collision settings' layer; WorldModel.h for WorldShadowTier (a terrain casts as a model
-// does); TerrainMesh.h for the mesh the asset owns.
+// does); TerrainMesh.h for the mesh the asset owns; TerrainMaterial.h for its palette's materials.
 #include "CollisionLayer.h"
+#include "TerrainMaterial.h"
 #include "TerrainMesh.h"
 #include "WorldModel.h"
 
@@ -21,18 +22,22 @@
  * editor will write: TerrainMesh_SaveGHDF). Unknown keys are refused everywhere in a definition and every rule is
  * checked when it is read; the mesh's own limits when it loads (the file is hostile).
  *
- * The PALETTE names 1 to TERRAIN_MAX_MATERIALS terrain materials (B02 adds that asset type; until then the names only
- * pick a debug colour per entry): a vertex weighs each of them, a face material takes one outright (so a model's palette
- * names no material "hole" or as its blend slot: those slots are read first). The DENSITY CHANNELS
- * (at most TERRAIN_MAX_DENSITY_CHANNELS) are named for the scattering (B09); their bytes are kept per vertex.
+ * The PALETTE names 1 to TERRAIN_MAX_MATERIALS terrain materials (TerrainMaterial.h, B02), loaded as the terrain's
+ * dependencies: a vertex weighs each of them, a face material takes one outright (so a model's palette names no material
+ * "hole" or as its blend slot: those slots are read first). The renderer makes one texture array per map kind, one layer
+ * per material, so the materials' maps of one kind must share one size (the load refuses a mismatch, naming both). The
+ * RULES (at most TERRAIN_MAX_RULES, B02) move the weights toward a material by the ground's slope, its height and noise,
+ * in order, per pixel (TerrainBlend.h is their C mirror). The DENSITY CHANNELS (at most TERRAIN_MAX_DENSITY_CHANNELS) are
+ * named for the scattering (B09); their bytes are kept per vertex.
  *
  * A placed object names its terrain in its terrain component (WorldTerrainComponent.h) and may override each default
  * setting with an explicit flag next to the value; WorldTerrainComponent_ResolveSettings turns the two into the settings
  * that apply.
  *
- * OWNERSHIP. The asset is pure data with no dependencies, and owns its mesh; the asset manager owns the asset. Never keep
- * its pointer past your asset user (AssetManager.md). The renderer and the collision world read the mesh and never write
- * it; the editor (later) changes it through the mesh's setters, and both rebuild what changed by the chunks' revisions.
+ * OWNERSHIP. The asset is pure data (no GL) and owns its mesh and rules; its palette's materials are its dependencies,
+ * held under its dependency user and released after it. The asset manager owns the asset. Never keep its pointer past
+ * your asset user (AssetManager.md). The renderer and the collision world read the mesh and never write it; the editor
+ * (later) changes it through the mesh's setters, and both rebuild what changed by the chunks' revisions.
  */
 
 
@@ -44,6 +49,11 @@
 #define TERRAIN_NAME_MAX_LENGTH ((size_t)128)
 /** @brief The material slot name a definition's faces use for the painted weights unless it says otherwise. */
 #define TERRAIN_DEFAULT_BLEND_SLOT ((const unsigned char*)u8"blend")
+/** @brief The most rules a terrain may have: each is about five vec4 uniforms of the terrain shader's, which shares
+ *  GL 3.3's guaranteed 1024 fragment uniform components with the lighting and the sixteen materials. */
+#define TERRAIN_MAX_RULES 8U
+/** @brief Every palette material at once, as a rule's CoveredMaterials (without "only_on"). */
+#define TERRAIN_ALL_MATERIALS ((uint32_t)((1U << TERRAIN_MAX_MATERIALS) - 1U))
 
 
 // Types.
@@ -94,14 +104,82 @@ typedef struct TerrainSettingsStruct
 } TerrainSettings;
 
 /**
+ * @brief One condition of a terrain rule on a value (the ground's slope, or its height): 1 inside [Minimum, Maximum],
+ *        ramping to 0 over Blend around each bound (a smooth step from bound - Blend / 2 to bound + Blend / 2), a hard
+ *        step without a blend. A bound left out is open. A plain value type.
+ */
+typedef struct TerrainRuleRangeStruct
+{
+    /** @brief Whether the rule has this condition (its block in the definition); without it the condition is 1. */
+    bool IsEnabled;
+    /** @brief Whether the range has a lower bound, and the bound (degrees for the slope, metres for the height). */
+    bool HasMinimum;
+    float Minimum;
+    /** @brief Whether the range has an upper bound, and the bound. */
+    bool HasMaximum;
+    float Maximum;
+    /** @brief The ramp's width around each bound, in the same unit (>= 0; 0 is a hard step). */
+    float Blend;
+} TerrainRuleRange;
+
+/**
+ * @brief A terrain rule's noise: world-space value noise (TerrainBlend_GetValueNoise) scaling the rule's strength. A plain
+ *        value type.
+ */
+typedef struct TerrainRuleNoiseStruct
+{
+    /** @brief Whether the rule has noise (its block in the definition); without it the noise factor is 1. */
+    bool IsEnabled;
+    /** @brief Metres per noise cell (above 0): the size of its patches. */
+    float Scale;
+    /** @brief How much the noise takes away, 0 to 1: the factor is 1 - Strength + Strength x noise. */
+    float Strength;
+    /** @brief Picks the pattern: rules with different seeds vary apart. */
+    uint32_t Seed;
+} TerrainRuleNoise;
+
+/**
+ * @brief One of a terrain's rules (B02): where its conditions hold, it moves the weights toward its material. A plain
+ *        value type, read from the terrain's definition (its "rules").
+ *
+ * Per pixel (and in TerrainBlend_ApplyRules), in order: the rule's strength is Opacity x the slope's condition x the
+ * height's x the noise's factor; each covered material other than its own gives up that share of its weight, which its
+ * material gains. Faces with a face material are left as they are.
+ */
+typedef struct TerrainRuleStruct
+{
+    /** @brief The palette index of the material it puts down. */
+    uint32_t Material;
+    /** @brief How strongly it applies where its conditions hold fully, 0 to 1. */
+    float Opacity;
+    /** @brief A bit per palette index: the materials it may cover ("only_on"; every material without it). */
+    uint32_t CoveredMaterials;
+    /** @brief The slope, in degrees from flat (0) through vertical (90) to an overhang's underside (180). */
+    TerrainRuleRange Slope;
+    /** @brief The height, in metres: the world's Y (absolute, not the terrain's own). */
+    TerrainRuleRange Height;
+    /** @brief The noise. */
+    TerrainRuleNoise Noise;
+} TerrainRule;
+
+/**
  * @brief A loaded terrain. Read-only, owned by the asset manager: use the accessors.
  */
 typedef struct TerrainAssetStruct
 {
     /** @brief The mesh (owned). */
     TerrainMesh* _mesh;
+    /** @brief The palette's materials (borrowed: held under the terrain's dependency user, valid while the terrain is);
+     *  NULL past the palette, and for a terrain built without loading them (headless tests). */
+    const TerrainMaterial* _materials[TERRAIN_MAX_MATERIALS];
+    /** @brief The rules, in order. */
+    TerrainRule _rules[TERRAIN_MAX_RULES];
+    uint32_t _ruleCount;
     /** @brief Its placements' defaults. */
     TerrainSettings _settings;
+    /** @brief The terrain's own name (its definition's; into _names), for messages; NULL for a terrain built without a
+     *  definition (headless tests). */
+    const unsigned char* _name;
     /** @brief The palette's names and the density channels' names (into _names, owned). */
     const unsigned char* _materialNames[TERRAIN_MAX_MATERIALS];
     uint32_t _materialCount;
@@ -132,6 +210,13 @@ static inline const TerrainSettings* TerrainAsset_GetSettings(const TerrainAsset
     return &self->_settings;
 }
 
+/** @brief The terrain's name (its definition's: borrowed, valid while the terrain is), or NULL for one built without a
+ *  definition. */
+static inline const unsigned char* TerrainAsset_GetName(const TerrainAsset* self)
+{
+    return self->_name;
+}
+
 /** @brief The palette's size (1 to TERRAIN_MAX_MATERIALS). */
 static inline uint32_t TerrainAsset_GetMaterialCount(const TerrainAsset* self)
 {
@@ -147,6 +232,30 @@ static inline uint32_t TerrainAsset_GetMaterialCount(const TerrainAsset* self)
 static inline const unsigned char* TerrainAsset_GetMaterialName(const TerrainAsset* self, uint32_t index)
 {
     return (index < self->_materialCount) ? self->_materialNames[index] : NULL;
+}
+
+/**
+ * @brief A palette material.
+ * @param self The terrain; must not be NULL.
+ * @param index The palette index.
+ * @returns The material (borrowed: valid while the terrain is), or NULL for an index past the palette or a terrain built
+ *          without its materials.
+ */
+static inline const TerrainMaterial* TerrainAsset_GetMaterial(const TerrainAsset* self, uint32_t index)
+{
+    return (index < self->_materialCount) ? self->_materials[index] : NULL;
+}
+
+/**
+ * @brief The terrain's rules, in the order they apply.
+ * @param self The terrain; must not be NULL.
+ * @param outCount [out] Receives how many there are (0 to TERRAIN_MAX_RULES). Must not be NULL.
+ * @returns The rules (borrowed: valid while the terrain is).
+ */
+static inline const TerrainRule* TerrainAsset_GetRules(const TerrainAsset* self, uint32_t* outCount)
+{
+    *outCount = self->_ruleCount;
+    return self->_rules;
 }
 
 /** @brief The number of density channels (0 to TERRAIN_MAX_DENSITY_CHANNELS). */

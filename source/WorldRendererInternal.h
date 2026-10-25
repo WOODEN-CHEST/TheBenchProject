@@ -13,6 +13,7 @@
 #include "WorldEnvironment.h"
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
+#include "GLTextureArray.h"
 #include "NightVision.h"
 #include "SpriteTransform.h"
 #include "WorldRenderSpace.h"
@@ -41,7 +42,8 @@
  *   WorldRendererPost.c      outlines, bloom, sun shafts and the tonemap
  *   WorldRendererCrisp.c     the crisp overlay for OmitPixelation objects
  *   WorldRendererTerrain.c   the terrain (B01): its chunks' GPU meshes, the lit terrain shader, its draws in every pass
- *                            and the chunk key
+ *                            and the chunk key; since B02 its materials' texture arrays (GLTextureArray.h, the
+ *                            project's only direct GL calls) and their uniforms
  * plus the per-object render cache (WorldRenderCache.h) and each frame's visibility (WorldVisibility.h: what each pass
  * draws, with every entry's fade). Each pass keeps its shader, uniform locations, targets and toggles in its own state
  * struct below.
@@ -87,6 +89,14 @@
  * whether or not the shader samples them. */
 typedef enum
 {
+    // The terrain program's material arrays (B02): sampler2DArray, below raylib's material map units' top, because the
+    // terrain program draws with no material maps (DrawMesh binds none for it). Other programs' material maps bind
+    // GL_TEXTURE_2D (or cube) textures on these units; an array sampler reads only the units' GL_TEXTURE_2D_ARRAY
+    // target, which nothing else uses. The budget for later tasks is in agents/WorldRuntime.md ("Renderer structure").
+    WorldRendererTextureUnit_TerrainAlbedoHeight = 9,   // sampler2DArray materialAlbedoHeight
+    WorldRendererTextureUnit_TerrainNormal = 10,        // sampler2DArray materialNormal
+    WorldRendererTextureUnit_TerrainRoughnessAo = 11,   // sampler2DArray materialRoughnessAo
+    // Every lit program's frame textures.
     WorldRendererTextureUnit_ShadowNear = 12,       // sampler2D shadowMap (near sun cascade)
     WorldRendererTextureUnit_ShadowFar = 13,        // sampler2D shadowMapFar (far sun cascade)
     WorldRendererTextureUnit_PointShadowCube = 14,  // samplerCube pointShadowCube
@@ -95,6 +105,8 @@ typedef enum
 
 _Static_assert(WorldRendererTextureUnit_ShadowNear >= WORLD_RENDERER_MATERIAL_MAP_COUNT,
     "renderer-owned texture units must sit above raylib's material map units");
+_Static_assert(WorldRendererTextureUnit_TerrainRoughnessAo < WorldRendererTextureUnit_ShadowNear,
+    "the terrain's arrays sit below the frame textures");
 
 /* Which objects a draw pass should include, by their OmitPixelation flag. The pixelated scene pass draws only
  * pixelated objects (when the crisp overlay is active), the crisp overlay pass draws only the flagged ones, and
@@ -852,13 +864,15 @@ typedef struct WorldRendererSunshaftStateStruct
 } WorldRendererSunshaftState;
 
 /** @brief One part of a terrain chunk's GPU mesh (B01): a raylib mesh of at most 65536 vertices (its indices are unsigned
- *  shorts) with positions, normals and indices, and the buffer of its weights in its vertex array (four normalized
- *  bytes at each of the attribute locations 9 to 12). Its CPU arrays are freed after the upload, but for the indices:
- *  raylib's DrawMesh draws a mesh without them as an unindexed one. */
+ *  shorts) with positions, normals and indices, the buffer of its weights in its vertex array (four normalized bytes at
+ *  each of the attribute locations 9 to 12) and (B02) the buffer of its vertices' flags (four normalized bytes at
+ *  location 13: x the face material). Its CPU arrays are freed after the upload, but for the indices: raylib's DrawMesh
+ *  draws a mesh without them as an unindexed one. */
 typedef struct WorldRendererTerrainPartStruct
 {
     Mesh _mesh;
     unsigned int _weightBuffer;
+    unsigned int _flagBuffer;
 } WorldRendererTerrainPart;
 
 /** @brief A terrain chunk's GPU mesh (B01): its parts (none for a chunk without a surface), and the chunk revision they
@@ -870,8 +884,35 @@ typedef struct WorldRendererTerrainChunkMeshStruct
     uint32_t _revision;
 } WorldRendererTerrainChunkMesh;
 
-/** @brief The GPU meshes of one terrain's chunks (B01), one per chunk of the layout revision they were cut for, kept while
- *  a cache entry resolves the terrain. */
+/** @brief The most rules the terrain shader holds (its rule arrays' size): TerrainAsset.h's TERRAIN_MAX_RULES. */
+#define WORLD_RENDERER_TERRAIN_MAX_RULES TERRAIN_MAX_RULES
+
+/** @brief A terrain's material uniforms (B02), worked out once when its record is made (the terrain never changes while
+ *  loaded) and uploaded whenever the lit pass turns to its chunks: the arrays' layouts are the shader's. */
+typedef struct WorldRendererTerrainUniformsStruct
+{
+    int _materialCount;
+    /** @brief Per palette material, four floats each: the linear tint; (1 / tile size, roughness, normal strength,
+     *  height blend strength); (triplanar mode, triplanar slope in degrees, puddles, porosity); the linear mean colour
+     *  times the tint. Its tile sizes, for the chunks' wrapped offsets. */
+    float _tint[TERRAIN_MAX_MATERIALS * 4U];
+    float _surface[TERRAIN_MAX_MATERIALS * 4U];
+    float _projection[TERRAIN_MAX_MATERIALS * 4U];
+    float _meanColor[TERRAIN_MAX_MATERIALS * 4U];
+    double _tileSizes[TERRAIN_MAX_MATERIALS];
+    int _ruleCount;
+    /** @brief Per rule: (material, covered bits, seed bits, condition bits); (slope min, max, blend, opacity); (height
+     *  min, max, blend, 0); (1 / noise cell size, strength, 0, 0). Its noise periods in metres (0 without noise), for the
+     *  chunks' wrapped offsets. */
+    int _ruleIds[WORLD_RENDERER_TERRAIN_MAX_RULES * 4U];
+    float _ruleSlope[WORLD_RENDERER_TERRAIN_MAX_RULES * 4U];
+    float _ruleHeight[WORLD_RENDERER_TERRAIN_MAX_RULES * 4U];
+    float _ruleNoise[WORLD_RENDERER_TERRAIN_MAX_RULES * 4U];
+    double _noisePeriods[WORLD_RENDERER_TERRAIN_MAX_RULES];
+} WorldRendererTerrainUniforms;
+
+/** @brief The GPU meshes of one terrain's chunks (B01), one per chunk of the layout revision they were cut for, and
+ *  (B02) its materials' texture arrays and uniforms, kept while a cache entry resolves the terrain. */
 typedef struct WorldRendererTerrainMeshesStruct
 {
     /** @brief The terrain (borrowed under the model user: the meshes go with it, WorldRendererTerrain_ReleaseMeshes). */
@@ -881,9 +922,20 @@ typedef struct WorldRendererTerrainMeshesStruct
     uint32_t _chunkCount;
     /** @brief Set while a cache entry resolves the terrain this frame. */
     bool _isUsed;
+    /** @brief Its texture arrays, one per TerrainMaterialMapKind (GL names), and each one's layer size; all 0 until
+     *  they are built, and when they could not be (then the terrain shows its materials' mean colours). */
+    unsigned int _arrays[TerrainMaterialMapKind_Count];
+    int32_t _arrayWidths[TerrainMaterialMapKind_Count];
+    int32_t _arrayHeights[TerrainMaterialMapKind_Count];
+    /** @brief Whether every array was built, and whether building them was tried (once per record). */
+    bool _hasArrays;
+    bool _isArrayBuildTried;
+    /** @brief Its material uniforms. */
+    WorldRendererTerrainUniforms _uniforms;
 } WorldRendererTerrainMeshes;
 
-/** @brief The terrain (B01): the lit terrain shader, the chunks' GPU meshes and the chunk key. */
+/** @brief The terrain (B01): the lit terrain shader, the chunks' GPU meshes and the chunk key; (B02) the texture arrays'
+ *  GL functions, the material and rule uniforms and the debug view. */
 typedef struct WorldRendererTerrainStateStruct
 {
     /** @brief The lit terrain shader (world_terrain); NULL = the chunks draw unlit with raylib's default shader. Its frame
@@ -892,10 +944,37 @@ typedef struct WorldRendererTerrainStateStruct
     WorldRendererLitLocations _lit;
     WorldRendererDitherLocations _dither;
     int _locChunkTint;
+    /** @brief The materials' and rules' uniforms (B02): per frame the view; per terrain its materials, its rules and
+     *  whether it has arrays; per chunk its wrapped offsets and height. -1 for those the shader lacks. */
+    int _locTerrainView;
+    int _locMaterialCount;
+    int _locHasMaterialArrays;
+    int _locMaterialTint;
+    int _locMaterialSurface;
+    int _locMaterialProjection;
+    int _locMaterialMeanColor;
+    int _locRuleCount;
+    int _locRuleIds;
+    int _locRuleSlope;
+    int _locRuleHeight;
+    int _locRuleNoise;
+    int _locMaterialUvOffset;
+    int _locRuleNoiseOffset;
+    int _locChunkHeight;
+    /** @brief The texture arrays' GL functions (resolved when the shader loads; unavailable: logged once, and the terrains
+     *  show their materials' mean colours). */
+    GLTextureArrayApi _arrayApi;
+    /** @brief Set once the arrays' unavailability, and once a terrain's arrays failing, has been logged. */
+    bool _isArrayApiFailureReported;
+    bool _isArrayFailureReported;
     /** @brief WorldRendererTerrainMeshes, one per terrain a cache entry resolves. */
     GenericBuffer _meshes;
     /** @brief Whether the chunk key is on: each chunk tinted by its cell, and the terrain's wireframe. */
     bool _isDebugEnabled;
+    /** @brief What the terrains show (B02; WorldRenderer_SetTerrainView). */
+    WorldRendererTerrainView _view;
+    /** @brief Whether a terrain the camera's pass drew this frame had its arrays (the status's "terrain materials"). */
+    bool _wereArraysDrawn;
 } WorldRendererTerrainState;
 
 /** @brief The crisp overlay (un-pixelated OmitPixelation objects composited over the pixelated frame). */
@@ -1519,31 +1598,36 @@ void WorldRendererPost_Tonemap(WorldRenderer* self, const WorldRenderFrame* fram
  *  WorldRendererTerrain_Deconstruct. */
 void WorldRendererTerrain_Construct(WorldRenderer* self);
 
-/** @brief Unloads every GPU mesh and frees the list. Called once by WorldRenderer_Deconstruct, with the GL context alive,
- *  before the model user is retired. */
+/** @brief Unloads every GPU mesh and texture array and frees the list. Called once by WorldRenderer_Deconstruct, with the
+ *  GL context alive, before the model user is retired. */
 void WorldRendererTerrain_Deconstruct(WorldRenderer* self);
 
-/** @brief Loads the lit terrain shader (world_terrain) and prepares its lighting, dither and chunk key uniforms.
- *  Optional: without it the chunks draw unlit with raylib's default shader. */
+/** @brief Loads the lit terrain shader (world_terrain) and prepares its lighting, dither and chunk key uniforms and (B02)
+ *  its materials' and rules' uniforms, the arrays' samplers on their units, and the texture arrays' GL functions
+ *  (unavailable: logged once). Optional: without it the chunks draw unlit with raylib's default shader. */
 void WorldRendererTerrain_LoadShader(WorldRenderer* self);
 
-/** @brief Unloads every GPU mesh: before the model user the terrains are held under is replaced (an address may hold
- *  another terrain then). Needs the GL context. */
+/** @brief Unloads every GPU mesh and texture array: before the model user the terrains are held under is replaced (an
+ *  address may hold another terrain then). Needs the GL context. */
 void WorldRendererTerrain_ReleaseMeshes(WorldRenderer* self);
 
 /**
- * @brief Brings the GPU meshes up to date with the render cache, synced for this frame: a terrain whose chunk layout
- *        changed gets new meshes, a chunk whose revision changed is uploaded again (only the listed chunks: those of
- *        shown terrains), and the meshes of terrains no cache entry resolves any more are unloaded. Cheap when nothing
- *        changed. Needs the GL context. Render reads: the terrains' meshes are only read.
+ * @brief Brings the GPU meshes up to date with the render cache, synced for this frame: a terrain seen for the first time
+ *        gets its material uniforms and (B02) its texture arrays (made once; a failure is logged once and the terrain
+ *        shows its materials' mean colours), a terrain whose chunk layout changed gets new meshes, a chunk whose revision
+ *        changed is uploaded again (only the listed chunks: those of shown terrains), and the meshes and arrays of
+ *        terrains no cache entry resolves any more are unloaded. Cheap when nothing changed. Needs the GL context. Render
+ *        reads: the terrains (meshes and materials) are only read.
  */
 void WorldRendererTerrain_PrepareFrame(WorldRenderer* self);
 
 /**
- * @brief The scene pass's terrain: the camera's chunks (the visibility's list) through the lit terrain shader, each with
- *        its forward lights (by its sphere), its dither (its fade) and, while the chunk key is on, its cell's colour; then
- *        the key's wireframe. Without the shader they draw unlit with raylib's default shader, solid. Call after
- *        WorldRendererLighting_UploadFrame, inside BeginMode3D, before the sprites (decals lie on the terrain).
+ * @brief The scene pass's terrain: the camera's chunks (the visibility's list) through the lit terrain shader, each
+ *        terrain's arrays bound and its materials' and rules' uniforms uploaded as the pass turns to its chunks, each
+ *        chunk with its wrapped offsets and height, its forward lights (by its sphere), its dither (its fade) and, while
+ *        the chunk key is on, its cell's colour; then the key's wireframe. Without the shader they draw unlit with
+ *        raylib's default shader, solid. Call after WorldRendererLighting_UploadFrame, inside BeginMode3D, before the
+ *        sprites (decals lie on the terrain).
  */
 void WorldRendererTerrain_DrawLit(WorldRenderer* self);
 
@@ -1566,6 +1650,16 @@ void WorldRendererTerrain_DrawNormals(WorldRenderer* self, Shader shader, int lo
  */
 void WorldRendererTerrain_DrawCasters(WorldRenderer* self, Shader shader, const WorldRendererDitherLocations* dither,
     WorldVisibilityPass pass);
+
+/**
+ * @brief The status's "terrain materials" feature (B02): unavailable without the lit terrain shader or texture arrays,
+ *        active while a terrain the camera's pass drew had its arrays, inactive otherwise.
+ */
+WorldRendererFeatureState WorldRendererTerrain_GetMaterialsState(const WorldRenderer* self);
+
+/** @brief Logs one line per terrain the renderer keeps (B02): its materials and its texture arrays' sizes (with the
+ *  status, WorldRenderer_LogStatus). */
+void WorldRendererTerrain_LogMaterials(const WorldRenderer* self);
 
 
 // WorldRendererCrisp.c

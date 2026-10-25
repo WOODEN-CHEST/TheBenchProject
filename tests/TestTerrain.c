@@ -469,3 +469,106 @@ bool TestTerrain_ReplaceInGlbJson(const GenericBuffer* glb, const char* find, co
     Memory_Free(NewJson._data);
     return true;
 }
+
+
+// Functions: terrain materials (B02).
+/* Writes one map: a square PNG of @p size filled by @p texel(x, y), and its texture definition, as "<name>_<map>". */
+static Error WriteMaterialMap(const unsigned char* root, const char* name, const char* map, int32_t size,
+    Color (*texel)(int32_t x, int32_t y, int32_t size, Color albedo), Color albedo)
+{
+    char Relative[JSON_TEXT_CAPACITY];
+    char Definition[JSON_TEXT_CAPACITY];
+    snprintf(Relative, sizeof(Relative), "textures/%s_%s.json", name, map);
+    snprintf(Definition, sizeof(Definition), "{\"name\": \"%s_%s\", \"location\": \"%s_%s\"}", name, map, name, map);
+    Error Result = Test_WriteTextFile(root, Relative, Definition);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Image Picture = GenImageColor(size, size, BLANK);
+    Color* Pixels = Picture.data;
+    for (int32_t Y = 0; Y < size; Y++)
+    {
+        for (int32_t X = 0; X < size; X++)
+        {
+            Pixels[(Y * size) + X] = texel(X, Y, size, albedo);
+        }
+    }
+    char Path[JSON_TEXT_CAPACITY];
+    snprintf(Path, sizeof(Path), "%s/textures/%s_%s.png", (const char*)root, name, map);
+    bool IsWritten = ExportImage(Picture, Path);
+    UnloadImage(Picture);
+    return IsWritten ? Error_CreateSuccess() : Error_Construct4(ErrorCode_IO, "Could not write %s.", Path);
+}
+
+static Color AlbedoTexel(int32_t x, int32_t y, int32_t size, Color albedo)
+{
+    (void)x;
+    (void)y;
+    (void)size;
+    return (Color){ albedo.r, albedo.g, albedo.b, 255 };
+}
+
+static Color HeightTexel(int32_t x, int32_t y, int32_t size, Color albedo)
+{
+    (void)y;
+    (void)albedo;
+    unsigned char Value = (size > 1) ? (unsigned char)lroundf(255.0f * (float)x / (float)(size - 1)) : 255U;
+    return (Color){ Value, 0, (unsigned char)(255U - Value), 255 };
+}
+
+static Color NormalTexel(int32_t x, int32_t y, int32_t size, Color albedo)
+{
+    (void)x;
+    (void)y;
+    (void)size;
+    (void)albedo;
+    return (Color){ 150, 110, 200, 255 };
+}
+
+static Color RoughnessAoTexel(int32_t x, int32_t y, int32_t size, Color albedo)
+{
+    (void)x;
+    (void)y;
+    (void)size;
+    (void)albedo;
+    return (Color){ 200, 100, 0, 255 };
+}
+
+Error TestTerrain_WriteMaterialFiles(const unsigned char* root, const TestTerrainMaterialFiles* files)
+{
+    Error Result = WriteMaterialMap(root, files->Name, "albedo", files->AlbedoSize, AlbedoTexel, files->Albedo);
+    GenericBuffer Json;
+    GenericBuffer_AllocateVariable(&Json, JSON_TEXT_CAPACITY, sizeof(unsigned char));
+    AppendText(&Json, "{\"name\": \"%s\", \"albedo\": \"%s_albedo\"", files->Name, files->Name);
+    if ((Result.Code == ErrorCode_Success) && (files->HeightSize > 0))
+    {
+        Result = WriteMaterialMap(root, files->Name, "height", files->HeightSize, HeightTexel, files->Albedo);
+        AppendText(&Json, ", \"height\": \"%s_height\"", files->Name);
+    }
+    if ((Result.Code == ErrorCode_Success) && (files->NormalSize > 0))
+    {
+        Result = WriteMaterialMap(root, files->Name, "normal", files->NormalSize, NormalTexel, files->Albedo);
+        AppendText(&Json, ", \"normal\": \"%s_normal\"", files->Name);
+    }
+    if ((Result.Code == ErrorCode_Success) && (files->RoughnessAoSize > 0))
+    {
+        Result = WriteMaterialMap(root, files->Name, "roughness_ao", files->RoughnessAoSize, RoughnessAoTexel,
+            files->Albedo);
+        AppendText(&Json, ", \"roughness_ao\": \"%s_roughness_ao\"", files->Name);
+    }
+    if (files->Settings != NULL)
+    {
+        AppendText(&Json, ", %s", files->Settings);
+    }
+    AppendText(&Json, "}");
+    GenericBuffer_AppendByte(&Json, 0U);
+    if (Result.Code == ErrorCode_Success)
+    {
+        char Relative[JSON_TEXT_CAPACITY];
+        snprintf(Relative, sizeof(Relative), "terrain_materials/%s.json", files->Name);
+        Result = Test_WriteTextFile(root, Relative, (const char*)Json._data);
+    }
+    Memory_Free(Json._data);
+    return Result;
+}

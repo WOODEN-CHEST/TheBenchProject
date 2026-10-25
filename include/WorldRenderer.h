@@ -146,9 +146,31 @@ typedef enum WorldRendererFeatureEnum
     /** @brief The lit terrain shader (world_terrain, B01): terrain chunks lit like models. Without it they draw unlit with
      *  raylib's default shader. */
     WorldRendererFeature_TerrainShading,
+    /** @brief The terrains' materials from texture arrays (B02): active while a drawn terrain has its arrays; unavailable
+     *  without texture arrays (a GL function missing, logged once: the terrains then show their materials' mean colours)
+     *  or without the lit terrain shader. */
+    WorldRendererFeature_TerrainMaterials,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
+
+/**
+ * @brief What the terrains show (B02, a debug aid: WorldRenderer_SetTerrainView). Every view but the first colours each
+ *        palette material with a debug colour of its own (green, brown, grey, sand, ... by palette index), lit.
+ */
+typedef enum WorldRendererTerrainViewEnum
+{
+    /** @brief The materials, blended and shaded (the default). */
+    WorldRendererTerrainView_Shaded = 0,
+    /** @brief The painted weights as they were painted (B01's colours): before the rules. */
+    WorldRendererTerrainView_PaintedWeights = 1,
+    /** @brief The weights after the terrain's rules (slope, height, noise). */
+    WorldRendererTerrainView_RuleWeights = 2,
+    /** @brief The material with the largest share after height blending, each pixel one flat colour. */
+    WorldRendererTerrainView_DominantMaterial = 3,
+    /** @brief The number of views; not a view. */
+    WorldRendererTerrainView_Count = 4
+} WorldRendererTerrainView;
 
 /** @brief What a feature did in the most recent render. */
 typedef enum WorldRendererFeatureStateEnum
@@ -223,6 +245,8 @@ typedef struct WorldRendererStatusStruct
     size_t DrawnTerrainTriangleCount;
     /** @brief Whether the chunk key was on (WorldRenderer_SetTerrainKeyEnabled). */
     bool IsTerrainKeyEnabled;
+    /** @brief What the terrains showed (WorldRenderer_SetTerrainView, B02). */
+    WorldRendererTerrainView TerrainView;
 } WorldRendererStatus;
 
 
@@ -437,6 +461,30 @@ void WorldRenderer_SetTerrainKeyEnabled(WorldRenderer* self, bool enabled);
  * @returns true if enabled.
  */
 bool WorldRenderer_IsTerrainKeyEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Chooses what the terrains show (B02): their shaded materials, or a debug view of the blend's steps (the painted
+ *        weights, the weights after the rules, the dominant material).
+ *
+ * A debug aid. Default WorldRendererTerrainView_Shaded. Applied on the next render. A value outside the enum is ignored.
+ * @param self The renderer; must not be NULL.
+ * @param view The view.
+ */
+void WorldRenderer_SetTerrainView(WorldRenderer* self, WorldRendererTerrainView view);
+
+/**
+ * @brief Reports what the terrains show (see WorldRenderer_SetTerrainView).
+ * @param self The renderer; must not be NULL.
+ * @returns The view.
+ */
+WorldRendererTerrainView WorldRenderer_GetTerrainView(const WorldRenderer* self);
+
+/**
+ * @brief The name of a terrain view, for log lines ("shaded", "painted weights", "rule weights", "dominant material").
+ * @param view The view.
+ * @returns A static string; "unknown" for a value outside the enum.
+ */
+const unsigned char* WorldRenderer_GetTerrainViewName(WorldRendererTerrainView view);
 
 /**
  * @brief Enables or disables the bloom pass (a blurred bright-pass of the scene added back in HDR).

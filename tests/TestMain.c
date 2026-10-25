@@ -28,6 +28,8 @@ int main(void)
     TerrainMeshTests_Run(&Run);
     TerrainGltfTests_Run(&Run);
     TerrainAssetTests_Run(&Run);
+    TerrainMaterialTests_Run(&Run);
+    TerrainBlendTests_Run(&Run);
     WorldLightCullingTests_Run(&Run);
     NamespacedKeyTests_Run(&Run);
     DataValueTests_Run(&Run);
