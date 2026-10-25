@@ -1,0 +1,8 @@
+{
+    "name": "test_pebble",
+    "lods": [
+        { "model": "test_pebble_lod0", "max_distance": 12 },
+        { "model": "test_pebble_lod1", "max_distance": 45 }
+    ],
+    "lod_hysteresis": 0.15
+}

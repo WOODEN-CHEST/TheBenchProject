@@ -226,6 +226,9 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
     // unavailable). Filtered by OmitPixelation: crisp objects are drawn by the crisp overlay pass instead.
     WorldRendererGeometry_DrawModels(self, frame->SceneFilter);
 
+    // The model instances components' copies (B03; never crisp), lit like the models.
+    WorldRendererInstances_DrawLit(self, frame, frame->SceneFilter);
+
     // The terrain's chunks (B01; never crisp), before the sprites: decals lie on it.
     WorldRendererTerrain_DrawLit(self);
 

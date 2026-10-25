@@ -1,16 +1,12 @@
 #include "WorldModelComponent.h"
 #include "WorldInternal.h"
+#include "WorldModelComponentInternal.h"
 #include "wr/WRMemory.h"
 
 
 // Macros.
 /** The format version of the model component's property table. */
 #define MODEL_TABLE_VERSION 1U
-/** The inspector's categories. */
-#define CATEGORY_MODEL ((const unsigned char*)u8"Model")
-#define CATEGORY_RENDERING ((const unsigned char*)u8"Rendering")
-#define CATEGORY_DRAW_DISTANCE ((const unsigned char*)u8"Draw distance")
-#define CATEGORY_LODS ((const unsigned char*)u8"Level of detail")
 
 
 // Types.
@@ -43,192 +39,116 @@ typedef enum ModelPropertyEnum
 
 
 // Fields.
-/* Every property, in inspector order: each override flag sits right before the value it switches on. The wire ids are
- * the save schema: never renumber or reuse one; a removed property's id goes into the table's retired list. (T10
- * renamed wire 1 from "model", a model asset, to "world_model", and made rows 2 to 5 the placement's own values behind
- * their override flags; T11 added the LOD rows, 17 to 21.) The next free wire id is 22. */
+/* Every property, in inspector order: each override flag sits right before the value it switches on. The rows' keys,
+ * types, defaults, rules and texts are shared with the model instances component (source/WorldModelComponentInternal.h,
+ * B03). The wire ids are the save schema: never renumber or reuse one; a removed property's id goes into the table's
+ * retired list. (T10 renamed wire 1 from "model", a model asset, to "world_model", and made rows 2 to 5 the placement's
+ * own values behind their override flags; T11 added the LOD rows, 17 to 21.) The next free wire id is 22. */
 static const PropertyDescriptor ModelProperties[ModelProperty_Count] =
 {
     [ModelProperty_WorldModel] =
     {
-        .Key = u8"world_model", .WireId = 1U, .Type = PropertyType_AssetName,
-        PROPERTY_MEMBER(WorldModelComponent, _worldModel), .Default.StringValue = NULL,
-        .Rules = PROPERTY_RULES_STRING(WORLD_MODEL_COMPONENT_NAME_MAX_LENGTH, true), .Flags = PROPERTY_FLAGS_SETTING,
-        .Category = CATEGORY_MODEL, .DisplayName = u8"World model",
-        .Description = u8"The world model to draw (its LOD models, draw distance, render defaults and variants); none "
-            u8"draws nothing.",
+        WORLD_MODEL_PLACEMENT_ROW_WORLD_MODEL, .WireId = 1U, PROPERTY_MEMBER(WorldModelComponent, _worldModel),
         .SinceVersion = 1U
     },
     [ModelProperty_UsesVariant] =
     {
-        .Key = u8"uses_variant", .WireId = 6U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _usesVariant), .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING,
-        .Category = CATEGORY_MODEL, .DisplayName = u8"Use a variant",
-        .Description = u8"Draws the object with one of its world model's variants instead of the model's own "
-            u8"materials.",
+        WORLD_MODEL_PLACEMENT_ROW_USES_VARIANT, .WireId = 6U, PROPERTY_MEMBER(WorldModelComponent, _usesVariant),
         .SinceVersion = 1U
     },
     [ModelProperty_Variant] =
     {
-        .Key = u8"variant", .WireId = 7U, .Type = PropertyType_String, PROPERTY_MEMBER(WorldModelComponent, _variant),
-        .Default.StringValue = NULL, .Rules = PROPERTY_RULES_STRING(WORLD_MODEL_VARIANT_NAME_MAX_LENGTH, true),
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MODEL, .DisplayName = u8"Variant",
-        .Description = u8"The variant drawn while \"Use a variant\" is on; an unknown name draws the model's own "
-            u8"materials.",
+        WORLD_MODEL_PLACEMENT_ROW_VARIANT, .WireId = 7U, PROPERTY_MEMBER(WorldModelComponent, _variant),
         .SinceVersion = 1U
     },
     [ModelProperty_OverridesHasOutline] =
     {
-        .Key = u8"overrides_has_outline", .WireId = 8U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _overridesHasOutline), .Default.BoolValue = false,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING, .DisplayName = u8"Override outline",
-        .Description = u8"Uses this object's outline setting instead of its world model's.", .SinceVersion = 1U
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_HAS_OUTLINE, .WireId = 8U,
+        PROPERTY_MEMBER(WorldModelComponent, _overridesHasOutline), .SinceVersion = 1U
     },
     [ModelProperty_HasOutline] =
     {
-        .Key = u8"has_outline", .WireId = 2U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _hasOutline), .Default.BoolValue = true, .Flags = PROPERTY_FLAGS_SETTING,
-        .Category = CATEGORY_RENDERING, .DisplayName = u8"Outline",
-        .Description = u8"Draws a 1-pixel outline around the model (while \"Override outline\" is on).",
+        WORLD_MODEL_PLACEMENT_ROW_HAS_OUTLINE, .WireId = 2U, PROPERTY_MEMBER(WorldModelComponent, _hasOutline),
         .SinceVersion = 1U
     },
     [ModelProperty_OverridesOmitPixelation] =
     {
-        .Key = u8"overrides_omit_pixelation", .WireId = 9U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _overridesOmitPixelation), .Default.BoolValue = false,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING, .DisplayName = u8"Override crisp",
-        .Description = u8"Uses this object's crisp setting instead of its world model's.", .SinceVersion = 1U
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_OMIT_PIXELATION, .WireId = 9U,
+        PROPERTY_MEMBER(WorldModelComponent, _overridesOmitPixelation), .SinceVersion = 1U
     },
     [ModelProperty_OmitPixelation] =
     {
-        .Key = u8"omit_pixelation", .WireId = 3U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _omitPixelation), .Default.BoolValue = false,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING, .DisplayName = u8"Crisp",
-        .Description = u8"Draws the model at full resolution over the pixelated image, for readable screens (while "
-            u8"\"Override crisp\" is on).",
+        WORLD_MODEL_PLACEMENT_ROW_OMIT_PIXELATION, .WireId = 3U, PROPERTY_MEMBER(WorldModelComponent, _omitPixelation),
         .SinceVersion = 1U
     },
     [ModelProperty_OverridesShadowTier] =
     {
-        .Key = u8"overrides_shadow_tier", .WireId = 10U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _overridesShadowTier), .Default.BoolValue = false,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING, .DisplayName = u8"Override shadow range",
-        .Description = u8"Uses this object's shadow range instead of its world model's.", .SinceVersion = 1U
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_SHADOW_TIER, .WireId = 10U,
+        PROPERTY_MEMBER(WorldModelComponent, _overridesShadowTier), .SinceVersion = 1U
     },
     [ModelProperty_ShadowTier] =
     {
-        .Key = u8"shadow_tier", .WireId = 4U, .Type = PropertyType_Enum,
-        PROPERTY_MEMBER(WorldModelComponent, _shadowTier), .Default.EnumValue = WorldShadowTier_Both,
-        .EnumTable = &WORLD_SHADOW_TIER_ENUM, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING,
-        .DisplayName = u8"Shadow range",
-        .Description = u8"Which shadows the model casts: \"near\" only up close (small props), \"far\" only the coarse "
-            u8"long-range one (big objects), \"both\" everywhere (while \"Override shadow range\" is on).",
+        WORLD_MODEL_PLACEMENT_ROW_SHADOW_TIER, .WireId = 4U, PROPERTY_MEMBER(WorldModelComponent, _shadowTier),
         .SinceVersion = 1U
     },
     [ModelProperty_OverridesCastsShadows] =
     {
-        .Key = u8"overrides_casts_shadows", .WireId = 11U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _overridesCastsShadows), .Default.BoolValue = false,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING, .DisplayName = u8"Override casts shadows",
-        .Description = u8"Uses this object's \"Casts shadows\" instead of its world model's.", .SinceVersion = 1U
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_CASTS_SHADOWS, .WireId = 11U,
+        PROPERTY_MEMBER(WorldModelComponent, _overridesCastsShadows), .SinceVersion = 1U
     },
     [ModelProperty_CastsShadows] =
     {
-        .Key = u8"casts_shadows", .WireId = 5U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _castsShadows), .Default.BoolValue = true, .Flags = PROPERTY_FLAGS_SETTING,
-        .Category = CATEGORY_RENDERING, .DisplayName = u8"Casts shadows",
-        .Description = u8"When off, the model casts no shadow; it still receives them (while \"Override casts "
-            u8"shadows\" is on).",
+        WORLD_MODEL_PLACEMENT_ROW_CASTS_SHADOWS, .WireId = 5U, PROPERTY_MEMBER(WorldModelComponent, _castsShadows),
         .SinceVersion = 1U
     },
     [ModelProperty_OverridesDrawDistance] =
     {
-        .Key = u8"overrides_draw_distance", .WireId = 12U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _overridesDrawDistance), .Default.BoolValue = false,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_DRAW_DISTANCE, .DisplayName = u8"Override draw distance",
-        .Description = u8"Uses this object's draw distance instead of its world model's.", .SinceVersion = 1U
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_DRAW_DISTANCE, .WireId = 12U,
+        PROPERTY_MEMBER(WorldModelComponent, _overridesDrawDistance), .SinceVersion = 1U
     },
     [ModelProperty_DrawDistance] =
     {
-        .Key = u8"draw_distance", .WireId = 13U, .Type = PropertyType_Float,
-        PROPERTY_MEMBER(WorldModelComponent, _drawDistance), .Default.FloatValue = WORLD_MODEL_DEFAULT_DRAW_DISTANCE,
-        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_DRAW_DISTANCE,
-        .DisplayName = u8"Draw distance",
-        .Description = u8"How far the object is seen, in metres, before the quality setting and the zoom (while "
-            u8"\"Override draw distance\" is on); beyond it the object fades out.",
+        WORLD_MODEL_PLACEMENT_ROW_DRAW_DISTANCE, .WireId = 13U, PROPERTY_MEMBER(WorldModelComponent, _drawDistance),
         .SinceVersion = 1U
     },
     [ModelProperty_DrawDistanceMultiplier] =
     {
-        .Key = u8"draw_distance_multiplier", .WireId = 14U, .Type = PropertyType_Float,
-        PROPERTY_MEMBER(WorldModelComponent, _drawDistanceMultiplier), .Default.FloatValue = 1.0f,
-        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_DRAW_DISTANCE,
-        .DisplayName = u8"Draw distance multiplier",
-        .Description = u8"Multiplies the draw distance in effect, the world model's or this object's: 2 is seen twice "
-            u8"as far.",
-        .SinceVersion = 1U
+        WORLD_MODEL_PLACEMENT_ROW_DRAW_DISTANCE_MULTIPLIER, .WireId = 14U,
+        PROPERTY_MEMBER(WorldModelComponent, _drawDistanceMultiplier), .SinceVersion = 1U
     },
     [ModelProperty_OverridesIsDrawDistanceFixed] =
     {
-        .Key = u8"overrides_is_draw_distance_fixed", .WireId = 15U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _overridesIsDrawDistanceFixed), .Default.BoolValue = false,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_DRAW_DISTANCE,
-        .DisplayName = u8"Override fixed draw distance",
-        .Description = u8"Uses this object's \"Fixed draw distance\" instead of its world model's.", .SinceVersion = 1U
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_IS_DRAW_DISTANCE_FIXED, .WireId = 15U,
+        PROPERTY_MEMBER(WorldModelComponent, _overridesIsDrawDistanceFixed), .SinceVersion = 1U
     },
     [ModelProperty_IsDrawDistanceFixed] =
     {
-        .Key = u8"is_draw_distance_fixed", .WireId = 16U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _isDrawDistanceFixed), .Default.BoolValue = false,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_DRAW_DISTANCE, .DisplayName = u8"Fixed draw distance",
-        .Description = u8"Keeps the draw distance as it is when the player lowers or raises the draw distance quality "
-            u8"setting: for landmarks and gameplay-critical things (while \"Override fixed draw distance\" is on).",
-        .SinceVersion = 1U
+        WORLD_MODEL_PLACEMENT_ROW_IS_DRAW_DISTANCE_FIXED, .WireId = 16U,
+        PROPERTY_MEMBER(WorldModelComponent, _isDrawDistanceFixed), .SinceVersion = 1U
     },
     [ModelProperty_OverridesLodDistances] =
     {
-        .Key = u8"overrides_lod_distances", .WireId = 17U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _overridesLodDistances), .Default.BoolValue = false,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_LODS, .DisplayName = u8"Override LOD distances",
-        .Description = u8"Uses this object's LOD distances instead of its world model's (while it gives one per LOD).",
-        .SinceVersion = 1U
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_LOD_DISTANCES, .WireId = 17U,
+        PROPERTY_MEMBER(WorldModelComponent, _overridesLodDistances), .SinceVersion = 1U
     },
     [ModelProperty_LodDistances] =
     {
-        .Key = u8"lod_distances", .WireId = 18U, .Type = PropertyType_FloatList,
-        PROPERTY_MEMBER(WorldModelComponent, _lodDistances), .Default.FloatListValue = NULL,
-        .Rules = PROPERTY_RULES_INCREASING_FLOAT_LIST_ABOVE(WORLD_MODEL_MAX_LODS, 0.0), .Flags = PROPERTY_FLAGS_SETTING,
-        .Category = CATEGORY_LODS, .DisplayName = u8"LOD distances",
-        .Description = u8"Up to which distance, in metres, each LOD is drawn, the finest first and rising, before the "
-            u8"quality setting and the zoom (while \"Override LOD distances\" is on, and only with one distance per LOD "
-            u8"of the world model).",
+        WORLD_MODEL_PLACEMENT_ROW_LOD_DISTANCES, .WireId = 18U, PROPERTY_MEMBER(WorldModelComponent, _lodDistances),
         .SinceVersion = 1U
     },
     [ModelProperty_LodDistanceMultiplier] =
     {
-        .Key = u8"lod_distance_multiplier", .WireId = 19U, .Type = PropertyType_Float,
-        PROPERTY_MEMBER(WorldModelComponent, _lodDistanceMultiplier), .Default.FloatValue = 1.0f,
-        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_LODS,
-        .DisplayName = u8"LOD distance multiplier",
-        .Description = u8"Multiplies the LOD distances in effect, the world model's or this object's: 2 keeps each LOD "
-            u8"twice as far (more detail).",
-        .SinceVersion = 1U
+        WORLD_MODEL_PLACEMENT_ROW_LOD_DISTANCE_MULTIPLIER, .WireId = 19U,
+        PROPERTY_MEMBER(WorldModelComponent, _lodDistanceMultiplier), .SinceVersion = 1U
     },
     [ModelProperty_IsLodForced] =
     {
-        .Key = u8"is_lod_forced", .WireId = 20U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldModelComponent, _isLodForced), .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING,
-        .Category = CATEGORY_LODS, .DisplayName = u8"Force a LOD",
-        .Description = u8"Draws the \"Forced LOD\" whatever the distance, instead of choosing a LOD by distance.",
+        WORLD_MODEL_PLACEMENT_ROW_IS_LOD_FORCED, .WireId = 20U, PROPERTY_MEMBER(WorldModelComponent, _isLodForced),
         .SinceVersion = 1U
     },
     [ModelProperty_ForcedLod] =
     {
-        .Key = u8"forced_lod", .WireId = 21U, .Type = PropertyType_UInt32, PROPERTY_MEMBER(WorldModelComponent, _forcedLod),
-        .Default.UInt32Value = 0U, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_LODS,
-        .DisplayName = u8"Forced LOD",
-        .Description = u8"The LOD drawn while \"Force a LOD\" is on: 0 the finest; past the world model's last LOD, its "
-            u8"last.",
+        WORLD_MODEL_PLACEMENT_ROW_FORCED_LOD, .WireId = 21U, PROPERTY_MEMBER(WorldModelComponent, _forcedLod),
         .SinceVersion = 1U
     },
 };

@@ -17,6 +17,9 @@
 #define PBR_SHADER_ASSET_NAME ((const unsigned char*)u8"world_pbr")
 /** Asset name of its skinned twin (T29): the same fragment stage over a vertex stage that skins. */
 #define PBR_SKINNED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_pbr_skinned")
+/** Asset name of its instanced twin (B03): the same fragment stage over a vertex stage that places every copy of a cell
+ *  (WorldRendererInstances.c draws with it). */
+#define PBR_INSTANCED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_pbr_instanced")
 /** Base shadow depth bias (normalized light-clip depth) to combat acne; slope-scaled in the shader. Tuned
  *  for the shadow frustum's near..far range: ~0.0009 * (far-near) is the world-space offset (a few cm here). */
 #define SHADOW_BIAS 0.0009f
@@ -361,6 +364,7 @@ void WorldRendererLighting_LoadShader(WorldRenderer* self)
         WorldRendererCommon_Warn(self, (const unsigned char*)u8"WorldRenderer: \"world_pbr_skinned\" has no bone "
             u8"palette (bonePalette); skinned models draw in their bind pose.");
     }
+    LoadPbrProgram(self, &self->_pbr._instanced, PBR_INSTANCED_SHADER_ASSET_NAME);
 }
 
 void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, const unsigned char* assetName,
@@ -593,6 +597,7 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
     bool HasTerrain = (self->_terrain._shader != NULL);
     UploadPbrFrame(self, frame, &self->_pbr._rigid, applyScreenAo, ditherPixelScale);
     UploadPbrFrame(self, frame, &self->_pbr._skinned, applyScreenAo, ditherPixelScale);
+    UploadPbrFrame(self, frame, &self->_pbr._instanced, applyScreenAo, ditherPixelScale);
     if (HasSprites)
     {
         Shader SpriteShader = GameShader_GetRaylibShader(self->_sprites._shader);

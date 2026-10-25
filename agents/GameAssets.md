@@ -107,10 +107,12 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
 - `GameShader { Shader _rayShader; }`. `GameShader_GetRaylibShader(self)` returns the `Shader` by value; its `locs`
   array belongs to the asset.
 - Loading (`ShaderDefinition.c`): `vertex_location` and/or `fragment_location`, at least one (a bare `location` is the
-  fragment stage when `fragment_location` is absent). The sources are read as text through `AssetManager_OpenResource`
+  fragment stage when `fragment_location` is absent), and since B03 an optional `defines` (at most
+  `SHADER_DEFINITION_MAX_DEFINES`, 16, distinct names that `ShaderSource_IsDefineName` accepts; anything else fails the
+  definition with `ErrorCode_InvalidAssetDefinition`). The sources are read as text through `AssetManager_OpenResource`
   (stage extensions `vert` `frag` `vs` `fs` `glsl`, so the two stage files need distinct stems), their `#include`
-  lines are expanded (below), and they are compiled with `LoadShaderFromMemory`; a missing stage uses raylib's
-  default. Unloaded with `UnloadShader`.
+  lines are expanded and the defines written in (below), and they are compiled with `LoadShaderFromMemory`; a missing
+  stage uses raylib's default. Unloaded with `UnloadShader`.
 - A stage that fails to compile, and a program that fails to link (raylib would hand back its default shader), both
   fail the load (`ErrorCode_InvalidAssetData`); the compiler output is in raylib's own log. raylib's location array is
   freed on that path (`UnloadShader`), so a failure leaks nothing.
@@ -129,8 +131,14 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   `common/night_sky` (air mass, extinction, the skyglow profile: the sky, the stars and the lit shaders' fog),
   `common/night_vision` (the eye's dim-light vision: the sky and the lit shaders), `common/lighting` (the world's
   lighting: the PBR and the sprite shaders; it includes the four before it) and `common/distance_packing` (the
-  point-light shadow cube's packed distances). A stage file may be shared too: the four sprite shaders' definitions all
-  name `sprite/vertex`.
+  point-light shadow cube's packed distances); `common/dither`, `common/skinning` and `common/instancing` are the world
+  renderer's ([WorldRuntime.md](WorldRuntime.md)). A stage file may be shared too: the four sprite shaders' definitions
+  all name `sprite/vertex`, and each instanced twin names its rigid shader's fragment stage.
+- **Defines (B03).** `ShaderSource_ExpandIncludes` takes the definition's defines and writes each as `#define <name>`
+  right after the main file's first `#version` line, then `#line <the next line> 0`, so the main file's numbers stay
+  right (without a `#version` line they come first, then `#line 1 0`). One source serves a shader and its variants
+  through `#ifdef` (the instanced twins define `WORLD_INSTANCED`). The expander refuses a name `ShaderSource_IsDefineName`
+  does not accept (`ErrorCode_IllegalArgument`), leaving its output as it was.
 - Uniform values live in the GL program, which every holder shares: set the values you rely on before each use.
   Don't write into `locs`: copy the table if you need different entries (the WorldRenderer keeps its own copy for
   `world_pbr`, `_pbr._locs`, with the material map samplers patched).

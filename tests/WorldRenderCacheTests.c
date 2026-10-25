@@ -17,6 +17,8 @@
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
 #include "WorldTerrainComponent.h"
+#include "WorldModelInstancesComponent.h"
+#include "WorldInstancing.h"
 #include "raylib/raymath.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRPath.h"
@@ -1811,6 +1813,401 @@ static void TerrainEntriesFollowTheirComponents(TestRun* run)
 }
 
 // Public functions.
+/* Creates an object with a model instances component of "box" holding @p copies; returns the component, or NULL with a
+ * failed check. */
+static WorldModelInstancesComponent* AddInstances(TestRun* run, World* world, const PropertyInstanceEntry* copies,
+    size_t count)
+{
+    WorldObject* Object = NULL;
+    WorldComponent* Component = NULL;
+    if (!TEST_CHECK_SUCCESS(run, World_CreateObject(world, NULL, &Object))
+        || !TEST_CHECK_SUCCESS(run, World_AddComponent(world, WorldObject_GetId(Object), WorldComponentType_ModelInstances,
+            &Component)))
+    {
+        return NULL;
+    }
+    WorldModelInstancesComponent* Instances = WorldModelInstancesComponent_FromComponent(Component);
+    if (!TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetWorldModel(Instances, (const unsigned char*)u8"box"))
+        || !TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetInstances(Instances, copies, count)))
+    {
+        return NULL;
+    }
+    return Instances;
+}
+
+/* Seeded copies scattered over 80 m, turned, scaled evenly and unevenly. */
+static void MakeScatteredCopies(PropertyInstanceEntry* outCopies, size_t count)
+{
+    uint32_t State = 17U;
+    for (size_t Index = 0U; Index < count; Index++)
+    {
+        State = (State * 1664525U) + 1013904223U;
+        float A = (float)((State >> 8) % 1000U) / 1000.0f;
+        State = (State * 1664525U) + 1013904223U;
+        float B = (float)((State >> 8) % 1000U) / 1000.0f;
+        outCopies[Index] = PropertyInstanceEntry_CreateDefault();
+        outCopies[Index].Position = Vector3Double_Create(((double)A * 80.0) - 40.0, (double)(B * 4.0f),
+            ((double)B * 80.0) - 30.0);
+        outCopies[Index].Rotation = (Vector3){ A * 0.5f, B * 6.0f, 0.25f };
+        outCopies[Index].Scale = ((Index % 2U) == 0U) ? (Vector3){ 1.5f, 1.5f, 1.5f } : (Vector3){ 0.5f, 3.0f, 1.0f };
+    }
+}
+
+/* A copy's position through its cell's matrix (render space) against the object's world matrix in double, relative to
+ * @p origin, for every copy of every listed cell: the largest difference in metres. */
+static double GetWorstCopyPlacement(const WorldRenderCache* cache, const WorldModelInstancesComponent* component,
+    Vector3Double origin)
+{
+    size_t EntryCount = 0U;
+    const WorldRenderInstances* Entries = WorldRenderCache_GetInstances(cache, &EntryCount);
+    size_t CellCount = 0U;
+    const WorldRenderInstanceCell* Cells = WorldRenderCache_GetInstanceCells(cache, &CellCount);
+    size_t CopyCount = 0U;
+    const PropertyInstanceEntry* Copies = WorldModelInstancesComponent_GetInstances(component, &CopyCount);
+    double Worst = 0.0;
+    for (size_t Index = 0U; Index < CellCount; Index++)
+    {
+        const WorldRenderInstances* Entry = &Entries[Cells[Index].Entry];
+        if (Entry->Component != component)
+        {
+            continue;
+        }
+        size_t RecordCount = 0U;
+        size_t SourceCount = 0U;
+        const WorldInstanceRecord* Records = WorldInstanceCells_GetRecords(Entry->Cells, &RecordCount);
+        const size_t* Sources = WorldInstanceCells_GetSources(Entry->Cells, &SourceCount);
+        for (size_t Record = Cells[Index].FirstRecord; Record < (Cells[Index].FirstRecord + Cells[Index].RecordCount);
+            Record++)
+        {
+            Vector3 Local = { Records[Record].Rows[3], Records[Record].Rows[7], Records[Record].Rows[11] };
+            Vector3 Rendered = Vector3Transform(Local, Cells[Index].RenderMatrix);
+            Vector3Double Expected = Vector3Double_Subtract(Matrix4Double_TransformPoint(&Entry->WorldMatrix,
+                Copies[Sources[Record]].Position), origin);
+            Worst = fmax(Worst, Vector3Double_Distance(GameMath_FromVector3(Rendered), Expected));
+        }
+    }
+    return Worst;
+}
+
+/* The cells sit where the object puts them, through a turned, unevenly scaled parent: each copy lands at the object's
+ * world matrix times its position, and each cell's sphere in the world holds every point of its copies' spheres. */
+static void InstanceCellsAreListedWhereTheirObjectPutsThem(TestRun* run)
+{
+    CacheFixture Fixture;
+    PropertyInstanceEntry Copies[40];
+    MakeScatteredCopies(Copies, 40U);
+    WorldModelInstancesComponent* Instances = NULL;
+    WorldObject* Parent = NULL;
+    if (CacheFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, World_CreateObject(&Fixture.World, NULL, &Parent))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, Vector3Double_Create(12.0, -3.0, 40.0)))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Parent, (Vector3){ 0.2f, 0.9f, -0.1f }))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Parent, (Vector3){ 2.0f, 0.5f, 1.25f }))
+        && ((Instances = AddInstances(run, &Fixture.World, Copies, 40U)) != NULL))
+    {
+        WorldObject* Owner = WorldComponent_GetOwner(&Instances->Base);
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Owner, Vector3Double_Create(-5.0, 1.0, 2.0)));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Owner, (Vector3){ 0.0f, 1.2f, 0.3f }));
+        TEST_CHECK_SUCCESS(run, World_SetParent(&Fixture.World, WorldObject_GetId(Owner), WorldObject_GetId(Parent),
+            false));
+        Vector3Double Origin = Vector3Double_Create(3.0, 2.0, 1.0);
+        if (TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Origin, Fixture.Assets.Manager,
+            Fixture.ModelUser, NULL)))
+        {
+            size_t EntryCount = 0U;
+            const WorldRenderInstances* Entries = WorldRenderCache_GetInstances(&Fixture.Cache, &EntryCount);
+            size_t CellCount = 0U;
+            const WorldRenderInstanceCell* Cells = WorldRenderCache_GetInstanceCells(&Fixture.Cache, &CellCount);
+            size_t BuiltCount = 0U;
+            TEST_CHECK(run, (EntryCount == 1U) && (Entries[0].Asset != NULL) && Entries[0].IsDrawn
+                && Entries[0].AreCellsBuilt && (Entries[0].CellsBuildId == 1U)
+                && (WorldInstanceCells_GetCells(Entries[0].Cells, &BuiltCount) != NULL) && (BuiltCount == CellCount)
+                && (CellCount > 1U));
+            TEST_CHECK(run, GetWorstCopyPlacement(&Fixture.Cache, Instances, Origin) < 1e-4);
+
+            // Every point of every copy's sphere (the unit box's, through the copy's and the object's matrices) lies in
+            // its cell's world sphere.
+            size_t CopyCount = 0U;
+            const PropertyInstanceEntry* Held = WorldModelInstancesComponent_GetInstances(Instances, &CopyCount);
+            size_t SourceCount = 0U;
+            const size_t* Sources = WorldInstanceCells_GetSources(Entries[0].Cells, &SourceCount);
+            bool IsHeld = true;
+            for (size_t Index = 0U; Index < CellCount; Index++)
+            {
+                for (size_t Record = Cells[Index].FirstRecord; Record < (Cells[Index].FirstRecord
+                    + Cells[Index].RecordCount); Record++)
+                {
+                    const PropertyInstanceEntry* Copy = &Held[Sources[Record]];
+                    Matrix4Double Local = WorldTransform_Compose(Copy->Position, Copy->Rotation, Copy->Scale);
+                    Matrix4Double Placed = Matrix4Double_Multiply(&Local, &Entries[0].WorldMatrix);
+                    for (int Corner = 0; Corner < 8; Corner++)
+                    {
+                        Vector3Double Point = Vector3Double_Create(((Corner & 1) != 0) ? 0.5 : -0.5,
+                            ((Corner & 2) != 0) ? 0.5 : -0.5, ((Corner & 4) != 0) ? 0.5 : -0.5);
+                        double Distance = Vector3Double_Distance(Matrix4Double_TransformPoint(&Placed, Point),
+                            Cells[Index].Center);
+                        IsHeld = IsHeld && (Distance <= ((double)Cells[Index].Radius + 1e-4));
+                    }
+                }
+            }
+            TEST_CHECK(run, IsHeld);
+            // The render-space placement is the world one minus the origin.
+            TEST_CHECK(run, IsNearDouble((double)Cells[0].RenderCenter.x, Cells[0].Center.X - 3.0)
+                && IsNearDouble((double)Cells[0].RenderMatrix.m13, Cells[0].WorldMatrix.M[13] - 2.0));
+        }
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+/* Entries follow their components: the cells are built when the copies or the world model change, not when the object
+ * moves or another setting does; a hidden object lists no cells and builds when shown again; a world model that cannot
+ * load is logged once; an unknown variant too; a replaced component gets a new entry; a removed one none. */
+static void InstanceEntriesFollowTheirComponents(TestRun* run)
+{
+    GenericBuffer Directory;
+    GenericBuffer_AllocateVariable(&Directory, CACHE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    Logger Log;
+    if (!TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "instances_cache", &Directory))
+        || !TEST_CHECK_SUCCESS(run, Logger_Construct(&Log, Directory._data)))
+    {
+        Memory_Free(Directory._data);
+        return;
+    }
+    CacheFixture Fixture;
+    PropertyInstanceEntry Copies[3] = { PropertyInstanceEntry_CreateDefault(), PropertyInstanceEntry_CreateDefault(),
+        PropertyInstanceEntry_CreateDefault() };
+    Copies[1].Position = Vector3Double_Create(40.0, 0.0, 0.0);
+    Copies[2].Position = Vector3Double_Create(40.0, 0.0, 70.0);
+    WorldModelInstancesComponent* Instances = NULL;
+    if (CacheFixture_Construct(run, &Fixture))
+    {
+        Instances = AddInstances(run, &Fixture.World, Copies, 3U);
+    }
+    WorldObject* Owner = (Instances != NULL) ? WorldComponent_GetOwner(&Instances->Base) : NULL;
+    bool IsRun = Owner != NULL;
+    uint64_t LastBuild = 0U;
+    for (int Step = 0; IsRun && (Step < 12); Step++)
+    {
+        switch (Step)
+        {
+            case 1: TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Owner, Vector3Double_Create(5.0, 0.0, 0.0))); break;
+            case 2:
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Instances,
+                    WorldModelSetting_DrawDistance, true));
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetDrawDistance(Instances, 25.0f));
+                break;
+            case 3: TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetInstances(Instances, Copies, 2U)); break;
+            case 4: TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Owner, false)); break;
+            case 5:
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetInstances(Instances, Copies, 1U));
+                TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Owner, true));
+                break;
+            case 6: TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetWorldModel(Instances,
+                (const unsigned char*)u8"nowhere")); break;
+            case 7: break;
+            case 8: TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetWorldModel(Instances,
+                (const unsigned char*)u8"box")); break;
+            case 9:
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetVariant(Instances, (const unsigned char*)u8"red"));
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetUsesVariant(Instances, true));
+                break;
+            case 10:
+            {
+                // Replaced: the same object and type, a new component (a new serial), a new entry.
+                uint64_t Id = WorldObject_GetId(Owner);
+                WorldComponent* Again = NULL;
+                TEST_CHECK_SUCCESS(run, World_RemoveComponent(&Fixture.World, Id, WorldComponentType_ModelInstances));
+                TEST_CHECK_SUCCESS(run, World_AddComponent(&Fixture.World, Id, WorldComponentType_ModelInstances, &Again));
+                Instances = WorldModelInstancesComponent_FromComponent(Again);
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetWorldModel(Instances,
+                    (const unsigned char*)u8"box"));
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetInstances(Instances, Copies, 3U));
+                break;
+            }
+            case 11: TEST_CHECK_SUCCESS(run, World_RemoveComponent(&Fixture.World, WorldObject_GetId(Owner),
+                WorldComponentType_ModelInstances)); break;
+            default: break;
+        }
+        IsRun = TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Vector3Double_Zero(),
+            Fixture.Assets.Manager, Fixture.ModelUser, &Log));
+        size_t EntryCount = 0U;
+        size_t CellCount = 0U;
+        const WorldRenderInstances* Entries = WorldRenderCache_GetInstances(&Fixture.Cache, &EntryCount);
+        const WorldRenderInstanceCell* Cells = WorldRenderCache_GetInstanceCells(&Fixture.Cache, &CellCount);
+        bool IsResolved = (EntryCount == 1U) && (Entries[0].Asset != NULL);
+        uint64_t Build = (EntryCount == 1U) ? Entries[0].CellsBuildId : 0U;
+        switch (Step)
+        {
+            case 0: TEST_CHECK(run, IsResolved && (CellCount == 3U) && (Build == 1U)
+                && (Cells[0].DrawDistance == WORLD_MODEL_DEFAULT_DRAW_DISTANCE)); break;
+            // Moved: the same records, the cells moved with the object.
+            case 1: TEST_CHECK(run, IsResolved && (CellCount == 3U) && (Build == LastBuild)
+                && IsNearDouble(Cells[0].WorldMatrix.M[12], 5.0 + 16.0)); break;
+            case 2: TEST_CHECK(run, IsResolved && (CellCount == 3U) && (Build == LastBuild)
+                && (Cells[0].DrawDistance == 25.0f)); break;
+            case 3: TEST_CHECK(run, IsResolved && (CellCount == 2U) && (Build > LastBuild)); break;
+            case 4: TEST_CHECK(run, IsResolved && (CellCount == 0U) && (Build == LastBuild)); break;
+            case 5: TEST_CHECK(run, IsResolved && (CellCount == 1U) && (Build > LastBuild)); break;
+            case 6: case 7: TEST_CHECK(run, (EntryCount == 1U) && (Entries[0].Asset == NULL) && (CellCount == 0U)); break;
+            case 8: TEST_CHECK(run, IsResolved && (CellCount == 1U) && (Build > LastBuild)); break;
+            case 9: TEST_CHECK(run, IsResolved && (CellCount == 1U) && (Build == LastBuild) && Entries[0].UsesVariant
+                && !Entries[0].HasVariant); break;
+            case 10: TEST_CHECK(run, IsResolved && (Entries[0].Serial == WorldComponent_GetSerial(&Instances->Base))
+                && (CellCount == 3U) && (Build > LastBuild)); break;
+            case 11: TEST_CHECK(run, (EntryCount == 0U) && (CellCount == 0U)); break;
+            default: break;
+        }
+        LastBuild = Build;
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+    TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
+    if (Owner != NULL)
+    {
+        TEST_CHECK(run, CountInLatestLog(run, Directory._data, "draws no instances: world model \"nowhere\"") == 1U);
+        TEST_CHECK(run, CountInLatestLog(run, Directory._data,
+            "draws the instances of world model \"box\" with its own materials: it has no variant \"red\"") == 1U);
+    }
+    Memory_Free(Directory._data);
+}
+
+/* 100 km out (off the float grid), the cells' copies land where the object's double world matrix puts them, relative to
+ * a camera near them, as precisely as at the origin: records relative to their cells, cells placed in double. */
+static void InstanceCellsHoldFarFromTheOrigin(TestRun* run)
+{
+    CacheFixture Fixture;
+    PropertyInstanceEntry Copies[40];
+    MakeScatteredCopies(Copies, 40U);
+    WorldModelInstancesComponent* Instances = NULL;
+    if (CacheFixture_Construct(run, &Fixture) && ((Instances = AddInstances(run, &Fixture.World, Copies, 40U)) != NULL))
+    {
+        WorldObject* Owner = WorldComponent_GetOwner(&Instances->Base);
+        Vector3Double Far = Vector3Double_Create(100000.37, 50.21, -100000.53);
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Owner, Far));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Owner, (Vector3){ 0.0f, 0.7f, 0.0f }));
+        Vector3Double Origin = Vector3Double_Add(Far, Vector3Double_Create(3.25, 1.5, -2.75));
+        if (TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Origin, Fixture.Assets.Manager,
+            Fixture.ModelUser, NULL)))
+        {
+            TEST_CHECK(run, GetWorstCopyPlacement(&Fixture.Cache, Instances, Origin) < 1e-4);
+        }
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+/* The LOD update gives each drawn entry its bands for the player's lod_distance_scale and each cell the LODs its copies
+ * can show from the camera. */
+static void InstanceCellsGetTheirLodsFromTheCamera(TestRun* run)
+{
+    CacheFixture Fixture;
+    PropertyInstanceEntry Copies[2] = { PropertyInstanceEntry_CreateDefault(), PropertyInstanceEntry_CreateDefault() };
+    Copies[1].Position = Vector3Double_Create(0.0, 0.0, 96.0);
+    BoundingBox Box = { .min = { -0.5f, -0.5f, -0.5f }, .max = { 0.5f, 0.5f, 0.5f } };
+    WorldModelInstancesComponent* Instances = NULL;
+    if (CacheFixture_Construct(run, &Fixture)
+        && TestAssets_AddModel(run, &Fixture.Assets, "bush_lod0", Box, NULL)
+        && TestAssets_AddModel(run, &Fixture.Assets, "bush_lod1", Box, NULL)
+        && TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"bush\", \"lods\": [{\"model\": \"bush_lod0\", "
+            "\"max_distance\": 20}, {\"model\": \"bush_lod1\", \"max_distance\": 200}], \"lod_hysteresis\": 0.1}")
+        && ((Instances = AddInstances(run, &Fixture.World, Copies, 2U)) != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetWorldModel(Instances, (const unsigned char*)u8"bush"))
+        && CacheFixture_Sync(run, &Fixture))
+    {
+        WorldRenderLodView View = { .CameraPosition = { 0.0f, 0.0f, 0.0f }, .ZoomFactor = 1.0f, .DistanceScale = 1.0f,
+            .DeltaSeconds = 0.0f };
+        WorldRenderCache_UpdateLods(&Fixture.Cache, &View, NULL);
+        size_t EntryCount = 0U;
+        const WorldRenderInstances* Entries = WorldRenderCache_GetInstances(&Fixture.Cache, &EntryCount);
+        size_t CellCount = 0U;
+        const WorldRenderInstanceCell* Cells = WorldRenderCache_GetInstanceCells(&Fixture.Cache, &CellCount);
+        TEST_CHECK(run, (EntryCount == 1U) && (Entries[0].Bands.LodCount == 2U) && (Entries[0].Bands.Start[0] == 18.0f)
+            && (Entries[0].Bands.End[0] == 22.0f) && (CellCount == 2U) && (Cells[0].LodMask == 1U)
+            && (Cells[1].LodMask == 2U));
+        // Twice the LOD scale doubles the bands: both cells still each show one LOD; zoomed out, the near one too.
+        View.DistanceScale = 0.25f;
+        WorldRenderCache_UpdateLods(&Fixture.Cache, &View, NULL);
+        TEST_CHECK(run, (Entries[0].Bands.Start[0] == 4.5f) && (Cells[0].LodMask == 1U) && (Cells[1].LodMask == 2U));
+        View.CameraPosition = (Vector3){ 0.0f, 0.0f, -5.0f };
+        WorldRenderCache_UpdateLods(&Fixture.Cache, &View, NULL);
+        TEST_CHECK(run, (Cells[0].LodMask == 3U) && (Cells[1].LodMask == 2U));
+        // Zoomed in (a tenth), the far cell's 96 m count as 9.6: its copies show LOD 0.
+        View = (WorldRenderLodView){ .CameraPosition = { 0.0f, 0.0f, 0.0f }, .ZoomFactor = 0.1f, .DistanceScale = 1.0f,
+            .DeltaSeconds = 0.0f };
+        WorldRenderCache_UpdateLods(&Fixture.Cache, &View, NULL);
+        TEST_CHECK(run, (Cells[0].LodMask == 1U) && (Cells[1].LodMask == 1U));
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetIsLodForced(Instances, true));
+        if (CacheFixture_Sync(run, &Fixture))
+        {
+            WorldRenderCache_UpdateLods(&Fixture.Cache, &View, NULL);
+            Cells = WorldRenderCache_GetInstanceCells(&Fixture.Cache, &CellCount);
+            TEST_CHECK(run, (CellCount == 2U) && (Cells[0].LodMask == 1U) && (Cells[1].LodMask == 1U));
+        }
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
+/* A placement's own LOD distances that do not fit its world model give way to the world model's, with one warning
+ * when that starts (as a model's do), and again only after they fitted in between. */
+static void InstanceLodListsThatDoNotFitAreLoggedOnce(TestRun* run)
+{
+    GenericBuffer Directory;
+    GenericBuffer_AllocateVariable(&Directory, CACHE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    Logger Log;
+    if (!TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "instances_lod_lists", &Directory))
+        || !TEST_CHECK_SUCCESS(run, Logger_Construct(&Log, Directory._data)))
+    {
+        Memory_Free(Directory._data);
+        return;
+    }
+    CacheFixture Fixture;
+    PropertyInstanceEntry Copy = PropertyInstanceEntry_CreateDefault();
+    BoundingBox Box = { .min = { -0.5f, -0.5f, -0.5f }, .max = { 0.5f, 0.5f, 0.5f } };
+    WorldModelInstancesComponent* Instances = NULL;
+    const float ThreeDistances[3] = { 5.0f, 10.0f, 20.0f };
+    const float TwoDistances[2] = { 5.0f, 10.0f };
+    bool IsReady = CacheFixture_Construct(run, &Fixture)
+        && TestAssets_AddModel(run, &Fixture.Assets, "shrub_lod0", Box, NULL)
+        && TestAssets_AddModel(run, &Fixture.Assets, "shrub_lod1", Box, NULL)
+        && TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"shrub\", \"lods\": [{\"model\": \"shrub_lod0\", "
+            "\"max_distance\": 20}, {\"model\": \"shrub_lod1\", \"max_distance\": 200}]}")
+        && ((Instances = AddInstances(run, &Fixture.World, &Copy, 1U)) != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetWorldModel(Instances, (const unsigned char*)u8"shrub"))
+        && TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Instances, WorldModelSetting_LodDistances,
+            true))
+        && TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetLodDistances(Instances, ThreeDistances, 3U));
+    WorldRenderLodView View = { .CameraPosition = { 0.0f, 0.0f, 0.0f }, .ZoomFactor = 1.0f, .DistanceScale = 1.0f,
+        .DeltaSeconds = 0.0f };
+    for (int Step = 0; IsReady && (Step < 4); Step++)
+    {
+        if (Step == 2)
+        {
+            // Fitting in between lets a later misfit warn again.
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetLodDistances(Instances, TwoDistances, 2U));
+        }
+        if (Step == 3)
+        {
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetLodDistances(Instances, ThreeDistances, 3U));
+        }
+        IsReady = TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Vector3Double_Zero(),
+            Fixture.Assets.Manager, Fixture.ModelUser, &Log));
+        WorldRenderCache_UpdateLods(&Fixture.Cache, &View, &Log);
+        size_t EntryCount = 0U;
+        const WorldRenderInstances* Entries = WorldRenderCache_GetInstances(&Fixture.Cache, &EntryCount);
+        // The world model's switch distance applies while the list does not fit: its band lies around 20 m.
+        TEST_CHECK(run, (EntryCount == 1U) && (Entries[0].IsLodListRefused == (Step != 2))
+            && (Entries[0].Bands.LodCount == 2U)
+            && (Entries[0].Bands.Start[0] == ((Step == 2) ? 4.75f : 19.0f)));
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+    TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
+    if (IsReady)
+    {
+        TEST_CHECK(run, CountInLatestLog(run, Directory._data,
+            "uses its world model \"shrub\"'s LOD distances: its own lod_distances holds 3, the world model has 2 LODs")
+            == 2U);
+    }
+    Memory_Free(Directory._data);
+}
+
 void WorldRenderCacheTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
@@ -1844,6 +2241,11 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "the_first_person_object_hides_its_bones_from_the_camera", TheFirstPersonObjectHidesItsBonesFromTheCamera },
         { "terrain_chunks_are_listed_where_their_object_puts_them", TerrainChunksAreListedWhereTheirObjectPutsThem },
         { "terrain_entries_follow_their_components", TerrainEntriesFollowTheirComponents },
+        { "instance_cells_are_listed_where_their_object_puts_them", InstanceCellsAreListedWhereTheirObjectPutsThem },
+        { "instance_entries_follow_their_components", InstanceEntriesFollowTheirComponents },
+        { "instance_cells_hold_far_from_the_origin", InstanceCellsHoldFarFromTheOrigin },
+        { "instance_cells_get_their_lods_from_the_camera", InstanceCellsGetTheirLodsFromTheCamera },
+        { "instance_lod_lists_that_do_not_fit_are_logged_once", InstanceLodListsThatDoNotFitAreLoggedOnce },
     };
     TestRun_RunSuite(run, "WorldRenderCache", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

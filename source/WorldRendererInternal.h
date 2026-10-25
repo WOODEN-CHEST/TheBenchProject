@@ -12,6 +12,7 @@
 #include "WorldAnimatorComponent.h"
 #include "WorldEnvironment.h"
 #include "WorldModelComponent.h"
+#include "WorldInstancing.h"
 #include "WorldSpriteComponent.h"
 #include "GLTextureArray.h"
 #include "NightVision.h"
@@ -44,6 +45,9 @@
  *   WorldRendererTerrain.c   the terrain (B01): its chunks' GPU meshes, the lit terrain shader, its draws in every pass
  *                            and the chunk key; since B02 its materials' texture arrays (GLTextureArray.h, the
  *                            project's only direct GL calls) and their uniforms
+ *   WorldRendererInstances.c the model instances components' copies (B03): their records' GPU buffers, the instanced
+ *                            twins of the geometry passes, their instanced draws in every pass and the one-at-a-time
+ *                            path (the A/B and every fallback)
  * plus the per-object render cache (WorldRenderCache.h) and each frame's visibility (WorldVisibility.h: what each pass
  * draws, with every entry's fade). Each pass keeps its shader, uniform locations, targets and toggles in its own state
  * struct below.
@@ -479,6 +483,10 @@ typedef struct WorldRendererPbrStateStruct
     /** @brief The program for skinned meshes (T29); its shader NULL = skinned meshes draw with the rigid one, in their
      *  bind pose. Every lit upload of the rigid program goes to it too. */
     WorldRendererPbrProgram _skinned;
+    /** @brief The program for instanced copies (B03: world_pbr_instanced, world_pbr's fragment stage over a vertex stage
+     *  that places every copy of a cell); its shader NULL = copies draw one at a time with the rigid one. Every lit
+     *  upload of the rigid program goes to it too; its instancing uniforms are in WorldRendererInstanceState. */
+    WorldRendererPbrProgram _instanced;
     /** @brief This render's forward-light candidates (WorldCullingLight), which every lit shader (models and sprites)
      *  picks each object's lights from: every light of the render cache except the cube-shadow light, which is shaded on
      *  its own. */
@@ -978,6 +986,91 @@ typedef struct WorldRendererTerrainStateStruct
     bool _wereArraysDrawn;
 } WorldRendererTerrainState;
 
+/**
+ * @brief The per-draw uniforms of an instanced program (B03, shaders/common/instancing.glsl): the LOD a draw draws, the
+ *        component's LOD bands, fade, opacity and bounds this frame, and the LOD's import transform. -1 for a uniform
+ *        the shader lacks.
+ *
+ * Filled by the instancing pass at load, which also uploads the program's pass (instancePass: each program draws one).
+ */
+typedef struct WorldRendererInstancingLocationsStruct
+{
+    int _locLod;
+    int _locLodCount;
+    int _locForcedLod;
+    int _locBandStart;
+    int _locBandEnd;
+    int _locZoomFactor;
+    int _locDrawDistance;
+    int _locFadeStart;
+    int _locFadeBand;
+    int _locObjectOpacity;
+    int _locBoundsCenter;
+    int _locBoundsRadius;
+    int _locLodTransform;
+} WorldRendererInstancingLocations;
+
+/** @brief One cache entry's records on the GPU (B03): one vertex buffer per build of its cells (each cell a range of it),
+ *  uploaded once. */
+typedef struct WorldRendererInstanceBufferStruct
+{
+    /** @brief The build it holds (WorldRenderInstances.CellsBuildId: unique for the cache's life, so a buffer never
+     *  outlives its records). */
+    uint64_t _buildId;
+    /** @brief The GL vertex buffer (WorldInstanceRecord after WorldInstanceRecord) and how many records it holds. */
+    unsigned int _buffer;
+    size_t _recordCount;
+    /** @brief Set while a cache entry holds its build this frame. */
+    bool _isUsed;
+} WorldRendererInstanceBuffer;
+
+/**
+ * @brief The model instances components' copies (B03): the instanced twins of the G-buffer and shadow shaders (the lit
+ *        one is _pbr._instanced), the records' GPU buffers and the A/B toggle.
+ *
+ * A pass whose twin is missing, and every pass while instancing is off, draws each copy on its own through its ordinary
+ * shader, with the copy's values from WorldInstancing.c (the C mirror of common/instancing).
+ */
+typedef struct WorldRendererInstanceStateStruct
+{
+    /** @brief The lit twin's instancing uniforms (its program is _pbr._instanced). */
+    WorldRendererInstancingLocations _pbrInstancing;
+    /** @brief The G-buffer's twin (world_normal_instanced), its outline flag and its uniforms; NULL = copies draw one at a
+     *  time into the G-buffer. */
+    GameShader* _normalShader;
+    int _normalLocOutlineFlag;
+    WorldRendererDitherLocations _normalDither;
+    WorldRendererInstancingLocations _normalInstancing;
+    /** @brief The cascades' twin (world_depth_instanced); NULL = copies cast one at a time into the cascades. */
+    GameShader* _depthShader;
+    WorldRendererDitherLocations _depthDither;
+    WorldRendererInstancingLocations _depthInstancing;
+    /** @brief The cube shadow's twin (world_cube_depth_instanced) and its light's locations; NULL = copies cast one at a
+     *  time into the cube. */
+    GameShader* _cubeDepthShader;
+    int _cubeLocLightPos;
+    int _cubeLocLightFar;
+    WorldRendererDitherLocations _cubeDither;
+    WorldRendererInstancingLocations _cubeInstancing;
+    /** @brief WorldRendererInstanceBuffer, one per build a cache entry holds, roughly in the entries' order. */
+    GenericBuffer _buffers;
+    /** @brief This frame's GL buffer per cache entry (unsigned int, parallel to WorldRenderCache_GetInstances; 0 for an
+     *  entry without records). */
+    GenericBuffer _entryBuffers;
+    /** @brief Whether the copies draw instanced (the default) or one at a time through the ordinary shaders
+     *  (WorldRenderer_SetInstancingEnabled: the A/B). */
+    bool _isEnabled;
+    /** @brief The last render's zoom factor and draw distance scale, for the status's copies by LOD
+     *  (WorldRenderer_LogStatus evaluates them with the C mirror). */
+    float _lastZoomFactor;
+    float _lastDrawDistanceScale;
+    /** @brief Whether the camera's pass drew a cell instanced this frame (the status's "instancing"). */
+    bool _wereCellsDrawnInstanced;
+    /** @brief Set once a buffer raylib could not make, and once a mesh without a vertex array, has been logged. */
+    bool _isUploadFailureReported;
+    bool _isVertexArrayFailureReported;
+} WorldRendererInstanceState;
+
 /** @brief The crisp overlay (un-pixelated OmitPixelation objects composited over the pixelated frame). */
 typedef struct WorldRendererCrispStateStruct
 {
@@ -1068,6 +1161,7 @@ struct WorldRendererStruct
     WorldRendererSunshaftState _sunshaft;
     WorldRendererCrispState _crisp;
     WorldRendererTerrainState _terrain;
+    WorldRendererInstanceState _instances;
 };
 
 
@@ -1282,6 +1376,31 @@ void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel
  *  and its part of the cross-fade; otherwise (the materials' own shaders, the unlit skinned one for skinned meshes) it
  *  draws the LOD with the larger share, solid. */
 void WorldRendererGeometry_DrawModels(WorldRenderer* self, WorldRendererPixelFilter filter);
+
+/**
+ * @brief Builds the material one mesh of a model entry's LOD draws with, on the stack: the asset material's maps copied
+ *        into @p outMaps, the entry's variant applied to the copy, the LOD's look (the entry's tint, times the LOD's
+ *        debug colour and its glow while the LOD tinting is on), the pass's shader; in the lit pass the copy's PBR
+ *        factors and map flags uploaded into @p litProgram first. Nothing is written to an asset. (WorldRendererGeometry_DrawModel
+ *        draws each mesh with it; the instanced draws of B03 too.)
+ * @param self The renderer.
+ * @param model The entry (its Asset, HasVariant, VariantIndex and Tint are read).
+ * @param rayModel The LOD's raylib model.
+ * @param meshIndex The mesh.
+ * @param lod The LOD (for its look).
+ * @param passShader The shader to draw with, or NULL to keep the material's own.
+ * @param litProgram In the lit pass the PBR program @p passShader belongs to; NULL otherwise.
+ * @param outMaps [out] Receives the maps the material points at; must hold WORLD_RENDERER_MATERIAL_MAP_COUNT and
+ *        outlive the draw.
+ * @returns The material.
+ */
+Material WorldRendererGeometry_PrepareMaterial(const WorldRenderer* self, const WorldRenderModel* model, Model rayModel,
+    int meshIndex, size_t lod, const Shader* passShader, const WorldRendererPbrProgram* litProgram,
+    MaterialMap* outMaps);
+
+/** @brief Per-channel 0..255 colour multiply (a*b/255, truncated), as raylib folds an object's tint into a material's
+ *  albedo colour. */
+Color WorldRendererGeometry_MultiplyColor(Color a, Color b);
 
 /** @brief Draws a small wireframe sphere at each light (its render-space position), tinted by its colour (a debug aid).
  *  Inside BeginMode3D. */
@@ -1661,6 +1780,79 @@ WorldRendererFeatureState WorldRendererTerrain_GetMaterialsState(const WorldRend
 /** @brief Logs one line per terrain the renderer keeps (B02): its materials and its texture arrays' sizes (with the
  *  status, WorldRenderer_LogStatus). */
 void WorldRendererTerrain_LogMaterials(const WorldRenderer* self);
+
+
+// WorldRendererInstances.c
+/** @brief Constructs the instancing pass's CPU state (its buffer lists; instancing on). Called once by
+ *  WorldRenderer_Create; pair with WorldRendererInstances_Deconstruct. */
+void WorldRendererInstances_Construct(WorldRenderer* self);
+
+/** @brief Unloads every records buffer and frees the lists. Called once by WorldRenderer_Deconstruct, with the GL
+ *  context alive. */
+void WorldRendererInstances_Deconstruct(WorldRenderer* self);
+
+/** @brief Loads the G-buffer's and the shadows' instanced twins (world_normal_instanced, world_depth_instanced,
+ *  world_cube_depth_instanced) and prepares their uniforms and the lit twin's (_pbr._instanced, which
+ *  WorldRendererLighting_LoadShader loads: call after it). Each is optional: without it that pass draws copies one at a
+ *  time. */
+void WorldRendererInstances_LoadShaders(WorldRenderer* self);
+
+/** @brief Unloads every records buffer (when the world changes: WorldRenderer_PrepareWorld). Needs the GL context. */
+void WorldRendererInstances_ReleaseBuffers(WorldRenderer* self);
+
+/**
+ * @brief Brings the records' GPU buffers up to date with the render cache, synced for this frame: each entry's build of
+ *        cells uploaded once (a new build replaces the old buffer), the buffers no entry holds any more unloaded. Cheap
+ *        when nothing changed. Needs the GL context. A buffer raylib could not make (0: no GL context) is logged once,
+ *        and that entry then draws its copies one at a time; a GL_OUT_OF_MEMORY from the upload is not caught (raylib
+ *        checks no upload's GL errors).
+ */
+void WorldRendererInstances_PrepareFrame(WorldRenderer* self);
+
+/**
+ * @brief The lit pass's copies: the camera's cells (none in the crisp overlay: copies are never crisp), each with its
+ *        forward lights (by its sphere) and the LODs its copies can show, instanced through world_pbr_instanced (each
+ *        copy's fade and LOD band in the vertex stage), or one at a time through world_pbr while instancing is off or the
+ *        twin or a buffer is missing; without PBR, one at a time with the materials' own shaders, solid. Call after
+ *        WorldRendererLighting_UploadFrame, inside BeginMode3D.
+ * @param self The renderer.
+ * @param frame The frame (its zoom factor).
+ * @param filter The pass's pixel filter (CrispOnly draws nothing).
+ */
+void WorldRendererInstances_DrawLit(WorldRenderer* self, const WorldRenderFrame* frame, WorldRendererPixelFilter filter);
+
+/**
+ * @brief The G-buffer's copies: the camera's cells solid enough for it, each copy solid as the LOD with the larger
+ *        share until mid-fade, with its component's outline flag; instanced through world_normal_instanced, or one at a
+ *        time through @p shader (world_normal).
+ * @param self The renderer.
+ * @param frame The frame.
+ * @param shader The G-buffer's model shader (its program).
+ * @param locOutlineFlag Its outline flag's location.
+ */
+void WorldRendererInstances_DrawNormals(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
+    int locOutlineFlag);
+
+/**
+ * @brief A shadow pass's copies (its visibility list of cells): each copy as the LOD with the larger share, dithered by
+ *        its own fade; instanced through the pass's twin (world_depth_instanced, or world_cube_depth_instanced with the
+ *        frame's cube light), or one at a time through @p shader. Inside the pass's matrices and culling.
+ * @param self The renderer.
+ * @param frame The frame (the zoom factor; the cube's light for PointShadow).
+ * @param shader The pass's ordinary depth shader (its program).
+ * @param dither Its dither locations.
+ * @param pass The shadow pass.
+ */
+void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
+    const WorldRendererDitherLocations* dither, WorldVisibilityPass pass);
+
+/** @brief The status's "instancing" feature (B03): unavailable without the lit twin (or without PBR lighting), active
+ *  while the camera's pass drew a cell instanced, inactive otherwise (switched off, or no copies in view). */
+WorldRendererFeatureState WorldRendererInstances_GetState(const WorldRenderer* self);
+
+/** @brief Logs one line about the copies (with the status, WorldRenderer_LogStatus): the components, their copies, the
+ *  drawn cells, and the copies the camera's cells show by LOD (the last render's, through the C mirror). */
+void WorldRendererInstances_LogStatus(const WorldRenderer* self);
 
 
 // WorldRendererCrisp.c

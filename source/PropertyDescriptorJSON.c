@@ -32,6 +32,13 @@
 /** The bits that mark a UTF-8 continuation byte (10xxxxxx). */
 #define PROPERTY_JSON_UTF8_CONTINUATION_MASK 0xC0U
 #define PROPERTY_JSON_UTF8_CONTINUATION_BITS 0x80U
+/** The keys of one instance's compound in an instance list. */
+#define PROPERTY_JSON_INSTANCE_POSITION_KEY ((const unsigned char*)u8"position")
+#define PROPERTY_JSON_INSTANCE_ROTATION_KEY ((const unsigned char*)u8"rotation")
+#define PROPERTY_JSON_INSTANCE_SCALE_KEY ((const unsigned char*)u8"scale")
+#define PROPERTY_JSON_INSTANCE_TINT_KEY ((const unsigned char*)u8"tint")
+/** The channel value of an opaque white tint, an instance's default. */
+#define PROPERTY_JSON_INSTANCE_TINT_DEFAULT_CHANNEL 255U
 
 
 // Static functions: values.
@@ -133,6 +140,123 @@ static Error CreateAssetNameListValue(JSONObjectPool* pool, const PropertyAssetN
         if (Result.Code == ErrorCode_Success)
         {
             Result = JSONArray_Add(Array, &Element);
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = JSONObjectPool_ReturnArray(pool, Array, true);
+        Error_Deconstruct(&ReturnResult);
+        return Result;
+    }
+    *outValue = JSONObjectValue_CreateArray(Array);
+    return Error_CreateSuccess();
+}
+
+/* Sets a value made from @p pool into a compound, returning it to the pool when it cannot be set. */
+static Error SetPooledValue(JSONObjectPool* pool, JSONCompound* compound, const unsigned char* key,
+    JSONObjectValue* value)
+{
+    Error Result = JSONCompound_Set(compound, key, value);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = JSONObjectPool_ReturnValue(pool, value);
+        Error_Deconstruct(&ReturnResult);
+    }
+    return Result;
+}
+
+/* Whether an instance's tint is the default, opaque white. */
+static bool IsInstanceTintDefault(Color tint)
+{
+    return (tint.r == PROPERTY_JSON_INSTANCE_TINT_DEFAULT_CHANNEL) && (tint.g == PROPERTY_JSON_INSTANCE_TINT_DEFAULT_CHANNEL)
+        && (tint.b == PROPERTY_JSON_INSTANCE_TINT_DEFAULT_CHANNEL)
+        && (tint.a == PROPERTY_JSON_INSTANCE_TINT_DEFAULT_CHANNEL);
+}
+
+/* One instance as a compound: its position always; its rotation (in degrees), its scale (one number while its three
+ * components are equal) and its tint only when they are not the defaults (no turn, its model's size, opaque white). */
+static Error CreateInstanceValue(JSONObjectPool* pool, const PropertyInstanceEntry* entry, JSONObjectValue* outValue)
+{
+    JSONCompound* Compound = NULL;
+    Error Result = JSONObjectPool_BorrowCompound(pool, &Compound);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    JSONObjectValue Value;
+    Result = GameJSON_CreateVector3DoubleValue(pool, entry->Position, &Value);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = SetPooledValue(pool, Compound, PROPERTY_JSON_INSTANCE_POSITION_KEY, &Value);
+    }
+    Vector3 Rotation = entry->Rotation;
+    bool IsTurned = (Rotation.x != 0.0f) || (Rotation.y != 0.0f) || (Rotation.z != 0.0f);
+    if ((Result.Code == ErrorCode_Success) && IsTurned)
+    {
+        Result = CreateAngleVector3Value(pool, Rotation, &Value);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = SetPooledValue(pool, Compound, PROPERTY_JSON_INSTANCE_ROTATION_KEY, &Value);
+        }
+    }
+    Vector3 Scale = entry->Scale;
+    bool IsUniform = (Scale.x == Scale.y) && (Scale.y == Scale.z);
+    bool IsScaled = !IsUniform || (Scale.x != 1.0f);
+    if ((Result.Code == ErrorCode_Success) && IsScaled)
+    {
+        if (IsUniform)
+        {
+            Value = GameJSON_CreateFloatValue(Scale.x);
+        }
+        else
+        {
+            Result = GameJSON_CreateVector3Value(pool, Scale, &Value);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = SetPooledValue(pool, Compound, PROPERTY_JSON_INSTANCE_SCALE_KEY, &Value);
+        }
+    }
+    if ((Result.Code == ErrorCode_Success) && !IsInstanceTintDefault(entry->Tint))
+    {
+        Result = GameJSON_CreateColorValue(pool, entry->Tint, &Value);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = SetPooledValue(pool, Compound, PROPERTY_JSON_INSTANCE_TINT_KEY, &Value);
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = JSONObjectPool_ReturnCompound(pool, Compound, true);
+        Error_Deconstruct(&ReturnResult);
+        return Result;
+    }
+    *outValue = JSONObjectValue_CreateCompound(Compound);
+    return Error_CreateSuccess();
+}
+
+/* An instance list as an array of its instances' compounds; [] when empty. */
+static Error CreateInstanceListValue(JSONObjectPool* pool, const PropertyInstanceList* list, JSONObjectValue* outValue)
+{
+    JSONArray* Array = NULL;
+    Error Result = JSONObjectPool_BorrowArray(pool, &Array);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    const PropertyInstanceEntry* Entries = PropertyInstanceList_GetEntries(list);
+    for (size_t Index = 0; (Index < PropertyInstanceList_GetCount(list)) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        JSONObjectValue Element;
+        Result = CreateInstanceValue(pool, &Entries[Index], &Element);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = JSONArray_Add(Array, &Element);
+            if (Result.Code != ErrorCode_Success)
+            {
+                Error ReturnResult = JSONObjectPool_ReturnValue(pool, &Element);
+                Error_Deconstruct(&ReturnResult);
+            }
         }
     }
     if (Result.Code != ErrorCode_Success)
@@ -260,6 +384,8 @@ static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descrip
             return CreateEnumSetValue(pool, descriptor->EnumTable, data->EnumSetValue, outValue);
         case PropertyType_AssetNameList:
             return CreateAssetNameListValue(pool, data->AssetNameListValue, outValue);
+        case PropertyType_InstanceList:
+            return CreateInstanceListValue(pool, data->InstanceListValue, outValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -472,6 +598,8 @@ static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectVa
             return ReadEnumSet(descriptor, value, &outData->EnumSetValue);
         case PropertyType_AssetNameList:
             return Error_Construct2(ErrorCode_InvalidState, "Asset name lists are read separately.");
+        case PropertyType_InstanceList:
+            return Error_Construct2(ErrorCode_InvalidState, "Instance lists are read separately.");
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -577,6 +705,213 @@ static Error ReadAssetNameList(const PropertyDescriptor* descriptor, const JSONO
     return Error_CreateSuccess();
 }
 
+/* An instance's scale: one number (the same on every axis) or three. */
+static Error ReadInstanceScale(const JSONObjectValue* value, Vector3* outScale)
+{
+    if ((value->Type == JSONValueType_Array) || (value->Type == JSONValueType_Compound))
+    {
+        return GameJSON_ParseVector3(value, outScale);
+    }
+    float Uniform = 0.0f;
+    Error Result = ReadFloat(value, false, &Uniform);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return Error_Construct2(ErrorCode_InvalidJSON, "Expected a number or three numbers.");
+    }
+    *outScale = (Vector3){ .x = Uniform, .y = Uniform, .z = Uniform };
+    return Error_CreateSuccess();
+}
+
+/* Reads the value of one key of an instance's compound into its field. */
+typedef Error (*InstanceKeyReader)(const JSONObjectValue* value, void* outValue);
+
+static Error ReadInstancePosition(const JSONObjectValue* value, void* outValue)
+{
+    return GameJSON_ParseVector3Double(value, outValue);
+}
+
+static Error ReadInstanceRotation(const JSONObjectValue* value, void* outValue)
+{
+    return ReadAngleVector3(value, outValue);
+}
+
+static Error ReadInstanceScaleKey(const JSONObjectValue* value, void* outValue)
+{
+    return ReadInstanceScale(value, outValue);
+}
+
+static Error ReadInstanceTint(const JSONObjectValue* value, void* outValue)
+{
+    return GameJSON_ParseColor(value, outValue);
+}
+
+/* Reads one optional key of an instance's compound with @p read, counting it in @p inOutFoundCount when present. */
+static Error ReadInstanceKey(JSONCompound* compound, const unsigned char* key, InstanceKeyReader read, void* outValue,
+    size_t* inOutFoundCount)
+{
+    JSONObjectValue Value;
+    bool IsFound = false;
+    Error Result = JSONCompound_GetOptional(compound, key, &Value, &IsFound);
+    if ((Result.Code != ErrorCode_Success) || !IsFound)
+    {
+        return Result;
+    }
+    (*inOutFoundCount)++;
+    Result = read(&Value, outValue);
+    if (Result.Code == ErrorCode_Success)
+    {
+        return Result;
+    }
+    Error Wrapped = Error_Construct4(ErrorCode_InvalidJSON, ".%s: %s", (const char*)key,
+        (Result.Message != NULL) ? (const char*)Result.Message : "invalid value.");
+    Error_Deconstruct(&Result);
+    return Wrapped;
+}
+
+static void AppendKey(GenericBuffer* list, const unsigned char* key, bool isFirst);
+
+/* Whether a key is one of an instance's four. */
+static bool IsInstanceKey(const unsigned char* key)
+{
+    const unsigned char* const Keys[] = { PROPERTY_JSON_INSTANCE_POSITION_KEY, PROPERTY_JSON_INSTANCE_ROTATION_KEY,
+        PROPERTY_JSON_INSTANCE_SCALE_KEY, PROPERTY_JSON_INSTANCE_TINT_KEY };
+    size_t Length = StringUTF8_GetByteLength(key);
+    for (size_t Index = 0U; Index < (sizeof(Keys) / sizeof(Keys[0])); Index++)
+    {
+        if ((StringUTF8_GetByteLength(Keys[Index]) == Length) && Memory_IsEqual(Keys[Index], key, Length))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The error for an instance's compound that holds a key other than its four, naming the first such key (quoted and cut
+ * as the tables' unknown keys are). */
+static Error CreateUnknownInstanceKeyError(JSONCompound* compound)
+{
+    GenericBuffer Name;
+    GenericBuffer_AllocateVariable(&Name, PROPERTY_JSON_UNKNOWN_KEY_PRINT_LIMIT, sizeof(unsigned char));
+    bool IsNamed = false;
+    CollectionEnumerator* Enumerator = ICollection_CreateEnumerator(JSONCompound_GetEntryCollection(compound));
+    bool HasNext = false;
+    Error Result = (Enumerator != NULL) ? CollectionEnumerator_HasNext(Enumerator, &HasNext) : Error_CreateSuccess();
+    while ((Enumerator != NULL) && (Result.Code == ErrorCode_Success) && HasNext && !IsNamed)
+    {
+        JSONCompoundEntry Entry;
+        Result = CollectionEnumerator_NextByValue(Enumerator, &Entry);
+        if ((Result.Code == ErrorCode_Success) && !IsInstanceKey(Entry.Key))
+        {
+            AppendKey(&Name, Entry.Key, true);
+            IsNamed = GenericBuffer_NullTerminate(&Name);
+        }
+        else if (Result.Code == ErrorCode_Success)
+        {
+            Result = CollectionEnumerator_HasNext(Enumerator, &HasNext);
+        }
+    }
+    Error_Deconstruct(&Result);
+    if (Enumerator != NULL)
+    {
+        CollectionEnumerator_Destroy(Enumerator);
+    }
+    Error Refusal = IsNamed
+        ? Error_Construct4(ErrorCode_InvalidJSON, ": %s is not a key of an instance (\"position\", \"rotation\", "
+            "\"scale\" or \"tint\").", (const char*)Name._data)
+        : Error_Construct2(ErrorCode_InvalidJSON,
+            ": An instance holds a key other than \"position\", \"rotation\", \"scale\" and \"tint\".");
+    Memory_Free(Name._data);
+    return Refusal;
+}
+
+/* One instance from its compound: every key optional (a missing one is the default), any other key refused. A message
+ * continues the instance's place in the list: ".scale: Expected ...", ": \"size\" is not a key ..." or ": Expected an
+ * instance ...". */
+static Error ReadInstance(const JSONObjectValue* value, PropertyInstanceEntry* outEntry)
+{
+    if (value->Type != JSONValueType_Compound)
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, ": Expected an instance: an object with a position, and "
+            "optionally a rotation, a scale and a tint.");
+    }
+    JSONCompound* Compound = value->Value.Compound;
+    PropertyInstanceEntry Entry = PropertyInstanceEntry_CreateDefault();
+    size_t FoundCount = 0U;
+    Error Result = ReadInstanceKey(Compound, PROPERTY_JSON_INSTANCE_POSITION_KEY, ReadInstancePosition, &Entry.Position,
+        &FoundCount);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadInstanceKey(Compound, PROPERTY_JSON_INSTANCE_ROTATION_KEY, ReadInstanceRotation, &Entry.Rotation,
+            &FoundCount);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadInstanceKey(Compound, PROPERTY_JSON_INSTANCE_SCALE_KEY, ReadInstanceScaleKey, &Entry.Scale,
+            &FoundCount);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadInstanceKey(Compound, PROPERTY_JSON_INSTANCE_TINT_KEY, ReadInstanceTint, &Entry.Tint, &FoundCount);
+    }
+    if ((Result.Code == ErrorCode_Success) && (JSONCompound_GetEntryCount(Compound) > FoundCount))
+    {
+        Result = CreateUnknownInstanceKeyError(Compound);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    *outEntry = Entry;
+    return Error_CreateSuccess();
+}
+
+/* An array of instances, its length checked before anything is allocated (the instances' rules are checked when the read
+ * commits); [] is the empty list. A broken instance is named by its index ("[12].scale: ..."). */
+static Error ReadInstanceList(const PropertyDescriptor* descriptor, const JSONObjectValue* value, void* target)
+{
+    if (value->Type != JSONValueType_Array)
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, "Expected an array of instances.");
+    }
+    size_t Count = JSONArray_GetElementCount(value->Value.Array);
+    if (Count > descriptor->Rules.MaxCount)
+    {
+        return Error_Construct4(ErrorCode_InvalidJSON, "The list has %" PRIu64 " instances; at most %" PRIu64
+            " are allowed.", (uint64_t)Count, (uint64_t)descriptor->Rules.MaxCount);
+    }
+    if (Count == 0U)
+    {
+        PropertyInternal_AdoptOwned(descriptor, target, NULL);
+        return Error_CreateSuccess();
+    }
+    PropertyInstanceList* List = PropertyInternal_AllocateInstanceList(Count);
+    Error Result = Error_CreateSuccess();
+    for (size_t Index = 0; (Index < Count) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        JSONObjectValue Element;
+        Result = JSONArray_Get(value->Value.Array, Index, &Element);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = ReadInstance(&Element, &List->_entries[Index]);
+        }
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error Wrapped = Error_Construct4(ErrorCode_InvalidJSON, "[%" PRIu64 "]%s", (uint64_t)Index,
+                (Result.Message != NULL) ? (const char*)Result.Message : ": invalid instance.");
+            Error_Deconstruct(&Result);
+            Result = Wrapped;
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        PropertyInstanceList_Destroy(List);
+        return Result;
+    }
+    PropertyInternal_AdoptOwned(descriptor, target, List);
+    return Error_CreateSuccess();
+}
+
 /* A string or null, length-checked before it is copied (the rest of its rules are checked when the read commits). */
 static Error ReadString(const PropertyDescriptor* descriptor, const JSONObjectValue* value, void* target)
 {
@@ -626,6 +961,10 @@ static Error ReadValue(const PropertyTable* table, const PropertyDescriptor* des
     else if (descriptor->Type == PropertyType_AssetNameList)
     {
         Result = ReadAssetNameList(descriptor, value, target);
+    }
+    else if (descriptor->Type == PropertyType_InstanceList)
+    {
+        Result = ReadInstanceList(descriptor, value, target);
     }
     else
     {

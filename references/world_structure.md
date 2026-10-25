@@ -97,7 +97,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `mobility` | `"static"` / `"movable"` | |
 | `tags` | array of keys | See "Tags and data". |
 | `data` | object | See "Tags and data". |
-| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`, `animator`, `terrain`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component`, `animator_component`, `terrain_component` in `agents/WorldData.md`, `agents/Characters.md`, `agents/Animation.md` and `agents/Terrain.md`). |
+| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`, `animator`, `terrain`, `model_instances`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component`, `animator_component`, `terrain_component`, `model_instances_component` in `agents/WorldData.md`, `agents/Characters.md`, `agents/Animation.md` and `agents/Terrain.md`). |
 
 An object has at most one component of each type. A block whose values are all defaults is still written (`"light":
 {}`): the component is there.
@@ -140,6 +140,42 @@ placement's own: 2 is seen twice as far. It is a plain setting, not an override.
     "draw_distance_multiplier": 1.5,
     "overrides_lod_distances": true,
     "lod_distances": [10.0, 30.0, 90.0]
+}
+```
+
+### The model instances block
+
+The `model_instances` component (B03) places many copies of one world model, drawn a cell at a time (a few draws for
+thousands of copies; `agents/WorldRuntime.md`, "Model instances"). It takes every key of the model block, with the same
+meaning and defaults, but `overrides_omit_pixelation` and `omit_pixelation` (copies are never drawn at full resolution
+over the pixelated image), and applies them to every copy; and `instances`, the copies:
+
+| Key | Value (default) | |
+|---|---|---|
+| `instances` | an array of instances (`[]`) | At most 262 144. Each is an object of up to four keys, any left out at its default: `position` (`[x, y, z]` metres from the object, in its own space; within 10 000 km on each axis), `rotation` (`[x, y, z]` degrees, Euler XYZ like an object's; 0), `scale` (one number, the same on every axis, or `[x, y, z]`; 1) and `tint` (a colour; its alpha is the copy's opacity, times the object's; white). Any other key is refused, naming the copy and the key (`[12]: "size" is not a key of an instance ...`). |
+
+The object's transform places every copy, its tint and opacity multiply theirs, and hiding it hides them all. A copy's
+LOD and fade are its own: it changes LOD inside a band around each switch distance and fades out at the draw distance
+by itself. The writer leaves each copy's defaults out (the position is always written), writes a scale that is the same
+on every axis as one number, and puts each copy on lines of its own. Two copies in the form of the test world's grove
+(object 52), the second stretched upward and half transparent:
+```
+"model_instances": {
+    "world_model": "test_tree",
+    "instances": [
+        {
+            "position": [-2.259, 1.774, 142.541],
+            "rotation": [0.0, 330.9, 0.0],
+            "scale": 0.88,
+            "tint": "#e7fbd8"
+        },
+        {
+            "position": [4.215, 3.618, 44.995],
+            "rotation": [0.0, 66.4, 0.0],
+            "scale": [1.15, 1.38, 1.15],
+            "tint": "#f1f6e880"
+        }
+    ]
 }
 ```
 
@@ -380,7 +416,8 @@ Every object can carry tags and typed data under namespaced keys (`agents/Object
 
 - Only values that differ from their defaults, so files stay short and pick up changed defaults.
 - Keys in table order: `id` first, then the object table's keys, `components` last; component blocks in type order
-  (`model`, `sprite`, `light`, `collider`, `character`, `animator`, `terrain`); tags and data keys alphabetically.
+  (`model`, `sprite`, `light`, `collider`, `character`, `animator`, `terrain`, `model_instances`); tags and data keys
+  alphabetically.
 - Not the runtime objects: the player and NPCs made during play (`WorldObject_IsPersistent` off) are left out with
   everything under them. The game state will save them on its own.
 - The objects **parents first**: the roots in id order, each followed by its subtree depth first, the children in the
@@ -406,7 +443,7 @@ every integer in the smallest GHDF type that holds it.
 | Object entry | Value |
 |---|---|
 | 1 | The id (an unsigned integer). |
-| 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`, 5 `character`, 6 `animator`, 7 `terrain`), each a compound keyed by the type's wire ids. |
+| 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`, 5 `character`, 6 `animator`, 7 `terrain`, 8 `model_instances`), each a compound keyed by the type's wire ids (`model_instances` shares the model block's, without 3 and 9, `omit_pixelation`'s pair, and adds 22 `instances`). |
 | 3 and up | The `world_object` table's wire ids: 3 `name`, 4 `position`, 5 `rotation`, 6 `scale`, 7 `tint`, 8 `is_enabled`, 9 `is_visible`, 10 `mobility`, 11 the tags and data, 12 `parent`, 13 `parent_socket` (T30). |
 
 How each type is stored (`agents/PropertyDescriptors.md`, "Types"): integers in the smallest integer type (readers take
@@ -414,7 +451,10 @@ any integer type whose value fits), floats as Float (angles in radians), vectors
 positions as Double arrays (files written before positions were doubles hold Float arrays, which still read),
 colours as UInt8 arrays, render colours as a compound, strings as strings, enums and dates as encoded integers, sets of
 enum entries as their mask in the smallest unsigned integer type, the tags
-and data as an array of entry compounds (`agents/ObjectData.md`, "GHDF"). A document must end where its root ends.
+and data as an array of entry compounds (`agents/ObjectData.md`, "GHDF"), and a model instances block's copies as a
+compound of parallel arrays: 1 the positions (a Double array, three per copy), then only when a copy differs from its
+default 2 the rotations (a Float array, radians, three each), 3 the scales (a Float array, three each) and 4 the tints
+(a UInt8 array, four each), each exactly as long as the positions say. A document must end where its root ends.
 
 ## Loading rules
 

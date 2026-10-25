@@ -3,7 +3,10 @@
 #include "GameSkeleton.h"
 #include "ShaderSource.h"
 #include "SkeletalAnimation.h"
+#include "WorldInstancing.h"
+#include "WorldLod.h"
 #include "WorldVisibility.h"
+#include "wr/WRFileSystem.h"
 #include "wr/WRJSON.h"
 #include <math.h>
 #include <stdio.h>
@@ -87,7 +90,19 @@ static Error ShaderFixture_ExpandBytes(ShaderFixture* self, const char* text, si
     GenericBuffer_Clear(&self->SourceList);
     AssetLocation Main = { AssetLocationType_File, (const unsigned char*)TEST_MAIN_LOCATION };
     return ShaderSource_ExpandIncludes(self->Manager, self->Types.Shader, &Main, (const unsigned char*)text, length,
-        &self->Text, &self->SourceList);
+        NULL, 0U, &self->Text, &self->SourceList);
+}
+
+/* Expands @p text (from TEST_MAIN_LOCATION) with @p defines into the fixture's Text and SourceList, which are cleared
+ * first. */
+static Error ShaderFixture_ExpandWithDefines(ShaderFixture* self, const char* text, const char* const* defines,
+    size_t defineCount)
+{
+    GenericBuffer_Clear(&self->Text);
+    GenericBuffer_Clear(&self->SourceList);
+    AssetLocation Main = { AssetLocationType_File, (const unsigned char*)TEST_MAIN_LOCATION };
+    return ShaderSource_ExpandIncludes(self->Manager, self->Types.Shader, &Main, (const unsigned char*)text,
+        strlen(text), (const unsigned char* const*)defines, defineCount, &self->Text, &self->SourceList);
 }
 
 static Error ShaderFixture_Expand(ShaderFixture* self, const char* text)
@@ -329,15 +344,96 @@ static void FailureLeavesTheOutputAsItWas(TestRun* run)
         AssetLocation Main = { AssetLocationType_File, (const unsigned char*)TEST_MAIN_LOCATION };
         static const char Text[] = "#version 330\nfloat a;\n#include \"common/missing\"\n";
         TEST_CHECK_ERROR(run, ShaderSource_ExpandIncludes(Fixture.Manager, Fixture.Types.Shader, &Main,
-            (const unsigned char*)Text, sizeof(Text) - 1U, &Fixture.Text, &Fixture.SourceList), ErrorCode_InvalidAssetData);
+            (const unsigned char*)Text, sizeof(Text) - 1U, NULL, 0U, &Fixture.Text, &Fixture.SourceList),
+            ErrorCode_InvalidAssetData);
         CHECK_TEXT(run, &Fixture.Text, "kept");
         TEST_CHECK(run, Fixture.SourceList._count == 0U);
     }
     ShaderFixture_Deconstruct(run, &Fixture);
 }
 
-/* Expands a shipped shader stage the way the shader loader does. */
-static bool ExpandShippedStage(TestRun* run, ShaderFixture* self, const char* location)
+/* A definition's defines follow the main file's #version line, which keeps its line numbers with a #line; without a
+ * #version they come first; a #version line at the file's end gets its line break; only the first #version line gets
+ * them. */
+static void DefinesFollowTheVersionLine(TestRun* run)
+{
+    const char* const Defines[] = { "WORLD_INSTANCED", "_SECOND2" };
+    ShaderFixture Fixture;
+    if (ShaderFixture_ConstructInWorkDirectory(run, "defines", &Fixture)
+        && ShaderFixture_Write(run, &Fixture, "common/a.glsl", "#ifdef WORLD_INSTANCED\nfloat a2;\n#endif\n"))
+    {
+        if (TEST_CHECK_SUCCESS(run, ShaderFixture_ExpandWithDefines(&Fixture,
+            "// header\n#version 330\n#include \"common/a\"\nfloat main4;\n", Defines, 2U)))
+        {
+            CHECK_TEXT(run, &Fixture.Text, "// header\n#version 330\n#define WORLD_INSTANCED\n#define _SECOND2\n#line 3 0\n"
+                "#line 1 1\n#ifdef WORLD_INSTANCED\nfloat a2;\n#endif\n#line 4 0\nfloat main4;\n");
+            CHECK_TEXT(run, &Fixture.SourceList, "0 = \"main/fragment\", 1 = \"common/a\"");
+        }
+        if (TEST_CHECK_SUCCESS(run, ShaderFixture_ExpandWithDefines(&Fixture, "void main() {}\n", Defines, 1U)))
+        {
+            CHECK_TEXT(run, &Fixture.Text, "#define WORLD_INSTANCED\n#line 1 0\nvoid main() {}\n");
+        }
+        if (TEST_CHECK_SUCCESS(run, ShaderFixture_ExpandWithDefines(&Fixture, "#version 330", Defines, 1U)))
+        {
+            CHECK_TEXT(run, &Fixture.Text, "#version 330\n#define WORLD_INSTANCED\n#line 2 0\n");
+        }
+        if (TEST_CHECK_SUCCESS(run, ShaderFixture_ExpandWithDefines(&Fixture, "#version 330\r\n#version 330\n", Defines,
+            1U)))
+        {
+            CHECK_TEXT(run, &Fixture.Text, "#version 330\r\n#define WORLD_INSTANCED\n#line 2 0\n#version 330\n");
+        }
+        // No defines: the text as before.
+        if (TEST_CHECK_SUCCESS(run, ShaderFixture_ExpandWithDefines(&Fixture, "#version 330\nfloat x;\n", NULL, 0U)))
+        {
+            CHECK_TEXT(run, &Fixture.Text, "#version 330\nfloat x;\n");
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+/* A define is a GLSL name a shader may define; the expander refuses others and leaves its output as it was. */
+static void DefineNamesAreChecked(TestRun* run)
+{
+    const char* const Good[] = { "WORLD_INSTANCED", "a", "_x", "X9_y", "GLX", "GL", "G_L_", "Gl_X" };
+    const char* const Bad[] = { "", "9A", "A-B", "A B", "GL_X", "GL_", "A__B", "__A", "A__", "\xC3\xA9t\xC3\xA9" };
+    for (size_t Index = 0U; Index < (sizeof(Good) / sizeof(Good[0])); Index++)
+    {
+        if (!TEST_CHECK(run, ShaderSource_IsDefineName((const unsigned char*)Good[Index])))
+        {
+            printf("    refused \"%s\"\n", Good[Index]);
+        }
+    }
+    for (size_t Index = 0U; Index < (sizeof(Bad) / sizeof(Bad[0])); Index++)
+    {
+        if (!TEST_CHECK(run, !ShaderSource_IsDefineName((const unsigned char*)Bad[Index])))
+        {
+            printf("    accepted \"%s\"\n", Bad[Index]);
+        }
+    }
+    TEST_CHECK(run, !ShaderSource_IsDefineName(NULL));
+
+    ShaderFixture Fixture;
+    if (ShaderFixture_ConstructInWorkDirectory(run, "define_names", &Fixture))
+    {
+        const char* const Defines[] = { "GOOD", "GL_BAD" };
+        GenericBuffer_AppendString(&Fixture.Text, (const unsigned char*)u8"kept");
+        GenericBuffer_NullTerminate(&Fixture.Text);
+        AssetLocation Main = { AssetLocationType_File, (const unsigned char*)TEST_MAIN_LOCATION };
+        static const char Text[] = "#version 330\n";
+        TEST_CHECK_ERROR(run, ShaderSource_ExpandIncludes(Fixture.Manager, Fixture.Types.Shader, &Main,
+            (const unsigned char*)Text, sizeof(Text) - 1U, (const unsigned char* const*)Defines, 2U, &Fixture.Text,
+            &Fixture.SourceList), ErrorCode_IllegalArgument);
+        CHECK_TEXT(run, &Fixture.Text, "kept");
+        TEST_CHECK_ERROR(run, ShaderSource_ExpandIncludes(Fixture.Manager, Fixture.Types.Shader, &Main,
+            (const unsigned char*)Text, sizeof(Text) - 1U, NULL, 1U, &Fixture.Text, &Fixture.SourceList),
+            ErrorCode_IllegalArgument);
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+/* Expands a shipped shader stage the way the shader loader does, with @p defines (@p defineCount of them). */
+static bool ExpandShippedStageWithDefines(TestRun* run, ShaderFixture* self, const char* location,
+    const char* const* defines, size_t defineCount)
 {
     AssetLocation Stage = { AssetLocationType_File, (const unsigned char*)location };
     IOStream* Stream = NULL;
@@ -352,9 +448,16 @@ static bool ExpandShippedStage(TestRun* run, ShaderFixture* self, const char* lo
     GenericBuffer_Clear(&self->Text);
     GenericBuffer_Clear(&self->SourceList);
     IsExpanded = IsExpanded && TEST_CHECK_SUCCESS(run, ShaderSource_ExpandIncludes(self->Manager, self->Types.Shader,
-        &Stage, Raw._data, Raw._count, &self->Text, &self->SourceList));
+        &Stage, Raw._data, Raw._count, (const unsigned char* const*)defines, defineCount, &self->Text,
+        &self->SourceList));
     Memory_Free(Raw._data);
     return IsExpanded;
+}
+
+/* Expands a shipped shader stage the way the shader loader does for a definition without defines. */
+static bool ExpandShippedStage(TestRun* run, ShaderFixture* self, const char* location)
+{
+    return ExpandShippedStageWithDefines(run, self, location, NULL, 0U);
 }
 
 static void ShippedSkyAndPbrShareOneAtmosphere(TestRun* run)
@@ -439,12 +542,15 @@ static void ShippedGeometryShadersShareOneDither(TestRun* run)
                 bool IsTested = (CountOccurrences(&Fixture.Text, "DitherDiscard()") == 2U)
                     && (CountOccurrences(&Fixture.Text, "bool DitherDiscard()") == 1U);
                 // Its comparisons are the C mirror's (WorldVisibility_IsDitherDiscarded), which the LOD tests prove
-                // complementary: a changed formula fails here until the mirror and this check change with it.
+                // complementary: a changed formula fails here until the mirror and this check change with it. Without
+                // WORLD_INSTANCED the uniforms feed it.
                 bool IsTheMirrorsFormula =
-                    (CountOccurrences(&Fixture.Text, "bool isKeptByFade = threshold > ditherFade;") == 1U)
-                    && (CountOccurrences(&Fixture.Text, "bool isKeptByLod = ditherIsIncomingLod ? "
-                        "(threshold <= ditherLodProgress) : (threshold > ditherLodProgress);") == 1U)
-                    && (CountOccurrences(&Fixture.Text, "return !(isKeptByFade && isKeptByLod);") == 1U);
+                    (CountOccurrences(&Fixture.Text, "bool isKeptByFade = threshold > fade;") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "bool isKeptByLod = isIncomingLod ? "
+                        "(threshold <= lodProgress) : (threshold > lodProgress);") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "return !(isKeptByFade && isKeptByLod);") == 1U)
+                    && (CountOccurrences(&Fixture.Text,
+                        "return DitherDiscardValues(ditherFade, ditherLodProgress, ditherIsIncomingLod);") == 1U);
                 if (!TEST_CHECK(run, HasUniforms && IsTested && IsTheMirrorsFormula
                     && BufferContains(&Fixture.SourceList, "\"common/dither\"") && BayerMatchesTheMirror(&Fixture.Text)))
                 {
@@ -494,6 +600,112 @@ static void ShippedSkinnedStagesShareOneSkinning(TestRun* run)
 }
 
 
+/* Reads "<shipped>/shaders/<relativePath>" into @p outText (NUL-terminated). */
+static bool ReadShippedText(TestRun* run, const char* relativePath, GenericBuffer* outText)
+{
+    char Relative[128];
+    snprintf(Relative, sizeof(Relative), "%s/shaders/%s", SHIPPED_ASSET_ROOT, relativePath);
+    GenericBuffer Path;
+    GenericBuffer_AllocateVariable(&Path, 0U, sizeof(unsigned char));
+    bool IsRead = TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, Relative, &Path))
+        && TEST_CHECK_SUCCESS(run, FileSystem_ReadAllBytes(Path._data, outText))
+        && GenericBuffer_NullTerminate(outText);
+    Memory_Free(Path._data);
+    return IsRead;
+}
+
+/* The value of "#define <name> <value>" in an expanded text, or NaN without one. */
+static double GetDefinedValue(const GenericBuffer* text, const char* name)
+{
+    char Opening[96];
+    snprintf(Opening, sizeof(Opening), "#define %s ", name);
+    const char* Define = (text->_count > 0U) ? strstr((const char*)text->_data, Opening) : NULL;
+    return (Define != NULL) ? strtod(Define + strlen(Opening), NULL) : NAN;
+}
+
+/* The instanced twins (B03): each definition loads, defines WORLD_INSTANCED and pairs its own vertex stage with its rigid
+ * shader's fragment stage. Every instanced vertex stage places its copies through the one shared include, which takes
+ * the records at locations 9 to 13 and whose constants are its C mirror's (source/WorldInstancing.h); with the define,
+ * the fragment stages' dither reads the copy's flat values through the formula the uniforms use. */
+static void ShippedInstancedTwinsShareTheirStages(TestRun* run)
+{
+    static const char* const Definitions[][3] =
+    {
+        { "pbr/pbr_instanced.json", "pbr/instanced", "pbr/fragment" },
+        { "normal/normal_instanced.json", "normal/instanced", "normal/fragment" },
+        { "depth/depth_instanced.json", "depth/instanced", "depth/fragment" },
+        { "cube_depth/cube_depth_instanced.json", "cube_depth/instanced", "cube_depth/fragment" }
+    };
+    const char* const Instanced[] = { "WORLD_INSTANCED" };
+    ShaderFixture Fixture;
+    size_t FailedCount = 1U;
+    GenericBuffer Definition;
+    GenericBuffer_AllocateVariable(&Definition, 0U, sizeof(unsigned char));
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data))
+        && TEST_CHECK_SUCCESS(run, AssetManager_ReadDefinitions(Fixture.Manager, &FailedCount)))
+    {
+        TEST_CHECK(run, FailedCount == 0U);
+        const unsigned char* const Names[] = { (const unsigned char*)u8"world_pbr_instanced",
+            (const unsigned char*)u8"world_normal_instanced", (const unsigned char*)u8"world_depth_instanced",
+            (const unsigned char*)u8"world_cube_depth_instanced" };
+        for (size_t Index = 0U; Index < (sizeof(Names) / sizeof(Names[0])); Index++)
+        {
+            bool Exists = false;
+            TEST_CHECK(run, TEST_CHECK_SUCCESS(run, AssetManager_HasDefinition(Fixture.Manager, Fixture.Types.Shader,
+                Names[Index], &Exists)) && Exists);
+        }
+        for (size_t Index = 0U; Index < (sizeof(Definitions) / sizeof(Definitions[0])); Index++)
+        {
+            GenericBuffer_Clear(&Definition);
+            bool IsPaired = ReadShippedText(run, Definitions[Index][0], &Definition)
+                && BufferContains(&Definition, "\"defines\": [\"WORLD_INSTANCED\"]");
+            char Location[64];
+            snprintf(Location, sizeof(Location), "\"vertex_location\": \"%s\"", Definitions[Index][1]);
+            IsPaired = IsPaired && BufferContains(&Definition, Location);
+            snprintf(Location, sizeof(Location), "\"fragment_location\": \"%s\"", Definitions[Index][2]);
+            IsPaired = IsPaired && BufferContains(&Definition, Location);
+
+            bool IsPlaced = ExpandShippedStageWithDefines(run, &Fixture, Definitions[Index][1], Instanced, 1U)
+                && (strncmp((const char*)Fixture.Text._data, "#version 330\n#define WORLD_INSTANCED\n#line 2 0\n", 46U)
+                    == 0)
+                && BufferContains(&Fixture.SourceList, "\"common/instancing\"")
+                && (CountOccurrences(&Fixture.Text, "layout(location = 9) in vec4 instanceRow0;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "layout(location = 10) in vec4 instanceRow1;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "layout(location = 11) in vec4 instanceRow2;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "layout(location = 12) in vec4 instanceTint;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "layout(location = 13) in float instanceRandom;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "if (!Instancing_IsShown(matModel))") == 1U)
+                && (CountOccurrences(&Fixture.Text, "Instancing_MoveVertex(vertexPosition)") == 1U)
+                && (GetDefinedValue(&Fixture.Text, "INSTANCE_PASS_LIT") == (double)WorldInstancePass_Lit)
+                && (GetDefinedValue(&Fixture.Text, "INSTANCE_PASS_GBUFFER") == (double)WorldInstancePass_GBuffer)
+                && (GetDefinedValue(&Fixture.Text, "INSTANCE_PASS_SHADOW") == (double)WorldInstancePass_Shadow)
+                && (GetDefinedValue(&Fixture.Text, "INSTANCE_MAX_BANDS") == (double)WORLD_INSTANCE_MAX_BANDS)
+                && (GetDefinedValue(&Fixture.Text, "INSTANCE_SOLID_SHARE") == (double)WORLD_LOD_SOLID_SHARE)
+                && (GetDefinedValue(&Fixture.Text, "INSTANCE_GBUFFER_FADE_LIMIT")
+                    == (double)WORLD_VISIBILITY_GBUFFER_FADE_LIMIT);
+
+            bool IsDithered = ExpandShippedStageWithDefines(run, &Fixture, Definitions[Index][2], Instanced, 1U)
+                && (CountOccurrences(&Fixture.Text, "#define WORLD_INSTANCED\n") == 1U)
+                && (CountOccurrences(&Fixture.Text, "flat in float fragDitherFade;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "flat in float fragDitherLodProgress;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "flat in float fragDitherIsIncomingLod;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "return DitherDiscardValues(fragDitherFade, fragDitherLodProgress, "
+                    "fragDitherIsIncomingLod > 0.5);") == 1U)
+                && BayerMatchesTheMirror(&Fixture.Text);
+            if (!TEST_CHECK(run, IsPaired && IsPlaced && IsDithered))
+            {
+                printf("    in \"%s\" (paired %d, placed %d, dithered %d)\n", Definitions[Index][0], (int)IsPaired,
+                    (int)IsPlaced, (int)IsDithered);
+            }
+        }
+    }
+    Memory_Free(Definition._data);
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+
 // Public functions.
 void ShaderSourceTests_Run(TestRun* run)
 {
@@ -509,9 +721,12 @@ void ShaderSourceTests_Run(TestRun* run)
         { "malformed_include_is_rejected", MalformedIncludeIsRejected },
         { "nul_byte_is_rejected", NulByteIsRejected },
         { "failure_leaves_the_output_as_it_was", FailureLeavesTheOutputAsItWas },
+        { "defines_follow_the_version_line", DefinesFollowTheVersionLine },
+        { "define_names_are_checked", DefineNamesAreChecked },
         { "shipped_sky_and_pbr_share_one_atmosphere", ShippedSkyAndPbrShareOneAtmosphere },
         { "shipped_geometry_shaders_share_one_dither", ShippedGeometryShadersShareOneDither },
         { "shipped_skinned_stages_share_one_skinning", ShippedSkinnedStagesShareOneSkinning },
+        { "shipped_instanced_twins_share_their_stages", ShippedInstancedTwinsShareTheirStages },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

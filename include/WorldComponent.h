@@ -75,8 +75,10 @@ typedef enum WorldComponentTypeEnum
     WorldComponentType_Animator = 5,
     /** @brief A terrain: places a terrain asset's mesh, drawn in chunks and solid (WorldTerrainComponent.h, B01). */
     WorldComponentType_Terrain = 6,
+    /** @brief Model instances: many copies of one world model, drawn instanced (WorldModelInstancesComponent.h, B03). */
+    WorldComponentType_ModelInstances = 7,
     /** @brief The number of standard types (not a type). */
-    WorldComponentType_Count = 7
+    WorldComponentType_Count = 8
 } WorldComponentType;
 
 /**

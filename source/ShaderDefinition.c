@@ -1,3 +1,4 @@
+#include <inttypes.h>
 #include "AssetTypesStandard.h"
 #include "AssetDefinitionCommon.h"
 #include "GameShader.h"
@@ -7,6 +8,7 @@
 #include "wr/WRMemory.h"
 #include "wr/WRIO.h"
 #include "wr/WRJSON.h"
+#include "wr/WRString.h"
 
 /*
  * The shader definition loads an optional vertex stage and an optional fragment stage, either of which may
@@ -18,7 +20,16 @@
  * would make the location ambiguous. Shader source is loaded as text, so this loader uses the streaming
  * resource API rather than a temp file, and a reference location needs no format. Each stage's #include lines
  * are expanded before it is compiled (ShaderSource.h).
+ *
+ * An optional "defines" array names preprocessor symbols for both stages (B03): ["WORLD_INSTANCED"] makes a twin of a
+ * shader from the same files, the shared files testing the symbol with #ifdef. Each name is a GLSL identifier that is not
+ * reserved (ShaderSource_IsDefineName), at most once per definition.
  */
+
+
+// Macros.
+/** @brief The most defines one shader definition may name. */
+#define SHADER_DEFINITION_MAX_DEFINES ((size_t)16)
 
 
 // Types.
@@ -29,6 +40,8 @@ typedef struct ShaderDefinitionStruct
     OwnedAssetLocation VertexLocation;
     bool HasFragment;
     OwnedAssetLocation FragmentLocation;
+    unsigned char** Defines; // DefineCount owned names, NULL when there are none
+    size_t DefineCount;
 } ShaderDefinition;
 
 typedef struct ShaderLoadedStruct
@@ -96,9 +109,10 @@ static void ReturnStageBuffers(AssetManager* manager, ShaderStageBuffers* buffer
  * On success *outText is borrowed from @p manager and the caller MUST return it with AssetManager_ReturnGenericBuffer;
  * on failure *outText is NULL (nothing to return). When the stage included files, their source-string numbers are
  * appended to @p sourceList. */
-static Error ReadStageSource(AssetManager* manager, AssetTypeID type, const OwnedAssetLocation* location,
-    GenericBuffer* sourceList, GenericBuffer** outText)
+static Error ReadStageSource(AssetManager* manager, const ShaderDefinition* definition,
+    const OwnedAssetLocation* location, GenericBuffer* sourceList, GenericBuffer** outText)
 {
+    AssetTypeID type = definition->Base.Type;
     *outText = NULL;
 
     AssetLocation View = OwnedAssetLocation_View(location);
@@ -126,8 +140,8 @@ static Error ReadStageSource(AssetManager* manager, AssetTypeID type, const Owne
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = ShaderSource_ExpandIncludes(manager, type, &View, RawText->_data, RawText->_count, ExpandedText,
-            sourceList);
+        Result = ShaderSource_ExpandIncludes(manager, type, &View, RawText->_data, RawText->_count,
+            (const unsigned char* const*)definition->Defines, definition->DefineCount, ExpandedText, sourceList);
     }
     ReturnBuffer(manager, RawText);
     if (Result.Code != ErrorCode_Success)
@@ -213,12 +227,12 @@ static Error ShaderDefinition_LoadAsset(void* self, AssetManager* manager, Asset
     }
     if ((Result.Code == ErrorCode_Success) && Definition->HasVertex)
     {
-        Result = ReadStageSource(manager, Definition->Base.Type, &Definition->VertexLocation, Buffers.VertexSources,
+        Result = ReadStageSource(manager, Definition, &Definition->VertexLocation, Buffers.VertexSources,
             &Buffers.VertexText);
     }
     if ((Result.Code == ErrorCode_Success) && Definition->HasFragment)
     {
-        Result = ReadStageSource(manager, Definition->Base.Type, &Definition->FragmentLocation, Buffers.FragmentSources,
+        Result = ReadStageSource(manager, Definition, &Definition->FragmentLocation, Buffers.FragmentSources,
             &Buffers.FragmentText);
     }
     if (Result.Code == ErrorCode_Success)
@@ -234,11 +248,80 @@ static void ShaderDefinition_Destroy(void* self)
     ShaderDefinition* Definition = self;
     OwnedAssetLocation_Deconstruct(&Definition->VertexLocation);
     OwnedAssetLocation_Deconstruct(&Definition->FragmentLocation);
+    for (size_t Index = 0U; Index < Definition->DefineCount; Index++)
+    {
+        Memory_Free(Definition->Defines[Index]);
+    }
+    Memory_Free(Definition->Defines);
     Memory_Free(Definition->Base.Name);
     Memory_Free(Definition);
 }
 
 static const AssetDefinitionVTable ShaderDefinitionVTable = { ShaderDefinition_LoadAsset, ShaderDefinition_Destroy };
+
+/* Reads the optional "defines": an array of at most SHADER_DEFINITION_MAX_DEFINES distinct define names. */
+static Error ReadDefines(JSONCompound* root, const unsigned char* sourceDescription, ShaderDefinition* definition)
+{
+    JSONObjectValue Value;
+    bool Found = false;
+    Error Result = JSONCompound_GetOptionalVerified(root, (const unsigned char*)u8"defines", JSONValueType_Array, &Value,
+        &Found);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+            u8"Shader definition %s: \"defines\" must be an array of names.", sourceDescription);
+    }
+    size_t Count = Found ? JSONArray_GetElementCount(Value.Value.Array) : 0U;
+    if (Count > SHADER_DEFINITION_MAX_DEFINES)
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+            u8"Shader definition %s: \"defines\" holds %" PRIu64 u8" names; a shader has at most %" PRIu64 u8".",
+            sourceDescription, (uint64_t)Count, (uint64_t)SHADER_DEFINITION_MAX_DEFINES);
+    }
+    if (Count == 0U)
+    {
+        return Error_CreateSuccess();
+    }
+    definition->Defines = Memory_Allocate(Count * sizeof(unsigned char*));
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        JSONObjectValue Element;
+        Result = JSONArray_GetVerified(Value.Value.Array, Index, JSONValueType_String, &Element);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = AssetJSON_ValueToOwnedString(&Element, &definition->Defines[Index]);
+        }
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+                u8"Shader definition %s: defines[%" PRIu64 u8"] must be a string.", sourceDescription, (uint64_t)Index);
+        }
+        // Counted once owned, so the definition's teardown frees what a failed check kept.
+        definition->DefineCount = Index + 1U;
+        const unsigned char* Name = definition->Defines[Index];
+        if (!ShaderSource_IsDefineName(Name))
+        {
+            return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+                u8"Shader definition %s: defines[%" PRIu64 u8"] is not a name GLSL lets a shader define (a letter or '_', "
+                u8"then letters, digits or '_', not starting with \"GL_\" and without \"__\").", sourceDescription,
+                (uint64_t)Index);
+        }
+        for (size_t Earlier = 0U; Earlier < Index; Earlier++)
+        {
+            size_t Length = StringUTF8_GetByteLength(Name);
+            if ((StringUTF8_GetByteLength(definition->Defines[Earlier]) == Length)
+                && Memory_IsEqual(definition->Defines[Earlier], Name, Length))
+            {
+                return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+                    u8"Shader definition %s: defines[%" PRIu64 u8"] and defines[%" PRIu64 u8"] are both \"%s\".",
+                    sourceDescription, (uint64_t)Earlier, (uint64_t)Index, Name);
+            }
+        }
+    }
+    return Error_CreateSuccess();
+}
 
 
 // Public functions.
@@ -284,6 +367,10 @@ Error ShaderDefinition_Construct(AssetManager* manager, const UserData* userData
     {
         Result = Error_Construct3(ErrorCode_InvalidAssetDefinition,
             u8"Shader definition must specify \"vertex_location\" and/or \"fragment_location\" (or \"location\").");
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadDefines(RootCompound, sourceDescription, Definition);
     }
 
     Error ReturnResult = JSONObjectPool_ReturnValue(Pool, &Root);

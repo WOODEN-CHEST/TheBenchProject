@@ -7,7 +7,9 @@
 #include "World.h"
 #include "WorldModel.h"
 #include "WorldModelComponent.h"
+#include "WorldModelInstancesComponent.h"
 #include "WorldObject.h"
+#include "PropertyDescriptorInternal.h"
 #include "raylib/raymath.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRPath.h"
@@ -1007,6 +1009,262 @@ static void ThePlacementPicksItsLodSettings(TestRun* run)
 }
 
 
+// Tests: the model instances component (B03).
+/* Two texts equal byte for byte (both NULL counts as equal). */
+static bool AreTextsEqual(const unsigned char* a, const unsigned char* b)
+{
+    if ((a == NULL) || (b == NULL))
+    {
+        return a == b;
+    }
+    return strcmp((const char*)a, (const char*)b) == 0;
+}
+
+/* The instances component's rows are the model component's, row for row (key, wire id, type, default, rules, flags,
+ * enum, texts; only the field differs), but for omit_pixelation and its flag (copies are never crisp); then the copies,
+ * wire id 22. */
+static void TheInstancesComponentSharesTheModelRows(TestRun* run)
+{
+    const PropertyTable* ModelTable = WorldModelComponent_GetPropertyTable();
+    const PropertyTable* Instances = WorldModelInstancesComponent_GetPropertyTable();
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(Instances));
+    TEST_CHECK(run, (Instances->DescriptorCount == (ModelTable->DescriptorCount - 2U + 1U))
+        && (PropertyTable_FindByKey(Instances, u8"omit_pixelation") == NULL)
+        && (PropertyTable_FindByKey(Instances, u8"overrides_omit_pixelation") == NULL));
+    for (size_t Row = 0U; Row < Instances->DescriptorCount; Row++)
+    {
+        const PropertyDescriptor* Own = &Instances->Descriptors[Row];
+        if (strcmp((const char*)Own->Key, "instances") == 0)
+        {
+            TEST_CHECK(run, (Own->WireId == 22U) && (Own->Type == PropertyType_InstanceList)
+                && (Own->Rules.MaxCount == WORLD_MODEL_INSTANCES_MAX_COUNT) && (Own->Rules.Maximum == WORLD_POSITION_LIMIT)
+                && (Row == (Instances->DescriptorCount - 1U)));
+            continue;
+        }
+        const PropertyDescriptor* Shared = PropertyTable_FindByKey(ModelTable, Own->Key);
+        if (!TEST_CHECK(run, Shared != NULL))
+        {
+            printf("      %s is not a model component row\n", (const char*)Own->Key);
+            continue;
+        }
+        bool IsSame = (Shared->WireId == Own->WireId) && (Shared->Type == Own->Type)
+            && (Memory_IsEqual(&Shared->Rules, &Own->Rules, sizeof(PropertyRules))) && (Shared->Flags == Own->Flags)
+            && (Shared->EnumTable == Own->EnumTable) && (Shared->SinceVersion == Own->SinceVersion)
+            && AreTextsEqual(Shared->DisplayName, Own->DisplayName) && AreTextsEqual(Shared->Description, Own->Description)
+            && AreTextsEqual(Shared->Category, Own->Category)
+            && (strcmp((const char*)Shared->MemberName, (const char*)Own->MemberName) == 0)
+            && (Shared->Size == Own->Size);
+        bool IsSameDefault = PropertyInternal_AreDataEqual(Own->Type, &Shared->Default, &Own->Default);
+        if (!TEST_CHECK(run, IsSame && IsSameDefault))
+        {
+            printf("      %s differs from the model component's row\n", (const char*)Own->Key);
+        }
+    }
+}
+
+/* The settings and the LOD settings in effect are the model component's for the same rows, through every flag and a
+ * spread of values; copies are never crisp, even where the world model is; the crisp flag cannot be set. */
+static void TheInstancesComponentResolvesLikeAModel(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    BoundingBox Box = { .min = { -0.5f, -0.5f, -0.5f }, .max = { 0.5f, 0.5f, 0.5f } };
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    World TestWorld;
+    KeyRegistry Keys;
+    bool IsWorldBuilt = false;
+    WorldModel* Loaded = NULL;
+    WorldObject* Object = NULL;
+    WorldComponent* ModelComponent = NULL;
+    WorldComponent* InstancesComponent = NULL;
+    if (TestAssetFixture_Construct(run, &Fixture)
+        && TestAssets_AddModel(run, &Fixture, "bush_lod0", Box, NULL)
+        && TestAssets_AddModel(run, &Fixture, "bush_lod1", Box, NULL)
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"bush\", \"lods\": [{\"model\": \"bush_lod0\", "
+            "\"max_distance\": 12}, {\"model\": \"bush_lod1\", \"max_distance\": 45}], \"lod_hysteresis\": 0.15, "
+            "\"render\": {\"omit_pixelation\": true, \"shadow_tier\": \"far\"}}")
+        && ((Loaded = LoadWorldModel(run, &Fixture, "bush", &User)) != NULL)
+        && (IsWorldBuilt = TestWorld_Construct(run, &TestWorld, &Keys, NULL, NULL))
+        && TEST_CHECK_SUCCESS(run, World_CreateObject(&TestWorld, NULL, &Object))
+        && TEST_CHECK_SUCCESS(run, World_AddComponent(&TestWorld, WorldObject_GetId(Object), WorldComponentType_Model,
+            &ModelComponent))
+        && TEST_CHECK_SUCCESS(run, World_AddComponent(&TestWorld, WorldObject_GetId(Object),
+            WorldComponentType_ModelInstances, &InstancesComponent)))
+    {
+        WorldModelComponent* Placement = WorldModelComponent_FromComponent(ModelComponent);
+        WorldModelInstancesComponent* Instances = WorldModelInstancesComponent_FromComponent(InstancesComponent);
+        TEST_CHECK(run, (Instances != NULL) && (WorldModelInstancesComponent_FromComponent(ModelComponent) == NULL)
+            && (WorldModelInstancesComponent_AsComponent(Instances) == InstancesComponent));
+        const WorldModelSettings* Asset = WorldModel_GetSettings(Loaded);
+        uint32_t Seed = 12345U;
+        for (int Round = 0; Round < 64; Round++)
+        {
+            // The same values through both components' setters (the instances' as the table writes them).
+            Seed = (Seed * 1664525U) + 1013904223U;
+            bool Bits[8];
+            for (int Bit = 0; Bit < 8; Bit++)
+            {
+                Bits[Bit] = ((Seed >> (Bit + 8)) & 1U) != 0U;
+            }
+            float Distance = 5.0f + (float)(Seed % 97U);
+            float Multiplier = 0.5f + ((float)((Seed >> 4) % 7U) * 0.25f);
+            WorldShadowTier Tier = (WorldShadowTier)((Seed >> 20) % 3U);
+            const float Own[] = { 3.0f + (float)(Round % 5), 30.0f + (float)Round };
+            size_t OwnCount = Bits[6] ? 2U : 1U;
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasOutline(Placement, Bits[0]));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetHasOutline(Instances, Bits[0]));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(Placement, Tier));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetShadowTier(Instances, Tier));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetCastsShadows(Placement, Bits[1]));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetCastsShadows(Instances, Bits[1]));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistance(Placement, Distance));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetDrawDistance(Instances, Distance));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistanceMultiplier(Placement, Multiplier));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetDrawDistanceMultiplier(Instances, Multiplier));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsDrawDistanceFixed(Placement, Bits[2]));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetIsDrawDistanceFixed(Instances, Bits[2]));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetLodDistances(Placement, Own, OwnCount));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetLodDistances(Instances, Own, OwnCount));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetLodDistanceMultiplier(Placement, Multiplier));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetLodDistanceMultiplier(Instances, Multiplier));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsLodForced(Placement, Bits[3]));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetIsLodForced(Instances, Bits[3]));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetForcedLod(Placement, (uint32_t)(Seed % 4U)));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetForcedLod(Instances, (uint32_t)(Seed % 4U)));
+            for (int Setting = 0; Setting < (int)WorldModelSetting_Count; Setting++)
+            {
+                if (Setting == (int)WorldModelSetting_OmitPixelation)
+                {
+                    continue;
+                }
+                bool IsOn = ((Seed >> (Setting + 1)) & 3U) != 0U;
+                TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Placement, (WorldModelSetting)Setting, IsOn));
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Instances, (WorldModelSetting)Setting,
+                    IsOn));
+                TEST_CHECK(run, WorldModelInstancesComponent_IsOverridden(Instances, (WorldModelSetting)Setting) == IsOn);
+            }
+            WorldModelSettings FromModel = WorldModelComponent_ResolveSettings(Placement, Asset);
+            WorldModelSettings FromInstances = WorldModelInstancesComponent_ResolveSettings(Instances, Asset);
+            TEST_CHECK(run, FromModel.OmitsPixelation && !FromInstances.OmitsPixelation);
+            FromModel.OmitsPixelation = false;
+            TEST_CHECK(run, AreSettingsEqual(&FromModel, &FromInstances));
+            WorldModelLodSettings ModelLods;
+            WorldModelLodSettings InstanceLods;
+            bool IsModelAsAsked = WorldModelComponent_ResolveLodSettings(Placement, Loaded, &ModelLods);
+            bool IsInstancesAsAsked = WorldModelInstancesComponent_ResolveLodSettings(Instances, Loaded, &InstanceLods);
+            TEST_CHECK(run, (IsModelAsAsked == IsInstancesAsAsked)
+                && Memory_IsEqual(&ModelLods, &InstanceLods, sizeof(ModelLods)));
+        }
+        // The crisp flag is the model component's alone.
+        TEST_CHECK_ERROR(run, WorldModelInstancesComponent_SetOverridden(Instances, WorldModelSetting_OmitPixelation,
+            true), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldModelInstancesComponent_SetOverridden(Instances, WorldModelSetting_Count, true),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK(run, !WorldModelInstancesComponent_IsOverridden(Instances, WorldModelSetting_OmitPixelation));
+        TEST_CHECK_ERROR(run, WorldModelInstancesComponent_SetOverridden(NULL, WorldModelSetting_HasOutline, true),
+            ErrorCode_IllegalArgument);
+    }
+    if (IsWorldBuilt)
+    {
+        TestWorld_Deconstruct(run, &TestWorld, &Keys);
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+/* The copies: set as a copy, refused with nothing changed (naming the copy that breaks a rule), and their own revision
+ * advances only when they may have changed (their setter, their row through the table, a read, a copy), so the renderer
+ * sorts them again only then. */
+static void TheInstancesRevisionFollowsTheCopies(TestRun* run)
+{
+    World TestWorld;
+    KeyRegistry Keys;
+    if (!TestWorld_Construct(run, &TestWorld, &Keys, NULL, NULL))
+    {
+        return;
+    }
+    WorldObject* Object = NULL;
+    WorldObject* OtherObject = NULL;
+    WorldComponent* Component = NULL;
+    WorldComponent* OtherComponent = NULL;
+    JSONObjectPool* Pool = NULL;
+    if (TEST_CHECK_SUCCESS(run, World_CreateObject(&TestWorld, NULL, &Object))
+        && TEST_CHECK_SUCCESS(run, World_AddComponent(&TestWorld, WorldObject_GetId(Object),
+            WorldComponentType_ModelInstances, &Component))
+        && TEST_CHECK_SUCCESS(run, World_CreateObject(&TestWorld, NULL, &OtherObject))
+        && TEST_CHECK_SUCCESS(run, World_AddComponent(&TestWorld, WorldObject_GetId(OtherObject),
+            WorldComponentType_ModelInstances, &OtherComponent))
+        && TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)))
+    {
+        WorldModelInstancesComponent* Instances = WorldModelInstancesComponent_FromComponent(Component);
+        const PropertyTable* Table = WorldModelInstancesComponent_GetPropertyTable();
+        size_t Count = 1U;
+        TEST_CHECK(run, (WorldModelInstancesComponent_GetInstances(Instances, &Count) == NULL) && (Count == 0U)
+            && (WorldModelInstancesComponent_GetWorldModel(Instances) == NULL));
+        PropertyInstanceEntry Copies[2] = { PropertyInstanceEntry_CreateDefault(), PropertyInstanceEntry_CreateDefault() };
+        Copies[1].Position = Vector3Double_Create(31.5, 0.0, -2.0);
+        Copies[1].Tint = (Color){ 100, 150, 200, 255 };
+
+        uint32_t Revision = WorldModelInstancesComponent_GetInstancesRevision(Instances);
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetInstances(Instances, Copies, 2U));
+        TEST_CHECK(run, WorldModelInstancesComponent_GetInstancesRevision(Instances) != Revision);
+        const PropertyInstanceEntry* Held = WorldModelInstancesComponent_GetInstances(Instances, &Count);
+        TEST_CHECK(run, (Count == 2U) && (Held != Copies) && (Held[1].Position.X == 31.5) && (Held[1].Tint.b == 200U));
+
+        // Other rows leave the copies' revision alone.
+        Revision = WorldModelInstancesComponent_GetInstancesRevision(Instances);
+        uint32_t ComponentRevision = WorldComponent_GetRevision(Component);
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetWorldModel(Instances, (const unsigned char*)u8"bush"));
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetDrawDistance(Instances, 40.0f));
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Instances, WorldModelSetting_DrawDistance,
+            true));
+        TEST_CHECK(run, (WorldModelInstancesComponent_GetInstancesRevision(Instances) == Revision)
+            && (WorldComponent_GetRevision(Component) == (ComponentRevision + 3U)));
+
+        // A refused set changes nothing, and names the copy.
+        PropertyInstanceEntry Broken[3] = { PropertyInstanceEntry_CreateDefault(), PropertyInstanceEntry_CreateDefault(),
+            PropertyInstanceEntry_CreateDefault() };
+        Broken[2].Position.Y = WORLD_POSITION_LIMIT * 2.0;
+        const char* const Fragments[] = { "model_instances_component.instances", "instance 2", NULL };
+        TestText_CheckErrorMessage(run, WorldModelInstancesComponent_SetInstances(Instances, Broken, 3U),
+            ErrorCode_ArgumentOutOfRange, Fragments);
+        TEST_CHECK_ERROR(run, WorldModelInstancesComponent_SetInstances(Instances, NULL, 2U), ErrorCode_IllegalArgument);
+        TEST_CHECK_ERROR(run, WorldModelInstancesComponent_SetInstances(NULL, Copies, 2U), ErrorCode_IllegalArgument);
+        WorldModelInstancesComponent_GetInstances(Instances, &Count);
+        TEST_CHECK(run, (Count == 2U) && (WorldModelInstancesComponent_GetInstancesRevision(Instances) == Revision));
+
+        // The row through the table, a JSON read and a copy each advance it.
+        PropertyInstanceList* One = NULL;
+        if (TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(Copies, 1U, &One)))
+        {
+            PropertyValue Value = PropertyValue_FromInstanceList(One);
+            TEST_CHECK_SUCCESS(run, Properties_Set(Table, Instances, u8"instances", &Value));
+            TEST_CHECK(run, WorldModelInstancesComponent_GetInstancesRevision(Instances) != Revision);
+            PropertyInstanceList_Destroy(One);
+        }
+        WorldModelInstancesComponent* Other = WorldModelInstancesComponent_FromComponent(OtherComponent);
+        Revision = WorldModelInstancesComponent_GetInstancesRevision(Other);
+        TEST_CHECK_SUCCESS(run, Properties_CopyTo(Table, Instances, Other));
+        TEST_CHECK(run, (WorldModelInstancesComponent_GetInstancesRevision(Other) != Revision)
+            && Properties_Equals(Table, Instances, Other));
+        JSONCompound* Compound = NULL;
+        if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
+        {
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetInstances(Instances, Copies, 2U));
+            TEST_CHECK_SUCCESS(run, Properties_WriteJSON(Table, Instances, Pool, Compound, NULL));
+            Revision = WorldModelInstancesComponent_GetInstancesRevision(Other);
+            TEST_CHECK_SUCCESS(run, Properties_ReadJSON(Table, Compound, Other, NULL));
+            TEST_CHECK(run, (WorldModelInstancesComponent_GetInstancesRevision(Other) != Revision)
+                && Properties_Equals(Table, Instances, Other));
+            TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Compound, true));
+        }
+    }
+    if (Pool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    }
+    TestWorld_Deconstruct(run, &TestWorld, &Keys);
+}
+
+
 // Tests: the shipped content.
 /* The game's world models (compile/out/asset/world_models) are all read without a skipped file. */
 /* The skinned figure of the socket tests: a root, a spine 1 m up, a head 2 m up, a hand 1 m to the side of the spine. */
@@ -1282,6 +1540,9 @@ void WorldModelTests_Run(TestRun* run)
             TheFlagsChooseBetweenTheWorldModelAndThePlacement },
         { "the_component_starts_at_its_defaults", TheComponentStartsAtItsDefaults },
         { "the_placement_picks_its_lod_settings", ThePlacementPicksItsLodSettings },
+        { "the_instances_component_shares_the_model_rows", TheInstancesComponentSharesTheModelRows },
+        { "the_instances_component_resolves_like_a_model", TheInstancesComponentResolvesLikeAModel },
+        { "the_instances_revision_follows_the_copies", TheInstancesRevisionFollowsTheCopies },
         { "sockets_the_graph_and_the_first_person_block_load_with_the_skeleton",
             SocketsTheGraphAndTheFirstPersonBlockLoadWithTheSkeleton },
         { "socket_and_first_person_rules_are_refused", SocketAndFirstPersonRulesAreRefused },

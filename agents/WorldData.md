@@ -15,6 +15,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldObject | `include/WorldObject.h`, `source/WorldObject.c` | The one object type: id, name, parent, transform (relative to the parent), tint, enabled, visible, mobility, and its component slots. |
 | WorldComponent | `include/WorldComponent.h`, `source/WorldComponent.c` | The component base, the component types and the registry entry that describes each (`WorldComponentTypeInfo`). |
 | WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A world model by asset name ([WorldModels.md](WorldModels.md)), the variant drawn, and the settings this placement overrides (explicit flags next to its own values: outline, crisp, shadow tier, casts shadows, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
+| WorldModelInstancesComponent | `include/WorldModelInstancesComponent.h`, `source/WorldModelInstancesComponent.c`, `source/WorldModelComponentInternal.h` (the rows it shares with the model component) | Many copies of one world model (B03): the model component's settings, shared through macros (all but `omit_pixelation`: copies are never crisp), and the copies as an `InstanceList` (each a double position, a rotation, a scale and a tint), with the pure functions that resolve the settings and the LOD settings in effect. |
 | WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A world sprite by asset name ([WorldSprites.md](WorldSprites.md)), bound by the world with its animation's playback instance, and every setting this placement overrides (explicit flags next to its own values: orientation, pivot, size, flips, alpha mode, lighting, decal, render flags, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
 | WorldColliderComponent | `include/WorldColliderComponent.h`, `source/WorldColliderComponent.c` | How the object collides (T12, [WorldCollision.md](WorldCollision.md)): its world model's collision set (or one primitive of its own), its layer, mask and trigger flag (each overriding the world model's default with an explicit flag), a local offset, rotation and scale, and a rotation mode, with the pure function that resolves the settings in effect. |
@@ -194,10 +195,11 @@ carries **at most one component of each type**; a street lamp is one object with
 | `WorldComponentType_Character` | 4 | `character` | `WorldCharacterComponent` (T13, a transform driver; [Characters.md](Characters.md)) |
 | `WorldComponentType_Animator` | 5 | `animator` | `WorldAnimatorComponent` (T29; [Animation.md](Animation.md)) |
 | `WorldComponentType_Terrain` | 6 | `terrain` | `WorldTerrainComponent` (B01; [Terrain.md](Terrain.md)) |
+| `WorldComponentType_ModelInstances` | 7 | `model_instances` | `WorldModelInstancesComponent` (B03; the renderer's side in [WorldRuntime.md](WorldRuntime.md), "Model instances") |
 
 The values are explicit and never renumbered (world files will save them). `WorldComponentType_Count` is the number
 of standard types; `WORLD_MAX_COMPONENT_TYPES` (16) is how many a world can hold, room for the types later tasks add
-(7 is B03's, then the ambient zone T14 and the screen T19) and for test-only types.
+(8 onward: the ambient zone T14 and the screen T19) and for test-only types.
 
 **The registry.** Each type has one `WorldComponentTypeInfo` (a static constant of its module, handed out by
 `Xxx_GetTypeInfo`; `WorldComponent_GetStandardTypeInfo(type)` maps the standard types): `Type`, `Name` (the key of its
@@ -258,6 +260,31 @@ hysteresis and fade time); it returns false when the placement's own list is on 
 The component holds no asset: the renderer resolves the world model by name and resolves it again when the name
 changes (it watches the revision, then compares the name), and the variant again when `uses_variant` or `variant`
 changes.
+
+### Model instances component (`model_instances_component`)
+Places many **copies** of one world model (B03): trees, bushes, posts, fence pieces, later scattered (B09) and grass
+(B10). Its table shares the model component's rows through the `WORLD_MODEL_PLACEMENT_ROW_*` macros of
+`source/WorldModelComponentInternal.h` (the names, wire ids, defaults, rules and categories are the model component's,
+T26's pattern): `world_model`, `uses_variant` / `variant`, the override pairs `has_outline`, `shadow_tier`,
+`casts_shadows`, `draw_distance`, `is_draw_distance_fixed`, `draw_distance_multiplier`, the LOD rows (`lod_distances`
+with its flag, `lod_distance_multiplier`, `is_lod_forced` / `forced_lod`), **all but `omit_pixelation`**: copies are
+never crisp (`WorldModelInstancesComponent_SetOverridden(self, WorldModelSetting_OmitPixelation, ...)` is refused, and
+`ResolveSettings` gives `OmitsPixelation` false). Every setting applies to every copy; the variant too.
+
+`instances` (wire 22) is an `InstanceList` ([PropertyDescriptors.md](PropertyDescriptors.md)): each copy's **position**
+relative to the object, in double ("Positions are doubles": floats only once the renderer makes it relative to a cell),
+its **rotation** (Euler XYZ in radians, degrees in JSON), its **scale** (three factors) and its **tint** (a colour whose
+alpha is the copy's opacity, multiplied by the object's). At most `WORLD_MODEL_INSTANCES_MAX_COUNT` (262 144) copies;
+every position within `WORLD_POSITION_LIMIT` of the object, every rotation and scale finite. Defaults: none.
+`WorldModelInstancesComponent_SetInstances(self, copies, count)` copies the list (checked by the row's rules), `_GetInstances
+(self, &count)` borrows it, and `_GetInstancesRevision` advances with every change of it (a typed set, a table write, a
+read or a copy), so the renderer sorts the copies into cells again only then. `ResolveSettings` and
+`ResolveLodSettings` are the model component's functions for this table.
+
+Not a transform driver. The object's transform places all the copies (moving it moves them without sorting them again),
+its tint and opacity multiply every copy's, and hiding or disabling it hides them all. Generated copies (B09) go in
+runtime objects (`WorldObject_SetPersistent(object, false)`), so they are never saved; the test frame's pebble field is
+one.
 
 ### Sprite component (`sprite_component`)
 Since T26 the component names a **world sprite** ([WorldSprites.md](WorldSprites.md)): the sprite animation to play and

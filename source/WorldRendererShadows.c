@@ -203,8 +203,8 @@ static WorldRendererCascadeFrame GetCascadeFrame(const WorldRenderFrame* frame, 
 
 /* Renders one shadow cascade: the depth of its casters (the visibility list of @p pass) from the frame's shadow light
  * into @p map, with the cascade's light matrices. Opens/closes its own texture + 3D passes. */
-static void RenderShadowCascade(WorldRenderer* self, RenderTexture2D map, const WorldRendererCascadeFrame* cascade,
-    WorldVisibilityPass pass)
+static void RenderShadowCascade(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D map,
+    const WorldRendererCascadeFrame* cascade, WorldVisibilityPass pass)
 {
     Shader DepthShader = GameShader_GetRaylibShader(self->_cascades._depthShader);
     bool HasSkinned = (self->_cascades._skinnedDepthShader != NULL);
@@ -221,6 +221,8 @@ static void RenderShadowCascade(WorldRenderer* self, RenderTexture2D map, const 
     // stored depth, which removes most self-shadowing acne without a large (peter-panning) depth bias.
     rlSetCullFace(RL_CULL_FACE_FRONT);
     DrawShadowCasters(self, &Shaders, &self->_cascades._dither, &self->_cascades._skinnedDither, pass);
+    // The model instances components' copies (B03), each as the LOD with the larger share, dithered by its own fade.
+    WorldRendererInstances_DrawCasters(self, frame, DepthShader, &self->_cascades._dither, pass);
     // The terrain's chunks (B01) the same way: a hill's far side, facing away from the light, shades what lies behind it.
     WorldRendererTerrain_DrawCasters(self, DepthShader, &self->_cascades._dither, pass);
     rlSetCullFace(RL_CULL_FACE_BACK);  // restore the default culling for the scene pass
@@ -415,10 +417,10 @@ void WorldRendererShadows_PrepareFrame(WorldRenderer* self, WorldRenderFrame* fr
 
 void WorldRendererShadows_RenderCascades(WorldRenderer* self, const WorldRenderFrame* frame)
 {
-    RenderShadowCascade(self, self->_cascades._nearMap, &frame->NearCascade, WorldVisibilityPass_NearCascade);
+    RenderShadowCascade(self, frame, self->_cascades._nearMap, &frame->NearCascade, WorldVisibilityPass_NearCascade);
     if (self->_cascades._hasFarMap)
     {
-        RenderShadowCascade(self, self->_cascades._farMap, &frame->FarCascade, WorldVisibilityPass_FarCascade);
+        RenderShadowCascade(self, frame, self->_cascades._farMap, &frame->FarCascade, WorldVisibilityPass_FarCascade);
     }
 }
 
@@ -495,6 +497,8 @@ void WorldRendererShadows_RenderPointLight(WorldRenderer* self, const WorldRende
         // here caused peter-panning + seam artifacts, so it is intentionally not used. The casters are those within the
         // light's reach (the visibility's cube list).
         DrawShadowCasters(self, &Shaders, &self->_pointShadow._dither, &self->_pointShadow._skinnedDither,
+            WorldVisibilityPass_PointShadow);
+        WorldRendererInstances_DrawCasters(self, frame, CubeShader, &self->_pointShadow._dither,
             WorldVisibilityPass_PointShadow);
         WorldRendererTerrain_DrawCasters(self, CubeShader, &self->_pointShadow._dither, WorldVisibilityPass_PointShadow);
         if (HasSpriteShader)

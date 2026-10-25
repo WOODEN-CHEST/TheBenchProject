@@ -111,6 +111,7 @@ no `inherit` states: a flag cannot collide with a real value, and the editor sho
 | `FloatList` (T11) | owned `PropertyFloatList*`, NULL while empty (its only default) | array of numbers, `[3.0, 6.0, 60.0]` (`[]` when empty) | Float array (empty when empty) |
 | `EnumSet` (T12) | `uint32_t` mask: bit N is the enum entry of value N | array of the entries' names in the table's order, `["world", "prop"]` (`[]` when empty) | the smallest unsigned integer type that holds the mask |
 | `AssetNameList` (T29) | owned `PropertyAssetNameList*`, NULL while empty (its only default) | array of strings, `["human_motions", "gestures"]` (`[]` when empty) | String array (empty when empty) |
+| `InstanceList` (B03) | owned `PropertyInstanceList*` of `PropertyInstanceEntry` (a `Vector3Double` position, a radians `Vector3` rotation, a `Vector3` scale, a `Color` tint), NULL while empty (its only default) | array of instances, each `{"position": [x, y, z], "rotation": [x, y, z], "scale": s or [x, y, z], "tint": "#rrggbb"}` with the defaults left out (rotation 0, scale 1, white; the position always written; rotations in degrees, a scale one number when even, the tint as a `Color`); any other key is refused; `[]` when empty | Compound {1: Double array of the positions (3 per instance), 2: Float array of the rotations in radians, 3: Float array of the scales, 4: UInt8 array of the tints (4 each)}; 2, 3 and 4 only when an instance differs from its default, each of exactly its length |
 
 Since T09 the integer types are written in the smallest GHDF integer type that holds the value (a `parent` of 12 is one
 UInt8 byte) and read from any GHDF integer type, fixed width or encoded, whose value fits the property's type
@@ -141,7 +142,11 @@ unknown name or one given twice is refused, naming its index (`[1]: ...`). The c
 collision layers) is the first. An `AssetNameList` takes `PROPERTY_RULES_ASSET_NAME_LIST(maxCount, maxLength)` (both
 required: 1 to `PROPERTY_ASSET_NAME_LIST_MAX_COUNT`, 64, names and 1 to `PROPERTY_ASSET_NAME_LIST_MAX_LENGTH`, 256,
 bytes each); every name must be a valid asset name (`AssetManager_IsValidAssetName`); its default must be NULL. The
-animator's `animation_libraries` (T29) is the first.
+animator's `animation_libraries` (T29) is the first. An `InstanceList` takes `PROPERTY_RULES_INSTANCE_LIST(maxCount,
+positionLimit)` (`Rules.MaxCount`, required: 1 to `PROPERTY_INSTANCE_LIST_MAX_COUNT`, 262 144, and every position's
+components within ±`positionLimit`); every rotation and scale must be finite; its default must be NULL. A refusal names
+the instance (`"...; instance 12's are not"`), and a JSON read's error its place (`[12].scale: Expected a number or
+three numbers.`). The model instances component's `instances` (B03) is the first.
 
 Flags: `Persistent` (written and read by JSON and GHDF), `Editable` (inspector), `ReadOnly` (visible, refused by
 `Properties_Set`; reads from files still fill it), `Script`. `PROPERTY_FLAGS_SETTING` = Persistent | Editable | Script.
@@ -218,7 +223,8 @@ and here, and test it in `tests/PropertyDescriptorTests.c` (the test record has 
 `DataMap`, which has its own record: it needs a key registry). `Double` and `Date` were added this way in T23,
 `AngleVector3` (an object's rotation) in T05, `DataMap` (tags and typed data) in T24, `FloatList` (a placement's LOD
 distances) in T11, `EnumSet` (a collider's layer mask) in T12, `Vector3Double` (an object's position, named
-`vector3_double`) in T33, `AssetNameList` (an animator's own animation libraries, named `asset_name_list`) in T29.
+`vector3_double`) in T33, `AssetNameList` (an animator's own animation libraries, named `asset_name_list`) in T29,
+`InstanceList` (a model instances component's copies, named `instance_list`) in B03.
 
 ### Float lists
 
@@ -239,6 +245,18 @@ the names' grammar is the row's rule, checked on set and read), `_Destroy`, `_Cl
 same order; NULL is empty), `_GetCount` and `_GetName(index)`. Owned like a float list: `Properties_Set` copies,
 `Properties_Get` borrows, reads hand a new list over, and the readers check the count and each name's length before
 they allocate. Duplicates are allowed (the first one that has a clip wins, for the animator).
+
+### Instance lists
+
+`PropertyInstanceList` (B03, in `PropertyDescriptor.h`) is one heap block: its count and its entries (a flexible array
+member of `PropertyInstanceEntry`). The empty list is NULL. `PropertyInstanceList_Create(entries, count, &list)` copies
+(NULL for 0; at most `PROPERTY_INSTANCE_LIST_MAX_COUNT`), `_Destroy`, `_Clone`, `_Equals` (every field of every entry,
+the position in double; NULL is empty), and the inline `_GetCount` / `_GetEntries`.
+`PropertyInstanceEntry_CreateDefault()` is the entry every missing JSON key falls back to: position 0, rotation 0,
+scale 1, opaque white. Owned like a float list: `Properties_Set` copies (`PropertyValue_FromInstanceList`),
+`Properties_Get` borrows, copies clone, reads hand a new list over, and the readers check the count before they allocate
+(GHDF: the positions' array must be a multiple of 3 long, the others exactly as long as the positions say). The rules are
+checked when the read commits.
 
 ## Known limits
 

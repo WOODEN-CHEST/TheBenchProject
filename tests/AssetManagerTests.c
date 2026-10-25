@@ -162,6 +162,47 @@ static void InvalidNameIsRejected(TestRun* run)
     AssetFixture_Deconstruct(run, &Fixture);
 }
 
+/* A shader definition's "defines" (B03): an array of at most 16 distinct names GLSL lets a shader define; anything else
+ * fails the definition. */
+static void ShaderDefinitionsCheckTheirDefines(TestRun* run)
+{
+    AssetFixture Fixture;
+    if (AssetFixture_Construct(run, "shader_defines", &Fixture)
+        && AssetFixture_Write(run, &Fixture, "shaders/ok/ok.json",
+            "{ \"name\": \"ok_defines\", \"fragment_location\": \"ok/fragment\", \"defines\": [\"A\", \"B_2\"] }")
+        && AssetFixture_Write(run, &Fixture, "shaders/empty/empty.json",
+            "{ \"name\": \"empty_defines\", \"fragment_location\": \"empty/fragment\", \"defines\": [] }")
+        && AssetFixture_Write(run, &Fixture, "shaders/sixteen/sixteen.json",
+            "{ \"name\": \"sixteen_defines\", \"fragment_location\": \"sixteen/fragment\", \"defines\": [\"A0\", \"A1\", "
+            "\"A2\", \"A3\", \"A4\", \"A5\", \"A6\", \"A7\", \"A8\", \"A9\", \"A10\", \"A11\", \"A12\", \"A13\", \"A14\", "
+            "\"A15\"] }")
+        && AssetFixture_Write(run, &Fixture, "shaders/not_array/not_array.json",
+            "{ \"name\": \"not_array\", \"fragment_location\": \"not_array/fragment\", \"defines\": \"A\" }")
+        && AssetFixture_Write(run, &Fixture, "shaders/not_string/not_string.json",
+            "{ \"name\": \"not_string\", \"fragment_location\": \"not_string/fragment\", \"defines\": [\"A\", 1] }")
+        && AssetFixture_Write(run, &Fixture, "shaders/reserved/reserved.json",
+            "{ \"name\": \"reserved\", \"fragment_location\": \"reserved/fragment\", \"defines\": [\"GL_X\"] }")
+        && AssetFixture_Write(run, &Fixture, "shaders/twice/twice.json",
+            "{ \"name\": \"twice\", \"fragment_location\": \"twice/fragment\", \"defines\": [\"A\", \"B\", \"A\"] }")
+        && AssetFixture_Write(run, &Fixture, "shaders/seventeen/seventeen.json",
+            "{ \"name\": \"seventeen\", \"fragment_location\": \"seventeen/fragment\", \"defines\": [\"A0\", \"A1\", "
+            "\"A2\", \"A3\", \"A4\", \"A5\", \"A6\", \"A7\", \"A8\", \"A9\", \"A10\", \"A11\", \"A12\", \"A13\", \"A14\", "
+            "\"A15\", \"A16\"] }"))
+    {
+        size_t FailedCount = 0;
+        if (AssetFixture_Read(run, &Fixture, &FailedCount))
+        {
+            TEST_CHECK(run, FailedCount == 5);
+            TEST_CHECK(run, AssetFixture_HasDefinition(&Fixture, Fixture.Types.Shader, "ok_defines"));
+            TEST_CHECK(run, AssetFixture_HasDefinition(&Fixture, Fixture.Types.Shader, "empty_defines"));
+            TEST_CHECK(run, AssetFixture_HasDefinition(&Fixture, Fixture.Types.Shader, "sixteen_defines"));
+            TEST_CHECK(run, !AssetFixture_HasDefinition(&Fixture, Fixture.Types.Shader, "twice"));
+            TEST_CHECK(run, !AssetFixture_HasDefinition(&Fixture, Fixture.Types.Shader, "seventeen"));
+        }
+    }
+    AssetFixture_Deconstruct(run, &Fixture);
+}
+
 static void SameRootDuplicateIsAnError(TestRun* run)
 {
     AssetFixture Fixture;
@@ -277,6 +318,7 @@ void AssetManagerTests_Run(TestRun* run)
     {
         { "bad_definition_file_is_skipped_and_counted", BadDefinitionFileIsSkippedAndCounted },
         { "invalid_name_is_rejected", InvalidNameIsRejected },
+        { "shader_definitions_check_their_defines", ShaderDefinitionsCheckTheirDefines },
         { "same_root_duplicate_is_an_error", SameRootDuplicateIsAnError },
         { "model_location_ignores_material_library", ModelLocationIgnoresMaterialLibrary },
         { "ambiguous_location_is_an_error", AmbiguousLocationIsAnError },

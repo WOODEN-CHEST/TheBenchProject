@@ -208,6 +208,13 @@ void WorldAnimationGraphTests_Run(TestRun* run);
  *  (WorldLodTests.c; a private module of source/). */
 void WorldLodTests_Run(TestRun* run);
 
+/** @brief Instanced drawing's pure maths (B03): cells (every copy in one, grid order, records composing back to the
+ *  copies, spheres holding them, stable random values), LOD bands (around the switch distances, stopping at the middle,
+ *  complementary and continuous, the zoom and the scales, a forced LOD), fades by T07's rule, the passes' rules and the
+ *  cells' LOD masks (WorldInstancingTests.c; a private module of source/). */
+void WorldInstancingTests_Run(TestRun* run);
+
+
 /** @brief Log rotation, pruning and formatted output under a base directory (LoggerTests.c). */
 void LoggerTests_Run(TestRun* run);
 

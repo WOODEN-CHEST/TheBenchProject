@@ -14,7 +14,9 @@
 #include "WorldComponent.h"
 #include "WorldEnvironment.h"
 #include "WorldFile.h"
+#include "WorldLightComponent.h"
 #include "WorldModelComponent.h"
+#include "WorldModelInstancesComponent.h"
 #include "WorldObject.h"
 #include "WorldSpriteComponent.h"
 #include "wr/WRFileSystem.h"
@@ -169,7 +171,8 @@ static PropertyValue MakeCandidate(const PropertyDescriptor* row, size_t attempt
         case PropertyType_DataMap:
         case PropertyType_FloatList:
         case PropertyType_AssetNameList:
-            break; // FillData, FillFloatList and FillAssetNameList build these
+        case PropertyType_InstanceList:
+            break; // FillData, FillFloatList, FillAssetNameList and FillInstanceList build these
     }
     return Value;
 }
@@ -206,6 +209,32 @@ static void FillAssetNameList(TestRun* run, const PropertyTable* table, void* in
     }
 }
 
+/* Sets an instance list row to three instances within its count, every field away from its default somewhere: thirds in
+ * the positions (the files must keep every digit), turns, even and uneven scales, tints with an opacity. */
+static void FillInstanceList(TestRun* run, const PropertyTable* table, void* instance, const PropertyDescriptor* row)
+{
+    PropertyInstanceEntry Entries[3];
+    for (size_t Index = 0U; Index < 3U; Index++)
+    {
+        double Step = (double)Index;
+        Entries[Index] = (PropertyInstanceEntry)
+        {
+            .Position = Vector3Double_Create(12.0 + Step + (1.0 / 3.0), 0.5 - Step, -40.0 - (Step / 3.0)),
+            .Rotation = { 0.25f * (float)Index, 1.0f + (float)Index, -0.5f },
+            .Scale = (Index == 1U) ? (Vector3){ 1.5f, 1.5f, 1.5f } : (Vector3){ 0.75f, 2.0f + (float)Index, 1.0f },
+            .Tint = { (unsigned char)(40U * Index), 200U, 90U, (unsigned char)(255U - (60U * Index)) }
+        };
+    }
+    size_t Count = (row->Rules.MaxCount < 3U) ? row->Rules.MaxCount : 3U;
+    PropertyInstanceList* List = NULL;
+    if (TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(Entries, Count, &List)))
+    {
+        PropertyValue Value = PropertyValue_FromInstanceList(List);
+        TEST_CHECK_SUCCESS(run, Properties_Set(table, instance, row->Key, &Value));
+        PropertyInstanceList_Destroy(List);
+    }
+}
+
 /* Sets every settable row of @p table (all but the ReadOnly ones, which go through the world) to a value that is not
  * its default and passes its rules. */
 static void FillTable(TestRun* run, const PropertyTable* table, void* instance)
@@ -225,6 +254,11 @@ static void FillTable(TestRun* run, const PropertyTable* table, void* instance)
         if (Descriptor->Type == PropertyType_AssetNameList)
         {
             FillAssetNameList(run, table, instance, Descriptor);
+            continue;
+        }
+        if (Descriptor->Type == PropertyType_InstanceList)
+        {
+            FillInstanceList(run, table, instance, Descriptor);
             continue;
         }
         bool IsSet = false;
@@ -1499,7 +1533,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 51U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 53U);
             // The terrain (B01): one object placing the placeholder terrain around the ground slab.
             WorldComponent* Ground = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 51U, WorldComponentType_Terrain, &Ground)
@@ -1597,6 +1631,27 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                 && (WorldColliderComponent_GetLayer(WorldColliderComponent_FromComponent(Zone)) == CollisionLayer_Trigger));
             TEST_CHECK(run, World_TryGetObject(&Loaded, 21U, &LampLight)
                 && (WorldObject_GetParentId(LampLight) == 20U));
+            // The grove (B03): 400 copies of the placeholder tree on the terrain, turned, scaled (some unevenly) and
+            // tinted, every 40th half transparent (asset_source/scripts/placeholder_instances.py).
+            WorldComponent* Grove = NULL;
+            size_t TreeCount = 0U;
+            const PropertyInstanceEntry* Trees = World_TryGetComponent(&Loaded, 52U, WorldComponentType_ModelInstances,
+                &Grove) ? WorldModelInstancesComponent_GetInstances(WorldModelInstancesComponent_FromComponent(Grove),
+                &TreeCount) : NULL;
+            size_t UnevenCount = 0U;
+            size_t HalfCount = 0U;
+            for (size_t Index = 0U; (Trees != NULL) && (Index < TreeCount); Index++)
+            {
+                UnevenCount += (Trees[Index].Scale.y != Trees[Index].Scale.x) ? 1U : 0U;
+                HalfCount += (Trees[Index].Tint.a == 0x80) ? 1U : 0U;
+            }
+            TEST_CHECK(run, (Trees != NULL) && (TreeCount == 400U) && AreNamesEqual(
+                WorldModelInstancesComponent_GetWorldModel(WorldModelInstancesComponent_FromComponent(Grove)),
+                (const unsigned char*)u8"test_tree") && (UnevenCount == 133U) && (HalfCount == 10U));
+            // Its lamp, in a clearing: the copies' cube shadows (B03's run list).
+            WorldComponent* GroveLamp = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 53U, WorldComponentType_Light, &GroveLamp)
+                && WorldLightComponent_CastsShadows(WorldLightComponent_FromComponent(GroveLamp)));
             // The file is in the writer's own form, so a save of the unchanged world diffs empty against it.
             TEST_CHECK_SUCCESS(run, WorldFile_WriteJSON(&Loaded, &Written));
             TEST_CHECK(run, BytesEqual(&Shipped, &Written));

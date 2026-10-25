@@ -150,6 +150,11 @@ typedef enum WorldRendererFeatureEnum
      *  without texture arrays (a GL function missing, logged once: the terrains then show their materials' mean colours)
      *  or without the lit terrain shader. */
     WorldRendererFeature_TerrainMaterials,
+    /** @brief Instanced drawing of model instances components (B03): every copy of a cell in one draw per mesh and LOD,
+     *  each copy fading and changing LOD on its own. Unavailable without PBR lighting or its instanced twin
+     *  (world_pbr_instanced); inactive while switched off (WorldRenderer_SetInstancingEnabled) or no cell is in view.
+     *  Without it, or without a pass's own twin, the copies draw one at a time, looking the same. */
+    WorldRendererFeature_Instancing,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -247,6 +252,21 @@ typedef struct WorldRendererStatusStruct
     bool IsTerrainKeyEnabled;
     /** @brief What the terrains showed (WorldRenderer_SetTerrainView, B02). */
     WorldRendererTerrainView TerrainView;
+    /** @brief Model instances components with a usable world model, and those that draw no copies (no world model named,
+     *  or one that failed to load: logged once) (B03). */
+    size_t InstanceComponentCount;
+    size_t InstanceComponentWithoutAssetCount;
+    /** @brief The copies of the components on enabled and visible objects, and their cells. */
+    size_t InstanceCount;
+    size_t InstanceCellCount;
+    /** @brief The cells the camera's passes drew and their copies (each copy then fades and picks its LOD on its own),
+     *  the cells outside the camera's view, and those beyond their draw distance or fully transparent. */
+    size_t DrawnInstanceCellCount;
+    size_t DrawnInstanceCount;
+    size_t InstanceCellsOutsideViewCount;
+    size_t InstanceCellsFadedOutCount;
+    /** @brief Whether the copies drew instanced (WorldRenderer_SetInstancingEnabled). */
+    bool IsInstancingEnabled;
 } WorldRendererStatus;
 
 
@@ -461,6 +481,24 @@ void WorldRenderer_SetTerrainKeyEnabled(WorldRenderer* self, bool enabled);
  * @returns true if enabled.
  */
 bool WorldRenderer_IsTerrainKeyEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Switches instanced drawing (B03): on, every pass draws all the copies of a cell of a model instances component
+ *        at once (one draw per mesh and LOD); off, it draws each copy on its own through the ordinary shaders, with the
+ *        same fades and LODs (an A/B for the instanced path: the picture must not change).
+ *
+ * A debug aid. Default enabled. Applied on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to draw instanced.
+ */
+void WorldRenderer_SetInstancingEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether instanced drawing is enabled (see WorldRenderer_SetInstancingEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true if enabled.
+ */
+bool WorldRenderer_IsInstancingEnabled(const WorldRenderer* self);
 
 /**
  * @brief Chooses what the terrains show (B02): their shaded materials, or a debug view of the blend's steps (the painted

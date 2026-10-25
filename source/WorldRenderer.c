@@ -55,6 +55,8 @@ static void EnsureShaders(WorldRenderer* self)
     WorldRendererSky_LoadShader(self);
     WorldRendererStars_LoadShader(self);
     WorldRendererTerrain_LoadShader(self);
+    // The instanced twins sit beside the lit, G-buffer and shadow shaders loaded above (B03).
+    WorldRendererInstances_LoadShaders(self);
 }
 
 // What each optional feature needs to be able to run at all (its shaders and targets), independent of whether it
@@ -463,6 +465,36 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->DrawnTerrainTriangleCount = Counts.DrawnTerrainTriangleCount;
     Status->IsTerrainKeyEnabled = self->_terrain._isDebugEnabled;
     Status->TerrainView = self->_terrain._view;
+
+    size_t InstanceEntryCount = 0;
+    const WorldRenderInstances* InstanceEntries = WorldRenderCache_GetInstances(&self->_cache, &InstanceEntryCount);
+    Status->InstanceComponentCount = 0;
+    Status->InstanceComponentWithoutAssetCount = 0;
+    for (size_t Index = 0; Index < InstanceEntryCount; Index++)
+    {
+        if (InstanceEntries[Index].Asset != NULL)
+        {
+            Status->InstanceComponentCount++;
+        }
+        else
+        {
+            Status->InstanceComponentWithoutAssetCount++;
+        }
+    }
+    size_t InstanceCellCount = 0;
+    const WorldRenderInstanceCell* InstanceCells = WorldRenderCache_GetInstanceCells(&self->_cache, &InstanceCellCount);
+    Status->InstanceCellCount = InstanceCellCount;
+    Status->InstanceCount = 0;
+    for (size_t Index = 0; Index < InstanceCellCount; Index++)
+    {
+        Status->InstanceCount += InstanceCells[Index].RecordCount;
+    }
+    Status->DrawnInstanceCellCount = Counts.DrawnInstanceCellCount;
+    Status->DrawnInstanceCount = Counts.DrawnInstanceCount;
+    Status->InstanceCellsOutsideViewCount = Counts.InstanceCellsOutsideViewCount;
+    Status->InstanceCellsFadedOutCount = Counts.InstanceCellsFadedOutCount;
+    Status->IsInstancingEnabled = self->_instances._isEnabled;
+    Status->Features[WorldRendererFeature_Instancing] = WorldRendererInstances_GetState(self);
 }
 
 /* Appends the drawn models per LOD to the status line's LOD text, LOD 0 first, up to the coarsest LOD drawn: "9 / 3 / 1".
@@ -566,6 +598,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     WorldRendererSky_Construct(Renderer);
     WorldRendererSprites_Construct(Renderer);
     WorldRendererTerrain_Construct(Renderer);
+    WorldRendererInstances_Construct(Renderer);
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardLights, INITIAL_FORWARD_LIGHT_CAPACITY,
         sizeof(WorldCullingLight));
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardRadiances, INITIAL_FORWARD_LIGHT_CAPACITY,
@@ -594,6 +627,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
 
     // The cache's asset pointers die with the model user, so the cache (and the terrains' GPU meshes) go first.
     WorldRendererTerrain_Deconstruct(self);
+    WorldRendererInstances_Deconstruct(self);
     WorldVisibility_Deconstruct(&self->_visibility);
     WorldRenderCache_Deconstruct(&self->_cache);
     Memory_Free(self->_pbr._forwardLights._data);
@@ -639,8 +673,9 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
     AssetUserID OldUser = self->_modelUser;
     WorldRenderCache_Reset(&self->_cache);
     // The terrains' GPU meshes are keyed by their terrains, which the old user may release: another terrain could then
-    // live at the same address.
+    // live at the same address. The copies' buffers go too: the new world's entries build their cells afresh.
     WorldRendererTerrain_ReleaseMeshes(self);
+    WorldRendererInstances_ReleaseBuffers(self);
     self->_modelUser = NewUser;
 
     // Any origin will do: this sync resolves the world models, and every render syncs again for its camera.
@@ -678,6 +713,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     WorldRendererGeometry_ResetPalettes(self);
     // The terrains' chunks on the GPU: new and changed ones uploaded, those of terrains no longer placed unloaded (B01).
     WorldRendererTerrain_PrepareFrame(self);
+    // The copies' records on the GPU: new builds of cells uploaded, the buffers no component holds unloaded (B03).
+    WorldRendererInstances_PrepareFrame(self);
     // Recreates the targets after a resize or a pixelation change; only a missing scene target is fatal.
     Error TargetResult = WorldRendererScene_EnsureTargets(self, target.texture.width, target.texture.height);
     if (TargetResult.Code != ErrorCode_Success)
@@ -804,6 +841,7 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_Skinning:         return (const unsigned char*)u8"skinning";
         case WorldRendererFeature_TerrainShading:   return (const unsigned char*)u8"terrain shading";
         case WorldRendererFeature_TerrainMaterials: return (const unsigned char*)u8"terrain materials";
+        case WorldRendererFeature_Instancing:       return (const unsigned char*)u8"instancing";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -855,8 +893,9 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     Error_Deconstruct(&LogResult);
     Memory_Free(Lods._data);
     Memory_Free(Lists._data);
-    // Each terrain's materials and texture arrays (B02).
+    // Each terrain's materials and texture arrays (B02), and the copies of the model instances components (B03).
     WorldRendererTerrain_LogMaterials(self);
+    WorldRendererInstances_LogStatus(self);
 }
 
 void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled)
@@ -927,6 +966,16 @@ void WorldRenderer_SetTerrainKeyEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_IsTerrainKeyEnabled(const WorldRenderer* self)
 {
     return self->_terrain._isDebugEnabled;
+}
+
+void WorldRenderer_SetInstancingEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_instances._isEnabled = enabled;
+}
+
+bool WorldRenderer_IsInstancingEnabled(const WorldRenderer* self)
+{
+    return self->_instances._isEnabled;
 }
 
 void WorldRenderer_SetTerrainView(WorldRenderer* self, WorldRendererTerrainView view)

@@ -22,10 +22,20 @@
 //
 // Test it last in a shader that takes derivatives or samples mipmapped textures (after those), so they stay defined for
 // the pixels that are drawn.
+//
+// The instanced twins (B03: their definitions define WORLD_INSTANCED) take the fade and the LOD band per copy from their
+// vertex stage (common/instancing) as flat varyings instead of the uniforms: the same formula with values from two
+// sources.
 
+#ifdef WORLD_INSTANCED
+flat in float fragDitherFade;          // the copy's fade: 0 solid .. 1 gone
+flat in float fragDitherLodProgress;   // its LOD band's progress: the share of the pixels the incoming LOD takes
+flat in float fragDitherIsIncomingLod; // 1 when this draw is the copy's incoming LOD, 0 otherwise (no bool varyings)
+#else
 uniform float ditherFade;         // this draw's fade (its draw distance, its opacity): 0 solid .. 1 gone
 uniform float ditherLodProgress;  // its LOD cross-fade's progress: the share of the pixels the incoming LOD takes
 uniform bool ditherIsIncomingLod; // whether this draw is the incoming LOD (it keeps the pixels the outgoing one leaves)
+#endif
 uniform vec2 ditherPixelScale;    // this pass's pixels per scene pixel: 1 at the scene's resolution (and in the shadow
                                   // maps, on their texel grid), window / scene in the crisp overlay
 
@@ -43,11 +53,22 @@ float DitherThreshold()
     return (DITHER_BAYER[cell.y*4 + cell.x] + 0.5)/16.0;
 }
 
-// Whether this fragment is discarded: the draw's fade or its part of a LOD cross-fade removes it.
-bool DitherDiscard()
+// Whether this fragment is discarded for a fade and a part of a LOD cross-fade: either removes it.
+bool DitherDiscardValues(float fade, float lodProgress, bool isIncomingLod)
 {
     float threshold = DitherThreshold();
-    bool isKeptByFade = threshold > ditherFade;
-    bool isKeptByLod = ditherIsIncomingLod ? (threshold <= ditherLodProgress) : (threshold > ditherLodProgress);
+    bool isKeptByFade = threshold > fade;
+    bool isKeptByLod = isIncomingLod ? (threshold <= lodProgress) : (threshold > lodProgress);
     return !(isKeptByFade && isKeptByLod);
+}
+
+// Whether this fragment is discarded: the draw's fade or its part of a LOD cross-fade removes it (in an instanced twin,
+// its copy's).
+bool DitherDiscard()
+{
+#ifdef WORLD_INSTANCED
+    return DitherDiscardValues(fragDitherFade, fragDitherLodProgress, fragDitherIsIncomingLod > 0.5);
+#else
+    return DitherDiscardValues(ditherFade, ditherLodProgress, ditherIsIncomingLod);
+#endif
 }

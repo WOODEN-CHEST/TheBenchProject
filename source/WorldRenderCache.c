@@ -30,42 +30,42 @@ static bool IsObjectShown(const WorldObject* object)
     return WorldObject_IsEffectivelyEnabled(object) && WorldObject_IsEffectivelyVisible(object);
 }
 
-/* The object's name for a log line ("" without one). */
-static const char* GetOwnerName(const WorldModelComponent* model)
+/* An object's name for a log line ("" without one). */
+static const char* GetObjectName(const WorldObject* object)
 {
-    const unsigned char* Name = WorldObject_GetName(WorldComponent_GetOwner(&model->Base));
+    const unsigned char* Name = WorldObject_GetName(object);
     return (Name != NULL) ? (const char*)Name : "";
 }
 
-/* Logs (once, when it happens) that an object's world model could not be resolved, and releases the error. */
-static void ReportModelFailure(Logger* logger, const WorldModelComponent* model, const unsigned char* assetName,
-    Error* error)
+/* Logs (once, when it happens) that an object's world model could not be resolved, and releases the error. @p consequence
+ * says what the object then lacks ("draws nothing", "draws no instances"). */
+static void ReportWorldModelFailure(Logger* logger, const WorldObject* owner, const char* consequence,
+    const unsigned char* assetName, Error* error)
 {
     if (logger != NULL)
     {
         Error LogResult = Logger_LogWarningFormatted(logger,
-            (const unsigned char*)u8"WorldRenderer: object %" PRIu64 u8" (\"%s\") draws nothing: world model \"%s\" "
-            u8"could not be loaded (%s).",
-            WorldObject_GetId(WorldComponent_GetOwner(&model->Base)), GetOwnerName(model), (const char*)assetName,
+            (const unsigned char*)u8"WorldRenderer: object %" PRIu64 u8" (\"%s\") %s: world model \"%s\" could not be "
+            u8"loaded (%s).", WorldObject_GetId(owner), GetObjectName(owner), consequence, (const char*)assetName,
             (error->Message != NULL) ? (const char*)error->Message : "no details");
         Error_Deconstruct(&LogResult);
     }
     Error_Deconstruct(error);
 }
 
-/* Logs (once, when the variant is resolved) that an object asks for a variant its world model does not have. */
-static void ReportVariantFailure(Logger* logger, const WorldModelComponent* model)
+/* Logs (once, when the variant is resolved) that an object asks for a variant its world model does not have. @p what
+ * names what it draws ("world model", "the instances of world model"). */
+static void ReportVariantFailure(Logger* logger, const WorldObject* owner, const char* what,
+    const unsigned char* worldModel, const unsigned char* variant)
 {
     if (logger == NULL)
     {
         return;
     }
-    const unsigned char* Variant = WorldModelComponent_GetVariant(model);
     Error LogResult = Logger_LogWarningFormatted(logger,
-        (const unsigned char*)u8"WorldRenderer: object %" PRIu64 u8" (\"%s\") draws world model \"%s\" with its own "
-        u8"materials: it has no variant \"%s\".",
-        WorldObject_GetId(WorldComponent_GetOwner(&model->Base)), GetOwnerName(model),
-        (const char*)WorldModelComponent_GetWorldModel(model), (Variant != NULL) ? (const char*)Variant : "");
+        (const unsigned char*)u8"WorldRenderer: object %" PRIu64 u8" (\"%s\") draws %s \"%s\" with its own "
+        u8"materials: it has no variant \"%s\".", WorldObject_GetId(owner), GetObjectName(owner), what,
+        (const char*)worldModel, (variant != NULL) ? (const char*)variant : "");
     Error_Deconstruct(&LogResult);
 }
 
@@ -88,7 +88,8 @@ static void ResolveVariant(WorldRenderModel* entry, Logger* logger)
         entry->VariantIndex = Index;
         return;
     }
-    ReportVariantFailure(logger, entry->Component);
+    ReportVariantFailure(logger, WorldComponent_GetOwner(&entry->Component->Base), "world model",
+        WorldModelComponent_GetWorldModel(entry->Component), WorldModelComponent_GetVariant(entry->Component));
 }
 
 /* Whether a component asks for another variant than the one an entry resolved. */
@@ -99,19 +100,18 @@ static bool IsVariantChanged(const WorldRenderModel* entry, const WorldModelComp
 }
 
 /* Logs (once, when it starts) that an object's own LOD distances do not fit its world model, whose distances it uses. */
-static void ReportLodListRefused(Logger* logger, const WorldRenderModel* entry)
+static void ReportLodListRefused(Logger* logger, const WorldObject* owner, const unsigned char* worldModelName,
+    size_t ownCount, const WorldModel* worldModel)
 {
     if (logger == NULL)
     {
         return;
     }
-    size_t OwnCount = 0U;
-    WorldModelComponent_GetLodDistances(entry->Component, &OwnCount);
     Error LogResult = Logger_LogWarningFormatted(logger,
         (const unsigned char*)u8"WorldRenderer: object %" PRIu64 u8" (\"%s\") uses its world model \"%s\"'s LOD "
         u8"distances: its own lod_distances holds %" PRIu64 u8", the world model has %" PRIu64 u8" LODs.",
-        entry->ObjectId, GetOwnerName(entry->Component), (const char*)WorldModelComponent_GetWorldModel(entry->Component),
-        (uint64_t)OwnCount, (uint64_t)WorldModel_GetLodCount(entry->Asset));
+        WorldObject_GetId(owner), GetObjectName(owner), (const char*)worldModelName, (uint64_t)ownCount,
+        (uint64_t)WorldModel_GetLodCount(worldModel));
     Error_Deconstruct(&LogResult);
 }
 
@@ -139,7 +139,8 @@ static void ResolveModel(WorldRenderModel* entry, AssetManager* assets, AssetUse
         }
         else
         {
-            ReportModelFailure(logger, entry->Component, AssetName, &LoadResult);
+            ReportWorldModelFailure(logger, WorldComponent_GetOwner(&entry->Component->Base), "draws nothing", AssetName,
+                &LoadResult);
         }
     }
     ResolveVariant(entry, logger);
@@ -432,7 +433,10 @@ static void UpdateLod(WorldRenderModel* entry, const WorldRenderLodView* view, f
     bool IsAsAsked = WorldModelComponent_ResolveLodSettings(entry->Component, entry->Asset, &Settings);
     if (!IsAsAsked && !entry->IsLodListRefused)
     {
-        ReportLodListRefused(logger, entry);
+        size_t OwnCount = 0U;
+        WorldModelComponent_GetLodDistances(entry->Component, &OwnCount);
+        ReportLodListRefused(logger, WorldComponent_GetOwner(&entry->Component->Base),
+            WorldModelComponent_GetWorldModel(entry->Component), OwnCount, entry->Asset);
     }
     entry->IsLodListRefused = !IsAsAsked;
 
@@ -647,6 +651,306 @@ static Error UpdateTerrains(WorldRenderCache* self, World* world, Vector3Double 
     return Error_CreateSuccess();
 }
 
+/* Releases an instances entry's cells. */
+static void FreeInstanceCells(WorldRenderInstances* entry)
+{
+    if (entry->Cells != NULL)
+    {
+        WorldInstanceCells_Deconstruct(entry->Cells);
+        Memory_Free(entry->Cells);
+        entry->Cells = NULL;
+    }
+    entry->AreCellsBuilt = false;
+}
+
+/* Releases the cells of every entry in an instances list (before the list is cleared). */
+static void FreeInstanceList(GenericBuffer* list)
+{
+    for (size_t Index = 0U; Index < list->_count; Index++)
+    {
+        FreeInstanceCells(GenericBuffer_GetPointerToElement(list, Index));
+    }
+}
+
+/* Resolves an instances entry's variant for the component's current uses_variant and variant name, as ResolveVariant
+ * does for a model (an unknown name logged once). */
+static void ResolveInstancesVariant(WorldRenderInstances* entry, Logger* logger)
+{
+    const WorldModelInstancesComponent* Component = entry->Component;
+    entry->UsesVariant = WorldModelInstancesComponent_UsesVariant(Component);
+    entry->VariantNameHash = HashName(WorldModelInstancesComponent_GetVariant(Component));
+    entry->HasVariant = false;
+    entry->VariantIndex = 0U;
+    if (!entry->UsesVariant || (entry->Asset == NULL))
+    {
+        return;
+    }
+    size_t Index = 0U;
+    if (WorldModel_TryFindVariant(entry->Asset, WorldModelInstancesComponent_GetVariant(Component), &Index))
+    {
+        entry->HasVariant = true;
+        entry->VariantIndex = Index;
+        return;
+    }
+    ReportVariantFailure(logger, WorldComponent_GetOwner(&Component->Base), "the instances of world model",
+        WorldModelInstancesComponent_GetWorldModel(Component), WorldModelInstancesComponent_GetVariant(Component));
+}
+
+/* The world model's bounding sphere in a copy's space: its centre through the bounds transform, its radius times that
+ * transform's stretch (in double, as a model's sphere is). */
+static WorldInstanceBounds GetInstanceBounds(const WorldModel* asset)
+{
+    Matrix4Double Bounds = GameMath_FromMatrix(WorldModel_GetBoundsTransform(asset));
+    Vector3Double Center = Matrix4Double_TransformPoint(&Bounds, GameMath_FromVector3(WorldModel_GetBoundsCenter(asset)));
+    return (WorldInstanceBounds)
+    {
+        .Center = GameMath_ToVector3(Center),
+        .Radius = (float)((double)WorldModel_GetBoundsRadius(asset) * WorldTransform_GetMaxScale(&Bounds))
+    };
+}
+
+/* Resolves an instances entry's world model for the component's current name, then its variant; the cells must be built
+ * again (the bounds may differ). A component without a name draws nothing; a load failure is logged here, once. */
+static void ResolveInstances(WorldRenderInstances* entry, AssetManager* assets, AssetUserID modelUser, Logger* logger)
+{
+    const unsigned char* AssetName = WorldModelInstancesComponent_GetWorldModel(entry->Component);
+    entry->IsResolved = true;
+    entry->NameHash = HashName(AssetName);
+    entry->Asset = NULL;
+    entry->AreCellsBuilt = false;
+    entry->IsLodListRefused = false;
+    if (AssetName != NULL)
+    {
+        WorldModel* Asset = NULL;
+        Error LoadResult = AssetManager_LoadWorldModel(assets, AssetName, modelUser, &Asset);
+        if (LoadResult.Code == ErrorCode_Success)
+        {
+            entry->Asset = Asset;
+            entry->Bounds = GetInstanceBounds(Asset);
+        }
+        else
+        {
+            ReportWorldModelFailure(logger, WorldComponent_GetOwner(&entry->Component->Base), "draws no instances",
+                AssetName, &LoadResult);
+        }
+    }
+    ResolveInstancesVariant(entry, logger);
+}
+
+/* Builds an entry's cells from its component's copies (allocating the cells on the first build), with a new build id. */
+static Error BuildInstanceCells(WorldRenderCache* self, WorldRenderInstances* entry)
+{
+    if (entry->Cells == NULL)
+    {
+        entry->Cells = Memory_Allocate(sizeof(WorldInstanceCells));
+        WorldInstanceCells_Construct(entry->Cells);
+    }
+    size_t Count = 0U;
+    const PropertyInstanceEntry* Copies = WorldModelInstancesComponent_GetInstances(entry->Component, &Count);
+    Error Result = WorldInstanceCells_Build(entry->Cells, Copies, Count, entry->ObjectId, &entry->Bounds);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    entry->AreCellsBuilt = true;
+    entry->CellsRevision = WorldModelInstancesComponent_GetInstancesRevision(entry->Component);
+    entry->CellsBuildId = ++self->_nextCellsBuildId;
+    return Error_CreateSuccess();
+}
+
+/* Re-matches the instances entries to the world's current model instances components, in order (as RematchTerrains): a
+ * component keeps its entry (its world model and its cells) when one with its owner's id and its serial exists;
+ * otherwise it gets a new, unresolved one. The cells of entries no component keeps are released. */
+static Error RematchInstances(WorldRenderCache* self, World* world)
+{
+    size_t PreviousCount = self->_instances._count;
+    size_t Cursor = 0;
+    GenericBuffer_Clear(&self->_instancesRematch);
+    size_t ComponentCount = 0;
+    WorldComponent* const* Components = World_GetComponents(world, WorldComponentType_ModelInstances, &ComponentCount);
+    Error Result = Error_CreateSuccess();
+    for (size_t Index = 0; (Index < ComponentCount) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        uint64_t Id = WorldObject_GetId(WorldComponent_GetOwner(Components[Index]));
+        uint64_t Serial = WorldComponent_GetSerial(Components[Index]);
+        WorldRenderInstances Entry = { .ObjectId = Id, .Serial = Serial, .IsResolved = false, .Asset = NULL,
+            .Cells = NULL, .AreCellsBuilt = false };
+        for (size_t Search = Cursor; Search < PreviousCount; Search++)
+        {
+            WorldRenderInstances* Previous = GenericBuffer_GetPointerToElement(&self->_instances, Search);
+            if (Previous->ObjectId == Id)
+            {
+                if (Previous->Serial == Serial)
+                {
+                    // The entry moves with its cells: the old list no longer owns them.
+                    Entry = *Previous;
+                    Previous->Cells = NULL;
+                }
+                Cursor = Search + 1;
+                break;
+            }
+        }
+        Entry.Component = WorldModelInstancesComponent_FromComponent(Components[Index]);
+        if (!GenericBuffer_AddLast(&self->_instancesRematch, &Entry))
+        {
+            FreeInstanceCells(&Entry);
+            Result = Error_Construct2(ErrorCode_InvalidOperation, "WorldRenderCache: could not grow the instances list.");
+        }
+    }
+    FreeInstanceList(&self->_instances);
+    GenericBuffer_Clear(&self->_instances);
+    if ((Result.Code == ErrorCode_Success) && (self->_instancesRematch._count > 0)
+        && !GenericBuffer_AddLastRange(&self->_instances, self->_instancesRematch._data, self->_instancesRematch._count))
+    {
+        Result = Error_Construct2(ErrorCode_InvalidOperation, "WorldRenderCache: could not grow the instances list.");
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        FreeInstanceList(&self->_instancesRematch);
+        GenericBuffer_Clear(&self->_instances);
+    }
+    GenericBuffer_Clear(&self->_instancesRematch);
+    return Result;
+}
+
+/* Lists the cells of a drawn instances entry for this frame: each cell's world matrix (the object's world matrix times
+ * the translation to its centre) and its sphere through it, in double and in render space for @p origin. */
+static Error AddInstanceCells(WorldRenderCache* self, const WorldRenderInstances* entry, size_t entryIndex,
+    Vector3Double origin)
+{
+    size_t CellCount = 0U;
+    const WorldInstanceCell* Cells = WorldInstanceCells_GetCells(entry->Cells, &CellCount);
+    for (size_t Index = 0U; Index < CellCount; Index++)
+    {
+        const WorldInstanceCell* Source = &Cells[Index];
+        Matrix4Double ToCenter = Matrix4Double_FromTranslation(Source->Center);
+        WorldRenderInstanceCell Cell =
+        {
+            .Entry = entryIndex, .Cell = Index, .FirstRecord = Source->FirstRecord, .RecordCount = Source->RecordCount,
+            .HasOutline = entry->HasOutline, .ShadowTier = entry->ShadowTier, .CastsShadows = entry->CastsShadows,
+            .DrawDistance = entry->DrawDistance, .IsDrawDistanceFixed = entry->IsDrawDistanceFixed, .Tint = entry->Tint,
+            .WorldMatrix = Matrix4Double_Multiply(&ToCenter, &entry->WorldMatrix),
+            .Center = Matrix4Double_TransformPoint(&entry->WorldMatrix, Source->SphereCenter),
+            .Radius = (float)(Source->SphereRadius * (double)entry->WorldStretch),
+            .LodMask = 0U
+        };
+        Cell.RenderMatrix = GameMath_ToMatrixRelative(&Cell.WorldMatrix, origin);
+        Cell.RenderCenter = GameMath_ToVector3Relative(Cell.Center, origin);
+        if (!GenericBuffer_AddLast(&self->_instanceCells, &Cell))
+        {
+            return Error_Construct2(ErrorCode_InvalidOperation, "WorldRenderCache: could not grow the instance cell list.");
+        }
+    }
+    return Error_CreateSuccess();
+}
+
+/* Brings one instances entry up to date for this frame: its world model and variant when they changed, its cells when
+ * its copies or its world model did, then its settings in effect, its tint, its world matrix and its cells. */
+static Error UpdateInstancesEntry(WorldRenderCache* self, WorldRenderInstances* entry, size_t entryIndex,
+    Vector3Double origin, AssetManager* assets, AssetUserID modelUser, Logger* logger)
+{
+    const WorldModelInstancesComponent* Component = entry->Component;
+    uint32_t Revision = WorldComponent_GetRevision(&Component->Base);
+    bool IsChanged = entry->IsResolved && (entry->Revision != Revision);
+    bool IsRenamed = IsChanged && (HashName(WorldModelInstancesComponent_GetWorldModel(Component)) != entry->NameHash);
+    bool IsVariantChanged = IsChanged && ((WorldModelInstancesComponent_UsesVariant(Component) != entry->UsesVariant)
+        || (HashName(WorldModelInstancesComponent_GetVariant(Component)) != entry->VariantNameHash));
+    if (!entry->IsResolved || IsRenamed)
+    {
+        ResolveInstances(entry, assets, modelUser, logger);
+    }
+    else if (IsVariantChanged)
+    {
+        ResolveInstancesVariant(entry, logger);
+    }
+    entry->Revision = Revision;
+
+    WorldModelSettings Defaults = (entry->Asset != NULL) ? *WorldModel_GetSettings(entry->Asset)
+        : WorldModelSettings_CreateDefault();
+    WorldModelSettings Settings = WorldModelInstancesComponent_ResolveSettings(Component, &Defaults);
+    entry->HasOutline = Settings.HasOutline;
+    entry->ShadowTier = Settings.ShadowTier;
+    entry->CastsShadows = Settings.CastsShadows;
+    entry->DrawDistance = Settings.DrawDistance;
+    entry->IsDrawDistanceFixed = Settings.IsDrawDistanceFixed;
+    const WorldObject* Owner = WorldComponent_GetOwner(&Component->Base);
+    entry->Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Owner));
+    entry->IsDrawn = (entry->Asset != NULL) && IsObjectShown(Owner);
+    if (!entry->IsDrawn)
+    {
+        return Error_CreateSuccess();
+    }
+    if (!entry->AreCellsBuilt || (entry->CellsRevision != WorldModelInstancesComponent_GetInstancesRevision(Component)))
+    {
+        Error BuildResult = BuildInstanceCells(self, entry);
+        if (BuildResult.Code != ErrorCode_Success)
+        {
+            return BuildResult;
+        }
+    }
+    entry->WorldMatrix = WorldObject_GetWorldMatrix(Owner);
+    entry->WorldStretch = (float)WorldTransform_GetMaxScale(&entry->WorldMatrix);
+    return AddInstanceCells(self, entry, entryIndex, origin);
+}
+
+/* Brings every instances entry up to date and lists this frame's cells, in render space for @p origin. The n-th model
+ * instances component must own the n-th entry; when one does not (or the counts differ) it stops with
+ * *outAreEntriesAligned false so the caller re-matches. */
+static Error UpdateInstances(WorldRenderCache* self, World* world, Vector3Double origin, AssetManager* assets,
+    AssetUserID modelUser, Logger* logger, bool* outAreEntriesAligned)
+{
+    *outAreEntriesAligned = false;
+    GenericBuffer_Clear(&self->_instanceCells);
+    size_t ComponentCount = 0;
+    WorldComponent* const* Components = World_GetComponents(world, WorldComponentType_ModelInstances, &ComponentCount);
+    if (ComponentCount != self->_instances._count)
+    {
+        return Error_CreateSuccess();
+    }
+    for (size_t Index = 0; Index < ComponentCount; Index++)
+    {
+        WorldRenderInstances* Entry = GenericBuffer_GetPointerToElement(&self->_instances, Index);
+        if ((Entry->Component != WorldModelInstancesComponent_FromComponent(Components[Index]))
+            || (Entry->Serial != WorldComponent_GetSerial(Components[Index])))
+        {
+            GenericBuffer_Clear(&self->_instanceCells);
+            return Error_CreateSuccess();
+        }
+        Error Result = UpdateInstancesEntry(self, Entry, Index, origin, assets, modelUser, logger);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+    *outAreEntriesAligned = true;
+    return Error_CreateSuccess();
+}
+
+/* One drawn instances entry's LOD bands this frame, from its LOD settings in effect (a placement's own list that does not
+ * fit its world model is warned about once, when that starts). */
+static void UpdateInstanceBands(WorldRenderInstances* entry, const WorldRenderLodView* view, Logger* logger)
+{
+    bool IsAsAsked = WorldModelInstancesComponent_ResolveLodSettings(entry->Component, entry->Asset, &entry->LodSettings);
+    if (!IsAsAsked && !entry->IsLodListRefused)
+    {
+        size_t OwnCount = 0U;
+        WorldModelInstancesComponent_GetLodDistances(entry->Component, &OwnCount);
+        ReportLodListRefused(logger, WorldComponent_GetOwner(&entry->Component->Base),
+            WorldModelInstancesComponent_GetWorldModel(entry->Component), OwnCount, entry->Asset);
+    }
+    entry->IsLodListRefused = !IsAsAsked;
+    WorldInstancing_GetLodBands(&entry->LodSettings, view->DistanceScale, &entry->Bands);
+}
+
+/* The LODs a cell's copies can show this frame: its entry's bands over the camera's zoomed distances to the cell's
+ * sphere's nearest and farthest points (each copy's sphere centre lies inside it). */
+static void UpdateInstanceCellLods(WorldRenderInstanceCell* cell, const WorldRenderInstances* entry,
+    const WorldRenderLodView* view, float zoomFactor)
+{
+    float Distance = Vector3Distance(view->CameraPosition, cell->RenderCenter);
+    cell->LodMask = WorldInstancing_GetCellLodMask(&entry->Bands, fmaxf(Distance - cell->Radius, 0.0f) * zoomFactor,
+        (Distance + cell->Radius) * zoomFactor);
+}
 
 // Internal functions (declared in WorldRenderCache.h).
 /* The first-person object's camera pose (T30): its pose with every bone its world model's first_person block hides, and
@@ -730,6 +1034,10 @@ void WorldRenderCache_Construct(WorldRenderCache* self)
     GenericBuffer_AllocateVariable(&self->_terrains, INITIAL_LIST_CAPACITY, sizeof(WorldRenderTerrain));
     GenericBuffer_AllocateVariable(&self->_terrainRematch, INITIAL_LIST_CAPACITY, sizeof(WorldRenderTerrain));
     GenericBuffer_AllocateVariable(&self->_terrainChunks, INITIAL_LIST_CAPACITY, sizeof(WorldRenderTerrainChunk));
+    GenericBuffer_AllocateVariable(&self->_instances, INITIAL_LIST_CAPACITY, sizeof(WorldRenderInstances));
+    GenericBuffer_AllocateVariable(&self->_instancesRematch, INITIAL_LIST_CAPACITY, sizeof(WorldRenderInstances));
+    GenericBuffer_AllocateVariable(&self->_instanceCells, INITIAL_LIST_CAPACITY, sizeof(WorldRenderInstanceCell));
+    self->_nextCellsBuildId = 0U;
     self->_world = NULL;
     self->_componentSetVersion = 0;
     self->_isMatched = false;
@@ -752,6 +1060,10 @@ void WorldRenderCache_Deconstruct(WorldRenderCache* self)
     Memory_Free(self->_terrains._data);
     Memory_Free(self->_terrainRematch._data);
     Memory_Free(self->_terrainChunks._data);
+    FreeInstanceList(&self->_instances);
+    Memory_Free(self->_instances._data);
+    Memory_Free(self->_instancesRematch._data);
+    Memory_Free(self->_instanceCells._data);
     Memory_Free(self->_firstPersonPalette);
 }
 
@@ -762,6 +1074,9 @@ void WorldRenderCache_Reset(WorldRenderCache* self)
     GenericBuffer_Clear(&self->_lights);
     GenericBuffer_Clear(&self->_terrains);
     GenericBuffer_Clear(&self->_terrainChunks);
+    FreeInstanceList(&self->_instances);
+    GenericBuffer_Clear(&self->_instances);
+    GenericBuffer_Clear(&self->_instanceCells);
     self->_world = NULL;
     self->_isMatched = false;
 }
@@ -784,6 +1099,7 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double 
     uint64_t Version = World_GetComponentSetVersion(world);
     bool IsMatchCurrent = self->_isMatched && (self->_componentSetVersion == Version);
     bool IsTerrainMatchCurrent = IsMatchCurrent;
+    bool IsInstancesMatchCurrent = IsMatchCurrent;
     bool AreEntriesAligned = false;
     // A fresh match always lines up with the world, so a second attempt is the most that can be needed: the first
     // only fails when the entries do not follow the world after all (a world rebuilt at the same address).
@@ -835,6 +1151,29 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double 
             "WorldRenderCache_Sync: the terrain entries do not follow the world.");
     }
 
+    // The model instances follow the world's model instances components the same way (B03).
+    bool AreInstancesAligned = false;
+    for (int Attempt = 0; (Attempt < 2) && !AreInstancesAligned; Attempt++)
+    {
+        Error Result = IsInstancesMatchCurrent ? Error_CreateSuccess() : RematchInstances(self, world);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = UpdateInstances(self, world, origin, assets, modelUser, logger, &AreInstancesAligned);
+        }
+        if (Result.Code != ErrorCode_Success)
+        {
+            WorldRenderCache_Reset(self);
+            return Result;
+        }
+        IsInstancesMatchCurrent = false;
+    }
+    if (!AreInstancesAligned)
+    {
+        WorldRenderCache_Reset(self);
+        return Error_Construct2(ErrorCode_InvalidState,
+            "WorldRenderCache_Sync: the model instances entries do not follow the world.");
+    }
+
     GenericBuffer_Clear(&self->_sprites);
     GenericBuffer_Clear(&self->_lights);
     Error BuildResult = BuildSpritesAndLights(self, world, origin);
@@ -859,6 +1198,20 @@ void WorldRenderCache_UpdateLods(WorldRenderCache* self, const WorldRenderLodVie
             continue;
         }
         UpdateLod(Entry, view, ZoomFactor, logger);
+    }
+    for (size_t Index = 0; Index < self->_instances._count; Index++)
+    {
+        WorldRenderInstances* Entry = GenericBuffer_GetPointerToElement(&self->_instances, Index);
+        if (Entry->IsDrawn)
+        {
+            UpdateInstanceBands(Entry, view, logger);
+        }
+    }
+    // Only drawn entries list cells, so every cell's entry has its bands now.
+    for (size_t Index = 0; Index < self->_instanceCells._count; Index++)
+    {
+        WorldRenderInstanceCell* Cell = GenericBuffer_GetPointerToElement(&self->_instanceCells, Index);
+        UpdateInstanceCellLods(Cell, GenericBuffer_GetPointerToElement(&self->_instances, Cell->Entry), view, ZoomFactor);
     }
 }
 

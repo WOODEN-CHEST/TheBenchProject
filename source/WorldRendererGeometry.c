@@ -42,56 +42,6 @@ static const Color LodTintColors[LOD_TINT_COLOR_COUNT] =
 
 
 // Static functions.
-/* Per-channel 0..255 colour multiply (a*b/255), matching how raylib's DrawModel folds the object tint into a
- * material's albedo colour. */
-static Color MultiplyColor(Color a, Color b)
-{
-    Color Result;
-    Result.r = (unsigned char)(((int)a.r * (int)b.r) / 255);
-    Result.g = (unsigned char)(((int)a.g * (int)b.g) / 255);
-    Result.b = (unsigned char)(((int)a.b * (int)b.b) / 255);
-    Result.a = (unsigned char)(((int)a.a * (int)b.a) / 255);
-    return Result;
-}
-
-/* Draws one mesh of a model entry's LOD with a material built on the stack. The asset material's maps are copied, so the
- * variant (its maps and factors for this material slot), the tint, the LOD tinting's glow and the pass shader land on the
- * copy and nothing is written to the shared assets (raylib's DrawModel instead writes the tint into the asset's maps for
- * the duration of the draw). In the lit pass @p litProgram is the PBR program @p passShader belongs to: the copy's PBR
- * factors and map flags are uploaded to it before the draw. A NULL @p passShader keeps the material's own shader.
- * DrawMesh still binds the maps' textures, through the shader's location table. */
-static void DrawMeshWithCopiedMaterial(const WorldRenderModel* model, Model rayModel, int meshIndex, Matrix transform,
-    const LodLook* look, const Shader* passShader, const WorldRendererPbrProgram* litProgram)
-{
-    int MaterialIndex = rayModel.meshMaterial[meshIndex];
-    const Material* AssetMaterial = &rayModel.materials[MaterialIndex];
-    MaterialMap Maps[WORLD_RENDERER_MATERIAL_MAP_COUNT];
-    Memory_Copy(AssetMaterial->maps, Maps, sizeof(Maps));
-    if (model->HasVariant)
-    {
-        WorldModel_ApplyVariant(model->Asset, model->VariantIndex, MaterialIndex, Maps);
-    }
-    if (look->HasGlow)
-    {
-        Maps[MATERIAL_MAP_EMISSION].texture.id = 0U; // the debug glow replaces the material's own emission
-        Maps[MATERIAL_MAP_EMISSION].color = look->Glow;
-        Maps[MATERIAL_MAP_EMISSION].value = LOD_TINT_GLOW_INTENSITY;
-    }
-
-    Material DrawMaterial = *AssetMaterial;
-    DrawMaterial.maps = Maps;
-    if (litProgram != NULL)
-    {
-        WorldRendererLighting_UploadMaterial(litProgram, &DrawMaterial);
-    }
-    Maps[MATERIAL_MAP_ALBEDO].color = MultiplyColor(Maps[MATERIAL_MAP_ALBEDO].color, look->Tint);
-    if (passShader != NULL)
-    {
-        DrawMaterial.shader = *passShader;
-    }
-    DrawMesh(rayModel.meshes[meshIndex], DrawMaterial, transform);
-}
-
 /* How a LOD is drawn: with the object's tint, and while the LOD tinting is on, times the LOD's debug colour, in which a
  * LOD past LOD 0 also glows faintly. */
 static LodLook GetLodLook(const WorldRenderer* self, const WorldRenderModel* model, size_t lod)
@@ -101,7 +51,8 @@ static LodLook GetLodLook(const WorldRenderer* self, const WorldRenderModel* mod
         return (LodLook){ .Tint = model->Tint, .HasGlow = false, .Glow = { 0, 0, 0, 255 } };
     }
     Color Debug = LodTintColors[(lod < LOD_TINT_COLOR_COUNT) ? lod : (LOD_TINT_COLOR_COUNT - 1U)];
-    return (LodLook){ .Tint = MultiplyColor(model->Tint, Debug), .HasGlow = lod > 0U, .Glow = Debug };
+    return (LodLook){ .Tint = WorldRendererGeometry_MultiplyColor(model->Tint, Debug), .HasGlow = lod > 0U,
+        .Glow = Debug };
 }
 
 
@@ -119,6 +70,54 @@ static bool CanSkin(const WorldRenderModel* model, const GameSkeleton* skeleton,
 
 
 // Internal functions (declared in WorldRendererInternal.h).
+Color WorldRendererGeometry_MultiplyColor(Color a, Color b)
+{
+    Color Result;
+    Result.r = (unsigned char)(((int)a.r * (int)b.r) / 255);
+    Result.g = (unsigned char)(((int)a.g * (int)b.g) / 255);
+    Result.b = (unsigned char)(((int)a.b * (int)b.b) / 255);
+    Result.a = (unsigned char)(((int)a.a * (int)b.a) / 255);
+    return Result;
+}
+
+/* The asset material's maps are copied, so the variant (its maps and factors for this material slot), the tint, the LOD
+ * tinting's glow and the pass shader land on the copy and nothing is written to the shared assets (raylib's DrawModel
+ * instead writes the tint into the asset's maps for the duration of the draw). DrawMesh still binds the maps' textures,
+ * through the shader's location table. */
+Material WorldRendererGeometry_PrepareMaterial(const WorldRenderer* self, const WorldRenderModel* model, Model rayModel,
+    int meshIndex, size_t lod, const Shader* passShader, const WorldRendererPbrProgram* litProgram,
+    MaterialMap* outMaps)
+{
+    LodLook Look = GetLodLook(self, model, lod);
+    int MaterialIndex = rayModel.meshMaterial[meshIndex];
+    const Material* AssetMaterial = &rayModel.materials[MaterialIndex];
+    Memory_Copy(AssetMaterial->maps, outMaps, WORLD_RENDERER_MATERIAL_MAP_COUNT * sizeof(MaterialMap));
+    if (model->HasVariant)
+    {
+        WorldModel_ApplyVariant(model->Asset, model->VariantIndex, MaterialIndex, outMaps);
+    }
+    if (Look.HasGlow)
+    {
+        outMaps[MATERIAL_MAP_EMISSION].texture.id = 0U; // the debug glow replaces the material's own emission
+        outMaps[MATERIAL_MAP_EMISSION].color = Look.Glow;
+        outMaps[MATERIAL_MAP_EMISSION].value = LOD_TINT_GLOW_INTENSITY;
+    }
+
+    Material DrawMaterial = *AssetMaterial;
+    DrawMaterial.maps = outMaps;
+    if (litProgram != NULL)
+    {
+        WorldRendererLighting_UploadMaterial(litProgram, &DrawMaterial);
+    }
+    outMaps[MATERIAL_MAP_ALBEDO].color = WorldRendererGeometry_MultiplyColor(outMaps[MATERIAL_MAP_ALBEDO].color,
+        Look.Tint);
+    if (passShader != NULL)
+    {
+        DrawMaterial.shader = *passShader;
+    }
+    return DrawMaterial;
+}
+
 void WorldRendererGeometry_LoadShaders(WorldRenderer* self)
 {
     self->_unlit._skinnedShader = WorldRendererCommon_LoadShader(self, UNLIT_SKINNED_SHADER_ASSET_NAME);
@@ -169,7 +168,6 @@ void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel
     // raylib's DrawModelEx convention.
     Model RayModel = GameModel_GetRaylibModel(LodModel);
     Matrix LodTransform = WorldRenderModel_GetLodTransform(model, lod);
-    LodLook Look = GetLodLook(self, model, lod);
     const GameSkeleton* Skeleton = GameModel_GetSkeleton(LodModel);
     bool IsPosed = CanSkin(model, Skeleton, shaders);
     for (int MeshIndex = 0; MeshIndex < RayModel.meshCount; MeshIndex++)
@@ -180,8 +178,10 @@ void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel
         {
             LitProgram = IsSkinned ? &self->_pbr._skinned : &self->_pbr._rigid;
         }
-        DrawMeshWithCopiedMaterial(model, RayModel, MeshIndex, LodTransform, &Look,
-            IsSkinned ? shaders->Skinned : shaders->Rigid, LitProgram);
+        MaterialMap Maps[WORLD_RENDERER_MATERIAL_MAP_COUNT];
+        Material DrawMaterial = WorldRendererGeometry_PrepareMaterial(self, model, RayModel, MeshIndex, lod,
+            IsSkinned ? shaders->Skinned : shaders->Rigid, LitProgram, Maps);
+        DrawMesh(RayModel.meshes[MeshIndex], DrawMaterial, LodTransform);
     }
 }
 

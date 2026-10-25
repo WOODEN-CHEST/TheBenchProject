@@ -1,0 +1,9 @@
+{
+    "name": "test_tree",
+    "lods": [
+        { "model": "test_tree_lod0", "max_distance": 30 },
+        { "model": "test_tree_lod1", "max_distance": 70 },
+        { "model": "test_tree_lod2", "max_distance": 250 }
+    ],
+    "lod_hysteresis": 0.1
+}

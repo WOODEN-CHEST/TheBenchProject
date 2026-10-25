@@ -67,6 +67,7 @@ typedef struct DataMapStruct DataMap;
  * | FloatList   | PropertyFloatList*, owned, NULL while empty | [a, b, ...]                  | Float array                   |
  * | EnumSet     | uint32_t mask (bit N: the entry of value N) | ["name", ...] (table order)    | smallest unsigned type (*)    |
  * | AssetNameList | PropertyAssetNameList*, owned, NULL while empty | ["name", ...]              | String array                  |
+ * | InstanceList | PropertyInstanceList*, owned, NULL while empty | [{"position": [x, y, z], "rotation": [x, y, z] (DEGREES), "scale": s or [x, y, z], "tint": "#rrggbbaa"}, ...] | Compound of parallel arrays {1: Double positions, 2: Float rotations, 3: Float scales, 4: UInt8 tints} |
  *
  * (*) Written in the smallest GHDF integer type that holds the value (a parent id of 12 is one UInt8 byte; GameGHDF.h);
  * read from any GHDF integer type, fixed width or encoded, whose value fits the property's type.
@@ -84,7 +85,14 @@ typedef struct DataMapStruct DataMap;
  * the shortest text that reads back to the same double, so a float written by a Vector3 row reads back as the double
  * that prints the same text; its GHDF reader also takes a Float array of 3, the form a Vector3 row wrote. An
  * AssetNameList (a placement's animation libraries, T29) is a list of valid asset names, each at most Rules.MaxLength
- * bytes: an empty list is NULL, written [] in JSON and as an empty String array in GHDF when defaults are written.
+ * bytes: an empty list is NULL, written [] in JSON and as an empty String array in GHDF when defaults are written. An
+ * InstanceList (the many copies a model instances component draws, B03) is a list of instances, each a position (in
+ * double), a rotation (Euler XYZ, radians in memory and in GHDF, degrees in JSON), a scale and a tint whose alpha is an
+ * opacity: JSON writes one compound per instance and leaves out a rotation of 0, a scale of 1 and an opaque white tint
+ * (a scale whose three components are equal is one number); GHDF writes a compound of parallel arrays, three doubles of
+ * position per instance at 1 and, only when some instance differs from the default, three floats of rotation at 2,
+ * three of scale at 3 and four channel bytes of tint at 4. An empty list is NULL ([] in JSON, a compound holding an empty
+ * position array in GHDF, when defaults are written).
  *
  * Not thread-safe: tables are immutable static data, but instances are plain structs with no locking.
  */
@@ -138,6 +146,14 @@ typedef struct DataMapStruct DataMap;
 #define PROPERTY_ASSET_NAME_LIST_MAX_COUNT ((size_t)64)
 /** @brief The longest name any AssetNameList may hold, in bytes, whatever its rules say. */
 #define PROPERTY_ASSET_NAME_LIST_MAX_LENGTH ((size_t)256)
+/** @brief Rules for an InstanceList: at most @p maxCount instances (at most PROPERTY_INSTANCE_LIST_MAX_COUNT), each
+ *         position's components in [-@p positionLimit, @p positionLimit] (every rotation and scale finite). */
+#define PROPERTY_RULES_INSTANCE_LIST(maxCount, positionLimit) \
+    { .HasMinimum = true, .Minimum = -(positionLimit), .HasMaximum = true, .Maximum = (positionLimit), \
+        .MaxCount = (maxCount) }
+/** @brief The most instances any InstanceList may hold, whatever its rules say (2^18), so a list's size never overflows
+ *         and no single list takes more than about 15 MB. */
+#define PROPERTY_INSTANCE_LIST_MAX_COUNT ((size_t)262144)
 
 /** @brief The flags of a creator setting: saved, shown in the editor's inspector and reachable from scripts. */
 #define PROPERTY_FLAGS_SETTING ((uint32_t)(PropertyFlags_Persistent | PropertyFlags_Editable | PropertyFlags_Script))
@@ -219,7 +235,12 @@ typedef enum PropertyTypeEnum
     /** @brief A list of asset names: an owned `PropertyAssetNameList*`, NULL while empty, which is its only default. Every
      *  name is a valid asset name (AssetManager_IsValidAssetName) of at most Rules.MaxLength bytes (required, at most
      *  PROPERTY_ASSET_NAME_LIST_MAX_LENGTH); Rules.MaxCount (required) bounds the count. */
-    PropertyType_AssetNameList
+    PropertyType_AssetNameList,
+    /** @brief A list of instances (B03): an owned `PropertyInstanceList*`, NULL while empty, which is its only default.
+     *  Every position component is finite and within the optional bounds (compared in double precision), every rotation
+     *  and scale component finite; Rules.MaxCount (required, at most PROPERTY_INSTANCE_LIST_MAX_COUNT) bounds the
+     *  count. */
+    PropertyType_InstanceList
 } PropertyType;
 
 /**
@@ -273,6 +294,38 @@ typedef struct PropertyAssetNameListStruct
 } PropertyAssetNameList;
 
 /**
+ * @brief One instance of an instance list: where a copy stands relative to the object that holds the list, how it is
+ *        turned and sized, and its colour. A plain value type; PropertyInstanceEntry_CreateDefault gives the defaults.
+ */
+typedef struct PropertyInstanceEntryStruct
+{
+    /** @brief Its position, in metres, relative to the object (in the object's own space). */
+    Vector3Double Position;
+    /** @brief Its rotation: Euler XYZ in radians, applied in that order, relative to the object (degrees in JSON). */
+    Vector3 Rotation;
+    /** @brief Its size along each of its axes; 1 is the model's own size. */
+    Vector3 Scale;
+    /** @brief A colour multiplied into its own (red, green, blue), and its opacity (alpha: 255 opaque, 0 invisible). */
+    Color Tint;
+} PropertyInstanceEntry;
+
+/**
+ * @brief A list of instances: the value of a PropertyType_InstanceList property, one heap block holding its count and
+ *        its instances.
+ *
+ * An empty list is NULL. Create one with PropertyInstanceList_Create and release it with PropertyInstanceList_Destroy;
+ * the instance whose field holds a list owns it, and Properties_Set copies the list it is given. Immutable once created:
+ * read it through PropertyInstanceList_GetCount and PropertyInstanceList_GetEntries.
+ */
+typedef struct PropertyInstanceListStruct
+{
+    /** @brief The number of instances: 1 to PROPERTY_INSTANCE_LIST_MAX_COUNT. */
+    size_t _count;
+    /** @brief The instances, _count of them. */
+    PropertyInstanceEntry _entries[];
+} PropertyInstanceList;
+
+/**
  * @brief The data of a property value; the active member is selected by the property's PropertyType.
  */
 typedef union PropertyDataUnion
@@ -321,6 +374,9 @@ typedef union PropertyDataUnion
     /** @brief PropertyType_AssetNameList: the list, or NULL for an empty one. Borrowed, as FloatListValue: NULL in a
      *  default, the instance's own from Properties_Get, copied by Properties_Set. */
     const PropertyAssetNameList* AssetNameListValue;
+    /** @brief PropertyType_InstanceList: the list, or NULL for an empty one. Borrowed, as FloatListValue: NULL in a
+     *  default, the instance's own from Properties_Get, copied by Properties_Set. */
+    const PropertyInstanceList* InstanceListValue;
 } PropertyData;
 
 /**
@@ -340,10 +396,10 @@ typedef struct PropertyValueStruct
  *        strings valid UTF-8, asset names valid, enums in their table).
  *
  * Build with the PROPERTY_RULES_* macros. Bounds apply to Int32, UInt32, Float, Double, Angle (radians), to every
- * component of Vector2, Vector3, Vector3Double and AngleVector3 (radians) and to every value of a FloatList; the string
- * rules to String
+ * component of Vector2, Vector3, Vector3Double and AngleVector3 (radians), to every value of a FloatList and to every
+ * position component of an InstanceList (in double); the string rules to String
  * and AssetName; MaxCount and MaxLength (bytes) to a DataMap; MaxCount and IsStrictlyIncreasing to a FloatList; MaxCount
- * and MaxLength (bytes per name) to an AssetNameList.
+ * and MaxLength (bytes per name) to an AssetNameList; MaxCount to an InstanceList.
  * PropertyTable_Check rejects rules that do not fit the type.
  */
 typedef struct PropertyRulesStruct
@@ -366,7 +422,8 @@ typedef struct PropertyRulesStruct
      *  (DataMap_GetByteSize); required too. */
     size_t MaxLength;
     /** @brief DataMap: the most entries, tags included; FloatList: the most values (at most
-     *  PROPERTY_FLOAT_LIST_MAX_COUNT). Required (> 0) for both; must be 0 for every other type. */
+     *  PROPERTY_FLOAT_LIST_MAX_COUNT); AssetNameList: the most names; InstanceList: the most instances (at most
+     *  PROPERTY_INSTANCE_LIST_MAX_COUNT). Required (> 0) for these; must be 0 for every other type. */
     size_t MaxCount;
     /** @brief Strings: whether NULL is a valid value. Such a property must default to NULL (GHDF has no null, so NULL
      *  is written as an absent entry, which reads back as the default). */
@@ -707,6 +764,13 @@ static inline PropertyValue PropertyValue_FromEnumSet(uint32_t mask)
     return (PropertyValue){ .Type = PropertyType_EnumSet, .Data.EnumSetValue = mask };
 }
 
+/** @brief Makes an InstanceList value. @param list The list (borrowed; Properties_Set copies it), or NULL for an empty
+ *  one. @returns The typed value. */
+static inline PropertyValue PropertyValue_FromInstanceList(const PropertyInstanceList* list)
+{
+    return (PropertyValue){ .Type = PropertyType_InstanceList, .Data.InstanceListValue = list };
+}
+
 /**
  * @brief Returns a property type's name for messages and tooling, e.g. u8"float" or u8"render_color".
  * @param type The type.
@@ -831,6 +895,77 @@ static inline const unsigned char* PropertyAssetNameList_GetName(const PropertyA
 }
 
 
+// Functions: instance lists.
+/**
+ * @brief An instance with the defaults: at the object's origin, not turned, at its model's size (1), opaque white.
+ * @returns The instance.
+ */
+static inline PropertyInstanceEntry PropertyInstanceEntry_CreateDefault(void)
+{
+    return (PropertyInstanceEntry)
+    {
+        .Position = { 0.0, 0.0, 0.0 }, .Rotation = { 0.0f, 0.0f, 0.0f }, .Scale = { 1.0f, 1.0f, 1.0f },
+        .Tint = { 255, 255, 255, 255 }
+    };
+}
+
+/**
+ * @brief Creates an instance list holding a copy of @p count instances (one allocation).
+ *
+ * The instances are copied as they are; whether they suit a property (finite, within its bounds) is that property's
+ * rules' business (Properties_CheckValue).
+ * @param entries The instances; may be NULL only when @p count is 0.
+ * @param count The number of instances, 0 to PROPERTY_INSTANCE_LIST_MAX_COUNT; 0 gives the empty list, NULL.
+ * @param outList [out] Receives the new list (the caller owns it: PropertyInstanceList_Destroy), or NULL for an empty
+ *        one. Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p outList is NULL, or @p entries is NULL with a count above 0;
+ *          ErrorCode_ArgumentOutOfRange for a count above PROPERTY_INSTANCE_LIST_MAX_COUNT (*outList is NULL then).
+ */
+Error PropertyInstanceList_Create(const PropertyInstanceEntry* entries, size_t count, PropertyInstanceList** outList);
+
+/**
+ * @brief Releases an instance list.
+ * @param list The list, or NULL (nothing happens).
+ */
+void PropertyInstanceList_Destroy(PropertyInstanceList* list);
+
+/**
+ * @brief Copies an instance list.
+ * @param list The list to copy; NULL (the empty list) gives NULL.
+ * @returns The copy, owned by the caller (PropertyInstanceList_Destroy).
+ */
+PropertyInstanceList* PropertyInstanceList_Clone(const PropertyInstanceList* list);
+
+/**
+ * @brief Reports whether two instance lists hold the same instances in the same order (numbers compared by value: 0
+ *        equals -0; tints by their four channels).
+ * @param a The first list; NULL is the empty list.
+ * @param b The second list; NULL is the empty list.
+ * @returns true when they are equal.
+ */
+bool PropertyInstanceList_Equals(const PropertyInstanceList* a, const PropertyInstanceList* b);
+
+/**
+ * @brief Returns how many instances an instance list holds.
+ * @param list The list; NULL is the empty list.
+ * @returns The count (0 for NULL).
+ */
+static inline size_t PropertyInstanceList_GetCount(const PropertyInstanceList* list)
+{
+    return (list != NULL) ? list->_count : 0U;
+}
+
+/**
+ * @brief Returns an instance list's instances.
+ * @param list The list; NULL is the empty list.
+ * @returns The instances (borrowed: valid while the list is), PropertyInstanceList_GetCount of them; NULL for NULL.
+ */
+static inline const PropertyInstanceEntry* PropertyInstanceList_GetEntries(const PropertyInstanceList* list)
+{
+    return (list != NULL) ? list->_entries : NULL;
+}
+
+
 // Functions: tables.
 /**
  * @brief Checks a table against every rule a table must follow.
@@ -840,10 +975,11 @@ static inline const unsigned char* PropertyAssetNameList_GetName(const PropertyA
  * size its type needs (Enum: 1, 2 or 4 bytes), and no two fields overlapping; rules that fit the type (bounds only on
  * bounded numeric types and float lists, finite and ordered, whole and in range for integers; MaxLength on every string;
  * MaxCount and MaxLength on every DataMap; MaxCount, at most PROPERTY_FLOAT_LIST_MAX_COUNT, on every FloatList, and
- * IsStrictlyIncreasing only there); a TagsKey exactly on DataMaps, snake_case and unique among the keys; an enum table
+ * IsStrictlyIncreasing only there; MaxCount, at most PROPERTY_INSTANCE_LIST_MAX_COUNT, on every InstanceList); a TagsKey
+ * exactly on DataMaps, snake_case and unique among the keys; an enum table
  * exactly on enums, with snake_case unique names and unique values that fit the field; only known flag bits;
  * SinceVersion in [1, Version]; override flags (PROPERTY_OVERRIDE_FLAG_PREFIX) that are Bools naming another row; and
- * every default passing its own rules (a DataMap's and a FloatList's is NULL). Run it from a test for every table in the
+ * every default passing its own rules (a DataMap's and every list's is NULL). Run it from a test for every table in the
  * game.
  * @param table The table; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p table is NULL or breaks a rule (the message names the table, the
@@ -876,7 +1012,7 @@ const PropertyDescriptor* PropertyTable_FindByKey(const PropertyTable* table, co
 Error Properties_Construct(const PropertyTable* table, void* instance);
 
 /**
- * @brief Releases what an instance owns (its String, AssetName, DataMap and FloatList fields, which become NULL).
+ * @brief Releases what an instance owns (its String, AssetName, DataMap and list fields, which become NULL).
  *
  * Other fields are untouched. Safe on a constructed instance, also more than once; NULL arguments do nothing.
  * @param table The table, or NULL.

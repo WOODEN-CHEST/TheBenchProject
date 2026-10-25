@@ -11,6 +11,7 @@
 #include "WorldCollision.h"
 #include "WorldTestAnimation.h"
 #include "WorldTestCharacters.h"
+#include "WorldTestInstances.h"
 #include "WorldFile.h"
 #include "WorldObject.h"
 #include "WorldModelComponent.h"
@@ -216,6 +217,9 @@ typedef struct WorldTestFrameStruct
     /** The animation system, ticked after the collision step's events (T29), and its debug keys: the showcase's clips
      *  (5), the crowd (6), slow motion (7); owned. */
     WorldTestAnimation _testAnimation;
+    /** The instanced copies' test content (B03): the pebble field (the apostrophe) and the instancing A/B (the
+     *  semicolon). */
+    WorldTestInstances _testInstances;
     /** Where the F11 key's far shift has moved the test world, its characters and the camera: an index into FarShifts
      *  (0: not moved). */
     size_t _farShiftIndex;
@@ -752,6 +756,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         LogCollisionStatus(frame);
         WorldTestCharacters_LogStatus(&frame->_testCharacters);
         WorldTestAnimation_LogStatus(&frame->_testAnimation);
+        WorldTestInstances_LogStatus(&frame->_testInstances);
         LogCameraStatus(frame);
     }
 
@@ -1515,6 +1520,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     HandleDebugCollisionInput(frame, input);
     HandleDebugFarShiftInput(frame, input);
     WorldTestAnimation_HandleInput(&frame->_testAnimation, input, &frame->_camera);
+    WorldTestInstances_HandleInput(&frame->_testInstances, input);
 }
 
 
@@ -1541,7 +1547,8 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"CTRL crouch, E use: sit on the "
             u8"bench, pick up the coffee cup, open the door, E again to stand up; 9 put down, 0 wave), F2 the test NPCs "
             u8"(a human, a dog, a pigeon), 8 the NPC human sits on the bench and gets up, F3 fly, F4 the player's kind; "
-            u8"5 the showcase's next clip, 6 the crowd, 7 slow motion; I renderer, game "
+            u8"5 the showcase's next clip, 6 the crowd, 7 slow motion; ' the pebble field (20 000 instanced copies), ; "
+            u8"instanced drawing (off: every copy on its own, the same picture); I renderer, game "
             u8"time, collision and camera status, T text sample, F5 save the world (worlds/test.saved.world.json and "
             u8".ghdf); M frees the mouse for the UI (click the world to capture it again); ESC quits (once the UI lets "
             u8"go of it).");
@@ -1856,6 +1863,8 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         return AnimationResult;
     }
     WorldTestCharacters_SetAnimation(&Frame->_testCharacters, Frame->_testAnimation._animation);
+    WorldTestInstances_Construct(&Frame->_testInstances, &Frame->_world, Frame->_collision, Frame->_renderer,
+        services->Logger);
 
     Frame->_services = services;
     for (size_t Index = 0U; Index < OPACITY_TEST_OBJECT_COUNT; Index++)

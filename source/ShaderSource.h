@@ -1,11 +1,12 @@
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
 #include "AssetManager.h"
 
 
 /*
- * Private header (source/): expands the #include lines of a shader stage's source before it is compiled (the shader
- * loader uses it; tests use it too).
+ * Private header (source/): expands the #include lines of a shader stage's source, and writes its definition's defines,
+ * before it is compiled (the shader loader uses it; tests use it too).
  *
  * SYNTAX. A line `#include "common/atmosphere"`, with optional spaces or tabs before the '#', between the '#' and
  * "include", and before the quoted location; a trailing `//` comment is allowed. The location is an asset file location
@@ -31,6 +32,14 @@
  * becomes an empty line, so a compiler error such as `2(14)` (NVIDIA) or `2:14(5)` (Mesa) names line 14 of file 2.
  * This uses the #line rules of GLSL 3.30 and later (the next line gets the number written); every shader of the game
  * declares #version 330.
+ *
+ * DEFINES (B03). A shader definition may name preprocessor symbols for both its stages ("defines", ShaderDefinition.c),
+ * so one source serves a shader and its variants: shared files test them with #ifdef (the instanced twins define
+ * WORLD_INSTANCED, and common/dither then reads each copy's values from the vertex stage instead of uniforms). Each
+ * becomes a line `#define <name>` right after the main file's first #version line, followed by
+ * `#line <the line after the #version> 0`, so the main file's line numbers stay right; a main file without a #version
+ * line gets them first, followed by `#line 1 0`. A name is a GLSL identifier that is not reserved
+ * (ShaderSource_IsDefineName).
  */
 
 
@@ -41,7 +50,16 @@
 
 // Functions.
 /**
- * @brief Expands every #include line of a shader stage's source text (see the file comment for the syntax and rules).
+ * @brief Whether a name can be a define (see the file comment): a letter or '_', then letters, digits or '_' (ASCII),
+ *        neither starting with "GL_" nor holding "__" (GLSL reserves both).
+ * @param name The name, NUL-terminated; NULL is no name.
+ * @returns Whether it can.
+ */
+bool ShaderSource_IsDefineName(const unsigned char* name);
+
+/**
+ * @brief Expands every #include line of a shader stage's source text and writes @p defines after its #version line (see
+ *        the file comment for the syntax and rules).
  *
  * Included files are read through @p assets, so they follow the search roots and resource-pack overrides like every
  * other resource. Scratch buffers are borrowed from the manager's pools and returned before this returns.
@@ -52,17 +70,21 @@
  *        must not be NULL.
  * @param text The stage's source text; it need not be NUL-terminated. May be NULL only when @p length is 0.
  * @param length Number of bytes in @p text.
+ * @param defines The names to define, each passing ShaderSource_IsDefineName; may be NULL only when @p defineCount is 0.
+ * @param defineCount How many.
  * @param outText [out] Byte buffer the expanded text is appended to, NUL-terminated. It is treated as one growing
  *        string: an existing trailing NUL is dropped first. On failure it is restored to its previous contents. Must
  *        not be NULL.
  * @param outSourceList [out] Byte buffer that receives, when the stage included at least one file, the source-string
  *        numbers for messages, e.g. `0 = "sky/fragment", 1 = "common/math", 2 = "common/atmosphere"`, appended as one
  *        growing NUL-terminated string. Nothing is appended when nothing was included or on failure. May be NULL.
- * @returns Success; ErrorCode_IllegalArgument for a NULL argument; ErrorCode_InvalidAssetData for a malformed
+ * @returns Success; ErrorCode_IllegalArgument for a NULL argument or a name that cannot be a define;
+ *          ErrorCode_InvalidAssetData for a malformed
  *          #include, an #include before the main file's #version, an include nested too deep, an included file that
  *          cannot be found or read (the message names the include, the including file and the line), a #version line
  *          in an included file, or a NUL byte; ErrorCode_BufferTooLarge when a buffer cannot grow.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
  */
 Error ShaderSource_ExpandIncludes(AssetManager* assets, AssetTypeID shaderType, const AssetLocation* mainLocation,
-    const unsigned char* text, size_t length, GenericBuffer* outText, GenericBuffer* outSourceList);
+    const unsigned char* text, size_t length, const unsigned char* const* defines, size_t defineCount,
+    GenericBuffer* outText, GenericBuffer* outSourceList);

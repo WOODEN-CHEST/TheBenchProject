@@ -11,13 +11,14 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | GameCamera | `include/GameCamera.h`, `source/GameCamera.c` | The 3D camera (a double position, fov/yaw/pitch/roll), converted to raylib's render camera at the origin only at render time. |
 | Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, the key registry, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
-| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, their LOD state, the variant, the settings in effect and their pose; since T30 the camera's pose, the first-person object's with its hidden bones collapsed; sprites with their world sprites' settings in effect; lights), built from the world's per-type component arrays. |
+| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, their LOD state, the variant, the settings in effect and their pose; since T30 the camera's pose, the first-person object's with its hidden bones collapsed; sprites with their world sprites' settings in effect; lights; since B01 terrains and their chunks; since B03 the model instances components with their cells), built from the world's per-type component arrays. |
+| WorldInstancing | `source/WorldInstancing.h`, `source/WorldInstancing.c` (private) | Instanced drawing as pure maths (B03, see "Model instances"): a component's copies sorted into cells with their records, the copies' LOD bands, fades and per-pass draws, and the LODs a cell can show: the C mirror of `shaders/common/instancing.glsl`. |
 | WorldLod | `source/WorldLod.h`, `source/WorldLod.c` (private) | Levels of detail as pure maths (see "LODs"): the LOD selection by distance with hysteresis, the scale and a forced LOD, and the cross-fade's state and its two draws. |
 | WorldRenderSpace | `source/WorldRenderSpace.h`, `source/WorldRenderSpace.c` (private) | Render space as pure maths (see "Render space", T32): the frame's origin and its rotation-only view and projection, the C mirror of the sky shader's ray, the shadow cascades snapped to their texel grids, each grid anchored to the last frame's box. |
 | WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
-| WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and since T13 walk mode (the player as a character) and test NPCs. |
+| WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs), `source/WorldTestAnimation.{h,c}` (private: the animation system and its keys), `source/WorldTestInstances.{h,c}` (private, B03: the pebble field and the instancing A/B) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and since T13 walk mode (the player as a character) and test NPCs. |
 
 `source/main.c` is the composition root (bootstrap).
 
@@ -164,6 +165,22 @@ camera, however far out it is. The maths is the private `source/WorldRenderSpace
   the chunk's centre: the chunk's positions are relative to it) and its sphere through it (scaled by
   `WorldTransform_GetMaxScale`), both in double and in render space, and the object's tint. The GPU meshes are the
   renderer's (`WorldRendererTerrain.c`, see "Renderer structure"): the cache lists, the renderer uploads.
+- **Model instances** (B03, see "Model instances"): one entry per `model_instances` component
+  (`WorldRenderInstances`, `WorldRenderCache_GetInstances`), kept across frames and matched by owner id and component
+  serial (a replaced component gets a new entry); its world model and variant are resolved as a model's are (under the
+  model user, again only when the name or the variant changes; failures logged once: `... draws no instances: world
+  model ...`, `... draws the instances of world model "x" with its own materials: it has no variant "y"`). Its copies are
+  sorted into **cells** (`WorldInstancing.h`) when the entry is new, when the component's instances revision changes
+  (`WorldModelInstancesComponent_GetInstancesRevision`) or when its world model is resolved again (the bounds change),
+  never because the object moved: a cell lives in the object's own space. Each build gets an id no other build of the
+  cache had (`CellsBuildId`, from a counter `Reset` keeps), which the renderer's GPU copy follows. Every frame each cell
+  of a shown object is listed (`WorldRenderInstanceCell`, `WorldRenderCache_GetInstanceCells`), entry by entry: its
+  records' range, the settings in effect (`WorldModelInstancesComponent_ResolveSettings`: never crisp), the object's
+  tint, the cell's world matrix (the object's world matrix times the translation to the cell's centre: its records are
+  relative to it) and its sphere through it, both in double and in render space. `WorldRenderCache_UpdateLods` gives
+  each drawn entry its LOD bands for the frame's `lod_distance_scale` (`WorldInstancing_GetLodBands`) and each cell the
+  LODs its copies can show from the camera (`LodMask`, `WorldInstancing_GetCellLodMask`). The cache lists, the renderer
+  uploads (`WorldRendererInstances.c`).
 
 Entries follow the components across additions and removals: when the world's component-set version changes, entries
 are re-matched by owner id, and an entry is carried over only if its component still names the model it was
@@ -252,13 +269,25 @@ lamp all relative to the frame's origin.
   dither (and the G-buffer's limit) like a model's. Their lists are their own
   (`WorldVisibility_GetTerrainChunks(visibility, cache, pass)`, the fades `WorldVisibility_GetTerrainChunkFade`), and
   their counts too: a chunk is not counted as a model.
+- **Instance cells** (B03) enter every list as models do, each by its sphere around all its copies: the camera's
+  frustum, each cascade's box by the component's shadow tier (when it casts), the cube's reach, the draw distance
+  measured to the sphere's nearest point (the quality setting scales it unless fixed; the zoom applies) and the opacity
+  (the object's: each copy's own alpha fades only that copy, in the vertex stage). A cell no copy of which can be seen
+  leaves every list; inside one, every copy fades and picks its LOD on its own (see "Model instances"). Their lists and
+  fades are their own (`WorldVisibility_GetInstanceCells`, `WorldVisibility_GetInstanceCellFade`), and their counts too
+  (`DrawnInstanceCellCount`, `DrawnInstanceCount`: the copies of the drawn cells, `InstanceCellsOutsideViewCount`,
+  `InstanceCellsFadedOutCount`).
 - **A/B.** `WorldRenderer_SetCullingEnabled` (U in the test frame) switches the camera's frustum and the cascades' boxes
   off: everything within its draw distance is drawn, as before culling existed, and the image must not change. The
   draw distances, fades and the cube's reach stay.
 - **Status.** The status line (after the first render, the I key) gives what the camera's passes drew (models, sprites,
   how many of them fading; the models by LOD and how many cross-fade), how many entries lay outside the view, and how
   many faded out (beyond their draw distance or fully transparent); since B01 the terrains placed (and those without a
-  terrain), the chunks drawn of all listed and their triangles, and whether the chunk key is on.
+  terrain), the chunks drawn of all listed and their triangles, and whether the chunk key is on; since B03 a line of
+  its own for the model instances: the components (and those without a world model), their copies and cells, the cells
+  drawn with their copies and how (instanced, or one at a time), the cells outside the view and faded out, and the
+  camera's copies by the LOD they show (the larger share), how many sit in a band and how many faded out, worked out
+  with the C mirror when the line is logged (never per frame).
 - **Known limits.** The cube shadow of a fading object is grainy: its 20-tap PCF spreads over about 17 texels and samples
   the dither pattern unevenly (the cascades' 2x2 PCF always takes one texel of each quarter of the pattern, so their
   shadows thin smoothly). The far plane is extracted from a float matrix, about 10 m uncertain at 4 km.
@@ -301,11 +330,74 @@ Every model draws one of its world model's LODs ([WorldModels.md](WorldModels.md
 - **Not built:** impostors (a sprite as the last LOD; a `// TODO:` in `WorldModel.h`). The renderer keeps one LOD state
   per model, for its one camera: a second view of the same world (a mirror, a security camera) would need its own.
 
+### Model instances (B03)
+
+A `model_instances` component ([WorldData.md](WorldData.md)) places many copies of one world model, each with its own
+position (double, relative to the object), rotation, scale and tint; it shares the model component's settings (every
+copy has them) except `omit_pixelation` (copies are never crisp). The renderer draws all the copies of a **cell** at
+once, each mesh of each LOD in one instanced draw, so tens of thousands of copies cost a few dozen draws.
+
+- **Cells** (`WorldInstancing.h`, built by the render cache): the copies are sorted into squares of
+  `WORLD_INSTANCE_CELL_SIZE` (32 m) of the object's own X and Z. A cell's centre is the middle of its square, and the
+  middle of its copies' heights; each copy's **record** (`WorldInstanceRecord`, 56 bytes) holds the first three rows
+  of its matrix relative to that centre (scale, the Euler XYZ rotation, the position minus the centre: composed in
+  double, rounded once), its tint and a stable random value (a hash of the object's id and the copy's index, for B10's
+  wind). The cell's sphere holds every copy's sphere (the world model's under the copy's matrix). Drawing a cell takes
+  one matrix, the object's world matrix times the translation to the cell's centre in render space, so the camera's
+  movement never touches the records (T32): 141 km out the copies stand where they stand at the origin, to the pixel.
+- **GPU buffers** (`WorldRendererInstances_PrepareFrame`): one vertex buffer per build of an entry's cells, uploaded
+  once (`rlLoadVertexBuffer`) and kept while the entry holds that build, hidden or not; a cell is a range of it. A new
+  build replaces the buffer; buffers no entry holds are unloaded, all of them at `PrepareWorld`.
+- **Per copy, in the vertex stage** (`shaders/common/instancing.glsl`, whose C mirror is `WorldInstancing.c`): a copy is
+  measured as an object is, its LOD by the camera's distance to its sphere's centre and its fade by the distance to the
+  sphere's nearest point, both times the zoom factor. Its fade is T07's (the last band of the draw distance in effect)
+  against 1 - its opacity (the object's times its tint's alpha). **LOD changes are distance bands**, not T11's timed
+  cross-fades (100 000 copies cannot keep a state each): around each switch distance s (times `lod_distance_scale`), from
+  s(1 - h) to s(1 + h) with h the world model's `lod_hysteresis`, the incoming LOD's share rises linearly
+  (`WorldInstancing_GetLodBands`; a band stops at the middle between two switch distances, so bands never overlap), drawn
+  with T11's complementary dither. A standing camera never changes the picture. The fade and the band reach the fragment
+  stage as flat varyings: with `WORLD_INSTANCED` defined (the twins' definitions), `common/dither` reads them instead of
+  its uniforms, through the same formula.
+- **The passes' rules, per copy** (`WorldInstancing_GetDraw`, as T07 and T11 set them for objects): the lit pass draws
+  both LODs of a band, each with its share of the dither, and the copy's fade; the G-buffer the LOD with the larger
+  share (the incoming one from `WORLD_LOD_SOLID_SHARE` of the band), solid, until mid-fade; the shadow passes that LOD,
+  dithered by the copy's own fade; the unlit fallback that LOD, solid. A copy with a fade of 1 is drawn by none.
+- **Which LODs a cell draws:** only those its copies can show this frame (`LodMask`: the bands met by the cell's range
+  of zoomed distances, widened a little for the GPU's rounding). The draw of LOD k keeps a copy only if it shows LOD k;
+  the others get every vertex at one point outside the clip volume, so they make no fragments.
+- **The draw** (`DrawMeshCopies`): raylib's `DrawMesh` (its GL 3.3 path: the material's colours, the matrices with the
+  cell's as the model matrix, the maps on their units), with the mesh's vertex array bound and the cell's records as
+  instanced attributes (divisor 1) at locations 9 to 13 for `rlDrawVertexArrayElementsInstanced`; then the attributes
+  are taken off the vertex array again (disabled, divisor 0, pointing at no buffer), so the mesh's ordinary draws are
+  untouched. raylib's `DrawMeshInstanced` is not used: it uploads every matrix into a new buffer on every call. The
+  per-draw material copy is `WorldRendererGeometry_PrepareMaterial`'s (the variant, the LOD tinting, the PBR factors),
+  the LOD's import transform goes in as `instanceLodTransform`, and the copy's tint multiplies its vertex colour.
+- **Lights:** a cell takes up to `WORLD_MAX_FORWARD_LIGHTS` forward lights by its sphere, as an object does.
+- **The A/B and the fallbacks** (`WorldRenderer_SetInstancingEnabled`, the semicolon in the test frame): off, every pass
+  draws each copy on its own through its ordinary shader (`world_pbr`, `world_normal`, `world_depth`,
+  `world_cube_depth`) with the copy's values from the C mirror as uniforms. A pass whose twin is missing, an entry
+  whose buffer raylib could not make (`rlLoadVertexBuffer` gives 0 only without a GL context), and the unlit fallback
+  (no PBR lighting: raylib's default shader, solid) draw so too, each logged once. An upload the GPU runs out of
+  memory for is not caught (`glBufferData`'s `GL_OUT_OF_MEMORY`: raylib checks none of its uploads' errors, meshes and
+  textures alike, and only `GLTextureArray` may call GL itself); the copies then draw from a buffer without storage. **The picture is the same up to float rounding** (measured, B03's status block): the instanced
+  path places a vertex by the record's rows and then the cell's matrix, the other by their product, and normals by
+  cofactors against an inverse transpose; without shadows and post effects some views are bit-identical and others
+  differ in a few pixels where two triangles meet; with them, shadow tests and AO round differently (most pixels by 1
+  of 255); a copy tint other than white also rounds (an integer multiply into the material colour, against a float
+  one in the shader).
+- **Costs** (B03, GTX 980 Ti, the start of the pebble field, a 1280 x 720 frame to a `glFinish`): 3.85 ms without
+  copies, 4.98 ms with the grove's 400 trees, 6.40 ms with the 20 000 pebbles and a lamp casting a cube shadow among
+  them; one at a time, 212.6 ms. The instanced lit pass's own GPU time is 0.67 ms there.
+- **Not built** (out of B03's scope): GPU culling (a cell is all or nothing for the frustum), collision for copies (B06
+  and B09 add them as a static source), scattering rules (B09), grass and wind (B10: the random value is in every record
+  and unused). Copies never skin (a skinned world model's copies draw rigid, in the bind pose) and never draw crisp.
+
 ### Pipeline (one `WorldRenderer_RenderToTarget`)
 
 1. Sync the cache for the frame's origin (the camera's position: every entry in render space); upload the terrain
-   chunks that are new or changed (`WorldRendererTerrain_PrepareFrame`, B01); make sure the targets match the window
-   size and pixelation setting (`WorldRendererScene_EnsureTargets`).
+   chunks that are new or changed (`WorldRendererTerrain_PrepareFrame`, B01) and the copies' new builds of cells
+   (`WorldRendererInstances_PrepareFrame`, B03); make sure the targets match the window size and pixelation setting
+   (`WorldRendererScene_EnsureTargets`).
 2. Build the frame context (`WorldRenderFrame`): the origin, the render camera, the zoom factor, the scene's
    rotation-only view and projection matrices (`WorldRenderSpace_BuildView`: the projection `BeginMode3D` builds for the
    scene target, shared by every pass that reconstructs positions or rays) and the camera's frustum from them, the
@@ -326,15 +418,17 @@ Every model draws one of its world model's LODs ([WorldModels.md](WorldModels.md
    and each sprite's matrices (`WorldRendererSprites_PrepareFrame`: facing the camera, facing the cascades' light and the
    cube shadow's lamp while those run) with the blended and additive sprites sorted back to front.
 4. The shadow cascades of the shadow light (the sun or the moon), then the point-light cube shadow, each drawing its
-   visibility list (the casters in its box; within the light's reach). Models (the LOD they show or fade to), terrain
-   chunks (B01; their back faces in the cascades, as the models') and cutout sprites cast; sprites turned toward the
-   light; each caster dithered by its fade.
-5. The normal/flag G-buffer (the camera's models, the LOD with the larger share, terrain chunks and cutout sprites,
-   solid below half their fade) and the AO pre-pass, when AO or outlines run.
+   visibility list (the casters in its box; within the light's reach). Models (the LOD they show or fade to), the
+   model instances' copies (B03: each the LOD with the larger share, dithered by its own fade), terrain chunks (B01;
+   their back faces in the cascades, as the models') and cutout sprites cast; sprites turned toward the light; each
+   caster dithered by its fade.
+5. The normal/flag G-buffer (the camera's models, the LOD with the larger share, the copies the same way, terrain
+   chunks and cutout sprites, solid below half their fade) and the AO pre-pass, when AO or outlines run.
 6. The scene pass: clear, atmospheric sky (with the moonlit sky, the moon's disc, the Milky Way and light pollution's
    skyglow), the stars (none behind the moon), debug grid, the camera's PBR models (each dithered by its fade, both LODs
    of a cross-fade with complementary dithers; the sun and the moon; per object: up to
-   `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), the camera's terrain
+   `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), the camera's
+   instance cells (B03: lit like the models, the lights per cell, both LODs of a copy's band), the camera's terrain
    chunks (B01: the `world_terrain` shader, lit as the models, with up to `WORLD_MAX_FORWARD_LIGHTS` lights per chunk;
    before the sprites, so decals lie on it), the camera's lit sprites
    (the cutout ones, then decals, then blended and additive ones back to front), light gizmos, and collider wireframes
@@ -619,9 +713,10 @@ get no AO and no outlines.
 | `WorldRendererInternal.h` | The renderer state (one state struct per pass), `WorldRenderFrame`, fixed texture units, shared constants, and every internal function, documented. |
 | `WorldRendererCommon.c` | Config multipliers, colour conversion, shader loading, one-time warnings, render-target constructors. |
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
-| `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette (T29); the unlit fallback's skinned shader; the LOD tinting, light gizmos, the pixelation filter. |
+| `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes; `WorldRendererGeometry_PrepareMaterial` builds each, the instanced draws use it too), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette (T29); the unlit fallback's skinned shader; the LOD tinting, light gizmos, the pixelation filter. |
+| `WorldRendererInstances.c` | The model instances' copies (B03, see "Model instances"): each entry's records buffer, the G-buffer's and the shadows' instanced twins (the lit one is the lighting file's), the instanced draw that mirrors `DrawMesh`, each pass's cells instanced or one at a time (the A/B and every fallback), the status line. |
 | `WorldRendererSprites.c` | The sprites: the unit quad, the lit sprite shader, each frame's sprite matrices (camera, cascades' light, cube's lamp) and transparent draw order, the lit cutout / decal / sorted transparent draws. The G-buffer and shadow passes draw sprites with this file's quad and matrices. |
-| `WorldRendererLighting.c` | The two PBR programs (rigid and, T29, skinned: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: both PBR programs, the sprite shader and, B01, the terrain shader, the night vision's among them), forward point lights, per-material factors, eye adaptation. |
+| `WorldRendererLighting.c` | The PBR programs (rigid; T29 skinned; B03 instanced: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: every PBR program, the sprite shader and, B01, the terrain shader, the night vision's among them), forward point lights, per-material factors, eye adaptation. |
 | `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow (models, terrain chunks, and cutout sprites through alpha-tested depth shaders). |
 | `WorldRendererGBuffer.c` | The normal/flag G-buffer (models, terrain chunks and cutout sprites) and the AO pre-pass. |
 | `WorldRendererTerrain.c` | The terrain's chunks (B01, [Terrain.md](Terrain.md)): their GPU meshes, kept by the renderer per terrain asset and chunk and uploaded again when a chunk's revision changes (all of them when the chunk layout changes; those of terrains no entry resolves any more unloaded); the `world_terrain` shader and its lit draw (per-chunk lights and dither; the unlit fallback with raylib's default shader); the G-buffer's and the shadow passes' draws with their shared shaders; the chunk key (the minus key: a colour per chunk and the wireframe); since B02 each terrain's materials as texture arrays (made once per terrain through `GLTextureArray`, bound on units 9 to 11), its materials' and rules' uniforms, each chunk's wrapped offsets, and the terrain views (the equals key). |
@@ -674,7 +769,8 @@ The renderer keeps receiving features, so:
   `WORLD_MAX_FORWARD_LIGHTS`; the shader clamps its loop and the renderer checks the arrays at load (and logs if
   the shader holds fewer), so a mismatch costs lights, never memory safety. The bone palette's size
   (`SKINNING_MAX_BONES` in `common/skinning`) is read from each skinned program at load the same way
-  (`WorldRendererCommon_PreparePalette`).
+  (`WorldRendererCommon_PreparePalette`). The instanced twins' constants (the passes' values, the most bands, the solid
+  share, the G-buffer's fade limit) are pinned to their C mirror by `tests/ShaderSourceTests.c`.
 - **Every geometry pass skins (T29).** A pass that draws models has a skinned twin of its shader (the same fragment
   stage over a vertex stage that includes `common/skinning`), passes both to `WorldRendererGeometry_DrawModel`
   (`WorldRendererMeshShaders`) and sets every per-object uniform on both while the entry has a pose (dither, outline
@@ -687,8 +783,14 @@ The renderer keeps receiving features, so:
   pass (`WorldRendererPalette`), and every frame starts by forgetting which pose each palette holds
   (`WorldRendererGeometry_ResetPalettes`). A new geometry pass follows the same pattern, or its skinned meshes draw in
   their bind pose.
+- **Every geometry pass instances (B03).** A pass that draws models has an instanced twin of its shader (the same
+  fragment stage over a vertex stage that includes `common/instancing`, its definition defining `WORLD_INSTANCED`) and
+  draws the model instances' cells with it (`WorldRendererInstances_Draw*`), setting the twin's per-entry uniforms
+  (`instance*`), its per-cell ones (outline flag, forward lights) and the LOD per draw; without its twin, or while
+  instancing is off, the pass draws each copy on its own through its ordinary shader with the C mirror's values. A new
+  geometry pass follows the same pattern, or the copies are missing from it.
 - **Terrain never skins and is never instanced** (B01): its chunks draw with one rigid shader per pass and need no
-  skinned twin.
+  skinned or instanced twin.
 - **Direct OpenGL calls** (B02, decision W7) live only in `source/GLTextureArray.{h,c}`: raylib has no texture arrays.
   Anything else that needs GL raylib lacks goes there or into a module like it (its function pointers through
   `rlGetProcAddress`, its constants defined in it, a missing function or a GL error degrading with one log line), never
@@ -703,9 +805,13 @@ The renderer keeps receiving features, so:
   - **13: the terrain's vertex flags** (B02): a normalized `u8 x 4` (`vertexFlags`; x 1 on a face material's vertices,
     whose faces the rules leave alone; y, z, w 0 and free for later terrain flags). Shared with B03's instanced shaders,
     which never draw a terrain.
-  - **13 to 15 on other meshes: free.** B03's instanced shaders will take raylib's instance transform at 9 to 12 and the
-    tint and the random value at 13 and 14 (its task file); 15 is the last one left. A new attribute takes a location
-    here, or shares one with a kind of mesh that never meets it in one shader, and is written into this list.
+  - **9 to 13 in the instanced twins** (B03, `common/instancing`): a copy's record, read once per copy (divisor 1)
+    from the cell's range of its entry's buffer: 9, 10 and 11 the three rows of its matrix (`vec4` each), 12 its tint
+    (a normalized `u8 x 4`), 13 its random value (a `float`). They take raylib's instance transform's locations (9 to
+    12, which the twins do not use) and the terrain's, which no model mesh fills; the attributes are taken off a mesh's
+    vertex array after each instanced draw.
+  - **14 and 15: free.** A new attribute takes a location here, or shares one with a kind of mesh that never meets it
+    in one shader, and is written into this list.
 - **Failures degrade loudly once.** A missing shader or target falls back with one log line, never silently
   and never per frame.
 
@@ -735,8 +841,16 @@ night vision and the fog; used by `world_pbr` and `world_sprite`), `common/dista
 packed distance; used by `world_cube_depth`, `world_sprite_cube_depth` and `common/lighting`), `common/dither` (the
 dithered fades: the draw's fade and its part of a LOD cross-fade; used by every world geometry shader, see
 "Visibility") and `common/skinning` (T29: the bone attributes and the palette, and a vertex's blended rows; used by
-every skinned vertex stage, [Animation.md](Animation.md)). Put new shared lighting or noise code there
-instead of copying it between shaders.
+every skinned vertex stage, [Animation.md](Animation.md)), and `common/instancing` (B03: a copy's record attributes, its
+fade, LOD band and draw per pass, see "Model instances"; used by every instanced vertex stage). Put new shared lighting
+or noise code there instead of copying it between shaders.
+
+The instanced twins (B03: `world_pbr_instanced`, `world_normal_instanced`, `world_depth_instanced`,
+`world_cube_depth_instanced`) sit beside their rigid shaders as the skinned ones do, each an `instanced.vert` with the
+rigid shader's fragment stage, and their definitions add `"defines": ["WORLD_INSTANCED"]`: a shader definition's
+`defines` (at most 16 GLSL names) are written as `#define` lines after the main file's `#version` line in both stages
+(`ShaderSource.h`), so one fragment stage serves both twins and shared files test the name with `#ifdef`
+(`common/dither` reads the copy's flat values under it; `common/instancing` refuses to compile without it).
 
 ## WorldTestFrame
 
@@ -906,6 +1020,17 @@ takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png`
   lists each terrain's materials and its arrays' sizes. **Equals** (`=`, B02) cycles what the terrain shows (logged):
   shaded, the painted weights (B01's debug colours, before the rules), the weights after the rules, the dominant material
   after height blending, then shaded again;
+- **the model instances (B03, the private `source/WorldTestInstances.{h,c}`; see "Model instances"):** the test world's
+  `grove` (object 52) is 400 copies of the placeholder tree on the terrain in front of the start view (3 LODs, at 30
+  and 70 m; a third stretched upward, tinted, every 40th half transparent; written by
+  `asset_source/scripts/placeholder_instances.py`), with a warm lamp casting a cube shadow in a clearing about 50 m
+  ahead (`grove_lamp`, object 53: the cube shadow is the nearest shadow-casting lamp's, so it takes over from the slab's
+  warm lamp once the camera is nearer to it). The **apostrophe** (`'`) shows and hides the **pebble field**
+  (logged): 20 000 copies of the placeholder pebble scattered in front of the slab, made when it is first shown as a
+  runtime object (never saved) at the terrain's object, each at the ground's height under it (a raycast); the
+  **semicolon** (`;`) switches instanced drawing (logged): off, every copy is drawn on its own through the ordinary
+  shaders, and the picture must not change (it may round differently by a level here and there). Q's LOD tinting
+  colours the copies' LODs too, and the status line (I) gives the copies by LOD;
 - T toggles the text sample.
 
 M frees the cursor for the UI (and captures it again); a left click the UI did not take captures it again. An

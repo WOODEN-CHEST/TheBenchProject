@@ -71,11 +71,13 @@ static void Clear(WorldVisibility* self)
     GenericBuffer_Clear(&self->_modelFades);
     GenericBuffer_Clear(&self->_spriteFades);
     GenericBuffer_Clear(&self->_terrainChunkFades);
+    GenericBuffer_Clear(&self->_instanceCellFades);
     for (int Pass = 0; Pass < (int)WorldVisibilityPass_Count; Pass++)
     {
         GenericBuffer_Clear(&self->_models[Pass]);
         GenericBuffer_Clear(&self->_sprites[Pass]);
         GenericBuffer_Clear(&self->_terrainChunks[Pass]);
+        GenericBuffer_Clear(&self->_instanceCells[Pass]);
     }
     self->_counts = (WorldVisibilityCounts){ 0 };
     self->_hasCrispObjects = false;
@@ -266,6 +268,42 @@ static bool AddTerrainChunk(WorldVisibility* self, const WorldVisibilityView* vi
         ModelCastsIntoCascade(chunk->ShadowTier, true), ModelCastsIntoCascade(chunk->ShadowTier, false), index);
 }
 
+/* One instance cell entry (B03; the cache lists only cells of drawn components): its fades by its sphere around every
+ * copy, then the camera's list when it is in view (counted with its copies), and the shadow passes' lists by its shadow
+ * tier, as a model's. */
+static bool AddInstanceCell(WorldVisibility* self, const WorldVisibilityView* view, const WorldRenderInstanceCell* cell,
+    size_t index)
+{
+    float DrawDistance = WorldVisibility_ScaleDrawDistance(cell->DrawDistance, cell->IsDrawDistanceFixed,
+        view->DrawDistanceScale);
+    WorldVisibilityFade Fade = GetFade(view, cell->RenderCenter, cell->Radius, DrawDistance, GetZoomFactor(view),
+        cell->Tint);
+    if (!GenericBuffer_AddLast(&self->_instanceCellFades, &Fade))
+    {
+        return false;
+    }
+    if (!(Fade.Combined < 1.0f))
+    {
+        self->_counts.InstanceCellsFadedOutCount++;
+        return true;
+    }
+    if (IsInVolume(view, &view->CameraFrustum, cell->RenderCenter, cell->Radius))
+    {
+        if (!AddIndex(&self->_instanceCells[WorldVisibilityPass_Camera], index))
+        {
+            return false;
+        }
+        self->_counts.DrawnInstanceCellCount++;
+        self->_counts.DrawnInstanceCount += cell->RecordCount;
+    }
+    else
+    {
+        self->_counts.InstanceCellsOutsideViewCount++;
+    }
+    return !cell->CastsShadows || AddCaster(self->_instanceCells, view, cell->RenderCenter, cell->Radius,
+        ModelCastsIntoCascade(cell->ShadowTier, true), ModelCastsIntoCascade(cell->ShadowTier, false), index);
+}
+
 /* Whether a pass value names a list. */
 static bool IsPass(WorldVisibilityPass pass)
 {
@@ -395,11 +433,13 @@ void WorldVisibility_Construct(WorldVisibility* self)
     GenericBuffer_AllocateVariable(&self->_modelFades, INITIAL_LIST_CAPACITY, sizeof(WorldVisibilityFade));
     GenericBuffer_AllocateVariable(&self->_spriteFades, INITIAL_LIST_CAPACITY, sizeof(WorldVisibilityFade));
     GenericBuffer_AllocateVariable(&self->_terrainChunkFades, INITIAL_LIST_CAPACITY, sizeof(WorldVisibilityFade));
+    GenericBuffer_AllocateVariable(&self->_instanceCellFades, INITIAL_LIST_CAPACITY, sizeof(WorldVisibilityFade));
     for (int Pass = 0; Pass < (int)WorldVisibilityPass_Count; Pass++)
     {
         GenericBuffer_AllocateVariable(&self->_models[Pass], INITIAL_LIST_CAPACITY, sizeof(size_t));
         GenericBuffer_AllocateVariable(&self->_sprites[Pass], INITIAL_LIST_CAPACITY, sizeof(size_t));
         GenericBuffer_AllocateVariable(&self->_terrainChunks[Pass], INITIAL_LIST_CAPACITY, sizeof(size_t));
+        GenericBuffer_AllocateVariable(&self->_instanceCells[Pass], INITIAL_LIST_CAPACITY, sizeof(size_t));
     }
     self->_counts = (WorldVisibilityCounts){ 0 };
     self->_hasCrispObjects = false;
@@ -414,11 +454,13 @@ void WorldVisibility_Deconstruct(WorldVisibility* self)
     Memory_Free(self->_modelFades._data);
     Memory_Free(self->_spriteFades._data);
     Memory_Free(self->_terrainChunkFades._data);
+    Memory_Free(self->_instanceCellFades._data);
     for (int Pass = 0; Pass < (int)WorldVisibilityPass_Count; Pass++)
     {
         Memory_Free(self->_models[Pass]._data);
         Memory_Free(self->_sprites[Pass]._data);
         Memory_Free(self->_terrainChunks[Pass]._data);
+        Memory_Free(self->_instanceCells[Pass]._data);
     }
 }
 
@@ -461,6 +503,18 @@ Error WorldVisibility_Build(WorldVisibility* self, const WorldRenderCache* cache
         {
             Clear(self);
             return Error_Construct2(ErrorCode_InvalidOperation, "WorldVisibility: could not grow a terrain chunk "
+                "list.");
+        }
+    }
+
+    size_t CellCount = 0;
+    const WorldRenderInstanceCell* Cells = WorldRenderCache_GetInstanceCells(cache, &CellCount);
+    for (size_t Index = 0; Index < CellCount; Index++)
+    {
+        if (!AddInstanceCell(self, view, &Cells[Index], Index))
+        {
+            Clear(self);
+            return Error_Construct2(ErrorCode_InvalidOperation, "WorldVisibility: could not grow an instance cell "
                 "list.");
         }
     }
@@ -510,6 +564,32 @@ const size_t* WorldVisibility_GetTerrainChunks(const WorldVisibility* self, cons
     *outCount = self->_terrainChunks[pass]._count;
     const void* Entries = self->_terrainChunks[pass]._data;
     return Entries;
+}
+
+const size_t* WorldVisibility_GetInstanceCells(const WorldVisibility* self, const WorldRenderCache* cache,
+    WorldVisibilityPass pass, size_t* outCount)
+{
+    size_t CellCount = 0;
+    WorldRenderCache_GetInstanceCells(cache, &CellCount);
+    *outCount = 0;
+    if (!IsPass(pass) || (CellCount != self->_instanceCellFades._count) || (self->_instanceCells[pass]._count == 0))
+    {
+        return NULL;
+    }
+    *outCount = self->_instanceCells[pass]._count;
+    const void* Entries = self->_instanceCells[pass]._data;
+    return Entries;
+}
+
+WorldVisibilityFade WorldVisibility_GetInstanceCellFade(const WorldVisibility* self, size_t index)
+{
+    if (index >= self->_instanceCellFades._count)
+    {
+        return (WorldVisibilityFade){ .Distance = 1.0f, .Combined = 1.0f };
+    }
+    const void* FadeData = self->_instanceCellFades._data;
+    const WorldVisibilityFade* Fades = FadeData;
+    return Fades[index];
 }
 
 WorldVisibilityFade WorldVisibility_GetModelFade(const WorldVisibility* self, size_t index)

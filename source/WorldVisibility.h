@@ -54,6 +54,11 @@
  * TERRAIN CHUNKS (B01) take the models' rules: their own draw distance (the terrain's, 4 km and fixed by default),
  * the camera's frustum, each cascade by their shadow tier, the cube's reach, the opacity of their object's tint. They
  * are never crisp, and have counts of their own (not in the models' and sprites').
+ *
+ * INSTANCE CELLS (B03) take them too, each by its sphere around every copy of the cell: their component's draw distance
+ * measured to the sphere's nearest point with the zoom factor, the camera's frustum, each cascade by their shadow tier,
+ * the cube's reach, their object's opacity. A cell in a list is drawn copy by copy: every copy fades and picks its LOD
+ * on its own in the vertex stage (WorldInstancing.h). Never crisp; counts of their own.
  */
 
 
@@ -186,6 +191,12 @@ typedef struct WorldVisibilityCountsStruct
     /** @brief Terrain chunks the camera's passes draw (B01), and the triangles of their surfaces. */
     size_t DrawnTerrainChunkCount;
     size_t DrawnTerrainTriangleCount;
+    /** @brief Instance cells (B03) the camera's passes draw, and the copies in them; those within their draw distance but
+     *  outside the view; those beyond it or of a fully transparent object. */
+    size_t DrawnInstanceCellCount;
+    size_t DrawnInstanceCount;
+    size_t InstanceCellsOutsideViewCount;
+    size_t InstanceCellsFadedOutCount;
 } WorldVisibilityCounts;
 
 /**
@@ -208,6 +219,10 @@ typedef struct WorldVisibilityStruct
      *  draws (B01). */
     GenericBuffer _terrainChunkFades;
     GenericBuffer _terrainChunks[WorldVisibilityPass_Count];
+    /** @brief WorldVisibilityFade per cache instance cell, and per pass the indices (size_t, ascending) of the cells it
+     *  draws (B03). */
+    GenericBuffer _instanceCellFades;
+    GenericBuffer _instanceCells[WorldVisibilityPass_Count];
     /** @brief The last build's counts. */
     WorldVisibilityCounts _counts;
     /** @brief Whether the camera's list holds an OmitPixelation (crisp) model or sprite. */
@@ -363,8 +378,8 @@ void WorldVisibility_Deconstruct(WorldVisibility* self);
  *   - the cube shadow's list when it casts shadows, the cube shadow runs and its sphere touches the light's reach sphere.
  * A model's sphere is its bounding sphere (around RenderCenter); a sprite's is the sphere around its pivot (Shape.Position)
  * that holds its quad in every orientation (WorldRenderSprite.BoundsRadius), so one sphere serves the camera and the
- * lights; a terrain chunk's is its bounding sphere, and it joins the lists as a model does (never crisp). Everything is
- * in render space. With culling off the
+ * lights; a terrain chunk's is its bounding sphere, and it joins the lists as a model does (never crisp), and so does an
+ * instance cell (B03). Everything is in render space. With culling off the
  * camera's frustum and the cascades' boxes cull nothing. Main thread only; no allocation once the lists have grown.
  * @param self The visibility; must not be NULL.
  * @param cache The render cache, synced for this frame; must not be NULL. Its entries are read, never written.
@@ -408,6 +423,26 @@ const size_t* WorldVisibility_GetSprites(const WorldVisibility* self, const Worl
  */
 const size_t* WorldVisibility_GetTerrainChunks(const WorldVisibility* self, const WorldRenderCache* cache,
     WorldVisibilityPass pass, size_t* outCount);
+
+/**
+ * @brief Returns a pass's instance cell list: indices into @p cache's instance cells, ascending (see
+ *        WorldVisibility_GetModels).
+ * @param self The visibility; must not be NULL.
+ * @param cache The cache the lists were built from; must not be NULL.
+ * @param pass The pass.
+ * @param outCount [out] Receives the entry count. Must not be NULL.
+ * @returns The indices (borrowed until the next build); NULL when there are none.
+ */
+const size_t* WorldVisibility_GetInstanceCells(const WorldVisibility* self, const WorldRenderCache* cache,
+    WorldVisibilityPass pass, size_t* outCount);
+
+/**
+ * @brief Returns a cache instance cell's fades this frame (the cell's as a whole: its copies fade on their own).
+ * @param self The visibility; must not be NULL.
+ * @param index The cell's index in the cache (from a list).
+ * @returns Its fades; fully faded (1, 1) for an index the last build did not cover.
+ */
+WorldVisibilityFade WorldVisibility_GetInstanceCellFade(const WorldVisibility* self, size_t index);
 
 /**
  * @brief Returns a cache model's fades this frame.

@@ -264,6 +264,12 @@ void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFr
     rlDisableColorBlend();  // write RGB (normal) + A (flag) directly; no alpha blend
     BeginMode3D(frame->RenderCamera);
     DrawNormalBufferModels(self, frame->SceneFilter);
+    // The model instances components' copies (B03; never crisp), each with its component's outline flag.
+    if (frame->SceneFilter != WorldRendererPixelFilter_CrispOnly)
+    {
+        WorldRendererInstances_DrawNormals(self, frame, GameShader_GetRaylibShader(self->_gbuffer._shader),
+            self->_gbuffer._locOutlineFlag);
+    }
     // The terrain's chunks (B01), with their outline flags.
     WorldRendererTerrain_DrawNormals(self, GameShader_GetRaylibShader(self->_gbuffer._shader),
         self->_gbuffer._locOutlineFlag);

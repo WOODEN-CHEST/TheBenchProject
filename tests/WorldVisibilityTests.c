@@ -10,6 +10,7 @@
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "WorldTerrainComponent.h"
+#include "WorldModelInstancesComponent.h"
 #include "Renderer.h"
 #include "raylib/raymath.h"
 #include "wr/WRVectorMath.h"
@@ -1334,6 +1335,134 @@ static void TerrainChunksJoinThePassesAsModelsDo(TestRun* run)
     TestTerrain_FreeGrid(&Grid);
 }
 
+/* Creates an object at @p position with a model instances component of the world model @p worldModel holding a copy at
+ * each of @p offsets (relative to the object); returns the object, or NULL with a failed check. */
+static WorldObject* AddInstancesObject(TestRun* run, World* world, const char* worldModel, Vector3 position,
+    const Vector3* offsets, size_t count)
+{
+    WorldObject* Object = NULL;
+    WorldComponent* Component = NULL;
+    PropertyInstanceEntry Copies[4];
+    for (size_t Index = 0U; Index < count; Index++)
+    {
+        Copies[Index] = PropertyInstanceEntry_CreateDefault();
+        Copies[Index].Position = GameMath_FromVector3(offsets[Index]);
+    }
+    if (!TEST_CHECK(run, count <= 4U)
+        || !TEST_CHECK_SUCCESS(run, World_CreateObject(world, NULL, &Object))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, GameMath_FromVector3(position)))
+        || !TEST_CHECK_SUCCESS(run, World_AddComponent(world, WorldObject_GetId(Object), WorldComponentType_ModelInstances,
+            &Component))
+        || !TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetWorldModel(
+            WorldModelInstancesComponent_FromComponent(Component), (const unsigned char*)worldModel))
+        || !TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetInstances(
+            WorldModelInstancesComponent_FromComponent(Component), Copies, count)))
+    {
+        return NULL;
+    }
+    return Object;
+}
+
+/* How many cells of @p object's copies a pass's list holds. */
+static size_t CountCellsOf(const VisibilityFixture* fixture, WorldVisibilityPass pass, const WorldObject* object)
+{
+    size_t EntryCount = 0U;
+    const WorldRenderInstances* Entries = WorldRenderCache_GetInstances(&fixture->Cache, &EntryCount);
+    size_t CellCount = 0U;
+    const WorldRenderInstanceCell* Cells = WorldRenderCache_GetInstanceCells(&fixture->Cache, &CellCount);
+    size_t Count = 0U;
+    const size_t* List = WorldVisibility_GetInstanceCells(&fixture->Visibility, &fixture->Cache, pass, &Count);
+    size_t Found = 0U;
+    for (size_t Position = 0U; Position < Count; Position++)
+    {
+        Found += (Entries[Cells[List[Position]].Entry].ObjectId == WorldObject_GetId(object)) ? 1U : 0U;
+    }
+    return Found;
+}
+
+/* Instance cells join the passes as models do, each by its sphere around its copies: the camera's list in view, the
+ * cascades by their component's shadow tier, none without casting, none beyond their draw distance (the quality setting
+ * scales it, unless fixed) or with their object fully transparent; they are counted on their own, with their copies. */
+static void InstanceCellsJoinThePassesAsModelsDo(TestRun* run)
+{
+    VisibilityFixture Fixture;
+    const Vector3 One[1] = { { 0.0f, 0.0f, 0.0f } };
+    // Two cells: the copy at the origin in front of the camera, the one 40 m back behind it.
+    const Vector3 Split[2] = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, -40.0f } };
+    bool IsReady = VisibilityFixture_Construct(run, &Fixture);
+    WorldObject* InFront = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ 0.0f, 0.0f, 10.0f }, One,
+        1U) : NULL;
+    WorldObject* Behind = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ 0.0f, 0.0f, -10.0f }, One,
+        1U) : NULL;
+    WorldObject* NearOnly = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ -1.0f, 0.0f, -3.0f },
+        One, 1U) : NULL;
+    WorldObject* NonCaster = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ 3.0f, 0.0f, -5.0f },
+        One, 1U) : NULL;
+    WorldObject* Beyond = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ 0.0f, 0.0f, 100.0f }, One,
+        1U) : NULL;
+    WorldObject* Clear = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ 2.0f, 0.0f, 12.0f }, One,
+        1U) : NULL;
+    WorldObject* TwoCells = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ 1.0f, 0.0f, 15.0f },
+        Split, 2U) : NULL;
+    WorldVisibilityView View = MakeView((Vector3){ 0.0f, 1.0f, 0.0f });
+    if ((InFront != NULL) && (Behind != NULL) && (NearOnly != NULL) && (NonCaster != NULL) && (Beyond != NULL)
+        && (Clear != NULL) && (TwoCells != NULL) && SetOpacity(run, Clear, 0.0f))
+    {
+        WorldModelInstancesComponent* Near = WorldModelInstancesComponent_FromComponent(WorldObject_GetComponent(NearOnly,
+            WorldComponentType_ModelInstances));
+        WorldModelInstancesComponent* Unshadowed = WorldModelInstancesComponent_FromComponent(WorldObject_GetComponent(
+            NonCaster, WorldComponentType_ModelInstances));
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Near, WorldModelSetting_ShadowTier, true));
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetShadowTier(Near, WorldShadowTier_Near));
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Unshadowed, WorldModelSetting_CastsShadows,
+            true));
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetCastsShadows(Unshadowed, false));
+        if (VisibilityFixture_Build(run, &Fixture, &View))
+        {
+            TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibilityPass_Camera, InFront) == 1U)
+                && (CountCellsOf(&Fixture, WorldVisibilityPass_NearCascade, InFront) == 1U)
+                && (CountCellsOf(&Fixture, WorldVisibilityPass_FarCascade, InFront) == 1U));
+            TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibilityPass_Camera, Behind) == 0U)
+                && (CountCellsOf(&Fixture, WorldVisibilityPass_NearCascade, Behind) == 1U)
+                && (CountCellsOf(&Fixture, WorldVisibilityPass_FarCascade, Behind) == 1U));
+            TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibilityPass_NearCascade, NearOnly) == 1U)
+                && (CountCellsOf(&Fixture, WorldVisibilityPass_FarCascade, NearOnly) == 0U));
+            TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibilityPass_NearCascade, NonCaster) == 0U)
+                && (CountCellsOf(&Fixture, WorldVisibilityPass_FarCascade, NonCaster) == 0U));
+            // The box's 600 m times the test's quality scale is 30 m: 100 m out is beyond it.
+            for (int Pass = 0; Pass < (int)WorldVisibilityPass_Count; Pass++)
+            {
+                TEST_CHECK(run, (CountCellsOf(&Fixture, (WorldVisibilityPass)Pass, Beyond) == 0U)
+                    && (CountCellsOf(&Fixture, (WorldVisibilityPass)Pass, Clear) == 0U));
+            }
+            // Each cell on its own: the front one in view, the back one behind the camera; both cast into the far
+            // cascade.
+            TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibilityPass_Camera, TwoCells) == 1U)
+                && (CountCellsOf(&Fixture, WorldVisibilityPass_FarCascade, TwoCells) == 2U));
+            WorldVisibilityCounts Counts = WorldVisibility_GetCounts(&Fixture.Visibility);
+            TEST_CHECK(run, (Counts.DrawnInstanceCellCount == 2U) && (Counts.DrawnInstanceCount == 2U)
+                && (Counts.InstanceCellsOutsideViewCount == 4U) && (Counts.InstanceCellsFadedOutCount == 2U)
+                && (Counts.DrawnModelCount == 0U) && (Counts.OutsideViewCount == 0U) && (Counts.FadedOutCount == 0U));
+            size_t CellCount = 0U;
+            WorldRenderCache_GetInstanceCells(&Fixture.Cache, &CellCount);
+            TEST_CHECK(run, (CellCount == 8U)
+                && (WorldVisibility_GetInstanceCellFade(&Fixture.Visibility, CellCount).Combined == 1.0f));
+
+            // A fixed draw distance keeps the far one: the quality setting no longer shortens it.
+            WorldModelInstancesComponent* Far = WorldModelInstancesComponent_FromComponent(WorldObject_GetComponent(Beyond,
+                WorldComponentType_ModelInstances));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Far,
+                WorldModelSetting_IsDrawDistanceFixed, true));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetIsDrawDistanceFixed(Far, true));
+            if (VisibilityFixture_Build(run, &Fixture, &View))
+            {
+                TEST_CHECK(run, CountCellsOf(&Fixture, WorldVisibilityPass_Camera, Beyond) == 1U);
+            }
+        }
+    }
+    VisibilityFixture_Deconstruct(run, &Fixture);
+}
+
 // Public functions.
 void WorldVisibilityTests_Run(TestRun* run)
 {
@@ -1357,6 +1486,7 @@ void WorldVisibilityTests_Run(TestRun* run)
         { "drawn_models_are_counted_by_lod", DrawnModelsAreCountedByLod },
         { "lists_and_lods_hold_twenty_kilometres_out", ListsAndLodsHoldTwentyKilometresOut },
         { "terrain_chunks_join_the_passes_as_models_do", TerrainChunksJoinThePassesAsModelsDo },
+        { "instance_cells_join_the_passes_as_models_do", InstanceCellsJoinThePassesAsModelsDo },
     };
     TestRun_RunSuite(run, "WorldVisibility", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

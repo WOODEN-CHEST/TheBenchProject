@@ -55,7 +55,8 @@ Current module list:
   shared by the model type's material_overrides and world model variants (one parser, one apply). GameFont (source/GameFont.c) adds sorted glyph lookup with the '?' fallback; fonts load at a
   definition-chosen size and codepoint set (source/FontCodepoints.c, private) and warn once about glyphs their file
   lacks. Shader stages may `#include "common/..."` shared GLSL from shaders/common/, expanded with #line directives so
-  compiler errors name the right file (source/ShaderSource.c, private). GameTexture is a standalone texture (sky
+  compiler errors name the right file (source/ShaderSource.c, private); since B03 a shader definition's `defines` are
+  written in after the #version line, so one source serves a shader and its variants (the instanced twins). GameTexture is a standalone texture (sky
   panoramas, the moon, noise, masks) with filtering, wrap, optional mipmaps and an sRGB/linear flag.
 * World models (WorldModels.md) - The world_model asset type (a standard type, JSON in world_models/): the reusable
   definition of a placeable thing, kept apart from its placements. WorldModel (include/WorldModel.h, source/WorldModel.c)
@@ -234,6 +235,12 @@ Current module list:
     placement overrides: each an explicit flag (overrides_<key>) next to the placement's own value (outline, crisp, shadow
     tier, casts shadows, draw distance, fixed draw distance, LOD switch distances), plus a draw distance multiplier, a LOD
     distance multiplier and a forced LOD; pure functions resolve the settings and the LOD settings in effect.
+  * WorldModelInstancesComponent - Component type 7 (`model_instances`, B03): many copies of one world model, each a
+    double position, a rotation, a scale and a tint (an InstanceList, at most 262 144), with the model component's
+    settings shared row for row through the private source/WorldModelComponentInternal.h (all but omit_pixelation:
+    copies are never crisp) and an instances revision; pure functions resolve the settings and the LOD settings in
+    effect. The renderer draws the copies a cell at a time, instanced, in every pass (WorldRuntime.md, "Model
+    instances").
   * WorldSpriteComponent - A world sprite by asset name (WorldSprites.md) with its animation's playback instance, bound
     under the world's asset user on attach and whenever the name changes (also through the table), and every setting
     this placement overrides: each an explicit flag (overrides_<key>) next to the placement's own value (orientation,
@@ -275,7 +282,9 @@ Current module list:
     stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, AO, outlines, bloom, sun
     shafts, crisp overlay, lit sprites with decals, sorted transparency and shadows that face the light; frustum
     culling, draw distances, and dithered fades and opacity; LODs with dithered cross-fades; skinned models posed by
-    their animators in every pass, T29; terrain chunks in every pass with their own GPU meshes, B01), in render space
+    their animators in every pass, T29; terrain chunks in every pass with their own GPU meshes, B01; model instances
+    drawn a cell at a time with instanced twins of every geometry pass, each copy fading and changing LOD on its own,
+    B03, source/WorldRendererInstances.c), in render space
     since T32:
     the world's orientation with the camera at the origin, every position relative to the camera (subtracted in double),
     shadow cascades snapped to their texels; separate from the world data and never writes to it. Split by render pass
@@ -283,8 +292,9 @@ Current module list:
     source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
     WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
   * WorldRenderCache - The renderer's private per-component cache (source/WorldRenderCache.h): one walk over the
-    world's model/sprite/light/terrain component arrays per frame builds the lists (since B01 every shown terrain's
-    chunks too) with the objects' world placements (in double,
+    world's model/sprite/light/terrain/model instances component arrays per frame builds the lists (since B01 every
+    shown terrain's chunks too; since B03 every shown model instances component's cells, built again only when its
+    copies or its world model change) with the objects' world placements (in double,
     and in render space for the frame's origin: the one place a world position becomes the floats the GPU sees;
     effectively disabled and hidden objects not drawn); world models are resolved once per component and again only
     when the name changes, variants to an index, and the settings in effect (models' and sprites') every frame; each
@@ -293,6 +303,11 @@ Current module list:
     camera's double position) with its rotation-only view and projection, the C mirror of the sky shader's ray, and the
     shadow cascades with their centres snapped to their texel grids in double, each grid kept from frame to frame
     (anchored to the last frame's box). WorldRuntime.md's "Render space" has the rule every pass and shader follows.
+  * WorldInstancing - Instanced drawing as pure maths (private, source/WorldInstancing.h; B03): a component's copies
+    sorted into 32 m cells of its object's space with their 56-byte records (each matrix relative to its cell's centre,
+    composed in double, rounded once), the copies' LOD bands around the switch distances, their fades, which pass draws
+    which LOD of a copy and how it dithers, and the LODs a cell can show: the C mirror of shaders/common/instancing.glsl
+    (tests, the one-at-a-time A/B, the status's copies by LOD).
   * WorldLod - Levels of detail as pure maths (private, source/WorldLod.h): the LOD a distance picks (the zoom, the
     config's lod_distance_scale, the placement's switch distances, hysteresis, a forced LOD) and the cross-fade's state
     across frames (progress over the world model's fade time, turning back without a pop, a third LOD from the larger
@@ -323,7 +338,9 @@ Current module list:
     cup's pick-up, the door's push), 8 sends the NPC human to the bench, 9 puts down, 0 waves. Since B01 its world has
     a terrain around the slab, and the minus key shows the terrain's chunk key; since B02 the terrain wears four
     placeholder materials and the equals key cycles its views (shaded, painted weights, rule weights, the dominant
-    material).
+    material). Since B03 its world has a grove of 400 instanced trees, the apostrophe shows a field of 20 000 instanced
+    pebbles (a runtime object) and the semicolon switches instanced drawing for the A/B (the private
+    source/WorldTestInstances.{h,c}).
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
@@ -334,7 +351,9 @@ Current module list:
   type (PropertyFloatList: an owned list of floats with a maximum count, per-value bounds and an optional rising rule)
   carries lists such as a placement's LOD distances; an EnumSet type (a uint32 mask of an enum's entries, JSON an
   array of names) carries a collider's layer mask; an AssetNameList type (PropertyAssetNameList: an owned list of
-  asset names, JSON an array of strings) carries an animator's own animation libraries. A setting a placement overrides
+  asset names, JSON an array of strings) carries an animator's own animation libraries; an InstanceList type
+  (PropertyInstanceList: an owned list of copies, each a double position, a rotation, a scale and a tint; JSON an array
+  of objects with the defaults left out, GHDF parallel arrays) carries a model instances component's copies. A setting a placement overrides
   is two rows, a Bool
   `overrides_<key>` and the value `<key>` (the table check enforces the pairing). A DataMap property (tags and typed
   data) is written as two JSON keys.

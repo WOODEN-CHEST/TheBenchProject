@@ -12,6 +12,8 @@
 #include "WorldLightComponent.h"
 #include "WorldLod.h"
 #include "WorldTerrainComponent.h"
+#include "WorldModelInstancesComponent.h"
+#include "WorldInstancing.h"
 #include "SpriteAnimation.h"
 #include "SpriteTransform.h"
 #include "raylib/raylib.h"
@@ -73,6 +75,18 @@
  * (WorldTerrainComponent_ResolveSettings) and its placement: the object's world matrix times the translation to the
  * chunk's centre, in double and in render space, and the chunk's bounding sphere through it. The chunks' GPU meshes are
  * the renderer's (WorldRendererTerrain.c): the cache lists, the renderer uploads.
+ *
+ * MODEL INSTANCES (B03). Each model instances component has an entry kept across frames (WorldRenderInstances), matched
+ * by owner id and component serial; its world model and variant are resolved as a model's are (under the model user,
+ * again only when the name or the variant changes; failures logged once). Its copies are sorted into cells
+ * (WorldInstancing.h: records relative to each cell's centre, in the object's space) when the entry is new, when the
+ * component's instances revision changes or when its world model is resolved again (its bounds), never because the
+ * object moved: the cells live in the object's space, and every frame lists each cell of a shown object
+ * (WorldRenderInstanceCell) with its placement, the object's world matrix times the translation to the cell's centre,
+ * in double and in render space, and the cell's sphere through it. Each build gets an id no other build of the cache
+ * had, which the renderer's GPU copy of the records follows (WorldRendererInstances.c: the cache builds, the renderer
+ * uploads). WorldRenderCache_UpdateLods gives each entry its LOD bands for the frame and each cell the LODs its copies
+ * can show (WorldInstancing_GetCellLodMask).
  *
  * The cache only reads the world, its objects and components, and never writes to an asset. Every pointer in the lists
  * is borrowed and valid until the world changes; the world models (and with them their LOD models and textures) and the
@@ -282,6 +296,90 @@ typedef struct WorldRenderTerrainChunkStruct
     Color Tint;
 } WorldRenderTerrainChunk;
 
+/** @brief A model instances component as the cache resolves it (B03), kept across frames. */
+typedef struct WorldRenderInstancesStruct
+{
+    /** @brief Id of the object that carries the component, and the component's serial when the entry was made (a
+     *  replaced component, even with its predecessor's id and address, gets a new entry). */
+    uint64_t ObjectId;
+    uint64_t Serial;
+    /** @brief The component (borrowed); valid until the world changes. */
+    const WorldModelInstancesComponent* Component;
+    /** @brief The component revision the entry last checked; meaningful once IsResolved is true. */
+    uint32_t Revision;
+    /** @brief Whether a resolution was attempted for the current name, and the hash of that name (0 for none). */
+    bool IsResolved;
+    uint64_t NameHash;
+    /** @brief The resolved world model, held under the model user passed to Sync; NULL when the component names none or it
+     *  failed to load (then the object draws no copies). Read-only. */
+    const WorldModel* Asset;
+    /** @brief The component's uses_variant and the hash of its variant name when the variant was resolved, whether the
+     *  copies draw a variant, and which (WorldModel_ApplyVariant). */
+    bool UsesVariant;
+    uint64_t VariantNameHash;
+    bool HasVariant;
+    size_t VariantIndex;
+    /** @brief Whether the placement's own LOD distances were refused last frame (the warning is logged when this turns
+     *  true). */
+    bool IsLodListRefused;
+    /** @brief The world model's bounding sphere in a copy's space (valid when Asset is not NULL). */
+    WorldInstanceBounds Bounds;
+    /** @brief The copies' cells (owned; NULL until first built), whether they are built for the current world model, the
+     *  instances revision they were built from, and their build id (unique in the cache, from 1; 0 before the first). */
+    WorldInstanceCells* Cells;
+    bool AreCellsBuilt;
+    uint32_t CellsRevision;
+    uint64_t CellsBuildId;
+    /** @brief Whether the passes draw the copies this frame: the world model resolved, the object (effectively) enabled
+     *  and visible. */
+    bool IsDrawn;
+    /** @brief The settings in effect (this frame; WorldModelInstancesComponent_ResolveSettings, never crisp). */
+    bool HasOutline;
+    WorldShadowTier ShadowTier;
+    bool CastsShadows;
+    float DrawDistance;
+    bool IsDrawDistanceFixed;
+    /** @brief The object's final tint colour (its alpha is the object's opacity: every copy's is multiplied by it). */
+    Color Tint;
+    /** @brief The object's world matrix (this frame), in double, and its stretch (WorldTransform_GetMaxScale). */
+    Matrix4Double WorldMatrix;
+    float WorldStretch;
+    /** @brief The LOD settings in effect and the bands for this frame's lod_distance_scale (WorldRenderCache_UpdateLods;
+     *  valid while IsDrawn). */
+    WorldModelLodSettings LodSettings;
+    WorldInstanceLodBands Bands;
+} WorldRenderInstances;
+
+/** @brief One cell of a model instances component as the passes draw it this frame (B03): every cell of every drawn
+ *  entry is listed, entry by entry in world order, each entry's cells in their order. */
+typedef struct WorldRenderInstanceCellStruct
+{
+    /** @brief The entry (an index into WorldRenderCache_GetInstances) and the cell (an index into its cells). */
+    size_t Entry;
+    size_t Cell;
+    /** @brief Its records in the entry's cells: RecordCount of them from FirstRecord. */
+    size_t FirstRecord;
+    size_t RecordCount;
+    /** @brief The entry's settings in effect, for the visibility. */
+    bool HasOutline;
+    WorldShadowTier ShadowTier;
+    bool CastsShadows;
+    float DrawDistance;
+    bool IsDrawDistanceFixed;
+    Color Tint;
+    /** @brief The cell's world matrix: the object's world matrix times the translation to the cell's centre (its records
+     *  are relative to it), in double; its sphere in the world, its centre in double. */
+    Matrix4Double WorldMatrix;
+    Vector3Double Center;
+    float Radius;
+    /** @brief The world matrix and the sphere's centre in render space (this frame): relative to the origin the lists
+     *  were synced for, subtracted in double and rounded once. The cell is drawn with RenderMatrix. */
+    Matrix RenderMatrix;
+    Vector3 RenderCenter;
+    /** @brief The LODs its copies can show this frame (bit k: LOD k; WorldRenderCache_UpdateLods). */
+    uint32_t LodMask;
+} WorldRenderInstanceCell;
+
 /** @brief What a frame's LOD update needs (WorldRenderCache_UpdateLods): the camera, the quality setting and the frame's
  *  time. A plain value type. */
 typedef struct WorldRenderLodViewStruct
@@ -321,6 +419,12 @@ typedef struct WorldRenderCacheStruct
     GenericBuffer _terrains;
     GenericBuffer _terrainRematch;
     GenericBuffer _terrainChunks;
+    /** @brief WorldRenderInstances entries, one per model instances component, in the world's component order (B03); a
+     *  scratch buffer for re-matching them; this frame's WorldRenderInstanceCell entries; the next cells' build id. */
+    GenericBuffer _instances;
+    GenericBuffer _instancesRematch;
+    GenericBuffer _instanceCells;
+    uint64_t _nextCellsBuildId;
     /** @brief The world the model entries were matched against (compared by address only; never dereferenced). */
     const World* _world;
     /** @brief That world's component-set version when the entries were matched. */
@@ -380,8 +484,9 @@ void WorldRenderCache_Reset(WorldRenderCache* self);
  * entry is new or whose name changed is resolved with AssetManager_LoadWorldModel under @p modelUser; a failure is
  * logged once (warning) and leaves the entry without an asset until the name changes. Variants are resolved with the
  * world model and when the component's variant changes (an unknown one logged once). Terrains are matched (by owner id
- * and component serial) and resolved the same way (AssetManager_LoadTerrain), and their chunks listed (B01). Every
- * model's settings, transform and bounds are recomputed. Main thread only; resolving a world model loads its LOD
+ * and component serial) and resolved the same way (AssetManager_LoadTerrain), and their chunks listed (B01); model
+ * instances likewise, their copies sorted into cells when they or their world model changed, and the cells of shown
+ * objects listed (B03). Every model's settings, transform and bounds are recomputed. Main thread only; resolving a world model loads its LOD
  * models, which needs the GL context.
  * @param self The cache; must not be NULL.
  * @param world The world to draw; must not be NULL.
@@ -392,14 +497,15 @@ void WorldRenderCache_Reset(WorldRenderCache* self);
  * @param logger Receives one warning per failed world model resolution and per unknown variant; borrowed, may be
  *        NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self, @p world or @p assets is NULL;
- *          ErrorCode_InvalidOperation if a list could not grow (the lists are then incomplete).
+ *          ErrorCode_InvalidOperation if a list (or a component's cells) could not grow (the lists are then incomplete).
  */
 Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double origin, AssetManager* assets,
     AssetUserID modelUser, Logger* logger);
 
 /**
- * @brief Picks the LOD every drawn model entry shows this frame and advances its cross-fade (WorldLod.h). Call it once
- *        per frame, after WorldRenderCache_Sync.
+ * @brief Picks the LOD every drawn model entry shows this frame and advances its cross-fade (WorldLod.h), and gives every
+ *        drawn model instances entry its LOD bands and each of its cells the LODs its copies can show (B03). Call it
+ *        once per frame, after WorldRenderCache_Sync.
  *
  * For each entry that is drawn: its LOD settings in effect (WorldModelComponent_ResolveLodSettings; when the placement's
  * own list does not fit its world model, the world model's distances, with one warning when that starts), the camera's
@@ -502,6 +608,34 @@ static inline const WorldRenderTerrainChunk* WorldRenderCache_GetTerrainChunks(c
 {
     const void* Entries = self->_terrainChunks._data;
     *outCount = self->_terrainChunks._count;
+    return Entries;
+}
+
+/**
+ * @brief Returns the model instances entries: one per model instances component, in world order, including ones that draw
+ *        nothing (no world model resolved, a hidden object).
+ * @param self The cache; must not be NULL.
+ * @param outCount [out] Receives the entry count. Must not be NULL.
+ * @returns The entries (borrowed until the next Sync or Reset); NULL when there are none.
+ */
+static inline const WorldRenderInstances* WorldRenderCache_GetInstances(const WorldRenderCache* self, size_t* outCount)
+{
+    const void* Entries = self->_instances._data;
+    *outCount = self->_instances._count;
+    return Entries;
+}
+
+/**
+ * @brief Returns this frame's instance cells: every cell of every drawn model instances entry, entry by entry.
+ * @param self The cache; must not be NULL.
+ * @param outCount [out] Receives the entry count. Must not be NULL.
+ * @returns The entries (borrowed until the next Sync or Reset); NULL when there are none.
+ */
+static inline const WorldRenderInstanceCell* WorldRenderCache_GetInstanceCells(const WorldRenderCache* self,
+    size_t* outCount)
+{
+    const void* Entries = self->_instanceCells._data;
+    *outCount = self->_instanceCells._count;
     return Entries;
 }
 

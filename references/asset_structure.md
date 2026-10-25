@@ -364,7 +364,8 @@ pixel fonts with one-pixel strokes. raylib's built-in font uses the default.
 {
     "name": "world_pbr",
     "vertex_location": asset location,   // [OPTIONAL] the vertex-stage source; omit to use Raylib's default
-    "fragment_location": asset location  // [OPTIONAL] the fragment-stage source; omit to use Raylib's default
+    "fragment_location": asset location, // [OPTIONAL] the fragment-stage source; omit to use Raylib's default
+    "defines": [ string, ... ]           // [OPTIONAL] names #defined in both stages (B03); none by default
 }
 ```
 
@@ -373,6 +374,20 @@ back-compat alias for `fragment_location` (the original single-stage behavior). 
 (`vert`, `frag`, `vs`, `fs`, `glsl`) is accepted for either stage, so two stage files with the same name but
 different extensions would make the location ambiguous: give the two stage files DISTINCT names — e.g.
 `shaders/pbr/vertex.vert` and `shaders/pbr/fragment.frag`, referenced as `"pbr/vertex"` and `"pbr/fragment"`.
+
+`defines` (B03) names preprocessor symbols for both stages, so one source serves a shader and its variants: each name
+becomes a line `#define <name>` right after the main file's `#version` line (first, when it has none), followed by a
+`#line` that keeps the file's line numbers, and shared files test it with `#ifdef`. At most 16 names, each at most once;
+a name is a GLSL identifier (a letter or `_`, then letters, digits or `_`) that neither starts with `GL_` nor holds `__`
+(GLSL reserves both). Anything else fails the definition. The instanced twins use it:
+```
+{
+    "name": "world_depth_instanced",
+    "vertex_location": "depth/instanced",
+    "fragment_location": "depth/fragment",
+    "defines": ["WORLD_INSTANCED"]
+}
+```
 
 ### Shared shader code: `#include`.
 A stage source may pull in shared GLSL with a line of its own:

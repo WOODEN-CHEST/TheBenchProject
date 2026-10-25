@@ -42,13 +42,18 @@ typedef struct PropertyScratchStruct
 /** Returns whether values of @p type are owned strings (String, AssetName). */
 bool PropertyInternal_IsStringType(PropertyType type);
 
-/** Returns whether fields of @p type own what they point to (the strings, DataMap and FloatList): the instance frees it,
+/** Returns whether fields of @p type own what they point to (the strings, DataMap and the lists): the instance frees it,
  *  copies clone it, reads hand it over. */
 bool PropertyInternal_IsOwnedType(PropertyType type);
 
 /** Allocates a float list of @p count values (1 to PROPERTY_FLOAT_LIST_MAX_COUNT), all 0, for a reader to fill in
  *  place before it hands the list to a field; the caller owns it (PropertyFloatList_Destroy). */
 PropertyFloatList* PropertyInternal_AllocateFloatList(size_t count);
+
+/** Allocates an instance list of @p count instances (1 to PROPERTY_INSTANCE_LIST_MAX_COUNT), each at its defaults
+ *  (PropertyInstanceEntry_CreateDefault), for a reader to fill in place before it hands the list to a field; the caller
+ *  owns it (PropertyInstanceList_Destroy). */
+PropertyInstanceList* PropertyInternal_AllocateInstanceList(size_t count);
 
 /** Returns whether @p descriptor has every flag in @p flags. */
 static inline bool PropertyInternal_HasFlags(const PropertyDescriptor* descriptor, uint32_t flags)

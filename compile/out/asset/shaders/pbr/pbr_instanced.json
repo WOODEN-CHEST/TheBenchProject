@@ -1,0 +1,6 @@
+{
+    "name": "world_pbr_instanced",
+    "vertex_location": "pbr/instanced",
+    "fragment_location": "pbr/fragment",
+    "defines": ["WORLD_INSTANCED"]
+}

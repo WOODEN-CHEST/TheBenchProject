@@ -21,6 +21,16 @@
 #define PROPERTY_GHDF_TINT_CHANNEL_COUNT 3U
 /** The most components of a written float or double array (a Vector3, a Vector3Double). */
 #define PROPERTY_GHDF_MAX_VECTOR_COMPONENTS 3U
+/** Entry ids inside an instance list's compound: parallel arrays, one group of elements per instance in the list's
+ *  order. The positions (three doubles each) are always there; the rotations (three floats, radians), the scales (three
+ *  floats) and the tints (four channel bytes, RGBA) only when some instance differs from the default. */
+#define PROPERTY_GHDF_INSTANCE_POSITIONS ((GHDFEntryID)1)
+#define PROPERTY_GHDF_INSTANCE_ROTATIONS ((GHDFEntryID)2)
+#define PROPERTY_GHDF_INSTANCE_SCALES ((GHDFEntryID)3)
+#define PROPERTY_GHDF_INSTANCE_TINTS ((GHDFEntryID)4)
+/** Elements per instance in each of those arrays. */
+#define PROPERTY_GHDF_INSTANCE_VECTOR_ELEMENTS 3U
+#define PROPERTY_GHDF_INSTANCE_TINT_ELEMENTS 4U
 
 
 // Static functions: writing.
@@ -194,6 +204,139 @@ static Error PutFloatList(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntr
     return Result;
 }
 
+/* Which of an instance list's optional arrays differ from their defaults somewhere in the list. */
+typedef struct InstanceArrayNeedsStruct
+{
+    bool HasRotations;
+    bool HasScales;
+    bool HasTints;
+} InstanceArrayNeeds;
+
+static InstanceArrayNeeds GetInstanceArrayNeeds(const PropertyInstanceList* list)
+{
+    InstanceArrayNeeds Needs = { .HasRotations = false, .HasScales = false, .HasTints = false };
+    const PropertyInstanceEntry* Entries = PropertyInstanceList_GetEntries(list);
+    for (size_t Index = 0; Index < PropertyInstanceList_GetCount(list); Index++)
+    {
+        const PropertyInstanceEntry* Entry = &Entries[Index];
+        Needs.HasRotations = Needs.HasRotations || (Entry->Rotation.x != 0.0f) || (Entry->Rotation.y != 0.0f)
+            || (Entry->Rotation.z != 0.0f);
+        Needs.HasScales = Needs.HasScales || (Entry->Scale.x != 1.0f) || (Entry->Scale.y != 1.0f)
+            || (Entry->Scale.z != 1.0f);
+        Needs.HasTints = Needs.HasTints || (Entry->Tint.r != 255U) || (Entry->Tint.g != 255U) || (Entry->Tint.b != 255U)
+            || (Entry->Tint.a != 255U);
+    }
+    return Needs;
+}
+
+/* Makes one instance's elements of one of an instance list's parallel arrays. */
+typedef void (*InstanceElementMaker)(const PropertyInstanceEntry* entry, GHDFObjectValue* outElements);
+
+static void MakePositionElements(const PropertyInstanceEntry* entry, GHDFObjectValue* outElements)
+{
+    outElements[0] = GHDFObjectValue_CreateDouble(entry->Position.X);
+    outElements[1] = GHDFObjectValue_CreateDouble(entry->Position.Y);
+    outElements[2] = GHDFObjectValue_CreateDouble(entry->Position.Z);
+}
+
+static void MakeRotationElements(const PropertyInstanceEntry* entry, GHDFObjectValue* outElements)
+{
+    outElements[0] = GHDFObjectValue_CreateFloat(entry->Rotation.x);
+    outElements[1] = GHDFObjectValue_CreateFloat(entry->Rotation.y);
+    outElements[2] = GHDFObjectValue_CreateFloat(entry->Rotation.z);
+}
+
+static void MakeScaleElements(const PropertyInstanceEntry* entry, GHDFObjectValue* outElements)
+{
+    outElements[0] = GHDFObjectValue_CreateFloat(entry->Scale.x);
+    outElements[1] = GHDFObjectValue_CreateFloat(entry->Scale.y);
+    outElements[2] = GHDFObjectValue_CreateFloat(entry->Scale.z);
+}
+
+static void MakeTintElements(const PropertyInstanceEntry* entry, GHDFObjectValue* outElements)
+{
+    outElements[0] = GHDFObjectValue_CreateUInt8(entry->Tint.r);
+    outElements[1] = GHDFObjectValue_CreateUInt8(entry->Tint.g);
+    outElements[2] = GHDFObjectValue_CreateUInt8(entry->Tint.b);
+    outElements[3] = GHDFObjectValue_CreateUInt8(entry->Tint.a);
+}
+
+/* One of an instance list's parallel arrays: @p perInstance elements of @p elementType per instance, made by
+ * @p makeElements. */
+static Error PutInstanceArray(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id, GHDFValueType elementType,
+    const PropertyInstanceList* list, size_t perInstance, InstanceElementMaker makeElements)
+{
+    GHDFArray* Array = NULL;
+    Error Result = GHDFObjectPool_BorrowArray(pool, elementType, &Array);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    const PropertyInstanceEntry* Entries = PropertyInstanceList_GetEntries(list);
+    GHDFObjectValue Elements[PROPERTY_GHDF_INSTANCE_TINT_ELEMENTS];
+    for (size_t Index = 0; (Index < PropertyInstanceList_GetCount(list)) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        makeElements(&Entries[Index], Elements);
+        for (size_t Element = 0; (Element < perInstance) && (Result.Code == ErrorCode_Success); Element++)
+        {
+            Result = GHDFArray_AddValue(Array, &Elements[Element]);
+        }
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        GHDFObjectValue ArrayValue = GHDFObjectValue_CreateArray(Array, elementType);
+        Result = GHDFCompound_SetValue(compound, id, GHDF_CreateArrayType(elementType), &ArrayValue);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = GHDFObjectPool_ReturnArray(pool, Array, true);
+        Error_Deconstruct(&ReturnResult);
+    }
+    return Result;
+}
+
+/* A compound of the list's parallel arrays: its positions always (an empty array for the empty list), its rotations,
+ * scales and tints when some instance has one other than the default. */
+static Error PutInstanceList(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id,
+    const PropertyInstanceList* list)
+{
+    GHDFCompound* ListCompound = NULL;
+    Error Result = GHDFObjectPool_BorrowCompound(pool, &ListCompound);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    InstanceArrayNeeds Needs = GetInstanceArrayNeeds(list);
+    Result = PutInstanceArray(pool, ListCompound, PROPERTY_GHDF_INSTANCE_POSITIONS, GHDFValueType_Double, list,
+        PROPERTY_GHDF_INSTANCE_VECTOR_ELEMENTS, MakePositionElements);
+    if ((Result.Code == ErrorCode_Success) && Needs.HasRotations)
+    {
+        Result = PutInstanceArray(pool, ListCompound, PROPERTY_GHDF_INSTANCE_ROTATIONS, GHDFValueType_Float, list,
+            PROPERTY_GHDF_INSTANCE_VECTOR_ELEMENTS, MakeRotationElements);
+    }
+    if ((Result.Code == ErrorCode_Success) && Needs.HasScales)
+    {
+        Result = PutInstanceArray(pool, ListCompound, PROPERTY_GHDF_INSTANCE_SCALES, GHDFValueType_Float, list,
+            PROPERTY_GHDF_INSTANCE_VECTOR_ELEMENTS, MakeScaleElements);
+    }
+    if ((Result.Code == ErrorCode_Success) && Needs.HasTints)
+    {
+        Result = PutInstanceArray(pool, ListCompound, PROPERTY_GHDF_INSTANCE_TINTS, GHDFValueType_UInt8, list,
+            PROPERTY_GHDF_INSTANCE_TINT_ELEMENTS, MakeTintElements);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        GHDFObjectValue Value = GHDFObjectValue_CreateCompound(ListCompound);
+        Result = GHDFCompound_SetValue(compound, id, GHDF_CreateRegularType(GHDFValueType_Compound), &Value);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = GHDFObjectPool_ReturnCompound(pool, ListCompound, true);
+        Error_Deconstruct(&ReturnResult);
+    }
+    return Result;
+}
+
 /* A Compound array of the map's entries (see DataMap.h). */
 static Error PutDataMap(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id, const DataMap* map)
 {
@@ -272,6 +415,8 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
             return GameGHDF_PutUnsigned(compound, Id, (uint64_t)data->EnumSetValue);
         case PropertyType_AssetNameList:
             return PutAssetNameList(pool, compound, Id, data->AssetNameListValue);
+        case PropertyType_InstanceList:
+            return PutInstanceList(pool, compound, Id, data->InstanceListValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -537,6 +682,135 @@ static Error ReadAssetNameList(GHDFCompound* compound, const PropertyDescriptor*
     return Error_CreateSuccess();
 }
 
+/* One of an instance list's optional arrays, with exactly @p count elements of @p elementType when it is there. */
+static Error GetInstanceArray(GHDFCompound* compound, GHDFEntryID id, GHDFValueType elementType, size_t count,
+    const char* name, GHDFArray** outArray)
+{
+    GHDFObjectValue Entry;
+    bool IsFound = false;
+    *outArray = NULL;
+    Error Result = GHDFCompound_GetOptionalVerified(compound, id, GHDF_CreateArrayType(elementType), &Entry, &IsFound);
+    if ((Result.Code != ErrorCode_Success) || !IsFound)
+    {
+        return Result;
+    }
+    if (GHDFArray_GetElementCount(Entry.Value.Array) != count)
+    {
+        return Error_Construct4(ErrorCode_Deserialize, "The %s array has %" PRIu64 " elements; the positions call for %"
+            PRIu64 ".", name, (uint64_t)GHDFArray_GetElementCount(Entry.Value.Array), (uint64_t)count);
+    }
+    *outArray = Entry.Value.Array;
+    return Error_CreateSuccess();
+}
+
+/* Element @p index of an array known to hold it. */
+static GHDFObjectValue GetElement(GHDFArray* array, size_t index, Error* inOutResult)
+{
+    GHDFObjectValue Element = { .Type = GHDFValueType_None };
+    if (inOutResult->Code == ErrorCode_Success)
+    {
+        *inOutResult = GHDFArray_Get(array, index, &Element);
+    }
+    return Element;
+}
+
+/* An instance list from its compound of parallel arrays, the count (the positions' length over three) checked before
+ * anything is allocated and every other array's length against it (the instances' rules are checked when the read
+ * commits); a compound with an empty position array is the empty list. */
+static Error ReadInstanceList(GHDFCompound* compound, const PropertyDescriptor* descriptor, void* target)
+{
+    GHDFObjectValue Entry;
+    bool IsFound = false;
+    Error Result = GHDFCompound_GetOptionalVerified(compound, (GHDFEntryID)descriptor->WireId,
+        GHDF_CreateRegularType(GHDFValueType_Compound), &Entry, &IsFound);
+    if ((Result.Code != ErrorCode_Success) || !IsFound)
+    {
+        return Result;
+    }
+    GHDFCompound* ListCompound = Entry.Value.Compound;
+    GHDFObjectValue PositionsEntry;
+    Result = GHDFCompound_GetVerified(ListCompound, PROPERTY_GHDF_INSTANCE_POSITIONS,
+        GHDF_CreateArrayType(GHDFValueType_Double), &PositionsEntry);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    GHDFArray* Positions = PositionsEntry.Value.Array;
+    size_t ElementCount = GHDFArray_GetElementCount(Positions);
+    if ((ElementCount % PROPERTY_GHDF_INSTANCE_VECTOR_ELEMENTS) != 0U)
+    {
+        return Error_Construct4(ErrorCode_Deserialize, "The position array has %" PRIu64 " elements, not three per "
+            "instance.", (uint64_t)ElementCount);
+    }
+    size_t Count = ElementCount / PROPERTY_GHDF_INSTANCE_VECTOR_ELEMENTS;
+    if (Count > descriptor->Rules.MaxCount)
+    {
+        return Error_Construct4(ErrorCode_Deserialize, "The list has %" PRIu64 " instances; at most %" PRIu64
+            " are allowed.", (uint64_t)Count, (uint64_t)descriptor->Rules.MaxCount);
+    }
+    GHDFArray* Rotations = NULL;
+    GHDFArray* Scales = NULL;
+    GHDFArray* Tints = NULL;
+    size_t VectorElements = Count * PROPERTY_GHDF_INSTANCE_VECTOR_ELEMENTS;
+    Result = GetInstanceArray(ListCompound, PROPERTY_GHDF_INSTANCE_ROTATIONS, GHDFValueType_Float, VectorElements,
+        "rotation", &Rotations);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = GetInstanceArray(ListCompound, PROPERTY_GHDF_INSTANCE_SCALES, GHDFValueType_Float, VectorElements,
+            "scale", &Scales);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = GetInstanceArray(ListCompound, PROPERTY_GHDF_INSTANCE_TINTS, GHDFValueType_UInt8,
+            Count * PROPERTY_GHDF_INSTANCE_TINT_ELEMENTS, "tint", &Tints);
+    }
+    if ((Result.Code != ErrorCode_Success) || (Count == 0U))
+    {
+        if (Result.Code == ErrorCode_Success)
+        {
+            PropertyInternal_AdoptOwned(descriptor, target, NULL);
+        }
+        return Result;
+    }
+
+    PropertyInstanceList* List = PropertyInternal_AllocateInstanceList(Count);
+    for (size_t Index = 0; (Index < Count) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        PropertyInstanceEntry* Instance = &List->_entries[Index];
+        size_t First = Index * PROPERTY_GHDF_INSTANCE_VECTOR_ELEMENTS;
+        Instance->Position.X = GetElement(Positions, First, &Result).Value.Double;
+        Instance->Position.Y = GetElement(Positions, First + 1U, &Result).Value.Double;
+        Instance->Position.Z = GetElement(Positions, First + 2U, &Result).Value.Double;
+        if (Rotations != NULL)
+        {
+            Instance->Rotation.x = GetElement(Rotations, First, &Result).Value.Float;
+            Instance->Rotation.y = GetElement(Rotations, First + 1U, &Result).Value.Float;
+            Instance->Rotation.z = GetElement(Rotations, First + 2U, &Result).Value.Float;
+        }
+        if (Scales != NULL)
+        {
+            Instance->Scale.x = GetElement(Scales, First, &Result).Value.Float;
+            Instance->Scale.y = GetElement(Scales, First + 1U, &Result).Value.Float;
+            Instance->Scale.z = GetElement(Scales, First + 2U, &Result).Value.Float;
+        }
+        if (Tints != NULL)
+        {
+            size_t FirstChannel = Index * PROPERTY_GHDF_INSTANCE_TINT_ELEMENTS;
+            Instance->Tint.r = GetElement(Tints, FirstChannel, &Result).Value.UInt8;
+            Instance->Tint.g = GetElement(Tints, FirstChannel + 1U, &Result).Value.UInt8;
+            Instance->Tint.b = GetElement(Tints, FirstChannel + 2U, &Result).Value.UInt8;
+            Instance->Tint.a = GetElement(Tints, FirstChannel + 3U, &Result).Value.UInt8;
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        PropertyInstanceList_Destroy(List);
+        return Result;
+    }
+    PropertyInternal_AdoptOwned(descriptor, target, List);
+    return Error_CreateSuccess();
+}
+
 /* Reads a scalar entry of @p type into *outEntry; *outFound false when absent, and on an error. */
 static Error GetScalar(GHDFCompound* compound, GHDFEntryID id, GHDFValueType type, GHDFObjectValue* outEntry,
     bool* outFound)
@@ -641,6 +915,8 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
             return Error_Construct2(ErrorCode_InvalidState, "Float lists are read separately.");
         case PropertyType_AssetNameList:
             return Error_Construct2(ErrorCode_InvalidState, "Asset name lists are read separately.");
+        case PropertyType_InstanceList:
+            return Error_Construct2(ErrorCode_InvalidState, "Instance lists are read separately.");
         case PropertyType_EnumSet:
         {
             // Bits outside the enum are refused when the read commits, like every rule.
@@ -668,6 +944,10 @@ static Error ReadEntry(const PropertyTable* table, GHDFCompound* compound, const
     else if (descriptor->Type == PropertyType_AssetNameList)
     {
         Result = ReadAssetNameList(compound, descriptor, target);
+    }
+    else if (descriptor->Type == PropertyType_InstanceList)
+    {
+        Result = ReadInstanceList(compound, descriptor, target);
     }
     else if (PropertyInternal_IsStringType(descriptor->Type))
     {

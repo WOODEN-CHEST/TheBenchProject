@@ -122,19 +122,22 @@ static size_t GetStorageSize(PropertyType type)
             return sizeof(uint32_t);
         case PropertyType_AssetNameList:
             return sizeof(PropertyAssetNameList*);
+        case PropertyType_InstanceList:
+            return sizeof(PropertyInstanceList*);
         case PropertyType_Enum:
             return 0U;
     }
     return 0U;
 }
 
-/* Types that take Minimum/Maximum rules (a float list's apply to each of its values). */
+/* Types that take Minimum/Maximum rules (a float list's apply to each of its values, an instance list's to each of its
+ * positions' components). */
 static bool IsBoundedType(PropertyType type)
 {
     return (type == PropertyType_Int32) || (type == PropertyType_UInt32) || (type == PropertyType_Float)
         || (type == PropertyType_Double) || (type == PropertyType_Angle) || (type == PropertyType_Vector2)
         || (type == PropertyType_Vector3) || (type == PropertyType_Vector3Double) || (type == PropertyType_AngleVector3)
-        || (type == PropertyType_FloatList);
+        || (type == PropertyType_FloatList) || (type == PropertyType_InstanceList);
 }
 
 static bool IsValidType(PropertyType type)
@@ -161,6 +164,10 @@ static const void* GetOwnedData(PropertyType type, const PropertyData* data)
     {
         return data->AssetNameListValue;
     }
+    if (type == PropertyType_InstanceList)
+    {
+        return data->InstanceListValue;
+    }
     return (type == PropertyType_FloatList) ? (const void*)data->FloatListValue : (const void*)data->StringValue;
 }
 
@@ -174,6 +181,10 @@ static void* CloneOwned(PropertyType type, const void* value)
     if (type == PropertyType_AssetNameList)
     {
         return PropertyAssetNameList_Clone(value);
+    }
+    if (type == PropertyType_InstanceList)
+    {
+        return PropertyInstanceList_Clone(value);
     }
     return (type == PropertyType_FloatList) ? (void*)PropertyFloatList_Clone(value) : (void*)CloneString(value);
 }
@@ -467,6 +478,50 @@ static Error CheckAssetNameList(const PropertyTable* table, const PropertyDescri
     return Error_CreateSuccess();
 }
 
+/* "hold at most 262144 instances", "have every position's components finite and in [-1e+07, 1e+07]; instance 12's are
+ * not", "have every rotation and scale finite; instance 3's are not": a hostile list is refused naming the instance. */
+static Error CheckInstanceList(const PropertyTable* table, const PropertyDescriptor* descriptor,
+    const PropertyInstanceList* list)
+{
+    size_t Count = PropertyInstanceList_GetCount(list);
+    const PropertyInstanceEntry* Entries = PropertyInstanceList_GetEntries(list);
+    char Text[PROPERTY_RULE_TEXT_SIZE + 96U];
+    if (Count > descriptor->Rules.MaxCount)
+    {
+        snprintf(Text, sizeof(Text), "hold at most %" PRIu64 " instances", (uint64_t)descriptor->Rules.MaxCount);
+        return MakeRuleError(table, descriptor, Text);
+    }
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        const PropertyInstanceEntry* Entry = &Entries[Index];
+        const double Position[3] = { Entry->Position.X, Entry->Position.Y, Entry->Position.Z };
+        for (size_t Axis = 0; Axis < 3U; Axis++)
+        {
+            if (Math_IsNaNDouble(Position[Axis]) || Math_IsInfinityDouble(Position[Axis])
+                || !IsWithinBounds(&descriptor->Rules, Position[Axis]))
+            {
+                char Rule[PROPERTY_RULE_TEXT_SIZE];
+                FormatRuleText(&descriptor->Rules, true, Rule, sizeof(Rule));
+                snprintf(Text, sizeof(Text), "have every position's components %s; instance %" PRIu64 "'s are not",
+                    Rule, (uint64_t)Index);
+                return MakeRuleError(table, descriptor, Text);
+            }
+        }
+        const float Floats[6] = { Entry->Rotation.x, Entry->Rotation.y, Entry->Rotation.z, Entry->Scale.x,
+            Entry->Scale.y, Entry->Scale.z };
+        for (size_t Component = 0; Component < 6U; Component++)
+        {
+            if (!IsFloatFinite(Floats[Component]))
+            {
+                snprintf(Text, sizeof(Text), "have every rotation and scale finite; instance %" PRIu64 "'s are not",
+                    (uint64_t)Index);
+                return MakeRuleError(table, descriptor, Text);
+            }
+        }
+    }
+    return Error_CreateSuccess();
+}
+
 
 // Static functions: the table check.
 static Error TableError(const PropertyTable* table, const PropertyDescriptor* descriptor, const char* problem)
@@ -622,6 +677,7 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
     bool IsMap = descriptor->Type == PropertyType_DataMap;
     bool IsList = descriptor->Type == PropertyType_FloatList;
     bool IsNameList = descriptor->Type == PropertyType_AssetNameList;
+    bool IsInstanceList = descriptor->Type == PropertyType_InstanceList;
     if (IsString && (Rules->MaxLength == 0U))
     {
         return TableError(table, descriptor, "a string needs a MaxLength");
@@ -644,14 +700,20 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
     {
         return TableError(table, descriptor, "a float list needs a MaxCount of 1 to PROPERTY_FLOAT_LIST_MAX_COUNT");
     }
+    if (IsInstanceList && ((Rules->MaxCount == 0U) || (Rules->MaxCount > PROPERTY_INSTANCE_LIST_MAX_COUNT)))
+    {
+        return TableError(table, descriptor,
+            "an instance list needs a MaxCount of 1 to PROPERTY_INSTANCE_LIST_MAX_COUNT");
+    }
     if ((!IsString && !IsMap && !IsNameList && (Rules->MaxLength != 0U)) || (!IsString && Rules->IsNullAllowed))
     {
         return TableError(table, descriptor, "only strings take MaxLength and IsNullAllowed (and data maps and asset "
             "name lists MaxLength)");
     }
-    if (!IsMap && !IsList && !IsNameList && (Rules->MaxCount != 0U))
+    if (!IsMap && !IsList && !IsNameList && !IsInstanceList && (Rules->MaxCount != 0U))
     {
-        return TableError(table, descriptor, "only data maps, float lists and asset name lists take a MaxCount");
+        return TableError(table, descriptor, "only data maps, float lists, asset name lists and instance lists take a "
+            "MaxCount");
     }
     if (!IsList && Rules->IsStrictlyIncreasing)
     {
@@ -668,6 +730,10 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
     if (IsList && (descriptor->Default.FloatListValue != NULL))
     {
         return TableError(table, descriptor, "a float list must default to empty (NULL)");
+    }
+    if (IsInstanceList && (descriptor->Default.InstanceListValue != NULL))
+    {
+        return TableError(table, descriptor, "an instance list must default to empty (NULL)");
     }
     return Error_CreateSuccess();
 }
@@ -790,7 +856,7 @@ bool PropertyInternal_IsStringType(PropertyType type)
 bool PropertyInternal_IsOwnedType(PropertyType type)
 {
     return PropertyInternal_IsStringType(type) || (type == PropertyType_DataMap) || (type == PropertyType_FloatList)
-        || (type == PropertyType_AssetNameList);
+        || (type == PropertyType_AssetNameList) || (type == PropertyType_InstanceList);
 }
 
 PropertyFloatList* PropertyInternal_AllocateFloatList(size_t count)
@@ -800,6 +866,19 @@ PropertyFloatList* PropertyInternal_AllocateFloatList(size_t count)
     PropertyFloatList* List = Memory_Allocate(ByteCount);
     Memory_Zero(List, ByteCount);
     List->_count = count;
+    return List;
+}
+
+PropertyInstanceList* PropertyInternal_AllocateInstanceList(size_t count)
+{
+    // count is at most PROPERTY_INSTANCE_LIST_MAX_COUNT, so the size cannot overflow.
+    size_t ByteCount = sizeof(PropertyInstanceList) + (count * sizeof(PropertyInstanceEntry));
+    PropertyInstanceList* List = Memory_Allocate(ByteCount);
+    List->_count = count;
+    for (size_t Index = 0; Index < count; Index++)
+    {
+        List->_entries[Index] = PropertyInstanceEntry_CreateDefault();
+    }
     return List;
 }
 
@@ -849,6 +928,11 @@ void PropertyInternal_AdoptOwned(const PropertyDescriptor* descriptor, void* ins
     if (descriptor->Type == PropertyType_AssetNameList)
     {
         PropertyAssetNameList_Destroy(Previous);
+        return;
+    }
+    if (descriptor->Type == PropertyType_InstanceList)
+    {
+        PropertyInstanceList_Destroy(Previous);
         return;
     }
     Memory_Free(Previous);
@@ -907,6 +991,8 @@ bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, con
             return a->EnumSetValue == b->EnumSetValue;
         case PropertyType_AssetNameList:
             return PropertyAssetNameList_Equals(a->AssetNameListValue, b->AssetNameListValue);
+        case PropertyType_InstanceList:
+            return PropertyInstanceList_Equals(a->InstanceListValue, b->InstanceListValue);
     }
     return false;
 }
@@ -1016,6 +1102,8 @@ Error PropertyInternal_CheckData(const PropertyTable* table, const PropertyDescr
             return CheckEnumSet(table, descriptor, data->EnumSetValue);
         case PropertyType_AssetNameList:
             return CheckAssetNameList(table, descriptor, data->AssetNameListValue);
+        case PropertyType_InstanceList:
+            return CheckInstanceList(table, descriptor, data->InstanceListValue);
     }
     return MakeRuleError(table, descriptor, "have a known property type");
 }
@@ -1165,6 +1253,8 @@ const unsigned char* PropertyType_GetName(PropertyType type)
             return u8"enum_set";
         case PropertyType_AssetNameList:
             return u8"asset_name_list";
+        case PropertyType_InstanceList:
+            return u8"instance_list";
     }
     return u8"unknown";
 }
@@ -1225,6 +1315,76 @@ bool PropertyFloatList_Equals(const PropertyFloatList* a, const PropertyFloatLis
     for (size_t Index = 0; Index < Count; Index++)
     {
         if (!(First[Index] == Second[Index]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+Error PropertyInstanceList_Create(const PropertyInstanceEntry* entries, size_t count, PropertyInstanceList** outList)
+{
+    if (outList == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "PropertyInstanceList_Create: outList must not be NULL.");
+    }
+    *outList = NULL;
+    if (count == 0U)
+    {
+        return Error_CreateSuccess();
+    }
+    if (entries == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "PropertyInstanceList_Create: entries must not be NULL when count is above 0.");
+    }
+    if (count > PROPERTY_INSTANCE_LIST_MAX_COUNT)
+    {
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange,
+            "PropertyInstanceList_Create: a list holds at most %" PRIu64 " instances, not %" PRIu64 ".",
+            (uint64_t)PROPERTY_INSTANCE_LIST_MAX_COUNT, (uint64_t)count);
+    }
+    PropertyInstanceList* List = PropertyInternal_AllocateInstanceList(count);
+    Memory_Copy(entries, List->_entries, count * sizeof(PropertyInstanceEntry));
+    *outList = List;
+    return Error_CreateSuccess();
+}
+
+void PropertyInstanceList_Destroy(PropertyInstanceList* list)
+{
+    Memory_Free(list);
+}
+
+PropertyInstanceList* PropertyInstanceList_Clone(const PropertyInstanceList* list)
+{
+    if (list == NULL)
+    {
+        return NULL;
+    }
+    PropertyInstanceList* Copy = PropertyInternal_AllocateInstanceList(list->_count);
+    Memory_Copy(list->_entries, Copy->_entries, list->_count * sizeof(PropertyInstanceEntry));
+    return Copy;
+}
+
+bool PropertyInstanceList_Equals(const PropertyInstanceList* a, const PropertyInstanceList* b)
+{
+    size_t Count = PropertyInstanceList_GetCount(a);
+    if (Count != PropertyInstanceList_GetCount(b))
+    {
+        return false;
+    }
+    const PropertyInstanceEntry* First = PropertyInstanceList_GetEntries(a);
+    const PropertyInstanceEntry* Second = PropertyInstanceList_GetEntries(b);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        const PropertyInstanceEntry* A = &First[Index];
+        const PropertyInstanceEntry* B = &Second[Index];
+        bool IsSame = (A->Position.X == B->Position.X) && (A->Position.Y == B->Position.Y)
+            && (A->Position.Z == B->Position.Z) && (A->Rotation.x == B->Rotation.x) && (A->Rotation.y == B->Rotation.y)
+            && (A->Rotation.z == B->Rotation.z) && (A->Scale.x == B->Scale.x) && (A->Scale.y == B->Scale.y)
+            && (A->Scale.z == B->Scale.z) && (A->Tint.r == B->Tint.r) && (A->Tint.g == B->Tint.g)
+            && (A->Tint.b == B->Tint.b) && (A->Tint.a == B->Tint.a);
+        if (!IsSame)
         {
             return false;
         }

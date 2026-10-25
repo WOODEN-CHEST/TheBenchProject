@@ -3,7 +3,9 @@
 `include/WorldModel.h`, `source/WorldModel.c` (the asset's data functions: the shadow tier's names, the default settings,
 variants by name and on one material) and `source/WorldModelDefinition.c` (the `world_model` asset type: the definition's
 parser and the loader). The placements' side is the model component, `include/WorldModelComponent.h` and
-`source/WorldModelComponent.c` ([WorldData.md](WorldData.md)). The definition format is in
+`source/WorldModelComponent.c` ([WorldData.md](WorldData.md)), and since B03 the model instances component, many copies
+of one world model with the model component's settings (`include/WorldModelInstancesComponent.h`; its LODs change in
+distance bands per copy, [WorldRuntime.md](WorldRuntime.md), "Model instances"). The definition format is in
 `references/asset_structure.md`, "World models". Tests: `tests/WorldModelTests.c`, the renderer's side in
 `tests/WorldRenderCacheTests.c` and `tests/WorldVisibilityTests.c`; the LOD maths in `tests/WorldLodTests.c`. Built in T10 (decisions G4 and G17); T11 added
 the LOD selection and cross-fades, T12 the `collision` section ("Collision" below; `tests/WorldColliderTests.c`).

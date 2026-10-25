@@ -4,6 +4,7 @@
 #include "PropertyDescriptor.h"
 #include "DataMap.h"
 #include "GameGHDF.h"
+#include "GameJSON.h"
 #include "GameClock.h"
 #include "NamespacedKey.h"
 #include "WorldEnvironment.h"
@@ -13,6 +14,7 @@
 #include "WorldLightComponent.h"
 #include "WorldColliderComponent.h"
 #include "WorldTerrainComponent.h"
+#include "WorldModelInstancesComponent.h"
 #include "Logger.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRPath.h"
@@ -621,6 +623,7 @@ static void TablesPassTheirCheck(TestRun* run)
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldLightComponent_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldColliderComponent_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldTerrainComponent_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldModelInstancesComponent_GetPropertyTable()));
     TEST_CHECK_ERROR(run, PropertyTable_Check(NULL), ErrorCode_IllegalArgument);
 }
 
@@ -747,7 +750,7 @@ static void DataMapRowsAreChecked(TestRun* run)
     CheckBrokenMapDescriptor(run, 1U, BreakTagsKeyToOtherKey, "key is used twice");
     CheckBrokenMapDescriptor(run, 1U, BreakMapCount, "MaxCount and a MaxLength");
     CheckBrokenMapDescriptor(run, 1U, BreakMapDefault, "default to empty");
-    CheckBrokenMapDescriptor(run, 0U, BreakCountOnInteger, "only data maps, float lists and asset name lists take a MaxCount");
+    CheckBrokenMapDescriptor(run, 0U, BreakCountOnInteger, "only data maps, float lists, asset name lists and instance lists take a MaxCount");
     CheckBrokenMapDescriptor(run, 0U, BreakTagsKeyOnInteger, "only data maps take a TagsKey");
 }
 
@@ -2383,6 +2386,460 @@ static void AssetNameListRowsAreChecked(TestRun* run)
     TEST_CHECK(run, strcmp((const char*)PropertyType_GetName(PropertyType_AssetNameList), "asset_name_list") == 0);
 }
 
+/* An instance list's own record (B03): a list row (at most four instances, positions within 1000 m) and a flag row. */
+typedef struct InstanceListRecordStruct
+{
+    PropertyInstanceList* Instances;
+    bool IsOn;
+} InstanceListRecord;
+
+static const PropertyDescriptor InstanceListProperties[] =
+{
+    { .Key = u8"instances", .WireId = 1U, .Type = PropertyType_InstanceList,
+        PROPERTY_MEMBER(InstanceListRecord, Instances), .Default.InstanceListValue = NULL,
+        .Rules = PROPERTY_RULES_INSTANCE_LIST(4U, 1000.0), .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"is_on", .WireId = 2U, .Type = PropertyType_Bool, PROPERTY_MEMBER(InstanceListRecord, IsOn),
+        .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+};
+
+static const PropertyTable InstanceListTable =
+{
+    .Name = u8"test_instance_list", .Version = 1U, .StructSize = sizeof(InstanceListRecord),
+    .Descriptors = InstanceListProperties,
+    .DescriptorCount = sizeof(InstanceListProperties) / sizeof(InstanceListProperties[0]), .RetiredWireIds = NULL,
+    .RetiredWireIdCount = 0U, .AfterSet = NULL, .Migrate = NULL
+};
+
+/* Three instances: one at its defaults but for its position (far out, off every float step), one turned and scaled
+ * evenly, one scaled unevenly and tinted half transparent. */
+static void MakeTestInstances(PropertyInstanceEntry outEntries[3])
+{
+    outEntries[0] = PropertyInstanceEntry_CreateDefault();
+    outEntries[0].Position = Vector3Double_Create(987.6543210987, -0.000125, 3.0);
+    outEntries[1] = PropertyInstanceEntry_CreateDefault();
+    outEntries[1].Position = Vector3Double_Create(-1.5, 2.25, 0.0);
+    outEntries[1].Rotation = (Vector3){ 0.0f, 1.5707963705062866f, 0.0f };
+    outEntries[1].Scale = (Vector3){ 1.25f, 1.25f, 1.25f };
+    outEntries[2] = PropertyInstanceEntry_CreateDefault();
+    outEntries[2].Position = Vector3Double_Create(0.1, 0.2, 0.3);
+    outEntries[2].Rotation = (Vector3){ 0.25f, -0.5f, 3.0f };
+    outEntries[2].Scale = (Vector3){ 0.5f, 2.0f, 1.0f };
+    outEntries[2].Tint = (Color){ 10, 200, 30, 128 };
+}
+
+static Error ReadInstanceListFromText(TestRun* run, JSONObjectPool* pool, const char* text, InstanceListRecord* record)
+{
+    JSONObjectValue Value;
+    if (!TestText_ParseJSON(run, pool, text, &Value))
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, "the test's JSON did not parse");
+    }
+    Error Result = Properties_ReadJSON(&InstanceListTable, Value.Value.Compound, record, NULL);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(pool, &Value));
+    return Result;
+}
+
+/* The JSON compound of one written instance: the keys it holds, in order, and its scale's JSON type. */
+static void CheckWrittenInstance(TestRun* run, JSONArray* array, size_t index, const char* const* keys, size_t keyCount)
+{
+    JSONObjectValue Element;
+    if (!TEST_CHECK_SUCCESS(run, JSONArray_Get(array, index, &Element))
+        || !TEST_CHECK(run, Element.Type == JSONValueType_Compound))
+    {
+        return;
+    }
+    TEST_CHECK(run, JSONCompound_GetEntryCount(Element.Value.Compound) == keyCount);
+    for (size_t Key = 0U; Key < keyCount; Key++)
+    {
+        JSONObjectValue Value;
+        bool IsFound = false;
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, JSONCompound_GetOptional(Element.Value.Compound,
+            (const unsigned char*)keys[Key], &Value, &IsFound)) && IsFound);
+    }
+}
+
+/* Puts an array of @p count elements of @p type (each @p value) under @p id of an instance list's compound. */
+static void PutInstanceArray(TestRun* run, GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id,
+    GHDFObjectValue value, size_t count)
+{
+    GHDFArray* Array = NULL;
+    if (!TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowArray(pool, value.Type, &Array)))
+    {
+        return;
+    }
+    for (size_t Index = 0U; Index < count; Index++)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFArray_AddValue(Array, &value));
+    }
+    GHDFObjectValue ArrayValue = GHDFObjectValue_CreateArray(Array, value.Type);
+    TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(compound, id, GHDF_CreateArrayType(value.Type), &ArrayValue));
+}
+
+/* Reads a hand-made instance list compound of @p positions doubles of positions and @p tints tint bytes (0 leaves the
+ * tints out) and returns the read's result. */
+static Error ReadHandMadeInstances(TestRun* run, GHDFObjectPool* pool, size_t positions, double position, size_t tints,
+    InstanceListRecord* record)
+{
+    GHDFCompound* Root = NULL;
+    GHDFCompound* List = NULL;
+    if (!TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(pool, &Root))
+        || !TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(pool, &List)))
+    {
+        return Error_Construct2(ErrorCode_InvalidState, "no compound");
+    }
+    PutInstanceArray(run, pool, List, 1U, GHDFObjectValue_CreateDouble(position), positions);
+    if (tints > 0U)
+    {
+        PutInstanceArray(run, pool, List, 4U, GHDFObjectValue_CreateUInt8(7U), tints);
+    }
+    GHDFObjectValue ListValue = GHDFObjectValue_CreateCompound(List);
+    TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Root, 1U, GHDF_CreateRegularType(GHDFValueType_Compound), &ListValue));
+    Error Result = Properties_ReadGHDF(&InstanceListTable, Root, record, NULL);
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(pool, Root, true));
+    return Result;
+}
+
+static void InstanceListsGoThroughTheTables(TestRun* run)
+{
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(&InstanceListTable));
+    PropertyInstanceEntry Entries[3];
+    MakeTestInstances(Entries);
+    PropertyInstanceList* List = NULL;
+    TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(Entries, 0U, &List));
+    TEST_CHECK(run, (List == NULL) && (PropertyInstanceList_GetCount(NULL) == 0U)
+        && (PropertyInstanceList_GetEntries(NULL) == NULL));
+    TEST_CHECK_ERROR(run, PropertyInstanceList_Create(NULL, 2U, &List), ErrorCode_IllegalArgument);
+    TEST_CHECK_ERROR(run, PropertyInstanceList_Create(Entries, PROPERTY_INSTANCE_LIST_MAX_COUNT + 1U, &List),
+        ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, PropertyInstanceList_Create(Entries, 1U, NULL), ErrorCode_IllegalArgument);
+    if (!TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(Entries, 3U, &List)))
+    {
+        return;
+    }
+    PropertyInstanceList* Copy = PropertyInstanceList_Clone(List);
+    TEST_CHECK(run, (Copy != List) && PropertyInstanceList_Equals(Copy, List) && (PropertyInstanceList_GetCount(Copy) == 3U)
+        && (PropertyInstanceList_GetEntries(Copy)[2].Tint.a == 128U));
+    TEST_CHECK(run, PropertyInstanceList_Equals(NULL, NULL) && !PropertyInstanceList_Equals(List, NULL)
+        && (PropertyInstanceList_Clone(NULL) == NULL));
+    // Every field counts in a comparison, and 0 equals -0.
+    for (size_t Field = 0U; Field < 4U; Field++)
+    {
+        PropertyInstanceEntry Changed[3];
+        MakeTestInstances(Changed);
+        switch (Field)
+        {
+            case 0U: Changed[1].Position.Z = 1e-9; break;
+            case 1U: Changed[1].Rotation.x = 1e-6f; break;
+            case 2U: Changed[1].Scale.z = 1.5f; break;
+            default: Changed[1].Tint.a = 254U; break;
+        }
+        PropertyInstanceList* Other = NULL;
+        if (TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(Changed, 3U, &Other)))
+        {
+            TEST_CHECK(run, !PropertyInstanceList_Equals(List, Other));
+            PropertyInstanceList_Destroy(Other);
+        }
+    }
+    PropertyInstanceEntry NegativeZero[3];
+    MakeTestInstances(NegativeZero);
+    NegativeZero[0].Rotation.y = -0.0f;
+    PropertyInstanceList* Signed = NULL;
+    if (TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(NegativeZero, 3U, &Signed)))
+    {
+        TEST_CHECK(run, PropertyInstanceList_Equals(List, Signed));
+        PropertyInstanceList_Destroy(Signed);
+    }
+
+    InstanceListRecord Record;
+    InstanceListRecord Other;
+    JSONObjectPool* Pool = NULL;
+    GHDFObjectPool* BinaryPool = NULL;
+    if (TEST_CHECK_SUCCESS(run, Properties_Construct(&InstanceListTable, &Record))
+        && TEST_CHECK_SUCCESS(run, Properties_Construct(&InstanceListTable, &Other))
+        && TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)) && TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&BinaryPool)))
+    {
+        // Set copies; the rules check every instance and name the one that breaks them.
+        PropertyValue Value = PropertyValue_FromInstanceList(List);
+        TEST_CHECK_SUCCESS(run, Properties_Set(&InstanceListTable, &Record, u8"instances", &Value));
+        TEST_CHECK(run, (Record.Instances != NULL) && (Record.Instances != List)
+            && PropertyInstanceList_Equals(Record.Instances, List));
+        for (size_t Breaker = 0U; Breaker < 5U; Breaker++)
+        {
+            PropertyInstanceEntry Broken[5];
+            MakeTestInstances(Broken);
+            Broken[3] = PropertyInstanceEntry_CreateDefault();
+            Broken[4] = PropertyInstanceEntry_CreateDefault();
+            size_t Count = 3U;
+            const char* Fragment = "instance 2";
+            switch (Breaker)
+            {
+                case 0U: Broken[2].Position.Y = (double)NAN; break;
+                case 1U: Broken[2].Position.X = 1000.5; break;
+                case 2U: Broken[2].Scale.y = INFINITY; break;
+                case 3U: Broken[2].Rotation.z = NAN; break;
+                default: Count = 5U; Fragment = "at most 4 instances"; break;
+            }
+            PropertyInstanceList* Wrong = NULL;
+            if (TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(Broken, Count, &Wrong)))
+            {
+                PropertyValue WrongValue = PropertyValue_FromInstanceList(Wrong);
+                const char* const Fragments[] = { "test_instance_list.instances", Fragment, NULL };
+                TestText_CheckErrorMessage(run, Properties_Set(&InstanceListTable, &Record, u8"instances", &WrongValue),
+                    ErrorCode_ArgumentOutOfRange, Fragments);
+                PropertyInstanceList_Destroy(Wrong);
+            }
+        }
+        TEST_CHECK(run, PropertyInstanceList_Equals(Record.Instances, List));
+        TEST_CHECK_SUCCESS(run, Properties_CopyTo(&InstanceListTable, &Record, &Other));
+        TEST_CHECK(run, (Other.Instances != Record.Instances) && Properties_Equals(&InstanceListTable, &Record, &Other));
+
+        // JSON: one compound per instance, the defaults left out, an even scale one number, degrees, "#rrggbbaa".
+        JSONCompound* Compound = NULL;
+        if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
+        {
+            TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&InstanceListTable, &Record, Pool, Compound, NULL));
+            JSONObjectValue Array;
+            if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"instances", JSONValueType_Array, &Array))
+                && TEST_CHECK(run, JSONArray_GetElementCount(Array.Value.Array) == 3U))
+            {
+                const char* const OnlyPosition[] = { "position" };
+                const char* const Turned[] = { "position", "rotation", "scale" };
+                const char* const Everything[] = { "position", "rotation", "scale", "tint" };
+                CheckWrittenInstance(run, Array.Value.Array, 0U, OnlyPosition, 1U);
+                CheckWrittenInstance(run, Array.Value.Array, 1U, Turned, 3U);
+                CheckWrittenInstance(run, Array.Value.Array, 2U, Everything, 4U);
+                JSONObjectValue Second;
+                JSONObjectValue Scale;
+                JSONObjectValue Rotation;
+                if (TEST_CHECK_SUCCESS(run, JSONArray_Get(Array.Value.Array, 1U, &Second))
+                    && TEST_CHECK_SUCCESS(run, JSONCompound_Get(Second.Value.Compound, u8"scale", &Scale))
+                    && TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Second.Value.Compound, u8"rotation",
+                        JSONValueType_Array, &Rotation)))
+                {
+                    double Degrees = 0.0;
+                    JSONObjectValue Yaw;
+                    TEST_CHECK(run, (Scale.Type != JSONValueType_Array)
+                        && TEST_CHECK_SUCCESS(run, JSONArray_Get(Rotation.Value.Array, 1U, &Yaw))
+                        && TEST_CHECK_SUCCESS(run, GameJSON_ValueToDouble(&Yaw, &Degrees)) && (Degrees == 90.0));
+                }
+            }
+            TEST_CHECK_SUCCESS(run, Properties_ReadJSON(&InstanceListTable, Compound, &Other, NULL));
+            TEST_CHECK(run, PropertyInstanceList_Equals(Other.Instances, List));
+            TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Compound, true));
+        }
+        TEST_CHECK_SUCCESS(run, ReadInstanceListFromText(run, Pool, "{\"instances\": []}", &Other));
+        TEST_CHECK(run, Other.Instances == NULL);
+        TEST_CHECK_SUCCESS(run, ReadInstanceListFromText(run, Pool,
+            "{\"instances\": [{\"position\": [1.5, 0.0, -2.0], \"scale\": [1.0, 2.0, 3.0], \"tint\": \"#102030\"}, {}]}",
+            &Other));
+        const PropertyInstanceEntry* Read = PropertyInstanceList_GetEntries(Other.Instances);
+        TEST_CHECK(run, (PropertyInstanceList_GetCount(Other.Instances) == 2U) && (Read[0].Position.Z == -2.0)
+            && (Read[0].Scale.y == 2.0f) && (Read[0].Tint.g == 0x20U) && (Read[0].Tint.a == 255U)
+            && (Read[1].Position.X == 0.0) && (Read[1].Scale.x == 1.0f) && (Read[1].Tint.r == 255U));
+        // Broken input changes nothing and names the instance.
+        static const char* const RefusedTexts[] =
+        {
+            "{\"instances\": {\"position\": [0, 0, 0]}}",
+            "{\"instances\": [{}, [0, 0, 0]]}",
+            "{\"instances\": [{}, {\"position\": [0, 0, 0], \"colour\": \"#ffffff\"}]}",
+            "{\"instances\": [{}, {\"scale\": \"big\"}]}",
+            "{\"instances\": [{}, {\"position\": [0, 0]}]}",
+            "{\"instances\": [{}, {\"rotation\": [0, 1e300, 0]}]}",
+            "{\"instances\": [{}, {\"tint\": 12}]}",
+            "{\"instances\": [{}, {}, {}, {}, {}]}",
+            "{\"instances\": [{}, {}, {\"position\": [0, 2000, 0]}]}",
+        };
+        static const char* const RefusedFragments[] =
+        {
+            "Expected an array", "[1]: Expected an instance", "[1]: \"colour\" is not a key of an instance", "[1].scale",
+            "[1].position", "[1].rotation", "[1].tint", "The list has 5 instances; at most 4", "instance 2",
+        };
+        for (size_t Index = 0U; Index < sizeof(RefusedTexts) / sizeof(RefusedTexts[0]); Index++)
+        {
+            const char* const Fragments[] = { "test_instance_list", RefusedFragments[Index], NULL };
+            if (!TestText_CheckErrorMessage(run, ReadInstanceListFromText(run, Pool, RefusedTexts[Index], &Other),
+                ErrorCode_InvalidJSON, Fragments))
+            {
+                printf("      (read: %s)\n", RefusedTexts[Index]);
+            }
+            TEST_CHECK(run, PropertyInstanceList_GetCount(Other.Instances) == 2U);
+        }
+
+        // GHDF: parallel arrays, the optional ones only when some instance needs them; hostile shapes are refused.
+        GHDFCompound* Binary = NULL;
+        if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Binary)))
+        {
+            TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&InstanceListTable, &Record, BinaryPool, Binary, NULL));
+            GHDFObjectValue Entry;
+            GHDFObjectValue Positions;
+            GHDFObjectValue Tints;
+            if (TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Binary, 1U, GHDF_CreateRegularType(GHDFValueType_Compound),
+                &Entry)))
+            {
+                TEST_CHECK(run, TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Entry.Value.Compound, 1U,
+                    GHDF_CreateArrayType(GHDFValueType_Double), &Positions))
+                    && (GHDFArray_GetElementCount(Positions.Value.Array) == 9U)
+                    && TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Entry.Value.Compound, 4U,
+                        GHDF_CreateArrayType(GHDFValueType_UInt8), &Tints))
+                    && (GHDFArray_GetElementCount(Tints.Value.Array) == 12U)
+                    && (GHDFCompound_GetEntryCount(Entry.Value.Compound) == 4U));
+            }
+            TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&InstanceListTable, Binary, &Other, NULL));
+            TEST_CHECK(run, PropertyInstanceList_Equals(Other.Instances, Record.Instances));
+            TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Binary, true));
+        }
+        // Only positions: the other arrays stay out and read back as the defaults.
+        PropertyInstanceEntry Plain[2] = { PropertyInstanceEntry_CreateDefault(), PropertyInstanceEntry_CreateDefault() };
+        Plain[1].Position = Vector3Double_Create(4.0, 5.0, 6.0);
+        PropertyInstanceList* PlainList = NULL;
+        if (TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(Plain, 2U, &PlainList))
+            && TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Binary)))
+        {
+            PropertyValue PlainValue = PropertyValue_FromInstanceList(PlainList);
+            TEST_CHECK_SUCCESS(run, Properties_Set(&InstanceListTable, &Other, u8"instances", &PlainValue));
+            TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&InstanceListTable, &Other, BinaryPool, Binary, NULL));
+            GHDFObjectValue Entry;
+            TEST_CHECK(run, TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Binary, 1U,
+                GHDF_CreateRegularType(GHDFValueType_Compound), &Entry))
+                && (GHDFCompound_GetEntryCount(Entry.Value.Compound) == 1U));
+            TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&InstanceListTable, Binary, &Record, NULL));
+            TEST_CHECK(run, PropertyInstanceList_Equals(Record.Instances, PlainList));
+            TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Binary, true));
+        }
+        PropertyInstanceList_Destroy(PlainList);
+        // An empty list written with the defaults is a compound with an empty position array, and reads back empty.
+        if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Binary)))
+        {
+            PropertyValue Empty = PropertyValue_FromInstanceList(NULL);
+            InstanceListRecord Cleared;
+            if (TEST_CHECK_SUCCESS(run, Properties_Construct(&InstanceListTable, &Cleared)))
+            {
+                TEST_CHECK_SUCCESS(run, Properties_Set(&InstanceListTable, &Cleared, u8"instances", &Empty));
+                PropertyWriteOptions Options = { .AreDefaultsWritten = true };
+                TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&InstanceListTable, &Cleared, BinaryPool, Binary,
+                    &Options));
+                TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&InstanceListTable, Binary, &Record, NULL));
+                TEST_CHECK(run, Record.Instances == NULL);
+                Properties_Deconstruct(&InstanceListTable, &Cleared);
+            }
+            TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Binary, true));
+        }
+        // A turn about X or Z alone, and a tint that differs from white only in its alpha, survive both formats.
+        PropertyInstanceEntry Single[3] = { PropertyInstanceEntry_CreateDefault(), PropertyInstanceEntry_CreateDefault(),
+            PropertyInstanceEntry_CreateDefault() };
+        Single[0].Rotation.x = 0.5f;
+        Single[1].Rotation.z = -0.25f;
+        Single[2].Tint = (Color){ 255, 255, 255, 128 };
+        PropertyInstanceList* SingleList = NULL;
+        JSONCompound* SingleJSON = NULL;
+        if (TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(Single, 3U, &SingleList))
+            && TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &SingleJSON))
+            && TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Binary)))
+        {
+            PropertyValue SingleValue = PropertyValue_FromInstanceList(SingleList);
+            InstanceListRecord FromJSON;
+            InstanceListRecord FromGHDF;
+            if (TEST_CHECK_SUCCESS(run, Properties_Construct(&InstanceListTable, &FromJSON))
+                && TEST_CHECK_SUCCESS(run, Properties_Construct(&InstanceListTable, &FromGHDF)))
+            {
+                TEST_CHECK_SUCCESS(run, Properties_Set(&InstanceListTable, &Record, u8"instances", &SingleValue));
+                TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&InstanceListTable, &Record, Pool, SingleJSON, NULL));
+                TEST_CHECK_SUCCESS(run, Properties_ReadJSON(&InstanceListTable, SingleJSON, &FromJSON, NULL));
+                TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&InstanceListTable, &Record, BinaryPool, Binary, NULL));
+                TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&InstanceListTable, Binary, &FromGHDF, NULL));
+                TEST_CHECK(run, PropertyInstanceList_Equals(FromJSON.Instances, SingleList)
+                    && PropertyInstanceList_Equals(FromGHDF.Instances, SingleList));
+            }
+            Properties_Deconstruct(&InstanceListTable, &FromJSON);
+            Properties_Deconstruct(&InstanceListTable, &FromGHDF);
+            TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, SingleJSON, true));
+            TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Binary, true));
+        }
+        PropertyInstanceList_Destroy(SingleList);
+        // Hostile compounds: positions not three per instance, too many, another array's length off (short or long),
+        // out of range.
+        TEST_CHECK_ERROR(run, ReadHandMadeInstances(run, BinaryPool, 7U, 1.0, 0U, &Other), ErrorCode_Deserialize);
+        TEST_CHECK_ERROR(run, ReadHandMadeInstances(run, BinaryPool, 15U, 1.0, 0U, &Other), ErrorCode_Deserialize);
+        TEST_CHECK_ERROR(run, ReadHandMadeInstances(run, BinaryPool, 6U, 1.0, 7U, &Other), ErrorCode_Deserialize);
+        TEST_CHECK_ERROR(run, ReadHandMadeInstances(run, BinaryPool, 6U, 1.0, 9U, &Other), ErrorCode_Deserialize);
+        const char* const OutOfRange[] = { "instance 0", NULL };
+        TestText_CheckErrorMessage(run, ReadHandMadeInstances(run, BinaryPool, 6U, 5000.0, 8U, &Other),
+            ErrorCode_Deserialize, OutOfRange);
+        TEST_CHECK(run, PropertyInstanceList_GetCount(Other.Instances) == 2U);
+        TEST_CHECK_SUCCESS(run, ReadHandMadeInstances(run, BinaryPool, 6U, 1.0, 8U, &Other));
+        TEST_CHECK(run, (PropertyInstanceList_GetCount(Other.Instances) == 2U)
+            && (PropertyInstanceList_GetEntries(Other.Instances)[1].Tint.a == 7U)
+            && (PropertyInstanceList_GetEntries(Other.Instances)[1].Scale.x == 1.0f));
+    }
+    Properties_Deconstruct(&InstanceListTable, &Record);
+    Properties_Deconstruct(&InstanceListTable, &Other);
+    TEST_CHECK(run, (Record.Instances == NULL) && (Other.Instances == NULL));
+    if (BinaryPool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(BinaryPool));
+    }
+    if (Pool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    }
+    PropertyInstanceList_Destroy(Copy);
+    PropertyInstanceList_Destroy(List);
+}
+
+static void InstanceListRowsAreChecked(TestRun* run)
+{
+    PropertyDescriptor Rows[1] = { InstanceListProperties[0] };
+    PropertyTable Table = InstanceListTable;
+    Table.Descriptors = Rows;
+    Table.DescriptorCount = 1U;
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(&Table));
+    Rows[0].Rules = (PropertyRules)PROPERTY_RULES_INSTANCE_LIST(0U, 10.0);
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument);
+    Rows[0].Rules = (PropertyRules)PROPERTY_RULES_INSTANCE_LIST(PROPERTY_INSTANCE_LIST_MAX_COUNT + 1U, 10.0);
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument);
+    Rows[0].Rules = (PropertyRules)PROPERTY_RULES_INSTANCE_LIST(4U, 10.0);
+    Rows[0].Rules.MaxLength = 3U;
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument);
+    Rows[0].Rules = (PropertyRules)PROPERTY_RULES_INSTANCE_LIST(4U, 10.0);
+    Rows[0].Rules.IsStrictlyIncreasing = true;
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument);
+    PropertyInstanceEntry One = PropertyInstanceEntry_CreateDefault();
+    PropertyInstanceList* Default = NULL;
+    if (TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(&One, 1U, &Default)))
+    {
+        Rows[0].Rules = (PropertyRules)PROPERTY_RULES_INSTANCE_LIST(4U, 10.0);
+        Rows[0].Default.InstanceListValue = Default;
+        TEST_CHECK_ERROR(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument);
+        PropertyInstanceList_Destroy(Default);
+    }
+    TEST_CHECK(run, strcmp((const char*)PropertyType_GetName(PropertyType_InstanceList), "instance_list") == 0);
+
+    // Without bounds every finite position goes, but never one that is not finite.
+    Rows[0].Rules = (PropertyRules){ .MaxCount = 4U };
+    Rows[0].Default.InstanceListValue = NULL;
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(&Table));
+    InstanceListRecord Record;
+    if (TEST_CHECK_SUCCESS(run, Properties_Construct(&Table, &Record)))
+    {
+        const double Positions[3] = { 1.0e300, (double)NAN, (double)INFINITY };
+        for (size_t Index = 0U; Index < 3U; Index++)
+        {
+            PropertyInstanceEntry Far = PropertyInstanceEntry_CreateDefault();
+            Far.Position.Y = Positions[Index];
+            PropertyInstanceList* List = NULL;
+            if (TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(&Far, 1U, &List)))
+            {
+                PropertyValue Value = PropertyValue_FromInstanceList(List);
+                Error Result = Properties_Set(&Table, &Record, u8"instances", &Value);
+                TEST_CHECK(run, (Result.Code == ErrorCode_Success) == (Index == 0U));
+                Error_Deconstruct(&Result);
+                PropertyInstanceList_Destroy(List);
+            }
+        }
+        Properties_Deconstruct(&Table, &Record);
+    }
+}
+
 void PropertyDescriptorTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
@@ -2407,6 +2864,8 @@ void PropertyDescriptorTests_Run(TestRun* run)
         { "float_lists_go_through_the_tables", FloatListsGoThroughTheTables },
         { "asset_name_lists_go_through_the_tables", AssetNameListsGoThroughTheTables },
         { "asset_name_list_rows_are_checked", AssetNameListRowsAreChecked },
+        { "instance_lists_go_through_the_tables", InstanceListsGoThroughTheTables },
+        { "instance_list_rows_are_checked", InstanceListRowsAreChecked },
         { "enum_sets_go_through_the_tables", EnumSetsGoThroughTheTables },
         { "big_structs_read_through_a_heap_scratch", BigStructsReadThroughAHeapScratch },
         { "migration_runs_for_older_data", MigrationRunsForOlderData },

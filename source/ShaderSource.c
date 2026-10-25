@@ -42,6 +42,8 @@ typedef struct ShaderExpansionStruct
     GenericBuffer* SourceOffsets; // borrowed from Assets (size_t)
     bool IsMainFile;              // source 0 is a file, so including it again is a repeat
     size_t MainVersionLine;       // line of the main file's #version, 0 when it has none
+    const unsigned char* const* Defines; // the caller's
+    size_t DefineCount;
 } ShaderExpansion;
 
 /* A byte buffer's state before an append to it as one growing string, to undo the append on failure. */
@@ -56,6 +58,16 @@ typedef struct GrowingStringMarkStruct
 static bool IsHorizontalSpace(unsigned char character)
 {
     return (character == ' ') || (character == '\t');
+}
+
+static bool IsIdentifierStart(unsigned char character)
+{
+    return ((character >= 'a') && (character <= 'z')) || ((character >= 'A') && (character <= 'Z')) || (character == '_');
+}
+
+static bool IsIdentifierPart(unsigned char character)
+{
+    return IsIdentifierStart(character) || ((character >= '0') && (character <= '9'));
 }
 
 static size_t SkipHorizontalSpace(const unsigned char* text, size_t length, size_t index)
@@ -337,6 +349,41 @@ static Error ReadInclude(ShaderExpansion* self, size_t includeIndex, size_t pare
 static Error ExpandFile(ShaderExpansion* self, const unsigned char* text, size_t length, size_t sourceIndex,
     size_t depth);
 
+/* Writes "#define <name>\n" for every define, then "#line <nextLine> 0" (the main file goes on at that line). */
+static Error AppendDefines(ShaderExpansion* self, size_t nextLine)
+{
+    for (size_t Index = 0U; Index < self->DefineCount; Index++)
+    {
+        bool IsAppended = GenericBuffer_AppendString(self->Output, u8"#define ")
+            && GenericBuffer_AppendString(self->Output, self->Defines[Index])
+            && GenericBuffer_AppendString(self->Output, u8"\n");
+        if (!IsAppended)
+        {
+            return Error_Construct3(ErrorCode_BufferTooLarge, u8"Failed to grow the expanded shader source.");
+        }
+    }
+    return AppendLineDirective(self, nextLine, SHADER_SOURCE_MAIN_INDEX);
+}
+
+/* The main file's #version line, then its defines (when it has any) on lines of their own. */
+static Error ExpandVersionLine(ShaderExpansion* self, const ShaderLine* line)
+{
+    Error Result = AppendOutput(self, line->Text, line->FullLength);
+    if ((Result.Code != ErrorCode_Success) || (self->DefineCount == 0U) || (line->Number != self->MainVersionLine))
+    {
+        return Result;
+    }
+    if (!line->HasLineBreak)
+    {
+        Result = AppendOutputString(self, u8"\n");
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+    return AppendDefines(self, line->Number + 1U);
+}
+
 /* Replaces an #include line: the included file's expanded text between two #line directives, or an empty line when
  * the file was included before. The recursion ends at SHADER_SOURCE_MAX_INCLUDE_DEPTH. */
 static Error ExpandInclude(ShaderExpansion* self, const ShaderLine* line, const unsigned char* location,
@@ -435,7 +482,7 @@ static Error ExpandLine(ShaderExpansion* self, const ShaderLine* line, size_t so
                     u8"Shader include \"%s\" has a #version line (line %" PRIu64 u8"); only the main file declares the "
                     u8"version.", GetSourceName(self, sourceIndex), (uint64_t)line->Number);
             }
-            return AppendOutput(self, line->Text, line->FullLength);
+            return ExpandVersionLine(self, line);
         case ShaderDirective_Include:
             return ExpandIncludeLine(self, line, NameEnd, sourceIndex, depth);
     }
@@ -526,14 +573,40 @@ static Error AddMainSource(ShaderExpansion* self, const AssetLocation* mainLocat
 
 
 // Public functions.
+bool ShaderSource_IsDefineName(const unsigned char* name)
+{
+    if ((name == NULL) || !IsIdentifierStart(name[0]) || ((name[0] == 'G') && (name[1] == 'L') && (name[2] == '_')))
+    {
+        return false;
+    }
+    for (size_t Index = 1U; name[Index] != '\0'; Index++)
+    {
+        if (!IsIdentifierPart(name[Index]) || ((name[Index] == '_') && (name[Index - 1U] == '_')))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 Error ShaderSource_ExpandIncludes(AssetManager* assets, AssetTypeID shaderType, const AssetLocation* mainLocation,
-    const unsigned char* text, size_t length, GenericBuffer* outText, GenericBuffer* outSourceList)
+    const unsigned char* text, size_t length, const unsigned char* const* defines, size_t defineCount,
+    GenericBuffer* outText, GenericBuffer* outSourceList)
 {
     if ((assets == NULL) || (mainLocation == NULL) || (mainLocation->Value == NULL) || (outText == NULL)
-        || ((text == NULL) && (length > 0U)))
+        || ((text == NULL) && (length > 0U)) || ((defines == NULL) && (defineCount > 0U)))
     {
         return Error_Construct3(ErrorCode_IllegalArgument,
-            u8"ShaderSource_ExpandIncludes needs a manager, a main location, an output buffer and the text.");
+            u8"ShaderSource_ExpandIncludes needs a manager, a main location, an output buffer, the text and the defines.");
+    }
+    for (size_t Index = 0U; Index < defineCount; Index++)
+    {
+        if (!ShaderSource_IsDefineName(defines[Index]))
+        {
+            return Error_Construct3(ErrorCode_IllegalArgument,
+                u8"ShaderSource_ExpandIncludes: define %" PRIu64 u8" is not a GLSL name that may be defined.",
+                (uint64_t)Index);
+        }
     }
 
     ShaderExpansion Expansion;
@@ -543,6 +616,8 @@ Error ShaderSource_ExpandIncludes(AssetManager* assets, AssetTypeID shaderType, 
     Expansion.Output = outText;
     Expansion.IsMainFile = (mainLocation->Type == AssetLocationType_File);
     Expansion.MainVersionLine = (text != NULL) ? FindVersionLine(text, length) : 0U;
+    Expansion.Defines = defines;
+    Expansion.DefineCount = defineCount;
 
     Error Result = AssetManager_BorrowGenericBuffer(assets, sizeof(unsigned char), &Expansion.SourceNames);
     if (Result.Code != ErrorCode_Success)
@@ -559,6 +634,11 @@ Error ShaderSource_ExpandIncludes(AssetManager* assets, AssetTypeID shaderType, 
 
     GrowingStringMark OutputMark = BeginGrowingString(outText);
     Result = AddMainSource(&Expansion, mainLocation);
+    if ((Result.Code == ErrorCode_Success) && (Expansion.MainVersionLine == 0U) && (defineCount > 0U))
+    {
+        // No #version line to follow: the defines come first, and the main file starts at its line 1.
+        Result = AppendDefines(&Expansion, 1U);
+    }
     if ((Result.Code == ErrorCode_Success) && (text != NULL))
     {
         Result = ExpandFile(&Expansion, text, length, SHADER_SOURCE_MAIN_INDEX, 0U);

@@ -56,6 +56,7 @@ int main(void)
     WorldVisibilityTests_Run(&Run);
     WorldRenderSpaceTests_Run(&Run);
     WorldLodTests_Run(&Run);
+    WorldInstancingTests_Run(&Run);
     AnimationLibraryTests_Run(&Run);
     AnimationGraphTests_Run(&Run);
     AnimationGraphPlayerTests_Run(&Run);
