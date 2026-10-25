@@ -44,6 +44,14 @@
 #define MOVE_SPEED 6.0f
 /** Multiplier applied to movement speed while the sprint key is held. */
 #define SPRINT_MULTIPLIER 3.0f
+/** The mouse wheel steps the flycam's speed (T34): each notch multiplies it by the cube root of two, so this many notches
+ *  double it. */
+#define FLY_SPEED_STEPS_PER_DOUBLING 3
+/** The slowest step: MOVE_SPEED / 16, under 0.4 m a second, for looking closely. */
+#define FLY_SPEED_MIN_STEP (-12)
+/** The fastest step: MOVE_SPEED x 1024, about 6 km a second, for crossing the far view quickly (the sprint key still
+ *  multiplies it). */
+#define FLY_SPEED_MAX_STEP 30
 /** Mouse look sensitivity, in radians per pixel of mouse movement. */
 #define MOUSE_SENSITIVITY 0.0025f
 /** The test world's clock speed in game seconds per real second: a 2-minute day, short so the cycle is easy to
@@ -148,6 +156,11 @@ typedef struct WorldTestFrameStruct
     WorldRenderer* _renderer;
     /** Whether the mouse cursor is currently captured. */
     bool _cursorCaptured;
+    /** The flycam's speed in wheel notches from MOVE_SPEED (FLY_SPEED_STEPS_PER_DOUBLING notches to a doubling), from
+     *  FLY_SPEED_MIN_STEP to FLY_SPEED_MAX_STEP. */
+    int _flySpeedStep;
+    /** Wheel movement short of a whole notch (smooth wheels and touchpads report fractions), kept for the next tick. */
+    float _flyWheelRemainder;
     /** The text sample's components come from and go back to this factory; owned. */
     TextComponentFactory _textFactory;
     /** The text sample (empty if its JSON failed to load); owned. */
@@ -411,7 +424,13 @@ static void LogCollisionStatus(WorldTestFrame* frame)
     Error_Deconstruct(&LogResult);
 }
 
-/* The I key's camera line: where the camera is and how far from the world's origin. */
+/* The flycam's speed in metres a second before the sprint key: MOVE_SPEED stepped by the mouse wheel. */
+static float FlySpeed(const WorldTestFrame* frame)
+{
+    return MOVE_SPEED * exp2f((float)frame->_flySpeedStep / (float)FLY_SPEED_STEPS_PER_DOUBLING);
+}
+
+/* The I key's camera line: where the camera is, how far from the world's origin, and the flycam's speed. */
 static void LogCameraStatus(WorldTestFrame* frame)
 {
     if (frame->_services->Logger == NULL)
@@ -422,8 +441,9 @@ static void LogCameraStatus(WorldTestFrame* frame)
     Vector3Double Shift = FarShifts[frame->_farShiftIndex];
     Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
         (const unsigned char*)u8"WorldTest: the camera is at (%.3f, %.3f, %.3f), %.3f km from the world's origin; far "
-        u8"shift (%.0f, %.0f, %.0f) m (F11).", Position.X, Position.Y, Position.Z,
-        Vector3Double_Length(Position) / METRES_PER_KILOMETRE, Shift.X, Shift.Y, Shift.Z);
+        u8"shift (%.0f, %.0f, %.0f) m (F11); flycam speed %.2f m/s (the mouse wheel).", Position.X, Position.Y,
+        Position.Z, Vector3Double_Length(Position) / METRES_PER_KILOMETRE, Shift.X, Shift.Y, Shift.Z,
+        (double)FlySpeed(frame));
     Error_Deconstruct(&LogResult);
 }
 
@@ -1393,6 +1413,36 @@ static void SetCursorCaptured(WorldTestFrame* frame, bool isCaptured)
     frame->_cursorCaptured = isCaptured;
 }
 
+/* The mouse wheel steps the flycam's speed: up is faster, down slower, in whole notches between the limits (a fraction
+ * waits for the rest of its notch). Logs the new speed once for a tick that changed it. */
+static void HandleFlySpeedWheel(WorldTestFrame* frame, GameInput* input)
+{
+    Vector2 Wheel = GameInput_GetWheelDelta(input);
+    if (Wheel.y == 0.0f)
+    {
+        return;
+    }
+    GameInput_ConsumeWheel(input);
+    frame->_flyWheelRemainder += Wheel.y;
+    float Notches = truncf(frame->_flyWheelRemainder);
+    frame->_flyWheelRemainder -= Notches;
+    float Range = (float)(FLY_SPEED_MAX_STEP - FLY_SPEED_MIN_STEP);
+    int Step = frame->_flySpeedStep + (int)Clamp(Notches, -Range, Range);
+    Step = (Step < FLY_SPEED_MIN_STEP) ? FLY_SPEED_MIN_STEP : ((Step > FLY_SPEED_MAX_STEP) ? FLY_SPEED_MAX_STEP : Step);
+    if (Step == frame->_flySpeedStep)
+    {
+        return;
+    }
+    frame->_flySpeedStep = Step;
+    if (frame->_services->Logger != NULL)
+    {
+        Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+            (const unsigned char*)u8"WorldTest: flycam speed %.2f m/s (the mouse wheel; the sprint key multiplies it by "
+            u8"%.0f).", (double)FlySpeed(frame), (double)SPRINT_MULTIPLIER);
+        Error_Deconstruct(&LogResult);
+    }
+}
+
 /* The frame's own controls, from what the UI above left unconsumed: quitting, the mouse, the flycam. */
 static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaSeconds)
 {
@@ -1435,7 +1485,12 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
         frame->_camera.Pitch = Clamp(frame->_camera.Pitch, -GAME_CAMERA_MAX_PITCH, GAME_CAMERA_MAX_PITCH);
     }
 
-    float Speed = GameInput_IsActionDown(input, GameAction_Sprint) ? (MOVE_SPEED * SPRINT_MULTIPLIER) : MOVE_SPEED;
+    // The wheel steps the flycam's speed (not while walking: the character has its own) and the sprint key multiplies it.
+    if (!IsWalking)
+    {
+        HandleFlySpeedWheel(frame, input);
+    }
+    float Speed = FlySpeed(frame) * (GameInput_IsActionDown(input, GameAction_Sprint) ? SPRINT_MULTIPLIER : 1.0f);
     Vector3 Forward = GameCamera_GetForward(&frame->_camera);
     Vector3 Right = GameCamera_GetRight(&frame->_camera);
     Vector3 Movement = { .x = 0.0f, .y = 0.0f, .z = 0.0f };
@@ -1855,6 +1910,8 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     Frame->_camera = GameCamera_Create(Vector3Double_Create(0.0, 2.5, -7.0), GAME_CAMERA_DEFAULT_FOV_Y);
     Frame->_camera.Pitch = -0.2f;
     Frame->_cursorCaptured = false;
+    Frame->_flySpeedStep = 0;
+    Frame->_flyWheelRemainder = 0.0f;
 
     *outFrame = &Frame->Base;
     return Error_CreateSuccess();

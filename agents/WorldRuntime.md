@@ -563,7 +563,10 @@ shaded separately and is excluded from the forward candidates, so an object can 
 view-space normals (RGB) and a surface/outline flag (A: 0 = nothing, 0.5 = surface, 1 = surface with outline)
 into a low-res 8-bit target with blending disabled. `world_ao` turns it into an AO multiplier that the PBR pass
 applies to its ambient term only (so AO never dims direct light). `world_postfx` draws outlines after the scene:
-depth/surface silhouettes darken, view-normal creases are recoloured sun-aware; the sky is never outlined. It reads the
+depth/surface silhouettes darken, view-normal creases are recoloured sun-aware; the sky is never outlined. Since T34 a
+line fades with the fog as the surface under it does: its strength is scaled by the fog's transmittance to the pixel
+(`exp(-distance * fogDensity)`, the frame's `FogDensity`, the lit shaders' `FogFactor` from the other side), so a hill
+the haze has all but hidden keeps no dark rim, and with no fog the lines are exactly as before. It reads the
 G-buffer's depth (the scene's only where the G-buffer's is not samplable), which matches its normals and flags: a fading
 object is solid in the G-buffer but has the dither's holes in the scene's depth. (Since then the debug light gizmos,
 which write the scene's depth but are not in the G-buffer, are no longer darkened as if they were the rim of the surface
@@ -722,7 +725,9 @@ lookups' light-facing quads), each with its own fragment stage in its own direct
 shaders lives in `asset/shaders/common/` and is pulled in with `#include "common/<name>"` (no `#version` in shared
 files; rules in GameAssets.md, "GameShader"): `common/math` (`PI`), `common/atmosphere` (Rayleigh + Mie single
 scattering lit by the sun or the moon, with an overload that also gives the view ray's transmittance; used by
-`world_sky` and the PBR fog), `common/night_sky` (air mass, extinction and the skyglow profile,
+`world_sky` and the PBR fog; since T34 its 16 view steps grow with the square of their index, short near the viewer
+where every ray meets the densest air, and each step's light is dimmed by the air in front of it and half its own:
+equal steps, each dimmed by all of its own air, had made the sky about 30 % off and the horizon a dark brown band), `common/night_sky` (air mass, extinction and the skyglow profile,
 used by `world_sky`, `world_stars` and the PBR fog) and `common/night_vision` (the eye's night vision: the rods' share
 and the blend into their grey; used by `world_sky` and `common/lighting`), `common/lighting` (the frame's lighting: its
 uniforms, the BRDF and its wrapped variant, the cascades' shadow, point lights and the cube shadow, the screen AO, the
@@ -799,8 +804,10 @@ the clock.
 
 All input runs in `Update` at the fixed timestep and comes from `Services.Input` ([GameInput.md](GameInput.md)), after
 the UI test frame above had first refusal: movement through the actions (`move_*`, default WASD + SPACE/CTRL, `sprint`
-default SHIFT), mouse-look (`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured) and the
-debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
+default SHIFT), mouse-look (`GameInput_GetMouseDelta`, this tick's movement, only while the cursor is captured), the
+mouse wheel (T34: the flycam's speed, up faster and down slower, three notches to a doubling from 0.375 to 6144 m/s,
+6 m/s at start; the sprint key still multiplies it by 3; each change is logged and the I key's camera line shows it;
+not while walking, and the UI takes it first while the pointer is over a widget) and the debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11 and the
 digits are taken already, minus since B01 and equals since B02; the keypad is free. Leave F12 free: raylib's `EndDrawing`
 takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):

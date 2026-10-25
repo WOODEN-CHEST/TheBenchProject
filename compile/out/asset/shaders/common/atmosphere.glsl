@@ -44,8 +44,7 @@ vec3 atmosphere(vec3 rayDir, vec3 rayOrigin, vec3 sunDir, float iSun, float kMie
     // black sky.
     vec2 planet = raySphere(rayOrigin, rayDir, ATMOSPHERE_R_PLANET);
     if (planet.x > 0.0) tEnd = min(tEnd, planet.x);
-    float segLen = (tEnd - tStart)/float(ATMOSPHERE_PRIMARY_STEPS);
-    float t = tStart;
+    float span = tEnd - tStart;
 
     vec3 sumR = vec3(0.0);
     vec3 sumM = vec3(0.0);
@@ -58,14 +57,22 @@ vec3 atmosphere(vec3 rayDir, vec3 rayOrigin, vec3 sunDir, float iSun, float kMie
     float phaseR = 3.0/(16.0*PI)*(1.0 + mumu);
     float phaseM = 3.0/(8.0*PI)*((1.0 - gg)*(mumu + 1.0))/(pow(1.0 + gg - 2.0*mu*ATMOSPHERE_MIE_G, 1.5)*(2.0 + gg));
 
+    // The steps grow with the square of their index: short near the viewer, where every ray meets the densest air (a
+    // level ray rises with the square of its distance as the planet curves away). Equal steps were about 70 km long
+    // on a level ray, so the low air the horizon's light comes from fell inside the first one, and each step's light
+    // was dimmed as if it all came from the step's far end: the horizon came out at a quarter to a third of the
+    // brightness three degrees higher, a dark brown band, and the sky as a whole about 30 % off. Measured against 1024
+    // steps, this march is about 1 % off on average and 6 % at worst at the default haze, for 8 % more time than the old
+    // one (T34; integrating each step's light exactly was no more accurate and took 22 % more).
     for (int i = 0; i < ATMOSPHERE_PRIMARY_STEPS; i++)
     {
-        vec3 pos = rayOrigin + rayDir*(t + segLen*0.5);
+        float stepFrom = float(i)/float(ATMOSPHERE_PRIMARY_STEPS);
+        float stepTo = float(i + 1)/float(ATMOSPHERE_PRIMARY_STEPS);
+        float segLen = span*(stepTo*stepTo - stepFrom*stepFrom);
+        vec3 pos = rayOrigin + rayDir*(tStart + span*stepFrom*stepFrom + segLen*0.5);
         float h = length(pos) - ATMOSPHERE_R_PLANET;
-        float hr = exp(-h/ATMOSPHERE_H_RAYLEIGH)*segLen;
-        float hm = exp(-h/ATMOSPHERE_H_MIE)*segLen;
-        odR += hr;
-        odM += hm;
+        float densityR = exp(-h/ATMOSPHERE_H_RAYLEIGH);
+        float densityM = exp(-h/ATMOSPHERE_H_MIE);
 
         vec2 lightAtmos = raySphere(pos, sunDir, ATMOSPHERE_R_ATMOS);
         float lSeg = lightAtmos.y/float(ATMOSPHERE_LIGHT_STEPS);
@@ -81,12 +88,17 @@ vec3 atmosphere(vec3 rayDir, vec3 rayOrigin, vec3 sunDir, float iSun, float kMie
             lt += lSeg;
         }
 
-        // Mie extinction is ~1.1x its scattering coefficient.
-        vec3 tau = ATMOSPHERE_K_RAYLEIGH*(odR + lOdR) + kMie*1.1*(odM + lOdM);
-        vec3 attn = exp(-tau);
-        sumR += hr*attn;
-        sumM += hm*attn;
-        t += segLen;
+        // The step's light reaches the viewer dimmed by the air in front of the step (odR, odM: the steps before), by
+        // half the step's own air (its light is scattered all along the step, so on average from its middle) and by
+        // the light's own path to the sun. Mie extinction is ~1.1x its scattering coefficient.
+        float halfR = 0.5*densityR*segLen;
+        float halfM = 0.5*densityM*segLen;
+        vec3 tau = ATMOSPHERE_K_RAYLEIGH*(odR + halfR + lOdR) + kMie*1.1*(odM + halfM + lOdM);
+        vec3 attn = exp(-tau)*segLen;
+        sumR += densityR*attn;
+        sumM += densityM*attn;
+        odR += densityR*segLen;
+        odM += densityM*segLen;
     }
 
     transmittance = exp(-(ATMOSPHERE_K_RAYLEIGH*odR + kMie*1.1*odM));

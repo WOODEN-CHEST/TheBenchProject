@@ -160,6 +160,7 @@ void WorldRendererPost_LoadShaders(WorldRenderer* self)
         self->_outline._locNormalTexture = GetShaderLocation(RayShader, "normalTexture");
         self->_outline._locSunDirectionView = GetShaderLocation(RayShader, "sunDirectionView");
         self->_outline._locStrength = GetShaderLocation(RayShader, "outlineStrength");
+        self->_outline._locFogDensity = GetShaderLocation(RayShader, "fogDensity");
     }
 }
 
@@ -227,6 +228,9 @@ void WorldRendererPost_RenderOutlines(WorldRenderer* self, const WorldRenderFram
     // Outlines are code-configurable (not JSON) per spec: a single renderer toggle + a built-in strength.
     float OutlineStrength = self->_outline._isEnabled ? OUTLINE_BASE_STRENGTH : 0.0f;
     SetShaderValue(RayShader, self->_outline._locStrength, &OutlineStrength, SHADER_UNIFORM_FLOAT);
+
+    // The fog's density, so a line fades with the fog as the surface under it does (T34).
+    SetShaderValue(RayShader, self->_outline._locFogDensity, &frame->FogDensity, SHADER_UNIFORM_FLOAT);
 
     BeginTextureMode(self->_outline._target);
     ClearBackground(BLACK);

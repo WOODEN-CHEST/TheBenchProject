@@ -34,6 +34,7 @@ uniform mat4 projection;         // the perspective projection used by the scene
 uniform vec3 sunDirectionView;   // unit direction TO the sun, in VIEW space (for sun-aware crease colouring)
 
 uniform float outlineStrength;   // effective outline strength (0..1); 0 disables outlines
+uniform float fogDensity;        // the scene's distance-fog density (per metre, as the lit shaders get it; 0 = no fog)
 
 out vec4 finalColor;
 
@@ -159,7 +160,11 @@ void main()
             float litSide = smoothstep(-0.15, 0.15, towardSun);
             coeff = 1.0 - OUTLINE_CREASE_DARKEN*nei*litSide + OUTLINE_CREASE_BRIGHTEN*nei*(1.0 - litSide);
         }
-        color *= mix(1.0, coeff, clamp(outlineStrength, 0.0, 1.0));
+        // The line fades with the fog, as the surface's own light does: a hill the haze has all but hidden keeps no
+        // dark rim (T34). The share that still shows is the fog's transmittance to this pixel (the lit shaders'
+        // FogFactor, from the same distance), so with no fog the line is as before.
+        float haze = exp(-length(viewPos)*max(fogDensity, 0.0));
+        color *= mix(1.0, coeff, clamp(outlineStrength, 0.0, 1.0)*haze);
     }
 
     finalColor = vec4(color, 1.0)*fragColor*colDiffuse;

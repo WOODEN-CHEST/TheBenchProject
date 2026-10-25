@@ -801,6 +801,7 @@ typedef struct WorldRendererOutlineStateStruct
     int _locNormalTexture;
     int _locSunDirectionView;
     int _locStrength;
+    int _locFogDensity;
     /** @brief The target the outline pass writes into (same size/format as the scene target). */
     RenderTexture2D _target;
     /** @brief Whether _target has been created. */
