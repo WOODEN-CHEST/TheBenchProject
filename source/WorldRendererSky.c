@@ -1,5 +1,6 @@
-// The atmospheric sky pass, with the moon, the Milky Way and light pollution's skyglow. The stars are their own pass
-// (WorldRendererStars.c), drawn right after this one.
+// The atmospheric sky pass, with the moon, the Milky Way and light pollution's skyglow. Since T15 its glow comes from the
+// atmosphere's tables (WorldRendererAtmosphere.c, built first in the frame), or the direct march while they are off. The
+// stars are their own pass (WorldRendererStars.c), drawn right after this one.
 
 #include <math.h>
 #include "WorldRendererInternal.h"
@@ -228,7 +229,6 @@ void WorldRendererSky_LoadShader(WorldRenderer* self)
     self->_sky._locSunColor = GetShaderLocation(RayShader, "sunColor");
     self->_sky._locSunIntensity = GetShaderLocation(RayShader, "sunIntensity");
     self->_sky._locSunSize = GetShaderLocation(RayShader, "sunSize");
-    self->_sky._locTurbidity = GetShaderLocation(RayShader, "turbidity");
     self->_sky._locSkyTint = GetShaderLocation(RayShader, "skyTint");
     self->_sky._locSkyglowRadiance = GetShaderLocation(RayShader, "skyglowRadiance");
     self->_sky._locMilkyWayTexture = GetShaderLocation(RayShader, "milkyWayTexture");
@@ -252,6 +252,7 @@ void WorldRendererSky_LoadShader(WorldRenderer* self)
     self->_sky._locNightVisionSteepness = GetShaderLocation(RayShader, "nightVisionSteepness");
     self->_sky._locNightVisionStrength = GetShaderLocation(RayShader, "nightVisionStrength");
     self->_sky._locNightVisionTint = GetShaderLocation(RayShader, "nightVisionTint");
+    WorldRendererAtmosphere_PrepareShader(RayShader, &self->_sky._atmosphere);
 
     // The night vision's calibration never changes: upload it once.
     SetShaderValue(RayShader, self->_sky._locNightVisionHalfLuminance, &self->_nightVision.HalfLuminance,
@@ -321,7 +322,8 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     SetShaderValue(RayShader, self->_sky._locSunColor, frame->SunLight.Color, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, self->_sky._locSunIntensity, &Environment->SunIntensity, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sky._locSunSize, &Environment->SunSizeMultiplier, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_sky._locTurbidity, &Environment->SkyTurbidity, SHADER_UNIFORM_FLOAT);
+    // The air, and the tables or the direct march (T15).
+    WorldRendererAtmosphere_UploadFrame(RayShader, &self->_sky._atmosphere, frame);
 
     float SkyTint[3];
     WorldRendererCommon_ColorToLinear(Environment->SkyTint, SkyTint);
@@ -377,6 +379,9 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
         SetShaderValue(RayShader, self->_sky._locMilkyWayLod, &Lod, SHADER_UNIFORM_FLOAT);
     }
 
+    // The atmosphere's tables stay on their own units (above the 2D batch's), bound once more in case a pass since the
+    // atmosphere's moved them.
+    WorldRendererAtmosphere_BindTables(self, frame);
     BeginShaderMode(RayShader);
     // A 2D (batch) draw binds extra samplers through SetShaderValueTexture, after BeginShaderMode.
     if (frame->IsMilkyWayActive)

@@ -1540,6 +1540,11 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                 && AreNamesEqual(WorldTerrainComponent_GetTerrain(WorldTerrainComponent_FromComponent(Ground)),
                     (const unsigned char*)u8"placeholder_terrain"));
             TEST_CHECK(run, AreNamesEqual(World_GetName(&Loaded), (const unsigned char*)u8"test"));
+            // The file predates the air's settings (T15): they read as their defaults, and (below) are left out again.
+            const WorldEnvironment* Environment = World_GetEnvironment(&Loaded);
+            TEST_CHECK(run, (Environment->HazeHeight == 1200.0f) && (Environment->SunGlow == 0.758f)
+                && (Environment->AirDensity == 1.0f) && (Environment->Ozone == 1.0f)
+                && (Environment->MultipleScattering == 1.0f) && (Environment->HazeAlbedo.r == 244));
             // The animation examples (T29): four placeholder figures, each animator playing a clip of its own; the short
             // one waves in a loop its library does not give the clip (the placement's loop override).
             size_t AnimatorCount = 0U;

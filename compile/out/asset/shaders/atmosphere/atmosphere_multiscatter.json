@@ -1,0 +1,4 @@
+{
+    "name": "world_atmosphere_multiscatter",
+    "fragment_location": "atmosphere/multiscatter"
+}

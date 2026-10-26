@@ -1,0 +1,4 @@
+{
+    "name": "world_atmosphere_transmittance",
+    "fragment_location": "atmosphere/transmittance"
+}

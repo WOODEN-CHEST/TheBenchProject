@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 // RenderTexture2D (the frame target the renderer blits its result into) is a Raylib type in this API,
 // so the Raylib include is unavoidable here (as in the other rendering headers).
 #include "raylib/raylib.h"
@@ -155,6 +156,12 @@ typedef enum WorldRendererFeatureEnum
      *  (world_pbr_instanced); inactive while switched off (WorldRenderer_SetInstancingEnabled) or no cell is in view.
      *  Without it, or without a pass's own twin, the copies draw one at a time, looking the same. */
     WorldRendererFeature_Instancing,
+    /** @brief The atmosphere's tables (T15): the transmittance, the multiple scattering and the sky view, built first in
+     *  every frame (the first two only when the air changes); the sky and the fog read them, with the light the air
+     *  scatters more than once. Unavailable without their shaders or targets; inactive while switched off
+     *  (WorldRenderer_SetAtmosphereTablesEnabled). Without them the sky and the fog are marched per pixel, single
+     *  scattering only. */
+    WorldRendererFeature_AtmosphereTables,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -267,6 +274,17 @@ typedef struct WorldRendererStatusStruct
     size_t InstanceCellsFadedOutCount;
     /** @brief Whether the copies drew instanced (WorldRenderer_SetInstancingEnabled). */
     bool IsInstancingEnabled;
+    /** @brief Whether the atmosphere's tables were switched on (WorldRenderer_SetAtmosphereTablesEnabled), how many times
+     *  their transmittance and multiple scattering tables were built (whenever the air changes), and the height above
+     *  sea level the sky was seen from, in metres (the camera's, at least 1 m) (T15). */
+    bool AreAtmosphereTablesEnabled;
+    uint32_t AtmosphereTableBuildCount;
+    float AtmosphereViewHeight;
+    /** @brief How long the render took on the CPU, in milliseconds (WorldRenderer_RenderToTarget from its start to its
+     *  return; the GPU works on after it, and its share shows in the frame time when it is the slower), and the time
+     *  since the render before, as the caller gave it (its deltaSeconds; 0 when that was not above 0). */
+    double RenderMilliseconds;
+    double FrameMilliseconds;
 } WorldRendererStatus;
 
 
@@ -370,6 +388,25 @@ void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled);
  * @returns true if pixelation is enabled.
  */
 bool WorldRenderer_IsPixelationEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Switches the atmosphere's tables on or off (default on), for A/B-ing the sky (T15).
+ *
+ * On, the sky and the fog's sky come from the tables built first in every frame, with the light the air scatters more
+ * than once; off, they are marched per pixel as before the tables (single scattering only), with the same air.
+ * Applied on the next render.
+ * TODO: remove the switch and the direct march once the owner approves the tables' sky (T15).
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to draw the sky from the tables.
+ */
+void WorldRenderer_SetAtmosphereTablesEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the atmosphere's tables are switched on (see WorldRenderer_SetAtmosphereTablesEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true if they are on (they draw the sky when available).
+ */
+bool WorldRenderer_AreAtmosphereTablesEnabled(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables the whole post-effects pass (screen-space AO + depth/normal-edge outlines).

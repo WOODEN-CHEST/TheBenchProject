@@ -12,6 +12,17 @@
 #define DEFAULT_SUN_ANGLE 0.4f
 /** Default atmospheric turbidity (a clear-ish sky). */
 #define DEFAULT_SKY_TURBIDITY 3.0f
+/** Default scale height of the haze, in metres (Earth's typical aerosol layer). */
+#define DEFAULT_HAZE_HEIGHT 1200.0f
+/** Default single-scattering albedo of the haze, sRGB: 244 is linear 0.907, about the 1 / 1.1 the sky had before T15
+ *  made it a setting. */
+#define DEFAULT_HAZE_ALBEDO 244U
+/** Default forward scattering of the haze (the Mie anisotropy g). */
+#define DEFAULT_SUN_GLOW 0.758f
+/** Default air density, ozone and multiple scattering: Earth's, and all of it. */
+#define DEFAULT_AIR_DENSITY 1.0f
+#define DEFAULT_OZONE 1.0f
+#define DEFAULT_MULTIPLE_SCATTERING 1.0f
 /** Default sun intensity multiplier. */
 #define DEFAULT_SUN_INTENSITY 1.0f
 /** Default sun disc size multiplier. */
@@ -152,13 +163,69 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .Key = u8"sky_turbidity", .WireId = 4U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, SkyTurbidity),
         .Default.FloatValue = DEFAULT_SKY_TURBIDITY, .Rules = PROPERTY_RULES_AT_LEAST(0.0),
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Haze",
-        .Description = u8"Atmospheric turbidity: higher values give a hazier, whiter sky.", .SinceVersion = 1U
+        .Description = u8"Atmospheric turbidity: higher values give a hazier, whiter sky (the haze's density is Earth's "
+            u8"times turbidity / 3).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"haze_height", .WireId = 47U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, HazeHeight),
+        .Default.FloatValue = DEFAULT_HAZE_HEIGHT, .Rules = PROPERTY_RULES_BETWEEN(WORLD_ENVIRONMENT_MIN_HAZE_HEIGHT,
+            WORLD_ENVIRONMENT_MAX_HAZE_HEIGHT),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Haze height",
+        .Description = u8"How high the haze reaches, in metres: its density falls by e with every this many metres of "
+            u8"height. Low haze hugs the ground and lets hills stand out above it.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"haze_albedo", .WireId = 48U, .Type = PropertyType_Color, PROPERTY_MEMBER(WorldEnvironment, HazeAlbedo),
+        .Default.ColorValue = { DEFAULT_HAZE_ALBEDO, DEFAULT_HAZE_ALBEDO, DEFAULT_HAZE_ALBEDO, 255 },
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Haze albedo",
+        .Description = u8"How much of the light the haze takes it scatters (the rest it absorbs): a light grey for clean "
+            u8"air, darker or tinted for smog and dust.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"sun_glow", .WireId = 49U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, SunGlow),
+        .Default.FloatValue = DEFAULT_SUN_GLOW, .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_SUN_GLOW),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Sun glow",
+        .Description = u8"How strongly the haze scatters light forward, 0 to 0.99: how large and bright the glow around "
+            u8"the sun and the moon is (0 none, 0.99 a tight, bright halo).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"air_density", .WireId = 50U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, AirDensity),
+        .Default.FloatValue = DEFAULT_AIR_DENSITY,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_AIR_MULTIPLE),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Air density",
+        .Description = u8"How strongly the air scatters light (what makes the sky blue), as a multiple of Earth's: "
+            u8"thinner or denser air for alien skies.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"ozone", .WireId = 51U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, Ozone),
+        .Default.FloatValue = DEFAULT_OZONE,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_AIR_MULTIPLE),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Ozone",
+        .Description = u8"The ozone layer's absorption as a multiple of Earth's (0 none): it keeps the twilight sky "
+            u8"blue overhead.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"multiple_scattering", .WireId = 52U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, MultipleScattering), .Default.FloatValue = DEFAULT_MULTIPLE_SCATTERING,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY,
+        .DisplayName = u8"Multiple scattering",
+        .Description = u8"How much of the light the air scatters more than once is drawn: 1 all of it (a brighter, paler "
+            u8"horizon, a fuller twilight), 0 single scattering only, for comparing.",
+        .SinceVersion = 1U
     },
     {
         .Key = u8"sky_ground_albedo", .WireId = 5U, .Type = PropertyType_Color,
         PROPERTY_MEMBER(WorldEnvironment, SkyGroundAlbedo), .Default.ColorValue = { 90, 90, 90, 255 },
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Ground albedo",
-        .Description = u8"The ground's colour as the atmosphere sees it; it tints the horizon.", .SinceVersion = 1U
+        .Description = u8"The ground's colour as the atmosphere sees it: the light it reflects up feeds the sky's "
+            u8"multiple scattering.",
+        .SinceVersion = 1U
     },
     {
         .Key = u8"sky_tint", .WireId = 6U, .Type = PropertyType_Color, PROPERTY_MEMBER(WorldEnvironment, SkyTint),

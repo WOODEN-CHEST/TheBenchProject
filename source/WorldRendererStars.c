@@ -141,6 +141,7 @@ void WorldRendererStars_LoadShader(WorldRenderer* self)
     self->_stars._locTimeSeconds = GetShaderLocation(RayShader, "timeSeconds");
     self->_stars._locMoonDirection = GetShaderLocation(RayShader, "moonDirection");
     self->_stars._locMoonCosRadius = GetShaderLocation(RayShader, "moonCosRadius");
+    WorldRendererAtmosphere_PrepareShader(RayShader, &self->_stars._atmosphere);
 }
 
 void WorldRendererStars_Unload(WorldRenderer* self)
@@ -218,6 +219,9 @@ void WorldRendererStars_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     SetShaderValue(RayShader, self->_stars._locMoonDirection, MoonDir, SHADER_UNIFORM_VEC3);
     float MoonCosRadius = frame->IsMoonActive ? frame->MoonDisc.CosRadius : NO_MOON_COS_RADIUS;
     SetShaderValue(RayShader, self->_stars._locMoonCosRadius, &MoonCosRadius, SHADER_UNIFORM_FLOAT);
+    // The air dims and reddens the stars near the horizon through the transmittance table (T15), or the air mass.
+    WorldRendererAtmosphere_UploadFrame(RayShader, &self->_stars._atmosphere, frame);
+    WorldRendererAtmosphere_BindTables(self, frame);
 
     // Added onto the sky with (ONE, ONE) blending, so the fragment's alpha of 0 leaves the scene's alpha alone.
     // Depth-tested but never written: the depth buffer must stay clear, which the bloom prefilter and the sun shafts

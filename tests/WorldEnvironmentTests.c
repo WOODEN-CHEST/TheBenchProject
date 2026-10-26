@@ -155,6 +155,12 @@ static void DefaultsAreValid(TestRun* run)
     TEST_CHECK(run, Environment.IsMoonEnabled && (Environment.MoonPhaseSource == WorldMoonPhaseSource_Calendar));
     TEST_CHECK(run, (Environment.MoonCycleDays == WORLD_ENVIRONMENT_MOON_CYCLE_DAYS) && !Environment.AreSeasonsEnabled);
     TEST_CHECK(run, (Environment.NightVisionStrength == 1.0f) && (Environment.NightVisionBlueShift == 0.5f));
+    // The air (T15): the sky before the tables (turbidity 3, a 1200 m haze of albedo about 0.9, g 0.758), Earth's air
+    // and ozone, all of the multiple scattering.
+    TEST_CHECK(run, (Environment.SkyTurbidity == 3.0f) && (Environment.HazeHeight == 1200.0f));
+    TEST_CHECK(run, (Environment.HazeAlbedo.r == 244) && (Environment.HazeAlbedo.g == 244) && (Environment.HazeAlbedo.b == 244));
+    TEST_CHECK(run, (Environment.SunGlow == 0.758f) && (Environment.AirDensity == 1.0f) && (Environment.Ozone == 1.0f));
+    TEST_CHECK(run, Environment.MultipleScattering == 1.0f);
     WorldEnvironment_Deconstruct(&Environment);
     WorldEnvironment_Deconstruct(&Environment); // safe to repeat
     TEST_CHECK(run, (Environment.MilkyWayTexture == NULL) && (Environment.MoonTexture == NULL));
@@ -236,6 +242,38 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.NightVisionBlueShift = -0.25f;
     CheckRejected(run, &Environment, "NightVisionBlueShift");
 
+    // The air's settings (T15).
+    ResetEnvironment(&Environment);
+    Environment.HazeHeight = 5.0f;
+    CheckRejected(run, &Environment, "world_environment.haze_height (HazeHeight) must be finite and in [10, 100000]");
+    ResetEnvironment(&Environment);
+    Environment.HazeHeight = NAN;
+    CheckRejected(run, &Environment, "HazeHeight");
+    ResetEnvironment(&Environment);
+    Environment.SunGlow = 1.0f;
+    CheckRejected(run, &Environment, "world_environment.sun_glow (SunGlow) must be finite and in [0, 0.99]");
+    ResetEnvironment(&Environment);
+    Environment.SunGlow = -0.1f;
+    CheckRejected(run, &Environment, "SunGlow");
+    ResetEnvironment(&Environment);
+    Environment.AirDensity = -1.0f;
+    CheckRejected(run, &Environment, "AirDensity");
+    ResetEnvironment(&Environment);
+    Environment.AirDensity = 101.0f;
+    CheckRejected(run, &Environment, "world_environment.air_density (AirDensity) must be finite and in [0, 100]");
+    ResetEnvironment(&Environment);
+    Environment.Ozone = INFINITY;
+    CheckRejected(run, &Environment, "Ozone");
+    ResetEnvironment(&Environment);
+    Environment.Ozone = 101.0f;
+    CheckRejected(run, &Environment, "world_environment.ozone (Ozone) must be finite and in [0, 100]");
+    ResetEnvironment(&Environment);
+    Environment.MultipleScattering = 1.5f;
+    CheckRejected(run, &Environment, "MultipleScattering");
+    ResetEnvironment(&Environment);
+    Environment.MultipleScattering = -0.5f;
+    CheckRejected(run, &Environment, "MultipleScattering");
+
     // Zero is allowed where the rule is ">= 0" (an effect switched off), the [0, 1] ranges include both ends, and the
     // calendar's first and last days are dates.
     ResetEnvironment(&Environment);
@@ -248,6 +286,18 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.NightVisionBlueShift = 1.0f;
     Environment.TimeOfDay = 1.0f;
     Environment.Date = GAME_CALENDAR_LAST_DAY_NUMBER;
+    Environment.HazeHeight = 10.0f;
+    Environment.SunGlow = 0.99f;
+    Environment.AirDensity = 0.0f;
+    Environment.Ozone = 100.0f;
+    Environment.MultipleScattering = 0.0f;
+    Environment.HazeAlbedo = (Color){ 0, 0, 0, 0 };
+    TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
+    Environment.HazeHeight = 100000.0f;
+    Environment.SunGlow = 0.0f;
+    Environment.AirDensity = 100.0f;
+    Environment.Ozone = 0.0f;
+    Environment.MultipleScattering = 1.0f;
     TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
     Environment.Date = GAME_CALENDAR_FIRST_DAY_NUMBER;
     TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
@@ -349,6 +399,12 @@ static void CopyToCopiesEverySetting(TestRun* run)
     Source.MoonPhase = 0.125f;
     Source.MoonIntensity = 0.5f;
     Source.MoonColor = (Color){ 9, 10, 11, 12 };
+    Source.HazeHeight = 300.0f;
+    Source.HazeAlbedo = (Color){ 13, 14, 15, 16 };
+    Source.SunGlow = 0.9f;
+    Source.AirDensity = 2.5f;
+    Source.Ozone = 0.0f;
+    Source.MultipleScattering = 0.25f;
     TEST_CHECK_SUCCESS(run, Properties_Set(WorldEnvironment_GetPropertyTable(), &Source, u8"moon_texture",
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"red_moon" }));
 
@@ -368,6 +424,9 @@ static void CopyToCopiesEverySetting(TestRun* run)
     TEST_CHECK(run, Destination.AreSeasonsEnabled && !Destination.IsMoonEnabled);
     TEST_CHECK(run, (Destination.MoonPhaseSource == WorldMoonPhaseSource_Fixed) && (Destination.MoonPhase == 0.125f));
     TEST_CHECK(run, (Destination.MoonIntensity == 0.5f) && (Destination.MoonColor.b == 11));
+    TEST_CHECK(run, (Destination.HazeHeight == 300.0f) && (Destination.HazeAlbedo.g == 14) && (Destination.SunGlow == 0.9f));
+    TEST_CHECK(run, (Destination.AirDensity == 2.5f) && (Destination.Ozone == 0.0f)
+        && (Destination.MultipleScattering == 0.25f));
     // The names are the destination's own copies.
     TEST_CHECK(run, (Destination.MoonTexture != Source.MoonTexture)
         && (strcmp((const char*)Destination.MoonTexture, "red_moon") == 0));

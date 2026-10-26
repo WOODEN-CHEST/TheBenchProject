@@ -587,7 +587,7 @@ multiply it by their own `gravity_multiplier`).
 GHDF wire id, the type, the default, the rules, the inspector text. `WorldEnvironment_SetDefaults`, `_Validate`,
 `_CopyTo` and `_Deconstruct` are thin wrappers over the table, and `WorldEnvironment_ReadJSON` / `_WriteJSON` are the
 JSON entry points for the world files (T09). **To add a setting, add the field and one table row** with a new,
-never-used wire id (the next free one is 47; 2 and 3 are retired); nothing else needs writing. The field comments state
+never-used wire id (the next free one is 53; 2 and 3 are retired); nothing else needs writing. The field comments state
 each value's rule; validation enforces them (finite, `TimeOfDay`, `LightPollution`, `StarTwinkle`, `MoonPhase`,
 `NightVisionStrength` and `NightVisionBlueShift` in [0, 1], `SunSizeMultiplier`, `MoonSizeMultiplier` and `MoonCycleDays` > 0, every strength/intensity/density/brightness
 >= 0, `Date` inside the calendar, the texture names valid asset names of at most 128 bytes, `MoonPhaseSource` one of
@@ -635,6 +635,28 @@ And `are_seasons_enabled` (default false): the sun's declination follows the dat
 place in the year, 0 at the March equinox; a uniform year, so the September equinox falls about two days early), so
 with `SunAngle` > 0 summer days are longer and the noon sun higher, and the moon follows the ecliptic (a full moon low
 in summer, high in winter). Off by default: it changes how much daylight the working hours get.
+
+The air's settings (T15, decisions G36 and G37; category "Sky and sun"; the renderer turns them into the atmosphere's
+coefficients with `WorldAtmosphere_GetMedium` and builds its tables from them, [WorldRuntime.md](WorldRuntime.md),
+"Atmosphere"). The defaults are the sky before T15 plus the ozone layer and all of the multiple scattering. The table
+stayed at version 1: absent keys read as their defaults, so older world files keep loading (and are written the same).
+
+| Key | Wire id | Rule | Default | Meaning |
+|---|---|---|---|---|
+| `sky_turbidity` | 4 | >= 0 | 3 | The haze's amount: its density is Earth's x turbidity / 3 (an extinction of 23.1e-6 per metre at sea level at 3). |
+| `haze_height` | 47 | [10, 100000] m | 1200 | The haze's scale height: low haze hugs the ground and lets hills stand out above it. |
+| `haze_albedo` | 48 | colour | (244, 244, 244): linear 0.907 | The share of the light the haze takes that it scatters (the rest it absorbs); darker or tinted for smog and dust. |
+| `sun_glow` | 49 | [0, 0.99] | 0.758 | The haze's forward scattering (the Mie phase function's g): how large and bright the glow around the sun and the moon is. |
+| `air_density` | 50 | [0, 100] | 1 | The air's Rayleigh scattering (the blue) as a multiple of Earth's. `sky_tint` changes the sky's colour. |
+| `ozone` | 51 | [0, 100] | 1 | The ozone layer's absorption as a multiple of Earth's: it keeps the twilight sky blue overhead (violet in this three-colour model); 0 none. |
+| `multiple_scattering` | 52 | [0, 1] | 1 | The share of the light scattered more than once that the sky draws (0: single scattering, for comparing). |
+| `sky_ground_albedo` | 5 | colour | (90, 90, 90): linear 0.10 | The ground's albedo as the air sees it: the light it reflects feeds the multiple scattering (unused before T15; T35's far ground). |
+
+`WORLD_ENVIRONMENT_MIN_HAZE_HEIGHT`, `_MAX_HAZE_HEIGHT`, `_MAX_SUN_GLOW` and `_MAX_AIR_MULTIPLE` (WorldEnvironment.h)
+are the rules' bounds; the renderer clamps to the same bounds and takes a non-finite value as its default, so the shaders
+only get finite air within them. `sky_turbidity` has no maximum: any finite haze is safe in the shaders (one too thick to
+see through gives a dark sky, never a NaN), and so is any sun or moon intensity in the sky-view table, which saturates at
+its half floats' largest value (65504).
 
 The night vision settings (the eye's dim-light vision, [WorldRuntime.md](WorldRuntime.md), "Night vision"):
 `night_vision_strength` ([0, 1], default 1: the eye; 0 keeps every colour, a long-exposure photo's night) and

@@ -2,7 +2,7 @@
 // frame's lighting uniforms (the renderer uploads the same values to every shader that includes this file), the
 // Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the cascades' shadow, forward point
 // lights and the shadow-casting point light with its cube shadow, the screen-space AO of the ambient term, the eye's
-// night vision and the atmospheric distance fog.
+// night vision and the atmospheric distance fog (from the atmosphere's tables since T15).
 //
 // Two families of light functions: the plain ones (SkyLight, PointLights) the PBR shader uses, and the wrapped ones
 // (SkyLightWrapped, PointLightsWrapped) sprites use, whose diffuse part reaches past the terminator ("wrap lighting",
@@ -74,14 +74,15 @@ uniform float pointShadowFar;           // far range the stored distance was nor
 uniform float pointShadowBias;          // world-space depth bias to combat shadow acne
 
 // Atmospheric distance fog: distant geometry fades into the SAME sky the sky pass draws, evaluated along the fragment's
-// own view ray, so far objects dissolve seamlessly into the sky (not a flat "close but not quite" colour). The sky pass
-// includes shaders/common/atmosphere.glsl too, and the renderer gives the uniforms below the values the sky pass gets.
-// fogDensity 0 disables fog.
+// own view ray, so far objects dissolve seamlessly into the sky (not a flat "close but not quite" colour). Since T15 the
+// fog reads the sky-view table the sky pass reads (common/atmosphere: the air's uniforms and the tables come from the
+// atmosphere pass), or marches the sky as the sky pass does while the tables are off; the renderer gives the uniforms
+// below the values the sky pass gets. fogDensity 0 disables fog.
+// TODO: T35 replaces this fog with aerial perspective (the haze of the air in front of a surface, G36).
 uniform float fogDensity;
-uniform float skyTurbidity;     // atmospheric haze; == WorldEnvironment.SkyTurbidity (same value the sky pass gets)
 uniform vec3  skyTint;          // linear sky tint multiplier (same value the sky pass gets)
-uniform float skySunIntensity;  // RAW sun intensity (NOT day-scaled); == WorldEnvironment.SunIntensity
-uniform vec3  skyglowRadiance;  // light pollution's glow at the horizon, linear (same value the sky pass gets)
+uniform float skySunIntensity;  // RAW sun intensity (NOT day-scaled); == WorldEnvironment.SunIntensity (the march's)
+uniform vec3  skyglowRadiance;  // light pollution's glow at the horizon, linear (the march's: the tables hold it)
 uniform float skyMoonIntensity; // the moonlit sky's light relative to the sun's (same value the sky pass gets); 0 = none
 
 // The eye's night vision (shaders/common/night_vision.glsl): dim reflected light loses its colour as it does for the
@@ -391,21 +392,33 @@ vec3 NightVisionOf(vec3 color)
 // toward, so it matches the visible sky in that direction.
 vec3 fogSkyColor(vec3 rayDir)
 {
-    vec3 rayOrigin = vec3(0.0, ATMOSPHERE_R_PLANET + 1.0, 0.0);
     vec3 sunDir = normalize(sunDirection);
-    float kMie = ATMOSPHERE_K_MIE_BASE*max(skyTurbidity, 0.0)/3.0;
-    float iSun = ATMOSPHERE_SUN_RADIANCE*max(skySunIntensity, 0.0);
-
-    // Mirror the ray into the upper hemisphere and darken below the horizon, exactly like the sky pass's main.
-    vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
-    vec3 sky = atmosphere(skyRay, rayOrigin, sunDir, iSun, kMie);
-    if (skyMoonIntensity > 0.0)
+    vec3 sky;
+    if (atmosphereTablesActive)
     {
-        sky += atmosphere(skyRay, rayOrigin, normalize(moonDirection), ATMOSPHERE_SUN_RADIANCE*skyMoonIntensity, kMie);
+        // The sky-view table, as the sky pass reads it (the mirror below the horizon and the skyglow are in it).
+        sky = atmosphereSkyView(rayDir, sunDir, 0.0);
+        if (skyMoonIntensity > 0.0)
+        {
+            sky += atmosphereSkyView(rayDir, normalize(moonDirection), 1.0);
+        }
     }
-    sky += nightSkySkyglow(skyRay.y, skyglowRadiance);
-    float belowFactor = smoothstep(0.0, -0.12, rayDir.y);
-    sky *= mix(1.0, 0.5, belowFactor);
+    else
+    {
+        // TODO: remove with the direct march once the owner approves the tables' sky (T15).
+        // The direct march: mirror the ray into the upper hemisphere and darken below the horizon, exactly like the sky
+        // pass's.
+        float iSun = ATMOSPHERE_SUN_RADIANCE*max(skySunIntensity, 0.0);
+        vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
+        sky = atmosphere(skyRay, sunDir, iSun);
+        if (skyMoonIntensity > 0.0)
+        {
+            sky += atmosphere(skyRay, normalize(moonDirection), ATMOSPHERE_SUN_RADIANCE*skyMoonIntensity);
+        }
+        sky += nightSkySkyglow(skyRay.y, skyglowRadiance);
+        float belowFactor = smoothstep(0.0, -0.12, rayDir.y);
+        sky *= mix(1.0, 0.5, belowFactor);
+    }
     sky *= max(skyTint, vec3(0.0));
     return sky;
 }

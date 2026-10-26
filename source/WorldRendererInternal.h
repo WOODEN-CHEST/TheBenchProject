@@ -16,6 +16,7 @@
 #include "WorldSpriteComponent.h"
 #include "GLTextureArray.h"
 #include "NightVision.h"
+#include "WorldAtmosphere.h"
 #include "SpriteTransform.h"
 #include "WorldRenderSpace.h"
 #include "WorldVisibility.h"
@@ -38,6 +39,8 @@
  *   WorldRendererLighting.c  the PBR shader, the lit shaders' frame uniforms, forward point lights, eye adaptation
  *   WorldRendererShadows.c   the shadow cascades of the sun or the moon, and the point-light cube shadow
  *   WorldRendererGBuffer.c   the normal/flag G-buffer and the ambient-occlusion pre-pass
+ *   WorldRendererAtmosphere.c the atmosphere's tables (T15): transmittance, multiple scattering, the sky view, built
+ *                            first in the frame and read by the sky, the fog and the stars
  *   WorldRendererSky.c       the atmospheric sky with the moon, the Milky Way and light pollution's skyglow
  *   WorldRendererStars.c     the star field (the seeded catalogue as one-pixel quads)
  *   WorldRendererPost.c      outlines, bloom, sun shafts and the tonemap
@@ -93,6 +96,11 @@
  * whether or not the shader samples them. */
 typedef enum
 {
+    // The atmosphere's tables (T15), for every program that reads them (the lit programs, the sky pass, the stars):
+    // raylib binds only cube maps on 7 and 8 (MATERIAL_MAP_CUBEMAP and _IRRADIANCE, which no material of ours fills),
+    // never a 2D texture, and the 2D batch only units 0 to 4, so the tables stay bound there for the whole frame.
+    WorldRendererTextureUnit_AtmosphereTransmittance = 7, // sampler2D atmosphereTransmittanceTable
+    WorldRendererTextureUnit_AtmosphereSkyView = 8,       // sampler2D atmosphereSkyViewTable
     // The terrain program's material arrays (B02): sampler2DArray, below raylib's material map units' top, because the
     // terrain program draws with no material maps (DrawMesh binds none for it). Other programs' material maps bind
     // GL_TEXTURE_2D (or cube) textures on these units; an array sampler reads only the units' GL_TEXTURE_2D_ARRAY
@@ -111,6 +119,8 @@ _Static_assert(WorldRendererTextureUnit_ShadowNear >= WORLD_RENDERER_MATERIAL_MA
     "renderer-owned texture units must sit above raylib's material map units");
 _Static_assert(WorldRendererTextureUnit_TerrainRoughnessAo < WorldRendererTextureUnit_ShadowNear,
     "the terrain's arrays sit below the frame textures");
+_Static_assert(WorldRendererTextureUnit_AtmosphereSkyView < WorldRendererTextureUnit_TerrainAlbedoHeight,
+    "the atmosphere's tables sit below the terrain's arrays (the terrain program reads both)");
 
 /* Which objects a draw pass should include, by their OmitPixelation flag. The pixelated scene pass draws only
  * pixelated objects (when the crisp overlay is active), the crisp overlay pass draws only the flagged ones, and
@@ -293,6 +303,13 @@ typedef struct WorldRenderFrameStruct
     Vector2 SunScreenUv;
     /** @brief The tonemap exposure from eye adaptation; set just before the tonemap. */
     float Exposure;
+    /** @brief The atmosphere this frame (T15, WorldRendererAtmosphere_PrepareFrame): the air's coefficients
+     *  (WorldAtmosphere_GetMedium of the environment), the camera's height above sea level the sky is seen from (the
+     *  origin's Y, clamped: WorldAtmosphere_GetViewHeight), and whether the tables hold the sky and the fog's sky (the
+     *  pass is available and switched on); false: the direct march (the A/B, the fallback). */
+    WorldAtmosphereMedium AtmosphereMedium;
+    float AtmosphereViewHeight;
+    bool AreAtmosphereTablesActive;
     /** @brief The eye's night vision this frame, which the sky and PBR shaders apply: how strongly (the renderer toggle
      *  x the world's NightVisionStrength; 0 = off), the field luminance it compares with (BaseSceneLuminance: the sky's
      *  light, without nearby lamps), the rods' grey (linear, luminance 1, from the world's NightVisionBlueShift), and
@@ -378,6 +395,29 @@ typedef struct WorldRendererSceneStateStruct
 } WorldRendererSceneState;
 
 /**
+ * @brief The uniform locations of a shader that includes shaders/common/atmosphere.glsl (T15): the frame's air, the height
+ *        the sky is seen from, whether the tables hold the sky, and the tables' samplers. -1 for a uniform the shader
+ *        lacks (or the compiler dropped).
+ *
+ * Filled by WorldRendererAtmosphere_PrepareShader, which also points the transmittance and sky-view samplers at their
+ * fixed units; WorldRendererAtmosphere_UploadFrame uploads a frame's values.
+ */
+typedef struct WorldRendererAtmosphereLocationsStruct
+{
+    int _locRayleighScattering;
+    int _locMieScattering;
+    int _locMieExtinction;
+    int _locMieHeight;
+    int _locMieAnisotropy;
+    int _locOzoneAbsorption;
+    int _locViewHeight;
+    int _locTablesActive;
+    int _locTransmittanceTable;
+    int _locMultiscatterTable;
+    int _locSkyViewTable;
+} WorldRendererAtmosphereLocations;
+
+/**
  * @brief The uniform locations of a shader that includes shaders/common/lighting.glsl (the PBR and the sprite
  *        shaders): the frame's lights, shadows, AO, fog and night vision, and the per-object forward point lights.
  *
@@ -429,9 +469,8 @@ typedef struct WorldRendererLitLocationsStruct
     int _locPointLightRadiances;
     int _locPointLightRanges;
     /** @brief The distance fog: it fades distant geometry into the atmospheric sky colour, so it needs the sky
-     *  parameters the sky pass uses plus the fog density. */
+     *  parameters the sky pass uses (the atmosphere's, below) plus the fog density. */
     int _locFogDensity;
-    int _locFogTurbidity;
     int _locFogSkyTint;
     int _locFogSunIntensity;
     int _locFogSkyglow;
@@ -443,6 +482,8 @@ typedef struct WorldRendererLitLocationsStruct
     int _locNightVisionSteepness;
     int _locNightVisionStrength;
     int _locNightVisionTint;
+    /** @brief The atmosphere (common/atmosphere): the air, the sky-view table the fog reads (T15). */
+    WorldRendererAtmosphereLocations _atmosphere;
 } WorldRendererLitLocations;
 
 /** @brief One PBR program that shades model objects, and its uniform locations: the rigid one (world_pbr) or the skinned
@@ -561,7 +602,6 @@ typedef struct WorldRendererSkyStateStruct
     int _locSunColor;
     int _locSunIntensity;
     int _locSunSize;
-    int _locTurbidity;
     int _locSkyTint;
     int _locSkyglowRadiance;
     int _locMilkyWayTexture;
@@ -585,7 +625,50 @@ typedef struct WorldRendererSkyStateStruct
     int _locNightVisionSteepness;
     int _locNightVisionStrength;
     int _locNightVisionTint;
+    /** @brief The atmosphere (common/atmosphere): the air and the tables (T15). */
+    WorldRendererAtmosphereLocations _atmosphere;
 } WorldRendererSkyState;
+
+/**
+ * @brief The atmosphere's tables (T15, WorldRendererAtmosphere.c): their three shaders and render targets, the air the
+ *        transmittance and multiple scattering tables were built for, and the A/B switch.
+ *
+ * The transmittance (WORLD_ATMOSPHERE_TRANSMITTANCE_WIDTH x _HEIGHT) and multiple scattering
+ * (WORLD_ATMOSPHERE_MULTISCATTER_SIZE squared) tables are built when the air changes; the sky view (two halves of
+ * WORLD_ATMOSPHERE_SKY_VIEW_WIDTH x _HEIGHT) every frame. All RGBA16F, bilinear, clamped.
+ */
+typedef struct WorldRendererAtmosphereStateStruct
+{
+    /** @brief The table builders (world_atmosphere_transmittance, _multiscatter, _skyview) and their atmosphere
+     *  locations; any NULL = the tables are unavailable (the sky and the fog march per pixel). */
+    GameShader* _transmittanceShader;
+    WorldRendererAtmosphereLocations _transmittanceLocations;
+    GameShader* _multiscatterShader;
+    WorldRendererAtmosphereLocations _multiscatterLocations;
+    int _multiscatterLocGroundAlbedo;
+    GameShader* _skyViewShader;
+    WorldRendererAtmosphereLocations _skyViewLocations;
+    int _skyViewLocLightCosZenith;
+    int _skyViewLocLightIntensity;
+    int _skyViewLocMultipleScattering;
+    int _skyViewLocTableHalf;
+    int _skyViewLocSkyglowRadiance;
+    /** @brief The tables' targets (colour only) and whether each was created; made once, with the shaders. */
+    RenderTexture2D _transmittance;
+    bool _hasTransmittance;
+    RenderTexture2D _multiscatter;
+    bool _hasMultiscatter;
+    RenderTexture2D _skyView;
+    bool _hasSkyView;
+    /** @brief What the transmittance and multiple scattering tables hold, and how often they were built (the status
+     *  line). */
+    WorldAtmosphereTableRecord _tables;
+    /** @brief Whether the tables draw the sky and the fog (WorldRenderer_SetAtmosphereTablesEnabled: the A/B; on by
+     *  default). */
+    bool _isEnabled;
+    /** @brief Set once a target that could not be made has been logged. */
+    bool _isTargetFailureReported;
+} WorldRendererAtmosphereState;
 
 /** @brief The star field: the seeded star catalogue as one mesh of one-pixel quads, drawn right after the sky. */
 typedef struct WorldRendererStarStateStruct
@@ -602,6 +685,9 @@ typedef struct WorldRendererStarStateStruct
     int _locTimeSeconds;
     int _locMoonDirection;
     int _locMoonCosRadius;
+    /** @brief The atmosphere (common/atmosphere): the transmittance table dims and reddens the stars near the horizon
+     *  (T15). */
+    WorldRendererAtmosphereLocations _atmosphere;
     /** @brief The catalogue's mesh, uploaded once per catalogue: six vertices per star and no index buffer (raylib's
      *  16-bit indices would cap an indexed mesh at 16384 four-vertex stars). Its CPU arrays are freed after the
      *  upload. Valid while _hasMesh. */
@@ -1149,6 +1235,7 @@ struct WorldRendererStruct
     WorldRendererUnlitState _unlit;
     WorldRendererExposureState _exposure;
     WorldRendererTonemapState _tonemap;
+    WorldRendererAtmosphereState _atmosphere;
     WorldRendererSkyState _sky;
     WorldRendererStarState _stars;
     WorldRendererSpriteState _sprites;
@@ -1609,6 +1696,62 @@ void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFr
 
 /** @brief Runs the AO pre-pass from the G-buffer into the AO target, at frame->AoStrength. */
 void WorldRendererGBuffer_RenderAo(WorldRenderer* self, const WorldRenderFrame* frame);
+
+
+// WorldRendererAtmosphere.c
+/** @brief Constructs the atmosphere pass's state (the tables switched on, none built). Called once by
+ *  WorldRenderer_Create. */
+void WorldRendererAtmosphere_Construct(WorldRenderer* self);
+
+/**
+ * @brief Loads the three table builders and creates the tables' targets (fixed sizes, made once). Without any of them
+ *        the tables are unavailable: the sky and the fog march per pixel (logged once).
+ */
+void WorldRendererAtmosphere_LoadShaders(WorldRenderer* self);
+
+/** @brief Unloads the tables' targets. Called once by WorldRenderer_Deconstruct, with the GL context alive. */
+void WorldRendererAtmosphere_Unload(WorldRenderer* self);
+
+/** @brief Whether the tables can be built: their three shaders and targets exist. */
+bool WorldRendererAtmosphere_IsAvailable(const WorldRenderer* self);
+
+/**
+ * @brief Fills the frame's atmosphere: the air's coefficients from the environment, the height the sky is seen from (the
+ *        origin's Y, clamped) and whether the tables draw the sky and the fog this frame (available and switched on).
+ *        Needs the frame's Environment and Origin.
+ */
+void WorldRendererAtmosphere_PrepareFrame(const WorldRenderer* self, WorldRenderFrame* frame);
+
+/**
+ * @brief The atmosphere pass, first in the frame while frame->AreAtmosphereTablesActive: the transmittance and multiple
+ *        scattering tables built again when the air differs from the one they hold, then the sky view: the sun's half
+ *        (with light pollution's skyglow) and, while the moonlit sky shows (frame->MoonSkyIntensity above 0), the moon's.
+ *        Leaves the transmittance and sky-view tables bound on their units. Needs WorldRendererSky_PrepareFrame first.
+ */
+void WorldRendererAtmosphere_Render(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Caches a shader's atmosphere uniform locations (common/atmosphere) and points its transmittance and sky-view
+ *        samplers at their fixed units. Call once at load.
+ * @param shader The shader (its program).
+ * @param outLocations [out] Receives the locations.
+ */
+void WorldRendererAtmosphere_PrepareShader(Shader shader, WorldRendererAtmosphereLocations* outLocations);
+
+/**
+ * @brief Uploads the frame's atmosphere to a shader: the air, the height the sky is seen from and whether the tables hold
+ *        the sky (the shader reads them, or marches).
+ */
+void WorldRendererAtmosphere_UploadFrame(Shader shader, const WorldRendererAtmosphereLocations* locations,
+    const WorldRenderFrame* frame);
+
+/** @brief Binds the transmittance and sky-view tables on their fixed units (WorldRendererTextureUnit_Atmosphere*) while
+ *  the frame's tables are active, leaving unit 0 the active one. For every pass that reads them, before its draw. */
+void WorldRendererAtmosphere_BindTables(const WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Logs one line about the atmosphere's tables (with the status, WorldRenderer_LogStatus): on, off or unavailable,
+ *  their sizes, how often they were built, the height the sky is seen from, and the last render's CPU time. */
+void WorldRendererAtmosphere_LogStatus(const WorldRenderer* self);
 
 
 // WorldRendererSky.c

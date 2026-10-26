@@ -3,7 +3,9 @@
 // The generated star catalogue, one star per one-pixel quad (WorldRendererStars.c). Every vertex of a star carries the
 // star's direction, and its corner offset widens the star into a square exactly one scene pixel wide: such a square
 // always covers exactly one pixel centre, so each star lights one pixel at a steady brightness (no flicker) and steps
-// from pixel to pixel as the sky turns, like everything else in the pixelated world.
+// from pixel to pixel as the sky turns, like everything else in the pixelated world. Near the horizon the air dims and
+// reddens them: since T15 by the atmosphere's transmittance table (relative to the zenith, where their brightness is
+// tuned), or by the air mass while the tables are off (the A/B, the fallback).
 
 in vec3 vertexPosition;   // the star's unit direction in the star frame
 in vec2 vertexTexCoord;   // corner offset in pixels (+-0.5, +-0.5)
@@ -22,6 +24,7 @@ uniform float moonCosRadius;     // cosine of the disc's angular radius; above 1
 
 flat out vec3 fragRadiance;
 
+#include "common/atmosphere"
 #include "common/night_sky"
 
 // Stars fade out within this many magnitudes of the limit, so at dusk the brightest appear first.
@@ -52,7 +55,23 @@ void main()
 {
     vec3 direction = normalize(mat3(starsToWorld)*vertexPosition);
     float airmass = nightSkyAirmass(direction.y);
-    float magnitude = vertexTexCoord2.x + NIGHT_SKY_EXTINCTION_PER_AIRMASS*(airmass - 1.0);
+    float magnitude = vertexTexCoord2.x;
+    vec3 extinctionTint = vec3(1.0);
+    if (atmosphereTablesActive)
+    {
+        // The air's transmittance toward the star, relative to the zenith's: its luminance in magnitudes, its colour as
+        // a tint (low stars redden).
+        vec3 relative = atmosphereTransmittanceToTop(atmosphereViewHeight, direction.y)
+            /max(atmosphereTransmittanceToTop(atmosphereViewHeight, 1.0), vec3(1e-6));
+        float relativeLuminance = max(dot(relative, vec3(0.2126, 0.7152, 0.0722)), 1e-6);
+        magnitude -= 2.5*log2(relativeLuminance)/log2(10.0);
+        extinctionTint = relative/relativeLuminance;
+    }
+    else
+    {
+        // TODO: remove with the direct march once the owner approves the tables' sky (T15).
+        magnitude += NIGHT_SKY_EXTINCTION_PER_AIRMASS*(airmass - 1.0);
+    }
     float visibility = clamp((limitingMagnitude - magnitude)/STAR_FADE_MAGNITUDES, 0.0, 1.0);
     if ((direction.y <= 0.0) || (visibility <= 0.0) || (dot(direction, moonDirection) > moonCosRadius))
     {
@@ -71,7 +90,7 @@ void main()
     // One luminance per magnitude whatever the colour: the colour only sets the hue.
     vec3 color = pow(max(vertexColor.rgb, vec3(0.0)), vec3(2.2));
     color /= max(dot(color, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
-    fragRadiance = color*flux*radianceScale*visibility;
+    fragRadiance = color*extinctionTint*flux*radianceScale*visibility;
 
     // A point at infinity (w = 0, so the camera's position does not matter), just inside the far plane, widened by the
     // corner offset to exactly one pixel.

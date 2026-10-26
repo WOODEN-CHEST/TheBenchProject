@@ -171,7 +171,6 @@ static void CacheLitLocations(WorldRendererLitLocations* lit, Shader shader)
     lit->_locPointLightRanges = GetShaderLocation(shader, "pointLightRanges");
 
     lit->_locFogDensity = GetShaderLocation(shader, "fogDensity");
-    lit->_locFogTurbidity = GetShaderLocation(shader, "skyTurbidity");
     lit->_locFogSkyTint = GetShaderLocation(shader, "skyTint");
     lit->_locFogSunIntensity = GetShaderLocation(shader, "skySunIntensity");
     lit->_locFogSkyglow = GetShaderLocation(shader, "skyglowRadiance");
@@ -386,6 +385,8 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
     AssignSamplerUnit(shader, outLocations->_locShadowMapFar, WorldRendererTextureUnit_ShadowFar);
     AssignSamplerUnit(shader, outLocations->_locPointShadowCube, WorldRendererTextureUnit_PointShadowCube);
     AssignSamplerUnit(shader, outLocations->_locAmbientOcclusionMap, WorldRendererTextureUnit_AmbientOcclusion);
+    // The air and the atmosphere's tables the fog reads (T15; their samplers on their own units).
+    WorldRendererAtmosphere_PrepareShader(shader, &outLocations->_atmosphere);
 
     // The shader's point-light arrays must hold the WORLD_MAX_FORWARD_LIGHTS the culling may select; with fewer,
     // upload only as many as fit (the shader also clamps its loop to its own array size).
@@ -469,9 +470,9 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     // Atmospheric distance fog: the lit shaders fade distant geometry into the SAME sky the sky pass draws,
     // evaluated per fragment along its view ray, so far objects dissolve seamlessly into the sky (and, because
     // the atmospheric sky is already dark at night, distant geometry fades to the dark night sky on its own).
-    // Feed them the sky parameters the sky pass uses (turbidity, linear tint, RAW — not day-scaled — sun
-    // intensity, the moonlit sky's strength); the sun and moon directions are the ones uploaded above.
-    SetShaderValue(shader, lit->_locFogTurbidity, &Environment->SkyTurbidity, SHADER_UNIFORM_FLOAT);
+    // Feed them the sky parameters the sky pass uses (the air and the atmosphere's tables, linear tint, RAW — not
+    // day-scaled — sun intensity, the moonlit sky's strength); the sun and moon directions are the ones uploaded above.
+    WorldRendererAtmosphere_UploadFrame(shader, &lit->_atmosphere, frame);
     float FogSkyTint[3];
     WorldRendererCommon_ColorToLinear(Environment->SkyTint, FogSkyTint);
     SetShaderValue(shader, lit->_locFogSkyTint, FogSkyTint, SHADER_UNIFORM_VEC3);
@@ -549,11 +550,12 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     SetShaderValue(shader, lit->_locShadowStrength, &frame->ShadowStrength, SHADER_UNIFORM_FLOAT);
 }
 
-/* Binds the frame's shadow maps, AO map and shadow cube to their fixed units (the lit shaders' samplers point there),
- * once for every lit shader: texture units are context state. Bound manually, which works because the lit passes draw
- * with DrawMesh (a direct draw, not the 2D batch). */
+/* Binds the frame's shadow maps, AO map, shadow cube and the atmosphere's tables to their fixed units (the lit shaders'
+ * samplers point there), once for every lit shader: texture units are context state. Bound manually, which works
+ * because the lit passes draw with DrawMesh (a direct draw, not the 2D batch). */
 static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo)
 {
+    WorldRendererAtmosphere_BindTables(self, frame);
     if (frame->IsCascadeShadowActive)
     {
         rlActiveTextureSlot(WorldRendererTextureUnit_ShadowNear);

@@ -64,6 +64,15 @@
 #define WORLD_ENVIRONMENT_MAX_GRAVITY 1000.0
 /** @brief The most bytes a texture name (MilkyWayTexture, MoonTexture) may have, without the terminator. */
 #define WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH ((size_t)128)
+/** @brief The haze's scale height's limits (HazeHeight), in metres: below 10 m it would fall between the rows of the
+ *  renderer's atmosphere tables, and 100 km is the top of the atmosphere. */
+#define WORLD_ENVIRONMENT_MIN_HAZE_HEIGHT 10.0
+#define WORLD_ENVIRONMENT_MAX_HAZE_HEIGHT 100000.0
+/** @brief The largest SunGlow (the haze's forward scattering): at 1 its phase function would be a spike. */
+#define WORLD_ENVIRONMENT_MAX_SUN_GLOW 0.99
+/** @brief The largest AirDensity and Ozone, as multiples of Earth's (a bound for hostile content: the sky is black long
+ *  before). */
+#define WORLD_ENVIRONMENT_MAX_AIR_MULTIPLE 100.0
 
 
 // Types.
@@ -153,9 +162,31 @@ typedef struct WorldEnvironmentStruct
      *  how much daylight the working hours get. */
     bool AreSeasonsEnabled;
 
-    /** @brief Atmospheric turbidity (haziness) for the physically based sky; higher is hazier. Finite and >= 0. */
+    /** @brief Atmospheric turbidity (haziness) for the physically based sky; higher is hazier: the haze's density is
+     *  Earth's x turbidity / 3. Finite and >= 0. */
     float SkyTurbidity;
-    /** @brief Ground albedo color feeding atmospheric scattering (affects horizon/sky tint). Alpha ignored. */
+    /** @brief The haze's scale height, in metres: its density falls by e with every this many metres of height, so low
+     *  haze hugs the ground and lets hills stand out above it (default 1200). Finite and in [10, 100000]. */
+    float HazeHeight;
+    /** @brief The haze's single-scattering albedo, sRGB: the share of the light it takes that it scatters, the rest it
+     *  absorbs (default about 0.9 grey); darker or tinted for smog and dust. Alpha ignored. */
+    Color HazeAlbedo;
+    /** @brief How strongly the haze scatters light forward (the Mie anisotropy g): how large and bright the glow around
+     *  the sun and the moon is, 0 none (the haze scatters evenly), 0.99 a tight, bright halo (default 0.758). Finite
+     *  and in [0, 0.99]. */
+    float SunGlow;
+    /** @brief The air's Rayleigh scattering (what makes the sky blue) as a multiple of Earth's: thinner or denser air,
+     *  for alien skies (default 1; SkyTint changes the colour). Finite and in [0, 100]. */
+    float AirDensity;
+    /** @brief The ozone layer's absorption as a multiple of Earth's: it takes orange and red from the light that
+     *  crosses it, which keeps the twilight sky blue overhead (default 1; 0 none). Finite and in [0, 100]. */
+    float Ozone;
+    /** @brief How much of the light the air scatters more than once is drawn: 1 (the default) all of it, which
+     *  brightens the horizon and fills the twilight sky, 0 single scattering only (for comparing). Finite and in
+     *  [0, 1]. */
+    float MultipleScattering;
+    /** @brief The ground's colour as the atmosphere sees it, sRGB: the light it reflects up into the air feeds the
+     *  sky's multiple scattering. Alpha ignored. */
     Color SkyGroundAlbedo;
     /** @brief Tint applied to the computed sky color, so worlds can push alien skies. Alpha ignored. */
     Color SkyTint;

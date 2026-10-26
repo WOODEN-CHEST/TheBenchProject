@@ -9,6 +9,7 @@
 #include "NightSky.h"
 #include "Logger.h"
 #include "wr/WRMemory.h"
+#include "wr/WRStopwatch.h"
 #include "wr/WRString.h"
 
 
@@ -29,6 +30,9 @@
 #define RENDER_TIME_WRAP_SECONDS 3600.0
 /** Initial capacity (in bytes) of the status line's LOD counts ("9 / 3 / 1"). */
 #define STATUS_LOD_TEXT_CAPACITY 64
+/** Nanoseconds in a millisecond and milliseconds in a second, for the render's CPU time and the frame time. */
+#define NANOSECONDS_PER_MILLISECOND 1.0e6
+#define MILLISECONDS_PER_SECOND 1000.0
 
 _Static_assert(WORLD_RENDERER_STATUS_LOD_COUNT == WORLD_MODEL_MAX_LODS,
     "the status counts drawn models for every LOD a world model may have");
@@ -45,6 +49,8 @@ static void EnsureShaders(WorldRenderer* self)
     }
     self->_shadersLoadAttempted = true;
 
+    // The atmosphere's tables first: the sky and every lit shader read them (T15).
+    WorldRendererAtmosphere_LoadShaders(self);
     WorldRendererLighting_LoadShader(self);
     WorldRendererGeometry_LoadShaders(self);
     WorldRendererPost_LoadShaders(self);
@@ -495,6 +501,12 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->InstanceCellsFadedOutCount = Counts.InstanceCellsFadedOutCount;
     Status->IsInstancingEnabled = self->_instances._isEnabled;
     Status->Features[WorldRendererFeature_Instancing] = WorldRendererInstances_GetState(self);
+
+    Status->Features[WorldRendererFeature_AtmosphereTables] = StateOf(WorldRendererAtmosphere_IsAvailable(self),
+        frame->AreAtmosphereTablesActive);
+    Status->AreAtmosphereTablesEnabled = self->_atmosphere._isEnabled;
+    Status->AtmosphereTableBuildCount = self->_atmosphere._tables.BuildCount;
+    Status->AtmosphereViewHeight = frame->AtmosphereViewHeight;
 }
 
 /* Appends the drawn models per LOD to the status line's LOD text, LOD 0 first, up to the coarsest LOD drawn: "9 / 3 / 1".
@@ -595,6 +607,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_isCullingEnabled = true;
     WorldRenderCache_Construct(&Renderer->_cache);
     WorldVisibility_Construct(&Renderer->_visibility);
+    WorldRendererAtmosphere_Construct(Renderer);
     WorldRendererSky_Construct(Renderer);
     WorldRendererSprites_Construct(Renderer);
     WorldRendererTerrain_Construct(Renderer);
@@ -620,6 +633,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     }
 
     WorldRendererScene_ReleaseTargets(self);
+    WorldRendererAtmosphere_Unload(self);
     WorldRendererShadows_Unload(self);
     WorldRendererStars_Unload(self);
     WorldRendererSprites_Deconstruct(self);
@@ -699,6 +713,7 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
             "WorldRenderer_RenderToTarget: self, world and camera must not be NULL.");
     }
 
+    Stopwatch RenderClock = Stopwatch_StartNew();
     EnsureShaders(self);
 
     // One walk of the world: resolves new and renamed models (failures logged once) and lists what to draw, in render
@@ -730,6 +745,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     WorldRendererStars_SyncCatalogue(self, Frame.Environment);
     WorldRendererSky_SyncTextures(self, Frame.Environment);
     WorldRendererSky_PrepareFrame(&Frame);
+    // The air and the height the sky is seen from (T15), and whether the atmosphere's tables draw the sky this frame.
+    WorldRendererAtmosphere_PrepareFrame(self, &Frame);
     // Every model's LOD and its cross-fade, then which shadow passes run and their light matrices, then what every pass
     // draws: the camera's frustum, each cascade's box and the cube's reach cull, the draw distances and opacities fade.
     UpdateLods(self, &Frame, deltaSeconds);
@@ -746,7 +763,9 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     // Every sprite's matrices for the camera and the shadow lights, and the transparent ones' draw order.
     WorldRendererSprites_PrepareFrame(self, &Frame);
 
-    // Shadow maps first: the scene and crisp passes sample them.
+    // The atmosphere's tables first (T15): the sky, the fog and the stars read them. Then the shadow maps: the scene and
+    // crisp passes sample them.
+    WorldRendererAtmosphere_Render(self, &Frame);
     if (Frame.IsCascadeShadowActive)
     {
         WorldRendererShadows_RenderCascades(self, &Frame);
@@ -802,6 +821,10 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     }
 
     UpdateStatus(self, &Frame);
+    self->_status.RenderMilliseconds = (double)Stopwatch_ElapsedNanoseconds(&RenderClock) / NANOSECONDS_PER_MILLISECOND;
+    self->_status.FrameMilliseconds = (isfinite(deltaSeconds) && (deltaSeconds > 0.0))
+        ? (deltaSeconds * MILLISECONDS_PER_SECOND) : 0.0;
+    Stopwatch_Deconstruct(&RenderClock);
     if (!self->_isStatusReported)
     {
         self->_isStatusReported = true;
@@ -842,6 +865,7 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_TerrainShading:   return (const unsigned char*)u8"terrain shading";
         case WorldRendererFeature_TerrainMaterials: return (const unsigned char*)u8"terrain materials";
         case WorldRendererFeature_Instancing:       return (const unsigned char*)u8"instancing";
+        case WorldRendererFeature_AtmosphereTables: return (const unsigned char*)u8"atmosphere tables";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -893,9 +917,11 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     Error_Deconstruct(&LogResult);
     Memory_Free(Lods._data);
     Memory_Free(Lists._data);
-    // Each terrain's materials and texture arrays (B02), and the copies of the model instances components (B03).
+    // Each terrain's materials and texture arrays (B02), the copies of the model instances components (B03), and the
+    // atmosphere's tables with the render's CPU time (T15).
     WorldRendererTerrain_LogMaterials(self);
     WorldRendererInstances_LogStatus(self);
+    WorldRendererAtmosphere_LogStatus(self);
 }
 
 void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled)
@@ -906,6 +932,16 @@ void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_IsPixelationEnabled(const WorldRenderer* self)
 {
     return self->_pixelationEnabled;
+}
+
+void WorldRenderer_SetAtmosphereTablesEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_atmosphere._isEnabled = enabled;
+}
+
+bool WorldRenderer_AreAtmosphereTablesEnabled(const WorldRenderer* self)
+{
+    return self->_atmosphere._isEnabled;
 }
 
 void WorldRenderer_SetPostEffectsEnabled(WorldRenderer* self, bool enabled)

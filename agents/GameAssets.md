@@ -127,7 +127,8 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   semantics), and a skipped repeat becomes an empty line, so `1(27)` / `1:27(26)` in the compiler output means line 27
   of file 1. When such a stage fails to compile, the load error lists which number is which file. A missing include
   fails with `ErrorCode_InvalidAssetData` naming the include, the including file and the line (cached like every
-  failure). Shared files today: `common/math` (`PI`), `common/atmosphere` (the sky and the lit shaders' fog share it),
+  failure). Shared files today: `common/math` (`PI`), `common/atmosphere` (the air, the atmosphere's tables and their
+  march, T34's direct march: the table builders, the sky, the stars and the lit shaders' fog share it, T15),
   `common/night_sky` (air mass, extinction, the skyglow profile: the sky, the stars and the lit shaders' fog),
   `common/night_vision` (the eye's dim-light vision: the sky and the lit shaders), `common/lighting` (the world's
   lighting: the PBR and the sprite shaders; it includes the four before it) and `common/distance_packing` (the

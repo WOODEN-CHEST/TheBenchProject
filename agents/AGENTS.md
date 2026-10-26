@@ -284,7 +284,9 @@ Current module list:
     culling, draw distances, and dithered fades and opacity; LODs with dithered cross-fades; skinned models posed by
     their animators in every pass, T29; terrain chunks in every pass with their own GPU meshes, B01; model instances
     drawn a cell at a time with instanced twins of every geometry pass, each copy fading and changing LOD on its own,
-    B03, source/WorldRendererInstances.c), in render space
+    B03, source/WorldRendererInstances.c; the atmosphere's lookup tables, T15, source/WorldRendererAtmosphere.c:
+    transmittance, multiple scattering and the sky view, built first in the frame, which the sky, the fog and the stars
+    read), in render space
     since T32:
     the world's orientation with the camera at the origin, every position relative to the camera (subtracted in double),
     shadow cascades snapped to their texels; separate from the world data and never writes to it. Split by render pass
@@ -299,6 +301,10 @@ Current module list:
     effectively disabled and hidden objects not drawn); world models are resolved once per component and again only
     when the name changes, variants to an index, and the settings in effect (models' and sprites') every frame; each
     model's LOD state is kept across frames and updated once per frame (WorldRenderCache_UpdateLods).
+  * WorldAtmosphere - The atmosphere as pure maths (private, source/WorldAtmosphere.h; T15): the air's coefficients from
+    the environment (the air, the haze, the ozone layer), when the tables must be built again (the stale check and the
+    tables' build record), the height the sky is seen from, heights and distances along rays without the cancellation of a float radius, and the lookup tables' layout
+    (transmittance, multiple scattering, sky view): the C mirror of shaders/common/atmosphere.glsl's mappings.
   * WorldRenderSpace - Render space as pure maths (private, source/WorldRenderSpace.h; T32): the frame's origin (the
     camera's double position) with its rotation-only view and projection, the C mirror of the sky shader's ray, and the
     shadow cascades with their centres snapped to their texel grids in double, each grid kept from frame to frame
@@ -340,7 +346,8 @@ Current module list:
     placeholder materials and the equals key cycles its views (shaded, painted weights, rule weights, the dominant
     material). Since B03 its world has a grove of 400 instanced trees, the apostrophe shows a field of 20 000 instanced
     pebbles (a runtime object) and the semicolon switches instanced drawing for the A/B (the private
-    source/WorldTestInstances.{h,c}).
+    source/WorldTestInstances.{h,c}). Since T15 the keypad's 1 switches the atmosphere's tables (the A/B against the
+    direct march), 2 the multiple scattering and 3 the ozone, and I adds the frame times.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown

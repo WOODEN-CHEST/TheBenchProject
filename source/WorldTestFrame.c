@@ -31,6 +31,7 @@
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRJSON.h"
+#include "wr/WRStopwatch.h"
 #include "wr/WRString.h"
 
 
@@ -112,6 +113,9 @@
 #define FAR_SHIFT_COUNT 3U
 /** Metres in a kilometre, for the far shift's log lines. */
 #define METRES_PER_KILOMETRE 1000.0
+/** Milliseconds in a second and nanoseconds in a millisecond, for the I key's frame times. */
+#define MILLISECONDS_PER_SECOND 1000.0
+#define NANOSECONDS_PER_MILLISECOND 1.0e6
 /** Default font of the text sample: covers Latvian and Cyrillic. */
 #define TEXT_SAMPLE_FONT_NAME ((const unsigned char*)u8"noto_sans")
 /** Top-left corner of the text sample, in normalized-fitted units. */
@@ -223,6 +227,9 @@ typedef struct WorldTestFrameStruct
     /** Where the F11 key's far shift has moved the test world, its characters and the camera: an index into FarShifts
      *  (0: not moved). */
     size_t _farShiftIndex;
+    /** The last tick's update time, in milliseconds, for the I key's frame line (T15; the frame time and the render's
+     *  CPU time are in the renderer's status). */
+    double _lastUpdateMilliseconds;
 } WorldTestFrame;
 
 
@@ -351,6 +358,17 @@ static const char* GetMoonPhaseName(float phase)
     return MoonPhaseNames[Index % MOON_PHASE_NAME_COUNT];
 }
 
+/* Logs a line of the frame's, "WorldTest: <message>" (the atmosphere's keys, the desk, the door, the wireframes). */
+static void LogLine(WorldTestFrame* frame, const char* message)
+{
+    if (frame->_services->Logger != NULL)
+    {
+        Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger, (const unsigned char*)u8"WorldTest: %s",
+            message);
+        Error_Deconstruct(&LogResult);
+    }
+}
+
 /* Logs a change of the game time with the moon it brings, "WorldTest: <what>: Sun 2026-10-18 06:00:00; first quarter
  * (phase 0.24, 49% lit, from the calendar).": on key presses and new days, never per tick. The environment is brought
  * up to the clock first, so the moon is the new time's. */
@@ -448,6 +466,25 @@ static void LogCameraStatus(WorldTestFrame* frame)
         u8"shift (%.0f, %.0f, %.0f) m (F11); flycam speed %.2f m/s (the mouse wheel).", Position.X, Position.Y,
         Position.Z, Vector3Double_Length(Position) / METRES_PER_KILOMETRE, Shift.X, Shift.Y, Shift.Z,
         (double)FlySpeed(frame));
+    Error_Deconstruct(&LogResult);
+}
+
+/* The I key's frame line (T15): the time between the last two renders (the frame time: the GPU's share shows in it when it
+ * is the slower), the last tick's update and the last render's CPU time. */
+static void LogFrameTimes(WorldTestFrame* frame)
+{
+    if (frame->_services->Logger == NULL)
+    {
+        return;
+    }
+    WorldRendererStatus Status;
+    WorldRenderer_GetStatus(frame->_renderer, &Status);
+    double FramesPerSecond = (Status.FrameMilliseconds > 0.0) ? (MILLISECONDS_PER_SECOND / Status.FrameMilliseconds) : 0.0;
+    Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+        (const unsigned char*)u8"WorldTest: the last frame took %.2f ms (%.1f a second; with vsync on it waits for the "
+        u8"screen); its update %.2f ms and its render %.2f ms on the CPU (the GPU works on after it: its share shows in "
+        u8"the frame time when it is the slower).", Status.FrameMilliseconds, FramesPerSecond,
+        frame->_lastUpdateMilliseconds, Status.RenderMilliseconds);
     Error_Deconstruct(&LogResult);
 }
 
@@ -550,6 +587,36 @@ static void HandleDebugClockInput(WorldTestFrame* frame, const GameInput* input,
     if (GameInput_IsKeyPressed(input, GameKey_Slash)) { ShiftDays(frame, DAYS_PER_WEEK, "a week ahead"); }
 }
 
+/* The atmosphere's keys (T15): keypad 1 switches the tables off and on (the A/B against the direct march of T34), keypad 2
+ * the multiple scattering (1 or 0) and keypad 3 the ozone (1 or 0), so the sky's parts can be seen one at a time. Each
+ * logged. */
+static void HandleDebugAtmosphereInput(WorldTestFrame* frame, const GameInput* input, WorldEnvironment* environment)
+{
+    // TODO: remove keypad 1 with the direct march once the owner approves the tables' sky (T15).
+    if (GameInput_IsKeyPressed(input, GameKey_Keypad1))
+    {
+        bool Enabled = !WorldRenderer_AreAtmosphereTablesEnabled(frame->_renderer);
+        WorldRenderer_SetAtmosphereTablesEnabled(frame->_renderer, Enabled);
+        LogLine(frame, Enabled ? "atmosphere tables ON (the sky and the fog's sky from the tables, with the light "
+            "scattered more than once)."
+            : "atmosphere tables OFF (the direct march, as before T15: single scattering per pixel).");
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_Keypad2))
+    {
+        environment->MultipleScattering = (environment->MultipleScattering > 0.0f) ? 0.0f : 1.0f;
+        LogLine(frame, (environment->MultipleScattering > 0.0f)
+            ? "multiple scattering 1 (the tables draw the light scattered more than once)."
+            : "multiple scattering 0 (single scattering only, as the direct march draws it).");
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_Keypad3))
+    {
+        environment->Ozone = (environment->Ozone > 0.0f) ? 0.0f : 1.0f;
+        LogLine(frame, (environment->Ozone > 0.0f)
+            ? "ozone 1 (Earth's: it keeps the twilight sky blue overhead)."
+            : "ozone 0 (no ozone layer: a greyer twilight sky).");
+    }
+}
+
 /* The moon's and the seasons' debug keys: F pins the moon full (a story's fixed phase) or gives it back to the
  * calendar, Y switches the seasons. Each change is logged with the date, time and moon. */
 static void HandleDebugSkyInput(WorldTestFrame* frame, const GameInput* input)
@@ -567,6 +634,7 @@ static void HandleDebugSkyInput(WorldTestFrame* frame, const GameInput* input)
         Environment->AreSeasonsEnabled = !Environment->AreSeasonsEnabled;
         LogClock(frame, Environment->AreSeasonsEnabled ? "seasons ON (the sun follows the date)" : "seasons OFF");
     }
+    HandleDebugAtmosphereInput(frame, input, Environment);
 }
 
 // Static functions: the world file.
@@ -758,6 +826,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         WorldTestAnimation_LogStatus(&frame->_testAnimation);
         WorldTestInstances_LogStatus(&frame->_testInstances);
         LogCameraStatus(frame);
+        LogFrameTimes(frame);
     }
 
     // T toggles the text sample (checks font drawing, Latvian and Cyrillic glyphs, decorations, inline sprites).
@@ -951,17 +1020,6 @@ static void HandleDebugModelInput(WorldTestFrame* frame, const GameInput* input)
 
 
 // Static functions: the desk (the test world's hierarchy).
-/* Logs a line of the frame's (about the desk, the door, the wireframes). */
-static void LogLine(WorldTestFrame* frame, const char* message)
-{
-    if (frame->_services->Logger != NULL)
-    {
-        Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger, (const unsigned char*)u8"WorldTest: %s",
-            message);
-        Error_Deconstruct(&LogResult);
-    }
-}
-
 /* The desk's debug keys: J starts and stops the desk sliding back and forth along X (its parts, the cup, the lamp and
  * the lamp's light follow); H hides and shows the desk, and with it everything on it (the lamp's light goes off). */
 static void HandleDebugDeskInput(WorldTestFrame* frame, const GameInput* input)
@@ -1568,6 +1626,7 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
 {
     WorldTestFrame* Frame = self;
     float Delta = (float)time.PassedTime;
+    Stopwatch UpdateClock = Stopwatch_StartNew();
 
     if (Frame->_services->Input != NULL)
     {
@@ -1619,6 +1678,8 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
         TextLayoutOptions Options = TextLayoutOptions_CreateDefault();
         TextResult = TextLayout_Refresh(&Frame->_textSampleLayout, &Frame->_textSample, &Options);
     }
+    Frame->_lastUpdateMilliseconds = (double)Stopwatch_ElapsedNanoseconds(&UpdateClock) / NANOSECONDS_PER_MILLISECOND;
+    Stopwatch_Deconstruct(&UpdateClock);
     return TextResult;
 }
 
@@ -1921,6 +1982,7 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     Frame->_cursorCaptured = false;
     Frame->_flySpeedStep = 0;
     Frame->_flyWheelRemainder = 0.0f;
+    Frame->_lastUpdateMilliseconds = 0.0;
 
     *outFrame = &Frame->Base;
     return Error_CreateSuccess();

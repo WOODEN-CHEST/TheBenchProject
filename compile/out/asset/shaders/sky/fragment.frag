@@ -1,9 +1,12 @@
 #version 330
 
-// Full-screen atmospheric sky: Rayleigh + Mie single-scattering (shaders/common/atmosphere.glsl, which the PBR
-// shader's distance fog shares) lit by the sun and, at night, by the moon; light pollution's skyglow; a sun disc, the
-// moon's disc and the Milky Way. The eye's night vision (shaders/common/night_vision.glsl) greys the dim sky, not the
-// discs. The stars are a separate pass drawn over this one (shaders/stars).
+// Full-screen atmospheric sky: the atmosphere (shaders/common/atmosphere.glsl, which the lit shaders' distance fog
+// shares) lit by the sun and, at night, by the moon; light pollution's skyglow; a sun disc, the moon's disc and the Milky
+// Way. The eye's night vision (shaders/common/night_vision.glsl) greys the dim sky, not the discs. The stars are a
+// separate pass drawn over this one (shaders/stars).
+// Since T15 the sky's glow comes from the atmosphere's tables, built first in the frame (the sky-view table by direction:
+// single and multiple scattering, with the skyglow; the transmittance table dims the discs and the Milky Way); with the
+// tables off (the A/B, or unavailable) it is marched per pixel as before (T34: single scattering).
 // Drawn behind the 3D geometry into the linear-HDR scene buffer; the tonemap post-pass maps it to display.
 // The per-pixel ray is reconstructed from the inverse view-projection so the sky lines up exactly with the 3D
 // camera. The renderer works in render space (the world's orientation with the camera at the origin), so that matrix
@@ -21,10 +24,10 @@ uniform vec3 sunDirection;     // unit direction TO the sun (world, +Y up)
 uniform vec3 sunColor;         // linear; tints the sun disc
 uniform float sunIntensity;    // radiance multiplier
 uniform float sunSize;         // angular-size multiplier for the sun disc
-uniform float turbidity;       // atmospheric haze (default ~3)
 uniform vec3 skyTint;          // linear multiplier, for alien skies
 
-uniform vec3 skyglowRadiance;      // light pollution's glow at the horizon, linear (0 by day)
+uniform vec3 skyglowRadiance;      // light pollution's glow at the horizon, linear (0 by day; the march's: the tables
+                                   // hold it)
 uniform sampler2D milkyWayTexture; // sky_milky_way: an equirectangular panorama in galactic coordinates (sRGB)
 uniform mat4 worldToGalactic;      // world direction -> galactic (x toward the galactic centre, z its north pole)
 uniform float milkyWayRadiance;    // linear radiance of a white texel; 0 draws no Milky Way (and samples nothing)
@@ -110,28 +113,46 @@ void main()
     vec4 clip = vec4(uv*2.0 - 1.0, 1.0, 1.0);
     vec4 world = invViewProj*clip;
     vec3 rayDir = normalize(world.xyz/world.w); // the camera sits at the origin of render space
-
-    // Ground viewer just above the planet surface; the sky dome uses world +Y as up.
-    vec3 rayOrigin = vec3(0.0, ATMOSPHERE_R_PLANET + 1.0, 0.0);
     vec3 sunDir = normalize(sunDirection);
-
-    float kMie = ATMOSPHERE_K_MIE_BASE*max(turbidity, 0.0)/3.0;
+    vec3 moonDir = normalize(moonDirection);
     float iSun = ATMOSPHERE_SUN_RADIANCE*max(sunIntensity, 0.0);
 
-    // Infinite-skybox look: there is no ground. Compute the atmosphere (and the skyglow it scatters) with the ray
-    // mirrored into the upper hemisphere (abs(y)) so every direction gets a sky colour, then darken below the horizon
-    // so it still reads as "down" instead of a mirror-bright ground. The PBR shader's fogSkyColor repeats these steps.
-    vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
+    // The sky's glow, and the share of what lies beyond the air along the ray that reaches the camera (the discs, the
+    // Milky Way). Infinite-skybox look for now: there is no ground; below the horizon the sky above it is mirrored and
+    // darkened so it still reads as "down" (T35 draws the far ground instead).
+    vec3 sky;
     vec3 transmittance;
-    vec3 sky = atmosphere(skyRay, rayOrigin, sunDir, iSun, kMie, transmittance);
-    if (moonSkyIntensity > 0.0)
+    vec3 milkyWayExtinction;
+    if (atmosphereTablesActive)
     {
-        // The moonlit sky: the same atmosphere lit by the moon (blue for the same reason the day is, far dimmer).
-        sky += atmosphere(skyRay, rayOrigin, normalize(moonDirection), ATMOSPHERE_SUN_RADIANCE*moonSkyIntensity, kMie);
+        // The tables (T15): the sun's glow with the skyglow, and the moonlit sky (the same atmosphere lit by the moon:
+        // blue for the same reason the day is, far dimmer), each with its multiple scattering; the mirror is theirs.
+        sky = atmosphereSkyView(rayDir, sunDir, 0.0);
+        if (moonSkyIntensity > 0.0)
+        {
+            sky += atmosphereSkyView(rayDir, moonDir, 1.0);
+        }
+        transmittance = atmosphereTransmittanceToTop(atmosphereViewHeight, rayDir.y);
+        // The Milky Way's brightness is tuned for the zenith: the air dims and reddens it by its transmittance relative
+        // to the zenith's.
+        milkyWayExtinction = transmittance/max(atmosphereTransmittanceToTop(atmosphereViewHeight, 1.0), vec3(1e-6));
     }
-    sky += nightSkySkyglow(skyRay.y, skyglowRadiance);
-    float belowFactor = smoothstep(0.0, -0.12, rayDir.y); // 0 above the horizon, 1 below
-    sky *= mix(1.0, 0.5, belowFactor);
+    else
+    {
+        // TODO: remove with the direct march once the owner approves the tables' sky (T15).
+        // The direct march (T34), with the ray mirrored into the upper hemisphere (abs(y)) so every direction gets a sky
+        // colour. The lit shaders' fogSkyColor repeats these steps.
+        vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
+        sky = atmosphere(skyRay, sunDir, iSun, transmittance);
+        if (moonSkyIntensity > 0.0)
+        {
+            sky += atmosphere(skyRay, moonDir, ATMOSPHERE_SUN_RADIANCE*moonSkyIntensity);
+        }
+        sky += nightSkySkyglow(skyRay.y, skyglowRadiance);
+        float belowFactor = smoothstep(0.0, -0.12, rayDir.y); // 0 above the horizon, 1 below
+        sky *= mix(1.0, 0.5, belowFactor);
+        milkyWayExtinction = vec3(nightSkyExtinction(nightSkyAirmass(rayDir.y)));
+    }
 
     // Beyond the air, the moon covers what lies behind it: the sun disc, the Milky Way (and the stars, which the star
     // pass leaves out behind it). Only above the horizon, like the sun disc.
@@ -146,7 +167,7 @@ void main()
     // brightness, the light pollution and the twilight.
     if ((milkyWayRadiance > 0.0) && (rayDir.y > 0.0))
     {
-        sky += milkyWay(rayDir)*nightSkyExtinction(nightSkyAirmass(rayDir.y))*(1.0 - moonCover);
+        sky += milkyWay(rayDir)*milkyWayExtinction*(1.0 - moonCover);
     }
 
     // What the eye sees of the sky's dim light: at night its colour fades into the rods' grey (a low moon's sky is as
@@ -156,16 +177,18 @@ void main()
         nightVisionStrength, nightVisionTint);
 
     // The discs are emitters, far brighter than the game draws them, so they keep their colour: the sun disc, only
-    // above the horizon (so the mirror does not create a second sun below), and the moon, dimmed and reddened by the air
-    // in front of it (pale by day under the bright in-scatter, bright at night, orange as it rises).
+    // above the horizon (so the mirror does not create a second sun below), and the moon, both dimmed and reddened by
+    // the air in front of them (the moon pale by day under the bright in-scatter, bright at night, orange as it rises;
+    // the sun orange as it sets). The direct march leaves the sun's disc undimmed, as before T15.
     vec3 discs = vec3(0.0);
     float discCos = cos(radians(0.5*max(sunSize, 0.01)));
     if ((rayDir.y > -0.02) && (dot(rayDir, sunDir) > discCos))
     {
-        discs += max(sunColor, vec3(0.0))*iSun*(1.0 - moonCover);
+        vec3 sunDisc = max(sunColor, vec3(0.0))*iSun*(1.0 - moonCover);
+        discs += atmosphereTablesActive ? (sunDisc*transmittance) : sunDisc;
     }
     discs += moon*transmittance*moonCover;
     sky += discs*tint;
 
-    finalColor = vec4(sky, 1.0); // linear HDR; tonemap post-pass maps to display
+    finalColor = vec4(sky, 1.0); // linear HDR; tonemap post-pass maps it to display
 }

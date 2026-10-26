@@ -3,6 +3,7 @@
 #include "GameSkeleton.h"
 #include "ShaderSource.h"
 #include "SkeletalAnimation.h"
+#include "WorldAtmosphere.h"
 #include "WorldInstancing.h"
 #include "WorldLod.h"
 #include "WorldVisibility.h"
@@ -485,6 +486,84 @@ static void ShippedSkyAndPbrShareOneAtmosphere(TestRun* run)
 }
 
 
+/* The value of "const float <name> = <value>;" in an expanded text, or NaN without one. */
+static double GetConstValue(const GenericBuffer* text, const char* name)
+{
+    char Opening[96];
+    snprintf(Opening, sizeof(Opening), "const float %s = ", name);
+    const char* Constant = (text->_count > 0U) ? strstr((const char*)text->_data, Opening) : NULL;
+    return (Constant != NULL) ? strtod(Constant + strlen(Opening), NULL) : NAN;
+}
+
+/* The atmosphere (T15): every shader that reads or builds its tables takes them from the one shared include, which
+ * declares the air, the view height and the tables once, and whose constants are its C mirror's
+ * (source/WorldAtmosphere.h): the planet, the air's scale height, the ozone layer, the tables' sizes and what counts as
+ * vertical. */
+static void ShippedAtmosphereMatchesItsMirror(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        const char* const Stages[] =
+        {
+            "atmosphere/transmittance", "atmosphere/multiscatter", "atmosphere/skyview", "sky/fragment",
+            "stars/vertex", "pbr/fragment", "sprite/fragment", "terrain/fragment"
+        };
+        for (size_t Index = 0U; Index < (sizeof(Stages) / sizeof(Stages[0])); Index++)
+        {
+            if (!ExpandShippedStage(run, &Fixture, Stages[Index]))
+            {
+                continue;
+            }
+            bool IsShared = BufferContains(&Fixture.SourceList, "\"common/atmosphere\"")
+                && (CountOccurrences(&Fixture.Text, "uniform vec3 atmosphereRayleighScattering;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform float atmosphereViewHeight;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform bool atmosphereTablesActive;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform sampler2D atmosphereTransmittanceTable;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform sampler2D atmosphereSkyViewTable;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "vec2 atmosphereSkyViewUnit(") == 1U)
+                && (CountOccurrences(&Fixture.Text, "vec2 atmosphereTransmittanceUv(") == 1U);
+            bool IsTheMirrors =
+                (GetConstValue(&Fixture.Text, "ATMOSPHERE_R_PLANET") == WORLD_ATMOSPHERE_PLANET_RADIUS)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_R_ATMOS") == WORLD_ATMOSPHERE_TOP_RADIUS)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_RAYLEIGH_HEIGHT") == WORLD_ATMOSPHERE_RAYLEIGH_HEIGHT)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_OZONE_CENTER") == WORLD_ATMOSPHERE_OZONE_CENTER)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_OZONE_HALF_WIDTH") == WORLD_ATMOSPHERE_OZONE_HALF_WIDTH)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_TRANSMITTANCE_WIDTH")
+                    == (double)WORLD_ATMOSPHERE_TRANSMITTANCE_WIDTH)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_TRANSMITTANCE_HEIGHT")
+                    == (double)WORLD_ATMOSPHERE_TRANSMITTANCE_HEIGHT)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_MULTISCATTER_SIZE")
+                    == (double)WORLD_ATMOSPHERE_MULTISCATTER_SIZE)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_SKY_VIEW_WIDTH") == (double)WORLD_ATMOSPHERE_SKY_VIEW_WIDTH)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_SKY_VIEW_HEIGHT") == (double)WORLD_ATMOSPHERE_SKY_VIEW_HEIGHT)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_SKY_VIEW_HALF_COUNT")
+                    == (double)WORLD_ATMOSPHERE_SKY_VIEW_HALF_COUNT)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_VERTICAL_EPSILON") == WORLD_ATMOSPHERE_VERTICAL_EPSILON);
+            if (!TEST_CHECK(run, IsShared && IsTheMirrors))
+            {
+                printf("    in \"%s\" (shared %d, the mirror's %d)\n", Stages[Index], (int)IsShared, (int)IsTheMirrors);
+            }
+        }
+        // The table builders' definitions load (the renderer asks for them by these names).
+        size_t FailedCount = 1U;
+        TEST_CHECK_SUCCESS(run, AssetManager_ReadDefinitions(Fixture.Manager, &FailedCount));
+        TEST_CHECK(run, FailedCount == 0U);
+        const unsigned char* const Names[] = { (const unsigned char*)u8"world_atmosphere_transmittance",
+            (const unsigned char*)u8"world_atmosphere_multiscatter", (const unsigned char*)u8"world_atmosphere_skyview" };
+        for (size_t Index = 0U; Index < (sizeof(Names) / sizeof(Names[0])); Index++)
+        {
+            bool Exists = false;
+            TEST_CHECK(run, TEST_CHECK_SUCCESS(run, AssetManager_HasDefinition(Fixture.Manager, Fixture.Types.Shader,
+                Names[Index], &Exists)) && Exists);
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+
 /* Whether an expanded text's DITHER_BAYER holds the 16 values source/WorldVisibility.c mirrors in C, in its order (row
  * by row from the target's bottom row). */
 static bool BayerMatchesTheMirror(const GenericBuffer* text)
@@ -724,6 +803,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "defines_follow_the_version_line", DefinesFollowTheVersionLine },
         { "define_names_are_checked", DefineNamesAreChecked },
         { "shipped_sky_and_pbr_share_one_atmosphere", ShippedSkyAndPbrShareOneAtmosphere },
+        { "shipped_atmosphere_matches_its_mirror", ShippedAtmosphereMatchesItsMirror },
         { "shipped_geometry_shaders_share_one_dither", ShippedGeometryShadersShareOneDither },
         { "shipped_skinned_stages_share_one_skinning", ShippedSkinnedStagesShareOneSkinning },
         { "shipped_instanced_twins_share_their_stages", ShippedInstancedTwinsShareTheirStages },

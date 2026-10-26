@@ -214,6 +214,13 @@ void WorldLodTests_Run(TestRun* run);
  *  cells' LOD masks (WorldInstancingTests.c; a private module of source/). */
 void WorldInstancingTests_Run(TestRun* run);
 
+/** @brief The atmosphere's pure maths (T15): the air's coefficients from the environment (the defaults, the settings,
+ *  clamping), when its tables are stale, the height the sky is seen from, heights and distances along rays without
+ *  cancellation, and the tables' mappings (the transmittance's, the multiple scattering's, the sky view's: round trips,
+ *  their corners, rows dense near the ground and the horizon, the azimuth from the light, the halves)
+ *  (WorldAtmosphereTests.c; a private module of source/). */
+void WorldAtmosphereTests_Run(TestRun* run);
+
 
 /** @brief Log rotation, pruning and formatted output under a base directory (LoggerTests.c). */
 void LoggerTests_Run(TestRun* run);

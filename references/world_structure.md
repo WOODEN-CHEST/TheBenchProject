@@ -80,7 +80,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `format_version` | integer, required | The format the file is written in: 1. A newer version is refused ("newer than this game reads"). |
 | `name` | string or `null` | The world's name: at most 256 bytes of UTF-8. |
 | `next_object_id` | integer | The id the world hands to its next new object, so ids of removed objects are not reused; 18446744073709551615 once every id was handed out (no id is that large). When it is not above every object id it is raised to one that is, with a warning; without it, one above the largest id. |
-| `environment` | object | The environment's settings by key (the `world_environment` table). Absent keys keep their defaults. |
+| `environment` | object | The environment's settings by key (the `world_environment` table; `agents/WorldData.md`, "Environment", lists them with their rules). Absent keys keep their defaults. Since T15 the air's settings are among them: `haze_height`, `haze_albedo`, `sun_glow`, `air_density`, `ozone` and `multiple_scattering` (with `sky_turbidity` and `sky_ground_albedo`), e.g. `{"haze_height": 300, "sun_glow": 0.9, "ozone": 0}`. |
 | `objects` | array of objects | The objects. |
 
 ### An object
