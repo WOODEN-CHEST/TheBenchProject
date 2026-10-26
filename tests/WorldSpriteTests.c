@@ -70,7 +70,8 @@ static bool AreSettingsEqual(const WorldSpriteSettings* a, const WorldSpriteSett
         && (a->IsLit == b->IsLit) && (a->Emission == b->Emission) && (a->LightWrap == b->LightWrap)
         && (a->IsDecal == b->IsDecal) && (a->DecalOffset == b->DecalOffset)
         && (a->Render.HasOutline == b->Render.HasOutline) && (a->Render.OmitsPixelation == b->Render.OmitsPixelation)
-        && (a->Render.CastsShadows == b->Render.CastsShadows) && (a->HasDrawDistance == b->HasDrawDistance)
+        && (a->Render.CastsShadows == b->Render.CastsShadows) && (a->Render.Haze == b->Render.Haze)
+        && (a->HasDrawDistance == b->HasDrawDistance)
         && (!a->HasDrawDistance || (a->DrawDistance == b->DrawDistance))
         && (a->IsDrawDistanceFixed == b->IsDrawDistanceFixed);
 }
@@ -106,7 +107,8 @@ static WorldSpriteSettings CreateAssetSettings(void)
     Settings.LightWrap = 0.25f;
     Settings.IsDecal = false;
     Settings.DecalOffset = 0.05f;
-    Settings.Render = (WorldSpriteRenderSettings){ .HasOutline = false, .OmitsPixelation = false, .CastsShadows = false };
+    Settings.Render = (WorldSpriteRenderSettings){ .HasOutline = false, .OmitsPixelation = false, .CastsShadows = false,
+        .Haze = 0.5f };
     Settings.HasDrawDistance = true;
     Settings.DrawDistance = 80.0f;
     Settings.IsDrawDistanceFixed = true;
@@ -131,6 +133,7 @@ static void SetPlacementValues(TestRun* run, WorldSpriteComponent* placement)
     TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetCastsShadows(placement, true));
     TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetHasOutline(placement, true));
     TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOmitsPixelation(placement, true));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetHaze(placement, 0.0f));
     TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDrawDistance(placement, 30.0f));
     TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetIsDrawDistanceFixed(placement, false));
 }
@@ -155,6 +158,7 @@ static bool IsSettingFromPlacement(const WorldSpriteSettings* resolved, WorldSpr
         case WorldSpriteSetting_DecalOffset:         return resolved->DecalOffset == 0.2f;
         case WorldSpriteSetting_HasOutline:          return resolved->Render.HasOutline;
         case WorldSpriteSetting_OmitPixelation:      return resolved->Render.OmitsPixelation;
+        case WorldSpriteSetting_Haze:                return resolved->Render.Haze == 0.0f;
         case WorldSpriteSetting_DrawDistance:        return resolved->DrawDistance == 30.0f;
         case WorldSpriteSetting_IsDrawDistanceFixed: return !resolved->IsDrawDistanceFixed;
         case WorldSpriteSetting_Count:               break;
@@ -192,7 +196,7 @@ static void AMinimalDefinitionGetsTheDefaults(TestRun* run)
                 && Settings->IsLit && (Settings->Emission == 1.0f) && (Settings->LightWrap == 1.0f)
                 && !Settings->IsDecal && (Settings->DecalOffset == 0.01f));
             TEST_CHECK(run, Settings->Render.HasOutline && !Settings->Render.OmitsPixelation
-                && Settings->Render.CastsShadows);
+                && Settings->Render.CastsShadows && (Settings->Render.Haze == 1.0f));
             TEST_CHECK(run, !Settings->HasDrawDistance && !Settings->IsDrawDistanceFixed);
             TEST_CHECK(run, WorldSprite_GetAnimation(Loaded) == Animation); // the one shared animation asset
         }
@@ -219,7 +223,7 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
         "  \"light_wrap\": 0.75,\n"
         "  \"is_decal\": true,\n"
         "  \"decal_offset\": 0.02,\n"
-        "  \"render\": { \"has_outline\": false, \"omit_pixelation\": true, \"casts_shadows\": false },\n"
+        "  \"render\": { \"has_outline\": false, \"omit_pixelation\": true, \"casts_shadows\": false, \"haze\": 0 },\n"
         "  \"draw_distance\": 90,\n"
         "  \"is_draw_distance_fixed\": true\n"
         "}\n";
@@ -241,7 +245,7 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
             && !Settings->IsLit && (Settings->Emission == 1.5f) && (Settings->LightWrap == 0.75f) && Settings->IsDecal
             && (Settings->DecalOffset == 0.02f));
         TEST_CHECK(run, !Settings->Render.HasOutline && Settings->Render.OmitsPixelation
-            && !Settings->Render.CastsShadows);
+            && !Settings->Render.CastsShadows && (Settings->Render.Haze == 0.0f));
         TEST_CHECK(run, Settings->HasDrawDistance && (Settings->DrawDistance == 90.0f) && Settings->IsDrawDistanceFixed);
     }
     TestAssetFixture_Deconstruct(run, &Fixture);
@@ -271,7 +275,9 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
             "World sprite \"s\": render must be a JSON object." },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"render\": {\"outline\": true}}",
             ErrorCode_InvalidAssetDefinition, "Unknown key \"outline\" in world sprite \"s\", render; the keys allowed "
-                "there are: has_outline, omit_pixelation, casts_shadows." },
+                "there are: has_outline, omit_pixelation, casts_shadows, haze." },
+        { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"render\": {\"haze\": -1}}", ErrorCode_InvalidJSON,
+            "world_sprite_render.haze (Haze) must be finite and in [0, 1000]." },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"render\": {\"pivot\": [0, 0]}}",
             ErrorCode_InvalidAssetDefinition, "Unknown key \"pivot\" in world sprite \"s\", render;" },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"render\": {\"has_outline\": \"yes\"}}",
@@ -578,6 +584,7 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
         [WorldSpriteSetting_DecalOffset] = "decal_offset",
         [WorldSpriteSetting_HasOutline] = "has_outline",
         [WorldSpriteSetting_OmitPixelation] = "omit_pixelation",
+        [WorldSpriteSetting_Haze] = "haze",
         [WorldSpriteSetting_DrawDistance] = "draw_distance",
         [WorldSpriteSetting_IsDrawDistanceFixed] = "is_draw_distance_fixed",
     };

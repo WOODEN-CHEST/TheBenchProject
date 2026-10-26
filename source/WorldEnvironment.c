@@ -39,18 +39,24 @@
 #define DEFAULT_LIGHT_POLLUTION 0.35f
 /** Default ambient skylight intensity multiplier. */
 #define DEFAULT_AMBIENT_INTENSITY 1.0f
-/** Default fog strength multiplier. */
+/** Default fog strength multiplier: the physical haze. */
 #define DEFAULT_FOG_STRENGTH 1.0f
+/** Default aerial distance scale: distances as they are. */
+#define DEFAULT_AERIAL_DISTANCE_SCALE 1.0f
+/** Default ground haze thickness, in metres: a mist thins by e every 20 m above its base. */
+#define DEFAULT_GROUND_HAZE_THICKNESS 20.0f
+/** Default ground haze albedo, sRGB: 250 is linear 0.957, a near-white mist (water droplets scatter almost all they
+ *  take). */
+#define DEFAULT_GROUND_HAZE_ALBEDO 250U
+/** Default forward scattering of the ground haze (the phase function's g): a mist's droplets are larger than the air's
+ *  haze, and their glow around the sun tighter. */
+#define DEFAULT_GROUND_HAZE_GLOW 0.8f
 /** Default post-effect strength multiplier applied to bloom/sunshafts/shadows. */
 #define DEFAULT_EFFECT_STRENGTH 1.0f
 /** Default night vision strength: the eye's. */
 #define DEFAULT_NIGHT_VISION_STRENGTH 1.0f
 /** Default night vision blue shift: half way to the night blue, a faint blue cast. */
 #define DEFAULT_NIGHT_VISION_BLUE_SHIFT 0.5f
-/** Sun elevation (GetSunDirection().y) at/below which daylight is fully gone (night). */
-#define DAYLIGHT_SET_ELEVATION (-0.12f)
-/** Sun elevation at/above which daylight is at full strength (day). Twilight ramps between the two. */
-#define DAYLIGHT_RISE_ELEVATION (0.10f)
 /** The format version of the environment's property table. */
 #define ENVIRONMENT_TABLE_VERSION 1U
 /** Pi in double precision, for the calendar maths. */
@@ -64,9 +70,6 @@
 #define DEFAULT_MOON_SIZE_MULTIPLIER 5.0f
 /** Default moon disc brightness multiplier. */
 #define DEFAULT_MOON_BRIGHTNESS 1.0f
-/** The moon's light fades in from the horizon and is full from this elevation (the sine; about 11.5 degrees), where
- *  the air it crosses stops dimming it much. */
-#define MOONLIGHT_FULL_ELEVATION 0.2f
 /** The lunar phase law (Krisciunas and Schaefer 1991, after Allen): how many magnitudes fainter than full the moon is
  *  per degree of phase angle, and per degree to the fourth power. */
 #define MOON_MAGNITUDES_PER_DEGREE 0.026
@@ -104,7 +107,7 @@
 #define CATEGORY_NIGHT_SKY ((const unsigned char*)u8"Night sky")
 #define CATEGORY_MOON ((const unsigned char*)u8"Moon")
 #define CATEGORY_AMBIENT ((const unsigned char*)u8"Ambient light")
-#define CATEGORY_FOG ((const unsigned char*)u8"Fog")
+#define CATEGORY_HAZE ((const unsigned char*)u8"Haze")
 #define CATEGORY_EFFECTS ((const unsigned char*)u8"Effects")
 #define CATEGORY_PHYSICS ((const unsigned char*)u8"Physics")
 
@@ -223,8 +226,8 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .Key = u8"sky_ground_albedo", .WireId = 5U, .Type = PropertyType_Color,
         PROPERTY_MEMBER(WorldEnvironment, SkyGroundAlbedo), .Default.ColorValue = { 90, 90, 90, 255 },
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Ground albedo",
-        .Description = u8"The ground's colour as the atmosphere sees it: the light it reflects up feeds the sky's "
-            u8"multiple scattering.",
+        .Description = u8"The ground's colour as the atmosphere sees it: the far ground below the horizon shows it, and "
+            u8"the light it reflects up feeds the sky's multiple scattering.",
         .SinceVersion = 1U
     },
     {
@@ -408,16 +411,90 @@ static const PropertyDescriptor EnvironmentProperties[] =
     },
     {
         .Key = u8"fog_color", .WireId = 15U, .Type = PropertyType_Color, PROPERTY_MEMBER(WorldEnvironment, FogColor),
-        .Default.ColorValue = { 170, 190, 220, 255 }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_FOG,
+        .Default.ColorValue = { 170, 190, 220, 255 }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_HAZE,
         .DisplayName = u8"Fog colour",
-        .Description = u8"Not used by the renderer: distant objects fade into the sky's own colour. Kept for saved data.",
+        .Description = u8"Not used by the renderer: distant things fade into the haze of the air in front of them. Kept "
+            u8"for saved data.",
         .SinceVersion = 1U
     },
     {
         .Key = u8"fog_strength", .WireId = 16U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, FogStrength),
         .Default.FloatValue = DEFAULT_FOG_STRENGTH, .Rules = PROPERTY_RULES_AT_LEAST(0.0),
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_FOG, .DisplayName = u8"Fog strength",
-        .Description = u8"Multiplies the distance fog (with the player's own fog setting).", .SinceVersion = 1U
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_HAZE, .DisplayName = u8"Haze strength",
+        .Description = u8"Multiplies the haze on everything in the world and the ground haze (with the player's own "
+            u8"setting): 1 is the real air, 0 clear air, 2 twice the haze. The sky stays as it is.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"aerial_distance_scale", .WireId = 53U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, AerialDistanceScale), .Default.FloatValue = DEFAULT_AERIAL_DISTANCE_SCALE,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_AERIAL_DISTANCE_SCALE),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_HAZE, .DisplayName = u8"Aerial distance scale",
+        .Description = u8"Treats every distance as this many times longer for the haze, so a small town reads as bigger "
+            u8"and hazier; far things still meet the sky at the horizon. 1 is the real distance.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"haze_start_distance", .WireId = 54U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, HazeStartDistance), .Default.FloatValue = 0.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_DISTANCE), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_HAZE, .DisplayName = u8"Haze start distance",
+        .Description = u8"No haze nearer than this many metres: an artistic choice (the real air starts at 0).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"ground_haze_density", .WireId = 55U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, GroundHazeDensity), .Default.FloatValue = 0.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_GROUND_HAZE_DENSITY), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_HAZE, .DisplayName = u8"Ground haze",
+        .Description = u8"A low layer of mist: how much of the light it takes per metre at its base (0 none; 0.02 a "
+            u8"morning mist that hides things beyond about 200 m).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"ground_haze_base", .WireId = 56U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, GroundHazeBase), .Default.FloatValue = 0.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(-WORLD_ENVIRONMENT_MAX_DISTANCE, WORLD_ENVIRONMENT_MAX_DISTANCE),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_HAZE, .DisplayName = u8"Ground haze base",
+        .Description = u8"The height of the mist's base, in metres: as dense as its density says below it, thinning above "
+            u8"it.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"ground_haze_thickness", .WireId = 57U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, GroundHazeThickness), .Default.FloatValue = DEFAULT_GROUND_HAZE_THICKNESS,
+        .Rules = PROPERTY_RULES_BETWEEN(WORLD_ENVIRONMENT_MIN_GROUND_HAZE_THICKNESS,
+            WORLD_ENVIRONMENT_MAX_GROUND_HAZE_THICKNESS),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_HAZE, .DisplayName = u8"Ground haze thickness",
+        .Description = u8"How quickly the mist thins above its base: by e (to about a third) every this many metres.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"ground_haze_albedo", .WireId = 58U, .Type = PropertyType_Color,
+        PROPERTY_MEMBER(WorldEnvironment, GroundHazeAlbedo),
+        .Default.ColorValue = { DEFAULT_GROUND_HAZE_ALBEDO, DEFAULT_GROUND_HAZE_ALBEDO, DEFAULT_GROUND_HAZE_ALBEDO, 255 },
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_HAZE, .DisplayName = u8"Ground haze colour",
+        .Description = u8"The mist's colour: how much of the light it takes it scatters (near white for mist, darker or "
+            u8"tinted for smoke and dust).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"ground_haze_glow", .WireId = 59U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, GroundHazeGlow), .Default.FloatValue = DEFAULT_GROUND_HAZE_GLOW,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_SUN_GLOW), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_HAZE, .DisplayName = u8"Ground haze glow",
+        .Description = u8"How strongly the mist scatters light forward, 0 to 0.99: how large and bright its glow around the "
+            u8"sun and the moon is.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"horizon_ground_height", .WireId = 60U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, HorizonGroundHeight), .Default.FloatValue = 0.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(-WORLD_ENVIRONMENT_MAX_DISTANCE, WORLD_ENVIRONMENT_MAX_DISTANCE),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_HAZE, .DisplayName = u8"Far ground height",
+        .Description = u8"The height of the far ground the sky shows below the horizon, beyond the world's own ground, in "
+            u8"metres; the sky is seen from the camera's height above it.",
+        .SinceVersion = 1U
     },
     {
         .Key = u8"is_bloom_enabled", .WireId = 17U, .Type = PropertyType_Bool,
@@ -572,12 +649,6 @@ static float GetLinearLuminance(Color color)
         + 0.0722f * powf((float)color.b / 255.0f, ENVIRONMENT_SRGB_GAMMA);
 }
 
-/* The daylight factor for a sun elevation (the sine): see WorldEnvironment_GetDaylightFactor. */
-static float GetDaylightForElevation(float elevation)
-{
-    return SmoothStep(DAYLIGHT_SET_ELEVATION, DAYLIGHT_RISE_ELEVATION, elevation);
-}
-
 /* The sky's daily angle: 0 at dawn, pi/2 at noon (the sun's angle along its path). */
 static float GetDayAngle(const WorldEnvironment* self)
 {
@@ -666,8 +737,8 @@ static float GetMoonlightFactorFor(const WorldEnvironment* self, float moonEleva
     {
         return 0.0f;
     }
-    float Height = SmoothStep(0.0f, MOONLIGHT_FULL_ELEVATION, moonElevation);
-    float Factor = WorldEnvironment_GetMoonBrightness(illumination) * Height * (1.0f - daylight);
+    float Factor = WorldEnvironment_GetMoonBrightness(illumination)
+        * WorldEnvironment_GetMoonlightForElevation(moonElevation) * (1.0f - daylight);
     return fminf(fmaxf(Factor, 0.0f), 1.0f);
 }
 
@@ -806,10 +877,20 @@ Matrix WorldEnvironment_GetStarsToWorld(const WorldEnvironment* self)
     return MatrixMultiply(MatrixRotateZ(Angle), MatrixRotateX(self->SunAngle));
 }
 
+float WorldEnvironment_GetDaylightForElevation(float sunElevation)
+{
+    return SmoothStep(WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION, WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION, sunElevation);
+}
+
+float WorldEnvironment_GetMoonlightForElevation(float moonElevation)
+{
+    return SmoothStep(0.0f, WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION, moonElevation);
+}
+
 float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self)
 {
     // Smoothstep from "set" to "rise": 0 below the horizon band, 1 above it, a smooth twilight in between.
-    return GetDaylightForElevation(WorldEnvironment_GetSunDirection(self).y);
+    return WorldEnvironment_GetDaylightForElevation(WorldEnvironment_GetSunDirection(self).y);
 }
 
 float WorldEnvironment_GetMoonPhase(const WorldEnvironment* self)
@@ -845,14 +926,15 @@ float WorldEnvironment_GetMoonlightFactor(const WorldEnvironment* self)
 {
     Vector3 Sun = WorldEnvironment_GetSunDirection(self);
     Vector3 Moon = WorldEnvironment_GetMoonDirection(self);
-    return GetMoonlightFactorFor(self, Moon.y, GetIlluminationFor(Sun, Moon), GetDaylightForElevation(Sun.y));
+    return GetMoonlightFactorFor(self, Moon.y, GetIlluminationFor(Sun, Moon),
+        WorldEnvironment_GetDaylightForElevation(Sun.y));
 }
 
 void WorldEnvironment_GetSkyLights(const WorldEnvironment* self, WorldSkyLights* outLights)
 {
     WorldSkyLights Lights = { 0 };
     Lights.SunDirection = WorldEnvironment_GetSunDirection(self);
-    Lights.Daylight = GetDaylightForElevation(Lights.SunDirection.y);
+    Lights.Daylight = WorldEnvironment_GetDaylightForElevation(Lights.SunDirection.y);
     Lights.SunIntensity = fmaxf(self->SunIntensity, 0.0f) * Lights.Daylight; // fmaxf drops a NaN
     Lights.MoonPhase = WorldEnvironment_GetMoonPhase(self);
     Lights.MoonDirection = GetMoonDirectionForPhase(self, Lights.MoonPhase);

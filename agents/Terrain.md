@@ -129,8 +129,9 @@ The thirteenth standard asset type ([AssetManager.md](AssetManager.md)): JSON de
 `AssetManager_LoadTerrain`. `source` picks the mesh's origin explicitly: `model` (a `.glb` imported when it loads, with
 the `weights` and `densities` mappings, `normals` and `blend_slot`) or `data` (the binary form). `materials` (1 to 16
 names) is the palette, `density_channels` (up to 8) the channels, `chunk_size` the cells, and `render` and `collision`
-the defaults of its placements (`TerrainSettings`: outline, shadow tier, casts shadows, a 4 km draw distance kept fixed
-against the quality setting; colliding on `world` with the layer's default mask unless the definition gives one).
+the defaults of its placements (`TerrainSettings`: outline, shadow tier, casts shadows, the haze multiplier (T35,
+`render.haze`, default 1), a 4 km draw distance kept fixed against the quality setting; colliding on `world` with the
+layer's default mask unless the definition gives one).
 Unknown keys are refused everywhere and every rule is checked when the definitions are read; the file when it loads. The
 asset owns its mesh, its names (`TerrainAsset_GetName` is the terrain's own, for messages) and its `rules` (B02:
 `TerrainAsset_GetRules`, at most `TERRAIN_MAX_RULES`, 8); its palette's materials are its **dependencies** (B02:
@@ -234,6 +235,7 @@ The table, `terrain_component` (version 1):
 | `overrides_has_outline`, `has_outline` | 2, 3 | Bool, Bool | false, true |
 | `overrides_shadow_tier`, `shadow_tier` | 4, 5 | Bool, Enum (`near`, `far`, `both`) | false, `both` |
 | `overrides_casts_shadows`, `casts_shadows` | 6, 7 | Bool, Bool | false, true |
+| `overrides_haze`, `haze` (T35) | 19, 20 | Bool, Float in [0, 1000] | false, 1 |
 | `overrides_draw_distance`, `draw_distance` | 8, 9 | Bool, Float > 0 | false, 4000 |
 | `draw_distance_multiplier` | 10 | Float > 0 | 1 |
 | `overrides_is_draw_distance_fixed`, `is_draw_distance_fixed` | 11, 12 | Bool, Bool | false, true |
@@ -241,7 +243,8 @@ The table, `terrain_component` (version 1):
 | `overrides_collision_layer`, `collision_layer` | 15, 16 | Bool, Enum (the layers) | false, `world` |
 | `overrides_collides_with`, `collides_with` | 17, 18 | Bool, EnumSet (the layers) | false, world's default mask |
 
-Its next free wire id is 19.
+Its next free wire id is 21. `haze` multiplies the haze in front of the terrain ([WorldRuntime.md](WorldRuntime.md),
+"Haze"): 1 the real air's, 0 as if the air were clear.
 
 ## Collision
 
@@ -283,8 +286,8 @@ placed again when the object moves. Characters stand and walk on it as on any me
 - **The passes:** the lit pass draws each chunk with the `world_terrain` shader (`shaders/terrain/`): its vertex stage
   is rigid; its fragment stage blends the materials ("The blend" above) and lights them as `world_pbr` lights a
   dielectric (the sun and the moon with the cascades' shadow, the cube-shadow light, up to 8 forward lights per chunk by
-  its sphere, the ambient with the map's and the screen's AO, the night vision and the fog), dithered by the chunk's
-  fade, before the sprites (decals lie on it). Without the
+  its sphere, the ambient with the map's and the screen's AO, the night vision and the haze in front of it at the
+  chunk's own haze multiplier, T35), dithered by the chunk's fade, before the sprites (decals lie on it). Without the
   shader the chunks draw unlit and solid through raylib's default shader. The G-buffer (`world_normal`, the outline
   flag in effect), the cascades (`world_depth`, back faces: a hill's far side shades what lies behind it) and the cube
   shadow (`world_cube_depth`) draw the chunks with the shared shaders. Terrain is never crisp, never skinned, never

@@ -1,6 +1,7 @@
 // The night sky's shared maths, for #include "common/night_sky": the air mass and extinction that dim stars and the
-// Milky Way near the horizon, and the profile of light pollution's skyglow (the sky pass draws it, the PBR fog fades
-// toward it). The CPU twin of nightSkyAirmass is NightSky_GetAirmass (source/NightSky.c), which the tests check.
+// Milky Way near the horizon, and the profile of light pollution's skyglow (the sky pass's direct march draws it; since
+// T35 the tables hold light pollution's light in the air instead). The CPU twin of nightSkyAirmass is NightSky_GetAirmass
+// (source/NightSky.c), which the tests check.
 
 // Magnitudes lost per air mass beyond the zenith's (a clear sky): a star at 10 degrees altitude loses about 1.1, one at
 // the horizon all of its light.

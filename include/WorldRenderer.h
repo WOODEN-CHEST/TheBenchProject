@@ -89,6 +89,9 @@ typedef struct WorldRendererStruct WorldRenderer;
 /** @brief How many LODs the status counts drawn models for (WorldRendererStatus.DrawnModelsByLod): a world model's most,
  *  WORLD_MODEL_MAX_LODS (WorldModel.h). */
 #define WORLD_RENDERER_STATUS_LOD_COUNT 8U
+/** @brief How many slices the haze's volume has (WorldRenderer_SetHazeView): WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT
+ *  (source/WorldAtmosphere.h, checked there). */
+#define WORLD_RENDERER_HAZE_SLICE_COUNT 32
 
 
 // Types.
@@ -157,11 +160,16 @@ typedef enum WorldRendererFeatureEnum
      *  Without it, or without a pass's own twin, the copies draw one at a time, looking the same. */
     WorldRendererFeature_Instancing,
     /** @brief The atmosphere's tables (T15): the transmittance, the multiple scattering and the sky view, built first in
-     *  every frame (the first two only when the air changes); the sky and the fog read them, with the light the air
-     *  scatters more than once. Unavailable without their shaders or targets; inactive while switched off
-     *  (WorldRenderer_SetAtmosphereTablesEnabled). Without them the sky and the fog are marched per pixel, single
-     *  scattering only. */
+     *  every frame (the first two only when the air changes); the sky reads them, with the light the air scatters more
+     *  than once, and since T35 the far ground below the horizon. Unavailable without their shaders or targets; inactive
+     *  while switched off (WorldRenderer_SetAtmosphereTablesEnabled). Without them the sky is marched per pixel, single
+     *  scattering only, and nothing is hazed. */
     WorldRendererFeature_AtmosphereTables,
+    /** @brief The haze (T35): the aerial-perspective volume built every frame from the atmosphere's tables, which hazes
+     *  every lit surface (the air's in-scatter and transmittance in front of it), and the ground haze. Unavailable
+     *  without the tables or the volume's shader or target; inactive while the tables are switched off or the frame's
+     *  haze is 0 (the fog strengths). */
+    WorldRendererFeature_Haze,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -183,6 +191,22 @@ typedef enum WorldRendererTerrainViewEnum
     /** @brief The number of views; not a view. */
     WorldRendererTerrainView_Count = 4
 } WorldRendererTerrainView;
+
+/**
+ * @brief What the haze's debug view shows over the scene (T35, a debug aid: WorldRenderer_SetHazeView): one slice of the
+ *        aerial-perspective volume stretched over the screen, as the lit shaders sample it.
+ */
+typedef enum WorldRendererHazeViewEnum
+{
+    /** @brief No debug view: the scene (the default). */
+    WorldRendererHazeView_Off = 0,
+    /** @brief The slice's in-scatter: the light the air scattered toward the camera up to the slice's distance. */
+    WorldRendererHazeView_InScatter = 1,
+    /** @brief The slice's transmittance: the share of light that crosses the air up to it. */
+    WorldRendererHazeView_Transmittance = 2,
+    /** @brief The number of views; not a view. */
+    WorldRendererHazeView_Count = 3
+} WorldRendererHazeView;
 
 /** @brief What a feature did in the most recent render. */
 typedef enum WorldRendererFeatureStateEnum
@@ -280,6 +304,13 @@ typedef struct WorldRendererStatusStruct
     bool AreAtmosphereTablesEnabled;
     uint32_t AtmosphereTableBuildCount;
     float AtmosphereViewHeight;
+    /** @brief The frame's haze (T35): its distance scale (the environment's aerial_distance_scale and fog_strength times
+     *  the player's fog strength; 1 the real air) and the ground haze's density at its base (per metre; 0: none), and
+     *  what the haze's debug view showed (WorldRenderer_SetHazeView) and its slice. */
+    float HazeDistanceScale;
+    float GroundHazeDensity;
+    WorldRendererHazeView HazeView;
+    int HazeViewSlice;
     /** @brief How long the render took on the CPU, in milliseconds (WorldRenderer_RenderToTarget from its start to its
      *  return; the GPU works on after it, and its share shows in the frame time when it is the slower), and the time
      *  since the render before, as the caller gave it (its deltaSeconds; 0 when that was not above 0). */
@@ -407,6 +438,38 @@ void WorldRenderer_SetAtmosphereTablesEnabled(WorldRenderer* self, bool enabled)
  * @returns true if they are on (they draw the sky when available).
  */
 bool WorldRenderer_AreAtmosphereTablesEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Chooses the haze's debug view (T35): the scene, or one slice of the aerial-perspective volume (its in-scatter or
+ *        its transmittance) stretched over the screen in its place, as the lit shaders sample it.
+ *
+ * A debug aid. Default WorldRendererHazeView_Off. Applied on the next render; shows nothing while the haze is inactive.
+ * A view outside the enum is ignored; the slice is clamped to the volume's (0 to WORLD_RENDERER_HAZE_SLICE_COUNT - 1,
+ * the last the whole ray to the top of the atmosphere).
+ * @param self The renderer; must not be NULL.
+ * @param view The view.
+ * @param slice The slice shown.
+ */
+void WorldRenderer_SetHazeView(WorldRenderer* self, WorldRendererHazeView view, int slice);
+
+/**
+ * @brief Reports the haze's debug view (see WorldRenderer_SetHazeView).
+ * @param self The renderer; must not be NULL.
+ * @param outSlice [out] Receives the slice shown; may be NULL.
+ * @returns The view.
+ */
+WorldRendererHazeView WorldRenderer_GetHazeView(const WorldRenderer* self, int* outSlice);
+
+/**
+ * @brief The distance a slice of the haze's volume holds, in metres (T35): from 1 m to 200 km by a fixed ratio; the last
+ *        slice holds the whole ray (returns 0 for it, and for a slice outside the volume).
+ * @param slice The slice.
+ * @returns The distance.
+ */
+double WorldRenderer_GetHazeSliceDistance(int slice);
+
+/** @brief A name for a haze debug view, for logs ("off", "in-scatter", "transmittance"; "unknown" outside the enum). */
+const unsigned char* WorldRenderer_GetHazeViewName(WorldRendererHazeView view);
 
 /**
  * @brief Enables or disables the whole post-effects pass (screen-space AO + depth/normal-edge outlines).

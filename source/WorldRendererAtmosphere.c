@@ -1,20 +1,41 @@
 // The atmosphere's lookup tables (T15; Hillaire, "A Scalable and Production Ready Sky and Atmosphere Rendering
 // Technique", EGSR 2020), built first in every frame: the transmittance and the multiple scattering when the air changes,
-// the sky view every frame. The sky pass, the lit shaders' fog and the stars read them (WorldAtmosphere.h has their
-// layout, shaders/common/atmosphere.glsl their GLSL).
+// the sky view every frame; and the aerial-perspective volume built from them every frame (T35). The sky pass and the
+// stars read the tables; every lit surface, the sky pass's ground haze and the outlines read the volume
+// (WorldAtmosphere.h has their layout, shaders/common/atmosphere.glsl and shaders/common/haze.glsl their GLSL).
 
 #include <inttypes.h>
 #include <math.h>
+#include <stdio.h>
 #include "WorldRendererInternal.h"
 #include "Logger.h"
 #include "raylib/rlgl.h"
 
 
 // Macros.
-/** Asset names of the three table builders (full-screen fragment passes). */
+/** Asset names of the three table builders and the volume's (full-screen fragment passes). */
 #define TRANSMITTANCE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_atmosphere_transmittance")
 #define MULTISCATTER_SHADER_ASSET_NAME ((const unsigned char*)u8"world_atmosphere_multiscatter")
 #define SKY_VIEW_SHADER_ASSET_NAME ((const unsigned char*)u8"world_atmosphere_skyview")
+#define VOLUME_SHADER_ASSET_NAME ((const unsigned char*)u8"world_atmosphere_volume")
+
+
+// Types.
+/** The light one half of the sky-view table is lit by, and the far ground's light in it. */
+typedef struct SkyViewLightStruct
+{
+    /** Which half, the light's zenith cosine and its light on the air (relative to the sun's at intensity 1). */
+    WorldAtmosphereSkyViewHalf Half;
+    float LightCosZenith;
+    float LightIntensity;
+    /** Light pollution's light in the air (the sun's half only; linear). */
+    const float* LightPollution;
+    /** The light on the far ground (linear, the lit shaders' units, before its height ramp), the zenith cosines its ramp
+     *  rises over, and the ambient there (the sun's half only). */
+    float GroundLight[3];
+    float GroundLightRamp[2];
+    const float* GroundAmbient;
+} SkyViewLight;
 
 
 // Static functions.
@@ -106,51 +127,154 @@ static void BuildMultiscatter(WorldRenderer* self, const WorldRenderFrame* frame
 /* One half of the sky-view table, lit by one light: the shader keeps the half's rows and discards the other's, so every
  * half covers the whole target. Its input tables are bound again for each half: a batch draw forgets them once it is
  * drawn. */
-static void DrawSkyViewHalf(WorldRenderer* self, Shader builder, WorldAtmosphereSkyViewHalf half, float lightCosZenith,
-    float lightIntensity, const float skyglowRadiance[3])
+static void DrawSkyViewHalf(WorldRenderer* self, Shader builder, const SkyViewLight* light)
 {
     WorldRendererAtmosphereState* State = &self->_atmosphere;
-    float TableHalf = (float)half;
+    float TableHalf = (float)light->Half;
     SetShaderValue(builder, State->_skyViewLocTableHalf, &TableHalf, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(builder, State->_skyViewLocLightCosZenith, &lightCosZenith, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(builder, State->_skyViewLocLightIntensity, &lightIntensity, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(builder, State->_skyViewLocSkyglowRadiance, skyglowRadiance, SHADER_UNIFORM_VEC3);
+    SetShaderValue(builder, State->_skyViewLocLightCosZenith, &light->LightCosZenith, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(builder, State->_skyViewLocLightIntensity, &light->LightIntensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(builder, State->_skyViewLocLightPollution, light->LightPollution, SHADER_UNIFORM_VEC3);
+    SetShaderValue(builder, State->_skyViewLocGroundLight, light->GroundLight, SHADER_UNIFORM_VEC3);
+    SetShaderValue(builder, State->_skyViewLocGroundLightRamp, light->GroundLightRamp, SHADER_UNIFORM_VEC2);
+    SetShaderValue(builder, State->_skyViewLocGroundAmbient, light->GroundAmbient, SHADER_UNIFORM_VEC3);
     SetShaderValueTexture(builder, State->_skyViewLocations._locTransmittanceTable, State->_transmittance.texture);
     SetShaderValueTexture(builder, State->_skyViewLocations._locMultiscatterTable, State->_multiscatter.texture);
     DrawRectangle(0, 0, State->_skyView.texture.width, State->_skyView.texture.height, WHITE);
     rlDrawRenderBatchActive(); // the next half's uniforms must not reach this one's draw
 }
 
-/* The sky-view table: the sun's half every frame (its glow with light pollution's skyglow), the moon's while the
- * moonlit sky shows. */
+/* The sky-view table: the sun's half every frame (its glow with light pollution's light, the far ground lit by the sun
+ * and the ambient), the moon's while the moonlit sky shows (the far ground lit by the moon). The far ground is lit as
+ * the lit shaders light the terrain: by the frame's sun and moon colours at their raw intensities, each ramped by its
+ * own height over the far point (the shader), so it meets a terrain's edge without a seam. */
 static void BuildSkyView(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     WorldRendererAtmosphereState* State = &self->_atmosphere;
+    const WorldEnvironment* Environment = frame->Environment;
     Shader Builder = GameShader_GetRaylibShader(State->_skyViewShader);
     WorldRendererAtmosphere_UploadFrame(Builder, &State->_skyViewLocations, frame);
     SetShaderValue(Builder, State->_skyViewLocMultipleScattering, &frame->AtmosphereMedium.MultipleScattering,
         SHADER_UNIFORM_FLOAT);
+    float SkyTint[3];
+    WorldRendererCommon_ColorToLinear(Environment->SkyTint, SkyTint);
+    SetShaderValue(Builder, State->_skyViewLocSkyTint, SkyTint, SHADER_UNIFORM_VEC3);
+    SetShaderValue(Builder, State->_skyViewLocHazeDistanceScale, &frame->Haze.DistanceScale, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(Builder, State->_skyViewLocHazeStartDistance, &frame->Haze.StartDistance, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(Builder, State->_skyViewLocGroundAlbedo, frame->AtmosphereMedium.GroundAlbedo, SHADER_UNIFORM_VEC3);
 
     BeginTable(State->_skyView);
     BeginShaderMode(Builder);
-    float SunIntensity = fmaxf(frame->Environment->SunIntensity, 0.0f);
-    DrawSkyViewHalf(self, Builder, WorldAtmosphereSkyViewHalf_Sun, frame->SunDirection.y, SunIntensity,
-        frame->SkyglowRadiance);
+    float SunIntensity = fmaxf(Environment->SunIntensity, 0.0f); // fmaxf drops a NaN
+    SkyViewLight Sun =
+    {
+        .Half = WorldAtmosphereSkyViewHalf_Sun, .LightCosZenith = frame->SunDirection.y, .LightIntensity = SunIntensity,
+        .LightPollution = frame->LightPollutionRadiance,
+        .GroundLightRamp = { WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION, WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION },
+        .GroundAmbient = frame->AmbientColor
+    };
+    for (int Channel = 0; Channel < 3; Channel++)
+    {
+        Sun.GroundLight[Channel] = frame->SunLight.Color[Channel] * SunIntensity;
+    }
+    DrawSkyViewHalf(self, Builder, &Sun);
     if (frame->MoonSkyIntensity > 0.0f)
     {
-        const float NoSkyglow[3] = { 0.0f, 0.0f, 0.0f };
-        DrawSkyViewHalf(self, Builder, WorldAtmosphereSkyViewHalf_Moon, frame->MoonDirection.y, frame->MoonSkyIntensity,
-            NoSkyglow);
+        // The moonlight without its height ramp (WorldEnvironment_GetSkyLights' factor: the phase's brightness, faded out
+        // by daylight), which the shader takes at the far point's own height.
+        const float None[3] = { 0.0f, 0.0f, 0.0f };
+        float Moonlight = Environment->IsMoonEnabled ? fmaxf(Environment->MoonIntensity, 0.0f)
+            * fminf(fmaxf(WorldEnvironment_GetMoonBrightness(frame->MoonIllumination) * (1.0f - frame->Daylight), 0.0f),
+                1.0f) : 0.0f;
+        SkyViewLight Moon =
+        {
+            .Half = WorldAtmosphereSkyViewHalf_Moon, .LightCosZenith = frame->MoonDirection.y,
+            .LightIntensity = frame->MoonSkyIntensity, .LightPollution = None,
+            .GroundLightRamp = { 0.0f, WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION }, .GroundAmbient = None
+        };
+        for (int Channel = 0; Channel < 3; Channel++)
+        {
+            Moon.GroundLight[Channel] = frame->MoonLight.Color[Channel] * Moonlight;
+        }
+        DrawSkyViewHalf(self, Builder, &Moon);
     }
     EndShaderMode();
     EndTable();
+}
+
+/* The aerial-perspective volume (T35): the air's in-scatter and transmittance for the camera's screen directions at the
+ * volume's slices, lit by the sun, the moon (while the moonlit sky shows) and light pollution, and the light at the
+ * ground haze's base. */
+static void BuildVolume(WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    WorldRendererAtmosphereState* State = &self->_atmosphere;
+    const WorldEnvironment* Environment = frame->Environment;
+    Shader Builder = GameShader_GetRaylibShader(State->_volumeShader);
+    WorldRendererAtmosphere_UploadFrame(Builder, &State->_volumeLocations, frame);
+    SetShaderValueMatrix(Builder, State->_volumeLocInvViewProjection, frame->InvViewProjection);
+    float SunDirection[3] = { frame->SunDirection.x, frame->SunDirection.y, frame->SunDirection.z };
+    SetShaderValue(Builder, State->_volumeLocSunDirection, SunDirection, SHADER_UNIFORM_VEC3);
+    float SunIntensity = fmaxf(Environment->SunIntensity, 0.0f); // fmaxf drops a NaN
+    SetShaderValue(Builder, State->_volumeLocSunIntensity, &SunIntensity, SHADER_UNIFORM_FLOAT);
+    float MoonDirection[3] = { frame->MoonDirection.x, frame->MoonDirection.y, frame->MoonDirection.z };
+    SetShaderValue(Builder, State->_volumeLocMoonDirection, MoonDirection, SHADER_UNIFORM_VEC3);
+    SetShaderValue(Builder, State->_volumeLocMoonSkyIntensity, &frame->MoonSkyIntensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(Builder, State->_volumeLocMultipleScattering, &frame->AtmosphereMedium.MultipleScattering,
+        SHADER_UNIFORM_FLOAT);
+    SetShaderValue(Builder, State->_volumeLocLightPollution, frame->LightPollutionRadiance, SHADER_UNIFORM_VEC3);
+    float SkyTint[3];
+    WorldRendererCommon_ColorToLinear(Environment->SkyTint, SkyTint);
+    SetShaderValue(Builder, State->_volumeLocSkyTint, SkyTint, SHADER_UNIFORM_VEC3);
+    float BaseHeight = frame->Haze.GroundHazeBase - frame->Haze.GroundHeight;
+    SetShaderValue(Builder, State->_volumeLocGroundHazeBaseHeight, &BaseHeight, SHADER_UNIFORM_FLOAT);
+
+    BeginTable(State->_volume);
+    BeginShaderMode(Builder);
+    SetShaderValueTexture(Builder, State->_volumeLocations._locTransmittanceTable, State->_transmittance.texture);
+    SetShaderValueTexture(Builder, State->_volumeLocations._locMultiscatterTable, State->_multiscatter.texture);
+    DrawRectangle(0, 0, State->_volume.texture.width, State->_volume.texture.height, WHITE);
+    EndShaderMode();
+    EndTable();
+}
+
+/* The volume builder's own uniform locations. */
+static void CacheVolumeLocations(WorldRendererAtmosphereState* state)
+{
+    Shader Volume = GameShader_GetRaylibShader(state->_volumeShader);
+    state->_volumeLocInvViewProjection = GetShaderLocation(Volume, "invViewProjection");
+    state->_volumeLocSunDirection = GetShaderLocation(Volume, "sunDirection");
+    state->_volumeLocSunIntensity = GetShaderLocation(Volume, "sunIntensity");
+    state->_volumeLocMoonDirection = GetShaderLocation(Volume, "moonDirection");
+    state->_volumeLocMoonSkyIntensity = GetShaderLocation(Volume, "moonSkyIntensity");
+    state->_volumeLocMultipleScattering = GetShaderLocation(Volume, "multipleScattering");
+    state->_volumeLocLightPollution = GetShaderLocation(Volume, "lightPollutionRadiance");
+    state->_volumeLocSkyTint = GetShaderLocation(Volume, "skyTint");
+    state->_volumeLocGroundHazeBaseHeight = GetShaderLocation(Volume, "groundHazeBaseHeight");
+}
+
+/* The sky-view builder's own uniform locations. */
+static void CacheSkyViewLocations(WorldRendererAtmosphereState* state)
+{
+    Shader SkyView = GameShader_GetRaylibShader(state->_skyViewShader);
+    state->_skyViewLocLightCosZenith = GetShaderLocation(SkyView, "lightCosZenith");
+    state->_skyViewLocLightIntensity = GetShaderLocation(SkyView, "lightIntensity");
+    state->_skyViewLocMultipleScattering = GetShaderLocation(SkyView, "multipleScattering");
+    state->_skyViewLocTableHalf = GetShaderLocation(SkyView, "tableHalf");
+    state->_skyViewLocLightPollution = GetShaderLocation(SkyView, "lightPollutionRadiance");
+    state->_skyViewLocSkyTint = GetShaderLocation(SkyView, "skyTint");
+    state->_skyViewLocHazeDistanceScale = GetShaderLocation(SkyView, "hazeDistanceScale");
+    state->_skyViewLocHazeStartDistance = GetShaderLocation(SkyView, "hazeStartDistance");
+    state->_skyViewLocGroundAlbedo = GetShaderLocation(SkyView, "groundAlbedo");
+    state->_skyViewLocGroundLight = GetShaderLocation(SkyView, "groundLight");
+    state->_skyViewLocGroundLightRamp = GetShaderLocation(SkyView, "groundLightRamp");
+    state->_skyViewLocGroundAmbient = GetShaderLocation(SkyView, "groundAmbient");
 }
 
 
 // Internal functions (declared in WorldRendererInternal.h).
 void WorldRendererAtmosphere_Construct(WorldRenderer* self)
 {
-    self->_atmosphere = (WorldRendererAtmosphereState){ ._isEnabled = true };
+    self->_atmosphere = (WorldRendererAtmosphereState){ ._isEnabled = true, ._view = WorldRendererHazeView_Off };
 }
 
 void WorldRendererAtmosphere_LoadShaders(WorldRenderer* self)
@@ -162,18 +286,13 @@ void WorldRendererAtmosphere_LoadShaders(WorldRenderer* self)
     if ((State->_transmittanceShader == NULL) || (State->_multiscatterShader == NULL) || (State->_skyViewShader == NULL))
     {
         WorldRendererCommon_Warn(self, (const unsigned char*)u8"WorldRenderer: the atmosphere's tables are unavailable "
-            u8"(a table shader is missing): the sky and the fog are marched per pixel, single scattering only.");
+            u8"(a table shader is missing): the sky is marched per pixel, single scattering only, and nothing is hazed.");
         return;
     }
 
     Shader Multiscatter = GameShader_GetRaylibShader(State->_multiscatterShader);
     State->_multiscatterLocGroundAlbedo = GetShaderLocation(Multiscatter, "groundAlbedo");
-    Shader SkyView = GameShader_GetRaylibShader(State->_skyViewShader);
-    State->_skyViewLocLightCosZenith = GetShaderLocation(SkyView, "lightCosZenith");
-    State->_skyViewLocLightIntensity = GetShaderLocation(SkyView, "lightIntensity");
-    State->_skyViewLocMultipleScattering = GetShaderLocation(SkyView, "multipleScattering");
-    State->_skyViewLocTableHalf = GetShaderLocation(SkyView, "tableHalf");
-    State->_skyViewLocSkyglowRadiance = GetShaderLocation(SkyView, "skyglowRadiance");
+    CacheSkyViewLocations(State);
 
     State->_hasTransmittance = CreateTable(WORLD_ATMOSPHERE_TRANSMITTANCE_WIDTH, WORLD_ATMOSPHERE_TRANSMITTANCE_HEIGHT,
         &State->_transmittance);
@@ -184,8 +303,26 @@ void WorldRendererAtmosphere_LoadShaders(WorldRenderer* self)
     if (!State->_hasTransmittance || !State->_hasMultiscatter || !State->_hasSkyView)
     {
         WorldRendererCommon_WarnOnce(self, &State->_isTargetFailureReported, (const unsigned char*)u8"WorldRenderer: the "
-            u8"atmosphere's tables are unavailable (the GPU did not make their RGBA16F targets): the sky and the fog are "
-            u8"marched per pixel, single scattering only.");
+            u8"atmosphere's tables are unavailable (the GPU did not make their RGBA16F targets): the sky is marched per "
+            u8"pixel, single scattering only, and nothing is hazed.");
+        return;
+    }
+
+    // The volume (T35), from the tables.
+    State->_volumeShader = LoadBuilder(self, VOLUME_SHADER_ASSET_NAME, &State->_volumeLocations);
+    if (State->_volumeShader == NULL)
+    {
+        WorldRendererCommon_Warn(self, (const unsigned char*)u8"WorldRenderer: the haze is unavailable (its volume's "
+            u8"shader is missing): distant things show without aerial perspective.");
+        return;
+    }
+    CacheVolumeLocations(State);
+    State->_hasVolume = CreateTable(WORLD_ATMOSPHERE_VOLUME_WIDTH, WORLD_ATMOSPHERE_VOLUME_HEIGHT, &State->_volume);
+    if (!State->_hasVolume)
+    {
+        WorldRendererCommon_WarnOnce(self, &State->_isTargetFailureReported, (const unsigned char*)u8"WorldRenderer: the "
+            u8"haze is unavailable (the GPU did not make its volume's RGBA16F target): distant things show without aerial "
+            u8"perspective.");
     }
 }
 
@@ -195,6 +332,7 @@ void WorldRendererAtmosphere_Unload(WorldRenderer* self)
     WorldRendererCommon_UnloadTarget(&State->_transmittance, &State->_hasTransmittance);
     WorldRendererCommon_UnloadTarget(&State->_multiscatter, &State->_hasMultiscatter);
     WorldRendererCommon_UnloadTarget(&State->_skyView, &State->_hasSkyView);
+    WorldRendererCommon_UnloadTarget(&State->_volume, &State->_hasVolume);
     State->_tables.IsBuilt = false;
 }
 
@@ -205,11 +343,22 @@ bool WorldRendererAtmosphere_IsAvailable(const WorldRenderer* self)
         && (State->_skyViewShader != NULL) && State->_hasTransmittance && State->_hasMultiscatter && State->_hasSkyView;
 }
 
+bool WorldRendererAtmosphere_IsVolumeAvailable(const WorldRenderer* self)
+{
+    return WorldRendererAtmosphere_IsAvailable(self) && (self->_atmosphere._volumeShader != NULL)
+        && self->_atmosphere._hasVolume;
+}
+
 void WorldRendererAtmosphere_PrepareFrame(const WorldRenderer* self, WorldRenderFrame* frame)
 {
     WorldAtmosphere_GetMedium(frame->Environment, &frame->AtmosphereMedium);
-    frame->AtmosphereViewHeight = (float)WorldAtmosphere_GetViewHeight(frame->Origin.Y);
+    WorldAtmosphere_GetHaze(frame->Environment, WorldRendererCommon_ConfigFogStrength(self), &frame->Haze);
+    WorldAtmosphere_GetLightPollutionRadiance(frame->Environment, frame->Daylight, frame->LightPollutionRadiance);
+    // The sky is seen from the camera's height above the atmosphere's ground (horizon_ground_height), in double.
+    frame->AtmosphereViewHeight = (float)WorldAtmosphere_GetViewHeight(frame->Origin.Y - (double)frame->Haze.GroundHeight);
     frame->AreAtmosphereTablesActive = self->_atmosphere._isEnabled && WorldRendererAtmosphere_IsAvailable(self);
+    frame->IsHazeActive = frame->AreAtmosphereTablesActive && WorldRendererAtmosphere_IsVolumeAvailable(self)
+        && (frame->Haze.DistanceScale > 0.0f);
 }
 
 void WorldRendererAtmosphere_Render(WorldRenderer* self, const WorldRenderFrame* frame)
@@ -224,6 +373,10 @@ void WorldRendererAtmosphere_Render(WorldRenderer* self, const WorldRenderFrame*
         BuildMultiscatter(self, frame);
     }
     BuildSkyView(self, frame);
+    if (frame->IsHazeActive)
+    {
+        BuildVolume(self, frame);
+    }
     WorldRendererAtmosphere_BindTables(self, frame);
 }
 
@@ -260,9 +413,9 @@ void WorldRendererAtmosphere_UploadFrame(Shader shader, const WorldRendererAtmos
     SetShaderValue(shader, locations->_locTablesActive, &TablesActive, SHADER_UNIFORM_INT);
 }
 
-/* Bound manually: the lit passes draw with DrawMesh and the stars with a direct draw, and the sky pass's 2D batch binds
- * only units 0 to 4, so 7 and 8 stay as set here. Unit 0 is made the active one again, where raylib's own binds expect
- * it (a texture loaded later would otherwise land on unit 8). */
+/* Bound manually: the stars draw with a direct draw, and the sky pass's 2D batch binds only units 0 to 4, so 7 and 8 stay
+ * as set here until the lit passes bind the volume on 8 (WorldRendererAtmosphere_BindVolume). Unit 0 is made the active
+ * one again, where raylib's own binds expect it (a texture loaded later would otherwise land on unit 8). */
 void WorldRendererAtmosphere_BindTables(const WorldRenderer* self, const WorldRenderFrame* frame)
 {
     if (!frame->AreAtmosphereTablesActive)
@@ -274,6 +427,81 @@ void WorldRendererAtmosphere_BindTables(const WorldRenderer* self, const WorldRe
     rlActiveTextureSlot(WorldRendererTextureUnit_AtmosphereSkyView);
     rlEnableTexture(self->_atmosphere._skyView.texture.id);
     rlActiveTextureSlot(0);
+}
+
+void WorldRendererAtmosphere_PrepareHazeShader(Shader shader, bool isVolumeOnFixedUnit,
+    WorldRendererHazeLocations* outLocations)
+{
+    outLocations->_locActive = GetShaderLocation(shader, "hazeActive");
+    outLocations->_locVolume = GetShaderLocation(shader, "atmosphereVolume");
+    outLocations->_locDistanceScale = GetShaderLocation(shader, "hazeDistanceScale");
+    outLocations->_locStartDistance = GetShaderLocation(shader, "hazeStartDistance");
+    outLocations->_locGroundHazeDensity = GetShaderLocation(shader, "groundHazeDensity");
+    outLocations->_locGroundHazeThickness = GetShaderLocation(shader, "groundHazeThickness");
+    outLocations->_locGroundHazeHeight = GetShaderLocation(shader, "groundHazeHeight");
+    outLocations->_locGroundHazeAlbedo = GetShaderLocation(shader, "groundHazeAlbedo");
+    outLocations->_locGroundHazeGlow = GetShaderLocation(shader, "groundHazeGlow");
+    if (isVolumeOnFixedUnit)
+    {
+        AssignSamplerUnit(shader, outLocations->_locVolume, WorldRendererTextureUnit_HazeVolume);
+    }
+}
+
+void WorldRendererAtmosphere_UploadHaze(Shader shader, const WorldRendererHazeLocations* locations,
+    const WorldRenderFrame* frame)
+{
+    const WorldAtmosphereHaze* Haze = &frame->Haze;
+    int Active = frame->IsHazeActive ? 1 : 0;
+    SetShaderValue(shader, locations->_locActive, &Active, SHADER_UNIFORM_INT);
+    SetShaderValue(shader, locations->_locDistanceScale, &Haze->DistanceScale, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, locations->_locStartDistance, &Haze->StartDistance, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, locations->_locGroundHazeDensity, &Haze->GroundHazeDensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, locations->_locGroundHazeThickness, &Haze->GroundHazeThickness, SHADER_UNIFORM_FLOAT);
+    // The camera's height above the haze's base, in double (the camera may be far from the world's origin).
+    float Height = (float)(frame->Origin.Y - (double)Haze->GroundHazeBase);
+    SetShaderValue(shader, locations->_locGroundHazeHeight, &Height, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, locations->_locGroundHazeAlbedo, Haze->GroundHazeAlbedo, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, locations->_locGroundHazeGlow, &Haze->GroundHazeGlow, SHADER_UNIFORM_FLOAT);
+}
+
+/* Bound manually, as the tables are (WorldRendererAtmosphere_BindTables): the lit passes draw with DrawMesh. */
+void WorldRendererAtmosphere_BindVolume(const WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    if (!frame->IsHazeActive)
+    {
+        return;
+    }
+    rlActiveTextureSlot(WorldRendererTextureUnit_HazeVolume);
+    rlEnableTexture(self->_atmosphere._volume.texture.id);
+    rlActiveTextureSlot(0);
+}
+
+void WorldRendererAtmosphere_BindVolumeTexture(const WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
+    const WorldRendererHazeLocations* locations)
+{
+    if (frame->IsHazeActive)
+    {
+        SetShaderValueTexture(shader, locations->_locVolume, self->_atmosphere._volume.texture);
+    }
+}
+
+/* The slice's tile, half a texel in from its edges so the bilinear reads stay in it, drawn flipped (its rows run from
+ * the screen's bottom up, as the scene target's do) over the whole scene target. */
+void WorldRendererAtmosphere_DrawView(WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    const WorldRendererAtmosphereState* State = &self->_atmosphere;
+    if ((State->_view == WorldRendererHazeView_Off) || !frame->IsHazeActive)
+    {
+        return;
+    }
+    float Size = (float)WORLD_ATMOSPHERE_VOLUME_SIZE;
+    float Part = (State->_view == WorldRendererHazeView_Transmittance)
+        ? (float)WorldAtmosphereVolumePart_Transmittance : (float)WorldAtmosphereVolumePart_InScatter;
+    Rectangle Source = { (float)State->_viewSlice * Size + 0.5f, Part * Size + 0.5f, Size - 1.0f, -(Size - 1.0f) };
+    Rectangle Destination = { 0.0f, 0.0f, (float)frame->SceneWidth, (float)frame->SceneHeight };
+    BeginTextureMode(self->_scene._target);
+    DrawTexturePro(State->_volume.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
+    EndTextureMode();
 }
 
 void WorldRendererAtmosphere_LogStatus(const WorldRenderer* self)
@@ -292,17 +520,35 @@ void WorldRendererAtmosphere_LogStatus(const WorldRenderer* self)
     const WorldRendererStatus* Status = &self->_status;
     WorldRendererFeatureState State = Status->Features[WorldRendererFeature_AtmosphereTables];
     const char* Tables = (State == WorldRendererFeatureState_Active)
-        ? "on (the sky and the fog's sky from them, with multiple scattering)"
-        : ((State == WorldRendererFeatureState_Unavailable) ? "unavailable (the sky and the fog are marched per pixel)"
-            : "off (the A/B: the sky and the fog marched per pixel, single scattering)");
+        ? "on (the sky and the far ground from them, with multiple scattering)"
+        : ((State == WorldRendererFeatureState_Unavailable) ? "unavailable (the sky is marched per pixel)"
+            : "off (the A/B: the sky marched per pixel, single scattering)");
     Error LogResult = Logger_LogInfoFormatted(self->_logger,
         (const unsigned char*)u8"WorldRenderer: atmosphere tables %s: transmittance %d x %d, multiple scattering %d x %d "
         u8"(built %" PRIu32 u8" times, whenever the air changes), sky view %d x %d for the sun and %d x %d for the moon "
-        u8"(every frame; the moon's while its sky shows); the sky seen from %.2f m above sea level; the last render took "
-        u8"%.2f ms on the CPU.",
+        u8"(every frame; the moon's while its sky shows); the sky seen from %.2f m above the atmosphere's ground; the last "
+        u8"render took %.2f ms on the CPU.",
         Tables, WORLD_ATMOSPHERE_TRANSMITTANCE_WIDTH, WORLD_ATMOSPHERE_TRANSMITTANCE_HEIGHT,
         WORLD_ATMOSPHERE_MULTISCATTER_SIZE, WORLD_ATMOSPHERE_MULTISCATTER_SIZE, Status->AtmosphereTableBuildCount,
         WORLD_ATMOSPHERE_SKY_VIEW_WIDTH, WORLD_ATMOSPHERE_SKY_VIEW_HEIGHT, WORLD_ATMOSPHERE_SKY_VIEW_WIDTH,
         WORLD_ATMOSPHERE_SKY_VIEW_HEIGHT, (double)Status->AtmosphereViewHeight, Status->RenderMilliseconds);
     Error_Deconstruct(&LogResult);
+
+    WorldRendererFeatureState HazeState = Status->Features[WorldRendererFeature_Haze];
+    const char* Haze = (HazeState == WorldRendererFeatureState_Active) ? "on"
+        : ((HazeState == WorldRendererFeatureState_Unavailable) ? "unavailable (nothing is hazed)"
+            : "off (nothing is hazed: the tables are off, or the haze strength is 0)");
+    char View[64] = "";
+    if (Status->HazeView != WorldRendererHazeView_Off)
+    {
+        snprintf(View, sizeof(View), "; showing slice %d's %s", Status->HazeViewSlice,
+            (const char*)WorldRenderer_GetHazeViewName(Status->HazeView));
+    }
+    Error HazeResult = Logger_LogInfoFormatted(self->_logger,
+        (const unsigned char*)u8"WorldRenderer: haze %s: volume %d x %d directions at %d slices (%.0f m to %.0f km, then "
+        u8"the whole ray), distances x %.3g; ground haze %.4g per metre at its base%s.",
+        Haze, WORLD_ATMOSPHERE_VOLUME_SIZE, WORLD_ATMOSPHERE_VOLUME_SIZE, WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT,
+        WORLD_ATMOSPHERE_VOLUME_NEAREST, WORLD_ATMOSPHERE_VOLUME_FARTHEST / 1000.0, (double)Status->HazeDistanceScale,
+        (double)Status->GroundHazeDensity, View);
+    Error_Deconstruct(&HazeResult);
 }

@@ -27,7 +27,7 @@ uniform bool hasEmissiveMap;
 
 out vec4 finalColor;
 
-// The frame's lights, shadows, ambient, fog and night vision: shared with the sprite shader, which the renderer gives
+// The frame's lights, shadows, ambient, haze and night vision: shared with the sprite shader, which the renderer gives
 // the same values.
 #include "common/lighting"
 // The draw's fade (its draw distance, the object's opacity) as a dither on the scene's pixel grid.
@@ -107,8 +107,8 @@ void main()
     reflected = NightVisionOf(reflected);
     vec3 color = reflected + emissive;
 
-    // Distance fog toward the atmospheric sky colour along this fragment's own view ray.
-    color = ApplyFog(color, fragPosition);
+    // The haze in front of it (aerial perspective, the ground haze).
+    color = ApplyAerialPerspective(color, fragPosition);
 
     // The fade is tested last, after every derivative and mipmapped fetch above, so those stay defined for the pixels
     // that are drawn.

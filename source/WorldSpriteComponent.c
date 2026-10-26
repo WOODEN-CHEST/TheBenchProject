@@ -56,6 +56,8 @@ typedef enum SpritePropertyEnum
     SpriteProperty_HasOutline,
     SpriteProperty_OverridesOmitPixelation,
     SpriteProperty_OmitPixelation,
+    SpriteProperty_OverridesHaze,
+    SpriteProperty_Haze,
     SpriteProperty_OverridesDrawDistance,
     SpriteProperty_DrawDistance,
     SpriteProperty_DrawDistanceMultiplier,
@@ -70,7 +72,8 @@ typedef enum SpritePropertyEnum
  * share their rows with the world sprite's tables (WorldSpriteInternal.h). The wire ids are the save schema: never
  * renumber or reuse one; a removed property's id goes into the table's retired list. (T26 renamed wire 1 from
  * "sprite_animation", a sprite animation, to "world_sprite", a world sprite, and made rows 2 to 16 the placement's own
- * values behind their override flags.) The next free wire id is 37. */
+ * values behind their override flags; T35 added the haze's pair, 37 and 38, the haze's id the world sprite's render
+ * table's.) The next free wire id is 39. */
 static const PropertyDescriptor SpriteProperties[SpriteProperty_Count] =
 {
     [SpriteProperty_WorldSprite] =
@@ -181,6 +184,12 @@ static const PropertyDescriptor SpriteProperties[SpriteProperty_Count] =
         WORLD_SPRITE_ROW_OMIT_PIXELATION, .WireId = 3U, PROPERTY_MEMBER(WorldSpriteComponent, _omitPixelation),
         .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesHaze] = OVERRIDE_ROW(WorldSpriteSetting_Haze, "haze", 37U,
+        WORLD_SPRITE_CATEGORY_LIGHTING, "haze"),
+    [SpriteProperty_Haze] =
+    {
+        WORLD_SPRITE_ROW_HAZE, .WireId = 38U, PROPERTY_MEMBER(WorldSpriteComponent, _haze), .SinceVersion = 1U
+    },
     [SpriteProperty_OverridesDrawDistance] = OVERRIDE_ROW(WorldSpriteSetting_DrawDistance, "draw_distance", 32U,
         WORLD_SPRITE_CATEGORY_DRAW_DISTANCE, "draw distance"),
     [SpriteProperty_DrawDistance] =
@@ -238,6 +247,7 @@ static const SpriteProperty OverrideFlagRows[WorldSpriteSetting_Count] =
     [WorldSpriteSetting_DecalOffset] = SpriteProperty_OverridesDecalOffset,
     [WorldSpriteSetting_HasOutline] = SpriteProperty_OverridesHasOutline,
     [WorldSpriteSetting_OmitPixelation] = SpriteProperty_OverridesOmitPixelation,
+    [WorldSpriteSetting_Haze] = SpriteProperty_OverridesHaze,
     [WorldSpriteSetting_DrawDistance] = SpriteProperty_OverridesDrawDistance,
     [WorldSpriteSetting_IsDrawDistanceFixed] = SpriteProperty_OverridesIsDrawDistanceFixed,
 };
@@ -489,6 +499,10 @@ static void ResolveDecalAndRender(const WorldSpriteComponent* self, WorldSpriteS
     {
         settings->Render.OmitsPixelation = self->_omitPixelation;
     }
+    if (self->_overrides[WorldSpriteSetting_Haze])
+    {
+        settings->Render.Haze = self->_haze;
+    }
 }
 
 
@@ -708,6 +722,15 @@ Error WorldSpriteComponent_SetOmitsPixelation(WorldSpriteComponent* self, bool o
         return CreateNullSelfError("WorldSpriteComponent_SetOmitsPixelation");
     }
     return SetBoolProperty(self, SpriteProperty_OmitPixelation, &self->_omitPixelation, omitPixelation);
+}
+
+Error WorldSpriteComponent_SetHaze(WorldSpriteComponent* self, float haze)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldSpriteComponent_SetHaze");
+    }
+    return SetFloatProperty(self, SpriteProperty_Haze, &self->_haze, haze);
 }
 
 Error WorldSpriteComponent_SetDrawDistance(WorldSpriteComponent* self, float drawDistance)

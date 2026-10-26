@@ -11,7 +11,8 @@
 // dedicated PRE-pass — shaders/ao/fragment.frag — that feeds AO into ONLY the PBR ambient term, so it no
 // longer dims direct light.)
 // The G-buffer packs a VIEW-SPACE normal in RGB (encoded n*0.5+0.5) and a surface/outline flag in A:
-//   A = 0.0 -> not a surface (sky / grid);  0.5 -> surface, no outline;  1.0 -> surface, outline enabled.
+//   A = 0.0 -> not a surface (sky / grid);  0.5 -> surface, no outline;  0.76..1.0 -> surface, outline enabled, the
+//   object's haze multiplier (0..1) over that range (T35: its outline fades with its own haze).
 // Because the sky is never drawn into the G-buffer it has A = 0, so it is neither ambient-occluded nor
 // outlined (outlines are never applied to the sky). Everything stays in linear HDR; the later tonemap pass
 // maps it to display. All sampling uses gl_FragCoord (the true framebuffer pixel), NOT fragTexCoord, so the
@@ -34,13 +35,19 @@ uniform mat4 projection;         // the perspective projection used by the scene
 uniform vec3 sunDirectionView;   // unit direction TO the sun, in VIEW space (for sun-aware crease colouring)
 
 uniform float outlineStrength;   // effective outline strength (0..1); 0 disables outlines
-uniform float fogDensity;        // the scene's distance-fog density (per metre, as the lit shaders get it; 0 = no fog)
+uniform vec3 worldUpView;        // the world's up (+Y) in view space: the haze's rays climb along it
 
 out vec4 finalColor;
+
+// The haze (T35): the outline fades by its transmittance, the volume's and the ground haze's (the frame's haze values;
+// the volume bound with SetShaderValueTexture).
+#include "common/haze"
 
 // ---- G-buffer flag thresholds (the alpha channel is 0.0 / 0.5 / 1.0) ----
 const float SURFACE_ON = 0.25;   // alpha above this = a solid world-model surface (0 = sky / grid)
 const float OUTLINE_ON = 0.75;   // alpha above this = surface with per-object outlines enabled
+// An outlined surface's alpha holds its haze multiplier: OUTLINE_HAZE_BASE at 0, 1 at 1 (normal/fragment.frag's).
+const float OUTLINE_HAZE_BASE = 0.76;
 
 // ---- Outline tuning (depth + view-normal edge detection) ----
 // three.js normal-edge bias: a fixed direction that decides which side of a crease is treated as the edge, so
@@ -160,11 +167,19 @@ void main()
             float litSide = smoothstep(-0.15, 0.15, towardSun);
             coeff = 1.0 - OUTLINE_CREASE_DARKEN*nei*litSide + OUTLINE_CREASE_BRIGHTEN*nei*(1.0 - litSide);
         }
-        // The line fades with the fog, as the surface's own light does: a hill the haze has all but hidden keeps no
-        // dark rim (T34). The share that still shows is the fog's transmittance to this pixel (the lit shaders'
-        // FogFactor, from the same distance), so with no fog the line is as before.
-        float haze = exp(-length(viewPos)*max(fogDensity, 0.0));
-        color *= mix(1.0, coeff, clamp(outlineStrength, 0.0, 1.0)*haze);
+        // The line fades with the haze, as the surface's own light does: a hill the haze has all but hidden keeps no
+        // dark rim (T34). The share that still shows is the haze's transmittance to this pixel (T35: the volume's and
+        // the ground haze's, per colour, at the object's own haze), so in clear air the line is as before.
+        float toPoint = length(viewPos);
+        vec3 haze = vec3(1.0);
+        if (toPoint > 0.0)
+        {
+            float multiplier = clamp((gbuffer.a - OUTLINE_HAZE_BASE)/(1.0 - OUTLINE_HAZE_BASE), 0.0, 1.0);
+            vec3 viewDirection = viewPos/toPoint;
+            vec3 direction = vec3(0.0, dot(viewDirection, worldUpView), 0.0); // only its climb matters to the haze
+            haze = hazeTransmittance(uv, direction, toPoint, multiplier);
+        }
+        color *= mix(vec3(1.0), vec3(coeff), clamp(outlineStrength, 0.0, 1.0)*haze);
     }
 
     finalColor = vec4(color, 1.0)*fragColor*colDiffuse;

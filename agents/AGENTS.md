@@ -250,7 +250,7 @@ Current module list:
   * WorldLightComponent - A point light (colour, intensity, range, casts shadows).
   * WorldColliderComponent - How the object collides (World collision, WorldCollision.md).
   * WorldTerrainComponent - Where a terrain lies and how it draws and collides (Terrain, Terrain.md).
-  * WorldEnvironment - Per-world sky/sun/moon/night-sky/fog/effect settings, described by its property table
+  * WorldEnvironment - Per-world sky/sun/moon/night-sky/haze/effect settings, described by its property table
     (defaults, validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md; it owns its sky texture
     names). Its date and time of day are what the sky shows: the game clock writes them every tick, the environment
     never advances time itself. Pure functions turn them into the sky: the sun (optionally following the seasons), the
@@ -285,8 +285,10 @@ Current module list:
     their animators in every pass, T29; terrain chunks in every pass with their own GPU meshes, B01; model instances
     drawn a cell at a time with instanced twins of every geometry pass, each copy fading and changing LOD on its own,
     B03, source/WorldRendererInstances.c; the atmosphere's lookup tables, T15, source/WorldRendererAtmosphere.c:
-    transmittance, multiple scattering and the sky view, built first in the frame, which the sky, the fog and the stars
-    read), in render space
+    transmittance, multiple scattering and the sky view, built first in the frame, which the sky and the stars read;
+    the haze, T35, source/WorldRendererAtmosphere.c and shaders/common/haze.glsl: the aerial-perspective volume built
+    from them every frame, the far ground below the horizon, the ground haze and light pollution's light in the air,
+    which every lit surface, the sky, the stars and the outlines take), in render space
     since T32:
     the world's orientation with the camera at the origin, every position relative to the camera (subtracted in double),
     shadow cascades snapped to their texels; separate from the world data and never writes to it. Split by render pass

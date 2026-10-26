@@ -59,7 +59,7 @@ static bool AreSettingsEqual(const TerrainSettings* a, const TerrainSettings* b)
 {
     return (a->Render.HasOutline == b->Render.HasOutline) && (a->Render.ShadowTier == b->Render.ShadowTier)
         && (a->Render.CastsShadows == b->Render.CastsShadows) && (a->Render.DrawDistance == b->Render.DrawDistance)
-        && (a->Render.IsDrawDistanceFixed == b->Render.IsDrawDistanceFixed)
+        && (a->Render.IsDrawDistanceFixed == b->Render.IsDrawDistanceFixed) && (a->Render.Haze == b->Render.Haze)
         && (a->Collision.IsEnabled == b->Collision.IsEnabled) && (a->Collision.Layer == b->Collision.Layer)
         && (a->Collision.HasCollidesWith == b->Collision.HasCollidesWith)
         && (!a->Collision.HasCollidesWith || (a->Collision.CollidesWith == b->Collision.CollidesWith));
@@ -232,7 +232,7 @@ static void AMinimalDefinitionGetsTheDefaults(TestRun* run)
         TEST_CHECK(run, AreSettingsEqual(Settings, &Defaults));
         TEST_CHECK(run, Settings->Render.HasOutline && (Settings->Render.ShadowTier == WorldShadowTier_Both)
             && Settings->Render.CastsShadows && (Settings->Render.DrawDistance == TERRAIN_DEFAULT_DRAW_DISTANCE)
-            && Settings->Render.IsDrawDistanceFixed);
+            && Settings->Render.IsDrawDistanceFixed && (Settings->Render.Haze == 1.0f));
         TEST_CHECK(run, Settings->Collision.IsEnabled && (Settings->Collision.Layer == CollisionLayer_World)
             && !Settings->Collision.HasCollidesWith);
     }
@@ -261,7 +261,7 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
         "  \"blend_slot\": \"paint\",\n"
         "  \"chunk_size\": 16,\n"
         "  \"render\": {\"has_outline\": false, \"shadow_tier\": \"near\", \"casts_shadows\": false, "
-            "\"draw_distance\": 900, \"is_draw_distance_fixed\": false},\n"
+            "\"draw_distance\": 900, \"is_draw_distance_fixed\": false, \"haze\": 0.5},\n"
         "  \"collision\": {\"is_enabled\": false, \"layer\": \"prop\", \"collides_with\": [\"world\", \"character\"]}\n"
         "}\n",
         NULL
@@ -319,7 +319,7 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
         const TerrainSettings* Settings = TerrainAsset_GetSettings(Loaded);
         TEST_CHECK(run, !Settings->Render.HasOutline && (Settings->Render.ShadowTier == WorldShadowTier_Near)
             && !Settings->Render.CastsShadows && (Settings->Render.DrawDistance == 900.0f)
-            && !Settings->Render.IsDrawDistanceFixed);
+            && !Settings->Render.IsDrawDistanceFixed && (Settings->Render.Haze == 0.5f));
         TEST_CHECK(run, !Settings->Collision.IsEnabled && (Settings->Collision.Layer == CollisionLayer_Prop)
             && Settings->Collision.HasCollidesWith
             && (Settings->Collision.CollidesWith
@@ -455,6 +455,10 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
             "render.draw_distance is -5; it must be above 0." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"draw_distance\": [1]}}",
             ErrorCode_InvalidAssetDefinition, "render.draw_distance must be a number of metres." },
+        { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"haze\": -2}}", ErrorCode_InvalidAssetDefinition,
+            "render.haze is -2; it must be at least 0 and at most 1000" },
+        { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"haze\": \"thick\"}}", ErrorCode_InvalidAssetDefinition,
+            "render.haze must be a number" },
         // The collision block.
         { MODEL_HEAD "\"materials\": [\"g\"], \"collision\": 1}", ErrorCode_InvalidAssetDefinition,
             "\"collision\" must be a JSON object." },
@@ -861,7 +865,7 @@ static void TheComponentStartsAtItsDefaults(TestRun* run)
             && WorldTerrainComponent_CastsShadows(Placement)
             && (WorldTerrainComponent_GetDrawDistance(Placement) == TERRAIN_DEFAULT_DRAW_DISTANCE)
             && (WorldTerrainComponent_GetDrawDistanceMultiplier(Placement) == 1.0f)
-            && WorldTerrainComponent_IsDrawDistanceFixed(Placement));
+            && WorldTerrainComponent_IsDrawDistanceFixed(Placement) && (WorldTerrainComponent_GetHaze(Placement) == 1.0f));
         TEST_CHECK(run, WorldTerrainComponent_IsCollisionEnabled(Placement)
             && (WorldTerrainComponent_GetCollisionLayer(Placement) == CollisionLayer_World)
             && (WorldTerrainComponent_GetCollidesWith(Placement) == CollisionLayer_GetDefaultMask(CollisionLayer_World)));
@@ -889,6 +893,7 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
         [WorldTerrainSetting_IsCollisionEnabled] = "is_collision_enabled",
         [WorldTerrainSetting_CollisionLayer] = "collision_layer",
         [WorldTerrainSetting_CollidesWith] = "collides_with",
+        [WorldTerrainSetting_Haze] = "haze",
     };
     const PropertyTable* Table = WorldTerrainComponent_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(Table));
@@ -948,7 +953,9 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetCollisionLayer(Placement, CollisionLayer_Prop));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetCollidesWith(Placement,
             COLLISION_LAYER_BIT(CollisionLayer_Prop)));
-        TEST_CHECK(run, WorldComponent_GetRevision(Component) == (Revision + 10U));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetHaze(Placement, 0.25f));
+        TEST_CHECK(run, WorldComponent_GetRevision(Component) == (Revision + 11U));
+        TEST_CHECK(run, WorldTerrainComponent_GetHaze(Placement) == 0.25f);
         TEST_CHECK(run, AreNamesEqual(WorldTerrainComponent_GetTerrain(Placement), "town")
             && !WorldTerrainComponent_HasOutline(Placement)
             && (WorldTerrainComponent_GetShadowTier(Placement) == WorldShadowTier_Far)
@@ -975,6 +982,8 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
             ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldTerrainComponent_SetCollidesWith(Placement, (uint32_t)1U << 30U),
             ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldTerrainComponent_SetHaze(Placement, -1.0f), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldTerrainComponent_SetHaze(Placement, NAN), ErrorCode_ArgumentOutOfRange);
         char LongName[WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH + 2U];
         Memory_Set(LongName, 't', WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH + 1U);
         LongName[WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH + 1U] = '\0';
@@ -1017,7 +1026,7 @@ static void TheFlagsChooseBetweenTheTerrainAndThePlacement(TestRun* run)
         TerrainSettings Asset =
         {
             .Render = { .HasOutline = false, .ShadowTier = WorldShadowTier_Far, .CastsShadows = false,
-                .DrawDistance = 800.0f, .IsDrawDistanceFixed = true },
+                .DrawDistance = 800.0f, .IsDrawDistanceFixed = true, .Haze = 0.5f },
             .Collision = { .IsEnabled = false, .Layer = CollisionLayer_Dynamic, .HasCollidesWith = true,
                 .CollidesWith = AssetMask }
         };
@@ -1030,6 +1039,7 @@ static void TheFlagsChooseBetweenTheTerrainAndThePlacement(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetIsCollisionEnabled(Placement, true));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetCollisionLayer(Placement, CollisionLayer_Prop));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetCollidesWith(Placement, OwnMask));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetHaze(Placement, 0.0f));
 
         TerrainSettings Resolved = WorldTerrainComponent_ResolveSettings(Placement, &Asset);
         TEST_CHECK(run, AreSettingsEqual(&Resolved, &Asset));
@@ -1052,6 +1062,7 @@ static void TheFlagsChooseBetweenTheTerrainAndThePlacement(TestRun* run)
                 == ((Setting == (int)WorldTerrainSetting_CollisionLayer) ? CollisionLayer_Prop : CollisionLayer_Dynamic));
             TEST_CHECK(run, Resolved.Collision.HasCollidesWith && (Resolved.Collision.CollidesWith
                 == ((Setting == (int)WorldTerrainSetting_CollidesWith) ? OwnMask : AssetMask)));
+            TEST_CHECK(run, Resolved.Render.Haze == ((Setting == (int)WorldTerrainSetting_Haze) ? 0.0f : 0.5f));
             TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetOverridden(Placement, (WorldTerrainSetting)Setting, false));
         }
 

@@ -187,6 +187,7 @@ static void UpdateModel(WorldRenderModel* entry, Vector3Double origin, AssetMana
     entry->OmitsPixelation = Settings.OmitsPixelation;
     entry->ShadowTier = Settings.ShadowTier;
     entry->CastsShadows = Settings.CastsShadows;
+    entry->Haze = Settings.Haze;
     entry->DrawDistance = Settings.DrawDistance;
     entry->IsDrawDistanceFixed = Settings.IsDrawDistanceFixed;
 
@@ -359,6 +360,7 @@ static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite, Vec
     Entry.HasOutline = Settings.Render.HasOutline;
     Entry.OmitsPixelation = Settings.Render.OmitsPixelation && (Entry.AlphaMode == WorldSpriteAlphaMode_Cutout)
         && !Entry.IsDecal;
+    Entry.Haze = Settings.Render.Haze;
     Entry.DrawDistance = Settings.DrawDistance;
     Entry.IsDrawDistanceFixed = Settings.IsDrawDistanceFixed;
     if (!GenericBuffer_AddLast(&self->_sprites, &Entry))
@@ -594,7 +596,8 @@ static Error AddTerrainChunks(WorldRenderCache* self, const WorldRenderTerrain* 
             .ObjectId = entry->ObjectId, .Serial = entry->Serial, .Asset = entry->Asset, .ChunkIndex = Chunk,
             .TriangleCount = TerrainChunk_GetSurfaceTriangleCount(Source), .HasOutline = Settings.Render.HasOutline,
             .ShadowTier = Settings.Render.ShadowTier, .CastsShadows = Settings.Render.CastsShadows,
-            .DrawDistance = Settings.Render.DrawDistance, .IsDrawDistanceFixed = Settings.Render.IsDrawDistanceFixed,
+            .Haze = Settings.Render.Haze, .DrawDistance = Settings.Render.DrawDistance,
+            .IsDrawDistanceFixed = Settings.Render.IsDrawDistanceFixed,
             .WorldMatrix = Matrix4Double_Multiply(&ToCenter, &ObjectWorld), .Radius = (float)((double)SphereRadius
                 * MaxScale), .Tint = Tint
         };
@@ -871,6 +874,7 @@ static Error UpdateInstancesEntry(WorldRenderCache* self, WorldRenderInstances* 
     entry->HasOutline = Settings.HasOutline;
     entry->ShadowTier = Settings.ShadowTier;
     entry->CastsShadows = Settings.CastsShadows;
+    entry->Haze = Settings.Haze;
     entry->DrawDistance = Settings.DrawDistance;
     entry->IsDrawDistanceFixed = Settings.IsDrawDistanceFixed;
     const WorldObject* Owner = WorldComponent_GetOwner(&Component->Base);

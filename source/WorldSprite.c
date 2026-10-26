@@ -112,6 +112,7 @@ static const PropertyDescriptor RenderProperties[] =
         WORLD_SPRITE_ROW_CASTS_SHADOWS, .WireId = 15U, PROPERTY_MEMBER(WorldSpriteRenderSettings, CastsShadows),
         .SinceVersion = 1U
     },
+    { WORLD_SPRITE_ROW_HAZE, .WireId = 38U, PROPERTY_MEMBER(WorldSpriteRenderSettings, Haze), .SinceVersion = 1U },
 };
 
 static const PropertyTable RenderTable =

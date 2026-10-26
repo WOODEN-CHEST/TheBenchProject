@@ -3,8 +3,10 @@
 // day and by the moon at night (the same model, a dimmer light). Two ways to get that light:
 //  - THE TABLES (T15; Hillaire, "A Scalable and Production Ready Sky and Atmosphere Rendering Technique", EGSR 2020):
 //    the atmosphere pass (source/WorldRendererAtmosphere.c) builds them first in every frame (the transmittance and the
-//    multiple scattering only when the air changes: shaders/atmosphere/), and the sky pass, the fog and the stars read
-//    them, with the light scattered more than once;
+//    multiple scattering only when the air changes: shaders/atmosphere/), and the sky pass and the stars read them, with
+//    the light scattered more than once. Since T35 the sky-view table ends its rays below the horizon on the far ground,
+//    and the pass also builds the aerial-perspective volume from them (the haze in front of every surface: its layout
+//    is here, its readers' side in common/haze);
 //  - THE DIRECT MARCH (atmosphere(), T34's: single scattering per pixel): the A/B path while the tables are switched
 //    off, and the fallback where they are unavailable (atmosphereTablesActive false).
 // World space (render space: the camera at the origin), +Y up, distances in metres; the planet's centre lies straight
@@ -50,6 +52,36 @@ const float ATMOSPHERE_SKY_VIEW_HALF_COUNT = 2.0;
 // The direct march's steps (T34): 16 along the view ray, 8 toward the light.
 const int ATMOSPHERE_PRIMARY_STEPS = 16;
 const int ATMOSPHERE_LIGHT_STEPS = 8;
+
+// The aerial-perspective volume (T35; WORLD_ATMOSPHERE_VOLUME_*): 32 by 32 screen directions at 32 slices, the slices'
+// distances growing by a fixed ratio from the first (1 m) to the last distance slice (200 km), then one for the whole
+// ray to the top of the atmosphere. One texture holds it: the slices side by side, the in-scatter's tiles in the lower
+// rows, the transmittance's above them, and one row of the frame's values on top.
+const float ATMOSPHERE_VOLUME_SIZE = 32.0;
+const float ATMOSPHERE_VOLUME_SLICE_COUNT = 32.0;
+const float ATMOSPHERE_VOLUME_NEAREST = 1.0;
+const float ATMOSPHERE_VOLUME_FARTHEST = 200000.0;
+const float ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE = ATMOSPHERE_VOLUME_SLICE_COUNT - 2.0;
+const float ATMOSPHERE_VOLUME_WIDTH = ATMOSPHERE_VOLUME_SIZE*ATMOSPHERE_VOLUME_SLICE_COUNT;
+const float ATMOSPHERE_VOLUME_HEIGHT = 2.0*ATMOSPHERE_VOLUME_SIZE + 1.0;
+// The steps of each slice's march: within this distance, beyond it, and for the whole ray (the C mirror's comment has
+// their accuracy).
+const float ATMOSPHERE_VOLUME_NEAR_DISTANCE = 4096.0;
+const int ATMOSPHERE_VOLUME_NEAR_STEPS = 8;
+const int ATMOSPHERE_VOLUME_FAR_STEPS = 24;
+const int ATMOSPHERE_VOLUME_RAY_STEPS = 32;
+// The frame's values in the volume's last row, by column (WorldAtmosphereVolumeValue): the light at the ground haze's
+// base, per unit of its scattering: the sun's and the moon's (to be multiplied by the haze's phase toward them), and the
+// light from all around (the sky's and light pollution's).
+const int ATMOSPHERE_VOLUME_GROUND_HAZE_SUN = 0;
+const int ATMOSPHERE_VOLUME_GROUND_HAZE_MOON = 1;
+const int ATMOSPHERE_VOLUME_GROUND_HAZE_AMBIENT = 2;
+// Light pollution's light in the air (T35): the town's light fills the air below about this height and within about this
+// horizontal distance of the camera (metres; WORLD_ATMOSPHERE_LIGHT_POLLUTION_HEIGHT, _REACH).
+const float ATMOSPHERE_LIGHT_POLLUTION_HEIGHT = 500.0;
+const float ATMOSPHERE_LIGHT_POLLUTION_REACH = 10000.0;
+// How far a ray of the sky goes through the ground haze, in metres (WORLD_ATMOSPHERE_SKY_DISTANCE).
+const float ATMOSPHERE_SKY_DISTANCE = 100000000.0;
 
 // The air this frame (WorldAtmosphere_GetMedium, from the environment's settings), per metre at sea level: the air's
 // Rayleigh scattering (x air_density), the haze's scattering and extinction (sky_turbidity, haze_albedo), the haze's
@@ -127,6 +159,27 @@ float atmosphereOzoneDensity(float height)
     return max(1.0 - abs(height - ATMOSPHERE_OZONE_CENTER)/ATMOSPHERE_OZONE_HALF_WIDTH, 0.0);
 }
 
+// The air at a point `height` metres up: its Rayleigh and haze scattering and its extinction per metre. A point below the
+// ground (a ray of the haze passes through it: the world's ground is flat and goes on where the planet curves away)
+// has the air on the ground.
+void atmosphereAirAt(float height, out vec3 scatteringR, out vec3 scatteringM, out vec3 extinction)
+{
+    float h = max(height, 0.0);
+    scatteringR = atmosphereRayleighScattering*exp(-h/ATMOSPHERE_RAYLEIGH_HEIGHT);
+    float densityM = exp(-h/max(atmosphereMieHeight, 1.0));
+    scatteringM = atmosphereMieScattering*densityM;
+    extinction = scatteringR + atmosphereMieExtinction*densityM + atmosphereOzoneAbsorption*atmosphereOzoneDensity(h);
+}
+
+// How much of light pollution's light (the town's, scattered by the air) the air holds at a point `height` metres up
+// (below the ground: as on it) and `horizontalDistance` from the camera, 1 at the camera's foot
+// (WorldAtmosphere_GetLightPollutionShare).
+float atmosphereLightPollutionShare(float height, float horizontalDistance)
+{
+    return exp(-max(height, 0.0)/ATMOSPHERE_LIGHT_POLLUTION_HEIGHT)
+        *exp(-max(horizontalDistance, 0.0)/ATMOSPHERE_LIGHT_POLLUTION_REACH);
+}
+
 // The air's extinction per metre at a height: its Rayleigh scattering, the haze's extinction, the ozone's absorption.
 vec3 atmosphereExtinction(float height)
 {
@@ -135,18 +188,22 @@ vec3 atmosphereExtinction(float height)
         + atmosphereOzoneAbsorption*atmosphereOzoneDensity(height);
 }
 
-// Rayleigh's phase function, and the haze's (Cornette and Shanks) with the frame's forward scattering, for the cosine
-// of the angle between the light and the view.
+// Rayleigh's phase function, Cornette and Shanks's for a forward scattering g, and the haze's (Cornette and Shanks's with
+// the frame's forward scattering), for the cosine of the angle between the light and the view.
 float atmosphereRayleighPhase(float cosAngle)
 {
     return 3.0/(16.0*PI)*(1.0 + cosAngle*cosAngle);
 }
 
-float atmosphereMiePhase(float cosAngle)
+float atmosphereCornetteShanksPhase(float cosAngle, float g)
 {
-    float g = atmosphereMieAnisotropy;
     float gg = g*g;
     return 3.0/(8.0*PI)*((1.0 - gg)*(cosAngle*cosAngle + 1.0))/(pow(1.0 + gg - 2.0*cosAngle*g, 1.5)*(2.0 + gg));
+}
+
+float atmosphereMiePhase(float cosAngle)
+{
+    return atmosphereCornetteShanksPhase(cosAngle, atmosphereMieAnisotropy);
 }
 
 // The optical depth from a point `height` metres up along `cosZenith` to the top of the atmosphere: steps growing with
@@ -302,9 +359,9 @@ vec3 atmosphereMultipleScattering(float height, float lightCosZenith)
     return textureLod(atmosphereMultiscatterTable, atmosphereMultiscatterUv(height, lightCosZenith), 0.0).rgb;
 }
 
-// The sky's light toward a direction from one half of the sky-view table (0 the sun's, with light pollution's
-// skyglow; 1 the moon's), as the atmosphere pass built it for this frame: below the horizon, for now, the darkened
-// mirror of the sky above it (T35 draws the far ground there). `direction` is a unit vector.
+// The sky's light toward a direction from one half of the sky-view table (0 the sun's, with light pollution's glow and
+// the far ground's ambient; 1 the moon's), as the atmosphere pass built it for this frame: below the horizon, the far
+// ground seen through the haze (T35). `direction` is a unit vector.
 vec3 atmosphereSkyView(vec3 direction, vec3 lightDirection, float tableHalf)
 {
     vec2 unit = atmosphereSkyViewUnit(atmosphereViewHeight, direction.y,
@@ -326,28 +383,38 @@ vec3 atmosphereStepShare(vec3 depth)
     return mix(share, vec3(1.0) - 0.5*depth, lessThanEqual(depth, vec3(1e-3)));
 }
 
-// The light the air scatters toward a viewer `height` metres up, looking along a ray with the zenith cosine
-// `cosZenith`, out to `maxLength` metres, the top of the atmosphere or the ground, for a light of radiance 1 whose
-// zenith cosine at the viewer is `lightCosZenith` (`cosLightAngle`: the cosine between the ray and the light): its
-// single scattering (each step's light through the transmittance table, in the planet's shadow where the light has set)
-// plus `multipleScattering` of its multiple scattering (the table). The steps grow with the square of their index
-// (short near the viewer, where every ray meets the densest air; a level ray rises with the square of its length as the
-// planet curves away), and each step's light is integrated exactly over its own air and dimmed by the air before it.
-// Also gives the ray's transmittance.
+// The light one light of radiance 1 scatters per metre toward the viewer at a point `height` metres up (below the ground:
+// as on it), its zenith cosine there `lightCos`: its single scattering through the transmittance table (`phaseR` and
+// `phaseM`, the phase functions for the angle between the view and the light), in the planet's shadow once the light
+// has set there, plus `multipleScattering` of the multiple scattering table's glow. The air's scattering at the point
+// is `scatteringR` and `scatteringM` (atmosphereAirAt).
+vec3 atmosphereLightSource(float height, float lightCos, float phaseR, float phaseM, vec3 scatteringR, vec3 scatteringM,
+    float multipleScattering)
+{
+    float h = max(height, 0.0);
+    return (scatteringR*phaseR + scatteringM*phaseM)*atmosphereLightTransmittance(h, lightCos)
+        + (scatteringR + scatteringM)*atmosphereMultipleScattering(h, lightCos)*multipleScattering;
+}
+
+// The light the air scatters toward a viewer `height` metres up along the first `pathLength` metres of a ray with the
+// zenith cosine `cosZenith`, through the ground if the ray reaches it (the air below it as on it: the haze's rays; the
+// sky's stop at the ground or the top themselves), for a light of radiance `lightRadiance` whose zenith cosine at the
+// viewer is `lightCosZenith` (`cosLightAngle`: the cosine between the ray and the light), plus light pollution's
+// `lightPollution` (the radiance of the town's light in the air at the camera's foot; 0: none). Each point's light is
+// atmosphereLightSource's, the light's zenith there its own on the curved planet. The steps grow with the square of their
+// index (short near the viewer, where every ray meets the densest air; a level ray rises with the square of its length
+// as the planet curves away), and each step's light is integrated exactly over its own air and dimmed by the air before
+// it. Also gives the path's transmittance.
 vec3 atmosphereScatteredLight(float height, float cosZenith, float lightCosZenith, float cosLightAngle,
-    float maxLength, int stepCount, float multipleScattering, out vec3 transmittance)
+    float pathLength, int stepCount, float lightRadiance, float multipleScattering, vec3 lightPollution,
+    out vec3 transmittance)
 {
     float radius = ATMOSPHERE_R_PLANET + height;
-    float pathLength = atmosphereDistanceToTop(height, cosZenith);
-    float toGround = atmosphereDistanceToGround(height, cosZenith);
-    if (toGround >= 0.0)
-    {
-        pathLength = min(pathLength, toGround);
-    }
-    pathLength = min(pathLength, maxLength);
+    float horizontal = sqrt(max(1.0 - cosZenith*cosZenith, 0.0));
     float phaseR = atmosphereRayleighPhase(cosLightAngle);
     float phaseM = atmosphereMiePhase(cosLightAngle);
-    float mieHeight = max(atmosphereMieHeight, 1.0);
+    bool hasLight = lightRadiance > 0.0;
+    bool hasPollution = any(greaterThan(lightPollution, vec3(0.0)));
     float steps = float(stepCount);
     vec3 light = vec3(0.0);
     vec3 depth = vec3(0.0);
@@ -358,14 +425,21 @@ vec3 atmosphereScatteredLight(float height, float cosZenith, float lightCosZenit
         float stepLength = pathLength*(to*to - from*from);
         float t = pathLength*from*from + 0.5*stepLength;
         float h = atmosphereHeightAt(height, cosZenith, t);
-        float lightCos = clamp((radius*lightCosZenith + t*cosLightAngle)/(ATMOSPHERE_R_PLANET + h), -1.0, 1.0);
-        vec3 scatteringR = atmosphereRayleighScattering*exp(-h/ATMOSPHERE_RAYLEIGH_HEIGHT);
-        float densityM = exp(-h/mieHeight);
-        vec3 scatteringM = atmosphereMieScattering*densityM;
-        vec3 extinction = scatteringR + atmosphereMieExtinction*densityM
-            + atmosphereOzoneAbsorption*atmosphereOzoneDensity(h);
-        vec3 source = (scatteringR*phaseR + scatteringM*phaseM)*atmosphereLightTransmittance(h, lightCos)
-            + (scatteringR + scatteringM)*atmosphereMultipleScattering(h, lightCos)*multipleScattering;
+        vec3 scatteringR;
+        vec3 scatteringM;
+        vec3 extinction;
+        atmosphereAirAt(h, scatteringR, scatteringM, extinction);
+        vec3 source = vec3(0.0);
+        if (hasLight)
+        {
+            float lightCos = clamp((radius*lightCosZenith + t*cosLightAngle)/(ATMOSPHERE_R_PLANET + h), -1.0, 1.0);
+            source = lightRadiance*atmosphereLightSource(h, lightCos, phaseR, phaseM, scatteringR, scatteringM,
+                multipleScattering);
+        }
+        if (hasPollution)
+        {
+            source += (scatteringR + scatteringM)*lightPollution*atmosphereLightPollutionShare(h, t*horizontal);
+        }
         vec3 stepDepth = extinction*stepLength;
         light += exp(-depth)*source*stepLength*atmosphereStepShare(stepDepth);
         depth += stepDepth;
@@ -375,8 +449,63 @@ vec3 atmosphereScatteredLight(float height, float cosZenith, float lightCosZenit
 }
 
 
+// ---- The aerial-perspective volume's layout (T35) ---------------------------------------------------------------
+// The distance of one of the volume's distance slices, in metres (WorldAtmosphere_GetVolumeSliceDistance).
+float atmosphereVolumeSliceDistance(float slice)
+{
+    return ATMOSPHERE_VOLUME_NEAREST*pow(ATMOSPHERE_VOLUME_FARTHEST/ATMOSPHERE_VOLUME_NEAREST,
+        clamp(slice, 0.0, ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE)/ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE);
+}
+
+// Where along the volume's slices a distance lies (WorldAtmosphere_GetVolumeSlice): -1 at the camera, rising linearly
+// to 0 at the first slice; between two distance slices the lower one's index plus the share of the way to the next,
+// linear in distance; past the last distance slice, linearly on toward the whole ray's slice, reached at the top of the
+// atmosphere (`distanceToTop`, the ray's distance to it, through the ground).
+float atmosphereVolumeSlice(float distance, float distanceToTop)
+{
+    if (!(distance > 0.0))
+    {
+        return -1.0;
+    }
+    if (distance < ATMOSPHERE_VOLUME_NEAREST)
+    {
+        return -1.0 + distance/ATMOSPHERE_VOLUME_NEAREST;
+    }
+    if (distance <= ATMOSPHERE_VOLUME_FARTHEST)
+    {
+        // The slice below the distance (its rounding does not matter: the share of the way to the next slice makes up
+        // for it), then the share of the way.
+        float index = log(distance/ATMOSPHERE_VOLUME_NEAREST)*ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE
+            /log(ATMOSPHERE_VOLUME_FARTHEST/ATMOSPHERE_VOLUME_NEAREST);
+        float lower = clamp(floor(index), 0.0, ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE - 1.0);
+        float from = atmosphereVolumeSliceDistance(lower);
+        float to = atmosphereVolumeSliceDistance(lower + 1.0);
+        return lower + clamp((distance - from)/(to - from), 0.0, 1.0);
+    }
+    float remaining = distanceToTop - ATMOSPHERE_VOLUME_FARTHEST;
+    float share = (remaining > 0.0) ? min((distance - ATMOSPHERE_VOLUME_FARTHEST)/remaining, 1.0) : 1.0;
+    return ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE + share;
+}
+
+// Where the volume's texture holds a screen direction's value at one slice (WorldAtmosphere_GetVolumeUv): `screenUv` in
+// [0, 1] (0 at the scene's bottom left), `part` 0 the in-scatter's tile, 1 the transmittance's; kept half a texel inside
+// the tile, so bilinear sampling never reads the neighbouring slice.
+vec2 atmosphereVolumeUv(vec2 screenUv, float slice, float part)
+{
+    vec2 inTile = clamp(screenUv*ATMOSPHERE_VOLUME_SIZE, vec2(0.5), vec2(ATMOSPHERE_VOLUME_SIZE - 0.5));
+    return vec2((slice*ATMOSPHERE_VOLUME_SIZE + inTile.x)/ATMOSPHERE_VOLUME_WIDTH,
+        (part*ATMOSPHERE_VOLUME_SIZE + inTile.y)/ATMOSPHERE_VOLUME_HEIGHT);
+}
+
+// The texel of one of the frame's values in the volume's last row (WorldAtmosphere_GetVolumeValueUv), for texelFetch.
+ivec2 atmosphereVolumeValueTexel(int value)
+{
+    return ivec2(value, int(2.0*ATMOSPHERE_VOLUME_SIZE));
+}
+
+
 // ---- The direct march (T34): the A/B path and the fallback -----------------------------------------------------
-// TODO: remove the direct march (here, and its branches in the sky pass, fogSkyColor and the stars) with the A/B switch
+// TODO: remove the direct march (here, and its branches in the sky pass and the stars) with the A/B switch
 // once the owner approves the tables' sky (T15; WorldRenderer_SetAtmosphereTablesEnabled).
 // Ray-sphere intersection, sphere centred at origin, radius sr. Returns (near, far); near > far means miss.
 vec2 raySphere(vec3 origin, vec3 dir, float sr)

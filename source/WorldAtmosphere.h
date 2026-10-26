@@ -39,6 +39,24 @@
  *    from it.
  * The renderer keeps them on fixed texture units for every reader (WorldRendererTextureUnit_Atmosphere*).
  *
+ * THE HAZE (T35, decisions G36 and G37). Far things fade into the haze of the air in front of them, from the same
+ * atmosphere as the sky (aerial perspective):
+ *  - THE VOLUME (Hillaire's aerial-perspective volume): for WORLD_ATMOSPHERE_VOLUME_SIZE squared screen directions, at
+ *    WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT distances, the light the air scattered toward the camera along the path so far
+ *    and the path's transmittance (both RGB), built every frame from the tables. Its slices grow by a fixed ratio from
+ *    WORLD_ATMOSPHERE_VOLUME_NEAREST to WORLD_ATMOSPHERE_VOLUME_FARTHEST; the last holds the whole ray, to the top of the
+ *    atmosphere, so every distance has an answer. Its rays pass through the planet's surface (the air below it as dense
+ *    as on the ground): the world's ground is flat and goes on where the planet curves away. One texture holds it: the
+ *    slices side by side, the in-scatter's rows below the transmittance's, then a row of the frame's values (the ground
+ *    haze's light: WorldAtmosphereVolumeValue).
+ *  - THE GROUND HAZE: a low layer of mist, density x exp(-max(height - base, 0) / thickness), integrated per pixel in
+ *    closed form along each ray (WorldAtmosphere_GetGroundHazeDepth).
+ *  - THE FRAME'S HAZE (WorldAtmosphere_GetHaze): every haze distance is multiplied by the environment's
+ *    AerialDistanceScale and FogStrength and the player's fog strength; none nearer than HazeStartDistance.
+ *  - LIGHT POLLUTION is the town's light scattered by the air: the air below about WORLD_ATMOSPHERE_LIGHT_POLLUTION_HEIGHT
+ *    and within about WORLD_ATMOSPHERE_LIGHT_POLLUTION_REACH of the camera is lit by it
+ *    (WorldAtmosphere_GetLightPollutionShare), so the glow grows with the haze.
+ *
  * PRECISION. Heights are taken as heights above the ground, never as a radius minus the planet's: a float holds a
  * radius of 6.4e6 m only to half a metre, and r^2 - R^2 near the ground loses most of its digits. The formulas below
  * avoid that cancellation in the same way the shaders do.
@@ -77,6 +95,44 @@
 /** @brief Below this product of the horizontal lengths of a direction and a light, one of them is vertical and their
  *  azimuth undefined (WorldAtmosphere_GetCosLightAzimuth; ATMOSPHERE_VERTICAL_EPSILON). */
 #define WORLD_ATMOSPHERE_VERTICAL_EPSILON 1e-9
+/** @brief The aerial-perspective volume (T35): its screen directions across and up, and its slices (distances along
+ *  each direction; ATMOSPHERE_VOLUME_SIZE, _SLICE_COUNT). */
+#define WORLD_ATMOSPHERE_VOLUME_SIZE 32
+#define WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT 32
+/** @brief The first slice's distance and the last distance slice's, in metres (ATMOSPHERE_VOLUME_NEAREST, _FARTHEST): the
+ *  slices between grow by a fixed ratio (1.50), so 21 of them lie within the 4 km far plane. */
+#define WORLD_ATMOSPHERE_VOLUME_NEAREST 1.0
+#define WORLD_ATMOSPHERE_VOLUME_FARTHEST 200000.0
+/** @brief The last distance slice (WORLD_ATMOSPHERE_VOLUME_FARTHEST); the slice after it holds the whole ray. */
+#define WORLD_ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE (WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT - 2)
+/** @brief The volume's texture in texels: the slices side by side, two rows of tiles (the in-scatter, the transmittance)
+ *  and one row of the frame's values (ATMOSPHERE_VOLUME_WIDTH, _HEIGHT). */
+#define WORLD_ATMOSPHERE_VOLUME_WIDTH (WORLD_ATMOSPHERE_VOLUME_SIZE * WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT)
+#define WORLD_ATMOSPHERE_VOLUME_HEIGHT (2 * WORLD_ATMOSPHERE_VOLUME_SIZE + 1)
+/** @brief The steps each slice's march takes (growing with the square of their index): within this distance, beyond
+ *  it, and for the whole ray (the sky view's: ATMOSPHERE_VOLUME_NEAR_DISTANCE, _NEAR_STEPS, _FAR_STEPS, _RAY_STEPS).
+ *  Measured against 512 steps (T35's status block): within 4 km the near steps are 0.13 % off at worst, beyond it the
+ *  far steps 1.2 % (of the light of the whole ray). */
+#define WORLD_ATMOSPHERE_VOLUME_NEAR_DISTANCE 4096.0
+#define WORLD_ATMOSPHERE_VOLUME_NEAR_STEPS 8
+#define WORLD_ATMOSPHERE_VOLUME_FAR_STEPS 24
+#define WORLD_ATMOSPHERE_VOLUME_RAY_STEPS 32
+/** @brief Light pollution's light in the air (T35): the town's light fills the air below about this height and within
+ *  about this horizontal distance of the camera, in metres (scale lengths of its exponential falloffs:
+ *  ATMOSPHERE_LIGHT_POLLUTION_HEIGHT, _REACH). Chosen so the glow's shape over the sky is T02's tuned one: at the default
+ *  air the zenith gets 5.5 % of the horizon's glow (T02: 6 %). */
+#define WORLD_ATMOSPHERE_LIGHT_POLLUTION_HEIGHT 500.0
+#define WORLD_ATMOSPHERE_LIGHT_POLLUTION_REACH 10000.0
+/** @brief The radiance of light pollution's light in the air at the camera's foot, at LightPollution 1 at night, in the
+ *  sky's light units (times the linear LightPollutionColor): the glow it gives at the horizon in the default air is
+ *  T02's skyglow there (0.012; T35's status block has the calibration). */
+#define WORLD_ATMOSPHERE_LIGHT_POLLUTION_RADIANCE 0.049
+/** @brief How far a ray of the sky goes through the ground haze, in metres: past every mist, and finite, so no infinity
+ *  meets a zero (ATMOSPHERE_SKY_DISTANCE). */
+#define WORLD_ATMOSPHERE_SKY_DISTANCE 1.0e8
+/** @brief The largest haze distance scale (WorldAtmosphereHaze.DistanceScale): any more and every surface is the sky
+ *  already; the bound keeps hostile multipliers finite. */
+#define WORLD_ATMOSPHERE_MAX_HAZE_SCALE 1.0e9
 
 
 // Types.
@@ -131,6 +187,56 @@ typedef struct WorldAtmosphereViewStruct
     double CosZenith;
     double CosLightAzimuth;
 } WorldAtmosphereView;
+
+/** @brief The parts of the aerial-perspective volume's texture: its rows of tiles. The values are the shaders' part
+ *  indices. */
+typedef enum WorldAtmosphereVolumePartEnum
+{
+    /** @brief The light the air scattered toward the camera along the path so far (RGB, the sky's light units). */
+    WorldAtmosphereVolumePart_InScatter = 0,
+    /** @brief The path's transmittance (RGB). */
+    WorldAtmosphereVolumePart_Transmittance = 1,
+} WorldAtmosphereVolumePart;
+
+/** @brief The frame's values in the volume's last row, one texel each (the values are their columns): the light the
+ *  ground haze scatters, per unit of its scattering, at its base. */
+typedef enum WorldAtmosphereVolumeValueEnum
+{
+    /** @brief The sun's light reaching the mist's base (through the air, in the planet's shadow once the sun has set
+     *  there), to be multiplied by the mist's phase function toward the sun. */
+    WorldAtmosphereVolumeValue_GroundHazeSun = 0,
+    /** @brief The moon's light there (the moonlit sky's strength), to be multiplied by the phase toward the moon. */
+    WorldAtmosphereVolumeValue_GroundHazeMoon = 1,
+    /** @brief The light reaching it from all around, scattered evenly: the sky's (its multiple scattering) and light
+     *  pollution's. */
+    WorldAtmosphereVolumeValue_GroundHazeAmbient = 2,
+    /** @brief The number of values; not a value. */
+    WorldAtmosphereVolumeValue_Count
+} WorldAtmosphereVolumeValue;
+
+/**
+ * @brief The haze of a frame (WorldAtmosphere_GetHaze), as every reader of the aerial perspective and the ground haze
+ *        takes it. Linear colours. A plain value type.
+ */
+typedef struct WorldAtmosphereHazeStruct
+{
+    /** @brief Every haze distance is multiplied by it (the environment's AerialDistanceScale and FogStrength and the
+     *  player's fog strength): 1 the real air, 0 none on surfaces. In [0, WORLD_ATMOSPHERE_MAX_HAZE_SCALE]. */
+    float DistanceScale;
+    /** @brief No haze nearer than this, in metres (>= 0). */
+    float StartDistance;
+    /** @brief The ground haze's density per metre at its base (>= 0; 0: none), its base (world Y, metres) and how
+     *  quickly it thins above it (metres, > 0). */
+    float GroundHazeDensity;
+    float GroundHazeBase;
+    float GroundHazeThickness;
+    /** @brief The share of the light it takes that the ground haze scatters (linear), and its forward scattering (the
+     *  phase function's g, [0, 0.99]). */
+    float GroundHazeAlbedo[3];
+    float GroundHazeGlow;
+    /** @brief The atmosphere's ground: the world Y the far ground lies at and the sky's heights are measured from. */
+    float GroundHeight;
+} WorldAtmosphereHaze;
 
 /**
  * @brief What the transmittance and multiple scattering tables were last built for (the renderer keeps one; all zero:
@@ -267,3 +373,145 @@ double WorldAtmosphere_GetCosLightAzimuth(Vector3Double direction, Vector3Double
  */
 Vector2Double WorldAtmosphere_GetSkyViewUv(double viewHeight, Vector3Double direction, Vector3Double lightDirection,
     WorldAtmosphereSkyViewHalf half);
+
+/**
+ * @brief The frame's haze from an environment's settings (AerialDistanceScale, FogStrength, HazeStartDistance, the ground
+ *        haze's five, HorizonGroundHeight) and the player's fog strength (GameConfig.FogStrength).
+ *
+ * A value outside its rule (which validated environments never hold) is clamped to it, and a non-finite one is taken as
+ * its default; the distance scale's product is clamped to WORLD_ATMOSPHERE_MAX_HAZE_SCALE, so every value is finite.
+ * @param environment The environment; must not be NULL.
+ * @param configFogStrength The player's fog strength (1 when there is no config).
+ * @param outHaze [out] Receives the haze.
+ */
+void WorldAtmosphere_GetHaze(const WorldEnvironment* environment, float configFogStrength, WorldAtmosphereHaze* outHaze);
+
+/**
+ * @brief The distance of one of the volume's distance slices, in metres: WORLD_ATMOSPHERE_VOLUME_NEAREST x (FARTHEST /
+ *        NEAREST)^(slice / WORLD_ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE).
+ * @param slice The slice, 0 to WORLD_ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE (clamped).
+ * @returns The distance.
+ */
+double WorldAtmosphere_GetVolumeSliceDistance(int slice);
+
+/**
+ * @brief Where along the volume's slices a distance lies (the shaders' atmosphereVolumeSlice): -1 at the camera, rising
+ *        linearly to 0 at the first slice; between two distance slices their index plus the share of the way from one
+ *        to the next (linear in distance, so the shaders' blend of the two is linear in distance); past the last
+ *        distance slice, linearly on toward the whole ray's slice, reached at the top of the atmosphere.
+ * @param distance The distance along the ray, in metres (a non-positive one is the camera's).
+ * @param distanceToTop The ray's distance to the top of the atmosphere (WorldAtmosphere_GetDistanceToTop, without the
+ *        ground: the volume's rays pass through it).
+ * @returns The slice coordinate, in [-1, WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT - 1].
+ */
+double WorldAtmosphere_GetVolumeSlice(double distance, double distanceToTop);
+
+/** @brief The inverse of WorldAtmosphere_GetVolumeSlice: the distance at a slice coordinate (0 at -1 and below). */
+double WorldAtmosphere_GetVolumeDistance(double slice, double distanceToTop);
+
+/**
+ * @brief Where the volume's texture holds a screen direction's value at one slice (the shaders' atmosphereVolumeUv):
+ *        texture coordinates, kept half a texel inside the slice's tile so bilinear sampling never reads its
+ *        neighbour.
+ * @param screenUv The direction's place on the screen, [0, 1] both ways (0 at the scene's bottom left), as the camera's
+ *        view-projection puts it.
+ * @param slice The slice, 0 to WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT - 1.
+ * @param part The in-scatter's or the transmittance's tile.
+ */
+Vector2Double WorldAtmosphere_GetVolumeUv(Vector2Double screenUv, int slice, WorldAtmosphereVolumePart part);
+
+/** @brief The texture coordinates of one of the frame's values in the volume's last row (its texel's centre). */
+Vector2Double WorldAtmosphere_GetVolumeValueUv(WorldAtmosphereVolumeValue value);
+
+/**
+ * @brief The ground haze's optical depth along part of a ray (the shaders' hazeGroundDepth): the integral of
+ *        density x exp(-max(y, 0) / thickness) over the ray from @p from to @p to metres along it, y the height above the
+ *        haze's base, in closed form.
+ *
+ * Exact for any slope, level rays included (computed as the mean density over the heights crossed, without cancellation).
+ * @param density The density at the base and below it, per metre (<= 0: none).
+ * @param thickness How quickly it thins above the base, in metres (> 0).
+ * @param heightAboveBase The ray's start's height above the base, in metres.
+ * @param rayY How much the ray climbs per metre along it (its unit direction's Y; negative going down).
+ * @param from The distance along the ray the part starts at, in metres.
+ * @param to The distance it ends at (no depth unless above @p from).
+ * @returns The optical depth (>= 0).
+ */
+double WorldAtmosphere_GetGroundHazeDepth(double density, double thickness, double heightAboveBase, double rayY,
+    double from, double to);
+
+/**
+ * @brief Where along a ray the ground haze's optical depth from @p from reaches @p depth (the shaders'
+ *        hazeGroundDistance): the inverse of WorldAtmosphere_GetGroundHazeDepth in its end, in closed form (the ray split
+ *        where it crosses the base; linear in depth where the density is even, below the base or along a nearly level
+ *        ray).
+ *
+ * The shaders read the air's haze there once more: where half of the mist's light comes from, so the air in front of
+ * a far mist hazes it.
+ * @param density The density at the base and below it, per metre (<= 0: none).
+ * @param thickness How quickly it thins above the base, in metres (> 0).
+ * @param heightAboveBase The ray's start's height above the base, in metres.
+ * @param rayY How much the ray climbs per metre along it.
+ * @param from The distance along the ray the depth is counted from, in metres.
+ * @param to The farthest distance returned (where the depth is counted to at most).
+ * @param depth The optical depth sought (<= 0: @p from).
+ * @returns The distance, in [@p from, @p to]: @p to when the depth from @p from to it is no more than @p depth.
+ */
+double WorldAtmosphere_GetGroundHazeDistance(double density, double thickness, double heightAboveBase, double rayY,
+    double from, double to, double depth);
+
+/**
+ * @brief The ground haze's optical depth along part of a ray over the curved planet (the shaders' hazeGroundDepthCurved),
+ *        for the sky pass's rays that pass over the horizon: beyond their lowest point they climb out of the haze again,
+ *        where the flat world's straight ray (WorldAtmosphere_GetGroundHazeDepth) would sink into it.
+ *
+ * The ray's height is taken as a parabola around its lowest point (its true height and curvature there): exact to a
+ * millimetre within 100 km of that point. The stretch below the base counts at the base's density, the rest is a
+ * Gaussian in the distance from the lowest point, in closed form (WorldAtmosphere_GetScaledErfc).
+ * @param density The density at the base and below it, per metre (<= 0: none).
+ * @param thickness How quickly it thins above the base, in metres (> 0).
+ * @param heightAboveBase The ray's start's height above the base, in metres.
+ * @param rayY The cosine of the ray's zenith angle at its start.
+ * @param radius The start's distance from the planet's centre, in metres (> 0): the planet's radius plus the view height.
+ * @param from The distance along the ray the part starts at, in metres.
+ * @param to The distance it ends at (no depth unless above @p from).
+ * @returns The optical depth (>= 0).
+ */
+double WorldAtmosphere_GetGroundHazeDepthCurved(double density, double thickness, double heightAboveBase, double rayY,
+    double radius, double from, double to);
+
+/** @brief e^(x^2) erfc(x) for x >= 0 (the shaders' hazeErfcx: Numerical Recipes' erfcc without its e^(-x^2), a fractional
+ *  error below 1.2e-7 everywhere). */
+double WorldAtmosphere_GetScaledErfc(double x);
+
+/**
+ * @brief The zenith cosine of a light at the point @p distance along a ray (the shaders' march: that point's own zenith,
+ *        on the curved planet): how high the sun stands over a far point of the ground, 0 where it is setting there.
+ * @param ray Where the ray starts and how it climbs.
+ * @param distance How far along it, in metres.
+ * @param lightCosZenith The light's zenith cosine at the ray's start.
+ * @param cosLightAngle The cosine of the angle between the ray and the light.
+ * @returns The cosine, clamped to [-1, 1].
+ */
+double WorldAtmosphere_GetLightCosAt(WorldAtmosphereRay ray, double distance, double lightCosZenith,
+    double cosLightAngle);
+
+/**
+ * @brief How much of light pollution's light (the town's, scattered by the air) the air holds at a point:
+ *        exp(-height / WORLD_ATMOSPHERE_LIGHT_POLLUTION_HEIGHT) x exp(-horizontalDistance /
+ *        WORLD_ATMOSPHERE_LIGHT_POLLUTION_REACH), 1 at the camera's foot.
+ * @param height The point's height above the ground, in metres (below it counts as on it).
+ * @param horizontalDistance Its horizontal distance from the camera, in metres.
+ */
+double WorldAtmosphere_GetLightPollutionShare(double height, double horizontalDistance);
+
+/**
+ * @brief Light pollution's light in the air at the camera's foot for an environment (LightPollution, clamped to [0, 1],
+ *        times its linear LightPollutionColor, times WORLD_ATMOSPHERE_LIGHT_POLLUTION_RADIANCE), faded out by daylight:
+ *        what the atmosphere's tables and the aerial-perspective volume are lit by besides the sun and the moon.
+ * @param environment The environment; must not be NULL.
+ * @param daylight How much daylight there is, 1 day .. 0 night (WorldEnvironment_GetDaylightFactor; clamped).
+ * @param outRadiance [out] Receives the radiance (linear RGB, >= 0).
+ */
+void WorldAtmosphere_GetLightPollutionRadiance(const WorldEnvironment* environment, float daylight,
+    float outRadiance[3]);

@@ -2,7 +2,7 @@
 
 // The terrain's lit fragment stage (B01; the materials since B02): up to sixteen terrain materials blended per pixel
 // from texture arrays (decision W7), lit as world_pbr lights a dielectric (the sun and the moon with the cascades'
-// shadow, the point lights, the ambient with the screen's AO, the night vision and the fog), dithered by the draw's
+// shadow, the point lights, the ambient with the screen's AO, the night vision and the haze), dithered by the draw's
 // fade. The blend, in order (its C mirror is source/TerrainBlend.c: change both together):
 // 1. the painted weights, interpolated and divided by their sum (none at all: the first material);
 // 2. the terrain's rules, in order: each moves its strength (opacity x slope x height x noise) of every covered
@@ -69,7 +69,7 @@ uniform float chunkHeight;
 
 out vec4 finalColor;
 
-// The frame's lights, shadows, ambient, fog and night vision, as world_pbr has them.
+// The frame's lights, shadows, ambient, haze and night vision, as world_pbr has them.
 #include "common/lighting"
 // The draw's fade (its draw distance, the object's opacity) as a dither on the scene's pixel grid.
 #include "common/dither"
@@ -472,7 +472,7 @@ void main()
     vec3 ambient = ambientColor*ambientIntensity*albedo*occlusion*ScreenAo();
 
     vec3 color = NightVisionOf(ambient + direct + pointTotal);
-    color = ApplyFog(color, fragPosition);
+    color = ApplyAerialPerspective(color, fragPosition);
 
     // The fade is tested last, after every derivative and mipmapped fetch above, so those stay defined for the pixels
     // that are drawn.

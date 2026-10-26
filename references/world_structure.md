@@ -1,6 +1,6 @@
 # World file structure
 
-A world file holds one 3D world: its name, its environment (sky, sun, moon, fog, effects) and its objects with their
+A world file holds one 3D world: its name, its environment (sky, sun, moon, haze, effects) and its objects with their
 tags, data and components. It has two forms with the same content:
 
 - **JSON** (`<name>.world.json`): authored worlds. Readable, editable by hand, and written so that git diffs stay
@@ -80,7 +80,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `format_version` | integer, required | The format the file is written in: 1. A newer version is refused ("newer than this game reads"). |
 | `name` | string or `null` | The world's name: at most 256 bytes of UTF-8. |
 | `next_object_id` | integer | The id the world hands to its next new object, so ids of removed objects are not reused; 18446744073709551615 once every id was handed out (no id is that large). When it is not above every object id it is raised to one that is, with a warning; without it, one above the largest id. |
-| `environment` | object | The environment's settings by key (the `world_environment` table; `agents/WorldData.md`, "Environment", lists them with their rules). Absent keys keep their defaults. Since T15 the air's settings are among them: `haze_height`, `haze_albedo`, `sun_glow`, `air_density`, `ozone` and `multiple_scattering` (with `sky_turbidity` and `sky_ground_albedo`), e.g. `{"haze_height": 300, "sun_glow": 0.9, "ozone": 0}`. |
+| `environment` | object | The environment's settings by key (the `world_environment` table; `agents/WorldData.md`, "Environment", lists them with their rules). Absent keys keep their defaults. Since T15 the air's settings are among them: `haze_height`, `haze_albedo`, `sun_glow`, `air_density`, `ozone` and `multiple_scattering` (with `sky_turbidity` and `sky_ground_albedo`), e.g. `{"haze_height": 300, "sun_glow": 0.9, "ozone": 0}`. Since T35 the haze's settings: `aerial_distance_scale` (every haze distance that many times longer; 5 for a bigger, hazier town), `haze_start_distance`, the ground haze's `ground_haze_density` (0.02 a morning mist), `ground_haze_base`, `ground_haze_thickness` (15 for that mist), `ground_haze_albedo` and `ground_haze_glow`, and `horizon_ground_height` (the far ground's height); `fog_strength` multiplies the haze (1 the real air, 0 clear air) and `fog_color` is no longer used, e.g. `{"ground_haze_density": 0.02, "ground_haze_thickness": 15}`. |
 | `objects` | array of objects | The objects. |
 
 ### An object
@@ -117,6 +117,7 @@ are no "inherit" values.
 | Full resolution over the pixelated image | `overrides_omit_pixelation` | `omit_pixelation` (default false) |
 | The shadow cascades | `overrides_shadow_tier` | `shadow_tier`: `both` (default), `near`, `far` |
 | Casting shadows | `overrides_casts_shadows` | `casts_shadows` (default true) |
+| The haze in front of it (T35) | `overrides_haze` | `haze`: in [0, 1000], times the air's haze (default 1; 0 as if the air were clear: a sign that must read from far away) |
 | The draw distance | `overrides_draw_distance` | `draw_distance`: metres, above 0 (default 600) |
 | Keeping it fixed against the quality setting | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` (default false) |
 | The LOD switch distances | `overrides_lod_distances` | `lod_distances`: metres, finest LOD first, each above 0 and above the one before, at most 8 (default `[]`) |
@@ -204,6 +205,7 @@ while its flag is off.
 | A decal's lift | `overrides_decal_offset` | `decal_offset`: metres, >= 0 (0.01) |
 | The outline | `overrides_has_outline` | `has_outline` (true) |
 | Full resolution over the pixelated image | `overrides_omit_pixelation` | `omit_pixelation` (false) |
+| The haze in front of it (T35) | `overrides_haze` | `haze`: in [0, 1000] (1; 0 as if the air were clear) |
 | The draw distance | `overrides_draw_distance` | `draw_distance`: metres, above 0 (150) |
 | Keeping it fixed against the quality setting | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` (false) |
 
@@ -335,6 +337,7 @@ render and collision setting of the terrain asset can be overridden with the two
 | `overrides_has_outline`, `has_outline` | false, true | The outline. |
 | `overrides_shadow_tier`, `shadow_tier` | false, `both` | Which cascades it casts into: `near`, `far`, `both`. |
 | `overrides_casts_shadows`, `casts_shadows` | false, true | Off: it casts no shadow (it still receives them). |
+| `overrides_haze`, `haze` | false, 1 | Times the air's haze in front of it, in [0, 1000] (T35; 0 as if the air were clear). |
 | `overrides_draw_distance`, `draw_distance` | false, 4000 | How far each chunk is seen, in metres (above 0). |
 | `draw_distance_multiplier` | above 0 (1) | Times the draw distance in effect. |
 | `overrides_is_draw_distance_fixed`, `is_draw_distance_fixed` | false, true | On: the player's draw distance setting leaves it as it is. |

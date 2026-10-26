@@ -23,8 +23,8 @@
  *
  * OVERRIDES. Each default of the terrain asset a placement may change is two rows: an override flag
  * ("overrides_<key>", false: the asset's value applies) and the placement's own value next to it, kept (and saved) while
- * the flag is off: has_outline, shadow_tier, casts_shadows, draw_distance, is_draw_distance_fixed, is_collision_enabled,
- * collision_layer and collides_with. draw_distance_multiplier (above 0, default 1) multiplies whichever draw distance
+ * the flag is off: has_outline, shadow_tier, casts_shadows, haze (T35), draw_distance, is_draw_distance_fixed,
+ * is_collision_enabled, collision_layer and collides_with. draw_distance_multiplier (above 0, default 1) multiplies whichever draw distance
  * applies. WorldTerrainComponent_ResolveSettings is the pure function that gives the settings in effect. Its table is
  * "terrain_component", in that order with "terrain" first; every change advances the component's revision.
  */
@@ -57,6 +57,8 @@ typedef enum WorldTerrainSettingEnum
     WorldTerrainSetting_CollisionLayer,
     /** @brief collides_with. */
     WorldTerrainSetting_CollidesWith,
+    /** @brief haze (T35). */
+    WorldTerrainSetting_Haze,
     /** @brief The number of settings (not a setting). */
     WorldTerrainSetting_Count
 } WorldTerrainSetting;
@@ -79,6 +81,10 @@ typedef struct WorldTerrainComponentStruct
     WorldShadowTier _shadowTier;
     bool _overridesCastsShadows;
     bool _castsShadows;
+    bool _overridesHaze;
+    /** @brief The haze multiplier, in [0, WORLD_MODEL_MAX_HAZE] (default 1: the real air's haze; 0 as if the air were
+     *  clear). */
+    float _haze;
     bool _overridesDrawDistance;
     /** @brief Metres, above 0 (default TERRAIN_DEFAULT_DRAW_DISTANCE). */
     float _drawDistance;
@@ -219,6 +225,24 @@ static inline bool WorldTerrainComponent_CastsShadows(const WorldTerrainComponen
  * @returns Success; ErrorCode_IllegalArgument for a NULL self.
  */
 Error WorldTerrainComponent_SetCastsShadows(WorldTerrainComponent* self, bool castsShadows);
+
+/**
+ * @brief The placement's own haze multiplier (it applies while WorldTerrainSetting_Haze is overridden).
+ * @param self The component; must not be NULL.
+ * @returns The multiplier: 1 the real air's haze, 0 none.
+ */
+static inline float WorldTerrainComponent_GetHaze(const WorldTerrainComponent* self)
+{
+    return self->_haze;
+}
+
+/**
+ * @brief Sets the placement's own haze multiplier (it applies while overridden): how hazy the terrain looks at a distance.
+ * @param self The component; must not be NULL.
+ * @param haze Finite, in [0, WORLD_MODEL_MAX_HAZE]: 1 the real air's haze, 0 as if the air were clear.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL self; ErrorCode_ArgumentOutOfRange for a value outside the range.
+ */
+Error WorldTerrainComponent_SetHaze(WorldTerrainComponent* self, float haze);
 
 /**
  * @brief The placement's own draw distance in metres (it applies while WorldTerrainSetting_DrawDistance is

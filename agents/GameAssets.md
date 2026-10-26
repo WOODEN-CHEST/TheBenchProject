@@ -128,10 +128,12 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   of file 1. When such a stage fails to compile, the load error lists which number is which file. A missing include
   fails with `ErrorCode_InvalidAssetData` naming the include, the including file and the line (cached like every
   failure). Shared files today: `common/math` (`PI`), `common/atmosphere` (the air, the atmosphere's tables and their
-  march, T34's direct march: the table builders, the sky, the stars and the lit shaders' fog share it, T15),
-  `common/night_sky` (air mass, extinction, the skyglow profile: the sky, the stars and the lit shaders' fog),
-  `common/night_vision` (the eye's dim-light vision: the sky and the lit shaders), `common/lighting` (the world's
-  lighting: the PBR and the sprite shaders; it includes the four before it) and `common/distance_packing` (the
+  march, T34's direct march, the haze volume's layout: the table builders, the volume's, the sky, the stars and the
+  haze's readers share it, T15, T35), `common/haze` (the haze in front of what the camera sees: the volume's readers and
+  the ground haze; the lit shaders, the sky, the stars and the outlines, T35), `common/night_sky` (air mass,
+  extinction, the skyglow profile: the sky and the stars), `common/night_vision` (the eye's dim-light vision: the sky and
+  the lit shaders), `common/lighting` (the world's lighting: the PBR, terrain and sprite shaders; it includes the ones
+  before it) and `common/distance_packing` (the
   point-light shadow cube's packed distances); `common/dither`, `common/skinning` and `common/instancing` are the world
   renderer's ([WorldRuntime.md](WorldRuntime.md)). A stage file may be shared too: the four sprite shaders' definitions
   all name `sprite/vertex`, and each instanced twin names its rigid shader's fragment stage.

@@ -1,12 +1,15 @@
 #version 330
 
-// Full-screen atmospheric sky: the atmosphere (shaders/common/atmosphere.glsl, which the lit shaders' distance fog
-// shares) lit by the sun and, at night, by the moon; light pollution's skyglow; a sun disc, the moon's disc and the Milky
-// Way. The eye's night vision (shaders/common/night_vision.glsl) greys the dim sky, not the discs. The stars are a
-// separate pass drawn over this one (shaders/stars).
+// Full-screen atmospheric sky: the atmosphere (shaders/common/atmosphere.glsl) lit by the sun and, at night, by the moon;
+// light pollution's light; a sun disc, the moon's disc and the Milky Way. The eye's night vision
+// (shaders/common/night_vision.glsl) greys the dim sky, not the discs. The stars are a separate pass drawn over this one
+// (shaders/stars).
 // Since T15 the sky's glow comes from the atmosphere's tables, built first in the frame (the sky-view table by direction:
-// single and multiple scattering, with the skyglow; the transmittance table dims the discs and the Milky Way); with the
-// tables off (the A/B, or unavailable) it is marched per pixel as before (T34: single scattering).
+// single and multiple scattering, with light pollution's light; the transmittance table dims the discs and the Milky
+// Way); with the tables off (the A/B, or unavailable) it is marched per pixel as before (T34: single scattering, light
+// pollution as T02's skyglow). Since T35 the table holds the far ground below the horizon (the haze in front of it
+// included), and the ground haze (common/haze) lies in front of the sky and the far ground as it lies in front of the
+// world's surfaces, so a misty horizon meets misty ground without a seam.
 // Drawn behind the 3D geometry into the linear-HDR scene buffer; the tonemap post-pass maps it to display.
 // The per-pixel ray is reconstructed from the inverse view-projection so the sky lines up exactly with the 3D
 // camera. The renderer works in render space (the world's orientation with the camera at the origin), so that matrix
@@ -26,8 +29,8 @@ uniform float sunIntensity;    // radiance multiplier
 uniform float sunSize;         // angular-size multiplier for the sun disc
 uniform vec3 skyTint;          // linear multiplier, for alien skies
 
-uniform vec3 skyglowRadiance;      // light pollution's glow at the horizon, linear (0 by day; the march's: the tables
-                                   // hold it)
+uniform vec3 skyglowRadiance;      // light pollution's glow at the horizon, linear (0 by day; the direct march's: the
+                                   // tables hold light pollution's light in the air)
 uniform sampler2D milkyWayTexture; // sky_milky_way: an equirectangular panorama in galactic coordinates (sRGB)
 uniform mat4 worldToGalactic;      // world direction -> galactic (x toward the galactic centre, z its north pole)
 uniform float milkyWayRadiance;    // linear radiance of a white texel; 0 draws no Milky Way (and samples nothing)
@@ -55,6 +58,7 @@ uniform vec3  nightVisionTint;           // the rods' grey, luminance 1 (the wor
 out vec4 finalColor;
 
 #include "common/atmosphere"
+#include "common/haze"
 #include "common/night_sky"
 #include "common/night_vision"
 
@@ -116,17 +120,23 @@ void main()
     vec3 sunDir = normalize(sunDirection);
     vec3 moonDir = normalize(moonDirection);
     float iSun = ATMOSPHERE_SUN_RADIANCE*max(sunIntensity, 0.0);
+    // With the tables the planet's surface ends every ray below its horizon (the far ground, T35), and nothing beyond the
+    // air shows there; the direct march mirrors the sky below the horizon and draws the discs down to -0.02, as before.
+    float toGround = atmosphereDistanceToGround(atmosphereViewHeight, rayDir.y);
+    bool isBeyondAirShown = atmosphereTablesActive ? (toGround < 0.0) : (rayDir.y > -0.02);
 
     // The sky's glow, and the share of what lies beyond the air along the ray that reaches the camera (the discs, the
-    // Milky Way). Infinite-skybox look for now: there is no ground; below the horizon the sky above it is mirrored and
-    // darkened so it still reads as "down" (T35 draws the far ground instead).
+    // Milky Way). Below the horizon the tables hold the far ground; the direct march mirrors the sky above it and darkens
+    // it, so it still reads as "down".
+    vec3 tint = max(skyTint, vec3(0.0));
     vec3 sky;
     vec3 transmittance;
     vec3 milkyWayExtinction;
     if (atmosphereTablesActive)
     {
-        // The tables (T15): the sun's glow with the skyglow, and the moonlit sky (the same atmosphere lit by the moon:
-        // blue for the same reason the day is, far dimmer), each with its multiple scattering; the mirror is theirs.
+        // The tables (T15): the sun's glow with light pollution's, and the moonlit sky (the same atmosphere lit by the
+        // moon: blue for the same reason the day is, far dimmer), each with its multiple scattering, already tinted; the
+        // far ground below the horizon is theirs.
         sky = atmosphereSkyView(rayDir, sunDir, 0.0);
         if (moonSkyIntensity > 0.0)
         {
@@ -141,7 +151,7 @@ void main()
     {
         // TODO: remove with the direct march once the owner approves the tables' sky (T15).
         // The direct march (T34), with the ray mirrored into the upper hemisphere (abs(y)) so every direction gets a sky
-        // colour. The lit shaders' fogSkyColor repeats these steps.
+        // colour.
         vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
         sky = atmosphere(skyRay, sunDir, iSun, transmittance);
         if (moonSkyIntensity > 0.0)
@@ -150,7 +160,7 @@ void main()
         }
         sky += nightSkySkyglow(skyRay.y, skyglowRadiance);
         float belowFactor = smoothstep(0.0, -0.12, rayDir.y); // 0 above the horizon, 1 below
-        sky *= mix(1.0, 0.5, belowFactor);
+        sky *= mix(1.0, 0.5, belowFactor)*tint;
         milkyWayExtinction = vec3(nightSkyExtinction(nightSkyAirmass(rayDir.y)));
     }
 
@@ -158,7 +168,7 @@ void main()
     // pass leaves out behind it). Only above the horizon, like the sun disc.
     float moonCover = 0.0;
     vec3 moon = vec3(0.0);
-    if ((moonOpacity > 0.0) && (rayDir.y > -0.02))
+    if ((moonOpacity > 0.0) && isBeyondAirShown)
     {
         moon = moonDisc(rayDir, sunDir, moonCover);
     }
@@ -167,28 +177,40 @@ void main()
     // brightness, the light pollution and the twilight.
     if ((milkyWayRadiance > 0.0) && (rayDir.y > 0.0))
     {
-        sky += milkyWay(rayDir)*milkyWayExtinction*(1.0 - moonCover);
+        sky += milkyWay(rayDir)*milkyWayExtinction*(1.0 - moonCover)*tint;
+    }
+
+    // The ground haze in front of all of it (T35): up to the far ground below the horizon (where the table's rays end),
+    // through the whole sky above it, along the curved planet for the rays that pass over the horizon. It dims the discs
+    // too.
+    float mistTransmittance = 1.0;
+    if (hazeActive && (groundHazeDensity > 0.0))
+    {
+        float toEnd = (toGround >= 0.0) ? toGround : ATMOSPHERE_SKY_DISTANCE;
+        vec3 mistLight;
+        mistTransmittance = hazeGroundInFrontOfSky(uv, rayDir, toEnd, (toGround < 0.0) && (rayDir.y < 0.0), sunDir,
+            moonDir, mistLight);
+        sky = mix(mistLight, sky, mistTransmittance);
     }
 
     // What the eye sees of the sky's dim light: at night its colour fades into the rods' grey (a low moon's sky is as
     // orange as a sunset's, but too dim for colour vision); by day this leaves it exactly as it is.
-    vec3 tint = max(skyTint, vec3(0.0));
-    sky = nightVision(sky*tint, nightVisionFieldLuminance, nightVisionHalfLuminance, nightVisionSteepness,
+    sky = nightVision(sky, nightVisionFieldLuminance, nightVisionHalfLuminance, nightVisionSteepness,
         nightVisionStrength, nightVisionTint);
 
     // The discs are emitters, far brighter than the game draws them, so they keep their colour: the sun disc, only
-    // above the horizon (so the mirror does not create a second sun below), and the moon, both dimmed and reddened by
-    // the air in front of them (the moon pale by day under the bright in-scatter, bright at night, orange as it rises;
-    // the sun orange as it sets). The direct march leaves the sun's disc undimmed, as before T15.
+    // above the horizon (not over the far ground, nor as a second sun in the direct march's mirror), and the moon, both
+    // dimmed and reddened by the air in front of them (the moon pale by day under the bright in-scatter, bright at night,
+    // orange as it rises; the sun orange as it sets). The direct march leaves the sun's disc undimmed, as before T15.
     vec3 discs = vec3(0.0);
     float discCos = cos(radians(0.5*max(sunSize, 0.01)));
-    if ((rayDir.y > -0.02) && (dot(rayDir, sunDir) > discCos))
+    if (isBeyondAirShown && (dot(rayDir, sunDir) > discCos))
     {
         vec3 sunDisc = max(sunColor, vec3(0.0))*iSun*(1.0 - moonCover);
         discs += atmosphereTablesActive ? (sunDisc*transmittance) : sunDisc;
     }
     discs += moon*transmittance*moonCover;
-    sky += discs*tint;
+    sky += discs*tint*mistTransmittance;
 
     finalColor = vec4(sky, 1.0); // linear HDR; tonemap post-pass maps it to display
 }

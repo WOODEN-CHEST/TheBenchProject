@@ -578,10 +578,11 @@ static void FillEnvironment(WorldEnvironment* environment)
 }
 
 /* The settings added after the hand-written encoder's time: T03's (the moon, the seasons, the sky texture names, ids 31
- * to 43), the night vision's (44 and 45), the gravity (46) and the air's (T15, 47 to 52), every one off its default. The
- * names go through the table, which clones them and frees the old ones. */
+ * to 43), the night vision's (44 and 45), the gravity (46), the air's (T15, 47 to 52) and the haze's (T35, 53 to 60), every
+ * one off its default. The names go through the table, which clones them and frees the old ones. */
 static const uint16_t LaterSettingWireIds[] =
-    { 31U, 32U, 33U, 34U, 35U, 36U, 37U, 38U, 39U, 40U, 41U, 42U, 43U, 44U, 45U, 46U, 47U, 48U, 49U, 50U, 51U, 52U };
+    { 31U, 32U, 33U, 34U, 35U, 36U, 37U, 38U, 39U, 40U, 41U, 42U, 43U, 44U, 45U, 46U, 47U, 48U, 49U, 50U, 51U, 52U, 53U,
+        54U, 55U, 56U, 57U, 58U, 59U, 60U };
 
 static void FillLaterSettings(TestRun* run, WorldEnvironment* environment)
 {
@@ -605,6 +606,14 @@ static void FillLaterSettings(TestRun* run, WorldEnvironment* environment)
     environment->AirDensity = 0.5f;
     environment->Ozone = 2.0f;
     environment->MultipleScattering = 0.5f;
+    environment->AerialDistanceScale = 5.0f;
+    environment->HazeStartDistance = 75.5f;
+    environment->GroundHazeDensity = 0.02f;
+    environment->GroundHazeBase = -12.25f;
+    environment->GroundHazeThickness = 15.0f;
+    environment->GroundHazeAlbedo = (Color){ 210, 190, 170, 255 };
+    environment->GroundHazeGlow = 0.6f;
+    environment->HorizonGroundHeight = 340.0f;
     const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, Properties_Set(Table, environment, u8"moon_texture",
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"pack.red_moon" }));
@@ -2045,7 +2054,7 @@ static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
             TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Expected, 30U,
                 GHDF_CreateRegularType(GHDFValueType_EncodedInteger), &Date));
             TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Environment, Pool, Actual, &Everything));
-            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 50U);
+            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 58U);
             for (size_t Index = 0U; Index < (sizeof(LaterSettingWireIds) / sizeof(LaterSettingWireIds[0])); Index++)
             {
                 TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Actual, LaterSettingWireIds[Index]));
@@ -2076,7 +2085,7 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
     if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
     {
         TEST_CHECK_SUCCESS(run, WorldEnvironment_WriteJSON(&Source, Pool, Compound, NULL));
-        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 50U);
+        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 58U);
         JSONObjectValue Parsed;
         if (ReparseCompound(run, Pool, Compound, &Parsed))
         {
@@ -2161,6 +2170,26 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
         TEST_CHECK(run, Restored.SunGlow == 0.9f);
         TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
     }
+    // The haze's settings as a creator writes them (T35): a bigger, hazier town and a morning mist.
+    if (TestText_ParseJSON(run, Pool, "{\"aerial_distance_scale\": 5, \"ground_haze_density\": 0.02, "
+        "\"ground_haze_thickness\": 15, \"horizon_ground_height\": -20.5}", &Value))
+    {
+        TEST_CHECK_SUCCESS(run, WorldEnvironment_ReadJSON(&Restored, Value.Value.Compound, NULL));
+        TEST_CHECK(run, (Restored.AerialDistanceScale == 5.0f) && (Restored.GroundHazeDensity == 0.02f)
+            && (Restored.GroundHazeThickness == 15.0f) && (Restored.HorizonGroundHeight == -20.5f));
+        TEST_CHECK(run, (Restored.GroundHazeBase == 0.0f) && (Restored.GroundHazeGlow == 0.8f)
+            && (Restored.HazeStartDistance == 0.0f) && (Restored.GroundHazeAlbedo.g == 250));
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+    if (TestText_ParseJSON(run, Pool, "{\"ground_haze_thickness\": 0}", &Value))
+    {
+        const char* const Fragments[] =
+            { "world_environment.ground_haze_thickness (GroundHazeThickness) must be finite and in [0.1, 100000]", NULL };
+        TestText_CheckErrorMessage(run, WorldEnvironment_ReadJSON(&Restored, Value.Value.Compound, NULL),
+            ErrorCode_InvalidJSON, Fragments);
+        TEST_CHECK(run, Restored.GroundHazeThickness == 15.0f);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
     WorldEnvironment_Deconstruct(&Source);
     WorldEnvironment_Deconstruct(&Restored);
     TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
@@ -2185,7 +2214,7 @@ static void EnvironmentGHDFRoundTrip(TestRun* run)
     if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Pool, &Compound)))
     {
         TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Source, Pool, Compound, NULL));
-        TEST_CHECK(run, GHDFCompound_GetEntryCount(Compound) == 50U);
+        TEST_CHECK(run, GHDFCompound_GetEntryCount(Compound) == 58U);
         TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(Table, Compound, &Restored, NULL));
         TEST_CHECK(run, Properties_Equals(Table, &Source, &Restored));
         TEST_CHECK(run, (Restored.MoonTexture != Source.MoonTexture) && AreStringsEqual(Restored.MoonTexture, u8"pack.red_moon"));

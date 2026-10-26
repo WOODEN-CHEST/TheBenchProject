@@ -2,7 +2,7 @@
 // frame's lighting uniforms (the renderer uploads the same values to every shader that includes this file), the
 // Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the cascades' shadow, forward point
 // lights and the shadow-casting point light with its cube shadow, the screen-space AO of the ambient term, the eye's
-// night vision and the atmospheric distance fog (from the atmosphere's tables since T15).
+// night vision and the haze in front of every surface (T35's aerial perspective and ground haze, common/haze).
 //
 // Two families of light functions: the plain ones (SkyLight, PointLights) the PBR shader uses, and the wrapped ones
 // (SkyLightWrapped, PointLightsWrapped) sprites use, whose diffuse part reaches past the terminator ("wrap lighting",
@@ -12,21 +12,21 @@
 // RENDER SPACE (T32). "World space" here, and in every shader that includes this file, means render space: the world's
 // orientation with the camera at (0, 0, 0). Fragment positions, light positions and the shadow matrices are relative to
 // the camera (the renderer subtracts its position in double), so the camera needs no uniform: the view vector is
-// -worldPos, the fog's distance length(worldPos). A pattern anchored to the world must not use these positions alone:
+// -worldPos, the haze's distance length(worldPos). A pattern anchored to the world must not use these positions alone:
 // it gets the camera's position wrapped by the pattern's period, in double, from the renderer (agents/WorldRuntime.md,
 // "Render space").
 
 #include "common/math"
 #include "common/atmosphere"
-#include "common/night_sky"
+#include "common/haze"
 #include "common/night_vision"
 #include "common/distance_packing"
 
 // Lighting, set by WorldRenderer each frame. Light colours are LINEAR.
-uniform vec3 sunDirection;     // unit direction TO the sun, world space (also the fog sky's sun)
+uniform vec3 sunDirection;     // unit direction TO the sun, world space (also the ground haze's sun)
 uniform vec3 sunColor;         // linear
 uniform float sunIntensity;    // the sun's light: daylight included, 0 at night
-uniform vec3 moonDirection;    // unit direction TO the moon, world space (also the fog sky's moon)
+uniform vec3 moonDirection;    // unit direction TO the moon, world space (also the ground haze's moon)
 uniform vec3 moonColor;        // linear
 uniform float moonIntensity;   // the moon's light: phase, height and night included, 0 by day or without a moon
 uniform vec3 ambientColor;     // linear
@@ -73,17 +73,14 @@ uniform samplerCube pointShadowCube;    // packed (RGBA8) linear distance from t
 uniform float pointShadowFar;           // far range the stored distance was normalized by
 uniform float pointShadowBias;          // world-space depth bias to combat shadow acne
 
-// Atmospheric distance fog: distant geometry fades into the SAME sky the sky pass draws, evaluated along the fragment's
-// own view ray, so far objects dissolve seamlessly into the sky (not a flat "close but not quite" colour). Since T15 the
-// fog reads the sky-view table the sky pass reads (common/atmosphere: the air's uniforms and the tables come from the
-// atmosphere pass), or marches the sky as the sky pass does while the tables are off; the renderer gives the uniforms
-// below the values the sky pass gets. fogDensity 0 disables fog.
-// TODO: T35 replaces this fog with aerial perspective (the haze of the air in front of a surface, G36).
-uniform float fogDensity;
-uniform vec3  skyTint;          // linear sky tint multiplier (same value the sky pass gets)
-uniform float skySunIntensity;  // RAW sun intensity (NOT day-scaled); == WorldEnvironment.SunIntensity (the march's)
-uniform vec3  skyglowRadiance;  // light pollution's glow at the horizon, linear (the march's: the tables hold it)
-uniform float skyMoonIntensity; // the moonlit sky's light relative to the sun's (same value the sky pass gets); 0 = none
+// The haze in front of a surface (T35, common/haze): the air's from the aerial-perspective volume, and the ground haze.
+// The volume's screen directions are the scene camera's: a point's place among them is its position through the scene's
+// view-projection (the crisp pass, at the window's resolution, reads the same directions). A draw's own haze multiplies
+// the frame's: its placement's `haze` (1 the real air's, 0 none: a sign that must read from far away), set before every
+// lit draw.
+// T14: the ambient zones' haze multiplier (a room's) multiplies hazeMultiplier where the renderer sets it per draw.
+uniform mat4 hazeViewProjection;
+uniform float hazeMultiplier;
 
 // The eye's night vision (shaders/common/night_vision.glsl): dim reflected light loses its colour as it does for the
 // eye; emitted light keeps it. The same values the sky pass gets.
@@ -371,7 +368,7 @@ vec3 PointLightsWrapped(vec3 n, vec3 v, vec3 worldPos, vec3 shadowPos, vec3 shad
 }
 
 
-// ---- Ambient, night vision and fog -----------------------------------------------------------------------------
+// ---- Ambient, night vision and haze ----------------------------------------------------------------------------
 // The screen-space AO multiplier at this pixel (1 = open), for the ambient term only; 1 while no AO runs. Only meaningful
 // for a surface the AO pre-pass saw (a model, a cutout sprite) or one lying on it (a decal).
 float ScreenAo()
@@ -387,65 +384,36 @@ vec3 NightVisionOf(vec3 color)
         nightVisionStrength, nightVisionTint);
 }
 
-// The sky colour along a world-space view ray (the sky pass's result minus the sun and moon discs, the Milky Way and the
-// stars, but with the moonlit sky and light pollution's skyglow). This is the colour distant fogged geometry fades
-// toward, so it matches the visible sky in that direction.
-vec3 fogSkyColor(vec3 rayDir)
+// The draw's place on the volume's screen: a render-space point through the scene's view-projection.
+vec2 HazeScreenUv(vec3 worldPos)
 {
-    vec3 sunDir = normalize(sunDirection);
-    vec3 sky;
-    if (atmosphereTablesActive)
-    {
-        // The sky-view table, as the sky pass reads it (the mirror below the horizon and the skyglow are in it).
-        sky = atmosphereSkyView(rayDir, sunDir, 0.0);
-        if (skyMoonIntensity > 0.0)
-        {
-            sky += atmosphereSkyView(rayDir, normalize(moonDirection), 1.0);
-        }
-    }
-    else
-    {
-        // TODO: remove with the direct march once the owner approves the tables' sky (T15).
-        // The direct march: mirror the ray into the upper hemisphere and darken below the horizon, exactly like the sky
-        // pass's.
-        float iSun = ATMOSPHERE_SUN_RADIANCE*max(skySunIntensity, 0.0);
-        vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
-        sky = atmosphere(skyRay, sunDir, iSun);
-        if (skyMoonIntensity > 0.0)
-        {
-            sky += atmosphere(skyRay, normalize(moonDirection), ATMOSPHERE_SUN_RADIANCE*skyMoonIntensity);
-        }
-        sky += nightSkySkyglow(skyRay.y, skyglowRadiance);
-        float belowFactor = smoothstep(0.0, -0.12, rayDir.y);
-        sky *= mix(1.0, 0.5, belowFactor);
-    }
-    sky *= max(skyTint, vec3(0.0));
-    return sky;
+    vec4 clip = hazeViewProjection*vec4(worldPos, 1.0);
+    return (clip.w > 0.0) ? clip.xy/clip.w*0.5 + 0.5 : vec2(0.5);
 }
 
-// How much of the view toward a point the fog takes (0 none .. 1 all), with an exponential falloff; 0 without fog. The
-// camera sits at the origin of render space.
-float FogFactor(vec3 worldPos)
+// Aerial perspective: a surface's light reaches the camera dimmed by the haze in front of it (its transmittance), plus
+// the light that haze scatters toward the camera (its in-scatter, seen through the eye's night vision as the sky's glow
+// is). At the horizon that is the sky itself, so far things still dissolve into it; nearer, a hill ends as a pale,
+// flat silhouette, never see-through. The camera sits at the origin of render space.
+vec3 ApplyAerialPerspective(vec3 color, vec3 worldPos)
 {
-    if (fogDensity <= 0.0)
+    float toPoint = length(worldPos);
+    if (!(toPoint > 0.0))
     {
-        return 0.0;
+        return color;
     }
-    float fragDistance = length(worldPos);
-    return clamp(1.0 - exp(-fragDistance*fogDensity), 0.0, 1.0);
+    vec3 inScatter;
+    vec3 transmittance;
+    hazeInFront(HazeScreenUv(worldPos), worldPos/toPoint, toPoint, hazeMultiplier, normalize(sunDirection),
+        normalize(moonDirection), inScatter, transmittance);
+    return color*transmittance + NightVisionOf(inScatter);
 }
 
-// Distance fog: fades a colour toward the atmospheric sky colour along the point's own view ray, so distant geometry
-// dissolves into the exact sky behind it. The sky is only evaluated when the fog actually contributes (near fragments
-// skip the raymarch), and goes through the night vision as the sky pass's does.
-vec3 ApplyFog(vec3 color, vec3 worldPos)
+// The haze's transmittance to a point alone: an emitter seen through the haze (an additive sprite) is dimmed by it, its
+// in-scatter already being in what lies behind.
+vec3 AerialTransmittance(vec3 worldPos)
 {
-    float fogFactor = FogFactor(worldPos);
-    if (fogFactor > 0.001)
-    {
-        vec3 viewRay = normalize(worldPos);
-        vec3 fogSky = NightVisionOf(fogSkyColor(viewRay));
-        color = mix(color, fogSky, fogFactor);
-    }
-    return color;
+    float toPoint = length(worldPos);
+    return (toPoint > 0.0) ? hazeTransmittance(HazeScreenUv(worldPos), worldPos/toPoint, toPoint, hazeMultiplier)
+        : vec3(1.0);
 }

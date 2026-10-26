@@ -96,11 +96,17 @@
  * whether or not the shader samples them. */
 typedef enum
 {
-    // The atmosphere's tables (T15), for every program that reads them (the lit programs, the sky pass, the stars):
-    // raylib binds only cube maps on 7 and 8 (MATERIAL_MAP_CUBEMAP and _IRRADIANCE, which no material of ours fills),
-    // never a 2D texture, and the 2D batch only units 0 to 4, so the tables stay bound there for the whole frame.
+    // The atmosphere's tables (T15), for the programs that read them (the sky pass, the stars): raylib binds only cube
+    // maps on 7 and 8 (MATERIAL_MAP_CUBEMAP and _IRRADIANCE, which no material of ours fills), never a 2D texture, and
+    // the 2D batch only units 0 to 4, so what a pass binds there stays bound until another pass binds over it: the
+    // atmosphere pass leaves the tables bound and the sky pass and the stars bind them again before their draws; the lit
+    // passes bind the volume on 8 (below), so a lit program never reads the sky view there.
     WorldRendererTextureUnit_AtmosphereTransmittance = 7, // sampler2D atmosphereTransmittanceTable
     WorldRendererTextureUnit_AtmosphereSkyView = 8,       // sampler2D atmosphereSkyViewTable
+    // The aerial-perspective volume (T35) in the lit programs, on the unit the sky view has in the sky pass and the
+    // stars: the lit programs never read the sky view (the 2D passes that read the volume bind it with
+    // SetShaderValueTexture).
+    WorldRendererTextureUnit_HazeVolume = 8,              // sampler2D atmosphereVolume
     // The terrain program's material arrays (B02): sampler2DArray, below raylib's material map units' top, because the
     // terrain program draws with no material maps (DrawMesh binds none for it). Other programs' material maps bind
     // GL_TEXTURE_2D (or cube) textures on these units; an array sampler reads only the units' GL_TEXTURE_2D_ARRAY
@@ -119,8 +125,10 @@ _Static_assert(WorldRendererTextureUnit_ShadowNear >= WORLD_RENDERER_MATERIAL_MA
     "renderer-owned texture units must sit above raylib's material map units");
 _Static_assert(WorldRendererTextureUnit_TerrainRoughnessAo < WorldRendererTextureUnit_ShadowNear,
     "the terrain's arrays sit below the frame textures");
-_Static_assert(WorldRendererTextureUnit_AtmosphereSkyView < WorldRendererTextureUnit_TerrainAlbedoHeight,
-    "the atmosphere's tables sit below the terrain's arrays (the terrain program reads both)");
+_Static_assert(WorldRendererTextureUnit_HazeVolume < WorldRendererTextureUnit_TerrainAlbedoHeight,
+    "the haze's volume sits below the terrain's arrays (the terrain program reads both)");
+_Static_assert(WORLD_RENDERER_HAZE_SLICE_COUNT == WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT,
+    "the public haze slice count is the volume's");
 
 /* Which objects a draw pass should include, by their OmitPixelation flag. The pixelated scene pass draws only
  * pixelated objects (when the crisp overlay is active), the crisp overlay pass draws only the flagged ones, and
@@ -235,8 +243,8 @@ typedef struct WorldRenderFrameStruct
     float TimeSeconds;
     /** @brief Night sky values (WorldRendererSky_PrepareFrame): the faintest magnitude visible overhead (light
      *  pollution, the moonlit sky and twilight), the Milky Way's linear radiance per white texel (brightness, light
-     *  pollution and twilight included), and light pollution's skyglow at the horizon (linear; 0 by day), which the sky
-     *  and the PBR fog both add. */
+     *  pollution and twilight included), and light pollution's skyglow at the horizon (linear; 0 by day), which the
+     *  sky's direct march adds (the tables hold light pollution's light in the air instead: LightPollutionRadiance). */
     float LimitingMagnitude;
     float MilkyWayRadiance;
     float SkyglowRadiance[3];
@@ -274,10 +282,9 @@ typedef struct WorldRenderFrameStruct
     Vector3 PointShadowPosition;
     float PointShadowFar;
     /** @brief Lighting shared by the scene and crisp passes (computed once per render): linear ambient colour, the
-     *  scene luminance estimate eye adaptation starts from, the fog density, and the shadow strength. */
+     *  scene luminance estimate eye adaptation starts from, and the shadow strength. */
     float AmbientColor[3];
     float BaseSceneLuminance;
-    float FogDensity;
     float ShadowStrength;
 
     /** @brief Whether each optional pass runs this render. */
@@ -310,6 +317,13 @@ typedef struct WorldRenderFrameStruct
     WorldAtmosphereMedium AtmosphereMedium;
     float AtmosphereViewHeight;
     bool AreAtmosphereTablesActive;
+    /** @brief The haze this frame (T35, WorldRendererAtmosphere_PrepareFrame): the environment's and the player's
+     *  (WorldAtmosphere_GetHaze), light pollution's light in the air at the camera's foot (linear; 0 by day:
+     *  WorldAtmosphere_GetLightPollutionRadiance), and whether the volume holds it (built this frame: the tables are
+     *  active, the volume is available and the haze's distance scale is above 0); false: no haze on anything. */
+    WorldAtmosphereHaze Haze;
+    float LightPollutionRadiance[3];
+    bool IsHazeActive;
     /** @brief The eye's night vision this frame, which the sky and PBR shaders apply: how strongly (the renderer toggle
      *  x the world's NightVisionStrength; 0 = off), the field luminance it compares with (BaseSceneLuminance: the sky's
      *  light, without nearby lamps), the rods' grey (linear, luminance 1, from the world's NightVisionBlueShift), and
@@ -418,8 +432,29 @@ typedef struct WorldRendererAtmosphereLocationsStruct
 } WorldRendererAtmosphereLocations;
 
 /**
+ * @brief The uniform locations of a shader that includes shaders/common/haze.glsl (T35): whether the volume holds this
+ *        frame's haze, its sampler, the frame's haze (the distance scale, the start) and the ground haze. -1 for a
+ *        uniform the shader lacks (or the compiler dropped).
+ *
+ * Filled by WorldRendererAtmosphere_PrepareHazeShader; WorldRendererAtmosphere_UploadHaze uploads a frame's values.
+ */
+typedef struct WorldRendererHazeLocationsStruct
+{
+    int _locActive;
+    int _locVolume;
+    int _locDistanceScale;
+    int _locStartDistance;
+    int _locGroundHazeDensity;
+    int _locGroundHazeThickness;
+    int _locGroundHazeHeight;
+    int _locGroundHazeAlbedo;
+    int _locGroundHazeGlow;
+} WorldRendererHazeLocations;
+
+/**
  * @brief The uniform locations of a shader that includes shaders/common/lighting.glsl (the PBR and the sprite
- *        shaders): the frame's lights, shadows, AO, fog and night vision, and the per-object forward point lights.
+ *        shaders): the frame's lights, shadows, AO, haze and night vision, and the per-object forward point lights and
+ *        haze multiplier.
  *
  * Filled by WorldRendererLighting_PrepareLitShader; -1 for a uniform the shader lacks (or optimized out).
  */
@@ -428,8 +463,8 @@ typedef struct WorldRendererLitLocationsStruct
     /** @brief How many point lights the shader's uniform arrays hold, capped at WORLD_MAX_FORWARD_LIGHTS
      *  (checked at load; uploads never exceed it). */
     int _maxPointLights;
-    /** @brief The two directional lights (the sun's direction is also the fog sky's), the ambient. (No camera position:
-     *  the camera sits at the origin of render space.) */
+    /** @brief The two directional lights (they light the ground haze too), the ambient. (No camera position: the camera
+     *  sits at the origin of render space.) */
     int _locSunDirection;
     int _locSunColor;
     int _locSunIntensity;
@@ -468,13 +503,11 @@ typedef struct WorldRendererLitLocationsStruct
     int _locPointLightPositions;
     int _locPointLightRadiances;
     int _locPointLightRanges;
-    /** @brief The distance fog: it fades distant geometry into the atmospheric sky colour, so it needs the sky
-     *  parameters the sky pass uses (the atmosphere's, below) plus the fog density. */
-    int _locFogDensity;
-    int _locFogSkyTint;
-    int _locFogSunIntensity;
-    int _locFogSkyglow;
-    int _locFogMoonIntensity;
+    /** @brief The haze (T35): the scene's view-projection, where the volume's screen directions lie (uploaded per
+     *  frame), and the draw's haze multiplier (its placement's haze, set before every lit draw:
+     *  WorldRendererLighting_SetDrawHaze). */
+    int _locHazeViewProjection;
+    int _locHazeMultiplier;
     /** @brief The night vision: the field luminance, the calibration (uploaded once at load), the strength and the rods'
      *  grey. */
     int _locNightVisionFieldLuminance;
@@ -482,8 +515,11 @@ typedef struct WorldRendererLitLocationsStruct
     int _locNightVisionSteepness;
     int _locNightVisionStrength;
     int _locNightVisionTint;
-    /** @brief The atmosphere (common/atmosphere): the air, the sky-view table the fog reads (T15). */
+    /** @brief The atmosphere (common/atmosphere): the air and the height the sky is seen from, which the haze's volume
+     *  reads take (T15). */
     WorldRendererAtmosphereLocations _atmosphere;
+    /** @brief The haze (common/haze): the volume on WorldRendererTextureUnit_HazeVolume and the frame's haze (T35). */
+    WorldRendererHazeLocations _haze;
 } WorldRendererLitLocations;
 
 /** @brief One PBR program that shades model objects, and its uniform locations: the rigid one (world_pbr) or the skinned
@@ -627,15 +663,19 @@ typedef struct WorldRendererSkyStateStruct
     int _locNightVisionTint;
     /** @brief The atmosphere (common/atmosphere): the air and the tables (T15). */
     WorldRendererAtmosphereLocations _atmosphere;
+    /** @brief The haze (common/haze): the ground haze in front of the sky, seen through the volume's air (T35). */
+    WorldRendererHazeLocations _haze;
 } WorldRendererSkyState;
 
 /**
- * @brief The atmosphere's tables (T15, WorldRendererAtmosphere.c): their three shaders and render targets, the air the
- *        transmittance and multiple scattering tables were built for, and the A/B switch.
+ * @brief The atmosphere's tables (T15, WorldRendererAtmosphere.c) and the aerial-perspective volume (T35): their shaders
+ *        and render targets, the air the transmittance and multiple scattering tables were built for, the A/B switch
+ *        and the volume's debug view.
  *
  * The transmittance (WORLD_ATMOSPHERE_TRANSMITTANCE_WIDTH x _HEIGHT) and multiple scattering
  * (WORLD_ATMOSPHERE_MULTISCATTER_SIZE squared) tables are built when the air changes; the sky view (two halves of
- * WORLD_ATMOSPHERE_SKY_VIEW_WIDTH x _HEIGHT) every frame. All RGBA16F, bilinear, clamped.
+ * WORLD_ATMOSPHERE_SKY_VIEW_WIDTH x _HEIGHT) and the volume (WORLD_ATMOSPHERE_VOLUME_WIDTH x _HEIGHT) every frame. All
+ * RGBA16F, bilinear, clamped.
  */
 typedef struct WorldRendererAtmosphereStateStruct
 {
@@ -652,14 +692,40 @@ typedef struct WorldRendererAtmosphereStateStruct
     int _skyViewLocLightIntensity;
     int _skyViewLocMultipleScattering;
     int _skyViewLocTableHalf;
-    int _skyViewLocSkyglowRadiance;
-    /** @brief The tables' targets (colour only) and whether each was created; made once, with the shaders. */
+    int _skyViewLocLightPollution;
+    int _skyViewLocSkyTint;
+    int _skyViewLocHazeDistanceScale;
+    int _skyViewLocHazeStartDistance;
+    int _skyViewLocGroundAlbedo;
+    int _skyViewLocGroundLight;
+    int _skyViewLocGroundLightRamp;
+    int _skyViewLocGroundAmbient;
+    /** @brief The volume's builder (world_atmosphere_volume, T35), its atmosphere locations and its own; NULL = no
+     *  haze. */
+    GameShader* _volumeShader;
+    WorldRendererAtmosphereLocations _volumeLocations;
+    int _volumeLocInvViewProjection;
+    int _volumeLocSunDirection;
+    int _volumeLocSunIntensity;
+    int _volumeLocMoonDirection;
+    int _volumeLocMoonSkyIntensity;
+    int _volumeLocMultipleScattering;
+    int _volumeLocLightPollution;
+    int _volumeLocSkyTint;
+    int _volumeLocGroundHazeBaseHeight;
+    /** @brief The tables' targets and the volume's (colour only) and whether each was created; made once, with the
+     *  shaders. */
     RenderTexture2D _transmittance;
     bool _hasTransmittance;
     RenderTexture2D _multiscatter;
     bool _hasMultiscatter;
     RenderTexture2D _skyView;
     bool _hasSkyView;
+    RenderTexture2D _volume;
+    bool _hasVolume;
+    /** @brief What the volume's debug view shows (WorldRenderer_SetHazeView: off by default) and which slice. */
+    WorldRendererHazeView _view;
+    int _viewSlice;
     /** @brief What the transmittance and multiple scattering tables hold, and how often they were built (the status
      *  line). */
     WorldAtmosphereTableRecord _tables;
@@ -688,6 +754,8 @@ typedef struct WorldRendererStarStateStruct
     /** @brief The atmosphere (common/atmosphere): the transmittance table dims and reddens the stars near the horizon
      *  (T15). */
     WorldRendererAtmosphereLocations _atmosphere;
+    /** @brief The haze (common/haze): the ground haze dims the stars (T35). */
+    WorldRendererHazeLocations _haze;
     /** @brief The catalogue's mesh, uploaded once per catalogue: six vertices per star and no index buffer (raylib's
      *  16-bit indices would cap an indexed mesh at 16384 four-vertex stars). Its CPU arrays are freed after the
      *  upload. Valid while _hasMesh. */
@@ -830,8 +898,10 @@ typedef struct WorldRendererGBufferStateStruct
 {
     /** @brief The G-buffer shader for models; NULL = AO and outlines are unavailable. */
     GameShader* _shader;
-    /** @brief Cached world_normal outline-flag uniform location (-1 when absent). */
+    /** @brief Cached world_normal outline-flag and haze-multiplier uniform locations (-1 when absent): an outlined
+     *  surface's flag holds its haze multiplier (T35). */
     int _locOutlineFlag;
+    int _locHazeMultiplier;
     /** @brief The two G-buffer shaders' dither uniforms: their fade stays at the default 0 (the G-buffer draws a fading
      *  object solid below WORLD_VISIBILITY_GBUFFER_FADE_LIMIT and skips it above). */
     WorldRendererDitherLocations _dither;
@@ -840,14 +910,16 @@ typedef struct WorldRendererGBufferStateStruct
      *  model shader's) and its palette; NULL = skinned meshes draw their bind pose into the G-buffer. */
     GameShader* _skinnedShader;
     int _skinnedLocOutlineFlag;
+    int _skinnedLocHazeMultiplier;
     WorldRendererDitherLocations _skinnedDither;
     WorldRendererPalette _skinnedPalette;
     /** @brief The G-buffer shader for cutout sprites (alpha-tested at each sprite's cutoff); NULL = sprites get no
      *  outlines and no AO of their own. */
     GameShader* _spriteShader;
-    /** @brief Cached world_normal_sprite uniform locations (-1 when absent): the outline flag, the frame's area and the
-     *  cutoff. */
+    /** @brief Cached world_normal_sprite uniform locations (-1 when absent): the outline flag, the haze multiplier, the
+     *  frame's area and the cutoff. */
     int _spriteLocOutlineFlag;
+    int _spriteLocHazeMultiplier;
     int _spriteLocUvRect;
     int _spriteLocAlphaCutoff;
     /** @brief The low-res G-buffer target (RGB = view normal, A = surface/outline flag). Its depth is a samplable
@@ -895,7 +967,10 @@ typedef struct WorldRendererOutlineStateStruct
     int _locNormalTexture;
     int _locSunDirectionView;
     int _locStrength;
-    int _locFogDensity;
+    int _locWorldUpView;
+    /** @brief The atmosphere and the haze (common/haze): the outlines fade by the haze's transmittance (T35). */
+    WorldRendererAtmosphereLocations _atmosphere;
+    WorldRendererHazeLocations _haze;
     /** @brief The target the outline pass writes into (same size/format as the scene target). */
     RenderTexture2D _target;
     /** @brief Whether _target has been created. */
@@ -1125,6 +1200,7 @@ typedef struct WorldRendererInstanceStateStruct
      *  time into the G-buffer. */
     GameShader* _normalShader;
     int _normalLocOutlineFlag;
+    int _normalLocHazeMultiplier;
     WorldRendererDitherLocations _normalDither;
     WorldRendererInstancingLocations _normalInstancing;
     /** @brief The cascades' twin (world_depth_instanced); NULL = copies cast one at a time into the cascades. */
@@ -1622,6 +1698,16 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
     const WorldRendererLitLocations* locations, Vector3 center, float radius);
 
 /**
+ * @brief Sets the haze multiplier of the lit draw that follows (T35): its placement's resolved haze (1 the real air's, 0
+ *        none). Every lit draw sets it, as the uniform keeps the last draw's value.
+ * T14: the ambient zones' haze multiplier multiplies @p haze here.
+ * @param shader The lit shader (its program).
+ * @param locations Its locations (WorldRendererLighting_PrepareLitShader).
+ * @param haze The multiplier (>= 0; a negative or NaN one counts as 0 in the shader).
+ */
+void WorldRendererLighting_SetDrawHaze(Shader shader, const WorldRendererLitLocations* locations, float haze);
+
+/**
  * @brief Uploads one material's PBR scalar factors and map-presence flags to a PBR program, for its meshes drawn next.
  *
  * DrawMesh uploads colDiffuse and binds the maps itself, but not these. Pass the per-draw copy, after the variant was
@@ -1699,36 +1785,76 @@ void WorldRendererGBuffer_RenderAo(WorldRenderer* self, const WorldRenderFrame* 
 
 
 // WorldRendererAtmosphere.c
-/** @brief Constructs the atmosphere pass's state (the tables switched on, none built). Called once by
- *  WorldRenderer_Create. */
+/** @brief Constructs the atmosphere pass's state (the tables switched on, none built, the volume's view off). Called once
+ *  by WorldRenderer_Create. */
 void WorldRendererAtmosphere_Construct(WorldRenderer* self);
 
 /**
- * @brief Loads the three table builders and creates the tables' targets (fixed sizes, made once). Without any of them
- *        the tables are unavailable: the sky and the fog march per pixel (logged once).
+ * @brief Loads the three table builders and the volume's, and creates their targets (fixed sizes, made once). Without
+ *        any of the tables' the tables are unavailable: the sky marches per pixel and nothing is hazed (logged once);
+ *        without the volume's, nothing is hazed (logged once).
  */
 void WorldRendererAtmosphere_LoadShaders(WorldRenderer* self);
 
-/** @brief Unloads the tables' targets. Called once by WorldRenderer_Deconstruct, with the GL context alive. */
+/** @brief Unloads the tables' and the volume's targets. Called once by WorldRenderer_Deconstruct, with the GL context
+ *  alive. */
 void WorldRendererAtmosphere_Unload(WorldRenderer* self);
 
 /** @brief Whether the tables can be built: their three shaders and targets exist. */
 bool WorldRendererAtmosphere_IsAvailable(const WorldRenderer* self);
 
+/** @brief Whether the volume can be built: the tables can, and its shader and target exist. */
+bool WorldRendererAtmosphere_IsVolumeAvailable(const WorldRenderer* self);
+
 /**
- * @brief Fills the frame's atmosphere: the air's coefficients from the environment, the height the sky is seen from (the
- *        origin's Y, clamped) and whether the tables draw the sky and the fog this frame (available and switched on).
- *        Needs the frame's Environment and Origin.
+ * @brief Fills the frame's atmosphere: the air's coefficients from the environment, the haze (the environment's and the
+ *        player's fog strength), light pollution's light in the air, the height the sky is seen from (the origin's Y
+ *        above the atmosphere's ground, clamped), whether the tables draw the sky this frame (available and switched on)
+ *        and whether the volume hazes it (the tables active, the volume available, the haze's scale above 0). Needs the
+ *        frame's Environment, Origin and Daylight.
  */
 void WorldRendererAtmosphere_PrepareFrame(const WorldRenderer* self, WorldRenderFrame* frame);
 
 /**
  * @brief The atmosphere pass, first in the frame while frame->AreAtmosphereTablesActive: the transmittance and multiple
  *        scattering tables built again when the air differs from the one they hold, then the sky view: the sun's half
- *        (with light pollution's skyglow) and, while the moonlit sky shows (frame->MoonSkyIntensity above 0), the moon's.
- *        Leaves the transmittance and sky-view tables bound on their units. Needs WorldRendererSky_PrepareFrame first.
+ *        (with light pollution's light and the far ground's ambient) and, while the moonlit sky shows
+ *        (frame->MoonSkyIntensity above 0), the moon's; then, while frame->IsHazeActive, the volume. Leaves the
+ *        transmittance and sky-view tables bound on their units. Needs the frame's lights
+ *        (WorldRendererLighting_PrepareFrame) and WorldRendererSky_PrepareFrame first.
  */
 void WorldRendererAtmosphere_Render(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Caches a shader's haze uniform locations (common/haze, T35). Call once at load.
+ * @param shader The shader (its program).
+ * @param isVolumeOnFixedUnit true for a lit program, whose volume sampler is pointed at WorldRendererTextureUnit_HazeVolume
+ *        here (a 2D pass binds the volume itself: WorldRendererAtmosphere_BindVolumeTexture).
+ * @param outLocations [out] Receives the locations.
+ */
+void WorldRendererAtmosphere_PrepareHazeShader(Shader shader, bool isVolumeOnFixedUnit,
+    WorldRendererHazeLocations* outLocations);
+
+/**
+ * @brief Uploads the frame's haze to a shader (common/haze): whether the volume holds it, the distance scale, the start,
+ *        and the ground haze (its base relative to the camera).
+ */
+void WorldRendererAtmosphere_UploadHaze(Shader shader, const WorldRendererHazeLocations* locations,
+    const WorldRenderFrame* frame);
+
+/** @brief Binds the volume on WorldRendererTextureUnit_HazeVolume while the frame's haze is active, leaving unit 0 the
+ *  active one: for the lit passes (DrawMesh draws), before their draws. */
+void WorldRendererAtmosphere_BindVolume(const WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Binds the volume to a 2D pass's volume sampler (SetShaderValueTexture, after BeginShaderMode) while the frame's
+ *  haze is active. */
+void WorldRendererAtmosphere_BindVolumeTexture(const WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
+    const WorldRendererHazeLocations* locations);
+
+/** @brief Draws the volume's debug view over the scene target (WorldRenderer_SetHazeView): one slice's in-scatter or
+ *  transmittance, stretched over the screen as the readers sample it. Nothing while the view is off or the haze
+ *  inactive. After the scene pass. */
+void WorldRendererAtmosphere_DrawView(WorldRenderer* self, const WorldRenderFrame* frame);
 
 /**
  * @brief Caches a shader's atmosphere uniform locations (common/atmosphere) and points its transmittance and sky-view
@@ -1749,8 +1875,9 @@ void WorldRendererAtmosphere_UploadFrame(Shader shader, const WorldRendererAtmos
  *  the frame's tables are active, leaving unit 0 the active one. For every pass that reads them, before its draw. */
 void WorldRendererAtmosphere_BindTables(const WorldRenderer* self, const WorldRenderFrame* frame);
 
-/** @brief Logs one line about the atmosphere's tables (with the status, WorldRenderer_LogStatus): on, off or unavailable,
- *  their sizes, how often they were built, the height the sky is seen from, and the last render's CPU time. */
+/** @brief Logs two lines about the atmosphere (with the status, WorldRenderer_LogStatus): the tables (on, off or
+ *  unavailable, their sizes, how often they were built, the height the sky is seen from, the last render's CPU time)
+ *  and the haze (the volume, the frame's haze, the ground haze, the debug view). */
 void WorldRendererAtmosphere_LogStatus(const WorldRenderer* self);
 
 
@@ -1900,8 +2027,9 @@ void WorldRendererTerrain_DrawLit(WorldRenderer* self);
  * @param self The renderer.
  * @param shader The G-buffer shader (its program).
  * @param locOutlineFlag Its outline flag's location.
+ * @param locHazeMultiplier Its haze multiplier's location (an outlined chunk's flag holds its haze, T35).
  */
-void WorldRendererTerrain_DrawNormals(WorldRenderer* self, Shader shader, int locOutlineFlag);
+void WorldRendererTerrain_DrawNormals(WorldRenderer* self, Shader shader, int locOutlineFlag, int locHazeMultiplier);
 
 /**
  * @brief Draws a shadow pass's chunk casters (its visibility list) with @p shader (world_depth or world_cube_depth), each
@@ -1972,9 +2100,10 @@ void WorldRendererInstances_DrawLit(WorldRenderer* self, const WorldRenderFrame*
  * @param frame The frame.
  * @param shader The G-buffer's model shader (its program).
  * @param locOutlineFlag Its outline flag's location.
+ * @param locHazeMultiplier Its haze multiplier's location (an outlined copy's flag holds its component's haze, T35).
  */
 void WorldRendererInstances_DrawNormals(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
-    int locOutlineFlag);
+    int locOutlineFlag, int locHazeMultiplier);
 
 /**
  * @brief A shadow pass's copies (its visibility list of cells): each copy as the LOD with the larger share, dithered by

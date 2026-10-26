@@ -34,6 +34,8 @@ typedef enum TerrainPropertyEnum
     TerrainProperty_ShadowTier,
     TerrainProperty_OverridesCastsShadows,
     TerrainProperty_CastsShadows,
+    TerrainProperty_OverridesHaze,
+    TerrainProperty_Haze,
     TerrainProperty_OverridesDrawDistance,
     TerrainProperty_DrawDistance,
     TerrainProperty_DrawDistanceMultiplier,
@@ -51,8 +53,8 @@ typedef enum TerrainPropertyEnum
 
 // Fields.
 /* Every property, in inspector order: each override flag sits right before the value it switches on. The wire ids are
- * the save schema: never renumber or reuse one; a removed property's id goes into the table's retired list. The next
- * free wire id is 19. */
+ * the save schema: never renumber or reuse one; a removed property's id goes into the table's retired list. (T35 added
+ * the haze's pair, 19 and 20.) The next free wire id is 21. */
 static const PropertyDescriptor TerrainProperties[TerrainProperty_Count] =
 {
     [TerrainProperty_Terrain] =
@@ -110,6 +112,22 @@ static const PropertyDescriptor TerrainProperties[TerrainProperty_Count] =
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING, .DisplayName = u8"Casts shadows",
         .Description = u8"When off, the terrain casts no shadow; it still receives them (while \"Override casts "
             u8"shadows\" is on).",
+        .SinceVersion = 1U
+    },
+    [TerrainProperty_OverridesHaze] =
+    {
+        .Key = u8"overrides_haze", .WireId = 19U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldTerrainComponent, _overridesHaze), .Default.BoolValue = false,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING, .DisplayName = u8"Override haze",
+        .Description = u8"Uses this object's haze instead of its terrain's.", .SinceVersion = 1U
+    },
+    [TerrainProperty_Haze] =
+    {
+        .Key = u8"haze", .WireId = 20U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldTerrainComponent, _haze),
+        .Default.FloatValue = 1.0f, .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_MODEL_MAX_HAZE),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING, .DisplayName = u8"Haze",
+        .Description = u8"How hazy the terrain looks at a distance: it multiplies the haze in front of it, 1 the real "
+            u8"air's, 0 as if the air were clear (while \"Override haze\" is on).",
         .SinceVersion = 1U
     },
     [TerrainProperty_OverridesDrawDistance] =
@@ -286,6 +304,10 @@ static bool TryGetOverrideFlag(WorldTerrainComponent* self, WorldTerrainSetting 
             *outFlag = &self->_overridesCollidesWith;
             *outProperty = TerrainProperty_OverridesCollidesWith;
             return true;
+        case WorldTerrainSetting_Haze:
+            *outFlag = &self->_overridesHaze;
+            *outProperty = TerrainProperty_OverridesHaze;
+            return true;
         case WorldTerrainSetting_Count:
             break;
     }
@@ -350,6 +372,7 @@ bool WorldTerrainComponent_IsOverridden(const WorldTerrainComponent* self, World
         case WorldTerrainSetting_IsCollisionEnabled:  return self->_overridesIsCollisionEnabled;
         case WorldTerrainSetting_CollisionLayer:      return self->_overridesCollisionLayer;
         case WorldTerrainSetting_CollidesWith:        return self->_overridesCollidesWith;
+        case WorldTerrainSetting_Haze:                return self->_overridesHaze;
         case WorldTerrainSetting_Count:               break;
     }
     // Only reachable with a value outside the enum: nothing is overridden.
@@ -406,6 +429,22 @@ Error WorldTerrainComponent_SetCastsShadows(WorldTerrainComponent* self, bool ca
         return CreateNullSelfError("WorldTerrainComponent_SetCastsShadows");
     }
     SetBool(self, &self->_castsShadows, castsShadows, TerrainProperty_CastsShadows);
+    return Error_CreateSuccess();
+}
+
+Error WorldTerrainComponent_SetHaze(WorldTerrainComponent* self, float haze)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldTerrainComponent_SetHaze");
+    }
+    Error Result = CheckProperty(TerrainProperty_Haze, PropertyValue_FromFloat(haze));
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    self->_haze = haze;
+    WorldInternal_ComponentAfterSet(self, &TerrainProperties[TerrainProperty_Haze]);
     return Error_CreateSuccess();
 }
 
@@ -508,6 +547,10 @@ TerrainSettings WorldTerrainComponent_ResolveSettings(const WorldTerrainComponen
     if (self->_overridesCastsShadows)
     {
         Settings.Render.CastsShadows = self->_castsShadows;
+    }
+    if (self->_overridesHaze)
+    {
+        Settings.Render.Haze = self->_haze;
     }
     if (self->_overridesDrawDistance)
     {

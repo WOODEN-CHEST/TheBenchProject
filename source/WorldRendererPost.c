@@ -160,7 +160,10 @@ void WorldRendererPost_LoadShaders(WorldRenderer* self)
         self->_outline._locNormalTexture = GetShaderLocation(RayShader, "normalTexture");
         self->_outline._locSunDirectionView = GetShaderLocation(RayShader, "sunDirectionView");
         self->_outline._locStrength = GetShaderLocation(RayShader, "outlineStrength");
-        self->_outline._locFogDensity = GetShaderLocation(RayShader, "fogDensity");
+        self->_outline._locWorldUpView = GetShaderLocation(RayShader, "worldUpView");
+        // The haze the lines fade by (T35): the volume bound per draw, as a 2D pass's extra textures are.
+        WorldRendererAtmosphere_PrepareShader(RayShader, &self->_outline._atmosphere);
+        WorldRendererAtmosphere_PrepareHazeShader(RayShader, false, &self->_outline._haze);
     }
 }
 
@@ -229,8 +232,13 @@ void WorldRendererPost_RenderOutlines(WorldRenderer* self, const WorldRenderFram
     float OutlineStrength = self->_outline._isEnabled ? OUTLINE_BASE_STRENGTH : 0.0f;
     SetShaderValue(RayShader, self->_outline._locStrength, &OutlineStrength, SHADER_UNIFORM_FLOAT);
 
-    // The fog's density, so a line fades with the fog as the surface under it does (T34).
-    SetShaderValue(RayShader, self->_outline._locFogDensity, &frame->FogDensity, SHADER_UNIFORM_FLOAT);
+    // The haze, so a line fades with the haze as the surface under it does (T34, T35): the frame's, and the world's up
+    // in view space, along which the haze's rays climb.
+    WorldRendererAtmosphere_UploadFrame(RayShader, &self->_outline._atmosphere, frame);
+    WorldRendererAtmosphere_UploadHaze(RayShader, &self->_outline._haze, frame);
+    Vector3 ViewUp = Vector3Transform((Vector3){ 0.0f, 1.0f, 0.0f }, frame->View);
+    float UpView[3] = { ViewUp.x, ViewUp.y, ViewUp.z };
+    SetShaderValue(RayShader, self->_outline._locWorldUpView, UpView, SHADER_UNIFORM_VEC3);
 
     BeginTextureMode(self->_outline._target);
     ClearBackground(BLACK);
@@ -248,6 +256,7 @@ void WorldRendererPost_RenderOutlines(WorldRenderer* self, const WorldRenderFram
     Texture2D Depth = self->_gbuffer._isDepthSamplable ? self->_gbuffer._target.depth : self->_scene._target.depth;
     SetShaderValueTexture(RayShader, self->_outline._locDepthTexture, Depth);
     SetShaderValueTexture(RayShader, self->_outline._locNormalTexture, self->_gbuffer._target.texture);
+    WorldRendererAtmosphere_BindVolumeTexture(self, frame, RayShader, &self->_outline._haze);
 
     // The shader samples by gl_FragCoord (not fragTexCoord), so this straight full-screen copy needs no flip.
     // DrawTexturePro binds the scene colour to unit 0 (texture0); the batch binds depth/normal to units 1/2 and

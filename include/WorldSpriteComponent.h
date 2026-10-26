@@ -28,9 +28,9 @@
  *   posters, decals). The image is two-sided.
  * The object's position, rotation and scale here are its world ones: a parent's placement carries the sprite along.
  *
- * LOOK. Lit sprites take the sun, the moon, the lamps, shadows and fog like models; a billboard's light wraps around it by
- * light_wrap, as around a round thing. Unlit sprites show their colours as emitted light (times emission: neon, fire),
- * still fogged. The alpha mode decides transparency: cutout (alpha test at alpha_cutoff: opaque, depth-correct,
+ * LOOK. Lit sprites take the sun, the moon, the lamps, shadows and the haze like models; a billboard's light wraps around
+ * it by light_wrap, as around a round thing. Unlit sprites show their colours as emitted light (times emission: neon,
+ * fire), still hazed (haze multiplies the haze in front of a sprite: 0 as if the air were clear). The alpha mode decides transparency: cutout (alpha test at alpha_cutoff: opaque, depth-correct,
  * unsorted, casts shadows when casts_shadows, outlined), blend (soft edges, smoke: sorted back to front after the opaque
  * world, writes no depth) or additive (glows: adds light, sorted with the blended ones). A decal (is_decal, together with
  * the fixed orientation) lies on a surface: it is drawn after the opaque world, pushed decal_offset metres off its
@@ -62,7 +62,7 @@
  * WorldSpriteComponent_FromComponent. Its properties are the rows of its table ("sprite_component"), in this order:
  * world_sprite; then for each setting its flag and its value: orientation, pivot, pixels_per_unit, flip_x, flip_y,
  * alpha_mode, alpha_cutoff, is_lit, emission, light_wrap, casts_shadows, is_decal, decal_offset, has_outline,
- * omit_pixelation and draw_distance (followed by draw_distance_multiplier) and is_draw_distance_fixed. Every change
+ * omit_pixelation, haze and draw_distance (followed by draw_distance_multiplier) and is_draw_distance_fixed. Every change
  * advances the component's revision.
  */
 
@@ -109,6 +109,8 @@ typedef enum WorldSpriteSettingEnum
     WorldSpriteSetting_HasOutline,
     /** @brief Drawing at full resolution (omit_pixelation). */
     WorldSpriteSetting_OmitPixelation,
+    /** @brief How hazy it looks at a distance (haze; T35). */
+    WorldSpriteSetting_Haze,
     /** @brief The draw distance (draw_distance). */
     WorldSpriteSetting_DrawDistance,
     /** @brief Keeping the draw distance fixed against the quality setting (is_draw_distance_fixed). */
@@ -160,6 +162,9 @@ typedef struct WorldSpriteComponentStruct
     bool _hasOutline;
     /** @brief This placement's "drawn at full resolution over the pixelated image" (default false). */
     bool _omitPixelation;
+    /** @brief This placement's haze multiplier, in [0, WORLD_SPRITE_MAX_HAZE] (default 1: the real air's haze; 0 as if
+     *  the air were clear). */
+    float _haze;
     /** @brief This placement's draw distance, in metres, above 0 (default WORLD_SPRITE_DEFAULT_DRAW_DISTANCE). */
     float _drawDistance;
     /** @brief Multiplies the draw distance in effect (the world sprite's, its kind's or this placement's), above 0
@@ -582,6 +587,26 @@ static inline bool WorldSpriteComponent_OmitsPixelation(const WorldSpriteCompone
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  */
 Error WorldSpriteComponent_SetOmitsPixelation(WorldSpriteComponent* self, bool omitPixelation);
+
+/**
+ * @brief Returns this placement's own haze multiplier (it applies while WorldSpriteSetting_Haze is overridden).
+ * @param self The sprite component; must not be NULL.
+ * @returns The multiplier: 1 the real air's haze, 0 none.
+ */
+static inline float WorldSpriteComponent_GetHaze(const WorldSpriteComponent* self)
+{
+    return self->_haze;
+}
+
+/**
+ * @brief Sets this placement's own haze multiplier (it applies while WorldSpriteSetting_Haze is overridden): how hazy the
+ *        sprite looks at a distance.
+ * @param self The sprite component; must not be NULL.
+ * @param haze Finite, in [0, WORLD_SPRITE_MAX_HAZE]: 1 the real air's haze, 0 as if the air were clear.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for a value outside the
+ *          range.
+ */
+Error WorldSpriteComponent_SetHaze(WorldSpriteComponent* self, float haze);
 
 /**
  * @brief Returns this placement's own draw distance (it applies while WorldSpriteSetting_DrawDistance is overridden).

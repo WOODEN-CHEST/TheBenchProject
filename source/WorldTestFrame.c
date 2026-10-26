@@ -78,6 +78,12 @@
 #define SECONDS_PER_REAL_MINUTE 60.0
 /** How far above the current light pollution the N key's next step must be (so 0.35 steps on to 0.7). */
 #define LIGHT_POLLUTION_STEP_EPSILON 0.001f
+/** The morning mist keypad 7 lays down (T35): its density per metre at its base and how fast it thins above it, the
+ *  task's example (ground_haze_density 0.02, ground_haze_thickness 15). */
+#define TEST_MIST_DENSITY 0.02f
+#define TEST_MIST_THICKNESS 15.0f
+/** Room for one haze key's log line. */
+#define HAZE_TEXT_CAPACITY ((size_t)160)
 /** The objects whose opacity the X key steps: the centre cube (a model) and the tree (a cutout sprite), both casting
  *  shadows. */
 #define OPACITY_TEST_OBJECT_COUNT 2U
@@ -587,9 +593,78 @@ static void HandleDebugClockInput(WorldTestFrame* frame, const GameInput* input,
     if (GameInput_IsKeyPressed(input, GameKey_Slash)) { ShiftDays(frame, DAYS_PER_WEEK, "a week ahead"); }
 }
 
+/* Logs the haze's debug view after keypad 4 or 5 changed it: the view, its slice and the slice's distance. */
+static void LogHazeView(WorldTestFrame* frame)
+{
+    int Slice = 0;
+    WorldRendererHazeView View = WorldRenderer_GetHazeView(frame->_renderer, &Slice);
+    char Text[HAZE_TEXT_CAPACITY];
+    double Distance = WorldRenderer_GetHazeSliceDistance(Slice);
+    if (View == WorldRendererHazeView_Off)
+    {
+        snprintf(Text, sizeof(Text), "haze view off (the scene).");
+    }
+    else if (Distance > 0.0)
+    {
+        snprintf(Text, sizeof(Text), "haze view: the volume's %s at slice %d (%.1f m).",
+            (const char*)WorldRenderer_GetHazeViewName(View), Slice, Distance);
+    }
+    else
+    {
+        snprintf(Text, sizeof(Text), "haze view: the volume's %s at slice %d (the whole ray, to the top of the "
+            "atmosphere).", (const char*)WorldRenderer_GetHazeViewName(View), Slice);
+    }
+    LogLine(frame, Text);
+}
+
+/* The haze's keys (T35): keypad 4 steps the debug view (off, a slice's in-scatter, its transmittance), keypad 5 the slice
+ * it shows (wrapping), keypad 6 the environment's aerial_distance_scale (1, 5, 10), keypad 7 a morning mist (the ground
+ * haze off or on), keypad 8 the haze strength (fog_strength 1 or 0: clear air). Each logged. */
+static void HandleDebugHazeInput(WorldTestFrame* frame, const GameInput* input, WorldEnvironment* environment)
+{
+    int Slice = 0;
+    WorldRendererHazeView View = WorldRenderer_GetHazeView(frame->_renderer, &Slice);
+    if (GameInput_IsKeyPressed(input, GameKey_Keypad4))
+    {
+        WorldRenderer_SetHazeView(frame->_renderer,
+            (WorldRendererHazeView)(((int)View + 1) % (int)WorldRendererHazeView_Count), Slice);
+        LogHazeView(frame);
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_Keypad5))
+    {
+        WorldRenderer_SetHazeView(frame->_renderer, View, (Slice + 1) % WORLD_RENDERER_HAZE_SLICE_COUNT);
+        LogHazeView(frame);
+    }
+    char Text[HAZE_TEXT_CAPACITY];
+    if (GameInput_IsKeyPressed(input, GameKey_Keypad6))
+    {
+        float Scale = environment->AerialDistanceScale;
+        environment->AerialDistanceScale = (Scale < 5.0f) ? 5.0f : ((Scale < 10.0f) ? 10.0f : 1.0f);
+        snprintf(Text, sizeof(Text), "aerial distance scale %g (every haze distance that many times longer).",
+            (double)environment->AerialDistanceScale);
+        LogLine(frame, Text);
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_Keypad7))
+    {
+        bool IsOn = !(environment->GroundHazeDensity > 0.0f);
+        environment->GroundHazeDensity = IsOn ? TEST_MIST_DENSITY : 0.0f;
+        environment->GroundHazeThickness = TEST_MIST_THICKNESS;
+        snprintf(Text, sizeof(Text), IsOn ? "morning mist ON (ground haze %g per metre at y %g, thinning by e every %g "
+            "m)." : "morning mist OFF (no ground haze).", (double)environment->GroundHazeDensity,
+            (double)environment->GroundHazeBase, (double)environment->GroundHazeThickness);
+        LogLine(frame, Text);
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_Keypad8))
+    {
+        environment->FogStrength = (environment->FogStrength > 0.0f) ? 0.0f : 1.0f;
+        LogLine(frame, (environment->FogStrength > 0.0f) ? "haze strength 1 (the real air's haze)."
+            : "haze strength 0 (no haze on anything: crisp to the far plane).");
+    }
+}
+
 /* The atmosphere's keys (T15): keypad 1 switches the tables off and on (the A/B against the direct march of T34), keypad 2
  * the multiple scattering (1 or 0) and keypad 3 the ozone (1 or 0), so the sky's parts can be seen one at a time. Each
- * logged. */
+ * logged. Then the haze's (keypad 4 to 8). */
 static void HandleDebugAtmosphereInput(WorldTestFrame* frame, const GameInput* input, WorldEnvironment* environment)
 {
     // TODO: remove keypad 1 with the direct march once the owner approves the tables' sky (T15).
@@ -597,9 +672,9 @@ static void HandleDebugAtmosphereInput(WorldTestFrame* frame, const GameInput* i
     {
         bool Enabled = !WorldRenderer_AreAtmosphereTablesEnabled(frame->_renderer);
         WorldRenderer_SetAtmosphereTablesEnabled(frame->_renderer, Enabled);
-        LogLine(frame, Enabled ? "atmosphere tables ON (the sky and the fog's sky from the tables, with the light "
-            "scattered more than once)."
-            : "atmosphere tables OFF (the direct march, as before T15: single scattering per pixel).");
+        LogLine(frame, Enabled ? "atmosphere tables ON (the sky and the far ground from the tables, with the light "
+            "scattered more than once, and the haze)."
+            : "atmosphere tables OFF (the direct march, as before T15: single scattering per pixel, and no haze).");
     }
     if (GameInput_IsKeyPressed(input, GameKey_Keypad2))
     {
@@ -615,6 +690,7 @@ static void HandleDebugAtmosphereInput(WorldTestFrame* frame, const GameInput* i
             ? "ozone 1 (Earth's: it keeps the twilight sky blue overhead)."
             : "ozone 0 (no ozone layer: a greyer twilight sky).");
     }
+    HandleDebugHazeInput(frame, input, environment);
 }
 
 /* The moon's and the seasons' debug keys: F pins the moon full (a story's fixed phase) or gives it back to the

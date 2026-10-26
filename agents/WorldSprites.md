@@ -27,7 +27,8 @@ asked, 2026-10-20: "the more settings the better").
   starts with `World sprite "<name>": `.
 - **The settings are read through property tables**, not hand-written code: `WorldSprite_GetSettingsPropertyTable`
   (`world_sprite`, the root's 15 rows, over `WorldSpriteSettings`) and `WorldSprite_GetRenderPropertyTable`
-  (`world_sprite_render`, the `render` block's three flags, over `WorldSpriteRenderSettings`). Together they describe
+  (`world_sprite_render`, the `render` block's three flags and, since T35, its `haze` multiplier, over
+  `WorldSpriteRenderSettings`). Together they describe
   every field of `WorldSpriteSettings`, so copying, comparing, validating and writing go through both. A value that breaks a rule
   is refused with the table's message: `World sprite "tree": world_sprite.pixels_per_unit (PixelsPerUnit) must be
   finite and > 0.`
@@ -88,9 +89,13 @@ getters and setters, which read and write the placement's own value.
 | `DecalOffset` | `overrides_decal_offset` | `decal_offset` |
 | `HasOutline` | `overrides_has_outline` | `has_outline` |
 | `OmitPixelation` | `overrides_omit_pixelation` | `omit_pixelation` |
+| `Haze` (T35) | `overrides_haze` | `haze` |
 | `DrawDistance` | `overrides_draw_distance` | `draw_distance` |
 | `IsDrawDistanceFixed` | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` |
 
+`haze` (T35, [0, 1000], default the world sprite's `render.haze`, 1) multiplies the haze in front of the sprite
+([WorldRuntime.md](WorldRuntime.md), "Haze"): 1 the real air's, 0 as if the air were clear (a sign that must read from
+far away). It applies to every kind of sprite (lit, unlit, blended, additive, decals) and to a cutout sprite's outline.
 `draw_distance_multiplier` (above 0, default 1) is a plain setting: it multiplies whichever draw distance is in effect.
 **`WorldSpriteComponent_ResolveSettings(component, spriteSettings)`** is the one pure function that turns the world
 sprite's settings and the overrides into the settings in effect; the renderer's cache calls it for every sprite each

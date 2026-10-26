@@ -226,10 +226,12 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, WorldRendererPixelFil
         bool IsPosed = HasLitSkinned && (Entry->CameraPose != NULL);
         WorldRendererLighting_UploadObjectLights(self, self->_pbr._rigid._passShader, &self->_pbr._rigid._lit,
             Entry->RenderCenter, Entry->Radius);
+        WorldRendererLighting_SetDrawHaze(self->_pbr._rigid._passShader, &self->_pbr._rigid._lit, Entry->Haze);
         if (IsPosed)
         {
             WorldRendererLighting_UploadObjectLights(self, self->_pbr._skinned._passShader, &self->_pbr._skinned._lit,
                 Entry->RenderCenter, Entry->Radius);
+            WorldRendererLighting_SetDrawHaze(self->_pbr._skinned._passShader, &self->_pbr._skinned._lit, Entry->Haze);
         }
         float Fade = WorldVisibility_GetModelFade(&self->_visibility, Index).Combined;
         WorldLodDraw Draws[WORLD_LOD_MAX_DRAWS];

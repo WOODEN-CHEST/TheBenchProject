@@ -104,7 +104,7 @@ static const unsigned char* const ModelOnlyKeys[] =
 static const unsigned char* const MappingKeys[] = { u8"attribute", u8"r", u8"g", u8"b", u8"a" };
 static const unsigned char* const RenderKeys[] =
 {
-    u8"has_outline", u8"shadow_tier", u8"casts_shadows", u8"draw_distance", u8"is_draw_distance_fixed"
+    u8"has_outline", u8"shadow_tier", u8"casts_shadows", u8"draw_distance", u8"is_draw_distance_fixed", u8"haze"
 };
 static const unsigned char* const CollisionKeys[] = { u8"is_enabled", u8"layer", u8"collides_with" };
 static const unsigned char* const RuleKeys[] =
@@ -606,6 +606,21 @@ static Error ParseRender(TerrainDefinition* definition, JSONCompound* root)
         if (!(Settings->DrawDistance > 0.0f))
         {
             return Fail(definition, "render.draw_distance is %g; it must be above 0.", (double)Settings->DrawDistance);
+        }
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AssetJSON_ReadOptionalFloat(Render, (const unsigned char*)u8"haze", Settings->Haze, &Settings->Haze,
+            NULL);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return Fail(definition, "render.haze must be a number (1 the real air's haze, 0 none).");
+        }
+        if (!((Settings->Haze >= 0.0f) && (Settings->Haze <= WORLD_MODEL_MAX_HAZE)))
+        {
+            return Fail(definition, "render.haze is %g; it must be at least 0 and at most %g (1 the real air's haze, 0 "
+                "none).", (double)Settings->Haze, (double)WORLD_MODEL_MAX_HAZE);
         }
     }
     return Result;

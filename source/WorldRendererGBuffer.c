@@ -99,9 +99,11 @@ static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter
         }
         float OutlineFlag = Entry->HasOutline ? 1.0f : 0.0f;
         SetShaderValue(NormalShader, self->_gbuffer._locOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(NormalShader, self->_gbuffer._locHazeMultiplier, &Entry->Haze, SHADER_UNIFORM_FLOAT);
         if (HasSkinned && (Entry->CameraPose != NULL))
         {
             SetShaderValue(SkinnedShader, self->_gbuffer._skinnedLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
+            SetShaderValue(SkinnedShader, self->_gbuffer._skinnedLocHazeMultiplier, &Entry->Haze, SHADER_UNIFORM_FLOAT);
         }
         WorldRendererGeometry_DrawModel(self, Entry, WorldLodState_GetSolidLod(&Entry->Lod), &Shaders, false);
     }
@@ -138,6 +140,7 @@ static void DrawNormalBufferSprites(WorldRenderer* self, WorldRendererPixelFilte
         }
         float OutlineFlag = Entry->HasOutline ? 1.0f : 0.0f;
         SetShaderValue(SpriteShader, self->_gbuffer._spriteLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(SpriteShader, self->_gbuffer._spriteLocHazeMultiplier, &Entry->Haze, SHADER_UNIFORM_FLOAT);
         SetShaderValue(SpriteShader, self->_gbuffer._spriteLocUvRect, Entry->UvRect, SHADER_UNIFORM_VEC4);
         SetShaderValue(SpriteShader, self->_gbuffer._spriteLocAlphaCutoff, &Entry->AlphaCutoff, SHADER_UNIFORM_FLOAT);
         // Tint WHITE: the G-buffer only reads the frame's alpha (for the cutout), not its colour.
@@ -157,6 +160,7 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
     {
         Shader RayShader = GameShader_GetRaylibShader(self->_gbuffer._spriteShader);
         self->_gbuffer._spriteLocOutlineFlag = GetShaderLocation(RayShader, "outlineFlag");
+        self->_gbuffer._spriteLocHazeMultiplier = GetShaderLocation(RayShader, "hazeMultiplier");
         self->_gbuffer._spriteLocUvRect = GetShaderLocation(RayShader, "uvRect");
         self->_gbuffer._spriteLocAlphaCutoff = GetShaderLocation(RayShader, "alphaCutoff");
         WorldRendererCommon_PrepareDither(RayShader, &self->_gbuffer._spriteDither); // stays solid (IsSolidInGBuffer)
@@ -168,6 +172,7 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
     {
         Shader RayShader = GameShader_GetRaylibShader(self->_gbuffer._shader);
         self->_gbuffer._locOutlineFlag = GetShaderLocation(RayShader, "outlineFlag");
+        self->_gbuffer._locHazeMultiplier = GetShaderLocation(RayShader, "hazeMultiplier");
         WorldRendererCommon_PrepareDither(RayShader, &self->_gbuffer._dither); // stays solid (IsSolidInGBuffer)
     }
 
@@ -179,6 +184,7 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
     {
         Shader RayShader = GameShader_GetRaylibShader(self->_gbuffer._skinnedShader);
         self->_gbuffer._skinnedLocOutlineFlag = GetShaderLocation(RayShader, "outlineFlag");
+        self->_gbuffer._skinnedLocHazeMultiplier = GetShaderLocation(RayShader, "hazeMultiplier");
         WorldRendererCommon_PrepareDither(RayShader, &self->_gbuffer._skinnedDither); // stays solid like its twin
         WorldRendererCommon_PreparePalette(RayShader, &self->_gbuffer._skinnedPalette);
     }
@@ -264,15 +270,15 @@ void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFr
     rlDisableColorBlend();  // write RGB (normal) + A (flag) directly; no alpha blend
     BeginMode3D(frame->RenderCamera);
     DrawNormalBufferModels(self, frame->SceneFilter);
-    // The model instances components' copies (B03; never crisp), each with its component's outline flag.
+    // The model instances components' copies (B03; never crisp), each with its component's outline flag and haze.
     if (frame->SceneFilter != WorldRendererPixelFilter_CrispOnly)
     {
         WorldRendererInstances_DrawNormals(self, frame, GameShader_GetRaylibShader(self->_gbuffer._shader),
-            self->_gbuffer._locOutlineFlag);
+            self->_gbuffer._locOutlineFlag, self->_gbuffer._locHazeMultiplier);
     }
-    // The terrain's chunks (B01), with their outline flags.
+    // The terrain's chunks (B01), with their outline flags and haze.
     WorldRendererTerrain_DrawNormals(self, GameShader_GetRaylibShader(self->_gbuffer._shader),
-        self->_gbuffer._locOutlineFlag);
+        self->_gbuffer._locOutlineFlag, self->_gbuffer._locHazeMultiplier);
     // Cutout sprites into the same G-buffer (alpha-tested) so they get silhouette outlines and AO too.
     DrawNormalBufferSprites(self, frame->SceneFilter);
     EndMode3D();

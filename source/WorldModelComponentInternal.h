@@ -14,7 +14,8 @@
  *         .SinceVersion = 1U }
  *
  * Both tables give a setting the same wire id. Instances are never crisp: the instances table leaves out the two
- * omit_pixelation rows (wire ids 3 and 9 are the model component's alone).
+ * omit_pixelation rows (wire ids 3 and 9 are the model component's alone); the instances table's list is wire id 22, so
+ * the haze's pair (T35) is 23 and 24 in both.
  */
 
 
@@ -145,6 +146,18 @@
     .DisplayName = u8"LOD distance multiplier", \
     .Description = u8"Multiplies the LOD distances in effect, the world model's or this object's: 2 keeps each LOD " \
         u8"twice as far (more detail)."
+
+#define WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_HAZE \
+    .Key = u8"overrides_haze", .Type = PropertyType_Bool, .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, \
+    .Category = WORLD_MODEL_PLACEMENT_CATEGORY_RENDERING, .DisplayName = u8"Override haze", \
+    .Description = u8"Uses this object's haze instead of its world model's."
+
+#define WORLD_MODEL_PLACEMENT_ROW_HAZE \
+    .Key = u8"haze", .Type = PropertyType_Float, .Default.FloatValue = 1.0f, \
+    .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_MODEL_MAX_HAZE), .Flags = PROPERTY_FLAGS_SETTING, \
+    .Category = WORLD_MODEL_PLACEMENT_CATEGORY_RENDERING, .DisplayName = u8"Haze", \
+    .Description = u8"How hazy the object looks at a distance: it multiplies the haze in front of it, 1 the real air's, " \
+        u8"0 as if the air were clear (a beacon, a sign that must read from far away; while \"Override haze\" is on)."
 
 #define WORLD_MODEL_PLACEMENT_ROW_IS_LOD_FORCED \
     .Key = u8"is_lod_forced", .Type = PropertyType_Bool, .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, \

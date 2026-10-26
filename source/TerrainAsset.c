@@ -14,7 +14,7 @@ TerrainSettings TerrainSettings_CreateDefault(void)
         .Render =
         {
             .HasOutline = true, .ShadowTier = WorldShadowTier_Both, .CastsShadows = true,
-            .DrawDistance = TERRAIN_DEFAULT_DRAW_DISTANCE, .IsDrawDistanceFixed = true
+            .DrawDistance = TERRAIN_DEFAULT_DRAW_DISTANCE, .IsDrawDistanceFixed = true, .Haze = 1.0f
         },
         .Collision =
         {

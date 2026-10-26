@@ -437,7 +437,8 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
     if (!CacheFixture_Construct(run, &Fixture)
         || !TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"dark_box\", \"lods\": [{\"model\": \"box\", "
             "\"max_distance\": 20}], \"draw_distance\": 50, \"is_draw_distance_fixed\": true, \"render\": {"
-            "\"has_outline\": false, \"omit_pixelation\": true, \"shadow_tier\": \"far\", \"casts_shadows\": false}}")
+            "\"has_outline\": false, \"omit_pixelation\": true, \"shadow_tier\": \"far\", \"casts_shadows\": false, "
+            "\"haze\": 0.5}}")
         || ((ModelComponent = AddModel(run, &Fixture.World, "dark_box", Vector3Zero(), (Vector3){ 1.0f, 1.0f, 1.0f }))
             == NULL)
         || !CacheFixture_Sync(run, &Fixture))
@@ -449,7 +450,7 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
     TEST_CHECK(run, (Count == 1) && Models[0].IsDrawn && !Models[0].HasOutline && Models[0].OmitsPixelation
         && (Models[0].ShadowTier == WorldShadowTier_Far) && !Models[0].CastsShadows && (Models[0].DrawDistance == 50.0f)
-        && Models[0].IsDrawDistanceFixed);
+        && Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.5f));
 
     // The placement's own values (kept from before) apply once their flags are on; the multiplier always does.
     for (int Setting = 0; Setting < (int)WorldModelSetting_Count; Setting++)
@@ -459,12 +460,13 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
     TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(ModelComponent, WorldShadowTier_Near));
     TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistance(ModelComponent, 30.0f));
     TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistanceMultiplier(ModelComponent, 2.0f));
+    TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHaze(ModelComponent, 0.0f));
     if (CacheFixture_Sync(run, &Fixture))
     {
         Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
         TEST_CHECK(run, (Count == 1) && Models[0].HasOutline && !Models[0].OmitsPixelation
             && (Models[0].ShadowTier == WorldShadowTier_Near) && Models[0].CastsShadows
-            && (Models[0].DrawDistance == 60.0f) && !Models[0].IsDrawDistanceFixed);
+            && (Models[0].DrawDistance == 60.0f) && !Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.0f));
     }
 
     // Overrides off again: the world model's settings, its distance times the multiplier.
@@ -476,7 +478,7 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
     {
         Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
         TEST_CHECK(run, (Count == 1) && !Models[0].HasOutline && (Models[0].ShadowTier == WorldShadowTier_Far)
-            && (Models[0].DrawDistance == 100.0f) && Models[0].IsDrawDistanceFixed);
+            && (Models[0].DrawDistance == 100.0f) && Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.5f));
     }
     CacheFixture_Deconstruct(run, &Fixture);
 }
@@ -987,7 +989,7 @@ static void SpriteEntriesCarryTheirQuadAndSettings(TestRun* run)
     if (!CacheFixture_Construct(run, &Fixture)
         || !TestAssets_AddWorldSprite(run, &Fixture.Assets, "{\"name\": \"sign\", \"sprite_animation\": "
             "\"walk_animation\", \"orientation\": \"fixed\", \"pivot\": [0.5, 0], \"pixels_per_unit\": 0.5, "
-            "\"alpha_mode\": \"blend\", \"is_decal\": true, \"render\": {\"omit_pixelation\": true}}"))
+            "\"alpha_mode\": \"blend\", \"is_decal\": true, \"render\": {\"omit_pixelation\": true, \"haze\": 2}}"))
     {
         CacheFixture_Deconstruct(run, &Fixture);
         return;
@@ -1019,6 +1021,8 @@ static void SpriteEntriesCarryTheirQuadAndSettings(TestRun* run)
         && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDecal(Puff, true))
         && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Puff, WorldSpriteSetting_OmitPixelation, true))
         && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOmitsPixelation(Puff, true))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Puff, WorldSpriteSetting_Haze, true))
+        && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetHaze(Puff, 0.0f))
         && TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetPixelsPerUnit(Puff, 4.0f));
     size_t Count = 0;
     const WorldRenderSprite* Sprites = NULL;
@@ -1042,13 +1046,14 @@ static void SpriteEntriesCarryTheirQuadAndSettings(TestRun* run)
         TEST_CHECK(run, IsNear(Entry->BoundsRadius, SpriteTransform_GetBoundingRadius(Entry->Shape.Size,
             Entry->Shape.Pivot)));
         TEST_CHECK(run, Entry->IsDecal && (Entry->AlphaMode == WorldSpriteAlphaMode_Blend) && !Entry->OmitsPixelation
-            && Entry->IsLit && Entry->CastsShadows && IsNear(Entry->DecalOffset, 0.01f));
+            && Entry->IsLit && Entry->CastsShadows && IsNear(Entry->DecalOffset, 0.01f) && (Entry->Haze == 2.0f));
         // No draw distance anywhere: a decal's.
         TEST_CHECK(run, (Entry->DrawDistance == 60.0f) && !Entry->IsDrawDistanceFixed);
 
         Entry = &Sprites[1];
         // The cutout billboard is drawn crisp; the blended decal above is not.
-        TEST_CHECK(run, !Entry->IsDecal && !Entry->IsLit && (Entry->Emission == 4.0f) && Entry->OmitsPixelation);
+        TEST_CHECK(run, !Entry->IsDecal && !Entry->IsLit && (Entry->Emission == 4.0f) && Entry->OmitsPixelation
+            && (Entry->Haze == 0.0f));
         TEST_CHECK(run, IsNear(Entry->Shape.Size.x, 1.0f / 32.0f) && (Entry->Shape.Pivot.x == 0.5f));
         TEST_CHECK(run, Entry->DrawDistance == 150.0f);
     }
@@ -1761,6 +1766,8 @@ static void TerrainEntriesFollowTheirComponents(TestRun* run)
                     true));
                 TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetHasOutline(Terrain, false));
                 TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetDrawDistanceMultiplier(Terrain, 0.5f));
+                TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetOverridden(Terrain, WorldTerrainSetting_Haze, true));
+                TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetHaze(Terrain, 3.0f));
                 break;
             case 4: TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetTerrain(Terrain, (const unsigned char*)u8"nowhere"));
                 break;
@@ -1790,11 +1797,11 @@ static void TerrainEntriesFollowTheirComponents(TestRun* run)
         switch (Step)
         {
             case 0: case 2: TEST_CHECK(run, IsResolved && (ChunkCount == 3U) && Chunks[0].HasOutline
-                && (Chunks[0].DrawDistance == TERRAIN_DEFAULT_DRAW_DISTANCE)); break;
+                && (Chunks[0].DrawDistance == TERRAIN_DEFAULT_DRAW_DISTANCE) && (Chunks[0].Haze == 1.0f)); break;
             case 1: TEST_CHECK(run, IsResolved && (ChunkCount == 0U)); break;
             // Resolved again under the old name, it keeps the placement's own settings.
             case 3: case 6: TEST_CHECK(run, IsResolved && (ChunkCount == 3U) && !Chunks[0].HasOutline
-                && (Chunks[0].DrawDistance == (0.5f * TERRAIN_DEFAULT_DRAW_DISTANCE))); break;
+                && (Chunks[0].DrawDistance == (0.5f * TERRAIN_DEFAULT_DRAW_DISTANCE)) && (Chunks[2].Haze == 3.0f)); break;
             case 4: case 5: TEST_CHECK(run, (TerrainCount == 1U) && (Terrains[0].Asset == NULL) && (ChunkCount == 0U));
                 break;
             case 7: TEST_CHECK(run, IsResolved && (Terrains[0].Serial == WorldComponent_GetSerial(&Terrain->Base))
@@ -1995,6 +2002,9 @@ static void InstanceEntriesFollowTheirComponents(TestRun* run)
                 TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Instances,
                     WorldModelSetting_DrawDistance, true));
                 TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetDrawDistance(Instances, 25.0f));
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Instances, WorldModelSetting_Haze,
+                    true));
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetHaze(Instances, 2.5f));
                 break;
             case 3: TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetInstances(Instances, Copies, 2U)); break;
             case 4: TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Owner, false)); break;
@@ -2039,12 +2049,12 @@ static void InstanceEntriesFollowTheirComponents(TestRun* run)
         switch (Step)
         {
             case 0: TEST_CHECK(run, IsResolved && (CellCount == 3U) && (Build == 1U)
-                && (Cells[0].DrawDistance == WORLD_MODEL_DEFAULT_DRAW_DISTANCE)); break;
+                && (Cells[0].DrawDistance == WORLD_MODEL_DEFAULT_DRAW_DISTANCE) && (Entries[0].Haze == 1.0f)); break;
             // Moved: the same records, the cells moved with the object.
             case 1: TEST_CHECK(run, IsResolved && (CellCount == 3U) && (Build == LastBuild)
                 && IsNearDouble(Cells[0].WorldMatrix.M[12], 5.0 + 16.0)); break;
             case 2: TEST_CHECK(run, IsResolved && (CellCount == 3U) && (Build == LastBuild)
-                && (Cells[0].DrawDistance == 25.0f)); break;
+                && (Cells[0].DrawDistance == 25.0f) && (Entries[0].Haze == 2.5f)); break;
             case 3: TEST_CHECK(run, IsResolved && (CellCount == 2U) && (Build > LastBuild)); break;
             case 4: TEST_CHECK(run, IsResolved && (CellCount == 0U) && (Build == LastBuild)); break;
             case 5: TEST_CHECK(run, IsResolved && (CellCount == 1U) && (Build > LastBuild)); break;

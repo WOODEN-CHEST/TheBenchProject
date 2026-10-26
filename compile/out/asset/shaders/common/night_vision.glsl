@@ -1,8 +1,8 @@
 // The eye's dim-light vision, for #include "common/night_vision": in dim light the rods take over from the cones, and
 // colour fades into a grey with a faint blue cast. The sky pass applies it to the sky's glow (the air's in-scatter, the
-// skyglow, the Milky Way), the PBR shader to reflected light and the fog; emitters (the sun's and the moon's discs,
-// stars, emissive materials) are left out: the game draws them far dimmer than they are, and real emitters that bright
-// are seen in colour. The model and its calibration are explained in source/NightVision.h; NightVision_GetRodShare is
+// skyglow, the Milky Way), the lit shaders to reflected light and the haze's in-scatter; emitters (the sun's and the
+// moon's discs, stars, emissive materials) are left out: the game draws them far dimmer than they are, and real emitters
+// that bright are seen in colour. The model and its calibration are explained in source/NightVision.h; NightVision_GetRodShare is
 // the CPU twin of nightVisionRodShare, which the tests check.
 
 // Above (level / halfLuminance)^steepness of this the rods' share is below 1/1024 and the colour is left exactly as it

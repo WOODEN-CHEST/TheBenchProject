@@ -495,6 +495,8 @@ void WorldRendererInstances_LoadShaders(WorldRenderer* self)
     {
         State->_normalLocOutlineFlag = GetShaderLocation(GameShader_GetRaylibShader(State->_normalShader),
             "outlineFlag");
+        State->_normalLocHazeMultiplier = GetShaderLocation(GameShader_GetRaylibShader(State->_normalShader),
+            "hazeMultiplier");
     }
     State->_depthShader = (self->_cascades._depthShader != NULL) ? LoadTwin(self, DEPTH_INSTANCED_SHADER_ASSET_NAME,
         WorldInstancePass_Shadow, &State->_depthDither, &State->_depthInstancing) : NULL;
@@ -591,6 +593,8 @@ void WorldRendererInstances_DrawLit(WorldRenderer* self, const WorldRenderFrame*
         .OrdinaryDither = IsLit ? &self->_pbr._rigid._dither : NULL,
         .IsLit = IsLit
     };
+    size_t EntryCount = 0U;
+    const WorldRenderInstances* Entries = WorldRenderCache_GetInstances(&self->_cache, &EntryCount);
     size_t CellCount = 0U;
     const WorldRenderInstanceCell* Cells = WorldRenderCache_GetInstanceCells(&self->_cache, &CellCount);
     size_t VisibleCount = 0U;
@@ -599,14 +603,16 @@ void WorldRendererInstances_DrawLit(WorldRenderer* self, const WorldRenderFrame*
     for (size_t Position = 0U; Position < VisibleCount; Position++)
     {
         const WorldRenderInstanceCell* Cell = &Cells[Visible[Position]];
-        // The cell's forward lights by its sphere, into the program that draws it (the twin, or world_pbr one at a
-        // time).
+        // The cell's forward lights by its sphere and its component's haze multiplier (T35), into the program that draws
+        // it (the twin, or world_pbr one at a time).
         if (IsLit)
         {
             const WorldRendererPbrProgram* Program = (IsInstanced && (GetEntryBuffer(self, Cell->Entry) != 0U))
                 ? &self->_pbr._instanced : &self->_pbr._rigid;
             WorldRendererLighting_UploadObjectLights(self, Program->_passShader, &Program->_lit, Cell->RenderCenter,
                 Cell->Radius);
+            WorldRendererLighting_SetDrawHaze(Program->_passShader, &Program->_lit,
+                (Cell->Entry < EntryCount) ? Entries[Cell->Entry].Haze : 1.0f);
         }
         if (DrawCell(self, &Pass, Cell, frame->ZoomFactor, DrawDistanceScale))
         {
@@ -616,7 +622,7 @@ void WorldRendererInstances_DrawLit(WorldRenderer* self, const WorldRenderFrame*
 }
 
 void WorldRendererInstances_DrawNormals(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
-    int locOutlineFlag)
+    int locOutlineFlag, int locHazeMultiplier)
 {
     WorldRendererInstanceState* State = &self->_instances;
     bool IsInstanced = (State->_normalShader != NULL) && State->_isEnabled;
@@ -651,9 +657,11 @@ void WorldRendererInstances_DrawNormals(WorldRenderer* self, const WorldRenderFr
         }
         float OutlineFlag = Entries[Cell->Entry].HasOutline ? 1.0f : 0.0f;
         SetShaderValue(shader, locOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(shader, locHazeMultiplier, &Entries[Cell->Entry].Haze, SHADER_UNIFORM_FLOAT);
         if (IsInstanced)
         {
             SetShaderValue(Twin, State->_normalLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
+            SetShaderValue(Twin, State->_normalLocHazeMultiplier, &Entries[Cell->Entry].Haze, SHADER_UNIFORM_FLOAT);
         }
         DrawCell(self, &Pass, Cell, frame->ZoomFactor, DrawDistanceScale);
     }

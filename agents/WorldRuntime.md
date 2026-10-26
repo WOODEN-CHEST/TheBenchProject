@@ -77,9 +77,10 @@ camera, however far out it is. The maths is the private `source/WorldRenderSpace
   position relative to the camera; light positions (`pointLightPositions`, `pointShadowLightPos`, the cube depth
   shaders' `lightPosition`) and the shadow matrices (`lightVP`, `lightVPFar`) are in render space; the camera sits at
   the origin, so there is no camera uniform (`viewPos` and the sky's `cameraPos` are gone): the view vector is
-  `-fragPosition`, the fog's distance `length(fragPosition)`, a decal's side `dot(normal, -position)`. Directions (the
-  sun, the moon, normals) are the world's. Fog, specular and `PerturbNormal` (`dFdx` of the position) work unchanged
-  and lost their large-coordinate error.
+  `-fragPosition`, the haze's distance `length(fragPosition)`, a decal's side `dot(normal, -position)`. Directions (the
+  sun, the moon, normals) are the world's. The haze, specular and `PerturbNormal` (`dFdx` of the position) work
+  unchanged and lost their large-coordinate error. The haze's heights (T35) come from the origin's Y in double (the
+  camera's height above the ground haze's base and above the atmosphere's ground), never from a render-space position.
 - **Absolute coordinates in a shader** (world-anchored noise, rain streaks wrapping around the camera, wave phases,
   puddle masks; T14, T17, T18, T19, T21 and T22 will want them): a shader never receives the origin as floats. It gets
   the origin **wrapped by the pattern's period**, computed in double on the CPU (`fmod(origin, period)` per axis), and
@@ -409,20 +410,21 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    radiance, skyglow, the moonlit sky's strength and the moon's disc; first the star catalogue is rebuilt if the
    world's seed or density changed, and the sky textures reloaded if the world names others), the atmosphere's
    (`WorldRendererAtmosphere_PrepareFrame`, T15: the air's coefficients, the height the sky is seen from, whether the
-   tables draw the sky), every model's LOD and its cross-fade (`WorldRenderCache_UpdateLods`, see "LODs"), and every
+   tables draw the sky; T35: the frame's haze, light pollution's light in the air, whether the volume hazes the frame),
+   every model's LOD and its cross-fade (`WorldRenderCache_UpdateLods`, see "LODs"), and every
    pass decision:
    first which shadow passes run (`DecideShadows`) and their light matrices (`WorldRendererShadows_PrepareFrame`: both
    cascades' view, projection and box, snapped to their texels; the cube shadow's lamp and far range), then the frame's visibility (what every
    pass draws, see "Visibility"), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
 3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the sun's and the moon's linear colours,
-   the ambient colour (with the moonlit sky's fill), the scene luminance for eye adaptation, fog density, shadow
+   the ambient colour (with the moonlit sky's fill), the scene luminance for eye adaptation, shadow
    strength, and the forward-light candidates (every light except the cube-shadow light) with their linear radiance.
    Then the eye's night vision for the frame (`DecideNightVision`: its strength, the field luminance, the rods' grey),
    and each sprite's matrices (`WorldRendererSprites_PrepareFrame`: facing the camera, facing the cascades' light and the
    cube shadow's lamp while those run) with the blended and additive sprites sorted back to front.
 4. The atmosphere's tables (T15, `WorldRendererAtmosphere_Render`, see "Atmosphere"): the transmittance and multiple
    scattering tables when the air changed, then the sky view (the sun's half, and the moon's while the moonlit sky
-   shows); left bound on units 7 and 8. Then the shadow cascades of the shadow light (the sun or the moon), then the
+   shows), then the aerial-perspective volume (T35, see "Haze"); the tables left bound on units 7 and 8. Then the shadow cascades of the shadow light (the sun or the moon), then the
    point-light cube shadow, each drawing its
    visibility list (the casters in its box; within the light's reach). Models (the LOD they show or fade to), the
    model instances' copies (B03: each the LOD with the larger share, dithered by its own fade), terrain chunks (B01;
@@ -431,7 +433,8 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
 5. The normal/flag G-buffer (the camera's models, the LOD with the larger share, the copies the same way, terrain
    chunks and cutout sprites, solid below half their fade) and the AO pre-pass, when AO or outlines run.
 6. The scene pass: clear, atmospheric sky (the sky-view table's glow, with the moonlit sky and light pollution's
-   skyglow; the moon's disc, the Milky Way), the stars (none behind the moon), debug grid, the camera's PBR models (each dithered by its fade, both LODs
+   light, and the far ground below the horizon; the ground haze in front of it all; the moon's disc, the Milky Way), the
+   stars (none behind the moon), debug grid, the camera's PBR models (each dithered by its fade, both LODs
    of a cross-fade with complementary dithers; the sun and the moon; per object: up to
    `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), the camera's
    instance cells (B03: lit like the models, the lights per cell, both LODs of a copy's band), the camera's terrain
@@ -439,7 +442,8 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    before the sprites, so decals lie on it), the camera's lit sprites
    (the cutout ones, then decals, then blended and additive ones back to front), light gizmos, and collider wireframes
    and contact points while a collision world is set (T12, T27). The sky's glow and the models' and lit sprites' reflected light go through the
-   eye's night vision.
+   eye's night vision; every lit surface is seen through the haze in front of it. Then, while one is chosen, the haze's
+   debug view over the scene (`WorldRenderer_SetHazeView`, see "Haze").
 7. Outlines, then bloom and sun shafts from the (outlined) HDR scene.
 8. Eye adaptation, then the tonemapped point-upscale into the frame target.
 9. The crisp overlay for OmitPixelation models and cutout sprites, composited over the finished image.
@@ -461,12 +465,10 @@ tonemapped (ACES + gamma, `world_tonemap`) only in the final blit, after the pix
 horizon, a dim cool floor at night, the `NIGHT DARKNESS KNOB`s in `WorldRendererLighting.c`, raised by the moonlit
 sky's fill), forward point lights, per-material metallic/roughness/occlusion/emissive factors and
 optional albedo / normal / packed ORM (in the METALNESS slot) / emissive maps from the model definition's
-`material_overrides`, derivative-based normal mapping, and atmospheric distance fog that fades into the same sky
-the sky pass draws: since T15 `fogSkyColor` reads the sky-view table the sky pass reads (with the moonlit sky's half
-while it shows; the skyglow and the below-horizon mirror are in the table), and marches the sky as the sky pass does
-while the tables are off (both shaders `#include "common/atmosphere"`, so the atmosphere maths are one file). The
-fog's factor is unchanged until T35 replaces it with aerial perspective. The lighting itself (the frame's uniforms, the BRDF, the sky's
-lights with the cascades' shadow, point lights with the cube shadow, the AO, the night vision and the fog) lives in
+`material_overrides`, derivative-based normal mapping, and the haze in front of every surface (T35's aerial
+perspective and ground haze, see "Haze": `ApplyAerialPerspective`, which replaced T34's distance fog). The lighting
+itself (the frame's uniforms, the BRDF, the sky's lights with the cascades' shadow, point lights with the cube shadow,
+the AO, the night vision and the haze) lives in
 `shaders/common/lighting.glsl`, which the sprite shader includes too: the renderer prepares and feeds every lit shader
 the same way (`WorldRendererLighting_PrepareLitShader`, `WorldRendererLighting_UploadFrame`). T06 moved it there without
 changing a bit of the PBR image (checked against the previous build on two drivers). Without it models draw unlit with
@@ -497,7 +499,7 @@ because raylib's `DrawMesh` draws indexed only while the CPU index array is kept
   cube's lamp) are made once per frame and shared by every pass.
 - **Lighting** (`world_sprite`, `#include "common/lighting"`): a rough dielectric (roughness 0.9, metallic 0, occlusion
   1) lit by the sun, the moon, the forward point lights (reach-culled per sprite on the sphere around its pivot), the
-  cube-shadow lamp, the ambient and the fog, its reflected light through the eye's night vision. Fixed sprites and decals
+  cube-shadow lamp, the ambient and the haze, its reflected light through the eye's night vision. Fixed sprites and decals
   are two-sided cards lit with their normal turned toward the viewer. Billboards and axis billboards face the camera
   and stand in for round things, so their diffuse light wraps: (n.l + w) / (1 + w) with w their `light_wrap` (default 1:
   n.l x 0.5 + 0.5), half lit from the side and dark only from straight behind; the specular keeps n.l.
@@ -506,12 +508,13 @@ because raylib's `DrawMesh` draws indexed only while the CPU index array is kept
   the light-facing quad, at the point matching each fragment (`matShadowModel`, `matPointShadowModel` in the vertex
   stage): the sprite is shadowed by everything else where its own entry stands, never by itself.
 - **Unlit** sprites (`is_lit` false) show their colours times `emission` as emitted light: no night vision, still
-  fogged.
+  hazed.
 - **Alpha modes.** `cutout` discards texels whose alpha is below `alpha_cutoff` (the texture's alpha; the object's opacity
   is the dither, see "Visibility") and writes opaque colour and depth. `blend` writes premultiplied colour (blended ONE,
   ONE_MINUS_SRC_ALPHA, so the scene's alpha stays 1) with the texture's alpha times the object's opacity. `additive`
-  writes premultiplied colour with alpha 0 (added ONE, ONE), dimmed by the fog's transmittance instead of mixed toward the
-  sky (an emitter seen through haze). Neither of the two writes depth.
+  writes premultiplied colour with alpha 0 (added ONE, ONE), dimmed by the haze's transmittance alone (an emitter seen
+  through haze: the haze's own light is already in what lies behind). A blended sprite's premultiplied haze composites
+  exactly over the haze of what lies behind it. Neither of the two writes depth.
 - **Order** in a lit pass (`WorldRendererSprites_DrawLit`, after the opaque models): the cutout sprites; then the decals
   (depth tested, not written; blended as their alpha mode says; in world order); then the blended and additive sprites,
   farthest first by view depth (equal depths keep world order), so each blends over everything behind it, the others
@@ -544,8 +547,8 @@ and not retried until the name changes (`WorldRendererSky_SyncTextures`).
 
 **Atmosphere** (T15, decisions G36 and G37; `source/WorldRendererAtmosphere.c`, the C mirror `source/WorldAtmosphere.h`,
 the GLSL `shaders/common/atmosphere.glsl`). The sky's light is computed once per frame into lookup tables (Hillaire, "A
-Scalable and Production Ready Sky and Atmosphere Rendering Technique", EGSR 2020) that the sky pass, the fog and the
-stars read, instead of a march per sky pixel and per fogged fragment.
+Scalable and Production Ready Sky and Atmosphere Rendering Technique", EGSR 2020) that the sky pass, the stars and,
+through the aerial-perspective volume built from them (T35, "Haze"), every lit surface read.
 - **The air** (`WorldAtmosphere_GetMedium`, from the environment: [WorldData.md](WorldData.md), "Environment"): the air's
   Rayleigh scattering (5.5, 13.0, 22.4)e-6 per metre at sea level x `air_density`, scale height 8 km; the haze's
   extinction 23.1e-6 x `sky_turbidity` / 3, of which it scatters `haze_albedo`, scale height `haze_height`, forward
@@ -560,38 +563,125 @@ stars read, instead of a march per sky pixel and per fogged fragment.
     zenith angle, per unit of scattering (64 directions, 20 steps each, the lit ground's reflection, the geometric series
     L2 / (1 - f_ms));
   - *sky view*, 192 x 216 (two halves of 192 x 108): the light the sky sends toward the camera by direction, the sun's
-    half (with light pollution's skyglow) built every frame, the moon's half while the moonlit sky shows
-    (`MoonSkyIntensity` above 0, as before); azimuth from the half's light across (the sine of half the angle: 0.6
-    degrees a texel next to the light), zenith angle up, quadratic toward the horizon (from 1.7 m the two rows next to
-    it are 0.008 degrees from it); 32 steps growing with the square of their index, each step's light integrated exactly over its own
-    air, the light through the transmittance table and the planet's shadow (soft over the sun's disc), plus
-    `multiple_scattering` of the multiple scattering table's glow. Below the horizon, for now, today's darkened mirror
-    (the sky above it, x 0.5 over the lower 0.12): T35 replaces it with the far ground.
+    half (with light pollution's light in the air, "Night sky") built every frame, the moon's half while the moonlit
+    sky shows (`MoonSkyIntensity` above 0, as before); azimuth from the half's light across (the sine of half the angle:
+    0.6 degrees a texel next to the light), zenith angle up, quadratic toward the horizon (from 1.7 m the two rows next
+    to it are 0.008 degrees from it); 32 steps growing with the square of their index, each step's light integrated
+    exactly over its own air, the light through the transmittance table and the planet's shadow (soft over the sun's
+    disc), plus `multiple_scattering` of the multiple scattering table's glow; the in-scatter tinted by `sky_tint`.
+    **Below the horizon** (T35) a ray ends on the *far ground*: the planet's surface at the atmosphere's ground
+    (`horizon_ground_height`), seen through the haze in front of it (that path scaled by the frame's haze like every
+    surface's, through the ground where the scale takes it past it). The ground is `sky_ground_albedo` lit as the lit
+    shaders light a dielectric facing up: the half's light in the lit shaders' units (the frame's sun colour at the raw
+    `sun_intensity`, or the moonlight without its height ramp), ramped by that light's own height over the far point of
+    the curved planet (the daylight's twilight ramp or the moonlight's: `WorldEnvironment_GetDaylightForElevation`,
+    `_GetMoonlightForElevation`), times the cosine to it, plus the frame's ambient in the sun's half. So a far point the
+    sun has set on is dark, and the far ground meets a terrain's edge without a seam. It replaced T15's darkened mirror.
   The transmittance and multiple scattering tables are built again only when their air changes
   (`WorldAtmosphere_UpdateTableRecord`, with `WorldAtmosphere_AreTablesStale`: not for `sun_glow` or
   `multiple_scattering`, which only the sky view uses). A rebuild costs 0.47 ms on a GTX 980 Ti, so whatever moves the
   air every frame (T16's weather) should step it. A light far brighter than the sun saturates the sky view at its half
   floats' largest value (65504) instead of turning infinite there; a haze too thick to see through gives no light, never
   a NaN (each step's share of its own light is selected, not blended, near 0 depth).
-- **The camera's height**: the tables see the sky from the camera's world Y above sea level (world Y 0), at least 1 m
-  and at most 99 km (`WorldAtmosphere_GetViewHeight`), from the frame's origin in double: flying up darkens the zenith
-  and drops the horizon (1.44 degrees at 2 km). The direct march starts there too. T35 adds land above sea level.
+- **The camera's height**: the tables see the sky from the camera's height above the atmosphere's ground (world Y minus
+  `horizon_ground_height`, default 0: sea level at world Y 0), at least 1 m and at most 99 km
+  (`WorldAtmosphere_GetViewHeight`), from the frame's origin in double: flying up darkens the zenith and drops the horizon
+  (1.44 degrees at 2 km). The direct march starts there too.
 - **Precision**: a float holds a radius of 6.4e6 m only to half a metre, so heights are carried as heights above the
-  ground (r^2 - R^2 as h (2R + h), never a radius minus the planet's), in C and in GLSL alike.
-- **The readers**: the sky pass (the glow by direction, both halves; the discs and the Milky Way through the
-  transmittance toward them, the Milky Way and the stars relative to the zenith's, where their brightness is tuned), the
-  lit shaders' `fogSkyColor` (both halves), the stars' vertex stage (their magnitude and colour). The tables sit on
-  fixed units for every reader (7 the transmittance, 8 the sky view: "Renderer structure"), bound by
+  ground (r^2 - R^2 as h (2R + h), never a radius minus the planet's), in C and in GLSL alike. The GPU's `acos` (NVIDIA)
+  is off by about 6.5e-5 rad near the horizon, so the sky view's rows there hold directions about 0.004 degrees lower
+  than the C mirror's; the readers' lookups make the same error, so a direction still finds its own row (a tenth of a
+  pixel).
+- **The readers**: the sky pass (the glow and the far ground by direction, both halves; the discs and the Milky Way
+  through the transmittance toward them, the Milky Way and the stars relative to the zenith's, where their brightness is
+  tuned; the discs only where a ray misses the planet, never over the far ground), the stars' vertex stage (their
+  magnitude and colour), and the volume's builder. The tables sit on fixed units
+  for their readers (7 the transmittance, 8 the sky view: "Renderer structure"), bound by
   `WorldRendererAtmosphere_BindTables` after the pass and again before each reader; the builders take their inputs
   through the 2D batch.
-- **A/B and fallback**: `WorldRenderer_SetAtmosphereTablesEnabled` (keypad 1 in the test frame) switches the sky and the
-  fog to the direct march, which is also what runs when a table shader or target is missing (logged once). The status's
+- **A/B and fallback**: `WorldRenderer_SetAtmosphereTablesEnabled` (keypad 1 in the test frame) switches the sky to the
+  direct march (with T15's darkened mirror below the horizon and T02's skyglow), which is also what runs when a table
+  shader or target is missing (logged once); nothing is hazed then (the volume is built from the tables). The status's
   "atmosphere tables" feature says which; `WorldRendererAtmosphere_LogStatus` logs the sizes, the build count, the height
   the sky is seen from and the render's CPU time. TODO in the code: remove the switch and the march once approved.
-- **Accuracy and cost** (T15's status block has the measurements): the sky-view table, sampled as the shaders sample
-  it, is within 0.2 to 0.4 % on average of single scattering with 1024 steps and an exact light path at the default haze
-  with the sun above 4 degrees (multiple scattering off), the transmittance table within 0.5 % of an exact optical depth;
-  the sky pass costs 0.024 ms instead of 0.215 by day, the atmosphere pass 0.06 ms (0.11 at night with the moon's half).
+- **Accuracy and cost** (T15's and T35's status blocks have the measurements): the sky-view table, sampled as the
+  shaders sample it, is within 0.2 to 0.4 % on average of single scattering with 1024 steps and an exact light path at
+  the default haze with the sun above 4 degrees (multiple scattering off; 0.41 % over every sun height from -4 to 85
+  degrees against a soft-shadowed reference, 7.6 % at worst at the moment of sunset, where the darkened mirror gave
+  19 %), the transmittance table within 0.5 % of an exact optical depth; the sky pass costs 0.024 ms instead of 0.215 by
+  day, the tables 0.06 ms (0.11 at night with the moon's half).
+
+**Haze** (T35, decisions G36 and G37; the pure maths in `source/WorldAtmosphere.{h,c}`, the readers' GLSL
+`shaders/common/haze.glsl`, the volume's builder `shaders/atmosphere/volume.frag`). A surface's light reaches the camera
+dimmed by the air in front of it (the transmittance) plus the light that air scatters toward the camera (the
+in-scatter), from the same atmosphere as the sky along the real path: at the horizon that is exactly the sky, so far
+things still dissolve into it; nearer, a hill ends as a flat, pale silhouette, never see-through; dark things turn
+blue, bright ones warm. It replaced T34's distance fog (`fogSkyColor`, `FogFactor` and `BASE_FOG_DENSITY` are gone).
+- **The aerial-perspective volume** (Hillaire 2020, section 5.6): for 32 x 32 screen directions of the scene camera, at 32
+  slices, the in-scatter (RGB, the sky's light units) and the RGB transmittance of the path so far. The slices' distances
+  grow by a fixed ratio (1.50) from 1 m to 200 km, 21 within the 4 km far plane, and the last holds the whole ray to the
+  top of the atmosphere, so every distance has an answer; a distance between two slices reads both, linearly in
+  distance (`WorldAtmosphere_GetVolumeSlice`; from the camera to the first slice, clear air to it). Its rays pass through
+  the planet's surface with the air below it as on it: the world's ground is flat and goes on where the planet curves
+  away. Built every frame after the sky view (`BuildVolume`) into one RGBA16F texture of 1024 x 65: the slices side by
+  side, the in-scatter's tiles in rows 0 to 31, the transmittance's in rows 32 to 63 (RGB transmittance in tiles of its
+  own keeps the blue shift exact), and a row of the frame's values (`WorldAtmosphereVolumeValue`: the light at the ground
+  haze's base: the sun's and the moon's through the air and the planet's shadow, and the light from all around, the
+  sky's multiple scattering and light pollution's). Each in-scatter texel marches its path (8 steps within 4 km, 24
+  beyond, 32 for the whole ray: within 0.13 % and 1.2 % of 512 steps), lit by the sun, by the moon while the moonlit sky
+  shows and by light pollution's light, tinted by `sky_tint`; each transmittance texel marches the air alone. A texel's
+  path ends at its slice's distance or at the top of the atmosphere, whichever is nearer.
+- **The readers** (`common/haze`): a point at render-space `p` is looked up at its screen place through the scene's
+  view-projection (`hazeViewProjection`: the crisp pass at window resolution reads the same directions) and at
+  `length(p)`, scaled. `ApplyAerialPerspective` in `common/lighting` gives every lit shader colour x transmittance + the
+  in-scatter through the eye's night vision: models (rigid, skinned, instanced), terrain, lit and unlit sprites and
+  decals, at scene and at window resolution; an additive sprite takes the transmittance alone (`AerialTransmittance`). The
+  lit programs read the volume on unit 8 (`WorldRendererTextureUnit_HazeVolume`); the sky pass and the outline pass bind
+  it with `SetShaderValueTexture`.
+- **The frame's haze** (`WorldAtmosphere_GetHaze`): every haze distance (and the ground haze's depth) is multiplied by
+  `aerial_distance_scale` x `fog_strength` x the player's `fog_strength` (`DistanceScale`; 1 the real air), and the
+  first `haze_start_distance` metres are clear. At scale 0 the volume is not built and nothing is hazed (the far ground
+  then meets the sky with no haze in front of it). A draw multiplies the scale by its placement's `haze` (an override
+  pair on models, model instances, sprites and terrain: [WorldModels.md](WorldModels.md),
+  [WorldSprites.md](WorldSprites.md), [Terrain.md](Terrain.md)): 0 shows it as if the air were clear (a sign that must
+  read from far away). Every lit draw sets `hazeMultiplier` (`WorldRendererLighting_SetDrawHaze`), as the uniform keeps
+  the last draw's value. **T14's hook**: an ambient zone's haze multiplier multiplies the draw's where the callers of
+  `WorldRendererLighting_SetDrawHaze` pass it.
+- **The ground haze**: a low layer of mist, `ground_haze_density` x exp(-max(height - `ground_haze_base`, 0) /
+  `ground_haze_thickness`), its optical depth along each ray in closed form (`hazeGroundDepth`, C mirror
+  `WorldAtmosphere_GetGroundHazeDepth`: the mean density over the heights crossed, so a level ray needs no special case),
+  in the flat world's heights, per pixel (a few metres of mist would blur across the volume's rows). Its light is
+  `ground_haze_albedo` x (the sun's and the moon's light at its base through its glow toward them, Cornette-Shanks with
+  `ground_haze_glow`, plus the light from all around), seen through the air in front of where half of it comes from (the
+  distance where its depth reaches -ln((1 + e^-depth) / 2): `hazeGroundDistance`, C mirror
+  `WorldAtmosphere_GetGroundHazeDistance`), so a mist around the camera is not hazed by the far air and a far misty
+  valley is: the pixel is mix(the mist's light, what lies behind, the mist's transmittance), the mist's light at most
+  65504 (the scene target's half floats). The sky pass lays it in front of the sky and the far ground the same way (to
+  the far ground's distance below the horizon, to `WORLD_ATMOSPHERE_SKY_DISTANCE` above it: `hazeGroundInFrontOfSky`), so
+  a misty horizon meets misty ground without a seam; a ray that looks down but passes over the planet's horizon (from up
+  high, between level and the horizon) follows the curved planet instead (`hazeGroundDepthCurved`, C mirror
+  `WorldAtmosphere_GetGroundHazeDepthCurved`: the ray's height a parabola around its lowest point, the depth a Gaussian
+  there in closed form through the scaled complementary error function, within 0.01 % of the exact ray), because
+  beyond its lowest point it climbs out of the mist, where the flat world's straight ray would sink into it. The discs,
+  the Milky Way and the stars (`hazeGroundTransmittance`, per star) are dimmed by it. Off by default (density 0); T16's
+  `fog_density` and `fog_height` and T18's mist will drive it.
+- **The outlines** fade by the haze's transmittance per colour at the object's own multiplier: an outlined surface's
+  G-buffer alpha holds its haze (`OUTLINE_HAZE_BASE` 0.76 at 0 to 1 at 1; above 1 counts as 1), and `world_postfx` reads
+  the volume's transmittance and the ground haze's at the pixel ("G-buffer, AO and outlines").
+- **Light pollution** is the town's light scattered by the air ("Night sky").
+- **The debug view** (`WorldRenderer_SetHazeView`; keypad 4 and 5 in the test frame): one slice's in-scatter or
+  transmittance stretched over the scene in its place, as the readers sample it (`WorldRendererAtmosphere_DrawView`).
+- **Status**: the "haze" feature (active while the volume is built; inactive while the tables are off or the haze's
+  scale is 0; unavailable without the tables or the volume's shader or target), and a status log line with the volume,
+  the scale, the ground haze and the debug view.
+- **Units** (an open question in T35's status block): the in-scatter is in the sky's light units (the atmosphere's sun is
+  `ATMOSPHERE_SUN_RADIANCE` 22 x `sun_intensity`), a surface's own light in the lit shaders' (the sun 1 x its colour,
+  plus the ambient): the sky is about ten times brighter against the surfaces than real skies are, so a dark surface
+  hazes about ten times faster than in real air (a 30 % veil over grass 400 m away, about 4 % in reality), while black
+  things still vanish at the real visibility (about 100 km at turbidity 3).
+- **Cost** (GTX 980 Ti, T35's status block): the volume and its use 0.085 ms by day and 0.13 ms at night (the moon's
+  march), against T34's fog march of 0.26 and 0.5 to 0.67 ms; a morning mist adds about 0.18 ms in a view full of
+  terrain.
 
 **Night sky.** The pure maths is in the private `source/NightSky.{h,c}` (tested in `tests/NightSkyTests.c`); the GLSL
 the passes share is `shaders/common/night_sky.glsl`.
@@ -629,13 +719,20 @@ the passes share is `shaders/common/night_sky.glsl`.
   (automatic derivatives would draw a seam line where the longitude wraps). Brightness: `MilkyWayBrightness` x full
   at a limiting magnitude of 6 or more, gone at 4.5 or less x extinction. A missing texture is logged once and the
   sky draws no Milky Way.
-- **Light pollution.** At night the sky adds a skyglow of `LightPollutionColor` x `LightPollution`, strongest at the
-  horizon and fading to 6% of that overhead, faded out by daylight. Since T15 it is added into the sky-view table's
-  sun half (and the direct march adds it per pixel), so the PBR fog adds the same glow and fogged silhouettes match the
-  glowing sky behind them. The night ambient gains a small share of the colour
-  (`NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE`); the `NIGHT_AMBIENT_*` floor stays the dark-site look.
+- **Light pollution.** At night the town's light fills the air: since T35 it is what it physically is, light scattered
+  by the air, so it grows with the haze. The air below about `WORLD_ATMOSPHERE_LIGHT_POLLUTION_HEIGHT` (500 m) and within
+  about `WORLD_ATMOSPHERE_LIGHT_POLLUTION_REACH` (10 km) of the camera holds `LightPollutionColor` x `LightPollution` x
+  `WORLD_ATMOSPHERE_LIGHT_POLLUTION_RADIANCE` (0.049), faded out by daylight (`WorldAtmosphere_GetLightPollutionRadiance`),
+  scattered like any light (the air's scattering per metre x that, `WorldAtmosphere_GetLightPollutionShare`): in the
+  sky-view table's sun half, in the volume (the haze over the town glows) and in the ground haze's light. The radiance is
+  calibrated so the glow at the horizon is T02's skyglow (0.012 x the colour at `LightPollution` 1: 99 % of it in green),
+  a little bluer (Rayleigh scattering), 5.5 % of it overhead (T02: 6 %); doubling `sky_turbidity` brightens it about 1.4
+  times at the horizon. The direct march (the A/B) keeps T02's skyglow profile (`SKYGLOW_BASE_RADIANCE`). The night
+  ambient gains a small share of the colour (`NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE`); the `NIGHT_AMBIENT_*` floor stays
+  the dark-site look.
 - **Brightness knobs** (tuned for the night exposure, the eye adaptation's maximum of 24): `STAR_RADIANCE_SCALE` in
-  `WorldRendererStars.c`, `MILKY_WAY_BASE_RADIANCE` and `SKYGLOW_BASE_RADIANCE` in `WorldRendererSky.c`; per world
+  `WorldRendererStars.c`, `MILKY_WAY_BASE_RADIANCE` and `SKYGLOW_BASE_RADIANCE` in `WorldRendererSky.c` (the direct march's skyglow), `WORLD_ATMOSPHERE_LIGHT_POLLUTION_RADIANCE` in
+  `WorldAtmosphere.h` (the tables'); per world
   `StarBrightness` and `MilkyWayBrightness` scale them.
 
 **Moon.** The sky's model is pure maths in `WorldEnvironment` (`agents/WorldData.md`); the renderer draws it.
@@ -658,8 +755,8 @@ the passes share is `shaders/common/night_sky.glsl`.
 - **The moonlit sky.** The same atmosphere lit by the moon: x `MoonIntensity` x the phase's brightness x
   `MOON_SKY_SHARE` (the "MOONLIT SKY KNOB", 0.3: a dark slate-blue sky with a soft halo at full moon), faded out while
   the sun is above about 3 degrees and the moon below about -3 to -6 (outside that it is skipped: since T15 the sky-view
-  table's moon half is built only then, with the moon as its light). The PBR fog adds the same moonlit sky, so fogged
-  silhouettes match the sky behind them.
+  table's moon half is built only then, with the moon as its light). The haze's volume is lit by the moon then too, so
+  hazed silhouettes match the sky behind them.
 - **Moonlight.** The second directional light of the PBR shader, with the sun's BRDF: `MoonIntensity` (default 0.02 of
   the sun, `WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY`: tuned on rendered frames so a full-moon night is clearly lighter
   than a new-moon one and still reads as night; 8% lit the test world nearly like day at the night exposure) x the
@@ -688,8 +785,8 @@ private `source/NightVision.{h,c}` (tested in `tests/NightVisionTests.c`; its he
   colour, the dark beyond it greys. Lamps lower the exposure but do not raise the field: the rods adapt locally, so a
   lamp beside the camera darkens the dim sky but gives it no colour.
 - **What goes through it.** The sky pass's glow (the in-scatter of the sun and the moon, the skyglow, the Milky Way;
-  before the discs are added) and the PBR shader's reflected light (ambient, the sun and the moon, point lights) and
-  its fog's sky. Not the emitters: the sun's and the moon's discs, the stars and emissive materials (the game draws
+  before the discs are added) and the lit shaders' reflected light (ambient, the sun and the moon, point lights) and the
+  haze's in-scatter. Not the emitters: the sun's and the moon's discs, the stars and emissive materials (the game draws
   emitters far dimmer than they are, and a real emitter that bright is seen in colour: the orange rising moon, a lit
   screen at night). Lit sprites' reflected light goes through it like the models'; unlit sprites are emitters.
 - **Switches.** The world's `NightVisionStrength` (1 the eye, 0 colourful nights: a long-exposure photo) and
@@ -719,13 +816,15 @@ and nearer ones were stored too far away). Models and cutout sprites (turned tow
 shaded separately and is excluded from the forward candidates, so an object can still get eight other point lights.
 
 **G-buffer, AO and outlines.** `world_normal` (models) and `world_normal_sprite` (cutout sprites, alpha-tested) write
-view-space normals (RGB) and a surface/outline flag (A: 0 = nothing, 0.5 = surface, 1 = surface with outline)
+view-space normals (RGB) and a surface/outline flag (A: 0 = nothing, 0.5 = surface, 0.76 to 1 = surface with outline,
+its haze multiplier over that range)
 into a low-res 8-bit target with blending disabled. `world_ao` turns it into an AO multiplier that the PBR pass
 applies to its ambient term only (so AO never dims direct light). `world_postfx` draws outlines after the scene:
 depth/surface silhouettes darken, view-normal creases are recoloured sun-aware; the sky is never outlined. Since T34 a
-line fades with the fog as the surface under it does: its strength is scaled by the fog's transmittance to the pixel
-(`exp(-distance * fogDensity)`, the frame's `FogDensity`, the lit shaders' `FogFactor` from the other side), so a hill
-the haze has all but hidden keeps no dark rim, and with no fog the lines are exactly as before. It reads the
+line fades with the haze as the surface under it does: since T35 its strength is scaled, per colour, by the haze's
+transmittance to the pixel at the object's own haze multiplier (the volume's and the ground haze's, `hazeTransmittance`;
+the world's up in view space, `worldUpView`, gives the ray's climb), so a hill the haze has all but hidden keeps no dark
+rim, and a sign with `haze` 0 keeps its lines. It reads the
 G-buffer's depth (the scene's only where the G-buffer's is not samplable), which matches its normals and flags: a fading
 object is solid in the G-buffer but has the dither's holes in the scene's depth. (Since then the debug light gizmos,
 which write the scene's depth but are not in the G-buffer, are no longer darkened as if they were the rim of the surface
@@ -741,8 +840,9 @@ pixelated image, depth-tested against the scene so they are occluded correctly (
 screen). When the overlay cannot run they fall back to the pixelated passes, so they never vanish. Crisp objects
 get no AO and no outlines.
 
-**Effect strengths.** Bloom, sun shafts, shadows, AO and fog combine the world's multiplier
-(`WorldEnvironment`), the config's (`GameConfig`) and a built-in base. Outlines are a code-side toggle.
+**Effect strengths.** Bloom, sun shafts, shadows and AO combine the world's multiplier
+(`WorldEnvironment`), the config's (`GameConfig`) and a built-in base; the haze's strength is the world's
+`fog_strength` x the config's `FogStrength` (1 the real air: "Haze"). Outlines are a code-side toggle.
 
 ### Failures and status
 
@@ -767,11 +867,13 @@ get no AO and no outlines.
   texture arrays (B02: active while a drawn terrain has them, unavailable without texture arrays or the terrain shader;
   the status log adds a line per terrain with its materials and its arrays' sizes, and the status names a debug view
   while one shows), "atmosphere tables" the atmosphere's tables (T15: unavailable without their three shaders or targets,
-  inactive while switched off, when the sky and the fog are marched per pixel; the status adds the build count, the
-  height the sky is seen from, the render's CPU time and the frame time the caller gave). It also counts what the
-  camera's passes drew and what culling and fading removed (see "Visibility"). The renderer logs the status once after its
-  first render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame), with a line for the atmosphere's
-  tables.
+  inactive while switched off, when the sky is marched per pixel; the status adds the build count, the height the sky is
+  seen from, the render's CPU time and the frame time the caller gave), "haze" the aerial-perspective volume (T35:
+  unavailable without the tables or the volume's shader or target, inactive while the tables are off or the haze's scale
+  is 0; the status adds the scale, the ground haze's density and the debug view). It also counts what the camera's passes
+  drew and what culling and fading removed (see "Visibility"). The renderer logs the status once after its first
+  render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame), with a line for the atmosphere's tables
+  and one for the haze.
 
 ### Renderer structure (keep it clean)
 
@@ -789,8 +891,8 @@ get no AO and no outlines.
 | `WorldRendererGBuffer.c` | The normal/flag G-buffer (models, terrain chunks and cutout sprites) and the AO pre-pass. |
 | `WorldRendererTerrain.c` | The terrain's chunks (B01, [Terrain.md](Terrain.md)): their GPU meshes, kept by the renderer per terrain asset and chunk and uploaded again when a chunk's revision changes (all of them when the chunk layout changes; those of terrains no entry resolves any more unloaded); the `world_terrain` shader and its lit draw (per-chunk lights and dither; the unlit fallback with raylib's default shader); the G-buffer's and the shadow passes' draws with their shared shaders; the chunk key (the minus key: a colour per chunk and the wireframe); since B02 each terrain's materials as texture arrays (made once per terrain through `GLTextureArray`, bound on units 9 to 11), its materials' and rules' uniforms, each chunk's wrapped offsets, and the terrain views (the equals key). |
 | `GLTextureArray.c` (B02, not a pass) | Texture arrays (`GL_TEXTURE_2D_ARRAY`): the project's only direct OpenGL calls (decision W7), through the function pointers raylib's loader resolves (`rlGetProcAddress`), with their GL constants; private (`source/GLTextureArray.h`). |
-| `WorldRendererAtmosphere.c` | The atmosphere's tables (T15, see "Atmosphere"): their three builders and targets, the rebuild when the air changes, the sky view every frame (the moon's half while its sky shows), the atmosphere uniforms every reader gets (`WorldRendererAtmosphereLocations`), the tables' fixed units, the A/B, the status line. Runs first among the GPU passes. |
-| `WorldRendererSky.c` | The atmospheric sky with the moon, the moonlit sky, the Milky Way and light pollution's skyglow; the sky textures the world names; the night sky values and the moon's disc for the frame. |
+| `WorldRendererAtmosphere.c` | The atmosphere's tables (T15, see "Atmosphere"): their three builders and targets, the rebuild when the air changes, the sky view every frame (the moon's half while its sky shows; the far ground below the horizon); the haze's volume (T35, see "Haze"), its builder and target, the frame's haze and light pollution, the haze uniforms every reader gets (`WorldRendererHazeLocations`), the volume's unit and binds, the debug view; the atmosphere uniforms every reader gets (`WorldRendererAtmosphereLocations`), the tables' fixed units, the A/B, the status lines. Runs first among the GPU passes. |
+| `WorldRendererSky.c` | The atmospheric sky with the moon, the moonlit sky, the Milky Way and the ground haze in front of it (the far ground and light pollution's light are the tables'); the sky textures the world names; the night sky values (the direct march's skyglow among them) and the moon's disc for the frame. |
 | `WorldRendererStars.c` | The star field: the catalogue's mesh (rebuilt when the seed or density changes) and its draw (none behind the moon). |
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
 | `WorldRendererCrisp.c` | The crisp overlay. |
@@ -825,7 +927,7 @@ The renderer keeps receiving features, so:
   | Units | Who | What |
   |---|---|---|
   | 0–11 | raylib's `DrawMesh` | A drawn material's maps, map i on unit i (`GL_TEXTURE_2D`, cubes on 7–9); the 2D batch uses 0–4. Free in a program whose materials carry no maps. |
-  | 7–8 | every program that reads the atmosphere's tables (T15): the lit programs (models, sprites, terrain), the sky pass, the stars | 7 the transmittance table, 8 the sky-view table (`sampler2D`, `WorldRendererTextureUnit_Atmosphere*`). raylib binds only cube maps there (`MATERIAL_MAP_CUBEMAP`, `_IRRADIANCE`, filled by no material of ours) and the 2D batch only 0–4, so the tables stay bound for the frame; units chosen because they are free in every lit program, the terrain's included, with no capability check (units 16 and up would have needed GL_MAX_TEXTURE_IMAGE_UNITS above 16). T35's volume takes 8 in the lit programs (the fog's sky-view sampler today). |
+  | 7–8 | the sky pass and the stars (T15); the lit programs (models, sprites, terrain: T35) | In the sky pass and the stars 7 the transmittance table, 8 the sky-view table (`sampler2D`, `WorldRendererTextureUnit_Atmosphere*`). In the lit programs 8 the haze's volume (`sampler2D atmosphereVolume`, `WorldRendererTextureUnit_HazeVolume`: they read no table since T35; their transmittance sampler on 7 is declared and unused, so 7 is free there for a `sampler2D` of the frame). raylib binds only cube maps there (`MATERIAL_MAP_CUBEMAP`, `_IRRADIANCE`, filled by no material of ours) and the 2D batch only 0–4, so what a pass binds stays bound; the lit passes bind the volume on 8 with their frame textures, the sky pass and the stars the tables before their draws (the sky pass and the outlines take the volume through `SetShaderValueTexture`). Units chosen because they are free in every lit program, the terrain's included, with no capability check (units 16 and up would have needed GL_MAX_TEXTURE_IMAGE_UNITS above 16). |
   | 9–11 | the terrain program only (B02) | Its material arrays (`sampler2DArray`: albedo and height, normal, roughness and AO). The terrain draws with no raylib maps, and an array sampler reads only a unit's `GL_TEXTURE_2D_ARRAY` target, which nothing else binds, so the models' maps on the same units never meet them. |
   | 12–15 | every lit program | The frame's textures: the near and far cascades, the cube shadow, the screen's AO. Full. |
 
@@ -903,15 +1005,18 @@ lookups' light-facing quads), each with its own fragment stage in its own direct
 (`unlit/` has its own, raylib's default). Each renderer shader lives in its own directory under `asset/shaders/`. GLSL shared between
 shaders lives in `asset/shaders/common/` and is pulled in with `#include "common/<name>"` (no `#version` in shared
 files; rules in GameAssets.md, "GameShader"): `common/math` (`PI`), `common/atmosphere` (the air's uniforms, the
-tables' layout and lookups, their march and T34's direct march of single scattering, see "Atmosphere"; used by the table
-builders, `world_sky`, `world_stars` and the lit shaders' fog; since T34 the direct march's 16 view steps grow with the
+tables' layout and lookups, their march (through the ground for the haze, with light pollution's light) and T34's direct
+march of single scattering, the haze volume's layout, see "Atmosphere"; used by the table builders, the volume's,
+`world_sky`, `world_stars` and the haze's readers; since T34 the direct march's 16 view steps grow with the
 square of their index, short near the viewer where every ray meets the densest air, and each step's light is dimmed by
 the air in front of it and half its own: equal steps, each dimmed by all of its own air, had made the sky about 30 % off
-and the horizon a dark brown band), `common/night_sky` (air mass, extinction and the skyglow profile,
-used by `world_sky`, `world_stars` and the PBR fog) and `common/night_vision` (the eye's night vision: the rods' share
+and the horizon a dark brown band), `common/haze` (T35: the volume's readers, the ground haze's closed forms and the
+compositing, see "Haze"; used by `common/lighting`, `world_sky`, `world_stars` and `world_postfx`), `common/night_sky`
+(air mass, extinction and the skyglow profile, used by `world_sky` and `world_stars`) and `common/night_vision` (the eye's night vision: the rods' share
 and the blend into their grey; used by `world_sky` and `common/lighting`), `common/lighting` (the frame's lighting: its
 uniforms, the BRDF and its wrapped variant, the cascades' shadow, point lights and the cube shadow, the screen AO, the
-night vision and the fog; used by `world_pbr` and `world_sprite`), `common/distance_packing` (the cube shadow's
+night vision and the haze through `common/haze`: `ApplyAerialPerspective`; used by `world_pbr`, `world_terrain` and
+`world_sprite`), `common/distance_packing` (the cube shadow's
 packed distance; used by `world_cube_depth`, `world_sprite_cube_depth` and `common/lighting`), `common/dither` (the
 dithered fades: the draw's fade and its part of a LOD cross-fade; used by every world geometry shader, see
 "Visibility") and `common/skinning` (T29: the bone attributes and the palette, and a vertex's blended rows; used by
@@ -920,9 +1025,9 @@ fade, LOD band and draw per pass, see "Model instances"; used by every instanced
 or noise code there instead of copying it between shaders.
 
 The atmosphere's table builders (T15: `world_atmosphere_transmittance`, `world_atmosphere_multiscatter`,
-`world_atmosphere_skyview`) share one directory, `shaders/atmosphere/` (`atmosphere_*.json` with the fragment stages
-`transmittance`, `multiscatter` and `skyview` over raylib's default vertex stage): full-screen passes into the tables'
-targets.
+`world_atmosphere_skyview`) and the haze's volume builder (T35: `world_atmosphere_volume`) share one directory,
+`shaders/atmosphere/` (`atmosphere_*.json` with the fragment stages `transmittance`, `multiscatter`, `skyview` and
+`volume` over raylib's default vertex stage): full-screen passes into the tables' and the volume's targets.
 
 The instanced twins (B03: `world_pbr_instanced`, `world_normal_instanced`, `world_depth_instanced`,
 `world_cube_depth_instanced`) sit beside their rigid shaders as the skinned ones do, each an `instanced.vert` with the
@@ -1002,8 +1107,8 @@ mouse wheel (T34: the flycam's speed, up faster and down slower, three notches t
 6 m/s at start; the sprint key still multiplies it by 3; each change is logged and the I key's camera line shows it;
 not while walking, and the UI takes it first while the pointer is over a widget) and the debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11 and the
-digits are taken already, minus since B01, equals since B02, the keypad's 1 to 3 since T15; the rest of the keypad is
-free. Leave F12 free: raylib's `EndDrawing`
+digits are taken already, minus since B01, equals since B02, the keypad's 1 to 3 since T15 and 4 to 8 since T35; the
+keypad's 0 and 9 are free. Leave F12 free: raylib's `EndDrawing`
 takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
@@ -1011,9 +1116,14 @@ takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png`
   00:00) and pause; `[` `]` scrub the time while held (a tenth of a day per real second, across midnights, logged when
   let go); `,` and `.` the previous and next day, `/` a week ahead (the day keys keep the time of day);
 - **the atmosphere (T15, see "Atmosphere"):** keypad 1 switches the atmosphere's tables off and on (the A/B: off, the sky
-  and the fog are marched per pixel as before T15, single scattering; logged), keypad 2 the environment's
+  is marched per pixel as before T15, single scattering, and nothing is hazed; logged), keypad 2 the environment's
   `multiple_scattering` between 1 and 0, keypad 3 its `ozone` between 1 and 0 (each logged: compare dusk with and
   without the ozone layer);
+- **the haze (T35, see "Haze"):** keypad 4 steps the haze's debug view (off, a slice's in-scatter, its transmittance),
+  keypad 5 the slice it shows (wrapping from the whole ray back to the first; logged with its distance:
+  `WorldTest: haze view: the volume's in-scatter at slice 20 (3420.0 m).`), keypad 6 the environment's
+  `aerial_distance_scale` (1, 5, 10), keypad 7 a morning mist (`ground_haze_density` 0.02, `ground_haze_thickness` 15,
+  or no ground haze), keypad 8 the haze strength (`fog_strength` 1 or 0: clear air to the far plane); each logged;
 - **the moon and the seasons:** F pins the moon full (`MoonPhaseSource` fixed at 0.5) and gives it back to the
   calendar; Y switches the seasons (`AreSeasonsEnabled`). Every clock and moon log line carries the moon: `WorldTest:
   next day: Mon 2026-10-19 12:00:00; first quarter (phase 0.27, 59% lit, from the calendar).`;

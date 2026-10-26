@@ -161,6 +161,14 @@ static void DefaultsAreValid(TestRun* run)
     TEST_CHECK(run, (Environment.HazeAlbedo.r == 244) && (Environment.HazeAlbedo.g == 244) && (Environment.HazeAlbedo.b == 244));
     TEST_CHECK(run, (Environment.SunGlow == 0.758f) && (Environment.AirDensity == 1.0f) && (Environment.Ozone == 1.0f));
     TEST_CHECK(run, Environment.MultipleScattering == 1.0f);
+    // The haze (T35): the real air (no extra distance, the whole of it, from the camera), no ground haze, a near-white mist
+    // of glow 0.8 when one is set, the far ground at world Y 0.
+    TEST_CHECK(run, (Environment.FogStrength == 1.0f) && (Environment.AerialDistanceScale == 1.0f)
+        && (Environment.HazeStartDistance == 0.0f));
+    TEST_CHECK(run, (Environment.GroundHazeDensity == 0.0f) && (Environment.GroundHazeBase == 0.0f)
+        && (Environment.GroundHazeThickness == 20.0f) && (Environment.GroundHazeGlow == 0.8f));
+    TEST_CHECK(run, (Environment.GroundHazeAlbedo.r == 250) && (Environment.GroundHazeAlbedo.b == 250)
+        && (Environment.HorizonGroundHeight == 0.0f));
     WorldEnvironment_Deconstruct(&Environment);
     WorldEnvironment_Deconstruct(&Environment); // safe to repeat
     TEST_CHECK(run, (Environment.MilkyWayTexture == NULL) && (Environment.MoonTexture == NULL));
@@ -274,6 +282,40 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.MultipleScattering = -0.5f;
     CheckRejected(run, &Environment, "MultipleScattering");
 
+    // The haze's settings (T35).
+    ResetEnvironment(&Environment);
+    Environment.AerialDistanceScale = -1.0f;
+    CheckRejected(run, &Environment, "AerialDistanceScale");
+    ResetEnvironment(&Environment);
+    Environment.AerialDistanceScale = 1001.0f;
+    CheckRejected(run, &Environment,
+        "world_environment.aerial_distance_scale (AerialDistanceScale) must be finite and in [0, 1000]");
+    ResetEnvironment(&Environment);
+    Environment.HazeStartDistance = -0.5f;
+    CheckRejected(run, &Environment, "HazeStartDistance");
+    ResetEnvironment(&Environment);
+    Environment.GroundHazeDensity = NAN;
+    CheckRejected(run, &Environment, "GroundHazeDensity");
+    ResetEnvironment(&Environment);
+    Environment.GroundHazeDensity = 101.0f;
+    CheckRejected(run, &Environment, "world_environment.ground_haze_density (GroundHazeDensity) must be finite and in "
+        "[0, 100]");
+    ResetEnvironment(&Environment);
+    Environment.GroundHazeBase = INFINITY;
+    CheckRejected(run, &Environment, "GroundHazeBase");
+    ResetEnvironment(&Environment);
+    Environment.GroundHazeBase = -2.0e7f;
+    CheckRejected(run, &Environment, "GroundHazeBase");
+    ResetEnvironment(&Environment);
+    Environment.GroundHazeThickness = 0.05f;
+    CheckRejected(run, &Environment, "GroundHazeThickness");
+    ResetEnvironment(&Environment);
+    Environment.GroundHazeGlow = 1.0f;
+    CheckRejected(run, &Environment, "GroundHazeGlow");
+    ResetEnvironment(&Environment);
+    Environment.HorizonGroundHeight = 2.0e7f;
+    CheckRejected(run, &Environment, "HorizonGroundHeight");
+
     // Zero is allowed where the rule is ">= 0" (an effect switched off), the [0, 1] ranges include both ends, and the
     // calendar's first and last days are dates.
     ResetEnvironment(&Environment);
@@ -292,7 +334,19 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.Ozone = 100.0f;
     Environment.MultipleScattering = 0.0f;
     Environment.HazeAlbedo = (Color){ 0, 0, 0, 0 };
+    Environment.FogStrength = 0.0f;
+    Environment.AerialDistanceScale = 0.0f;
+    Environment.HazeStartDistance = 1.0e7f;
+    Environment.GroundHazeDensity = 100.0f;
+    Environment.GroundHazeBase = -1.0e7f;
+    Environment.GroundHazeThickness = 0.1f;
+    Environment.GroundHazeGlow = 0.0f;
+    Environment.HorizonGroundHeight = 1.0e7f;
     TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
+    Environment.AerialDistanceScale = 1000.0f;
+    Environment.GroundHazeThickness = 100000.0f;
+    Environment.GroundHazeGlow = 0.99f;
+    Environment.HorizonGroundHeight = -1.0e7f;
     Environment.HazeHeight = 100000.0f;
     Environment.SunGlow = 0.0f;
     Environment.AirDensity = 100.0f;
@@ -405,6 +459,14 @@ static void CopyToCopiesEverySetting(TestRun* run)
     Source.AirDensity = 2.5f;
     Source.Ozone = 0.0f;
     Source.MultipleScattering = 0.25f;
+    Source.AerialDistanceScale = 5.0f;
+    Source.HazeStartDistance = 30.0f;
+    Source.GroundHazeDensity = 0.02f;
+    Source.GroundHazeBase = -4.0f;
+    Source.GroundHazeThickness = 15.0f;
+    Source.GroundHazeAlbedo = (Color){ 17, 18, 19, 20 };
+    Source.GroundHazeGlow = 0.5f;
+    Source.HorizonGroundHeight = 250.0f;
     TEST_CHECK_SUCCESS(run, Properties_Set(WorldEnvironment_GetPropertyTable(), &Source, u8"moon_texture",
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"red_moon" }));
 
@@ -427,6 +489,10 @@ static void CopyToCopiesEverySetting(TestRun* run)
     TEST_CHECK(run, (Destination.HazeHeight == 300.0f) && (Destination.HazeAlbedo.g == 14) && (Destination.SunGlow == 0.9f));
     TEST_CHECK(run, (Destination.AirDensity == 2.5f) && (Destination.Ozone == 0.0f)
         && (Destination.MultipleScattering == 0.25f));
+    TEST_CHECK(run, (Destination.AerialDistanceScale == 5.0f) && (Destination.HazeStartDistance == 30.0f)
+        && (Destination.GroundHazeDensity == 0.02f) && (Destination.GroundHazeBase == -4.0f));
+    TEST_CHECK(run, (Destination.GroundHazeThickness == 15.0f) && (Destination.GroundHazeAlbedo.b == 19)
+        && (Destination.GroundHazeGlow == 0.5f) && (Destination.HorizonGroundHeight == 250.0f));
     // The names are the destination's own copies.
     TEST_CHECK(run, (Destination.MoonTexture != Source.MoonTexture)
         && (strcmp((const char*)Destination.MoonTexture, "red_moon") == 0));
@@ -828,6 +894,35 @@ static void ShadowLightFollowsTheBrighterLight(TestRun* run)
  * shorter, the equinoxes' about 12; the noon sun is higher in summer; the full moon stands low in summer, high in
  * winter. Without them every day lasts 12 hours. (The year is uniform: the model's September equinox falls about two
  * days before the real one, whose sun moves slower through the northern summer.) */
+/* The sun's and the moon's light by how high they stand: the ramps the daylight factor and the moonlight use, which the
+ * renderer's far ground evaluates where the light stands over a far point of the ground. */
+static void LightRampsFollowTheElevation(TestRun* run)
+{
+    TEST_CHECK(run, WorldEnvironment_GetDaylightForElevation(WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION) == 0.0f);
+    TEST_CHECK(run, WorldEnvironment_GetDaylightForElevation(-0.5f) == 0.0f);
+    TEST_CHECK(run, WorldEnvironment_GetDaylightForElevation(WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION) == 1.0f);
+    TEST_CHECK(run, WorldEnvironment_GetDaylightForElevation(0.9f) == 1.0f);
+    TEST_CHECK(run, WorldEnvironment_GetDaylightForElevation(NAN) == 0.0f);
+    float Middle = 0.5f * (WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION + WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION);
+    TEST_CHECK(run, fabsf(WorldEnvironment_GetDaylightForElevation(Middle) - 0.5f) < 1e-6f);
+    TEST_CHECK(run, WorldEnvironment_GetMoonlightForElevation(0.0f) == 0.0f);
+    TEST_CHECK(run, WorldEnvironment_GetMoonlightForElevation(-0.1f) == 0.0f);
+    TEST_CHECK(run, WorldEnvironment_GetMoonlightForElevation(WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION) == 1.0f);
+    TEST_CHECK(run, fabsf(WorldEnvironment_GetMoonlightForElevation(0.1f) - 0.5f) < 1e-6f);
+    TEST_CHECK(run, WorldEnvironment_GetMoonlightForElevation(NAN) == 0.0f);
+
+    // The environment's own factors are these ramps at the sun's and the moon's elevation.
+    WorldEnvironment Environment;
+    WorldEnvironment_SetDefaults(&Environment);
+    for (int Step = 0; Step < 48; Step++)
+    {
+        Environment.TimeOfDay = (float)Step / 48.0f;
+        TEST_CHECK(run, WorldEnvironment_GetDaylightFactor(&Environment)
+            == WorldEnvironment_GetDaylightForElevation(WorldEnvironment_GetSunDirection(&Environment).y));
+    }
+    WorldEnvironment_Deconstruct(&Environment);
+}
+
 static void SeasonsChangeTheDayLength(TestRun* run)
 {
     WorldEnvironment Environment;
@@ -888,6 +983,7 @@ void WorldEnvironmentTests_Run(TestRun* run)
         { "stars_drift_through_the_year", StarsDriftThroughTheYear },
         { "shadow_light_follows_the_brighter_light", ShadowLightFollowsTheBrighterLight },
         { "seasons_change_the_day_length", SeasonsChangeTheDayLength },
+        { "light_ramps_follow_the_elevation", LightRampsFollowTheElevation },
     };
     TestRun_RunSuite(run, "WorldEnvironment", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

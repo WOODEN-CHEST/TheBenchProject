@@ -1,7 +1,7 @@
 #version 330
 
 // World sprites, lit like the models around them (common/lighting: the sun, the moon, point lights, shadows, the
-// ambient, fog, the eye's night vision) or unlit (their colours shown as emitted light, still fogged). The sprite's art
+// ambient, the haze, the eye's night vision) or unlit (their colours shown as emitted light, still hazed). The sprite's art
 // is sRGB and is linearized here; the scene buffer is linear HDR, tonemapped at the end.
 //
 // The surface is a rough dielectric (roughness 0.9, metallic 0, occlusion 1). A fixed sprite or decal is a two-sided
@@ -95,11 +95,11 @@ void main()
     {
         // An emitter seen through the haze: the air in front dims it, and the haze's own glow is already in what lies
         // behind, so it is dimmed, not mixed toward the sky.
-        color *= 1.0 - FogFactor(fragPosition);
+        color *= AerialTransmittance(fragPosition);
         finalColor = vec4(color*alpha, 0.0);
         return;
     }
 
-    color = ApplyFog(color, fragPosition);
+    color = ApplyAerialPerspective(color, fragPosition);
     finalColor = (alphaMode == ALPHA_MODE_BLEND) ? vec4(color*alpha, alpha) : vec4(color, 1.0);
 }

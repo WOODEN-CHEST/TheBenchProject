@@ -38,8 +38,8 @@
  * Added with World_AddComponent(world, id, WorldComponentType_Model, &component); reach its fields with
  * WorldModelComponent_FromComponent. Its properties are the rows of its table ("model_component"), in this order:
  * world_model, uses_variant, variant, overrides_has_outline, has_outline, overrides_omit_pixelation, omit_pixelation,
- * overrides_shadow_tier, shadow_tier ("both" / "near" / "far"), overrides_casts_shadows, casts_shadows,
- * overrides_draw_distance, draw_distance, draw_distance_multiplier, overrides_is_draw_distance_fixed,
+ * overrides_shadow_tier, shadow_tier ("both" / "near" / "far"), overrides_casts_shadows, casts_shadows, overrides_haze,
+ * haze, overrides_draw_distance, draw_distance, draw_distance_multiplier, overrides_is_draw_distance_fixed,
  * is_draw_distance_fixed, overrides_lod_distances, lod_distances, lod_distance_multiplier, is_lod_forced and forced_lod.
  * Every change advances the component's revision (WorldComponent_GetRevision).
  */
@@ -71,6 +71,8 @@ typedef enum WorldModelSettingEnum
     WorldModelSetting_IsDrawDistanceFixed,
     /** @brief The LOD switch distances (lod_distances, flag overrides_lod_distances). */
     WorldModelSetting_LodDistances,
+    /** @brief How hazy it looks at a distance (haze, flag overrides_haze; T35). */
+    WorldModelSetting_Haze,
     /** @brief The number of settings; not a setting. */
     WorldModelSetting_Count
 } WorldModelSetting;
@@ -106,6 +108,11 @@ typedef struct WorldModelComponentStruct
     bool _overridesCastsShadows;
     /** @brief This placement's "casts shadows" (default true). */
     bool _castsShadows;
+    /** @brief Whether _haze replaces the world model's (default false). */
+    bool _overridesHaze;
+    /** @brief This placement's haze multiplier, in [0, WORLD_MODEL_MAX_HAZE] (default 1: the real air's haze; 0 as if the
+     *  air were clear). */
+    float _haze;
     /** @brief Whether _drawDistance replaces the world model's draw distance (default false). */
     bool _overridesDrawDistance;
     /** @brief This placement's draw distance, in metres, above 0 (default WORLD_MODEL_DEFAULT_DRAW_DISTANCE). */
@@ -321,6 +328,26 @@ static inline bool WorldModelComponent_CastsShadows(const WorldModelComponent* s
 Error WorldModelComponent_SetCastsShadows(WorldModelComponent* self, bool castsShadows);
 
 /**
+ * @brief Returns this placement's own haze multiplier (it applies while WorldModelSetting_Haze is overridden).
+ * @param self The model component; must not be NULL.
+ * @returns The multiplier: 1 the real air's haze, 0 none.
+ */
+static inline float WorldModelComponent_GetHaze(const WorldModelComponent* self)
+{
+    return self->_haze;
+}
+
+/**
+ * @brief Sets this placement's own haze multiplier (it applies while WorldModelSetting_Haze is overridden): how hazy the
+ *        object looks at a distance.
+ * @param self The model component; must not be NULL.
+ * @param haze Finite, in [0, WORLD_MODEL_MAX_HAZE]: 1 the real air's haze, 0 as if the air were clear.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for a value outside the
+ *          range.
+ */
+Error WorldModelComponent_SetHaze(WorldModelComponent* self, float haze);
+
+/**
  * @brief Returns this placement's own draw distance (it applies while WorldModelSetting_DrawDistance is overridden).
  * @param self The model component; must not be NULL.
  * @returns Metres, above 0.
@@ -483,7 +510,7 @@ bool WorldModelComponent_ResolveLodSettings(const WorldModelComponent* self, con
 
 /**
  * @brief The settings that apply to this placement: each setting from the world model, or the placement's own value
- *        while its override flag is on, and the draw distance in effect times the multiplier.
+ *        while its override flag is on (the haze too), and the draw distance in effect times the multiplier.
  *
  * A pure function (the renderer calls it for every model each frame).
  * @param self The model component; must not be NULL.

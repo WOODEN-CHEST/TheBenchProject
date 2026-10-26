@@ -73,6 +73,24 @@
 /** @brief The largest AirDensity and Ozone, as multiples of Earth's (a bound for hostile content: the sky is black long
  *  before). */
 #define WORLD_ENVIRONMENT_MAX_AIR_MULTIPLE 100.0
+/** @brief The largest AerialDistanceScale (a bound for hostile content: far beyond it every surface is the sky). */
+#define WORLD_ENVIRONMENT_MAX_AERIAL_DISTANCE_SCALE 1000.0
+/** @brief The largest HazeStartDistance, GroundHazeBase and HorizonGroundHeight magnitude, in metres: the world's position
+ *  limit (WORLD_POSITION_LIMIT). */
+#define WORLD_ENVIRONMENT_MAX_DISTANCE 1.0e7
+/** @brief The largest GroundHazeDensity, per metre (a bound for hostile content: at 100 the mist hides everything beyond
+ *  a few centimetres). */
+#define WORLD_ENVIRONMENT_MAX_GROUND_HAZE_DENSITY 100.0
+/** @brief The limits of GroundHazeThickness, in metres. */
+#define WORLD_ENVIRONMENT_MIN_GROUND_HAZE_THICKNESS 0.1
+#define WORLD_ENVIRONMENT_MAX_GROUND_HAZE_THICKNESS 100000.0
+/** @brief The sun's elevation (the sine) at and below which its light is gone, and at and above which it is full: the
+ *  daylight factor's twilight ramp (WorldEnvironment_GetDaylightForElevation). The renderer's far ground mirrors it. */
+#define WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION (-0.12f)
+#define WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION 0.10f
+/** @brief The moon's elevation (the sine; about 11.5 degrees) from which its light is full, fading in from the horizon
+ *  (WorldEnvironment_GetMoonlightForElevation). The renderer's far ground mirrors it. */
+#define WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION 0.2f
 
 
 // Types.
@@ -185,8 +203,9 @@ typedef struct WorldEnvironmentStruct
      *  brightens the horizon and fills the twilight sky, 0 single scattering only (for comparing). Finite and in
      *  [0, 1]. */
     float MultipleScattering;
-    /** @brief The ground's colour as the atmosphere sees it, sRGB: the light it reflects up into the air feeds the
-     *  sky's multiple scattering. Alpha ignored. */
+    /** @brief The ground's colour as the atmosphere sees it, sRGB: the far ground below the horizon (beyond the world's
+     *  own ground) shows it, and the light it reflects up into the air feeds the sky's multiple scattering. Alpha
+     *  ignored. */
     Color SkyGroundAlbedo;
     /** @brief Tint applied to the computed sky color, so worlds can push alien skies. Alpha ignored. */
     Color SkyTint;
@@ -262,14 +281,41 @@ typedef struct WorldEnvironmentStruct
     /** @brief Ambient skylight intensity multiplier. Finite and >= 0. */
     float AmbientSkylightIntensity;
 
-    // ---- Fog (fades distant objects into the sky) ----
-    /** @brief Legacy flat fog colour. NOTE: the renderer's distance fog now fades distant geometry into the
-     *  atmospheric SKY colour along each view ray (so far objects dissolve seamlessly into the sky), and no
-     *  longer reads this field; it is retained for data/back-compat and possible non-atmospheric fallbacks.
-     *  Alpha ignored. */
+    // ---- Haze: the air in front of distant things, the mist near the ground, the far ground ----
+    /** @brief Legacy flat fog colour. Not read by the renderer (since T35 distant things fade into the haze of the air in
+     *  front of them, from the same atmosphere as the sky); kept for saved data. Alpha ignored. */
     Color FogColor;
-    /** @brief World-side fog strength multiplier (combined with the game config's fog strength). Finite and >= 0. */
+    /** @brief Multiplies the haze on surfaces and the ground haze (with the game config's FogStrength, the player's own):
+     *  1 (the default) is physical, 0 clear air, 2 twice the haze along every path. The sky itself is not changed.
+     *  Finite and >= 0. */
     float FogStrength;
+    /** @brief Treats every distance as this many times longer for the haze (the air's and the ground haze's), so a small
+     *  town can read as bigger and hazier; things still meet the sky at the horizon. 1 (the default) is physical.
+     *  Finite and in [0, WORLD_ENVIRONMENT_MAX_AERIAL_DISTANCE_SCALE]. */
+    float AerialDistanceScale;
+    /** @brief No haze nearer than this, in metres: an artistic option (default 0, physically 0). Finite and in
+     *  [0, WORLD_ENVIRONMENT_MAX_DISTANCE]. */
+    float HazeStartDistance;
+    /** @brief The ground haze (a low layer of mist): its density per metre at its base, 0 none (the default). It thins
+     *  by e every GroundHazeThickness metres above GroundHazeBase and is as dense as at the base below it. Mornings,
+     *  valleys and the weather turn it on. Finite and in [0, WORLD_ENVIRONMENT_MAX_GROUND_HAZE_DENSITY]. */
+    float GroundHazeDensity;
+    /** @brief The ground haze's base, world Y in metres (default 0). Finite and within +-WORLD_ENVIRONMENT_MAX_DISTANCE. */
+    float GroundHazeBase;
+    /** @brief How quickly the ground haze thins above its base: by e with every this many metres (default 20). Finite and
+     *  in [WORLD_ENVIRONMENT_MIN_GROUND_HAZE_THICKNESS, WORLD_ENVIRONMENT_MAX_GROUND_HAZE_THICKNESS]. */
+    float GroundHazeThickness;
+    /** @brief The ground haze's colour, sRGB: the share of the light it takes that it scatters (a near-white by default;
+     *  darker or tinted for smoke and dust). Alpha ignored. */
+    Color GroundHazeAlbedo;
+    /** @brief How strongly the ground haze scatters light forward: how large and bright its glow around the sun and the
+     *  moon is, 0 none to 0.99 a tight, bright halo (default 0.8, a mist's). Finite and in
+     *  [0, WORLD_ENVIRONMENT_MAX_SUN_GLOW]. */
+    float GroundHazeGlow;
+    /** @brief The height of the far ground below the horizon, world Y in metres (default 0): the atmosphere's ground,
+     *  which the sky sees below the horizon (lit, hazy toward the horizon), and its sea level: the sky is seen from the
+     *  camera's height above it. Finite and within +-WORLD_ENVIRONMENT_MAX_DISTANCE. */
+    float HorizonGroundHeight;
 
     // ---- Post-effect world multipliers (combined with the game config multipliers) ----
     /** @brief When false, this world suppresses bloom regardless of the config. */
@@ -510,6 +556,25 @@ float WorldEnvironment_GetMoonlightFactor(const WorldEnvironment* self);
  * @param outLights [out] Receives the lights; must not be NULL.
  */
 void WorldEnvironment_GetSkyLights(const WorldEnvironment* self, WorldSkyLights* outLights);
+
+/**
+ * @brief Returns how much of the sun's light reaches the ground where the sun stands this high: the daylight factor's
+ *        ramp, a smooth step from WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION (0) to WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION
+ *        (1). WorldEnvironment_GetDaylightFactor is it for the sun's elevation; the renderer's far ground takes it where
+ *        the sun stands at a far point of the curved planet.
+ * @param sunElevation The sine of the sun's elevation, [-1, 1] (NaN gives 0).
+ * @returns The factor in [0, 1].
+ */
+float WorldEnvironment_GetDaylightForElevation(float sunElevation);
+
+/**
+ * @brief Returns how much of the moon's light reaches the ground where the moon stands this high: 0 below the horizon,
+ *        rising smoothly to 1 at WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION (the air in front of a low moon dims it).
+ *        Part of WorldEnvironment_GetMoonlightFactor.
+ * @param moonElevation The sine of the moon's elevation, [-1, 1] (NaN gives 0).
+ * @returns The factor in [0, 1].
+ */
+float WorldEnvironment_GetMoonlightForElevation(float moonElevation);
 
 /**
  * @brief Returns how much of the sun's light reaches the world right now: 1 in full day, 0 at night.

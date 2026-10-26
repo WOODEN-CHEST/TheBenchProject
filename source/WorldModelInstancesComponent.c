@@ -25,6 +25,8 @@ typedef enum InstancesPropertyEnum
     InstancesProperty_ShadowTier,
     InstancesProperty_OverridesCastsShadows,
     InstancesProperty_CastsShadows,
+    InstancesProperty_OverridesHaze,
+    InstancesProperty_Haze,
     InstancesProperty_OverridesDrawDistance,
     InstancesProperty_DrawDistance,
     InstancesProperty_DrawDistanceMultiplier,
@@ -43,7 +45,8 @@ typedef enum InstancesPropertyEnum
 // Fields.
 /* Every property, in inspector order: the model component's rows with the model component's wire ids (shared through
  * source/WorldModelComponentInternal.h; no omit_pixelation, 3 and 9: copies are never crisp), then the copies. The wire
- * ids are the save schema: never renumber or reuse one. The next free wire id is 23. */
+ * ids are the save schema: never renumber or reuse one. (T35 added the haze's pair, 23 and 24, as in the model
+ * component.) The next free wire id is 25. */
 static const PropertyDescriptor InstancesProperties[InstancesProperty_Count] =
 {
     [InstancesProperty_WorldModel] =
@@ -90,6 +93,16 @@ static const PropertyDescriptor InstancesProperties[InstancesProperty_Count] =
     {
         WORLD_MODEL_PLACEMENT_ROW_CASTS_SHADOWS, .WireId = 5U,
         PROPERTY_MEMBER(WorldModelInstancesComponent, _castsShadows), .SinceVersion = 1U
+    },
+    [InstancesProperty_OverridesHaze] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_HAZE, .WireId = 23U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _overridesHaze), .SinceVersion = 1U
+    },
+    [InstancesProperty_Haze] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_HAZE, .WireId = 24U, PROPERTY_MEMBER(WorldModelInstancesComponent, _haze),
+        .SinceVersion = 1U
     },
     [InstancesProperty_OverridesDrawDistance] =
     {
@@ -264,6 +277,10 @@ static bool TryGetOverrideFlag(WorldModelInstancesComponent* self, WorldModelSet
             *outFlag = &self->_overridesLodDistances;
             *outProperty = InstancesProperty_OverridesLodDistances;
             return true;
+        case WorldModelSetting_Haze:
+            *outFlag = &self->_overridesHaze;
+            *outProperty = InstancesProperty_OverridesHaze;
+            return true;
         case WorldModelSetting_OmitPixelation:
         case WorldModelSetting_Count:
             break;
@@ -349,6 +366,7 @@ bool WorldModelInstancesComponent_IsOverridden(const WorldModelInstancesComponen
         case WorldModelSetting_DrawDistance:        return self->_overridesDrawDistance;
         case WorldModelSetting_IsDrawDistanceFixed: return self->_overridesIsDrawDistanceFixed;
         case WorldModelSetting_LodDistances:        return self->_overridesLodDistances;
+        case WorldModelSetting_Haze:                return self->_overridesHaze;
         case WorldModelSetting_OmitPixelation:
         case WorldModelSetting_Count:
             break;
@@ -409,6 +427,15 @@ Error WorldModelInstancesComponent_SetCastsShadows(WorldModelInstancesComponent*
     }
     SetBool(self, &self->_castsShadows, castsShadows, InstancesProperty_CastsShadows);
     return Error_CreateSuccess();
+}
+
+Error WorldModelInstancesComponent_SetHaze(WorldModelInstancesComponent* self, float haze)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelInstancesComponent_SetHaze");
+    }
+    return SetFloat(self, &self->_haze, haze, InstancesProperty_Haze);
 }
 
 Error WorldModelInstancesComponent_SetDrawDistance(WorldModelInstancesComponent* self, float drawDistance)
@@ -535,6 +562,10 @@ WorldModelSettings WorldModelInstancesComponent_ResolveSettings(const WorldModel
     if (self->_overridesCastsShadows)
     {
         Settings.CastsShadows = self->_castsShadows;
+    }
+    if (self->_overridesHaze)
+    {
+        Settings.Haze = self->_haze;
     }
     if (self->_overridesDrawDistance)
     {

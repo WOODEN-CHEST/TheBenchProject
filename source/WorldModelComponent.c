@@ -24,6 +24,8 @@ typedef enum ModelPropertyEnum
     ModelProperty_ShadowTier,
     ModelProperty_OverridesCastsShadows,
     ModelProperty_CastsShadows,
+    ModelProperty_OverridesHaze,
+    ModelProperty_Haze,
     ModelProperty_OverridesDrawDistance,
     ModelProperty_DrawDistance,
     ModelProperty_DrawDistanceMultiplier,
@@ -43,7 +45,8 @@ typedef enum ModelPropertyEnum
  * types, defaults, rules and texts are shared with the model instances component (source/WorldModelComponentInternal.h,
  * B03). The wire ids are the save schema: never renumber or reuse one; a removed property's id goes into the table's
  * retired list. (T10 renamed wire 1 from "model", a model asset, to "world_model", and made rows 2 to 5 the placement's
- * own values behind their override flags; T11 added the LOD rows, 17 to 21.) The next free wire id is 22. */
+ * own values behind their override flags; T11 added the LOD rows, 17 to 21; T35 the haze's pair, 23 and 24, as in the
+ * model instances component, whose list is 22.) The next free wire id is 25. */
 static const PropertyDescriptor ModelProperties[ModelProperty_Count] =
 {
     [ModelProperty_WorldModel] =
@@ -100,6 +103,15 @@ static const PropertyDescriptor ModelProperties[ModelProperty_Count] =
     {
         WORLD_MODEL_PLACEMENT_ROW_CASTS_SHADOWS, .WireId = 5U, PROPERTY_MEMBER(WorldModelComponent, _castsShadows),
         .SinceVersion = 1U
+    },
+    [ModelProperty_OverridesHaze] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_HAZE, .WireId = 23U, PROPERTY_MEMBER(WorldModelComponent, _overridesHaze),
+        .SinceVersion = 1U
+    },
+    [ModelProperty_Haze] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_HAZE, .WireId = 24U, PROPERTY_MEMBER(WorldModelComponent, _haze), .SinceVersion = 1U
     },
     [ModelProperty_OverridesDrawDistance] =
     {
@@ -241,6 +253,10 @@ static bool TryGetOverrideFlag(WorldModelComponent* self, WorldModelSetting sett
             *outFlag = &self->_overridesLodDistances;
             *outProperty = ModelProperty_OverridesLodDistances;
             return true;
+        case WorldModelSetting_Haze:
+            *outFlag = &self->_overridesHaze;
+            *outProperty = ModelProperty_OverridesHaze;
+            return true;
         case WorldModelSetting_Count:
             break;
     }
@@ -326,6 +342,7 @@ bool WorldModelComponent_IsOverridden(const WorldModelComponent* self, WorldMode
         case WorldModelSetting_DrawDistance:        return self->_overridesDrawDistance;
         case WorldModelSetting_IsDrawDistanceFixed: return self->_overridesIsDrawDistanceFixed;
         case WorldModelSetting_LodDistances:        return self->_overridesLodDistances;
+        case WorldModelSetting_Haze:                return self->_overridesHaze;
         case WorldModelSetting_Count:               break;
     }
     // Only reachable with a value outside the enum: nothing is overridden.
@@ -392,6 +409,22 @@ Error WorldModelComponent_SetCastsShadows(WorldModelComponent* self, bool castsS
         return CreateNullSelfError("WorldModelComponent_SetCastsShadows");
     }
     SetBool(self, &self->_castsShadows, castsShadows, ModelProperty_CastsShadows);
+    return Error_CreateSuccess();
+}
+
+Error WorldModelComponent_SetHaze(WorldModelComponent* self, float haze)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelComponent_SetHaze");
+    }
+    Error CheckResult = CheckProperty(ModelProperty_Haze, PropertyValue_FromFloat(haze));
+    if (CheckResult.Code != ErrorCode_Success)
+    {
+        return CheckResult;
+    }
+    self->_haze = haze;
+    WorldInternal_ComponentAfterSet(self, &ModelProperties[ModelProperty_Haze]);
     return Error_CreateSuccess();
 }
 
@@ -543,6 +576,10 @@ WorldModelSettings WorldModelComponent_ResolveSettings(const WorldModelComponent
     if (self->_overridesCastsShadows)
     {
         Settings.CastsShadows = self->_castsShadows;
+    }
+    if (self->_overridesHaze)
+    {
+        Settings.Haze = self->_haze;
     }
     if (self->_overridesDrawDistance)
     {

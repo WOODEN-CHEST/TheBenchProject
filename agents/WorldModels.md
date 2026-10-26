@@ -25,7 +25,7 @@ as dependencies; world sprites, T26, do the same for sprite animations: [WorldSp
 - **Definitions are checked when they are read** (a bad file is skipped at startup with one error, like every asset
   type): 1 to `WORLD_MODEL_MAX_LODS` (8) LODs naming valid model assets, their `max_distance` finite, above 0 and rising;
   `draw_distance` at least the last `max_distance` (left out, it is that distance); `lod_fade_seconds` >= 0;
-  `lod_hysteresis` in [0, 1); `render`'s four settings; at most `WORLD_MODEL_MAX_VARIANTS` (64) variants with unique
+  `lod_hysteresis` in [0, 1); `render`'s five settings (T35 added `haze`, in [0, 1000]); at most `WORLD_MODEL_MAX_VARIANTS` (64) variants with unique
   names (`[a-z][a-z0-9_.-]*`, at most 128 bytes) and at most `WORLD_MODEL_MAX_VARIANT_OVERRIDES` (32) material
   overrides each, one per slot; `bounds` with a centre and a radius >= 0; `animation_libraries` (T29) at most
   `WORLD_MODEL_MAX_ANIMATION_LIBRARIES` (16) unique asset names; since T30 `animation_graph` (an asset name),
@@ -71,7 +71,7 @@ as dependencies; world sprites, T26, do the same for sprite animations: [WorldSp
 
 Pure data, read-only, owned by the asset manager (never keep it past your asset user). Accessors:
 `WorldModel_GetLodCount`, `_GetLodModel(index)` (the `GameModel*`), `_GetLodMaxDistance(index)`, `_GetSettings` (the
-placements' defaults, a `WorldModelSettings`: outline, crisp, shadow tier, casts shadows, draw distance, fixed),
+placements' defaults, a `WorldModelSettings`: outline, crisp, shadow tier, casts shadows, haze, draw distance, fixed),
 `_GetLodFadeSeconds`, `_GetLodHysteresis`, `_GetBoundsCenter` / `_GetBoundsRadius` / `_GetBoundsTransform` /
 `_HasOwnBounds`, the animation's `_GetSkeleton`, `_GetSkeletonLod` and libraries (T29), its graph, sockets and
 first-person block (T30),
@@ -119,10 +119,16 @@ and `PropertyTable_Check` enforces the pairing for every table ([PropertyDescrip
 | `OmitPixelation` | `overrides_omit_pixelation` | `omit_pixelation` |
 | `ShadowTier` | `overrides_shadow_tier` | `shadow_tier` |
 | `CastsShadows` | `overrides_casts_shadows` | `casts_shadows` |
+| `Haze` (T35) | `overrides_haze` | `haze` |
 | `DrawDistance` | `overrides_draw_distance` | `draw_distance` |
 | `IsDrawDistanceFixed` | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` |
 | `LodDistances` (T11) | `overrides_lod_distances` | `lod_distances` (a list) |
 
+`haze` (T35, [0, 1000], default the world model's `render.haze`, 1) multiplies the haze in front of the placement
+([WorldRuntime.md](WorldRuntime.md), "Haze"): 1 the real air's, 0 as if the air were clear (a beacon, a sign that must
+read from far away), above 1 hazier than the air (its outline then fades only as at 1). The renderer sets it per draw
+(the lit pass and, for outlined models, the G-buffer). The model instances component has the same pair for all its
+copies.
 `draw_distance_multiplier` (above 0, default 1) is a plain setting: it multiplies whichever draw distance is in effect;
 `lod_distance_multiplier` likewise for the LOD switch distances, and `is_lod_forced` with `forced_lod` force a LOD (see
 "LODs").

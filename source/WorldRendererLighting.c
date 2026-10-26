@@ -1,6 +1,6 @@
-// The PBR shader and the frame lighting every lit shader (models, sprites) gets through common/lighting (the sun and the
-// moon, ambient, fog, shadows, per-object forward point lights, the eye's night vision), the PBR's per-material factors,
-// and HDR eye adaptation.
+// The PBR shader and the frame lighting every lit shader (models, sprites, terrain) gets through common/lighting (the sun
+// and the moon, ambient, the haze, shadows, per-object forward point lights and haze, the eye's night vision), the PBR's
+// per-material factors, and HDR eye adaptation.
 
 #include <math.h>
 #include <stdio.h>
@@ -66,9 +66,6 @@
 /** How much a directional light (the sun, the moon) counts toward the scene-illumination estimate driving eye
  *  adaptation. */
 #define DIRECTIONAL_ADAPT_WEIGHT 0.5f
-/** Base exponential fog density at world+config fog strength 1.0 (per world unit). Distant geometry fades into
- *  the atmospheric sky colour; the world and config fog-strength multipliers scale this. */
-#define BASE_FOG_DENSITY 0.008f
 // ---- Eye adaptation (HDR auto-exposure) ----
 /** Scene illumination that maps to exposure 1.0 (roughly full daylight); brighter dims, darker brightens. */
 #define ADAPT_REFERENCE_LUMINANCE 0.80f
@@ -170,11 +167,8 @@ static void CacheLitLocations(WorldRendererLitLocations* lit, Shader shader)
     lit->_locPointLightRadiances = GetShaderLocation(shader, "pointLightRadiances");
     lit->_locPointLightRanges = GetShaderLocation(shader, "pointLightRanges");
 
-    lit->_locFogDensity = GetShaderLocation(shader, "fogDensity");
-    lit->_locFogSkyTint = GetShaderLocation(shader, "skyTint");
-    lit->_locFogSunIntensity = GetShaderLocation(shader, "skySunIntensity");
-    lit->_locFogSkyglow = GetShaderLocation(shader, "skyglowRadiance");
-    lit->_locFogMoonIntensity = GetShaderLocation(shader, "skyMoonIntensity");
+    lit->_locHazeViewProjection = GetShaderLocation(shader, "hazeViewProjection");
+    lit->_locHazeMultiplier = GetShaderLocation(shader, "hazeMultiplier");
 
     lit->_locNightVisionFieldLuminance = GetShaderLocation(shader, "nightVisionFieldLuminance");
     lit->_locNightVisionHalfLuminance = GetShaderLocation(shader, "nightVisionHalfLuminance");
@@ -385,8 +379,9 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
     AssignSamplerUnit(shader, outLocations->_locShadowMapFar, WorldRendererTextureUnit_ShadowFar);
     AssignSamplerUnit(shader, outLocations->_locPointShadowCube, WorldRendererTextureUnit_PointShadowCube);
     AssignSamplerUnit(shader, outLocations->_locAmbientOcclusionMap, WorldRendererTextureUnit_AmbientOcclusion);
-    // The air and the atmosphere's tables the fog reads (T15; their samplers on their own units).
+    // The air (T15) and the haze (T35: the volume's sampler on its own unit).
     WorldRendererAtmosphere_PrepareShader(shader, &outLocations->_atmosphere);
+    WorldRendererAtmosphere_PrepareHazeShader(shader, true, &outLocations->_haze);
 
     // The shader's point-light arrays must hold the WORLD_MAX_FORWARD_LIGHTS the culling may select; with fewer,
     // upload only as many as fit (the shader also clamps its loop to its own array size).
@@ -419,10 +414,6 @@ void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* f
         + Luminance(frame->SunLight.Color) * frame->SunLight.Intensity * DIRECTIONAL_ADAPT_WEIGHT
         + Luminance(frame->MoonLight.Color) * frame->MoonLight.Intensity * DIRECTIONAL_ADAPT_WEIGHT;
 
-    // Atmospheric distance fog density = base x world x config fog strength.
-    float FogDensity = BASE_FOG_DENSITY * Environment->FogStrength * WorldRendererCommon_ConfigFogStrength(self);
-    frame->FogDensity = (FogDensity < 0.0f) ? 0.0f : FogDensity;
-
     // shadowStrength is shared by the cascades' and the point shadow's visibility, so it is gated on global shadow
     // enablement (NOT the sun being up) — otherwise a point light would cast no shadow at night. Which directional
     // light the cascades darken, and how much, is the shader's sunShadowFade / moonShadowFade (0 for both while the
@@ -443,16 +434,14 @@ static const WorldRenderLight* GetPointShadowLight(const WorldRenderer* self, co
         : NULL;
 }
 
-/* Uploads the frame's lighting values to one lit shader (common/lighting): the sun and the moon, the ambient, the fog
- * and its sky, the night vision, the cascades' fades, light direction and matrices, the AO switch and the cube-shadow
- * light. Positions and matrices are in render space, where the camera sits at the origin (so it needs no uniform). The
+/* Uploads the frame's lighting values to one lit shader (common/lighting): the sun and the moon, the ambient, the haze,
+ * the night vision, the cascades' fades, light direction and matrices, the AO switch and the cube-shadow light.
+ * Positions and matrices are in render space, where the camera sits at the origin (so it needs no uniform). The
  * textures are bound once for every lit shader (BindFrameTextures). */
 static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
     const WorldRendererLitLocations* lit, bool applyScreenAo)
 {
-    const WorldEnvironment* Environment = frame->Environment;
-
-    // The two directional lights. The sun's direction is also the fog sky's sun, the moon's the fog sky's moon.
+    // The two directional lights; they light the ground haze too.
     float SunDir[3] = { frame->SunLight.Direction.x, frame->SunLight.Direction.y, frame->SunLight.Direction.z };
     SetShaderValue(shader, lit->_locSunDirection, SunDir, SHADER_UNIFORM_VEC3);
     SetShaderValue(shader, lit->_locSunColor, frame->SunLight.Color, SHADER_UNIFORM_VEC3);
@@ -467,21 +456,15 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     float AmbientIntensity = 1.0f;
     SetShaderValue(shader, lit->_locAmbientIntensity, &AmbientIntensity, SHADER_UNIFORM_FLOAT);
 
-    // Atmospheric distance fog: the lit shaders fade distant geometry into the SAME sky the sky pass draws,
-    // evaluated per fragment along its view ray, so far objects dissolve seamlessly into the sky (and, because
-    // the atmospheric sky is already dark at night, distant geometry fades to the dark night sky on its own).
-    // Feed them the sky parameters the sky pass uses (the air and the atmosphere's tables, linear tint, RAW — not
-    // day-scaled — sun intensity, the moonlit sky's strength); the sun and moon directions are the ones uploaded above.
+    // The haze in front of every surface (T35): the volume the atmosphere pass built for the scene camera's screen
+    // directions (read through the scene's view-projection, also by the crisp pass), the frame's haze and the ground
+    // haze. Each draw sets its own multiplier; 1 until the first does.
     WorldRendererAtmosphere_UploadFrame(shader, &lit->_atmosphere, frame);
-    float FogSkyTint[3];
-    WorldRendererCommon_ColorToLinear(Environment->SkyTint, FogSkyTint);
-    SetShaderValue(shader, lit->_locFogSkyTint, FogSkyTint, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, lit->_locFogSunIntensity, &Environment->SunIntensity, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(shader, lit->_locFogSkyglow, frame->SkyglowRadiance, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, lit->_locFogMoonIntensity, &frame->MoonSkyIntensity, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(shader, lit->_locFogDensity, &frame->FogDensity, SHADER_UNIFORM_FLOAT);
+    WorldRendererAtmosphere_UploadHaze(shader, &lit->_haze, frame);
+    SetShaderValueMatrix(shader, lit->_locHazeViewProjection, frame->ViewProjection);
+    WorldRendererLighting_SetDrawHaze(shader, lit, 1.0f);
 
-    // The eye's night vision for the reflected light and the fog (strength 0 leaves every colour as it is).
+    // The eye's night vision for the reflected light and the haze (strength 0 leaves every colour as it is).
     SetShaderValue(shader, lit->_locNightVisionFieldLuminance, &frame->NightVisionFieldLuminance, SHADER_UNIFORM_FLOAT);
     SetShaderValue(shader, lit->_locNightVisionStrength, &frame->NightVisionStrength, SHADER_UNIFORM_FLOAT);
     SetShaderValue(shader, lit->_locNightVisionTint, frame->NightVisionTint, SHADER_UNIFORM_VEC3);
@@ -550,12 +533,12 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     SetShaderValue(shader, lit->_locShadowStrength, &frame->ShadowStrength, SHADER_UNIFORM_FLOAT);
 }
 
-/* Binds the frame's shadow maps, AO map, shadow cube and the atmosphere's tables to their fixed units (the lit shaders'
+/* Binds the frame's shadow maps, AO map, shadow cube and the haze's volume to their fixed units (the lit shaders'
  * samplers point there), once for every lit shader: texture units are context state. Bound manually, which works
  * because the lit passes draw with DrawMesh (a direct draw, not the 2D batch). */
 static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo)
 {
-    WorldRendererAtmosphere_BindTables(self, frame);
+    WorldRendererAtmosphere_BindVolume(self, frame);
     if (frame->IsCascadeShadowActive)
     {
         rlActiveTextureSlot(WorldRendererTextureUnit_ShadowNear);
@@ -659,6 +642,11 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
         SetShaderValueV(shader, locations->_locPointLightRadiances, RadianceValues, SHADER_UNIFORM_VEC3, CountInt);
         SetShaderValueV(shader, locations->_locPointLightRanges, Ranges, SHADER_UNIFORM_FLOAT, CountInt);
     }
+}
+
+void WorldRendererLighting_SetDrawHaze(Shader shader, const WorldRendererLitLocations* locations, float haze)
+{
+    SetShaderValue(shader, locations->_locHazeMultiplier, &haze, SHADER_UNIFORM_FLOAT);
 }
 
 /* raylib's DrawMesh uploads colDiffuse and binds the material's textures (via the map-sampler locations of the

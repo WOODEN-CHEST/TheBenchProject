@@ -507,6 +507,12 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->AreAtmosphereTablesEnabled = self->_atmosphere._isEnabled;
     Status->AtmosphereTableBuildCount = self->_atmosphere._tables.BuildCount;
     Status->AtmosphereViewHeight = frame->AtmosphereViewHeight;
+    Status->Features[WorldRendererFeature_Haze] = StateOf(WorldRendererAtmosphere_IsVolumeAvailable(self),
+        frame->IsHazeActive);
+    Status->HazeDistanceScale = frame->Haze.DistanceScale;
+    Status->GroundHazeDensity = frame->Haze.GroundHazeDensity;
+    Status->HazeView = self->_atmosphere._view;
+    Status->HazeViewSlice = self->_atmosphere._viewSlice;
 }
 
 /* Appends the drawn models per LOD to the status line's LOD text, LOD 0 first, up to the coarsest LOD drawn: "9 / 3 / 1".
@@ -745,7 +751,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     WorldRendererStars_SyncCatalogue(self, Frame.Environment);
     WorldRendererSky_SyncTextures(self, Frame.Environment);
     WorldRendererSky_PrepareFrame(&Frame);
-    // The air and the height the sky is seen from (T15), and whether the atmosphere's tables draw the sky this frame.
+    // The air, the haze and the height the sky is seen from (T15, T35), and whether the atmosphere's tables draw the sky
+    // and the volume hazes it this frame.
     WorldRendererAtmosphere_PrepareFrame(self, &Frame);
     // Every model's LOD and its cross-fade, then which shadow passes run and their light matrices, then what every pass
     // draws: the camera's frustum, each cascade's box and the cube's reach cull, the draw distances and opacities fade.
@@ -763,8 +770,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     // Every sprite's matrices for the camera and the shadow lights, and the transparent ones' draw order.
     WorldRendererSprites_PrepareFrame(self, &Frame);
 
-    // The atmosphere's tables first (T15): the sky, the fog and the stars read them. Then the shadow maps: the scene and
-    // crisp passes sample them.
+    // The atmosphere's tables and the haze's volume first (T15, T35): the sky, the stars and every lit surface read them.
+    // Then the shadow maps: the scene and crisp passes sample them.
     WorldRendererAtmosphere_Render(self, &Frame);
     if (Frame.IsCascadeShadowActive)
     {
@@ -787,8 +794,10 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
         WorldRendererGBuffer_RenderAo(self, &Frame);
     }
 
-    // The 3D world into the scene target (pixel resolution when pixelating).
+    // The 3D world into the scene target (pixel resolution when pixelating), and over it, when asked, the haze's debug
+    // view (one slice of the volume).
     WorldRendererScene_Render(self, &Frame);
+    WorldRendererAtmosphere_DrawView(self, &Frame);
 
     // Outlines (low-res, reading the scene colour + depth + G-buffer), then bloom and sun shafts from the
     // (outlined) HDR scene. Without outlines the scene goes to the tonemap as-is.
@@ -866,6 +875,7 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_TerrainMaterials: return (const unsigned char*)u8"terrain materials";
         case WorldRendererFeature_Instancing:       return (const unsigned char*)u8"instancing";
         case WorldRendererFeature_AtmosphereTables: return (const unsigned char*)u8"atmosphere tables";
+        case WorldRendererFeature_Haze:             return (const unsigned char*)u8"haze";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -942,6 +952,44 @@ void WorldRenderer_SetAtmosphereTablesEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_AreAtmosphereTablesEnabled(const WorldRenderer* self)
 {
     return self->_atmosphere._isEnabled;
+}
+
+void WorldRenderer_SetHazeView(WorldRenderer* self, WorldRendererHazeView view, int slice)
+{
+    if ((uint32_t)view >= (uint32_t)WorldRendererHazeView_Count)
+    {
+        return;
+    }
+    self->_atmosphere._view = view;
+    self->_atmosphere._viewSlice = (slice < 0) ? 0
+        : ((slice > WORLD_RENDERER_HAZE_SLICE_COUNT - 1) ? (WORLD_RENDERER_HAZE_SLICE_COUNT - 1) : slice);
+}
+
+WorldRendererHazeView WorldRenderer_GetHazeView(const WorldRenderer* self, int* outSlice)
+{
+    if (outSlice != NULL)
+    {
+        *outSlice = self->_atmosphere._viewSlice;
+    }
+    return self->_atmosphere._view;
+}
+
+double WorldRenderer_GetHazeSliceDistance(int slice)
+{
+    return ((slice >= 0) && (slice <= WORLD_ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE))
+        ? WorldAtmosphere_GetVolumeSliceDistance(slice) : 0.0;
+}
+
+const unsigned char* WorldRenderer_GetHazeViewName(WorldRendererHazeView view)
+{
+    switch (view)
+    {
+        case WorldRendererHazeView_Off:           return (const unsigned char*)u8"off";
+        case WorldRendererHazeView_InScatter:     return (const unsigned char*)u8"in-scatter";
+        case WorldRendererHazeView_Transmittance: return (const unsigned char*)u8"transmittance";
+        case WorldRendererHazeView_Count:         break;
+    }
+    return (const unsigned char*)u8"unknown";
 }
 
 void WorldRenderer_SetPostEffectsEnabled(WorldRenderer* self, bool enabled)

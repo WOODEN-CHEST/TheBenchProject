@@ -1,4 +1,4 @@
-// The atmospheric sky pass, with the moon, the Milky Way and light pollution's skyglow. Since T15 its glow comes from the
+// The atmospheric sky pass, with the moon, the Milky Way and light pollution's light. Since T15 its glow comes from the
 // atmosphere's tables (WorldRendererAtmosphere.c, built first in the frame), or the direct march while they are off. The
 // stars are their own pass (WorldRendererStars.c), drawn right after this one.
 
@@ -253,6 +253,7 @@ void WorldRendererSky_LoadShader(WorldRenderer* self)
     self->_sky._locNightVisionStrength = GetShaderLocation(RayShader, "nightVisionStrength");
     self->_sky._locNightVisionTint = GetShaderLocation(RayShader, "nightVisionTint");
     WorldRendererAtmosphere_PrepareShader(RayShader, &self->_sky._atmosphere);
+    WorldRendererAtmosphere_PrepareHazeShader(RayShader, false, &self->_sky._haze);
 
     // The night vision's calibration never changes: upload it once.
     SetShaderValue(RayShader, self->_sky._locNightVisionHalfLuminance, &self->_nightVision.HalfLuminance,
@@ -322,8 +323,9 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     SetShaderValue(RayShader, self->_sky._locSunColor, frame->SunLight.Color, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, self->_sky._locSunIntensity, &Environment->SunIntensity, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sky._locSunSize, &Environment->SunSizeMultiplier, SHADER_UNIFORM_FLOAT);
-    // The air, and the tables or the direct march (T15).
+    // The air, and the tables or the direct march (T15); the ground haze in front of the sky (T35).
     WorldRendererAtmosphere_UploadFrame(RayShader, &self->_sky._atmosphere, frame);
+    WorldRendererAtmosphere_UploadHaze(RayShader, &self->_sky._haze, frame);
 
     float SkyTint[3];
     WorldRendererCommon_ColorToLinear(Environment->SkyTint, SkyTint);
@@ -392,6 +394,7 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     {
         SetShaderValueTexture(RayShader, self->_sky._locMoonTexture, MoonTexture);
     }
+    WorldRendererAtmosphere_BindVolumeTexture(self, frame, RayShader, &self->_sky._haze);
     DrawRectangle(0, 0, frame->SceneWidth, frame->SceneHeight, WHITE);
     EndShaderMode();
 }

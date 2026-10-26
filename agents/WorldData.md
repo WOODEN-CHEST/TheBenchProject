@@ -21,8 +21,8 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldColliderComponent | `include/WorldColliderComponent.h`, `source/WorldColliderComponent.c` | How the object collides (T12, [WorldCollision.md](WorldCollision.md)): its world model's collision set (or one primitive of its own), its layer, mask and trigger flag (each overriding the world model's default with an explicit flag), a local offset, rotation and scale, and a rotation mode, with the pure function that resolves the settings in effect. |
 | WorldCharacterComponent | `include/WorldCharacterComponent.h`, `source/WorldCharacterComponent.c` | The player or an NPC (T13, [Characters.md](Characters.md)): a character asset by name and every setting this placement overrides (explicit flags next to its own values), the input its driver gives it and the state it is in; the first transform driver. |
 | WorldAnimatorComponent | `include/WorldAnimatorComponent.h`, `source/WorldAnimatorComponent.c` | What plays the object's skeletal animation (T29, [Animation.md](Animation.md)): the clip row and how it plays, the placement's own libraries, and the pose the animation system publishes. |
-| WorldTerrainComponent | `include/WorldTerrainComponent.h`, `source/WorldTerrainComponent.c` | A terrain asset by name (B01, [Terrain.md](Terrain.md)) and the settings this placement overrides (explicit flags next to its own values: outline, shadow tier, casts shadows, draw distance, fixed draw distance, collision enabled, layer and mask; a draw distance multiplier), with the pure function that resolves the settings in effect. |
-| WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/fog/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
+| WorldTerrainComponent | `include/WorldTerrainComponent.h`, `source/WorldTerrainComponent.c` | A terrain asset by name (B01, [Terrain.md](Terrain.md)) and the settings this placement overrides (explicit flags next to its own values: outline, shadow tier, casts shadows, haze, draw distance, fixed draw distance, collision enabled, layer and mask; a draw distance multiplier), with the pure function that resolves the settings in effect. |
+| WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/haze/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
 | World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index), `source/WorldHierarchy.c` (parents, world matrices, effective flags, subtrees; also the `WorldObject_` functions about them) | Owns the objects and their components, mints ids, keeps the id map, the hierarchy and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
 | WorldTransform (private) | `source/WorldTransform.h`, `source/WorldTransform.c` | The pure maths of transforms, in double (T33): compose (DrawModelEx's order), the one decomposition back to position / Euler XYZ / scale, a local matrix under a parent, a bound on a matrix's stretch. Used by the hierarchy, the renderer's cache, collision and the characters. |
 | WorldQuery | `include/WorldQuery.h`, `source/WorldQuery.c` | Searches over the objects by tags, data, components, flags and place ([ObjectData.md](ObjectData.md)). |
@@ -266,7 +266,7 @@ Places many **copies** of one world model (B03): trees, bushes, posts, fence pie
 (B10). Its table shares the model component's rows through the `WORLD_MODEL_PLACEMENT_ROW_*` macros of
 `source/WorldModelComponentInternal.h` (the names, wire ids, defaults, rules and categories are the model component's,
 T26's pattern): `world_model`, `uses_variant` / `variant`, the override pairs `has_outline`, `shadow_tier`,
-`casts_shadows`, `draw_distance`, `is_draw_distance_fixed`, `draw_distance_multiplier`, the LOD rows (`lod_distances`
+`casts_shadows`, `haze` (T35), `draw_distance`, `is_draw_distance_fixed`, `draw_distance_multiplier`, the LOD rows (`lod_distances`
 with its flag, `lod_distance_multiplier`, `is_lod_forced` / `forced_lod`), **all but `omit_pixelation`**: copies are
 never crisp (`WorldModelInstancesComponent_SetOverridden(self, WorldModelSetting_OmitPixelation, ...)` is refused, and
 `ResolveSettings` gives `OmitsPixelation` false). Every setting applies to every copy; the variant too.
@@ -308,7 +308,7 @@ The values and their defaults are T06's (the renderer's side is [WorldRuntime.md
   reaches `_alphaCutoff` (0.5), depth-correct, casts shadows, outlined; `blend`: soft edges, sorted, its alpha times the
   object's opacity; `additive`: adds its light).
 - **Lighting:** `_isLit` (true: lit like the models; false: its colours glow as they are, times `_emission` (>= 0,
-  default 1), still fogged), `_lightWrap` ([0, 1], default 1: how far light wraps around a billboard or axis billboard,
+  default 1), still hazed), `_lightWrap` ([0, 1], default 1: how far light wraps around a billboard or axis billboard,
   0 a flat card, 1 a round thing half lit from the side; fixed sprites ignore it), `_castsShadows` (true; only cutout
   sprites that are not decals cast).
 - **Decal:** `_isDecal` (false; takes effect only with the fixed orientation, `WorldSpriteSettings_IsDrawnAsDecal` on
@@ -377,7 +377,8 @@ driver: it bends the object's model, never moves the object.
 Places a terrain (B01; everything about terrain is in [Terrain.md](Terrain.md)): `terrain` (the asset name of a
 terrain, `terrains/`; none places nothing), then the override pairs over the asset's defaults, as the model
 component's: `overrides_has_outline` / `has_outline`, `overrides_shadow_tier` / `shadow_tier`,
-`overrides_casts_shadows` / `casts_shadows`, `overrides_draw_distance` / `draw_distance`, `draw_distance_multiplier`
+`overrides_casts_shadows` / `casts_shadows`, `overrides_haze` / `haze` (T35; wires 19 and 20), `overrides_draw_distance` /
+`draw_distance`, `draw_distance_multiplier`
 (above 0, default 1), `overrides_is_draw_distance_fixed` / `is_draw_distance_fixed`, and the collision's,
 `overrides_is_collision_enabled` / `is_collision_enabled`, `overrides_collision_layer` / `collision_layer`,
 `overrides_collides_with` / `collides_with`. `WorldTerrainComponent_ResolveSettings` gives the settings in effect (a
@@ -511,6 +512,8 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `shadow_tier` | 4 | Enum `both` / `near` / `far` | `both` |
 | | `overrides_casts_shadows` | 11 | Bool | false |
 | | `casts_shadows` | 5 | Bool | true |
+| | `overrides_haze` | 23 | Bool | false |
+| | `haze` | 24 | Float in [0, 1000] | 1 |
 | | `overrides_draw_distance` | 12 | Bool | false |
 | | `draw_distance` | 13 | Float > 0 | 600 |
 | | `draw_distance_multiplier` | 14 | Float > 0 | 1 |
@@ -552,6 +555,8 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `has_outline` | 2 | Bool | true |
 | | `overrides_omit_pixelation` | 31 | Bool | false |
 | | `omit_pixelation` | 3 | Bool | false |
+| | `overrides_haze` | 37 | Bool | false |
+| | `haze` | 38 | Float in [0, 1000] | 1 |
 | | `overrides_draw_distance` | 32 | Bool | false |
 | | `draw_distance` | 33 | Float > 0 | 150 |
 | | `draw_distance_multiplier` | 34 | Float > 0 | 1 |
@@ -563,9 +568,13 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `casts_shadows` | 4 | Bool | false |
 
 T10 renamed the model component's wire 1 from `model` (a model asset) to `world_model` and made wires 2 to 5 the
-placement's own values behind their override flags; T11 added the LOD rows (17 to 21); its next free wire id is 22. T26
+placement's own values behind their override flags; T11 added the LOD rows (17 to 21), B03's instances component took 22
+(`instances`) and T35 the haze's pair (23, 24): its next free wire id is 25. T26
 did the same to the sprite component: wire 1 `sprite_animation` became `world_sprite`, wires 2 to 16 the placement's own
-values behind their flags (wires 17 to 31), and the draw distance rows came new (32 to 36); its next free wire id is 37. The sprite's value rows
+values behind their flags (wires 17 to 31), and the draw distance rows came new (32 to 36); T35 added the haze's pair
+(37, 38), so its next free wire id is 39. The haze (T35) multiplies the haze in front of the placement
+([WorldRuntime.md](WorldRuntime.md), "Haze"): 1 the real air's, 0 as if the air were clear (a sign that must read from far
+away); its default is the world model's or world sprite's own `render.haze` (1). The sprite's value rows
 share their key, type, default, rules and texts with the world sprite's tables (`source/WorldSpriteInternal.h`,
 [WorldSprites.md](WorldSprites.md)). Each override flag sits right before its value, in table order (the inspector's and
 the JSON writer's order), and `PropertyTable_Check` checks the pairing. The collider's table is in
@@ -579,7 +588,7 @@ wire id is 13.
 
 ## Environment
 
-`WorldEnvironment` is a struct with the date and time of day, sky, sun, night sky, moon, ambient, fog and effect
+`WorldEnvironment` is a struct with the date and time of day, sky, sun, night sky, moon, ambient, haze and effect
 settings, and the world's gravity (T13: `gravity`, 9.81 m/s² straight down by default, in [0, 1000]; characters
 multiply it by their own `gravity_multiplier`).
 **Every field is one row of its property table** (`WorldEnvironment_GetPropertyTable`, in `source/WorldEnvironment.c`; module doc
@@ -587,7 +596,7 @@ multiply it by their own `gravity_multiplier`).
 GHDF wire id, the type, the default, the rules, the inspector text. `WorldEnvironment_SetDefaults`, `_Validate`,
 `_CopyTo` and `_Deconstruct` are thin wrappers over the table, and `WorldEnvironment_ReadJSON` / `_WriteJSON` are the
 JSON entry points for the world files (T09). **To add a setting, add the field and one table row** with a new,
-never-used wire id (the next free one is 53; 2 and 3 are retired); nothing else needs writing. The field comments state
+never-used wire id (the next free one is 61; 2 and 3 are retired); nothing else needs writing. The field comments state
 each value's rule; validation enforces them (finite, `TimeOfDay`, `LightPollution`, `StarTwinkle`, `MoonPhase`,
 `NightVisionStrength` and `NightVisionBlueShift` in [0, 1], `SunSizeMultiplier`, `MoonSizeMultiplier` and `MoonCycleDays` > 0, every strength/intensity/density/brightness
 >= 0, `Date` inside the calendar, the texture names valid asset names of at most 128 bytes, `MoonPhaseSource` one of
@@ -650,13 +659,36 @@ stayed at version 1: absent keys read as their defaults, so older world files ke
 | `air_density` | 50 | [0, 100] | 1 | The air's Rayleigh scattering (the blue) as a multiple of Earth's. `sky_tint` changes the sky's colour. |
 | `ozone` | 51 | [0, 100] | 1 | The ozone layer's absorption as a multiple of Earth's: it keeps the twilight sky blue overhead (violet in this three-colour model); 0 none. |
 | `multiple_scattering` | 52 | [0, 1] | 1 | The share of the light scattered more than once that the sky draws (0: single scattering, for comparing). |
-| `sky_ground_albedo` | 5 | colour | (90, 90, 90): linear 0.10 | The ground's albedo as the air sees it: the light it reflects feeds the multiple scattering (unused before T15; T35's far ground). |
+| `sky_ground_albedo` | 5 | colour | (90, 90, 90): linear 0.10 | The ground's albedo as the air sees it: the light it reflects feeds the multiple scattering, and since T35 the far ground's colour below the horizon (unused before T15). |
 
 `WORLD_ENVIRONMENT_MIN_HAZE_HEIGHT`, `_MAX_HAZE_HEIGHT`, `_MAX_SUN_GLOW` and `_MAX_AIR_MULTIPLE` (WorldEnvironment.h)
 are the rules' bounds; the renderer clamps to the same bounds and takes a non-finite value as its default, so the shaders
 only get finite air within them. `sky_turbidity` has no maximum: any finite haze is safe in the shaders (one too thick to
 see through gives a dark sky, never a NaN), and so is any sun or moon intensity in the sky-view table, which saturates at
 its half floats' largest value (65504).
+
+The haze's settings (T35, decisions G36 and G37; category "Haze"; the renderer turns them into the frame's haze with
+`WorldAtmosphere_GetHaze`, [WorldRuntime.md](WorldRuntime.md), "Haze"). The defaults are the real air on a clear day:
+no ground haze, every distance as it is. The table stayed at version 1 (absent keys read as their defaults).
+
+| Key | Wire id | Rule | Default | Meaning |
+|---|---|---|---|---|
+| `fog_strength` | 16 | >= 0 | 1 | "Haze strength": multiplies the haze on everything and the ground haze, with the player's own `FogStrength` ([Config.md](Config.md)): 1 the real air, 0 clear air, 2 twice the haze. The sky stays as it is. Before T35 it scaled the distance fog. |
+| `fog_color` | 15 | colour | (170, 190, 220) | Not used by the renderer since T35 (distant things fade into the haze of the air in front of them); kept for saved data. |
+| `aerial_distance_scale` | 53 | [0, 1000] | 1 | Treats every distance as this many times longer for the haze, so a small town reads as bigger and hazier; far things still meet the sky at the horizon. |
+| `haze_start_distance` | 54 | [0, 1e7] m | 0 | No haze nearer than this: an artistic choice (the real air starts at 0). |
+| `ground_haze_density` | 55 | [0, 100] per metre | 0 | A low layer of mist: how much light it takes per metre at its base (0 none; 0.02 a morning mist hiding things beyond about 200 m). |
+| `ground_haze_base` | 56 | [-1e7, 1e7] m | 0 | The world Y of the mist's base: as dense as its density says below it, thinning above it. |
+| `ground_haze_thickness` | 57 | [0.1, 100000] m | 20 | How quickly the mist thins above its base: by e every this many metres. |
+| `ground_haze_albedo` | 58 | colour | (250, 250, 250) | The mist's colour: the share of the light it takes that it scatters (near white for mist, darker or tinted for smoke and dust). |
+| `ground_haze_glow` | 59 | [0, 0.99] | 0.8 | How strongly the mist scatters light forward (its phase function's g): its glow around the sun and the moon. |
+| `horizon_ground_height` | 60 | [-1e7, 1e7] m | 0 | "Far ground height": the world Y of the far ground the sky shows below the horizon, beyond the world's own ground; the sky is seen from the camera's height above it. |
+
+`WORLD_ENVIRONMENT_MAX_AERIAL_DISTANCE_SCALE`, `_MAX_DISTANCE`, `_MAX_GROUND_HAZE_DENSITY`, `_MIN_GROUND_HAZE_THICKNESS`
+and `_MAX_GROUND_HAZE_THICKNESS` (WorldEnvironment.h) are the rules' bounds; `WorldAtmosphere_GetHaze` clamps to them and
+takes a non-finite value as its default. The far ground's light follows the sun's and the moon's height over each far
+point with the same ramps the lights use (`WorldEnvironment_GetDaylightForElevation`, `_GetMoonlightForElevation`:
+`WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION` -0.12 to `_RISE_ELEVATION` 0.10, `_MOONLIGHT_FULL_ELEVATION` 0.2).
 
 The night vision settings (the eye's dim-light vision, [WorldRuntime.md](WorldRuntime.md), "Night vision"):
 `night_vision_strength` ([0, 1], default 1: the eye; 0 keeps every colour, a long-exposure photo's night) and

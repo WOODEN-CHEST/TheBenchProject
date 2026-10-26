@@ -470,6 +470,523 @@ static void SkyViewUvPicksTheHalf(TestRun* run)
 }
 
 
+/* The frame's haze: the environment's multipliers and the player's, the ground haze, the far ground's height; values
+ * outside their rules clamped, non-finite ones their defaults. */
+static void HazeFollowsTheEnvironment(TestRun* run)
+{
+    WorldEnvironment Environment;
+    WorldEnvironment_SetDefaults(&Environment);
+    WorldAtmosphereHaze Haze;
+    WorldAtmosphere_GetHaze(&Environment, 1.0f, &Haze);
+    TEST_CHECK(run, (Haze.DistanceScale == 1.0f) && (Haze.StartDistance == 0.0f) && (Haze.GroundHazeDensity == 0.0f));
+    TEST_CHECK(run, (Haze.GroundHazeBase == 0.0f) && (Haze.GroundHazeThickness == 20.0f) && (Haze.GroundHeight == 0.0f));
+    TEST_CHECK(run, IsClose((double)Haze.GroundHazeAlbedo[1], pow(250.0 / 255.0, 2.2), 1e-6));
+    TEST_CHECK(run, Haze.GroundHazeGlow == 0.8f);
+
+    // Every multiplier multiplies: the world's distance scale and strength and the player's.
+    Environment.AerialDistanceScale = 2.0f;
+    Environment.FogStrength = 3.0f;
+    WorldAtmosphere_GetHaze(&Environment, 0.5f, &Haze);
+    TEST_CHECK(run, Haze.DistanceScale == 3.0f);
+    WorldAtmosphere_GetHaze(&Environment, 0.0f, &Haze);
+    TEST_CHECK(run, Haze.DistanceScale == 0.0f);
+    Environment.FogStrength = 0.0f;
+    WorldAtmosphere_GetHaze(&Environment, 1.0f, &Haze);
+    TEST_CHECK(run, Haze.DistanceScale == 0.0f);
+
+    Environment.FogStrength = 1.0f;
+    Environment.AerialDistanceScale = 1.0f;
+    Environment.HazeStartDistance = 120.0f;
+    Environment.GroundHazeDensity = 0.02f;
+    Environment.GroundHazeBase = -35.5f;
+    Environment.GroundHazeThickness = 15.0f;
+    Environment.GroundHazeAlbedo = (Color){ 255, 0, 255, 255 };
+    Environment.GroundHazeGlow = 0.5f;
+    Environment.HorizonGroundHeight = 812.0f;
+    WorldAtmosphere_GetHaze(&Environment, 1.0f, &Haze);
+    TEST_CHECK(run, (Haze.StartDistance == 120.0f) && (Haze.GroundHazeDensity == 0.02f) && (Haze.GroundHazeBase == -35.5f));
+    TEST_CHECK(run, (Haze.GroundHazeThickness == 15.0f) && (Haze.GroundHazeGlow == 0.5f) && (Haze.GroundHeight == 812.0f));
+    TEST_CHECK(run, (Haze.GroundHazeAlbedo[0] == 1.0f) && (Haze.GroundHazeAlbedo[1] == 0.0f));
+
+    // What validation refuses is clamped (a hostile product stays finite); what is not finite takes its default.
+    Environment.FogStrength = 3.0e38f;
+    Environment.AerialDistanceScale = 1.0e6f;
+    Environment.GroundHazeDensity = -1.0f;
+    Environment.GroundHazeThickness = 0.0f;
+    Environment.GroundHazeGlow = 2.0f;
+    Environment.HazeStartDistance = -5.0f;
+    Environment.HorizonGroundHeight = -1.0e9f;
+    WorldAtmosphere_GetHaze(&Environment, 3.0e38f, &Haze);
+    TEST_CHECK(run, Haze.DistanceScale == (float)WORLD_ATMOSPHERE_MAX_HAZE_SCALE);
+    TEST_CHECK(run, (Haze.GroundHazeDensity == 0.0f) && (Haze.StartDistance == 0.0f));
+    TEST_CHECK(run, Haze.GroundHazeThickness == (float)WORLD_ENVIRONMENT_MIN_GROUND_HAZE_THICKNESS);
+    TEST_CHECK(run, Haze.GroundHazeGlow == (float)WORLD_ENVIRONMENT_MAX_SUN_GLOW);
+    TEST_CHECK(run, Haze.GroundHeight == -(float)WORLD_ENVIRONMENT_MAX_DISTANCE);
+    Environment.FogStrength = NAN;
+    Environment.AerialDistanceScale = INFINITY;
+    Environment.GroundHazeDensity = NAN;
+    Environment.GroundHazeThickness = NAN;
+    Environment.GroundHazeGlow = NAN;
+    Environment.GroundHazeBase = NAN;
+    Environment.HazeStartDistance = NAN;
+    Environment.HorizonGroundHeight = INFINITY;
+    WorldAtmosphere_GetHaze(&Environment, NAN, &Haze);
+    TEST_CHECK(run, (Haze.DistanceScale == 1.0f) && (Haze.GroundHazeDensity == 0.0f) && (Haze.GroundHazeBase == 0.0f));
+    TEST_CHECK(run, (Haze.GroundHazeThickness == 20.0f) && (Haze.GroundHazeGlow == 0.8f));
+    TEST_CHECK(run, (Haze.StartDistance == 0.0f) && (Haze.GroundHeight == 0.0f));
+    WorldEnvironment_Deconstruct(&Environment);
+}
+
+/* The volume's distance slices grow by one ratio from 1 m to 200 km, 21 of them within the 4 km far plane, and a
+ * distance and its slice coordinate round-trip: linear in distance between two slices, from the camera to the first,
+ * and from the last distance slice to the whole ray's. */
+static void VolumeSlicesRoundTrip(TestRun* run)
+{
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetVolumeSliceDistance(0), WORLD_ATMOSPHERE_VOLUME_NEAREST, 1e-12));
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetVolumeSliceDistance(WORLD_ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE),
+        WORLD_ATMOSPHERE_VOLUME_FARTHEST, 1e-6));
+    double Ratio = WorldAtmosphere_GetVolumeSliceDistance(1) / WorldAtmosphere_GetVolumeSliceDistance(0);
+    TEST_CHECK(run, IsClose(Ratio, 1.502, 1e-3));
+    int NearCount = 0;
+    for (int Slice = 0; Slice <= WORLD_ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE; Slice++)
+    {
+        double Distance = WorldAtmosphere_GetVolumeSliceDistance(Slice);
+        NearCount += (Distance <= 4000.0) ? 1 : 0;
+        if (Slice > 0)
+        {
+            TEST_CHECK(run, IsClose(Distance / WorldAtmosphere_GetVolumeSliceDistance(Slice - 1), Ratio, 1e-9));
+        }
+        // Each slice's distance is its own coordinate, whatever the ray's length.
+        TEST_CHECK(run, IsClose(WorldAtmosphere_GetVolumeSlice(Distance, 1.1e6), (double)Slice, 1e-9));
+        TEST_CHECK(run, IsClose(WorldAtmosphere_GetVolumeSlice(Distance, 50000.0), (double)Slice, 1e-9));
+    }
+    TEST_CHECK(run, NearCount == 21);
+    // Clamped outside the slices.
+    TEST_CHECK(run, WorldAtmosphere_GetVolumeSliceDistance(-3) == WorldAtmosphere_GetVolumeSliceDistance(0));
+    TEST_CHECK(run, WorldAtmosphere_GetVolumeSliceDistance(99)
+        == WorldAtmosphere_GetVolumeSliceDistance(WORLD_ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE));
+
+    // The camera, and the way to the first slice.
+    TEST_CHECK(run, WorldAtmosphere_GetVolumeSlice(0.0, 1e6) == -1.0);
+    TEST_CHECK(run, WorldAtmosphere_GetVolumeSlice(-5.0, 1e6) == -1.0);
+    TEST_CHECK(run, WorldAtmosphere_GetVolumeSlice(NAN, 1e6) == -1.0);
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetVolumeSlice(0.25, 1e6), -0.75, 1e-12));
+    // Linear in distance between two slices: half way in metres is half way in slices.
+    double Middle = 0.5 * (WorldAtmosphere_GetVolumeSliceDistance(12) + WorldAtmosphere_GetVolumeSliceDistance(13));
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetVolumeSlice(Middle, 1e6), 12.5, 1e-9));
+    // Past the last distance slice: on toward the whole ray, reached at the top of the atmosphere.
+    double Top = 1.13e6;
+    double Last = (double)WORLD_ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE;
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetVolumeSlice(0.5 * (WORLD_ATMOSPHERE_VOLUME_FARTHEST + Top), Top),
+        Last + 0.5, 1e-9));
+    TEST_CHECK(run, WorldAtmosphere_GetVolumeSlice(Top, Top) == Last + 1.0);
+    TEST_CHECK(run, WorldAtmosphere_GetVolumeSlice(3.0 * Top, Top) == Last + 1.0);
+    // A steep ray leaves the air before the last distance slice: everything past it is the whole ray.
+    TEST_CHECK(run, WorldAtmosphere_GetVolumeSlice(WORLD_ATMOSPHERE_VOLUME_FARTHEST * 1.01, 100000.0) == Last + 1.0);
+
+    // Round trips both ways, and the coordinate rises with the distance.
+    double Previous = -2.0;
+    for (int Step = 0; Step <= 400; Step++)
+    {
+        double Distance = 1e-3 * pow(10.0, 9.0 * (double)Step / 400.0); // 1 mm to 1000 km
+        double Slice = WorldAtmosphere_GetVolumeSlice(Distance, Top);
+        TEST_CHECK(run, Slice >= Previous);
+        Previous = Slice;
+        if (Distance <= Top)
+        {
+            double Back = WorldAtmosphere_GetVolumeDistance(Slice, Top);
+            if (!TEST_CHECK(run, IsClose(Back, Distance, 1e-9 * Distance + 1e-12)))
+            {
+                printf("    %.9g m -> slice %.9f -> %.9g m\n", Distance, Slice, Back);
+            }
+        }
+    }
+    for (int Step = 0; Step <= 320; Step++)
+    {
+        double Slice = -1.0 + (double)Step / 10.0;
+        double Back = WorldAtmosphere_GetVolumeSlice(WorldAtmosphere_GetVolumeDistance(Slice, Top), Top);
+        TEST_CHECK(run, IsClose(Back, Slice, 1e-9));
+    }
+    TEST_CHECK(run, WorldAtmosphere_GetVolumeDistance(-1.0, Top) == 0.0);
+    TEST_CHECK(run, WorldAtmosphere_GetVolumeDistance(Last + 1.0, Top) == Top);
+}
+
+/* The volume's texture: each slice a tile of the screen's directions, the in-scatter's tiles below the transmittance's,
+ * the frame's values in the last row; a tile is sampled at least half a texel inside, never reading its neighbour. */
+static void VolumeTextureLayout(TestRun* run)
+{
+    double Width = (double)WORLD_ATMOSPHERE_VOLUME_WIDTH;
+    double Height = (double)WORLD_ATMOSPHERE_VOLUME_HEIGHT;
+    double Size = (double)WORLD_ATMOSPHERE_VOLUME_SIZE;
+    TEST_CHECK(run, (WORLD_ATMOSPHERE_VOLUME_WIDTH == 1024) && (WORLD_ATMOSPHERE_VOLUME_HEIGHT == 65));
+    // A direction's centre lands on its texel's centre in every slice and both parts.
+    for (int Slice = 0; Slice < WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT; Slice += 7)
+    {
+        for (int Across = 0; Across < WORLD_ATMOSPHERE_VOLUME_SIZE; Across += 5)
+        {
+            Vector2Double Screen = Vector2Double_Create(((double)Across + 0.5) / Size, ((double)(31 - Across) + 0.5) / Size);
+            Vector2Double InScatter = WorldAtmosphere_GetVolumeUv(Screen, Slice, WorldAtmosphereVolumePart_InScatter);
+            Vector2Double Transmittance = WorldAtmosphere_GetVolumeUv(Screen, Slice,
+                WorldAtmosphereVolumePart_Transmittance);
+            TEST_CHECK(run, IsClose(InScatter.X * Width, (double)(Slice * WORLD_ATMOSPHERE_VOLUME_SIZE + Across) + 0.5,
+                1e-9));
+            TEST_CHECK(run, IsClose(InScatter.Y * Height, (double)(31 - Across) + 0.5, 1e-9));
+            TEST_CHECK(run, IsClose(Transmittance.X, InScatter.X, 1e-12));
+            TEST_CHECK(run, IsClose(Transmittance.Y * Height, Size + (double)(31 - Across) + 0.5, 1e-9));
+        }
+    }
+    // The screen's edges are held half a texel inside the tile.
+    Vector2Double Corner = WorldAtmosphere_GetVolumeUv(Vector2Double_Create(0.0, 1.0), 3,
+        WorldAtmosphereVolumePart_Transmittance);
+    TEST_CHECK(run, IsClose(Corner.X * Width, 3.0 * Size + 0.5, 1e-9));
+    TEST_CHECK(run, IsClose(Corner.Y * Height, 2.0 * Size - 0.5, 1e-9));
+    Vector2Double Outside = WorldAtmosphere_GetVolumeUv(Vector2Double_Create(-0.2, 1.4), 0,
+        WorldAtmosphereVolumePart_InScatter);
+    TEST_CHECK(run, IsClose(Outside.X * Width, 0.5, 1e-9) && IsClose(Outside.Y * Height, Size - 0.5, 1e-9));
+    // The frame's values: their own texels in the last row.
+    for (int Value = 0; Value < (int)WorldAtmosphereVolumeValue_Count; Value++)
+    {
+        Vector2Double Uv = WorldAtmosphere_GetVolumeValueUv((WorldAtmosphereVolumeValue)Value);
+        TEST_CHECK(run, IsClose(Uv.X * Width, (double)Value + 0.5, 1e-9) && IsClose(Uv.Y * Height, Height - 0.5, 1e-9));
+    }
+}
+
+/* The ground haze's density in long double: as dense as the base below it, thinning by e every thickness above. */
+static long double ReferenceGroundHazeDensity(long double density, long double thickness, long double height)
+{
+    return (height <= 0.0L) ? density : density * expl(-height / thickness);
+}
+
+/* The ground haze's optical depth the slow way, in long double: a level ray crosses one density; a sloped one is
+ * integrated over the heights it crosses (divided by its climb per metre), above the base in the density's own variable
+ * so the steep part near the base gets the steps, below it at the base's density. */
+static double ReferenceGroundHazeDepth(double density, double thickness, double heightAboveBase, double rayY,
+    double from, double to)
+{
+    long double Start = (long double)heightAboveBase + (long double)rayY * (long double)from;
+    long double End = (long double)heightAboveBase + (long double)rayY * (long double)to;
+    if (rayY == 0.0)
+    {
+        return (double)(ReferenceGroundHazeDensity(density, thickness, Start) * ((long double)to - (long double)from));
+    }
+    long double Low = fminl(Start, End);
+    long double High = fmaxl(Start, End);
+    long double Sum = 0.0L;
+    const int Steps = 200000;
+    long double AboveLow = fmaxl(Low, 0.0L);
+    if (High > AboveLow)
+    {
+        long double UpperU = fminl((High - AboveLow) / (long double)thickness, 60.0L);
+        for (int Index = 0; Index < Steps; Index++)
+        {
+            long double U = UpperU * ((long double)Index + 0.5L) / (long double)Steps;
+            Sum += ReferenceGroundHazeDensity(density, thickness, AboveLow + U * (long double)thickness)
+                * (UpperU / (long double)Steps) * (long double)thickness;
+        }
+    }
+    if (Low < 0.0L)
+    {
+        Sum += (long double)density * (fminl(High, 0.0L) - Low);
+    }
+    return (double)(Sum / fabsl((long double)rayY));
+}
+
+/* The ground haze's closed form against the slow integral: rays going up, going down and level, from below, at and above
+ * the base, short and to the sky's distance. */
+static void GroundHazeDepthIsTheIntegral(TestRun* run)
+{
+    const double Thicknesses[] = { 15.0, 0.1, 1000.0 };
+    const double Heights[] = { -30.0, 0.0, 1.7, 40.0, 500.0 };
+    const double Slopes[] = { -1.0, -0.3, -0.001, -2e-7, 0.0, 1e-7, 0.002, 0.2, 1.0 };
+    const double Ranges[][2] = { { 0.0, 10.0 }, { 3.0, 400.0 }, { 0.0, 1e5 }, { 50.0, WORLD_ATMOSPHERE_SKY_DISTANCE } };
+    double Density = 0.02;
+    for (size_t T = 0U; T < (sizeof(Thicknesses) / sizeof(Thicknesses[0])); T++)
+    {
+        for (size_t H = 0U; H < (sizeof(Heights) / sizeof(Heights[0])); H++)
+        {
+            for (size_t S = 0U; S < (sizeof(Slopes) / sizeof(Slopes[0])); S++)
+            {
+                for (size_t R = 0U; R < (sizeof(Ranges) / sizeof(Ranges[0])); R++)
+                {
+                    double Got = WorldAtmosphere_GetGroundHazeDepth(Density, Thicknesses[T], Heights[H], Slopes[S],
+                        Ranges[R][0], Ranges[R][1]);
+                    double Expected = ReferenceGroundHazeDepth(Density, Thicknesses[T], Heights[H], Slopes[S],
+                        Ranges[R][0], Ranges[R][1]);
+                    if (!TEST_CHECK(run, isfinite(Got) && (Got >= 0.0) && IsClose(Got, Expected,
+                        1e-6 * fabs(Expected) + 1e-12)))
+                    {
+                        printf("    thickness %.1f height %.1f slope %.1e [%.0f, %.0e]: %.12g against %.12g\n",
+                            Thicknesses[T], Heights[H], Slopes[S], Ranges[R][0], Ranges[R][1], Got, Expected);
+                    }
+                }
+            }
+        }
+    }
+    // No density, no length, a reversed part: no depth.
+    TEST_CHECK(run, WorldAtmosphere_GetGroundHazeDepth(0.0, 15.0, 0.0, 0.0, 0.0, 100.0) == 0.0);
+    TEST_CHECK(run, WorldAtmosphere_GetGroundHazeDepth(0.02, 15.0, 0.0, 0.0, 5.0, 5.0) == 0.0);
+    TEST_CHECK(run, WorldAtmosphere_GetGroundHazeDepth(0.02, 15.0, 0.0, 0.0, 9.0, 5.0) == 0.0);
+    // Straight up from the base, all of it: density x thickness; level at the base over 100 m: density x 100.
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetGroundHazeDepth(0.02, 15.0, 0.0, 1.0, 0.0, WORLD_ATMOSPHERE_SKY_DISTANCE),
+        0.3, 1e-12));
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetGroundHazeDepth(0.02, 15.0, 0.0, 0.0, 0.0, 100.0), 2.0, 1e-12));
+    // A level ray in the mist to the sky's distance hides the horizon (the depth is huge, not infinite).
+    double Horizon = WorldAtmosphere_GetGroundHazeDepth(0.02, 15.0, 1.7, 0.0, 0.0, WORLD_ATMOSPHERE_SKY_DISTANCE);
+    TEST_CHECK(run, isfinite(Horizon) && (Horizon > 1e5));
+}
+
+/* The ground haze's inverse: the distance where its depth reaches a share of the whole brings that depth back (the closed
+ * form, which the test above checks against the integral), in [from, to], over the same rays; a share of 0 is the start,
+ * all of it or more the end. Then two mists: around the camera half the light of a thick one comes from its first ln 2
+ * of depth, and seen from above, from where the ray reaches it. */
+static void GroundHazeDistanceInvertsTheDepth(TestRun* run)
+{
+    const double Thicknesses[] = { 15.0, 0.1, 1000.0 };
+    const double Heights[] = { -30.0, 0.0, 1.7, 40.0, 500.0 };
+    const double Slopes[] = { -1.0, -0.3, -0.001, -2e-7, 0.0, 1e-7, 0.002, 0.2, 1.0 };
+    const double Ranges[][2] = { { 0.0, 10.0 }, { 3.0, 400.0 }, { 0.0, 1e5 }, { 50.0, WORLD_ATMOSPHERE_SKY_DISTANCE } };
+    const double Shares[] = { 0.0, 1e-6, 0.001, 0.1, 0.5, 0.9, 0.999, 1.0, 1.5 };
+    double Density = 0.02;
+    for (size_t T = 0U; T < (sizeof(Thicknesses) / sizeof(Thicknesses[0])); T++)
+    {
+        for (size_t H = 0U; H < (sizeof(Heights) / sizeof(Heights[0])); H++)
+        {
+            for (size_t S = 0U; S < (sizeof(Slopes) / sizeof(Slopes[0])); S++)
+            {
+                for (size_t R = 0U; R < (sizeof(Ranges) / sizeof(Ranges[0])); R++)
+                {
+                    double From = Ranges[R][0];
+                    double To = Ranges[R][1];
+                    double Whole = WorldAtmosphere_GetGroundHazeDepth(Density, Thicknesses[T], Heights[H], Slopes[S],
+                        From, To);
+                    for (size_t Share = 0U; Share < (sizeof(Shares) / sizeof(Shares[0])); Share++)
+                    {
+                        double Sought = Shares[Share] * Whole;
+                        double Got = WorldAtmosphere_GetGroundHazeDistance(Density, Thicknesses[T], Heights[H],
+                            Slopes[S], From, To, Sought);
+                        double Reached = WorldAtmosphere_GetGroundHazeDepth(Density, Thicknesses[T], Heights[H],
+                            Slopes[S], From, Got);
+                        // Exact where the density changes along the stretch; an even density's (a climb under a
+                        // thousandth of a thickness) is off by a part in 10 000 of the depth at most.
+                        double Tolerance = 2e-4 * Whole + 1e-12;
+                        bool IsInside = isfinite(Got) && (Got >= From) && (Got <= To);
+                        bool IsBack = (Shares[Share] >= 1.0) ? IsClose(Reached, Whole, Tolerance)
+                            : IsClose(Reached, Sought, Tolerance);
+                        if (!TEST_CHECK(run, IsInside && IsBack))
+                        {
+                            printf("    thickness %.1f height %.1f slope %.1e [%.0f, %.0e] share %.6f: %.12g reaches "
+                                "%.12g of %.12g\n", Thicknesses[T], Heights[H], Slopes[S], From, To, Shares[Share], Got,
+                                Reached, Sought);
+                        }
+                    }
+                    TEST_CHECK(run, WorldAtmosphere_GetGroundHazeDistance(Density, Thicknesses[T], Heights[H],
+                        Slopes[S], From, To, 0.0) == From);
+                    TEST_CHECK(run, WorldAtmosphere_GetGroundHazeDistance(Density, Thicknesses[T], Heights[H],
+                        Slopes[S], From, To, 2.0 * Whole + 1.0) == To);
+                }
+            }
+        }
+    }
+    // No mist: never reached, the end. A depth that is not a number: the start.
+    TEST_CHECK(run, WorldAtmosphere_GetGroundHazeDistance(0.0, 15.0, 1.7, 0.0, 0.0, 500.0, 0.1) == 500.0);
+    TEST_CHECK(run, WorldAtmosphere_GetGroundHazeDistance(0.02, 15.0, -5.0, 0.1, 0.0, 500.0, NAN) == 0.0);
+    // A thick morning mist around the camera, looking level over a kilometre: half its light from the first ln 2 of depth,
+    // 39 m out (ln 2 / (0.02 e^(-1.7 / 15))).
+    double Whole = WorldAtmosphere_GetGroundHazeDepth(0.02, 15.0, 1.7, 0.0, 0.0, 1000.0);
+    double Median = -log(0.5 * (1.0 + exp(-Whole)));
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetGroundHazeDistance(0.02, 15.0, 1.7, 0.0, 0.0, 1000.0, Median),
+        log(2.0) / (0.02 * exp(-1.7 / 15.0)), 1e-6));
+    // From 300 m above it, looking down at a tenth: the ray reaches the base 3 km out, and the mist's light comes from just
+    // before, where the depth above the base (3 (e^(-(3000 - t) / 150) - e^-20) down to it) has reached about ln 2: 220 m
+    // short of it, 2.78 km out, 22 m above the base.
+    Whole = WorldAtmosphere_GetGroundHazeDepth(0.02, 15.0, 300.0, -0.1, 0.0, 5000.0);
+    Median = -log(0.5 * (1.0 + exp(-Whole)));
+    double FromAbove = WorldAtmosphere_GetGroundHazeDistance(0.02, 15.0, 300.0, -0.1, 0.0, 5000.0, Median);
+    TEST_CHECK(run, IsClose(FromAbove, 3000.0 + 150.0 * log(Median / 3.0 + exp(-20.0)), 1e-6));
+}
+
+/* The ground haze's depth along a ray over the curved planet, the slow way in long double: the exact height of the
+ * straight ray (its distance from the planet's centre minus the start's), Simpson's rule over @p steps. */
+static double ReferenceCurvedGroundHazeDepth(double density, double thickness, double heightAboveBase, double rayY,
+    double radius, double from, double to, int steps)
+{
+    long double R = (long double)radius;
+    long double Mu = (long double)rayY;
+    long double Step = ((long double)to - (long double)from) / (long double)steps;
+    long double Sum = 0.0L;
+    for (int Index = 0; Index <= steps; Index++)
+    {
+        long double T = (long double)from + Step * (long double)Index;
+        long double Rise = sqrtl(R * R + 2.0L * R * Mu * T + T * T) - R;
+        long double Height = (long double)heightAboveBase + Rise;
+        long double Value = (long double)density * expl(-fmaxl(Height, 0.0L) / (long double)thickness);
+        long double Weight = ((Index == 0) || (Index == steps)) ? 1.0L : ((Index % 2 == 1) ? 4.0L : 2.0L);
+        Sum += Weight * Value;
+    }
+    return (double)(Sum * Step / 3.0L);
+}
+
+/* e^(x^2) erfc(x) against the C library's erfc within the formula's 1.2e-7; and the ground haze over the curved planet
+ * against the slow integral along the exact ray, within 0.01 %: from inside the mist, just above it and high above it (up
+ * to 99 km), with the base on the ground or above it (rays dipping below the base), level, at fractions of the way to
+ * the horizon and just above it, and climbing. From up high, a ray between level and the horizon misses
+ * the mist where the flat world's straight ray sinks into it; near the camera, inside the mist, the two agree. */
+static void GroundHazeFollowsTheCurvedPlanet(TestRun* run)
+{
+    for (int Index = 0; Index <= 200; Index++)
+    {
+        double X = 0.1 * (double)Index;
+        double Expected = exp(X * X) * erfc(X);
+        TEST_CHECK(run, IsClose(WorldAtmosphere_GetScaledErfc(X), Expected, 2e-7 * Expected));
+    }
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetScaledErfc(0.0), 1.0, 2e-7));
+
+    // The camera's height above the ground and above the mist's base: the base on the ground, above it (the camera
+    // above the layer, or inside its even part below the base, so rays dip below the base), and up high.
+    const double Placements[][2] = { { 1.7, 1.7 }, { 12.0, 12.0 }, { 40.0, 40.0 }, { 300.0, 300.0 }, { 300.0, 100.0 },
+        { 300.0, -20.0 }, { 5000.0, 5000.0 }, { 20000.0, 20000.0 }, { 99000.0, 99000.0 } };
+    const double Thicknesses[] = { 15.0, 100.0 };
+    const double Shares[] = { 0.0, 0.3, 0.7, 0.95, 0.999 }; // of the way from level to the horizon
+    double Density = 0.02;
+    for (size_t P = 0U; P < (sizeof(Placements) / sizeof(Placements[0])); P++)
+    {
+        double ViewHeight = Placements[P][0];
+        double AboveBase = Placements[P][1];
+        double Radius = WORLD_ATMOSPHERE_PLANET_RADIUS + ViewHeight;
+        double Horizon = WorldAtmosphere_GetHorizonCos(ViewHeight);
+        for (size_t T = 0U; T < (sizeof(Thicknesses) / sizeof(Thicknesses[0])); T++)
+        {
+            for (size_t Share = 0U; Share <= (sizeof(Shares) / sizeof(Shares[0])); Share++)
+            {
+                // The last case climbs (a tenth of a degree up).
+                double RayY = (Share < (sizeof(Shares) / sizeof(Shares[0]))) ? Shares[Share] * Horizon : 0.0017;
+                double Expected = ReferenceCurvedGroundHazeDepth(Density, Thicknesses[T], AboveBase, RayY, Radius, 0.0,
+                    3.0e6, 6000000);
+                double Got = WorldAtmosphere_GetGroundHazeDepthCurved(Density, Thicknesses[T], AboveBase, RayY, Radius,
+                    0.0, WORLD_ATMOSPHERE_SKY_DISTANCE);
+                if (!TEST_CHECK(run, isfinite(Got) && IsClose(Got, Expected, 1e-4 * Expected + 1e-9)))
+                {
+                    printf("    view height %.1f above the base %.1f thickness %.0f rayY %.6g: %.9g against %.9g\n",
+                        ViewHeight, AboveBase, Thicknesses[T], RayY, Got, Expected);
+                }
+                // A part of the ray: from 1 km to 300 km.
+                Expected = ReferenceCurvedGroundHazeDepth(Density, Thicknesses[T], AboveBase, RayY, Radius, 1000.0,
+                    300000.0, 4000000);
+                Got = WorldAtmosphere_GetGroundHazeDepthCurved(Density, Thicknesses[T], AboveBase, RayY, Radius, 1000.0,
+                    300000.0);
+                TEST_CHECK(run, isfinite(Got) && IsClose(Got, Expected, 1e-4 * Expected + 1e-9));
+            }
+        }
+    }
+    // From 300 m, halfway from level to the horizon (0.28 degrees down), over a mist of 15 m: the flat world's ray sinks
+    // into it 61 km out; the curved one passes 150 m above it.
+    double Horizon300 = WorldAtmosphere_GetHorizonCos(300.0);
+    double Curved = WorldAtmosphere_GetGroundHazeDepthCurved(0.02, 15.0, 300.0, 0.5 * Horizon300,
+        WORLD_ATMOSPHERE_PLANET_RADIUS + 300.0, 0.0, WORLD_ATMOSPHERE_SKY_DISTANCE);
+    double Flat = WorldAtmosphere_GetGroundHazeDepth(0.02, 15.0, 300.0, 0.5 * Horizon300, 0.0,
+        WORLD_ATMOSPHERE_SKY_DISTANCE);
+    TEST_CHECK(run, (Curved < 1e-3) && (Flat > 100.0));
+    // Inside the mist, its first 100 m agree with the flat world's.
+    double Near = WorldAtmosphere_GetGroundHazeDepthCurved(0.02, 15.0, 1.7, 0.5 * WorldAtmosphere_GetHorizonCos(1.7),
+        WORLD_ATMOSPHERE_PLANET_RADIUS + 1.7, 0.0, 100.0);
+    double NearFlat = WorldAtmosphere_GetGroundHazeDepth(0.02, 15.0, 1.7, 0.5 * WorldAtmosphere_GetHorizonCos(1.7), 0.0,
+        100.0);
+    TEST_CHECK(run, IsClose(Near, NearFlat, 1e-4 * NearFlat));
+    // No density, no length.
+    TEST_CHECK(run, WorldAtmosphere_GetGroundHazeDepthCurved(0.0, 15.0, 1.7, 0.0, 6.4e6, 0.0, 1e8) == 0.0);
+    TEST_CHECK(run, WorldAtmosphere_GetGroundHazeDepthCurved(0.02, 15.0, 1.7, 0.0, 6.4e6, 5.0, 5.0) == 0.0);
+}
+
+/* How high a light stands over a far point of the ground (the curved planet's own zenith there), against the geometry in
+ * long double; the sun sets on far ground away from it first. */
+static void LightStandsLowerOverFarGround(TestRun* run)
+{
+    const double Heights[] = { 1.7, 300.0, 5000.0 };
+    const double Cosines[] = { -0.3, -0.01, -0.0005, 0.0, 0.2 };
+    const double Distances[] = { 0.0, 100.0, 4650.0, 60000.0, 250000.0 };
+    for (size_t H = 0U; H < (sizeof(Heights) / sizeof(Heights[0])); H++)
+    {
+        for (size_t C = 0U; C < (sizeof(Cosines) / sizeof(Cosines[0])); C++)
+        {
+            for (size_t D = 0U; D < (sizeof(Distances) / sizeof(Distances[0])); D++)
+            {
+                // The ray in the plane x, y (y up through the start), the light 40 degrees off it in azimuth.
+                long double Mu = (long double)Cosines[C];
+                long double SinMu = sqrtl(1.0L - Mu * Mu);
+                long double LightMu = 0.15L;
+                long double LightSin = sqrtl(1.0L - LightMu * LightMu);
+                long double Azimuth = 40.0L / 57.29577951308232L;
+                long double Point[3] = { (long double)Distances[D] * SinMu,
+                    (long double)WORLD_ATMOSPHERE_PLANET_RADIUS + (long double)Heights[H] + (long double)Distances[D] * Mu,
+                    0.0L };
+                long double Light[3] = { LightSin * cosl(Azimuth), LightMu, LightSin * sinl(Azimuth) };
+                long double Length = sqrtl(Point[0] * Point[0] + Point[1] * Point[1]);
+                double Expected = (double)((Point[0] * Light[0] + Point[1] * Light[1]) / Length);
+                double CosAngle = (double)(SinMu * Light[0] + Mu * Light[1]);
+                double Got = WorldAtmosphere_GetLightCosAt(AtmosphereRay(Heights[H], Cosines[C]), Distances[D],
+                    (double)LightMu, CosAngle);
+                TEST_CHECK(run, IsClose(Got, Expected, 1e-9));
+            }
+        }
+    }
+    // The sun on the horizon behind the camera: a ground point 100 km ahead sees it 0.9 degrees lower, set for it.
+    double Ahead = WorldAtmosphere_GetLightCosAt(AtmosphereRay(1.7, -0.0005), 100000.0, 0.0, -1.0);
+    TEST_CHECK(run, IsClose(asin(Ahead) * TEST_DEGREES_PER_RADIAN, -100000.0 / WORLD_ATMOSPHERE_PLANET_RADIUS
+        * TEST_DEGREES_PER_RADIAN, 1e-3));
+    TEST_CHECK(run, WorldEnvironment_GetDaylightForElevation((float)Ahead) < 1.0f);
+    // From 1.7 m the far ground begins where the world's ground would end: the horizon, 4.65 km out.
+    double ToGround = WorldAtmosphere_GetDistanceToGround(AtmosphereRay(1.7, WorldAtmosphere_GetHorizonCos(1.7) - 1e-9));
+    TEST_CHECK(run, (ToGround > 4600.0) && (ToGround < 4700.0));
+}
+
+/* Light pollution's light in the air: 1 at the camera's foot, a third (1 / e) a scale length up or out, as on the ground
+ * below it. */
+static void LightPollutionFillsTheLowAirNearby(TestRun* run)
+{
+    TEST_CHECK(run, WorldAtmosphere_GetLightPollutionShare(0.0, 0.0) == 1.0);
+    TEST_CHECK(run, WorldAtmosphere_GetLightPollutionShare(-40.0, 0.0) == 1.0);
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetLightPollutionShare(WORLD_ATMOSPHERE_LIGHT_POLLUTION_HEIGHT, 0.0),
+        exp(-1.0), 1e-12));
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetLightPollutionShare(0.0, WORLD_ATMOSPHERE_LIGHT_POLLUTION_REACH),
+        exp(-1.0), 1e-12));
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetLightPollutionShare(1000.0, 5000.0), exp(-2.0 - 0.5), 1e-12));
+}
+
+/* Light pollution's radiance: the light pollution's colour times its strength (clamped to [0, 1], a broken one none) times
+ * the calibrated radiance, at night only. */
+static void LightPollutionRadianceIsTheTownsAtNight(TestRun* run)
+{
+    WorldEnvironment Environment;
+    WorldEnvironment_SetDefaults(&Environment);
+    Environment.LightPollution = 0.5f;
+    Environment.LightPollutionColor = (Color){ .r = 255, .g = 128, .b = 0, .a = 255 };
+    float Radiance[3];
+    WorldAtmosphere_GetLightPollutionRadiance(&Environment, 0.0f, Radiance);
+    float Expected[3] = { 0.5f * (float)WORLD_ATMOSPHERE_LIGHT_POLLUTION_RADIANCE,
+        0.5f * powf(128.0f / 255.0f, 2.2f) * (float)WORLD_ATMOSPHERE_LIGHT_POLLUTION_RADIANCE, 0.0f };
+    TEST_CHECK(run, IsClose(Radiance[0], Expected[0], 1e-7) && IsClose(Radiance[1], Expected[1], 1e-7)
+        && (Radiance[2] == 0.0f));
+    // Twilight halves it; the day has none.
+    WorldAtmosphere_GetLightPollutionRadiance(&Environment, 0.5f, Radiance);
+    TEST_CHECK(run, IsClose(Radiance[0], 0.5 * Expected[0], 1e-7));
+    WorldAtmosphere_GetLightPollutionRadiance(&Environment, 1.0f, Radiance);
+    TEST_CHECK(run, (Radiance[0] == 0.0f) && (Radiance[1] == 0.0f));
+    WorldAtmosphere_GetLightPollutionRadiance(&Environment, 7.0f, Radiance);
+    TEST_CHECK(run, Radiance[0] == 0.0f);
+    // Beyond 1 counts as 1; below 0 and NaN as none.
+    Environment.LightPollution = 3.0f;
+    WorldAtmosphere_GetLightPollutionRadiance(&Environment, 0.0f, Radiance);
+    TEST_CHECK(run, IsClose(Radiance[0], 2.0 * Expected[0], 1e-7));
+    Environment.LightPollution = -1.0f;
+    WorldAtmosphere_GetLightPollutionRadiance(&Environment, 0.0f, Radiance);
+    TEST_CHECK(run, Radiance[0] == 0.0f);
+    Environment.LightPollution = NAN;
+    WorldAtmosphere_GetLightPollutionRadiance(&Environment, NAN, Radiance);
+    TEST_CHECK(run, isfinite(Radiance[0]) && (Radiance[0] == 0.0f));
+    WorldEnvironment_Deconstruct(&Environment);
+}
+
+
 // Public functions.
 void WorldAtmosphereTests_Run(TestRun* run)
 {
@@ -489,6 +1006,15 @@ void WorldAtmosphereTests_Run(TestRun* run)
         { "sky_view_is_dense_near_the_horizon", SkyViewIsDenseNearTheHorizon },
         { "sky_view_azimuth_is_the_lights", SkyViewAzimuthIsTheLights },
         { "sky_view_uv_picks_the_half", SkyViewUvPicksTheHalf },
+        { "haze_follows_the_environment", HazeFollowsTheEnvironment },
+        { "volume_slices_round_trip", VolumeSlicesRoundTrip },
+        { "volume_texture_layout", VolumeTextureLayout },
+        { "ground_haze_depth_is_the_integral", GroundHazeDepthIsTheIntegral },
+        { "ground_haze_distance_inverts_the_depth", GroundHazeDistanceInvertsTheDepth },
+        { "ground_haze_follows_the_curved_planet", GroundHazeFollowsTheCurvedPlanet },
+        { "light_stands_lower_over_far_ground", LightStandsLowerOverFarGround },
+        { "light_pollution_fills_the_low_air_nearby", LightPollutionFillsTheLowAirNearby },
+        { "light_pollution_radiance_is_the_towns_at_night", LightPollutionRadianceIsTheTownsAtNight },
     };
     TestRun_RunSuite(run, "WorldAtmosphere", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

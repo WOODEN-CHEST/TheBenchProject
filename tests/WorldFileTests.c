@@ -1545,6 +1545,10 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
             TEST_CHECK(run, (Environment->HazeHeight == 1200.0f) && (Environment->SunGlow == 0.758f)
                 && (Environment->AirDensity == 1.0f) && (Environment->Ozone == 1.0f)
                 && (Environment->MultipleScattering == 1.0f) && (Environment->HazeAlbedo.r == 244));
+            // And the haze's (T35): the real air, no ground haze, the far ground at Y 0.
+            TEST_CHECK(run, (Environment->AerialDistanceScale == 1.0f) && (Environment->HazeStartDistance == 0.0f)
+                && (Environment->GroundHazeDensity == 0.0f) && (Environment->GroundHazeThickness == 20.0f)
+                && (Environment->HorizonGroundHeight == 0.0f) && (Environment->FogStrength == 1.0f));
             // The animation examples (T29): four placeholder figures, each animator playing a clip of its own; the short
             // one waves in a loop its library does not give the clip (the placement's loop override).
             size_t AnimatorCount = 0U;

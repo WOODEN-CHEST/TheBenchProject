@@ -87,6 +87,9 @@ typedef struct AnimationGraphStruct AnimationGraph;
 /** @brief The draw distance of WorldModelSettings_CreateDefault, in metres: what a model component's own draw distance
  *  starts at (its override is off by default). A world model's own draw distance defaults to its last LOD's. */
 #define WORLD_MODEL_DEFAULT_DRAW_DISTANCE 600.0f
+/** @brief The largest haze multiplier a world model or a placement may give (T35; render.haze, the components' haze):
+ *  far beyond it every surface is the sky already. Terrain and model instances take the same bound. */
+#define WORLD_MODEL_MAX_HAZE 1000.0f
 /** @brief The most animation libraries a world model may name (T29). */
 #define WORLD_MODEL_MAX_ANIMATION_LIBRARIES ((size_t)16)
 /** @brief The most sockets a world model may have (T30). */
@@ -139,6 +142,10 @@ typedef struct WorldModelSettingsStruct
     /** @brief Whether the player's draw_distance_scale leaves DrawDistance as it is (landmarks, gameplay-critical
      *  props). */
     bool IsDrawDistanceFixed;
+    /** @brief How hazy the model looks at a distance (T35): it multiplies the haze in front of it, 1 (the default) the
+     *  real air's, 0 as if the air were clear (a beacon, a sign that must read from far away). In
+     *  [0, WORLD_MODEL_MAX_HAZE]. */
+    float Haze;
 } WorldModelSettings;
 
 /**

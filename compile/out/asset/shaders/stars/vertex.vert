@@ -5,7 +5,8 @@
 // always covers exactly one pixel centre, so each star lights one pixel at a steady brightness (no flicker) and steps
 // from pixel to pixel as the sky turns, like everything else in the pixelated world. Near the horizon the air dims and
 // reddens them: since T15 by the atmosphere's transmittance table (relative to the zenith, where their brightness is
-// tuned), or by the air mass while the tables are off (the A/B, the fallback).
+// tuned), or by the air mass while the tables are off (the A/B, the fallback). Since T35 the ground haze dims them too
+// (common/haze: its transmittance toward each star).
 
 in vec3 vertexPosition;   // the star's unit direction in the star frame
 in vec2 vertexTexCoord;   // corner offset in pixels (+-0.5, +-0.5)
@@ -25,6 +26,7 @@ uniform float moonCosRadius;     // cosine of the disc's angular radius; above 1
 flat out vec3 fragRadiance;
 
 #include "common/atmosphere"
+#include "common/haze"
 #include "common/night_sky"
 
 // Stars fade out within this many magnitudes of the limit, so at dusk the brightest appear first.
@@ -90,7 +92,8 @@ void main()
     // One luminance per magnitude whatever the colour: the colour only sets the hue.
     vec3 color = pow(max(vertexColor.rgb, vec3(0.0)), vec3(2.2));
     color /= max(dot(color, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
-    fragRadiance = color*extinctionTint*flux*radianceScale*visibility;
+    fragRadiance = color*extinctionTint*flux*radianceScale*visibility
+        *hazeGroundTransmittance(direction, ATMOSPHERE_SKY_DISTANCE);
 
     // A point at infinity (w = 0, so the camera's position does not matter), just inside the far plane, widened by the
     // corner offset to exactly one pixel.

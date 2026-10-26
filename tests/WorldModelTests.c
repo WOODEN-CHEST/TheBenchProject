@@ -126,7 +126,8 @@ static bool AreSettingsEqual(const WorldModelSettings* a, const WorldModelSettin
 {
     return (a->HasOutline == b->HasOutline) && (a->OmitsPixelation == b->OmitsPixelation)
         && (a->ShadowTier == b->ShadowTier) && (a->CastsShadows == b->CastsShadows)
-        && (a->DrawDistance == b->DrawDistance) && (a->IsDrawDistanceFixed == b->IsDrawDistanceFixed);
+        && (a->DrawDistance == b->DrawDistance) && (a->IsDrawDistanceFixed == b->IsDrawDistanceFixed)
+        && (a->Haze == b->Haze);
 }
 
 
@@ -153,6 +154,7 @@ static void AMinimalDefinitionGetsTheDefaults(TestRun* run)
             TEST_CHECK(run, Settings->HasOutline && !Settings->OmitsPixelation
                 && (Settings->ShadowTier == WorldShadowTier_Both) && Settings->CastsShadows);
             TEST_CHECK(run, (Settings->DrawDistance == 25.0f) && !Settings->IsDrawDistanceFixed);
+            TEST_CHECK(run, Settings->Haze == 1.0f); // the real air's haze
             TEST_CHECK(run, (WorldModel_GetLodFadeSeconds(Loaded) == WORLD_MODEL_DEFAULT_LOD_FADE_SECONDS)
                 && (WorldModel_GetLodHysteresis(Loaded) == WORLD_MODEL_DEFAULT_LOD_HYSTERESIS));
             // The sphere around LOD 0's mesh bounds, in its mesh space, with its import transform to the object's.
@@ -188,7 +190,7 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
         "  \"lod_fade_seconds\": 0.5,\n"
         "  \"lod_hysteresis\": 0.1,\n"
         "  \"render\": { \"has_outline\": false, \"omit_pixelation\": true, \"shadow_tier\": \"near\", "
-        "\"casts_shadows\": false },\n"
+        "\"casts_shadows\": false, \"haze\": 0.25 },\n"
         "  \"variants\": [\n"
         "    { \"name\": \"dark_wood\", \"material_overrides\": [ { \"slot\": 0, \"albedo\": \"dark_albedo\", "
         "\"tint\": \"#d0c0b0\" } ] },\n"
@@ -216,7 +218,8 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
         const WorldModelSettings* Settings = WorldModel_GetSettings(Loaded);
         TEST_CHECK(run, !Settings->HasOutline && Settings->OmitsPixelation
             && (Settings->ShadowTier == WorldShadowTier_Near)
-            && !Settings->CastsShadows && (Settings->DrawDistance == 120.0f) && Settings->IsDrawDistanceFixed);
+            && !Settings->CastsShadows && (Settings->DrawDistance == 120.0f) && Settings->IsDrawDistanceFixed
+            && (Settings->Haze == 0.25f));
         TEST_CHECK(run, (WorldModel_GetLodFadeSeconds(Loaded) == 0.5f)
             && (WorldModel_GetLodHysteresis(Loaded) == 0.1f));
         Vector3 Center = WorldModel_GetBoundsCenter(Loaded);
@@ -302,6 +305,12 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
             "render.shadow_tier is \"middle\"; it must be \"both\", \"near\" or \"far\"" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": {\"has_outline\": "
             "\"yes\"}}", ErrorCode_InvalidAssetDefinition, "render.has_outline must be true or false" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": {\"haze\": -1}}",
+            ErrorCode_InvalidAssetDefinition, "render.haze is -1; it must be at least 0 and at most 1000" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": {\"haze\": 1001}}",
+            ErrorCode_InvalidAssetDefinition, "render.haze is 1001" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": {\"haze\": "
+            "\"none\"}}", ErrorCode_InvalidJSON, "render" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"variants\": {}}",
             ErrorCode_InvalidAssetDefinition, "variants must be an array" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"variants\": [{}]}",
@@ -683,6 +692,7 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
         [WorldModelSetting_DrawDistance] = "draw_distance",
         [WorldModelSetting_IsDrawDistanceFixed] = "is_draw_distance_fixed",
         [WorldModelSetting_LodDistances] = "lod_distances",
+        [WorldModelSetting_Haze] = "haze",
     };
     const PropertyTable* Table = WorldModelComponent_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(Table));
@@ -752,7 +762,7 @@ static void TheFlagsChooseBetweenTheWorldModelAndThePlacement(TestRun* run)
         WorldModelSettings Asset =
         {
             .HasOutline = false, .OmitsPixelation = false, .ShadowTier = WorldShadowTier_Far, .CastsShadows = false,
-            .DrawDistance = 80.0f, .IsDrawDistanceFixed = true
+            .DrawDistance = 80.0f, .IsDrawDistanceFixed = true, .Haze = 0.5f
         };
         // The placement's own values, all different from the asset's; their flags stay off for now.
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasOutline(Placement, true));
@@ -761,6 +771,7 @@ static void TheFlagsChooseBetweenTheWorldModelAndThePlacement(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetCastsShadows(Placement, true));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistance(Placement, 30.0f));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsDrawDistanceFixed(Placement, false));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHaze(Placement, 0.0f));
 
         WorldModelSettings Resolved = WorldModelComponent_ResolveSettings(Placement, &Asset);
         TEST_CHECK(run, AreSettingsEqual(&Resolved, &Asset));
@@ -778,6 +789,7 @@ static void TheFlagsChooseBetweenTheWorldModelAndThePlacement(TestRun* run)
             TEST_CHECK(run, Resolved.DrawDistance
                 == ((Setting == (int)WorldModelSetting_DrawDistance) ? 30.0f : 80.0f));
             TEST_CHECK(run, Resolved.IsDrawDistanceFixed == (Setting != (int)WorldModelSetting_IsDrawDistanceFixed));
+            TEST_CHECK(run, Resolved.Haze == ((Setting == (int)WorldModelSetting_Haze) ? 0.0f : 0.5f));
             TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Placement, (WorldModelSetting)Setting, false));
         }
 
@@ -798,7 +810,13 @@ static void TheFlagsChooseBetweenTheWorldModelAndThePlacement(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistanceMultiplier(Placement, 1e10f));
         TEST_CHECK(run, isinf(WorldModelComponent_ResolveSettings(Placement, &Asset).DrawDistance));
 
-        // The rules: distances and multipliers above 0 and finite, variant names of at most 128 bytes.
+        // The rules: distances and multipliers above 0 and finite, the haze in [0, 1000], variant names of at most 128
+        // bytes.
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetHaze(Placement, -0.5f), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetHaze(Placement, 1001.0f), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetHaze(Placement, NAN), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK(run, WorldModelComponent_GetHaze(Placement) == 0.0f);
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHaze(Placement, 1000.0f));
         TEST_CHECK_ERROR(run, WorldModelComponent_SetDrawDistance(Placement, 0.0f), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldModelComponent_SetDrawDistance(Placement, NAN), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldModelComponent_SetDrawDistanceMultiplier(Placement, -1.0f),
@@ -843,7 +861,7 @@ static void TheComponentStartsAtItsDefaults(TestRun* run)
             && WorldModelComponent_CastsShadows(Placement)
             && (WorldModelComponent_GetDrawDistance(Placement) == WORLD_MODEL_DEFAULT_DRAW_DISTANCE)
             && (WorldModelComponent_GetDrawDistanceMultiplier(Placement) == 1.0f)
-            && !WorldModelComponent_IsDrawDistanceFixed(Placement));
+            && !WorldModelComponent_IsDrawDistanceFixed(Placement) && (WorldModelComponent_GetHaze(Placement) == 1.0f));
         // No LOD distances of its own, a LOD multiplier of 1, the LOD chosen by distance (forced LOD 0 kept).
         size_t LodDistanceCount = 1U;
         TEST_CHECK(run, (WorldModelComponent_GetLodDistances(Placement, &LodDistanceCount) == NULL)
@@ -1130,6 +1148,9 @@ static void TheInstancesComponentResolvesLikeAModel(TestRun* run)
             TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetIsLodForced(Instances, Bits[3]));
             TEST_CHECK_SUCCESS(run, WorldModelComponent_SetForcedLod(Placement, (uint32_t)(Seed % 4U)));
             TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetForcedLod(Instances, (uint32_t)(Seed % 4U)));
+            float Haze = (float)((Seed >> 12) % 9U) * 0.25f;
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHaze(Placement, Haze));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetHaze(Instances, Haze));
             for (int Setting = 0; Setting < (int)WorldModelSetting_Count; Setting++)
             {
                 if (Setting == (int)WorldModelSetting_OmitPixelation)

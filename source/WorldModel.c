@@ -81,7 +81,8 @@ WorldModelSettings WorldModelSettings_CreateDefault(void)
         .ShadowTier = WorldShadowTier_Both,
         .CastsShadows = true,
         .DrawDistance = WORLD_MODEL_DEFAULT_DRAW_DISTANCE,
-        .IsDrawDistanceFixed = false
+        .IsDrawDistanceFixed = false,
+        .Haze = 1.0f
     };
 }
 

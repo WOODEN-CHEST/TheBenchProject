@@ -111,6 +111,13 @@
     .Category = WORLD_SPRITE_CATEGORY_SPRITE, .DisplayName = u8"Crisp", \
     .Description = u8"Draws the sprite at full resolution over the pixelated image (cutout sprites)."
 
+#define WORLD_SPRITE_ROW_HAZE \
+    .Key = u8"haze", .Type = PropertyType_Float, .Default.FloatValue = 1.0f, \
+    .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_SPRITE_MAX_HAZE), .Flags = PROPERTY_FLAGS_SETTING, \
+    .Category = WORLD_SPRITE_CATEGORY_LIGHTING, .DisplayName = u8"Haze", \
+    .Description = u8"How hazy the sprite looks at a distance: it multiplies the haze in front of it, 1 the real air's, 0 " \
+        u8"as if the air were clear (a sign that must read from far away)."
+
 #define WORLD_SPRITE_ROW_DRAW_DISTANCE \
     .Key = u8"draw_distance", .Type = PropertyType_Float, .Default.FloatValue = WORLD_SPRITE_DEFAULT_DRAW_DISTANCE, \
     .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, \

@@ -23,7 +23,8 @@
  *
  * SETTINGS. The component names a WORLD MODEL (WorldModel.h) and overrides its settings exactly as the model component
  * does (WorldModelComponent.h), with the same rows, keys, wire ids and rules (source/WorldModelComponentInternal.h): the
- * variant, the outline, the shadow range, casting shadows, the draw distance and its multiplier and fixed flag, the LOD
+ * variant, the outline, the shadow range, casting shadows, the haze (T35), the draw distance and its multiplier and fixed
+ * flag, the LOD
  * distances and their multiplier, a forced LOD. Each override is an explicit flag, "overrides_" + the setting's key, next
  * to the placement's own value. Every copy shares them. Copies are never crisp: there is no omit_pixelation row, and
  * WorldModelSetting_OmitPixelation is refused.
@@ -34,7 +35,8 @@
  * Added with World_AddComponent(world, id, WorldComponentType_ModelInstances, &component); reach its fields with
  * WorldModelInstancesComponent_FromComponent. Its properties are the rows of its table ("model_instances_component"), in
  * this order: world_model, uses_variant, variant, overrides_has_outline, has_outline, overrides_shadow_tier, shadow_tier,
- * overrides_casts_shadows, casts_shadows, overrides_draw_distance, draw_distance, draw_distance_multiplier,
+ * overrides_casts_shadows, casts_shadows, overrides_haze, haze, overrides_draw_distance, draw_distance,
+ * draw_distance_multiplier,
  * overrides_is_draw_distance_fixed, is_draw_distance_fixed, overrides_lod_distances, lod_distances,
  * lod_distance_multiplier, is_lod_forced, forced_lod and instances. Every change advances the component's revision
  * (WorldComponent_GetRevision); a change of the instances also advances their own revision
@@ -77,6 +79,10 @@ typedef struct WorldModelInstancesComponentStruct
     bool _overridesCastsShadows;
     /** @brief This placement's "casts shadows" (default true). */
     bool _castsShadows;
+    /** @brief Whether _haze replaces the world model's (default false). */
+    bool _overridesHaze;
+    /** @brief This placement's haze multiplier, in [0, WORLD_MODEL_MAX_HAZE] (default 1: the real air's haze). */
+    float _haze;
     /** @brief Whether _drawDistance replaces the world model's draw distance (default false). */
     bool _overridesDrawDistance;
     /** @brief This placement's draw distance, in metres, above 0 (default WORLD_MODEL_DEFAULT_DRAW_DISTANCE). */
@@ -280,6 +286,26 @@ static inline bool WorldModelInstancesComponent_CastsShadows(const WorldModelIns
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  */
 Error WorldModelInstancesComponent_SetCastsShadows(WorldModelInstancesComponent* self, bool castsShadows);
+
+/**
+ * @brief Returns this placement's own haze multiplier (it applies while WorldModelSetting_Haze is overridden).
+ * @param self The component; must not be NULL.
+ * @returns The multiplier: 1 the real air's haze, 0 none.
+ */
+static inline float WorldModelInstancesComponent_GetHaze(const WorldModelInstancesComponent* self)
+{
+    return self->_haze;
+}
+
+/**
+ * @brief Sets this placement's own haze multiplier (it applies while WorldModelSetting_Haze is overridden): how hazy every
+ *        copy looks at a distance.
+ * @param self The component; must not be NULL.
+ * @param haze Finite, in [0, WORLD_MODEL_MAX_HAZE]: 1 the real air's haze, 0 as if the air were clear.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for a value outside the
+ *          range.
+ */
+Error WorldModelInstancesComponent_SetHaze(WorldModelInstancesComponent* self, float haze);
 
 /**
  * @brief Returns this placement's own draw distance (it applies while WorldModelSetting_DrawDistance is overridden).

@@ -495,10 +495,19 @@ static double GetConstValue(const GenericBuffer* text, const char* name)
     return (Constant != NULL) ? strtod(Constant + strlen(Opening), NULL) : NAN;
 }
 
-/* The atmosphere (T15): every shader that reads or builds its tables takes them from the one shared include, which
- * declares the air, the view height and the tables once, and whose constants are its C mirror's
- * (source/WorldAtmosphere.h): the planet, the air's scale height, the ozone layer, the tables' sizes and what counts as
- * vertical. */
+/* The value of "const int <name> = <value>;" in an expanded text, or -1 without one. */
+static long GetConstIntValue(const GenericBuffer* text, const char* name)
+{
+    char Opening[96];
+    snprintf(Opening, sizeof(Opening), "const int %s = ", name);
+    const char* Constant = (text->_count > 0U) ? strstr((const char*)text->_data, Opening) : NULL;
+    return (Constant != NULL) ? strtol(Constant + strlen(Opening), NULL, 10) : -1L;
+}
+
+/* The atmosphere (T15): every shader that reads or builds its tables (and since T35 the haze's volume) takes them from
+ * the one shared include, which declares the air, the view height and the tables once, and whose constants are its C
+ * mirror's (source/WorldAtmosphere.h): the planet, the air's scale height, the ozone layer, the tables' sizes, what
+ * counts as vertical, and the volume's layout, steps and values and light pollution's reach. */
 static void ShippedAtmosphereMatchesItsMirror(TestRun* run)
 {
     ShaderFixture Fixture;
@@ -508,8 +517,8 @@ static void ShippedAtmosphereMatchesItsMirror(TestRun* run)
     {
         const char* const Stages[] =
         {
-            "atmosphere/transmittance", "atmosphere/multiscatter", "atmosphere/skyview", "sky/fragment",
-            "stars/vertex", "pbr/fragment", "sprite/fragment", "terrain/fragment"
+            "atmosphere/transmittance", "atmosphere/multiscatter", "atmosphere/skyview", "atmosphere/volume",
+            "sky/fragment", "stars/vertex", "pbr/fragment", "sprite/fragment", "terrain/fragment", "postfx/fragment"
         };
         for (size_t Index = 0U; Index < (sizeof(Stages) / sizeof(Stages[0])); Index++)
         {
@@ -542,9 +551,39 @@ static void ShippedAtmosphereMatchesItsMirror(TestRun* run)
                 && (GetConstValue(&Fixture.Text, "ATMOSPHERE_SKY_VIEW_HALF_COUNT")
                     == (double)WORLD_ATMOSPHERE_SKY_VIEW_HALF_COUNT)
                 && (GetConstValue(&Fixture.Text, "ATMOSPHERE_VERTICAL_EPSILON") == WORLD_ATMOSPHERE_VERTICAL_EPSILON);
-            if (!TEST_CHECK(run, IsShared && IsTheMirrors))
+            bool IsTheVolumes =
+                (GetConstValue(&Fixture.Text, "ATMOSPHERE_VOLUME_SIZE") == (double)WORLD_ATMOSPHERE_VOLUME_SIZE)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_VOLUME_SLICE_COUNT")
+                    == (double)WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT)
+                && (CountOccurrences(&Fixture.Text, "const float ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE = "
+                    "ATMOSPHERE_VOLUME_SLICE_COUNT - 2.0;") == 1U)
+                && (WORLD_ATMOSPHERE_VOLUME_LAST_DISTANCE_SLICE == WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT - 2)
+                && (CountOccurrences(&Fixture.Text, "const float ATMOSPHERE_VOLUME_WIDTH = "
+                    "ATMOSPHERE_VOLUME_SIZE*ATMOSPHERE_VOLUME_SLICE_COUNT;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "const float ATMOSPHERE_VOLUME_HEIGHT = "
+                    "2.0*ATMOSPHERE_VOLUME_SIZE + 1.0;") == 1U)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_VOLUME_NEAREST") == WORLD_ATMOSPHERE_VOLUME_NEAREST)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_VOLUME_FARTHEST") == WORLD_ATMOSPHERE_VOLUME_FARTHEST)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_VOLUME_NEAR_DISTANCE")
+                    == WORLD_ATMOSPHERE_VOLUME_NEAR_DISTANCE)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_VOLUME_NEAR_STEPS") == WORLD_ATMOSPHERE_VOLUME_NEAR_STEPS)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_VOLUME_FAR_STEPS") == WORLD_ATMOSPHERE_VOLUME_FAR_STEPS)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_VOLUME_RAY_STEPS") == WORLD_ATMOSPHERE_VOLUME_RAY_STEPS)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_VOLUME_GROUND_HAZE_SUN")
+                    == (long)WorldAtmosphereVolumeValue_GroundHazeSun)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_VOLUME_GROUND_HAZE_MOON")
+                    == (long)WorldAtmosphereVolumeValue_GroundHazeMoon)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_VOLUME_GROUND_HAZE_AMBIENT")
+                    == (long)WorldAtmosphereVolumeValue_GroundHazeAmbient)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_LIGHT_POLLUTION_HEIGHT")
+                    == WORLD_ATMOSPHERE_LIGHT_POLLUTION_HEIGHT)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_LIGHT_POLLUTION_REACH")
+                    == WORLD_ATMOSPHERE_LIGHT_POLLUTION_REACH)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_SKY_DISTANCE") == WORLD_ATMOSPHERE_SKY_DISTANCE);
+            if (!TEST_CHECK(run, IsShared && IsTheMirrors && IsTheVolumes))
             {
-                printf("    in \"%s\" (shared %d, the mirror's %d)\n", Stages[Index], (int)IsShared, (int)IsTheMirrors);
+                printf("    in \"%s\" (shared %d, the mirror's %d, the volume's %d)\n", Stages[Index], (int)IsShared,
+                    (int)IsTheMirrors, (int)IsTheVolumes);
             }
         }
         // The table builders' definitions load (the renderer asks for them by these names).
@@ -552,7 +591,8 @@ static void ShippedAtmosphereMatchesItsMirror(TestRun* run)
         TEST_CHECK_SUCCESS(run, AssetManager_ReadDefinitions(Fixture.Manager, &FailedCount));
         TEST_CHECK(run, FailedCount == 0U);
         const unsigned char* const Names[] = { (const unsigned char*)u8"world_atmosphere_transmittance",
-            (const unsigned char*)u8"world_atmosphere_multiscatter", (const unsigned char*)u8"world_atmosphere_skyview" };
+            (const unsigned char*)u8"world_atmosphere_multiscatter", (const unsigned char*)u8"world_atmosphere_skyview",
+            (const unsigned char*)u8"world_atmosphere_volume" };
         for (size_t Index = 0U; Index < (sizeof(Names) / sizeof(Names[0])); Index++)
         {
             bool Exists = false;
@@ -563,6 +603,97 @@ static void ShippedAtmosphereMatchesItsMirror(TestRun* run)
     ShaderFixture_Deconstruct(run, &Fixture);
 }
 
+
+/* The haze (T35): every lit shader applies it once through the lighting include (an additive sprite takes its
+ * transmittance alone), the sky pass (the discs only where a ray misses the planet), the stars and the outlines take it
+ * from the same include, the fog is gone from all of them, the include's series limits and its scaled erfc's coefficients
+ * are its C mirror's (WorldAtmosphere.c), and the G-buffer's shaders encode an outlined surface's haze from the value the
+ * outline pass decodes it with, above its outline threshold. */
+static void ShippedShadersShareOneHaze(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        typedef struct HazeStageStruct
+        {
+            const char* Location;
+            const char* Use;
+            size_t UseCount;
+        } HazeStage;
+        const HazeStage Stages[] =
+        {
+            { "pbr/fragment", "color = ApplyAerialPerspective(color, fragPosition);", 1U },
+            { "terrain/fragment", "color = ApplyAerialPerspective(color, fragPosition);", 1U },
+            { "sprite/fragment", "color = ApplyAerialPerspective(color, fragPosition);", 1U },
+            { "sprite/fragment", "color *= AerialTransmittance(fragPosition);", 1U },
+            { "sky/fragment", "mistTransmittance = hazeGroundInFrontOfSky(uv, rayDir, toEnd,", 1U },
+            { "sky/fragment", "bool isBeyondAirShown = atmosphereTablesActive ? (toGround < 0.0) : (rayDir.y > -0.02);", 1U },
+            { "stars/vertex", "*hazeGroundTransmittance(direction, ATMOSPHERE_SKY_DISTANCE);", 1U },
+            { "postfx/fragment", "haze = hazeTransmittance(uv, direction, toPoint, multiplier);", 1U },
+        };
+        const char* const Gone[] = { "ApplyFog", "FogFactor", "fogSkyColor", "fogDensity", "skySunIntensity" };
+        for (size_t Index = 0U; Index < (sizeof(Stages) / sizeof(Stages[0])); Index++)
+        {
+            if (!ExpandShippedStage(run, &Fixture, Stages[Index].Location))
+            {
+                continue;
+            }
+            bool IsShared = BufferContains(&Fixture.SourceList, "\"common/haze\"")
+                && (CountOccurrences(&Fixture.Text, "uniform sampler2D atmosphereVolume;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "float hazeGroundDepth(") == 1U)
+                && (CountOccurrences(&Fixture.Text, "float hazeGroundDepthCurved(") == 1U)
+                // WorldAtmosphere_GetScaledErfc's coefficients, which the tests check against the C library's erfc.
+                && (CountOccurrences(&Fixture.Text, "return t*exp(-1.26551223 + t*(1.00002368 + t*(0.37409196 + "
+                    "t*(0.09678418 + t*(-0.18628806 + t*(0.27886807") == 1U)
+                && (CountOccurrences(&Fixture.Text, "+ t*(-1.13520398 + t*(1.48851587 + t*(-0.82215223 + "
+                    "t*0.17087277)))))))));") == 1U)
+                && (GetConstValue(&Fixture.Text, "HAZE_SERIES_LIMIT") == 1e-3)
+                && (GetConstValue(&Fixture.Text, "HAZE_SLOPE_LIMIT") == 1e-3)
+                && (GetConstValue(&Fixture.Text, "HAZE_LIGHT_MAX") == 65504.0);
+            bool IsUsed = CountOccurrences(&Fixture.Text, Stages[Index].Use) == Stages[Index].UseCount;
+            bool IsFogGone = true;
+            for (size_t Name = 0U; Name < (sizeof(Gone) / sizeof(Gone[0])); Name++)
+            {
+                IsFogGone = IsFogGone && !BufferContains(&Fixture.Text, Gone[Name]);
+            }
+            if (!TEST_CHECK(run, IsShared && IsUsed && IsFogGone))
+            {
+                printf("    in \"%s\" (shared %d, used %d, no fog %d)\n", Stages[Index].Location, (int)IsShared,
+                    (int)IsUsed, (int)IsFogGone);
+            }
+        }
+        // The lit shaders take a draw's multiplier once, from the lighting include.
+        const char* const Lit[] = { "pbr/fragment", "terrain/fragment", "sprite/fragment" };
+        for (size_t Index = 0U; Index < (sizeof(Lit) / sizeof(Lit[0])); Index++)
+        {
+            if (ExpandShippedStage(run, &Fixture, Lit[Index]))
+            {
+                TEST_CHECK(run, CountOccurrences(&Fixture.Text, "uniform float hazeMultiplier;") == 1U);
+            }
+        }
+        // The outlined surfaces' alpha: written from OUTLINE_HAZE_BASE, read back with the same, above OUTLINE_ON.
+        const char* const Encoders[] = { "normal/fragment", "normal_sprite/fragment" };
+        double Base = NAN;
+        if (ExpandShippedStage(run, &Fixture, "postfx/fragment"))
+        {
+            Base = GetConstValue(&Fixture.Text, "OUTLINE_HAZE_BASE");
+            TEST_CHECK(run, (Base > GetConstValue(&Fixture.Text, "OUTLINE_ON")) && (Base < 1.0));
+        }
+        for (size_t Index = 0U; Index < (sizeof(Encoders) / sizeof(Encoders[0])); Index++)
+        {
+            if (ExpandShippedStage(run, &Fixture, Encoders[Index]))
+            {
+                TEST_CHECK(run, (GetConstValue(&Fixture.Text, "OUTLINE_HAZE_BASE") == Base)
+                    && (CountOccurrences(&Fixture.Text, "uniform float hazeMultiplier;") == 1U)
+                    && (CountOccurrences(&Fixture.Text,
+                        "mix(OUTLINE_HAZE_BASE, 1.0, clamp(hazeMultiplier, 0.0, 1.0))") == 1U));
+            }
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
 
 /* Whether an expanded text's DITHER_BAYER holds the 16 values source/WorldVisibility.c mirrors in C, in its order (row
  * by row from the target's bottom row). */
@@ -804,6 +935,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "define_names_are_checked", DefineNamesAreChecked },
         { "shipped_sky_and_pbr_share_one_atmosphere", ShippedSkyAndPbrShareOneAtmosphere },
         { "shipped_atmosphere_matches_its_mirror", ShippedAtmosphereMatchesItsMirror },
+        { "shipped_shaders_share_one_haze", ShippedShadersShareOneHaze },
         { "shipped_geometry_shaders_share_one_dither", ShippedGeometryShadersShareOneDither },
         { "shipped_skinned_stages_share_one_skinning", ShippedSkinnedStagesShareOneSkinning },
         { "shipped_instanced_twins_share_their_stages", ShippedInstancedTwinsShareTheirStages },

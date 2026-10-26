@@ -143,6 +143,8 @@ typedef struct WorldRenderModelStruct
     bool OmitsPixelation;
     WorldShadowTier ShadowTier;
     bool CastsShadows;
+    /** @brief The haze multiplier in effect (T35): the lit passes multiply the haze in front of the model by it. */
+    float Haze;
     /** @brief The draw distance in effect, in metres, times the component's multiplier (>= 0: +infinity never fades, 0
      *  is never drawn), and whether the player's draw_distance_scale leaves it as it is (this frame). WorldVisibility
      *  applies the scale and the zoom. */
@@ -214,6 +216,8 @@ typedef struct WorldRenderSpriteStruct
     /** @brief Whether it is drawn crisp: omit_pixelation on a cutout sprite that is not a decal (the crisp overlay
      *  composites opaque surfaces only, so the others stay pixelated). */
     bool OmitsPixelation;
+    /** @brief The haze multiplier in effect (T35): the lit pass multiplies the haze in front of the sprite by it. */
+    float Haze;
     /** @brief The draw distance in effect, in metres, times the component's multiplier (>= 0: +infinity never fades, 0
      *  is never drawn), and whether the player's draw_distance_scale leaves it as it is (this frame). WorldVisibility
      *  applies the scale and the zoom. */
@@ -277,6 +281,8 @@ typedef struct WorldRenderTerrainChunkStruct
     bool HasOutline;
     WorldShadowTier ShadowTier;
     bool CastsShadows;
+    /** @brief The haze multiplier in effect (T35). */
+    float Haze;
     /** @brief The draw distance in effect, in metres, times the placement's multiplier (>= 0: +infinity never fades),
      *  and whether the player's draw_distance_scale leaves it as it is. WorldVisibility applies the scale and the zoom. */
     float DrawDistance;
@@ -333,10 +339,12 @@ typedef struct WorldRenderInstancesStruct
     /** @brief Whether the passes draw the copies this frame: the world model resolved, the object (effectively) enabled
      *  and visible. */
     bool IsDrawn;
-    /** @brief The settings in effect (this frame; WorldModelInstancesComponent_ResolveSettings, never crisp). */
+    /** @brief The settings in effect (this frame; WorldModelInstancesComponent_ResolveSettings, never crisp): the
+     *  haze multiplier (T35) among them, which the lit pass takes for every cell of the entry. */
     bool HasOutline;
     WorldShadowTier ShadowTier;
     bool CastsShadows;
+    float Haze;
     float DrawDistance;
     bool IsDrawDistanceFixed;
     /** @brief The object's final tint colour (its alpha is the object's opacity: every copy's is multiplied by it). */

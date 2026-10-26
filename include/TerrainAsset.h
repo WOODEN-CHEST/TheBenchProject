@@ -73,6 +73,9 @@ typedef struct TerrainRenderSettingsStruct
     float DrawDistance;
     /** @brief Whether the player's draw_distance_scale leaves the draw distance as it is (default true). */
     bool IsDrawDistanceFixed;
+    /** @brief How hazy it looks at a distance (T35): it multiplies the haze in front of it, 1 (the default) the real
+     *  air's, 0 as if the air were clear. In [0, WORLD_MODEL_MAX_HAZE]. */
+    float Haze;
 } TerrainRenderSettings;
 
 /**

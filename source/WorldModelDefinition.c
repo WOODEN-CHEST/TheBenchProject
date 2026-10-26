@@ -128,7 +128,7 @@ static const unsigned char* const RootKeys[] =
 static const unsigned char* const LodKeys[] = { u8"model", u8"max_distance" };
 static const unsigned char* const RenderKeys[] =
 {
-    u8"has_outline", u8"omit_pixelation", u8"shadow_tier", u8"casts_shadows"
+    u8"has_outline", u8"omit_pixelation", u8"shadow_tier", u8"casts_shadows", u8"haze"
 };
 static const unsigned char* const VariantKeys[] = { u8"name", u8"material_overrides" };
 static const unsigned char* const OverrideKeys[] =
@@ -449,7 +449,7 @@ static Error ParseShadowTier(const ParseContext* context, JSONCompound* render, 
     return Result;
 }
 
-/* "render": the default render settings of the placements (outline, crisp, shadow tier, casts shadows). */
+/* "render": the default render settings of the placements (outline, crisp, shadow tier, casts shadows, haze). */
 static Error ParseRender(const ParseContext* context, JSONCompound* root)
 {
     JSONCompound* Render = NULL;
@@ -482,6 +482,16 @@ static Error ParseRender(const ParseContext* context, JSONCompound* root)
     if (Result.Code == ErrorCode_Success)
     {
         Result = ParseShadowTier(context, Render, &Settings->ShadowTier);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadFloat(context, Render, (const unsigned char*)u8"haze", Settings->Haze, "render", &Settings->Haze,
+            NULL);
+    }
+    if ((Result.Code == ErrorCode_Success) && !((Settings->Haze >= 0.0f) && (Settings->Haze <= WORLD_MODEL_MAX_HAZE)))
+    {
+        Result = Fail(context, "render.haze is %g; it must be at least 0 and at most %g (1 the real air's haze, 0 none).",
+            (double)Settings->Haze, (double)WORLD_MODEL_MAX_HAZE);
     }
     return Result;
 }
