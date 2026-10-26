@@ -39,6 +39,14 @@
 #define DEFAULT_LIGHT_POLLUTION 0.35f
 /** Default ambient skylight intensity multiplier. */
 #define DEFAULT_AMBIENT_INTENSITY 1.0f
+/** ===== NIGHT DARKNESS KNOB =====
+ *  Default colour (sRGB) and strength (linear) of the moonless night's own light on surfaces: a faint blue, linear
+ *  (0.0040, 0.0050, 0.0110), the dark-site floor of the night's ambient before T36. Pairs with the exposure's maximum
+ *  (WORLD_SKY_LIGHT_ADAPT_MAX_EXPOSURE): the night's brightness on screen is about their product. */
+#define DEFAULT_NIGHT_LIGHT_RED 161U
+#define DEFAULT_NIGHT_LIGHT_GREEN 178U
+#define DEFAULT_NIGHT_LIGHT_BLUE 255U
+#define DEFAULT_NIGHT_LIGHT_INTENSITY 0.011f
 /** Default fog strength multiplier: the physical haze. */
 #define DEFAULT_FOG_STRENGTH 1.0f
 /** Default aerial distance scale: distances as they are. */
@@ -94,12 +102,10 @@
  *  jumps. A ratio rather than a difference: the sun's twilight light falls off steeply at its end, where the moon
  *  takes over, and a band over the ratio's logarithm keeps the fade from being squeezed into a few game seconds. */
 #define SHADOW_LIGHT_HANDOVER_RATIO 4.0f
-/** A shadow light dimmer than this luminance (relative: the sun at noon is about 0.9, the default full moon about 0.014)
- *  casts no shadows, fading in to full at twice it: a thin crescent's shadow could not show against the night's ambient
- *  light, and skipping it saves the cascade pass. */
+/** A shadow light dimmer than this luminance (relative: the sun at noon is about 0.9, the default full moon high up
+ *  about 0.025) casts no shadows, fading in to full at twice it: a thin crescent's shadow could not show against the
+ *  night's ambient light, and skipping it saves the cascade pass. */
 #define SHADOW_LIGHT_MIN_LUMINANCE 0.0006f
-/** sRGB gamma, for weighing the lights by the luminance of their linear colour. */
-#define ENVIRONMENT_SRGB_GAMMA 2.2f
 
 /* The inspector's categories. */
 #define CATEGORY_TIME ((const unsigned char*)u8"Date and time")
@@ -192,7 +198,7 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .Default.FloatValue = DEFAULT_SUN_GLOW, .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_SUN_GLOW),
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Sun glow",
         .Description = u8"How strongly the haze scatters light forward, 0 to 0.99: how large and bright the glow around "
-            u8"the sun and the moon is (0 none, 0.99 a tight, bright halo).",
+            u8"the sun and the moon is (0 none, 0.99 a tight, bright halo). It shapes the sky's light on surfaces too.",
         .SinceVersion = 1U
     },
     {
@@ -219,26 +225,32 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY,
         .DisplayName = u8"Multiple scattering",
         .Description = u8"How much of the light the air scatters more than once is drawn: 1 all of it (a brighter, paler "
-            u8"horizon, a fuller twilight), 0 single scattering only, for comparing.",
+            u8"horizon, a fuller twilight, more of the sky's light on surfaces), 0 single scattering only, for comparing.",
         .SinceVersion = 1U
     },
     {
         .Key = u8"sky_ground_albedo", .WireId = 5U, .Type = PropertyType_Color,
         PROPERTY_MEMBER(WorldEnvironment, SkyGroundAlbedo), .Default.ColorValue = { 90, 90, 90, 255 },
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Ground albedo",
-        .Description = u8"The ground's colour as the atmosphere sees it: the far ground below the horizon shows it, and "
-            u8"the light it reflects up feeds the sky's multiple scattering.",
+        .Description = u8"The ground's colour as the atmosphere sees it: the far ground below the horizon shows it, the "
+            u8"light it reflects up feeds the sky's multiple scattering, and it lights every surface from below (the "
+            u8"ground's bounce).",
         .SinceVersion = 1U
     },
     {
         .Key = u8"sky_tint", .WireId = 6U, .Type = PropertyType_Color, PROPERTY_MEMBER(WorldEnvironment, SkyTint),
         .Default.ColorValue = { 255, 255, 255, 255 }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY,
-        .DisplayName = u8"Sky tint", .Description = u8"Multiplies the sky's colour, for alien skies.", .SinceVersion = 1U
+        .DisplayName = u8"Sky tint",
+        .Description = u8"Multiplies the sky's colour, for alien skies: the sky, the haze and the sky's light on surfaces.",
+        .SinceVersion = 1U
     },
     {
         .Key = u8"sun_color", .WireId = 7U, .Type = PropertyType_Color, PROPERTY_MEMBER(WorldEnvironment, SunColor),
-        .Default.ColorValue = { 255, 244, 214, 255 }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY,
-        .DisplayName = u8"Sun colour", .Description = u8"The colour of the sun's disc and light.", .SinceVersion = 1U
+        .Default.ColorValue = { 255, 255, 255, 255 }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY,
+        .DisplayName = u8"Sun colour",
+        .Description = u8"The sun's colour above the air: its light, its disc and the light it gives the sky and the haze. "
+            u8"The air reddens it toward the horizon by itself, so white is a sun like ours.",
+        .SinceVersion = 1U
     },
     {
         .Key = u8"sun_intensity", .WireId = 8U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, SunIntensity),
@@ -377,8 +389,9 @@ static const PropertyDescriptor EnvironmentProperties[] =
         PROPERTY_MEMBER(WorldEnvironment, MoonIntensity), .Default.FloatValue = WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY,
         .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MOON,
         .DisplayName = u8"Moonlight",
-        .Description = u8"The light of a full moon high in the sky, relative to the sun's; the phase and the moon's height "
-            u8"scale it, and the moonlit sky follows it. 0 gives a moon that lights nothing.",
+        .Description = u8"The light of a full moon above the air, relative to the sun's; the phase scales it, the air dims "
+            u8"it toward the horizon, and the moonlit sky is lit by all of it. It fades out by day. 0 gives a moon that "
+            u8"lights nothing.",
         .SinceVersion = 1U
     },
     {
@@ -400,14 +413,36 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .Key = u8"ambient_skylight_color", .WireId = 13U, .Type = PropertyType_Color,
         PROPERTY_MEMBER(WorldEnvironment, AmbientSkylightColor), .Default.ColorValue = { 255, 255, 255, 255 },
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_AMBIENT, .DisplayName = u8"Ambient tint",
-        .Description = u8"Tints the ambient light, whose hue follows the sky; white leaves it as it is.",
+        .Description = u8"Tints the sky's light on surfaces (the ambient: the sky's own light from above, the ground's from "
+            u8"below); white leaves it as it is.",
         .SinceVersion = 1U
     },
     {
         .Key = u8"ambient_skylight_intensity", .WireId = 14U, .Type = PropertyType_Float,
         PROPERTY_MEMBER(WorldEnvironment, AmbientSkylightIntensity), .Default.FloatValue = DEFAULT_AMBIENT_INTENSITY,
         .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_AMBIENT,
-        .DisplayName = u8"Ambient intensity", .Description = u8"Multiplies the ambient light.", .SinceVersion = 1U
+        .DisplayName = u8"Ambient intensity",
+        .Description = u8"Multiplies the sky's light on surfaces: 1 is the sky's own, 0 leaves shade lit only by the "
+            u8"night's light and lamps.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"night_light_color", .WireId = 61U, .Type = PropertyType_Color,
+        PROPERTY_MEMBER(WorldEnvironment, NightLightColor),
+        .Default.ColorValue = { DEFAULT_NIGHT_LIGHT_RED, DEFAULT_NIGHT_LIGHT_GREEN, DEFAULT_NIGHT_LIGHT_BLUE, 255 },
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_AMBIENT, .DisplayName = u8"Night light colour",
+        .Description = u8"The colour of the moonless night's own light on surfaces: starlight and the air's faint glow, "
+            u8"raised for play as the moonlight is.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"night_light_intensity", .WireId = 62U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, NightLightIntensity), .Default.FloatValue = DEFAULT_NIGHT_LIGHT_INTENSITY,
+        .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_AMBIENT,
+        .DisplayName = u8"Night light",
+        .Description = u8"How bright the moonless night's own light is (its colour times this, linear): 0 gives a "
+            u8"pitch-black moonless night outside the moon's and the town's light.",
+        .SinceVersion = 1U
     },
     {
         .Key = u8"fog_color", .WireId = 15U, .Type = PropertyType_Color, PROPERTY_MEMBER(WorldEnvironment, FogColor),
@@ -641,14 +676,6 @@ static float SmoothStep(float edge0, float edge1, float value)
     return T * T * (3.0f - 2.0f * T);
 }
 
-/* The relative luminance of a colour's linear (sRGB-decoded) value: how bright a light of that colour looks. */
-static float GetLinearLuminance(Color color)
-{
-    return 0.2126f * powf((float)color.r / 255.0f, ENVIRONMENT_SRGB_GAMMA)
-        + 0.7152f * powf((float)color.g / 255.0f, ENVIRONMENT_SRGB_GAMMA)
-        + 0.0722f * powf((float)color.b / 255.0f, ENVIRONMENT_SRGB_GAMMA);
-}
-
 /* The sky's daily angle: 0 at dawn, pi/2 at noon (the sun's angle along its path). */
 static float GetDayAngle(const WorldEnvironment* self)
 {
@@ -731,47 +758,14 @@ static float GetIlluminationFor(Vector3 sunDirection, Vector3 moonDirection)
 }
 
 /* The moonlight factor (see WorldEnvironment_GetMoonlightFactor) from values the caller already has. */
-static float GetMoonlightFactorFor(const WorldEnvironment* self, float moonElevation, float illumination, float daylight)
+static float GetMoonlightFactorFor(const WorldEnvironment* self, float illumination, float daylight)
 {
     if (!self->IsMoonEnabled)
     {
         return 0.0f;
     }
-    float Factor = WorldEnvironment_GetMoonBrightness(illumination)
-        * WorldEnvironment_GetMoonlightForElevation(moonElevation) * (1.0f - daylight);
+    float Factor = WorldEnvironment_GetMoonBrightness(illumination) * (1.0f - daylight);
     return fminf(fmaxf(Factor, 0.0f), 1.0f);
-}
-
-/* Picks the light that casts the shadows (see WorldEnvironment_GetSkyLights) into @p lights, whose light values are
- * filled in. */
-static void ChooseShadowLight(const WorldEnvironment* self, WorldSkyLights* lights)
-{
-    lights->ShadowLight = WorldShadowLight_None;
-    lights->ShadowDirection = lights->SunDirection;
-    lights->ShadowFade = 0.0f;
-
-    float SunLuminance = lights->SunIntensity * GetLinearLuminance(self->SunColor);
-    float MoonLuminance = lights->MoonIntensity * GetLinearLuminance(self->MoonColor);
-    float Brighter = fmaxf(SunLuminance, MoonLuminance);
-    float Dimmer = fminf(SunLuminance, MoonLuminance);
-    if (!(Brighter > 0.0f))
-    {
-        return; // both dark (or broken values)
-    }
-    bool IsSunBrighter = SunLuminance >= MoonLuminance;
-    Vector3 Direction = IsSunBrighter ? lights->SunDirection : lights->MoonDirection;
-    float Rise = SmoothStep(SHADOW_LIGHT_MIN_ELEVATION, SHADOW_LIGHT_FULL_ELEVATION, Direction.y);
-    float HandOver = (Dimmer > 0.0f)
-        ? SmoothStep(0.0f, logf(SHADOW_LIGHT_HANDOVER_RATIO), logf(Brighter / Dimmer)) : 1.0f;
-    float Strength = SmoothStep(SHADOW_LIGHT_MIN_LUMINANCE, 2.0f * SHADOW_LIGHT_MIN_LUMINANCE, Brighter);
-    float Fade = Rise * HandOver * Strength;
-    if (!(Fade > 0.0f))
-    {
-        return;
-    }
-    lights->ShadowLight = IsSunBrighter ? WorldShadowLight_Sun : WorldShadowLight_Moon;
-    lights->ShadowDirection = Direction;
-    lights->ShadowFade = Fade;
 }
 
 
@@ -926,8 +920,7 @@ float WorldEnvironment_GetMoonlightFactor(const WorldEnvironment* self)
 {
     Vector3 Sun = WorldEnvironment_GetSunDirection(self);
     Vector3 Moon = WorldEnvironment_GetMoonDirection(self);
-    return GetMoonlightFactorFor(self, Moon.y, GetIlluminationFor(Sun, Moon),
-        WorldEnvironment_GetDaylightForElevation(Sun.y));
+    return GetMoonlightFactorFor(self, GetIlluminationFor(Sun, Moon), WorldEnvironment_GetDaylightForElevation(Sun.y));
 }
 
 void WorldEnvironment_GetSkyLights(const WorldEnvironment* self, WorldSkyLights* outLights)
@@ -935,14 +928,40 @@ void WorldEnvironment_GetSkyLights(const WorldEnvironment* self, WorldSkyLights*
     WorldSkyLights Lights = { 0 };
     Lights.SunDirection = WorldEnvironment_GetSunDirection(self);
     Lights.Daylight = WorldEnvironment_GetDaylightForElevation(Lights.SunDirection.y);
-    Lights.SunIntensity = fmaxf(self->SunIntensity, 0.0f) * Lights.Daylight; // fmaxf drops a NaN
+    Lights.SunIntensity = fmaxf(self->SunIntensity, 0.0f); // fmaxf drops a NaN
     Lights.MoonPhase = WorldEnvironment_GetMoonPhase(self);
     Lights.MoonDirection = GetMoonDirectionForPhase(self, Lights.MoonPhase);
     Lights.MoonIllumination = GetIlluminationFor(Lights.SunDirection, Lights.MoonDirection);
     Lights.MoonIntensity = fmaxf(self->MoonIntensity, 0.0f)
-        * GetMoonlightFactorFor(self, Lights.MoonDirection.y, Lights.MoonIllumination, Lights.Daylight);
-    ChooseShadowLight(self, &Lights);
+        * GetMoonlightFactorFor(self, Lights.MoonIllumination, Lights.Daylight);
     *outLights = Lights;
+}
+
+WorldShadowLightChoice WorldEnvironment_ChooseShadowLight(Vector3 sunDirection, float sunLuminance, Vector3 moonDirection,
+    float moonLuminance)
+{
+    WorldShadowLightChoice Choice = { .Light = WorldShadowLight_None, .Direction = sunDirection, .Fade = 0.0f };
+    float Brighter = fmaxf(sunLuminance, moonLuminance);
+    float Dimmer = fminf(sunLuminance, moonLuminance);
+    if (!(Brighter > 0.0f))
+    {
+        return Choice; // both dark (or broken values)
+    }
+    bool IsSunBrighter = sunLuminance >= moonLuminance;
+    Vector3 Direction = IsSunBrighter ? sunDirection : moonDirection;
+    float Rise = SmoothStep(SHADOW_LIGHT_MIN_ELEVATION, SHADOW_LIGHT_FULL_ELEVATION, Direction.y);
+    float HandOver = (Dimmer > 0.0f)
+        ? SmoothStep(0.0f, logf(SHADOW_LIGHT_HANDOVER_RATIO), logf(Brighter / Dimmer)) : 1.0f;
+    float Strength = SmoothStep(SHADOW_LIGHT_MIN_LUMINANCE, 2.0f * SHADOW_LIGHT_MIN_LUMINANCE, Brighter);
+    float Fade = Rise * HandOver * Strength;
+    if (!(Fade > 0.0f))
+    {
+        return Choice;
+    }
+    Choice.Light = IsSunBrighter ? WorldShadowLight_Sun : WorldShadowLight_Moon;
+    Choice.Direction = Direction;
+    Choice.Fade = Fade;
+    return Choice;
 }
 
 Color WorldEnvironment_ComputeSkyColor(const WorldEnvironment* self)

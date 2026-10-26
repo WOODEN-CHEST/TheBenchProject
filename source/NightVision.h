@@ -19,14 +19,17 @@
  * day-for-night filter, and Krawczyk's own tint, (1.05, 0.97, 1.27), reads violet). The grey keeps the pixel's
  * luminance, so the night's tuned brightness does not change.
  *
- * THE GAME'S LIGHT. The game compresses light levels: its noon (a scene luminance of about 0.74 in its own units)
- * stands for about 5000 cd/m^2, its moonless night (about 0.006 with the default light pollution) for about
- * 0.001 cd/m^2: a range of about 10^2 in the game for 10^7 in the world. A game luminance Y is read as the real
- * luminance 5000 x (Y / 0.74)^g cd/m^2, the power g (about 3.2) set by those two anchors. Hunt's sensitivity then
- * becomes sigma = 1 / (1 + (Y / Yh)^g), half at Yh (about 0.019): the game's level of 0.04 cd/m^2.
+ * THE GAME'S LIGHT. The game compresses light levels: its noon (a scene luminance of about 0.40 in its own units, T36's
+ * light scale) stands for about 5000 cd/m^2, its moonless night (about 0.0054 with the default light pollution) for
+ * about 0.001 cd/m^2: a range of about 10^2 in the game for 10^7 in the world. A game luminance Y is read as the real
+ * luminance 5000 x (Y / 0.40)^g cd/m^2, the power g (about 3.6) set by those two anchors. Hunt's sensitivity then
+ * becomes sigma = 1 / (1 + (Y / Yh)^g), half at Yh (about 0.015): the game's level of 0.04 cd/m^2.
  *
  * WHICH LUMINANCE. The larger of the pixel's own and the field luminance: the light the sky (the sun, the moon, the
- * sky's glow, light pollution) gives the whole scene, the renderer's base scene luminance. By day the field is bright
+ * sky's glow, light pollution) gives the whole scene. Since T36 the daylight in it (the sun's and the sky's light from
+ * the sun) is on the real scale, linearly, while the night's lights (the moon, the moonless night's own light, the town's)
+ * are raised for play and are read through the anchors' power law: NightVision_GetFieldLuminance adds their real
+ * luminances, so the twilight keeps its colours until the sun is a few degrees down, as it does for the eye. By day the field is bright
  * and every pixel is seen by the cones, however dark (a shadow at noon is still tens of cd/m^2). At night each pixel
  * is seen by its own light: a lamp's bright pool keeps its colour, the dim sky beyond it greys. Lamps do not raise the
  * field (they do lower the exposure): the rods adapt locally, each patch of retina to its own part of the view, so a
@@ -38,15 +41,21 @@
 
 
 // Macros.
-/** @brief The game's noon: the scene luminance (in the game's linear light units; what eye adaptation starts from) of a
- *  clear noon with the default environment. */
-#define NIGHT_VISION_NOON_LUMINANCE 0.74
+/** @brief The game's noon: the scene luminance (in the game's linear light units; what eye adaptation starts from:
+ *  WorldSkyLight_GetSceneLuminance at a standing player's eyes) of a clear noon with the default environment
+ *  (tests/WorldSkyLightTests.c checks it). */
+#define NIGHT_VISION_NOON_LUMINANCE 0.40
 /** @brief The real luminance a clear noon stands for, in cd/m^2 (a sunlit scene). */
 #define NIGHT_VISION_NOON_CANDELAS 5000.0
-/** @brief The game's moonless night: the scene luminance of a new-moon night with the default light pollution. */
-#define NIGHT_VISION_NIGHT_LUMINANCE 0.006
+/** @brief The game's moonless night: the scene luminance of a new-moon midnight with the default light pollution (the
+ *  night's own light and the town's; tests/WorldSkyLightTests.c checks it). */
+#define NIGHT_VISION_NIGHT_LUMINANCE 0.0054
 /** @brief The real luminance a moonless night stands for, in cd/m^2 (starlight and a little skyglow). */
 #define NIGHT_VISION_NIGHT_CANDELAS 0.001
+/** @brief The anchors on the light scale before T36 (the renderer's A/B of the old light).
+ *  TODO: remove once the owner approves T36's light. */
+#define NIGHT_VISION_LEGACY_NOON_LUMINANCE 0.74
+#define NIGHT_VISION_LEGACY_NIGHT_LUMINANCE 0.006
 /** @brief Hunt's half point: the luminance in cd/m^2 at which rods and cones share vision equally. */
 #define NIGHT_VISION_HALF_CANDELAS 0.04
 /** @brief Above (Y / Yh)^g of this, the rods' share is below 1/1024 and the shaders leave the colour exactly as it is:
@@ -80,9 +89,20 @@ typedef struct NightVisionCalibrationStruct
 /**
  * @brief Returns the calibration: Steepness from the noon and night anchors, HalfLuminance from Hunt's half point,
  *        FullColourLuminance from NIGHT_VISION_FULL_COLOUR_RATIO.
- * @returns The calibration (about 0.019, 3.2 and 0.165).
+ * @returns The calibration (NightVision_GetCalibrationFor of NIGHT_VISION_NOON_LUMINANCE and
+ *          NIGHT_VISION_NIGHT_LUMINANCE).
  */
 NightVisionCalibration NightVision_GetCalibration(void);
+
+/**
+ * @brief Returns the calibration for a light scale whose clear noon and moonless night have these scene luminances (the
+ *        candela values they stand for stay NIGHT_VISION_NOON_CANDELAS and NIGHT_VISION_NIGHT_CANDELAS): the renderer's
+ *        A/B of the light before T36 takes it with NIGHT_VISION_LEGACY_NOON_LUMINANCE and _NIGHT_LUMINANCE.
+ * @param noonLuminance The scale's noon (> nightLuminance > 0).
+ * @param nightLuminance Its moonless night.
+ * @returns The calibration.
+ */
+NightVisionCalibration NightVision_GetCalibrationFor(double noonLuminance, double nightLuminance);
 
 /**
  * @brief Returns the real luminance a game luminance stands for: NIGHT_VISION_NOON_CANDELAS x (Y /
@@ -91,6 +111,18 @@ NightVisionCalibration NightVision_GetCalibration(void);
  * @returns The luminance in cd/m^2.
  */
 double NightVision_GetRealLuminance(float luminance);
+
+/**
+ * @brief Returns the field luminance the shaders' night vision compares with, on the game's light scale (T36), from the
+ *        scene luminance split in two: the daylight's share (the sun's and the sky's light from the sun, on the real
+ *        scale: NIGHT_VISION_NOON_LUMINANCE stands for NIGHT_VISION_NOON_CANDELAS, linearly) and the night lights' (the
+ *        moon's, the moonless night's own light, the town's: raised for play, so NightVision_GetRealLuminance). Their real
+ *        luminances add, and the sum comes back through the inverse of NightVision_GetRealLuminance.
+ * @param dayLuminance The daylight's share; a value that is not positive gives none.
+ * @param nightLuminance The night lights' share; a value that is not positive gives none.
+ * @returns The field luminance (game units): the night lights' share by night, about the whole by day.
+ */
+float NightVision_GetFieldLuminance(float dayLuminance, float nightLuminance);
 
 /**
  * @brief Returns the rods' share of vision for a pixel: 1 / (1 + (max(luminance, fieldLuminance) / Yh)^g), 0 (the

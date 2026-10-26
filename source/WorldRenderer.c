@@ -160,19 +160,20 @@ static bool DoSpritesCastShadows(const WorldRenderer* self, const WorldRenderFra
 }
 
 /* The eye's night vision this frame: how strongly it applies (the renderer toggle x the world's strength), the field
- * luminance it compares with (the sky's light, BaseSceneLuminance, so it runs after WorldRendererLighting_PrepareFrame;
- * a non-finite one counts as daylight, changing nothing), the rods' grey (the world's blue shift), and whether it
- * changes anything: only while the field is below the full-colour luminance (by day the shaders skip it). */
+ * luminance it compares with (the sky's light, NightVisionField, so it runs after WorldRendererLighting_PrepareSkyLight,
+ * which also chose the frame's calibration; a non-finite one counts as daylight, changing nothing), the rods' grey (the
+ * world's blue shift), and whether it changes anything: only while the field is below the full-colour luminance (by day
+ * the shaders skip it). */
 static void DecideNightVision(const WorldRenderer* self, WorldRenderFrame* frame)
 {
     const WorldEnvironment* Environment = frame->Environment;
     float Strength = fminf(fmaxf(Environment->NightVisionStrength, 0.0f), 1.0f); // fmaxf drops a NaN
     frame->NightVisionStrength = self->_isNightVisionEnabled ? Strength : 0.0f;
-    frame->NightVisionFieldLuminance = isfinite(frame->BaseSceneLuminance)
-        ? fmaxf(frame->BaseSceneLuminance, 0.0f) : self->_nightVision.FullColourLuminance;
+    frame->NightVisionFieldLuminance = isfinite(frame->NightVisionField)
+        ? fmaxf(frame->NightVisionField, 0.0f) : frame->NightVision.FullColourLuminance;
     NightVision_GetRodTint(Environment->NightVisionBlueShift, frame->NightVisionTint);
     frame->IsNightVisionActive = IsNightVisionAvailable(self) && (frame->NightVisionStrength > 0.0f)
-        && (frame->NightVisionFieldLuminance < self->_nightVision.FullColourLuminance);
+        && (frame->NightVisionFieldLuminance < frame->NightVision.FullColourLuminance);
 }
 
 /* Advances the render clock behind WorldRenderFrame.TimeSeconds, wrapping it every RENDER_TIME_WRAP_SECONDS. A zero,
@@ -186,8 +187,9 @@ static void AdvanceRenderTime(WorldRenderer* self, double deltaSeconds)
     self->_renderTimeSeconds = fmod(self->_renderTimeSeconds + deltaSeconds, RENDER_TIME_WRAP_SECONDS);
 }
 
-/* Fills the frame's sky from the environment's model: the sun, the moon, the two lights (their colours come with the
- * lighting) and which of them casts the shadows, and the stars' rotation. */
+/* Fills the frame's sky from the environment's model: the sun, the moon, their light above the air (what reaches the
+ * surfaces, and which of them casts the shadows, comes with the sky's light: WorldRendererLighting_PrepareSkyLight) and
+ * the stars' rotation. */
 static void BuildSky(WorldRenderFrame* frame)
 {
     WorldSkyLights Lights;
@@ -197,13 +199,8 @@ static void BuildSky(WorldRenderFrame* frame)
     frame->MoonDirection = Lights.MoonDirection;
     frame->MoonPhase = Lights.MoonPhase;
     frame->MoonIllumination = Lights.MoonIllumination;
-    frame->SunLight.Direction = Lights.SunDirection;
-    frame->SunLight.Intensity = Lights.SunIntensity;
-    frame->MoonLight.Direction = Lights.MoonDirection;
-    frame->MoonLight.Intensity = Lights.MoonIntensity;
-    frame->ShadowLight = Lights.ShadowLight;
-    frame->ShadowDirection = Lights.ShadowDirection;
-    frame->ShadowFade = Lights.ShadowFade;
+    frame->SunIntensity = Lights.SunIntensity;
+    frame->MoonIntensity = Lights.MoonIntensity;
     frame->StarsToWorld = WorldEnvironment_GetStarsToWorld(frame->Environment);
 }
 
@@ -217,6 +214,7 @@ static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera
     *outFrame = (WorldRenderFrame){ 0 };
     outFrame->World = world;
     outFrame->Environment = World_GetEnvironment(world);
+    outFrame->IsOneLightScale = self->_isOneLightScaleEnabled;
     BuildSky(outFrame);
     outFrame->TimeSeconds = (float)self->_renderTimeSeconds;
     outFrame->WindowWidth = target.texture.width;
@@ -256,7 +254,7 @@ static void UpdateLods(WorldRenderer* self, const WorldRenderFrame* frame, doubl
 
 /* Decides which shadow passes run this frame (both are rendered before the scene pass). The cascades follow the sky's
  * shadow light (the sun by day, the moon on bright nights, none while both are low or handing over:
- * WorldEnvironment_GetSkyLights decides); the point-light shadow is independent of the sky (shadows at night), cast by
+ * WorldRendererLighting_PrepareSkyLight chose it from their light at the camera); the point-light shadow is independent of the sky (shadows at night), cast by
  * the nearest shadow-casting light. Both need to be available and wanted (the world's switch, world x config strength
  * above 0). */
 static void DecideShadows(WorldRenderer* self, WorldRenderFrame* frame)
@@ -390,8 +388,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->Features[WorldRendererFeature_Stars] = StateOf(AreStarsAvailable(self), frame->AreStarsActive);
     Status->Features[WorldRendererFeature_MilkyWay] = StateOf(IsMilkyWayAvailable(self), frame->IsMilkyWayActive);
     Status->Features[WorldRendererFeature_Moon] = StateOf(IsMoonAvailable(self), frame->IsMoonActive);
-    Status->Features[WorldRendererFeature_Moonlight] = StateOf(IsMoonlightAvailable(self),
-        frame->MoonLight.Intensity > 0.0f);
+    Status->Features[WorldRendererFeature_Moonlight] = StateOf(IsMoonlightAvailable(self), frame->IsMoonLit);
     Status->Features[WorldRendererFeature_NightVision] = StateOf(IsNightVisionAvailable(self),
         frame->IsNightVisionActive);
     Status->StarCount = self->_stars._starCount;
@@ -506,6 +503,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
         frame->AreAtmosphereTablesActive);
     Status->AreAtmosphereTablesEnabled = self->_atmosphere._isEnabled;
     Status->AtmosphereTableBuildCount = self->_atmosphere._tables.BuildCount;
+    Status->IrradianceTableBuildCount = self->_atmosphere._irradianceTable.BuildCount;
     Status->AtmosphereViewHeight = frame->AtmosphereViewHeight;
     Status->Features[WorldRendererFeature_Haze] = StateOf(WorldRendererAtmosphere_IsVolumeAvailable(self),
         frame->IsHazeActive);
@@ -513,6 +511,20 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->GroundHazeDensity = frame->Haze.GroundHazeDensity;
     Status->HazeView = self->_atmosphere._view;
     Status->HazeViewSlice = self->_atmosphere._viewSlice;
+
+    // The light at the camera (T36).
+    const WorldSkyLightFrame* Light = &frame->SkyLight;
+    Status->IsOneLightScale = frame->IsOneLightScale;
+    Status->IsSkyLightPerHeight = frame->IsSkyLightPerHeight;
+    Status->SkyLightTableBuildCount = self->_atmosphere._skyLight.Record.BuildCount;
+    Status->IsSkyLightTableBuilding = self->_atmosphere._skyLight.IsBuilding;
+    Memory_Copy(Light->Sun, Status->SunLight, sizeof(Status->SunLight));
+    Memory_Copy(Light->Moon, Status->MoonLight, sizeof(Status->MoonLight));
+    Memory_Copy(Light->Sky, Status->SkyIrradiance, sizeof(Status->SkyIrradiance));
+    Memory_Copy(Light->Ground, Status->GroundIrradiance, sizeof(Status->GroundIrradiance));
+    Memory_Copy(Light->Night, Status->NightLight, sizeof(Status->NightLight));
+    Status->SceneLuminance = frame->BaseSceneLuminance;
+    Status->Exposure = frame->Exposure;
 }
 
 /* Appends the drawn models per LOD to the status line's LOD text, LOD 0 first, up to the coarsest LOD drawn: "9 / 3 / 1".
@@ -606,6 +618,10 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_isNightVisionEnabled = true;
     Renderer->_isSpriteLightingEnabled = true;
     Renderer->_nightVision = NightVision_GetCalibration();
+    // TODO: remove once the owner approves T36's light (the A/B's light before T36 and its night vision).
+    Renderer->_isOneLightScaleEnabled = true;
+    Renderer->_legacyNightVision = NightVision_GetCalibrationFor(NIGHT_VISION_LEGACY_NOON_LUMINANCE,
+        NIGHT_VISION_LEGACY_NIGHT_LUMINANCE);
     Renderer->_outline._isEnabled = true;
     Renderer->_bloom._isEnabled = true;
     Renderer->_sunshaft._isEnabled = true;
@@ -640,6 +656,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
 
     WorldRendererScene_ReleaseTargets(self);
     WorldRendererAtmosphere_Unload(self);
+    WorldRendererAtmosphere_Deconstruct(self);
     WorldRendererShadows_Unload(self);
     WorldRendererStars_Unload(self);
     WorldRendererSprites_Deconstruct(self);
@@ -677,9 +694,14 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
     }
 
     // Preload the shaders and the sky textures the world names, so the first frame does not stall on them (idempotent,
-    // logged on failure).
+    // logged on failure), and make the C mirror's tables hold the world's air (T36: a whole build, about 55 ms, unless
+    // they already hold it; without this the first frame builds them, and a new world's air would otherwise come in
+    // over frames).
     EnsureShaders(self);
     WorldRendererSky_SyncTextures(self, World_GetEnvironment(world));
+    WorldAtmosphereMedium Medium;
+    WorldAtmosphere_GetMedium(World_GetEnvironment(world), &Medium);
+    WorldSkyLight_PrepareBuilder(&self->_atmosphere._skyLight, &Medium);
 
     // Asset holds are not counted, so the models no object uses any more are released by resolving every model
     // the world uses under a fresh user and then retiring the old one: models both users hold stay loaded (no
@@ -752,8 +774,11 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     WorldRendererSky_SyncTextures(self, Frame.Environment);
     WorldRendererSky_PrepareFrame(&Frame);
     // The air, the haze and the height the sky is seen from (T15, T35), and whether the atmosphere's tables draw the sky
-    // and the volume hazes it this frame.
+    // and the volume hazes it this frame. Then the sky's light (T36): what reaches the surfaces at the camera through
+    // the air, the sky's irradiance there, the light the air is lit by, the scene luminance the eye adapts from, the
+    // night vision's calibration and the shadows' light.
     WorldRendererAtmosphere_PrepareFrame(self, &Frame);
+    WorldRendererLighting_PrepareSkyLight(self, &Frame);
     // Every model's LOD and its cross-fade, then which shadow passes run and their light matrices, then what every pass
     // draws: the camera's frustum, each cascade's box and the cube's reach cull, the draw distances and opacities fade.
     UpdateLods(self, &Frame, deltaSeconds);
@@ -927,11 +952,12 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     Error_Deconstruct(&LogResult);
     Memory_Free(Lods._data);
     Memory_Free(Lists._data);
-    // Each terrain's materials and texture arrays (B02), the copies of the model instances components (B03), and the
-    // atmosphere's tables with the render's CPU time (T15).
+    // Each terrain's materials and texture arrays (B02), the copies of the model instances components (B03), the
+    // atmosphere's tables with the render's CPU time (T15), and the light at the camera (T36).
     WorldRendererTerrain_LogMaterials(self);
     WorldRendererInstances_LogStatus(self);
     WorldRendererAtmosphere_LogStatus(self);
+    WorldRendererLighting_LogStatus(self);
 }
 
 void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled)
@@ -952,6 +978,18 @@ void WorldRenderer_SetAtmosphereTablesEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_AreAtmosphereTablesEnabled(const WorldRenderer* self)
 {
     return self->_atmosphere._isEnabled;
+}
+
+// TODO: remove once the owner approves T36's light.
+void WorldRenderer_SetOneLightScaleEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_isOneLightScaleEnabled = enabled;
+}
+
+// TODO: remove once the owner approves T36's light.
+bool WorldRenderer_IsOneLightScaleEnabled(const WorldRenderer* self)
+{
+    return self->_isOneLightScaleEnabled;
 }
 
 void WorldRenderer_SetHazeView(WorldRenderer* self, WorldRendererHazeView view, int slice)

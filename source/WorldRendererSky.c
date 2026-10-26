@@ -40,19 +40,10 @@
 /** How far below the horizon (the sine of the elevation) the disc's centre may go, beyond its own radius, before the
  *  disc is skipped: the sun disc is drawn down to the same -0.02. */
 #define MOON_HORIZON_MARGIN 0.02f
-/** ===== MOONLIT SKY KNOB =====
- *  How much of the moonlight the moonlit sky gets: the atmosphere is lit by MoonIntensity x the phase's brightness x
- *  this. Below 1 because the moonlight itself is far brighter than the real moon's (for play), and the night exposure
- *  would turn a sky lit by all of it into a dull daytime blue; at 0.3 a full moon gives a dark slate-blue sky with a
- *  soft halo. Raise it for a brighter night sky at full moon. */
+/** The light before T36 (the A/B): how much of the moonlight the moonlit sky got (the sky was lit 22 times as brightly as
+ *  the surfaces then). Since T36 the moonlit sky is lit by all of the moon's light above the air, as the surfaces are.
+ *  TODO: remove once the owner approves T36's light. */
 #define MOON_SKY_SHARE 0.3f
-/** The moonlit sky (the atmosphere lit by the moon) fades out as the sun rises from the horizon to about 3 degrees
- *  (sines 0 to 0.052; the day sky drowns it anyway), and in as the moon rises from about -6 to -3 degrees (the light of
- *  a moon further down barely reaches the air above us). Outside both it is skipped, saving its raymarch. */
-#define MOONLIT_SKY_SUN_FADE_START 0.0f
-#define MOONLIT_SKY_SUN_FADE_END 0.052f
-#define MOONLIT_SKY_MOON_FADE_START (-0.105f)
-#define MOONLIT_SKY_MOON_FADE_END (-0.052f)
 /** For the stars' limiting magnitude, the moon brightens the sky in full once it stands this high (the sine; about 11.5
  *  degrees), fading from slightly below the horizon. */
 #define MOONLIT_STARS_FADE_START (-0.05f)
@@ -159,7 +150,9 @@ static void DeconstructSkyTexture(WorldRenderer* self, WorldRendererSkyTexture* 
     slot->_name = (GenericBuffer){ 0 };
 }
 
-/* The moon's light on the atmosphere (the moonlit sky) and its disc. */
+/* The moon's light on the atmosphere (the moonlit sky) and its disc. Since T36 the moonlit sky is lit by all of the moon's
+ * light above the air (the frame's MoonIntensity: the phase's brightness and the daylight gate in), the surfaces by the
+ * same; the light before T36 (the A/B) took MOON_SKY_SHARE of the moonlight without the daylight gate. */
 static void PrepareMoon(WorldRenderFrame* frame)
 {
     const WorldEnvironment* Environment = frame->Environment;
@@ -170,9 +163,13 @@ static void PrepareMoon(WorldRenderFrame* frame)
         return;
     }
     float Brightness = WorldEnvironment_GetMoonBrightness(frame->MoonIllumination);
-    float SunGate = 1.0f - SmoothStep(MOONLIT_SKY_SUN_FADE_START, MOONLIT_SKY_SUN_FADE_END, frame->SunDirection.y);
-    float MoonGate = SmoothStep(MOONLIT_SKY_MOON_FADE_START, MOONLIT_SKY_MOON_FADE_END, frame->MoonDirection.y);
-    frame->MoonSkyIntensity = fmaxf(Environment->MoonIntensity, 0.0f) * Brightness * SunGate * MoonGate * MOON_SKY_SHARE;
+    // The moonlit sky shows with the sun down and the moon up (WorldSkyLight_GetMoonGate): outside its gates it is
+    // skipped, saving its raymarch, its half of the sky view and the moon's light on surfaces where none can be seen.
+    float Gate = WorldSkyLight_GetMoonGate(frame->SunDirection.y, frame->MoonDirection.y);
+    // TODO: remove the light before T36's share once the owner approves T36's light.
+    frame->MoonSkyIntensity = frame->IsOneLightScale ? fmaxf(frame->MoonIntensity, 0.0f) * Gate
+        : fmaxf(Environment->MoonIntensity, 0.0f) * WORLD_RENDERER_LEGACY_MOON_INTENSITY_SCALE * Brightness * Gate
+            * MOON_SKY_SHARE;
 
     // The disc: its size, its axes (toward the sky's pole, so the face turns as it crosses the sky), its fade near the
     // sun, and nothing once it is wholly below the horizon.
@@ -226,8 +223,8 @@ void WorldRendererSky_LoadShader(WorldRenderer* self)
     self->_sky._locResolution = GetShaderLocation(RayShader, "resolution");
     self->_sky._locInvViewProj = GetShaderLocation(RayShader, "invViewProj");
     self->_sky._locSunDirection = GetShaderLocation(RayShader, "sunDirection");
-    self->_sky._locSunColor = GetShaderLocation(RayShader, "sunColor");
     self->_sky._locSunIntensity = GetShaderLocation(RayShader, "sunIntensity");
+    self->_sky._locSunDiscIntensity = GetShaderLocation(RayShader, "sunDiscIntensity");
     self->_sky._locSunSize = GetShaderLocation(RayShader, "sunSize");
     self->_sky._locSkyTint = GetShaderLocation(RayShader, "skyTint");
     self->_sky._locSkyglowRadiance = GetShaderLocation(RayShader, "skyglowRadiance");
@@ -254,11 +251,6 @@ void WorldRendererSky_LoadShader(WorldRenderer* self)
     self->_sky._locNightVisionTint = GetShaderLocation(RayShader, "nightVisionTint");
     WorldRendererAtmosphere_PrepareShader(RayShader, &self->_sky._atmosphere);
     WorldRendererAtmosphere_PrepareHazeShader(RayShader, false, &self->_sky._haze);
-
-    // The night vision's calibration never changes: upload it once.
-    SetShaderValue(RayShader, self->_sky._locNightVisionHalfLuminance, &self->_nightVision.HalfLuminance,
-        SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, self->_sky._locNightVisionSteepness, &self->_nightVision.Steepness, SHADER_UNIFORM_FLOAT);
 }
 
 void WorldRendererSky_SyncTextures(WorldRenderer* self, const WorldEnvironment* environment)
@@ -320,8 +312,9 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     float SunDir[3] = { frame->SunDirection.x, frame->SunDirection.y, frame->SunDirection.z };
     SetShaderValue(RayShader, self->_sky._locSunDirection, SunDir, SHADER_UNIFORM_VEC3);
 
-    SetShaderValue(RayShader, self->_sky._locSunColor, frame->SunLight.Color, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_sky._locSunIntensity, &Environment->SunIntensity, SHADER_UNIFORM_FLOAT);
+    // The sun above the air (its light on the air in the direct march) and its disc, colours in.
+    SetShaderValue(RayShader, self->_sky._locSunIntensity, frame->AirSunIntensity, SHADER_UNIFORM_VEC3);
+    SetShaderValue(RayShader, self->_sky._locSunDiscIntensity, frame->SunDiscIntensity, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, self->_sky._locSunSize, &Environment->SunSizeMultiplier, SHADER_UNIFORM_FLOAT);
     // The air, and the tables or the direct march (T15); the ground haze in front of the sky (T35).
     WorldRendererAtmosphere_UploadFrame(RayShader, &self->_sky._atmosphere, frame);
@@ -332,17 +325,20 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     SetShaderValue(RayShader, self->_sky._locSkyTint, SkyTint, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, self->_sky._locSkyglowRadiance, frame->SkyglowRadiance, SHADER_UNIFORM_VEC3);
 
-    // The eye's night vision for the sky's dim light (strength 0 leaves it as it is).
+    // The eye's night vision for the sky's dim light (strength 0 leaves it as it is), calibrated on the frame's scale.
     SetShaderValue(RayShader, self->_sky._locNightVisionFieldLuminance, &frame->NightVisionFieldLuminance,
         SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_sky._locNightVisionHalfLuminance, &frame->NightVision.HalfLuminance,
+        SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_sky._locNightVisionSteepness, &frame->NightVision.Steepness, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sky._locNightVisionStrength, &frame->NightVisionStrength, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sky._locNightVisionTint, frame->NightVisionTint, SHADER_UNIFORM_VEC3);
 
-    // The moon: its direction (the moonlit sky needs it even without the disc), the moonlit sky's strength (0 skips
-    // its raymarch), and the disc (an opacity of 0 draws none).
+    // The moon: its direction (the moonlit sky needs it even without the disc), the moonlit sky's light (0 skips its
+    // half), and the disc (an opacity of 0 draws none).
     float MoonDir[3] = { frame->MoonDirection.x, frame->MoonDirection.y, frame->MoonDirection.z };
     SetShaderValue(RayShader, self->_sky._locMoonDirection, MoonDir, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, self->_sky._locMoonSkyIntensity, &frame->MoonSkyIntensity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_sky._locMoonSkyIntensity, frame->AirMoonIntensity, SHADER_UNIFORM_VEC3);
     float MoonOpacity = frame->IsMoonActive ? frame->MoonDisc.Opacity : 0.0f;
     SetShaderValue(RayShader, self->_sky._locMoonOpacity, &MoonOpacity, SHADER_UNIFORM_FLOAT);
     Texture2D MoonTexture = { 0 };
@@ -356,7 +352,7 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
         SetShaderValue(RayShader, self->_sky._locMoonUp, Up, SHADER_UNIFORM_VEC3);
         SetShaderValue(RayShader, self->_sky._locMoonCosRadius, &Disc->CosRadius, SHADER_UNIFORM_FLOAT);
         SetShaderValue(RayShader, self->_sky._locMoonSinRadius, &Disc->SinRadius, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(RayShader, self->_sky._locMoonColor, frame->MoonLight.Color, SHADER_UNIFORM_VEC3);
+        SetShaderValue(RayShader, self->_sky._locMoonColor, frame->MoonColor, SHADER_UNIFORM_VEC3);
         SetShaderValue(RayShader, self->_sky._locMoonDiscRadiance, &Disc->Radiance, SHADER_UNIFORM_FLOAT);
         SetShaderValue(RayShader, self->_sky._locMoonEarthshine, &Disc->Earthshine, SHADER_UNIFORM_FLOAT);
         HasMoonTexture = (self->_sky._moon._texture != NULL);

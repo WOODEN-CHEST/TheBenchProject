@@ -20,12 +20,15 @@ static double ClampUnit(double value)
 // Public functions.
 NightVisionCalibration NightVision_GetCalibration(void)
 {
+    return NightVision_GetCalibrationFor(NIGHT_VISION_NOON_LUMINANCE, NIGHT_VISION_NIGHT_LUMINANCE);
+}
+
+NightVisionCalibration NightVision_GetCalibrationFor(double noonLuminance, double nightLuminance)
+{
     // real = noon candelas x (game / noon luminance)^g through both anchors, so g = ln(candela ratio) / ln(game ratio);
     // Hunt's half point and the full-colour ratio then fall at fixed game luminances.
-    double Steepness = log(NIGHT_VISION_NOON_CANDELAS / NIGHT_VISION_NIGHT_CANDELAS)
-        / log(NIGHT_VISION_NOON_LUMINANCE / NIGHT_VISION_NIGHT_LUMINANCE);
-    double HalfLuminance = NIGHT_VISION_NOON_LUMINANCE
-        * pow(NIGHT_VISION_HALF_CANDELAS / NIGHT_VISION_NOON_CANDELAS, 1.0 / Steepness);
+    double Steepness = log(NIGHT_VISION_NOON_CANDELAS / NIGHT_VISION_NIGHT_CANDELAS) / log(noonLuminance / nightLuminance);
+    double HalfLuminance = noonLuminance * pow(NIGHT_VISION_HALF_CANDELAS / NIGHT_VISION_NOON_CANDELAS, 1.0 / Steepness);
     double FullColourLuminance = HalfLuminance * pow(NIGHT_VISION_FULL_COLOUR_RATIO, 1.0 / Steepness);
     return (NightVisionCalibration)
     {
@@ -43,6 +46,18 @@ double NightVision_GetRealLuminance(float luminance)
     }
     NightVisionCalibration Calibration = NightVision_GetCalibration();
     return NIGHT_VISION_NOON_CANDELAS * pow((double)luminance / NIGHT_VISION_NOON_LUMINANCE, (double)Calibration.Steepness);
+}
+
+float NightVision_GetFieldLuminance(float dayLuminance, float nightLuminance)
+{
+    double Day = (dayLuminance > 0.0f) ? (double)dayLuminance : 0.0;
+    double Real = NIGHT_VISION_NOON_CANDELAS * Day / NIGHT_VISION_NOON_LUMINANCE + NightVision_GetRealLuminance(nightLuminance);
+    if (!(Real > 0.0))
+    {
+        return 0.0f;
+    }
+    NightVisionCalibration Calibration = NightVision_GetCalibration();
+    return (float)(NIGHT_VISION_NOON_LUMINANCE * pow(Real / NIGHT_VISION_NOON_CANDELAS, 1.0 / (double)Calibration.Steepness));
 }
 
 float NightVision_GetRodShare(float luminance, float fieldLuminance, float strength)

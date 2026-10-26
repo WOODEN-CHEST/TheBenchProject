@@ -17,6 +17,7 @@
 #include "GLTextureArray.h"
 #include "NightVision.h"
 #include "WorldAtmosphere.h"
+#include "WorldSkyLight.h"
 #include "SpriteTransform.h"
 #include "WorldRenderSpace.h"
 #include "WorldVisibility.h"
@@ -40,7 +41,8 @@
  *   WorldRendererShadows.c   the shadow cascades of the sun or the moon, and the point-light cube shadow
  *   WorldRendererGBuffer.c   the normal/flag G-buffer and the ambient-occlusion pre-pass
  *   WorldRendererAtmosphere.c the atmosphere's tables (T15): transmittance, multiple scattering, the sky view, built
- *                            first in the frame and read by the sky, the fog and the stars
+ *                            first in the frame and read by the sky and the stars; the haze's volume (T35); the sky's
+ *                            irradiance table and the sky's light by height in the volume's last row (T36)
  *   WorldRendererSky.c       the atmospheric sky with the moon, the Milky Way and light pollution's skyglow
  *   WorldRendererStars.c     the star field (the seeded catalogue as one-pixel quads)
  *   WorldRendererPost.c      outlines, bloom, sun shafts and the tonemap
@@ -85,6 +87,10 @@
  *  Material.maps, so a per-draw material copy must have this many. Changing it means checking
  *  WorldRendererTextureUnit. */
 #define WORLD_RENDERER_MATERIAL_MAP_COUNT RENDERER_MATERIAL_MAP_COUNT
+/** The light before T36 (the A/B) takes moon_intensity at this share: T36 doubled its default (the moonlit sky's own
+ *  light replaced a painted fill), so the default world's old light stays the old light.
+ *  TODO: remove once the owner approves T36's light. */
+#define WORLD_RENDERER_LEGACY_MOON_INTENSITY_SCALE (0.02f / WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY)
 
 
 // Types.
@@ -146,18 +152,6 @@ typedef struct WorldRendererRadianceStruct
     /** @brief Linear RGB radiance. */
     float Rgb[3];
 } WorldRendererRadiance;
-
-/** @brief One of the sky's directional lights (the sun or the moon) as the PBR shader takes it. */
-typedef struct WorldRendererDirectionalLightStruct
-{
-    /** @brief Unit direction TO the light. */
-    Vector3 Direction;
-    /** @brief Linear colour. */
-    float Color[3];
-    /** @brief Intensity on that colour, with daylight (the sun) or phase, height and night (the moon) already in; 0 =
-     *  the light is off. */
-    float Intensity;
-} WorldRendererDirectionalLight;
 
 /** @brief One shadow cascade's light matrices and box for a frame, in render space (WorldRendererShadows_PrepareFrame:
  *  WorldRenderSpace_GetCascade). */
@@ -248,8 +242,9 @@ typedef struct WorldRenderFrameStruct
     float LimitingMagnitude;
     float MilkyWayRadiance;
     float SkyglowRadiance[3];
-    /** @brief The moon's light on the atmosphere, relative to the sun's (the moonlit sky the sky pass and the PBR fog
-     *  add); 0 by day, without a moon, or while the moon is far below the horizon. */
+    /** @brief The moon's light on the atmosphere, relative to the sun's above the air (the moonlit sky); 0 by day,
+     *  without a moon, or while the moon is far below the horizon (WorldRendererSky_PrepareFrame: since T36 all of the
+     *  moon's light above the air, its work-saving gates in; the light before T36 took MOON_SKY_SHARE of it). */
     float MoonSkyIntensity;
     /** @brief The moon's disc, valid while IsMoonActive. */
     WorldRendererMoonDisc MoonDisc;
@@ -262,10 +257,32 @@ typedef struct WorldRenderFrameStruct
      *  runs, All otherwise. */
     WorldRendererPixelFilter SceneFilter;
 
-    /** @brief The sky's two directional lights (directions and intensities from WorldEnvironment_GetSkyLights, linear
-     *  colours from WorldRendererLighting_PrepareFrame), shared by the scene and crisp passes. */
-    WorldRendererDirectionalLight SunLight;
-    WorldRendererDirectionalLight MoonLight;
+    /** @brief The sky's lights above the air (WorldEnvironment_GetSkyLights: the sun's intensity, the moon's with its
+     *  phase and the daylight gate in). */
+    float SunIntensity;
+    float MoonIntensity;
+    /** @brief Whether this frame takes T36's light, one light scale for the sky and the surfaces (false: the light before
+     *  T36, the A/B's: WorldRenderer_SetOneLightScaleEnabled). Set when the frame is built. */
+    bool IsOneLightScale;
+    /** @brief The sky's light at the camera (WorldRendererLighting_PrepareSkyLight): T36's from the C mirror
+     *  (WorldSkyLight_GetFrameLight), or with the light before T36 its ramped sun and moon and its painted ambient in the
+     *  same fields (the sky's and the ground's irradiance pi times the ambient, the tint white, no night light). The lit
+     *  shaders take it as their uniforms while IsSkyLightPerHeight is false. */
+    WorldSkyLightFrame SkyLight;
+    /** @brief Whether the lit shaders take the sky's light by height from the volume's last row (T36's light while the
+     *  atmosphere's tables and the volume run); false: SkyLight's, the camera's, for every fragment. Whether the moon
+     *  lights anything this frame (its terms are skipped otherwise). */
+    bool IsSkyLightPerHeight;
+    bool IsMoonLit;
+    /** @brief The light the air is lit by: the sun and the moon above the air as multiples of WORLD_ATMOSPHERE_SUN_LIGHT,
+     *  colour in (the atmosphere's shaders' intensity uniforms; the light before T36: 22 / WORLD_ATMOSPHERE_SUN_LIGHT x
+     *  the old intensities, white). The moon's is 0 while the moonlit sky does not show (MoonSkyIntensity 0). */
+    float AirSunIntensity[3];
+    float AirMoonIntensity[3];
+    /** @brief The sun's disc (the sky shader's radiance is SUN_DISC_RADIANCE x this, colour in) and the moon's disc's
+     *  linear colour. */
+    float SunDiscIntensity[3];
+    float MoonColor[3];
     /** @brief The light the shadow cascades are rendered from this frame (the brighter one once it stands high
      *  enough), its unit direction, and how strong its shadows are (0..1: faded near the horizon and while the lights
      *  hand over). The cascades only run while ShadowLight is not None (IsCascadeShadowActive). */
@@ -281,11 +298,16 @@ typedef struct WorldRenderFrameStruct
      *  casters must touch; valid while IsPointShadowActive. */
     Vector3 PointShadowPosition;
     float PointShadowFar;
-    /** @brief Lighting shared by the scene and crisp passes (computed once per render): linear ambient colour, the
-     *  scene luminance estimate eye adaptation starts from, and the shadow strength. */
-    float AmbientColor[3];
+    /** @brief Lighting shared by the scene and crisp passes (computed once per render): the scene luminance estimate eye
+     *  adaptation starts from (WorldSkyLight_GetSceneLuminance; before T36 the old one's), the field luminance night
+     *  vision compares with before the lamps (T36: NightVision_GetFieldLuminance of its daylight's and night lights'
+     *  shares; before T36 BaseSceneLuminance), and the shadow strength. */
     float BaseSceneLuminance;
+    float NightVisionField;
     float ShadowStrength;
+    /** @brief The light before T36 (the A/B's): its painted ambient (linear), which its far ground takes too.
+     *  TODO: remove once the owner approves T36's light. */
+    float LegacyAmbientColor[3];
 
     /** @brief Whether each optional pass runs this render. */
     bool IsCascadeShadowActive;
@@ -325,13 +347,16 @@ typedef struct WorldRenderFrameStruct
     float LightPollutionRadiance[3];
     bool IsHazeActive;
     /** @brief The eye's night vision this frame, which the sky and PBR shaders apply: how strongly (the renderer toggle
-     *  x the world's NightVisionStrength; 0 = off), the field luminance it compares with (BaseSceneLuminance: the sky's
+     *  x the world's NightVisionStrength; 0 = off), the field luminance it compares with (NightVisionField: the sky's
      *  light, without nearby lamps), the rods' grey (linear, luminance 1, from the world's NightVisionBlueShift), and
      *  whether it changes anything (on, with the field below the full-colour luminance: dusk and night). */
     float NightVisionStrength;
     float NightVisionFieldLuminance;
     float NightVisionTint[3];
     bool IsNightVisionActive;
+    /** @brief The night vision's calibration this frame (T36's light scale or the light before T36's: the scales differ,
+     *  NightVision_GetCalibrationFor). */
+    NightVisionCalibration NightVision;
 } WorldRenderFrame;
 
 /**
@@ -429,6 +454,7 @@ typedef struct WorldRendererAtmosphereLocationsStruct
     int _locTransmittanceTable;
     int _locMultiscatterTable;
     int _locSkyViewTable;
+    int _locIrradianceTable;
 } WorldRendererAtmosphereLocations;
 
 /**
@@ -463,16 +489,20 @@ typedef struct WorldRendererLitLocationsStruct
     /** @brief How many point lights the shader's uniform arrays hold, capped at WORLD_MAX_FORWARD_LIGHTS
      *  (checked at load; uploads never exceed it). */
     int _maxPointLights;
-    /** @brief The two directional lights (they light the ground haze too), the ambient. (No camera position: the camera
-     *  sits at the origin of render space.) */
+    /** @brief The two directional lights' directions (they light the ground haze too) and the sky's light (T36): whether it
+     *  comes by height from the volume, the camera's (the sun's, the moon's, the sky's, the ground's), whether the moon
+     *  lights anything, the ambient's tint and the night's own light. (No camera position: the camera sits at the origin
+     *  of render space.) */
     int _locSunDirection;
-    int _locSunColor;
-    int _locSunIntensity;
     int _locMoonDirection;
-    int _locMoonColor;
-    int _locMoonIntensity;
-    int _locAmbientColor;
-    int _locAmbientIntensity;
+    int _locSkyLightPerHeight;
+    int _locSunLight;
+    int _locMoonLight;
+    int _locSkyIrradiance;
+    int _locGroundIrradiance;
+    int _locIsMoonLit;
+    int _locAmbientTint;
+    int _locNightLight;
     /** @brief Screen-space AO: the AO map, its active flag and the scene resolution used to map gl_FragCoord to the AO
      *  map's UV. */
     int _locAmbientOcclusionMap;
@@ -635,8 +665,8 @@ typedef struct WorldRendererSkyStateStruct
     int _locResolution;
     int _locInvViewProj;
     int _locSunDirection;
-    int _locSunColor;
     int _locSunIntensity;
+    int _locSunDiscIntensity;
     int _locSunSize;
     int _locSkyTint;
     int _locSkyglowRadiance;
@@ -668,14 +698,15 @@ typedef struct WorldRendererSkyStateStruct
 } WorldRendererSkyState;
 
 /**
- * @brief The atmosphere's tables (T15, WorldRendererAtmosphere.c) and the aerial-perspective volume (T35): their shaders
- *        and render targets, the air the transmittance and multiple scattering tables were built for, the A/B switch
- *        and the volume's debug view.
+ * @brief The atmosphere's tables (T15, WorldRendererAtmosphere.c), the aerial-perspective volume (T35) and the sky's
+ *        irradiance table (T36): their shaders and render targets, the air they were built for, the C mirror's own
+ *        tables (WorldSkyLight.h), the A/B switch and the volume's debug view.
  *
  * The transmittance (WORLD_ATMOSPHERE_TRANSMITTANCE_WIDTH x _HEIGHT) and multiple scattering
- * (WORLD_ATMOSPHERE_MULTISCATTER_SIZE squared) tables are built when the air changes; the sky view (two halves of
- * WORLD_ATMOSPHERE_SKY_VIEW_WIDTH x _HEIGHT) and the volume (WORLD_ATMOSPHERE_VOLUME_WIDTH x _HEIGHT) every frame. All
- * RGBA16F, bilinear, clamped.
+ * (WORLD_ATMOSPHERE_MULTISCATTER_SIZE squared) tables are built when the air changes, the irradiance table
+ * (WORLD_ATMOSPHERE_IRRADIANCE_TEXTURE_WIDTH x _HEIGHT) after them or when the haze's forward scattering or the share of
+ * multiple scattering changes; the sky view (two halves of WORLD_ATMOSPHERE_SKY_VIEW_WIDTH x _HEIGHT) and the volume
+ * (WORLD_ATMOSPHERE_VOLUME_WIDTH x _HEIGHT) every frame. All RGBA16F, bilinear, clamped.
  */
 typedef struct WorldRendererAtmosphereStateStruct
 {
@@ -697,6 +728,9 @@ typedef struct WorldRendererAtmosphereStateStruct
     int _skyViewLocHazeDistanceScale;
     int _skyViewLocHazeStartDistance;
     int _skyViewLocGroundAlbedo;
+    int _skyViewLocIsGroundLitThroughAir;
+    int _skyViewLocAmbientTint;
+    int _skyViewLocGroundNightLight;
     int _skyViewLocGroundLight;
     int _skyViewLocGroundLightRamp;
     int _skyViewLocGroundAmbient;
@@ -708,11 +742,17 @@ typedef struct WorldRendererAtmosphereStateStruct
     int _volumeLocSunDirection;
     int _volumeLocSunIntensity;
     int _volumeLocMoonDirection;
-    int _volumeLocMoonSkyIntensity;
+    int _volumeLocMoonIntensity;
     int _volumeLocMultipleScattering;
     int _volumeLocLightPollution;
     int _volumeLocSkyTint;
     int _volumeLocGroundHazeBaseHeight;
+    int _volumeLocGroundAlbedo;
+    /** @brief The irradiance table's builder (world_atmosphere_irradiance, T36), its atmosphere locations and its own;
+     *  NULL = the tables are unavailable. */
+    GameShader* _irradianceShader;
+    WorldRendererAtmosphereLocations _irradianceLocations;
+    int _irradianceLocMultipleScattering;
     /** @brief The tables' targets and the volume's (colour only) and whether each was created; made once, with the
      *  shaders. */
     RenderTexture2D _transmittance;
@@ -723,12 +763,20 @@ typedef struct WorldRendererAtmosphereStateStruct
     bool _hasSkyView;
     RenderTexture2D _volume;
     bool _hasVolume;
+    RenderTexture2D _irradiance;
+    bool _hasIrradiance;
     /** @brief What the volume's debug view shows (WorldRenderer_SetHazeView: off by default) and which slice. */
     WorldRendererHazeView _view;
     int _viewSlice;
     /** @brief What the transmittance and multiple scattering tables hold, and how often they were built (the status
-     *  line). */
+     *  line); what the irradiance table holds (WorldAtmosphere_UpdateIrradianceRecord). */
     WorldAtmosphereTableRecord _tables;
+    WorldAtmosphereTableRecord _irradianceTable;
+    /** @brief The C mirror's tables (T36; made with the renderer, their sets on the heap): the set the sky's light at the
+     *  camera reads (WorldRendererLighting_PrepareSkyLight) and a second one a rebuild fills over frames when the air
+     *  changes (WorldRendererAtmosphere_UpdateSkyLightTables). Built whole when a world is prepared, or on the first
+     *  frame. */
+    WorldSkyLightBuilder _skyLight;
     /** @brief Whether the tables draw the sky and the fog (WorldRenderer_SetAtmosphereTablesEnabled: the A/B; on by
      *  default). */
     bool _isEnabled;
@@ -1282,11 +1330,17 @@ struct WorldRendererStruct
     bool _postfxEnabled;
     /** @brief Toggle for the eye's night vision (A/B; on by default); the world's NightVisionStrength scales it. */
     bool _isNightVisionEnabled;
+    /** @brief Toggle for T36's light, one light scale for the sky and the surfaces (A/B; on by default): off takes the
+     *  light before T36 (the sky at 22, the painted ambient, the ramped sun, the old exposure and night vision).
+     *  TODO: remove once the owner approves T36's light. */
+    bool _isOneLightScaleEnabled;
     /** @brief Toggle for sprite lighting (A/B; on by default): off draws every sprite unlit at its full colours, as
      *  before sprites were lit. */
     bool _isSpriteLightingEnabled;
-    /** @brief The night vision's calibration on the game's light scale (NightVision_GetCalibration), computed once. */
+    /** @brief The night vision's calibration on the game's light scale (NightVision_GetCalibration), computed once; and
+     *  on the scale before T36 (the A/B's; TODO: remove once the owner approves T36's light). */
     NightVisionCalibration _nightVision;
+    NightVisionCalibration _legacyNightVision;
     /** @brief The per-object render cache and this render's model/sprite/light lists. */
     WorldRenderCache _cache;
     /** @brief This render's visibility: per pass the cache entries it draws (the camera's frustum, each cascade's box,
@@ -1652,9 +1706,8 @@ void WorldRendererLighting_LoadShader(WorldRenderer* self);
 
 /**
  * @brief Prepares a shader that includes shaders/common/lighting.glsl: caches its frame-lighting uniform locations,
- *        uploads the constants (the shadow bias and texel size, the night vision's calibration), points its shadow and
- *        AO samplers at their fixed units, and checks how many point lights its arrays hold (logging once when fewer
- *        than WORLD_MAX_FORWARD_LIGHTS).
+ *        uploads the constants (the shadow bias and texel size), points its shadow and AO samplers at their fixed units,
+ *        and checks how many point lights its arrays hold (logging once when fewer than WORLD_MAX_FORWARD_LIGHTS).
  * @param self The renderer.
  * @param shader The shader (its program).
  * @param assetName Its asset name, for the log line.
@@ -1664,12 +1717,21 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
     WorldRendererLitLocations* outLocations);
 
 /**
- * @brief Computes the frame's lighting (the sun's and the moon's colours, the ambient with its moonlit share, fog,
- *        shadow strength, scene luminance) into @p frame and builds the forward-light candidates (every light except
- *        the frame's cube-shadow light).
+ * @brief Computes the frame's sky light (T36): the C mirror's tables built again when the air changed, the sky's light at
+ *        the camera (frame->SkyLight: WorldSkyLight_GetFrameLight), the light the air is lit by and the sun's disc, the
+ *        shadow light chosen from the light that reaches the camera (frame->ShadowLight, ShadowDirection, ShadowFade:
+ *        WorldEnvironment_ChooseShadowLight), whether the lit shaders read it by height, the scene luminance eye
+ *        adaptation starts from and the night vision's calibration. With the light before T36 (the A/B) the old values in
+ *        the same fields.
  *
- * Needs the frame's sky lights (SunLight and MoonLight directions and intensities, Daylight), IsPointShadowActive and
- * ShadowLightIndex.
+ * Needs WorldRendererSky_PrepareFrame (the moonlit sky) and WorldRendererAtmosphere_PrepareFrame (the air, the view
+ * height, light pollution, whether the tables and the volume run) first; the shadow decisions need it.
+ */
+void WorldRendererLighting_PrepareSkyLight(WorldRenderer* self, WorldRenderFrame* frame);
+
+/**
+ * @brief Computes the frame's shadow strength into @p frame and builds the forward-light candidates (every light except
+ *        the frame's cube-shadow light). Needs IsPointShadowActive and ShadowLightIndex.
  */
 void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame);
 
@@ -1726,6 +1788,11 @@ void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program
  * @returns The exposure (always finite and within the adaptation clamp).
  */
 float WorldRendererLighting_UpdateExposure(WorldRenderer* self, const WorldRenderFrame* frame, float deltaSeconds);
+
+/** @brief Logs a line about the frame's light at the camera (with the status, WorldRenderer_LogStatus): which light runs
+ *  (T36's or the A/B's), the sun's and the moon's through the air, the sky's irradiance, the ground's bounce, the night's
+ *  light, the scene luminance and the exposure. */
+void WorldRendererLighting_LogStatus(const WorldRenderer* self);
 
 
 // WorldRendererShadows.c
@@ -1785,14 +1852,16 @@ void WorldRendererGBuffer_RenderAo(WorldRenderer* self, const WorldRenderFrame* 
 
 
 // WorldRendererAtmosphere.c
-/** @brief Constructs the atmosphere pass's state (the tables switched on, none built, the volume's view off). Called once
- *  by WorldRenderer_Create. */
+/** @brief Constructs the atmosphere pass's state (the tables switched on, none built, the volume's view off) and
+ *  allocates the C mirror's two table sets (T36: built on the first frame that needs them). Called once by
+ *  WorldRenderer_Create. */
 void WorldRendererAtmosphere_Construct(WorldRenderer* self);
 
 /**
- * @brief Loads the three table builders and the volume's, and creates their targets (fixed sizes, made once). Without
- *        any of the tables' the tables are unavailable: the sky marches per pixel and nothing is hazed (logged once);
- *        without the volume's, nothing is hazed (logged once).
+ * @brief Loads the four table builders (the transmittance, the multiple scattering, the sky view, T36's irradiance) and
+ *        the volume's, and creates their targets (fixed sizes, made once). Without any of the tables' the tables are
+ *        unavailable: the sky marches per pixel, nothing is hazed and the lit shaders take the sky's light at the
+ *        camera (logged once); without the volume's, nothing is hazed and the same (logged once).
  */
 void WorldRendererAtmosphere_LoadShaders(WorldRenderer* self);
 
@@ -1800,7 +1869,20 @@ void WorldRendererAtmosphere_LoadShaders(WorldRenderer* self);
  *  alive. */
 void WorldRendererAtmosphere_Unload(WorldRenderer* self);
 
-/** @brief Whether the tables can be built: their three shaders and targets exist. */
+/** @brief Frees the C mirror's tables (CPU memory). Called once by WorldRenderer_Deconstruct. */
+void WorldRendererAtmosphere_Deconstruct(WorldRenderer* self);
+
+/**
+ * @brief Keeps the C mirror's tables on the air (T36; stale as the GPU's irradiance table is:
+ *        WorldAtmosphere_IsIrradianceStale; WorldSkyLight_UpdateBuilder): built whole the first time; when the air
+ *        changes, rebuilt into the second set over frames and swapped in when done, about
+ *        SKY_LIGHT_BUILD_BUDGET_NANOSECONDS of steps a frame (WorldSkyLight_RunBuildStep: a step runs only while the
+ *        time so far and the last step's fit in the budget, the first always). Called every frame by
+ *        WorldRendererLighting_PrepareSkyLight.
+ */
+void WorldRendererAtmosphere_UpdateSkyLightTables(WorldRenderer* self, const WorldAtmosphereMedium* medium);
+
+/** @brief Whether the tables can be built: their four shaders and targets exist. */
 bool WorldRendererAtmosphere_IsAvailable(const WorldRenderer* self);
 
 /** @brief Whether the volume can be built: the tables can, and its shader and target exist. */
@@ -1817,11 +1899,13 @@ void WorldRendererAtmosphere_PrepareFrame(const WorldRenderer* self, WorldRender
 
 /**
  * @brief The atmosphere pass, first in the frame while frame->AreAtmosphereTablesActive: the transmittance and multiple
- *        scattering tables built again when the air differs from the one they hold, then the sky view: the sun's half
- *        (with light pollution's light and the far ground's ambient) and, while the moonlit sky shows
- *        (frame->MoonSkyIntensity above 0), the moon's; then, while frame->IsHazeActive, the volume. Leaves the
- *        transmittance and sky-view tables bound on their units. Needs the frame's lights
- *        (WorldRendererLighting_PrepareFrame) and WorldRendererSky_PrepareFrame first.
+ *        scattering tables built again when the air differs from the one they hold, the irradiance table after them (or
+ *        when the haze's forward scattering or the share of multiple scattering changed), then the sky view: the sun's
+ *        half (with light pollution's light and the far ground's ambient) and, while the moonlit sky shows
+ *        (frame->MoonSkyIntensity above 0), the moon's; then the volume (all of it while frame->IsHazeActive, only its
+ *        last row while only frame->IsSkyLightPerHeight). Leaves the transmittance and sky-view tables bound on their
+ *        units. Needs the frame's sky light (WorldRendererLighting_PrepareSkyLight) and WorldRendererSky_PrepareFrame
+ *        first.
  */
 void WorldRendererAtmosphere_Render(WorldRenderer* self, const WorldRenderFrame* frame);
 
@@ -1842,8 +1926,8 @@ void WorldRendererAtmosphere_PrepareHazeShader(Shader shader, bool isVolumeOnFix
 void WorldRendererAtmosphere_UploadHaze(Shader shader, const WorldRendererHazeLocations* locations,
     const WorldRenderFrame* frame);
 
-/** @brief Binds the volume on WorldRendererTextureUnit_HazeVolume while the frame's haze is active, leaving unit 0 the
- *  active one: for the lit passes (DrawMesh draws), before their draws. */
+/** @brief Binds the volume on WorldRendererTextureUnit_HazeVolume while it holds this frame's haze or sky light, leaving
+ *  unit 0 the active one: for the lit passes (DrawMesh draws), before their draws. */
 void WorldRendererAtmosphere_BindVolume(const WorldRenderer* self, const WorldRenderFrame* frame);
 
 /** @brief Binds the volume to a 2D pass's volume sampler (SetShaderValueTexture, after BeginShaderMode) while the frame's

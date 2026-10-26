@@ -221,6 +221,13 @@ void WorldInstancingTests_Run(TestRun* run);
  *  (WorldAtmosphereTests.c; a private module of source/). */
 void WorldAtmosphereTests_Run(TestRun* run);
 
+/** @brief The sky's light on the surfaces (T36): the exact transmittance against a long double integral, the light
+ *  setting over its disc, the C tables against the exact light, the sky's and light pollution's irradiance against fine
+ *  integrals, the frame's light from its parts and the settings, broken values, the shadow light's hand-over at dusk
+ *  through the air, the light falling continuously into the night, the exposure, and the night vision's anchors on this
+ *  scale (WorldSkyLightTests.c; a private module of source/). */
+void WorldSkyLightTests_Run(TestRun* run);
+
 
 /** @brief Log rotation, pruning and formatted output under a base directory (LoggerTests.c). */
 void LoggerTests_Run(TestRun* run);

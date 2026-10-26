@@ -254,8 +254,9 @@ Current module list:
     (defaults, validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md; it owns its sky texture
     names). Its date and time of day are what the sky shows: the game clock writes them every tick, the environment
     never advances time itself. Pure functions turn them into the sky: the sun (optionally following the seasons), the
-    moon (phase from the calendar, position, lit fraction, moonlight), the stars' daily turn and yearly drift, and
-    which of the sun and the moon casts the shadows (WorldEnvironment_GetSkyLights).
+    moon (phase from the calendar, position, lit fraction, moonlight above the air), the stars' daily turn and yearly
+    drift, the two lights above the air (WorldEnvironment_GetSkyLights) and which of them casts the shadows from the
+    light each gives through the air (WorldEnvironment_ChooseShadowLight, T36).
   * World - Owns the objects and their components, mints the uint64 ids (an id map for lookups), keeps a dense array
     of components per type for systems to iterate, holds the environment, borrows the key registry (the keys of its
     objects' tags and data) and keeps their tag index; with an asset manager (World_Construct2) it owns an asset user
@@ -288,7 +289,9 @@ Current module list:
     transmittance, multiple scattering and the sky view, built first in the frame, which the sky and the stars read;
     the haze, T35, source/WorldRendererAtmosphere.c and shaders/common/haze.glsl: the aerial-perspective volume built
     from them every frame, the far ground below the horizon, the ground haze and light pollution's light in the air,
-    which every lit surface, the sky, the stars and the outlines take), in render space
+    which every lit surface, the sky, the stars and the outlines take; one light scale for the sky and the surfaces,
+    T36: the sun and the moon through the air at each surface's height and the sky's own light as the ambient, from the
+    sky's irradiance table and the volume's last row), in render space
     since T32:
     the world's orientation with the camera at the origin, every position relative to the camera (subtracted in double),
     shadow cascades snapped to their texels; separate from the world data and never writes to it. Split by render pass
@@ -306,7 +309,17 @@ Current module list:
   * WorldAtmosphere - The atmosphere as pure maths (private, source/WorldAtmosphere.h; T15): the air's coefficients from
     the environment (the air, the haze, the ozone layer), when the tables must be built again (the stale check and the
     tables' build record), the height the sky is seen from, heights and distances along rays without the cancellation of a float radius, and the lookup tables' layout
-    (transmittance, multiple scattering, sky view): the C mirror of shaders/common/atmosphere.glsl's mappings.
+    (transmittance, multiple scattering, sky view; since T36 the sky's irradiance table and the sky's light by height in
+    the volume's last row): the C mirror of shaders/common/atmosphere.glsl's mappings.
+  * WorldSkyLight - The sky's light on the world's surfaces as pure maths (private, source/WorldSkyLight.h; T36, new
+    module): the exact transmittance toward a light with its disc's share above the horizon, the C mirror's own
+    transmittance and multiple scattering tables and the GPU's irradiance table built from them by the GPU's quadrature
+    (whole, or in steps over frames: WorldSkyLightBuilder keeps two sets and swaps in a rebuild when the air changes),
+    the sky's and light pollution's irradiance, the frame's light at the camera (the sun's and the moon's through the
+    air, the sky's irradiance, the ground's bounce, the ambient's tint, the night's own light; every value finite), the
+    moon's gate (while the moonlit sky shows), and the eye's scene luminance and exposure on that scale. The renderer takes the camera's
+    light from it for the exposure, night vision, the shadow light, the status line and the fallback uniforms; the
+    tests check the GPU's quadrature through it (WorldRuntime.md, "Sky's light on surfaces").
   * WorldRenderSpace - Render space as pure maths (private, source/WorldRenderSpace.h; T32): the frame's origin (the
     camera's double position) with its rotation-only view and projection, the C mirror of the sky shader's ray, and the
     shadow cascades with their centres snapped to their texel grids in double, each grid kept from frame to frame
@@ -333,7 +346,9 @@ Current module list:
     magnitude (light pollution, the moonlit sky, twilight), the air mass, star colours and the galaxy's place among
     the stars; used by the sky and star passes (WorldRendererSky.c, WorldRendererStars.c).
   * NightVision - The eye's dim-light vision as pure maths (private, source/NightVision.h): Hunt's rod share calibrated
-    on the game's light scale and the rods' blue-grey; the sky and PBR shaders apply it (shaders/common/night_vision).
+    on the game's light scale (since T36 the one scale's anchors, and the field luminance from the daylight on the real
+    scale and the night's raised lights through the power law) and the rods' blue-grey; the sky and PBR shaders apply it
+    (shaders/common/night_vision).
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world whose sky follows the frame's game
     clock and whose colliders it steps every tick (trigger, contact and motion events logged; F7 shows the colliders,
     F8 the contact points, F6 swings the door, F9 sends a wall through a row of crates, F10 moves the door's crate),
@@ -349,7 +364,9 @@ Current module list:
     material). Since B03 its world has a grove of 400 instanced trees, the apostrophe shows a field of 20 000 instanced
     pebbles (a runtime object) and the semicolon switches instanced drawing for the A/B (the private
     source/WorldTestInstances.{h,c}). Since T15 the keypad's 1 switches the atmosphere's tables (the A/B against the
-    direct march), 2 the multiple scattering and 3 the ozone, and I adds the frame times.
+    direct march), 2 the multiple scattering and 3 the ozone, and I adds the frame times; since T35 the keypad's 4 to 8
+    drive the haze (its debug view and slice, the distance scale, a morning mist, the haze strength); since T36 keypad
+    9 switches between the one light scale and the light before it (the A/B).
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown

@@ -405,26 +405,30 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    scene target, shared by every pass that reconstructs positions or rays) and the camera's frustum from them, the
    sky
    (`WorldEnvironment_GetSkyLights`: the sun's and the moon's directions, daylight, the moon's phase and lit fraction,
-   the two lights' intensities and the shadow light with its fade), the stars' rotation (`StarsToWorld`), the render
+   the two lights' intensities above the air), the stars' rotation (`StarsToWorld`), the render
    clock (`TimeSeconds`), sizes, the night sky values (`WorldRendererSky_PrepareFrame`: limiting magnitude, Milky Way
    radiance, skyglow, the moonlit sky's strength and the moon's disc; first the star catalogue is rebuilt if the
    world's seed or density changed, and the sky textures reloaded if the world names others), the atmosphere's
    (`WorldRendererAtmosphere_PrepareFrame`, T15: the air's coefficients, the height the sky is seen from, whether the
    tables draw the sky; T35: the frame's haze, light pollution's light in the air, whether the volume hazes the frame),
-   every model's LOD and its cross-fade (`WorldRenderCache_UpdateLods`, see "LODs"), and every
+   the sky's light (`WorldRendererLighting_PrepareSkyLight`, T36, see "Sky's light on surfaces": the C mirror's tables
+   kept on the air, the light at the camera, the light the air is lit by, the sun's disc, the scene luminance, night
+   vision's field and calibration, and the shadow light chosen from the light through the air), every model's LOD and
+   its cross-fade (`WorldRenderCache_UpdateLods`, see "LODs"), and every
    pass decision:
    first which shadow passes run (`DecideShadows`) and their light matrices (`WorldRendererShadows_PrepareFrame`: both
    cascades' view, projection and box, snapped to their texels; the cube shadow's lamp and far range), then the frame's visibility (what every
    pass draws, see "Visibility"), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
-3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the sun's and the moon's linear colours,
-   the ambient colour (with the moonlit sky's fill), the scene luminance for eye adaptation, shadow
-   strength, and the forward-light candidates (every light except the cube-shadow light) with their linear radiance.
+3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the shadow strength and the forward-light
+   candidates (every light except the cube-shadow light) with their linear radiance.
    Then the eye's night vision for the frame (`DecideNightVision`: its strength, the field luminance, the rods' grey),
    and each sprite's matrices (`WorldRendererSprites_PrepareFrame`: facing the camera, facing the cascades' light and the
    cube shadow's lamp while those run) with the blended and additive sprites sorted back to front.
 4. The atmosphere's tables (T15, `WorldRendererAtmosphere_Render`, see "Atmosphere"): the transmittance and multiple
-   scattering tables when the air changed, then the sky view (the sun's half, and the moon's while the moonlit sky
-   shows), then the aerial-perspective volume (T35, see "Haze"); the tables left bound on units 7 and 8. Then the shadow cascades of the shadow light (the sun or the moon), then the
+   scattering tables when the air changed, the sky's irradiance table after them (T36), then the sky view (the sun's
+   half, and the moon's while the moonlit sky shows), then the aerial-perspective volume (T35, see "Haze") with the
+   sky's light by height in its last row (T36; only that row while the haze is off); the tables left bound on units 7
+   and 8. Then the shadow cascades of the shadow light (the sun or the moon), then the
    point-light cube shadow, each drawing its
    visibility list (the casters in its box; within the light's reach). Models (the LOD they show or fade to), the
    model instances' copies (B03: each the LOD with the larger share, dithered by its own fade), terrain chunks (B01;
@@ -461,9 +465,9 @@ overlay unavailable), 8-bit (last resort). The tier is logged once. Everything i
 tonemapped (ACES + gamma, `world_tonemap`) only in the final blit, after the pixelation upscale.
 
 **PBR.** `world_pbr` (vertex + fragment pair): Cook-Torrance GGX with two directional lights, the sun and the moon
-(one `DirectionalLight` function; see "Moon" for the moonlight), a sky-tracking ambient (blue by day, warm near the
-horizon, a dim cool floor at night, the `NIGHT DARKNESS KNOB`s in `WorldRendererLighting.c`, raised by the moonlit
-sky's fill), forward point lights, per-material metallic/roughness/occlusion/emissive factors and
+(one `DirectionalLight` function; since T36 their light through the air at the fragment's height), the sky's own
+light as the ambient (T36: the sky's irradiance from above, the ground's bounce from below, the moonless night's own
+light; see "Sky's light on surfaces"), forward point lights, per-material metallic/roughness/occlusion/emissive factors and
 optional albedo / normal / packed ORM (in the METALNESS slot) / emissive maps from the model definition's
 `material_overrides`, derivative-based normal mapping, and the haze in front of every surface (T35's aerial
 perspective and ground haze, see "Haze": `ApplyAerialPerspective`, which replaced T34's distance fog). The lighting
@@ -536,7 +540,9 @@ because raylib's `DrawMesh` draws indexed only while the CPU index array is kept
 **Sky.** `world_sky`: the atmosphere (`shaders/common/atmosphere.glsl`) lit by the sun and, at night, by the moon: since
 T15 the sky-view table's glow by direction (single and multiple scattering, with light pollution's skyglow; see
 "Atmosphere"), or, with the tables off (the A/B, the fallback), T34's march of single scattering per pixel; the sun disc
-(dimmed and reddened by the transmittance table since T15: orange as it sets), the moon's disc, the Milky Way, drawn as
+(dimmed and reddened by the transmittance table since T15: orange as it sets; since T36 at a radiance of its own,
+`SUN_DISC_RADIANCE` 22 x `sun_color` x `sun_intensity`, scaled against the exposure: "Sky's light on surfaces"), the
+moon's disc, the Milky Way, drawn as
 a full-screen pass before the geometry (it writes no depth). Each pixel's ray comes from the inverse of the frame's view-projection,
 so the sky lines up with the 3D camera; in render space that matrix is a rotation and a projection, so the ray is exact
 at any distance from the world's origin (see "Render space"). Falls back to a CPU gradient clear. Its textures are the ones the world's
@@ -564,7 +570,8 @@ through the aerial-perspective volume built from them (T35, "Haze"), every lit s
     L2 / (1 - f_ms));
   - *sky view*, 192 x 216 (two halves of 192 x 108): the light the sky sends toward the camera by direction, the sun's
     half (with light pollution's light in the air, "Night sky") built every frame, the moon's half while the moonlit
-    sky shows (`MoonSkyIntensity` above 0, as before); azimuth from the half's light across (the sine of half the angle:
+    sky shows (`MoonSkyIntensity` above 0, as before), each lit by its light above the air on the surfaces' scale (T36:
+  `ATMOSPHERE_SUN_LIGHT` x `sun_intensity` x `sun_color`, before T36 22 x `sun_intensity`); azimuth from the half's light across (the sine of half the angle:
     0.6 degrees a texel next to the light), zenith angle up, quadratic toward the horizon (from 1.7 m the two rows next
     to it are 0.008 degrees from it); 32 steps growing with the square of their index, each step's light integrated
     exactly over its own air, the light through the transmittance table and the planet's shadow (soft over the sun's
@@ -572,14 +579,19 @@ through the aerial-perspective volume built from them (T35, "Haze"), every lit s
     **Below the horizon** (T35) a ray ends on the *far ground*: the planet's surface at the atmosphere's ground
     (`horizon_ground_height`), seen through the haze in front of it (that path scaled by the frame's haze like every
     surface's, through the ground where the scale takes it past it). The ground is `sky_ground_albedo` lit as the lit
-    shaders light a dielectric facing up: the half's light in the lit shaders' units (the frame's sun colour at the raw
-    `sun_intensity`, or the moonlight without its height ramp), ramped by that light's own height over the far point of
-    the curved planet (the daylight's twilight ramp or the moonlight's: `WorldEnvironment_GetDaylightForElevation`,
-    `_GetMoonlightForElevation`), times the cosine to it, plus the frame's ambient in the sun's half. So a far point the
-    sun has set on is dark, and the far ground meets a terrain's edge without a seam. It replaced T15's darkened mirror.
+    shaders light a dielectric facing up (T36): the half's light through the air at the far point of the curved planet,
+    at the light's zenith cosine there (the transmittance with its disc's share above the horizon), times the cosine to
+    it, plus the sky's irradiance at the ground (the irradiance table, with light pollution's in the sun's half) times
+    the ambient's tint, plus the moonless night's own light in the sun's half. So a far point the sun has set on is lit
+    by the sky alone, and the far ground meets a terrain's edge without a seam. It replaced T15's darkened mirror; with
+    the light before T36 (the A/B) it is lit as then (the sun at its raw intensity ramped by its height over the far
+    point, the painted ambient).
+  - *irradiance* (T36), 65 x 32: the sky's irradiance on a surface facing up per unit of a light above the air, by the
+    light's elevation and the height, and light pollution's in its last column ("Sky's light on surfaces").
   The transmittance and multiple scattering tables are built again only when their air changes
   (`WorldAtmosphere_UpdateTableRecord`, with `WorldAtmosphere_AreTablesStale`: not for `sun_glow` or
-  `multiple_scattering`, which only the sky view uses). A rebuild costs 0.47 ms on a GTX 980 Ti, so whatever moves the
+  `multiple_scattering`, which only the sky view and the irradiance table use; the irradiance table follows those too:
+  `WorldAtmosphere_UpdateIrradianceRecord`). A rebuild costs 0.47 ms on a GTX 980 Ti, so whatever moves the
   air every frame (T16's weather) should step it. A light far brighter than the sun saturates the sky view at its half
   floats' largest value (65504) instead of turning infinite there; a haze too thick to see through gives no light, never
   a NaN (each step's share of its own light is selected, not blended, near 0 depth).
@@ -627,7 +639,8 @@ blue, bright ones warm. It replaced T34's distance fog (`fogSkyColor`, `FogFacto
   side, the in-scatter's tiles in rows 0 to 31, the transmittance's in rows 32 to 63 (RGB transmittance in tiles of its
   own keeps the blue shift exact), and a row of the frame's values (`WorldAtmosphereVolumeValue`: the light at the ground
   haze's base: the sun's and the moon's through the air and the planet's shadow, and the light from all around, the
-  sky's multiple scattering and light pollution's). Each in-scatter texel marches its path (8 steps within 4 km, 24
+  sky's multiple scattering and light pollution's; since T36 also the sky's light by height every lit surface reads:
+  "Sky's light on surfaces"). Each in-scatter texel marches its path (8 steps within 4 km, 24
   beyond, 32 for the whole ray: within 0.13 % and 1.2 % of 512 steps), lit by the sun, by the moon while the moonlit sky
   shows and by light pollution's light, tinted by `sky_tint`; each transmittance texel marches the air alone. A texel's
   path ends at its slice's distance or at the top of the atmosphere, whichever is nearer.
@@ -674,14 +687,107 @@ blue, bright ones warm. It replaced T34's distance fog (`fogSkyColor`, `FogFacto
 - **Status**: the "haze" feature (active while the volume is built; inactive while the tables are off or the haze's
   scale is 0; unavailable without the tables or the volume's shader or target), and a status log line with the volume,
   the scale, the ground haze and the debug view.
-- **Units** (an open question in T35's status block): the in-scatter is in the sky's light units (the atmosphere's sun is
-  `ATMOSPHERE_SUN_RADIANCE` 22 x `sun_intensity`), a surface's own light in the lit shaders' (the sun 1 x its colour,
-  plus the ambient): the sky is about ten times brighter against the surfaces than real skies are, so a dark surface
-  hazes about ten times faster than in real air (a 30 % veil over grass 400 m away, about 4 % in reality), while black
-  things still vanish at the real visibility (about 100 km at turbidity 3).
+- **Units** (G39, answered (b); done in T36): the in-scatter is on the surfaces' scale, so a dark surface hazes at the
+  real rate: from 300 m up the terrain 400 to 600 m away changes 0.5 % in brightness (28.7 % before T36: the sky was
+  22 times the surfaces' sun; the air takes about 1.8 % of the grass's light over 500 m and gives back the sky's, nearly
+  as bright), black things still vanish at the real visibility (about 100 km at turbidity 3), and a morning mist toward
+  a low sun glows instead of blowing out to white.
 - **Cost** (GTX 980 Ti, T35's status block): the volume and its use 0.085 ms by day and 0.13 ms at night (the moon's
   march), against T34's fog march of 0.26 and 0.5 to 0.67 ms; a morning mist adds about 0.18 ms in a view full of
   terrain.
+
+**Sky's light on surfaces** (T36, decision G39 (b); the C mirror `source/WorldSkyLight.{h,c}`, tested in
+`tests/WorldSkyLightTests.c`; the layouts in `source/WorldAtmosphere.h`; the lit shaders' part in
+`shaders/common/lighting.glsl`). The sky, the haze, the far ground and every surface are lit by the same sun and moon,
+on the surfaces' scale: lamps, emissives, the bloom threshold, night vision's candelas and the night sky's radiances
+keep their calibration, the sky's moved.
+- **One scale.** The sun above the air lights a surface facing it with `ATMOSPHERE_SUN_LIGHT` (1.078; C twin
+  `WORLD_ATMOSPHERE_SUN_LIGHT`, pinned by the shader source tests) x `sun_intensity` x `sun_color` (linear; white by
+  default: the air reddens it by itself): the sun 60 degrees up lights the ground in the default air as the sun before
+  T36 did (luminance 0.911). The air is lit by the same light (before T36 by 22 times it). The moon above the air is
+  `moon_intensity` x its phase's brightness x (1 - the daylight factor) x the sun's light, in `moon_color`, for the
+  surfaces and the air alike.
+- **Through the air, at each surface's own height.** The sun's and the moon's light on a surface is their light above
+  the air times `atmosphereLightTransmittance` toward them at the surface's height (the transmittance with the share of
+  the light's disc above the planet's horizon there): near white at noon, golden then red as the sun sets, gone once the
+  disc has set there. So from 5 km at dusk the ground lies in the planet's shadow while the camera still sees the sun, and
+  a hill keeps the sun longer than the valley. It replaced the daylight ramp and the moonlight's height ramp.
+- **The ambient** is the sky's own light: its irradiance on a surface facing up (the sky's model: single scattering
+  through the transmittance with the phase functions, plus `multiple_scattering` of the multiple scattering table's
+  glow, lit by the sun, the moon and light pollution's light in the air, times `sky_tint`) and the ground's bounce on one
+  facing down (`sky_ground_albedo` x the sun's and the moon's light on the ground and the sky's irradiance). A surface
+  with normal n takes (sky (1 + n.y) / 2 + ground (1 - n.y) / 2) / pi x `ambient_skylight_color` x
+  `ambient_skylight_intensity` + the moonless night's own light (`night_light_color` x `night_light_intensity`), times its
+  albedo and AO (`AmbientLight` in `common/lighting`: **T14's hook** for the sky visibility and the ambient zones). It
+  replaced the painted hues (`AMBIENT_DAY_*`, `AMBIENT_SUNSET_*`) and their ramps. At a clear noon shade is about a tenth
+  of sunlit ground (the default air is clear; hazier air brightens it), and walls facing away from the sun get the
+  ground's bounce.
+- **The irradiance table** (`world_atmosphere_irradiance`, `shaders/atmosphere/irradiance.frag`): 65 x 32 RGBA16F, the
+  irradiance per unit of a light above the air by the light's elevation (64 columns from -20 degrees to the zenith, even
+  in asinh(elevation / 0.07 rad): about 0.4 degrees apart at the horizon, where the twilight's light falls fastest) and
+  the height (32 rows from the ground to 100 km, even in log(1 + height / 1 km): even in the height near the ground), the
+  last column light pollution's per unit of its radiance; natural logarithms (at least -46), so a read between texels
+  follows light falling off exponentially: within 1 % of the quadrature from 2 degrees below the horizon up, 5 % from 6
+  below (lower, the sky's light is a thousandth of the night's own). The quadrature, the C mirror's (pinned by the
+  shader source tests): Gauss-Legendre rings of the zenith cosine (6) times even azimuths over half a turn (6) for the
+  air's own light, the multiple scattering's glow once a ring; the haze's lobe around the light by Henyey and Greenstein's
+  inverse weighted by Cornette and Shanks's (4 rings x 4 azimuths, each up to 10 haze scale heights up); light
+  pollution's over the rings, each up to 10 of its falloff lengths; Simpson's rule over 8 stretches (the haze's 4)
+  growing with the square of their index, the optical depth between points exact for exponential densities. Within 2 %
+  of a fine integral of the same model from the zenith to 4 degrees below the horizon (light pollution's within 0.5 %).
+  Built after the transmittance and multiple scattering tables, and when `sun_glow` or `multiple_scattering` changes:
+  0.235 ms on a GTX 980 Ti.
+- **By height: the volume's last row.** The volume pass writes the sun's and the moon's light through the air, the sky's
+  irradiance and the ground's bounce at 64 heights from the ground to 20 km (even in the height's square root: 5, 20,
+  45 m at the ground) into its row 64, a block of 64 columns each from column 64 on (`WorldAtmosphereSkyLight`,
+  `WorldAtmosphere_GetSkyLightColumn`): no new texture unit. It is written whenever the tables run, with the haze off
+  too (then only that row is drawn). The lit shaders read the two heights around a fragment's own (the view height plus
+  its render-space y) and mix them (`SkyLightAt`); while the tables or the volume do not run (keypad 1, a missing
+  shader), every fragment takes the camera's light from uniforms, the C mirror's.
+- **The C mirror** (`WorldSkyLight`): the light at the camera, for the exposure, night vision, the shadow light, the
+  status line and the fallback uniforms. The transmittance exactly (Gauss-Legendre over the ray's stretches between its
+  lowest point and the ozone layer's corners: within 1e-6 of a long double integral); the sky's irradiance from the
+  irradiance table built in C by the same quadrature (from a transmittance table of half the GPU's size each way and a
+  multiple scattering table with half its steps: within 0.3 % of full-size tables) and read as the GPU reads it. A
+  frame's light costs about 2.3 microseconds; the lights above the air, the ambient's tint and the night's light are at
+  most `WORLD_SKY_LIGHT_MAX_LIGHT` (65504, the GPU's half-float limit), so absurd but valid intensities stay finite. Its
+  tables (about 85 KB, two sets on the heap) are kept by a `WorldSkyLightBuilder` (pure, tested): built whole when a
+  world is prepared (`WorldRenderer_PrepareWorld`, only when the world's air differs from what they hold) or on the first
+  frame (about 55 ms); when the air changes they are rebuilt into the second set over frames (193 steps of at most
+  0.5 ms: about 70 frames), the old set lighting the frames meanwhile, and swapped in when done; a change during a
+  rebuild waits for the next one. `WorldRendererAtmosphere_UpdateSkyLightTables` takes about 1 ms of steps a frame: a
+  step runs while the time so far and the last step's fit in 1 ms, the first always. So T16's weather can move the air
+  every frame. The GPU's light at the camera matches it within 0.4 % (2.5 % for the sun at the moment of sunset: the
+  GPU's transmittance table against the exact transmittance). The moon's light counts while the moonlit sky shows
+  (`WorldSkyLight_GetMoonGate`: the sun below about 3 degrees, the moon above about -6), for the surfaces and the air
+  alike.
+- **The eye.** The scene luminance eye adaptation starts from (`WorldSkyLight_GetSceneLuminance`) is the ambient's
+  luminance on a white surface facing up plus 0.40 (`WORLD_SKY_LIGHT_DIRECTIONAL_ADAPT_WEIGHT`) of the sun's and the
+  moon's light: 0.40 at a clear noon, where the exposure (`WORLD_SKY_LIGHT_ADAPT_REFERENCE_LUMINANCE` 0.80 over it: 2.0)
+  keeps sunlit surfaces as bright as before T36 (within 7 %), while the lamps' share of the adaptation and the night's
+  look stay as before (the same reference and maximum exposure, 24, as before T36). Near a lamp by day sunlit surfaces
+  are 15 to 25 % darker than before T36: the painted ambient that brightened daylight is gone, so lamps stand out more.
+  The sun counts at its full weight whatever its height while flat ground gets the sine of it, so with a low sun the
+  ground comes out darker than before T36 (from about 15 degrees up; T36's status block, choice 2, has the levels and
+  the ways to change it). The exposure rises continuously through dusk and reaches its maximum about at sunset. Night vision reads the light in
+  two parts (`NightVision_GetFieldLuminance`, "Night vision").
+- **The sun's disc** keeps its look on screen whatever the exposure: its radiance is `SUN_DISC_RADIANCE` (22,
+  `world_sky`; C twin `WORLD_ATMOSPHERE_SUN_DISC_RADIANCE`) x `sun_color` x `sun_intensity` x 1.08 / the exposure (the
+  last render's; `SUN_DISC_SCREEN_EXPOSURE`), so the setting disc stays orange while the exposure rises to 24 (at most
+  65504 in all). It does not bloom (the bloom masks the sky) unless the scene's depth cannot be sampled.
+- **The sun shafts'** strength is multiplied by 8 / the exposure (`SUNSHAFT_SKY_SCREEN_SCALE`): their light on screen is
+  8 times the sky's pixels they gather toward the sun, mostly the disc, so it falls as the exposure rises with the disc;
+  tuned on pictures to within about 25 % of before T36 with the sun 30, 15 and 5 degrees up.
+- **The A/B** (`WorldRenderer_SetOneLightScaleEnabled`; keypad 9 in the test frame, logged): off, the light before T36
+  (the sky lit by 22 times the sun, the painted ambient, the sun ramped by the daylight and its old warm colour, the moon
+  by its height at half the new default intensity, the old far ground, exposure and night vision anchors): the pictures
+  before T36 to a level in a few pixels. TODO in the code: remove once approved.
+- **Status**: a log line with the light at the camera (the sun's and the moon's light, the sky's irradiance, the
+  ground's bounce, the night's light, the scene luminance, the exposure, the C tables' builds) and the same in
+  `WorldRendererStatus`.
+- **Cost** (GTX 980 Ti, T36's status block): the values row 0.004 ms with the haze on, 0.0125 ms alone; the lit terrain
+  about 0.06 ms more (5 to 8 %); the irradiance table 0.235 ms when the air changes; the C mirror 2.3 microseconds a
+  frame.
 
 **Night sky.** The pure maths is in the private `source/NightSky.{h,c}` (tested in `tests/NightSkyTests.c`); the GLSL
 the passes share is `shaders/common/night_sky.glsl`.
@@ -727,9 +833,10 @@ the passes share is `shaders/common/night_sky.glsl`.
   sky-view table's sun half, in the volume (the haze over the town glows) and in the ground haze's light. The radiance is
   calibrated so the glow at the horizon is T02's skyglow (0.012 x the colour at `LightPollution` 1: 99 % of it in green),
   a little bluer (Rayleigh scattering), 5.5 % of it overhead (T02: 6 %); doubling `sky_turbidity` brightens it about 1.4
-  times at the horizon. The direct march (the A/B) keeps T02's skyglow profile (`SKYGLOW_BASE_RADIANCE`). The night
-  ambient gains a small share of the colour (`NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE`); the `NIGHT_AMBIENT_*` floor stays
-  the dark-site look.
+  times at the horizon. The direct march (the A/B) keeps T02's skyglow profile (`SKYGLOW_BASE_RADIANCE`). Since T36 the
+  town's light reaches surfaces as part of the sky's irradiance (the irradiance table's last column: "Sky's light on
+  surfaces"), and the moonless night's own light is the environment's `night_light_color` x `night_light_intensity`
+  (before T36 the `NIGHT_AMBIENT_*` floor and `NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE`).
 - **Brightness knobs** (tuned for the night exposure, the eye adaptation's maximum of 24): `STAR_RADIANCE_SCALE` in
   `WorldRendererStars.c`, `MILKY_WAY_BASE_RADIANCE` and `SKYGLOW_BASE_RADIANCE` in `WorldRendererSky.c` (the direct march's skyglow), `WORLD_ATMOSPHERE_LIGHT_POLLUTION_RADIANCE` in
   `WorldAtmosphere.h` (the tables'); per world
@@ -752,18 +859,20 @@ the passes share is `shaders/common/night_sky.glsl`.
   by day it is pale (a quarter moon is findable in the afternoon), at night bright, and reddened low over the horizon.
   It fades out within 6 to 12 degrees of the sun (lost in the glare; this also keeps the virtual moon from eclipsing
   the sun) and is skipped once below the horizon.
-- **The moonlit sky.** The same atmosphere lit by the moon: x `MoonIntensity` x the phase's brightness x
-  `MOON_SKY_SHARE` (the "MOONLIT SKY KNOB", 0.3: a dark slate-blue sky with a soft halo at full moon), faded out while
-  the sun is above about 3 degrees and the moon below about -3 to -6 (outside that it is skipped: since T15 the sky-view
-  table's moon half is built only then, with the moon as its light). The haze's volume is lit by the moon then too, so
+- **The moonlit sky.** The same atmosphere lit by the moon's light above the air (since T36 all of it, the moonlight
+  the surfaces get; before T36 `MOON_SKY_SHARE` 0.3 of it): a dark blue sky with a soft halo at full moon, faded out
+  while the sun is above about 3 degrees and the moon below about -3 to -6 (outside that it is skipped: since T15 the
+  sky-view table's moon half is built only then, with the moon as its light). The haze's volume is lit by the moon then too, so
   hazed silhouettes match the sky behind them.
-- **Moonlight.** The second directional light of the PBR shader, with the sun's BRDF: `MoonIntensity` (default 0.02 of
-  the sun, `WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY`: tuned on rendered frames so a full-moon night is clearly lighter
-  than a new-moon one and still reads as night; 8% lit the test world nearly like day at the night exposure) x the
-  phase's brightness (`WorldEnvironment_GetMoonBrightness`, the opposition-surge fit of Krisciunas and Schaefer: a half
-  moon gives about a tenth of the full moon's light) x its height (full from about 11 degrees) x (1 - daylight), in
-  `MoonColor`. The ambient gains the moonlit sky's fill (`MOON_AMBIENT_SHARE` 0.3 of the moonlight), the eye
-  adaptation counts the moonlight like the sunlight. New-moon nights look as before.
+- **Moonlight.** The second directional light of the PBR shader, with the sun's BRDF: `MoonIntensity` (default 0.04 of
+  the sun since T36, `WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY`: tuned on rendered frames so a full-moon night's ground
+  is as bright as before T36, within 2 %, clearly lighter than a new-moon night and still night) x the phase's
+  brightness (`WorldEnvironment_GetMoonBrightness`, the opposition-surge fit of Krisciunas and Schaefer: a half moon
+  gives about a tenth of the full moon's light) x (1 - daylight), in `MoonColor`, above the air; since T36 it reaches a
+  surface through the air at the surface's height like the sun (reddened and dimmed low over the horizon, gone once
+  set), its fill is the moonlit sky's own irradiance (before T36 a painted `MOON_AMBIENT_SHARE` of 0.3 of the moonlight,
+  3.5 times the sky's: moonlit shadows have more contrast now), and the eye adaptation counts it like the sunlight. New-moon
+  nights look as before.
 
 **Night vision.** The eye's dim-light vision: in dim light the rods take over from the cones and colour fades into a
 grey with a faint blue cast. A low moon's sky is as orange as a sunset's (moonlight is sunlight, scattered by the same
@@ -772,16 +881,21 @@ private `source/NightVision.{h,c}` (tested in `tests/NightVisionTests.c`; its he
 `shaders/common/night_vision.glsl`.
 - **The model.** Hunt's rod sensitivity as Krawczyk, Myszkowski and Seidel use it (2005): the rods' share
   sigma = 0.04 / (0.04 + L) for a luminance L in cd/m^2, half and half at 0.04 (a bright moonlit scene). The game's
-  light scale is compressed (its noon, a scene luminance of about 0.74, stands for 5000 cd/m^2, its moonless night,
-  about 0.006, for 0.001 cd/m^2), so a game luminance Y is read as 5000 x (Y / 0.74)^3.2 cd/m^2, which makes
-  sigma = 1 / (1 + (Y / 0.019)^3.2). A pixel is blended by sigma toward its luminance in the rods' grey: white shifted
+  light scale is compressed (its noon, a scene luminance of about 0.40 on T36's scale, stands for 5000 cd/m^2, its
+  moonless night, about 0.0054, for 0.001 cd/m^2), so a game luminance Y is read as 5000 x (Y / 0.40)^3.58 cd/m^2,
+  which makes sigma = 1 / (1 + (Y / 0.015)^3.58). A pixel is blended by sigma toward its luminance in the rods' grey: white shifted
   toward the night blue (CIE x, y = 0.25, 0.25, Jensen et al. 2001) by the world's `NightVisionBlueShift` (default
   0.5; the full blue looks like a film's day-for-night filter, Krawczyk's own tint reads violet), at the same luminance,
   so the night's tuned brightness does not change.
-- **Which luminance.** The larger of the pixel's own and the field luminance: the frame's `BaseSceneLuminance`, the
-  light the sky gives the whole scene (the sun, the moon, the ambient), without the nearby lamps eye adaptation adds.
-  By day the field is far above 0.165, where sigma is below 1/1024, and the shaders return the colour untouched: day
-  frames are bit for bit what they were. At night each pixel is seen by its own light: a lamp's bright pool keeps its
+- **Which luminance.** The larger of the pixel's own and the field luminance: the light the sky gives the whole scene
+  (the sun, the moon, the ambient), without the nearby lamps eye adaptation adds. Since T36 it is read in two parts
+  (`NightVision_GetFieldLuminance`, the frame's `NightVisionField`): the daylight (the sun's and its sky's light) is on the
+  real scale, linearly (the noon's 0.40 stands for 5000 cd/m^2), while the night's lights (the moon, the town, the
+  moonless night's own light) are raised for play and go through the power law; their real luminances add. So the
+  twilight keeps its colours until the sun is about 4 degrees down, loses them through the nautical twilight (half at
+  about -8 degrees) and is the rods' by -12 degrees, as for the eye; without the split the night's own light alone would
+  grey the sunset. By day the field is far above 0.105, where sigma is below 1/1024, and the shaders return the colour
+  untouched: day frames are bit for bit what they were. At night each pixel is seen by its own light: a lamp's bright pool keeps its
   colour, the dark beyond it greys. Lamps lower the exposure but do not raise the field: the rods adapt locally, so a
   lamp beside the camera darkens the dim sky but gives it no colour.
 - **What goes through it.** The sky pass's glow (the in-scatter of the sun and the moon, the skyglow, the Milky Way;
@@ -799,7 +913,7 @@ private `source/NightVision.{h,c}` (tested in `tests/NightVisionTests.c`; its he
 **Sun and moon shadows.** Two orthographic cascades around the camera (2048² depth textures), their centres snapped to
 their texel grids so shadow edges stand still while the camera moves (see "Render space"): NEAR (32 m, 1.6 cm texels,
 sharp) and FAR (160 m, 7.8 cm texels, coarse, optional). Each model component's `WorldShadowTier` (Both / Near / Far) routes which
-cascade(s) it casts into, and one with `casts_shadows` off casts into none (nor into the point-light shadow). They are rendered from the frame's shadow light (`WorldEnvironment_GetSkyLights`): the
+cascade(s) it casts into, and one with `casts_shadows` off casts into none (nor into the point-light shadow). They are rendered from the frame's shadow light (`WorldEnvironment_ChooseShadowLight`, since T36 from the light the sun and the moon give the camera's surroundings through the air): the
 brighter of the sun and the moon by luminance, once it stands above 0.05 (the sine of its elevation; full shadows from
 0.15), faded out while the two are about as bright (0 where they are equal, full once one is 4 times the other) and for
 a light too dim for a shadow to show (a thin crescent). So dusk with the moon up goes from sun shadows through none to
@@ -833,7 +947,9 @@ are under the post-effects toggle (`WorldRenderer_SetPostEffectsEnabled`, O key 
 
 **Bloom and sun shafts.** Half-resolution HDR passes added by the tonemap: a depth-masked bright pass (the sky
 does not bloom) with a separable blur, and a radial blur of the unoccluded sky toward the sun's screen position
-that fades as the sun nears the screen margin or the horizon.
+that fades as the sun nears the screen margin or the horizon; since T36 the shafts' strength is divided by the exposure
+(times `SUNSHAFT_SKY_SCREEN_SCALE`), so they follow the sky's light on screen and do not glare at dusk ("Sky's light
+on surfaces").
 
 **Crisp overlay.** OmitPixelation models and cutout sprites render lit at window resolution and are composited over the
 pixelated image, depth-tested against the scene so they are occluded correctly (e.g. a readable in-world
@@ -927,7 +1043,7 @@ The renderer keeps receiving features, so:
   | Units | Who | What |
   |---|---|---|
   | 0–11 | raylib's `DrawMesh` | A drawn material's maps, map i on unit i (`GL_TEXTURE_2D`, cubes on 7–9); the 2D batch uses 0–4. Free in a program whose materials carry no maps. |
-  | 7–8 | the sky pass and the stars (T15); the lit programs (models, sprites, terrain: T35) | In the sky pass and the stars 7 the transmittance table, 8 the sky-view table (`sampler2D`, `WorldRendererTextureUnit_Atmosphere*`). In the lit programs 8 the haze's volume (`sampler2D atmosphereVolume`, `WorldRendererTextureUnit_HazeVolume`: they read no table since T35; their transmittance sampler on 7 is declared and unused, so 7 is free there for a `sampler2D` of the frame). raylib binds only cube maps there (`MATERIAL_MAP_CUBEMAP`, `_IRRADIANCE`, filled by no material of ours) and the 2D batch only 0–4, so what a pass binds stays bound; the lit passes bind the volume on 8 with their frame textures, the sky pass and the stars the tables before their draws (the sky pass and the outlines take the volume through `SetShaderValueTexture`). Units chosen because they are free in every lit program, the terrain's included, with no capability check (units 16 and up would have needed GL_MAX_TEXTURE_IMAGE_UNITS above 16). |
+  | 7–8 | the sky pass and the stars (T15); the lit programs (models, sprites, terrain: T35) | In the sky pass and the stars 7 the transmittance table, 8 the sky-view table (`sampler2D`, `WorldRendererTextureUnit_Atmosphere*`). In the lit programs 8 the haze's volume (`sampler2D atmosphereVolume`, `WorldRendererTextureUnit_HazeVolume`, since T36 also for the sky's light by height in its last row, while the haze is off too: they read no table since T35; their transmittance sampler on 7 is declared and unused, so 7 is free there for a `sampler2D` of the frame). raylib binds only cube maps there (`MATERIAL_MAP_CUBEMAP`, `_IRRADIANCE`, filled by no material of ours) and the 2D batch only 0–4, so what a pass binds stays bound; the lit passes bind the volume on 8 with their frame textures, the sky pass and the stars the tables before their draws (the sky pass and the outlines take the volume through `SetShaderValueTexture`). Units chosen because they are free in every lit program, the terrain's included, with no capability check (units 16 and up would have needed GL_MAX_TEXTURE_IMAGE_UNITS above 16). |
   | 9–11 | the terrain program only (B02) | Its material arrays (`sampler2DArray`: albedo and height, normal, roughness and AO). The terrain draws with no raylib maps, and an array sampler reads only a unit's `GL_TEXTURE_2D_ARRAY` target, which nothing else binds, so the models' maps on the same units never meet them. |
   | 12–15 | every lit program | The frame's textures: the near and far cascades, the cube shadow, the screen's AO. Full. |
 
@@ -1107,8 +1223,8 @@ mouse wheel (T34: the flycam's speed, up faster and down slower, three notches t
 6 m/s at start; the sprint key still multiplies it by 3; each change is logged and the I key's camera line shows it;
 not while walking, and the UI takes it first while the pointer is over a widget) and the debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11 and the
-digits are taken already, minus since B01, equals since B02, the keypad's 1 to 3 since T15 and 4 to 8 since T35; the
-keypad's 0 and 9 are free. Leave F12 free: raylib's `EndDrawing`
+digits are taken already, minus since B01, equals since B02, the keypad's 1 to 3 since T15, 4 to 8 since T35 and 9
+since T36; the keypad's 0 is free. Leave F12 free: raylib's `EndDrawing`
 takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
@@ -1124,6 +1240,8 @@ takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png`
   `WorldTest: haze view: the volume's in-scatter at slice 20 (3420.0 m).`), keypad 6 the environment's
   `aerial_distance_scale` (1, 5, 10), keypad 7 a morning mist (`ground_haze_density` 0.02, `ground_haze_thickness` 15,
   or no ground haze), keypad 8 the haze strength (`fog_strength` 1 or 0: clear air to the far plane); each logged;
+- **the light (T36, see "Sky's light on surfaces"):** keypad 9 switches between T36's light (one scale for the sky and
+  the surfaces) and the light before T36 (the A/B; logged: `WorldTest: T36's light OFF (the light before T36: ...)`);
 - **the moon and the seasons:** F pins the moon full (`MoonPhaseSource` fixed at 0.5) and gives it back to the
   calendar; Y switches the seasons (`AreSeasonsEnabled`). Every clock and moon log line carries the moon: `WorldTest:
   next day: Mon 2026-10-19 12:00:00; first quarter (phase 0.27, 59% lit, from the calendar).`;

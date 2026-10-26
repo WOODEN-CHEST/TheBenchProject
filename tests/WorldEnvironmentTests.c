@@ -169,6 +169,14 @@ static void DefaultsAreValid(TestRun* run)
         && (Environment.GroundHazeThickness == 20.0f) && (Environment.GroundHazeGlow == 0.8f));
     TEST_CHECK(run, (Environment.GroundHazeAlbedo.r == 250) && (Environment.GroundHazeAlbedo.b == 250)
         && (Environment.HorizonGroundHeight == 0.0f));
+    // The light (T36): a white sun above the air (the air reddens it), the sky's own light as the ambient, untinted, and
+    // the moonless night's own light, blue-white.
+    TEST_CHECK(run, (Environment.SunColor.r == 255) && (Environment.SunColor.g == 255) && (Environment.SunColor.b == 255)
+        && (Environment.SunIntensity == 1.0f));
+    TEST_CHECK(run, (Environment.AmbientSkylightColor.r == 255) && (Environment.AmbientSkylightColor.g == 255)
+        && (Environment.AmbientSkylightColor.b == 255) && (Environment.AmbientSkylightIntensity == 1.0f));
+    TEST_CHECK(run, (Environment.NightLightColor.r == 161) && (Environment.NightLightColor.g == 178)
+        && (Environment.NightLightColor.b == 255) && (Environment.NightLightIntensity == 0.011f));
     WorldEnvironment_Deconstruct(&Environment);
     WorldEnvironment_Deconstruct(&Environment); // safe to repeat
     TEST_CHECK(run, (Environment.MilkyWayTexture == NULL) && (Environment.MoonTexture == NULL));
@@ -316,6 +324,14 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.HorizonGroundHeight = 2.0e7f;
     CheckRejected(run, &Environment, "HorizonGroundHeight");
 
+    // The night's own light (T36).
+    ResetEnvironment(&Environment);
+    Environment.NightLightIntensity = -0.01f;
+    CheckRejected(run, &Environment, "NightLightIntensity");
+    ResetEnvironment(&Environment);
+    Environment.NightLightIntensity = NAN;
+    CheckRejected(run, &Environment, "NightLightIntensity");
+
     // Zero is allowed where the rule is ">= 0" (an effect switched off), the [0, 1] ranges include both ends, and the
     // calendar's first and last days are dates.
     ResetEnvironment(&Environment);
@@ -342,6 +358,7 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.GroundHazeThickness = 0.1f;
     Environment.GroundHazeGlow = 0.0f;
     Environment.HorizonGroundHeight = 1.0e7f;
+    Environment.NightLightIntensity = 0.0f;
     TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
     Environment.AerialDistanceScale = 1000.0f;
     Environment.GroundHazeThickness = 100000.0f;
@@ -467,6 +484,8 @@ static void CopyToCopiesEverySetting(TestRun* run)
     Source.GroundHazeAlbedo = (Color){ 17, 18, 19, 20 };
     Source.GroundHazeGlow = 0.5f;
     Source.HorizonGroundHeight = 250.0f;
+    Source.NightLightColor = (Color){ 21, 22, 23, 24 };
+    Source.NightLightIntensity = 0.5f;
     TEST_CHECK_SUCCESS(run, Properties_Set(WorldEnvironment_GetPropertyTable(), &Source, u8"moon_texture",
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"red_moon" }));
 
@@ -493,6 +512,8 @@ static void CopyToCopiesEverySetting(TestRun* run)
         && (Destination.GroundHazeDensity == 0.02f) && (Destination.GroundHazeBase == -4.0f));
     TEST_CHECK(run, (Destination.GroundHazeThickness == 15.0f) && (Destination.GroundHazeAlbedo.b == 19)
         && (Destination.GroundHazeGlow == 0.5f) && (Destination.HorizonGroundHeight == 250.0f));
+    TEST_CHECK(run, (Destination.NightLightColor.g == 22) && (Destination.NightLightColor.a == 24)
+        && (Destination.NightLightIntensity == 0.5f));
     // The names are the destination's own copies.
     TEST_CHECK(run, (Destination.MoonTexture != Source.MoonTexture)
         && (strcmp((const char*)Destination.MoonTexture, "red_moon") == 0));
@@ -730,9 +751,10 @@ static void MoonIlluminationFollowsThePhase(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
-/* Moonlight: a high full moon at midnight gives all of it, the full moon lights nothing by day (it is down) and a moon
- * low over the horizon little; a quarter moon at dusk gives a tenth of it, dimmed by the twilight; no moon, none. */
-static void MoonlightFollowsThePhaseHeightAndDaylight(TestRun* run)
+/* Moonlight above the air: a full moon at midnight gives all of it, none by day, and one just risen in the twilight is
+ * dimmed by the twilight alone (since T36 the air dims a low moon, in the renderer, not this factor: a quarter moon set
+ * after midnight keeps its factor); a quarter moon an hour after sunset gives a tenth of it; no moon, none. */
+static void MoonlightFollowsThePhaseAndDaylight(TestRun* run)
 {
     WorldEnvironment Environment;
     WorldEnvironment_SetDefaults(&Environment);
@@ -744,26 +766,37 @@ static void MoonlightFollowsThePhaseHeightAndDaylight(TestRun* run)
     WorldSkyLights Lights;
     WorldEnvironment_GetSkyLights(&Environment, &Lights);
     TEST_CHECK(run, fabsf(Lights.MoonIntensity - Environment.MoonIntensity) < 1e-6f);
-    TEST_CHECK(run, (Lights.SunIntensity == 0.0f) && (Lights.Daylight == 0.0f));
+    // The sun above the air keeps its intensity at night (since T36 the air and the planet take it away, in the
+    // renderer); the daylight is gone.
+    TEST_CHECK(run, (Lights.SunIntensity == Environment.SunIntensity) && (Lights.Daylight == 0.0f));
     TEST_CHECK(run, (Lights.MoonPhase == 0.5f) && (Lights.MoonIllumination > 0.9999f));
 
     Environment.TimeOfDay = 0.5f;
     TEST_CHECK(run, WorldEnvironment_GetMoonlightFactor(&Environment) == 0.0f);
     Environment.TimeOfDay = 0.755f; // just risen opposite the setting sun: low, and the twilight is still bright
     float Rising = WorldEnvironment_GetMoonlightFactor(&Environment);
-    TEST_CHECK(run, (Rising > 0.0f) && (Rising < 0.1f));
+    float Twilight = 1.0f - WorldEnvironment_GetDaylightFactor(&Environment);
+    TEST_CHECK(run, (Twilight > 0.1f) && (Twilight < 0.9f) && (WorldEnvironment_GetMoonDirection(&Environment).y < 0.1f));
+    TEST_CHECK(run, fabsf(Rising - WorldEnvironment_GetMoonBrightness(WorldEnvironment_GetMoonIllumination(&Environment))
+        * Twilight) < 1e-6f);
 
     Environment.MoonPhase = 0.25f;
     Environment.TimeOfDay = 0.8f; // high in the south an hour after sunset
     float Quarter = WorldEnvironment_GetMoonlightFactor(&Environment);
     TEST_CHECK(run, (Quarter > 0.05f) && (Quarter < WorldEnvironment_GetMoonBrightness(0.5f) + 1e-4f));
+    Environment.TimeOfDay = 0.05f; // set an hour after midnight: below the horizon, its light above the air the same
+    TEST_CHECK(run, (WorldEnvironment_GetMoonDirection(&Environment).y < -0.1f)
+        && (fabsf(WorldEnvironment_GetMoonlightFactor(&Environment) - Quarter) < 1e-3f));
+    WorldEnvironment_GetSkyLights(&Environment, &Lights);
+    TEST_CHECK(run, fabsf(Lights.MoonIntensity - Environment.MoonIntensity * WorldEnvironment_GetMoonlightFactor(&Environment))
+        < 1e-7f);
 
     Environment.MoonPhase = 0.5f;
     Environment.TimeOfDay = 0.0f;
     Environment.IsMoonEnabled = false;
     TEST_CHECK(run, WorldEnvironment_GetMoonlightFactor(&Environment) == 0.0f);
     WorldEnvironment_GetSkyLights(&Environment, &Lights);
-    TEST_CHECK(run, (Lights.MoonIntensity == 0.0f) && (Lights.ShadowLight == WorldShadowLight_None));
+    TEST_CHECK(run, Lights.MoonIntensity == 0.0f);
     WorldEnvironment_Deconstruct(&Environment);
 }
 
@@ -821,73 +854,49 @@ static void StarsDriftThroughTheYear(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
-/* The sun casts the shadows by day, the moon on a full-moon midnight, neither when both are down; and at dusk with a
- * full moon rising the hand-over from the sun to the moon goes through no shadows, without a jump anywhere. */
+/* The shadow light is the brighter of the sun and the moon (the light each gives a surface facing it, through the air:
+ * the renderer's), with its shadows faded in as it rises, out while the two are close (the hand-over), and none while the
+ * brighter one is too dim to show one; neither for broken values. (A dusk through the air: WorldSkyLightTests.c.) */
 static void ShadowLightFollowsTheBrighterLight(TestRun* run)
 {
-    WorldEnvironment Environment;
-    WorldEnvironment_SetDefaults(&Environment);
-    Environment.MoonPhaseSource = WorldMoonPhaseSource_Fixed;
-    Environment.MoonPhase = 0.5f;
-    WorldSkyLights Lights;
+    Vector3 High = Vector3Normalize((Vector3){ 0.2f, 0.9f, 0.3f });
+    Vector3 Low = Vector3Normalize((Vector3){ 0.9f, 0.1f, 0.0f });
+    Vector3 Down = { 0.0f, -1.0f, 0.0f };
 
-    Environment.TimeOfDay = 0.5f;
-    WorldEnvironment_GetSkyLights(&Environment, &Lights);
-    TEST_CHECK(run, (Lights.ShadowLight == WorldShadowLight_Sun) && (Lights.ShadowFade == 1.0f));
-    TEST_CHECK(run, AreVectorsClose(Lights.ShadowDirection, Lights.SunDirection) && (Lights.SunIntensity == 1.0f));
-    TEST_CHECK(run, (Lights.MoonIntensity == 0.0f) && (Lights.Daylight == 1.0f));
+    // The noon sun; the full moon high at midnight; a sun below the horizon gives none (its light is 0).
+    WorldShadowLightChoice Choice = WorldEnvironment_ChooseShadowLight(High, 0.9f, Down, 0.0f);
+    TEST_CHECK(run, (Choice.Light == WorldShadowLight_Sun) && (Choice.Fade == 1.0f) && AreVectorsClose(Choice.Direction, High));
+    Choice = WorldEnvironment_ChooseShadowLight(Down, 0.0f, High, 0.012f);
+    TEST_CHECK(run, (Choice.Light == WorldShadowLight_Moon) && (Choice.Fade == 1.0f) && AreVectorsClose(Choice.Direction, High));
 
-    Environment.TimeOfDay = 0.0f;
-    WorldEnvironment_GetSkyLights(&Environment, &Lights);
-    TEST_CHECK(run, (Lights.ShadowLight == WorldShadowLight_Moon) && (Lights.ShadowFade > 0.999f));
-    TEST_CHECK(run, AreVectorsClose(Lights.ShadowDirection, Lights.MoonDirection));
+    // Both dark, or broken: no shadows, the sun's direction kept.
+    Choice = WorldEnvironment_ChooseShadowLight(Down, 0.0f, Low, 0.0f);
+    TEST_CHECK(run, (Choice.Light == WorldShadowLight_None) && (Choice.Fade == 0.0f) && AreVectorsClose(Choice.Direction, Down));
+    Choice = WorldEnvironment_ChooseShadowLight(High, NAN, Low, NAN);
+    TEST_CHECK(run, (Choice.Light == WorldShadowLight_None) && (Choice.Fade == 0.0f));
 
-    // A new moon is down with the sun at midnight: no light casts shadows. Nor does a moon without light.
-    Environment.MoonPhase = 0.0f;
-    WorldEnvironment_GetSkyLights(&Environment, &Lights);
-    TEST_CHECK(run, (Lights.ShadowLight == WorldShadowLight_None) && (Lights.ShadowFade == 0.0f));
-    TEST_CHECK(run, AreVectorsClose(Lights.ShadowDirection, Lights.SunDirection));
-    Environment.MoonPhase = 0.5f;
-    Environment.MoonIntensity = 0.0f;
-    WorldEnvironment_GetSkyLights(&Environment, &Lights);
-    TEST_CHECK(run, Lights.ShadowLight == WorldShadowLight_None);
-    Environment.MoonIntensity = WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY;
+    // Too dim: a thin crescent's light (below 0.0006) casts none, twice that fully, in between part way.
+    TEST_CHECK(run, WorldEnvironment_ChooseShadowLight(Down, 0.0f, High, 0.0005f).Light == WorldShadowLight_None);
+    TEST_CHECK(run, WorldEnvironment_ChooseShadowLight(Down, 0.0f, High, 0.0013f).Fade == 1.0f);
+    Choice = WorldEnvironment_ChooseShadowLight(Down, 0.0f, High, 0.0009f);
+    TEST_CHECK(run, (Choice.Light == WorldShadowLight_Moon) && (Choice.Fade > 0.4f) && (Choice.Fade < 0.6f));
 
-    // An hour after sunset: a quarter moon high in the sky casts shadows, a thin crescent is too dim for one to show.
-    Environment.TimeOfDay = 0.8f;
-    Environment.MoonPhase = 0.25f;
-    WorldEnvironment_GetSkyLights(&Environment, &Lights);
-    TEST_CHECK(run, (Lights.ShadowLight == WorldShadowLight_Moon) && (Lights.ShadowFade > 0.99f));
-    Environment.MoonPhase = 0.1f;
-    WorldEnvironment_GetSkyLights(&Environment, &Lights);
-    TEST_CHECK(run, (Lights.MoonIntensity > 0.0f) && (Lights.ShadowLight == WorldShadowLight_None));
-    Environment.MoonPhase = 0.5f;
+    // The rise: none below 0.05 (the sine of the elevation), full from 0.15, smooth between.
+    TEST_CHECK(run, WorldEnvironment_ChooseShadowLight(Vector3Normalize((Vector3){ 1.0f, 0.04f, 0.0f }), 0.5f, Down,
+        0.0f).Light == WorldShadowLight_None);
+    TEST_CHECK(run, WorldEnvironment_ChooseShadowLight(Vector3Normalize((Vector3){ 1.0f, 0.16f, 0.0f }), 0.5f, Down,
+        0.0f).Fade == 1.0f);
+    Choice = WorldEnvironment_ChooseShadowLight((Vector3){ 0.99499f, 0.1f, 0.0f }, 0.5f, Down, 0.0f);
+    TEST_CHECK(run, (Choice.Light == WorldShadowLight_Sun) && (fabsf(Choice.Fade - 0.5f) < 0.01f));
 
-    // Dusk to night with a full moon rising: sun shadows, then none, then moon shadows, never a jump.
-    bool HasSeenNone = false;
-    bool IsOrderRight = true;
-    bool IsSmooth = true;
-    bool AreSwitchesHidden = true;
-    WorldShadowLight Previous = WorldShadowLight_Sun;
-    float PreviousFade = 1.0f;
-    for (int Step = 0; Step <= 75000; Step++)
-    {
-        Environment.TimeOfDay = 0.70f + (float)Step * 2e-6f; // steps of 0.17 game seconds
-        WorldEnvironment_GetSkyLights(&Environment, &Lights);
-        IsSmooth = IsSmooth && (fabsf(Lights.ShadowFade - PreviousFade) < 0.01f);
-        if (Lights.ShadowLight != Previous)
-        {
-            AreSwitchesHidden = AreSwitchesHidden && (PreviousFade < 0.01f) && (Lights.ShadowFade < 0.01f);
-            IsOrderRight = IsOrderRight && ((Lights.ShadowLight == WorldShadowLight_None)
-                || ((Lights.ShadowLight == WorldShadowLight_Moon) && HasSeenNone));
-        }
-        HasSeenNone = HasSeenNone || (Lights.ShadowLight == WorldShadowLight_None);
-        Previous = Lights.ShadowLight;
-        PreviousFade = Lights.ShadowFade;
-    }
-    TEST_CHECK(run, IsSmooth && AreSwitchesHidden && IsOrderRight && HasSeenNone);
-    TEST_CHECK(run, (Previous == WorldShadowLight_Moon) && (PreviousFade > 0.99f));
-    WorldEnvironment_Deconstruct(&Environment);
+    // The hand-over: none while the two are equal, full once one is 4 times the other, whichever is the brighter.
+    TEST_CHECK(run, WorldEnvironment_ChooseShadowLight(High, 0.01f, Low, 0.01f).Light == WorldShadowLight_None);
+    Choice = WorldEnvironment_ChooseShadowLight(High, 0.05f, High, 0.01f);
+    TEST_CHECK(run, (Choice.Light == WorldShadowLight_Sun) && (Choice.Fade == 1.0f));
+    Choice = WorldEnvironment_ChooseShadowLight(High, 0.01f, High, 0.05f);
+    TEST_CHECK(run, (Choice.Light == WorldShadowLight_Moon) && (Choice.Fade == 1.0f));
+    Choice = WorldEnvironment_ChooseShadowLight(High, 0.02f, High, 0.01f);
+    TEST_CHECK(run, (Choice.Light == WorldShadowLight_Sun) && (Choice.Fade > 0.4f) && (Choice.Fade < 0.6f));
 }
 
 /* With the seasons on (and a northern latitude), the June solstice day is longer than 12 hours, the December one
@@ -979,7 +988,7 @@ void WorldEnvironmentTests_Run(TestRun* run)
         { "moon_phase_follows_the_calendar", MoonPhaseFollowsTheCalendar },
         { "moon_moves_with_its_phase", MoonMovesWithItsPhase },
         { "moon_illumination_follows_the_phase", MoonIlluminationFollowsThePhase },
-        { "moonlight_follows_the_phase_height_and_daylight", MoonlightFollowsThePhaseHeightAndDaylight },
+        { "moonlight_follows_the_phase_and_daylight", MoonlightFollowsThePhaseAndDaylight },
         { "stars_drift_through_the_year", StarsDriftThroughTheYear },
         { "shadow_light_follows_the_brighter_light", ShadowLightFollowsTheBrighterLight },
         { "seasons_change_the_day_length", SeasonsChangeTheDayLength },

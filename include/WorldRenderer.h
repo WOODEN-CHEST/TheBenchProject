@@ -299,10 +299,12 @@ typedef struct WorldRendererStatusStruct
     /** @brief Whether the copies drew instanced (WorldRenderer_SetInstancingEnabled). */
     bool IsInstancingEnabled;
     /** @brief Whether the atmosphere's tables were switched on (WorldRenderer_SetAtmosphereTablesEnabled), how many times
-     *  their transmittance and multiple scattering tables were built (whenever the air changes), and the height above
-     *  sea level the sky was seen from, in metres (the camera's, at least 1 m) (T15). */
+     *  their transmittance and multiple scattering tables were built (whenever the air changes) and the sky's
+     *  irradiance table (T36: after them, or when the haze's forward scattering or the multiple scattering's share
+     *  changes), and the height above sea level the sky was seen from, in metres (the camera's, at least 1 m) (T15). */
     bool AreAtmosphereTablesEnabled;
     uint32_t AtmosphereTableBuildCount;
+    uint32_t IrradianceTableBuildCount;
     float AtmosphereViewHeight;
     /** @brief The frame's haze (T35): its distance scale (the environment's aerial_distance_scale and fog_strength times
      *  the player's fog strength; 1 the real air) and the ground haze's density at its base (per metre; 0: none), and
@@ -311,6 +313,25 @@ typedef struct WorldRendererStatusStruct
     float GroundHazeDensity;
     WorldRendererHazeView HazeView;
     int HazeViewSlice;
+    /** @brief The last render's light at the camera (T36): whether T36's light ran (one light scale for the sky and the
+     *  surfaces; false: the A/B's light before T36, WorldRenderer_SetOneLightScaleEnabled), whether the lit surfaces took
+     *  it by their height (false: the camera's for all), the sun's and the moon's light on a surface facing them, the
+     *  sky's irradiance on a surface facing up, the ground's bounce on one facing down and the moonless night's own
+     *  light (linear RGB, the game's light units), and the scene luminance eye adaptation started from and the exposure it
+     *  set. */
+    bool IsOneLightScale;
+    bool IsSkyLightPerHeight;
+    /** @brief How many times the C mirror's tables were built (the first frame's, then one per air change, each spread
+     *  over frames), and whether a rebuild was running. */
+    uint32_t SkyLightTableBuildCount;
+    bool IsSkyLightTableBuilding;
+    float SunLight[3];
+    float MoonLight[3];
+    float SkyIrradiance[3];
+    float GroundIrradiance[3];
+    float NightLight[3];
+    float SceneLuminance;
+    float Exposure;
     /** @brief How long the render took on the CPU, in milliseconds (WorldRenderer_RenderToTarget from its start to its
      *  return; the GPU works on after it, and its share shows in the frame time when it is the slower), and the time
      *  since the render before, as the caller gave it (its deltaSeconds; 0 when that was not above 0). */
@@ -345,9 +366,11 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self);
 
 /**
  * @brief Loads the shaders, the sky textures the world's environment names and the models of the world's objects, so
- *        the first frames do not stall on them.
+ *        the first frames do not stall on them, and makes the sky's light follow the world's air at once.
  *
- * Resolves every model component's model under a fresh asset user and then retires the previous one, so models
+ * The sky's light at the camera (T36) is computed from tables of the air built on the CPU: when the world's air differs
+ * from what they hold (or on the first call) they are built whole here, about 55 ms; a later change of the air is
+ * rebuilt over frames instead. Resolves every model component's model under a fresh asset user and then retires the previous one, so models
  * that no world object uses any more are released (asset holds are not counted, so this swap is how unused
  * models get released). Failures are logged once and skipped, not fatal. Components added later are resolved by
  * WorldRenderer_RenderToTarget automatically, but a model that failed is not retried until its component names
@@ -438,6 +461,26 @@ void WorldRenderer_SetAtmosphereTablesEnabled(WorldRenderer* self, bool enabled)
  * @returns true if they are on (they draw the sky when available).
  */
 bool WorldRenderer_AreAtmosphereTablesEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Switches between T36's light (default on) and the light before T36, for A/B-ing the light (T36).
+ *
+ * On, the sky and the surfaces are lit on one light scale: the sun and the moon through the air at each surface's height,
+ * the sky's own light as the ambient, the exposure on that scale. Off, the light before T36: the sky lit by a sun 22
+ * times the surfaces', the painted ambient, the sun ramped by the daylight, the old exposure and night vision.
+ * Applied on the next render.
+ * TODO: remove once the owner approves T36's light.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true for T36's light.
+ */
+void WorldRenderer_SetOneLightScaleEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether T36's light is on (see WorldRenderer_SetOneLightScaleEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true for T36's light, false for the light before T36.
+ */
+bool WorldRenderer_IsOneLightScaleEnabled(const WorldRenderer* self);
 
 /**
  * @brief Chooses the haze's debug view (T35): the scene, or one slice of the aerial-perspective volume (its in-scatter or

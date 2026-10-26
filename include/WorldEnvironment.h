@@ -25,8 +25,8 @@
  * THE SKY'S MODEL. Pure functions below turn the date and time into what the sky shows: the sun's direction (on the
  * celestial equator, or following the seasons when AreSeasonsEnabled), the moon (its phase from the calendar, its
  * direction east of the sun by that phase, its lit fraction), the stars' rotation (turning once a day and drifting
- * about 1 degree a day through the year), and the two directional lights with the choice of which one casts the
- * shadows (WorldEnvironment_GetSkyLights).
+ * about 1 degree a day through the year), the two directional lights above the air (WorldEnvironment_GetSkyLights), and
+ * the choice of which one casts the shadows from the light each gives the ground (WorldEnvironment_ChooseShadowLight).
  *
  * Every field is described once in the environment's property table (WorldEnvironment_GetPropertyTable, in
  * source/WorldEnvironment.c): its key (the field name in snake_case, e.g. "light_pollution"), its GHDF wire id, its
@@ -54,10 +54,12 @@
 #define WORLD_ENVIRONMENT_MOON_EPOCH_DAY 730124.7597
 /** @brief The real moon's mean cycle (synodic month), new moon to new moon, in days: MoonCycleDays's default. */
 #define WORLD_ENVIRONMENT_MOON_CYCLE_DAYS 29.530588f
-/** @brief MoonIntensity's default: the moonlight of a full moon, relative to the sun's light. Far above the real
+/** @brief MoonIntensity's default: the light of a full moon above the air, relative to the sun's. Far above the real
  *  moon's (about 1/400000), so that at the night exposure a full-moon night is clearly lighter than a new-moon one,
- *  with soft shadows, and still reads as night (tuned on rendered frames: 8% lit the test world nearly like day). */
-#define WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY 0.02f
+ *  with soft shadows, and still reads as night (tuned on rendered frames: 8% lit the test world nearly like day). Since
+ *  T36 it lights the surfaces through the air with the moonlit sky's own light as their fill (before T36 a painted fill
+ *  of 30 % of it): twice the old 0.02 keeps a full-moon night's ground as bright as before (tuned on rendered frames). */
+#define WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY 0.04f
 /** @brief The default gravity, in metres per second squared. */
 #define WORLD_ENVIRONMENT_DEFAULT_GRAVITY 15.0f
 /** @brief The largest gravity a world may set, in metres per second squared (a bound for hostile content). */
@@ -84,12 +86,12 @@
 /** @brief The limits of GroundHazeThickness, in metres. */
 #define WORLD_ENVIRONMENT_MIN_GROUND_HAZE_THICKNESS 0.1
 #define WORLD_ENVIRONMENT_MAX_GROUND_HAZE_THICKNESS 100000.0
-/** @brief The sun's elevation (the sine) at and below which its light is gone, and at and above which it is full: the
- *  daylight factor's twilight ramp (WorldEnvironment_GetDaylightForElevation). The renderer's far ground mirrors it. */
+/** @brief The sun's elevation (the sine) at and below which the daylight is gone, and at and above which it is full: the
+ *  daylight factor's twilight ramp (WorldEnvironment_GetDaylightForElevation). */
 #define WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION (-0.12f)
 #define WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION 0.10f
-/** @brief The moon's elevation (the sine; about 11.5 degrees) from which its light is full, fading in from the horizon
- *  (WorldEnvironment_GetMoonlightForElevation). The renderer's far ground mirrors it. */
+/** @brief The moon's elevation (the sine; about 11.5 degrees) from which its light was full before T36, fading in from
+ *  the horizon (WorldEnvironment_GetMoonlightForElevation; the A/B of the light before T36 only). */
 #define WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION 0.2f
 
 
@@ -107,7 +109,7 @@ typedef enum WorldMoonPhaseSourceEnum
 } WorldMoonPhaseSource;
 
 /**
- * @brief Which directional light casts the shadows at a moment (WorldSkyLights.ShadowLight). Not saved.
+ * @brief Which directional light casts the shadows at a moment (WorldShadowLightChoice.Light). Not saved.
  */
 typedef enum WorldShadowLightEnum
 {
@@ -121,10 +123,12 @@ typedef enum WorldShadowLightEnum
 } WorldShadowLight;
 
 /**
- * @brief The sky's two directional lights at one moment, and which of them casts the shadows.
+ * @brief The sky's two directional lights at one moment, above the air.
  *
  * A plain value, filled by WorldEnvironment_GetSkyLights from the date, the time and the settings. Intensities are
- * multipliers on the lights' colours (SunColor, MoonColor), with daylight, the moon's phase and height already in.
+ * multipliers on the lights' colours (SunColor, MoonColor) above the air (since T36: the renderer takes them through the
+ * air, whose transmittance reddens and ends them as they set); the moon's phase and the daylight are already in the
+ * moon's.
  */
 typedef struct WorldSkyLightsStruct
 {
@@ -132,7 +136,7 @@ typedef struct WorldSkyLightsStruct
     Vector3 SunDirection;
     /** @brief How much daylight there is, 1 day .. 0 night (WorldEnvironment_GetDaylightFactor). */
     float Daylight;
-    /** @brief The sun's light: SunIntensity x Daylight, >= 0. */
+    /** @brief The sun's intensity above the air: SunIntensity, >= 0. */
     float SunIntensity;
     /** @brief Unit direction to the moon (WorldEnvironment_GetMoonDirection). */
     Vector3 MoonDirection;
@@ -140,18 +144,29 @@ typedef struct WorldSkyLightsStruct
     float MoonPhase;
     /** @brief The lit fraction of the moon's disc in [0, 1] (WorldEnvironment_GetMoonIllumination). */
     float MoonIllumination;
-    /** @brief The moon's light: MoonIntensity x WorldEnvironment_GetMoonlightFactor, >= 0 (0 when the moon is off). */
+    /** @brief The moon's intensity above the air, relative to the sun's at sun_intensity 1: MoonIntensity x
+     *  WorldEnvironment_GetMoonlightFactor (the phase's brightness, faded out by daylight), >= 0 (0 when the moon is
+     *  off). */
     float MoonIntensity;
-    /** @brief Which light casts the shadows: the brighter one (by luminance), once it stands high enough, or none. */
-    WorldShadowLight ShadowLight;
-    /** @brief Unit direction to the shadow light; the sun's direction when ShadowLight is None. */
-    Vector3 ShadowDirection;
-    /** @brief How strong the shadows are, 0..1: they fade in as the shadow light rises from 0.05 to 0.15 (the sine of
-     *  its elevation), fade out while the two lights are about as bright (full once one is 4 times the other), so
-     *  a hand-over from the sun to the moon (or back) never jumps, and fade out for a light too dim to show a shadow
-     *  (a thin crescent). 0 when ShadowLight is None. */
-    float ShadowFade;
 } WorldSkyLights;
+
+/**
+ * @brief Which of the sky's lights casts the shadows, its direction and how strong its shadows are
+ *        (WorldEnvironment_ChooseShadowLight). A plain value.
+ */
+typedef struct WorldShadowLightChoiceStruct
+{
+    /** @brief The light: the brighter one (by the luminance it gives a surface facing it), once it stands high enough,
+     *  or none. */
+    WorldShadowLight Light;
+    /** @brief Unit direction to it; the sun's direction when Light is None. */
+    Vector3 Direction;
+    /** @brief How strong the shadows are, 0..1: they fade in as the light rises from 0.05 to 0.15 (the sine of its
+     *  elevation), fade out while the two lights are about as bright (full once one is 4 times the other), so a
+     *  hand-over from the sun to the moon (or back) never jumps, and fade out for a light too dim to show a shadow (a
+     *  thin crescent). 0 when Light is None. */
+    float Fade;
+} WorldShadowLightChoice;
 
 /**
  * @brief The environment/graphics settings of a single world.
@@ -210,7 +225,8 @@ typedef struct WorldEnvironmentStruct
     /** @brief Tint applied to the computed sky color, so worlds can push alien skies. Alpha ignored. */
     Color SkyTint;
 
-    /** @brief Sun disc color. Alpha ignored. */
+    /** @brief The sun's colour above the air (white by default since T36): its light, its disc and the light it gives
+     *  the air (the sky, the haze); the air reddens it toward the horizon by itself. Alpha ignored. */
     Color SunColor;
     /** @brief Sun radiance multiplier. Finite and >= 0. */
     float SunIntensity;
@@ -263,8 +279,9 @@ typedef struct WorldEnvironmentStruct
     /** @brief Brightness multiplier for the moon's disc in the sky (1 = natural); the moonlight is MoonIntensity.
      *  Finite and >= 0. */
     float MoonBrightness;
-    /** @brief The moonlight of a full moon high in the sky, relative to the sun's light (the phase and the moon's
-     *  height scale it, and the moonlit sky follows it). 0 gives a moon that lights nothing. Finite and >= 0. */
+    /** @brief The light of a full moon above the air, relative to the sun's (the phase scales it, the air dims and
+     *  reddens it toward the horizon, and the moonlit sky is lit by all of it; it fades out by day). 0 gives a moon that
+     *  lights nothing. Finite and >= 0. */
     float MoonIntensity;
     /** @brief Colour of the moonlight and the disc; blue-white gives the night look. Alpha ignored. */
     Color MoonColor;
@@ -273,13 +290,18 @@ typedef struct WorldEnvironmentStruct
     unsigned char* MoonTexture;
 
     // ---- Ambient / skylight ----
-    /** @brief Tint on the ambient skylight applied to shaded surfaces. The renderer picks the ambient HUE from
-     *  the sun's elevation to track the sky (blue by day, warm at sunrise/sunset, fading to a faint blue at
-     *  night); this colour multiplies that, so WHITE (the default) leaves it as-is and other colours warm/cool
-     *  the whole fill. Alpha ignored. */
+    /** @brief Tints the sky's light on surfaces (since T36 the ambient is the sky's own irradiance and the ground's
+     *  bounce: blue by day, the twilight's colours, the moonlit sky, the town's glow): WHITE (the default) leaves it as
+     *  it is. Alpha ignored. */
     Color AmbientSkylightColor;
-    /** @brief Ambient skylight intensity multiplier. Finite and >= 0. */
+    /** @brief Scales the sky's light on surfaces (1: the sky's own). Finite and >= 0. */
     float AmbientSkylightIntensity;
+    /** @brief The colour of the moonless night's own light on surfaces (starlight and airglow, raised for play as the
+     *  moonlight is), added to the sky's. Alpha ignored. */
+    Color NightLightColor;
+    /** @brief The moonless night's own light: its colour's multiplier, linear (0: a pitch-black moonless night).
+     *  Finite and >= 0. */
+    float NightLightIntensity;
 
     // ---- Haze: the air in front of distant things, the mist near the ground, the far ground ----
     /** @brief Legacy flat fog colour. Not read by the renderer (since T35 distant things fade into the haze of the air in
@@ -532,58 +554,73 @@ float WorldEnvironment_GetMoonIllumination(const WorldEnvironment* self);
 float WorldEnvironment_GetMoonBrightness(float illumination);
 
 /**
- * @brief Returns how much of a full moon's light reaches the world right now, 0..1: the phase's brightness
- *        (WorldEnvironment_GetMoonBrightness), faded in from the horizon (full once the moon stands about 11 degrees
- *        high), and out by daylight (x (1 - WorldEnvironment_GetDaylightFactor)). 0 when IsMoonEnabled is false.
+ * @brief Returns how much of a full moon's light lights the world right now, above the air, 0..1: the phase's
+ *        brightness (WorldEnvironment_GetMoonBrightness), faded out by daylight (x (1 -
+ *        WorldEnvironment_GetDaylightFactor)): the moonlight is far brighter than the real moon's, for play, so by day it
+ *        must not show. 0 when IsMoonEnabled is false. Since T36 the air dims it toward the horizon (the renderer's
+ *        transmittance), not this factor.
  *
- * The moonlight's intensity is MoonIntensity times this.
+ * The moon's intensity above the air is MoonIntensity times this.
  * @param self The environment; must not be NULL.
  * @returns The moonlight factor in [0, 1].
  */
 float WorldEnvironment_GetMoonlightFactor(const WorldEnvironment* self);
 
 /**
- * @brief Computes the sky's two directional lights for the date and time, and which one casts the shadows.
+ * @brief Computes the sky's two directional lights above the air for the date and time.
  *
- * The sun's light is SunIntensity x daylight, the moon's MoonIntensity x WorldEnvironment_GetMoonlightFactor. The
- * shadow light is the brighter of the two by luminance (intensity x the luminance of its linear colour). Its shadows
- * fade in as it rises (none below 0.05, the sine of its elevation, full from 0.15) and fade out around the hand-over:
- * x smoothstep(0, ln 4, ln(brighter / dimmer)) for the two luminances, which is 0 where they are equal and 1 once one
- * is 4 times the other. So dusk with the moon up goes from sun shadows through no shadows to moon shadows without a
- * jump. A light dimmer than about a twentieth of the default full moon's casts none (its shadow could not show), and
- * neither light casts shadows when both are dark or below the horizon.
+ * The sun's intensity is SunIntensity, the moon's MoonIntensity x WorldEnvironment_GetMoonlightFactor. The renderer takes
+ * them through the air and chooses the shadow light from what reaches the ground (WorldEnvironment_ChooseShadowLight).
  * @param self The environment; must not be NULL.
  * @param outLights [out] Receives the lights; must not be NULL.
  */
 void WorldEnvironment_GetSkyLights(const WorldEnvironment* self, WorldSkyLights* outLights);
 
 /**
- * @brief Returns how much of the sun's light reaches the ground where the sun stands this high: the daylight factor's
- *        ramp, a smooth step from WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION (0) to WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION
- *        (1). WorldEnvironment_GetDaylightFactor is it for the sun's elevation; the renderer's far ground takes it where
- *        the sun stands at a far point of the curved planet.
+ * @brief Chooses which of the sky's lights casts the shadows, from the luminance each gives a surface facing it.
+ *
+ * The shadow light is the brighter of the two. Its shadows fade in as it rises (none below 0.05, the sine of its
+ * elevation, full from 0.15) and fade out around the hand-over: x smoothstep(0, ln 4, ln(brighter / dimmer)), 0 where the
+ * two are equal and 1 once one is 4 times the other. So dusk with the moon up goes from sun shadows through no shadows
+ * to moon shadows without a jump. A light dimmer than a luminance of 0.0006 casts none (a thin crescent's shadow could
+ * not show; the sun at noon gives about 0.9, the default full moon high up about 0.025), fading in to full at twice it;
+ * neither casts shadows when both are dark.
+ * @param sunDirection Unit direction to the sun.
+ * @param sunLuminance The luminance the sun gives a surface facing it (through the air; >= 0).
+ * @param moonDirection Unit direction to the moon.
+ * @param moonLuminance The moon's, the same way.
+ * @returns The choice.
+ */
+WorldShadowLightChoice WorldEnvironment_ChooseShadowLight(Vector3 sunDirection, float sunLuminance, Vector3 moonDirection,
+    float moonLuminance);
+
+/**
+ * @brief Returns how much daylight there is where the sun stands this high: a smooth step from
+ *        WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION (0) to WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION (1).
+ *        WorldEnvironment_GetDaylightFactor is it for the sun's elevation.
  * @param sunElevation The sine of the sun's elevation, [-1, 1] (NaN gives 0).
  * @returns The factor in [0, 1].
  */
 float WorldEnvironment_GetDaylightForElevation(float sunElevation);
 
 /**
- * @brief Returns how much of the moon's light reaches the ground where the moon stands this high: 0 below the horizon,
- *        rising smoothly to 1 at WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION (the air in front of a low moon dims it).
- *        Part of WorldEnvironment_GetMoonlightFactor.
+ * @brief Returns the moonlight's height ramp before T36: 0 below the horizon, rising smoothly to 1 at
+ *        WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION. Since T36 the air's transmittance dims the moon instead; only the
+ *        renderer's A/B of the light before T36 uses this.
  * @param moonElevation The sine of the moon's elevation, [-1, 1] (NaN gives 0).
  * @returns The factor in [0, 1].
  */
+// TODO: remove once the owner approves T36's light (the A/B's old moonlight).
 float WorldEnvironment_GetMoonlightForElevation(float moonElevation);
 
 /**
- * @brief Returns how much of the sun's light reaches the world right now: 1 in full day, 0 at night.
+ * @brief Returns how much daylight there is right now: 1 in full day, 0 at night.
  *
- * A smooth 0..1 factor derived from the sun's elevation (the Y of WorldEnvironment_GetSunDirection): it is 1
- * while the sun is well above the horizon, ramps down through twilight as the sun approaches and crosses the
- * horizon, and is 0 once the sun is below it. The renderer multiplies the sun's intensity by this (so the sun
- * stops lighting objects at night) and blends the ambient skylight from its daytime color toward a dim night
- * ambient by the same factor, so the world actually darkens as the game clock moves the time of day.
+ * A smooth 0..1 factor derived from the sun's elevation (the Y of WorldEnvironment_GetSunDirection): it is 1 while the
+ * sun is well above the horizon, ramps down through twilight as the sun approaches and crosses the horizon, and is 0
+ * once the sun is about 7 degrees below it. Since T36 the sun's light comes through the air (the renderer), not through
+ * this factor; it fades out what is far brighter than the real thing and must not show by day: the moonlight and the
+ * town's light in the air.
  * @param self The environment; must not be NULL.
  * @returns The daylight factor in [0, 1].
  */

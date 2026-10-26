@@ -1,8 +1,15 @@
 // The world's lighting, shared by the lit shaders (world_pbr and world_sprite), for #include "common/lighting": the
 // frame's lighting uniforms (the renderer uploads the same values to every shader that includes this file), the
 // Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the cascades' shadow, forward point
-// lights and the shadow-casting point light with its cube shadow, the screen-space AO of the ambient term, the eye's
-// night vision and the haze in front of every surface (T35's aerial perspective and ground haze, common/haze).
+// lights and the shadow-casting point light with its cube shadow, the sky's ambient light with the screen-space AO, the
+// eye's night vision and the haze in front of every surface (T35's aerial perspective and ground haze, common/haze).
+//
+// THE SKY'S LIGHT (T36, one light scale): the sun and the moon reach a surface through the air (their light above the air
+// times the transmittance toward them at the surface's own height: reddened low over the horizon, gone once the disc has
+// set there), and its ambient is the sky's own light, the sky's irradiance from above and the ground's bounce from below
+// (AmbientLight), plus the moonless night's own light. The atmosphere pass writes that light by height into the haze
+// volume's last row every frame (SkyLightAt reads it at the fragment's height); without it (the atmosphere's tables off
+// or unavailable) the uniforms hold the light at the camera, the C mirror's.
 //
 // Two families of light functions: the plain ones (SkyLight, PointLights) the PBR shader uses, and the wrapped ones
 // (SkyLightWrapped, PointLightsWrapped) sprites use, whose diffuse part reaches past the terminator ("wrap lighting",
@@ -24,13 +31,18 @@
 
 // Lighting, set by WorldRenderer each frame. Light colours are LINEAR.
 uniform vec3 sunDirection;     // unit direction TO the sun, world space (also the ground haze's sun)
-uniform vec3 sunColor;         // linear
-uniform float sunIntensity;    // the sun's light: daylight included, 0 at night
 uniform vec3 moonDirection;    // unit direction TO the moon, world space (also the ground haze's moon)
-uniform vec3 moonColor;        // linear
-uniform float moonIntensity;   // the moon's light: phase, height and night included, 0 by day or without a moon
-uniform vec3 ambientColor;     // linear
-uniform float ambientIntensity;
+// The sky's light (T36). While skyLightPerHeight is on, the light at each fragment's height comes from the volume's last
+// row; otherwise these four hold it at the camera for every fragment (the light on a surface facing the sun, facing the
+// moon, the sky's irradiance on one facing up, the ground's bounce on one facing down).
+uniform bool skyLightPerHeight;
+uniform vec3 sunLight;
+uniform vec3 moonLight;
+uniform vec3 skyIrradiance;
+uniform vec3 groundIrradiance;
+uniform bool isMoonLit;        // false: the moon lights nothing this frame (its terms are skipped)
+uniform vec3 ambientTint;      // the ambient's tint and strength on the sky's light (ambient_skylight_color x intensity)
+uniform vec3 nightLight;       // the moonless night's own light on a surface, per unit of its albedo
 
 // Shadow map: TWO cascades, rendered from the sky's shadow light: the sun by day, the moon on bright nights. The NEAR
 // cascade is a small, sharp map for close detail; the FAR cascade is a large, coarse map for distant / large casters
@@ -219,31 +231,84 @@ float SkyShadowAmount(vec3 shadowPos, float nDotL)
     return shadow*clamp(shadowStrength, 0.0, 1.0);
 }
 
+// ---- The sky's light at a point (T36) --------------------------------------------------------------------------
+// What lights a surface at a point: the sun's light on a surface facing it, the moon's, the sky's irradiance on a surface
+// facing up and the ground's bounce on one facing down.
+struct SkyLightValues
+{
+    vec3 sun;
+    vec3 moon;
+    vec3 sky;
+    vec3 ground;
+};
+
+// One value of the sky's light at a height from the volume's last row, linear between the two heights around it.
+vec3 SkyLightValueAt(int value, float coordinate)
+{
+    int lower = int(floor(coordinate));
+    float share = coordinate - float(lower);
+    vec3 a = texelFetch(atmosphereVolume, atmosphereSkyLightTexel(value, lower), 0).rgb;
+    vec3 b = texelFetch(atmosphereVolume, atmosphereSkyLightTexel(value, lower + 1), 0).rgb;
+    return mix(a, b, share);
+}
+
+// The sky's light at a render-space point: at its own height above the atmosphere's ground (the camera's plus its height
+// in render space), or the camera's while the volume holds none.
+SkyLightValues SkyLightAt(vec3 worldPos)
+{
+    SkyLightValues light;
+    if (skyLightPerHeight)
+    {
+        float coordinate = atmosphereSkyLightCoordinate(atmosphereViewHeight + worldPos.y);
+        light.sun = SkyLightValueAt(ATMOSPHERE_SKY_LIGHT_SUN, coordinate);
+        light.moon = isMoonLit ? SkyLightValueAt(ATMOSPHERE_SKY_LIGHT_MOON, coordinate) : vec3(0.0);
+        light.sky = SkyLightValueAt(ATMOSPHERE_SKY_LIGHT_SKY, coordinate);
+        light.ground = SkyLightValueAt(ATMOSPHERE_SKY_LIGHT_GROUND, coordinate);
+        return light;
+    }
+    light.sun = sunLight;
+    light.moon = moonLight;
+    light.sky = skyIrradiance;
+    light.ground = groundIrradiance;
+    return light;
+}
+
 // The sky's two lights through the plain BRDF: the sun, then (at night) the moon. The cascades' shadow darkens the
 // direct term of the light that cast it (by its fade), never the ambient.
-vec3 SkyLight(vec3 n, vec3 v, float shadowAmount, vec3 albedo, vec3 f0, float rough, float metal)
+vec3 SkyLight(SkyLightValues light, vec3 n, vec3 v, float shadowAmount, vec3 albedo, vec3 f0, float rough, float metal)
 {
-    vec3 direct = DirectionalLight(n, v, normalize(sunDirection), sunColor*sunIntensity,
-        1.0 - shadowAmount*sunShadowFade, albedo, f0, rough, metal);
-    if (moonIntensity > 0.0)
+    vec3 direct = DirectionalLight(n, v, normalize(sunDirection), light.sun, 1.0 - shadowAmount*sunShadowFade, albedo,
+        f0, rough, metal);
+    if (isMoonLit)
     {
-        direct += DirectionalLight(n, v, normalize(moonDirection), moonColor*moonIntensity,
-            1.0 - shadowAmount*moonShadowFade, albedo, f0, rough, metal);
+        direct += DirectionalLight(n, v, normalize(moonDirection), light.moon, 1.0 - shadowAmount*moonShadowFade, albedo,
+            f0, rough, metal);
     }
     return direct;
 }
 
 // The sky's two lights with wrap lighting (WrappedLight), shadowed like SkyLight.
-vec3 SkyLightWrapped(vec3 n, vec3 v, float shadowAmount, float wrap, vec3 albedo, vec3 f0, float rough, float metal)
+vec3 SkyLightWrapped(SkyLightValues light, vec3 n, vec3 v, float shadowAmount, float wrap, vec3 albedo, vec3 f0,
+    float rough, float metal)
 {
-    vec3 direct = WrappedLight(n, v, normalize(sunDirection), sunColor*sunIntensity, wrap, albedo, f0, rough, metal)
+    vec3 direct = WrappedLight(n, v, normalize(sunDirection), light.sun, wrap, albedo, f0, rough, metal)
         *(1.0 - shadowAmount*sunShadowFade);
-    if (moonIntensity > 0.0)
+    if (isMoonLit)
     {
-        direct += WrappedLight(n, v, normalize(moonDirection), moonColor*moonIntensity, wrap, albedo, f0, rough, metal)
+        direct += WrappedLight(n, v, normalize(moonDirection), light.moon, wrap, albedo, f0, rough, metal)
             *(1.0 - shadowAmount*moonShadowFade);
     }
     return direct;
+}
+
+// The ambient light on a surface with the normal n, per unit of its albedo (times its AO by the caller): the sky's
+// irradiance over the upper half of its view and the ground's bounce over the lower half, as a Lambertian surface takes
+// them ((sky (1 + n.y) / 2 + ground (1 - n.y) / 2) / pi), tinted, plus the moonless night's own light.
+// T14: the sky visibility and the ambient zones plug in here (the sky's part seen from inside a room, a zone's light).
+vec3 AmbientLight(SkyLightValues light, vec3 n)
+{
+    float up = clamp(n.y, -1.0, 1.0);
+    return (light.sky*(1.0 + up) + light.ground*(1.0 - up))*(0.5/PI)*ambientTint + nightLight;
 }
 
 

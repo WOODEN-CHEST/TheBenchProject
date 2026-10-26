@@ -40,6 +40,13 @@
 /** Elevation band (above SUNSHAFT_MIN_ELEVATION) over which the shafts fade in, so they also ease off gently at
  *  the horizon instead of cutting out abruptly. */
 #define SUNSHAFT_ELEVATION_FADE_BAND 0.15f
+/** T36: the sun shafts' strength is multiplied by this over the exposure, so their light on screen is this times the
+ *  sky pixels they gather toward the sun (linear HDR), not the eye's exposure times them (which rises up to 24 at dusk
+ *  and would make them glare). Their light comes mostly from the sun's disc, itself drawn against the exposure
+ *  (SUN_DISC_SCREEN_EXPOSURE), so it falls as the exposure rises. Tuned on pictures against the light before T36: the
+ *  shafts' added light on screen is within about 25 % of before with the sun 30, 15 and 5 degrees up (T36's status
+ *  block). */
+#define SUNSHAFT_SKY_SCREEN_SCALE 8.0f
 
 
 // Static functions.
@@ -420,6 +427,12 @@ void WorldRendererPost_Tonemap(WorldRenderer* self, const WorldRenderFrame* fram
         float BloomStrength = frame->IsBloomActive ? frame->BloomStrength : 0.0f;
         SetShaderValue(TonemapRay, self->_tonemap._locBloomStrength, &BloomStrength, SHADER_UNIFORM_FLOAT);
         float SunshaftStrength = frame->AreSunshaftsActive ? frame->SunshaftStrength : 0.0f;
+        if (frame->IsOneLightScale && (frame->Exposure > 0.0f))
+        {
+            // T36: the shafts follow the sky on screen, not the eye's exposure (TODO: only this branch once the owner
+            // approves T36's light).
+            SunshaftStrength *= SUNSHAFT_SKY_SCREEN_SCALE / frame->Exposure;
+        }
         SetShaderValue(TonemapRay, self->_tonemap._locSunshaftStrength, &SunshaftStrength, SHADER_UNIFORM_FLOAT);
         BeginShaderMode(TonemapRay);
         // Bind the extra samplers (bloom unit 1, sun shafts unit 2) AFTER BeginShaderMode, via

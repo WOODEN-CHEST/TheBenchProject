@@ -8,15 +8,18 @@
 //
 // Below the horizon (T35) a ray ends on the far ground: the planet's surface at the atmosphere's ground height, seen
 // through the haze in front of it. The ground is the frame's sky_ground_albedo lit as the lit shaders light a dielectric
-// facing up: the half's light (the sun's, or the moon's) by its own height over that point of the curved planet (a far
-// point the sun has set on is dark), and in the sun's half the frame's ambient, so the far ground meets a terrain's
-// edge without a seam. The haze in front of it follows the frame's haze (the distance scale and the start), as the
-// volume's does for everything else, its rays through the ground (common/atmosphere) where the scale takes them past it.
-// The sky's in-scatter is tinted by the sky's tint; the ground's own light is not.
+// facing up, so the far ground meets a terrain's edge without a seam: since T36 by the half's light (the sun's, or the
+// moon's) through the air at that point of the curved planet (reddened as it sets there, none once it has set) and the
+// sky's irradiance there (the irradiance table at the light's own height over the point; in the sun's half light
+// pollution's and the night's own light too), tinted as the lit shaders tint the ambient. (The light before T36, the
+// A/B: the half's light by a height ramp, and the frame's ambient.) The haze in front of it follows the frame's haze
+// (the distance scale and the start), as the volume's does for everything else, its rays through the ground
+// (common/atmosphere) where the scale takes them past it. The sky's in-scatter is tinted by the sky's tint; the ground's
+// direct light is not.
 
 uniform float lightCosZenith;      // the light's zenith cosine (its direction's y)
-uniform float lightIntensity;      // its light on the air relative to the sun's at sunIntensity 1 (the sun's raw
-                                   // intensity, or the moonlit sky's)
+uniform vec3 lightIntensity;       // its light above the air, colour in: ATMOSPHERE_SUN_LIGHT x this (the sun's, or the
+                                   // moonlit sky's)
 uniform float multipleScattering;  // the share of the multiple scattering drawn, 0..1
 uniform float tableHalf;           // the half drawn: 0 the sun's, 1 the moon's
 uniform vec3 lightPollutionRadiance; // the town's light in the air at the camera's foot (linear; 0 by day, and in the
@@ -25,6 +28,11 @@ uniform vec3 skyTint;              // the sky's tint (linear)
 uniform float hazeDistanceScale;   // the frame's haze: every distance x this, none nearer than hazeStartDistance
 uniform float hazeStartDistance;
 uniform vec3 groundAlbedo;         // the far ground's albedo (sky_ground_albedo, linear)
+uniform bool isGroundLitThroughAir; // T36's light (false: the light before T36, the A/B's)
+uniform vec3 ambientTint;          // the ambient's tint on the sky's light (ambient_skylight_color x intensity)
+uniform vec3 groundNightLight;     // the moonless night's own light on the far ground per unit of albedo (0 in the
+                                   // moon's half)
+// TODO: remove these three once the owner approves T36's light (the far ground before T36).
 uniform vec3 groundLight;          // the half's light on the far ground (linear, the lit shaders' units), before its
                                    // height ramp
 uniform vec2 groundLightRamp;      // the light's zenith cosines over which it rises from none to all (the daylight's
@@ -57,7 +65,7 @@ void main()
     float cosLightAngle = sinZenith*lightSin*cosLightAzimuth + cosZenith*lightCosZenith;
     // A light far brighter than the sun saturates at the largest value the table's half floats hold, instead of turning
     // infinite there (and NaN wherever it meets a 0).
-    float lightRadiance = min(ATMOSPHERE_SUN_RADIANCE*max(lightIntensity, 0.0), HALF_FLOAT_MAX);
+    vec3 lightRadiance = min(ATMOSPHERE_SUN_LIGHT*max(lightIntensity, vec3(0.0)), vec3(HALF_FLOAT_MAX));
 
     // Above the horizon the ray crosses the whole atmosphere; below it, the haze in front of the far ground.
     float toGround = atmosphereDistanceToGround(atmosphereViewHeight, cosZenith);
@@ -71,11 +79,23 @@ void main()
     if (isGround)
     {
         // The light's own zenith cosine over the ground point (WorldAtmosphere_GetLightCosAt), where it is lit like the
-        // lit shaders' ground: rising over the ramp, by the cosine to the light, and the ambient.
+        // lit shaders' ground: through the air there, by the cosine to the light, and the sky's irradiance there.
         float radius = ATMOSPHERE_R_PLANET + atmosphereViewHeight;
         float groundCos = clamp((radius*lightCosZenith + toGround*cosLightAngle)/ATMOSPHERE_R_PLANET, -1.0, 1.0);
-        float ramp = smoothstep(groundLightRamp.x, groundLightRamp.y, groundCos);
-        vec3 ground = groundAlbedo*(groundLight*ramp*max(groundCos, 0.0)/PI + groundAmbient);
+        vec3 ground;
+        if (isGroundLitThroughAir)
+        {
+            vec3 direct = lightRadiance*atmosphereLightTransmittance(0.0, groundCos)*max(groundCos, 0.0);
+            vec3 skyLight = (atmosphereSkyIrradiance(0.0, groundCos)*lightRadiance
+                + atmosphereLightPollutionIrradiance(0.0)*lightPollutionRadiance)*max(skyTint, vec3(0.0));
+            ground = groundAlbedo*((direct + skyLight*max(ambientTint, vec3(0.0)))/PI + max(groundNightLight, vec3(0.0)));
+        }
+        else
+        {
+            // TODO: remove once the owner approves T36's light (the far ground before T36).
+            float ramp = smoothstep(groundLightRamp.x, groundLightRamp.y, groundCos);
+            ground = groundAlbedo*(groundLight*ramp*max(groundCos, 0.0)/PI + groundAmbient);
+        }
         sky += transmittance*max(ground, vec3(0.0));
     }
     finalColor = vec4(min(sky, vec3(HALF_FLOAT_MAX)), 1.0);

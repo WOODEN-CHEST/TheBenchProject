@@ -6,6 +6,7 @@
 #include "WorldAtmosphere.h"
 #include "WorldInstancing.h"
 #include "WorldLod.h"
+#include "WorldSkyLight.h"
 #include "WorldVisibility.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRJSON.h"
@@ -507,7 +508,9 @@ static long GetConstIntValue(const GenericBuffer* text, const char* name)
 /* The atmosphere (T15): every shader that reads or builds its tables (and since T35 the haze's volume) takes them from
  * the one shared include, which declares the air, the view height and the tables once, and whose constants are its C
  * mirror's (source/WorldAtmosphere.h): the planet, the air's scale height, the ozone layer, the tables' sizes, what
- * counts as vertical, and the volume's layout, steps and values and light pollution's reach. */
+ * counts as vertical, the volume's layout, steps and values and light pollution's reach, and (T36) the sun's light on
+ * the one light scale, the lights' discs, the sky's light by height in the volume's last row and the irradiance table's
+ * layout; the sky's old radiance is gone. */
 static void ShippedAtmosphereMatchesItsMirror(TestRun* run)
 {
     ShaderFixture Fixture;
@@ -518,7 +521,8 @@ static void ShippedAtmosphereMatchesItsMirror(TestRun* run)
         const char* const Stages[] =
         {
             "atmosphere/transmittance", "atmosphere/multiscatter", "atmosphere/skyview", "atmosphere/volume",
-            "sky/fragment", "stars/vertex", "pbr/fragment", "sprite/fragment", "terrain/fragment", "postfx/fragment"
+            "atmosphere/irradiance", "sky/fragment", "stars/vertex", "pbr/fragment", "sprite/fragment",
+            "terrain/fragment", "postfx/fragment"
         };
         for (size_t Index = 0U; Index < (sizeof(Stages) / sizeof(Stages[0])); Index++)
         {
@@ -532,6 +536,7 @@ static void ShippedAtmosphereMatchesItsMirror(TestRun* run)
                 && (CountOccurrences(&Fixture.Text, "uniform bool atmosphereTablesActive;") == 1U)
                 && (CountOccurrences(&Fixture.Text, "uniform sampler2D atmosphereTransmittanceTable;") == 1U)
                 && (CountOccurrences(&Fixture.Text, "uniform sampler2D atmosphereSkyViewTable;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform sampler2D atmosphereIrradianceTable;") == 1U)
                 && (CountOccurrences(&Fixture.Text, "vec2 atmosphereSkyViewUnit(") == 1U)
                 && (CountOccurrences(&Fixture.Text, "vec2 atmosphereTransmittanceUv(") == 1U);
             bool IsTheMirrors =
@@ -580,10 +585,36 @@ static void ShippedAtmosphereMatchesItsMirror(TestRun* run)
                 && (GetConstValue(&Fixture.Text, "ATMOSPHERE_LIGHT_POLLUTION_REACH")
                     == WORLD_ATMOSPHERE_LIGHT_POLLUTION_REACH)
                 && (GetConstValue(&Fixture.Text, "ATMOSPHERE_SKY_DISTANCE") == WORLD_ATMOSPHERE_SKY_DISTANCE);
-            if (!TEST_CHECK(run, IsShared && IsTheMirrors && IsTheVolumes))
+            bool IsTheLights =
+                (GetConstValue(&Fixture.Text, "ATMOSPHERE_SUN_LIGHT") == WORLD_ATMOSPHERE_SUN_LIGHT)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_LIGHT_DIAMETER") == WORLD_ATMOSPHERE_LIGHT_DIAMETER)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT")
+                    == WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_SKY_LIGHT_HIGHEST") == WORLD_ATMOSPHERE_SKY_LIGHT_HIGHEST)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_SKY_LIGHT_FIRST_COLUMN")
+                    == WORLD_ATMOSPHERE_SKY_LIGHT_FIRST_COLUMN)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_SKY_LIGHT_SUN") == (long)WorldAtmosphereSkyLight_Sun)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_SKY_LIGHT_MOON") == (long)WorldAtmosphereSkyLight_Moon)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_SKY_LIGHT_SKY") == (long)WorldAtmosphereSkyLight_Sky)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_SKY_LIGHT_GROUND") == (long)WorldAtmosphereSkyLight_Ground)
+                && (GetConstIntValue(&Fixture.Text, "ATMOSPHERE_SKY_LIGHT_COUNT") == (long)WorldAtmosphereSkyLight_Count)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_IRRADIANCE_WIDTH") == (double)WORLD_ATMOSPHERE_IRRADIANCE_WIDTH)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_IRRADIANCE_HEIGHT")
+                    == (double)WORLD_ATMOSPHERE_IRRADIANCE_HEIGHT)
+                && (CountOccurrences(&Fixture.Text, "const float ATMOSPHERE_IRRADIANCE_TEXTURE_WIDTH = "
+                    "ATMOSPHERE_IRRADIANCE_WIDTH + 1.0;") == 1U)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_IRRADIANCE_LOWEST_ELEVATION")
+                    == WORLD_ATMOSPHERE_IRRADIANCE_LOWEST_ELEVATION)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_IRRADIANCE_LOG_FLOOR") == WORLD_ATMOSPHERE_IRRADIANCE_LOG_FLOOR)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE")
+                    == WORLD_ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE)
+                && (GetConstValue(&Fixture.Text, "ATMOSPHERE_IRRADIANCE_HEIGHT_SCALE")
+                    == WORLD_ATMOSPHERE_IRRADIANCE_HEIGHT_SCALE)
+                && !BufferContains(&Fixture.Text, "ATMOSPHERE_SUN_RADIANCE");
+            if (!TEST_CHECK(run, IsShared && IsTheMirrors && IsTheVolumes && IsTheLights))
             {
-                printf("    in \"%s\" (shared %d, the mirror's %d, the volume's %d)\n", Stages[Index], (int)IsShared,
-                    (int)IsTheMirrors, (int)IsTheVolumes);
+                printf("    in \"%s\" (shared %d, the mirror's %d, the volume's %d, the lights' %d)\n", Stages[Index],
+                    (int)IsShared, (int)IsTheMirrors, (int)IsTheVolumes, (int)IsTheLights);
             }
         }
         // The table builders' definitions load (the renderer asks for them by these names).
@@ -592,12 +623,128 @@ static void ShippedAtmosphereMatchesItsMirror(TestRun* run)
         TEST_CHECK(run, FailedCount == 0U);
         const unsigned char* const Names[] = { (const unsigned char*)u8"world_atmosphere_transmittance",
             (const unsigned char*)u8"world_atmosphere_multiscatter", (const unsigned char*)u8"world_atmosphere_skyview",
-            (const unsigned char*)u8"world_atmosphere_volume" };
+            (const unsigned char*)u8"world_atmosphere_volume", (const unsigned char*)u8"world_atmosphere_irradiance" };
         for (size_t Index = 0U; Index < (sizeof(Names) / sizeof(Names[0])); Index++)
         {
             bool Exists = false;
             TEST_CHECK(run, TEST_CHECK_SUCCESS(run, AssetManager_HasDefinition(Fixture.Manager, Fixture.Types.Shader,
                 Names[Index], &Exists)) && Exists);
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+
+/* Whether the numbers of "<opening><n numbers>)" in an expanded text are, in order, @p expected (within 1e-15). */
+static bool ArrayIs(const GenericBuffer* text, const char* opening, const double* expected, int count)
+{
+    const char* Cursor = (text->_count > 0U) ? strstr((const char*)text->_data, opening) : NULL;
+    if (Cursor == NULL)
+    {
+        return false;
+    }
+    Cursor += strlen(opening);
+    for (int Index = 0; Index < count; Index++)
+    {
+        char* End = NULL;
+        double Value = strtod(Cursor, &End);
+        if ((End == Cursor) || (fabs(Value - expected[Index]) > 1e-15))
+        {
+            return false;
+        }
+        Cursor = End;
+        while ((*Cursor == ',') || (*Cursor == ' ') || (*Cursor == '\n') || (*Cursor == '\r'))
+        {
+            Cursor++;
+        }
+    }
+    return *Cursor == ')';
+}
+
+/* The sky's light on the surfaces (T36): the irradiance table's builder takes the C mirror's quadrature
+ * (source/WorldSkyLight.h: the same rings, azimuths, stretches and depth, the same limits, the Gauss-Legendre nodes and
+ * weights of its rings), and every lit shader takes the sky's light from the lighting include once (by height from the
+ * volume's last row, or the camera's from its uniforms) with the ambient from its one function, as the volume's builder
+ * writes that row (every block of it); the builders clamp the light above the air where the C mirror does, and the sun's
+ * disc's radiance is its C twin's. */
+static void ShippedSkyLightMatchesItsMirror(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        if (ExpandShippedStage(run, &Fixture, "atmosphere/irradiance"))
+        {
+            // Gauss-Legendre's 6 nodes on [-1, 1] (the roots of the Legendre polynomial P6) and their weights.
+            const double Nodes[6] = { -0.9324695142031521, -0.6612093864662645, -0.2386191860831969,
+                0.2386191860831969, 0.6612093864662645, 0.9324695142031521 };
+            const double Weights[6] = { 0.1713244923791704, 0.3607615730481386, 0.4679139345726910,
+                0.4679139345726910, 0.3607615730481386, 0.1713244923791704 };
+            bool IsTheMirrors =
+                (GetConstIntValue(&Fixture.Text, "IRRADIANCE_ZENITH_NODES") == WORLD_SKY_LIGHT_ZENITH_NODES)
+                && (GetConstIntValue(&Fixture.Text, "IRRADIANCE_AZIMUTHS") == WORLD_SKY_LIGHT_AZIMUTHS)
+                && (GetConstIntValue(&Fixture.Text, "IRRADIANCE_MIE_RINGS") == WORLD_SKY_LIGHT_MIE_RINGS)
+                && (GetConstIntValue(&Fixture.Text, "IRRADIANCE_MIE_AZIMUTHS") == WORLD_SKY_LIGHT_MIE_AZIMUTHS)
+                && (GetConstIntValue(&Fixture.Text, "IRRADIANCE_STEPS") == WORLD_SKY_LIGHT_STEPS)
+                && (GetConstIntValue(&Fixture.Text, "IRRADIANCE_MIE_STEPS") == WORLD_SKY_LIGHT_MIE_STEPS)
+                && (GetConstValue(&Fixture.Text, "IRRADIANCE_MIE_DEPTH") == WORLD_SKY_LIGHT_MIE_DEPTH)
+                && (GetConstValue(&Fixture.Text, "IRRADIANCE_LIGHT_POLLUTION_DEPTH")
+                    == WORLD_SKY_LIGHT_LIGHT_POLLUTION_DEPTH)
+                && (GetConstValue(&Fixture.Text, "IRRADIANCE_SERIES_LIMIT") == 1e-3)
+                && (GetConstValue(&Fixture.Text, "IRRADIANCE_ISOTROPIC_LIMIT") == 1e-4)
+                && (GetConstValue(&Fixture.Text, "IRRADIANCE_MAX_GLOW") == WORLD_ENVIRONMENT_MAX_SUN_GLOW)
+                // The arrays below are the 6-node rule: a change of the rings needs new ones here.
+                && (WORLD_SKY_LIGHT_ZENITH_NODES == 6)
+                && ArrayIs(&Fixture.Text, "GAUSS_NODES[IRRADIANCE_ZENITH_NODES] = float[](", Nodes, 6)
+                && ArrayIs(&Fixture.Text, "GAUSS_WEIGHTS[IRRADIANCE_ZENITH_NODES] = float[](", Weights, 6);
+            TEST_CHECK(run, IsTheMirrors);
+        }
+        // The volume's builder writes every block of the last row, and clamps the light above the air where the C
+        // mirror does (WORLD_SKY_LIGHT_MAX_LIGHT); so does the sky view's.
+        if (ExpandShippedStage(run, &Fixture, "atmosphere/volume"))
+        {
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "vec3 SkyLightValue(") == 1U)
+                && (CountOccurrences(&Fixture.Text, "int block = texel.x - ATMOSPHERE_SKY_LIGHT_FIRST_COLUMN;") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "block < ATMOSPHERE_SKY_LIGHT_COUNT*ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT") == 1U)
+                && (GetConstValue(&Fixture.Text, "HALF_FLOAT_MAX") == WORLD_SKY_LIGHT_MAX_LIGHT));
+        }
+        if (ExpandShippedStage(run, &Fixture, "atmosphere/skyview"))
+        {
+            TEST_CHECK(run, GetConstValue(&Fixture.Text, "HALF_FLOAT_MAX") == WORLD_SKY_LIGHT_MAX_LIGHT);
+        }
+        // The sun's disc's radiance is its C twin's: the renderer clamps the disc's intensity and draws the light before
+        // T36's disc by it.
+        if (ExpandShippedStage(run, &Fixture, "sky/fragment"))
+        {
+            TEST_CHECK(run, GetConstValue(&Fixture.Text, "SUN_DISC_RADIANCE") == WORLD_ATMOSPHERE_SUN_DISC_RADIANCE);
+        }
+        const char* const Lit[] = { "pbr/fragment", "terrain/fragment", "sprite/fragment" };
+        const char* const Gone[] = { "ATMOSPHERE_SUN_RADIANCE", "uniform vec3 ambientColor", "uniform vec3 sunColor",
+            "uniform vec3 moonColor", "moonAmbient" };
+        for (size_t Index = 0U; Index < (sizeof(Lit) / sizeof(Lit[0])); Index++)
+        {
+            if (!ExpandShippedStage(run, &Fixture, Lit[Index]))
+            {
+                continue;
+            }
+            bool IsShared = BufferContains(&Fixture.SourceList, "\"common/lighting\"")
+                && (CountOccurrences(&Fixture.Text, "SkyLightValues SkyLightAt(vec3 worldPos)") == 1U)
+                && (CountOccurrences(&Fixture.Text, "vec3 AmbientLight(SkyLightValues light, vec3 n)") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform bool skyLightPerHeight;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "SkyLightValues light = SkyLightAt(fragPosition);") == 1U)
+                && (CountOccurrences(&Fixture.Text, "AmbientLight(light, n)") == 1U);
+            bool IsOldLightGone = true;
+            for (size_t Name = 0U; Name < (sizeof(Gone) / sizeof(Gone[0])); Name++)
+            {
+                IsOldLightGone = IsOldLightGone && !BufferContains(&Fixture.Text, Gone[Name]);
+            }
+            if (!TEST_CHECK(run, IsShared && IsOldLightGone))
+            {
+                printf("    in \"%s\" (shared %d, the old light gone %d)\n", Lit[Index], (int)IsShared,
+                    (int)IsOldLightGone);
+            }
         }
     }
     ShaderFixture_Deconstruct(run, &Fixture);
@@ -935,6 +1082,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "define_names_are_checked", DefineNamesAreChecked },
         { "shipped_sky_and_pbr_share_one_atmosphere", ShippedSkyAndPbrShareOneAtmosphere },
         { "shipped_atmosphere_matches_its_mirror", ShippedAtmosphereMatchesItsMirror },
+        { "shipped_sky_light_matches_its_mirror", ShippedSkyLightMatchesItsMirror },
         { "shipped_shaders_share_one_haze", ShippedShadersShareOneHaze },
         { "shipped_geometry_shaders_share_one_dither", ShippedGeometryShadersShareOneDither },
         { "shipped_skinned_stages_share_one_skinning", ShippedSkinnedStagesShareOneSkinning },

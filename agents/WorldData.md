@@ -596,7 +596,7 @@ multiply it by their own `gravity_multiplier`).
 GHDF wire id, the type, the default, the rules, the inspector text. `WorldEnvironment_SetDefaults`, `_Validate`,
 `_CopyTo` and `_Deconstruct` are thin wrappers over the table, and `WorldEnvironment_ReadJSON` / `_WriteJSON` are the
 JSON entry points for the world files (T09). **To add a setting, add the field and one table row** with a new,
-never-used wire id (the next free one is 61; 2 and 3 are retired); nothing else needs writing. The field comments state
+never-used wire id (the next free one is 63; 2 and 3 are retired); nothing else needs writing. The field comments state
 each value's rule; validation enforces them (finite, `TimeOfDay`, `LightPollution`, `StarTwinkle`, `MoonPhase`,
 `NightVisionStrength` and `NightVisionBlueShift` in [0, 1], `SunSizeMultiplier`, `MoonSizeMultiplier` and `MoonCycleDays` > 0, every strength/intensity/density/brightness
 >= 0, `Date` inside the calendar, the texture names valid asset names of at most 128 bytes, `MoonPhaseSource` one of
@@ -636,8 +636,8 @@ The moon settings (T03; the owner's rule: as many settings for story creators as
 | `moon_orbit_tilt` | finite (an angle) | 0.09 rad (5.2 degrees) | How far the moon's path strays from the sun's. |
 | `moon_size_multiplier` | > 0 | 5 | The disc x the real 0.52 degrees (5: about 16 pixels at 640x360). |
 | `moon_brightness` | >= 0 | 1 | Multiplies the disc's brightness in the sky. |
-| `moon_intensity` | >= 0 | 0.02 | The full moon's light relative to the sun's (`WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY`). |
-| `moon_color` | colour | (200, 214, 255) | The moonlight's and the disc's colour. |
+| `moon_intensity` | >= 0 | 0.04 | The full moon's light above the air relative to the sun's (`WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY`; 0.02 before T36, when a painted fill added to it). The phase scales it, it fades out by day, the air dims it toward the horizon, and the moonlit sky is lit by all of it. |
+| `moon_color` | colour | (200, 214, 255) | The moonlight's colour above the air (the air reddens it low over the horizon) and the disc's. Real moonlight is the sun's light, a little warmer; the blue of the night is the eye's (night vision): T36's status block shows white against the default for the owner's choice. |
 | `moon_texture` | asset name | `sky_moon` | The moon's face. |
 
 And `are_seasons_enabled` (default false): the sun's declination follows the date (23.44 degrees x the sine of its
@@ -655,11 +655,11 @@ stayed at version 1: absent keys read as their defaults, so older world files ke
 | `sky_turbidity` | 4 | >= 0 | 3 | The haze's amount: its density is Earth's x turbidity / 3 (an extinction of 23.1e-6 per metre at sea level at 3). |
 | `haze_height` | 47 | [10, 100000] m | 1200 | The haze's scale height: low haze hugs the ground and lets hills stand out above it. |
 | `haze_albedo` | 48 | colour | (244, 244, 244): linear 0.907 | The share of the light the haze takes that it scatters (the rest it absorbs); darker or tinted for smog and dust. |
-| `sun_glow` | 49 | [0, 0.99] | 0.758 | The haze's forward scattering (the Mie phase function's g): how large and bright the glow around the sun and the moon is. |
+| `sun_glow` | 49 | [0, 0.99] | 0.758 | The haze's forward scattering (the Mie phase function's g): how large and bright the glow around the sun and the moon is; since T36 it shapes the sky's light on surfaces too (the irradiance table). |
 | `air_density` | 50 | [0, 100] | 1 | The air's Rayleigh scattering (the blue) as a multiple of Earth's. `sky_tint` changes the sky's colour. |
 | `ozone` | 51 | [0, 100] | 1 | The ozone layer's absorption as a multiple of Earth's: it keeps the twilight sky blue overhead (violet in this three-colour model); 0 none. |
-| `multiple_scattering` | 52 | [0, 1] | 1 | The share of the light scattered more than once that the sky draws (0: single scattering, for comparing). |
-| `sky_ground_albedo` | 5 | colour | (90, 90, 90): linear 0.10 | The ground's albedo as the air sees it: the light it reflects feeds the multiple scattering, and since T35 the far ground's colour below the horizon (unused before T15). |
+| `multiple_scattering` | 52 | [0, 1] | 1 | The share of the light scattered more than once that the sky draws (0: single scattering, for comparing); since T36 the same share of the sky's light on surfaces. |
+| `sky_ground_albedo` | 5 | colour | (90, 90, 90): linear 0.10 | The ground's albedo as the air sees it: the light it reflects feeds the multiple scattering, since T35 the far ground's colour below the horizon (unused before T15), and since T36 the ground's bounce that lights every surface from below. |
 
 `WORLD_ENVIRONMENT_MIN_HAZE_HEIGHT`, `_MAX_HAZE_HEIGHT`, `_MAX_SUN_GLOW` and `_MAX_AIR_MULTIPLE` (WorldEnvironment.h)
 are the rules' bounds; the renderer clamps to the same bounds and takes a non-finite value as its default, so the shaders
@@ -686,9 +686,25 @@ no ground haze, every distance as it is. The table stayed at version 1 (absent k
 
 `WORLD_ENVIRONMENT_MAX_AERIAL_DISTANCE_SCALE`, `_MAX_DISTANCE`, `_MAX_GROUND_HAZE_DENSITY`, `_MIN_GROUND_HAZE_THICKNESS`
 and `_MAX_GROUND_HAZE_THICKNESS` (WorldEnvironment.h) are the rules' bounds; `WorldAtmosphere_GetHaze` clamps to them and
-takes a non-finite value as its default. The far ground's light follows the sun's and the moon's height over each far
-point with the same ramps the lights use (`WorldEnvironment_GetDaylightForElevation`, `_GetMoonlightForElevation`:
-`WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION` -0.12 to `_RISE_ELEVATION` 0.10, `_MOONLIGHT_FULL_ELEVATION` 0.2).
+takes a non-finite value as its default. Since T36 the far ground is lit like every surface: the sun's and the moon's
+light through the air at each far point, the sky's irradiance there and the moonless night's own light. (Before T36 its
+light followed the lights' height over each far point with the ramps `WorldEnvironment_GetDaylightForElevation` and
+`_GetMoonlightForElevation`, which only the renderer's A/B of the old light still uses.)
+
+The light's settings (T36, decision G39 (b): one light scale for the sky and the surfaces; [WorldRuntime.md](WorldRuntime.md),
+"Sky's light on surfaces"). The sun, the moon and the sky light every surface through the air on the surfaces' scale,
+so the sun's colour is its colour above the air and the ambient is the sky's own light. The keys kept their wire ids;
+three changed meaning and the night's own light is new. The table stayed at version 1: older world files keep loading
+(one that set `sun_color` to a warm colour gets a warmer sun than before, as the air reddens it too).
+
+| Key | Wire id | Rule | Default | Meaning |
+|---|---|---|---|---|
+| `sun_color` | 7 | colour | (255, 255, 255) | The sun's colour above the air: its light, its disc and the light it gives the sky, the haze and the mist. The air reddens it toward the horizon by itself (before T36 the default was a warm (255, 244, 214) on a sun that did not redden). |
+| `sun_intensity` | 8 | >= 0 | 1 | Multiplies the sun's brightness (its light above the air is 1.078 x this x the colour: `WORLD_ATMOSPHERE_SUN_LIGHT`). |
+| `ambient_skylight_color` | 13 | colour | (255, 255, 255) | Tints the sky's light on surfaces (the sky's own light from above, the ground's bounce from below); white leaves it as it is. Before T36 it tinted a painted ambient. |
+| `ambient_skylight_intensity` | 14 | >= 0 | 1 | Multiplies the sky's light on surfaces: 1 the sky's own, 0 leaves shade lit only by the night's light and lamps. |
+| `night_light_color` | 61 | colour | (161, 178, 255) | The colour of the moonless night's own light on surfaces (starlight and the air's glow, raised for play as the moonlight is). |
+| `night_light_intensity` | 62 | >= 0 | 0.011 | How bright the moonless night's own light is (its linear colour times this, added to every surface's ambient): 0 gives a pitch-black moonless night outside the moon's and the town's light. Before T36 this was the renderer's `NIGHT_AMBIENT_*` floor. |
 
 The night vision settings (the eye's dim-light vision, [WorldRuntime.md](WorldRuntime.md), "Night vision"):
 `night_vision_strength` ([0, 1], default 1: the eye; 0 keeps every colour, a long-exposure photo's night) and
@@ -708,9 +724,12 @@ and "Night sky"):
   phase is the real moon's within about a day; or fixed), `_GetMoonDirection` (east of the sun by 2pi x phase, the tilt
   term north of it), `_GetMoonIllumination` ((1 - dot(sun, moon)) / 2), `_GetMoonBrightness` (the total light for an
   illumination: the opposition-surge fit of Krisciunas and Schaefer, a half moon gives about a tenth of the full
-  moon's) and `_GetMoonlightFactor` (brightness x its height x (1 - daylight); 0 without a moon).
-- `WorldEnvironment_GetSkyLights`: both lights at once (directions, intensities, the moon's phase and illumination)
-  and the shadow light: the brighter by luminance once it stands high enough, with a fade (in from 0.05 to 0.15 of
+  moon's) and `_GetMoonlightFactor` (brightness x (1 - daylight); 0 without a moon; since T36 not its height: the air
+  dims a low moon, in the renderer).
+- `WorldEnvironment_GetSkyLights`: both lights at once above the air (directions, the daylight factor, the sun's
+  intensity, the moon's intensity with its phase and the daylight in, the moon's phase and illumination).
+- `WorldEnvironment_ChooseShadowLight` (T36: from the light each gives a surface facing it through the air, which the
+  renderer computes): the brighter by luminance once it stands high enough, with a fade (in from 0.05 to 0.15 of
   elevation, out around the hand-over between the two and for a light too dim to show a shadow), so the hand-over from
   the sun to the moon never jumps.
 

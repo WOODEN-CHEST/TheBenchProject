@@ -239,6 +239,37 @@ static void TableRecordBuildsOnlyWhenNeeded(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
+/* The irradiance table (T36) is stale when the tables it reads are, and also when the haze's forward scattering or the
+ * share of multiple scattering changes (it holds both); its record builds on the first frame and then only then. */
+static void IrradianceIsStaleWithItsInputs(TestRun* run)
+{
+    WorldEnvironment Environment;
+    WorldEnvironment_SetDefaults(&Environment);
+    WorldAtmosphereMedium Built;
+    WorldAtmosphere_GetMedium(&Environment, &Built);
+    WorldAtmosphereMedium Medium = Built;
+    TEST_CHECK(run, !WorldAtmosphere_IsIrradianceStale(&Built, &Medium));
+    Medium.MieAnisotropy *= 1.001f;
+    TEST_CHECK(run, WorldAtmosphere_IsIrradianceStale(&Built, &Medium) && !WorldAtmosphere_AreTablesStale(&Built, &Medium));
+    Medium = Built;
+    Medium.MultipleScattering = 0.5f;
+    TEST_CHECK(run, WorldAtmosphere_IsIrradianceStale(&Built, &Medium));
+    Medium = Built;
+    Medium.GroundAlbedo[0] *= 1.001f;
+    TEST_CHECK(run, WorldAtmosphere_IsIrradianceStale(&Built, &Medium));
+
+    WorldAtmosphereTableRecord Record = { 0 };
+    Medium = Built;
+    TEST_CHECK(run, WorldAtmosphere_UpdateIrradianceRecord(&Record, &Medium) && (Record.BuildCount == 1U));
+    TEST_CHECK(run, !WorldAtmosphere_UpdateIrradianceRecord(&Record, &Medium));
+    Medium.MieAnisotropy = 0.9f;
+    TEST_CHECK(run, WorldAtmosphere_UpdateIrradianceRecord(&Record, &Medium) && (Record.BuildCount == 2U));
+    TEST_CHECK(run, !WorldAtmosphere_UpdateIrradianceRecord(&Record, &Medium));
+    Record.IsBuilt = false; // the target was dropped
+    TEST_CHECK(run, WorldAtmosphere_UpdateIrradianceRecord(&Record, &Medium) && (Record.BuildCount == 3U));
+    WorldEnvironment_Deconstruct(&Environment);
+}
+
 static void ViewHeightIsClamped(TestRun* run)
 {
     TEST_CHECK(run, WorldAtmosphere_GetViewHeight(-5.0) == WORLD_ATMOSPHERE_MIN_VIEW_HEIGHT);
@@ -897,6 +928,103 @@ static void GroundHazeFollowsTheCurvedPlanet(TestRun* run)
     TEST_CHECK(run, WorldAtmosphere_GetGroundHazeDepthCurved(0.02, 15.0, 1.7, 0.0, 6.4e6, 5.0, 5.0) == 0.0);
 }
 
+/* The sky's light by height (T36): its heights from the ground to WORLD_ATMOSPHERE_SKY_LIGHT_HIGHEST, closest near the
+ * ground, round-trip through their coordinates, and heights outside clamp; its blocks lie in the volume's last row after
+ * the ground haze's values, one per value, side by side. */
+static void SkyLightLayoutRoundTrips(TestRun* run)
+{
+    bool AreRoundTrips = true;
+    for (int Index = 0; Index < WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT; Index++)
+    {
+        double Height = WorldAtmosphere_GetSkyLightHeight(Index);
+        AreRoundTrips = AreRoundTrips
+            && IsClose(WorldAtmosphere_GetSkyLightCoordinate(Height), (double)Index, ROUND_TRIP_TOLERANCE);
+    }
+    int Last = WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT - 1;
+    TEST_CHECK(run, AreRoundTrips && (WorldAtmosphere_GetSkyLightHeight(0) == 0.0)
+        && (WorldAtmosphere_GetSkyLightHeight(Last) == WORLD_ATMOSPHERE_SKY_LIGHT_HIGHEST));
+    TEST_CHECK(run, WorldAtmosphere_GetSkyLightHeight(1) < 6.0); // about 5 m apart at the ground
+    TEST_CHECK(run, (WorldAtmosphere_GetSkyLightCoordinate(-10.0) == 0.0) && (WorldAtmosphere_GetSkyLightCoordinate(NAN) == 0.0)
+        && (WorldAtmosphere_GetSkyLightCoordinate(1e6) == (double)Last));
+    TEST_CHECK(run, (WorldAtmosphere_GetSkyLightHeight(-3) == 0.0)
+        && (WorldAtmosphere_GetSkyLightHeight(1000) == WORLD_ATMOSPHERE_SKY_LIGHT_HIGHEST));
+
+    TEST_CHECK(run, WorldAtmosphere_GetSkyLightColumn(WorldAtmosphereSkyLight_Sun, 0) == WORLD_ATMOSPHERE_SKY_LIGHT_FIRST_COLUMN);
+    TEST_CHECK(run, WORLD_ATMOSPHERE_SKY_LIGHT_FIRST_COLUMN > (int)WorldAtmosphereVolumeValue_GroundHazeAmbient);
+    for (int Value = 1; Value < (int)WorldAtmosphereSkyLight_Count; Value++)
+    {
+        TEST_CHECK(run, WorldAtmosphere_GetSkyLightColumn((WorldAtmosphereSkyLight)Value, 0)
+            == WorldAtmosphere_GetSkyLightColumn((WorldAtmosphereSkyLight)(Value - 1), Last) + 1);
+    }
+    TEST_CHECK(run, WorldAtmosphere_GetSkyLightColumn(WorldAtmosphereSkyLight_Ground, Last) < WORLD_ATMOSPHERE_VOLUME_WIDTH);
+    TEST_CHECK(run, (WorldAtmosphere_GetSkyLightColumn(WorldAtmosphereSkyLight_Sky, -1)
+        == WorldAtmosphere_GetSkyLightColumn(WorldAtmosphereSkyLight_Sky, 0))
+        && (WorldAtmosphere_GetSkyLightColumn(WorldAtmosphereSkyLight_Sky, 99)
+            == WorldAtmosphere_GetSkyLightColumn(WorldAtmosphereSkyLight_Sky, Last)));
+}
+
+/* The irradiance table's layout (T36) round-trips: across, the light's elevation from the lowest to the zenith, dense at
+ * the horizon (even in its asinh over the elevation scale); up, the height, even near the ground (in log(1 + height /
+ * the height scale)); lower lights and heights outside clamp; the lights' part takes the texture's first columns from
+ * texel centre to texel centre, light pollution the last one, at the same rows. */
+static void IrradianceLayoutRoundTrips(TestRun* run)
+{
+    const double Heights[] = { 0.0, 1.7, 300.0, 5000.0, 60000.0, 100000.0 };
+    const double Elevations[] = { -20.0, -4.0, 0.0, 5.0, 45.0, 90.0 };
+    bool AreRoundTrips = true;
+    for (size_t Height = 0U; Height < (sizeof(Heights) / sizeof(Heights[0])); Height++)
+    {
+        for (size_t Elevation = 0U; Elevation < (sizeof(Elevations) / sizeof(Elevations[0])); Elevation++)
+        {
+            WorldAtmosphereRay Light = AtmosphereRay(Heights[Height], sin(Elevations[Elevation] / TEST_DEGREES_PER_RADIAN));
+            WorldAtmosphereRay Back = WorldAtmosphere_GetIrradianceRay(WorldAtmosphere_GetIrradianceUnit(Light));
+            AreRoundTrips = AreRoundTrips && IsClose(Back.CosZenith, Light.CosZenith, ROUND_TRIP_TOLERANCE)
+                && IsClose(Back.Height, Light.Height, fmax(HEIGHT_TOLERANCE * Light.Height, 1e-6));
+        }
+    }
+    TEST_CHECK(run, AreRoundTrips);
+    double Rows = (double)WORLD_ATMOSPHERE_IRRADIANCE_HEIGHT;
+    double Lowest = WORLD_ATMOSPHERE_IRRADIANCE_LOWEST_ELEVATION;
+    double Top = WORLD_ATMOSPHERE_TOP_RADIUS - WORLD_ATMOSPHERE_PLANET_RADIUS;
+    // (Within an ulp of 1 at the zenith: the compiler folds the zenith's asinh exactly, the library's may be an ulp off.)
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetIrradianceUnit(AtmosphereRay(0.0, sin(Lowest))).X, 0.0, 1e-12)
+        && IsClose(WorldAtmosphere_GetIrradianceUnit(AtmosphereRay(0.0, 1.0)).X, 1.0, 1e-12)
+        && (WorldAtmosphere_GetIrradianceUnit(AtmosphereRay(Top, 1.0)).Y == 1.0));
+    double Scale = WORLD_ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE;
+    double Middle = Scale * sinh(0.5 * (asinh(Lowest / Scale) + asinh(0.5 * TEST_ATMOSPHERE_PI / Scale)));
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetIrradianceUnit(AtmosphereRay(0.0, sin(Middle))).X, 0.5, 1e-12));
+    double HeightScale = WORLD_ATMOSPHERE_IRRADIANCE_HEIGHT_SCALE;
+    double HalfUp = HeightScale * (sqrt(1.0 + Top / HeightScale) - 1.0);
+    TEST_CHECK(run, IsClose(WorldAtmosphere_GetIrradianceUnit(AtmosphereRay(HalfUp, 1.0)).Y, 0.5, 1e-12));
+    // Columns closest at the horizon, rows evenly spaced near the ground (within a tenth over the first two).
+    double Across = 1.0 / (double)(WORLD_ATMOSPHERE_IRRADIANCE_WIDTH - 1);
+    double AtHorizon = WorldAtmosphere_GetIrradianceUnit(AtmosphereRay(0.0, sin(0.005))).X
+        - WorldAtmosphere_GetIrradianceUnit(AtmosphereRay(0.0, sin(-0.005))).X;
+    double AtZenith = WorldAtmosphere_GetIrradianceUnit(AtmosphereRay(0.0, 1.0)).X
+        - WorldAtmosphere_GetIrradianceUnit(AtmosphereRay(0.0, sin(0.5 * TEST_ATMOSPHERE_PI - 0.01))).X;
+    TEST_CHECK(run, (AtHorizon / 0.01 > 10.0 * AtZenith / 0.01) && (AtHorizon / 0.01 * 0.0075 > Across));
+    double First = WorldAtmosphere_GetIrradianceRay(Vector2Double_Create(0.0, 1.0 / (Rows - 1.0))).Height;
+    double Second = WorldAtmosphere_GetIrradianceRay(Vector2Double_Create(0.0, 2.0 / (Rows - 1.0))).Height - First;
+    TEST_CHECK(run, (First > 100.0) && (First < 250.0) && (Second > First) && (Second < 1.2 * First));
+    TEST_CHECK(run, (WorldAtmosphere_GetIrradianceUnit(AtmosphereRay(-5.0, -0.9)).X == 0.0)
+        && (WorldAtmosphere_GetIrradianceUnit(AtmosphereRay(-5.0, -0.9)).Y == 0.0)
+        && (WorldAtmosphere_GetIrradianceUnit(AtmosphereRay(1e7, 1.0)).Y == 1.0));
+
+    // The texture: the lights' columns, then light pollution's.
+    double Width = (double)WORLD_ATMOSPHERE_IRRADIANCE_TEXTURE_WIDTH;
+    Vector2Double LowUv = WorldAtmosphere_GetIrradianceUv(AtmosphereRay(0.0, sin(Lowest)));
+    Vector2Double HighUv = WorldAtmosphere_GetIrradianceUv(AtmosphereRay(Top, 1.0));
+    TEST_CHECK(run, IsClose(LowUv.X, 0.5 / Width, 1e-12) && IsClose(LowUv.Y, 0.5 / Rows, 1e-12));
+    TEST_CHECK(run, IsClose(HighUv.X, ((double)WORLD_ATMOSPHERE_IRRADIANCE_WIDTH - 0.5) / Width, 1e-12)
+        && IsClose(HighUv.Y, (Rows - 0.5) / Rows, 1e-12));
+    for (size_t Height = 0U; Height < (sizeof(Heights) / sizeof(Heights[0])); Height++)
+    {
+        Vector2Double Town = WorldAtmosphere_GetLightPollutionIrradianceUv(Heights[Height]);
+        TEST_CHECK(run, IsClose(Town.X, ((double)WORLD_ATMOSPHERE_IRRADIANCE_WIDTH + 0.5) / Width, 1e-12)
+            && (Town.Y == WorldAtmosphere_GetIrradianceUv(AtmosphereRay(Heights[Height], 0.3)).Y));
+    }
+}
+
 /* How high a light stands over a far point of the ground (the curved planet's own zenith there), against the geometry in
  * long double; the sun sets on far ground away from it first. */
 static void LightStandsLowerOverFarGround(TestRun* run)
@@ -997,6 +1125,7 @@ void WorldAtmosphereTests_Run(TestRun* run)
         { "medium_clamps_what_validation_refuses", MediumClampsWhatValidationRefuses },
         { "tables_are_stale_only_when_their_air_changes", TablesAreStaleOnlyWhenTheirAirChanges },
         { "table_record_builds_only_when_needed", TableRecordBuildsOnlyWhenNeeded },
+        { "irradiance_is_stale_with_its_inputs", IrradianceIsStaleWithItsInputs },
         { "view_height_is_clamped", ViewHeightIsClamped },
         { "heights_along_rays_are_exact", HeightsAlongRaysAreExact },
         { "horizon_and_distances", HorizonAndDistances },
@@ -1012,6 +1141,8 @@ void WorldAtmosphereTests_Run(TestRun* run)
         { "ground_haze_depth_is_the_integral", GroundHazeDepthIsTheIntegral },
         { "ground_haze_distance_inverts_the_depth", GroundHazeDistanceInvertsTheDepth },
         { "ground_haze_follows_the_curved_planet", GroundHazeFollowsTheCurvedPlanet },
+        { "sky_light_layout_round_trips", SkyLightLayoutRoundTrips },
+        { "irradiance_layout_round_trips", IrradianceLayoutRoundTrips },
         { "light_stands_lower_over_far_ground", LightStandsLowerOverFarGround },
         { "light_pollution_fills_the_low_air_nearby", LightPollutionFillsTheLowAirNearby },
         { "light_pollution_radiance_is_the_towns_at_night", LightPollutionRadianceIsTheTownsAtNight },

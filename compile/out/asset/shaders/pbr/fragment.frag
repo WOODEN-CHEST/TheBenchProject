@@ -85,15 +85,17 @@ void main()
     // Base reflectance: 0.04 for dielectrics, the albedo for metals.
     vec3 f0 = mix(vec3(0.04), albedo, metal);
 
-    // The sun and (at night) the moon, darkened by the cascades' shadow; the slope bias follows the shadow light's
-    // angle. Then the point lights, the cube-shadow light read at the fragment itself.
+    // The sun and (at night) the moon through the air at the fragment's height, darkened by the cascades' shadow; the
+    // slope bias follows the shadow light's angle. Then the point lights, the cube-shadow light read at the fragment
+    // itself.
+    SkyLightValues light = SkyLightAt(fragPosition);
     float shadowAmount = SkyShadowAmount(fragPosition, max(dot(n, normalize(shadowLightDirection)), 0.0));
-    vec3 direct = SkyLight(n, v, shadowAmount, albedo, f0, rough, metal);
+    vec3 direct = SkyLight(light, n, v, shadowAmount, albedo, f0, rough, metal);
     vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, n, albedo, f0, rough, metal);
 
-    // Flat ambient skylight stand-in (proper image-based lighting lands with the atmospheric sky step).
-    // Screen-space AO darkens ONLY this ambient term (never the direct light).
-    vec3 ambient = ambientColor*ambientIntensity*albedo*occlusion*ScreenAo();
+    // The sky's own light as the ambient (the sky above, the ground's bounce below, the night's light). Screen-space AO
+    // darkens ONLY this ambient term (never the direct light).
+    vec3 ambient = AmbientLight(light, n)*albedo*occlusion*ScreenAo();
 
     vec3 emissive = emissiveColor*emissiveIntensity;
     if (hasEmissiveMap)

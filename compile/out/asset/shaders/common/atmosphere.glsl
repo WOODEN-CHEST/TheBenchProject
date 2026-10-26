@@ -32,8 +32,10 @@ const float ATMOSPHERE_RAYLEIGH_HEIGHT = 8000.0;
 // The ozone layer, a tent from 10 to 40 km, densest at 25 km (WORLD_ATMOSPHERE_OZONE_CENTER, _HALF_WIDTH).
 const float ATMOSPHERE_OZONE_CENTER = 25000.0;
 const float ATMOSPHERE_OZONE_HALF_WIDTH = 15000.0;
-// The sun's radiance on the air at sunIntensity 1, in the game's light units.
-const float ATMOSPHERE_SUN_RADIANCE = 22.0;
+// The sun's light above the air on a surface facing it, at sun_intensity 1 and a white sun_color, in the game's light
+// units, the surfaces' and the sky's alike since T36 (WORLD_ATMOSPHERE_SUN_LIGHT: the sun 60 degrees up then lights the
+// ground at sea level as it did before). A light's intensity uniform (its colour in it) multiplies it.
+const float ATMOSPHERE_SUN_LIGHT = 1.078;
 // The angular diameter of the sun's disc (and the moon's), radians: the planet's shadow on the air is soft over it.
 const float ATMOSPHERE_LIGHT_DIAMETER = 0.0093;
 // Below this product of the horizontal lengths of a direction and a light, one of them is vertical and their azimuth
@@ -76,6 +78,30 @@ const int ATMOSPHERE_VOLUME_RAY_STEPS = 32;
 const int ATMOSPHERE_VOLUME_GROUND_HAZE_SUN = 0;
 const int ATMOSPHERE_VOLUME_GROUND_HAZE_MOON = 1;
 const int ATMOSPHERE_VOLUME_GROUND_HAZE_AMBIENT = 2;
+// The sky's light by height in the volume's last row (T36; WORLD_ATMOSPHERE_SKY_LIGHT_*, WorldAtmosphereSkyLight): this
+// many heights from the ground to the highest, even in the height's square root, a block of columns each for the sun's
+// light through the air, the moon's, the sky's irradiance on a surface facing up and the ground's bounce on one facing
+// down (the light that lights a surface at that height), from the first column on.
+const int ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT = 64;
+const float ATMOSPHERE_SKY_LIGHT_HIGHEST = 20000.0;
+const int ATMOSPHERE_SKY_LIGHT_FIRST_COLUMN = 64;
+const int ATMOSPHERE_SKY_LIGHT_SUN = 0;
+const int ATMOSPHERE_SKY_LIGHT_MOON = 1;
+const int ATMOSPHERE_SKY_LIGHT_SKY = 2;
+const int ATMOSPHERE_SKY_LIGHT_GROUND = 3;
+const int ATMOSPHERE_SKY_LIGHT_COUNT = 4;
+// The sky's irradiance table (T36; WORLD_ATMOSPHERE_IRRADIANCE_*): the light the sky sends a surface facing up per unit of
+// a light above the air, by the light's elevation across (from the lowest to the zenith, even in
+// asinh(elevation / ELEVATION_SCALE): dense at the horizon) and the height up (even in log(1 + height / HEIGHT_SCALE):
+// even in the height near the ground), then one column of light pollution's irradiance per unit of its radiance; each
+// texel the logarithm of its value (at least the floor), so the bilinear read follows light falling off exponentially.
+const float ATMOSPHERE_IRRADIANCE_WIDTH = 64.0;
+const float ATMOSPHERE_IRRADIANCE_HEIGHT = 32.0;
+const float ATMOSPHERE_IRRADIANCE_TEXTURE_WIDTH = ATMOSPHERE_IRRADIANCE_WIDTH + 1.0;
+const float ATMOSPHERE_IRRADIANCE_LOWEST_ELEVATION = -0.3490658503988659;
+const float ATMOSPHERE_IRRADIANCE_LOG_FLOOR = -46.0;
+const float ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE = 0.07;
+const float ATMOSPHERE_IRRADIANCE_HEIGHT_SCALE = 1000.0;
 // Light pollution's light in the air (T35): the town's light fills the air below about this height and within about this
 // horizontal distance of the camera (metres; WORLD_ATMOSPHERE_LIGHT_POLLUTION_HEIGHT, _REACH).
 const float ATMOSPHERE_LIGHT_POLLUTION_HEIGHT = 500.0;
@@ -104,6 +130,8 @@ uniform bool atmosphereTablesActive;
 uniform sampler2D atmosphereTransmittanceTable;
 uniform sampler2D atmosphereMultiscatterTable;
 uniform sampler2D atmosphereSkyViewTable;
+// The sky's irradiance table (T36), read while the sky view and the volume are built.
+uniform sampler2D atmosphereIrradianceTable;
 
 
 // ---- Geometry ---------------------------------------------------------------------------------------------------
@@ -398,22 +426,23 @@ vec3 atmosphereLightSource(float height, float lightCos, float phaseR, float pha
 
 // The light the air scatters toward a viewer `height` metres up along the first `pathLength` metres of a ray with the
 // zenith cosine `cosZenith`, through the ground if the ray reaches it (the air below it as on it: the haze's rays; the
-// sky's stop at the ground or the top themselves), for a light of radiance `lightRadiance` whose zenith cosine at the
-// viewer is `lightCosZenith` (`cosLightAngle`: the cosine between the ray and the light), plus light pollution's
+// sky's stop at the ground or the top themselves), for a light of radiance `lightRadiance` (its light above the air,
+// coloured) whose zenith cosine at the viewer is `lightCosZenith` (`cosLightAngle`: the cosine between the ray and the
+// light), plus light pollution's
 // `lightPollution` (the radiance of the town's light in the air at the camera's foot; 0: none). Each point's light is
 // atmosphereLightSource's, the light's zenith there its own on the curved planet. The steps grow with the square of their
 // index (short near the viewer, where every ray meets the densest air; a level ray rises with the square of its length
 // as the planet curves away), and each step's light is integrated exactly over its own air and dimmed by the air before
 // it. Also gives the path's transmittance.
 vec3 atmosphereScatteredLight(float height, float cosZenith, float lightCosZenith, float cosLightAngle,
-    float pathLength, int stepCount, float lightRadiance, float multipleScattering, vec3 lightPollution,
+    float pathLength, int stepCount, vec3 lightRadiance, float multipleScattering, vec3 lightPollution,
     out vec3 transmittance)
 {
     float radius = ATMOSPHERE_R_PLANET + height;
     float horizontal = sqrt(max(1.0 - cosZenith*cosZenith, 0.0));
     float phaseR = atmosphereRayleighPhase(cosLightAngle);
     float phaseM = atmosphereMiePhase(cosLightAngle);
-    bool hasLight = lightRadiance > 0.0;
+    bool hasLight = any(greaterThan(lightRadiance, vec3(0.0)));
     bool hasPollution = any(greaterThan(lightPollution, vec3(0.0)));
     float steps = float(stepCount);
     vec3 light = vec3(0.0);
@@ -504,6 +533,94 @@ ivec2 atmosphereVolumeValueTexel(int value)
 }
 
 
+// ---- The sky's light by height and the irradiance table (T36) ---------------------------------------------------
+// A height's place among the sky's light's heights (WorldAtmosphere_GetSkyLightCoordinate): (count - 1) x sqrt(height /
+// highest), clamped; the readers blend the two whole coordinates around it.
+float atmosphereSkyLightCoordinate(float height)
+{
+    return float(ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT - 1)*sqrt(clamp(height/ATMOSPHERE_SKY_LIGHT_HIGHEST, 0.0, 1.0));
+}
+
+// The height a whole coordinate stands for (WorldAtmosphere_GetSkyLightHeight).
+float atmosphereSkyLightHeight(int index)
+{
+    float unit = float(index)/float(ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT - 1);
+    return ATMOSPHERE_SKY_LIGHT_HIGHEST*unit*unit;
+}
+
+// The texel of one value of the sky's light at one of its heights (WorldAtmosphere_GetSkyLightColumn), for texelFetch.
+ivec2 atmosphereSkyLightTexel(int value, int index)
+{
+    return ivec2(ATMOSPHERE_SKY_LIGHT_FIRST_COLUMN + value*ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT
+        + clamp(index, 0, ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT - 1), int(2.0*ATMOSPHERE_VOLUME_SIZE));
+}
+
+// Where the irradiance table holds a height and a light's zenith cosine (WorldAtmosphere_GetIrradianceUnit, _Uv), as
+// texture coordinates in its lights' columns, and light pollution's column at a height
+// (WorldAtmosphere_GetLightPollutionIrradianceUv).
+// The mappings' ends: the asinh of the lowest elevation's and the zenith's over the elevation scale, and the log of the
+// top's height over the height scale.
+const float ATMOSPHERE_IRRADIANCE_LOWEST_ACROSS = asinh(ATMOSPHERE_IRRADIANCE_LOWEST_ELEVATION
+    /ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE);
+const float ATMOSPHERE_IRRADIANCE_HIGHEST_ACROSS = asinh(0.5*PI/ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE);
+const float ATMOSPHERE_IRRADIANCE_TOP_UP = log(1.0 + (ATMOSPHERE_R_ATMOS - ATMOSPHERE_R_PLANET)
+    /ATMOSPHERE_IRRADIANCE_HEIGHT_SCALE);
+
+float atmosphereIrradianceRowUnit(float height)
+{
+    return clamp(log(1.0 + max(height, 0.0)/ATMOSPHERE_IRRADIANCE_HEIGHT_SCALE)/ATMOSPHERE_IRRADIANCE_TOP_UP, 0.0, 1.0);
+}
+
+float atmosphereIrradianceColumnUnit(float lightCosZenith)
+{
+    float elevation = asin(clamp(lightCosZenith, -1.0, 1.0));
+    return clamp((asinh(elevation/ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE) - ATMOSPHERE_IRRADIANCE_LOWEST_ACROSS)
+        /(ATMOSPHERE_IRRADIANCE_HIGHEST_ACROSS - ATMOSPHERE_IRRADIANCE_LOWEST_ACROSS), 0.0, 1.0);
+}
+
+// The height and the light's elevation (radians) a unit row and column hold (WorldAtmosphere_GetIrradianceRay).
+float atmosphereIrradianceRowHeight(float up)
+{
+    return ATMOSPHERE_IRRADIANCE_HEIGHT_SCALE*(exp(up*ATMOSPHERE_IRRADIANCE_TOP_UP) - 1.0);
+}
+
+float atmosphereIrradianceColumnElevation(float across)
+{
+    return ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE*sinh(ATMOSPHERE_IRRADIANCE_LOWEST_ACROSS
+        + across*(ATMOSPHERE_IRRADIANCE_HIGHEST_ACROSS - ATMOSPHERE_IRRADIANCE_LOWEST_ACROSS));
+}
+
+vec2 atmosphereIrradianceUv(float height, float lightCosZenith)
+{
+    return vec2((0.5 + atmosphereIrradianceColumnUnit(lightCosZenith)*(ATMOSPHERE_IRRADIANCE_WIDTH - 1.0))
+        /ATMOSPHERE_IRRADIANCE_TEXTURE_WIDTH,
+        atmosphereUnitToTexel(atmosphereIrradianceRowUnit(height), ATMOSPHERE_IRRADIANCE_HEIGHT));
+}
+
+vec2 atmosphereLightPollutionIrradianceUv(float height)
+{
+    return vec2((ATMOSPHERE_IRRADIANCE_WIDTH + 0.5)/ATMOSPHERE_IRRADIANCE_TEXTURE_WIDTH,
+        atmosphereUnitToTexel(atmosphereIrradianceRowUnit(height), ATMOSPHERE_IRRADIANCE_HEIGHT));
+}
+
+// The sky's irradiance on a surface facing up `height` metres up, per unit of a light above the air at the zenith cosine
+// `lightCosZenith` (untinted; none for a light below the table's lowest elevation, as the C mirror's
+// WorldSkyLight_GetSkyIrradiance), and light pollution's per unit of its radiance at the camera's foot.
+vec3 atmosphereSkyIrradiance(float height, float lightCosZenith)
+{
+    if (lightCosZenith < sin(ATMOSPHERE_IRRADIANCE_LOWEST_ELEVATION))
+    {
+        return vec3(0.0);
+    }
+    return exp(textureLod(atmosphereIrradianceTable, atmosphereIrradianceUv(height, lightCosZenith), 0.0).rgb);
+}
+
+vec3 atmosphereLightPollutionIrradiance(float height)
+{
+    return exp(textureLod(atmosphereIrradianceTable, atmosphereLightPollutionIrradianceUv(height), 0.0).rgb);
+}
+
+
 // ---- The direct march (T34): the A/B path and the fallback -----------------------------------------------------
 // TODO: remove the direct march (here, and its branches in the sky pass and the stars) with the A/B switch
 // once the owner approves the tables' sky (T15; WorldRenderer_SetAtmosphereTablesEnabled).
@@ -519,10 +636,10 @@ vec2 raySphere(vec3 origin, vec3 dir, float sr)
 }
 
 // Light the atmosphere scatters toward the camera along rayDir, for a light (the sun, or the moon) in direction sunDir
-// with radiance iSun, through the frame's air, single scattering only, marched per pixel. No discs, no stars. Also gives
-// the view ray's transmittance: the share of what lies beyond the air along rayDir (the moon's disc) that reaches the
-// viewer.
-vec3 atmosphere(vec3 rayDir, vec3 sunDir, float iSun, out vec3 transmittance)
+// with radiance iSun (its light above the air, coloured), through the frame's air, single scattering only, marched per
+// pixel. No discs, no stars. Also gives the view ray's transmittance: the share of what lies beyond the air along rayDir
+// (the moon's disc) that reaches the viewer.
+vec3 atmosphere(vec3 rayDir, vec3 sunDir, vec3 iSun, out vec3 transmittance)
 {
     transmittance = vec3(1.0);
     vec3 rayOrigin = vec3(0.0, ATMOSPHERE_R_PLANET + atmosphereViewHeight, 0.0);
@@ -603,7 +720,7 @@ vec3 atmosphere(vec3 rayDir, vec3 sunDir, float iSun, out vec3 transmittance)
 }
 
 // The same without the transmittance.
-vec3 atmosphere(vec3 rayDir, vec3 sunDir, float iSun)
+vec3 atmosphere(vec3 rayDir, vec3 sunDir, vec3 iSun)
 {
     vec3 transmittance;
     return atmosphere(rayDir, sunDir, iSun, transmittance);

@@ -5,22 +5,25 @@
 // along the path so far (the in-scatter's tiles, in the sky's light units) or the path's transmittance (the
 // transmittance's tiles); the last slice holds the whole ray, to the top of the atmosphere. Lit by the sun, by the moon
 // while the moonlit sky shows, and by light pollution's light in the air. The last row holds the frame's values: the
-// light at the ground haze's base. Built every frame after the sky-view table, from the transmittance and multiple
-// scattering tables (source/WorldRendererAtmosphere.c); the lit shaders, the sky pass and the outlines read it
-// (common/haze).
+// light at the ground haze's base, and (T36) the sky's light by height: the sun's and the moon's through the air, the
+// sky's irradiance and the ground's bounce, what lights every surface at that height. Built every frame after the
+// sky-view table, from the transmittance, multiple scattering and irradiance tables (source/WorldRendererAtmosphere.c;
+// only its last row while the haze is off); the lit shaders, the sky pass and the outlines read it (common/haze,
+// common/lighting).
 // Its rays pass through the planet's surface, the air below it as on it: the world's ground is flat and goes on where
 // the planet curves away (a level ray from 1.7 m meets the planet 4.65 km out), and a valley below sea level is hazed
 // like the plain around it.
 
 uniform mat4 invViewProjection;     // clip -> render space (a rotation and the projection): the screen's directions
 uniform vec3 sunDirection;           // unit direction to the sun
-uniform float sunIntensity;          // the sun's raw intensity: its light on the air is ATMOSPHERE_SUN_RADIANCE x this
+uniform vec3 sunIntensity;           // the sun above the air, colour in: its light is ATMOSPHERE_SUN_LIGHT x this
 uniform vec3 moonDirection;          // unit direction to the moon
-uniform float moonSkyIntensity;      // the moonlit sky's light relative to the sun's; 0: none
+uniform vec3 moonIntensity;          // the moon above the air the same way (the moonlit sky's light); 0: none
 uniform float multipleScattering;    // the share of the multiple scattering drawn, 0..1
 uniform vec3 lightPollutionRadiance; // the town's light in the air at the camera's foot (linear; 0 by day)
 uniform vec3 skyTint;                // the sky's tint (linear): the haze is the sky's light, tinted as the sky is
 uniform float groundHazeBaseHeight;  // the ground haze's base above the atmosphere's ground, metres
+uniform vec3 groundAlbedo;           // the ground's albedo (sky_ground_albedo, linear): the ground's bounce
 
 out vec4 finalColor;
 
@@ -29,19 +32,50 @@ out vec4 finalColor;
 // The largest value a texel of the volume (RGBA16F) holds.
 const float HALF_FLOAT_MAX = 65504.0;
 
+// One value of the sky's light (ATMOSPHERE_SKY_LIGHT_*) at one of its heights.
+vec3 SkyLightValue(int value, float height, vec3 sunRadiance, vec3 moonRadiance)
+{
+    vec3 sun = sunRadiance*atmosphereLightTransmittance(height, sunDirection.y);
+    vec3 moon = moonRadiance*atmosphereLightTransmittance(height, moonDirection.y);
+    if (value == ATMOSPHERE_SKY_LIGHT_SUN)
+    {
+        return sun;
+    }
+    if (value == ATMOSPHERE_SKY_LIGHT_MOON)
+    {
+        return moon;
+    }
+    vec3 sky = (atmosphereSkyIrradiance(height, sunDirection.y)*sunRadiance
+        + atmosphereSkyIrradiance(height, moonDirection.y)*moonRadiance
+        + atmosphereLightPollutionIrradiance(height)*lightPollutionRadiance)*max(skyTint, vec3(0.0));
+    if (value == ATMOSPHERE_SKY_LIGHT_SKY)
+    {
+        return sky;
+    }
+    // The ground below the surface, lit by the sun, the moon and the sky, reflecting evenly.
+    return max(groundAlbedo, vec3(0.0))*(sun*max(sunDirection.y, 0.0) + moon*max(moonDirection.y, 0.0) + sky);
+}
+
 void main()
 {
     ivec2 texel = ivec2(gl_FragCoord.xy);
     int size = int(ATMOSPHERE_VOLUME_SIZE);
     // A light far brighter than the sun saturates at the largest value a texel holds instead of turning infinite.
-    float sunRadiance = min(ATMOSPHERE_SUN_RADIANCE*max(sunIntensity, 0.0), HALF_FLOAT_MAX);
-    float moonRadiance = min(ATMOSPHERE_SUN_RADIANCE*max(moonSkyIntensity, 0.0), HALF_FLOAT_MAX);
+    vec3 sunRadiance = min(ATMOSPHERE_SUN_LIGHT*max(sunIntensity, vec3(0.0)), vec3(HALF_FLOAT_MAX));
+    vec3 moonRadiance = min(ATMOSPHERE_SUN_LIGHT*max(moonIntensity, vec3(0.0)), vec3(HALF_FLOAT_MAX));
     if (texel.y >= 2*size)
     {
-        // The values' row: the light at the ground haze's base, per unit of its scattering.
+        // The values' row: the light at the ground haze's base, per unit of its scattering; then the sky's light by
+        // height.
         float baseHeight = max(groundHazeBaseHeight, 0.0);
         vec3 value = vec3(0.0);
-        if (texel.x == ATMOSPHERE_VOLUME_GROUND_HAZE_SUN)
+        int block = texel.x - ATMOSPHERE_SKY_LIGHT_FIRST_COLUMN;
+        if ((block >= 0) && (block < ATMOSPHERE_SKY_LIGHT_COUNT*ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT))
+        {
+            value = SkyLightValue(block/ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT,
+                atmosphereSkyLightHeight(block % ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT), sunRadiance, moonRadiance);
+        }
+        else if (texel.x == ATMOSPHERE_VOLUME_GROUND_HAZE_SUN)
         {
             value = sunRadiance*atmosphereLightTransmittance(baseHeight, sunDirection.y);
         }
@@ -82,14 +116,14 @@ void main()
     float cosSun = dot(direction, sunDirection);
     vec3 transmittance;
     vec3 light = atmosphereScatteredLight(atmosphereViewHeight, direction.y, sunDirection.y, cosSun, pathLength,
-        stepCount, isTransmittance ? 0.0 : sunRadiance, multipleScattering,
+        stepCount, isTransmittance ? vec3(0.0) : sunRadiance, multipleScattering,
         isTransmittance ? vec3(0.0) : lightPollutionRadiance, transmittance);
     if (isTransmittance)
     {
         finalColor = vec4(transmittance, 1.0);
         return;
     }
-    if (moonRadiance > 0.0)
+    if (any(greaterThan(moonRadiance, vec3(0.0))))
     {
         vec3 moonTransmittance;
         light += atmosphereScatteredLight(atmosphereViewHeight, direction.y, moonDirection.y,

@@ -76,11 +76,12 @@ void main()
         float shadowAmount = SkyShadowAmount(fragShadowPosition, shadowNDotL);
         vec3 pointShadowNormal = FacingNormal(fragPointShadowNormal, pointShadowLightPos - fragPointShadowPosition);
 
-        vec3 direct = SkyLightWrapped(n, v, shadowAmount, lightWrap, albedo, SPRITE_F0, SPRITE_ROUGHNESS,
+        SkyLightValues light = SkyLightAt(fragPosition);
+        vec3 direct = SkyLightWrapped(light, n, v, shadowAmount, lightWrap, albedo, SPRITE_F0, SPRITE_ROUGHNESS,
             SPRITE_METALLIC);
         vec3 pointTotal = PointLightsWrapped(n, v, fragPosition, fragPointShadowPosition, pointShadowNormal, lightWrap,
             albedo, SPRITE_F0, SPRITE_ROUGHNESS, SPRITE_METALLIC);
-        vec3 ambient = ambientColor*ambientIntensity*albedo*(useScreenAo ? ScreenAo() : 1.0);
+        vec3 ambient = AmbientLight(light, n)*albedo*(useScreenAo ? ScreenAo() : 1.0);
 
         // Reflected light goes through the eye's night vision, as the models' does.
         color = NightVisionOf(ambient + direct + pointTotal);

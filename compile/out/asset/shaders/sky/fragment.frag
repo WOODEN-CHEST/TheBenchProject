@@ -24,8 +24,8 @@ uniform vec2 resolution;       // scene target size in pixels
 uniform mat4 invViewProj;      // inverse(view * proj) in render space (a rotation and the projection), matching BeginMode3D
 
 uniform vec3 sunDirection;     // unit direction TO the sun (world, +Y up)
-uniform vec3 sunColor;         // linear; tints the sun disc
-uniform float sunIntensity;    // radiance multiplier
+uniform vec3 sunIntensity;     // the sun above the air, colour in (linear): its light is ATMOSPHERE_SUN_LIGHT x this
+uniform vec3 sunDiscIntensity; // the sun's disc, colour in (linear): its radiance is SUN_DISC_RADIANCE x this
 uniform float sunSize;         // angular-size multiplier for the sun disc
 uniform vec3 skyTint;          // linear multiplier, for alien skies
 
@@ -37,7 +37,8 @@ uniform float milkyWayRadiance;    // linear radiance of a white texel; 0 draws 
 uniform float milkyWayLod;         // mip level matching the pixel's angular size (explicit: see milkyWay)
 
 uniform vec3 moonDirection;        // unit direction TO the moon (world, +Y up)
-uniform float moonSkyIntensity;    // the moon's light on the atmosphere relative to the sun's; 0 skips the moonlit sky
+uniform vec3 moonSkyIntensity;     // the moon's light on the atmosphere as sunIntensity is (colour in); 0 skips the
+                                   // moonlit sky
 uniform float moonOpacity;         // the disc's opacity (it fades out near the sun); 0 draws no disc
 uniform vec3 moonRight;            // the disc's axes on the sky, perpendicular to moonDirection: right, and up toward
 uniform vec3 moonUp;               //   the sky's pole (so the face turns as the moon crosses the sky)
@@ -64,6 +65,9 @@ out vec4 finalColor;
 
 // The moon's face where no texture is bound (sRGB grey).
 const float MOON_FLAT_ALBEDO = 0.7;
+// The sun's disc's radiance at sun_intensity 1 (T36: a constant of its own, the sky's sun before T36). Far dimmer than the
+// real sun's, so that it keeps its colour on screen.
+const float SUN_DISC_RADIANCE = 22.0;
 
 // The Milky Way toward a world direction. The panorama is in galactic coordinates: the galactic centre in the middle,
 // longitude growing to the left (the view from inside the sky, as astronomical all-sky maps show it) and the north
@@ -119,7 +123,9 @@ void main()
     vec3 rayDir = normalize(world.xyz/world.w); // the camera sits at the origin of render space
     vec3 sunDir = normalize(sunDirection);
     vec3 moonDir = normalize(moonDirection);
-    float iSun = ATMOSPHERE_SUN_RADIANCE*max(sunIntensity, 0.0);
+    vec3 iSun = ATMOSPHERE_SUN_LIGHT*max(sunIntensity, vec3(0.0));
+    vec3 iMoon = ATMOSPHERE_SUN_LIGHT*max(moonSkyIntensity, vec3(0.0));
+    bool isMoonlitSky = any(greaterThan(iMoon, vec3(0.0)));
     // With the tables the planet's surface ends every ray below its horizon (the far ground, T35), and nothing beyond the
     // air shows there; the direct march mirrors the sky below the horizon and draws the discs down to -0.02, as before.
     float toGround = atmosphereDistanceToGround(atmosphereViewHeight, rayDir.y);
@@ -138,7 +144,7 @@ void main()
         // moon: blue for the same reason the day is, far dimmer), each with its multiple scattering, already tinted; the
         // far ground below the horizon is theirs.
         sky = atmosphereSkyView(rayDir, sunDir, 0.0);
-        if (moonSkyIntensity > 0.0)
+        if (isMoonlitSky)
         {
             sky += atmosphereSkyView(rayDir, moonDir, 1.0);
         }
@@ -154,9 +160,9 @@ void main()
         // colour.
         vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
         sky = atmosphere(skyRay, sunDir, iSun, transmittance);
-        if (moonSkyIntensity > 0.0)
+        if (isMoonlitSky)
         {
-            sky += atmosphere(skyRay, moonDir, ATMOSPHERE_SUN_RADIANCE*moonSkyIntensity);
+            sky += atmosphere(skyRay, moonDir, iMoon);
         }
         sky += nightSkySkyglow(skyRay.y, skyglowRadiance);
         float belowFactor = smoothstep(0.0, -0.12, rayDir.y); // 0 above the horizon, 1 below
@@ -206,7 +212,7 @@ void main()
     float discCos = cos(radians(0.5*max(sunSize, 0.01)));
     if (isBeyondAirShown && (dot(rayDir, sunDir) > discCos))
     {
-        vec3 sunDisc = max(sunColor, vec3(0.0))*iSun*(1.0 - moonCover);
+        vec3 sunDisc = SUN_DISC_RADIANCE*max(sunDiscIntensity, vec3(0.0))*(1.0 - moonCover);
         discs += atmosphereTablesActive ? (sunDisc*transmittance) : sunDisc;
     }
     discs += moon*transmittance*moonCover;

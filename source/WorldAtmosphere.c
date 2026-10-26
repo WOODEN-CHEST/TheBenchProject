@@ -215,6 +215,24 @@ bool WorldAtmosphere_UpdateTableRecord(WorldAtmosphereTableRecord* record, const
     return true;
 }
 
+bool WorldAtmosphere_IsIrradianceStale(const WorldAtmosphereMedium* builtFor, const WorldAtmosphereMedium* medium)
+{
+    return WorldAtmosphere_AreTablesStale(builtFor, medium) || (builtFor->MieAnisotropy != medium->MieAnisotropy)
+        || (builtFor->MultipleScattering != medium->MultipleScattering);
+}
+
+bool WorldAtmosphere_UpdateIrradianceRecord(WorldAtmosphereTableRecord* record, const WorldAtmosphereMedium* medium)
+{
+    if (record->IsBuilt && !WorldAtmosphere_IsIrradianceStale(&record->BuiltFor, medium))
+    {
+        return false;
+    }
+    record->BuiltFor = *medium;
+    record->IsBuilt = true;
+    record->BuildCount++;
+    return true;
+}
+
 double WorldAtmosphere_GetViewHeight(double cameraHeight)
 {
     if (!isfinite(cameraHeight))
@@ -275,22 +293,34 @@ double WorldAtmosphere_TexelToUnit(double coordinate, int size)
 
 Vector2Double WorldAtmosphere_GetTransmittanceUv(WorldAtmosphereRay ray)
 {
+    Vector2Double Unit = WorldAtmosphere_GetTransmittanceUnit(ray);
+    return Vector2Double_Create(WorldAtmosphere_UnitToTexel(Unit.X, WORLD_ATMOSPHERE_TRANSMITTANCE_WIDTH),
+        WorldAtmosphere_UnitToTexel(Unit.Y, WORLD_ATMOSPHERE_TRANSMITTANCE_HEIGHT));
+}
+
+WorldAtmosphereRay WorldAtmosphere_GetTransmittanceRay(Vector2Double uv)
+{
+    return WorldAtmosphere_GetTransmittanceUnitRay(Vector2Double_Create(
+        WorldAtmosphere_TexelToUnit(uv.X, WORLD_ATMOSPHERE_TRANSMITTANCE_WIDTH),
+        WorldAtmosphere_TexelToUnit(uv.Y, WORLD_ATMOSPHERE_TRANSMITTANCE_HEIGHT)));
+}
+
+Vector2Double WorldAtmosphere_GetTransmittanceUnit(WorldAtmosphereRay ray)
+{
     double Height = fmax(ray.Height, 0.0);
     double HorizonToTop = GetHorizonToTop();
     double Rho = GetHorizonDistance(Height);
     double Distance = WorldAtmosphere_GetDistanceToTop((WorldAtmosphereRay){ .Height = Height, .CosZenith = ray.CosZenith });
     double MinDistance = (WORLD_ATMOSPHERE_TOP_RADIUS - WORLD_ATMOSPHERE_PLANET_RADIUS) - Height;
     double MaxDistance = Rho + HorizonToTop;
-    double UnitAcross = ClampUnit((Distance - MinDistance) / (MaxDistance - MinDistance));
-    double UnitUp = ClampUnit(Rho / HorizonToTop);
-    return Vector2Double_Create(WorldAtmosphere_UnitToTexel(UnitAcross, WORLD_ATMOSPHERE_TRANSMITTANCE_WIDTH),
-        WorldAtmosphere_UnitToTexel(UnitUp, WORLD_ATMOSPHERE_TRANSMITTANCE_HEIGHT));
+    return Vector2Double_Create(ClampUnit((Distance - MinDistance) / (MaxDistance - MinDistance)),
+        ClampUnit(Rho / HorizonToTop));
 }
 
-WorldAtmosphereRay WorldAtmosphere_GetTransmittanceRay(Vector2Double uv)
+WorldAtmosphereRay WorldAtmosphere_GetTransmittanceUnitRay(Vector2Double unit)
 {
-    double UnitAcross = WorldAtmosphere_TexelToUnit(uv.X, WORLD_ATMOSPHERE_TRANSMITTANCE_WIDTH);
-    double UnitUp = WorldAtmosphere_TexelToUnit(uv.Y, WORLD_ATMOSPHERE_TRANSMITTANCE_HEIGHT);
+    double UnitAcross = unit.X;
+    double UnitUp = unit.Y;
     double HorizonToTop = GetHorizonToTop();
     double Rho = HorizonToTop * UnitUp;
     double Radius = sqrt(Rho * Rho + WORLD_ATMOSPHERE_PLANET_RADIUS * WORLD_ATMOSPHERE_PLANET_RADIUS);
@@ -484,6 +514,83 @@ Vector2Double WorldAtmosphere_GetVolumeValueUv(WorldAtmosphereVolumeValue value)
 {
     return Vector2Double_Create(((double)value + 0.5) / (double)WORLD_ATMOSPHERE_VOLUME_WIDTH,
         (2.0 * (double)WORLD_ATMOSPHERE_VOLUME_SIZE + 0.5) / (double)WORLD_ATMOSPHERE_VOLUME_HEIGHT);
+}
+
+double WorldAtmosphere_GetSkyLightCoordinate(double height)
+{
+    double Share = ClampUnit(height / WORLD_ATMOSPHERE_SKY_LIGHT_HIGHEST); // ClampUnit drops a NaN
+    return (double)(WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT - 1) * sqrt(Share);
+}
+
+double WorldAtmosphere_GetSkyLightHeight(int index)
+{
+    int Index = (index < 0) ? 0
+        : ((index > WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT - 1) ? (WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT - 1) : index);
+    double Unit = (double)Index / (double)(WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT - 1);
+    return WORLD_ATMOSPHERE_SKY_LIGHT_HIGHEST * Unit * Unit;
+}
+
+int WorldAtmosphere_GetSkyLightColumn(WorldAtmosphereSkyLight value, int index)
+{
+    int Index = (index < 0) ? 0
+        : ((index > WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT - 1) ? (WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT - 1) : index);
+    return WORLD_ATMOSPHERE_SKY_LIGHT_FIRST_COLUMN + (int)value * WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT + Index;
+}
+
+/* The irradiance table's mappings (WorldAtmosphere_GetIrradianceUnit): the asinh of the lowest elevation's and the
+ * zenith's over the elevation scale, and the log of the top's height over the height scale. */
+static double GetIrradianceLowestAcross(void)
+{
+    return asinh(WORLD_ATMOSPHERE_IRRADIANCE_LOWEST_ELEVATION / WORLD_ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE);
+}
+
+static double GetIrradianceHighestAcross(void)
+{
+    return asinh(0.5 * ATMOSPHERE_PI / WORLD_ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE);
+}
+
+static double GetIrradianceTopUp(void)
+{
+    return log1p((WORLD_ATMOSPHERE_TOP_RADIUS - WORLD_ATMOSPHERE_PLANET_RADIUS) / WORLD_ATMOSPHERE_IRRADIANCE_HEIGHT_SCALE);
+}
+
+Vector2Double WorldAtmosphere_GetIrradianceUnit(WorldAtmosphereRay ray)
+{
+    double Elevation = asin(fmin(fmax(ray.CosZenith, -1.0), 1.0));
+    double Lowest = GetIrradianceLowestAcross();
+    double Across = ClampUnit((asinh(Elevation / WORLD_ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE) - Lowest)
+        / (GetIrradianceHighestAcross() - Lowest));
+    double Up = ClampUnit(log1p(fmax(ray.Height, 0.0) / WORLD_ATMOSPHERE_IRRADIANCE_HEIGHT_SCALE) / GetIrradianceTopUp());
+    return Vector2Double_Create(Across, Up); // fmax and ClampUnit drop a NaN
+}
+
+WorldAtmosphereRay WorldAtmosphere_GetIrradianceRay(Vector2Double unit)
+{
+    double Lowest = GetIrradianceLowestAcross();
+    double Elevation = WORLD_ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE
+        * sinh(Lowest + ClampUnit(unit.X) * (GetIrradianceHighestAcross() - Lowest));
+    return (WorldAtmosphereRay)
+    {
+        .Height = WORLD_ATMOSPHERE_IRRADIANCE_HEIGHT_SCALE * expm1(ClampUnit(unit.Y) * GetIrradianceTopUp()),
+        .CosZenith = sin(Elevation)
+    };
+}
+
+Vector2Double WorldAtmosphere_GetIrradianceUv(WorldAtmosphereRay ray)
+{
+    // The lights' part: the first WORLD_ATMOSPHERE_IRRADIANCE_WIDTH columns of a texture one column wider.
+    Vector2Double Unit = WorldAtmosphere_GetIrradianceUnit(ray);
+    double Width = (double)WORLD_ATMOSPHERE_IRRADIANCE_WIDTH;
+    return Vector2Double_Create((0.5 + Unit.X * (Width - 1.0)) / (double)WORLD_ATMOSPHERE_IRRADIANCE_TEXTURE_WIDTH,
+        WorldAtmosphere_UnitToTexel(Unit.Y, WORLD_ATMOSPHERE_IRRADIANCE_HEIGHT));
+}
+
+Vector2Double WorldAtmosphere_GetLightPollutionIrradianceUv(double height)
+{
+    Vector2Double Unit = WorldAtmosphere_GetIrradianceUnit((WorldAtmosphereRay){ .Height = height, .CosZenith = 1.0 });
+    return Vector2Double_Create(((double)WORLD_ATMOSPHERE_IRRADIANCE_WIDTH + 0.5)
+        / (double)WORLD_ATMOSPHERE_IRRADIANCE_TEXTURE_WIDTH,
+        WorldAtmosphere_UnitToTexel(Unit.Y, WORLD_ATMOSPHERE_IRRADIANCE_HEIGHT));
 }
 
 double WorldAtmosphere_GetGroundHazeDepth(double density, double thickness, double heightAboveBase, double rayY,
