@@ -485,6 +485,7 @@ void WorldRendererLighting_PrepareSkyLight(WorldRenderer* self, WorldRenderFrame
     // The sun's disc for the eye's exposure (the last render's: this one's is set after the scene is drawn).
     float Exposure = WorldSkyLight_GetExposure(self->_exposure._isInitialized ? self->_exposure._adaptedLuminance
         : frame->BaseSceneLuminance);
+    frame->LastExposure = Exposure;
     float SunColor[3];
     WorldRendererCommon_ColorToLinear(Environment->SunColor, SunColor);
     for (int Channel = 0; Channel < 3; Channel++)

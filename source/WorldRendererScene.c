@@ -155,8 +155,11 @@ Error WorldRendererScene_EnsureTargets(WorldRenderer* self, int windowWidth, int
         return Error_Construct4(ErrorCode_InvalidState,
             "WorldRenderer: could not create a %dx%d scene render target (not even 8-bit).", SceneWidth, SceneHeight);
     }
-    // Point filtering makes the upscale to the window produce hard, square pixels.
+    // Point filtering makes the upscale to the window produce hard, square pixels. Clamped at its edges: raylib makes
+    // colour textures repeat, so a pass reading the scene at an edge would take the opposite edge's pixels (the sun
+    // shafts drew the town at the bottom of the screen as white and aqua streaks at its top).
     SetTextureFilter(self->_scene._target.texture, TEXTURE_FILTER_POINT);
+    SetTextureWrap(self->_scene._target.texture, TEXTURE_WRAP_CLAMP);
     if (self->_scene._isDepthSamplable)
     {
         // The post passes compare raw depth texels, so nearest (point) sampling is required.

@@ -1,5 +1,6 @@
 // Post-processing passes: outlines, bloom, sun shafts and the tonemap.
 
+#include <float.h>
 #include <math.h>
 #include "WorldRendererInternal.h"
 #include "raylib/raymath.h"
@@ -47,6 +48,10 @@
  *  shafts' added light on screen is within about 25 % of before with the sun 30, 15 and 5 degrees up (T36's status
  *  block). */
 #define SUNSHAFT_SKY_SCREEN_SCALE 8.0f
+/** T36: the most a sky pixel adds to the shafts, as its brightness on screen (linear, its HDR luminance times the
+ *  exposure): about the sky's glow near the sun, so the sun's disc (a few pixels about 20 times brighter on screen)
+ *  adds no more than the glow around it and its square pixels do not smear into a blocky cross. */
+#define SUNSHAFT_SOURCE_SCREEN_LIMIT 1.0f
 
 
 // Static functions.
@@ -90,6 +95,7 @@ static void LoadCompositeShaders(WorldRenderer* self)
         self->_sunshaft._locResolution = GetShaderLocation(RayShader, "resolution");
         self->_sunshaft._locDepthTexture = GetShaderLocation(RayShader, "depthTexture");
         self->_sunshaft._locSunScreenPos = GetShaderLocation(RayShader, "sunScreenPos");
+        self->_sunshaft._locSourceLimit = GetShaderLocation(RayShader, "sourceLimit");
     }
 }
 
@@ -390,6 +396,10 @@ void WorldRendererPost_RenderSunshafts(WorldRenderer* self, const WorldRenderFra
     Shader Shaft = GameShader_GetRaylibShader(self->_sunshaft._shader);
     float Resolution[2] = { (float)self->_sunshaft._width, (float)self->_sunshaft._height };
     float SunPos[2] = { frame->SunScreenUv.x, frame->SunScreenUv.y };
+    // T36: a sample adds at most the sky glow's brightness on screen (the last exposure's), so the sun's disc does not
+    // outshine it. TODO: only this once the owner approves T36's light (the light before it took no limit).
+    float SourceLimit = (frame->IsOneLightScale && (frame->LastExposure > 0.0f))
+        ? SUNSHAFT_SOURCE_SCREEN_LIMIT / frame->LastExposure : FLT_MAX;
     Rectangle SourceRect = { 0.0f, 0.0f, (float)source.texture.width, (float)source.texture.height };
     Rectangle FullDest = { 0.0f, 0.0f, (float)self->_sunshaft._width, (float)self->_sunshaft._height };
 
@@ -397,6 +407,7 @@ void WorldRendererPost_RenderSunshafts(WorldRenderer* self, const WorldRenderFra
     ClearBackground(BLANK);
     SetShaderValue(Shaft, self->_sunshaft._locResolution, Resolution, SHADER_UNIFORM_VEC2);
     SetShaderValue(Shaft, self->_sunshaft._locSunScreenPos, SunPos, SHADER_UNIFORM_VEC2);
+    SetShaderValue(Shaft, self->_sunshaft._locSourceLimit, &SourceLimit, SHADER_UNIFORM_FLOAT);
     BeginShaderMode(Shaft);
     // Bind the scene depth (unit 1) via SetShaderValueTexture AFTER BeginShaderMode (batch texture table), like
     // the outline/bloom passes; the source colour is bound to unit 0 by DrawTexturePro.

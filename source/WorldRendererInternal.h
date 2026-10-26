@@ -283,6 +283,9 @@ typedef struct WorldRenderFrameStruct
      *  linear colour. */
     float SunDiscIntensity[3];
     float MoonColor[3];
+    /** @brief The exposure of the last render, which the eye is adapted to before this frame's is set (T36: the sun's
+     *  disc and the sun shafts' source limit are drawn against it); 0 with the light before T36. */
+    float LastExposure;
     /** @brief The light the shadow cascades are rendered from this frame (the brighter one once it stands high
      *  enough), its unit direction, and how strong its shadows are (0..1: faded near the horizon and while the lights
      *  hand over). The cascades only run while ShadowLight is not None (IsCascadeShadowActive). */
@@ -1068,6 +1071,7 @@ typedef struct WorldRendererSunshaftStateStruct
     int _locResolution;
     int _locDepthTexture;
     int _locSunScreenPos;
+    int _locSourceLimit;
     /** @brief Whether sun shafts are drawn (code toggle for A/B testing; on by default). */
     bool _isEnabled;
     /** @brief The sun-shaft buffer (colour-only HDR, reduced resolution, BILINEAR). */

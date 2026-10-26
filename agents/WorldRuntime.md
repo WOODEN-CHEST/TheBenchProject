@@ -949,7 +949,12 @@ are under the post-effects toggle (`WorldRenderer_SetPostEffectsEnabled`, O key 
 does not bloom) with a separable blur, and a radial blur of the unoccluded sky toward the sun's screen position
 that fades as the sun nears the screen margin or the horizon; since T36 the shafts' strength is divided by the exposure
 (times `SUNSHAFT_SKY_SCREEN_SCALE`), so they follow the sky's light on screen and do not glare at dusk ("Sky's light
-on surfaces").
+on surfaces"). The march toward the sun ends at the screen's edge (beyond it nothing is known; clamped, the samples
+repeated the edge row into streaks), and each sample adds at most `SUNSHAFT_SOURCE_SCREEN_LIMIT` (1.0) on screen (its
+luminance times the last exposure), about the sky's glow near the sun: the disc's few pixels, far brighter, would smear
+their square shape into a blocky cross. The scene's colour texture clamps at its edges (raylib makes colour textures
+repeat, and a read at an edge took the opposite edge's pixels: the town at the bottom of the screen as white and aqua
+streaks at its top).
 
 **Crisp overlay.** OmitPixelation models and cutout sprites render lit at window resolution and are composited over the
 pixelated image, depth-tested against the scene so they are occluded correctly (e.g. a readable in-world
