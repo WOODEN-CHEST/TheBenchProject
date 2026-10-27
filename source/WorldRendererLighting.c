@@ -1,6 +1,7 @@
 // The PBR shader and the frame lighting every lit shader (models, sprites, terrain) gets through common/lighting (the sky's
 // light: the sun and the moon through the air and the sky's own light as the ambient, T36; the haze, shadows, per-object
-// forward point lights and haze, the eye's night vision), the PBR's per-material factors, and HDR eye adaptation.
+// forward point lights and haze, the eye's night vision), and the PBR's per-material factors. The eye's adaptation is
+// WorldRendererExposure.c's (T37).
 
 #include <inttypes.h>
 #include <math.h>
@@ -8,7 +9,6 @@
 #include "WorldRendererInternal.h"
 #include "WorldLightCulling.h"
 #include "Logger.h"
-#include "raylib/raymath.h"
 #include "raylib/rlgl.h"
 #include "wr/WRMemory.h"
 
@@ -25,9 +25,8 @@
  *  for the shadow frustum's near..far range: ~0.0009 * (far-near) is the world-space offset (a few cm here). */
 #define SHADOW_BIAS 0.0009f
 /** The exposure the sun's disc is drawn for whatever the eye's (T36): the disc's radiance is divided by the exposure and
- *  multiplied by this, so it keeps its look on screen through dusk, when the exposure rises up to
- *  WORLD_SKY_LIGHT_ADAPT_MAX_EXPOSURE (it would turn the setting disc white): the exposure of a clear noon before T36,
- *  so the disc looks as it did then. */
+ *  multiplied by this, so it keeps its look on screen through dusk, when the exposure rises far above the noon's (it
+ *  would turn the setting disc white): the exposure of a clear noon before T36, so the disc looks as it did then. */
 #define SUN_DISC_SCREEN_EXPOSURE 1.08f
 /** The most the sun's disc's intensity holds (T36): its radiance, WORLD_ATMOSPHERE_SUN_DISC_RADIANCE times it, stays
  *  within the scene's half floats whatever sun_intensity is (an infinity there times the moon's cover or a sky_tint of
@@ -37,62 +36,6 @@
  *  larger where the light grazes a surface, a small fraction head-on). Raise if acne (streaky self-shadowing),
  *  lower if peter-panning (the shadow detaches from its caster). */
 #define POINT_SHADOW_BIAS 0.35f
-// ---- The light before T36 (the A/B, WorldRenderer_SetOneLightScaleEnabled) ----
-// TODO: remove this block, ComputeLegacyAmbientColor, PrepareLegacySkyLight and ExposureFromAdaptedLegacy once the owner
-// approves T36's light.
-/** The night's ambient floor before T36 (LINEAR RGB): the look of a moonless night (the moon added its own fill on top:
- *  MOON_AMBIENT_SHARE). Since T36 the environment's night light (night_light_color, night_light_intensity) is this. */
-#define NIGHT_AMBIENT_R 0.004f
-#define NIGHT_AMBIENT_G 0.005f
-#define NIGHT_AMBIENT_B 0.011f
-/** Light pollution's share of the night ambient before T36: at LightPollution 1 the night floor gained this much of the
- *  (linear) LightPollutionColor. Since T36 the sky's irradiance holds light pollution's light in the air. */
-#define NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE 0.004f
-/** The daytime ambient's scale before T36 (before the night floor). */
-#define AMBIENT_SKY_STRENGTH 0.85f
-/** The painted daytime ambient before T36 (LINEAR RGB): the blue skylight when the sun is well above the horizon. */
-#define AMBIENT_DAY_R 0.15f
-#define AMBIENT_DAY_G 0.35f
-#define AMBIENT_DAY_B 0.75f
-/** The painted twilight ambient before T36 (LINEAR RGB): the warm tint the fill blended toward near the horizon. */
-#define AMBIENT_SUNSET_R 0.80f
-#define AMBIENT_SUNSET_G 0.28f
-#define AMBIENT_SUNSET_B 0.08f
-/** How near the horizon (in sun-elevation units) the ambient warmed before T36: a Gaussian of the sun's elevation with
- *  this as its width, gated by the daylight factor. */
-#define AMBIENT_SUNSET_BAND 0.15f
-/** The moonlit sky's fill before T36: the share of the moonlight that came back from the sky as ambient. Since T36 the
- *  moonlit sky's irradiance is the moon's ambient. */
-#define MOON_AMBIENT_SHARE 0.3f
-/** The sun's colour before T36 (sRGB): sun_color's old default, which the light before T36 multiplies into the world's
- *  (white by default since T36), so the A/B shows the old warm sun. */
-#define LEGACY_SUN_COLOR_R 255U
-#define LEGACY_SUN_COLOR_G 244U
-#define LEGACY_SUN_COLOR_B 214U
-/** The sky's sun before T36: its light on the air was this times sun_intensity, 22 times the surfaces' sun. */
-#define LEGACY_SKY_SUN_RADIANCE 22.0f
-/** The share of a directional light in the scene luminance before T36. */
-#define LEGACY_DIRECTIONAL_ADAPT_WEIGHT 0.5f
-/** The exposure before T36: the scene luminance that mapped to exposure 1, the exposure's range and the lowest luminance
- *  it rose to. */
-#define LEGACY_ADAPT_REFERENCE_LUMINANCE 0.80f
-#define LEGACY_ADAPT_MIN_EXPOSURE 0.5f
-#define LEGACY_ADAPT_MAX_EXPOSURE 24.0f
-#define LEGACY_ADAPT_MIN_LUMINANCE 0.02f
-// ---- Eye adaptation (HDR auto-exposure; its target on T36's scale: WorldSkyLight_GetExposure) ----
-/** Base adaptation rate (1/seconds); deliberately slow. Higher = quicker adaptation overall. */
-#define ADAPT_BASE_SPEED 0.6f
-/** Extra rate per unit of |brightness change|, so large jumps adapt faster than gentle drifts. */
-#define ADAPT_DELTA_GAIN 0.8f
-/** Multiplier applied when BRIGHTENING (target > current): light adaptation is quicker than dark adaptation,
- *  so going from a dark night to facing a light snaps down fast, while dark-adapting stays slow. */
-#define ADAPT_BRIGHTEN_MULTIPLIER 5.0f
-/** Clamp on a single frame's delta time feeding adaptation, so one long stall cannot jump the exposure. */
-#define ADAPT_MAX_DELTA_SECONDS 0.1f
-/** Per-point-light weight in the adaptation estimate (how strongly being near a light lowers exposure). */
-#define POINT_ADAPT_WEIGHT 0.5f
-/** Pi, for the light before T36's ambient expressed as the sky's irradiance (the shaders divide that by pi). */
-#define LIGHTING_PI 3.14159265358979323846f
 /** Room for the name of one point-light array element ("pointLightPositions[N]") when probing the shader. */
 #define POINT_LIGHT_UNIFORM_NAME_CAPACITY 48
 
@@ -223,51 +166,6 @@ static void LoadPbrProgram(WorldRenderer* self, WorldRendererPbrProgram* program
     program->_passShader = (Shader){ .id = RayShader.id, .locs = program->_locs };
 }
 
-/* The light before T36 (the A/B): the painted ambient skylight colour (linear RGB), TRACKING the sky's timing, driven
- * by the sun's elevation and the SAME daylight thresholds the sun lighting used (WorldEnvironment_GetDaylightFactor), so
- * the fill light and the sun agreed:
- *   * day  (sun well above the horizon) -> the daytime blue fill, at full brightness;
- *   * twilight (sun near the horizon)   -> blended toward the warm sunrise/sunset colour;
- *   * night (sun below the horizon)     -> the fill fades out to the dim NIGHT_AMBIENT floor.
- * The warm tint is gated by BOTH a narrow band around the horizon (AMBIENT_SUNSET_BAND, a Gaussian of the sun
- * elevation) AND the daylight factor, so it can neither appear while the sun is still high (sky still blue) nor
- * linger once the sun has set — the two bugs the flat sky-colour gradient produced. The hues are authored
- * (AMBIENT_DAY_* / AMBIENT_SUNSET_*), tinted by AmbientSkylightColor (WHITE = neutral) and scaled by
- * AmbientSkylightIntensity x AMBIENT_SKY_STRENGTH; the whole fill fades with the daylight factor. Light pollution
- * raises the night floor a little in its glow's colour (NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE), and the moon raises it by
- * the moonlit sky's fill (MOON_AMBIENT_SHARE of the moonlight, tinted and scaled like the day's skylight). */
-static void ComputeLegacyAmbientColor(const WorldEnvironment* environment, float sunElevation, float daylight,
-    const float moonColor[3], float moonIntensity, float outRGB[3])
-{
-    float SunsetT = sunElevation / AMBIENT_SUNSET_BAND;
-    float Sunset = expf(-(SunsetT * SunsetT)) * daylight; // warm only near the horizon AND while it is still day
-    if (Sunset < 0.0f) { Sunset = 0.0f; }
-    if (Sunset > 1.0f) { Sunset = 1.0f; }
-
-    float DayHue[3] = { AMBIENT_DAY_R, AMBIENT_DAY_G, AMBIENT_DAY_B };
-    float SunsetHue[3] = { AMBIENT_SUNSET_R, AMBIENT_SUNSET_G, AMBIENT_SUNSET_B };
-    float AmbientTint[3];
-    WorldRendererCommon_ColorToLinear(environment->AmbientSkylightColor, AmbientTint);
-    float NightAmbient[3] = { NIGHT_AMBIENT_R, NIGHT_AMBIENT_G, NIGHT_AMBIENT_B };
-    float PollutionColor[3];
-    WorldRendererCommon_ColorToLinear(environment->LightPollutionColor, PollutionColor);
-    float Pollution = fminf(fmaxf(environment->LightPollution, 0.0f), 1.0f); // fmaxf drops a NaN
-    float MoonFill = moonIntensity * MOON_AMBIENT_SHARE * environment->AmbientSkylightIntensity;
-    for (int Channel = 0; Channel < 3; Channel++)
-    {
-        NightAmbient[Channel] += PollutionColor[Channel] * Pollution * NIGHT_AMBIENT_LIGHT_POLLUTION_SHARE
-            + moonColor[Channel] * AmbientTint[Channel] * MoonFill;
-    }
-    float AmbientMagnitude = daylight * environment->AmbientSkylightIntensity * AMBIENT_SKY_STRENGTH;
-
-    for (int Channel = 0; Channel < 3; Channel++)
-    {
-        float Hue = DayHue[Channel] + (SunsetHue[Channel] - DayHue[Channel]) * Sunset;
-        float Lit = Hue * AmbientTint[Channel] * AmbientMagnitude;
-        outRGB[Channel] = fmaxf(Lit, NightAmbient[Channel]);
-    }
-}
-
 /* Builds this render's forward-light candidates and their linear radiance (colour -> linear x intensity, once
  * per light per frame): every light of the render cache that can light anything, except the cube-shadow light,
  * which the shader shades separately with its shadow. In render space, like the spheres they are culled against. */
@@ -310,42 +208,6 @@ static void BuildForwardLights(WorldRenderer* self, const WorldRenderFrame* fram
     }
 }
 
-/* Eases the adapted luminance toward the scene luminance over @p dt seconds. Slow in general, but faster the
- * larger the brightness change, and faster still when BRIGHTENING (facing a light) than when dark-adapting —
- * so a jump from a black night to a bright light snaps down quickly while dark-adaptation stays gradual. A
- * zero, negative or NaN delta holds the adaptation. */
-static float AdaptLuminance(float adapted, float target, float dt)
-{
-    if (!(dt > 0.0f))
-    {
-        return adapted;
-    }
-    if (dt > ADAPT_MAX_DELTA_SECONDS)
-    {
-        dt = ADAPT_MAX_DELTA_SECONDS;
-    }
-    float Delta = target - adapted;
-    float Speed = ADAPT_BASE_SPEED * (1.0f + ADAPT_DELTA_GAIN * fabsf(Delta));
-    if (Delta > 0.0f)
-    {
-        Speed *= ADAPT_BRIGHTEN_MULTIPLIER;
-    }
-    float Rate = 1.0f - expf(-dt * Speed);
-    if (Rate < 0.0f) { Rate = 0.0f; }
-    if (Rate > 1.0f) { Rate = 1.0f; }
-    return adapted + Delta * Rate;
-}
-
-/* The light before T36 (the A/B): its exposure for an adapted luminance (reference/adapted, clamped). */
-static float ExposureFromAdaptedLegacy(float adapted)
-{
-    float LuminanceValue = (adapted < LEGACY_ADAPT_MIN_LUMINANCE) ? LEGACY_ADAPT_MIN_LUMINANCE : adapted;
-    float Exposure = LEGACY_ADAPT_REFERENCE_LUMINANCE / LuminanceValue;
-    if (Exposure < LEGACY_ADAPT_MIN_EXPOSURE) { Exposure = LEGACY_ADAPT_MIN_EXPOSURE; }
-    if (Exposure > LEGACY_ADAPT_MAX_EXPOSURE) { Exposure = LEGACY_ADAPT_MAX_EXPOSURE; }
-    return Exposure;
-}
-
 /* The shadow light from the luminance each light gives a surface facing it, into the frame. */
 static void ChooseShadowLight(WorldRenderFrame* frame, float sunLuminance, float moonLuminance)
 {
@@ -354,54 +216,6 @@ static void ChooseShadowLight(WorldRenderFrame* frame, float sunLuminance, float
     frame->ShadowLight = Choice.Light;
     frame->ShadowDirection = Choice.Direction;
     frame->ShadowFade = Choice.Fade;
-}
-
-/* The light before T36 (the A/B) in the frame's fields: the sun's colour (the world's times the old warm default) at
- * its intensity ramped by the daylight, the moon ramped by its height, the painted ambient (the sky's and the ground's
- * irradiance pi times it, so the shaders' ambient is it), the sky lit by 22 times the sun, the old scene luminance, night
- * vision and shadow light.
- * TODO: remove once the owner approves T36's light. */
-static void PrepareLegacySkyLight(WorldRenderer* self, WorldRenderFrame* frame)
-{
-    const WorldEnvironment* Environment = frame->Environment;
-    float WorldSun[3];
-    float LegacySun[3];
-    WorldRendererCommon_ColorToLinear(Environment->SunColor, WorldSun);
-    WorldRendererCommon_ColorToLinear((Color){ LEGACY_SUN_COLOR_R, LEGACY_SUN_COLOR_G, LEGACY_SUN_COLOR_B, 255 },
-        LegacySun);
-    float SunIntensity = frame->SunIntensity * frame->Daylight;
-    float MoonIntensity = frame->MoonIntensity * WORLD_RENDERER_LEGACY_MOON_INTENSITY_SCALE
-        * WorldEnvironment_GetMoonlightForElevation(frame->MoonDirection.y);
-    ComputeLegacyAmbientColor(Environment, frame->SunDirection.y, frame->Daylight, frame->MoonColor, MoonIntensity,
-        frame->LegacyAmbientColor);
-    // The sky before T36 took the sun at 22 times sun_intensity and the moonlit sky's share (MoonSkyIntensity), white;
-    // its disc was the same sun in the sun's colour.
-    float SkyScale = LEGACY_SKY_SUN_RADIANCE / (float)WORLD_ATMOSPHERE_SUN_LIGHT;
-    float DiscScale = LEGACY_SKY_SUN_RADIANCE / (float)WORLD_ATMOSPHERE_SUN_DISC_RADIANCE;
-    WorldSkyLightFrame* Light = &frame->SkyLight;
-    for (int Channel = 0; Channel < 3; Channel++)
-    {
-        float SunColor = WorldSun[Channel] * LegacySun[Channel];
-        Light->Sun[Channel] = SunColor * SunIntensity;
-        Light->Moon[Channel] = frame->MoonColor[Channel] * MoonIntensity;
-        Light->Sky[Channel] = LIGHTING_PI * frame->LegacyAmbientColor[Channel];
-        Light->SunSky[Channel] = Light->Sky[Channel];
-        Light->Ground[Channel] = Light->Sky[Channel];
-        Light->AmbientTint[Channel] = 1.0f;
-        Light->Night[Channel] = 0.0f;
-        frame->AirSunIntensity[Channel] = SkyScale * frame->SunIntensity;
-        frame->AirMoonIntensity[Channel] = SkyScale * frame->MoonSkyIntensity;
-        Light->SunAboveAir[Channel] = (float)WORLD_ATMOSPHERE_SUN_LIGHT * frame->AirSunIntensity[Channel];
-        Light->MoonAboveAir[Channel] = (float)WORLD_ATMOSPHERE_SUN_LIGHT * frame->AirMoonIntensity[Channel];
-        frame->SunDiscIntensity[Channel] = SunColor * frame->SunIntensity * DiscScale;
-    }
-    frame->IsSkyLightPerHeight = false;
-    frame->IsMoonLit = MoonIntensity > 0.0f;
-    frame->BaseSceneLuminance = Luminance(frame->LegacyAmbientColor)
-        + Luminance(Light->Sun) * LEGACY_DIRECTIONAL_ADAPT_WEIGHT + Luminance(Light->Moon) * LEGACY_DIRECTIONAL_ADAPT_WEIGHT;
-    frame->NightVisionField = frame->BaseSceneLuminance;
-    frame->NightVision = self->_legacyNightVision;
-    ChooseShadowLight(frame, Luminance(Light->Sun), Luminance(Light->Moon));
 }
 
 
@@ -460,11 +274,6 @@ void WorldRendererLighting_PrepareSkyLight(WorldRenderer* self, WorldRenderFrame
 {
     const WorldEnvironment* Environment = frame->Environment;
     WorldRendererCommon_ColorToLinear(Environment->MoonColor, frame->MoonColor);
-    if (!frame->IsOneLightScale)
-    {
-        PrepareLegacySkyLight(self, frame);
-        return;
-    }
 
     // The C mirror's tables follow the air.
     WorldRendererAtmosphereState* Atmosphere = &self->_atmosphere;
@@ -482,9 +291,8 @@ void WorldRendererLighting_PrepareSkyLight(WorldRenderer* self, WorldRenderFrame
         frame->LightPollutionRadiance, (double)frame->AtmosphereViewHeight, &frame->SkyLight);
     const WorldSkyLightFrame* Light = &frame->SkyLight;
     frame->BaseSceneLuminance = WorldSkyLight_GetSceneLuminance(Light);
-    // The sun's disc for the eye's exposure (the last render's: this one's is set after the scene is drawn).
-    float Exposure = WorldSkyLight_GetExposure(self->_exposure._isInitialized ? self->_exposure._adaptedLuminance
-        : frame->BaseSceneLuminance);
+    // The sun's disc for the eye's exposure (the one it is at: this render's is set after the scene is drawn).
+    float Exposure = WorldRendererExposure_GetCurrent(self, frame);
     frame->LastExposure = Exposure;
     float SunColor[3];
     WorldRendererCommon_ColorToLinear(Environment->SunColor, SunColor);
@@ -539,7 +347,7 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     const WorldRendererLitLocations* lit, bool applyScreenAo)
 {
     // The two directional lights' directions (they light the ground haze too), and the sky's light: by height from the
-    // volume's last row, or the camera's from these uniforms (the C mirror's; the A/B's light before T36).
+    // volume's last row, or the camera's from these uniforms (the C mirror's).
     float SunDir[3] = { frame->SunDirection.x, frame->SunDirection.y, frame->SunDirection.z };
     SetShaderValue(shader, lit->_locSunDirection, SunDir, SHADER_UNIFORM_VEC3);
     float MoonDir[3] = { frame->MoonDirection.x, frame->MoonDirection.y, frame->MoonDirection.z };
@@ -780,54 +588,6 @@ void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program
     SetShaderValue(RayShader, program->_locHasEmissiveMap, &HasEmissive, SHADER_UNIFORM_INT);
 }
 
-/* Starts from the frame's base scene luminance (ambient + sun + moon), adds nearby point lights (being near a light
- * raises the estimate -> lowers exposure; in render space, the camera at the origin), then eases the adapted luminance
- * toward it. A non-finite estimate (a corrupt light or environment value) holds the adaptation, so it can never be
- * poisoned for good. */
-float WorldRendererLighting_UpdateExposure(WorldRenderer* self, const WorldRenderFrame* frame, float deltaSeconds)
-{
-    float SceneLuminance = frame->BaseSceneLuminance;
-
-    size_t LightCount = 0;
-    const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &LightCount);
-    for (size_t Index = 0; Index < LightCount; Index++)
-    {
-        const WorldRenderLight* Light = &Lights[Index];
-        if ((Light->Range <= 0.0f) || (Light->Intensity <= 0.0f))
-        {
-            continue;
-        }
-        float Distance = Vector3Length(Light->RenderPosition);
-        if (Distance >= Light->Range)
-        {
-            continue;
-        }
-        float LinearColor[3];
-        WorldRendererCommon_ColorToLinear(Light->Color, LinearColor);
-        float Proximity = 1.0f - (Distance / Light->Range);
-        SceneLuminance += Luminance(LinearColor) * Light->Intensity * Proximity * Proximity * POINT_ADAPT_WEIGHT;
-    }
-
-    if (!isfinite(SceneLuminance))
-    {
-        SceneLuminance = self->_exposure._isInitialized ? self->_exposure._adaptedLuminance
-            : WORLD_SKY_LIGHT_ADAPT_REFERENCE_LUMINANCE;
-    }
-    if (!self->_exposure._isInitialized || !isfinite(self->_exposure._adaptedLuminance))
-    {
-        self->_exposure._adaptedLuminance = SceneLuminance; // snap on the first frame so there is no start-up flash
-        self->_exposure._isInitialized = true;
-    }
-    else
-    {
-        self->_exposure._adaptedLuminance = AdaptLuminance(self->_exposure._adaptedLuminance, SceneLuminance,
-            deltaSeconds);
-    }
-    // TODO: remove the light before T36's exposure once the owner approves T36's light.
-    return frame->IsOneLightScale ? WorldSkyLight_GetExposure(self->_exposure._adaptedLuminance)
-        : ExposureFromAdaptedLegacy(self->_exposure._adaptedLuminance);
-}
-
 void WorldRendererLighting_LogStatus(const WorldRenderer* self)
 {
     if ((self->_logger == NULL) || !self->_isStatusReported)
@@ -836,18 +596,19 @@ void WorldRendererLighting_LogStatus(const WorldRenderer* self)
     }
     const WorldRendererStatus* Status = &self->_status;
     Error LogResult = Logger_LogInfoFormatted(self->_logger,
-        (const unsigned char*)u8"WorldRenderer: light %s at the camera (%s): sun %.4g %.4g %.4g, moon %.4g %.4g %.4g, sky "
+        (const unsigned char*)u8"WorldRenderer: light at the camera (%s): sun %.4g %.4g %.4g, moon %.4g %.4g %.4g, sky "
         u8"%.4g %.4g %.4g (irradiance on a surface facing up), ground %.4g %.4g %.4g (facing down), night %.4g %.4g %.4g; "
-        u8"scene luminance %.4g, exposure %.3g; the C mirror's tables built %" PRIu32 u8" times (when the air changes, "
-        u8"over frames%s).",
-        Status->IsOneLightScale ? "T36 (one scale for the sky and the surfaces)" : "before T36 (the A/B)",
+        u8"scene luminance %.4g, the eye adapted to %.4g (%s), exposure %.3g; the C mirror's tables built %" PRIu32
+        u8" times (when the air changes, over frames%s).",
         Status->IsSkyLightPerHeight ? "the surfaces take it at their own heights" : "every surface takes the camera's",
         (double)Status->SunLight[0], (double)Status->SunLight[1], (double)Status->SunLight[2],
         (double)Status->MoonLight[0], (double)Status->MoonLight[1], (double)Status->MoonLight[2],
         (double)Status->SkyIrradiance[0], (double)Status->SkyIrradiance[1], (double)Status->SkyIrradiance[2],
         (double)Status->GroundIrradiance[0], (double)Status->GroundIrradiance[1], (double)Status->GroundIrradiance[2],
         (double)Status->NightLight[0], (double)Status->NightLight[1], (double)Status->NightLight[2],
-        (double)Status->SceneLuminance, (double)Status->Exposure, Status->SkyLightTableBuildCount,
+        (double)Status->SceneLuminance, (double)Status->AdaptedLuminance,
+        Status->IsExposureMetered ? "measured" : "the sky light's anchor", (double)Status->Exposure,
+        Status->SkyLightTableBuildCount,
         Status->IsSkyLightTableBuilding ? "; a rebuild is running" : "");
     Error_Deconstruct(&LogResult);
 }

@@ -49,7 +49,6 @@
             "components": {
                 "light": {
                     "color": "#ff963c",
-                    "intensity": 6.0,
                     "range": 10.0,
                     "casts_shadows": true
                 }
@@ -62,7 +61,6 @@
             "components": {
                 "light": {
                     "color": "#5096ff",
-                    "intensity": 6.0,
                     "range": 10.0
                 }
             }
@@ -274,7 +272,7 @@
             "components": {
                 "light": {
                     "color": "#ffd6a0",
-                    "intensity": 3.0,
+                    "intensity": 0.5,
                     "range": 4.0
                 }
             }
@@ -680,7 +678,9 @@
             "name": "terrain",
             "components": {
                 "terrain": {
-                    "terrain": "placeholder_terrain"
+                    "terrain": "placeholder_terrain",
+                    "overrides_draw_distance": true,
+                    "draw_distance": 100000.0
                 }
             }
         },
@@ -3100,7 +3100,7 @@
             "components": {
                 "light": {
                     "color": "#ffd9a0",
-                    "intensity": 30.0,
+                    "intensity": 5.0,
                     "range": 18.0,
                     "casts_shadows": true
                 }

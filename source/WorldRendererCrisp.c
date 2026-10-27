@@ -21,6 +21,7 @@ void WorldRendererCrisp_LoadShader(WorldRenderer* self)
         self->_crisp._locCrispDepth = GetShaderLocation(RayShader, "crispDepth");
         self->_crisp._locSceneDepth = GetShaderLocation(RayShader, "sceneDepth");
         self->_crisp._locExposure = GetShaderLocation(RayShader, "exposure");
+        self->_crisp._locDepthReversed = GetShaderLocation(RayShader, "depthReversed");
     }
 }
 
@@ -33,7 +34,7 @@ void WorldRendererCrisp_CreateTargets(WorldRenderer* self, int windowWidth, int 
     {
         return;
     }
-    self->_crisp._target = WorldRendererCommon_TryCreateHdrTarget(windowWidth, windowHeight, true);
+    self->_crisp._target = WorldRendererCommon_TryCreateHdrTarget(self, windowWidth, windowHeight, true);
     self->_crisp._hasTarget = (self->_crisp._target.id != 0);
     if (!self->_crisp._hasTarget)
     {
@@ -57,7 +58,8 @@ void WorldRendererCrisp_ReleaseTargets(WorldRenderer* self)
 void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     BeginTextureMode(self->_crisp._target);
-    ClearBackground(BLANK); // clears colour to (0,0,0,0) and depth to the far plane: "no crisp object here"
+    WorldRendererCommon_BeginCameraDepth(self, frame); // the scene's depth convention (T39)
+    ClearBackground(BLANK); // clears colour to (0,0,0,0) and depth to the farthest (0 reversed): "no crisp object here"
     // Re-upload the lighting (sun/ambient/fog/shadow + re-bind the shadow map) — the crisp pass runs after
     // the bloom/shaft passes, which may have changed GL texture-slot / shader state. applyScreenAo=false: this
     // is a full-res pass, so the low-res AO map (sampled by gl_FragCoord) would mis-align; crisp objects get no AO.
@@ -70,10 +72,12 @@ void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* fram
     };
     WorldRendererLighting_UploadFrame(self, frame, false, DitherPixelScale);
     BeginMode3D(frame->RenderCamera);
+    WorldRendererCommon_LoadCameraProjection(frame);
     WorldRendererGeometry_DrawModels(self, WorldRendererPixelFilter_CrispOnly);
     // Crisp sprites (OmitPixelation on cutout sprites) render full-res here too, so they stay sharp like crisp models.
     WorldRendererSprites_DrawLit(self, WorldRendererPixelFilter_CrispOnly, false);
     EndMode3D();
+    WorldRendererCommon_EndCameraDepth(self, frame);
     EndTextureMode();
 }
 
@@ -87,6 +91,7 @@ void WorldRendererCrisp_Composite(WorldRenderer* self, const WorldRenderFrame* f
     Shader Composite = GameShader_GetRaylibShader(self->_crisp._compositeShader);
     BeginTextureMode(target);
     SetShaderValue(Composite, self->_crisp._locExposure, &frame->Exposure, SHADER_UNIFORM_FLOAT);
+    WorldRendererCommon_SetDepthConvention(Composite, self->_crisp._locDepthReversed, frame);
     BeginShaderMode(Composite);
     // Crisp colour is bound to unit 0 by DrawTexturePro; the two depth textures go to units 1/2 via
     // SetShaderValueTexture (after BeginShaderMode) so they enter Raylib's 2D batch texture table.

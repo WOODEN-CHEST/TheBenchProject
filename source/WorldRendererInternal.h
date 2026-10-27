@@ -15,6 +15,9 @@
 #include "WorldInstancing.h"
 #include "WorldSpriteComponent.h"
 #include "GLTextureArray.h"
+#include "GLReadback.h"
+#include "GLDepth.h"
+#include "EyeAdaptation.h"
 #include "NightVision.h"
 #include "WorldAtmosphere.h"
 #include "WorldSkyLight.h"
@@ -46,10 +49,15 @@
  *   WorldRendererSky.c       the atmospheric sky with the moon, the Milky Way and light pollution's skyglow
  *   WorldRendererStars.c     the star field (the seeded catalogue as one-pixel quads)
  *   WorldRendererPost.c      outlines, bloom, sun shafts and the tonemap
+ *   WorldRendererExposure.c  the eye's adaptation to the picture (T37): the meter pass, its readback (GLReadback.h,
+ *                            direct GL calls) and the exposure (EyeAdaptation.h)
+ * The camera's passes (the scene, the G-buffer, the crisp overlay) draw with reversed depth where the GPU has clip
+ * control (T39: GLDepth.h, direct GL calls; WorldRendererCommon_BeginCameraDepth and the rest): a 32-bit float depth
+ * from 1 at the near plane to 0 at infinity and no far plane, so whatever has a long draw distance draws at any distance.
  *   WorldRendererCrisp.c     the crisp overlay for OmitPixelation objects
  *   WorldRendererTerrain.c   the terrain (B01): its chunks' GPU meshes, the lit terrain shader, its draws in every pass
- *                            and the chunk key; since B02 its materials' texture arrays (GLTextureArray.h, the
- *                            project's only direct GL calls) and their uniforms
+ *                            and the chunk key; since B02 its materials' texture arrays (GLTextureArray.h, direct GL
+ *                            calls) and their uniforms
  *   WorldRendererInstances.c the model instances components' copies (B03): their records' GPU buffers, the instanced
  *                            twins of the geometry passes, their instanced draws in every pass and the one-at-a-time
  *                            path (the A/B and every fallback)
@@ -76,8 +84,9 @@
 #define SCENE_DEPTH_FORMAT 19
 /** sRGB gamma used to convert stored 8-bit colours to/from linear light. */
 #define SRGB_GAMMA 2.2f
-/** Near/far planes the scene 3D pass uses (Raylib's global cull distances, which BeginMode3D applies); the
- *  frame context rebuilds the same projection for the passes that reconstruct view positions from depth. */
+/** Near/far planes the scene 3D pass uses (Raylib's global cull distances, which BeginMode3D applies; the far plane
+ *  only without reversed depth, T39); the frame context rebuilds the same projection for the passes that reconstruct
+ *  view positions from depth. */
 #define SCENE_NEAR_PLANE ((double)RL_CULL_DISTANCE_NEAR)
 #define SCENE_FAR_PLANE ((double)RL_CULL_DISTANCE_FAR)
 /** Resolution (square) of each sun shadow-map cascade, in texels. The PBR shader's PCF needs its texel size. */
@@ -87,10 +96,6 @@
  *  Material.maps, so a per-draw material copy must have this many. Changing it means checking
  *  WorldRendererTextureUnit. */
 #define WORLD_RENDERER_MATERIAL_MAP_COUNT RENDERER_MATERIAL_MAP_COUNT
-/** The light before T36 (the A/B) takes moon_intensity at this share: T36 doubled its default (the moonlit sky's own
- *  light replaced a painted fill), so the default world's old light stays the old light.
- *  TODO: remove once the owner approves T36's light. */
-#define WORLD_RENDERER_LEGACY_MOON_INTENSITY_SCALE (0.02f / WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY)
 
 
 // Types.
@@ -235,16 +240,17 @@ typedef struct WorldRenderFrameStruct
     /** @brief Render time in seconds, accumulated by the renderer and wrapped every hour (float precision), for
      *  animated effects such as twinkling. Renderer-side state, not world time. */
     float TimeSeconds;
-    /** @brief Night sky values (WorldRendererSky_PrepareFrame): the faintest magnitude visible overhead (light
-     *  pollution, the moonlit sky and twilight), the Milky Way's linear radiance per white texel (brightness, light
-     *  pollution and twilight included), and light pollution's skyglow at the horizon (linear; 0 by day), which the
-     *  sky's direct march adds (the tables hold light pollution's light in the air instead: LightPollutionRadiance). */
+    /** @brief Night sky values: the faintest magnitude visible overhead (WorldRendererSky_PrepareNightSky: the eye's
+     *  threshold against the twilight, the moonlit sky and light pollution), the Milky Way's linear radiance per white
+     *  texel (its brightness by that limit), and light pollution's skyglow at the horizon (WorldRendererSky_PrepareFrame:
+     *  linear; 0 by day), which the sky's direct march adds (the tables hold light pollution's light in the air instead:
+     *  LightPollutionRadiance). */
     float LimitingMagnitude;
     float MilkyWayRadiance;
     float SkyglowRadiance[3];
     /** @brief The moon's light on the atmosphere, relative to the sun's above the air (the moonlit sky); 0 by day,
      *  without a moon, or while the moon is far below the horizon (WorldRendererSky_PrepareFrame: since T36 all of the
-     *  moon's light above the air, its work-saving gates in; the light before T36 took MOON_SKY_SHARE of it). */
+     *  moon's light above the air, its work-saving gates in). */
     float MoonSkyIntensity;
     /** @brief The moon's disc, valid while IsMoonActive. */
     WorldRendererMoonDisc MoonDisc;
@@ -261,22 +267,17 @@ typedef struct WorldRenderFrameStruct
      *  phase and the daylight gate in). */
     float SunIntensity;
     float MoonIntensity;
-    /** @brief Whether this frame takes T36's light, one light scale for the sky and the surfaces (false: the light before
-     *  T36, the A/B's: WorldRenderer_SetOneLightScaleEnabled). Set when the frame is built. */
-    bool IsOneLightScale;
-    /** @brief The sky's light at the camera (WorldRendererLighting_PrepareSkyLight): T36's from the C mirror
-     *  (WorldSkyLight_GetFrameLight), or with the light before T36 its ramped sun and moon and its painted ambient in the
-     *  same fields (the sky's and the ground's irradiance pi times the ambient, the tint white, no night light). The lit
-     *  shaders take it as their uniforms while IsSkyLightPerHeight is false. */
+    /** @brief The sky's light at the camera (WorldRendererLighting_PrepareSkyLight: the C mirror's,
+     *  WorldSkyLight_GetFrameLight). The lit shaders take it as their uniforms while IsSkyLightPerHeight is false. */
     WorldSkyLightFrame SkyLight;
-    /** @brief Whether the lit shaders take the sky's light by height from the volume's last row (T36's light while the
-     *  atmosphere's tables and the volume run); false: SkyLight's, the camera's, for every fragment. Whether the moon
+    /** @brief Whether the lit shaders take the sky's light by height from the volume's last row (while the atmosphere's
+     *  tables and the volume run); false: SkyLight's, the camera's, for every fragment. Whether the moon
      *  lights anything this frame (its terms are skipped otherwise). */
     bool IsSkyLightPerHeight;
     bool IsMoonLit;
     /** @brief The light the air is lit by: the sun and the moon above the air as multiples of WORLD_ATMOSPHERE_SUN_LIGHT,
-     *  colour in (the atmosphere's shaders' intensity uniforms; the light before T36: 22 / WORLD_ATMOSPHERE_SUN_LIGHT x
-     *  the old intensities, white). The moon's is 0 while the moonlit sky does not show (MoonSkyIntensity 0). */
+     *  colour in (the atmosphere's shaders' intensity uniforms). The moon's is 0 while the moonlit sky does not show
+     *  (MoonSkyIntensity 0). */
     float AirSunIntensity[3];
     float AirMoonIntensity[3];
     /** @brief The sun's disc (the sky shader's radiance is SUN_DISC_RADIANCE x this, colour in) and the moon's disc's
@@ -284,7 +285,7 @@ typedef struct WorldRenderFrameStruct
     float SunDiscIntensity[3];
     float MoonColor[3];
     /** @brief The exposure of the last render, which the eye is adapted to before this frame's is set (T36: the sun's
-     *  disc and the sun shafts' source limit are drawn against it); 0 with the light before T36. */
+     *  disc and the sun shafts' source limit are drawn against it). */
     float LastExposure;
     /** @brief The light the shadow cascades are rendered from this frame (the brighter one once it stands high
      *  enough), its unit direction, and how strong its shadows are (0..1: faded near the horizon and while the lights
@@ -301,16 +302,13 @@ typedef struct WorldRenderFrameStruct
      *  casters must touch; valid while IsPointShadowActive. */
     Vector3 PointShadowPosition;
     float PointShadowFar;
-    /** @brief Lighting shared by the scene and crisp passes (computed once per render): the scene luminance estimate eye
-     *  adaptation starts from (WorldSkyLight_GetSceneLuminance; before T36 the old one's), the field luminance night
-     *  vision compares with before the lamps (T36: NightVision_GetFieldLuminance of its daylight's and night lights'
-     *  shares; before T36 BaseSceneLuminance), and the shadow strength. */
+    /** @brief Lighting shared by the scene and crisp passes (computed once per render): the scene luminance estimate of
+     *  the sky's light at the camera (WorldSkyLight_GetSceneLuminance), the field luminance night vision compares with
+     *  before the lamps (T36: NightVision_GetFieldLuminance of its daylight's and night lights' shares), and the shadow
+     *  strength. */
     float BaseSceneLuminance;
     float NightVisionField;
     float ShadowStrength;
-    /** @brief The light before T36 (the A/B's): its painted ambient (linear), which its far ground takes too.
-     *  TODO: remove once the owner approves T36's light. */
-    float LegacyAmbientColor[3];
 
     /** @brief Whether each optional pass runs this render. */
     bool IsCascadeShadowActive;
@@ -335,6 +333,16 @@ typedef struct WorldRenderFrameStruct
     Vector2 SunScreenUv;
     /** @brief The tonemap exposure from eye adaptation; set just before the tonemap. */
     float Exposure;
+    /** @brief The eye's adaptation this frame (T37, set with Exposure): the luminance it is adapted to (the view's
+     *  log-average, game units; the anchor's before the first measurement, 0 before the eye started), the real
+     *  luminance that stands for (cd/m^2, EyeAdaptation_GetRealScale), and whether a measurement of the picture set it. */
+    float AdaptedLuminance;
+    float AdaptedRealLuminance;
+    bool IsExposureMetered;
+    /** @brief Whether the camera's passes draw with reversed depth this frame (T39: the renderer's _depth._isReversed): the
+     *  projection is then the reversed infinite one, the depth targets 32-bit float cleared to 0, and every reader of
+     *  their depth takes it so (shaders/common/depth.glsl's depthReversed). */
+    bool IsDepthReversed;
     /** @brief The atmosphere this frame (T15, WorldRendererAtmosphere_PrepareFrame): the air's coefficients
      *  (WorldAtmosphere_GetMedium of the environment), the camera's height above sea level the sky is seen from (the
      *  origin's Y, clamped: WorldAtmosphere_GetViewHeight), and whether the tables hold the sky and the fog's sky (the
@@ -357,8 +365,7 @@ typedef struct WorldRenderFrameStruct
     float NightVisionFieldLuminance;
     float NightVisionTint[3];
     bool IsNightVisionActive;
-    /** @brief The night vision's calibration this frame (T36's light scale or the light before T36's: the scales differ,
-     *  NightVision_GetCalibrationFor). */
+    /** @brief The night vision's calibration (NightVision_GetCalibration), the renderer's, for the shaders. */
     NightVisionCalibration NightVision;
 } WorldRenderFrame;
 
@@ -614,13 +621,44 @@ typedef struct WorldRendererUnlitStateStruct
     WorldRendererPalette _skinnedPalette;
 } WorldRendererUnlitState;
 
-/** @brief HDR eye adaptation (auto-exposure) state. */
+/** @brief Reversed depth for the camera's passes (T39, decision G41; GLDepth.h). */
+typedef struct WorldRendererDepthStateStruct
+{
+    /** @brief The GL functions and whether the GPU has clip control (loaded with the shaders). */
+    GLDepthApi _api;
+    /** @brief Whether the camera's passes draw reversed: the API is available. Without it they keep raylib's projection
+     *  and its far plane (RL_CULL_DISTANCE_FAR), logged once. */
+    bool _isReversed;
+    /** @brief Set once the fallback has been logged. */
+    bool _isFailureReported;
+} WorldRendererDepthState;
+
+/** @brief The eye's adaptation to the picture (T37, WorldRendererExposure.c; the eye's model is EyeAdaptation.h's). */
 typedef struct WorldRendererExposureStateStruct
 {
-    /** @brief The eye's currently adapted luminance (drives auto-exposure); eased toward the scene luminance. */
-    float _adaptedLuminance;
-    /** @brief false until the first adaptation update snaps _adaptedLuminance to the scene (no first-frame flash). */
-    bool _isInitialized;
+    /** @brief The eye: the level it is adapted to and the one it eases toward. */
+    EyeAdaptation _eye;
+    /** @brief The meter's shader (world_luminance; NULL: unavailable) and its uniforms' locations: the window, and the
+     *  scene's depth that tells the sky apart with its switch and its convention (common/depth). */
+    GameShader* _shader;
+    int _locWindow;
+    int _locDepthTexture;
+    int _locDepthMask;
+    int _locDepthReversed;
+    /** @brief The meter's target (one float a block, EYE_ADAPTATION_METER_WIDTH x EYE_ADAPTATION_METER_HEIGHT) and whether
+     *  it exists. */
+    RenderTexture2D _target;
+    bool _hasTarget;
+    /** @brief The readback's GL functions and its copies of the target in flight. */
+    GLReadbackApi _readbackApi;
+    GLReadback _readback;
+    /** @brief Whether the meter runs (its shader, the readback's functions, the target and its buffers are all there);
+     *  without it the eye adapts to the anchor (the sky's light at the camera). */
+    bool _isAvailable;
+    /** @brief The newest blocks read back (log2 luminances, rows from the bottom). */
+    float _blocks[EYE_ADAPTATION_METER_BLOCK_COUNT];
+    /** @brief Set once the meter's failure has been logged. */
+    bool _isFailureReported;
 } WorldRendererExposureState;
 
 /** @brief The tonemap pass (HDR scene -> display, adds bloom and sun shafts). */
@@ -731,12 +769,8 @@ typedef struct WorldRendererAtmosphereStateStruct
     int _skyViewLocHazeDistanceScale;
     int _skyViewLocHazeStartDistance;
     int _skyViewLocGroundAlbedo;
-    int _skyViewLocIsGroundLitThroughAir;
     int _skyViewLocAmbientTint;
     int _skyViewLocGroundNightLight;
-    int _skyViewLocGroundLight;
-    int _skyViewLocGroundLightRamp;
-    int _skyViewLocGroundAmbient;
     /** @brief The volume's builder (world_atmosphere_volume, T35), its atmosphere locations and its own; NULL = no
      *  haze. */
     GameShader* _volumeShader;
@@ -802,6 +836,8 @@ typedef struct WorldRendererStarStateStruct
     int _locTimeSeconds;
     int _locMoonDirection;
     int _locMoonCosRadius;
+    /** @brief The camera's depth convention (common/depth): where the stars sit in depth (T39). */
+    int _locDepthReversed;
     /** @brief The atmosphere (common/atmosphere): the transmittance table dims and reddens the stars near the horizon
      *  (T15). */
     WorldRendererAtmosphereLocations _atmosphere;
@@ -996,6 +1032,7 @@ typedef struct WorldRendererAoStateStruct
     int _locDepthTexture;
     int _locNormalTexture;
     int _locStrength;
+    int _locDepthReversed;
     /** @brief The low-res AO-multiplier target (R = 1 open .. <1 occluded) the PBR pass samples for its ambient
      *  term. */
     RenderTexture2D _target;
@@ -1019,6 +1056,7 @@ typedef struct WorldRendererOutlineStateStruct
     int _locSunDirectionView;
     int _locStrength;
     int _locWorldUpView;
+    int _locDepthReversed;
     /** @brief The atmosphere and the haze (common/haze): the outlines fade by the haze's transmittance (T35). */
     WorldRendererAtmosphereLocations _atmosphere;
     WorldRendererHazeLocations _haze;
@@ -1044,6 +1082,7 @@ typedef struct WorldRendererBloomStateStruct
     int _prefilterLocSoftKnee;
     int _prefilterLocDepthTexture;
     int _prefilterLocDepthMask;
+    int _prefilterLocDepthReversed;
     /** @brief Cached bloom-blur uniform locations (-1 when absent). */
     int _blurLocResolution;
     int _blurLocDirection;
@@ -1072,6 +1111,7 @@ typedef struct WorldRendererSunshaftStateStruct
     int _locDepthTexture;
     int _locSunScreenPos;
     int _locSourceLimit;
+    int _locDepthReversed;
     /** @brief Whether sun shafts are drawn (code toggle for A/B testing; on by default). */
     bool _isEnabled;
     /** @brief The sun-shaft buffer (colour-only HDR, reduced resolution, BILINEAR). */
@@ -1294,6 +1334,7 @@ typedef struct WorldRendererCrispStateStruct
     int _locCrispDepth;
     int _locSceneDepth;
     int _locExposure;
+    int _locDepthReversed;
     /** @brief Whether the crisp overlay is drawn (code toggle for A/B testing; on by default). */
     bool _isEnabled;
     /** @brief The overlay target (HDR colour + samplable depth) at WINDOW resolution. */
@@ -1334,17 +1375,11 @@ struct WorldRendererStruct
     bool _postfxEnabled;
     /** @brief Toggle for the eye's night vision (A/B; on by default); the world's NightVisionStrength scales it. */
     bool _isNightVisionEnabled;
-    /** @brief Toggle for T36's light, one light scale for the sky and the surfaces (A/B; on by default): off takes the
-     *  light before T36 (the sky at 22, the painted ambient, the ramped sun, the old exposure and night vision).
-     *  TODO: remove once the owner approves T36's light. */
-    bool _isOneLightScaleEnabled;
     /** @brief Toggle for sprite lighting (A/B; on by default): off draws every sprite unlit at its full colours, as
      *  before sprites were lit. */
     bool _isSpriteLightingEnabled;
-    /** @brief The night vision's calibration on the game's light scale (NightVision_GetCalibration), computed once; and
-     *  on the scale before T36 (the A/B's; TODO: remove once the owner approves T36's light). */
+    /** @brief The night vision's calibration on the game's light scale (NightVision_GetCalibration), computed once. */
     NightVisionCalibration _nightVision;
-    NightVisionCalibration _legacyNightVision;
     /** @brief The per-object render cache and this render's model/sprite/light lists. */
     WorldRenderCache _cache;
     /** @brief This render's visibility: per pass the cache entries it draws (the camera's frustum, each cascade's box,
@@ -1368,6 +1403,7 @@ struct WorldRendererStruct
     WorldRendererPbrState _pbr;
     WorldRendererUnlitState _unlit;
     WorldRendererExposureState _exposure;
+    WorldRendererDepthState _depth;
     WorldRendererTonemapState _tonemap;
     WorldRendererAtmosphereState _atmosphere;
     WorldRendererSkyState _sky;
@@ -1507,19 +1543,68 @@ void WorldRendererCommon_Warn(WorldRenderer* self, const unsigned char* message)
 void WorldRendererCommon_WarnOnce(WorldRenderer* self, bool* isReported, const unsigned char* message);
 
 /**
- * @brief Tries to create an HDR (RGBA16F) framebuffer with a depth attachment.
+ * @brief Makes a camera pass's depth buffer: 32-bit float through GLDepth while the renderer draws reversed (T39), raylib's
+ *        own (the driver's choice, usually 24-bit) otherwise.
+ * @param self The renderer.
+ * @param width Its width in pixels.
+ * @param height Its height.
+ * @param samplable Whether later passes read it: a texture; otherwise a renderbuffer.
+ * @returns Its GL name, 0 when it could not be made (logged once). Attach it with rlFramebufferAttach; raylib's
+ *          UnloadRenderTexture deletes it with its framebuffer.
+ */
+unsigned int WorldRendererCommon_LoadCameraDepth(WorldRenderer* self, int width, int height, bool samplable);
+
+/**
+ * @brief Tries to create an HDR (RGBA16F) framebuffer with a camera pass's depth attachment
+ *        (WorldRendererCommon_LoadCameraDepth).
  *
  * The depth is a samplable texture when @p samplableDepth is true, or a renderbuffer otherwise (depth testing
  * is identical either way).
  * @returns The target, or a zero target (id 0) if the GPU cannot make the combination complete.
  */
-RenderTexture2D WorldRendererCommon_TryCreateHdrTarget(int width, int height, bool samplableDepth);
+RenderTexture2D WorldRendererCommon_TryCreateHdrTarget(WorldRenderer* self, int width, int height, bool samplableDepth);
 
 /**
- * @brief Creates a colour-only HDR (RGBA16F) framebuffer, for passes that write every pixel without depth.
+ * @brief Sets a depth reader's convention (shaders/common/depth.glsl's depthReversed): 1 while the frame draws reversed
+ *        depth (T39), 0 otherwise.
+ * @param shader The reader's shader.
+ * @param location Its depthReversed location (-1: nothing).
+ * @param frame The frame (IsDepthReversed).
+ */
+void WorldRendererCommon_SetDepthConvention(Shader shader, int location, const WorldRenderFrame* frame);
+
+/**
+ * @brief Starts a camera pass's depth (T39): reversed depth while the frame draws it (GLDepth_BeginReversed: depth
+ *        cleared to 0, the greater depth passing), nothing otherwise. Call after BeginTextureMode, before the clear.
+ * @param self The renderer.
+ * @param frame The frame (IsDepthReversed).
+ */
+void WorldRendererCommon_BeginCameraDepth(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Loads the frame's projection after BeginMode3D while the frame draws reversed (raylib's BeginMode3D loads its own,
+ *        with its fixed far plane), nothing otherwise.
+ * @param frame The frame (IsDepthReversed, Projection).
+ */
+void WorldRendererCommon_LoadCameraProjection(const WorldRenderFrame* frame);
+
+/**
+ * @brief Ends a camera pass's depth: gives raylib back its depth state (GLDepth_EndReversed) while the frame draws
+ *        reversed, nothing otherwise. Call after EndMode3D, before EndTextureMode.
+ * @param self The renderer.
+ * @param frame The frame (IsDepthReversed).
+ */
+void WorldRendererCommon_EndCameraDepth(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Creates a colour-only framebuffer, for passes that write every pixel without depth.
+ * @param width The target's width in pixels.
+ * @param height Its height.
+ * @param format Its texture's format: PIXELFORMAT_UNCOMPRESSED_R16G16B16A16 (HDR colour) for most passes,
+ *        PIXELFORMAT_UNCOMPRESSED_R32 (one float) for the eye's meter.
  * @returns The target, or a zero target (id 0) if it could not be made complete.
  */
-RenderTexture2D WorldRendererCommon_CreateColorTarget(int width, int height);
+RenderTexture2D WorldRendererCommon_CreateColorTarget(int width, int height, PixelFormat format);
 
 /**
  * @brief Unloads a render target if @p hasTarget says it exists, and clears the flag.
@@ -1725,8 +1810,7 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
  *        the camera (frame->SkyLight: WorldSkyLight_GetFrameLight), the light the air is lit by and the sun's disc, the
  *        shadow light chosen from the light that reaches the camera (frame->ShadowLight, ShadowDirection, ShadowFade:
  *        WorldEnvironment_ChooseShadowLight), whether the lit shaders read it by height, the scene luminance eye
- *        adaptation starts from and the night vision's calibration. With the light before T36 (the A/B) the old values in
- *        the same fields.
+ *        adaptation starts from and the night vision's calibration.
  *
  * Needs WorldRendererSky_PrepareFrame (the moonlit sky) and WorldRendererAtmosphere_PrepareFrame (the air, the view
  * height, light pollution, whether the tables and the volume run) first; the shadow decisions need it.
@@ -1783,19 +1867,9 @@ void WorldRendererLighting_SetDrawHaze(Shader shader, const WorldRendererLitLoca
  */
 void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program, const Material* material);
 
-/**
- * @brief Eases the adapted luminance toward the frame's scene luminance (plus nearby point lights) and returns
- *        the tonemap exposure.
- * @param self The renderer.
- * @param frame The frame (BaseSceneLuminance must be computed).
- * @param deltaSeconds Real seconds since the previous render; 0, negative or non-finite holds the adaptation.
- * @returns The exposure (always finite and within the adaptation clamp).
- */
-float WorldRendererLighting_UpdateExposure(WorldRenderer* self, const WorldRenderFrame* frame, float deltaSeconds);
-
-/** @brief Logs a line about the frame's light at the camera (with the status, WorldRenderer_LogStatus): which light runs
- *  (T36's or the A/B's), the sun's and the moon's through the air, the sky's irradiance, the ground's bounce, the night's
- *  light, the scene luminance and the exposure. */
+/** @brief Logs a line about the frame's light at the camera (with the status, WorldRenderer_LogStatus): the sun's and the
+ *  moon's through the air, the sky's irradiance, the ground's bounce, the night's light, the scene luminance and the
+ *  exposure. */
 void WorldRendererLighting_LogStatus(const WorldRenderer* self);
 
 
@@ -1990,12 +2064,20 @@ void WorldRendererSky_LoadShader(WorldRenderer* self);
 void WorldRendererSky_SyncTextures(WorldRenderer* self, const WorldEnvironment* environment);
 
 /**
- * @brief Computes the frame's night sky values: the limiting magnitude (light pollution, the moonlit sky, twilight),
- *        the Milky Way's radiance, the skyglow, the moon's light on the atmosphere and its disc.
+ * @brief Computes the frame's moon (its light on the atmosphere and its disc) and the skyglow.
  *
  * Needs frame->Environment, the sun's and the moon's directions, Daylight and MoonIllumination.
  */
 void WorldRendererSky_PrepareFrame(WorldRenderFrame* frame);
+
+/**
+ * @brief Computes the frame's night sky (T38): the limiting magnitude, the naked eye's threshold against the sky behind
+ *        the stars (the twilight's light from the sun on the real scale, the moonlit sky and light pollution's:
+ *        NightSky_GetLimitingMagnitude), and the Milky Way's radiance by it.
+ *
+ * Needs WorldRendererSky_PrepareFrame and the frame's sky light (WorldRendererLighting_PrepareSkyLight).
+ */
+void WorldRendererSky_PrepareNightSky(WorldRenderFrame* frame);
 
 /**
  * @brief Whether the moon's disc shows this frame: the moon is on, above the horizon and far enough from the sun
@@ -2033,6 +2115,40 @@ void WorldRendererStars_SyncCatalogue(WorldRenderer* self, const WorldEnvironmen
 void WorldRendererStars_Draw(WorldRenderer* self, const WorldRenderFrame* frame);
 
 
+// WorldRendererExposure.c
+/** @brief Makes the eye, loads the meter's shader and makes its target and readback (once, with the other shaders); a
+ *  missing part is logged once and the eye adapts to the anchor (the sky's light at the camera) instead. */
+void WorldRendererExposure_Load(WorldRenderer* self);
+
+/** @brief Frees the meter's target and the readback's buffers (and any copies in flight). */
+void WorldRendererExposure_Unload(WorldRenderer* self);
+
+/** @brief Whether the eye meters the picture (WorldRendererExposure_Load made everything it needs). */
+bool WorldRendererExposure_IsAvailable(const WorldRenderer* self);
+
+/**
+ * @brief Returns the exposure the eye is at before this frame's update (the sun's disc and the sun shafts are drawn
+ *        against it): its level's (the anchor's before it started) under this frame's sky light.
+ * @param self The renderer.
+ * @param frame The frame (BaseSceneLuminance and SkyLight must be computed).
+ * @returns The exposure.
+ */
+float WorldRendererExposure_GetCurrent(const WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Moves the eye on by a frame and returns the tonemap's exposure: takes the newest blocks the GPU has finished,
+ *        measures them, eases the eye, then meters @p source for the frames to come and asks for its copy. Sets the
+ *        frame's AdaptedLuminance, AdaptedRealLuminance and IsExposureMetered.
+ * @param self The renderer.
+ * @param frame The frame (BaseSceneLuminance and SkyLight must be computed).
+ * @param source The finished HDR scene, as the tonemap reads it (the scene target or the outlines').
+ * @param deltaSeconds Real seconds since the previous render; 0, negative or NaN holds the eye.
+ * @returns The exposure (finite, within EYE_ADAPTATION_MIN_EXPOSURE and EYE_ADAPTATION_MAX_EXPOSURE).
+ */
+float WorldRendererExposure_Update(WorldRenderer* self, WorldRenderFrame* frame, RenderTexture2D source,
+    float deltaSeconds);
+
+
 // WorldRendererPost.c
 /** @brief Loads the tonemap, bloom, sun-shaft and outline shaders. */
 void WorldRendererPost_LoadShaders(WorldRenderer* self);
@@ -2048,8 +2164,9 @@ void WorldRendererPost_ReleaseTargets(WorldRenderer* self);
  *  when the G-buffer's is not samplable) into the outline target. */
 void WorldRendererPost_RenderOutlines(WorldRenderer* self, const WorldRenderFrame* frame);
 
-/** @brief Bright-passes @p source into the bloom buffers and blurs it, leaving the bloom in the A buffer. */
-void WorldRendererPost_RenderBloom(WorldRenderer* self, RenderTexture2D source);
+/** @brief Bright-passes @p source into the bloom buffers and blurs it, leaving the bloom in the A buffer (the sky masked
+ *  out by the scene's depth, read in the frame's convention). */
+void WorldRendererPost_RenderBloom(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D source);
 
 /**
  * @brief Projects the sun to screen UV for the sun shafts.

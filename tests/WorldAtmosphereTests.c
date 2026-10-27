@@ -62,8 +62,9 @@ static bool AreColorsClose(const float a[3], const float b[3], double relativeTo
 
 
 // Static functions: tests.
-/* The defaults are the sky before T15 (the same Rayleigh and haze coefficients, the haze's albedo about 1 / 1.1), plus the
- * ozone layer and all of the multiple scattering. */
+/* The defaults are the sky before T15's coefficients (the same Rayleigh coefficients and reference haze, the haze's albedo
+ * about 1 / 1.1) with the haze of T37's 20 km visibility (turbidity 24: the reference haze times 8), plus the ozone layer
+ * and all of the multiple scattering. */
 static void MediumDefaultsAreTheSkyBeforeTheTables(TestRun* run)
 {
     WorldEnvironment Environment;
@@ -71,8 +72,8 @@ static void MediumDefaultsAreTheSkyBeforeTheTables(TestRun* run)
     WorldAtmosphereMedium Medium;
     WorldAtmosphere_GetMedium(&Environment, &Medium);
     const float Rayleigh[3] = { 5.5e-6f, 13.0e-6f, 22.4e-6f };
-    const float Extinction[3] = { 23.1e-6f, 23.1e-6f, 23.1e-6f };
-    const float Scattering[3] = { 21.0e-6f, 21.0e-6f, 21.0e-6f };
+    const float Extinction[3] = { 8.0f * 23.1e-6f, 8.0f * 23.1e-6f, 8.0f * 23.1e-6f };
+    const float Scattering[3] = { 8.0f * 21.0e-6f, 8.0f * 21.0e-6f, 8.0f * 21.0e-6f };
     const float Ozone[3] = { 0.650e-6f, 1.881e-6f, 0.085e-6f };
     float GroundValue = powf(90.0f / 255.0f, 2.2f); // the default 90 grey, linear
     const float Ground[3] = { GroundValue, GroundValue, GroundValue };
@@ -94,7 +95,7 @@ static void MediumFollowsTheSettings(TestRun* run)
     WorldAtmosphere_GetMedium(&Environment, &Default);
 
     Environment.AirDensity = 2.0f;
-    Environment.SkyTurbidity = 6.0f;
+    Environment.SkyTurbidity = 2.0f * Environment.SkyTurbidity;
     Environment.HazeAlbedo = (Color){ 255, 0, 0, 255 };
     Environment.Ozone = 0.5f;
     Environment.HazeHeight = 300.0f;
@@ -138,7 +139,7 @@ static void MediumClampsWhatValidationRefuses(TestRun* run)
     Environment.MultipleScattering = 2.0f;
     WorldAtmosphereMedium Medium;
     WorldAtmosphere_GetMedium(&Environment, &Medium);
-    TEST_CHECK(run, IsClose((double)Medium.MieExtinction[1], 23.1e-6, 1e-12));
+    TEST_CHECK(run, IsClose((double)Medium.MieExtinction[1], 8.0 * 23.1e-6, 1e-6)); // the default, turbidity 24 (float)
     TEST_CHECK(run, Medium.MieHeight == (float)WORLD_ENVIRONMENT_MAX_HAZE_HEIGHT);
     TEST_CHECK(run, Medium.MieAnisotropy == 0.0f);
     TEST_CHECK(run, IsClose((double)Medium.RayleighScattering[1], 13.0e-6, 1e-12)); // INFINITY counts as non-finite

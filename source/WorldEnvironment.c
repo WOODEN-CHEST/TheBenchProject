@@ -11,7 +11,7 @@
 /** Default sun-arc tilt from the zenith at noon, in radians (~23 degrees, so the sun is not straight up). */
 #define DEFAULT_SUN_ANGLE 0.4f
 /** Default atmospheric turbidity (a clear-ish sky). */
-#define DEFAULT_SKY_TURBIDITY 3.0f
+#define DEFAULT_SKY_TURBIDITY 24.0f
 /** Default scale height of the haze, in metres (Earth's typical aerosol layer). */
 #define DEFAULT_HAZE_HEIGHT 1200.0f
 /** Default single-scattering albedo of the haze, sRGB: 244 is linear 0.907, about the 1 / 1.1 the sky had before T15
@@ -41,8 +41,9 @@
 #define DEFAULT_AMBIENT_INTENSITY 1.0f
 /** ===== NIGHT DARKNESS KNOB =====
  *  Default colour (sRGB) and strength (linear) of the moonless night's own light on surfaces: a faint blue, linear
- *  (0.0040, 0.0050, 0.0110), the dark-site floor of the night's ambient before T36. Pairs with the exposure's maximum
- *  (WORLD_SKY_LIGHT_ADAPT_MAX_EXPOSURE): the night's brightness on screen is about their product. */
+ *  (0.0040, 0.0050, 0.0110), the dark-site floor of the night's ambient before T36. The eye adapts to most of it
+ *  (T37): the night's brightness on screen follows the eye's curve (EyeAdaptation.h, EYE_ADAPTATION_POWER), and night
+ *  vision's anchors are set by it. */
 #define DEFAULT_NIGHT_LIGHT_RED 161U
 #define DEFAULT_NIGHT_LIGHT_GREEN 178U
 #define DEFAULT_NIGHT_LIGHT_BLUE 255U
@@ -173,7 +174,8 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .Default.FloatValue = DEFAULT_SKY_TURBIDITY, .Rules = PROPERTY_RULES_AT_LEAST(0.0),
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SKY, .DisplayName = u8"Haze",
         .Description = u8"Atmospheric turbidity: higher values give a hazier, whiter sky (the haze's density is Earth's "
-            u8"times turbidity / 3).",
+            u8"reference haze times turbidity / 3). The default, 24, sees about 20 km (a hazy summer day); 11 about 40 km, "
+            u8"3 about 108 km (the clearest air).",
         .SinceVersion = 1U
     },
     {
@@ -874,11 +876,6 @@ Matrix WorldEnvironment_GetStarsToWorld(const WorldEnvironment* self)
 float WorldEnvironment_GetDaylightForElevation(float sunElevation)
 {
     return SmoothStep(WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION, WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION, sunElevation);
-}
-
-float WorldEnvironment_GetMoonlightForElevation(float moonElevation)
-{
-    return SmoothStep(0.0f, WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION, moonElevation);
 }
 
 float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self)

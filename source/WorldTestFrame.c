@@ -658,29 +658,13 @@ static void HandleDebugHazeInput(WorldTestFrame* frame, const GameInput* input, 
     {
         environment->FogStrength = (environment->FogStrength > 0.0f) ? 0.0f : 1.0f;
         LogLine(frame, (environment->FogStrength > 0.0f) ? "haze strength 1 (the real air's haze)."
-            : "haze strength 0 (no haze on anything: crisp to the far plane).");
-    }
-}
-
-/* The light's key (T36): keypad 9 switches between T36's light (one light scale for the sky and the surfaces) and the
- * light before T36, the A/B. Logged.
- * TODO: remove once the owner approves T36's light. */
-static void HandleDebugLightInput(WorldTestFrame* frame, const GameInput* input)
-{
-    if (GameInput_IsKeyPressed(input, GameKey_Keypad9))
-    {
-        bool Enabled = !WorldRenderer_IsOneLightScaleEnabled(frame->_renderer);
-        WorldRenderer_SetOneLightScaleEnabled(frame->_renderer, Enabled);
-        LogLine(frame, Enabled ? "T36's light ON (one light scale: the sun and the moon through the air at each "
-            "surface's height, the sky's own light as the ambient, the exposure and night vision on that scale)."
-            : "T36's light OFF (the light before T36: the sky lit by a sun 22 times the surfaces', the painted ambient, "
-            "the sun ramped by the daylight, the old exposure and night vision).");
+            : "haze strength 0 (no haze on anything: crisp to the horizon).");
     }
 }
 
 /* The atmosphere's keys (T15): keypad 1 switches the tables off and on (the A/B against the direct march of T34), keypad 2
  * the multiple scattering (1 or 0) and keypad 3 the ozone (1 or 0), so the sky's parts can be seen one at a time. Each
- * logged. Then the haze's (keypad 4 to 8) and the light's (keypad 9). */
+ * logged. Then the haze's (keypad 4 to 8). */
 static void HandleDebugAtmosphereInput(WorldTestFrame* frame, const GameInput* input, WorldEnvironment* environment)
 {
     // TODO: remove keypad 1 with the direct march once the owner approves the tables' sky (T15).
@@ -707,7 +691,6 @@ static void HandleDebugAtmosphereInput(WorldTestFrame* frame, const GameInput* i
             : "ozone 0 (no ozone layer: a greyer twilight sky).");
     }
     HandleDebugHazeInput(frame, input, environment);
-    HandleDebugLightInput(frame, input);
 }
 
 /* The moon's and the seasons' debug keys: F pins the moon full (a story's fixed phase) or gives it back to the

@@ -17,7 +17,10 @@
  * THE VIEW (WorldRenderSpace_BuildView). raylib's camera sits at the origin and looks along the camera's forward
  * (GameCamera_ToRenderCamera), so the view matrix is a pure rotation and the view-projection and its inverse hold no
  * large numbers: the sky's rays come from the rotation alone (WorldRenderSpace_GetSkyRay is the C mirror of the sky
- * shader's ray), and the stars and the sun's place on screen are directions (w = 0).
+ * shader's ray), and the stars and the sun's place on screen are directions (w = 0). Since T39 (decision G41) the
+ * projection may be REVERSED and infinite (WorldRenderSpace_GetReversedProjection): the near plane at depth 1, infinity
+ * at 0, no far plane, for the camera's passes where the GPU has clip control (GLDepth.h); otherwise raylib's, with its far
+ * plane.
  *
  * THE SHADOW CASCADES (WorldRenderSpace_GetCascade, WorldRenderSpace_StepCascade). Each cascade is a fixed-size
  * orthographic box around the camera, looking along the shadow light. Its centre is kept on the cascade's texel grid in
@@ -104,24 +107,39 @@ typedef struct WorldRenderCascadeGridStruct
 
 // Functions.
 /**
+ * @brief Returns the reversed infinite perspective projection (T39): x and y as MatrixPerspective's, clip z the near
+ *        plane's distance and clip w the view distance, so with clip control's 0-to-1 depth a point at the near plane
+ *        has depth 1, one twice as far 0.5, infinity 0; nothing is clipped far away. In raymath's layout.
+ * @param fovY The vertical field of view, in radians (above 0, below pi).
+ * @param aspect The target's width over its height (above 0).
+ * @param nearPlane The near plane, in metres (above 0).
+ * @param outInverse [out] Receives its inverse (exact: clip back to view space); may be NULL.
+ * @returns The projection.
+ */
+Matrix WorldRenderSpace_GetReversedProjection(double fovY, double aspect, double nearPlane, Matrix* outInverse);
+
+/**
  * @brief Builds a frame's view in render space: the origin (the camera's position), raylib's camera at (0, 0, 0), the
  *        rotation-only view and the projection, with their product and the inverses.
  *
  * The view is MatrixLookAt of the render camera, which is what BeginMode3D loads for it, and the projection is
- * MatrixPerspective of the camera's field of view, which matches BeginMode3D's for a target of @p aspect, so the passes
+ * MatrixPerspective of the camera's field of view, which matches BeginMode3D's for a target of @p aspect (or, for
+ * reversed depth, WorldRenderSpace_GetReversedProjection, which the camera's passes load in its place), so the passes
  * that reconstruct positions or rays from pixels line up with the geometry. Constant time; no allocation.
  * @param camera The camera; must not be NULL.
  * @param aspect The target's width over its height (above 0).
  * @param nearPlane The projection's near plane, in metres (raylib's cull distance for the scene).
- * @param farPlane The projection's far plane, in metres.
+ * @param farPlane The projection's far plane, in metres (unused for reversed depth: no far plane).
+ * @param isDepthReversed Whether the projection is the reversed infinite one (T39).
  * @returns The view.
  */
-WorldRenderView WorldRenderSpace_BuildView(const GameCamera* camera, double aspect, double nearPlane, double farPlane);
+WorldRenderView WorldRenderSpace_BuildView(const GameCamera* camera, double aspect, double nearPlane, double farPlane,
+    bool isDepthReversed);
 
 /**
- * @brief The view ray through a point of the target as the sky shader reconstructs it (its C mirror, in float): the far
- *        plane's point there through the inverse view-projection, divided by its w and made unit. The camera is at the
- *        origin, so the point is the ray.
+ * @brief The view ray through a point of the target as the sky shader reconstructs it (its C mirror, in float): the point
+ *        at clip depth 1 there (the far plane's, or with reversed depth the near plane's) through the inverse
+ *        view-projection, divided by its w and made unit. The camera is at the origin, so the point is the ray.
  * @param invViewProjection The frame's inverse view-projection (WorldRenderView.InvViewProjection); must not be NULL.
  * @param u The point's place across the target, 0 at its left edge and 1 at its right (gl_FragCoord.x / width).
  * @param v The point's place up the target, 0 at its bottom edge and 1 at its top (gl_FragCoord.y / height).

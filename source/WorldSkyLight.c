@@ -1191,6 +1191,12 @@ float WorldSkyLight_GetSceneLuminance(const WorldSkyLightFrame* frame)
     return Luminance(Ambient) + WORLD_SKY_LIGHT_DIRECTIONAL_ADAPT_WEIGHT * (Luminance(frame->Sun) + Luminance(frame->Moon));
 }
 
+double WorldSkyLight_GetTwilightLuminance(const WorldSkyLightFrame* frame)
+{
+    return (double)Luminance(frame->SunSky) / SKY_LIGHT_PI * WORLD_ATMOSPHERE_SUN_LIGHT_CANDELAS
+        / WORLD_ATMOSPHERE_SUN_LIGHT;
+}
+
 float WorldSkyLight_GetDayLuminance(const WorldSkyLightFrame* frame)
 {
     float Ambient[3];
@@ -1199,11 +1205,4 @@ float WorldSkyLight_GetDayLuminance(const WorldSkyLightFrame* frame)
         Ambient[Channel] = frame->SunSky[Channel] * frame->AmbientTint[Channel] / (float)SKY_LIGHT_PI;
     }
     return Luminance(Ambient) + WORLD_SKY_LIGHT_DIRECTIONAL_ADAPT_WEIGHT * Luminance(frame->Sun);
-}
-
-float WorldSkyLight_GetExposure(float luminance)
-{
-    float Value = fmaxf(luminance, WORLD_SKY_LIGHT_ADAPT_MIN_LUMINANCE); // fmaxf drops a NaN
-    float Exposure = WORLD_SKY_LIGHT_ADAPT_REFERENCE_LUMINANCE / Value;
-    return fminf(fmaxf(Exposure, WORLD_SKY_LIGHT_ADAPT_MIN_EXPOSURE), WORLD_SKY_LIGHT_ADAPT_MAX_EXPOSURE);
 }

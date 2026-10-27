@@ -4,9 +4,10 @@
 #include "wr/WRError.h"
 
 /*
- * Private header (source/): 2D texture arrays (GL_TEXTURE_2D_ARRAY), the project's only direct OpenGL calls (decision
- * W7, B02). raylib has no texture arrays, and a terrain blends up to sixteen materials per pixel anywhere, which raylib's
- * twelve material map slots cannot hold; an array holds one layer per material and the shader picks layers by index.
+ * Private header (source/): 2D texture arrays (GL_TEXTURE_2D_ARRAY), direct OpenGL calls (decision W7, B02; with
+ * GLReadback.h's since T37 and GLDepth.h's since T39, the project's only ones). raylib has no texture arrays, and a
+ * terrain blends up to sixteen materials per pixel anywhere, which raylib's twelve material map slots cannot hold; an
+ * array holds one layer per material and the shader picks layers by index.
  *
  * WHY HERE. Everything else draws through raylib. These calls are kept in this one module, and their function pointers
  * come through raylib's rlGetProcAddress (the loader raylib itself was initialized with), so raylib is not rebuilt and no

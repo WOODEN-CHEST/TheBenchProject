@@ -17,8 +17,8 @@ uniform float exposure;         // same HDR eye-adaptation exposure the main ton
 
 out vec4 finalColor;
 
-const float FAR_DEPTH = 0.9999;   // at/above this the crisp target has no geometry at this pixel
-const float DEPTH_BIAS = 1e-5;    // tolerance for the crisp-vs-scene depth comparison
+#include "common/depth"         // the camera's depth convention: depthIsSky, depthIsBehind
+const float DEPTH_TOLERANCE = 1e-5; // for the crisp-vs-scene depth comparison
 
 // Narkowicz ACES filmic tonemap — identical to the main tonemap pass so crisp objects match the world's look.
 vec3 TonemapACES(vec3 x)
@@ -34,9 +34,9 @@ vec3 TonemapACES(vec3 x)
 void main()
 {
     float cd = texture(crispDepth, fragTexCoord).r;
-    if (cd >= FAR_DEPTH) { discard; }                 // no crisp object at this pixel -> keep the pixelated frame
+    if (depthIsSky(cd)) { discard; }                  // no crisp object at this pixel -> keep the pixelated frame
     float sd = texture(sceneDepth, fragTexCoord).r;
-    if (cd > sd + DEPTH_BIAS) { discard; }            // crisp object is behind the pixelated scene -> occluded
+    if (depthIsBehind(cd, sd, DEPTH_TOLERANCE)) { discard; } // crisp object is behind the pixelated scene -> occluded
 
     vec3 hdr = max(texture(texture0, fragTexCoord).rgb, vec3(0.0));
     float ev = (exposure > 0.0) ? exposure : 1.0;

@@ -144,6 +144,11 @@ void NightSkyTests_Run(TestRun* run);
  *  strength, the rods' grey (NightVisionTests.c; a private module of source/). */
 void NightVisionTests_Run(TestRun* run);
 
+/** @brief The eye's adaptation to the picture (T37): the meter's centre-weighted mean, the estimate, the first
+ *  measurement, the easing in stops, the window, the real scale and the partial adaptation's exposure
+ *  (EyeAdaptationTests.c; a private module of source/). */
+void EyeAdaptationTests_Run(TestRun* run);
+
 /** @brief The renderer's per-object render cache (WorldRenderCacheTests.c; a private module of source/). */
 void WorldRenderCacheTests_Run(TestRun* run);
 

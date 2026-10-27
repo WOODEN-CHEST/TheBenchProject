@@ -1,16 +1,16 @@
 #version 330
 
 // Screen-space sun shafts (god rays): a radial blur from the sun's screen position that accumulates the sky's
-// radiance where the line of sight toward the sun is UNOCCLUDED (sky pixels wrote no depth, so they sit at the
-// far plane) and nothing where geometry blocks it — producing bright shafts fanning out from the sun past
-// silhouette edges. Runs in linear HDR; the tonemap adds the result (scaled by the sun-shaft strength) before
+// radiance where the line of sight toward the sun is UNOCCLUDED (sky pixels wrote no depth, so they keep the cleared
+// depth: common/depth's depthIsSky) and nothing where geometry blocks it — producing bright shafts fanning out from the
+// sun past silhouette edges. Runs in linear HDR; the tonemap adds the result (scaled by the sun-shaft strength) before
 // ACES. Samples by gl_FragCoord/resolution for orientation-consistency with the other post passes.
 
 in vec2 fragTexCoord;
 in vec4 fragColor;
 
 uniform sampler2D texture0;      // linear-HDR scene colour (its sky pixels are the shaft light source)
-uniform sampler2D depthTexture;  // scene depth: sky (unoccluded) sits at the far plane, geometry is closer
+uniform sampler2D depthTexture;  // scene depth: sky (unoccluded) keeps the cleared depth, geometry is closer
 uniform vec4 colDiffuse;
 uniform vec2 resolution;         // this target's pixel size
 uniform vec2 sunScreenPos;       // sun position in UV [0,1] (same gl_FragCoord/resolution convention as here)
@@ -23,7 +23,7 @@ out vec4 finalColor;
 const int SAMPLES = 48;          // steps marched from the fragment toward the sun
 const float DENSITY = 0.9;       // fraction of the fragment->sun span the march covers
 const float DECAY = 0.95;        // per-step attenuation, so samples nearer the fragment weigh more
-const float SKY_DEPTH = 0.9999;  // depth at/above which a pixel is unoccluded sky (the shaft light source)
+#include "common/depth"        // depthIsSky: unoccluded sky (the shaft light source)
 
 void main()
 {
@@ -44,7 +44,7 @@ void main()
         {
             break;
         }
-        if (texture(depthTexture, samplePos).r >= SKY_DEPTH)
+        if (depthIsSky(texture(depthTexture, samplePos).r))
         {
             vec3 source = max(texture(texture0, samplePos).rgb, vec3(0.0));
             float luminance = dot(source, vec3(0.2126, 0.7152, 0.0722));

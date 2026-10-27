@@ -100,7 +100,7 @@ typedef enum WorldFrustumPlaneEnum
     WorldFrustumPlane_Top,
     /** @brief Clip z = -w: the near plane. */
     WorldFrustumPlane_Near,
-    /** @brief Clip z = +w: the far plane. */
+    /** @brief Clip z = +w: the far plane (none for a reversed infinite projection: WorldVisibility_ExtractReversedFrustum). */
     WorldFrustumPlane_Far,
     /** @brief The number of planes; not a plane. */
     WorldFrustumPlane_Count
@@ -239,6 +239,16 @@ typedef struct WorldVisibilityStruct
  * @returns The frustum. Constant time.
  */
 WorldFrustum WorldVisibility_ExtractFrustum(Matrix viewProjection);
+
+/**
+ * @brief Extracts the planes of a reversed infinite projection's view volume (T39: clip control's 0 <= z <= w, the near
+ *        plane at clip z = w, infinity at z = 0): the four sides as WorldVisibility_ExtractFrustum's, the near plane, and
+ *        a far plane that holds everything (zero normal, the largest float as its offset): draw distances alone decide how
+ *        far the camera sees.
+ * @param viewProjection World -> clip, in raymath's order, with WorldRenderSpace_GetReversedProjection's projection.
+ * @returns The frustum. Constant time.
+ */
+WorldFrustum WorldVisibility_ExtractReversedFrustum(Matrix viewProjection);
 
 /**
  * @brief Whether a sphere touches a frustum: false only when it lies wholly behind one of the planes.

@@ -196,22 +196,49 @@ Error NightSky_GenerateStars(uint64_t seed, float density, GenericBuffer* outSta
     return Error_CreateSuccess();
 }
 
-float NightSky_GetLimitingMagnitude(float lightPollution, float moonlitSky, float sunElevationDegrees)
+float NightSky_GetThresholdMagnitude(double backgroundCandelas)
+{
+    // An infinite background gives infinite thresholds through the formula, so -inf.
+    double Background = (backgroundCandelas > 0.0) ? backgroundCandelas * NIGHT_SKY_NANOLAMBERTS_PER_CANDELA : 0.0;
+    double Rods = NIGHT_SKY_THRESHOLD_ROD_C1 * pow(1.0 + sqrt(NIGHT_SKY_THRESHOLD_ROD_C2 * Background), 2.0);
+    double Cones = NIGHT_SKY_THRESHOLD_CONE_C1 * pow(1.0 + sqrt(NIGHT_SKY_THRESHOLD_CONE_C2 * Background), 2.0);
+    return (float)(NIGHT_SKY_THRESHOLD_ZERO_POINT - 2.5 * log10(fmin(Rods, Cones)));
+}
+
+double NightSky_GetThresholdBackground(float limitingMagnitude)
+{
+    if (!((double)limitingMagnitude < (double)NIGHT_SKY_DARKEST_THRESHOLD_MAGNITUDE))
+    {
+        return 0.0;
+    }
+    // The threshold is the lower of two rising curves, so the background that reaches it is the larger of their inverses;
+    // the cones' never reaches a threshold under their C1.
+    double Threshold = pow(10.0, -0.4 * ((double)limitingMagnitude - NIGHT_SKY_THRESHOLD_ZERO_POINT));
+    double RodRoot = fmax(sqrt(Threshold / NIGHT_SKY_THRESHOLD_ROD_C1) - 1.0, 0.0);
+    double Background = RodRoot * RodRoot / NIGHT_SKY_THRESHOLD_ROD_C2;
+    if (Threshold > NIGHT_SKY_THRESHOLD_CONE_C1)
+    {
+        double ConeRoot = sqrt(Threshold / NIGHT_SKY_THRESHOLD_CONE_C1) - 1.0;
+        Background = fmax(Background, ConeRoot * ConeRoot / NIGHT_SKY_THRESHOLD_CONE_C2);
+    }
+    return Background / NIGHT_SKY_NANOLAMBERTS_PER_CANDELA;
+}
+
+float NightSky_GetNightLimitingMagnitude(float lightPollution, float moonlitSky)
 {
     double Pollution = ClampDouble((double)lightPollution, 0.0, 1.0);
     double Moonlight = ClampDouble((double)moonlitSky, 0.0, (double)NIGHT_SKY_MAX_MOONLIT_SKY);
     double MoonMagnitudes = (double)NIGHT_SKY_FULL_MOON_MAGNITUDES * log10(1.0 + NIGHT_SKY_MOONLIT_SKY_SCALE * Moonlight)
         / log10(1.0 + NIGHT_SKY_MOONLIT_SKY_SCALE);
-    double NightLimit = (double)NIGHT_SKY_DARK_SITE_LIMITING_MAGNITUDE - (double)NIGHT_SKY_LIGHT_POLLUTION_MAGNITUDES * Pollution
-        - MoonMagnitudes * (1.0 - Pollution);
-    if (!isfinite(sunElevationDegrees))
-    {
-        return NIGHT_SKY_DAYTIME_LIMITING_MAGNITUDE;
-    }
-    double DegreesBelowHorizon = fmax(0.0, -(double)sunElevationDegrees);
-    double TwilightLimit = (double)NIGHT_SKY_DAYTIME_LIMITING_MAGNITUDE
-        + (double)NIGHT_SKY_TWILIGHT_MAGNITUDES_PER_DEGREE * DegreesBelowHorizon;
-    return (float)fmin(NightLimit, TwilightLimit);
+    return (float)((double)NIGHT_SKY_DARK_SITE_LIMITING_MAGNITUDE - (double)NIGHT_SKY_LIGHT_POLLUTION_MAGNITUDES * Pollution
+        - MoonMagnitudes * (1.0 - Pollution));
+}
+
+float NightSky_GetLimitingMagnitude(float lightPollution, float moonlitSky, double twilightCandelas)
+{
+    double Night = NightSky_GetThresholdBackground(NightSky_GetNightLimitingMagnitude(lightPollution, moonlitSky));
+    double Twilight = (twilightCandelas > 0.0) ? twilightCandelas : 0.0;
+    return NightSky_GetThresholdMagnitude(Twilight + Night);
 }
 
 float NightSky_GetMilkyWayVisibility(float limitingMagnitude)

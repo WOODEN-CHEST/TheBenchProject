@@ -652,7 +652,7 @@ stayed at version 1: absent keys read as their defaults, so older world files ke
 
 | Key | Wire id | Rule | Default | Meaning |
 |---|---|---|---|---|
-| `sky_turbidity` | 4 | >= 0 | 3 | The haze's amount: its density is Earth's x turbidity / 3 (an extinction of 23.1e-6 per metre at sea level at 3). |
+| `sky_turbidity` | 4 | >= 0 | 24 | The haze's amount: its density is the reference haze x turbidity / 3 (an extinction of 23.1e-6 per metre at sea level at 3). The default sees about 20 km (a hazy summer day; T37, G44: 3 before, about 108 km, the clearest air); 11 about 40 km. |
 | `haze_height` | 47 | [10, 100000] m | 1200 | The haze's scale height: low haze hugs the ground and lets hills stand out above it. |
 | `haze_albedo` | 48 | colour | (244, 244, 244): linear 0.907 | The share of the light the haze takes that it scatters (the rest it absorbs); darker or tinted for smog and dust. |
 | `sun_glow` | 49 | [0, 0.99] | 0.758 | The haze's forward scattering (the Mie phase function's g): how large and bright the glow around the sun and the moon is; since T36 it shapes the sky's light on surfaces too (the irradiance table). |

@@ -19,6 +19,7 @@ uniform vec2 resolution;         // G-buffer size in pixels
 uniform mat4 invProjection;      // inverse of the perspective projection used by the scene pass
 uniform mat4 projection;         // the perspective projection used by the scene pass (for sample re-projection)
 uniform float aoStrength;        // effective AO strength (config x world); 0 disables (output stays 1 = open)
+#include "common/depth"
 
 out vec4 finalColor;
 
@@ -44,7 +45,7 @@ const vec3 AO_KERNEL[12] = vec3[12](
 vec3 ViewPosFromUv(vec2 uv)
 {
     float d = texture(depthTexture, uv).r;
-    vec4 ndc = vec4(uv*2.0 - 1.0, d*2.0 - 1.0, 1.0);
+    vec4 ndc = vec4(uv*2.0 - 1.0, depthToNdc(d), 1.0);
     vec4 view = invProjection*ndc;
     return view.xyz/view.w;
 }

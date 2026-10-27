@@ -11,7 +11,7 @@
 /** sRGB gamma, for the colours the environment stores (the renderer's own conversion). */
 #define ATMOSPHERE_SRGB_GAMMA 2.2f
 /** The default turbidity, haze height and haze forward scattering, for a non-finite setting (WorldEnvironment.c's). */
-#define ATMOSPHERE_FALLBACK_TURBIDITY 3.0f
+#define ATMOSPHERE_FALLBACK_TURBIDITY 24.0f
 #define ATMOSPHERE_FALLBACK_HAZE_HEIGHT 1200.0f
 #define ATMOSPHERE_FALLBACK_SUN_GLOW 0.758f
 /** The turbidity the haze's extinction is given for. */

@@ -176,10 +176,19 @@ Current module list:
   * TerrainBlend - The terrain's material blend in C (B02; include/TerrainBlend.h): the terrain shader's steps mirrored
     (weights, rules with their periodic value noise, height blending, triplanar projections) and the material at a point
     of a terrain (a triangle and barycentrics: footsteps, the scattering's limits).
-  * GLTextureArray - Texture arrays (private, source/GLTextureArray.{h,c}; B02, decision W7): the project's only direct
-    OpenGL calls, through the function pointers raylib's rlGetProcAddress resolves (no raylib rebuild), with their GL
-    constants; used by the renderer's terrain pass. Anything else that needs GL raylib lacks belongs in a module like
-    it, never in a pass (BUILDING.md, "Direct OpenGL calls").
+  * GLTextureArray - Texture arrays (private, source/GLTextureArray.{h,c}; B02, decision W7): direct OpenGL calls (the
+    project's only ones with GLReadback and GLDepth), through the function pointers raylib's rlGetProcAddress resolves
+    (no raylib rebuild), with their GL constants; used by the renderer's terrain pass. Anything else that needs GL raylib
+    lacks belongs in a module like it, never in a pass (BUILDING.md, "Direct OpenGL calls").
+  * GLReadback - Reading a small target back without waiting for the GPU (private, source/GLReadback.{h,c}; T37, new
+    module, decision G42): a pixel-pack buffer and a fence per copy, three in flight, the newest finished copy handed
+    over a frame or two later; direct OpenGL calls in GLTextureArray's manner. Used by the eye's meter
+    (WorldRendererExposure.c).
+  * GLDepth - Reversed depth (private, source/GLDepth.{h,c}; T39, new module, decision G41): whether the GPU has clip
+    control (OpenGL 4.5 or GL_ARB_clip_control), 32-bit float depth textures and renderbuffers, and the switch of GL's
+    depth state to reversed (0-to-1 clip depth, GL_GEQUAL, cleared to 0) and back to raylib's; direct OpenGL calls in
+    GLTextureArray's manner. Used by the renderer's camera passes (WorldRendererCommon.c's camera depth helpers), so
+    the camera draws at any distance; without clip control the renderer keeps raylib's projection and its 4 km.
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -291,8 +300,10 @@ Current module list:
     from them every frame, the far ground below the horizon, the ground haze and light pollution's light in the air,
     which every lit surface, the sky, the stars and the outlines take; one light scale for the sky and the surfaces,
     T36: the sun and the moon through the air at each surface's height and the sky's own light as the ambient, from the
-    sky's irradiance table and the volume's last row), in render space
-    since T32:
+    sky's irradiance table and the volume's last row; the eye adapting to the picture, T37,
+    source/WorldRendererExposure.c: a meter pass over the HDR picture read back a frame or two later; the camera's
+    passes in reversed 32-bit float depth with no far plane where the GPU has clip control, T39, GLDepth, so whatever
+    has the draw distance draws at any distance), in render space since T32:
     the world's orientation with the camera at the origin, every position relative to the camera (subtracted in double),
     shadow cascades snapped to their texels; separate from the world data and never writes to it. Split by render pass
     into
@@ -317,11 +328,13 @@ Current module list:
     (whole, or in steps over frames: WorldSkyLightBuilder keeps two sets and swaps in a rebuild when the air changes),
     the sky's and light pollution's irradiance, the frame's light at the camera (the sun's and the moon's through the
     air, the sky's irradiance, the ground's bounce, the ambient's tint, the night's own light; every value finite), the
-    moon's gate (while the moonlit sky shows), and the eye's scene luminance and exposure on that scale. The renderer takes the camera's
-    light from it for the exposure, night vision, the shadow light, the status line and the fallback uniforms; the
-    tests check the GPU's quadrature through it (WorldRuntime.md, "Sky's light on surfaces").
+    moon's gate (while the moonlit sky shows), and the scene luminance on that scale with its daylight's share. The
+    renderer takes the camera's light from it for the eye's anchor and real scale, night vision, the shadow light, the
+    status line and the fallback uniforms; the tests check the GPU's quadrature through it (WorldRuntime.md, "Sky's
+    light on surfaces").
   * WorldRenderSpace - Render space as pure maths (private, source/WorldRenderSpace.h; T32): the frame's origin (the
-    camera's double position) with its rotation-only view and projection, the C mirror of the sky shader's ray, and the
+    camera's double position) with its rotation-only view and projection (since T39 also the reversed infinite
+    projection and its closed-form inverse), the C mirror of the sky shader's ray, and the
     shadow cascades with their centres snapped to their texel grids in double, each grid kept from frame to frame
     (anchored to the last frame's box). WorldRuntime.md's "Render space" has the rule every pass and shader follows.
   * WorldInstancing - Instanced drawing as pure maths (private, source/WorldInstancing.h; B03): a component's copies
@@ -334,7 +347,8 @@ Current module list:
     across frames (progress over the world model's fade time, turning back without a pop, a third LOD from the larger
     share, the two draws with complementary dithers, the LOD the G-buffer and the shadows draw solid).
   * WorldVisibility - What each pass draws this frame (private, source/WorldVisibility.h): frustum planes and sphere
-    tests (the camera's frustum, each shadow cascade's box), draw distances (each model's and sprite's own, times the
+    tests (the camera's frustum, without a far plane for reversed depth since T39; each shadow cascade's box), draw
+    distances (each model's and sprite's own, times the
     config's draw_distance_scale unless fixed, against its distance times the camera's zoom factor) with their
     fade band, the opacity's fade, the dither's C mirror (shaders/common/dither.glsl: the draw's fade and the LOD
     cross-fade's complementary masks), and
@@ -343,12 +357,19 @@ Current module list:
     camera or a light; billboard, axis billboard, fixed), its world size from pixels per unit, its bounds and the
     back-to-front order of the blended sprites; the sprite pass and the shadow passes draw with it.
   * NightSky - The night sky's pure maths (private, source/NightSky.h): the seeded star catalogue, the limiting
-    magnitude (light pollution, the moonlit sky, twilight), the air mass, star colours and the galaxy's place among
-    the stars; used by the sky and star passes (WorldRendererSky.c, WorldRendererStars.c).
+    magnitude (since T38 the naked eye's threshold, Schaefer's, against the sky's luminance: the twilight's from the
+    C mirror's sky light on the real scale, light pollution's and the moonlit sky's as the background that gives their
+    tuned limits), the air mass, star colours and the galaxy's place among the stars; used by the sky and star passes
+    (WorldRendererSky.c, WorldRendererStars.c).
   * NightVision - The eye's dim-light vision as pure maths (private, source/NightVision.h): Hunt's rod share calibrated
     on the game's light scale (since T36 the one scale's anchors, and the field luminance from the daylight on the real
     scale and the night's raised lights through the power law) and the rods' blue-grey; the sky and PBR shaders apply it
     (shaders/common/night_vision).
+  * EyeAdaptation - The eye's adaptation to the picture as pure maths (private, source/EyeAdaptation.h; T37, new module,
+    decision G42): the meter's centre-weighted log-average of its blocks, the anchor and the window around it (the sky's
+    floor at the night's own light), the eye eased in stops, and the partial adaptation's curve over night vision's real
+    light scale that gives the exposure; the renderer's meter pass and readback feed it (WorldRuntime.md, "Eye
+    adaptation").
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world whose sky follows the frame's game
     clock and whose colliders it steps every tick (trigger, contact and motion events logged; F7 shows the colliders,
     F8 the contact points, F6 swings the door, F9 sends a wall through a row of crates, F10 moves the door's crate),
@@ -365,8 +386,8 @@ Current module list:
     pebbles (a runtime object) and the semicolon switches instanced drawing for the A/B (the private
     source/WorldTestInstances.{h,c}). Since T15 the keypad's 1 switches the atmosphere's tables (the A/B against the
     direct march), 2 the multiple scattering and 3 the ozone, and I adds the frame times; since T35 the keypad's 4 to 8
-    drive the haze (its debug view and slice, the distance scale, a morning mist, the haze strength); since T36 keypad
-    9 switches between the one light scale and the light before it (the A/B).
+    drive the haze (its debug view and slice, the distance scale, a morning mist, the haze strength); T36's keypad 9
+    (the light before T36, the A/B) went in T37.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown

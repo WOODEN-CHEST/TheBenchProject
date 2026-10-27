@@ -48,10 +48,15 @@ double NightVision_GetRealLuminance(float luminance)
     return NIGHT_VISION_NOON_CANDELAS * pow((double)luminance / NIGHT_VISION_NOON_LUMINANCE, (double)Calibration.Steepness);
 }
 
-float NightVision_GetFieldLuminance(float dayLuminance, float nightLuminance)
+double NightVision_GetRealFieldLuminance(float dayLuminance, float nightLuminance)
 {
     double Day = (dayLuminance > 0.0f) ? (double)dayLuminance : 0.0;
-    double Real = NIGHT_VISION_NOON_CANDELAS * Day / NIGHT_VISION_NOON_LUMINANCE + NightVision_GetRealLuminance(nightLuminance);
+    return NIGHT_VISION_NOON_CANDELAS * Day / NIGHT_VISION_NOON_LUMINANCE + NightVision_GetRealLuminance(nightLuminance);
+}
+
+float NightVision_GetFieldLuminance(float dayLuminance, float nightLuminance)
+{
+    double Real = NightVision_GetRealFieldLuminance(dayLuminance, nightLuminance);
     if (!(Real > 0.0))
     {
         return 0.0f;

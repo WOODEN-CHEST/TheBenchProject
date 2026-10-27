@@ -90,9 +90,6 @@
  *  daylight factor's twilight ramp (WorldEnvironment_GetDaylightForElevation). */
 #define WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION (-0.12f)
 #define WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION 0.10f
-/** @brief The moon's elevation (the sine; about 11.5 degrees) from which its light was full before T36, fading in from
- *  the horizon (WorldEnvironment_GetMoonlightForElevation; the A/B of the light before T36 only). */
-#define WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION 0.2f
 
 
 // Types.
@@ -602,16 +599,6 @@ WorldShadowLightChoice WorldEnvironment_ChooseShadowLight(Vector3 sunDirection, 
  * @returns The factor in [0, 1].
  */
 float WorldEnvironment_GetDaylightForElevation(float sunElevation);
-
-/**
- * @brief Returns the moonlight's height ramp before T36: 0 below the horizon, rising smoothly to 1 at
- *        WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION. Since T36 the air's transmittance dims the moon instead; only the
- *        renderer's A/B of the light before T36 uses this.
- * @param moonElevation The sine of the moon's elevation, [-1, 1] (NaN gives 0).
- * @returns The factor in [0, 1].
- */
-// TODO: remove once the owner approves T36's light (the A/B's old moonlight).
-float WorldEnvironment_GetMoonlightForElevation(float moonElevation);
 
 /**
  * @brief Returns how much daylight there is right now: 1 in full day, 0 at night.

@@ -4,6 +4,7 @@
 #include "TestWorld.h"
 #include "GameMath.h"
 #include "WorldVisibility.h"
+#include "WorldRenderSpace.h"
 #include "WorldRenderCache.h"
 #include "World.h"
 #include "WorldObject.h"
@@ -325,6 +326,37 @@ static void FrustumPlanesFromAViewProjection(TestRun* run)
     TEST_CHECK(run, !WorldVisibility_IsSphereInFrustum(&Frustum, (Vector3){ 0.0f, -7.0f, 10.0f }, 1.0f));
     TEST_CHECK(run, !WorldVisibility_IsSphereInFrustum(&Frustum, (Vector3){ NAN, 0.0f, 10.0f }, 1.0f));
     TEST_CHECK(run, !WorldVisibility_IsSphereInFrustum(&Frustum, (Vector3){ 0.0f, 0.0f, 10.0f }, NAN));
+}
+
+/* The reversed infinite projection's frustum (T39): the sides are the standard frustum's, the near plane lies 0.05 m
+ * ahead, and nothing is too far: a sphere 20 km, 1000 km and 1e7 m ahead is inside (the standard frustum drops it past
+ * 4 km), while behind the camera and beside the view stay outside. */
+static void ReversedFrustumHasNoFarPlane(TestRun* run)
+{
+    Matrix View = MatrixLookAt((Vector3){ 0.0f, 0.0f, 0.0f }, (Vector3){ 0.0f, 0.0f, 1.0f }, (Vector3){ 0.0f, 1.0f, 0.0f });
+    Matrix Projection = WorldRenderSpace_GetReversedProjection(TEST_FOV_Y_DEGREES * DEG2RAD, TEST_ASPECT, TEST_NEAR, NULL);
+    WorldFrustum Frustum = WorldVisibility_ExtractReversedFrustum(MatrixMultiply(View, Projection));
+    WorldFrustum Standard = MakeCameraFrustum((Vector3){ 0.0f, 0.0f, 0.0f });
+    for (int Index = WorldFrustumPlane_Left; Index <= WorldFrustumPlane_Top; Index++)
+    {
+        const WorldPlane* A = &Frustum.Planes[Index];
+        const WorldPlane* B = &Standard.Planes[Index];
+        TEST_CHECK(run, IsNear(A->Normal.x, B->Normal.x) && IsNear(A->Normal.y, B->Normal.y)
+            && IsNear(A->Normal.z, B->Normal.z) && IsNear(A->Distance, B->Distance));
+    }
+    const WorldPlane* Near = &Frustum.Planes[WorldFrustumPlane_Near];
+    TEST_CHECK(run, IsNear(Near->Normal.z, 1.0f) && IsNear(Near->Distance, -0.05f));
+    const float Distances[] = { 10.0f, 20000.0f, 1.0e6f, 1.0e7f };
+    for (size_t Index = 0U; Index < (sizeof(Distances) / sizeof(Distances[0])); Index++)
+    {
+        TEST_CHECK(run, WorldVisibility_IsSphereInFrustum(&Frustum, (Vector3){ 0.0f, 0.0f, Distances[Index] }, 1.0f));
+    }
+    TEST_CHECK(run, !WorldVisibility_IsSphereInFrustum(&Standard, (Vector3){ 0.0f, 0.0f, 20000.0f }, 1.0f));
+    TEST_CHECK(run, !WorldVisibility_IsSphereInFrustum(&Frustum, (Vector3){ 0.0f, 0.0f, -5.0f }, 1.0f));
+    TEST_CHECK(run, !WorldVisibility_IsSphereInFrustum(&Frustum, (Vector3){ 13.0f, 0.0f, 10.0f }, 1.0f));
+    TEST_CHECK(run, !WorldVisibility_IsSphereInFrustum(&Frustum, (Vector3){ -26000.0f, 0.0f, 20000.0f }, 100.0f));
+    TEST_CHECK(run, WorldVisibility_IsSphereInFrustum(&Frustum, (Vector3){ 0.0f, 0.0f, -0.5f }, 1.0f));
+    TEST_CHECK(run, !WorldVisibility_IsSphereInFrustum(&Frustum, (Vector3){ NAN, 0.0f, 10.0f }, 1.0f));
 }
 
 /* A shadow cascade's orthographic box: inside, past each side by more and by less than the radius, beyond its far
@@ -1469,6 +1501,7 @@ void WorldVisibilityTests_Run(TestRun* run)
     static const TestCase Cases[] =
     {
         { "frustum_planes_from_a_view_projection", FrustumPlanesFromAViewProjection },
+        { "reversed_frustum_has_no_far_plane", ReversedFrustumHasNoFarPlane },
         { "cascade_box_culls_its_casters", CascadeBoxCullsItsCasters },
         { "own_draw_distances_and_the_zoom_factor", OwnDrawDistancesAndTheZoomFactor },
         { "distance_fade_rises_over_the_band", DistanceFadeRisesOverTheBand },

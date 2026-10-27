@@ -1,4 +1,6 @@
 #include "TestSuites.h"
+#include "EyeAdaptation.h"
+#include "NightSky.h"
 #include "NightVision.h"
 #include "WorldAtmosphere.h"
 #include "WorldEnvironment.h"
@@ -394,6 +396,14 @@ static void GetDirectLuminances(const WorldAtmosphereMedium* medium, const World
     *outMoon = Luminance(Moon);
 }
 
+/* The exposure the eye starts at under a frame's light (T37: its anchor, read on the real scale at the frame's mix). */
+static float GetAnchorExposure(const WorldSkyLightFrame* frame)
+{
+    float Scene = WorldSkyLight_GetSceneLuminance(frame);
+    float Day = WorldSkyLight_GetDayLuminance(frame);
+    return EyeAdaptation_GetExposure(EyeAdaptation_GetAnchor(Scene), EyeAdaptation_GetRealScale(Day, Scene - Day));
+}
+
 
 // Static functions: tests.
 /* The transmittance is exact: within 1e-6 of a long double integral from the ground to 99 km, straight up to along the
@@ -493,16 +503,11 @@ static void LightSetsOverItsDisc(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
-/* The C tables hold the light in the GPU's layout at half its size: within 0.005 of the exact light up to 5 km, within
- * 4.5 % from 2 degrees above the horizon at every height and 2 % from 4 degrees (nearer the horizon the light falls
- * faster than the table's texels; the sky's irradiance it feeds is within 0.15 % of the full-size table's); the multiple
- * scattering's glow is finite and positive, larger with the light higher. */
-static void TablesHoldTheLight(TestRun* run)
+/* The worst errors of the C tables' light against the exact light: up to 5 km (absolute), and relative from 2 and from 4
+ * degrees above the horizon at heights up to 60 km. */
+static void MeasureTableLight(const WorldSkyLightTables* tables, const WorldAtmosphereMedium* medium, double* outWorstLow,
+    double* outWorstFrom2, double* outWorstFrom4)
 {
-    WorldEnvironment Environment;
-    WorldEnvironment_SetDefaults(&Environment);
-    WorldAtmosphereMedium Medium;
-    WorldSkyLightTables* Tables = CreateTables(&Environment, &Medium);
     const double Heights[] = { 0.0, TEST_EYE_HEIGHT, 300.0, 5000.0, 20000.0, 60000.0 };
     double WorstLow = 0.0;
     double WorstFrom2 = 0.0;
@@ -515,8 +520,8 @@ static void TablesHoldTheLight(TestRun* run)
             double Above = (1.0 - Horizon) * pow((double)Step / 200.0, 2.0);
             double Got[3];
             double Want[3];
-            WorldSkyLight_LookUpLightTransmittance(Tables, SkyRay(Heights[Index], Horizon + Above), Got);
-            WorldSkyLight_GetLightTransmittance(&Medium, SkyRay(Heights[Index], Horizon + Above), Want);
+            WorldSkyLight_LookUpLightTransmittance(tables, SkyRay(Heights[Index], Horizon + Above), Got);
+            WorldSkyLight_GetLightTransmittance(medium, SkyRay(Heights[Index], Horizon + Above), Want);
             for (int Channel = 0; Channel < 3; Channel++)
             {
                 double Difference = fabs(Got[Channel] - Want[Channel]);
@@ -535,10 +540,46 @@ static void TablesHoldTheLight(TestRun* run)
             }
         }
     }
-    if (!TEST_CHECK(run, (WorstLow < 0.005) && (WorstFrom2 < 0.045) && (WorstFrom4 < 0.02)))
+    *outWorstLow = WorstLow;
+    *outWorstFrom2 = WorstFrom2;
+    *outWorstFrom4 = WorstFrom4;
+}
+
+/* The C tables hold the light in the GPU's layout at half its size. In the reference haze (turbidity 3, 108 km of
+ * visibility): within 0.005 of the exact light up to 5 km, within 4.5 % from 2 degrees above the horizon at every height
+ * and 2 % from 4 degrees (nearer the horizon the light falls faster than the table's texels; the sky's irradiance it
+ * feeds is within 0.15 % of the full-size table's). In the default haze (24, 20 km) the light near the horizon falls
+ * faster still: within 0.007, 19 % and 8.5 % (where it is a few thousandths of the light above the air; a full-size
+ * table would halve that). The multiple scattering's glow is finite and positive, larger with the light higher. */
+static void TablesHoldTheLight(TestRun* run)
+{
+    WorldEnvironment Environment;
+    WorldEnvironment_SetDefaults(&Environment);
+    typedef struct AirBoundsStruct
     {
-        printf("    up to 5 km %.4f; from 2 degrees %.2f %%, from 4 degrees %.2f %%\n", WorstLow, 100.0 * WorstFrom2,
-            100.0 * WorstFrom4);
+        float Turbidity;
+        double Low;
+        double From2;
+        double From4;
+    } AirBounds;
+    const AirBounds Airs[] = { { 3.0f, 0.005, 0.045, 0.02 }, { Environment.SkyTurbidity, 0.007, 0.19, 0.085 } };
+    WorldAtmosphereMedium Medium;
+    WorldSkyLightTables* Tables = Memory_Allocate(sizeof(WorldSkyLightTables));
+    for (size_t Air = 0U; Air < (sizeof(Airs) / sizeof(Airs[0])); Air++)
+    {
+        Environment.SkyTurbidity = Airs[Air].Turbidity;
+        WorldAtmosphere_GetMedium(&Environment, &Medium);
+        WorldSkyLight_BuildTables(&Medium, Tables);
+        double WorstLow = 0.0;
+        double WorstFrom2 = 0.0;
+        double WorstFrom4 = 0.0;
+        MeasureTableLight(Tables, &Medium, &WorstLow, &WorstFrom2, &WorstFrom4);
+        if (!TEST_CHECK(run, (WorstLow < Airs[Air].Low) && (WorstFrom2 < Airs[Air].From2)
+            && (WorstFrom4 < Airs[Air].From4)))
+        {
+            printf("    turbidity %g: up to 5 km %.4f; from 2 degrees %.2f %%, from 4 degrees %.2f %%\n",
+                (double)Airs[Air].Turbidity, WorstLow, 100.0 * WorstFrom2, 100.0 * WorstFrom4);
+        }
     }
 
     bool IsGlowSane = true;
@@ -650,9 +691,53 @@ static void LightPollutionIrradianceMatchesAFineIntegral(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
-/* The irradiance table holds the quadrature: at its texels exactly (to its float logarithms), between them within 1 % from
- * 2 degrees below the horizon up and 5 % from 6 degrees below (the twilight falls fastest there; lower, the sky's light is
- * a thousandth of the night's own), light pollution's within 2 % up to 5 km; none below the lowest elevation. */
+/* The worst errors of the irradiance table read between its texels against the quadrature: from 2 degrees below the
+ * horizon up, from 6 degrees below, and light pollution's up to 5 km. */
+static void MeasureIrradianceTable(const WorldSkyLightTables* tables, const WorldAtmosphereMedium* medium,
+    double* outWorstHigh, double* outWorstTwilight, double* outWorstTown)
+{
+    const double Heights[] = { 0.0, TEST_EYE_HEIGHT, 30.0, 300.0, 1200.0, 5000.0, 15000.0 };
+    double WorstHigh = 0.0;
+    double WorstTwilight = 0.0;
+    double WorstTown = 0.0;
+    for (size_t Height = 0U; Height < (sizeof(Heights) / sizeof(Heights[0])); Height++)
+    {
+        for (int Step = 0; Step <= 96; Step++)
+        {
+            double Elevation = (-6.0 + 96.0 * (double)Step / 96.0 + 0.173) * TEST_SKY_PI / 180.0;
+            if (Elevation > 0.5 * TEST_SKY_PI)
+            {
+                continue;
+            }
+            double Got[3];
+            double Want[3];
+            WorldSkyLight_LookUpSkyIrradiance(tables, SkyRay(Heights[Height], sin(Elevation)), Got);
+            WorldSkyLight_GetSkyIrradiance(tables, medium, SkyRay(Heights[Height], sin(Elevation)), Want);
+            double Difference = RelativeError(Got, Want);
+            if (Elevation >= -2.0 * TEST_SKY_PI / 180.0)
+            {
+                WorstHigh = fmax(WorstHigh, Difference);
+            }
+            WorstTwilight = fmax(WorstTwilight, Difference);
+        }
+        if (Heights[Height] <= 5000.0)
+        {
+            double Got[3];
+            double Want[3];
+            WorldSkyLight_LookUpLightPollutionIrradiance(tables, Heights[Height] + 17.0, Got);
+            WorldSkyLight_GetLightPollutionIrradiance(medium, Heights[Height] + 17.0, Want);
+            WorstTown = fmax(WorstTown, RelativeError(Got, Want));
+        }
+    }
+    *outWorstHigh = WorstHigh;
+    *outWorstTwilight = WorstTwilight;
+    *outWorstTown = WorstTown;
+}
+
+/* The irradiance table holds the quadrature: at its texels exactly (to its float logarithms); between them, in the
+ * reference haze (turbidity 3), within 1 % from 2 degrees below the horizon up and 5 % from 6 degrees below (the twilight
+ * falls fastest there; lower, the sky's light is a thousandth of the night's own), light pollution's within 2 % up to 5
+ * km; in the default haze (24) within 2 %, 5 % and 2 %; none below the lowest elevation. */
 static void IrradianceTableHoldsTheQuadrature(TestRun* run)
 {
     WorldEnvironment Environment;
@@ -679,44 +764,35 @@ static void IrradianceTableHoldsTheQuadrature(TestRun* run)
     }
     TEST_CHECK(run, WorstTexel < 2e-6);
 
-    const double Heights[] = { 0.0, TEST_EYE_HEIGHT, 30.0, 300.0, 1200.0, 5000.0, 15000.0 };
-    double WorstHigh = 0.0;
-    double WorstTwilight = 0.0;
-    double WorstTown = 0.0;
-    for (size_t Height = 0U; Height < (sizeof(Heights) / sizeof(Heights[0])); Height++)
+    typedef struct AirBoundsStruct
     {
-        for (int Step = 0; Step <= 96; Step++)
+        float Turbidity;
+        double High;
+        double Twilight;
+        double Town;
+    } AirBounds;
+    const float DefaultTurbidity = Environment.SkyTurbidity;
+    const AirBounds Airs[] = { { 3.0f, 0.01, 0.05, 0.02 }, { DefaultTurbidity, 0.02, 0.05, 0.02 } };
+    WorldSkyLightTables* AirTables = Memory_Allocate(sizeof(WorldSkyLightTables));
+    for (size_t Air = 0U; Air < (sizeof(Airs) / sizeof(Airs[0])); Air++)
+    {
+        WorldAtmosphereMedium AirMedium;
+        Environment.SkyTurbidity = Airs[Air].Turbidity;
+        WorldAtmosphere_GetMedium(&Environment, &AirMedium);
+        WorldSkyLight_BuildTables(&AirMedium, AirTables);
+        double WorstHigh = 0.0;
+        double WorstTwilight = 0.0;
+        double WorstTown = 0.0;
+        MeasureIrradianceTable(AirTables, &AirMedium, &WorstHigh, &WorstTwilight, &WorstTown);
+        if (!TEST_CHECK(run, (WorstHigh < Airs[Air].High) && (WorstTwilight < Airs[Air].Twilight)
+            && (WorstTown < Airs[Air].Town)))
         {
-            double Elevation = (-6.0 + 96.0 * (double)Step / 96.0 + 0.173) * TEST_SKY_PI / 180.0;
-            if (Elevation > 0.5 * TEST_SKY_PI)
-            {
-                continue;
-            }
-            double Got[3];
-            double Want[3];
-            WorldSkyLight_LookUpSkyIrradiance(Tables, SkyRay(Heights[Height], sin(Elevation)), Got);
-            WorldSkyLight_GetSkyIrradiance(Tables, &Medium, SkyRay(Heights[Height], sin(Elevation)), Want);
-            double Difference = RelativeError(Got, Want);
-            if (Elevation >= -2.0 * TEST_SKY_PI / 180.0)
-            {
-                WorstHigh = fmax(WorstHigh, Difference);
-            }
-            WorstTwilight = fmax(WorstTwilight, Difference);
-        }
-        if (Heights[Height] <= 5000.0)
-        {
-            double Got[3];
-            double Want[3];
-            WorldSkyLight_LookUpLightPollutionIrradiance(Tables, Heights[Height] + 17.0, Got);
-            WorldSkyLight_GetLightPollutionIrradiance(&Medium, Heights[Height] + 17.0, Want);
-            WorstTown = fmax(WorstTown, RelativeError(Got, Want));
+            printf("    turbidity %g: from 2 degrees below %.2f %%, from 6 below %.2f %%, light pollution %.2f %%\n",
+                (double)Airs[Air].Turbidity, 100.0 * WorstHigh, 100.0 * WorstTwilight, 100.0 * WorstTown);
         }
     }
-    if (!TEST_CHECK(run, (WorstHigh < 0.01) && (WorstTwilight < 0.05) && (WorstTown < 0.02)))
-    {
-        printf("    from 2 degrees below %.2f %%, from 6 below %.2f %%, light pollution %.2f %%\n", 100.0 * WorstHigh,
-            100.0 * WorstTwilight, 100.0 * WorstTown);
-    }
+    Environment.SkyTurbidity = DefaultTurbidity;
+    Memory_Free(AirTables);
     double Below[3];
     WorldSkyLight_LookUpSkyIrradiance(Tables, SkyRay(TEST_EYE_HEIGHT, sin(WORLD_ATMOSPHERE_IRRADIANCE_LOWEST_ELEVATION) - 1e-3),
         Below);
@@ -928,7 +1004,7 @@ static void FrameLightIsMadeOfItsParts(TestRun* run)
         TEST_CHECK(run, IsColourClose(Frame.AmbientTint, Tint, 1e-6) && IsColourClose(Frame.Night, Night, 1e-6));
         // The lights shine: the sun at noon (the moon is down), the moon at midnight (the sun is down) with the town's.
         bool IsNoon = Index == 0U;
-        TEST_CHECK(run, IsNoon ? ((Frame.Sun[1] > 0.8f) && (Frame.Moon[1] == 0.0f))
+        TEST_CHECK(run, IsNoon ? ((Frame.Sun[1] > 0.65f) && (Frame.Moon[1] == 0.0f))
             : ((Frame.Sun[1] == 0.0f) && (Frame.Moon[1] > 0.005f) && (TownSky[1] * (double)LightPollution[1] > 0.0)));
 
         // The scene luminance the eye adapts from: the ambient on a white surface facing up and half of each light.
@@ -1043,7 +1119,7 @@ static void BrokenValuesGiveNoLight(TestRun* run)
         TEST_CHECK(run, (Frame.Sun[1] == 0.0f) && (Frame.Moon[1] == 0.0f) && (Frame.Sky[1] == 0.0f)
             && (Frame.SunAboveAir[1] == 0.0f));
         float Scene = WorldSkyLight_GetSceneLuminance(&Frame);
-        TEST_CHECK(run, isfinite(Scene) && isfinite(WorldSkyLight_GetExposure(Scene)));
+        TEST_CHECK(run, isfinite(Scene) && isfinite(GetAnchorExposure(&Frame)));
     }
     const float Times[] = { 0.5f, 0.75f, 0.0f };
     const float Absurd[] = { FLT_MAX, INFINITY };
@@ -1077,7 +1153,7 @@ static void BrokenValuesGiveNoLight(TestRun* run)
             float Scene = WorldSkyLight_GetSceneLuminance(&Frame);
             float Day = WorldSkyLight_GetDayLuminance(&Frame);
             if (!TEST_CHECK(run, IsFinite && !isnan(Scene) && !isnan(Day)
-                && isfinite(WorldSkyLight_GetExposure(Scene))
+                && isfinite(GetAnchorExposure(&Frame))
                 && (Frame.SunAboveAir[0] == (float)WORLD_SKY_LIGHT_MAX_LIGHT) && (Frame.SunAboveAir[1] == 0.0f)
                 && (Frame.Sun[1] == 0.0f) && (Frame.AmbientTint[1] == (float)WORLD_SKY_LIGHT_MAX_LIGHT)))
             {
@@ -1148,8 +1224,12 @@ static void ShadowLightHandsOverAtDusk(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
-/* From noon into a moonless night the scene luminance falls without a rise or a jump (less than 10 % in any 10 game
- * seconds) to the night's own light, and the exposure rises with it, continuously, to its maximum. */
+/* From noon into a moonless night the scene luminance falls without a jump (less than 10 % in any 10 game seconds) to the
+ * night's own light, never rising by more than 0.1 % in 10 seconds (light pollution's glow comes on as the daylight
+ * fades: in the default haze it rises by about 0.01 % a step while the twilight is about 6 degrees down). The eye at
+ * its anchor follows it (T37): the screen level of the scene luminance falls steadily too (never rising by more than
+ * 0.1 %) from noon's to the night's; the exposure, which rises through the dusk and falls back as the twilight's real
+ * light fades, changes by less than 10 % in 10 seconds. */
 static void LightFallsContinuouslyIntoTheNight(TestRun* run)
 {
     WorldEnvironment Environment;
@@ -1158,10 +1238,13 @@ static void LightFallsContinuouslyIntoTheNight(TestRun* run)
     WorldAtmosphereMedium Medium;
     WorldSkyLightTables* Tables = CreateTables(&Environment, &Medium);
     double PreviousScene = INFINITY;
-    double PreviousExposure = 0.0;
+    double PreviousScreen = INFINITY;
+    double PreviousExposure = NAN;
+    double FirstScreen = NAN;
     double WorstDrop = 1.0;
+    double WorstExposureStep = 1.0;
     bool IsFalling = true;
-    bool IsExposureRising = true;
+    bool IsScreenFalling = true;
     float Scene = 0.0f;
     for (int Step = 0; Step <= 8 * 360; Step++) // 10-second steps from 12:00 to 20:00
     {
@@ -1170,27 +1253,90 @@ static void LightFallsContinuouslyIntoTheNight(TestRun* run)
         WorldSkyLightFrame Frame;
         GetFrameLight(Tables, &Medium, &Environment, &Lights, &Frame);
         Scene = WorldSkyLight_GetSceneLuminance(&Frame);
-        float Exposure = WorldSkyLight_GetExposure(Scene);
-        IsFalling = IsFalling && ((double)Scene <= PreviousScene * (1.0 + 1e-6));
-        IsExposureRising = IsExposureRising && ((double)Exposure >= PreviousExposure * (1.0 - 1e-6));
+        double Exposure = (double)GetAnchorExposure(&Frame);
+        double Screen = Exposure * (double)Scene;
+        IsFalling = IsFalling && ((double)Scene <= PreviousScene * (1.0 + 1e-3));
+        IsScreenFalling = IsScreenFalling && (Screen <= PreviousScreen * (1.0 + 1e-3));
         if (isfinite(PreviousScene))
         {
             WorstDrop = fmin(WorstDrop, (double)Scene / PreviousScene);
+            WorstExposureStep = fmin(WorstExposureStep, fmin(Exposure / PreviousExposure, PreviousExposure / Exposure));
         }
+        FirstScreen = isnan(FirstScreen) ? Screen : FirstScreen;
         PreviousScene = (double)Scene;
-        PreviousExposure = (double)Exposure;
+        PreviousScreen = Screen;
+        PreviousExposure = Exposure;
     }
     double Night[3];
     ToLinear(Environment.NightLightColor, Night);
     double NightLuminance = Luminance(Night) * (double)Environment.NightLightIntensity;
-    if (!TEST_CHECK(run, IsFalling && IsExposureRising && (WorstDrop > 0.9)))
+    if (!TEST_CHECK(run, IsFalling && IsScreenFalling && (WorstDrop > 0.9) && (WorstExposureStep > 0.9)))
     {
-        printf("    falling %d, exposure rising %d, worst drop in 10 s %.4f\n", (int)IsFalling, (int)IsExposureRising,
-            WorstDrop);
+        printf("    falling %d, screen falling %d, worst drop in 10 s %.4f, worst exposure step %.4f\n", (int)IsFalling,
+            (int)IsScreenFalling, WorstDrop, WorstExposureStep);
     }
-    // At 20:00 the night's own light and the town's are all there is.
-    TEST_CHECK(run, ((double)Scene >= NightLuminance) && ((double)Scene < 1.5 * NightLuminance)
-        && (PreviousExposure == (double)WORLD_SKY_LIGHT_ADAPT_MAX_EXPOSURE));
+    // At 20:00 the night's own light and the town's are all there is: the eye at its anchor shows a white surface at
+    // about two fifths of the noon's (the curve's calibration, T37: the open field's views keep their exposures from
+    // before T37 at noon and at night).
+    TEST_CHECK(run, ((double)Scene >= NightLuminance) && ((double)Scene < 1.5 * NightLuminance));
+    double NightShare = PreviousScreen / FirstScreen;
+    if (!TEST_CHECK(run, (NightShare > 0.38) && (NightShare < 0.42)))
+    {
+        printf("    the night's screen level is %.4f of the noon's\n", NightShare);
+    }
+    Memory_Free(Tables);
+    WorldEnvironment_Deconstruct(&Environment);
+}
+
+/* The stars come out through the dusk (T38): against the twilight's real luminance (the sky's light from the sun) and the
+ * night's in the default air, a new moon and the default light pollution, the faintest star seen rises steadily as the
+ * sun sinks: none with the sun 5 degrees up or higher, about 3.5 at the end of the civil twilight, the night's limit at
+ * full night; the Milky Way shows only once the sun is 10 degrees down, and most of its night's strength by 14. */
+static void StarsComeOutThroughTheDusk(TestRun* run)
+{
+    WorldEnvironment Environment;
+    WorldEnvironment_SetDefaults(&Environment);
+    Environment.MoonPhaseSource = WorldMoonPhaseSource_Fixed;
+    Environment.MoonPhase = 0.0f;
+    WorldAtmosphereMedium Medium;
+    WorldSkyLightTables* Tables = CreateTables(&Environment, &Medium);
+    double MaxSine = sin(67.07 * TEST_SKY_PI / 180.0); // the default sun's height at noon
+    float NightLimit = NightSky_GetNightLimitingMagnitude(Environment.LightPollution, 0.0f);
+    bool IsRising = true;
+    float Previous = -INFINITY;
+    float AtCivilEnd = NAN;
+    float MilkyWayAtTen = NAN;
+    float MilkyWayAtFourteen = NAN;
+    float Last = NAN;
+    for (int Degrees = 10; Degrees >= -20; Degrees--)
+    {
+        double Sine = sin((double)Degrees * TEST_SKY_PI / 180.0);
+        Environment.TimeOfDay = (float)(1.0 - acos(-Sine / MaxSine) / (2.0 * TEST_SKY_PI));
+        WorldSkyLights Lights;
+        WorldSkyLightFrame Frame;
+        GetFrameLight(Tables, &Medium, &Environment, &Lights, &Frame);
+        float Limit = NightSky_GetLimitingMagnitude(Environment.LightPollution, 0.0f,
+            WorldSkyLight_GetTwilightLuminance(&Frame));
+        IsRising = IsRising && (Limit >= Previous - 1e-4f);
+        Previous = Limit;
+        if (Degrees >= 5)
+        {
+            TEST_CHECK(run, Limit < NIGHT_SKY_BRIGHTEST_MAGNITUDE);
+        }
+        AtCivilEnd = (Degrees == -6) ? Limit : AtCivilEnd;
+        MilkyWayAtTen = (Degrees == -10) ? NightSky_GetMilkyWayVisibility(Limit) : MilkyWayAtTen;
+        MilkyWayAtFourteen = (Degrees == -14) ? NightSky_GetMilkyWayVisibility(Limit) : MilkyWayAtFourteen;
+        Last = Limit;
+    }
+    if (!TEST_CHECK(run, IsRising && (AtCivilEnd > 3.2f) && (AtCivilEnd < 3.8f) && (fabsf(Last - NightLimit) < 2e-3f)
+        && (MilkyWayAtTen == 0.0f) && (MilkyWayAtFourteen > 0.8f * NightSky_GetMilkyWayVisibility(NightLimit))))
+    {
+        printf("    rising %d, at -6 degrees %.2f, at -20 %.3f (night %.3f), the Milky Way at -10 %.2f, at -14 %.2f\n",
+            (int)IsRising, (double)AtCivilEnd, (double)Last, (double)NightLimit, (double)MilkyWayAtTen,
+            (double)MilkyWayAtFourteen);
+    }
+    // No daylight, no twilight; the twilight is the sun's sky alone (the night's lights do not count).
+    TEST_CHECK(run, WorldSkyLight_GetTwilightLuminance(&(WorldSkyLightFrame){ 0 }) == 0.0);
     Memory_Free(Tables);
     WorldEnvironment_Deconstruct(&Environment);
 }
@@ -1242,27 +1388,6 @@ static void TwilightKeepsItsColours(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
-/* The exposure is the reference luminance over the scene's, within its range: falling with the luminance, never darker
- * than the minimum nor brighter than the maximum, the maximum for the smallest luminance and for NaN. */
-static void ExposureFollowsTheLuminance(TestRun* run)
-{
-    TEST_CHECK(run, fabsf(WorldSkyLight_GetExposure(WORLD_SKY_LIGHT_ADAPT_REFERENCE_LUMINANCE) - 1.0f) < 1e-6f);
-    TEST_CHECK(run, fabsf(WorldSkyLight_GetExposure(0.5f * WORLD_SKY_LIGHT_ADAPT_REFERENCE_LUMINANCE) - 2.0f) < 1e-5f);
-    TEST_CHECK(run, WorldSkyLight_GetExposure(1000.0f) == WORLD_SKY_LIGHT_ADAPT_MIN_EXPOSURE);
-    TEST_CHECK(run, WorldSkyLight_GetExposure(0.0f) == WORLD_SKY_LIGHT_ADAPT_MAX_EXPOSURE);
-    TEST_CHECK(run, WorldSkyLight_GetExposure(NAN) == WORLD_SKY_LIGHT_ADAPT_MAX_EXPOSURE);
-    TEST_CHECK(run, WorldSkyLight_GetExposure(-1.0f) == WORLD_SKY_LIGHT_ADAPT_MAX_EXPOSURE);
-    bool IsFalling = true;
-    float Previous = INFINITY;
-    for (int Step = 0; Step <= 100; Step++)
-    {
-        float Exposure = WorldSkyLight_GetExposure(powf(10.0f, -3.0f + 0.05f * (float)Step));
-        IsFalling = IsFalling && (Exposure <= Previous);
-        Previous = Exposure;
-    }
-    TEST_CHECK(run, IsFalling);
-}
-
 /* The night vision's anchors are this light scale's: its noon the scene luminance of a clear noon with the default
  * environment, its night a new-moon midnight's with the default light pollution (the C mirror's, from the eye's
  * height). */
@@ -1312,8 +1437,8 @@ void WorldSkyLightTests_Run(TestRun* run)
         { "broken_values_give_no_light", BrokenValuesGiveNoLight },
         { "shadow_light_hands_over_at_dusk", ShadowLightHandsOverAtDusk },
         { "light_falls_continuously_into_the_night", LightFallsContinuouslyIntoTheNight },
-        { "exposure_follows_the_luminance", ExposureFollowsTheLuminance },
         { "twilight_keeps_its_colours", TwilightKeepsItsColours },
+        { "stars_come_out_through_the_dusk", StarsComeOutThroughTheDusk },
         { "night_vision_anchors_are_this_scale", NightVisionAnchorsAreThisScale },
     };
     TestRun_RunSuite(run, "WorldSkyLight", Cases, sizeof(Cases) / sizeof(Cases[0]));

@@ -28,14 +28,46 @@ static double SnapToGrid(double coordinate, double step)
 
 
 // Internal functions (declared in WorldRenderSpace.h).
-WorldRenderView WorldRenderSpace_BuildView(const GameCamera* camera, double aspect, double nearPlane, double farPlane)
+Matrix WorldRenderSpace_GetReversedProjection(double fovY, double aspect, double nearPlane, Matrix* outInverse)
+{
+    // MatrixPerspective's x and y; clip z = the near plane's distance, clip w = -z (the distance in front): depth
+    // z/w = near / distance after clip control's 0-to-1 mapping.
+    double Focal = 1.0 / tan(fovY * 0.5);
+    Matrix Projection = { 0 };
+    Projection.m0 = (float)(Focal / aspect);
+    Projection.m5 = (float)Focal;
+    Projection.m11 = -1.0f;
+    Projection.m14 = (float)nearPlane;
+    if (outInverse != NULL)
+    {
+        // x = clip x aspect / focal, y = clip y / focal, z = -clip w, w = clip z / near.
+        Matrix Inverse = { 0 };
+        Inverse.m0 = (float)(aspect / Focal);
+        Inverse.m5 = (float)(1.0 / Focal);
+        Inverse.m11 = (float)(1.0 / nearPlane);
+        Inverse.m14 = -1.0f;
+        *outInverse = Inverse;
+    }
+    return Projection;
+}
+
+WorldRenderView WorldRenderSpace_BuildView(const GameCamera* camera, double aspect, double nearPlane, double farPlane,
+    bool isDepthReversed)
 {
     WorldRenderView View;
     View.Origin = camera->Position;
     View.Camera = GameCamera_ToRenderCamera(camera);
     View.View = MatrixLookAt(View.Camera.position, View.Camera.target, View.Camera.up);
-    View.Projection = MatrixPerspective((double)View.Camera.fovy * DEG2RAD, aspect, nearPlane, farPlane);
-    View.InvProjection = MatrixInvert(View.Projection);
+    if (isDepthReversed)
+    {
+        View.Projection = WorldRenderSpace_GetReversedProjection((double)View.Camera.fovy * DEG2RAD, aspect, nearPlane,
+            &View.InvProjection);
+    }
+    else
+    {
+        View.Projection = MatrixPerspective((double)View.Camera.fovy * DEG2RAD, aspect, nearPlane, farPlane);
+        View.InvProjection = MatrixInvert(View.Projection);
+    }
     View.ViewProjection = MatrixMultiply(View.View, View.Projection);
     View.InvViewProjection = MatrixInvert(View.ViewProjection);
     return View;

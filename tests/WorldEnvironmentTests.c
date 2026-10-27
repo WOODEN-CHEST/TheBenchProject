@@ -155,9 +155,9 @@ static void DefaultsAreValid(TestRun* run)
     TEST_CHECK(run, Environment.IsMoonEnabled && (Environment.MoonPhaseSource == WorldMoonPhaseSource_Calendar));
     TEST_CHECK(run, (Environment.MoonCycleDays == WORLD_ENVIRONMENT_MOON_CYCLE_DAYS) && !Environment.AreSeasonsEnabled);
     TEST_CHECK(run, (Environment.NightVisionStrength == 1.0f) && (Environment.NightVisionBlueShift == 0.5f));
-    // The air (T15): the sky before the tables (turbidity 3, a 1200 m haze of albedo about 0.9, g 0.758), Earth's air
+    // The air (T15; T37: 20 km of visibility, turbidity 24): a 1200 m haze of albedo about 0.9, g 0.758, Earth's air
     // and ozone, all of the multiple scattering.
-    TEST_CHECK(run, (Environment.SkyTurbidity == 3.0f) && (Environment.HazeHeight == 1200.0f));
+    TEST_CHECK(run, (Environment.SkyTurbidity == 24.0f) && (Environment.HazeHeight == 1200.0f));
     TEST_CHECK(run, (Environment.HazeAlbedo.r == 244) && (Environment.HazeAlbedo.g == 244) && (Environment.HazeAlbedo.b == 244));
     TEST_CHECK(run, (Environment.SunGlow == 0.758f) && (Environment.AirDensity == 1.0f) && (Environment.Ozone == 1.0f));
     TEST_CHECK(run, Environment.MultipleScattering == 1.0f);
@@ -903,8 +903,7 @@ static void ShadowLightFollowsTheBrighterLight(TestRun* run)
  * shorter, the equinoxes' about 12; the noon sun is higher in summer; the full moon stands low in summer, high in
  * winter. Without them every day lasts 12 hours. (The year is uniform: the model's September equinox falls about two
  * days before the real one, whose sun moves slower through the northern summer.) */
-/* The sun's and the moon's light by how high they stand: the ramps the daylight factor and the moonlight use, which the
- * renderer's far ground evaluates where the light stands over a far point of the ground. */
+/* The daylight by how high the sun stands: the ramp the daylight factor uses (the moon's light fades out by it). */
 static void LightRampsFollowTheElevation(TestRun* run)
 {
     TEST_CHECK(run, WorldEnvironment_GetDaylightForElevation(WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION) == 0.0f);
@@ -914,13 +913,8 @@ static void LightRampsFollowTheElevation(TestRun* run)
     TEST_CHECK(run, WorldEnvironment_GetDaylightForElevation(NAN) == 0.0f);
     float Middle = 0.5f * (WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION + WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION);
     TEST_CHECK(run, fabsf(WorldEnvironment_GetDaylightForElevation(Middle) - 0.5f) < 1e-6f);
-    TEST_CHECK(run, WorldEnvironment_GetMoonlightForElevation(0.0f) == 0.0f);
-    TEST_CHECK(run, WorldEnvironment_GetMoonlightForElevation(-0.1f) == 0.0f);
-    TEST_CHECK(run, WorldEnvironment_GetMoonlightForElevation(WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION) == 1.0f);
-    TEST_CHECK(run, fabsf(WorldEnvironment_GetMoonlightForElevation(0.1f) - 0.5f) < 1e-6f);
-    TEST_CHECK(run, WorldEnvironment_GetMoonlightForElevation(NAN) == 0.0f);
 
-    // The environment's own factors are these ramps at the sun's and the moon's elevation.
+    // The environment's own factor is this ramp at the sun's elevation.
     WorldEnvironment Environment;
     WorldEnvironment_SetDefaults(&Environment);
     for (int Step = 0; Step < 48; Step++)

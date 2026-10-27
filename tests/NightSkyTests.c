@@ -4,6 +4,7 @@
 #include "GameCalendar.h"
 #include "raylib/raymath.h"
 #include <math.h>
+#include <stdio.h>
 
 
 // Macros.
@@ -197,47 +198,110 @@ static void ColorsAreMostlyWhiteToYellow(TestRun* run)
 
 
 // Tests: visibility.
+/* Schaefer's threshold (T38): the naked eye sees to about 6.5 against a dark site's sky (2.2e-4 cd/m^2), to 3.2 at the
+ * end of the civil twilight (about 1 cd/m^2), no star against daylight, and 7.93 against black; it falls as the
+ * background brightens, without a step where the rods hand over to the cones; its inverse gives the background back. */
+static void ThresholdFollowsSchaefer(TestRun* run)
+{
+    TEST_CHECK(run, fabsf(NightSky_GetThresholdMagnitude(2.2e-4) - 6.499f) < 0.002f);
+    TEST_CHECK(run, fabsf(NightSky_GetThresholdMagnitude(1.0) - 3.246f) < 0.002f);
+    TEST_CHECK(run, fabsf(NightSky_GetThresholdMagnitude(5000.0) + 3.984f) < 0.002f);
+    TEST_CHECK(run, NightSky_GetThresholdMagnitude(0.0) == NIGHT_SKY_DARKEST_THRESHOLD_MAGNITUDE);
+    TEST_CHECK(run, (NightSky_GetThresholdMagnitude(-1.0) == NIGHT_SKY_DARKEST_THRESHOLD_MAGNITUDE)
+        && (NightSky_GetThresholdMagnitude(NAN) == NIGHT_SKY_DARKEST_THRESHOLD_MAGNITUDE)
+        && (NightSky_GetThresholdMagnitude(INFINITY) == -INFINITY));
+    // Falling, by less than 0.01 magnitudes over a step of 0.2 % in the background (its steepest slope, against daylight,
+    // is 2.5 magnitudes a decade: 0.002 a step), from 1e-6 to 1e4 cd/m^2: no jump where the cones take over (Schaefer's
+    // two branches as they are written meet 0.09 magnitudes apart).
+    bool IsFalling = true;
+    double LargestStep = 0.0;
+    float Previous = NightSky_GetThresholdMagnitude(1e-6);
+    for (int Step = 1; Step <= 12000; Step++)
+    {
+        float Current = NightSky_GetThresholdMagnitude(1e-6 * pow(1.002, (double)Step));
+        IsFalling = IsFalling && (Current < Previous);
+        LargestStep = fmax(LargestStep, (double)(Previous - Current));
+        Previous = Current;
+    }
+    if (!TEST_CHECK(run, IsFalling && (LargestStep < 0.01)))
+    {
+        printf("    falling %d, largest step %.4f\n", (int)IsFalling, LargestStep);
+    }
+    // The inverse: from a magnitude to the background and back.
+    double WorstMagnitude = 0.0;
+    for (int Step = 0; Step <= 108; Step++)
+    {
+        float Magnitude = -3.0f + 0.1f * (float)Step;
+        double Background = NightSky_GetThresholdBackground(Magnitude);
+        WorstMagnitude = fmax(WorstMagnitude, fabs((double)(NightSky_GetThresholdMagnitude(Background) - Magnitude)));
+    }
+    TEST_CHECK(run, WorstMagnitude < 1e-4);
+    TEST_CHECK(run, (NightSky_GetThresholdBackground(NIGHT_SKY_DARKEST_THRESHOLD_MAGNITUDE) == 0.0)
+        && (NightSky_GetThresholdBackground(9.0f) == 0.0) && (NightSky_GetThresholdBackground(NAN) == 0.0));
+    TEST_CHECK(run, fabs(NightSky_GetThresholdBackground(6.499f) / 2.2e-4 - 1.0) < 0.01);
+}
+
+/* At full night the limit is the night's: 6.5 at a dark site, 3 under full light pollution, between them with half; the
+ * twilight's background adds to the night's, so through dusk the limit rises steadily toward the night's (the brightest
+ * stars against a sunset's sky, 3.2 at the end of the civil twilight, none against daylight). */
 static void LimitingMagnitudeFollowsPollutionAndTwilight(TestRun* run)
 {
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, 0.0f, -30.0f) - 6.5f) < 1e-4f);
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(1.0f, 0.0f, -30.0f) - 3.0f) < 1e-4f);
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.5f, 0.0f, -30.0f) - 4.75f) < 1e-4f);
-    // Twilight: only the brightest stars at -6 degrees, none with the sun up.
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, 0.0f, -6.0f) - 1.5f) < 1e-4f);
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, 0.0f, -12.0f) - 4.5f) < 1e-4f);
-    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 0.0f, 0.0f) < NIGHT_SKY_BRIGHTEST_MAGNITUDE);
-    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 0.0f, 20.0f) < NIGHT_SKY_BRIGHTEST_MAGNITUDE);
-    // The lower of the two limits wins.
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(1.0f, 0.0f, -12.0f) - 3.0f) < 1e-4f);
-    // Bad inputs: pollution clamps, NaN pollution counts as none, a NaN sun counts as day.
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(2.0f, 0.0f, -30.0f) - 3.0f) < 1e-4f);
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(NAN, 0.0f, -30.0f) - 6.5f) < 1e-4f);
-    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 0.0f, NAN) < NIGHT_SKY_BRIGHTEST_MAGNITUDE);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, 0.0f, 0.0) - 6.5f) < 1e-3f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(1.0f, 0.0f, 0.0) - 3.0f) < 1e-3f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.5f, 0.0f, 0.0) - 4.75f) < 1e-3f);
+    TEST_CHECK(run, fabsf(NightSky_GetNightLimitingMagnitude(0.5f, 0.0f) - 4.75f) < 1e-5f);
+    // The twilight: about 3.2 at the end of the civil twilight (the night's sky adds little there), none by day.
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, 0.0f, 1.0) - 3.245f) < 0.01f);
+    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 0.0f, 5000.0) < NIGHT_SKY_BRIGHTEST_MAGNITUDE);
+    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 0.0f, INFINITY) < NIGHT_SKY_BRIGHTEST_MAGNITUDE);
+    // Rising as the twilight fades, to the night's; a bright night shows fewer stars at every step of it.
+    const float Pollutions[] = { 0.0f, 0.35f, 1.0f };
+    for (size_t Index = 0U; Index < (sizeof(Pollutions) / sizeof(Pollutions[0])); Index++)
+    {
+        bool IsRising = true;
+        float Previous = -INFINITY;
+        for (int Step = 0; Step <= 120; Step++)
+        {
+            double Twilight = 1000.0 * pow(0.8, (double)Step);
+            float Current = NightSky_GetLimitingMagnitude(Pollutions[Index], 0.0f, Twilight);
+            IsRising = IsRising && (Current >= Previous)
+                && (Current <= NightSky_GetNightLimitingMagnitude(Pollutions[Index], 0.0f) + 1e-4f)
+                && (Current <= NightSky_GetLimitingMagnitude(0.0f, 0.0f, Twilight) + 1e-4f);
+            Previous = Current;
+        }
+        TEST_CHECK(run, IsRising);
+    }
+    // Bad inputs: pollution clamps, NaN pollution counts as none, an unusable twilight as none.
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(2.0f, 0.0f, 0.0) - 3.0f) < 1e-3f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(NAN, 0.0f, 0.0) - 6.5f) < 1e-3f);
+    TEST_CHECK(run, (NightSky_GetLimitingMagnitude(0.0f, 0.0f, NAN) == NightSky_GetLimitingMagnitude(0.0f, 0.0f, 0.0))
+        && (NightSky_GetLimitingMagnitude(0.0f, 0.0f, -1.0) == NightSky_GetLimitingMagnitude(0.0f, 0.0f, 0.0)));
 }
 
 /* A high full moon hides the faint stars and most of the Milky Way; a quarter moon (a tenth of its light) still dims the
- * sky noticeably; a city sky has little left for the moon to take. */
+ * sky noticeably; a city sky has little left for the moon to take; and in a bright twilight the moon barely counts. */
 static void MoonlightHidesFaintStars(TestRun* run)
 {
-    float FullMoon = NightSky_GetLimitingMagnitude(0.0f, 1.0f, -30.0f);
-    TEST_CHECK(run, fabsf(FullMoon - (NIGHT_SKY_DARK_SITE_LIMITING_MAGNITUDE - NIGHT_SKY_FULL_MOON_MAGNITUDES)) < 1e-4f);
+    float FullMoon = NightSky_GetLimitingMagnitude(0.0f, 1.0f, 0.0);
+    TEST_CHECK(run, fabsf(FullMoon - (NIGHT_SKY_DARK_SITE_LIMITING_MAGNITUDE - NIGHT_SKY_FULL_MOON_MAGNITUDES)) < 1e-3f);
     TEST_CHECK(run, NightSky_GetMilkyWayVisibility(FullMoon) < 0.1f);
-    float QuarterMoon = NightSky_GetLimitingMagnitude(0.0f, 0.09f, -30.0f);
+    float QuarterMoon = NightSky_GetLimitingMagnitude(0.0f, 0.09f, 0.0);
     TEST_CHECK(run, (QuarterMoon < 6.0f) && (QuarterMoon > 5.8f));
-    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 0.001f, -30.0f) > 6.45f);
+    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 0.001f, 0.0) > 6.45f);
 
     // Light pollution and the moon both brighten the sky, but the moon takes less from an already bright one.
-    float SmallTown = NightSky_GetLimitingMagnitude(0.35f, 1.0f, -30.0f);
-    TEST_CHECK(run, (SmallTown < NightSky_GetLimitingMagnitude(0.35f, 0.0f, -30.0f)) && (SmallTown < FullMoon));
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(1.0f, 1.0f, -30.0f) - 3.0f) < 1e-4f);
+    float SmallTown = NightSky_GetLimitingMagnitude(0.35f, 1.0f, 0.0);
+    TEST_CHECK(run, (SmallTown < NightSky_GetLimitingMagnitude(0.35f, 0.0f, 0.0)) && (SmallTown < FullMoon));
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(1.0f, 1.0f, 0.0) - 3.0f) < 1e-3f);
 
-    // Brighter moonlight takes more, up to a limit; bad values count as no moon; twilight still wins by day.
-    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 4.0f, -30.0f) < FullMoon);
-    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 1000.0f, -30.0f)
-        == NightSky_GetLimitingMagnitude(0.0f, NIGHT_SKY_MAX_MOONLIT_SKY, -30.0f));
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, NAN, -30.0f) - 6.5f) < 1e-4f);
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, -1.0f, -30.0f) - 6.5f) < 1e-4f);
-    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, 1.0f, -6.0f) - 1.5f) < 1e-4f);
+    // Brighter moonlight takes more, up to a limit; bad values count as no moon; a bright twilight hides the moon's sky.
+    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 4.0f, 0.0) < FullMoon);
+    TEST_CHECK(run, NightSky_GetLimitingMagnitude(0.0f, 1000.0f, 0.0)
+        == NightSky_GetLimitingMagnitude(0.0f, NIGHT_SKY_MAX_MOONLIT_SKY, 0.0));
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, NAN, 0.0) - 6.5f) < 1e-3f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, -1.0f, 0.0) - 6.5f) < 1e-3f);
+    TEST_CHECK(run, fabsf(NightSky_GetLimitingMagnitude(0.0f, 1.0f, 1.0) - NightSky_GetLimitingMagnitude(0.0f, 0.0f, 1.0))
+        < 0.02f);
 }
 
 static void MilkyWayFadesWithTheLimit(TestRun* run)
@@ -317,6 +381,7 @@ void NightSkyTests_Run(TestRun* run)
         { "faint_stars_outnumber_bright_ones", FaintStarsOutnumberBrightOnes },
         { "stars_crowd_the_galactic_plane", StarsCrowdTheGalacticPlane },
         { "colors_are_mostly_white_to_yellow", ColorsAreMostlyWhiteToYellow },
+        { "threshold_follows_schaefer", ThresholdFollowsSchaefer },
         { "limiting_magnitude_follows_pollution_and_twilight", LimitingMagnitudeFollowsPollutionAndTwilight },
         { "moonlight_hides_faint_stars", MoonlightHidesFaintStars },
         { "milky_way_fades_with_the_limit", MilkyWayFadesWithTheLimit },

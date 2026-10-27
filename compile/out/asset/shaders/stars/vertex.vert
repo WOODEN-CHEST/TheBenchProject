@@ -28,6 +28,7 @@ flat out vec3 fragRadiance;
 #include "common/atmosphere"
 #include "common/haze"
 #include "common/night_sky"
+#include "common/depth"
 
 // Stars fade out within this many magnitudes of the limit, so at dusk the brightest appear first.
 const float STAR_FADE_MAGNITUDES = 0.5;
@@ -95,10 +96,11 @@ void main()
     fragRadiance = color*extinctionTint*flux*radianceScale*visibility
         *hazeGroundTransmittance(direction, ATMOSPHERE_SKY_DISTANCE);
 
-    // A point at infinity (w = 0, so the camera's position does not matter), just inside the far plane, widened by the
-    // corner offset to exactly one pixel.
+    // A point at infinity (w = 0, so the camera's position does not matter), at infinity in depth too: just inside the
+    // far plane, or with reversed depth at 0, the cleared sky's (the stars draw before any geometry and write no depth,
+    // so only the clip volume and the cleared depth matter); widened by the corner offset to exactly one pixel.
     vec4 clip = viewProjection*vec4(direction, 0.0);
-    clip.z = clip.w*0.9999;
+    clip.z = (depthReversed > 0.5) ? 0.0 : clip.w*0.9999;
     clip.xy += vertexTexCoord*2.0/resolution*clip.w;
     gl_Position = clip;
 }

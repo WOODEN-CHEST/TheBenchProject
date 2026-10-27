@@ -1,0 +1,4 @@
+{
+    "name": "world_luminance",
+    "fragment_location": "luminance/fragment"
+}

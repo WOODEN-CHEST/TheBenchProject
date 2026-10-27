@@ -208,7 +208,59 @@ void WorldRendererCommon_WarnOnce(WorldRenderer* self, bool* isReported, const u
     WorldRendererCommon_Warn(self, message);
 }
 
-RenderTexture2D WorldRendererCommon_TryCreateHdrTarget(int width, int height, bool samplableDepth)
+unsigned int WorldRendererCommon_LoadCameraDepth(WorldRenderer* self, int width, int height, bool samplable)
+{
+    if (!self->_depth._isReversed)
+    {
+        return rlLoadTextureDepth(width, height, !samplable);
+    }
+    unsigned int Id = 0U;
+    Error Result = samplable ? GLDepth_CreateTexture(&self->_depth._api, width, height, &Id)
+        : GLDepth_CreateRenderbuffer(&self->_depth._api, width, height, &Id);
+    if (Result.Code != ErrorCode_Success)
+    {
+        char Message[384];
+        snprintf(Message, sizeof(Message), "WorldRenderer: a camera pass's 32-bit depth could not be made (%s).",
+            (Result.Message != NULL) ? (const char*)Result.Message : "an error");
+        WorldRendererCommon_WarnOnce(self, &self->_depth._isFailureReported, (const unsigned char*)Message);
+        Error_Deconstruct(&Result);
+        return 0U;
+    }
+    return Id;
+}
+
+void WorldRendererCommon_SetDepthConvention(Shader shader, int location, const WorldRenderFrame* frame)
+{
+    float Reversed = frame->IsDepthReversed ? 1.0f : 0.0f;
+    SetShaderValue(shader, location, &Reversed, SHADER_UNIFORM_FLOAT);
+}
+
+void WorldRendererCommon_BeginCameraDepth(WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    if (frame->IsDepthReversed)
+    {
+        GLDepth_BeginReversed(&self->_depth._api);
+    }
+}
+
+void WorldRendererCommon_LoadCameraProjection(const WorldRenderFrame* frame)
+{
+    if (frame->IsDepthReversed)
+    {
+        rlDrawRenderBatchActive();
+        rlSetMatrixProjection(frame->Projection);
+    }
+}
+
+void WorldRendererCommon_EndCameraDepth(WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    if (frame->IsDepthReversed)
+    {
+        GLDepth_EndReversed(&self->_depth._api);
+    }
+}
+
+RenderTexture2D WorldRendererCommon_TryCreateHdrTarget(WorldRenderer* self, int width, int height, bool samplableDepth)
 {
     RenderTexture2D Target = { 0 };
     Target.id = rlLoadFramebuffer();
@@ -225,7 +277,7 @@ RenderTexture2D WorldRendererCommon_TryCreateHdrTarget(int width, int height, bo
     Target.texture.format = PIXELFORMAT_UNCOMPRESSED_R16G16B16A16;
     Target.texture.mipmaps = 1;
 
-    Target.depth.id = rlLoadTextureDepth(width, height, !samplableDepth);
+    Target.depth.id = WorldRendererCommon_LoadCameraDepth(self, width, height, samplableDepth);
     Target.depth.width = width;
     Target.depth.height = height;
     Target.depth.format = SCENE_DEPTH_FORMAT;
@@ -235,7 +287,7 @@ RenderTexture2D WorldRendererCommon_TryCreateHdrTarget(int width, int height, bo
     rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH,
         samplableDepth ? RL_ATTACHMENT_TEXTURE2D : RL_ATTACHMENT_RENDERBUFFER, 0);
 
-    bool Complete = (Target.texture.id != 0) && rlFramebufferComplete(Target.id);
+    bool Complete = (Target.texture.id != 0) && (Target.depth.id != 0) && rlFramebufferComplete(Target.id);
     rlDisableFramebuffer();
 
     if (!Complete)
@@ -246,7 +298,7 @@ RenderTexture2D WorldRendererCommon_TryCreateHdrTarget(int width, int height, bo
     return Target;
 }
 
-RenderTexture2D WorldRendererCommon_CreateColorTarget(int width, int height)
+RenderTexture2D WorldRendererCommon_CreateColorTarget(int width, int height, PixelFormat format)
 {
     RenderTexture2D Target = { 0 };
     Target.id = rlLoadFramebuffer();
@@ -256,10 +308,10 @@ RenderTexture2D WorldRendererCommon_CreateColorTarget(int width, int height)
     }
 
     rlEnableFramebuffer(Target.id);
-    Target.texture.id = rlLoadTexture(NULL, width, height, PIXELFORMAT_UNCOMPRESSED_R16G16B16A16, 1);
+    Target.texture.id = rlLoadTexture(NULL, width, height, (int)format, 1);
     Target.texture.width = width;
     Target.texture.height = height;
-    Target.texture.format = PIXELFORMAT_UNCOMPRESSED_R16G16B16A16;
+    Target.texture.format = (int)format;
     Target.texture.mipmaps = 1;
     rlFramebufferAttach(Target.id, Target.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
 

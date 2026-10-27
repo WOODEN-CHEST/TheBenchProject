@@ -6,8 +6,8 @@
 // Macros.
 /** The scene luminance (the field) of a clear noon, a moonless night and a full-moon night, in the game's light units
  *  (T36's scale: WorldSkyLight_GetSceneLuminance with the default environment). */
-#define TEST_NOON_LUMINANCE 0.40f
-#define TEST_MOONLESS_LUMINANCE 0.0054f
+#define TEST_NOON_LUMINANCE 0.371f
+#define TEST_MOONLESS_LUMINANCE 0.00602f
 #define TEST_FULL_MOON_LUMINANCE 0.016f
 
 
@@ -17,8 +17,8 @@
 static void CalibrationFollowsTheAnchors(TestRun* run)
 {
     NightVisionCalibration Calibration = NightVision_GetCalibration();
-    TEST_CHECK(run, fabsf(Calibration.Steepness - 3.58f) < 0.05f);
-    TEST_CHECK(run, fabsf(Calibration.HalfLuminance - 0.0151f) < 0.001f);
+    TEST_CHECK(run, fabsf(Calibration.Steepness - 3.74f) < 0.05f);
+    TEST_CHECK(run, fabsf(Calibration.HalfLuminance - 0.0161f) < 0.001f);
     TEST_CHECK(run, (Calibration.FullColourLuminance > 0.095f) && (Calibration.FullColourLuminance < 0.115f));
 
     TEST_CHECK(run, fabs(NightVision_GetRealLuminance(TEST_NOON_LUMINANCE) / NIGHT_VISION_NOON_CANDELAS - 1.0) < 1e-4);
@@ -30,14 +30,11 @@ static void CalibrationFollowsTheAnchors(TestRun* run)
     TEST_CHECK(run, (NightVision_GetRealLuminance(0.0f) == 0.0) && (NightVision_GetRealLuminance(-1.0f) == 0.0)
         && (NightVision_GetRealLuminance(NAN) == 0.0));
 
-    // The calibration is the one for this scale's anchors; the light before T36 (the renderer's A/B) takes its own.
+    // The calibration is the one for this scale's anchors.
     NightVisionCalibration Anchored = NightVision_GetCalibrationFor(NIGHT_VISION_NOON_LUMINANCE,
         NIGHT_VISION_NIGHT_LUMINANCE);
     TEST_CHECK(run, (Anchored.Steepness == Calibration.Steepness) && (Anchored.HalfLuminance == Calibration.HalfLuminance)
         && (Anchored.FullColourLuminance == Calibration.FullColourLuminance));
-    NightVisionCalibration Legacy = NightVision_GetCalibrationFor(NIGHT_VISION_LEGACY_NOON_LUMINANCE,
-        NIGHT_VISION_LEGACY_NIGHT_LUMINANCE);
-    TEST_CHECK(run, (fabsf(Legacy.Steepness - 3.2f) < 0.05f) && (fabsf(Legacy.HalfLuminance - 0.019f) < 0.001f));
 }
 
 /* The field luminance from the light split in two (T36): the daylight on the real scale, linearly, the night's lights
@@ -54,6 +51,10 @@ static void FieldAddsDaylightAndTheNight(TestRun* run)
     double Expected = NIGHT_VISION_NOON_CANDELAS * 0.004 / NIGHT_VISION_NOON_LUMINANCE
         + NightVision_GetRealLuminance(TEST_MOONLESS_LUMINANCE);
     TEST_CHECK(run, fabs(Real / Expected - 1.0) < 1e-4);
+    TEST_CHECK(run, fabs(NightVision_GetRealFieldLuminance(0.004f, TEST_MOONLESS_LUMINANCE) / Expected - 1.0) < 1e-6);
+    TEST_CHECK(run, (NightVision_GetRealFieldLuminance(0.0f, 0.0f) == 0.0)
+        && (NightVision_GetRealFieldLuminance(NAN, -1.0f) == 0.0)
+        && (fabs(NightVision_GetRealFieldLuminance(TEST_NOON_LUMINANCE, 0.0f) / NIGHT_VISION_NOON_CANDELAS - 1.0) < 1e-6));
     // A sunset's sky light (a hundredth of noon's daylight) is colour vision, though the night's light is about as bright
     // on the game's scale.
     TEST_CHECK(run, NightVision_GetRodShare(0.0f, Twilight, 1.0f) < 0.01f);

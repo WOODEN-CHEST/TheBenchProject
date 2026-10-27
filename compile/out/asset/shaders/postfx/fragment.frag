@@ -42,6 +42,7 @@ out vec4 finalColor;
 // The haze (T35): the outline fades by its transmittance, the volume's and the ground haze's (the frame's haze values;
 // the volume bound with SetShaderValueTexture).
 #include "common/haze"
+#include "common/depth"
 
 // ---- G-buffer flag thresholds (the alpha channel is 0.0 / 0.5 / 1.0) ----
 const float SURFACE_ON = 0.25;   // alpha above this = a solid world-model surface (0 = sky / grid)
@@ -67,7 +68,7 @@ const float OUTLINE_CREASE_BRIGHTEN = 0.55;   // interior crease facing away fro
 vec3 ViewPosFromUv(vec2 uv)
 {
     float d = texture(depthTexture, uv).r;
-    vec4 ndc = vec4(uv*2.0 - 1.0, d*2.0 - 1.0, 1.0);
+    vec4 ndc = vec4(uv*2.0 - 1.0, depthToNdc(d), 1.0);
     vec4 view = invProjection*ndc;
     return view.xyz/view.w;
 }

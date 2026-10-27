@@ -104,7 +104,7 @@
 #define WORLD_ATMOSPHERE_VOLUME_SIZE 32
 #define WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT 32
 /** @brief The first slice's distance and the last distance slice's, in metres (ATMOSPHERE_VOLUME_NEAREST, _FARTHEST): the
- *  slices between grow by a fixed ratio (1.50), so 21 of them lie within the 4 km far plane. */
+ *  slices between grow by a fixed ratio (1.50), so 21 of them lie within 4 km. */
 #define WORLD_ATMOSPHERE_VOLUME_NEAREST 1.0
 #define WORLD_ATMOSPHERE_VOLUME_FARTHEST 200000.0
 /** @brief The last distance slice (WORLD_ATMOSPHERE_VOLUME_FARTHEST); the slice after it holds the whole ray. */
@@ -143,6 +143,12 @@
  *  toward it is (0.910, 0.831, 0.786), luminance 0.845, and 1.078 times that is 0.911, the luminance of sun_color's old
  *  default, (255, 244, 214) linear. Before T36 the sky's sun was 22. */
 #define WORLD_ATMOSPHERE_SUN_LIGHT 1.078
+/** @brief What WORLD_ATMOSPHERE_SUN_LIGHT stands for on the real scale (T38): the luminance of a white surface facing the
+ *  sun above the air, the solar illuminance (128 klux) over pi, in cd/m^2. So one of the game's light units is about
+ *  37800 cd/m^2 of radiance: the sky's luminance on the real scale (the stars' background). Night vision and the eye
+ *  read the game's light at the eye's adaptation level instead (NightVision.h: a clear noon's scene luminance for 5000
+ *  cd/m^2, the light of a sunlit view, not of a white surface). */
+#define WORLD_ATMOSPHERE_SUN_LIGHT_CANDELAS 40743.665431525208
 /** @brief The sun's disc's radiance per unit of the sky pass's sunDiscIntensity (the C twin of sky/fragment.frag's
  *  SUN_DISC_RADIANCE): the sky's sun before T36, so the disc keeps its look (the renderer scales the intensity by the
  *  exposure). */

@@ -23,7 +23,7 @@
 #define VOLUME_SHADER_ASSET_NAME ((const unsigned char*)u8"world_atmosphere_volume")
 #define IRRADIANCE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_atmosphere_irradiance")
 /** How long a frame spends on a rebuild of the C mirror's tables when the air changes (T36), in nanoseconds: a step
- *  (WorldSkyLight_RunBuildStep, at most about 0.6 ms) runs while the time so far and the last step's fit in it; the
+ *  (WorldSkyLight_RunBuildStep, at most about 0.75 ms) runs while the time so far and the last step's fit in it; the
  *  first always runs. */
 #define SKY_LIGHT_BUILD_BUDGET_NANOSECONDS 1000000ULL
 
@@ -41,12 +41,6 @@ typedef struct SkyViewLightStruct
     const float* LightPollution;
     /** The moonless night's own light on the far ground per unit of albedo (the sun's half only). */
     const float* GroundNightLight;
-    /** The light before T36 (the A/B): the light on the far ground (linear, the lit shaders' units, before its height
-     *  ramp), the zenith cosines its ramp rises over, and the ambient there (the sun's half only).
-     *  TODO: remove once the owner approves T36's light. */
-    float GroundLight[3];
-    float GroundLightRamp[2];
-    const float* GroundAmbient;
 } SkyViewLight;
 
 
@@ -61,7 +55,7 @@ static void AssignSamplerUnit(Shader shader, int location, WorldRendererTextureU
 /* Creates one table's target (RGBA16F colour, bilinear, clamped to its edges). false when the GPU cannot make it. */
 static bool CreateTable(int width, int height, RenderTexture2D* outTarget)
 {
-    *outTarget = WorldRendererCommon_CreateColorTarget(width, height);
+    *outTarget = WorldRendererCommon_CreateColorTarget(width, height, PIXELFORMAT_UNCOMPRESSED_R16G16B16A16);
     if (outTarget->id == 0)
     {
         return false;
@@ -165,9 +159,6 @@ static void DrawSkyViewHalf(WorldRenderer* self, Shader builder, const SkyViewLi
     SetShaderValue(builder, State->_skyViewLocLightIntensity, light->LightIntensity, SHADER_UNIFORM_VEC3);
     SetShaderValue(builder, State->_skyViewLocLightPollution, light->LightPollution, SHADER_UNIFORM_VEC3);
     SetShaderValue(builder, State->_skyViewLocGroundNightLight, light->GroundNightLight, SHADER_UNIFORM_VEC3);
-    SetShaderValue(builder, State->_skyViewLocGroundLight, light->GroundLight, SHADER_UNIFORM_VEC3);
-    SetShaderValue(builder, State->_skyViewLocGroundLightRamp, light->GroundLightRamp, SHADER_UNIFORM_VEC2);
-    SetShaderValue(builder, State->_skyViewLocGroundAmbient, light->GroundAmbient, SHADER_UNIFORM_VEC3);
     SetShaderValueTexture(builder, State->_skyViewLocations._locTransmittanceTable, State->_transmittance.texture);
     SetShaderValueTexture(builder, State->_skyViewLocations._locMultiscatterTable, State->_multiscatter.texture);
     SetShaderValueTexture(builder, State->_skyViewLocations._locIrradianceTable, State->_irradiance.texture);
@@ -193,23 +184,16 @@ static void BuildSkyView(WorldRenderer* self, const WorldRenderFrame* frame)
     SetShaderValue(Builder, State->_skyViewLocHazeDistanceScale, &frame->Haze.DistanceScale, SHADER_UNIFORM_FLOAT);
     SetShaderValue(Builder, State->_skyViewLocHazeStartDistance, &frame->Haze.StartDistance, SHADER_UNIFORM_FLOAT);
     SetShaderValue(Builder, State->_skyViewLocGroundAlbedo, frame->AtmosphereMedium.GroundAlbedo, SHADER_UNIFORM_VEC3);
-    int ThroughAir = frame->IsOneLightScale ? 1 : 0;
-    SetShaderValue(Builder, State->_skyViewLocIsGroundLitThroughAir, &ThroughAir, SHADER_UNIFORM_INT);
     SetShaderValue(Builder, State->_skyViewLocAmbientTint, frame->SkyLight.AmbientTint, SHADER_UNIFORM_VEC3);
 
     BeginTable(State->_skyView);
     BeginShaderMode(Builder);
     const float None[3] = { 0.0f, 0.0f, 0.0f };
-    // The light before T36's far ground (TODO: remove once the owner approves T36's light) takes the sun's colour at its
-    // raw intensity (the sun's disc's, before T36's daylight ramp) and the moon's without its height ramp.
     SkyViewLight Sun =
     {
         .Half = WorldAtmosphereSkyViewHalf_Sun, .LightCosZenith = frame->SunDirection.y,
         .LightIntensity = frame->AirSunIntensity, .LightPollution = frame->LightPollutionRadiance,
-        .GroundNightLight = frame->SkyLight.Night,
-        .GroundLight = { frame->SunDiscIntensity[0], frame->SunDiscIntensity[1], frame->SunDiscIntensity[2] },
-        .GroundLightRamp = { WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION, WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION },
-        .GroundAmbient = frame->LegacyAmbientColor
+        .GroundNightLight = frame->SkyLight.Night
     };
     DrawSkyViewHalf(self, Builder, &Sun);
     if (frame->MoonSkyIntensity > 0.0f)
@@ -217,14 +201,8 @@ static void BuildSkyView(WorldRenderer* self, const WorldRenderFrame* frame)
         SkyViewLight Moon =
         {
             .Half = WorldAtmosphereSkyViewHalf_Moon, .LightCosZenith = frame->MoonDirection.y,
-            .LightIntensity = frame->AirMoonIntensity, .LightPollution = None, .GroundNightLight = None,
-            .GroundLightRamp = { 0.0f, WORLD_ENVIRONMENT_MOONLIGHT_FULL_ELEVATION }, .GroundAmbient = None
+            .LightIntensity = frame->AirMoonIntensity, .LightPollution = None, .GroundNightLight = None
         };
-        for (int Channel = 0; Channel < 3; Channel++)
-        {
-            Moon.GroundLight[Channel] = frame->MoonColor[Channel] * frame->MoonIntensity
-                * WORLD_RENDERER_LEGACY_MOON_INTENSITY_SCALE;
-        }
         DrawSkyViewHalf(self, Builder, &Moon);
     }
     EndShaderMode();
@@ -300,12 +278,8 @@ static void CacheSkyViewLocations(WorldRendererAtmosphereState* state)
     state->_skyViewLocHazeDistanceScale = GetShaderLocation(SkyView, "hazeDistanceScale");
     state->_skyViewLocHazeStartDistance = GetShaderLocation(SkyView, "hazeStartDistance");
     state->_skyViewLocGroundAlbedo = GetShaderLocation(SkyView, "groundAlbedo");
-    state->_skyViewLocIsGroundLitThroughAir = GetShaderLocation(SkyView, "isGroundLitThroughAir");
     state->_skyViewLocAmbientTint = GetShaderLocation(SkyView, "ambientTint");
     state->_skyViewLocGroundNightLight = GetShaderLocation(SkyView, "groundNightLight");
-    state->_skyViewLocGroundLight = GetShaderLocation(SkyView, "groundLight");
-    state->_skyViewLocGroundLightRamp = GetShaderLocation(SkyView, "groundLightRamp");
-    state->_skyViewLocGroundAmbient = GetShaderLocation(SkyView, "groundAmbient");
 }
 
 

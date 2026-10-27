@@ -141,6 +141,7 @@ void WorldRendererStars_LoadShader(WorldRenderer* self)
     self->_stars._locTimeSeconds = GetShaderLocation(RayShader, "timeSeconds");
     self->_stars._locMoonDirection = GetShaderLocation(RayShader, "moonDirection");
     self->_stars._locMoonCosRadius = GetShaderLocation(RayShader, "moonCosRadius");
+    self->_stars._locDepthReversed = GetShaderLocation(RayShader, "depthReversed");
     WorldRendererAtmosphere_PrepareShader(RayShader, &self->_stars._atmosphere);
     WorldRendererAtmosphere_PrepareHazeShader(RayShader, false, &self->_stars._haze);
 }
@@ -220,6 +221,7 @@ void WorldRendererStars_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     SetShaderValue(RayShader, self->_stars._locMoonDirection, MoonDir, SHADER_UNIFORM_VEC3);
     float MoonCosRadius = frame->IsMoonActive ? frame->MoonDisc.CosRadius : NO_MOON_COS_RADIUS;
     SetShaderValue(RayShader, self->_stars._locMoonCosRadius, &MoonCosRadius, SHADER_UNIFORM_FLOAT);
+    WorldRendererCommon_SetDepthConvention(RayShader, self->_stars._locDepthReversed, frame);
     // The air dims and reddens the stars near the horizon through the transmittance table (T15), or the air mass; the
     // ground haze dims them too (T35).
     WorldRendererAtmosphere_UploadFrame(RayShader, &self->_stars._atmosphere, frame);

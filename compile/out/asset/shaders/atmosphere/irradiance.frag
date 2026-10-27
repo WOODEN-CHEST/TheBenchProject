@@ -29,8 +29,8 @@ out vec4 finalColor;
 
 const int IRRADIANCE_ZENITH_NODES = 6;
 const int IRRADIANCE_AZIMUTHS = 6;
-const int IRRADIANCE_MIE_RINGS = 4;
-const int IRRADIANCE_MIE_AZIMUTHS = 4;
+const int IRRADIANCE_MIE_RINGS = 6;
+const int IRRADIANCE_MIE_AZIMUTHS = 6;
 const int IRRADIANCE_STEPS = 8;
 const int IRRADIANCE_MIE_STEPS = 4;
 const float IRRADIANCE_MIE_DEPTH = 10.0;

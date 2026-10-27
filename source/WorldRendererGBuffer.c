@@ -19,48 +19,56 @@
 
 
 // Static functions.
-/* Creates the normal/flag G-buffer target: an 8-bit RGBA colour texture + a SAMPLABLE depth texture (so the AO
- * pre-pass can reconstruct view positions from it). Sets *outDepthSamplable true on success. Falls back to a
- * plain LoadRenderTexture (renderbuffer depth, not samplable → AO disabled, outlines still work) if the
- * samplable-depth framebuffer cannot be made complete. Returns a zero target only if even the fallback fails. */
-static RenderTexture2D TryCreateNormalTarget(int width, int height, bool* outDepthSamplable)
+/* Creates the normal/flag G-buffer target: an 8-bit RGBA colour texture and a camera pass's depth (a samplable texture,
+ * or a renderbuffer). Returns a zero target if the framebuffer cannot be made complete. */
+static RenderTexture2D CreateNormalTarget(WorldRenderer* self, int width, int height, bool samplableDepth)
 {
-    *outDepthSamplable = false;
-
     RenderTexture2D Target = { 0 };
     Target.id = rlLoadFramebuffer();
-    if (Target.id != 0)
+    if (Target.id == 0)
     {
-        rlEnableFramebuffer(Target.id);
-
-        Target.texture.id = rlLoadTexture(NULL, width, height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1);
-        Target.texture.width = width;
-        Target.texture.height = height;
-        Target.texture.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
-        Target.texture.mipmaps = 1;
-
-        Target.depth.id = rlLoadTextureDepth(width, height, false); // false => a samplable depth TEXTURE
-        Target.depth.width = width;
-        Target.depth.height = height;
-        Target.depth.format = SCENE_DEPTH_FORMAT;
-        Target.depth.mipmaps = 1;
-
-        rlFramebufferAttach(Target.id, Target.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
-        rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);
-
-        bool Complete = (Target.texture.id != 0) && rlFramebufferComplete(Target.id);
-        rlDisableFramebuffer();
-        if (Complete)
-        {
-            *outDepthSamplable = true;
-            return Target;
-        }
-        UnloadRenderTexture(Target);
+        return Target;
     }
+    rlEnableFramebuffer(Target.id);
 
-    // Fallback: a plain render texture (renderbuffer depth). Outlines still work (they read the SCENE depth);
-    // the AO pre-pass, which needs this target's depth samplable, stays off.
-    return LoadRenderTexture(width, height);
+    Target.texture.id = rlLoadTexture(NULL, width, height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1);
+    Target.texture.width = width;
+    Target.texture.height = height;
+    Target.texture.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+    Target.texture.mipmaps = 1;
+
+    Target.depth.id = WorldRendererCommon_LoadCameraDepth(self, width, height, samplableDepth);
+    Target.depth.width = width;
+    Target.depth.height = height;
+    Target.depth.format = SCENE_DEPTH_FORMAT;
+    Target.depth.mipmaps = 1;
+
+    rlFramebufferAttach(Target.id, Target.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
+    rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH,
+        samplableDepth ? RL_ATTACHMENT_TEXTURE2D : RL_ATTACHMENT_RENDERBUFFER, 0);
+
+    bool Complete = (Target.texture.id != 0) && (Target.depth.id != 0) && rlFramebufferComplete(Target.id);
+    rlDisableFramebuffer();
+    if (!Complete)
+    {
+        UnloadRenderTexture(Target); // frees the framebuffer and its attachments
+        Target = (RenderTexture2D){ 0 };
+    }
+    return Target;
+}
+
+/* Creates the G-buffer with a SAMPLABLE depth texture (so the AO pre-pass can reconstruct view positions from it) and
+ * sets *outDepthSamplable; falls back to a renderbuffer depth (not samplable: AO disabled, outlines still work, reading
+ * the SCENE depth) if that framebuffer cannot be made complete. Returns a zero target only if even the fallback fails. */
+static RenderTexture2D TryCreateNormalTarget(WorldRenderer* self, int width, int height, bool* outDepthSamplable)
+{
+    RenderTexture2D Target = CreateNormalTarget(self, width, height, true);
+    *outDepthSamplable = Target.id != 0;
+    if (Target.id == 0)
+    {
+        Target = CreateNormalTarget(self, width, height, false);
+    }
+    return Target;
 }
 
 /* Whether the G-buffer draws an entry with this fade: solid below half its fade, not at all from there on. It never
@@ -200,6 +208,7 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
         self->_ao._locDepthTexture = GetShaderLocation(RayShader, "depthTexture");
         self->_ao._locNormalTexture = GetShaderLocation(RayShader, "normalTexture");
         self->_ao._locStrength = GetShaderLocation(RayShader, "aoStrength");
+        self->_ao._locDepthReversed = GetShaderLocation(RayShader, "depthReversed");
     }
 }
 
@@ -212,7 +221,7 @@ void WorldRendererGBuffer_CreateTargets(WorldRenderer* self, int width, int heig
     if ((self->_gbuffer._shader != NULL) && self->_scene._isDepthSamplable
         && ((self->_outline._shader != NULL) || (self->_ao._shader != NULL)))
     {
-        self->_gbuffer._target = TryCreateNormalTarget(width, height, &self->_gbuffer._isDepthSamplable);
+        self->_gbuffer._target = TryCreateNormalTarget(self, width, height, &self->_gbuffer._isDepthSamplable);
         self->_gbuffer._hasTarget = (self->_gbuffer._target.id != 0);
         if (!self->_gbuffer._hasTarget)
         {
@@ -266,9 +275,11 @@ void WorldRendererGBuffer_ReleaseTargets(WorldRenderer* self)
 void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     BeginTextureMode(self->_gbuffer._target);
+    WorldRendererCommon_BeginCameraDepth(self, frame); // the scene's depth convention (T39)
     ClearBackground(BLANK); // RGBA (0,0,0,0): A=0 = "not a surface" everywhere the geometry does not draw
     rlDisableColorBlend();  // write RGB (normal) + A (flag) directly; no alpha blend
     BeginMode3D(frame->RenderCamera);
+    WorldRendererCommon_LoadCameraProjection(frame);
     DrawNormalBufferModels(self, frame->SceneFilter);
     // The model instances components' copies (B03; never crisp), each with its component's outline flag and haze.
     if (frame->SceneFilter != WorldRendererPixelFilter_CrispOnly)
@@ -282,6 +293,7 @@ void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFr
     // Cutout sprites into the same G-buffer (alpha-tested) so they get silhouette outlines and AO too.
     DrawNormalBufferSprites(self, frame->SceneFilter);
     EndMode3D();
+    WorldRendererCommon_EndCameraDepth(self, frame);
     rlEnableColorBlend();   // restore the default blending for the following 2D passes
     EndTextureMode();
 }
@@ -301,6 +313,7 @@ void WorldRendererGBuffer_RenderAo(WorldRenderer* self, const WorldRenderFrame* 
     SetShaderValueMatrix(RayShader, self->_ao._locProjection, frame->Projection);
     SetShaderValueMatrix(RayShader, self->_ao._locInvProjection, frame->InvProjection);
     SetShaderValue(RayShader, self->_ao._locStrength, &Strength, SHADER_UNIFORM_FLOAT);
+    WorldRendererCommon_SetDepthConvention(RayShader, self->_ao._locDepthReversed, frame);
     BeginShaderMode(RayShader);
     // Bind the G-buffer's depth (unit 1) + colour/flag (unit 2) via SetShaderValueTexture AFTER BeginShaderMode
     // so they enter Raylib's 2D batch texture table (a manual slot bind would leave the samplers on unit 0).

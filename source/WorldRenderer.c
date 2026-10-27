@@ -4,6 +4,7 @@
 
 #include <inttypes.h>
 #include <math.h>
+#include <stdio.h>
 #include "WorldRendererInternal.h"
 #include "WorldLightCulling.h"
 #include "NightSky.h"
@@ -49,11 +50,23 @@ static void EnsureShaders(WorldRenderer* self)
     }
     self->_shadersLoadAttempted = true;
 
+    // Reversed depth for the camera's passes (T39) before any target is made: their depth buffers follow it.
+    self->_depth._isReversed = GLDepth_LoadApi(&self->_depth._api);
+    if (!self->_depth._isReversed)
+    {
+        char Message[256];
+        snprintf(Message, sizeof(Message), "WorldRenderer: reversed depth is unavailable (%s); the camera keeps raylib's "
+            "projection and sees to %.0f m.", (self->_depth._api._missing != NULL) ? self->_depth._api._missing : "?",
+            (double)SCENE_FAR_PLANE);
+        WorldRendererCommon_WarnOnce(self, &self->_depth._isFailureReported, (const unsigned char*)Message);
+    }
+
     // The atmosphere's tables first: the sky and every lit shader read them (T15).
     WorldRendererAtmosphere_LoadShaders(self);
     WorldRendererLighting_LoadShader(self);
     WorldRendererGeometry_LoadShaders(self);
     WorldRendererPost_LoadShaders(self);
+    WorldRendererExposure_Load(self);
     WorldRendererCrisp_LoadShader(self);
     WorldRendererSprites_LoadShaders(self);
     WorldRendererGBuffer_LoadShaders(self);
@@ -205,16 +218,16 @@ static void BuildSky(WorldRenderFrame* frame)
 }
 
 /* Fills the frame's world, camera and sky fields and the scene matrices in render space (WorldRenderSpace_BuildView):
- * the origin (the camera's position), the camera at (0, 0, 0) with its rotation-only view, and the projection
- * BeginMode3D builds for the scene target (the camera's vertical FOV, the scene aspect and raylib's cull distances), so
- * every pass that reconstructs positions from depth, or rays from pixels, matches the geometry exactly. */
+ * the origin (the camera's position), the camera at (0, 0, 0) with its rotation-only view, and the projection the camera's
+ * passes draw with (the camera's vertical FOV, the scene aspect, raylib's near plane; the reversed infinite projection
+ * where the GPU has clip control, T39, else BeginMode3D's with raylib's far plane), so every pass that reconstructs
+ * positions from depth, or rays from pixels, matches the geometry exactly. */
 static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera* camera, RenderTexture2D target,
     WorldRenderFrame* outFrame)
 {
     *outFrame = (WorldRenderFrame){ 0 };
     outFrame->World = world;
     outFrame->Environment = World_GetEnvironment(world);
-    outFrame->IsOneLightScale = self->_isOneLightScaleEnabled;
     BuildSky(outFrame);
     outFrame->TimeSeconds = (float)self->_renderTimeSeconds;
     outFrame->WindowWidth = target.texture.width;
@@ -225,7 +238,9 @@ static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera
     outFrame->ShadowLightIndex = SIZE_MAX;
 
     double Aspect = (outFrame->SceneHeight > 0) ? ((double)outFrame->SceneWidth / (double)outFrame->SceneHeight) : 1.0;
-    WorldRenderView View = WorldRenderSpace_BuildView(camera, Aspect, SCENE_NEAR_PLANE, SCENE_FAR_PLANE);
+    outFrame->IsDepthReversed = self->_depth._isReversed;
+    WorldRenderView View = WorldRenderSpace_BuildView(camera, Aspect, SCENE_NEAR_PLANE, SCENE_FAR_PLANE,
+        outFrame->IsDepthReversed);
     outFrame->Origin = View.Origin;
     outFrame->RenderCamera = View.Camera;
     outFrame->ZoomFactor = WorldVisibility_GetZoomFactor(camera->FovY);
@@ -234,7 +249,9 @@ static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera
     outFrame->InvProjection = View.InvProjection;
     outFrame->ViewProjection = View.ViewProjection;
     outFrame->InvViewProjection = View.InvViewProjection;
-    outFrame->CameraFrustum = WorldVisibility_ExtractFrustum(outFrame->ViewProjection);
+    // No far plane with reversed depth: the draw distances alone decide how far the camera sees.
+    outFrame->CameraFrustum = outFrame->IsDepthReversed ? WorldVisibility_ExtractReversedFrustum(outFrame->ViewProjection)
+        : WorldVisibility_ExtractFrustum(outFrame->ViewProjection);
 }
 
 /* Picks every model's LOD for this frame (the camera's distance to it, the camera's zoom, the player's lod_distance_scale)
@@ -335,8 +352,8 @@ static void DecidePasses(WorldRenderer* self, WorldRenderFrame* frame)
         && WorldRendererPost_ComputeSunScreenUv(frame, &frame->SunScreenUv, &SunshaftFade);
     frame->SunshaftStrength = frame->AreSunshaftsActive ? (SunshaftStrength * SunshaftFade) : 0.0f;
 
-    // The night sky (needs WorldRendererSky_PrepareFrame first): stars while some star is bright enough for the
-    // twilight and the light pollution, the Milky Way while any of it shows.
+    // The night sky (needs WorldRendererSky_PrepareNightSky first): stars while some star is bright enough for the sky
+    // behind it, the Milky Way while any of it shows.
     frame->AreStarsActive = AreStarsAvailable(self) && self->_stars._hasMesh
         && (frame->LimitingMagnitude > NIGHT_SKY_BRIGHTEST_MAGNITUDE);
     frame->IsMilkyWayActive = IsMilkyWayAvailable(self) && (frame->MilkyWayRadiance > 0.0f);
@@ -514,7 +531,6 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
 
     // The light at the camera (T36).
     const WorldSkyLightFrame* Light = &frame->SkyLight;
-    Status->IsOneLightScale = frame->IsOneLightScale;
     Status->IsSkyLightPerHeight = frame->IsSkyLightPerHeight;
     Status->SkyLightTableBuildCount = self->_atmosphere._skyLight.Record.BuildCount;
     Status->IsSkyLightTableBuilding = self->_atmosphere._skyLight.IsBuilding;
@@ -525,6 +541,12 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Memory_Copy(Light->Night, Status->NightLight, sizeof(Status->NightLight));
     Status->SceneLuminance = frame->BaseSceneLuminance;
     Status->Exposure = frame->Exposure;
+    Status->Features[WorldRendererFeature_ExposureMetering] = StateOf(WorldRendererExposure_IsAvailable(self),
+        frame->IsExposureMetered);
+    Status->Features[WorldRendererFeature_ReversedDepth] = StateOf(self->_depth._isReversed, frame->IsDepthReversed);
+    Status->AdaptedLuminance = frame->AdaptedLuminance;
+    Status->AdaptedRealLuminance = frame->AdaptedRealLuminance;
+    Status->IsExposureMetered = frame->IsExposureMetered;
 }
 
 /* Appends the drawn models per LOD to the status line's LOD text, LOD 0 first, up to the coarsest LOD drawn: "9 / 3 / 1".
@@ -618,10 +640,6 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_isNightVisionEnabled = true;
     Renderer->_isSpriteLightingEnabled = true;
     Renderer->_nightVision = NightVision_GetCalibration();
-    // TODO: remove once the owner approves T36's light (the A/B's light before T36 and its night vision).
-    Renderer->_isOneLightScaleEnabled = true;
-    Renderer->_legacyNightVision = NightVision_GetCalibrationFor(NIGHT_VISION_LEGACY_NOON_LUMINANCE,
-        NIGHT_VISION_LEGACY_NIGHT_LUMINANCE);
     Renderer->_outline._isEnabled = true;
     Renderer->_bloom._isEnabled = true;
     Renderer->_sunshaft._isEnabled = true;
@@ -655,6 +673,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     }
 
     WorldRendererScene_ReleaseTargets(self);
+    WorldRendererExposure_Unload(self);
     WorldRendererAtmosphere_Unload(self);
     WorldRendererAtmosphere_Deconstruct(self);
     WorldRendererShadows_Unload(self);
@@ -694,7 +713,7 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
     }
 
     // Preload the shaders and the sky textures the world names, so the first frame does not stall on them (idempotent,
-    // logged on failure), and make the C mirror's tables hold the world's air (T36: a whole build, about 55 ms, unless
+    // logged on failure), and make the C mirror's tables hold the world's air (T36: a whole build, about 70 ms, unless
     // they already hold it; without this the first frame builds them, and a new world's air would otherwise come in
     // over frames).
     EnsureShaders(self);
@@ -779,6 +798,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     // night vision's calibration and the shadows' light.
     WorldRendererAtmosphere_PrepareFrame(self, &Frame);
     WorldRendererLighting_PrepareSkyLight(self, &Frame);
+    // The stars and the Milky Way by the sky's brightness behind them (T38: the twilight from the sky's light).
+    WorldRendererSky_PrepareNightSky(&Frame);
     // Every model's LOD and its cross-fade, then which shadow passes run and their light matrices, then what every pass
     // draws: the camera's frustum, each cascade's box and the cube's reach cull, the draw distances and opacities fade.
     UpdateLods(self, &Frame, deltaSeconds);
@@ -834,16 +855,16 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     }
     if (Frame.IsBloomActive)
     {
-        WorldRendererPost_RenderBloom(self, CompositeSource);
+        WorldRendererPost_RenderBloom(self, &Frame, CompositeSource);
     }
     if (Frame.AreSunshaftsActive)
     {
         WorldRendererPost_RenderSunshafts(self, &Frame, CompositeSource);
     }
 
-    // HDR eye adaptation eases the exposure toward the scene brightness, so the day-night cycle stays readable (a
-    // dark night is lifted; a bright light pulls it back down). Then the tonemapped upscale into the frame target.
-    Frame.Exposure = WorldRendererLighting_UpdateExposure(self, &Frame, (float)deltaSeconds);
+    // The eye adapts to the picture (T37): it eases toward the brightness the meter measured a frame or two ago, and
+    // meters this one. Then the tonemapped upscale into the frame target.
+    Frame.Exposure = WorldRendererExposure_Update(self, &Frame, CompositeSource, (float)deltaSeconds);
     WorldRendererPost_Tonemap(self, &Frame, CompositeSource, target);
 
     // Last: the crisp overlay draws over the finished pixelated image (e.g. a readable 3D screen), depth-tested
@@ -901,6 +922,8 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_Instancing:       return (const unsigned char*)u8"instancing";
         case WorldRendererFeature_AtmosphereTables: return (const unsigned char*)u8"atmosphere tables";
         case WorldRendererFeature_Haze:             return (const unsigned char*)u8"haze";
+        case WorldRendererFeature_ExposureMetering: return (const unsigned char*)u8"exposure metering";
+        case WorldRendererFeature_ReversedDepth:    return (const unsigned char*)u8"reversed depth";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -978,18 +1001,6 @@ void WorldRenderer_SetAtmosphereTablesEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_AreAtmosphereTablesEnabled(const WorldRenderer* self)
 {
     return self->_atmosphere._isEnabled;
-}
-
-// TODO: remove once the owner approves T36's light.
-void WorldRenderer_SetOneLightScaleEnabled(WorldRenderer* self, bool enabled)
-{
-    self->_isOneLightScaleEnabled = enabled;
-}
-
-// TODO: remove once the owner approves T36's light.
-bool WorldRenderer_IsOneLightScaleEnabled(const WorldRenderer* self)
-{
-    return self->_isOneLightScaleEnabled;
 }
 
 void WorldRenderer_SetHazeView(WorldRenderer* self, WorldRendererHazeView view, int slice)

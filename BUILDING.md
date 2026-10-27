@@ -109,11 +109,30 @@ directory: `cmake --build build --target raylib`, then copied to `lib/`. The che
 and GPU skinning (the test world's figures bend, no warning). The 2026-10-17 build (Release, custom frame control, no
 GPU skinning) was the one before; until that one it had been built with an empty build type, i.e. unoptimised.
 
-## Direct OpenGL calls (B02, decision W7)
+## Direct OpenGL calls (B02, decision W7; T37; T39)
 
-Everything draws through raylib, with one exception: **texture arrays** (`GL_TEXTURE_2D_ARRAY`), which raylib does not
-have and the terrain's materials need (up to sixteen materials blended per pixel, one array layer each). Their calls live
-in one private module, `source/GLTextureArray.{h,c}`, and nowhere else:
+Everything draws through raylib, with three exceptions, each in a private module of its own and nowhere else:
+- **texture arrays** (`GL_TEXTURE_2D_ARRAY`, `source/GLTextureArray.{h,c}`), which raylib does not have and the
+  terrain's materials need (up to sixteen materials blended per pixel, one array layer each);
+- **readbacks that do not wait** (`source/GLReadback.{h,c}`, T37): raylib reads a texture back only by stalling until
+  the GPU has finished everything before it; the eye's meter copies its target into a pixel-pack buffer, fences the
+  copy and takes the values a frame or two later (`glGenBuffers`, `glDeleteBuffers`, `glBindBuffer`, `glBufferData`,
+  `glGetBufferSubData`, `glReadPixels`, `glPixelStorei`, `glGetIntegerv`, `glFenceSync`, `glClientWaitSync`,
+  `glDeleteSync`, `glGetError`: OpenGL 3.2 core at the newest, the sync objects; a missing one leaves the eye adapting
+  to the sky's light at the camera, logged once);
+- **reversed depth** (`source/GLDepth.{h,c}`, T39, decision G41): raylib's camera depth runs from 0 at the near plane to
+  1 at its fixed 4 km far plane, in a depth buffer whose format the driver picks (24 bits here), so nothing past 4 km
+  draws; the camera's passes instead draw with depth 1 at the near plane falling toward 0 at infinity, into 32-bit
+  float depth buffers, which keeps about the same relative precision at every distance (`glClipControl` for the 0-to-1
+  depth range, `glDepthFunc`, `glClearDepth`, `glGenTextures`, `glDeleteTextures`, `glBindTexture`, `glTexImage2D`,
+  `glTexParameteri`, `glGenRenderbuffers`, `glDeleteRenderbuffers`, `glBindRenderbuffer`, `glRenderbufferStorage`,
+  `glGetIntegerv`, `glGetStringi`, `glGetError`). Clip control is OpenGL 4.5 or `GL_ARB_clip_control` (most desktop
+  GPUs since 2014; NVIDIA reports a 3.3 core context as 3.3 and has the extension, macOS has neither): the module
+  checks the version, then the extension list, and without it the renderer keeps raylib's projection and its 4 km,
+  logged once. The reversed state is switched on only around the camera's passes and switched back after them, so
+  raylib's own state is what every other pass and the UI see.
+
+The texture arrays' module, as the pattern all three follow:
 - the function pointers (`glGenTextures`, `glDeleteTextures`, `glBindTexture`, `glTexImage3D`, `glTexSubImage3D`,
   `glGenerateMipmap`, `glTexParameteri`, `glTexParameterf`, `glPixelStorei`, `glGetIntegerv`, `glGetFloatv`,
   `glGetError`) come through raylib's `rlGetProcAddress`, the loader raylib itself was initialized with (GLFW's on the
@@ -127,7 +146,7 @@ in one private module, `source/GLTextureArray.{h,c}`, and nowhere else:
   loader may hand out a stub for a missing function, so the error check is what catches it), leaves the terrain showing
   its materials' mean colours.
 
-Anything else that needs GL raylib lacks belongs in this module or one like it (function pointers through
+Anything else that needs GL raylib lacks belongs in one of these modules or one like them (function pointers through
 `rlGetProcAddress`, constants defined there, one log line on failure), never in a render pass.
 
 ## Windows notes (for when the Windows build is set up)

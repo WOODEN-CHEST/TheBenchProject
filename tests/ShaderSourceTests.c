@@ -1,5 +1,6 @@
 #include "TestSuites.h"
 #include "AssetManager.h"
+#include "EyeAdaptation.h"
 #include "GameSkeleton.h"
 #include "ShaderSource.h"
 #include "SkeletalAnimation.h"
@@ -1062,6 +1063,67 @@ static void ShippedInstancedTwinsShareTheirStages(TestRun* run)
     ShaderFixture_Deconstruct(run, &Fixture);
 }
 
+/* The eye's meter (T37): its blocks and samples are its C mirror's (source/EyeAdaptation.h, whose readback and weights
+ * take that many blocks), and its window is the one vec3 the renderer uploads. */
+static void ShippedMeterMatchesItsMirror(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        if (ExpandShippedStage(run, &Fixture, "luminance/fragment"))
+        {
+            TEST_CHECK(run, (GetConstIntValue(&Fixture.Text, "METER_WIDTH") == EYE_ADAPTATION_METER_WIDTH)
+                && (GetConstIntValue(&Fixture.Text, "METER_HEIGHT") == EYE_ADAPTATION_METER_HEIGHT)
+                && (GetConstIntValue(&Fixture.Text, "SAMPLES") == EYE_ADAPTATION_METER_SAMPLES)
+                && (CountOccurrences(&Fixture.Text, "uniform vec3 window;") == 1U));
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+/* Every stage that reads the camera's depth or writes its own (T39: the eye's meter, the bloom's prefilter, the sun
+ * shafts, the crisp composite, the AO, the outlines and the stars) takes the depth convention from the one shared
+ * include, with the renderer's depthReversed uniform once, and keeps no sky depth of its own; the include's tests are the
+ * conventions GLDepth.h states (reversed: the sky exactly 0, clip control's depth as stored, nearer greater; standard:
+ * raylib's, the sky at the cleared 1). */
+static void ShippedDepthReadersShareOneConvention(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        const char* const Stages[] =
+        {
+            "luminance/fragment", "bloom_prefilter/fragment", "sunshafts/fragment", "crisp_composite/fragment",
+            "ao/fragment", "postfx/fragment", "stars/vertex"
+        };
+        for (size_t Index = 0U; Index < (sizeof(Stages) / sizeof(Stages[0])); Index++)
+        {
+            if (ExpandShippedStage(run, &Fixture, Stages[Index]))
+            {
+                bool IsShared = BufferContains(&Fixture.SourceList, "\"common/depth\"")
+                    && (CountOccurrences(&Fixture.Text, "uniform float depthReversed;") == 1U);
+                bool HasNoOwnDepth = (CountOccurrences(&Fixture.Text, "SKY_DEPTH") == 0U)
+                    && (CountOccurrences(&Fixture.Text, "FAR_DEPTH") == 0U)
+                    && (CountOccurrences(&Fixture.Text, "d*2.0 - 1.0") == 0U);
+                bool IsTheConvention = (CountOccurrences(&Fixture.Text,
+                        "return (depthReversed > 0.5) ? (depth <= 0.0) : (depth >= 0.9999);") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "return (depthReversed > 0.5) ? depth : depth*2.0 - 1.0;") == 1U)
+                    && (CountOccurrences(&Fixture.Text,
+                        "return (depthReversed > 0.5) ? (a < b*(1.0 - tolerance)) : (a > b + tolerance);") == 1U);
+                if (!TEST_CHECK(run, IsShared && HasNoOwnDepth && IsTheConvention))
+                {
+                    printf("    in \"%s\"\n", Stages[Index]);
+                }
+            }
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
 
 // Public functions.
 void ShaderSourceTests_Run(TestRun* run)
@@ -1087,6 +1149,8 @@ void ShaderSourceTests_Run(TestRun* run)
         { "shipped_geometry_shaders_share_one_dither", ShippedGeometryShadersShareOneDither },
         { "shipped_skinned_stages_share_one_skinning", ShippedSkinnedStagesShareOneSkinning },
         { "shipped_instanced_twins_share_their_stages", ShippedInstancedTwinsShareTheirStages },
+        { "shipped_meter_matches_its_mirror", ShippedMeterMatchesItsMirror },
+        { "shipped_depth_readers_share_one_convention", ShippedDepthReadersShareOneConvention },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

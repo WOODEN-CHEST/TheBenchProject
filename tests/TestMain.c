@@ -51,6 +51,7 @@ int main(void)
     WorldEnvironmentTests_Run(&Run);
     NightSkyTests_Run(&Run);
     NightVisionTests_Run(&Run);
+    EyeAdaptationTests_Run(&Run);
     WorldRenderCacheTests_Run(&Run);
     SpriteTransformTests_Run(&Run);
     WorldVisibilityTests_Run(&Run);

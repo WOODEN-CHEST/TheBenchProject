@@ -102,7 +102,7 @@ typedef enum WorldRendererFeatureEnum
     WorldRendererFeature_PbrLighting,
     /** @brief The atmospheric sky. Without it a CPU-computed gradient colour fills the background. */
     WorldRendererFeature_Sky,
-    /** @brief The tonemap with eye adaptation. Without it the linear HDR scene is shown untonemapped. */
+    /** @brief The tonemap with the eye's exposure. Without it the linear HDR scene is shown untonemapped. */
     WorldRendererFeature_Tonemap,
     /** @brief The sprites: the lit sprite shader and the sprite quad. Without them sprites are not drawn at all. */
     WorldRendererFeature_SpriteShading,
@@ -170,6 +170,16 @@ typedef enum WorldRendererFeatureEnum
      *  without the tables or the volume's shader or target; inactive while the tables are switched off or the frame's
      *  haze is 0 (the fog strengths). */
     WorldRendererFeature_Haze,
+    /** @brief The eye's metering of the picture (T37): each frame's brightness measured on the GPU and read back a frame or
+     *  two later, which the eye adapts to (lamps count by what they light on screen). Inactive until the first
+     *  measurement arrives; unavailable without its shader (world_luminance), its target or the readback's GL functions
+     *  (logged once): the eye then adapts to the sky's light at the camera. */
+    WorldRendererFeature_ExposureMetering,
+    /** @brief Reversed depth for the camera's passes (T39): a 32-bit float depth from 1 at the near plane to 0 at
+     *  infinity and no far plane, so whatever has a long draw distance draws at any distance. Unavailable without clip
+     *  control (OpenGL 4.5 or GL_ARB_clip_control; logged once): the camera then keeps raylib's projection and its far
+     *  plane (4 km). */
+    WorldRendererFeature_ReversedDepth,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -313,13 +323,11 @@ typedef struct WorldRendererStatusStruct
     float GroundHazeDensity;
     WorldRendererHazeView HazeView;
     int HazeViewSlice;
-    /** @brief The last render's light at the camera (T36): whether T36's light ran (one light scale for the sky and the
-     *  surfaces; false: the A/B's light before T36, WorldRenderer_SetOneLightScaleEnabled), whether the lit surfaces took
-     *  it by their height (false: the camera's for all), the sun's and the moon's light on a surface facing them, the
-     *  sky's irradiance on a surface facing up, the ground's bounce on one facing down and the moonless night's own
-     *  light (linear RGB, the game's light units), and the scene luminance eye adaptation started from and the exposure it
-     *  set. */
-    bool IsOneLightScale;
+    /** @brief The last render's light at the camera (T36): whether the lit surfaces took it by their height (false: the
+     *  camera's for all), the sun's and the moon's light on a surface facing them, the sky's irradiance on a surface
+     *  facing up, the ground's bounce on one facing down and the moonless night's own light (linear RGB, the game's light
+     *  units), the scene luminance (a white surface's under the sky's light: what the eye starts from before it measures
+     *  the picture) and the exposure the eye set. */
     bool IsSkyLightPerHeight;
     /** @brief How many times the C mirror's tables were built (the first frame's, then one per air change, each spread
      *  over frames), and whether a rebuild was running. */
@@ -332,6 +340,12 @@ typedef struct WorldRendererStatusStruct
     float NightLight[3];
     float SceneLuminance;
     float Exposure;
+    /** @brief The eye (T37): the luminance it was adapted to (the view's log-average in the game's light units: the sky
+     *  light's anchor before the first measurement), the real luminance that stands for (cd/m^2, on night vision's scale
+     *  at the camera's mix of daylight and the night's lights), and whether a measurement of the picture set it. */
+    float AdaptedLuminance;
+    float AdaptedRealLuminance;
+    bool IsExposureMetered;
     /** @brief How long the render took on the CPU, in milliseconds (WorldRenderer_RenderToTarget from its start to its
      *  return; the GPU works on after it, and its share shows in the frame time when it is the slower), and the time
      *  since the render before, as the caller gave it (its deltaSeconds; 0 when that was not above 0). */
@@ -461,26 +475,6 @@ void WorldRenderer_SetAtmosphereTablesEnabled(WorldRenderer* self, bool enabled)
  * @returns true if they are on (they draw the sky when available).
  */
 bool WorldRenderer_AreAtmosphereTablesEnabled(const WorldRenderer* self);
-
-/**
- * @brief Switches between T36's light (default on) and the light before T36, for A/B-ing the light (T36).
- *
- * On, the sky and the surfaces are lit on one light scale: the sun and the moon through the air at each surface's height,
- * the sky's own light as the ambient, the exposure on that scale. Off, the light before T36: the sky lit by a sun 22
- * times the surfaces', the painted ambient, the sun ramped by the daylight, the old exposure and night vision.
- * Applied on the next render.
- * TODO: remove once the owner approves T36's light.
- * @param self The renderer; must not be NULL.
- * @param enabled true for T36's light.
- */
-void WorldRenderer_SetOneLightScaleEnabled(WorldRenderer* self, bool enabled);
-
-/**
- * @brief Reports whether T36's light is on (see WorldRenderer_SetOneLightScaleEnabled).
- * @param self The renderer; must not be NULL.
- * @returns true for T36's light, false for the light before T36.
- */
-bool WorldRenderer_IsOneLightScaleEnabled(const WorldRenderer* self);
 
 /**
  * @brief Chooses the haze's debug view (T35): the scene, or one slice of the aerial-perspective volume (its in-scatter or

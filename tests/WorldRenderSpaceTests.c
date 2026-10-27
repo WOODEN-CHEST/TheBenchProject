@@ -55,6 +55,10 @@
  *  frames, before its 28 km jump. */
 #define GRID_STEP 0.003
 #define GRID_FRAME_COUNT 30
+/** The reversed projection's round trip (T39): how close a point must come back through the inverse, as a share of its
+ *  distance, and how close the closed-form inverse must match MatrixInvert's, as a share of each element. */
+#define REVERSED_ROUND_TRIP_TOLERANCE 1e-6
+#define REVERSED_INVERSE_TOLERANCE 1e-6
 
 
 // Types.
@@ -194,7 +198,35 @@ static Vector3Double ProbePoint(const ReferenceView* view, size_t index)
 
 static WorldRenderView BuildView(const GameCamera* camera)
 {
-    return WorldRenderSpace_BuildView(camera, SCENE_WIDTH / SCENE_HEIGHT, RL_CULL_DISTANCE_NEAR, RL_CULL_DISTANCE_FAR);
+    return WorldRenderSpace_BuildView(camera, SCENE_WIDTH / SCENE_HEIGHT, RL_CULL_DISTANCE_NEAR, RL_CULL_DISTANCE_FAR,
+        false);
+}
+
+/* The camera's view with reversed depth (T39), as the renderer builds it where the GPU has clip control. */
+static WorldRenderView BuildReversedView(const GameCamera* camera)
+{
+    return WorldRenderSpace_BuildView(camera, SCENE_WIDTH / SCENE_HEIGHT, RL_CULL_DISTANCE_NEAR, RL_CULL_DISTANCE_FAR,
+        true);
+}
+
+/* A matrix times (x, y, z, w), in float as a shader's product. */
+static Vector4 TransformVector4(Matrix m, Vector4 v)
+{
+    return (Vector4)
+    {
+        (m.m0 * v.x) + (m.m4 * v.y) + (m.m8 * v.z) + (m.m12 * v.w),
+        (m.m1 * v.x) + (m.m5 * v.y) + (m.m9 * v.z) + (m.m13 * v.w),
+        (m.m2 * v.x) + (m.m6 * v.y) + (m.m10 * v.z) + (m.m14 * v.w),
+        (m.m3 * v.x) + (m.m7 * v.y) + (m.m11 * v.z) + (m.m15 * v.w)
+    };
+}
+
+/* A view-space point's depth through a projection as the GPU stores it with clip control's 0-to-1 depth: clip z over
+ * clip w, in float. */
+static float ClipDepth(Matrix projection, Vector3 viewPoint)
+{
+    Vector4 Clip = TransformVector4(projection, (Vector4){ viewPoint.x, viewPoint.y, viewPoint.z, 1.0f });
+    return Clip.z / Clip.w;
 }
 
 
@@ -349,6 +381,102 @@ static void SkyRaysAreExactAtAnyDistance(TestRun* run)
         if (Distances[Distance] == FAR_DISTANCE)
         {
             TEST_CHECK(run, WorstOld > OLD_RAY_ERROR_MINIMUM);
+        }
+    }
+}
+
+/* The reversed infinite projection (T39): depth is 1 at the near plane, a half at twice its distance, and falls as 1
+ * over the distance toward 0, which no finite distance reaches (10 000 km: 5e-9, a normal float); points 1 m apart at
+ * 20 km and 1 km apart at 10 000 km keep distinct float depths, nearer greater; x and y are MatrixPerspective's, so a
+ * point lands within a thousandth of a pixel of where the standard projection puts it. */
+static void ReversedDepthFallsFromTheNearPlaneToInfinity(TestRun* run)
+{
+    double FovY = (double)SCENE_FOV_Y * (DOUBLE_PI / 180.0);
+    double Aspect = SCENE_WIDTH / SCENE_HEIGHT;
+    Matrix Reversed = WorldRenderSpace_GetReversedProjection(FovY, Aspect, RL_CULL_DISTANCE_NEAR, NULL);
+    Matrix Standard = MatrixPerspective(FovY, Aspect, RL_CULL_DISTANCE_NEAR, RL_CULL_DISTANCE_FAR);
+    float Near = (float)RL_CULL_DISTANCE_NEAR;
+    TEST_CHECK(run, ClipDepth(Reversed, (Vector3){ 0.0f, 0.0f, -Near }) == 1.0f);
+    TEST_CHECK(run, fabsf(ClipDepth(Reversed, (Vector3){ 0.0f, 0.0f, -2.0f * Near }) - 0.5f) < 1e-7f);
+    float Farthest = ClipDepth(Reversed, (Vector3){ 0.0f, 0.0f, -1.0e7f });
+    TEST_CHECK(run, (Farthest > 0.0f) && (fabsf(Farthest - 5.0e-9f) < 1e-14f) && isnormal(Farthest));
+    TEST_CHECK(run, ClipDepth(Reversed, (Vector3){ 600.0f, -200.0f, -20000.0f })
+        > ClipDepth(Reversed, (Vector3){ 600.0f, -200.0f, -20001.0f }));
+    TEST_CHECK(run, ClipDepth(Reversed, (Vector3){ 0.0f, 0.0f, -1.0e7f })
+        > ClipDepth(Reversed, (Vector3){ 0.0f, 0.0f, -1.0e7f - 1000.0f }));
+    const Vector3 Points[] = { { 0.02f, 0.01f, -0.06f }, { 1.3f, -0.4f, -3.0f }, { 500.0f, 200.0f, -2000.0f },
+        { -9000.0f, 3000.0f, -30000.0f } };
+    for (size_t Index = 0U; Index < (sizeof(Points) / sizeof(Points[0])); Index++)
+    {
+        Pixel FromReversed = DrawnPixel(MatrixIdentity(), MatrixIdentity(), Reversed, Points[Index]);
+        Pixel FromStandard = DrawnPixel(MatrixIdentity(), MatrixIdentity(), Standard, Points[Index]);
+        TEST_CHECK(run, PixelDistance(FromReversed, FromStandard) < ORIGIN_PIXEL_TOLERANCE);
+    }
+}
+
+/* The reversed projection's closed-form inverse takes a pixel's stored depth back to the point it came from, as the AO
+ * and the outline passes reconstruct positions (common/depth's depthToNdc), within a millionth of the distance from the
+ * near plane to 10 000 km, and matches MatrixInvert's. */
+static void ReversedDepthComesBackThroughItsInverse(TestRun* run)
+{
+    double FovY = (double)SCENE_FOV_Y * (DOUBLE_PI / 180.0);
+    Matrix Inverse;
+    Matrix Reversed = WorldRenderSpace_GetReversedProjection(FovY, SCENE_WIDTH / SCENE_HEIGHT, RL_CULL_DISTANCE_NEAR,
+        &Inverse);
+    const float Distances[] = { 0.05f, 1.0f, 20000.0f, 1.0e7f };
+    for (size_t Index = 0U; Index < (sizeof(Distances) / sizeof(Distances[0])); Index++)
+    {
+        float Distance = Distances[Index];
+        Vector3 Point = { 0.31f * Distance, -0.12f * Distance, -Distance };
+        Vector4 Clip = TransformVector4(Reversed, (Vector4){ Point.x, Point.y, Point.z, 1.0f });
+        Vector4 Ndc = { Clip.x / Clip.w, Clip.y / Clip.w, Clip.z / Clip.w, 1.0f };
+        Vector4 Back = TransformVector4(Inverse, Ndc);
+        Vector3 Restored = { Back.x / Back.w, Back.y / Back.w, Back.z / Back.w };
+        TEST_CHECK(run, Vector3Distance(Restored, Point) <= (float)(REVERSED_ROUND_TRIP_TOLERANCE * (double)Distance));
+    }
+    Matrix Numeric = MatrixInvert(Reversed);
+    const float* A = &Inverse.m0;
+    const float* B = &Numeric.m0;
+    bool IsSame = true;
+    for (size_t Index = 0U; Index < 16U; Index++)
+    {
+        IsSame = IsSame && (fabs((double)A[Index] - (double)B[Index])
+            <= (REVERSED_INVERSE_TOLERANCE * fmax(1.0, fabs((double)B[Index]))));
+    }
+    TEST_CHECK(run, IsSame);
+}
+
+/* With reversed depth (T39) the view carries the reversed projection, its closed-form inverse and their products with the
+ * rotation, and the sky's rays (the C mirror of the shader's, whose clip depth 1 is now the near plane's) are the exact
+ * camera's within a hundredth of a pixel at every corner, at the origin and 50 km out. */
+static void ReversedViewsKeepTheSkyRaysExact(TestRun* run)
+{
+    const double Distances[] = { 0.0, FAR_DISTANCE };
+    const double Corners[4][2] =
+    {
+        { 0.0, 0.0 }, { SCENE_WIDTH - 1.0, 0.0 }, { 0.0, SCENE_HEIGHT - 1.0 }, { SCENE_WIDTH - 1.0, SCENE_HEIGHT - 1.0 }
+    };
+    for (size_t Distance = 0U; Distance < (sizeof(Distances) / sizeof(Distances[0])); Distance++)
+    {
+        double Far = Distances[Distance];
+        GameCamera Viewer = MakeCamera(Vector3Double_Create(Far * 0.6, 1.7, -Far * 0.8));
+        WorldRenderView View = BuildReversedView(&Viewer);
+        Matrix Inverse;
+        Matrix Projection = WorldRenderSpace_GetReversedProjection((double)View.Camera.fovy * DEG2RAD,
+            SCENE_WIDTH / SCENE_HEIGHT, RL_CULL_DISTANCE_NEAR, &Inverse);
+        Matrix ViewProjection = MatrixMultiply(View.View, Projection);
+        TEST_CHECK(run, (memcmp(&View.Projection, &Projection, sizeof(Matrix)) == 0)
+            && (memcmp(&View.InvProjection, &Inverse, sizeof(Matrix)) == 0)
+            && (memcmp(&View.ViewProjection, &ViewProjection, sizeof(Matrix)) == 0));
+        ReferenceView Reference = MakeReference(&Viewer);
+        for (size_t Corner = 0U; Corner < 4U; Corner++)
+        {
+            double X = Corners[Corner][0];
+            double Y = Corners[Corner][1];
+            Vector3 Mirror = WorldRenderSpace_GetSkyRay(&View.InvViewProjection, (float)((X + 0.5) / SCENE_WIDTH),
+                (float)((Y + 0.5) / SCENE_HEIGHT));
+            TEST_CHECK(run, RayErrorInPixels(GameMath_FromVector3(Mirror), ReferenceRay(&Reference, X, Y))
+                < PIXEL_TOLERANCE);
         }
     }
 }
@@ -546,6 +674,9 @@ void WorldRenderSpaceTests_Run(TestRun* run)
             PointsLandWithinAHundredthOfAPixelFiftyKilometresOut },
         { "near_the_origin_points_land_where_they_did", NearTheOriginPointsLandWhereTheyDid },
         { "sky_rays_are_exact_at_any_distance", SkyRaysAreExactAtAnyDistance },
+        { "reversed_depth_falls_from_the_near_plane_to_infinity", ReversedDepthFallsFromTheNearPlaneToInfinity },
+        { "reversed_depth_comes_back_through_its_inverse", ReversedDepthComesBackThroughItsInverse },
+        { "reversed_views_keep_the_sky_rays_exact", ReversedViewsKeepTheSkyRaysExact },
         { "cascade_texels_stand_still_as_the_camera_moves", CascadeTexelsStandStillAsTheCameraMoves },
         { "cascade_grid_turns_about_the_camera", CascadeGridTurnsAboutTheCamera },
         { "cascade_grid_follows_the_camera", CascadeGridFollowsTheCamera },

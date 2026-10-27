@@ -9,8 +9,16 @@
 
 /*
  * Private header (source/): the night sky's pure maths, used by the renderer's star and sky passes and by the tests:
- * the seeded star catalogue, the faintest star that can still be seen (light pollution and twilight), the air mass
- * toward an altitude, star colours, and the fixed orientation of the galaxy among the stars. No GL, no state.
+ * the seeded star catalogue, the faintest star that can still be seen (the naked eye's threshold against the sky's
+ * brightness: light pollution, the moonlit sky, the twilight), the air mass toward an altitude, star colours, and the
+ * fixed orientation of the galaxy among the stars. No GL, no state.
+ *
+ * THE LIMIT (T38). The faintest star the eye sees overhead follows the sky's luminance behind it: Schaefer's threshold
+ * ("Astronomy and the limits of vision", 1993) against the background, the rods' and the cones' alike, the lower one
+ * counting (NightSky_GetThresholdMagnitude): about 6.5 under a dark site's 2.2e-4 cd/m^2, 3 to 3.5 at the end of the
+ * civil twilight, none by day. The background is the twilight's (the renderer's sky light from the sun, in cd/m^2) added
+ * to the night's: the sky light pollution and the moon brighten, expressed as the background that gives the limits T02
+ * and T03 tuned for them (NightSky_GetThresholdBackground of the night limit), the natural night sky's glow in it.
  *
  * FRAMES. Stars are placed in the star frame of WorldEnvironment_GetStarsToWorld: the celestial frame (the pole above
  * the horizon at -z) of the moment the sun stands at right ascension 90 degrees, the June solstice. The renderer turns
@@ -39,11 +47,20 @@
 #define NIGHT_SKY_DARK_SITE_LIMITING_MAGNITUDE 6.5f
 /** @brief Magnitudes full light pollution (1) takes off the limiting magnitude (6.5 - 3.5 = 3: a city's few stars). */
 #define NIGHT_SKY_LIGHT_POLLUTION_MAGNITUDES 3.5f
-/** @brief Limiting magnitude while the sun is on or above the horizon: brighter than any star, so none show. */
-#define NIGHT_SKY_DAYTIME_LIMITING_MAGNITUDE (-1.5f)
-/** @brief How much the limiting magnitude grows per degree the sun sinks below the horizon: magnitude 1.5 at -6
- *  degrees (only the brightest stars), 4.5 at -12, beyond the dark-site limit at -18 (full night). */
-#define NIGHT_SKY_TWILIGHT_MAGNITUDES_PER_DEGREE 0.5f
+/** @brief Schaefer's threshold (1993): the illuminance a star must give the eye to be seen against a background of B
+ *  nanolamberts is C1 (1 + sqrt(C2 B))^2 foot-candles, with the rods' constants below about 1479 nL and the cones'
+ *  above (the lower threshold of the two counts: the eye sees with the more sensitive); a star of magnitude m gives
+ *  10^(-0.4 (m - NIGHT_SKY_THRESHOLD_ZERO_POINT)) foot-candles. */
+#define NIGHT_SKY_THRESHOLD_ROD_C1 1.5848931924611134e-10
+#define NIGHT_SKY_THRESHOLD_ROD_C2 1.2589254117941673e-2
+#define NIGHT_SKY_THRESHOLD_CONE_C1 4.4668359215096345e-9
+#define NIGHT_SKY_THRESHOLD_CONE_C2 1.2589254117941673e-6
+#define NIGHT_SKY_THRESHOLD_ZERO_POINT (-16.57)
+/** @brief Nanolamberts per cd/m^2: pi x 10^5. */
+#define NIGHT_SKY_NANOLAMBERTS_PER_CANDELA 314159.26535897932
+/** @brief The faintest magnitude NightSky_GetThresholdMagnitude gives: against a black background, the rods' C1 alone
+ *  (about 7.93). */
+#define NIGHT_SKY_DARKEST_THRESHOLD_MAGNITUDE 7.93f
 /** @brief Limiting magnitudes between which the Milky Way fades in: gone at or below the first, full at the second. */
 #define NIGHT_SKY_MILKY_WAY_HIDDEN_LIMIT 4.5f
 #define NIGHT_SKY_MILKY_WAY_FULL_LIMIT 6.0f
@@ -106,24 +123,52 @@ size_t NightSky_GetStarCount(float density);
 Error NightSky_GenerateStars(uint64_t seed, float density, GenericBuffer* outStars);
 
 /**
- * @brief Returns the faintest magnitude visible overhead for a light pollution, a moonlit sky and a sun elevation.
- *
- * The smaller of two limits:
- * - the night limit: NIGHT_SKY_DARK_SITE_LIMITING_MAGNITUDE, minus NIGHT_SKY_LIGHT_POLLUTION_MAGNITUDES x
- *   lightPollution, minus the moon's share: NIGHT_SKY_FULL_MOON_MAGNITUDES x log10(1 + 20 m) / log10(21) for the
- *   moonlit sky m, times (1 - lightPollution). The logarithm follows the eye: a quarter moon (a tenth of the full
- *   moon's light) still takes about 0.6 magnitudes; and an already bright city sky leaves the moon less to take;
- * - the twilight limit: NIGHT_SKY_DAYTIME_LIMITING_MAGNITUDE with the sun up, growing
- *   NIGHT_SKY_TWILIGHT_MAGNITUDES_PER_DEGREE per degree below the horizon. So at dusk the brightest stars appear first,
- *   and full night begins at about -18 degrees.
+ * @brief Returns Schaefer's threshold: the faintest magnitude the naked eye sees against a background luminance (the
+ *        lower of the rods' and the cones' thresholds: continuous, falling as the background brightens).
+ * @param backgroundCandelas The background's luminance in cd/m^2; a value that is not positive (or NaN) counts as a
+ *        black background, an infinite one gives the brightest threshold a finite one would tend to (none: -inf).
+ * @returns The limiting magnitude: NIGHT_SKY_DARKEST_THRESHOLD_MAGNITUDE against black, about 6.5 against a dark site's
+ *          night sky (2.2e-4 cd/m^2), below -3 against a daylit one.
+ */
+float NightSky_GetThresholdMagnitude(double backgroundCandelas);
+
+/**
+ * @brief Returns the background luminance against which the naked eye's threshold is a magnitude: the inverse of
+ *        NightSky_GetThresholdMagnitude.
+ * @param limitingMagnitude The magnitude; at or above NIGHT_SKY_DARKEST_THRESHOLD_MAGNITUDE gives 0 (a black background),
+ *        NaN counts as that.
+ * @returns The luminance in cd/m^2.
+ */
+double NightSky_GetThresholdBackground(float limitingMagnitude);
+
+/**
+ * @brief Returns the night limit: the faintest magnitude visible overhead at full night for a light pollution and a
+ *        moonlit sky (T02 and T03's tuning): NIGHT_SKY_DARK_SITE_LIMITING_MAGNITUDE, minus
+ *        NIGHT_SKY_LIGHT_POLLUTION_MAGNITUDES x lightPollution, minus the moon's share: NIGHT_SKY_FULL_MOON_MAGNITUDES x
+ *        log10(1 + 20 m) / log10(21) for the moonlit sky m, times (1 - lightPollution). The logarithm follows the eye:
+ *        a quarter moon (a tenth of the full moon's light) still takes about 0.6 magnitudes; and an already bright city
+ *        sky leaves the moon less to take.
  * @param lightPollution The environment's LightPollution; clamped to [0, 1] (NaN counts as 0).
  * @param moonlitSky How much the moon brightens the sky: 1 for a full moon high up at the default moonlight
  *        (WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY), 0 for no moon; clamped to [0, NIGHT_SKY_MAX_MOONLIT_SKY] (NaN counts
  *        as 0).
- * @param sunElevationDegrees The sun's elevation above the horizon, in degrees; a non-finite value counts as day.
+ * @returns The night limit.
+ */
+float NightSky_GetNightLimitingMagnitude(float lightPollution, float moonlitSky);
+
+/**
+ * @brief Returns the faintest magnitude visible overhead (T38): the threshold (NightSky_GetThresholdMagnitude) against the
+ *        twilight's background added to the night's, the background that gives the night limit
+ *        (NightSky_GetThresholdBackground of NightSky_GetNightLimitingMagnitude). So at full night it is the night limit,
+ *        and through dusk it rises with the twilight's fading light: the brightest stars at sunset, the limit of 3 to
+ *        3.5 at the end of the civil twilight, the night's by the end of the nautical one (in the default air).
+ * @param lightPollution The environment's LightPollution; clamped to [0, 1] (NaN counts as 0).
+ * @param moonlitSky The moonlit sky (as NightSky_GetNightLimitingMagnitude's).
+ * @param twilightCandelas The twilight's background luminance in cd/m^2 (the sky's light from the sun); a value that is
+ *        not positive (or NaN) counts as none, an infinite one as daylight (no star shows).
  * @returns The limiting magnitude; stars fainter than it are not drawn (they fade out within 0.5 magnitudes of it).
  */
-float NightSky_GetLimitingMagnitude(float lightPollution, float moonlitSky, float sunElevationDegrees);
+float NightSky_GetLimitingMagnitude(float lightPollution, float moonlitSky, double twilightCandelas);
 
 /**
  * @brief Returns how visible the Milky Way is (0..1) at a limiting magnitude: 0 at or below

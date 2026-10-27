@@ -53,12 +53,13 @@ static void ComputeSceneSize(bool pixelation, int windowWidth, int windowHeight,
  * disabled, sky/tonemap intact — the pre-postfx arrangement), (3) 8-bit LoadRenderTexture as the last
  * resort. An 8-bit scene buffer clamps/quantizes the linear-HDR sky badly, so it must never be entered just
  * because the depth-texture combination failed. Returns a zero target (id 0) only if even that fails. */
-static RenderTexture2D CreateSceneTarget(int width, int height, bool* outIsHDR, bool* outDepthSamplable)
+static RenderTexture2D CreateSceneTarget(WorldRenderer* self, int width, int height, bool* outIsHDR,
+    bool* outDepthSamplable)
 {
     *outIsHDR = false;
     *outDepthSamplable = false;
 
-    RenderTexture2D Target = WorldRendererCommon_TryCreateHdrTarget(width, height, true);
+    RenderTexture2D Target = WorldRendererCommon_TryCreateHdrTarget(self, width, height, true);
     if (Target.id != 0)
     {
         *outIsHDR = true;
@@ -66,7 +67,7 @@ static RenderTexture2D CreateSceneTarget(int width, int height, bool* outIsHDR, 
         return Target;
     }
 
-    Target = WorldRendererCommon_TryCreateHdrTarget(width, height, false);
+    Target = WorldRendererCommon_TryCreateHdrTarget(self, width, height, false);
     if (Target.id != 0)
     {
         *outIsHDR = true;
@@ -148,7 +149,7 @@ Error WorldRendererScene_EnsureTargets(WorldRenderer* self, int windowWidth, int
 
     WorldRendererScene_ReleaseTargets(self);
 
-    self->_scene._target = CreateSceneTarget(SceneWidth, SceneHeight, &self->_scene._isHdr,
+    self->_scene._target = CreateSceneTarget(self, SceneWidth, SceneHeight, &self->_scene._isHdr,
         &self->_scene._isDepthSamplable);
     if (self->_scene._target.id == 0)
     {
@@ -192,6 +193,8 @@ void WorldRendererScene_ReleaseTargets(WorldRenderer* self)
 void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     BeginTextureMode(self->_scene._target);
+    // The camera's depth (T39): reversed, from the clear (to 0) to the last draw, where the GPU has clip control.
+    WorldRendererCommon_BeginCameraDepth(self, frame);
 
     // Clear the depth buffer (and colour). When the atmospheric sky shader is present it overwrites every
     // pixel below, so the clear colour only matters as the fallback (the linearized CPU gradient) for when
@@ -217,8 +220,10 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
     // pixel scale is 1.
     WorldRendererLighting_UploadFrame(self, frame, true, (Vector2){ 1.0f, 1.0f });
 
-    // Render space: the camera at the origin, every position relative to it (the render cache's).
+    // Render space: the camera at the origin, every position relative to it (the render cache's); with reversed depth the
+    // frame's infinite projection in place of raylib's.
     BeginMode3D(frame->RenderCamera);
+    WorldRendererCommon_LoadCameraProjection(frame);
 
     if (self->_drawDebugGrid)
     {
@@ -253,5 +258,6 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
     }
 
     EndMode3D();
+    WorldRendererCommon_EndCameraDepth(self, frame);
     EndTextureMode();
 }

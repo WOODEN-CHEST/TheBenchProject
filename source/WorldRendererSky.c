@@ -40,10 +40,6 @@
 /** How far below the horizon (the sine of the elevation) the disc's centre may go, beyond its own radius, before the
  *  disc is skipped: the sun disc is drawn down to the same -0.02. */
 #define MOON_HORIZON_MARGIN 0.02f
-/** The light before T36 (the A/B): how much of the moonlight the moonlit sky got (the sky was lit 22 times as brightly as
- *  the surfaces then). Since T36 the moonlit sky is lit by all of the moon's light above the air, as the surfaces are.
- *  TODO: remove once the owner approves T36's light. */
-#define MOON_SKY_SHARE 0.3f
 /** For the stars' limiting magnitude, the moon brightens the sky in full once it stands this high (the sine; about 11.5
  *  degrees), fading from slightly below the horizon. */
 #define MOONLIT_STARS_FADE_START (-0.05f)
@@ -152,7 +148,7 @@ static void DeconstructSkyTexture(WorldRenderer* self, WorldRendererSkyTexture* 
 
 /* The moon's light on the atmosphere (the moonlit sky) and its disc. Since T36 the moonlit sky is lit by all of the moon's
  * light above the air (the frame's MoonIntensity: the phase's brightness and the daylight gate in), the surfaces by the
- * same; the light before T36 (the A/B) took MOON_SKY_SHARE of the moonlight without the daylight gate. */
+ * same. */
 static void PrepareMoon(WorldRenderFrame* frame)
 {
     const WorldEnvironment* Environment = frame->Environment;
@@ -162,14 +158,10 @@ static void PrepareMoon(WorldRenderFrame* frame)
     {
         return;
     }
-    float Brightness = WorldEnvironment_GetMoonBrightness(frame->MoonIllumination);
     // The moonlit sky shows with the sun down and the moon up (WorldSkyLight_GetMoonGate): outside its gates it is
     // skipped, saving its raymarch, its half of the sky view and the moon's light on surfaces where none can be seen.
     float Gate = WorldSkyLight_GetMoonGate(frame->SunDirection.y, frame->MoonDirection.y);
-    // TODO: remove the light before T36's share once the owner approves T36's light.
-    frame->MoonSkyIntensity = frame->IsOneLightScale ? fmaxf(frame->MoonIntensity, 0.0f) * Gate
-        : fmaxf(Environment->MoonIntensity, 0.0f) * WORLD_RENDERER_LEGACY_MOON_INTENSITY_SCALE * Brightness * Gate
-            * MOON_SKY_SHARE;
+    frame->MoonSkyIntensity = fmaxf(frame->MoonIntensity, 0.0f) * Gate;
 
     // The disc: its size, its axes (toward the sky's pole, so the face turns as it crosses the sky), its fade near the
     // sun, and nothing once it is wholly below the horizon.
@@ -270,6 +262,18 @@ void WorldRendererSky_PrepareFrame(WorldRenderFrame* frame)
     const WorldEnvironment* Environment = frame->Environment;
     PrepareMoon(frame);
 
+    float GlowColor[3];
+    WorldRendererCommon_ColorToLinear(Environment->LightPollutionColor, GlowColor);
+    float GlowStrength = SKYGLOW_BASE_RADIANCE * ClampUnit(Environment->LightPollution) * (1.0f - frame->Daylight);
+    for (int Channel = 0; Channel < 3; Channel++)
+    {
+        frame->SkyglowRadiance[Channel] = GlowColor[Channel] * GlowStrength;
+    }
+}
+
+void WorldRendererSky_PrepareNightSky(WorldRenderFrame* frame)
+{
+    const WorldEnvironment* Environment = frame->Environment;
     // The moon brightens the sky the stars are seen against: relative to a full moon high up at the default moonlight.
     float MoonlitSky = 0.0f;
     if (Environment->IsMoonEnabled)
@@ -278,18 +282,11 @@ void WorldRendererSky_PrepareFrame(WorldRenderFrame* frame)
             * WorldEnvironment_GetMoonBrightness(frame->MoonIllumination)
             * SmoothStep(MOONLIT_STARS_FADE_START, MOONLIT_STARS_FADE_END, frame->MoonDirection.y);
     }
-    float SunElevationDegrees = asinf(fminf(fmaxf(frame->SunDirection.y, -1.0f), 1.0f)) * RAD2DEG;
-    frame->LimitingMagnitude = NightSky_GetLimitingMagnitude(Environment->LightPollution, MoonlitSky, SunElevationDegrees);
+    // The twilight behind the stars (T38): the sky's light from the sun as its mean luminance, on the real scale.
+    frame->LimitingMagnitude = NightSky_GetLimitingMagnitude(Environment->LightPollution, MoonlitSky,
+        WorldSkyLight_GetTwilightLuminance(&frame->SkyLight));
     frame->MilkyWayRadiance = MILKY_WAY_BASE_RADIANCE * fmaxf(Environment->MilkyWayBrightness, 0.0f)
         * NightSky_GetMilkyWayVisibility(frame->LimitingMagnitude);
-
-    float GlowColor[3];
-    WorldRendererCommon_ColorToLinear(Environment->LightPollutionColor, GlowColor);
-    float GlowStrength = SKYGLOW_BASE_RADIANCE * ClampUnit(Environment->LightPollution) * (1.0f - frame->Daylight);
-    for (int Channel = 0; Channel < 3; Channel++)
-    {
-        frame->SkyglowRadiance[Channel] = GlowColor[Channel] * GlowStrength;
-    }
 }
 
 bool WorldRendererSky_IsMoonVisible(const WorldRenderFrame* frame)

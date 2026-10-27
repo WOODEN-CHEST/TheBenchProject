@@ -13,9 +13,10 @@
 // Drawn behind the 3D geometry into the linear-HDR scene buffer; the tonemap post-pass maps it to display.
 // The per-pixel ray is reconstructed from the inverse view-projection so the sky lines up exactly with the 3D
 // camera. The renderer works in render space (the world's orientation with the camera at the origin), so that matrix
-// is a rotation and a projection: the far plane's point IS the ray, exact however far the camera is from the world's
-// origin. Directions are the world's, with +Y up, matching WorldEnvironment_GetSunDirection. The C mirror of the ray is
-// WorldRenderSpace_GetSkyRay (source/WorldRenderSpace.c).
+// is a rotation and a projection: the point at clip depth 1 (the far plane's, or with reversed depth, T39, the near
+// plane's) IS the ray, exact however far the camera is from the world's origin. Directions are the world's, with +Y up,
+// matching WorldEnvironment_GetSunDirection. The C mirror of the ray is WorldRenderSpace_GetSkyRay
+// (source/WorldRenderSpace.c).
 
 in vec2 fragTexCoord;
 in vec4 fragColor;

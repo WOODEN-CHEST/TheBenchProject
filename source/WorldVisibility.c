@@ -2,6 +2,7 @@
 // mirror, and the per-pass lists built from the render cache (see WorldVisibility.h).
 
 #include <limits.h>
+#include <float.h>
 #include <math.h>
 #include "WorldVisibility.h"
 #include "raylib/raymath.h"
@@ -327,6 +328,17 @@ WorldFrustum WorldVisibility_ExtractFrustum(Matrix viewProjection)
     Frustum.Planes[WorldFrustumPlane_Near] = MakePlane(M->m3 + M->m2, M->m7 + M->m6, M->m11 + M->m10,
         M->m15 + M->m14);
     Frustum.Planes[WorldFrustumPlane_Far] = MakePlane(M->m3 - M->m2, M->m7 - M->m6, M->m11 - M->m10, M->m15 - M->m14);
+    return Frustum;
+}
+
+WorldFrustum WorldVisibility_ExtractReversedFrustum(Matrix viewProjection)
+{
+    // The sides do not depend on depth's convention. Inside along z where 0 <= z <= w: the near plane is w - z >= 0, and
+    // z >= 0 holds at every distance in front (z is the near plane's constant there).
+    const Matrix* M = &viewProjection;
+    WorldFrustum Frustum = WorldVisibility_ExtractFrustum(viewProjection);
+    Frustum.Planes[WorldFrustumPlane_Near] = MakePlane(M->m3 - M->m2, M->m7 - M->m6, M->m11 - M->m10, M->m15 - M->m14);
+    Frustum.Planes[WorldFrustumPlane_Far] = (WorldPlane){ .Normal = { 0.0f, 0.0f, 0.0f }, .Distance = FLT_MAX };
     return Frustum;
 }
 

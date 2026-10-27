@@ -79,6 +79,7 @@ static void LoadCompositeShaders(WorldRenderer* self)
         self->_bloom._prefilterLocSoftKnee = GetShaderLocation(RayShader, "softKnee");
         self->_bloom._prefilterLocDepthTexture = GetShaderLocation(RayShader, "depthTexture");
         self->_bloom._prefilterLocDepthMask = GetShaderLocation(RayShader, "depthMask");
+        self->_bloom._prefilterLocDepthReversed = GetShaderLocation(RayShader, "depthReversed");
     }
     self->_bloom._blurShader = WorldRendererCommon_LoadShader(self, BLOOM_BLUR_SHADER_ASSET_NAME);
     if (self->_bloom._blurShader != NULL)
@@ -96,6 +97,7 @@ static void LoadCompositeShaders(WorldRenderer* self)
         self->_sunshaft._locDepthTexture = GetShaderLocation(RayShader, "depthTexture");
         self->_sunshaft._locSunScreenPos = GetShaderLocation(RayShader, "sunScreenPos");
         self->_sunshaft._locSourceLimit = GetShaderLocation(RayShader, "sourceLimit");
+        self->_sunshaft._locDepthReversed = GetShaderLocation(RayShader, "depthReversed");
     }
 }
 
@@ -108,8 +110,10 @@ static void CreateBloomTargets(WorldRenderer* self, int sceneWidth, int sceneHei
     int BloomHeight = sceneHeight / BLOOM_RESOLUTION_DIVISOR;
     if (BloomWidth < 1) { BloomWidth = 1; }
     if (BloomHeight < 1) { BloomHeight = 1; }
-    self->_bloom._targetA = WorldRendererCommon_CreateColorTarget(BloomWidth, BloomHeight);
-    self->_bloom._targetB = WorldRendererCommon_CreateColorTarget(BloomWidth, BloomHeight);
+    self->_bloom._targetA = WorldRendererCommon_CreateColorTarget(BloomWidth, BloomHeight,
+        PIXELFORMAT_UNCOMPRESSED_R16G16B16A16);
+    self->_bloom._targetB = WorldRendererCommon_CreateColorTarget(BloomWidth, BloomHeight,
+        PIXELFORMAT_UNCOMPRESSED_R16G16B16A16);
     self->_bloom._hasTargets = (self->_bloom._targetA.id != 0) && (self->_bloom._targetB.id != 0);
     if (!self->_bloom._hasTargets)
     {
@@ -140,7 +144,8 @@ static void CreateSunshaftTarget(WorldRenderer* self, int sceneWidth, int sceneH
     int ShaftHeight = sceneHeight / SUNSHAFT_RESOLUTION_DIVISOR;
     if (ShaftWidth < 1) { ShaftWidth = 1; }
     if (ShaftHeight < 1) { ShaftHeight = 1; }
-    self->_sunshaft._target = WorldRendererCommon_CreateColorTarget(ShaftWidth, ShaftHeight);
+    self->_sunshaft._target = WorldRendererCommon_CreateColorTarget(ShaftWidth, ShaftHeight,
+        PIXELFORMAT_UNCOMPRESSED_R16G16B16A16);
     self->_sunshaft._hasTarget = (self->_sunshaft._target.id != 0);
     if (!self->_sunshaft._hasTarget)
     {
@@ -174,6 +179,7 @@ void WorldRendererPost_LoadShaders(WorldRenderer* self)
         self->_outline._locSunDirectionView = GetShaderLocation(RayShader, "sunDirectionView");
         self->_outline._locStrength = GetShaderLocation(RayShader, "outlineStrength");
         self->_outline._locWorldUpView = GetShaderLocation(RayShader, "worldUpView");
+        self->_outline._locDepthReversed = GetShaderLocation(RayShader, "depthReversed");
         // The haze the lines fade by (T35): the volume bound per draw, as a 2D pass's extra textures are.
         WorldRendererAtmosphere_PrepareShader(RayShader, &self->_outline._atmosphere);
         WorldRendererAtmosphere_PrepareHazeShader(RayShader, false, &self->_outline._haze);
@@ -186,7 +192,8 @@ void WorldRendererPost_CreateTargets(WorldRenderer* self, int width, int height)
     // scene depth is samplable (the outline pass reconstructs view positions from it).
     if ((self->_outline._shader != NULL) && self->_scene._isDepthSamplable)
     {
-        self->_outline._target = WorldRendererCommon_CreateColorTarget(width, height);
+        self->_outline._target = WorldRendererCommon_CreateColorTarget(width, height,
+            PIXELFORMAT_UNCOMPRESSED_R16G16B16A16);
         self->_outline._hasTarget = (self->_outline._target.id != 0);
         if (self->_outline._hasTarget)
         {
@@ -231,6 +238,7 @@ void WorldRendererPost_RenderOutlines(WorldRenderer* self, const WorldRenderFram
     SetShaderValue(RayShader, self->_outline._locResolution, Resolution, SHADER_UNIFORM_VEC2);
     SetShaderValueMatrix(RayShader, self->_outline._locProjection, frame->Projection);
     SetShaderValueMatrix(RayShader, self->_outline._locInvProjection, frame->InvProjection);
+    WorldRendererCommon_SetDepthConvention(RayShader, self->_outline._locDepthReversed, frame);
 
     // Sun direction in VIEW space for the sun-aware crease colouring. The G-buffer stores view-space normals,
     // so turning the sun's direction by the same view makes the shader's sun test a plain dot product. In render space
@@ -285,14 +293,14 @@ void WorldRendererPost_RenderOutlines(WorldRenderer* self, const WorldRenderFram
 /* Each sub-pass opens/closes its own texture + shader modes. The bloom shaders sample by gl_FragCoord/resolution,
  * so a positive-height full copy keeps every bloom buffer in the scene's orientation (the tonemap then samples
  * the bloom with the same fragTexCoord it uses for the scene, so the glow lines up). */
-void WorldRendererPost_RenderBloom(WorldRenderer* self, RenderTexture2D source)
+void WorldRendererPost_RenderBloom(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D source)
 {
     float BloomResolution[2] = { (float)self->_bloom._width, (float)self->_bloom._height };
     Rectangle FullDest = { 0.0f, 0.0f, (float)self->_bloom._width, (float)self->_bloom._height };
     Rectangle BloomSourceRect = { 0.0f, 0.0f, (float)self->_bloom._width, (float)self->_bloom._height };
 
     // Bright-pass + downsample the source into bloom buffer A. The sky (sun disc + stars) is excluded from bloom
-    // by masking against the scene depth (sky wrote no depth → sits at the far plane), so only objects glow —
+    // by masking against the scene depth (sky wrote no depth → keeps the cleared depth), so only objects glow —
     // but only when the scene depth is a samplable texture; otherwise everything blooms (graceful fallback).
     Shader Prefilter = GameShader_GetRaylibShader(self->_bloom._prefilterShader);
     float Threshold = BLOOM_THRESHOLD;
@@ -305,6 +313,7 @@ void WorldRendererPost_RenderBloom(WorldRenderer* self, RenderTexture2D source)
     SetShaderValue(Prefilter, self->_bloom._prefilterLocThreshold, &Threshold, SHADER_UNIFORM_FLOAT);
     SetShaderValue(Prefilter, self->_bloom._prefilterLocSoftKnee, &SoftKnee, SHADER_UNIFORM_FLOAT);
     SetShaderValue(Prefilter, self->_bloom._prefilterLocDepthMask, &DepthMask, SHADER_UNIFORM_FLOAT);
+    WorldRendererCommon_SetDepthConvention(Prefilter, self->_bloom._prefilterLocDepthReversed, frame);
     BeginShaderMode(Prefilter);
     // Bind the scene depth (unit 1) via SetShaderValueTexture AFTER BeginShaderMode so it enters Raylib's 2D
     // batch texture table (a manual slot bind would leave the sampler on unit 0 = the scene colour). Only when
@@ -397,9 +406,8 @@ void WorldRendererPost_RenderSunshafts(WorldRenderer* self, const WorldRenderFra
     float Resolution[2] = { (float)self->_sunshaft._width, (float)self->_sunshaft._height };
     float SunPos[2] = { frame->SunScreenUv.x, frame->SunScreenUv.y };
     // T36: a sample adds at most the sky glow's brightness on screen (the last exposure's), so the sun's disc does not
-    // outshine it. TODO: only this once the owner approves T36's light (the light before it took no limit).
-    float SourceLimit = (frame->IsOneLightScale && (frame->LastExposure > 0.0f))
-        ? SUNSHAFT_SOURCE_SCREEN_LIMIT / frame->LastExposure : FLT_MAX;
+    // outshine it.
+    float SourceLimit = (frame->LastExposure > 0.0f) ? SUNSHAFT_SOURCE_SCREEN_LIMIT / frame->LastExposure : FLT_MAX;
     Rectangle SourceRect = { 0.0f, 0.0f, (float)source.texture.width, (float)source.texture.height };
     Rectangle FullDest = { 0.0f, 0.0f, (float)self->_sunshaft._width, (float)self->_sunshaft._height };
 
@@ -408,6 +416,7 @@ void WorldRendererPost_RenderSunshafts(WorldRenderer* self, const WorldRenderFra
     SetShaderValue(Shaft, self->_sunshaft._locResolution, Resolution, SHADER_UNIFORM_VEC2);
     SetShaderValue(Shaft, self->_sunshaft._locSunScreenPos, SunPos, SHADER_UNIFORM_VEC2);
     SetShaderValue(Shaft, self->_sunshaft._locSourceLimit, &SourceLimit, SHADER_UNIFORM_FLOAT);
+    WorldRendererCommon_SetDepthConvention(Shaft, self->_sunshaft._locDepthReversed, frame);
     BeginShaderMode(Shaft);
     // Bind the scene depth (unit 1) via SetShaderValueTexture AFTER BeginShaderMode (batch texture table), like
     // the outline/bloom passes; the source colour is bound to unit 0 by DrawTexturePro.
@@ -438,10 +447,9 @@ void WorldRendererPost_Tonemap(WorldRenderer* self, const WorldRenderFrame* fram
         float BloomStrength = frame->IsBloomActive ? frame->BloomStrength : 0.0f;
         SetShaderValue(TonemapRay, self->_tonemap._locBloomStrength, &BloomStrength, SHADER_UNIFORM_FLOAT);
         float SunshaftStrength = frame->AreSunshaftsActive ? frame->SunshaftStrength : 0.0f;
-        if (frame->IsOneLightScale && (frame->Exposure > 0.0f))
+        if (frame->Exposure > 0.0f)
         {
-            // T36: the shafts follow the sky on screen, not the eye's exposure (TODO: only this branch once the owner
-            // approves T36's light).
+            // T36: the shafts follow the sky on screen, not the eye's exposure.
             SunshaftStrength *= SUNSHAFT_SKY_SCREEN_SCALE / frame->Exposure;
         }
         SetShaderValue(TonemapRay, self->_tonemap._locSunshaftStrength, &SunshaftStrength, SHADER_UNIFORM_FLOAT);
