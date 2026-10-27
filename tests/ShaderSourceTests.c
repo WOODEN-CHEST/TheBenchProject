@@ -1249,6 +1249,43 @@ static void ShippedInteriorMatchesItsMirror(TestRun* run)
 }
 
 
+/* The cascades' shadow: every lit stage reads it off its surface along its geometric normal (never a normal map's), with
+ * the near and the far cascade's depth bias and normal offset, and no single bias of the old kind. */
+static void ShippedCascadesAreReadOffTheSurface(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        const char* const Stages[][2] =
+        {
+            { "pbr/fragment", "SkyShadowAmount(fragPosition, surfaceNormal," },
+            { "terrain/fragment", "SkyShadowAmount(fragPosition, geometric," },
+            { "sprite/fragment", "SkyShadowAmount(fragShadowPosition, shadowFace, dot(shadowFace, toShadowLight))" },
+        };
+        for (size_t Index = 0U; Index < (sizeof(Stages) / sizeof(Stages[0])); Index++)
+        {
+            if (!ExpandShippedStage(run, &Fixture, Stages[Index][0]))
+            {
+                continue;
+            }
+            bool IsOffTheSurface = (CountOccurrences(&Fixture.Text, "uniform vec2 shadowDepthBias;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform vec2 shadowNormalOffset;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform float shadowBias;") == 0U)
+                && (CountOccurrences(&Fixture.Text, "vec4 clip = vp*vec4(worldPos + normal*(normalOffset*slant), 1.0);")
+                    == 1U)
+                && (CountOccurrences(&Fixture.Text, Stages[Index][1]) == 1U);
+            if (!TEST_CHECK(run, IsOffTheSurface))
+            {
+                printf("    in \"%s\"\n", Stages[Index][0]);
+            }
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+
 // Public functions.
 void ShaderSourceTests_Run(TestRun* run)
 {
@@ -1276,6 +1313,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "shipped_meter_matches_its_mirror", ShippedMeterMatchesItsMirror },
         { "shipped_depth_readers_share_one_convention", ShippedDepthReadersShareOneConvention },
         { "shipped_interior_matches_its_mirror", ShippedInteriorMatchesItsMirror },
+        { "shipped_cascades_are_read_off_the_surface", ShippedCascadesAreReadOffTheSurface },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

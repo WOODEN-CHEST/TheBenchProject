@@ -56,9 +56,10 @@ uniform mat4 lightVPFar;       // render space -> far-cascade light-clip space
 uniform sampler2D shadowMapFar;// far-cascade directional depth map
 uniform bool shadowFarActive;  // whether the far cascade is available this frame
 uniform float shadowStrength;  // 0..1, how much a shadowed light is darkened (the cascades and the point shadow)
-uniform float shadowBias;      // base depth bias to combat shadow acne
+uniform vec2 shadowDepthBias;  // the depth bias in the near and the far cascade, in their depth units (half a texel)
+uniform vec2 shadowNormalOffset; // how far a lookup moves off its surface at grazing incidence, near and far, metres
 uniform float shadowTexelSize; // 1.0 / shadow-map resolution, for PCF tap offsets
-uniform vec3 shadowLightDirection; // unit direction TO the light the cascades were rendered from (for the slope bias)
+uniform vec3 shadowLightDirection; // unit direction TO the light the cascades were rendered from
 uniform float sunShadowFade;   // 0..1, how much the cascades shadow the sun: 0 while the moon casts them or neither
 uniform float moonShadowFade;  // 0..1, how much they shadow the moon. Both 0: the cascades are not sampled at all
 
@@ -177,17 +178,21 @@ vec3 WrappedLight(vec3 n, vec3 v, vec3 l, vec3 radiance, float wrap, vec3 albedo
 
 
 // ---- The cascades' shadow --------------------------------------------------------------------------------------
-// The far cascade's texels cover ~5x more world than the near cascade's, so it needs a proportionally larger depth bias
-// to avoid self-shadow acne; the near cascade uses the base bias.
-const float SHADOW_FAR_BIAS_SCALE = 4.0;
+// The cascades hold the casters' faces turned away from the light (their front faces are culled), so a lit surface never
+// meets itself in the map. A lookup moves off its surface along its geometric normal, the more the more the surface is
+// turned from the light (no surface shadows itself through the map's texels at a slant), and keeps only a small depth
+// bias: a shadow then reaches the foot of what casts it, and a roof's shadow the top of the wall under it.
 
 // Samples ONE shadow cascade. Returns -1.0 when the fragment falls outside this cascade's frustum (so the caller can
 // fall back to the next cascade / treat it as lit), else 0 (fully lit) .. 1 (fully shadowed). Crisp pixel-art shadow: a
 // 2x2 PCF (the minimal filtering that stops a single-tap edge crawling pixel-to-pixel as the camera moves, while staying
-// sharp at the low resolution) with a slope-scaled bias to combat acne.
-float SampleShadowCascade(sampler2D map, mat4 vp, vec3 worldPos, float nDotL, float biasScale)
+// sharp at the low resolution). normal is the surface's geometric normal (unit), nDotL its cosine toward the shadow
+// light (clamped at 0).
+float SampleShadowCascade(sampler2D map, mat4 vp, vec3 worldPos, vec3 normal, float nDotL, float depthBias,
+    float normalOffset)
 {
-    vec4 clip = vp*vec4(worldPos, 1.0);
+    float slant = sqrt(max(1.0 - nDotL*nDotL, 0.0));
+    vec4 clip = vp*vec4(worldPos + normal*(normalOffset*slant), 1.0);
     vec3 proj = clip.xyz/clip.w;
     proj = proj*0.5 + 0.5; // NDC -> [0,1]
     if ((proj.z > 1.0) || (proj.x < 0.0) || (proj.x > 1.0) || (proj.y < 0.0) || (proj.y > 1.0))
@@ -195,41 +200,42 @@ float SampleShadowCascade(sampler2D map, mat4 vp, vec3 worldPos, float nDotL, fl
         return -1.0; // outside this cascade
     }
 
-    float bias = max(shadowBias*biasScale*(1.0 - nDotL), shadowBias*biasScale*0.15);
     // 2x2 PCF: four taps half a texel off-centre, averaged. Reads as a hard edge after the point-upscale but dithers the
     // boundary just enough to stop sub-pixel shimmer.
     float shadow = 0.0;
-    shadow += (proj.z - bias > texture(map, proj.xy + vec2(-0.5, -0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
-    shadow += (proj.z - bias > texture(map, proj.xy + vec2( 0.5, -0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
-    shadow += (proj.z - bias > texture(map, proj.xy + vec2(-0.5,  0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
-    shadow += (proj.z - bias > texture(map, proj.xy + vec2( 0.5,  0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
+    shadow += (proj.z - depthBias > texture(map, proj.xy + vec2(-0.5, -0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
+    shadow += (proj.z - depthBias > texture(map, proj.xy + vec2( 0.5, -0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
+    shadow += (proj.z - depthBias > texture(map, proj.xy + vec2(-0.5,  0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
+    shadow += (proj.z - depthBias > texture(map, proj.xy + vec2( 0.5,  0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
     return shadow*0.25;
 }
 
 // Returns 0 (lit) .. 1 (shadowed) for the fragment, sampling the NEAR cascade first (sharp) and falling back to the FAR
 // cascade (coarse, long-range) when the fragment lies beyond the near frustum. Outside both = lit. Samples nothing while
 // the cascades shadow neither light (they did not run this frame).
-float ComputeShadow(vec3 worldPos, float nDotL)
+float ComputeShadow(vec3 worldPos, vec3 normal, float nDotL)
 {
     if ((shadowStrength <= 0.0) || ((sunShadowFade <= 0.0) && (moonShadowFade <= 0.0)))
     {
         return 0.0;
     }
-    float shadow = SampleShadowCascade(shadowMap, lightVP, worldPos, nDotL, 1.0);
+    float shadow = SampleShadowCascade(shadowMap, lightVP, worldPos, normal, nDotL, shadowDepthBias.x,
+        shadowNormalOffset.x);
     if ((shadow < 0.0) && shadowFarActive)
     {
-        shadow = SampleShadowCascade(shadowMapFar, lightVPFar, worldPos, nDotL, SHADOW_FAR_BIAS_SCALE);
+        shadow = SampleShadowCascade(shadowMapFar, lightVPFar, worldPos, normal, nDotL, shadowDepthBias.y,
+            shadowNormalOffset.y);
     }
     return max(shadow, 0.0);
 }
 
 // How much the cascades darken the light that cast them at a point (0..1): their shadow times the shadow strength.
 // shadowPos is where the shadow map is read: the fragment's own position, or for a billboard the matching point of the
-// sprite as the light sees it (its shadow-map entry faces the light). nDotL (toward the shadow light) sets the slope
-// bias.
-float SkyShadowAmount(vec3 shadowPos, float nDotL)
+// sprite as the light sees it (its shadow-map entry faces the light); shadowNormal the geometric normal there (unit), and
+// nDotL its cosine toward the shadow light (clamped at 0), which set how far the lookup moves off the surface.
+float SkyShadowAmount(vec3 shadowPos, vec3 shadowNormal, float nDotL)
 {
-    float shadow = ComputeShadow(shadowPos, nDotL);
+    float shadow = ComputeShadow(shadowPos, shadowNormal, nDotL);
     return shadow*clamp(shadowStrength, 0.0, 1.0);
 }
 

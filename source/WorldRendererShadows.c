@@ -22,19 +22,6 @@
 /** Asset names of the cutout sprites' alpha-tested variants of the two depth shaders. */
 #define SPRITE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sprite_depth")
 #define SPRITE_CUBE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sprite_cube_depth")
-/** The shadow light (the sun or the moon) casts TWO cascaded orthographic shadow maps, both around the camera (their
- *  centres snapped to their texels): a NEAR cascade with a small extent (sharp shadows for close detail; 1.6 cm texels)
- *  and a FAR cascade with a large extent (coarse shadows for big / distant casters; 7.8 cm texels). Per-object
- *  WorldShadowTier routes which cascade(s) each object casts into. World-space width/height of each cascade's
- *  frustum: */
-#define SHADOW_NEAR_ORTHO_SIZE 32.0f
-#define SHADOW_FAR_ORTHO_SIZE 160.0f
-/** Distance the shadow light camera is placed from its focus, along the shadow light's direction. */
-#define SHADOW_DISTANCE 120.0f
-/** Near plane of the shadow orthographic frustum (shared by both cascades). */
-#define SHADOW_NEAR 1.0f
-/** Far plane of the shadow orthographic frustum (brackets the scene around the focus; shared by both cascades). */
-#define SHADOW_FAR (SHADOW_DISTANCE * 2.0f)
 /** Resolution (per cube face) of the point-light shadow cube map, in texels. */
 #define POINT_SHADOW_CUBE_SIZE 1024
 /** Near plane of the point-light shadow cube's 90-degree face projections. */

@@ -22,9 +22,13 @@
 /** Asset name of its instanced twin: the same fragment stage over a vertex stage that places every copy of a cell
  *  (WorldRendererInstances.c draws with it). */
 #define PBR_INSTANCED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_pbr_instanced")
-/** Base shadow depth bias (normalized light-clip depth) to combat acne; slope-scaled in the shader. Tuned
- *  for the shadow frustum's near..far range: ~0.0009 * (far-near) is the world-space offset (a few cm here). */
-#define SHADOW_BIAS 0.0009f
+/** The cascades' depth bias and normal offset, in texels of each cascade: half a texel of depth (the maps hold the
+ *  casters' faces turned away from the light, so a lit surface never meets itself there), and the lookup moved off the
+ *  surface along its normal by a texel and a half at grazing incidence (no surface shadows itself through the map's
+ *  texels at a slant). In the near cascade that is 0.8 cm and 2.3 cm: a shadow reaches the foot of what casts it, and a
+ *  roof's shadow the top of the wall under it. */
+#define SHADOW_DEPTH_BIAS_TEXELS 0.5f
+#define SHADOW_NORMAL_OFFSET_TEXELS 1.5f
 /** The exposure the sun's disc is drawn for whatever the eye's: the disc's radiance is divided by the exposure and
  *  multiplied by this, so it keeps its look on screen through dusk, when the exposure rises far above the noon's (it
  *  would turn the setting disc white): about a clear noon's exposure, the one the disc's look is tuned at. */
@@ -97,7 +101,8 @@ static void CacheLitLocations(WorldRendererLitLocations* lit, Shader shader)
     lit->_locShadowMapFar = GetShaderLocation(shader, "shadowMapFar");
     lit->_locShadowFarActive = GetShaderLocation(shader, "shadowFarActive");
     lit->_locShadowStrength = GetShaderLocation(shader, "shadowStrength");
-    lit->_locShadowBias = GetShaderLocation(shader, "shadowBias");
+    lit->_locShadowDepthBias = GetShaderLocation(shader, "shadowDepthBias");
+    lit->_locShadowNormalOffset = GetShaderLocation(shader, "shadowNormalOffset");
     lit->_locShadowTexelSize = GetShaderLocation(shader, "shadowTexelSize");
     lit->_locShadowLightDirection = GetShaderLocation(shader, "shadowLightDirection");
     lit->_locSunShadowFade = GetShaderLocation(shader, "sunShadowFade");
@@ -242,10 +247,19 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
 {
     CacheLitLocations(outLocations, shader);
 
-    // Constant shadow parameters; upload once.
-    float ShadowBias = SHADOW_BIAS;
+    // Constant shadow parameters; upload once. Each cascade's by its texel's world size (the depth bias in its depth
+    // units: the light frustum's near to far plane is 0 to 1).
     float ShadowTexel = 1.0f / (float)SHADOW_MAP_SIZE;
-    SetShaderValue(shader, outLocations->_locShadowBias, &ShadowBias, SHADER_UNIFORM_FLOAT);
+    float TexelWorld[2] = { SHADOW_NEAR_ORTHO_SIZE * ShadowTexel, SHADOW_FAR_ORTHO_SIZE * ShadowTexel };
+    float DepthBias[2];
+    float NormalOffset[2];
+    for (int Cascade = 0; Cascade < 2; Cascade++)
+    {
+        DepthBias[Cascade] = SHADOW_DEPTH_BIAS_TEXELS * TexelWorld[Cascade] / (SHADOW_FAR - SHADOW_NEAR);
+        NormalOffset[Cascade] = SHADOW_NORMAL_OFFSET_TEXELS * TexelWorld[Cascade];
+    }
+    SetShaderValue(shader, outLocations->_locShadowDepthBias, DepthBias, SHADER_UNIFORM_VEC2);
+    SetShaderValue(shader, outLocations->_locShadowNormalOffset, NormalOffset, SHADER_UNIFORM_VEC2);
     SetShaderValue(shader, outLocations->_locShadowTexelSize, &ShadowTexel, SHADER_UNIFORM_FLOAT);
 
     // Point the renderer-owned samplers at their fixed units once (see WorldRendererTextureUnit).

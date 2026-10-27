@@ -74,11 +74,11 @@ void main()
         vec3 n = FacingNormal(normalize(fragNormal), v);
         placeNormal = isCard ? n : placeNormal;
 
-        // The cascades are read on the sprite as their light sees it, with the slope bias of that quad's face toward
-        // the light; the cube shadow likewise on the quad facing its light.
+        // The cascades are read on the sprite as their light sees it, off that quad's face toward the light; the cube
+        // shadow likewise on the quad facing its light.
         vec3 toShadowLight = normalize(shadowLightDirection);
-        float shadowNDotL = abs(dot(normalize(fragShadowNormal), toShadowLight));
-        float shadowAmount = SkyShadowAmount(fragShadowPosition, shadowNDotL);
+        vec3 shadowFace = FacingNormal(normalize(fragShadowNormal), toShadowLight);
+        float shadowAmount = SkyShadowAmount(fragShadowPosition, shadowFace, dot(shadowFace, toShadowLight));
         vec3 pointShadowNormal = FacingNormal(fragPointShadowNormal, pointShadowLightPos - fragPointShadowPosition);
 
         SkyLightValues light = SkyLightAt(fragPosition);

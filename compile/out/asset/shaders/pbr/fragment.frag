@@ -91,7 +91,8 @@ void main()
     // slope bias follows the shadow light's angle. Then the point lights, the cube-shadow light read at the fragment
     // itself.
     SkyLightValues light = SkyLightAt(fragPosition);
-    float shadowAmount = SkyShadowAmount(fragPosition, max(dot(n, normalize(shadowLightDirection)), 0.0));
+    float shadowAmount = SkyShadowAmount(fragPosition, surfaceNormal,
+        max(dot(surfaceNormal, normalize(shadowLightDirection)), 0.0));
     vec3 direct = SkyLight(light, n, v, shadowAmount, albedo, f0, rough, metal);
     vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, n, albedo, f0, rough, metal);
 

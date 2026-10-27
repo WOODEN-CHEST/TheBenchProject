@@ -97,6 +97,19 @@
 #define SCENE_FAR_PLANE ((double)RL_CULL_DISTANCE_FAR)
 /** Resolution (square) of each sun shadow-map cascade, in texels. The PBR shader's PCF needs its texel size. */
 #define SHADOW_MAP_SIZE 2048
+/** The shadow light (the sun or the moon) casts TWO cascaded orthographic shadow maps, both around the camera (their
+ *  centres snapped to their texels): a NEAR cascade with a small extent (sharp shadows for close detail; 1.6 cm texels)
+ *  and a FAR cascade with a large extent (coarse shadows for big / distant casters; 7.8 cm texels). Per-object
+ *  WorldShadowTier routes which cascade(s) each object casts into. World-space width/height of each cascade's
+ *  frustum: */
+#define SHADOW_NEAR_ORTHO_SIZE 32.0f
+#define SHADOW_FAR_ORTHO_SIZE 160.0f
+/** Distance the shadow light camera is placed from its focus, along the shadow light's direction. */
+#define SHADOW_DISTANCE 120.0f
+/** Near plane of the shadow orthographic frustum (shared by both cascades). */
+#define SHADOW_NEAR 1.0f
+/** Far plane of the shadow orthographic frustum (brackets the scene around the focus; shared by both cascades). */
+#define SHADOW_FAR (SHADOW_DISTANCE * 2.0f)
 /** Number of maps in a raylib Material: the renderer module's RENDERER_MATERIAL_MAP_COUNT (raylib's private
  *  MAX_MATERIAL_MAPS, see BUILDING.md). DrawMesh reads, and binds textures from, exactly this many entries of
  *  Material.maps, so a per-draw material copy must have this many. Changing it means checking
@@ -578,7 +591,8 @@ typedef struct WorldRendererLitLocationsStruct
     int _locShadowMapFar;
     int _locShadowFarActive;
     int _locShadowStrength;
-    int _locShadowBias;
+    int _locShadowDepthBias;
+    int _locShadowNormalOffset;
     int _locShadowTexelSize;
     int _locShadowLightDirection;
     int _locSunShadowFade;

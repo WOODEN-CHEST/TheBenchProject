@@ -834,7 +834,8 @@ themselves, and the eye adapts indoors.
   floor's share whatever their windows, and the ground under deep eaves, a carport's floor and what lies under a desk
   or a table darken as a room does (about 12 % under the test world's desk); a facade under its eaves, whose place lies
   in front of them, keeps most of its sky. Light that comes in sideways, through doors and windows, is not in the map:
-  only the floor stands for it. The ring is coarse: within 1.5 m of anything that rises more than the bias (a bench, a
+  only the floor stands for it. So a cave's floor and back wall stay at the floor's share however wide its mouth, while
+  the overhang's underside near the lip, facing down and out at the sunlit ground, keeps that ground's bounce. The ring is coarse: within 1.5 m of anything that rises more than the bias (a bench, a
   crate, a car) open ground loses the taps that land on it (up to 3/8 of its ring), more than the sky such a thing
   hides; and in a space narrower than the step in front of a steep surface (1.5 m: a closet, a narrow corridor along an
   outside wall) a wall's faced place can land outside, beyond the opposite wall, so the wall keeps sky light. Toward the
@@ -1031,10 +1032,15 @@ cascade(s) it casts into, and one with `casts_shadows` off casts into none (nor 
 brighter of the sun and the moon by luminance, once it stands above 0.05 (the sine of its elevation; full shadows from
 0.15), faded out while the two are about as bright (0 where they are equal, full once one is 4 times the other) and for
 a light too dim for a shadow to show (a thin crescent). So dusk with the moon up goes from sun shadows through none to
-moon shadows without a jump. The PBR shader samples near first, then far, with 2×2 PCF and a slope-scaled bias along
-the shadow light, darkening only that light's direct term (`sunShadowFade` / `moonShadowFade`; both 0, and no map
-sampled, while the cascades do not run). Active when shadows are enabled, the strength is above 0 and there is a
-shadow light.
+moon shadows without a jump. The lit shaders sample near first, then far, with 2×2 PCF, darkening only that light's
+direct term (`sunShadowFade` / `moonShadowFade`; both 0, and no map sampled, while the cascades do not run). The maps
+hold the casters' faces turned away from the light (front faces culled), so a lit surface never meets itself there; a
+lookup moves off its surface along its geometric normal by a texel and a half at grazing incidence (`sin` of the angle
+to the light: none facing it) and keeps a depth bias of half a texel (0.8 cm and 2.3 cm in the near cascade, five times
+that in the far one: `SHADOW_DEPTH_BIAS_TEXELS`, `SHADOW_NORMAL_OFFSET_TEXELS`), so a shadow reaches the foot of what
+casts it and a roof's shadow the top of the wall under it; where a roof meets a wall a hairline of light, at most a
+scene pixel, can remain (the map's texel and its filter). A sprite is read on its quad facing the light, off that face.
+Active when shadows are enabled, the strength is above 0 and there is a shadow light.
 
 **Point-light shadow.** One cube shadow for the shadow-casting light nearest the camera (`CastsShadows`): six
 90° faces of packed linear distance (RGBA8 cube, `common/distance_packing`), sampled with 20-tap PCF. The faces are
