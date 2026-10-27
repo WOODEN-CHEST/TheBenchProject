@@ -72,14 +72,14 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
     and `roughness` (in [0, 1]), `emissive_color`, `emissive_intensity` (>= 0). The slot's `texture_properties`
     (filtering, wrap, mipmaps; `TextureProperties_Apply`) apply to each of its maps, so distant textured models can use
     mipmaps and shimmer less.
-  - **The factors are shared with world model variants** (T10, [WorldModels.md](WorldModels.md)): the slot and the
+  - **The factors are shared with world model variants** ([WorldModels.md](WorldModels.md)): the slot and the
     scalars are read by `AssetJSON_ReadMaterialSlot` and `AssetJSON_ReadMaterialFactors`
     (`source/AssetDefinitionCommon.{h,c}`) into a `GameMaterialFactors` (`GameModel.h`: each factor with its own
     `Has...` flag), and applied by `GameMaterialFactors_Apply(factors, hasEmissiveMap, maps)` (`source/GameModel.c`):
     here to the model's own materials while it loads, for a variant to the renderer's per-draw copy. An override with an
-    emissive map but no emissive colour or intensity shows the map at white x 1. Since T10 the shared parser enforces
-    the ranges the reference always gave (metallic and roughness in [0, 1], a non-negative intensity, finite numbers
-    that fit a float).
+    emissive map but no emissive colour or intensity shows the map at white x 1. The shared parser enforces the
+    ranges the reference gives (metallic and roughness in [0, 1], a non-negative intensity, finite numbers that fit a
+    float).
 - **Ownership:** the asset owns the meshes, the materials and their map arrays, and every texture its materials
   referenced at load (the importer's textures plus the overrides; raylib's default texture is skipped). Importer
   textures that an override replaced are unloaded during the load. On unload each tracked texture id is unloaded
@@ -90,9 +90,8 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
 - **Local bounds:** `GameModel_GetLocalBounds` returns the mesh-space bounding box (before the import transform),
   computed once at load, so users never walk the vertices themselves.
 - **Imported textured models shade wrong:** glTF's metallic texture and OBJ's `map_Ks` land in the METALNESS slot,
-  which the PBR shader reads as packed ORM (red = occlusion). Normalising imported materials is deferred
-  (`handoff/2026-10_code_review/FIX_PLAN.md`, "Not in this pass").
-- **Skinned models (T29, [Animation.md](Animation.md)):** a model whose file has a skin gets its `GameSkeleton` when it
+  which the PBR shader reads as packed ORM (red = occlusion). Normalising imported materials is deferred.
+- **Skinned models ([Animation.md](Animation.md)):** a model whose file has a skin gets its `GameSkeleton` when it
   loads (`GameModel_GetSkeleton`, NULL for a rigid model): bones in evaluation order, bind and inverse bind matrices,
   rest poses, which meshes the GPU skins (bone indices and weights uploaded, raylib built with `SUPPORT_GPU_SKINNING`:
   BUILDING.md) and each bone's vertex box. A skeleton that fails its checks (parents out of range or in a cycle) fails
@@ -107,7 +106,7 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
 - `GameShader { Shader _rayShader; }`. `GameShader_GetRaylibShader(self)` returns the `Shader` by value; its `locs`
   array belongs to the asset.
 - Loading (`ShaderDefinition.c`): `vertex_location` and/or `fragment_location`, at least one (a bare `location` is the
-  fragment stage when `fragment_location` is absent), and since B03 an optional `defines` (at most
+  fragment stage when `fragment_location` is absent), and an optional `defines` (at most
   `SHADER_DEFINITION_MAX_DEFINES`, 16, distinct names that `ShaderSource_IsDefineName` accepts; anything else fails the
   definition with `ErrorCode_InvalidAssetDefinition`). The sources are read as text through `AssetManager_OpenResource`
   (stage extensions `vert` `frag` `vs` `fs` `glsl`, so the two stage files need distinct stems), their `#include`
@@ -128,16 +127,16 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   of file 1. When such a stage fails to compile, the load error lists which number is which file. A missing include
   fails with `ErrorCode_InvalidAssetData` naming the include, the including file and the line (cached like every
   failure). Shared files today: `common/math` (`PI`), `common/atmosphere` (the air, the atmosphere's tables and their
-  march, T34's direct march, the haze volume's layout: the table builders, the volume's, the sky, the stars and the
-  haze's readers share it, T15, T35), `common/haze` (the haze in front of what the camera sees: the volume's readers and
-  the ground haze; the lit shaders, the sky, the stars and the outlines, T35), `common/night_sky` (air mass,
+  march, the direct march, the haze volume's layout: the table builders, the volume's, the sky, the stars and the
+  haze's readers share it), `common/haze` (the haze in front of what the camera sees: the volume's readers and
+  the ground haze; the lit shaders, the sky, the stars and the outlines), `common/night_sky` (air mass,
   extinction, the skyglow profile: the sky and the stars), `common/night_vision` (the eye's dim-light vision: the sky and
   the lit shaders), `common/lighting` (the world's lighting: the PBR, terrain and sprite shaders; it includes the ones
   before it) and `common/distance_packing` (the
-  point-light shadow cube's packed distances); `common/dither`, `common/skinning` and `common/instancing` are the world
-  renderer's ([WorldRuntime.md](WorldRuntime.md)). A stage file may be shared too: the four sprite shaders' definitions
+  point-light shadow cube's packed distances); `common/dither`, `common/skinning`, `common/instancing`, `common/depth`
+  and `common/value_noise` are the world renderer's ([WorldRuntime.md](WorldRuntime.md)). A stage file may be shared too: the four sprite shaders' definitions
   all name `sprite/vertex`, and each instanced twin names its rigid shader's fragment stage.
-- **Defines (B03).** `ShaderSource_ExpandIncludes` takes the definition's defines and writes each as `#define <name>`
+- **Defines.** `ShaderSource_ExpandIncludes` takes the definition's defines and writes each as `#define <name>`
   right after the main file's first `#version` line, then `#line <the next line> 0`, so the main file's numbers stay
   right (without a `#version` line they come first, then `#line 1 0`). One source serves a shader and its variants
   through `#ifdef` (the instanced twins define `WORLD_INSTANCED`). The expander refuses a name `ShaderSource_IsDefineName`
@@ -164,7 +163,7 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   by value (its id, size, mip count and format); `GameTexture_IsSrgb(self)` tells colour (`color_space` `srgb`, the
   default) from linear data (`linear`: normal maps, masks, noise). The flag is metadata for the shader: the GPU format
   is the same, and shaders linearize sRGB textures themselves.
-- For standalone textures: sky panoramas, the moon, noise, normal maps, masks. Sprites keep coming from sprite sheets
+- For standalone textures: sky panoramas, the moon, noise, normal maps, masks. Sprites come from sprite sheets
   and sprite animations, model maps from model definitions.
 - Loading (`TextureDefinition.c`): the file location (`png` `bmp` `gif` `qoi` `dds`; references are rejected when the
   definition is read) is decoded with `LoadImage` first, so an image over 8192 pixels per side fails before anything
@@ -172,7 +171,7 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   mipmaps generated when `texture_properties.mipmaps` is true and the file brought none (a compressed dds without its
   own mip levels fails the load: raylib would count a mip chain the GPU never built), then the wrap mode, then the
   filter (last, because raylib picks the mipmapped GL filter from the mip count). Unloaded with `UnloadTexture`.
-- **Pixels without a texture (B02):** `AssetManager_LoadTexturePixels(manager, name, maxSide, &pixels)` decodes the
+- **Pixels without a texture:** `AssetManager_LoadTexturePixels(manager, name, maxSide, &pixels)` decodes the
   image file a texture definition names into a `TexturePixels` (8-bit RGBA, row by row from the top; a greyscale image's
   grey in red, green and blue, alpha 255 without one; the definition's `color_space` as `IsSrgb`), without loading the
   texture asset, taking a hold or touching the GPU, so it works headless. The caller frees it with
@@ -180,7 +179,7 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   before the conversion to RGBA, which goes through floats. DDS files are refused before they are decoded (see below), so
   only png, bmp, gif and qoi pixels are read. The terrain materials read their maps this way (their texture arrays are
   made from the pixels: [Terrain.md](Terrain.md)); nothing is cached, so read once and keep what you need.
-- **Hostile DDS files (known, not fixed: found by B02's review).** raylib's DDS reader (`rl_load_dds_from_memory` in
+- **Hostile DDS files (known, not fixed).** raylib's DDS reader (`rl_load_dds_from_memory` in
   its `rltexgpu.h`) trusts the header: it copies as many bytes as the header's width, height and format claim (a
   compressed file's `pitch_or_linear_size`), never comparing them with the file's size, so a short `.dds` file from a
   hostile pack reads past the end of its buffer (a crash, or the heap's bytes in the image). Every GPU load of a dds

@@ -2,14 +2,13 @@
 
 `include/WorldFile.h`; `source/WorldFile.c` (the loading rules both formats share, the object order, files, paths),
 `source/WorldFileJSON.c`, `source/WorldFileGHDF.c`, and the private `source/WorldFileInternal.h` they share. Tests:
-`tests/WorldFileTests.c`. Built in T09 (decision G5: JSON for authored worlds, GHDF too, compact enough for the
-network). The format reference is `references/world_structure.md`.
+`tests/WorldFileTests.c`. JSON is for authored worlds; GHDF is there too, compact enough for the network. The format
+reference is `references/world_structure.md`.
 
 Saves and loads a `World` ([WorldData.md](WorldData.md)) as JSON or GHDF. Both are the same tree: the root (format
 version, name, next object id, environment, objects), each object's id, its object table and its components, each
 from its type's table. The property tables ([PropertyDescriptors.md](PropertyDescriptors.md)) write and read every
-value, so this module only walks the tree and applies the world's loading rules, written once for both formats. It
-replaced the hand-written `WorldDTO` / `WorldEncoder` T05 removed.
+value, so this module only walks the tree and applies the world's loading rules, written once for both formats.
 
 ## API
 
@@ -19,7 +18,7 @@ replaced the hand-written `WorldDTO` / `WorldEncoder` T05 removed.
 | `WorldFile_WriteJSON(world, outBytes)` / `_WriteGHDF` | Append the file's bytes to a buffer; nothing is appended on failure. The world is const. |
 | `WorldFile_LoadJSON(path, options, outWorld)` / `_LoadGHDF` | Read a file (at most `WORLD_FILE_MAX_BYTE_COUNT`, 64 MiB, checked before reading), then as above. |
 | `WorldFile_SaveJSON(world, path)` / `_SaveGHDF` | Write a file atomically: the bytes go to `<path>.tmp` next to it, which then replaces it (`FileSystem_ReplaceEntry`); missing parent folders are made. |
-| `WorldFile_BuildPath(baseDirectory, name, format, outPath)` | `<base>/worlds/<name>.world.json` or `.world.ghdf` (until story packs exist, A5; a `// TODO:` marks it). |
+| `WorldFile_BuildPath(baseDirectory, name, format, outPath)` | `<base>/worlds/<name>.world.json` or `.world.ghdf` (until story packs exist; a `// TODO:` marks it). |
 
 `WorldFileReadOptions` (`WorldFileReadOptions_Create(keys, assets, logger)`): the program's key registry (required:
 the world borrows it), the asset manager its components load from (or NULL), the logger (the world's, and the
@@ -40,8 +39,8 @@ Downloaded worlds will use this, so every file is treated as hostile.
    `WORLD_FILE_MAX_BYTE_COUNT`, 64 MiB) are checked, `JSON_DeserializeWithLimits` / `GHDF_ReadWithLimits` parse with the
    options' `MaxTreeByteCount`. A document's size bounds its tree only loosely (an empty JSON object is 3 bytes and over a
    kilobyte parsed, an empty GHDF compound in an array 1 byte and as much), so the readers estimate the tree as they
-   build it and refuse the document once it passes the limit: the 64 MiB input cap alone allowed tens of gigabytes, and
-   running out of memory aborts the game. A typical object (a name, a transform, a component) is estimated at about
+   build it and refuse the document once it passes the limit: the 64 MiB input cap alone would allow tens of gigabytes,
+   and running out of memory aborts the game. A typical object (a name, a transform, a component) is estimated at about
    6 KiB in either format, so 1 GiB leaves room for 100 000 objects with more on them.
 2. **Begin:** the options are checked, the key registry's count is taken, the world is constructed
    (`World_Construct2`).
@@ -78,17 +77,12 @@ shown as `?`. GHDF ids a table retired are skipped silently. These warnings are 
 failed load's error says what is wrong; the world it was building may still log its own lines, such as a refused
 parent, before it is destroyed).
 
-**Versions** (`GetTableVersion` in WorldFile.c): format 1 wrote every table at its version 1, which the reads pass as
+**Versions** (`GetTableVersion` in WorldFile.c): format 1 holds every table at its version 1, which the reads pass as
 `PropertyReadOptions.DataVersion`. A table that raises its `Version` (with a `Migrate`) needs a new world format
 version and that mapping: a `// TODO:` there says so, and a test fails while any table a world file holds is above 1.
-T10 changed the model component without either (the test world was the only world file, as T09 noted): its wire 1 /
-key `model` (a model asset) became `world_model` (a world model), and wires 2 to 5 became the placement's own values
-behind new override flags. A JSON file from before reads with `model` skipped as unknown, a GHDF one with entry 1 read
-as the world model's name (the shipped world models carry their models' names), and either keeps those values unused
-until their flags are set. T26 did the same to the sprite component: wire 1 / key `sprite_animation` became
-`world_sprite` (a world sprite named as its animation, for the shipped ones), and wires 2 to 16 became the placement's
-own values behind new override flags. Once other worlds must keep loading, such a change raises the table's version
-with a `Migrate` (and a GHDF migration slot, which the tables do not have yet) and the world format version.
+Once other worlds must keep loading, a change of a row's meaning (a key or wire id that comes to name something else)
+raises the table's version with a `Migrate` (and a GHDF migration slot, which the tables do not have yet) and the world
+format version.
 
 ## Writing
 
@@ -99,7 +93,7 @@ with a `Migrate` (and a GHDF migration slot, which the tables do not have yet) a
   instead of a warning and a counter that starts over.
 - **The object order** (`WorldFileInternal_CollectObjects`): the roots in id order, each followed by its subtree depth
   first (no recursion: the links lead back up), children in attach order. Parents come before their children, diffs
-  stay stable, and a load restores the attach order. **Runtime objects** (`WorldObject_IsPersistent` false, T13: the
+  stay stable, and a load restores the attach order. **Runtime objects** (`WorldObject_IsPersistent` false: the
   player and spawned NPCs, which the game state will save on its own) are left out with their whole subtrees; a saved
   object never hangs under one.
 - **JSON:** `id`, the object table's keys (defaults left out), then `components` keyed by registry name in type
@@ -108,21 +102,20 @@ with a `Migrate` (and a GHDF migration slot, which the tables do not have yet) a
 - **GHDF:** the root entries 1 to 5 (`WorldFileRootEntry`), objects with entry 1 the id and 2 the components (keyed by
   the type's value + 1, `WorldFileObjectEntry`), the tables' wire ids for the rest; integers in the smallest type
   ([GameGHDF.md](GameGHDF.md)).
-- **Positions are doubles** (T33, [WorldData.md](WorldData.md)): JSON writes each axis as the shortest text that reads
-  back the same double, so every digit survives (`[100001.333333333, 0.5, -99999.25]`) and a position that held a
-  float before T33 prints as it did (the shipped `test.world.json` is written byte for byte as before); GHDF writes a
-  Double array of 3. A GHDF save from before T33 (Float arrays) still loads, each position the float it held. A
-  position that is not finite, or beyond `WORLD_POSITION_LIMIT` (1e7 m) on an axis, is refused like any value outside
-  its row's rules.
+- **Positions are doubles** ([WorldData.md](WorldData.md)): JSON writes each axis as the shortest text that reads
+  back the same double, so every digit survives (`[100001.333333333, 0.5, -99999.25]`) and a position written as a
+  float's shortest text prints as it was; GHDF writes a Double array of 3. An older GHDF save with Float arrays still
+  loads, each position the float it held. A position that is not finite, or beyond `WORLD_POSITION_LIMIT` (1e7 m) on
+  an axis, is refused like any value outside its row's rules.
 - **Pools:** each read and write makes its own JSON or GHDF pool and destroys it afterwards, the tree with it (not
   returned first, which would walk it once more): a JSON pool keeps a copy of every key until it goes, so a shared one
   would only grow, and a large world's compounds should not stay pooled. Walking a compound uses an enumerator on the
   stack (`WorldFileInternal_BeginEnumeration`); the GHDF reader walks components by their ids, as the entry
   collection's enumerator would allocate an inner one per object.
-- **Scale:** 100 000 objects with a name and a position, all roots in descending id order (the worst case for the old
-  sort), on the owner's machine at -O3: written in 0.71 s as JSON (11.9 MB) and 0.25 s as GHDF (2.9 MB), read in 0.60 s
-  and 0.41 s. Before T09's WRFramework fixes saving about 87 000 roots overflowed the stack and reading 100 000 objects
-  took 7.4 s (`a_world_at_the_object_limit_saves_and_loads` keeps the case).
+- **Scale:** 100 000 objects with a name and a position, all roots in descending id order, on the owner's machine at
+  -O3: written in 0.71 s as JSON (11.9 MB) and 0.25 s as GHDF (2.9 MB), read in 0.60 s and 0.41 s.
+  `a_world_at_the_object_limit_saves_and_loads` keeps the case: the roots' sort must not recurse once per root (that
+  overflows the stack) and the readers' pools must not take quadratic time.
 
 Saving a world read from a file without changing it writes the same bytes (a test checks it with the shipped test
 world), so the test frame's F5 save diffs against its file only where the game changed something.
@@ -141,4 +134,4 @@ world), so the test frame's F5 save diffs against its file only where the game c
 - **Compression** for the network is left to later (a `// TODO:` in WorldFileGHDF.c: untrusted compressed data needs
   its own size limit before it is decompressed).
 - **Runtime state** (sprite playback, revisions, script data changed in play) is not part of a world file; game saves
-  as differences from the world come with the save round (architecture 3.7).
+  as differences from the world come later.

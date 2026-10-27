@@ -2,8 +2,8 @@
 
 `include/GameClock.h`, `source/GameClock.c`. Tests: `tests/GameClockTests.c`.
 
-The game's one clock: the in-game date and time that everything reads. Built in T23 (architecture proposal 3.3, "one
-game clock"; decision G9: a calendar date that matters in gameplay). Dates come from [GameCalendar.md](GameCalendar.md).
+The game's one clock: the in-game date and time that everything reads (a calendar date that matters in gameplay).
+Dates come from [GameCalendar.md](GameCalendar.md).
 
 ## State and settings
 
@@ -51,7 +51,7 @@ game clock"; decision G9: a calendar date that matters in gameplay). Dates come 
 
 A move passes every boundary after its start, up to and including its end: 08:30 onto 09:00 passes 09:00, and moving
 on from 09:00 does not pass it again. So per-tick crossings add up to exactly the boundaries crossed over many ticks.
-The scheduler of the game-core round (events at dates and times, architecture A4) will wake on these.
+The scheduler (events at dates and times, with the game core) will wake on these.
 
 ## Reading the time
 
@@ -65,27 +65,27 @@ The scheduler of the game-core round (events at dates and times, architecture A4
 ## Who reads the clock (the rule for later tasks)
 
 **Every user of game time takes it from this clock; nothing keeps its own time.**
-- **The sky.** `WorldEnvironment` no longer advances time ([WorldData.md](WorldData.md), "Environment"): its
+- **The sky.** `WorldEnvironment` never advances time ([WorldData.md](WorldData.md), "Environment"): its
   `time_of_day` and `date` are what the sky shows. Whoever runs the game writes them from the clock every tick
   (`TimeOfDay = GameClock_GetTimeOfDay`, `Date = GameClock_GetDay`); in a world file they are the sky's starting
-  point. The moon's phase and position, the stars' drift and the seasons (T03) read the environment's date and time,
+  point. The moon's phase and position, the stars' drift and the seasons read the environment's date and time,
   i.e. the clock.
-- **The weather (T16)** moves by the game seconds the clock moved: `Crossings.GameSeconds` of each Advance and each
-  fast-forward (`WeatherSystem_Update(..., clock, gameSecondsElapsed)` in its task file). A paused clock pauses the
+- **The weather (later)** moves by the game seconds the clock moved: `Crossings.GameSeconds` of each Advance and each
+  fast-forward (a planned `WeatherSystem_Update(..., clock, gameSecondsElapsed)`). A paused clock pauses the
   weather; sleeping moves it.
-- **Later:** the scheduler (game core, A4), NPC schedules, scripts' `wait(2h)` and `time.*` functions
-  (`handoff/2026-10_scripting_language/PROPOSAL.md`), story deadlines and office hours.
+- **Later:** the scheduler (game core), NPC schedules, scripts' `wait(2h)` and `time.*` functions,
+  story deadlines and office hours.
 
 Who owns the clock: today the world test frame (`WorldTestFrame`, [WorldRuntime.md](WorldRuntime.md)), which starts
 it from the world environment's date and time at a 2-minute-day speed (time scale 720). In the game it will belong to
-the game state (architecture 3.3), started from the story's settings (a `// TODO:` in `source/WorldTestFrame.c`
-until stories have a manifest, architecture A5).
+the game state, started from the story's settings (a `// TODO:` in `source/WorldTestFrame.c`
+until stories have a manifest).
 
 ## Not here (yet)
 
-- The scheduler (events at dates and times): the game-core round.
+- The scheduler (events at dates and times): with the game core.
 - Time zones and daylight saving: never planned.
-- Seasons for the sun: `WorldEnvironment.AreSeasonsEnabled` (T03, off by default), which reads the environment's date
+- Seasons for the sun: `WorldEnvironment.AreSeasonsEnabled` (off by default), which reads the environment's date
   ([WorldData.md](WorldData.md), "Environment").
 - Custom calendars: see [GameCalendar.md](GameCalendar.md).
 

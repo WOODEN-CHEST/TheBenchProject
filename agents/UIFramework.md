@@ -152,8 +152,8 @@ widget type's own event is delivered even then (it carries everything by value),
 still reports the click. Handlers may destroy widgets, move focus, start animations, subscribe or unsubscribe, and post
 more notifications (delivered in the same pass, at most `UI_SCREEN_MAX_EVENTS_PER_DISPATCH` per update: the rest are
 dropped, and logged once per streak of such updates, so handlers that keep posting cannot hang the game or flood the
-log). A widget's own vtable hooks still run immediately. The queue is shaped to later post into a game-wide event queue
-(architecture decision A4).
+log). A widget's own vtable hooks still run immediately. The queue is shaped to later post into a game-wide event
+queue.
 
 ## Update order
 

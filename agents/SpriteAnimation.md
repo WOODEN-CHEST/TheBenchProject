@@ -10,8 +10,8 @@ animations").
 - **`SpriteAnimation`**: the shared, immutable data. An ordered list of frames plus default playback parameters.
   A loaded animation is an asset (`AssetManager_LoadSpriteAnimation`), shared by every holder.
 - **`SpriteAnimationInstance`**: one consumer's playback state. Current frame, timing, fps, frame step,
-  running/looping flags, and an event raised when playback ends or loops. Each world sprite component or text
-  sprite has its own instance, advanced with `SpriteAnimationInstance_Update`.
+  running/looping flags, and an event raised when playback ends or loops. Each world sprite component has its own
+  instance, and each text document one per animation name, advanced with `SpriteAnimationInstance_Update`.
 
 ## Types
 
@@ -141,4 +141,5 @@ source rectangle, so divide `_areaInTexture` by the texture's width and height (
   `agents/WorldSprites.md`) under its own asset user (`agents/WorldData.md`). `WorldTestFrame` advances the sprites of
   enabled objects each update tick (`AdvanceSpriteAnimations`); the WorldRenderer only draws each sprite's current
   frame.
-- Text `SpriteComponent`s get their instances from `TextComponentResolver`'s `ObjectPool`.
+- Text `SpriteComponent`s get their instances from their `TextDocument` (one per animation name, from its
+  `ObjectPool`; [TextDocument.md](TextDocument.md)).

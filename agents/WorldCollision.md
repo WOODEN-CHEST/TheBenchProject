@@ -1,6 +1,6 @@
 # World collision
 
-Collision for the 3D world, built in T12 and T27 (decisions G13, G18–G20). The modules:
+Collision for the 3D world. The modules:
 - **Shapes and layers:** `include/CollisionShape.h` with `source/CollisionShape.c`, `source/CollisionHull.c` and
   `source/CollisionMesh.c`; `include/CollisionLayer.h` with `source/CollisionLayer.c`.
 - **The narrowphase**, all private:
@@ -18,13 +18,13 @@ Collision for the 3D world, built in T12 and T27 (decisions G13, G18–G20). The
   - `source/WorldCollision.c`: lifetime, sync, the debug list;
   - `source/WorldCollisionQuery.c`: the queries;
   - `source/WorldCollisionTrigger.c`: trigger events;
-  - `source/WorldCollisionTree.{h,c}`: the dynamic AABB tree (its boxes in double, T33);
-  - `source/WorldCollisionStep.c` (T27): the step: motions, bodies, the wake walk, blocked movers, the write-back,
+  - `source/WorldCollisionTree.{h,c}`: the dynamic AABB tree (its boxes in double);
+  - `source/WorldCollisionStep.c`: the step: motions, bodies, the wake walk, blocked movers, the write-back,
     results;
-  - `source/WorldCollisionSolver.c` (T27): the push-out solver, its sweeps and the depenetration;
-  - `source/WorldCollisionEvents.c` (T27): contacts, contact events, motion events.
+  - `source/WorldCollisionSolver.c`: the push-out solver, its sweeps and the depenetration;
+  - `source/WorldCollisionEvents.c`: contacts, contact events, motion events.
 - **Debug wireframes and contact points:** `source/WorldRendererCollision.c`.
-- **Terrain** (B01, [Terrain.md](Terrain.md)): `source/TerrainMeshCollision.c` builds a chunk's collision mesh
+- **Terrain** ([Terrain.md](Terrain.md)): `source/TerrainMeshCollision.c` builds a chunk's collision mesh
   (`TerrainMesh_CreateChunkCollisionMesh`); the collision world's terrain instances live in `source/WorldCollision.c`
   (see "Terrain").
 
@@ -34,11 +34,11 @@ Tests:
 - `tests/WorldCollisionTests.c`: the collision world, including the trees against brute force on a moving random scene
   (the brute force places the shapes as the world does, in double, and works relative to each query's origin, so the
   distances agree to the bit), and a ray finding a 1 cm wall to a micrometre;
-- `tests/WorldCollisionMotionTests.c` (T27): the step: tunnelling, push-out at once, masses, sliding, blocked movers,
+- `tests/WorldCollisionMotionTests.c`: the step: tunnelling, push-out at once, masses, sliding, blocked movers,
   teleports, the hierarchy, contact events, results, sleeping and determinism, and spheres resting a skin from a box to
   a micrometre;
-- `tests/WorldTerrainCollisionTests.c` (B01): terrain chunks: rays and casts naming the chunk and the terrain's
-  triangle, holes, seams that do not catch, T13's slope limit, rebuilds of only the changed chunks, a collider winning
+- `tests/WorldTerrainCollisionTests.c`: terrain chunks: rays and casts naming the chunk and the terrain's triangle,
+  holes, seams that do not catch, the characters' slope limit, rebuilds of only the changed chunks, a collider winning
   over a terrain, the warnings;
 - all three run twice, the second time as `WorldCollisionFar`, `WorldCollisionMotionFar` and
   `WorldTerrainCollisionFar` with every scene shifted about 100 km along each axis ([WorldData.md](WorldData.md),
@@ -47,16 +47,16 @@ Tests:
 The formats: `references/asset_structure.md` ("World models", `collision`; "Terrains", `collision`) and
 `references/world_structure.md` (the `collider` and `terrain` components).
 
-**What T12 is and is not.** It gives every collider a place in world space, and queries. The owner's requirements, as
-T12 covers them:
+**What it is and is not.** It gives every collider a place in world space, and queries. It guarantees:
 1. **Nothing passes through anything:** casts whose time of impact is exact for linear motion and conservative for
    turning motion.
 2. **Push-out:** contact manifolds with penetration depths and push-out normals.
 3. **Shapes from primitives:** compound shapes made of primitives.
 4. **The fullest contact data:** every result says which object, shape, part and triangle.
 
-**T27** applies them every tick ("Moving and pushing" below): it sweeps the moving colliders, pushes apart what
-overlaps, writes the pushes into the objects and reports contacts and their events. **T28** adds rigid bodies.
+**The collision step** applies them every tick ("Moving and pushing" below): it sweeps the moving colliders, pushes
+apart what overlaps, writes the pushes into the objects and reports contacts and their events. **Rigid bodies** are not
+built yet.
 
 ## Shapes (`CollisionShape.h`)
 
@@ -72,13 +72,13 @@ space, an optional part `Name`, and the sizes its type uses. Build one with `Col
 | `Cylinder` | `Radius`, `HalfHeight` (> 0) | Along local Y. |
 | `ConvexHull` | `Hull` | A `CollisionHull`, owned elsewhere (a world model's block). |
 | `Plane` | `IsBounded`, `PlaneHalfExtents` (x, z), `Depth` (>= 0) | Its front is local +Y. Bounded (the default): a rectangle in local XZ, solid `Depth` behind it inside the rectangle; depth 0 is a flat rectangle, one-way: a shape whose centre lies behind it never touches it. Unbounded: an infinite half-space, solid below. Contacts and casts push to the front; rays hit the front only. |
-| `Mesh` | `Mesh`, `IsTwoSided` | A `CollisionMesh`, owned elsewhere. Static colliders only: T27 never pushes one. |
+| `Mesh` | `Mesh`, `IsTwoSided` | A `CollisionMesh`, owned elsewhere. Static colliders only: the step never pushes one. |
 
 - **Hulls** (`CollisionHull_Create(points, count, maxVertices)`, `_CreateFromModel(model, maxVertices)`): quickhull in
   double precision with coplanar faces merged into polygons (in linear time: the faces are bucketed by group once).
   - **Reduction.** A hull finer than `maxVertices` (4 to 256, default 64) is rebuilt from its six axis extremes and its
     farthest vertices along directions spread over the sphere. The first pass has exactly as many directions as picks
-    are left, so the picks cover the whole hull (a longer pass once filled the budget from the top down and left a cone
+    are left, so the picks cover the whole hull (a longer pass would fill the budget from the top down and leave a cone
     below); denser, turned passes fill what repeated picks left. The directions are scaled by the inverse of the hull's
     half extents, which spreads the picks evenly over a thin hull; plain directions pick its rim and lose its thickness.
   - **Limits.** At most 65536 input points, which build in about 0.2 s; flat or too few points are refused.
@@ -90,14 +90,13 @@ space, an optional part `Name`, and the sizes its type uses. Build one with `Col
     take the face's normal and shapes slide over seams without catching. A contact's witness point lies exactly on the
     edge it touches, which the closest-point region test calls inside (its tests tie there): the contact reads its
     feature from the point's barycentric weights (a weight of at most 1e-5 puts it on the opposite edge,
-    `TRIANGLE_BOUNDARY_WEIGHT`), so a contact on an active edge keeps its own normal (T13's first tuning: read as
-    inside, a capsule beside a mesh box's bottom or top edge took that face's normal and plane distance, a push of
-    most of its height, and the test world's glowing cube threw a player jumping against it up and down);
+    `TRIANGLE_BOUNDARY_WEIGHT`), so a contact on an active edge keeps its own normal (read as inside, a capsule beside
+    a mesh box's bottom or top edge would take that face's normal and plane distance, a push of most of its height);
   - a median-split BVH is built.
 
-  Each triangle keeps its model part and its index there (`_part`, `_sourceIndex`; with a hit's barycentrics, T19 finds
-  the UVs).
-- **Given edges and indices** (B01). A `CollisionMeshPart` may bring each triangle's edge flags (`ActiveEdges`: bit 0
+  Each triangle keeps its model part and its index there (`_part`, `_sourceIndex`; with a hit's barycentrics they give
+  the UVs, for surface picking, not built yet).
+- **Given edges and indices.** A `CollisionMeshPart` may bring each triangle's edge flags (`ActiveEdges`: bit 0
   for (v0, v1), bit 1 for (v1, v2), bit 2 for (v2, v0)) and its own source index (`SourceIndices`) instead: the mesh
   keeps them as given (the parts' welding and degenerate triangles change neither) and computes nothing for them. The
   terrain passes the flags it computed over the whole terrain, so a chunk's border edges are active only where the
@@ -153,11 +152,11 @@ Component type 3, `collider`, with the table `collider_component`. Its rows:
 | `overrides_layer` / `layer`, `overrides_collides_with` / `collides_with`, `overrides_is_trigger` / `is_trigger` | Each overrides the world model's default. `collides_with` is an `EnumSet` of layers ([PropertyDescriptors.md](PropertyDescriptors.md)). |
 | `offset`, `rotation`, `scale` | A local transform of all its shapes on top of the object's ("distorting" hitboxes). The scale is above 0. |
 | `rotation_mode` | `full` turns with the object. `yaw_only` keeps only the yaw of the object's forward and stays upright: characters, posts. `none` stays axis-aligned. Both rebuild the frame from the world transform's decomposition (a mirror stays in the scale), with the object's scale along the kept axes: under `none` along the world's, so a crate stretched along its own X and turned 90 degrees gets a box along the world's X (use `full` for turned, stretched objects). |
-| `is_pushable` (T27) | On a movable object: the step may push it. Off: a movable object's collider is kinematic. |
-| `overrides_mass` / `mass` (T27) | The mass over the world model's (`COLLISION_DEFAULT_MASS`, 1 kg, without one); above 0, at most `COLLISION_MAX_MASS` (1e6: a larger ratio would lose the lighter one's push to rounding). |
-| `when_blocked` (T27) | A kinematic mover's: `stop` (the default) or `push_through`. |
-| `is_continuous` (T27) | Off: the collider's own motion is not swept, only held by its contacts. |
-| `reports_persisting_contacts` (T27) | On: a persist event every step while it is in contact. |
+| `is_pushable` | On a movable object: the step may push it. Off: a movable object's collider is kinematic. |
+| `overrides_mass` / `mass` | The mass over the world model's (`COLLISION_DEFAULT_MASS`, 1 kg, without one); above 0, at most `COLLISION_MAX_MASS` (1e6: a larger ratio would lose the lighter one's push to rounding). |
+| `when_blocked` | A kinematic mover's: `stop` (the default) or `push_through`. |
+| `is_continuous` | Off: the collider's own motion is not swept, only held by its contacts. |
+| `reports_persisting_contacts` | On: a persist event every step while it is in contact. |
 
 - **Pure resolution.** `WorldColliderComponent_ResolveSettings(collider, collision)` turns the override flags and the
   world model's defaults into `WorldColliderSettings`. Without a world model's collision the defaults are `prop`, prop's
@@ -167,7 +166,7 @@ Component type 3, `collider`, with the table `collider_component`. Its rows:
 - **Exact under any transform.** Every scale applies exactly to every shape: the object's, its parents' and the
   collider's. An unevenly scaled sphere is an ellipsoid; a sheared box is a parallelepiped.
 
-## Terrain (B01)
+## Terrain
 
 A terrain component ([Terrain.md](Terrain.md)) is the collision world's second source, next to colliders.
 - **One instance per terrain object without a collider.** An object with both collides through its collider alone (the
@@ -180,14 +179,14 @@ A terrain component ([Terrain.md](Terrain.md)) is the collision world's second s
   and indices" above): an edge on a chunk's border is inactive where the terrain is smooth across it, so a capsule
   sliding across it takes the face's normal, exactly as inside a chunk (the tests check a ball's contacts across seams
   and compare a capsule's walk across them with the same walk on a box).
-- **Hits name the terrain's triangle:** `MeshPart` is the chunk and `SourceTriangle` the terrain's triangle index (T19's
-  picking, B09 and the editor read its weights from it).
+- **Hits name the terrain's triangle:** `MeshPart` is the chunk and `SourceTriangle` the terrain's triangle index
+  (surface picking, scattering and the editor, none built yet, will read its weights from it).
 - **One-sided:** the front (counter-clockwise) side collides; rays and casts from below pass through. An overhang's
   underside faces down, so it is a roof.
 - **Settings:** the layer, the mask and whether it collides are the settings in effect
   (`WorldTerrainComponent_ResolveSettings`): `world` by default, the layer's default mask.
 - **Static or kinematic, never pushable.** A static terrain object sits in the static tree; a movable one pushes as a
-  kinematic mover (T27) and stops when blocked.
+  kinematic mover and stops when blocked.
 - **Rebuilds.** The meshes are cut again when the terrain (its name, its asset) or its chunk layout changes; a chunk's
   mesh is rebuilt alone when its revision moves (`TerrainMesh_RebuildDirtyChunks`, the editor); the shapes are rebuilt
   from the kept meshes when a setting changes, the object switches between static and movable, or the instance comes
@@ -204,7 +203,7 @@ it. It resolves world models by name under its own asset user (rule 1), as the r
 only own shapes collide. `WorldCollision_Destroy` releases them. The world models it resolved stay held until then, like
 the render cache's.
 
-### Doubles outside, floats inside (T33)
+### Doubles outside, floats inside
 
 As Jolt's double-precision build does it, so a world 100 km across collides as it does at its origin.
 - **Outside**, every position the collision world takes or gives is a double (`Vector3Double`): query origins and
@@ -223,7 +222,7 @@ As Jolt's double-precision build does it, so a world 100 km across collides as i
   exactly at the 2 mm contact distance, so a contact event can begin a tick apart in two runs at different places.
 - **Meshes keep their vertices as floats in their own space,** so a very large mesh loses precision at its far end
   (1 mm at 8 km from its object's origin; see "Known limits"). A terrain's chunks are meshes of their own, their
-  vertices relative to each chunk's centre on the terrain's 1/1024 m grid, where float subtraction is exact (B01): a
+  vertices relative to each chunk's centre on the terrain's 1/1024 m grid, where float subtraction is exact: a
   terrain is exact across its whole extent (8 km each way).
   Planes are placed by their object's origin too: a level unbounded plane (the usual ground) is exact anywhere, a
   tilted one far from its object's origin is not (see "Known limits").
@@ -257,9 +256,9 @@ the last step).
   - a world model without a `collision` section under a collider;
   - a shape flattened by a zero scale (it collides with nothing until unflattened);
   - a static object that moved.
-- **Terrains** (B01): see "Terrain" below; a terrain instance rebuilds only the chunks that changed.
+- **Terrains:** see "Terrain" above; a terrain instance rebuilds only the chunks that changed.
 - **Counts:** `WorldCollision_GetStats` gives instances (static, movable), shapes, mesh triangles, planes, trigger
-  pairs, rebuilds, moves, syncs and (B01) terrain chunks built.
+  pairs, rebuilds, moves, syncs and terrain chunks built.
 
 ### Queries
 
@@ -268,10 +267,10 @@ Every query takes a `WorldCollisionFilter` (`WorldCollisionFilter_Create(layerMa
 - **triggers:** ignored (the default of rays, casts and contacts), included (the default of overlaps) or the only ones;
 - **an ignored object:** `IgnoredObjectId`, optionally with its whole subtree (`IsIgnoredSubtree`: what a character
   carries);
-- **pushables** (T13): `ArePushablesIgnored` skips pushable colliders and the movable colliders a pushable carries (its
-  children's, which its push moves: a crate's handle, later a held item). A character's own moves sweep past other
+- **pushables:** `ArePushablesIgnored` skips pushable colliders and the movable colliders a pushable carries (its
+  children's, which its push moves: a crate's handle, a held item). A character's own moves sweep past other
   characters and crates and leave them to the collision step, which pushes both by mass ([Characters.md](Characters.md));
-- **as a layer** (T13): with `HasOwnLayer` the query collides as a collider on `OwnLayer` would, so it also skips
+- **as a layer:** with `HasOwnLayer` the query collides as a collider on `OwnLayer` would, so it also skips
   colliders whose mask lacks that layer (the other half of `CollisionLayer_DoCollide`'s symmetric rule). A character's
   sweeps collide as the `character` layer: a prop set not to collide with characters lets it through.
 
@@ -283,7 +282,7 @@ Every query takes a `WorldCollisionFilter` (`WorldCollisionFilter_Create(layerMa
 | `WorldCollision_OverlapShape` / `_OverlapSphere` / `_OverlapCapsule` / `_OverlapBox` | The ids of the objects touched, ascending, each once. A bounded plane can be a query shape here. |
 | `WorldCollision_CollideShape` / `_CollideObject` | Every contact manifold out to a separation (0 or a small skin for speculative contacts). `_CollideObject` uses an object's own collider as synced and applies the layer rule both ways. |
 
-**What a result holds (the owner's fourth requirement).**
+**What a result holds (the fullest contact data).**
 - **Every result** has a `WorldCollisionShapeInfo`: object id, shape index, part name, shape type, layer and trigger
   flag. On a mesh it adds the triangle index, the model part and its triangle, the material index and the barycentric
   weights of the triangle's corners.
@@ -295,7 +294,7 @@ Every query takes a `WorldCollisionFilter` (`WorldCollisionFilter_Create(layerMa
     separate);
   - 1 to 4 points from clipping the supporting faces (a box resting on a box gets its 4 corners), each with its world
     position on both surfaces (in double), its local position in A's and in B's object space (floats, for anchoring
-    and matching across ticks: T27), its own separation and a feature id that stays the same while the contact keeps
+    and matching across ticks), its own separation and a feature id that stays the same while the contact keeps
     its topology.
 
 **Pointers** in results (part names) and the debug list are valid until the next sync.
@@ -308,11 +307,11 @@ each new pair, an **exit** for each that ended.
   `WORLD_COLLISION_TRIGGER_EXIT_MARGIN` (1 cm) apart, so a collider resting on a boundary does not flicker.
 - **Pairs that never form:** two triggers, a static trigger with a static collider, layers that do not collide.
 - **Order:** events queue by trigger id, then other id, enters before exits, each with the sync's tick. They stay until
-  `WorldCollision_ClearTriggerEvents`: game logic drains them at one point of the tick (A4).
+  `WorldCollision_ClearTriggerEvents`: game logic drains them at one point of the tick.
 
-Solid contacts have their own events since T27 ("Contacts and their events").
+Solid contacts have their own events ("Contacts and their events").
 
-## Moving and pushing (T27)
+## Moving and pushing
 
 `WorldCollision_Step(collision, deltaSeconds)` is the tick's collision step. It syncs, sweeps every collider that moved
 since the last step, pushes apart what overlaps at once, writes the pushes into the objects, then finds the contacts,
@@ -322,7 +321,7 @@ their events, the motion events, the results and the trigger pairs.
 
 | The collider of | Is | In the step |
 |---|---|---|
-| a static object | static | Never moves in play (a move is a teleport, warned once as in T12) and never gives way. |
+| a static object | static | Never moves in play (a move is a teleport, warned once by the sync) and never gives way. |
 | a movable object, `is_pushable` off | **kinematic**: doors, elevators, whatever scripts and animations move | Pushes, is never pushed; `when_blocked` says what it does when it cannot. |
 | a movable object, `is_pushable` on | **pushable**: characters, NPCs, crates | Pushed: pushables share a push by inverse mass (equal masses give way equally, a heavy one barely moves). |
 
@@ -331,7 +330,7 @@ their events, the motion events, the results and the trigger pairs.
 - **A pushable under a pushable** is its own owner. It wakes with the one above it and is pushed on its own: it does
   not follow that one's push (the write-back takes it out), as a box on a frictionless cart.
 - **Pushes only translate**, along each contact's normal: a pushed collider slides along walls. Rotation from contacts
-  is T28's.
+  needs rigid bodies, not built yet.
 - **Triggers** are never pushed and push nothing. A pushed collider's planes and meshes take no part (warned once): its
   spheres, capsules, boxes, cylinders and hulls do.
 - **Contacts need a pushable.** The solver looks at the pairs around pushed colliders only: a kinematic door against a
@@ -356,7 +355,7 @@ their events, the motion events, the results and the trigger pairs.
 
 ### The step
 
-1. **Sync** (T12), then the motions and each collider's owner.
+1. **Sync**, then the motions and each collider's owner.
 2. **Bodies:** every collider that moves, and every pushable that one of them, a changed collider (rebuilt, placed,
    teleported) or a pushable still awake wakes, in a walk outward (a crowd pressed together wakes as one). A woken
    pushable brings what it carries. **Pushables at rest sleep:** a pile nothing comes near costs nothing, and its
@@ -378,7 +377,7 @@ their events, the motion events, the results and the trigger pairs.
 
 - **Substeps.** A step whose largest turn passes `WORLD_COLLISION_MAX_SUBSTEP_TURN` (15 degrees) is solved in equal
   substeps, at most `WORLD_COLLISION_MAX_SUBSTEPS`. At 480 Hz this is rare.
-- **Speculative contacts.** T12's manifolds at the substep's start, out to how far each pair can close in it (its
+- **Speculative contacts.** Contact manifolds at the substep's start, out to how far each pair can close in it (its
   translation and how far its turn reaches) plus `WORLD_COLLISION_SPECULATIVE_DISTANCE`.
 - **Rows.** Each contact point's separation after the motions (the two material points carried by their bodies'
   motions, along the normal) must stay at least `WORLD_COLLISION_SKIN`; the owners' pushes along the normal change it.
@@ -388,8 +387,8 @@ their events, the motion events, the results and the trigger pairs.
   in every iteration, so what cannot fit is left between pushables and movers, never in a wall. It stops once no pushed
   body moves more than a hundredth of the skin in an iteration (the bodies, not the rows: a box resting on a box has
   four rows trading shares of one push), or after `WORLD_COLLISION_SOLVER_ITERATIONS`. **No warm starting:** every
-  solve starts from no push (last step's pushes, re-applied row by row, threw a light pushable pinned by a heavy one
-  around). Very different masses converge slowly: a heavy pushable pressing a light one into a wall rests up to the
+  solve starts from no push (last step's pushes, re-applied row by row, would throw a light pushable pinned by a heavy
+  one around). Very different masses converge slowly: a heavy pushable pressing a light one into a wall rests up to the
   slop into it, steadily.
 - **Sweeps: nothing tunnels.** Every continuous pushed motion longer than the speculative distance is checked with
   exact casts against everything near it: the relative motion's linear cast when neither side turns (both may move),
@@ -411,8 +410,8 @@ their events, the motion events, the results and the trigger pairs.
 ### Contacts and their events
 
 - **Contacts** (`WorldCollision_GetContacts`, sorted by key): one per pair of shapes (and mesh triangle) of every pair
-  of colliders, one of them pushed, within the speculative reach at the step's end. Each is T12's manifold at the final
-  poses (A the lower object id) plus:
+  of colliders, one of them pushed, within the speculative reach at the step's end. Each is a contact manifold at the
+  final poses (A the lower object id) plus:
   - per point: the relative velocity's normal speed and tangent velocity (from the motions over the step), the push
     (metres, and as a speed), its age (matched across steps by feature id) and whether it touches
     (`WORLD_COLLISION_CONTACT_DISTANCE`) or is speculative;
@@ -434,7 +433,7 @@ their events, the motion events, the results and the trigger pairs.
 - **Motion events** (`WorldCollision_GetMotionEvents`, until `_ClearMotionEvents`), when a state begins and ends:
   blocked (the mover, the pushable that blocked it, whether it stopped) and crushed (the pushable, what it is pressed
   into, the depth). A collider removed while blocked or crushed ends it.
-- **Motion results** (`WorldCollision_GetMotionResult`), for drivers (T13's character): the collider's velocity over
+- **Motion results** (`WorldCollision_GetMotionResult`), for drivers (the characters): the collider's velocity over
   the step, its correction (a pushable's push, the motion a stopped mover lost), its touching contacts (a pushable's
   with those of the colliders it carries), its ground (the most upward-facing of them: the object, the normal into the
   collider, the point and that point's velocity, for moving platforms), blocked (by what, whether it stopped) and
@@ -480,14 +479,15 @@ it, so colliders at rest cost little beyond the sync.
 - **GJK** finds distances (Johnson's sub-algorithm). It tracks its best simplex and stops when it makes no progress,
   which keeps smooth shapes from cycling.
   - **Never overstated.** Every support also bounds the distance from below, and an exit before convergence reports
-    the tightest such bound, never more. The last simplex's direction is one of them (T13's review): above the middle of
-    a large face the first directions lean a hair toward corners tens of metres away and bound the gap millimetres
-    short, and the step that reaches the face itself is no closer than the edge before it, so the search used to end
-    on the leaning bound (a capsule resting 1 mm above a 40 m floor read 1.5 mm inside it, above a 120 m one 4.4 mm).
+    the tightest such bound, never more. The last simplex's direction is one of them: above the middle of a large face
+    the first directions lean a hair toward corners tens of metres away and bound the gap millimetres short, and the
+    step that reaches the face itself is no closer than the edge before it, so without it the search would end on the
+    leaning bound (a capsule resting 1 mm above a 40 m floor would read 1.5 mm inside it, above a 120 m one 4.4 mm).
   - **Exact near a face.** Near a face the closest point is the origin moved along the face's normal, which keeps the
-    direction exact for a large face next to the origin; the old form read a resting plank as 0.6 mm apart.
+    direction exact for a large face next to the origin; the corners' weighted sum would read a resting plank as
+    0.6 mm apart.
   - **Double precision for triangles.** The triangle's region tests and weights run in double precision, because GJK
-    builds slivers (two support points of a smooth shape a millimetre apart) whose float weights placed witness points
+    builds slivers (two support points of a smooth shape a millimetre apart) whose float weights would place witness points
     millimetres off.
   - **Robust at resting distances.** Below 1 mm the normal is checked against the simplex face's normal, both ways,
     keeping the direction of the largest gap, since a resting gap is within the coordinates' rounding.
@@ -536,7 +536,7 @@ From [WorldData.md](WorldData.md) ("Ready for things that move"):
 1. input;
 2. scripts;
 3. the transform drivers;
-4. **`WorldCollision_Step`** (T27; T12's sync is its first part);
+4. **`WorldCollision_Step`** (the sync is its first part);
 5. the queued events: trigger, contact and motion events;
 6. animation;
 7. `World_UpdateTransforms`;
@@ -558,7 +558,7 @@ events are logged, then the sprites animate.
   - a mesh's inactive edges darker;
   - drawn twice, faint without the depth test (hidden parts, and lines that lie on a surface), then solid with it.
 
-**Contact points** (T27). `WorldCollision_SetDebugContactsEnabled(collision, true)` makes each step list every contact
+**Contact points.** `WorldCollision_SetDebugContactsEnabled(collision, true)` makes each step list every contact
 point (`WorldCollision_GetDebugContacts`): midway between the two surfaces, with the normal, the push as a speed and
 whether it touches. The renderer draws them while a collision world is set: a 2 cm cross, white touching and grey
 near, a 12 cm cyan normal, and a red line for the push (its speed times 0.05 s, at most 0.5 m).
@@ -567,21 +567,21 @@ near, a 12 cm cyan normal, and a red line for the push (its speed times 0.05 s, 
 swings the door, F9 sends the pushing wall out and back, F10 teleports the door's crate aside and back; the contact and
 motion events are logged, and the I key's status lines add the counts and the last step's.
 
-**The test world** (`compile/out/worlds/test.world.json`) has 34 colliders:
+**The test world** (`compile/out/worlds/test.world.json`) has 36 colliders:
 - **`"bounds"`:** the slab (a `world` layer override), the cubes, the desk's parts and the variant cubes, through
-  `test`, `pbr_metal` and `painted_cube`;
+  `test`, `pbr_metal` and `painted_cube`, and the bench and the coffee cup through `test_bench` and `test_cup`;
 - **a hull:** the LOD spheres, built from `lod_test_lod0` (64 vertices);
 - **a mesh:** the PBR cube, from its own model, layer `world`;
 - **cylinders:** the cup (an own shape inside its scaled cube) and the tree's trunk;
 - **a bounded plane:** the sign, 3 cm deep;
 - **a door** (`test_door`, the test cube with an import transform, hinged at its origin) with a `closed` and an `open`
-  set; movable since T27, a kinematic mover that stops when blocked;
-- **a trigger zone** at the end of the desk's slide: the desk (now movable) and its parts log enter and exit;
-- **T27's movers** (own boxes, the crates pushable): a pushing wall (kinematic) behind a row of five crates, a static
+  set; movable, a kinematic mover that stops when blocked;
+- **a trigger zone** at the end of the desk's slide: the desk (movable) and its parts log enter and exit;
+- **movers** (boxes: the `test` world model's `bounds`, the crates pushable): a pushing wall (kinematic) behind a row of five crates, a static
   stop at the row's far end (the wall pushes the row against it and is blocked), and a crate pinned in a corner of two
   static posts in the door's swing (the door stops on it; closing pushes it along).
 
-Since B01 it also has a terrain (object 51, `placeholder_terrain`): the hills around the slab, one static instance of
+It also has a terrain (object 51, `placeholder_terrain`): the hills around the slab, one static instance of
 256 chunk meshes (61 168 triangles: the terrain's 61 174 less its 6 hole faces; [Terrain.md](Terrain.md), "The test
 terrain").
 
@@ -590,26 +590,26 @@ terrain").
 - **Shapes hundreds of metres across lose millimetres in GJK.** A direction off by float rounding (about 1e-7 of the
   coordinates) bounds a gap short by that times the shape's size: 2.8 mm next to a box 400 m wide. Up to 120 m the
   distance is right to 0.04 mm. Make a huge ground a plane or a mesh, not one box.
-- **A triangle mesh much larger than a few kilometres loses precision at its far end** (T33): its vertices are floats in
+- **A triangle mesh much larger than a few kilometres loses precision at its far end:** its vertices are floats in
   its own space, 1 mm apart at 8 km from its object's origin. Nothing splits a model's mesh automatically: split big
-  architecture into objects. Terrain needs nothing: its chunks are meshes of their own (B01).
-- **A tilted unbounded plane far from its object's origin** (T33): the narrowphase takes a plane's point from its
+  architecture into objects. Terrain needs nothing: its chunks are meshes of their own.
+- **A tilted unbounded plane far from its object's origin:** the narrowphase takes a plane's point from its
   object's origin, made relative to the query and rounded once, so 100 km from that origin the point is off by up to
   a float's step there (8 mm) and a plane tilted from level moves by that times the sine of its tilt. A level one (the
   usual ground) is exact anywhere. Put a tilted half-space's object near where it is used. A bounded plane (a
   rectangle) is placed by its centre, like a mesh: one much larger than a few kilometres loses precision at its edges.
-- **Queries see the colliders of the last sync.** A driver that queries (the characters, T13) sees a platform moved by
+- **Queries see the colliders of the last sync.** A driver that queries (the characters) sees a platform moved by
   an earlier driver in the same tick where the last step left it: a sync between them would also advance the tick
   stamped on every event.
-- **`WorldCollision_CollideObject` skips an object's own plane and mesh shapes.** It is marked `// TODO:`; T27's movers
-  are convex.
+- **`WorldCollision_CollideObject` skips an object's own plane and mesh shapes.** It is marked `// TODO:`; the
+  collision step does not use it.
 - **A mesh's debug wireframe draws every edge every frame:** fine for test content; the test terrain's 61 000 triangles
   are drawn whole with F7 too (the renderer's chunk key, the minus key, draws only the chunks in view).
 - **A terrain chunk with more than 2^20 triangles** gets no collision (warned once: everything falls through it). A
   32 m chunk holds that many only at triangles a few centimetres across.
 - **World models stay held** by the collision world until it is destroyed, as the render cache holds its own.
-- **Pushes translate only, without friction** (T28): a crate pushed by a turning door slides off it rather than
-  turning.
+- **Pushes translate only, without friction** (no rigid bodies yet): a crate pushed by a turning door slides off it
+  rather than turning.
 - **A turning body is not swept against a moving one:** a fast turn and a fast motion meeting in the same step rely on
   the substeps' speculative contacts.
 - **Contacts and contact events need a pushable on one side:** a door against a wall, or two kinematic movers, have

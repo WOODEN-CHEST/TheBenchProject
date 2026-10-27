@@ -1,11 +1,10 @@
 # NamespacedKey and KeyRegistry
 
-`include/NamespacedKey.h`, `source/NamespacedKey.c`. Tests: `tests/NamespacedKeyTests.c`. Built in T24 (the owner's
-design for tags and script data, decision G14, PLAN.md 2.10 of `handoff/2026-10_graphics_and_world/`).
+`include/NamespacedKey.h`, `source/NamespacedKey.c`. Tests: `tests/NamespacedKeyTests.c`.
 
 A **namespaced key** names something across story packs without collisions, like Minecraft's identifiers:
 `town:street_lamp`, `game:office`. Tags and the keys of object data use them today
-([ObjectData.md](ObjectData.md)); asset names across packs (architecture A5), climate presets, actions and events will
+([ObjectData.md](ObjectData.md)); asset names across packs, climate presets, actions and events will
 use them later.
 
 ## The key
@@ -54,9 +53,9 @@ logger)`), and it is torn down after the frames. Ids exist only at runtime; file
   read has released what it built. The kept keys keep their ids, texts and addresses; the storage of the forgotten
   texts is reused, and blocks past the last kept text are freed.
 - `KeyRegistry_FindByPrefix(registry, prefix, outIds)`: appends the ids whose text starts with `prefix`, in
-  alphabetical (byte) order of their text, for the terminal's autocomplete (`#town:` lists the known town keys;
-  `handoff/2026-10_scripting_language/PROPOSAL.md` section 7). A linear scan, well under a millisecond for thousands
-  of keys; the appended range is sorted in place through a view, so the buffer's earlier contents are untouched.
+  alphabetical (byte) order of their text, for the autocomplete of the planned scripting language's terminal
+  (`#town:` lists the known town keys). A linear scan, well under a millisecond for thousands of keys; the appended
+  range is sorted in place through a view, so the buffer's earlier contents are untouched.
 
 **Inside.** A `WRHashMap` maps the text's 64-bit FNV-1a hash to the id of the most recent key with that hash, and an
 array chains the ids whose texts share a hash (`_nextWithSameHash`): a lookup compares texts along the chain, so two
@@ -68,7 +67,7 @@ chain), then cuts the storage after the last kept text.
 **Limits.** At most `KEY_REGISTRY_MAX_KEY_COUNT` (2^20) keys: interning more fails with `InvalidOperation`, so content
 from other players cannot grow the registry without bound. Interning is permanent for the program's life (keys of every
 story loaded in a session stay), except that a read that fails gives back the keys it interned (above): the data
-readers all do, and a loader that refuses a whole file after reading parts of it must do the same (T09).
+readers all do, and a loader that refuses a whole file after reading parts of it must do the same.
 
 ## Thread safety
 

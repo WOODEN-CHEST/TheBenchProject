@@ -25,7 +25,7 @@ Each key has:
   `CONTROL`, `ALT`, `SUPER`).
 
 An **icon** per key (a sprite referenced by name, so text components can inline "Press [icon] to jump") comes with the
-controls menu; it is not in Phase 5. Everything lives in one table in `GameKey.c` indexed by `GameKey` (designated
+controls menu, which is not built yet. Everything lives in one table in `GameKey.c` indexed by `GameKey` (designated
 initializers, so the enum order cannot drift from the table).
 
 ## GameInput: the tick's input
@@ -83,7 +83,7 @@ bindings:
 | | `ui_back` | Escape |
 | Movement | `move_forward`, `move_back`, `move_left`, `move_right`, `move_up`, `move_down` | W, S, A, D, Space, Left Control |
 | | `sprint` | Left Shift |
-| Characters (T13) | `jump`, `crouch` | Space, Left Control (shared with `move_up` and `move_down`: walking reads these, the flycam and flight those) |
+| Characters | `jump`, `crouch` | Space, Left Control (shared with `move_up` and `move_down`: walking reads these, the flycam and flight those) |
 | | `use` | E (use what the character looks at) |
 | Pause / menu | `pause` | Escape |
 

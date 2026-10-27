@@ -1,22 +1,22 @@
 # Characters
 
-The player and NPCs (T13): what makes an object walk, run, crouch, jump, fly, look around and use things. A character
+The player and NPCs: what makes an object walk, run, crouch, jump, fly, look around and use things. A character
 is **the same for the player and every NPC**, whether a human, a dog or a pigeon: a component on an ordinary world
 object, set up by a character asset, driven by a plain input that the player controller fills from the keyboard and an
 NPC's brain (later scripts) fills the same way. A character nobody drives still stands, falls, rides platforms and is
 pushed.
 
-The owner's decisions behind it (`handoff/2026-10_graphics_and_world/DECISIONS.md`, G21 to G24): every character is an
-**upright capsule** sized by its asset (a dog a short wide one, a pigeon a tiny one); characters **walk** (fall, crouch,
-jump) and **fly**; a **`character` asset** holds every default of a kind of character and a placement may override
-**every setting**; animated models, held items and special actions come next, in T29 and T30.
+Every character is an **upright capsule** sized by its asset (a dog a short wide one, a pigeon a tiny one); characters
+**walk** (fall, crouch, jump) and **fly**; a **`character` asset** holds every default of a kind of character and a
+placement may override **every setting**; animated models, held items and special actions are the animation system's
+([Animation.md](Animation.md)).
 
 | Module | Files | What it is |
 |---|---|---|
 | CharacterAsset | `include/CharacterAsset.h`, `source/CharacterAsset.c`, `source/CharacterDefinition.c`, `source/CharacterInternal.h` (private) | The `character` asset type: `CharacterSettings`, their property table and defaults, the definition's parser and loader. |
 | WorldCharacterComponent | `include/WorldCharacterComponent.h`, `source/WorldCharacterComponent.c` | Component type 4 (`character`), a transform driver: the asset's name, the placement's overrides, the input, the state. |
 | WorldCharacters | `include/WorldCharacters.h`, `source/WorldCharacters.c`, `source/WorldCharacterMotion.c` and `source/WorldCharacterInternal.h` (private) | The character system: the tick's update, the capsule's motion, the collider, events, teleports, the look ray. |
-| PlayerController | `include/PlayerController.h`, `source/PlayerController.c` | The player's side: input into a character, the camera at its eyes (its body's eyes socket since T30), what the player looks at. |
+| PlayerController | `include/PlayerController.h`, `source/PlayerController.c` | The player's side: input into a character, the camera at its eyes (its body's eyes socket when it has one), what the player looks at. |
 
 ## The character asset (`CharacterAsset.h`)
 
@@ -50,11 +50,10 @@ code), its settings `CharacterAsset_GetSettings(asset)`.
   and that is what the system uses.
 - **Gravity is the world's**: the environment's `gravity` (`WORLD_ENVIRONMENT_DEFAULT_GRAVITY` unless the world sets
   it, [WorldData.md](WorldData.md)), times the character's `GravityMultiplier`.
-- **Settings added at the end.** `CharacterSetting`'s values are the wire ids' schema: the settings T13's first tuning
-  (2026-10-22) added (`GroundControl` to `AirDrag`) follow the first 36, and `GroundFriction` took `Deceleration`'s
-  place and wire id (its JSON key changed: a pre-release rename, no saved data used it).
-- **Test content** (`characters/test_world/`): `test_human` (the owner's tuning: 1.8 m tall, its eyes at 1.68 m, walks
-  at 2 and runs at 5 m/s, jumps at 5 m/s with a 1 m/s running boost, acceleration 64, friction 16, air control 4),
+- **Settings added at the end.** `CharacterSetting`'s values are the wire ids' schema, so a new setting goes at the
+  end, whatever its group: `GroundControl` to `AirDrag` follow the first 36.
+- **Test content** (`characters/test_world/`): `test_human` (tuned by hand: 1.8 m tall, its eyes at 1.68 m, walks
+  at 2 and runs at 5 m/s, jumps at 5 m/s with a 1 m/s running boost, acceleration 48, friction 16, air control 4),
   `test_dog` (0.28 by 0.7 m, 25 kg, runs at 6 m/s, lies down as its crouch: 0.56 m), `test_pigeon` (0.1 by 0.3 m,
   0.35 kg, flies, cannot crouch).
 
@@ -93,10 +92,10 @@ carries at most one, and adding it makes the object movable.
   its step height is measured from), `Velocity` (how fast it actually moved in its last update, relative to its ground:
   its own move after walls, plus what the collision step pushed it since; two characters pressing into each other
   read 0), `GroundVelocity` (the platform's), `FacingYaw`, `TurnRate`, `Height` (the stance's), `EyeHeight` and
-  `CrouchAmount` (eased), `IsStandUpBlocked`, `TimeInAir`; since T30 `Events` (a bit per `WorldCharacterEventKind`
+  `CrouchAmount` (eased), `IsStandUpBlocked`, `TimeInAir`; `Events` (a bit per `WorldCharacterEventKind`
   raised in its last update: what an animation graph's events read), `LastLandingSpeed` and `Approach` (below).
   `WorldCharacterComponent_GetEyePosition` is the object's world position plus the eye height (a `Vector3Double`).
-- **Action control (T30)** (`CharacterActionControl`, `WorldCharacterComponent_SetActionControl` / `_GetActionControl`,
+- **Action control** (`CharacterActionControl`, `WorldCharacterComponent_SetActionControl` / `_GetActionControl`,
   `CharacterActionControl_CreateFree`; runtime only, set by the animation system for its actions,
   [Animation.md](Animation.md)): a **lock** (`free`; `no_moving`: its input's movement and jumps are ignored;
   `no_turning`: its facing stays; `locked`: both) and an optional **anchor** (a world position in double, a yaw, an
@@ -132,7 +131,7 @@ character, in the world's component order:
 5. **Platforms.** A grounded character whose ground object's world matrix changed since the last update is moved by
    that change (the old matrix undone, the new one applied: exact for turning platforms) and turned by its yaw, its
    facing and its look too; that change over the tick is its `GroundVelocity`. The feet and the ground point are taken
-   relative to the ground's old translation first, in double (T33), so far out a carry is as exact as at the origin.
+   relative to the ground's old translation first, in double, so far out a carry is as exact as at the origin.
 6. **Stance.** Crouching while asked and allowed, on the ground; standing up once the input lets go (or crouching is
    no longer allowed, or it flies), only where the standing capsule fits (`CharacterMotion_DoesFit`: an overlap of the
    standing capsule a skin narrower, its bottom two skins up so the ground it rests on does not count, pushables
@@ -144,7 +143,7 @@ character, in the world's component order:
    the mass, `when_blocked` `stop`, continuous. Every write advances the collider's revision (the collision world
    rebuilds it), so nothing is written while nothing changed.
 8. **Velocity.** The wish: the walk, run or crouch speed times the move direction's length, along its horizontal
-   direction. **On the ground** (`GroundControl`, T13's first tuning): **steer**, the default, moves the whole velocity
+   direction. **On the ground** (`GroundControl`): **steer**, the default, moves the whole velocity
    toward the wished one at `Acceleration` (a turn back, a quarter turn and a wall pressed into at a slant alike: along
    the wall at the wish's share along it); **push** (Quake's way) adds along the keys' direction at `Acceleration` up to
    the wished speed along it, and the friction takes the motion across their direction or against it (a quarter turn
@@ -190,14 +189,14 @@ character, in the world's component order:
     event), keeping the ground's velocity and the **vertical speed its move had** (down a slope, a stair's roll), so a
     fall goes on smoothly; but off an edge with no walkable ground within its step height below the face it walked on
     (a ledge, not a stair) no faster than dropping from that face would have made it (its round bottom rolls over the
-    rim faster than gravity at a run: a 5 m/s run off a 1 m ledge dived, landing in half a fall's time). So by default
-    a walker **falls off every step**, stairs too, and only walkable slopes are followed (T13's first tuning: walking
-    off a block, the round bottom rolled most of its radius down the edge on the ground and the old 0.35 m snap dropped
-    it the rest in one tick). A walker whose look down an edge above its step cut short (pressing against a low curb)
-    keeps the ground it rests on when a ray along the ground's normal from its bottom cap's centre still finds it within
-    resting distance. In the air and not rising: landing on support within a few millimetres (an event with the impact
-    speed), also on a pushable it fell into (a crate, a head: the ground sweep takes an overlap whose push-out points up
-    as ground it sank into and lifts it out). Flying: `IsTouchingGround` from a 2 cm probe.
+    rim faster than gravity at a run: a 5 m/s run off a 1 m ledge would dive, landing in half a fall's time). So by
+    default a walker **falls off every step**, stairs too, and only walkable slopes are followed (with a step-down
+    distance, walking off a block, the round bottom rolls most of its radius down the edge on the ground and a 0.35 m
+    snap drops it the rest in one tick). A walker whose look down an edge above its step cut short (pressing against a
+    low curb) keeps the ground it rests on when a ray along the ground's normal from its bottom cap's centre still finds
+    it within resting distance. In the air and not rising: landing on support within a few millimetres (an event with
+    the impact speed), also on a pushable it fell into (a crate, a head: the ground sweep takes an overlap whose
+    push-out points up as ground it sank into and lifts it out). Flying: `IsTouchingGround` from a 2 cm probe.
 12. **Facing** turned at `TurnSpeed` (or at once) toward its velocity (if moving), its look, or not at all.
 13. **Eyes** eased toward the stance's eye height: fast at first, slowing as they near it (each moment they close the
     same share of what is left), there after `CrouchTransitionSeconds` (within 1% of the way, `CHARACTER_EYE_EASE_
@@ -217,7 +216,7 @@ walker going off a ledge or down a stair falls instead of rolling down the edge.
 ledge with its centre up to r sin(slope limit) past the edge (21 cm for a human), its feet up to r (1 - cos(slope
 limit)) below the top (8.8 cm), as capsule characters do.
 
-**Steps** (T13's review). The round bottom would roll over any edge up to radius x (1 - cos slope_limit) high (8.8 cm
+**Steps.** The round bottom would roll over any edge up to radius x (1 - cos slope_limit) high (8.8 cm
 for a human), walking up it as up a slope, whatever the step height. So a walker's ground is also the plane its steps
 are measured from (`GroundPoint` along `GroundNormal`, carried with a moving ground): an **edge** (a contact whose face
 under it, from the edge probe, is turned from the contact by more than 2°) higher than the step height above that
@@ -226,11 +225,11 @@ or a crest's edge lies on that plane and an edge a walker rolls down off is leve
 step height of 0 a walker climbs nothing higher than its skin and still walks over crests and down curbs.
 
 **Pushables are the collision step's.** Moves sweep past other characters and crates and what they carry (the
-filter's `ArePushablesIgnored`: a crate's handle too), walking or in the air, so T27 pushes both by mass: walking or
-jumping into a light crate shoves it, into an equal character stops both, into a pinned crate stops the walker. The
-ground filter sees pushables (a crate to stand on): a sweep that starts inside one from above (a falling character's
-move took it into a crate) is ground it sank into, and from the side (a character it walks into) it looks again
-without them, so a side overlap the step will mend is neither ground nor a reason to move.
+filter's `ArePushablesIgnored`: a crate's handle too), walking or in the air, so the collision step pushes both by
+mass: walking or jumping into a light crate shoves it, into an equal character stops both, into a pinned crate stops
+the walker. The ground filter sees pushables (a crate to stand on): a sweep that starts inside one from above (a
+falling character's move took it into a crate) is ground it sank into, and from the side (a character it walks into)
+it looks again without them, so a side overlap the step will mend is neither ground nor a reason to move.
 
 **Events** (`WorldCharacters_GetEvents`, until `_ClearEvents`; kinds saved by value): `Jumped`, `Landed` (what it landed
 on, the impact speed), `LeftGround`, `Crouched`, `StoodUp`, `TookOff`, `StoppedFlying`, `Used` (what it used, its
@@ -244,7 +243,7 @@ or where the object's own position (its local one, under a parent) would pass `W
 (`ErrorCode_ArgumentOutOfRange`: the object's position row would refuse it), and any position under a parent whose
 world matrix cannot be inverted (`ErrorCode_InvalidOperation`).
 
-**Positions are doubles** (T33; [WorldData.md](WorldData.md)): the feet, the ground point, the eyes, the platform
+**Positions are doubles** ([WorldData.md](WorldData.md)): the feet, the ground point, the eyes, the platform
 carry, the sweeps and the look ray's origin. The motion (`WorldCharacterMotion.c`) keeps every position as a double and
 every move, direction, normal and velocity as a float; it adds a move to the feet in double, and its sweeps and rays
 start at the feet (or the eyes), so the collision world measures them relative to the character itself. 173 km from
@@ -264,15 +263,15 @@ the character's input: `move_*` relative to the look's yaw (along the full look 
 consumed, so nothing below acts on it), the mouse turns the look (`MouseSensitivity`), the body faces the look. The look
 is read back from the character every tick, so a turning platform turns the view. `PlayerController_UpdateLookTarget`
 (after the collision step) says when what the player looks at changed; `PlayerController_ApplyCamera` puts the camera at
-the eyes, looking where the character looks. Since T30 (G34) **the eyes are the body's**: when the character's animator
+the eyes, looking where the character looks. **The eyes are the body's**: when the character's animator
 pose has an eyes socket (its world model's first_person block) the camera rides it as posed
 (`PlayerController_TryGetEyes`: the socket's world matrix), so every step, crouch and seat moves the view; without one
 it sits at the character's eye height above its feet. Call it once per shown frame, after the pose step (the frame's
-`PrepareRender`). The head bob placeholder of T13 is gone: the walk's own motion bobs the head. Input only through
+`PrepareRender`). The camera adds no bob of its own: the walk's own motion bobs the head. Input only through
 `GameInput`, only in `Update` (AGENTS.md rule 9).
 
-New actions (`GameInput.h`): `jump` (Space), `crouch` (Left Control), `use` (E); `jump` and `crouch` share their keys
-with `move_up` and `move_down`, which the flycam and flight read.
+Its own actions (`GameInput.h`): `jump` (Space), `crouch` (Left Control), `use` (E); `jump` and `crouch` share their
+keys with `move_up` and `move_down`, which the flycam and flight read.
 
 ## Tick order
 
@@ -301,8 +300,8 @@ pose step, the world matrices again and the camera (`PlayerController_ApplyCamer
 | `CHARACTER_MAX_FOLLOW_SLOPE` | 4 (76°) | The steepest drop per metre moved the ground follow reaches down for. |
 | `CHARACTER_EYE_EASE_REMAINDER` | 1% | The share of the eyes' way left after the crouch time; within it they snap there. |
 | `CHARACTER_MAX_DELTA_SECONDS` | 0.1 s | The longest tick stepped. |
-| `CHARACTER_ANCHOR_TOLERANCE` / `_YAW_TOLERANCE` | 1 cm / 1° | How close to its anchor, and to its yaw, an approach has arrived (T30). |
-| `CHARACTER_APPROACH_GRACE_SECONDS` | 0.5 s | How long past its time an approach may take before it has failed (T30). |
+| `CHARACTER_ANCHOR_TOLERANCE` / `_YAW_TOLERANCE` | 1 cm / 1° | How close to its anchor, and to its yaw, an approach has arrived. |
+| `CHARACTER_APPROACH_GRACE_SECONDS` | 0.5 s | How long past its time an approach may take before it has failed. |
 
 ## Cost
 
@@ -314,9 +313,9 @@ object and the collider only when they change, so a character standing still nev
 ## Debugging and the test content
 
 The test frame ([WorldRuntime.md](WorldRuntime.md), "WorldTestFrame"): F1 walk mode (the player, a runtime object,
-below the flycam), F2 the test NPCs (a human, a dog and a pigeon with placeholder bodies and scripted brains; since T30
-the human wears the animated humanoid, as the player does when it is a human), F3 flight, F4 the player's kind; E uses
-what the player looks at (starting the action it offers, T30), 8 sends the NPC human to sit on the bench, 9 puts down,
+below the flycam), F2 the test NPCs (a human, a dog and a pigeon with placeholder bodies and scripted brains; the
+human wears the animated humanoid, as the player does when it is a human), F3 flight, F4 the player's kind; E uses
+what the player looks at (starting the action it offers), 8 sends the NPC human to sit on the bench, 9 puts down,
 0 waves; the log names what the player looks at when it changes, every character event and every action; I adds the
 player's state (and its action and what it holds). F11 (the far shift) places every character again 28 km, then 141 km out, where they
 walk, jump and crouch as at the origin.
@@ -330,20 +329,19 @@ walk, jump and crouch as at the origin.
   rests off its rest gap by the lift's move in a tick (4 mm at 2 m/s) and the collision step lifts it back; the
   `Velocity` reported in the tick a rider jumps off a rising lift includes that lift (its real velocity is right). The
   ground follow's reach adds the ground's move in the tick, so riders keep a fast lift (without it, a lift rising
-  faster than about 1.4 m/s lost them every tick once the reach no longer had the old 35 cm snap).
+  faster than about 1.4 m/s would lose them every tick).
 - **Pushing (`ground_control` push) against a wall at a slant** slides along it at the wished speed, or sticks when
   pushing nearly straight in: friction takes the motion the wall turns aside as undriven (`// TODO:` in
-  `PushOnGround`: telling the wall's part apart needs the walls it touches). Steering, the default, slides at the
-  wish's share along the wall.
-- **Falling off every step** makes stairs a run of short falls: each step queues `LeftGround` and `Landed`. T30's
-  animations should treat a short time in the air as a step, not a fall (a step-down distance keeps a kind on its
-  stairs instead).
-- **The narrowest gap a character passes is its width plus 3 mm** (the skin and at least half the rest gap each side;
-  it was 2 mm before the skin was kept to everything).
+  `PushOnGround`: telling the wall's part apart needs the walls it touches). Steering, the default for that reason,
+  slides at the wish's share along the wall.
+- **Falling off every step** makes stairs a run of short falls: each step queues `LeftGround` and `Landed`. Animation
+  graphs should treat a short time in the air as a step, not a fall (the test humanoid's graph plays its fall only
+  after 0.3 s of `time_in_air`; a step-down distance keeps a kind on its stairs instead).
+- **The narrowest gap a character passes is its width plus 3 mm** (the skin and at least half the rest gap each side).
 - **A walker cannot step onto a pushable** (a 10 cm pallet, however heavy): the step up sweeps past pushables like every
   move. A jump gets it on top.
 - **A kinematic character (`IsPushable` off) blocked by a pinned crate has its turn undone** by the collision step's
-  set-back, which reverts its whole local transform (T27); its facing state still turns. Pushable characters, the
+  set-back, which reverts its whole local transform; its facing state still turns. Pushable characters, the
   default, are not affected.
 - **Two kinematic characters meeting fast overlap briefly** (up to 2 cm at 10 m/s, never through each other): the step
   never pushes kinematic against kinematic, and each one's sweep sees the other where the last step left it.
@@ -351,11 +349,11 @@ walk, jump and crouch as at the origin.
   until it gets out.
 - The capsule's round bottom perches on edges: a character may stand with its centre up to r sin(slope limit) past a
   ledge (21 cm for a human), its feet (the object's position) up to 8.8 cm below the edge's top. Foot placement (IK)
-  is T30's question.
+  is not built yet.
 - The platform carry is applied without a sweep: a platform carrying a character into a wall leaves the overlap to the
   collision step (a pushable character is pushed out of the wall, off the platform).
 - Velocity on landing is not made relative to a moving platform it lands on (it slows to the wish within a tenth of a
   second).
 - A character under a moving parent reads the parent's move as a push (characters are normally roots).
-- A character's visual model is not its own yet: today another component (a world model) or child objects; T29 and
-  T30 give characters animated models, held items on bone sockets and special actions.
+- A character's visual model is not its own: another component on its object (a world model, posed by its animator:
+  [Animation.md](Animation.md)) or child objects.

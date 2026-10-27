@@ -1,10 +1,9 @@
 # Object data: tags, typed values and queries
 
-Built in T24 (the owner's design for tags and script data, decision G14, refined in PLAN.md 2.10 of
-`handoff/2026-10_graphics_and_world/`). The data foundation for tags, scripts and selectors: every world object holds a
-map of namespaced keys ([NamespacedKey.md](NamespacedKey.md)) to typed values, set in the editor or by scripts, and
-queries search the world by tags, data, components, flags and place. The scripting language's syntax for all this
-(`obj.data[#town:visits]`, selectors) waits for the scripting round; the storage, the codecs and the queries are here.
+The data foundation for tags, scripts and selectors: every world object holds a map of namespaced keys
+([NamespacedKey.md](NamespacedKey.md)) to typed values, set in the editor or by scripts, and queries search the world by
+tags, data, components, flags and place. The syntax for all this (`obj.data[#town:visits]`, selectors) comes with the
+planned scripting language; the storage, the codecs and the queries are here.
 
 | Module | Files | What it is |
 |---|---|---|
@@ -28,7 +27,7 @@ the data map cases of `tests/PropertyDescriptorTests.c`.
 | `string` | 4 | UTF-8, at most `DATA_VALUE_MAX_STRING_LENGTH` (4096) bytes, no NUL. |
 | `key` | 5 | A namespaced key (a `KeyRegistry` id): a reference to an asset, a preset, a tag ... |
 | `object` | 6 | A world object by id (0 = none). |
-| `vector3` | 7 | Three finite doubles (a `Vector3Double`, T33: a position in the world keeps every digit, as an object's does). |
+| `vector3` | 7 | Three finite doubles (a `Vector3Double`: a position in the world keeps every digit, as an object's does). |
 | `color` | 8 | RGBA bytes. |
 | `date_time` | 9 | Microseconds since 0001-01-01T00:00:00, inside the calendar (see [GameCalendar.md](GameCalendar.md)). |
 | `list` | 10 | One element type (fixed at creation, never `tag`), at most `DATA_VALUE_MAX_ELEMENT_COUNT` (4096) elements. |
@@ -37,11 +36,10 @@ the data map cases of `tests/PropertyDescriptorTests.c`.
 The values are saved (GHDF writes the type's number): never renumber. One integer type and one float type, not
 int8/16/32/64 plus float/double: scripts need no promotion rules or number suffixes (Minecraft's `1b`/`1s`/`1L`/`1f`/
 `1d`), and the binary writer still stores each integer in the smallest GHDF type that holds it. If explicit widths are
-ever needed (packed binary data), they can come back as storage hints without changing the language's numbers.
+ever needed (packed binary data), they can be added as storage hints without changing the language's numbers.
 
-`DataValue` is the **storable part** of the future scripting VM's values (`handoff/2026-10_scripting_language/
-PROPOSAL.md`): the VM adds functions, class instances and fibers on top. Keep it free of anything that could not be
-saved.
+`DataValue` is the **storable part** of the future scripting VM's values: the VM adds functions, class instances and
+fibers on top. Keep it free of anything that could not be saved.
 
 - **Building.** `DataValue_CreateTag`, `DataValue_FromBool` / `FromInt` / `FromFloat` / `FromKey` / `FromObject` /
   `FromVector3` / `FromColor` / `FromDateTime` (no memory); `DataValue_CreateString` (and `_CreateStringFromBytes` for
@@ -92,8 +90,7 @@ goes back to NULL when the last entry is removed), read with `WorldObject_GetDat
 only through the world:
 
 - `World_SetData(world, id, key, value)`: copies the value (another type replaces the old one; the same value changes
-  nothing); `World_TryGetData(world, id, key, &value)` (named in the house style, the task's `World_GetData`);
-  `World_RemoveData(world, id, key, &wasRemoved)`.
+  nothing); `World_TryGetData(world, id, key, &value)`; `World_RemoveData(world, id, key, &wasRemoved)`.
 - Tags: `World_AddTag` (sets the key to a tag, replacing a value), `World_RemoveTag` (removes only a tag: a value under
   the key stays), `World_HasTag`.
 - **Limits** (hostile content):
@@ -132,12 +129,12 @@ recomputed per frame.
   `Greater`, `GreaterOrEqual` order numbers (int and float) and date_times, and never match other types;
 - `ComponentTypes` present;
 - `IsEnabledOnly`, `IsVisibleOnly` (off by default; scripts' searches set `IsEnabledOnly`, since a disabled object is
-  skipped by every system, and the editor leaves it off). Both are effective (T08): an object under a disabled or
+  skipped by every system, and the editor leaves it off). Both are effective: an object under a disabled or
   hidden ancestor counts as disabled or hidden;
 - within `MaximumDistance` of `Origin`; inside the box `BoxMinimum`..`BoxMaximum` (faces inside); positions are the
-  objects' world positions (`WorldObject_GetWorldPosition`, through their parents; T08). `Origin` and the box are
-  `Vector3Double`s and the distances compare in double (T33), so a query 100 km out tells apart objects millimetres
-  apart; `MaximumDistance` stays a float;
+  objects' world positions (`WorldObject_GetWorldPosition`, through their parents). `Origin` and the box are
+  `Vector3Double`s and the distances compare in double, so a query 100 km out tells apart objects millimetres
+  apart; `MaximumDistance` is a float;
 - the order: object ids ascending, or nearest to `Origin` first (`IsSortedByDistance`, ties by id); then `Limit`.
 
 Malformed queries (a NULL array with a count, key id 0, an ordering operator on a string, a NaN, a negative distance,
@@ -159,12 +156,12 @@ NULL).
 
 ### JSON
 
-The full reference, with an example a test reads from the file, is `references/world_structure.md` ("Tags and data";
-T09 moved it there from here). In short:
+The full reference, with an example a test reads from the file, is `references/world_structure.md` ("Tags and data").
+In short:
 
 - **Tags** are a list of keys under `tags`; everything else is a map of key -> value under `data`. A key may leave out
   its namespace (`"office"` reads as `tbp:office`, or in the reader's default namespace); the writer always writes
-  the full key. The writer lists both in alphabetical order of their keys (WRJSON keeps insertion order since T09, and
+  the full key. The writer lists both in alphabetical order of their keys (WRJSON keeps insertion order, and
   `DataMap_WriteJSON` inserts them sorted by text).
 - **Plain JSON types map directly:** an integer is an `int`, a number with a fraction or an exponent (`1.5`, `2.0`,
   `3e2`) a `float`, then string, bool, an array a list (all elements of its first element's type), an object a
@@ -182,7 +179,7 @@ T09 moved it there from here). In short:
 The `data` entry is a Compound array of entry compounds, sorted by key text: entry 1 the key's full text (String),
 2 the type (UInt8), 3 the value (absent for a tag), 4 a list's element type (UInt8). Values: Boolean; ints in the
 smallest of Int8/16/32/64; floats as Float when exact, else Double; strings and keys as String; objects in the smallest
-of UInt8/16/32/64; vector3 as a Double array of 3 (a Float array of 3, as saves before T33 wrote it, still reads); color
+of UInt8/16/32/64; vector3 as a Double array of 3 (a Float array of 3, as older saves wrote it, still reads); color
 as a UInt8 array of 4; date_time as Int64; a list as one array of its elements (the smallest integer type for all of an
 int list, Float or Double for floats, 3 doubles per vector3 (3 floats read too), 4 bytes per color, Int64 per date_time, a Compound array of value compounds for lists and compounds); a compound as a
 Compound array of entry compounds with names. Readers accept any integer type that holds the value, skip unknown
@@ -216,5 +213,5 @@ to the count it took before reading. The key registry has its own cap (2^20 keys
 ### Authored and runtime data
 
 Values set in the editor are saved in the world file. Values scripts set at runtime will be saved in game saves as
-differences from the world, when the save round designs that (architecture 3.7). Nothing here prevents it: the data
+differences from the world, once game saves are designed. Nothing here prevents it: the data
 revision says which objects changed, `DataMap_Equals` compares, and the map is plain data.

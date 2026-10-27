@@ -6,14 +6,14 @@ loader). The private `source/WorldSpriteInternal.h` holds the property rows the 
 component's table share. The placements' side is the sprite component, `include/WorldSpriteComponent.h` and
 `source/WorldSpriteComponent.c` ([WorldData.md](WorldData.md), "Sprite component"). The definition format is in
 `references/asset_structure.md`, "World sprites". Tests: `tests/WorldSpriteTests.c`, the renderer's side in
-`tests/WorldRenderCacheTests.c` and `tests/WorldVisibilityTests.c`. Built in T26 (decision G17), the sprite counterpart
-of world models ([WorldModels.md](WorldModels.md)).
+`tests/WorldRenderCacheTests.c` and `tests/WorldVisibilityTests.c`. World sprites are the sprite counterpart of world
+models ([WorldModels.md](WorldModels.md)).
 
 A sprite animation is a plain asset that text uses too, where world settings mean nothing. A **world sprite** holds
 what only matters in the world: which animation to play, how its quad stands (orientation, pivot, pixels per unit,
 flips), its transparency, how it is lit, whether it is a decal, its render flags and how far it is seen. A **world
-object** is one placement: it names its world sprite and may override **every** setting (the owner's answer when T26
-asked, 2026-10-20: "the more settings the better").
+object** is one placement: it names its world sprite and may override **every** setting (the principle: the more
+settings creators get, the better).
 
 ## The asset type
 
@@ -27,7 +27,7 @@ asked, 2026-10-20: "the more settings the better").
   starts with `World sprite "<name>": `.
 - **The settings are read through property tables**, not hand-written code: `WorldSprite_GetSettingsPropertyTable`
   (`world_sprite`, the root's 15 rows, over `WorldSpriteSettings`) and `WorldSprite_GetRenderPropertyTable`
-  (`world_sprite_render`, the `render` block's three flags and, since T35, its `haze` multiplier, over
+  (`world_sprite_render`, the `render` block's three flags and its `haze` multiplier, over
   `WorldSpriteRenderSettings`). Together they describe
   every field of `WorldSpriteSettings`, so copying, comparing, validating and writing go through both. A value that breaks a rule
   is refused with the table's message: `World sprite "tree": world_sprite.pixels_per_unit (PixelsPerUnit) must be
@@ -57,7 +57,7 @@ as the shadow tier's are for world models.
 
 Pure data, read-only, owned by the asset manager (never keep it past your asset user): `WorldSprite_GetAnimation` (the
 `SpriteAnimation*`, borrowed from the dependency) and `WorldSprite_GetSettings` (a `WorldSpriteSettings`: the defaults of
-its placements). `WorldSpriteSettings_CreateDefault` gives the tables' defaults (T06's: a centred, camera-facing, lit
+its placements). `WorldSpriteSettings_CreateDefault` gives the tables' defaults (a centred, camera-facing, lit
 cutout sprite at 32 pixels per metre, outlined, casting shadows) and no draw distance of its own.
 `WorldSpriteSettings_IsDrawnAsDecal` (marked a decal and fixed) and `WorldSpriteSettings_GetDefaultDrawDistance` (the
 kind's) work on any settings.
@@ -67,9 +67,9 @@ kind's) work on any settings.
 The sprite component names the world sprite (`world_sprite`; changing the name swaps the sprite and keeps the object,
 its tags, data, children and overrides). Every setting of `WorldSpriteSetting` is a pair of rows: the flag
 `overrides_<key>` (a Bool, off by default) right before the placement's own value `<key>`; while the flag is off the
-world sprite's value applies and the placement's value is kept and saved (the owner's rule with G17: no sentinels, no
+world sprite's value applies and the placement's value is kept and saved (no sentinels, no
 `inherit`). In C the flags are one array, `_overrides[WorldSpriteSetting_Count]`, read and set with
-`WorldSpriteComponent_IsOverridden` / `_SetOverridden(self, setting, isOverridden)`; the values keep their T06 typed
+`WorldSpriteComponent_IsOverridden` / `_SetOverridden(self, setting, isOverridden)`; the values have typed
 getters and setters, which read and write the placement's own value.
 
 | Setting (`WorldSpriteSetting`) | Flag | Value |
@@ -89,11 +89,11 @@ getters and setters, which read and write the placement's own value.
 | `DecalOffset` | `overrides_decal_offset` | `decal_offset` |
 | `HasOutline` | `overrides_has_outline` | `has_outline` |
 | `OmitPixelation` | `overrides_omit_pixelation` | `omit_pixelation` |
-| `Haze` (T35) | `overrides_haze` | `haze` |
+| `Haze` | `overrides_haze` | `haze` |
 | `DrawDistance` | `overrides_draw_distance` | `draw_distance` |
 | `IsDrawDistanceFixed` | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` |
 
-`haze` (T35, [0, 1000], default the world sprite's `render.haze`, 1) multiplies the haze in front of the sprite
+`haze` ([0, 1000], default the world sprite's `render.haze`, 1) multiplies the haze in front of the sprite
 ([WorldRuntime.md](WorldRuntime.md), "Haze"): 1 the real air's, 0 as if the air were clear (a sign that must read from
 far away). It applies to every kind of sprite (lit, unlit, blended, additive, decals) and to a cutout sprite's outline.
 `draw_distance_multiplier` (above 0, default 1) is a plain setting: it multiplies whichever draw distance is in effect.
@@ -101,17 +101,17 @@ far away). It applies to every kind of sprite (lit, unlit, blended, additive, de
 sprite's settings and the overrides into the settings in effect; the renderer's cache calls it for every sprite each
 frame.
 
-## Draw distance (G17)
+## Draw distance
 
 1. **Per placement** (`WorldSpriteComponent_ResolveSettings`): the placement's own `draw_distance` while
    `overrides_draw_distance` is on; else the world sprite's while its `has_draw_distance` is on (`HasDrawDistance`: an
    explicit row; a definition that gives `draw_distance` without it has it on); else
    the kind's default, `WORLD_SPRITE_DEFAULT_DRAW_DISTANCE` (150 m) or, for a decal,
-   `WORLD_SPRITE_DEFAULT_DECAL_DRAW_DISTANCE` (60 m), the defaults T07 gave every sprite. The kind is decided on the
+   `WORLD_SPRITE_DEFAULT_DECAL_DRAW_DISTANCE` (60 m). The kind is decided on the
    settings in effect: a placement that turns a sprite into a decal (fixed and `is_decal`) gets the decals' distance.
    Then times `draw_distance_multiplier`. Fixed as the world sprite says, or as the placement says while
    `overrides_is_draw_distance_fixed` is on.
-2. **Per frame** (`WorldVisibility`, [WorldRuntime.md](WorldRuntime.md), "Visibility"): the models' rules, since T26
+2. **Per frame** (`WorldVisibility`, [WorldRuntime.md](WorldRuntime.md), "Visibility"): the models' rules,
    for sprites too: times the player's `draw_distance_scale` unless fixed, against the distance to the nearest point of
    the sprite's sphere times the zoom factor.
 
@@ -129,7 +129,7 @@ renderer reads the bound world sprite's settings; it never loads world sprites i
 As for world models ([WorldModels.md](WorldModels.md)): the editor's `AssetManager_ReloadDefinition` will rebuild a world
 sprite in place (its pointer stays valid), and the cache reads the settings every frame, so changed settings show at
 once; a reloaded animation must also rebuild the world sprites built on it and rebind their placements' instances. Not
-built here. The editor can edit a world sprite through its two tables and write it back as JSON: the root's keys, the
+built yet. The editor can edit a world sprite through its two tables and write it back as JSON: the root's keys, the
 `render` block from the second table, and `name` and `sprite_animation`. A writer that leaves out default values must
 still write `has_draw_distance` whenever it writes `draw_distance` (or write every key, `PropertyWriteOptions.
 AreDefaultsWritten`): left out, a `draw_distance` kept while the flag is off would read back as on.
@@ -138,17 +138,12 @@ AreDefaultsWritten`): left out, a `draw_distance` kept while the flag is off wou
 
 `compile/out/asset/world_sprites/test_world/`: `test_sprite` (the test image, 1280 pixels per metre), `test_tire_mark`
 (a fixed, blended decal), `test_tree` (an axis billboard standing on its pivot), `test_sign` (fixed, standing),
-`test_smoke` (blended), `test_glow` (additive, unlit, glow 2) and `test_neon` (fixed, unlit, glow 3): T06's look of
-each, which the test world's placements held before. Each has its animation's name. The test world
-(`compile/out/worlds/test.world.json`) names them, and places the tree a second time, mirrored by its placement
-(`tree_mirrored`, id 24: `overrides_flip_x` and `flip_x` on).
+`test_smoke` (blended), `test_glow` (additive, unlit, glow 2) and `test_neon` (fixed, unlit, glow 3). Each has its
+animation's name. The test world (`compile/out/worlds/test.world.json`) names them, and places the tree a second time,
+mirrored by its placement (`tree_mirrored`, id 24: `overrides_flip_x` and `flip_x` on).
 
 ## Known limits
 
-- **World files written before T26:** a JSON file names animations under `sprite_animation`, which is skipped as unknown
-  (nothing drawn); a GHDF file keeps the name on wire 1, which now reads as the world sprite's name (it draws where a
-  world sprite has the animation's name, as every shipped one has). Either way its old look values read as the
-  placement's own values and stay unused until their flags are set. The world file format was not raised (as in T10).
-- **No sprite LODs, variants or collision** (the task's scope); a different look is another world sprite naming the same
+- **No sprite LODs, variants or collision**; a different look is another world sprite naming the same
   animation, which still loads once.
-- **Changing a world sprite's name rebinds and restarts the playback**, as renaming the animation did before.
+- **Changing a world sprite's name rebinds and restarts the playback**.

@@ -8,11 +8,10 @@ Files: `include/SoundEngine.h`, `source/SoundEngine.c`; the sound asset type is 
 - `AudioEngine_Construct1` always returns `ErrorCode_InvalidOperation` (see the `// TODO:` in
   `SoundEngine.c`). Nothing constructs the engine and nothing calls `AssetManager_LoadSound`, so no game code
   depends on audio yet.
-- The owner decided (2026-10-17, plan decision D8 in `handoff/2026-10_code_review/FIX_PLAN.md`) to keep this code
-  dormant and redesign it when the game needs sound. **This file is the brief for that redesign.** Before writing code,
-  ask the owner the open decisions at the end of this file and propose the header first: the owner reviews
-  API shape before implementation.
-- The old code stays in place as the starting point: its DSP, ramps, resampling and ring buffer are worth
+- The code is kept, dormant, until it is redesigned when the game needs sound. **This file is the brief for that
+  redesign.** Before writing code, ask the owner the open decisions at the end of this file and propose the header
+  first: the owner reviews API shape before implementation.
+- The current code stays in place as the starting point: its DSP, ramps, resampling and ring buffer are worth
   keeping (see "What survives").
 
 ## How the current engine works (for orientation)
@@ -185,7 +184,7 @@ zero-fills slots and has no generations). WRStopwatch and WREvent cover timing a
    main-thread `WREvent`s (recommended; callbacks can hang the audio thread, defect 9); (b) a restricted
    callback API; (c) sample-accurate scheduling by splitting blocks (only if rhythm/music sequencing needs it).
 6. **When all voices are in use:** (a) fail with an error; (b) steal the lowest-priority, oldest voice,
-   falling back to an error (recommended). Also ask to add `ErrorCode_CapacityExceeded` to WRError (the old
+   falling back to an error (recommended). Also ask to add `ErrorCode_CapacityExceeded` to WRError (the current
    code misuses `BufferTooLarge`).
 7. **Music:** (a) decode fully into memory (about 11.5 MB per stereo minute at 48 kHz; fine for effects);
    (b) raylib `Music` alongside the mixer (recommended when music is needed); (c) custom streaming voices

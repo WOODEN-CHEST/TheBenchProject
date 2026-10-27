@@ -26,8 +26,8 @@ A format adapter only moves values in and out of its document tree through two s
 (`ITextCodecReader` / `ITextCodecWriter`), so JSON and GHDF cannot drift apart: the same fields, defaults, ranges and
 rules apply to both. Adding a field means one table row (plus its two cases in the codec's get/set switches).
 
-The table could later be generated from the property descriptors of architecture decision A1; until then it is
-hand-written (the owner's decision of 2026-10-18).
+The table is hand-written; it could later be generated from the property descriptors
+([PropertyDescriptors.md](PropertyDescriptors.md)).
 
 ## Writing
 

@@ -3,32 +3,33 @@
 `include/WorldModel.h`, `source/WorldModel.c` (the asset's data functions: the shadow tier's names, the default settings,
 variants by name and on one material) and `source/WorldModelDefinition.c` (the `world_model` asset type: the definition's
 parser and the loader). The placements' side is the model component, `include/WorldModelComponent.h` and
-`source/WorldModelComponent.c` ([WorldData.md](WorldData.md)), and since B03 the model instances component, many copies
+`source/WorldModelComponent.c` ([WorldData.md](WorldData.md)), and the model instances component, many copies
 of one world model with the model component's settings (`include/WorldModelInstancesComponent.h`; its LODs change in
 distance bands per copy, [WorldRuntime.md](WorldRuntime.md), "Model instances"). The definition format is in
 `references/asset_structure.md`, "World models". Tests: `tests/WorldModelTests.c`, the renderer's side in
-`tests/WorldRenderCacheTests.c` and `tests/WorldVisibilityTests.c`; the LOD maths in `tests/WorldLodTests.c`. Built in T10 (decisions G4 and G17); T11 added
-the LOD selection and cross-fades, T12 the `collision` section ("Collision" below; `tests/WorldColliderTests.c`).
+`tests/WorldRenderCacheTests.c` and `tests/WorldVisibilityTests.c`; the LOD maths in `tests/WorldLodTests.c`; the
+`collision` section ("Collision" below) in `tests/WorldColliderTests.c`.
 
 A **world model** is everything that is the same for every placement of a thing: which model to draw at which distance
 (its LODs), how far it is seen, the default render settings of its placements, and its material variants. A **world
 object** is one placement: its id, transform, tags and data, which world model it uses, which variant, and what it
-overrides (the classic prefab / instance split, PLAN.md 2.2). Models stay plain assets that the UI can use too: what
-only matters in the world lives in the world model (the owner's rule G17: world-level assets are built on the plain ones
-as dependencies; world sprites, T26, do the same for sprite animations: [WorldSprites.md](WorldSprites.md)).
+overrides (the classic prefab / instance split). Models stay plain assets that the UI can use too: what
+only matters in the world lives in the world model (the rule: world-level assets are built on the plain ones
+as dependencies; world sprites do the same for sprite animations: [WorldSprites.md](WorldSprites.md)).
 
 ## The asset type
 
-- **A standard type**, registered with the others by `AssetManager_CreateStandardAssetTypes` (as T01 registered
-  `texture`): name `world_model`, directory `world_models/`, JSON definitions; `StandardAssetTypes.WorldModel` and
-  `AssetManager_LoadWorldModel` ([AssetManager.md](AssetManager.md)).
+- **A standard type**, registered with the others by `AssetManager_CreateStandardAssetTypes`: name `world_model`,
+  directory `world_models/`, JSON definitions; `StandardAssetTypes.WorldModel` and `AssetManager_LoadWorldModel`
+  ([AssetManager.md](AssetManager.md)).
 - **Definitions are checked when they are read** (a bad file is skipped at startup with one error, like every asset
   type): 1 to `WORLD_MODEL_MAX_LODS` (8) LODs naming valid model assets, their `max_distance` finite, above 0 and rising;
   `draw_distance` at least the last `max_distance` (left out, it is that distance); `lod_fade_seconds` >= 0;
-  `lod_hysteresis` in [0, 1); `render`'s five settings (T35 added `haze`, in [0, 1000]); at most `WORLD_MODEL_MAX_VARIANTS` (64) variants with unique
-  names (`[a-z][a-z0-9_.-]*`, at most 128 bytes) and at most `WORLD_MODEL_MAX_VARIANT_OVERRIDES` (32) material
-  overrides each, one per slot; `bounds` with a centre and a radius >= 0; `animation_libraries` (T29) at most
-  `WORLD_MODEL_MAX_ANIMATION_LIBRARIES` (16) unique asset names; since T30 `animation_graph` (an asset name),
+  `lod_hysteresis` in [0, 1); `render`'s five settings (`haze` in [0, 1000]); at most `WORLD_MODEL_MAX_VARIANTS` (64)
+  variants with unique names (`[a-z][a-z0-9_.-]*`, at most 128 bytes) and at most
+  `WORLD_MODEL_MAX_VARIANT_OVERRIDES` (32) material overrides each, one per slot; `bounds` with a centre and a radius
+  >= 0; `animation_libraries` at most `WORLD_MODEL_MAX_ANIMATION_LIBRARIES` (16) unique asset names; `animation_graph`
+  (an asset name),
   `sockets` (at most `WORLD_MODEL_MAX_SOCKETS`, 32, each a name of at most 64 bytes, an optional bone of at most 31, a
   position and a rotation) and `first_person` (`eyes`, one of its sockets; `hidden_bones`, at most 16; parsed in
   `source/WorldModelSocketDefinition.c`). **Unknown keys are refused** in every object
@@ -45,14 +46,14 @@ as dependencies; world sprites, T26, do the same for sprite animations: [WorldSp
   loaded. The variants, their overrides and their names are one allocation the asset owns; the `GameModel` and
   `GameTexture` pointers in it are borrowed from the dependencies. A variant override whose slot no LOD model has is
   logged once at load (it changes nothing).
-- **Animation (T29, [Animation.md](Animation.md)):** the world model's **skeleton** is the first skinned LOD's
+- **Animation ([Animation.md](Animation.md)):** the world model's **skeleton** is the first skinned LOD's
   (`WorldModel_GetSkeleton`, `_GetSkeletonLod`); every other LOD with bones must have its bones and bind poses
   (`GameSkeleton_HasSameBindPoses`), or the world model is refused, so one pose bends every skinned LOD (a coarse LOD may
   be rigid: it draws as it is). Its `animation_libraries` load as dependencies too (`_GetAnimationLibraryCount`,
   `_GetAnimationLibrary`, `_GetAnimationLibraryName`: the names are the world model's own copies); two of them may not
   hold a clip of the same name, and naming libraries without a skinned LOD is logged once at load (its placements play
-  nothing). Since T30 its `animation_graph` loads as a dependency too (`_GetAnimationGraph`, `_GetAnimationGraphName`).
-- **Sockets and first person (T30, [Animation.md](Animation.md)):** at load each bone socket is matched to the
+  nothing). Its `animation_graph` loads as a dependency too (`_GetAnimationGraph`, `_GetAnimationGraphName`).
+- **Sockets and first person ([Animation.md](Animation.md)):** at load each bone socket is matched to the
   skeleton by name, and each hidden bone; a bone socket or hidden bones on a world model without a skeleton, or naming a
   bone it lacks, fail the load. `WorldModel_GetSocketCount`, `_GetSocket(index)`, `WorldModel_TryFindSocket(name)` and
   `WorldModel_GetSocketMatrix(socket, boneMatrices)` give a socket's frame in the object's own space: its offset times
@@ -62,9 +63,9 @@ as dependencies; world sprites, T26, do the same for sprite animations: [WorldSp
 - **Bounds:** the definition's sphere, authored in the object's own space, or the sphere around LOD 0's mesh bounds in
   LOD 0's mesh space; `WorldModel_GetBoundsTransform` takes either to the object's space (identity, or LOD 0's import
   transform). The renderer composes that with the object's world matrix first and scales the radius by the product's
-  stretch (`WorldTransform_GetMaxScale`), so the derived sphere is exactly the drawn model's, as before world models:
+  stretch (`WorldTransform_GetMaxScale`), so the derived sphere is exactly the drawn model's:
   bounding the import and the placement separately would multiply an uneven import scale by an uneven placement scale
-  (five or ten times too large, the review found). `WorldModel_HasOwnBounds` says which: a posed placement (T29) keeps
+  (five or ten times too large). `WorldModel_HasOwnBounds` says which: a posed placement keeps
   the definition's sphere, and otherwise is bounded by its pose instead of LOD 0's bind pose.
 
 ## The loaded `WorldModel`
@@ -73,17 +74,17 @@ Pure data, read-only, owned by the asset manager (never keep it past your asset 
 `WorldModel_GetLodCount`, `_GetLodModel(index)` (the `GameModel*`), `_GetLodMaxDistance(index)`, `_GetSettings` (the
 placements' defaults, a `WorldModelSettings`: outline, crisp, shadow tier, casts shadows, haze, draw distance, fixed),
 `_GetLodFadeSeconds`, `_GetLodHysteresis`, `_GetBoundsCenter` / `_GetBoundsRadius` / `_GetBoundsTransform` /
-`_HasOwnBounds`, the animation's `_GetSkeleton`, `_GetSkeletonLod` and libraries (T29), its graph, sockets and
-first-person block (T30),
+`_HasOwnBounds`, the animation's `_GetSkeleton`, `_GetSkeletonLod` and libraries, its graph, sockets and
+first-person block,
 `_GetVariantCount`,
 `_GetVariantName(index)`, `WorldModel_TryFindVariant(name, &index)` and `WorldModel_ApplyVariant`.
 `WorldShadowTier` and its names (`WORLD_SHADOW_TIER_ENUM`, which the component's `shadow_tier` row uses too) live in
-`WorldModel.h` since T10; `WorldModelSettings_CreateDefault` is what a world model and a placement start from.
+`WorldModel.h`; `WorldModelSettings_CreateDefault` is what a world model and a placement start from.
 
 ## Variants
 
 A variant is another look of the same meshes: a named list of material overrides, one per material slot (the
-material's index in each LOD's model: every LOD keeps the same slots, ASSETS.md). An override swaps in texture assets
+material's index in each LOD's model: every LOD keeps the same slots). An override swaps in texture assets
 (albedo, normal, the packed occlusion/roughness/metallic map, emissive) and sets the PBR factors (tint, metallic,
 roughness, emissive colour and intensity).
 - **Applied at draw time, never to an asset** (AGENTS.md rule 3): the renderer copies a mesh's material maps for every
@@ -106,7 +107,7 @@ roughness, emissive colour and intensity).
 
 The model component ([WorldData.md](WorldData.md), "Model component") names the world model (`world_model`; changing the
 name swaps the model and keeps the object) and overrides the world model's settings per placement. Every override is
-explicit (the owner's rule with G17): a flag row `overrides_<key>` (a Bool, off by default) right before the value row
+explicit: a flag row `overrides_<key>` (a Bool, off by default) right before the value row
 `<key>`; while the flag is off the world model's value applies and the placement's own value is kept (and saved), so
 switching the flag back on restores it. No sentinel values, no `inherit` states. The pairs are two plain rows of the
 component's table (not a new property type): every reader, writer, the inspector and scripts handle them as they are,
@@ -119,12 +120,12 @@ and `PropertyTable_Check` enforces the pairing for every table ([PropertyDescrip
 | `OmitPixelation` | `overrides_omit_pixelation` | `omit_pixelation` |
 | `ShadowTier` | `overrides_shadow_tier` | `shadow_tier` |
 | `CastsShadows` | `overrides_casts_shadows` | `casts_shadows` |
-| `Haze` (T35) | `overrides_haze` | `haze` |
+| `Haze` | `overrides_haze` | `haze` |
 | `DrawDistance` | `overrides_draw_distance` | `draw_distance` |
 | `IsDrawDistanceFixed` | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` |
-| `LodDistances` (T11) | `overrides_lod_distances` | `lod_distances` (a list) |
+| `LodDistances` | `overrides_lod_distances` | `lod_distances` (a list) |
 
-`haze` (T35, [0, 1000], default the world model's `render.haze`, 1) multiplies the haze in front of the placement
+`haze` ([0, 1000], default the world model's `render.haze`, 1) multiplies the haze in front of the placement
 ([WorldRuntime.md](WorldRuntime.md), "Haze"): 1 the real air's, 0 as if the air were clear (a beacon, a sign that must
 read from far away), above 1 hazier than the air (its outline then fades only as at 1). The renderer sets it per draw
 (the lit pass and, for outlined models, the G-buffer). The model instances component has the same pair for all its
@@ -137,7 +138,7 @@ getters and setters for the values. **`WorldModelComponent_ResolveSettings(compo
 function that turns the world model's settings and the overrides into the settings in effect; the renderer's cache
 calls it every frame (against `WorldModelSettings_CreateDefault` while the world model is not resolved).
 
-## Draw distance (G17)
+## Draw distance
 
 An object's draw distance is resolved in two steps:
 1. **Per placement** (`WorldModelComponent_ResolveSettings`): the world model's `draw_distance`, or the placement's own
@@ -147,17 +148,17 @@ An object's draw distance is resolved in two steps:
    `draw_distance_scale` unless fixed (`WorldVisibility_ScaleDrawDistance`), compared with the camera's distance to the
    nearest point of the object's bounding sphere times the **zoom factor**, `WorldVisibility_GetZoomFactor(fovY)` =
    tan(fovY / 2) / tan(30 degrees): exactly 1 at the default 60 degrees, below 1 when zoomed in, so binoculars or a
-   zoomed camera keep far objects in sight. T11's LOD selection uses the same factor.
+   zoomed camera keep far objects in sight. The LOD selection uses the same factor.
 
 A placement may draw less far than its world model's last LOD distance: its coarser LODs are then never reached.
-Sprites follow the same two steps since T26, through world sprites ([WorldSprites.md](WorldSprites.md)).
+Sprites follow the same two steps, through world sprites ([WorldSprites.md](WorldSprites.md)).
 
 ## LODs
 
 A world model has 1 to `WORLD_MODEL_MAX_LODS` (8) LODs, the finest first, each with its `max_distance`: LOD i is drawn
 while the object is nearer than its switch distance i, the last LOD past the last boundary until the draw distance
-(where T07's fade takes it; the last LOD's own `max_distance` is the default draw distance). Built in T11 (decisions G6,
-G17); the maths is the private `source/WorldLod.{h,c}` ([WorldRuntime.md](WorldRuntime.md), "LODs").
+(where the draw distance's fade takes it; the last LOD's own `max_distance` is the default draw distance). The maths
+is the private `source/WorldLod.{h,c}` ([WorldRuntime.md](WorldRuntime.md), "LODs").
 - **Per placement** (`WorldModelComponent_ResolveLodSettings`, a pure function: `WorldModelLodSettings`): the switch
   distances are the world model's `max_distance`s, or the placement's own list while `overrides_lod_distances` is on and
   the list holds one distance per LOD (a `FloatList` row: finite, above 0, rising, at most 8; when the world model gains
@@ -183,11 +184,11 @@ G17); the maths is the private `source/WorldLod.{h,c}` ([WorldRuntime.md](WorldR
   also glow faintly, so the colours read at night); the I key's status line counts the drawn models per LOD and the
   cross-fading ones.
 
-## Collision (T12)
+## Collision
 
 A world model may hold its placements' collision: named **collision sets** (compounds of spheres, capsules, boxes,
 cylinders, convex hulls, planes and meshes, each placed in the model's space, an optional part name each), the set its
-placements use by default, and the placements' default layer, mask, trigger flag and mass (T27: how pushables share a
+placements use by default, and the placements' default layer, mask, trigger flag and mass (how pushables share a
 push; above 0, at most `COLLISION_MAX_MASS`, `COLLISION_DEFAULT_MASS` (1 kg) when left out, also under `"bounds"`).
 `"collision": "bounds"` is one set, `bounds`, holding a box around LOD 0 (exact under its import transform). No
 section: no collision. The format is in `references/asset_structure.md`; the shapes, the collider component that places
@@ -209,46 +210,40 @@ again when the component's name changes (its revision). The editor will need the
 the loaded asset is rebuilt in place (its pointer stays valid), and a per-asset revision tells caches such as the render
 cache to re-resolve what they derived from it (the LOD model pointers, the variant index, the bounds). A world model
 depends on its models and textures, so reloading one of those must also rebuild the world models built on it. Not built
-here.
+yet.
 
 ## Test content
 
 `compile/out/asset/world_models/test_world/`: `test`, `pbr_demo` and `pbr_metal` (one LOD each, the model of the same
-name, 600 m: the draw distance every model had before), and `painted_cube` (the test cube with the variants `red` and
-`blue`, tints only), and since T11 `lod_test`: three LODs of a sphere (the placeholder models `lod_test_lod0` to `_lod2`,
+name, 600 m), and `painted_cube` (the test cube with the variants `red` and
+`blue`, tints only), and `lod_test`: three LODs of a sphere (the placeholder models `lod_test_lod0` to `_lod2`,
 `models/placeholder_lod_test/`: UV spheres of radius 0.5 m at 32x16, 16x8 and 8x4 segments, written by a generator
 script) switching at 13 and 16 m, seen 60 m. The test world (`compile/out/worlds/test.world.json`) names world models;
-its per-object crisp and shadow tier settings are now override pairs. Two cubes behind the centre row show
+its per-object crisp and shadow tier settings are override pairs. Two cubes behind the centre row show
 `painted_cube`'s variants; the test frame's E key steps them (their own, swapped, none) and Z zooms the camera to 15
 degrees ([WorldRuntime.md](WorldRuntime.md), "WorldTestFrame"). A row of six `lod_test` spheres stands along the left
 edge of the ground (x = 8, z = -6 to 9), with two more beside it: `lod_test_forced` (LOD 2 forced) and
 `lod_test_own_distances` (its own switch distances, 3 and 6 m); Q tints them by LOD.
 
-Since T12 the world models collide: `test`, `pbr_metal` and `painted_cube` with `"bounds"`, `lod_test` with a convex
+The test world models collide: `test`, `pbr_metal` and `painted_cube` with `"bounds"`, `lod_test` with a convex
 hull of `lod_test_lod0` (64 vertices), `pbr_demo` with a mesh of its own model (layer `world`); and `test_door` (the test
 cube through the model `test_door`'s import transform, a 1 x 2 m panel hinged at its origin) has a `closed` and an
 `open` set, a panel and a named handle each ([WorldCollision.md](WorldCollision.md), "Debugging and the test content").
 
-Since T29 two world models animate ([Animation.md](Animation.md), "Test content"): `test_humanoid` (the placeholder
+Two world models animate ([Animation.md](Animation.md), "Test content"): `test_humanoid` (the placeholder
 figure, LOD 0 `test_humanoid` to 12 m, then the coarser `test_humanoid_lod1` to 80 m, both skinned on one skeleton) and
-`test_humanoid_short` (one LOD), each playing `test_humanoid_motions`. Since T30 both play the graph `test_humanoid`
+`test_humanoid_short` (one LOD), each playing `test_humanoid_motions`. Both play the graph `test_humanoid`
 and have the sockets `hand_r` and `hand_l` (in the palm, turned so a held cup stands upright in the holding pose) and
 `eyes`, and a first_person block hiding the neck (with the head); `test_bench` (a bench whose `seat` socket stands on
 the floor 0.55 m in front of it, where a sitter's feet go) and `test_cup` (its `grip` on its side, its `reach` 0.52 m
-in front, facing it) are new, both colliding by `"bounds"`; `test_door` has an `opener` socket.
+in front, facing it) both collide by `"bounds"`; `test_door` has an `opener` socket.
 
 ## Known limits
 
-- **Surfaces** belong to T19: the `surfaces` key is refused as unknown until then.
+- **Surfaces** are not built yet: the `surfaces` key is refused as unknown.
 - **A missing dependency fails the whole world model** (every LOD and texture must load), so its objects draw nothing;
   a variant texture typo costs the model, not just the variant.
 - **The unknown-variant warning** comes again after `WorldRenderer_PrepareWorld` (the cache resolves everything again).
-- **World files written before T10:** a JSON file names models under `model`, which is skipped as unknown; a GHDF file
-  keeps them on wire 1, which now reads as the world model's name (it draws where a world model has the model's name,
-  as every shipped one has). Either way their crisp and shadow tier settings read as the placement's own values and stay
-  unused until their override flags are set. The world file format was not raised: the test world was the only world
-  file ([WorldFile.md](WorldFile.md)); the F5 saves are rewritten by the next save.
 - **The unknown-variant warning quotes the variant's name as the world file gave it** (any UTF-8 of at most 128 bytes),
-  as the world's warnings already quote object names.
-- **No headless mesh loading:** tests use code-built models and textures (`tests/TestAssets.h`); the GPU path (variant
-  textures in the draw) was checked with the windowless EGL harness.
+  as the world's warnings quote object names.
+- **No headless mesh loading:** tests use code-built models and textures (`tests/TestAssets.h`).

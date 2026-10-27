@@ -56,7 +56,7 @@ The lifecycle **state** (Loading/Loaded/Active/…) is tracked by the manager, n
 `GameFrame_OnResize` and `GameFrame_PrepareRender` wrappers return success. `Destroy` and all core slots must be
 non-NULL.
 
-**`PrepareRender(self, time)`** (T30, G35) is the update side's last step before a render: the manager calls it once
+**`PrepareRender(self, time)`** is the update side's last step before a render: the manager calls it once
 per rendered frame, after that loop iteration's update ticks, for every active frame whose `IsUpdated` and `IsRendered`
 are both set (`GameFrameManager_PrepareRender`). It may change the frame's state, so work only a shown frame needs is
 done once per frame instead of every tick: the world test frame poses its skeletons there (`WorldAnimation_Pose`),

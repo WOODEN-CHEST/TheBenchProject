@@ -60,7 +60,7 @@ active at once:
 
 ## Preparing a render
 
-`GameFrameManager_PrepareRender(manager, time)` (T30, G35) calls each active frame's optional `PrepareRender` slot
+`GameFrameManager_PrepareRender(manager, time)` calls each active frame's optional `PrepareRender` slot
 (GameFrame.md), from the top of the z-stack down like the update, skipping frames whose `IsUpdated` or `IsRendered` is
 off (a frozen frame has nothing new to show, a hidden one nothing to show it on) and frames without the slot. It works
 on a snapshot like the update, so a frame added meanwhile waits for the next render. A failure is fatal like every
@@ -117,7 +117,7 @@ while (!WindowShouldClose() && !GameFrameManager_ShouldStop(&Manager))
     }
 
     ProgramTime RenderTime = ProgramTime_Create(Now, FrameTime);
-    Error p = GameFrameManager_PrepareRender(&Manager, RenderTime);   // the update side's last step (T30)
+    Error p = GameFrameManager_PrepareRender(&Manager, RenderTime);   // the update side's last step
     if (p.Code != ErrorCode_Success) { Error_Deconstruct(&p); /* stop */ break; }
     Error r = GameFrameManager_Render(&Manager, RenderTime);
     if (r.Code != ErrorCode_Success) { Error_Deconstruct(&r); /* stop */ break; }

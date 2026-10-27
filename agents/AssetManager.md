@@ -5,7 +5,7 @@ Files: `include/AssetManager.h`, `source/AssetManager.c`. Standard asset types: 
 sets), and one loader per type: `source/SpriteSheetDefinition.c`, `source/SpriteAnimationDefinition.c`,
 `source/SoundDefinition.c`, `source/FontDefinition.c`, `source/ShaderDefinition.c` (with its `#include` expander
 `source/ShaderSource.{h,c}`), `source/ModelDefinition.c`, `source/TextureDefinition.c`, `source/WorldModelDefinition.c`,
-and the later types' (`WorldSpriteDefinition.c`, `CharacterDefinition.c`, `AnimationLibraryDefinition.c`,
+and the other types' (`WorldSpriteDefinition.c`, `CharacterDefinition.c`, `AnimationLibraryDefinition.c`,
 `AnimationGraphDefinition.c`, `TerrainDefinition.c`, `TerrainMaterialDefinition.c`).
 The definition JSON format is specified in `references/asset_structure.md`.
 
@@ -36,7 +36,7 @@ registered together by `AssetManager_CreateStandardAssetTypes`. The wrappers it 
 - `AssetManager_Deconstruct` unloads every asset regardless of holders, so every asset user must be finished first
   (`main.c` tears down the frame manager before the asset manager).
 
-### The project rule (handoff/2026-10_code_review/FIX_PLAN.md, decision D3)
+### The project rule
 **Whatever keeps asset data owns its own `AssetUserID`, and nothing stores asset pointers or by-value copies
 (a `GameFont`, a raylib `Model`/`Texture2D`/`Font`/`Shader`, a `SpriteAnimationInstance` source) past that user.**
 - Give each owning object (a frame, the world renderer, a World built with an asset manager, each TextDocument;
@@ -51,16 +51,15 @@ under it when they are added (the renderer only reads frames); the `WorldRendere
 and the world's models under another, which `WorldRenderer_PrepareWorld` swaps to release unused models.
 
 Text follows it the same way: components only name fonts and sprite animations, and each `TextDocument` loads them
-under its own user and keeps them until it is destroyed ([TextDocument.md](TextDocument.md)). (Until FIX_PLAN Phase 4
-the text code copied fonts by value into components; that is gone.)
+under its own user and keeps them until it is destroyed ([TextDocument.md](TextDocument.md)).
 
 ### Assets are shared and read-only
 - Never write to an asset, including through the arrays a by-value copy still points at (`Model.materials`,
   `Material.maps`, `Model.meshes`, `Shader.locs`, `Font.glyphs`). Put per-use state (tint, transform, pass shader)
   into your own copies, for example a `Material` built on the stack.
 - The WorldRenderer draws every mesh with a `Material` built on the stack and keeps its own copy of the PBR shader's
-  location table, so it writes neither. `RenderContext_RenderModel` (raylib's `DrawModelEx`, used only by the dormant
-  UI) still writes the tint into the shared maps for the duration of a draw; it is marked `// TODO:`.
+  location table, so it writes neither. `RenderContext_RenderModel` (called only through `UIRenderContext_RenderModel`)
+  also draws each mesh with a `Material` built on the stack, the tint applied to its copied maps.
 
 ### Threading
 - **Main thread only.** The manager does no locking, and raylib loading must run on the GL thread.
@@ -124,7 +123,7 @@ Error_Deconstruct(&RetireResult);
 The typed loaders (`AssetManager_LoadSpriteSheet`, `LoadSpriteAnimation`, `LoadSound`, `LoadFont`, `LoadShader`,
 `LoadModel`, `LoadTexture`, `LoadWorldModel`, `LoadWorldSprite`, `LoadCharacter`, `LoadAnimationLibrary`,
 `LoadAnimationGraph`, `LoadTerrain`, `LoadTerrainMaterial`) return `ErrorCode_InvalidState` if the standard types were
-never registered. `AssetManager_LoadTexturePixels` (B02) is not a load: it decodes the image file of the texture
+never registered. `AssetManager_LoadTexturePixels` is not a load: it decodes the image file of the texture
 definition registered under a name (a pack's override wins) into CPU pixels, each call, without holding or caching
 anything ([GameAssets.md](GameAssets.md), "GameTexture"). Custom types use
 `AssetManager_LoadAssetSingle(self, typeId, name, user, &AssetPointer)` with a `void*` result.
@@ -270,7 +269,7 @@ with `TextureProperties_Apply`, the sprite sheet, sprite animation and font load
 | `world_model` (`world_models`) | `AssetManager_LoadWorldModel` | `WorldModel` | Only its own data: the variants, their overrides and names in one block. Its LOD models and its variants' textures are held under its dependency user and unload right after it. Unknown keys are refused anywhere in its definition. |
 | `world_sprite` (`world_sprites`) | `AssetManager_LoadWorldSprite` | `WorldSprite` | Only its own data (the settings). Its sprite animation is held under its dependency user and unloads right after it. Its settings are read through property tables whose rows the sprite component shares; unknown keys are refused in the root and in `render`. |
 | `character` (`characters`) | `AssetManager_LoadCharacter` | `CharacterAsset` | Only its own data (the settings); no dependencies. Its settings are read through a property table whose rows the character component shares; unknown keys are refused, and the heights must fit the radius ([Characters.md](Characters.md)). |
-| `terrain` (`terrains`) | `AssetManager_LoadTerrain` | `TerrainAsset` | Its mesh (`TerrainMesh`: CPU data, no GL; the renderer keeps the GPU copies), its names and (B02) its rules. Its palette's terrain materials are held under its dependency user (a material that fails fails the terrain; their maps of one kind must share one size). The mesh is imported from a `.glb` (`source: model`) or read from its binary form (`.ghdf`, `source: data`) when it loads, both treated as hostile; unknown keys are refused everywhere in the definition ([Terrain.md](Terrain.md)). |
+| `terrain` (`terrains`) | `AssetManager_LoadTerrain` | `TerrainAsset` | Its mesh (`TerrainMesh`: CPU data, no GL; the renderer keeps the GPU copies), its names and its rules. Its palette's terrain materials are held under its dependency user (a material that fails fails the terrain; their maps of one kind must share one size). The mesh is imported from a `.glb` (`source: model`) or read from its binary form (`.ghdf`, `source: data`) when it loads, both treated as hostile; unknown keys are refused everywhere in the definition ([Terrain.md](Terrain.md)). |
 | `terrain_material` (`terrain_materials`) | `AssetManager_LoadTerrainMaterial` | `TerrainMaterial` | Its settings (read through a property table) and its maps' pixels in one block, read from the image files of the texture assets it names (`AssetManager_LoadTexturePixels`: no texture asset is loaded, so it has no dependencies and needs no GL); the renderer makes texture arrays from them ([Terrain.md](Terrain.md)). |
 
 Details per type: [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md),
@@ -343,7 +342,7 @@ unknown keys with `AssetJSON_RejectUnknownKeys`, which a new type should use too
   fails before the GPU upload), `tests/ShaderSourceTests.c` the shader `#include` expander, `tests/WorldModelTests.c`
   the world model type (with code-built models and textures, `tests/TestAssets.h`, so it loads without GL) and
   `tests/WorldSpriteTests.c` the world sprite type (over code-built sprite animations).
-- **Reload (planned, built with the editor; T10 designed the consumers for it).** Today an asset never changes while it
+- **Reload (planned, built with the editor; the consumers are designed for it).** Today an asset never changes while it
   is loaded. The editor will edit a working copy of a definition, write its JSON into the pack and ask for that one
   definition to be reloaded. The plan:
   - `AssetManager_ReloadDefinition(self, type, name)` reads the definition's file again and replaces the definition
@@ -357,4 +356,5 @@ unknown keys with `AssetJSON_RejectUnknownKeys`, which a new type should use too
     placements' playback instances must be rebound when its animation changes;
   - dependencies: an asset built on another (a world model on its models and textures, a world sprite on its animation,
     a sprite animation on its sheets) is rebuilt when one it depends on is.
-  This is a light version of the fix plan's deferred decision D3 (c).
+  This is a light version of asset handles (an index and a generation for every asset), which would also allow
+  reload but change every consumer.

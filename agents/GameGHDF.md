@@ -1,6 +1,6 @@
 # GameGHDF
 
-`include/GameGHDF.h`, `source/GameGHDF.c`. Tests: `tests/GameGHDFTests.c`. Added in T09.
+`include/GameGHDF.h`, `source/GameGHDF.c`. Tests: `tests/GameGHDFTests.c`.
 
 The GHDF counterpart of [GameJSON.md](GameJSON.md): shared helpers for the game's GHDF values, so every writer and
 reader treats them the same way. Owns nothing; no lifecycle.
@@ -31,7 +31,7 @@ refuses a string with a NUL inside (it would read shorter than it is) or an entr
 
 - The property tables ([PropertyDescriptors.md](PropertyDescriptors.md)): `Int32`, `UInt32`, `UInt64` and `ObjectId`
   properties are written in the smallest type and read from any integer type in their range (an object's `parent` of
-  12 is one byte); strings go through the string helpers. `Enum` and `Date` stay encoded integers (as compact for their
+  12 is one byte); strings go through the string helpers. `Enum` and `Date` are encoded integers (as compact for their
   values).
 - The data values ([ObjectData.md](ObjectData.md)): ints and object references, lists of them in the smallest type for
   the whole list.

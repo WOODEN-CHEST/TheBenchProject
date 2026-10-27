@@ -1,31 +1,30 @@
 # Terrain
 
-The ground of a world (B01): **one free-form triangle mesh** (vertices anywhere, overhangs and caves allowed) with
+The ground of a world: **one free-form triangle mesh** (vertices anywhere, overhangs and caves allowed) with
 painted material weights and vegetation densities per vertex, and holes and hard per-face materials per triangle. It
 is a `terrain` asset that a world's terrain object names, imported from a Blender `.glb`, cut into chunks of about 32 m
-that draw in every render pass and collide as triangle meshes. Since B02 it is dressed in up to sixteen **terrain
+that draw in every render pass and collide as triangle meshes. It is dressed in up to sixteen **terrain
 materials** blended per pixel from the painted weights, hard per-face materials and **rules** (rock on steep slopes, a
 material by height, noise), with height blending (stones poking through grass) and triplanar mapping on steep faces,
 through texture arrays.
 
-The owner's decisions behind it (`handoff/2026-10_world_building/DECISIONS.md`): **W1**, a free vertex mesh rather
-than height-grid tiles (terrain editing will be mesh editing; LOD only if measured, B04); **W5**, the mesh lives in a
-**`terrain` asset** in a resource pack's `terrains/`, so stories set in one town share it and a story's pack overrides
-it; **W6**, it is **authored in Blender and imported** (the in-game editor will write the asset's binary form later).
-**W7** (B02), the materials reach the GPU through **texture arrays**: the project's first direct OpenGL calls, made
-through raylib's `rlGetProcAddress` and kept in one private module (`GLTextureArray`).
+The design behind it: a **free vertex mesh** rather than height-grid tiles (terrain editing will be mesh editing; LOD
+only if measured); the mesh lives in a **`terrain` asset** in a resource pack's `terrains/`, so stories set in one town
+share it and a story's pack overrides it; it is **authored in Blender and imported** (the in-game editor will write the
+asset's binary form later). The materials reach the GPU through **texture arrays**: direct OpenGL calls, made through
+raylib's `rlGetProcAddress` and kept in one private module (`GLTextureArray`).
 
 | Module | Files | What it is |
 |---|---|---|
 | TerrainMesh | `include/TerrainMesh.h`; `source/TerrainMesh.c` (checks, the grid, vertex groups, normals, active edges, the setters), `source/TerrainMeshChunks.c` (the chunks and their rebuilds), `source/TerrainMeshFile.c` (the binary form), `source/TerrainMeshGltf.c` (the glTF import), `source/TerrainMeshCollision.c` (a chunk's surface in parts and its collision mesh); private `source/TerrainMeshInternal.h` | The mesh as pure data with no GL: it loads headless. |
-| GltfChecks (private) | `source/GltfChecks.{h,c}` | The structure checks every glTF reader runs before cgltf trusts a number, the buffer-file callbacks and the budget of what cgltf may allocate; shared by the animation library's reader and the terrain's (moved out of `source/AnimationLibraryGltf.c` in B01; the budget came with B01's review). |
+| GltfChecks (private) | `source/GltfChecks.{h,c}` | The structure checks every glTF reader runs before cgltf trusts a number, the buffer-file callbacks and the budget of what cgltf may allocate; shared by the animation library's reader and the terrain's. |
 | TerrainAsset | `include/TerrainAsset.h`, `source/TerrainAsset.c`, `source/TerrainDefinition.c` (the asset type) | The `terrain` asset: the mesh, the palette's names, the density channels' names, and the default render and collision settings of its placements. |
 | WorldTerrainComponent | `include/WorldTerrainComponent.h`, `source/WorldTerrainComponent.c` | Component type 6 (`terrain`): a terrain by asset name and the settings this placement overrides. |
 | The collision world's terrains | `source/WorldCollision.c` (and its query, step and event files) | One instance per terrain object, one mesh shape per chunk ([WorldCollision.md](WorldCollision.md), "Terrain"). |
 | The renderer's terrain | `source/WorldRendererTerrain.c`; the render cache's terrain entries and chunk lists (`source/WorldRenderCache.{h,c}`); the visibility's chunk lists (`source/WorldVisibility.{h,c}`); `shaders/terrain/` (`world_terrain`) | The chunks' GPU meshes, the lit terrain shader and every pass ([WorldRuntime.md](WorldRuntime.md)). |
-| TerrainMaterial | `include/TerrainMaterial.h`, `source/TerrainMaterial.c` (the settings' table, the accessors, height sampling), `source/TerrainMaterialDefinition.c` (the asset type) | The `terrain_material` asset (B02): one palette material's maps (packed as the arrays take them, from the texture assets' image files) and settings. |
-| TerrainBlend | `include/TerrainBlend.h`, `source/TerrainBlend.c` | The blend's C mirror (B02): what the terrain shader works out per pixel (weights, rules, noise, height blending, projections), and the material at a point of a terrain. |
-| GLTextureArray (private) | `source/GLTextureArray.{h,c}` | Texture arrays through the GL functions raylib's loader resolves (B02, W7): direct OpenGL calls (with T37's `GLReadback` and T39's `GLDepth`, the only ones). |
+| TerrainMaterial | `include/TerrainMaterial.h`, `source/TerrainMaterial.c` (the settings' table, the accessors, height sampling), `source/TerrainMaterialDefinition.c` (the asset type) | The `terrain_material` asset: one palette material's maps (packed as the arrays take them, from the texture assets' image files) and settings. |
+| TerrainBlend | `include/TerrainBlend.h`, `source/TerrainBlend.c` | The blend's C mirror: what the terrain shader works out per pixel (weights, rules, noise, height blending, projections), and the material at a point of a terrain. |
+| GLTextureArray (private) | `source/GLTextureArray.{h,c}` | Texture arrays through the GL functions raylib's loader resolves: direct OpenGL calls (with `GLReadback` and `GLDepth`, the only ones). |
 | Test content | `asset_source/scripts/placeholder_terrain.py`, `asset_source/scripts/placeholder_terrain_materials.py`, `compile/out/asset/terrains/test_world/`, `terrain_materials/placeholder_terrain/`, `textures/placeholder_terrain/`, object 51 of the test world | The placeholder terrain around the test world's slab and its four materials. |
 
 The formats: `references/asset_structure.md` ("Terrains": every key, the import's rules and the Blender 5 export
@@ -95,9 +94,9 @@ The renderer and the collision world watch them ("Rendering", "Collision" below)
 root compound of the counts (format version 1, vertices, triangles, palette size, channels, normal mode) and one array
 per kind of data (positions; normals only when imported; weights and densities at their counts per vertex; indices,
 flags and face materials per triangle); the chunks, groups, smooth normals and active edges are computed again when it
-is read, bit for bit as before. Saves are atomic (a `.tmp` beside the file, then `FileSystem_ReplaceEntry`); reads are
-of hostile files: at most 192 MiB, the parsed tree at most 256 MiB, arrays of exactly their type and length, then every
-limit of the mesh.
+is read, bit for bit as they were when it was written. Saves are atomic (a `.tmp` beside the file, then
+`FileSystem_ReplaceEntry`); reads are of hostile files: at most 192 MiB, the parsed tree at most 256 MiB, arrays of
+exactly their type and length, then every limit of the mesh.
 
 **The glTF import** (`TerrainMesh_CreateFromGltf`, `_CreateFromGltfFile`; `TerrainGltfOptions`): the shared structure
 checks (`GltfChecks`; cgltf's own allocations within a budget, 64 MiB beyond the file's size for its parse), then two
@@ -129,18 +128,18 @@ The thirteenth standard asset type ([AssetManager.md](AssetManager.md)): JSON de
 `AssetManager_LoadTerrain`. `source` picks the mesh's origin explicitly: `model` (a `.glb` imported when it loads, with
 the `weights` and `densities` mappings, `normals` and `blend_slot`) or `data` (the binary form). `materials` (1 to 16
 names) is the palette, `density_channels` (up to 8) the channels, `chunk_size` the cells, and `render` and `collision`
-the defaults of its placements (`TerrainSettings`: outline, shadow tier, casts shadows, the haze multiplier (T35,
-`render.haze`, default 1), a 4 km draw distance kept fixed against the quality setting; colliding on `world` with the
+the defaults of its placements (`TerrainSettings`: outline, shadow tier, casts shadows, the haze multiplier
+(`render.haze`, default 1), a 4 km draw distance kept fixed against the quality setting; colliding on `world` with the
 layer's default mask unless the definition gives one).
 Unknown keys are refused everywhere and every rule is checked when the definitions are read; the file when it loads. The
-asset owns its mesh, its names (`TerrainAsset_GetName` is the terrain's own, for messages) and its `rules` (B02:
-`TerrainAsset_GetRules`, at most `TERRAIN_MAX_RULES`, 8); its palette's materials are its **dependencies** (B02:
-`TerrainAsset_GetMaterial`), loaded under its dependency user after the mesh, and a material that fails fails the
+asset owns its mesh, its names (`TerrainAsset_GetName` is the terrain's own, for messages) and its `rules`
+(`TerrainAsset_GetRules`, at most `TERRAIN_MAX_RULES`, 8); its palette's materials are its **dependencies**
+(`TerrainAsset_GetMaterial`), loaded under its dependency user after the mesh, and a material that fails fails the
 terrain, naming it. Once they are loaded the terrain checks that their maps of each kind share one size (a texture array
 holds one), naming both materials and sizes when they do not. The renderer and the collision world read the mesh and
 never write it; the editor (later) changes it through the setters.
 
-## The materials (B02, `TerrainMaterial.h`, the `terrain_material` type)
+## The materials (`TerrainMaterial.h`, the `terrain_material` type)
 
 The fourteenth standard asset type (`terrain_materials/`, loaded with `AssetManager_LoadTerrainMaterial`; the format is
 `references/asset_structure.md`, "Terrain materials"). Its **settings** (`TerrainMaterialSettings`: the four maps'
@@ -166,7 +165,7 @@ and repeating) and its albedo's mean colour in linear light times the tint (`Ter
 like from afar, and what terrains show without texture arrays). It has no dependencies (the texture assets themselves are
 never loaded).
 
-## The blend (B02; the shader and its C mirror, `TerrainBlend.h`)
+## The blend (the shader and its C mirror, `TerrainBlend.h`)
 
 Per pixel, in order (`shaders/terrain/fragment.frag`; `source/TerrainBlend.c` mirrors every step with the same constants,
 as `WorldVisibility` mirrors the dither: change both together):
@@ -194,14 +193,13 @@ as `WorldVisibility` mirrors the dither: change both together):
 5. **Lighting**: albedo, normal, roughness (the setting times the map) and AO (the map's, on the ambient) go to
    `common/lighting` as `world_pbr`'s dielectric (metallic 0), through the night vision.
 
-**Cost** (measured at B02 with GL timer queries around the lit pass: 1280 x 720, an NVIDIA GTX 980 Ti at 1417 MHz).
-A view full of terrain takes 1.5 to 2.0 ms (B01's debug colours: 0.3 to 0.4 ms). The shader streams steps 3 and 4
-over the materials (the best score, then each material's share and surface summed and divided by the shares' total)
-and holds no array per material but the weights: arrays of scores, shares and samples per material made the same
-pictures in 3.1 to 3.7 ms. Anisotropic filtering, triplanar sampling, the chunks' order and early depth tests changed
-nothing measurable. A program sized for the palette (four materials) measured 40 to 60 % less before the streaming:
-the next lever, if terrains need one. Measure a change to this shader the same way (the glcheck README, "Measuring a
-pass's GPU cost").
+**Cost** (measured with GL timer queries around the lit pass: 1280 x 720, an NVIDIA GTX 980 Ti at 1417 MHz).
+A view full of terrain takes 1.5 to 2.0 ms (a shader that only mixes the debug palette's colours: 0.3 to 0.4 ms). The
+shader streams steps 3 and 4 over the materials (the best score, then each material's share and surface summed and
+divided by the shares' total) and holds no array per material but the weights: arrays of scores, shares and samples
+per material make the same pictures in 3.1 to 3.7 ms. Anisotropic filtering, triplanar sampling, the chunks' order and
+early depth tests change nothing measurable. A program sized for the palette (four materials) measured 40 to 60 % less
+in a shader without the streaming: the next lever, if terrains need one. Measure a change to this shader the same way.
 
 **Where things are anchored.** The maps and the noise read the point in the terrain's space: they move with the
 terrain's object (a moved or turned terrain section keeps its look, as a model keeps its textures) and stand still at
@@ -214,7 +212,7 @@ size and noise period apart.
 object's world matrix: the point and its normal in the terrain's space, its height and normal in the world) then
 `TerrainBlend_EvaluatePoint` (the painted weights, the weights after the rules, the shares after height blending with the
 materials' height maps, and the dominant material). A collision hit on the terrain names its chunk and `SourceTriangle`
-with barycentrics, which is all it takes (footsteps, the scattering's limits, B09). It samples the base level of the
+with barycentrics, which is all it takes (footsteps, the scattering's limits). It samples the base level of the
 height maps where the GPU blends mip levels with distance: the same near the camera, the exact answer far away.
 
 ## The component (`WorldTerrainComponent.h`, type 6)
@@ -235,7 +233,7 @@ The table, `terrain_component` (version 1):
 | `overrides_has_outline`, `has_outline` | 2, 3 | Bool, Bool | false, true |
 | `overrides_shadow_tier`, `shadow_tier` | 4, 5 | Bool, Enum (`near`, `far`, `both`) | false, `both` |
 | `overrides_casts_shadows`, `casts_shadows` | 6, 7 | Bool, Bool | false, true |
-| `overrides_haze`, `haze` (T35) | 19, 20 | Bool, Float in [0, 1000] | false, 1 |
+| `overrides_haze`, `haze` | 19, 20 | Bool, Float in [0, 1000] | false, 1 |
 | `overrides_draw_distance`, `draw_distance` | 8, 9 | Bool, Float > 0 | false, 4000 |
 | `draw_distance_multiplier` | 10 | Float > 0 | 1 |
 | `overrides_is_draw_distance_fixed`, `is_draw_distance_fixed` | 11, 12 | Bool, Bool | false, true |
@@ -252,7 +250,7 @@ The collision world's second source ([WorldCollision.md](WorldCollision.md), "Te
 object without a collider (with both, the collider wins, warned once), one one-sided mesh shape per chunk at the chunk's
 centre, its border edges active only where the terrain has an edge, hits naming the chunk (`MeshPart`) and the
 terrain's triangle (`SourceTriangle`); rebuilt only for changed chunks (their revisions), all of them for a new layout,
-placed again when the object moves. Characters stand and walk on it as on any mesh (T13's step and slope limits).
+placed again when the object moves. Characters stand and walk on it as on any mesh (their step and slope limits).
 
 ## Rendering
 
@@ -266,9 +264,9 @@ placed again when the object moves. Characters stand and walk on it as on any me
   built from the chunk's surface in parts of at most 65536 vertices: positions (relative to the chunk's centre),
   normals (the terrain vertices'), the 16 weights as four normalized `u8 x 4` attributes at locations 9 to 12 (the
   painted weights, or for a face material's vertices that material's weight alone, 255: one-hot, so its faces take its
-  colour outright) and (B02) a flags attribute, `u8 x 4` at location 13 (x 255 on a face material's vertices: the rules
+  colour outright) and a flags attribute, `u8 x 4` at location 13 (x 255 on a face material's vertices: the rules
   leave them alone).
-- **Texture arrays** (B02, decision W7): each record also gets three `GL_TEXTURE_2D_ARRAY`s, one layer per palette
+- **Texture arrays**: each record also gets three `GL_TEXTURE_2D_ARRAY`s, one layer per palette
   material, made once from the materials' pixels (`source/GLTextureArray.c`: mipmapped, trilinear, anisotropic up to 8x
   where the driver has the extension, repeating): albedo with height (RGBA8), normal (RG8; a material without one gets a
   flat layer) and roughness with AO (RG8; without one, roughness 1 and no occlusion); a kind no material has is a 1 x 1
@@ -287,7 +285,7 @@ placed again when the object moves. Characters stand and walk on it as on any me
   is rigid; its fragment stage blends the materials ("The blend" above) and lights them as `world_pbr` lights a
   dielectric (the sun and the moon with the cascades' shadow, the cube-shadow light, up to 8 forward lights per chunk by
   its sphere, the ambient with the map's and the screen's AO, the night vision and the haze in front of it at the
-  chunk's own haze multiplier, T35), dithered by the chunk's fade, before the sprites (decals lie on it). Without the
+  chunk's own haze multiplier), dithered by the chunk's fade, before the sprites (decals lie on it). Without the
   shader the chunks draw unlit and solid through raylib's default shader. The G-buffer (`world_normal`, the outline
   flag in effect), the cascades (`world_depth`, back faces: a hill's far side shades what lies behind it) and the cube
   shadow (`world_cube_depth`) draw the chunks with the shared shaders. Terrain is never crisp, never skinned, never
@@ -295,11 +293,11 @@ placed again when the object moves. Characters stand and walk on it as on any me
 - **The chunk key** (minus in the test frame, `WorldRenderer_SetTerrainKeyEnabled`): each chunk mixes a colour by its
   cell (X and Z each modulo 3: neighbours always differ) into its lit colour, and the wireframe of the chunks in view is
   drawn over it, scaled 0.999 toward the camera so it lies on the surface.
-- **The views** (B02, `WorldRenderer_SetTerrainView`, the equals key in the test frame): shaded; the painted weights in
-  B01's debug colours (one per palette index, mixed in linear light); the weights after the rules in the same colours;
-  the dominant material after height blending, each pixel one flat colour. All lit, so the shape reads.
+- **The views** (`WorldRenderer_SetTerrainView`, the equals key in the test frame): shaded; the painted weights in the
+  debug palette's colours (one per palette index, mixed in linear light); the weights after the rules in the same
+  colours; the dominant material after height blending, each pixel one flat colour. All lit, so the shape reads.
 - **The status** (`WorldRenderer_GetStatus`, the I key) counts the terrains placed and those without a terrain, the
-  chunks drawn of all listed and their triangles, and the "terrain shading" and (B02) "terrain materials" features (the
+  chunks drawn of all listed and their triangles, and the "terrain shading" and "terrain materials" features (the
   latter active while a drawn terrain has its arrays); the status log adds a line per terrain: its materials, its rules'
   count and its arrays' sizes (`WorldRenderer: terrain "placeholder_terrain": 4 materials (grass, dirt, rock, gravel), 2
   rules; arrays albedo and height 256 x 256, normal 256 x 256, roughness and AO 256 x 256, 4 layers each.`).
@@ -318,12 +316,12 @@ slot as Blender exports them; object 51 of the test world places it at the origi
 - a cave mouth in the cliff's foot (x -8 to -5) of `hole` faces, with a 6 m tunnel behind it, its faces facing in;
 - a footpath east of the slab (dirt weights), and a 6 m patch south-west of it (x -30 to -24, z 14 to 20) in the
   `dirt` slot: a face material with hard edges;
-- (B02) a round patch of gravel north-east of the slab (centre (6, 17), pure gravel out to 3.5 m, painted out softly to
+- a round patch of gravel north-east of the slab (centre (6, 17), pure gravel out to 3.5 m, painted out softly to
   6.5 m), in the start view;
 - 1 m quads out to 40 m, then 2, 4 and 8 m ones; the outer edge slopes down to y = 0;
 - `COLOR_0` paints grass, dirt and gravel (red, green, alpha; blue maps rock, which only the rules put down);
   `_DENSITY_0` the trees (on gentle hills);
-- (B02) its palette is the four placeholder materials (`grass`, `dirt`, `rock`, `gravel`: 256 x 256 tileable maps from
+- its palette is the four placeholder materials (`grass`, `dirt`, `rock`, `gravel`: 256 x 256 tileable maps from
   `asset_source/scripts/placeholder_terrain_materials.py`; rock tiles at 4 m, gravel at 1.5 m, the others at 2 m) and two
   rules: rock above 35 degrees (8 degrees of blend, only over grass and dirt: the painted gravel stays), and dirt below
   4.5 m under the slab (2.5 m of blend) broken up by noise (2.5 m cells, strength 0.6), only over grass: the valley floor.
@@ -340,17 +338,17 @@ draws about 90 of them.
 - `tests/TerrainGltfTests.c`: the import (node transforms and mirrors, welding and averaged seams, every attribute
   kind, slots into flags, imported normals keeping hard edges, hostile files refused by the shared checks, the buffer
   limit, an import written and read back bit for bit); `tests/TestTerrain.{h,c}` write the test files.
-- `tests/TerrainAssetTests.c`: definitions (the defaults, every key, each rule refused with its message; since B02 the
+- `tests/TerrainAssetTests.c`: definitions (the defaults, every key, each rule refused with its message; the
   rules' keys too), loading the `.glb` and the binary form through the asset manager, the component's pairs and their
   resolution, a terrain object in a world file, the shipped terrain's counts (and its four materials and two rules), and
-  (B02) the rules read in order, the palette's materials as dependencies (a missing one fails the terrain, naming it),
+  the rules read in order, the palette's materials as dependencies (a missing one fails the terrain, naming it),
   and maps of one kind sharing one size. `tests/TestTerrain.{h,c}` also write a terrain material's files (small PNGs
   through raylib's CPU image writer and the definitions).
-- `tests/TerrainMaterialTests.c` (B02): the material's definitions (the defaults, every key, each rule refused), the maps
+- `tests/TerrainMaterialTests.c`: the material's definitions (the defaults, every key, each rule refused), the maps
   packed as the arrays take them, bad maps naming what and where (the height's size, the size limit, a missing or
   code-built texture), a texture's pixels read as RGBA from any image, bilinear height sampling with repeat, the table's
   check.
-- `tests/TerrainBlendTests.c` (B02): the C mirror: weights unpacked and normalized (none: the first material), ranges at
+- `tests/TerrainBlendTests.c`: the C mirror: weights unpacked and normalized (none: the first material), ranges at
   their edges and inside, the slope, the value noise against values from an independent implementation (periodic,
   deterministic, seeded), wrapping, rule strengths (the world's slope and height, the terrain's noise), rules in order
   with `only_on`, height blending (transitions, ties, a single material, a monotonic sweep), the dominant material,
@@ -358,8 +356,7 @@ draws about 90 of them.
   (painted, ruled, a face material), and the shaders' constants read from their files.
 - `tests/WorldTerrainCollisionTests.c`: [WorldCollision.md](WorldCollision.md), "Terrain"; run again 173 km out.
 - The render cache's and the visibility's terrain entries in `tests/WorldRenderCacheTests.c` and
-  `tests/WorldVisibilityTests.c`; the shader's stages in `tests/ShaderSourceTests.c`. The GPU side was checked with the
-  windowless harness (`handoff/2026-10_graphics_and_world/glcheck/`), including 32 renderer and shader mutations.
+  `tests/WorldVisibilityTests.c`; the shader's stages in `tests/ShaderSourceTests.c`.
 
 ## Known limits and what comes next
 
@@ -373,14 +370,15 @@ draws about 90 of them.
   speckled edge rather than stones.
 - **Terrain sections** join seamlessly only when their origins lie a whole number of every tile size and noise period
   apart (the maps and the noise lie in each terrain's own space).
-- **No LOD** (B04, W9): every chunk draws all its triangles out to its 4 km draw distance.
-- **Densities are kept, unused** until the scattering (B09).
+- **No LOD**: every chunk draws all its triangles out to its 4 km draw distance; whether and how terrain gets one is
+  open (ask the owner).
+- **Densities are kept, unused** until scattering is built.
 - **At most 8 rules** per terrain (the shader's uniform budget; `TERRAIN_MAX_RULES`).
 - **One-sided collision:** a shape whose centre ends up under the surface gets no contact from it and falls through
   (as from any one-sided mesh); the tunnel's faces face in, so its walls and roof hold from inside.
 - **A whole chunk is rebuilt** (GPU mesh and collision mesh) when anything in it changes: cheap for 32 m chunks, the
   editor's brushes will show whether it needs finer updates.
 - **A chunk with more than 2^20 triangles** gets no collision (warned once).
-- **Walking:** on slopes of about 26 degrees and more, the test human (T13's `ground_snap_distance` 0, the owner's
-  "falls off every step") leaves the ground for a few ticks at a time going downhill; with a snap distance of 0.2 m it
-  stays down (B01's status block).
+- **Walking:** on slopes of about 26 degrees and more, the test human (`ground_snap_distance` 0, the default: it falls
+  off every step, which is intended) leaves the ground for a few ticks at a time going downhill; with a snap distance of
+  0.2 m it stays down.

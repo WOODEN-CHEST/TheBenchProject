@@ -1,17 +1,16 @@
 # Animation
 
-Skeletal animation (T29): 3D models that bend with a skeleton and play clips, blended and cross-faded, with **a pose
+Skeletal animation: 3D models that bend with a skeleton and play clips, blended and cross-faded, with **a pose
 of their own per placed object**, so a hundred NPCs on one model each walk at their own phase. The renderer draws the
-poses in every pass. Since T30 an **animation graph** decides what a character plays (states, transitions, layers,
+poses in every pass. An **animation graph** decides what a character plays (states, transitions, layers,
 look-at), **special actions** (sitting on a bench, picking up a cup) are started the same way for the player and NPCs,
 objects **hang on sockets** of a posed model (a cup in a hand), and the player sees **its own body in first person**.
 
-The owner's decisions behind it (`handoff/2026-10_graphics_and_world/DECISIONS.md`): for T29 (G27 to G30) raylib is
-built with **GPU skinning** (`BUILDING.md`); clips are read by **our own glTF reader** (cgltf); clips live in a
-**separate asset type, `animation_library`**, so one set of clips plays on every model of a skeleton layout (humans of
-every size); playback is an **animator component**, apart from the model component. For T30 (G31 to G35): the graph is
-**its own asset type**, `animation_graph`, that creators edit; **no root motion** (clips move in place, an action's
-anchor slides the character); **foot IK later**, as its own task; **first person shows the real body without its
+The design behind it: raylib is built with **GPU skinning** (`BUILDING.md`); clips are read by **our own glTF
+reader** (cgltf); clips live in a **separate asset type, `animation_library`**, so one set of clips plays on every model
+of a skeleton layout (humans of every size); playback is an **animator component**, apart from the model component. The
+graph is **its own asset type**, `animation_graph`, that creators edit; **no root motion** (clips move in place, an
+action's anchor slides the character); **foot IK is not built yet**; **first person shows the real body without its
 head**; skeletons are **posed once per rendered frame**, in a step the frame manager runs right before a render.
 
 | Module | Files | What it is |
@@ -19,12 +18,12 @@ head**; skeletons are **posed once per rendered frame**, in a step the frame man
 | AnimationLibrary | `include/AnimationLibrary.h`, `source/AnimationLibrary.c` (sampling), `source/AnimationLibraryGltf.c` (the reader), `source/AnimationLibraryDefinition.c` (the asset type) | The `animation_library` asset: a file's bones (names, parents, rest poses) and its clips (tracks of keys), read from glTF treated as hostile; sampling a track at a time. |
 | GameSkeleton | `include/GameSkeleton.h`, `source/GameSkeleton.c` | A skinned model's skeleton, built once when the model loads (`GameModel_GetSkeleton`): bones in evaluation order, bind and inverse bind matrices, rest poses, which meshes the GPU skins, each bone's vertex box. |
 | SkeletalAnimation | `include/SkeletalAnimation.h`, `source/SkeletalAnimation.c` | The runtime maths: a library bound to a skeleton (retargeting), clips sampled onto it, poses blended, the mixer (clips with times, weights and fades), bone matrices, the skinning palette, the pose's bounds; transforms composed and taken apart. |
-| AnimationGraph | `include/AnimationGraph.h`, `source/AnimationGraph.c` (the block and its accessors), `source/AnimationGraphReader.c` (the JSON reader), `source/AnimationGraphDefinition.c` (the asset type) | The `animation_graph` asset (T30): parameters, events, layers of states and transitions, actions, look-at, as one immutable block of indices (no pointers: it copies as bytes). |
-| AnimationGraphPlayer | `include/AnimationGraphPlayer.h`, `source/AnimationGraphPlayer.c` | Playing a graph on one skeleton (T30), pure functions over caller memory: the binding (clips, masks, look bones), the instance (parameters, events, per-layer states with fades), the tick's advance and the pose. |
-| WorldAnimatorComponent | `include/WorldAnimatorComponent.h`, `source/WorldAnimatorComponent.c` | Component type 5 (`animator`): the clip row and how it plays (phase, speed, pause, fade, loop override, the placement's own libraries and, since T30, its own graph), and the pose the system publishes (with its sockets). |
+| AnimationGraph | `include/AnimationGraph.h`, `source/AnimationGraph.c` (the block and its accessors), `source/AnimationGraphReader.c` (the JSON reader), `source/AnimationGraphDefinition.c` (the asset type) | The `animation_graph` asset: parameters, events, layers of states and transitions, actions, look-at, as one immutable block of indices (no pointers: it copies as bytes). |
+| AnimationGraphPlayer | `include/AnimationGraphPlayer.h`, `source/AnimationGraphPlayer.c` | Playing a graph on one skeleton, pure functions over caller memory: the binding (clips, masks, look bones), the instance (parameters, events, per-layer states with fades), the tick's advance and the pose. |
+| WorldAnimatorComponent | `include/WorldAnimatorComponent.h`, `source/WorldAnimatorComponent.c` | Component type 5 (`animator`): the clip row and how it plays (phase, speed, pause, fade, loop override, the placement's own libraries and its own graph), and the pose the system publishes (with its sockets). |
 | WorldAnimation | `include/WorldAnimation.h`, `source/WorldAnimation.c` (binding, the tick, the pose step), `source/WorldAnimationGraph.c` (graphs: the character's state in, parameters, triggers), `source/WorldAnimationActions.c` (actions, anchors, attach and detach), `source/WorldAnimationInternal.h` (private: the per-animator runtime) | The animation system: each tick it binds, applies the rows, runs the graphs and actions and advances every animator; once per shown frame it poses them; code plays clips, sets parameters and starts actions through it; its events queue for the game. |
-| Skinned passes | `shaders/common/skinning.glsl`, `shaders/*/skinned.vert` and their definitions; `source/WorldRendererGeometry.c` and the pass files | The renderer's side: every geometry pass has a skinned twin of its shader and uploads each posed object's palette (WorldRuntime.md, "Renderer structure"); since T30 the camera's passes draw the first-person object without its head. |
-| WorldTestAnimation, WorldTestCharacters (test content) | `source/WorldTestAnimation.{h,c}`, `source/WorldTestCharacters.{h,c}` | The test frame's animation system and its debug keys (5, 6, 7); since T30 the humans' bodies, the use key starting actions, and keys 8, 9, 0. |
+| Skinned passes | `shaders/common/skinning.glsl`, `shaders/*/skinned.vert` and their definitions; `source/WorldRendererGeometry.c` and the pass files | The renderer's side: every geometry pass has a skinned twin of its shader and uploads each posed object's palette (WorldRuntime.md, "Renderer structure"); the camera's passes draw the first-person object without its head. |
+| WorldTestAnimation, WorldTestCharacters (test content) | `source/WorldTestAnimation.{h,c}`, `source/WorldTestCharacters.{h,c}` | The test frame's animation system and its debug keys (5, 6, 7); the humans' bodies, the use key starting actions, and keys 8, 9, 0. |
 
 ## Assets
 
@@ -37,21 +36,21 @@ asset), and its glTF clip import resamples to 60 frames a second with a wrong la
 **Animation libraries** (`animation_library`, JSON in `animation_libraries/`, the file `.glb` or `.gltf`; every key in
 `references/asset_structure.md`, "Animation libraries"): a file of clips, with or without a mesh (a Blender export of
 the actions alone is a library: its armature object becomes a bone the skeleton simply lacks), and per clip its name,
-the clip in the file (`source`, default the name), whether it loops (default no), its speed (default 1) and, since T30,
+the clip in the file (`source`, default the name), whether it loops (default no), its speed (default 1) and
 the metres it covers per cycle (`distance`, none by default; a graph's `match_speed` plays a gait at the character's real
 speed from it, scaled by the height ratio). A clip the
 definition does not name keeps the file's name when that is a valid clip name (`[a-z][a-z0-9_.-]*`), does not loop and
 plays at speed 1. **The reader treats the file as hostile.** cgltf's validation does its sums without overflow checks
 and its loader allocates each buffer's declared length, so before cgltf loads or validates anything the reader checks
-the structure itself, in overflow-safe sums (`CheckBuffers`, `CheckBufferViews`, `CheckAccessors`; since B01 in the
+the structure itself, in overflow-safe sums (`CheckBuffers`, `CheckBufferViews`, `CheckAccessors`; in the
 private `source/GltfChecks.c`, which the terrain's import shares): buffers of 1 byte or more, at most 256 MiB together,
 a data URI no longer than its base64; views inside their buffers with glTF's strides (none, or 4 to 252 bytes in
 fours) and no meshopt compression; accessors with a type and an element, inside their views, aligned to their
 components, a sparse one's replacements (1 to its count) inside theirs. A buffer file's URI is checked as cgltf opens it, with its percent escapes decoded
 (`%2e%2e` is `..`): beside the file, no absolute path, `..`, backslash, drive or NUL; the file must hold the buffer's
 declared length (only that is kept), and loaded buffers must start aligned (a `.glb`'s chunks padded to four).
-cgltf's parse allocates every JSON array's elements before any check can run, so its allocations have a budget
-(B01's review): 64 MiB beyond the file's size for the parse, the 256 MiB limit on top for the buffers; past it the read
+cgltf's parse allocates every JSON array's elements before any check can run, so its allocations have a budget:
+64 MiB beyond the file's size for the parse, the 256 MiB limit on top for the buffers; past it the read
 fails with a message instead of exhausting memory. Then
 cgltf validates (the node tree, sampler counts), and key times must be finite, at least 0, rising and at most an hour;
 values finite, rotations of a length above 0 (normalized on reading, the length reckoned in double); limits on bones
@@ -84,7 +83,7 @@ system reports a library that matches no bone, once).
 The **mixer** (`SkeletalMixer`, a plain value) plays up to 8 clips at once, each with its time, weight and fade.
 `SkeletalMixer_Play` cross-fades: the clip rises to full weight while every other falls to 0, all sharing one progress
 (the weights keep their sum); a clip already playing keeps its time unless restarted or ended. `SkeletalMixer_SetWeight`
-moves one clip alone (blends, T30's blend spaces). Looping clips wrap; others stop at their end and hold their last
+moves one clip alone (blends). Looping clips wrap; others stop at their end and hold their last
 pose; clips faded to 0 stop. Poses blend as weighted sums (rotations turned into the running sum's hemisphere); a total
 below 1 is filled with the rest pose, above 1 divided out. The pose becomes each bone's matrix in mesh space, the
 **palette** (per bone the first three rows of its skinning matrix, 12 floats) and the **bounds** (each bone's vertex box
@@ -105,17 +104,17 @@ saved; the playback itself, times and weights, is runtime state):
 | `fade_seconds` | 6 | Float [0, 60] | 0.2 | How long a change of `clip` cross-fades. |
 | `overrides_is_looped`, `is_looped` | 7, 8 | Bool | false | Whether the clip loops instead of its library's setting. |
 | `overrides_animation_libraries`, `animation_libraries` | 9, 10 | Bool; AssetNameList (16 names of ≤ 128 bytes) | false, none | The placement's own libraries instead of its world model's. |
-| `overrides_animation_graph`, `animation_graph` | 11, 12 | Bool; AssetName (≤ 128 bytes) | false, null | The placement's own graph instead of its world model's (on with no name: no graph). Since T30. |
+| `overrides_animation_graph`, `animation_graph` | 11, 12 | Bool; AssetName (≤ 128 bytes) | false, null | The placement's own graph instead of its world model's (on with no name: no graph). |
 
 The next free wire id is 13. The pose the system publishes (`WorldAnimatorComponent_GetPose`: the world model it was
-made for, the skeleton, the palette, the bone matrices, the bounds, a revision and, since T30, the world model's sockets
+made for, the skeleton, the palette, the bone matrices, the bounds, a revision and the world model's sockets
 with their frames in the pose and the first_person block's eyes socket) is valid until the system's next pose step;
 NULL while the animator has none.
 
 ## The animation system (`WorldAnimation.h`)
 
 `WorldAnimation_Create(world, assets, logger)` after the world; `WorldAnimation_Destroy` before it (it ends every action,
-freeing the characters they held, releases every animator's state and pose, and its asset user). Two steps (G35):
+freeing the characters they held, releases every animator's state and pose, and its asset user). Two steps:
 
 `WorldAnimation_Update(seconds)` runs in **the tick's animation step** (WorldData.md, "The tick order": after the
 collision step and its events, before `World_UpdateTransforms`), for each animator of an effectively enabled object:
@@ -127,7 +126,7 @@ collision step and its events, before `World_UpdateTransforms`), for each animat
    plays at full weight from its phase;
 2. **applies the rows** when they changed since: a new clip cross-fades in over `fade_seconds` (a clip already playing
    keeps its time), or out when `plays_clip` goes off; a loop override reaches the playing clip;
-3. **runs its graph** (T30): the object's character's state into the built-in parameters and its events, the action's
+3. **runs its graph**: the object's character's state into the built-in parameters and its events, the action's
    progress (an approach that arrived enters the action's first state), then the graph's advance by the tick's seconds
    times the animator's speed: transitions, times, timed events and their effects;
 4. **advances** its clips by the tick's seconds times their speeds and the animator's (nothing while paused).
@@ -144,7 +143,7 @@ that does not load or matches no bone, an unknown clip) is logged once per anima
 tick. `WorldAnimation_GetStatus` counts the animators, those posed, the clips playing, the bones posed and the
 update's time.
 
-**Code plays clips** through the system (the test frame's 5 key, T30's state graph, scripts later):
+**Code plays clips** through the system (scripts later):
 `WorldAnimation_PlayClip(object, clip, fade, isRestarted)` (a cross-fade), `_SetClipWeight` (one clip alone) and
 `_StopClips` (back to the rest pose). They bind the animator first if needed, so a clip played right after the object
 was made is not undone by its rows. A clip played from code fades the row's clip out like any other; the rows apply
@@ -155,7 +154,7 @@ world matrix in the last pose, as a `Matrix4Double`: the object's world matrix t
 times the bone's matrix, so a held item does not wobble far from the world's origin (the far test suite checks it 173 km
 out).
 
-## Animation graphs (T30)
+## Animation graphs
 
 A graph (`animation_graph`, JSON in `animation_graphs/`; every key in `references/asset_structure.md`, "Animation
 graphs") is what a character plays when. A world model names its graph (`animation_graph`, a dependency); an animator
@@ -198,7 +197,7 @@ clips (the mixer) play **over** the graph by their weight, so a script can still
 `WorldAnimation_TryGetState(object, layer, &state)` reads a layer's current state (NULL: the first layer),
 `_TryGetParameter` a parameter.
 
-## Actions (T30)
+## Actions
 
 An action is an entry into a layer's states with rules: `WorldAnimation_StartAction(object, action, target)` starts it
 for the player and NPCs alike (the target: none, optional or required, as the action says). It replaces an action that
@@ -219,7 +218,7 @@ object and the system's end each end the action and free the character.
 name, target, tick; `WorldAnimation_GetEvents`, cleared by `WorldAnimation_ClearEvents` once handled): the game reacts
 to them (the test frame swings its door on a `push`, sets a released cup down on what is under it).
 
-## Sockets and held items (T30)
+## Sockets and held items
 
 A world model's **sockets** (`WorldModels.md`) are named places on a bone (a hand: an offset in metres along the bone's
 axes; the frame is rigid, so a scaled import scales neither the offset nor what hangs there) or fixed in the object's
@@ -234,7 +233,7 @@ held pushable is carried by its holder in the collision step (not pushed out of 
 still collides, so it pushes its holder off what it touches: clips that carry things keep them clear (the placeholder
 reaches pass above a table's edge and keep the cup upright).
 
-## First person (T30, G34)
+## First person
 
 The player's camera rides its body's **eyes socket** (`PlayerController_ApplyCamera`: the world model's first_person
 block names it; without one the character's eye height), so every step, crouch and seat moves the view. The renderer's
@@ -265,12 +264,12 @@ with the shader); a skeleton with more draws its bind pose. `WorldRenderer_GetSt
 
 Bones: 256 per skeleton and per library, 128 per skinned draw, 4 per vertex. Libraries: 16 per world model and per
 animator. Clips: 256 per library, 8 playing per animator. Graphs: `AnimationGraph.h`'s limits (8 layers, 64 states and
-256 transitions a layer, 64 actions, 64 custom parameters). Measured on the test machine (i7-9700K, -O2, T29): one
+256 transitions a layer, 64 actions, 64 custom parameters). Measured on the test machine (i7-9700K, -O2): one
 19-bone pose of a single clip costs about 1.75 µs (sampling 1.05, bone matrices 0.3, palette 0.13, bounds 0.27); two
-clips blended about 3.3 µs. Since T30 (G35) poses are computed once per shown frame, not every 480 Hz tick: the tick
-only advances times and graphs. With the crowd out and the NPCs (105 animators, 1 995 bones) the tick's update takes
-about 21 µs and the pose step about 381 µs a shown frame (3.6 µs a figure: a figure under a full-weight code or row clip
-still samples its graph first), about 33 ms of a core a second at 60 frames, against T29's 87 ms.
+clips blended about 3.3 µs. Poses are computed once per shown frame, not every 480 Hz tick: the tick only advances
+times and graphs. With the crowd out and the NPCs (105 animators, 1 995 bones) the tick's update takes about 21 µs and
+the pose step about 381 µs a shown frame (3.6 µs a figure: a figure under a full-weight code or row clip still samples
+its graph first), about 33 ms of a core a second at 60 frames, against 87 ms posing single clips every 480 Hz tick.
 
 ## Test content
 
@@ -280,7 +279,7 @@ foot; +Y up, facing +Z, standing on the origin), as `models/placeholder_humanoid
 (fewer boxes) and `short.glb` (85% of the height, 15% wider), and its clips as
 `animation_libraries/placeholder_humanoid/motions.glb`: idle 3 s, walk 1 s, run 0.68 s, crouch_idle 2 s, crouch_walk
 1.4 s, jump 0.6 s, fall 1 s, land 0.5 s and wave 2 s, keyed at 24 a second, in place (the legs placed by a two-bone IK).
-`tests/data/placeholder_humanoid_with_clips.glb` is the tall model with its clips in one file. Since T30 the library
+`tests/data/placeholder_humanoid_with_clips.glb` is the tall model with its clips in one file. The library
 also has the actions' clips (sit_down 1.3 s, sit_idle 4 s, stand_up 1.3 s, pick_up 1.5 s, hold_r 2 s, put_down 1.6 s,
 open_door 1.4 s), made for the props and the anchors that place the character: their arms are placed by an IK and the
 script checks by forward kinematics that the hand's socket meets the cup's grip and the door at the grab, the release
@@ -292,13 +291,13 @@ matched to the speed, the crouches, jump, fall, land, flight and the actions' st
 the hand holds and waves; look-at on the neck and head; the actions `sit`, `pick_up`, `put_down`, `open_door`, `wave`);
 world models `test_humanoid` (LOD 1 from 12 m) and `test_humanoid_short`, both with the graph, the sockets `hand_r`,
 `hand_l` and `eyes`, and a first_person block hiding the neck and head; `test_bench` (its `seat` socket) and `test_cup`
-(`grip` and `reach`); `test_door` gained an `opener` socket. The test world has four figures (ids 45 to 48):
+(`grip` and `reach`); `test_door` has an `opener` socket. The test world has four figures (ids 45 to 48):
 `humanoid_showcase` (idle, a 0.3 s fade), `humanoid_short_waver` (wave, looped by the placement's override),
-`humanoid_walker` (walk from a quarter of the way in) and `humanoid_runner` (run at half speed); since T30 a bench (49)
+`humanoid_walker` (walk from a quarter of the way in) and `humanoid_runner` (run at half speed); it also has a bench (49)
 and a coffee cup on the desk (50), which with the door offer their actions (`tbp:action`). The test frame's keys: **5**
 steps the showcase through every clip, cross-fading; **6** brings out a crowd of 100 figures walking at their own
 phases in front of the camera (runtime objects, never saved) and takes it away; **7** slow motion (a quarter speed);
-**I** adds the animation status. Since T30 the player as a human and the NPC human wear the humanoid (WorldRuntime.md:
+**I** adds the animation status. The player as a human and the NPC human wear the humanoid (WorldRuntime.md:
 **E** uses what you look at, **8** sends the NPC human to the bench, **9** puts down, **0** waves).
 
 ## Tests
@@ -306,7 +305,7 @@ phases in front of the camera (runtime objects, never saved) and takes it away; 
 `AnimationLibrary` (the reader's rules and hostile files, sampling, the definition, the shipped files),
 `SkeletalAnimation` (transforms, retargeting, blending, the mixer, palette and bounds against every vertex, blending over
 by mask, look-at), `WorldAnimation` and `WorldAnimationFar` (the system end to end, sockets 173 km out, the pose step),
-since T30 `AnimationGraph` (the reader's rules and refusals), `AnimationGraphPlayer` (binding, transitions, blends,
+`AnimationGraph` (the reader's rules and refusals), `AnimationGraphPlayer` (binding, transitions, blends,
 events, layers, look-at, and the shipped humanoid graph on the shipped library), `WorldAnimationGraph` and
 `WorldAnimationGraphFar` (graphs following characters, parameters, sockets, actions with anchors, attach and detach,
 first-person eyes, a removed animator), the render cache's `posed_objects_take_their_pose_and_its_bounds` and

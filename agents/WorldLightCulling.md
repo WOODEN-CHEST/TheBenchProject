@@ -33,7 +33,7 @@ plus a parallel array of linear radiance (colour → linear × intensity, once p
 object drawn by a lit pass, `WorldRendererLighting_UploadObjectLights` culls the candidates against the object's
 bounding sphere (from the render cache: the model's mesh-space bounds, computed once at load, transformed
 by the object's matrix, radius scaled by the matrix's largest axis scale) and uploads the selected positions,
-radiances and ranges. Since T32 the lights and the spheres are in render space (relative to the camera: the render
+radiances and ranges. The lights and the spheres are in render space (relative to the camera: the render
 cache's `RenderPosition` and `RenderCenter`, see WorldRuntime.md, "Render space"); the culling itself works in any
 space its inputs share. The shader shades each with the same Cook-Torrance BRDF as the sun, with a windowed
 inverse-square falloff that reaches 0 at the light's range. The cost is O(lights) per drawn object.
@@ -41,4 +41,4 @@ inverse-square falloff that reaches 0 at the light's range. The cost is O(lights
 ## Notes / future
 - The bounding sphere is conservative (over-includes), so a light that reaches any part of a large object is
   kept; the shader's per-fragment attenuation handles the actual falloff.
-- A spatial index for lights (and objects) comes with the culling/LOD work, after the render cache.
+- A spatial index for lights (and objects) is future work.

@@ -41,13 +41,22 @@ When you implement a new module, create an md file in the agents directory descr
 its usage, then in this file, in the modules list, add the module, the md file reference and a short
 description of what the module is for.
 
+The docs in agents/ (this file too), references/ and BUILDING.md describe the project as it is now, not how it got
+there: what a module is, how to use it, its rules and pitfalls, and why, where a choice is not obvious. Leave the
+history out: no dates of decisions or changes, no task, decision or plan ids (T15, G41, B02, fix plan phases), no
+"the owner decided ...", no "since T27", "as before" or "used to", and no paths into handoff/ (it is gitignored, so
+such references work on one machine only). When a change makes a doc wrong, rewrite the text it affects to describe
+the new state instead of appending to it. What stays: the reasons behind choices (as reasons, not as a decision
+record), rules (as rules), intended behaviour that looks like a bug, open questions for the owner, and features that
+are not built yet (named, not numbered). The history itself lives in git and in handoff/.
+
 Current module list:
 * Config (Config.md) - Loads the game's JSON config file (window/render settings) into a plain, expandable GameConfig struct.
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, and registers the fourteen standard types; since B02 it also reads a texture asset's image file
-  as CPU pixels without loading it (AssetManager_LoadTexturePixels). Read its lifetime rules before touching assets.
+  caches failed loads, registers the fourteen standard types, and reads a texture asset's image file as CPU pixels
+  without loading it (AssetManager_LoadTexturePixels). Read its lifetime rules before touching assets.
 * Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader, GameSound and GameTexture: the manager-owned
   wrappers for the standard font, model, shader, sound and texture types, with their ownership rules, accessors and
   pitfalls; a skinned model carries its GameSkeleton (Animation.md). GameModel.h also holds GameMaterialFactors
@@ -55,20 +64,20 @@ Current module list:
   shared by the model type's material_overrides and world model variants (one parser, one apply). GameFont (source/GameFont.c) adds sorted glyph lookup with the '?' fallback; fonts load at a
   definition-chosen size and codepoint set (source/FontCodepoints.c, private) and warn once about glyphs their file
   lacks. Shader stages may `#include "common/..."` shared GLSL from shaders/common/, expanded with #line directives so
-  compiler errors name the right file (source/ShaderSource.c, private); since B03 a shader definition's `defines` are
+  compiler errors name the right file (source/ShaderSource.c, private); a shader definition's `defines` are
   written in after the #version line, so one source serves a shader and its variants (the instanced twins). GameTexture is a standalone texture (sky
   panoramas, the moon, noise, masks) with filtering, wrap, optional mipmaps and an sRGB/linear flag.
 * World models (WorldModels.md) - The world_model asset type (a standard type, JSON in world_models/): the reusable
   definition of a placeable thing, kept apart from its placements. WorldModel (include/WorldModel.h, source/WorldModel.c)
-  holds its LOD models and their switch distances (drawn by distance with dithered cross-fades since T11), its draw
+  holds its LOD models and their switch distances (drawn by distance with dithered cross-fades), its draw
   distance and whether it is fixed against the quality
-  setting, the default render settings of its placements, its material variants, its bounds, (since T12) its
-  collision sets and (since T29 and T30) its animation libraries, graph, sockets and first-person block (the sockets in
+  setting, the default render settings of its placements, its material variants, its bounds, its
+  collision sets and its animation libraries, graph, sockets and first-person block (the sockets in
   source/WorldModelSocketDefinition.c); its LOD models, its variants' textures, libraries, graph and the models its
   hulls and meshes are built from load as its dependencies. The definition (source/WorldModelDefinition.c) refuses unknown keys and
   checks every rule when it is read. Variants apply to the renderer's per-draw material copies, never to an asset. The
   model component names a world model and overrides its settings per placement with explicit flags.
-* World collision (WorldCollision.md) - Collision for the 3D world (T12, T27): shapes, layers, the collider component
+* World collision (WorldCollision.md) - Collision for the 3D world: shapes, layers, the collider component
   and the collision world with its step (moving and pushing). Covers:
   * CollisionShape - Collision shapes as plain values (sphere, capsule, box, cylinder, convex hull, plane bounded or
     infinite, triangle mesh) placed by a centre and a rotation, named sets of them (compounds), convex hulls (quickhull,
@@ -82,13 +91,13 @@ Current module list:
     advancement: no contact is ever skipped).
   * WorldColliderComponent - Component type 3: which of its world model's collision sets (or one primitive of its own),
     the layer, mask, trigger flag and mass (override flags over the world model's defaults), a local offset, rotation
-    and scale, a rotation mode (full, yaw only, none), and how it moves (T27: pushable or kinematic, what a blocked
+    and scale, a rotation mode (full, yaw only, none), and how it moves (pushable or kinematic, what a blocked
     mover does, swept or not, persisting contact reports).
   * WorldCollision - The collision world: every enabled collider in world space, synced once a tick (rebuilt or moved
     only when something changed; static and movable dynamic AABB trees, infinite planes in a list), queries with layer,
     trigger and ignore filters (rays, casts with rotation, overlaps, contact manifolds with local points and triangle
-    data), trigger enter/exit events with hysteresis, counts and a debug list the renderer draws as wireframes. Since
-    T27 its step (WorldCollision_Step, the tick's collision step; source/WorldCollisionStep.c, the solver in
+    data), trigger enter/exit events with hysteresis, counts and a debug list the renderer draws as wireframes. Its
+    step (WorldCollision_Step, the tick's collision step; source/WorldCollisionStep.c, the solver in
     source/WorldCollisionSolver.c, contacts and events in source/WorldCollisionEvents.c) sweeps every collider that
     moved (nothing tunnels: speculative contacts, then exact casts of every pushed motion), pushes everything that
     overlaps apart at once (projected Gauss-Seidel shared by mass; pushables slide, kinematic movers push, static
@@ -97,7 +106,7 @@ Current module list:
     each object's motion result (push, contacts, ground); teleports skip the sweep and pushables at rest sleep.
   The world model's `collision` section (sets and their defaults, or "bounds") is parsed and loaded by
   source/WorldModelCollisionDefinition.c (World models).
-* Characters (Characters.md) - The player and NPCs (T13): what makes an object walk, run, crouch, jump, fly, look
+* Characters (Characters.md) - The player and NPCs: what makes an object walk, run, crouch, jump, fly, look
   around and use things, the same for the player and every NPC, whether a human, a dog or a pigeon. Covers:
   * CharacterAsset - The character asset type (a standard type, JSON in characters/): the defaults of a kind of
     character (CharacterSettings: an upright capsule, eye height, mass, walking, turning, crouching, jumping, falling,
@@ -114,10 +123,10 @@ Current module list:
     and answers what a character looks at; its capsule motion is the private source/WorldCharacterMotion.c
     (source/WorldCharacterInternal.h).
   * PlayerController - The player's side: GameInput actions and the mouse into a character's input, the camera at its
-    eyes (since T30 its body's eyes socket as posed), what the player looks at.
-* Animation (Animation.md) - Skeletal animation (T29): skinned models posed per placed object, clips from separate
+    eyes (its body's eyes socket as posed), what the player looks at.
+* Animation (Animation.md) - Skeletal animation: skinned models posed per placed object, clips from separate
   libraries retargeted onto every model of a skeleton layout, cross-fades, sockets, and skinning in every render pass;
-  since T30 animation graphs (states, transitions, layers, look-at), special actions with anchors for the player and
+  animation graphs (states, transitions, layers, look-at), special actions with anchors for the player and
   NPCs alike, held items on sockets, first person on the body's eyes, and posing once per shown frame. Covers:
   * AnimationLibrary - The animation_library asset type (a standard type, JSON in animation_libraries/, a .glb or .gltf
     file): bones and clips read by our own glTF reader (cgltf, the file treated as hostile;
@@ -128,14 +137,14 @@ Current module list:
   * SkeletalAnimation - The runtime maths: binding a library to a skeleton by bone name (rotations from the clip,
     translations scaled by the height ratio, unmatched ancestors folded), blending, the mixer (8 clips, cross-fades,
     weights, loops), bone matrices, the skinning palette, the pose's bounds; transforms taken apart by columns.
-  * AnimationGraph - The animation_graph asset type (T30, a standard type, JSON in animation_graphs/): parameters,
+  * AnimationGraph - The animation_graph asset type (a standard type, JSON in animation_graphs/): parameters,
     events, layers of states and transitions, actions, look-at, read from a hostile definition into one immutable block
     of indices (source/AnimationGraphReader.c; the asset type in source/AnimationGraphDefinition.c).
-  * AnimationGraphPlayer - Playing a graph on one skeleton (T30), pure functions over caller memory: binding (clips,
+  * AnimationGraphPlayer - Playing a graph on one skeleton, pure functions over caller memory: binding (clips,
     masks, look bones), the instance (parameters, events, per-layer cross-fades), the tick's advance (transitions,
     synced blends, matched speeds, timed events) and the pose (layers by mask, look-at).
   * WorldAnimatorComponent - Component type 5 (`animator`): the clip row with phase, speed, pause, fade, a loop override,
-    the placement's own libraries and (T30) graph, and the pose the system publishes for the renderer and sockets
+    the placement's own libraries and graph, and the pose the system publishes for the renderer and sockets
     (with the sockets' frames and the eyes socket).
   * WorldAnimation - The animation system: once a tick, after the collision step's events, it binds every animator to
     its world model's skeleton, libraries and graph, applies its rows, runs its graph and action and advances its
@@ -143,9 +152,9 @@ Current module list:
     sockets; code plays clips, sets parameters and starts actions through it, and its events queue for the game; a
     bone's world matrix in double. Graphs are source/WorldAnimationGraph.c, actions (anchors, attach, detach)
     source/WorldAnimationActions.c, its per-animator state the private source/WorldAnimationInternal.h.
-* Terrain (Terrain.md) - Terrain of any shape (B01; decisions W1, W5, W6): one free-form triangle mesh with painted
+* Terrain (Terrain.md) - Terrain of any shape: one free-form triangle mesh with painted
   material weights and densities, holes and face materials, imported from a Blender .glb, cut into 32 m chunks that
-  draw in every pass and collide as triangle meshes; since B02 (W7) dressed in up to sixteen terrain materials blended
+  draw in every pass and collide as triangle meshes, dressed in up to sixteen terrain materials blended
   per pixel (painted weights, face materials, rules by slope, height and noise, height blending, triplanar mapping)
   through texture arrays. Covers:
   * TerrainMesh - The mesh as pure data with no GL (include/TerrainMesh.h): the 1/1024 m position grid, the limits,
@@ -167,24 +176,24 @@ Current module list:
     distance, collision enabled, layer, mask; a draw distance multiplier), with the pure function that resolves the
     settings in effect. The collision world makes each chunk a one-sided mesh shape (WorldCollision.md, "Terrain");
     the renderer draws the chunks in every pass (source/WorldRendererTerrain.c, WorldRuntime.md).
-  * TerrainMaterial - The terrain_material asset type (B02, a standard type, JSON in terrain_materials/;
+  * TerrainMaterial - The terrain_material asset type (a standard type, JSON in terrain_materials/;
     include/TerrainMaterial.h, source/TerrainMaterial.c, the definition in source/TerrainMaterialDefinition.c): one
     palette material's settings (read through a property table: tile size, tint, roughness, normal strength, height
     blend strength, triplanar mode and slope, surface key, puddles, porosity) and its maps' pixels, read from texture
     assets' image files and packed as the texture arrays take them (albedo with height, normal, roughness with AO); a
     terrain loads its palette's materials as its dependencies.
-  * TerrainBlend - The terrain's material blend in C (B02; include/TerrainBlend.h): the terrain shader's steps mirrored
+  * TerrainBlend - The terrain's material blend in C (include/TerrainBlend.h): the terrain shader's steps mirrored
     (weights, rules with their periodic value noise, height blending, triplanar projections) and the material at a point
     of a terrain (a triangle and barycentrics: footsteps, the scattering's limits).
-  * GLTextureArray - Texture arrays (private, source/GLTextureArray.{h,c}; B02, decision W7): direct OpenGL calls (the
+  * GLTextureArray - Texture arrays (private, source/GLTextureArray.{h,c}): direct OpenGL calls (the
     project's only ones with GLReadback and GLDepth), through the function pointers raylib's rlGetProcAddress resolves
     (no raylib rebuild), with their GL constants; used by the renderer's terrain pass. Anything else that needs GL raylib
     lacks belongs in a module like it, never in a pass (BUILDING.md, "Direct OpenGL calls").
-  * GLReadback - Reading a small target back without waiting for the GPU (private, source/GLReadback.{h,c}; T37, new
-    module, decision G42): a pixel-pack buffer and a fence per copy, three in flight, the newest finished copy handed
+  * GLReadback - Reading a small target back without waiting for the GPU (private, source/GLReadback.{h,c}): a
+    pixel-pack buffer and a fence per copy, three in flight, the newest finished copy handed
     over a frame or two later; direct OpenGL calls in GLTextureArray's manner. Used by the eye's meter
     (WorldRendererExposure.c).
-  * GLDepth - Reversed depth (private, source/GLDepth.{h,c}; T39, new module, decision G41): whether the GPU has clip
+  * GLDepth - Reversed depth (private, source/GLDepth.{h,c}): whether the GPU has clip
     control (OpenGL 4.5 or GL_ARB_clip_control), 32-bit float depth textures and renderbuffers, and the switch of GL's
     depth state to reversed (0-to-1 clip depth, GL_GEQUAL, cleared to 0) and back to raylib's; direct OpenGL calls in
     GLTextureArray's manner. Used by the renderer's camera passes (WorldRendererCommon.c's camera depth helpers), so
@@ -212,8 +221,8 @@ Current module list:
   * GameInput - The per-tick input snapshot (keys, mouse, wheel, typed text drained once), polled by the frame manager
     right after PollInputEvents, with consumption (a consumed key reads as not pressed while held) and the action layer
     (GameAction: named actions bound to keys with modifiers; JSON controls file load/save).
-* GameFrame (GameFrame.md) - Abstract base for a game "scene"/section (menu, level, loading screen), with stepped load/unload, logic lifecycle, per-target rendering and (T30) an optional PrepareRender slot: the update side's last step before a render (posing skeletons once per shown frame).
-* GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop (polls the input, then updates frames top-down so the top frame gets input first), runs their PrepareRender before each render (T30), and composites them to the screen; crashes gracefully on frame errors.
+* GameFrame (GameFrame.md) - Abstract base for a game "scene"/section (menu, level, loading screen), with stepped load/unload, logic lifecycle, per-target rendering and an optional PrepareRender slot: the update side's last step before a render (posing skeletons once per shown frame).
+* GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop (polls the input, then updates frames top-down so the top frame gets input first), runs their PrepareRender before each render, and composites them to the screen; crashes gracefully on frame errors.
 * NamespacedKey (NamespacedKey.md) - Namespaced keys (`namespace:path`, Minecraft's character set, at most 128 bytes,
   a default namespace for keys written without one) and the KeyRegistry that interns them to uint32 ids (one per
   program: main creates it, Services.Keys carries it, every World borrows it), with stable texts and prefix search for
@@ -244,7 +253,7 @@ Current module list:
     placement overrides: each an explicit flag (overrides_<key>) next to the placement's own value (outline, crisp, shadow
     tier, casts shadows, draw distance, fixed draw distance, LOD switch distances), plus a draw distance multiplier, a LOD
     distance multiplier and a forced LOD; pure functions resolve the settings and the LOD settings in effect.
-  * WorldModelInstancesComponent - Component type 7 (`model_instances`, B03): many copies of one world model, each a
+  * WorldModelInstancesComponent - Component type 7 (`model_instances`): many copies of one world model, each a
     double position, a rotation, a scale and a tint (an InstanceList, at most 262 144), with the model component's
     settings shared row for row through the private source/WorldModelComponentInternal.h (all but omit_pixelation:
     copies are never crisp) and an instances revision; pure functions resolve the settings and the LOD settings in
@@ -265,7 +274,7 @@ Current module list:
     never advances time itself. Pure functions turn them into the sky: the sun (optionally following the seasons), the
     moon (phase from the calendar, position, lit fraction, moonlight above the air), the stars' daily turn and yearly
     drift, the two lights above the air (WorldEnvironment_GetSkyLights) and which of them casts the shadows from the
-    light each gives through the air (WorldEnvironment_ChooseShadowLight, T36).
+    light each gives through the air (WorldEnvironment_ChooseShadowLight).
   * World - Owns the objects and their components, mints the uint64 ids (an id map for lookups), keeps a dense array
     of components per type for systems to iterate, holds the environment, borrows the key registry (the keys of its
     objects' tags and data) and keeps their tag index; with an asset manager (World_Construct2) it owns an asset user
@@ -292,38 +301,36 @@ Current module list:
     stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, AO, outlines, bloom, sun
     shafts, crisp overlay, lit sprites with decals, sorted transparency and shadows that face the light; frustum
     culling, draw distances, and dithered fades and opacity; LODs with dithered cross-fades; skinned models posed by
-    their animators in every pass, T29; terrain chunks in every pass with their own GPU meshes, B01; model instances
-    drawn a cell at a time with instanced twins of every geometry pass, each copy fading and changing LOD on its own,
-    B03, source/WorldRendererInstances.c; the atmosphere's lookup tables, T15, source/WorldRendererAtmosphere.c:
+    their animators in every pass; terrain chunks in every pass with their own GPU meshes; model instances drawn a cell
+    at a time with instanced twins of every geometry pass, each copy fading and changing LOD on its own
+    (source/WorldRendererInstances.c); the atmosphere's lookup tables (source/WorldRendererAtmosphere.c):
     transmittance, multiple scattering and the sky view, built first in the frame, which the sky and the stars read;
-    the haze, T35, source/WorldRendererAtmosphere.c and shaders/common/haze.glsl: the aerial-perspective volume built
+    the haze (source/WorldRendererAtmosphere.c and shaders/common/haze.glsl): the aerial-perspective volume built
     from them every frame, the far ground below the horizon, the ground haze and light pollution's light in the air,
-    which every lit surface, the sky, the stars and the outlines take; one light scale for the sky and the surfaces,
-    T36: the sun and the moon through the air at each surface's height and the sky's own light as the ambient, from the
-    sky's irradiance table and the volume's last row; the eye adapting to the picture, T37,
-    source/WorldRendererExposure.c: a meter pass over the HDR picture read back a frame or two later; the camera's
-    passes in reversed 32-bit float depth with no far plane where the GPU has clip control, T39, GLDepth, so whatever
-    has the draw distance draws at any distance), in render space since T32:
-    the world's orientation with the camera at the origin, every position relative to the camera (subtracted in double),
-    shadow cascades snapped to their texels; separate from the world data and never writes to it. Split by render pass
-    into
-    source/WorldRenderer*.c behind the private source/WorldRendererInternal.h; read "Renderer structure" in
-    WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features run.
+    which every lit surface, the sky, the stars and the outlines take; one light scale for the sky and the surfaces:
+    the sun and the moon through the air at each surface's height and the sky's own light as the ambient, from the
+    sky's irradiance table and the volume's last row; the eye adapting to the picture (source/WorldRendererExposure.c):
+    a meter pass over the HDR picture read back a frame or two later; the camera's passes in reversed 32-bit float
+    depth with no far plane where the GPU has clip control (GLDepth), so whatever has the draw distance draws at any
+    distance), in render space: the world's orientation with the camera at the origin, every position relative to the
+    camera (subtracted in double), shadow cascades snapped to their texels; separate from the world data and never
+    writes to it. Split by render pass into source/WorldRenderer*.c behind the private source/WorldRendererInternal.h;
+    read "Renderer structure" in WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features
+    run.
   * WorldRenderCache - The renderer's private per-component cache (source/WorldRenderCache.h): one walk over the
-    world's model/sprite/light/terrain/model instances component arrays per frame builds the lists (since B01 every
-    shown terrain's chunks too; since B03 every shown model instances component's cells, built again only when its
-    copies or its world model change) with the objects' world placements (in double,
+    world's model/sprite/light/terrain/model instances component arrays per frame builds the lists (every shown
+    terrain's chunks too, and every shown model instances component's cells, built again only when its copies or its
+    world model change) with the objects' world placements (in double,
     and in render space for the frame's origin: the one place a world position becomes the floats the GPU sees;
     effectively disabled and hidden objects not drawn); world models are resolved once per component and again only
     when the name changes, variants to an index, and the settings in effect (models' and sprites') every frame; each
     model's LOD state is kept across frames and updated once per frame (WorldRenderCache_UpdateLods).
-  * WorldAtmosphere - The atmosphere as pure maths (private, source/WorldAtmosphere.h; T15): the air's coefficients from
+  * WorldAtmosphere - The atmosphere as pure maths (private, source/WorldAtmosphere.h): the air's coefficients from
     the environment (the air, the haze, the ozone layer), when the tables must be built again (the stale check and the
     tables' build record), the height the sky is seen from, heights and distances along rays without the cancellation of a float radius, and the lookup tables' layout
-    (transmittance, multiple scattering, sky view; since T36 the sky's irradiance table and the sky's light by height in
-    the volume's last row): the C mirror of shaders/common/atmosphere.glsl's mappings.
-  * WorldSkyLight - The sky's light on the world's surfaces as pure maths (private, source/WorldSkyLight.h; T36, new
-    module): the exact transmittance toward a light with its disc's share above the horizon, the C mirror's own
+    (transmittance, multiple scattering, sky view, the sky's irradiance table and the sky's light by height in the
+    volume's last row): the C mirror of shaders/common/atmosphere.glsl's mappings.
+  * WorldSkyLight - The sky's light on the world's surfaces as pure maths (private, source/WorldSkyLight.h): the exact transmittance toward a light with its disc's share above the horizon, the C mirror's own
     transmittance and multiple scattering tables and the GPU's irradiance table built from them by the GPU's quadrature
     (whole, or in steps over frames: WorldSkyLightBuilder keeps two sets and swaps in a rebuild when the air changes),
     the sky's and light pollution's irradiance, the frame's light at the camera (the sun's and the moon's through the
@@ -332,12 +339,12 @@ Current module list:
     renderer takes the camera's light from it for the eye's anchor and real scale, night vision, the shadow light, the
     status line and the fallback uniforms; the tests check the GPU's quadrature through it (WorldRuntime.md, "Sky's
     light on surfaces").
-  * WorldRenderSpace - Render space as pure maths (private, source/WorldRenderSpace.h; T32): the frame's origin (the
-    camera's double position) with its rotation-only view and projection (since T39 also the reversed infinite
-    projection and its closed-form inverse), the C mirror of the sky shader's ray, and the
+  * WorldRenderSpace - Render space as pure maths (private, source/WorldRenderSpace.h): the frame's origin (the
+    camera's double position) with its rotation-only view and projection (also the reversed infinite projection and
+    its closed-form inverse), the C mirror of the sky shader's ray, and the
     shadow cascades with their centres snapped to their texel grids in double, each grid kept from frame to frame
     (anchored to the last frame's box). WorldRuntime.md's "Render space" has the rule every pass and shader follows.
-  * WorldInstancing - Instanced drawing as pure maths (private, source/WorldInstancing.h; B03): a component's copies
+  * WorldInstancing - Instanced drawing as pure maths (private, source/WorldInstancing.h): a component's copies
     sorted into 32 m cells of its object's space with their 56-byte records (each matrix relative to its cell's centre,
     composed in double, rounded once), the copies' LOD bands around the switch distances, their fades, which pass draws
     which LOD of a copy and how it dithers, and the LODs a cell can show: the C mirror of shaders/common/instancing.glsl
@@ -347,7 +354,7 @@ Current module list:
     across frames (progress over the world model's fade time, turning back without a pop, a third LOD from the larger
     share, the two draws with complementary dithers, the LOD the G-buffer and the shadows draw solid).
   * WorldVisibility - What each pass draws this frame (private, source/WorldVisibility.h): frustum planes and sphere
-    tests (the camera's frustum, without a far plane for reversed depth since T39; each shadow cascade's box), draw
+    tests (the camera's frustum, without a far plane for reversed depth; each shadow cascade's box), draw
     distances (each model's and sprite's own, times the
     config's draw_distance_scale unless fixed, against its distance times the camera's zoom factor) with their
     fade band, the opacity's fade, the dither's C mirror (shaders/common/dither.glsl: the draw's fade and the LOD
@@ -357,37 +364,34 @@ Current module list:
     camera or a light; billboard, axis billboard, fixed), its world size from pixels per unit, its bounds and the
     back-to-front order of the blended sprites; the sprite pass and the shadow passes draw with it.
   * NightSky - The night sky's pure maths (private, source/NightSky.h): the seeded star catalogue, the limiting
-    magnitude (since T38 the naked eye's threshold, Schaefer's, against the sky's luminance: the twilight's from the
+    magnitude (the naked eye's threshold, Schaefer's, against the sky's luminance: the twilight's from the
     C mirror's sky light on the real scale, light pollution's and the moonlit sky's as the background that gives their
     tuned limits), the air mass, star colours and the galaxy's place among the stars; used by the sky and star passes
     (WorldRendererSky.c, WorldRendererStars.c).
   * NightVision - The eye's dim-light vision as pure maths (private, source/NightVision.h): Hunt's rod share calibrated
-    on the game's light scale (since T36 the one scale's anchors, and the field luminance from the daylight on the real
+    on the game's light scale (the one scale's anchors, and the field luminance from the daylight on the real
     scale and the night's raised lights through the power law) and the rods' blue-grey; the sky and PBR shaders apply it
     (shaders/common/night_vision).
-  * EyeAdaptation - The eye's adaptation to the picture as pure maths (private, source/EyeAdaptation.h; T37, new module,
-    decision G42): the meter's centre-weighted log-average of its blocks, the anchor and the window around it (the sky's
+  * EyeAdaptation - The eye's adaptation to the picture as pure maths (private, source/EyeAdaptation.h): the meter's centre-weighted log-average of its blocks, the anchor and the window around it (the sky's
     floor at the night's own light), the eye eased in stops, and the partial adaptation's curve over night vision's real
     light scale that gives the exposure; the renderer's meter pass and readback feed it (WorldRuntime.md, "Eye
     adaptation").
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world whose sky follows the frame's game
     clock and whose colliders it steps every tick (trigger, contact and motion events logged; F7 shows the colliders,
     F8 the contact points, F6 swings the door, F9 sends a wall through a row of crates, F10 moves the door's crate),
-    with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world. Since T13 its
+    with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world. Its
     characters move every tick: F1 walk mode (the player as a character), F2 test NPCs (a human, a dog, a pigeon), F3
-    flight, F4 the player's kind (the private source/WorldTestCharacters.{h,c}). Since T29 it ticks the animation
-    system: 5 steps the showcase figure through the clips, 6 a crowd of 100 walking figures, 7 slow motion (the private
-    source/WorldTestAnimation.{h,c}). Since T30 it poses them in its PrepareRender, the humans wear the animated
-    humanoid (the player in first person), E starts the action the object looked at offers (the bench's sit, the coffee
-    cup's pick-up, the door's push), 8 sends the NPC human to the bench, 9 puts down, 0 waves. Since B01 its world has
-    a terrain around the slab, and the minus key shows the terrain's chunk key; since B02 the terrain wears four
-    placeholder materials and the equals key cycles its views (shaded, painted weights, rule weights, the dominant
-    material). Since B03 its world has a grove of 400 instanced trees, the apostrophe shows a field of 20 000 instanced
-    pebbles (a runtime object) and the semicolon switches instanced drawing for the A/B (the private
-    source/WorldTestInstances.{h,c}). Since T15 the keypad's 1 switches the atmosphere's tables (the A/B against the
-    direct march), 2 the multiple scattering and 3 the ozone, and I adds the frame times; since T35 the keypad's 4 to 8
-    drive the haze (its debug view and slice, the distance scale, a morning mist, the haze strength); T36's keypad 9
-    (the light before T36, the A/B) went in T37.
+    flight, F4 the player's kind (the private source/WorldTestCharacters.{h,c}). It ticks the animation system: 5 steps
+    the showcase figure through the clips, 6 a crowd of 100 walking figures, 7 slow motion (the private
+    source/WorldTestAnimation.{h,c}); it poses them in its PrepareRender, the humans wear the animated humanoid (the
+    player in first person), E starts the action the object looked at offers (the bench's sit, the coffee cup's
+    pick-up, the door's push), 8 sends the NPC human to the bench, 9 puts down, 0 waves. Its world has a terrain around
+    the slab in four placeholder materials (the minus key shows the terrain's chunk key, the equals key cycles its
+    views: shaded, painted weights, rule weights, the dominant material) and a grove of 400 instanced trees; the
+    apostrophe shows a field of 20 000 instanced pebbles (a runtime object) and the semicolon switches instanced
+    drawing for the A/B (the private source/WorldTestInstances.{h,c}). The keypad's 1 switches the atmosphere's tables
+    (the A/B against the direct march), 2 the multiple scattering and 3 the ozone, and I adds the frame times; the
+    keypad's 4 to 8 drive the haze (its debug view and slice, the distance scale, a morning mist, the haze strength).
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
@@ -457,7 +461,7 @@ Current module list:
   from any integer type whose value fits (arrays refused), and strings without NULs inside. Used by the property
   tables, the data values and the world files.
 * GameMath (GameMath.md) - The bridge between WRFramework's double-precision maths (WRVectorMath: Vector3Double,
-  Matrix4Double, BoundingBoxDouble, added in T31 for large worlds) and raylib's Vector3 and Matrix: conversions both
+  Matrix4Double, BoundingBoxDouble, for large worlds) and raylib's Vector3 and Matrix: conversions both
   ways, field by field (raylib declares Matrix's fields row by row), and relative to an origin (subtracted in double,
   rounded once), which is how a far-away position becomes the floats raylib and the GPU take. Header-only. GameMath.md
   also sums up WRVectorMath's conventions (raymath's, in double) and its precision far from the origin.
@@ -480,10 +484,10 @@ messages through a Logger (passed by pointer) at the appropriate level instead. 
 exception is the bootstrap fallback in main when the logger itself fails to initialize and therefore
 cannot be used.
 
-Project rules (added after the 2026-10 code review; handoff/2026-10_code_review/FIX_PLAN.md has the reasoning):
+Project rules:
 1. Asset lifetime: whatever keeps asset data owns its own AssetUserID, and nothing stores asset pointers or by-value
    copies (GameFont, Model, Texture2D, sprite animation sources) past that user. See AssetManager.md. Text follows it
-   through TextDocument (since FIX_PLAN Phase 4 components only name their assets).
+   through TextDocument (text components only name their assets).
 2. Never hold a Widget* or text component pointer across a call that can run hooks, events or user callbacks;
    re-resolve it by id afterwards (UIScreen_TryGetWidgetById). Destroying widgets from hooks and notification handlers
    is safe: Widget_Destroy is deferred to the end of the screen's update.

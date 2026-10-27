@@ -35,8 +35,8 @@ return NULL for the wrong type; upcast with `StringComponent_AsComponent` and fr
 - **TranslateComponent**: a key looked up in the document's translations, like Minecraft's `translate`. It embeds a
   `StringComponent` as its first member: that string part carries all the styling, and its text is the **fallback**,
   shown while the key has no translation (without a fallback the key itself is shown). The `StringComponent_*`
-  setters work on `TranslateComponent_AsString(translate)`. There are no string tables yet (architecture decision A9
-  decides the rest later), so the fallback always shows.
+  setters work on `TranslateComponent_AsString(translate)`. There are no string tables yet, so the fallback always
+  shows.
 - **SpriteComponent**: a sprite-animation asset name (NULL = draws nothing), color and box size. A sprite always takes
   up its size in the layout, even when its animation is missing; it draws its document's instance of the animation.
 - **EmptyComponent**: no content of its own; it lays out its children.
@@ -109,6 +109,3 @@ name) surface as errors. The style **borrows** its font name (normally a string 
   not handled yet: the factory pools, `TextComponent.c` destruction, the codec tables, the layout, the plain-text
   serializer and `TextStyle`.
 - Not thread-safe; main thread only.
-- History: the first version (2026-07) let children be shared between parents, borrowed every string, and copied fonts
-  by value; the 2026-10 code review (`handoff/2026-10_code_review/CODE_REVIEW.md` 2.1) lists what that broke. FIX_PLAN
-  Phase 4 rebuilt it into what this doc describes.

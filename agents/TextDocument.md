@@ -9,9 +9,6 @@ as needed. Every symbol has full Doxygen in its header; this doc is the map.
 | TextDocument | `include/TextDocument.h`, `source/TextDocument.c` | Owns a tree, an asset user, the name→asset bindings and one playback instance per sprite-animation name. |
 | TextLayout | `include/TextLayout.h`, `source/TextLayout.c` | Lays a document out (lines, wrapping, shrinking, alignment) into cached glyph and sprite runs, and draws them. |
 
-They replace the first version's `TextComponentResolver` (bound names by copying fonts into components) and
-`TextComponentRenderer` (re-measured the whole tree on every draw).
-
 ## TextDocument: one owner per text
 
 A document owns:
@@ -33,8 +30,8 @@ or a component pointed at survives. Never move or copy a constructed document (l
 font name. raylib's built-in font is not an asset (raylib owns it until `CloseWindow`) and has no glyphs before
 `InitWindow`; the document refreshes its copy until it does.
 
-**Translations.** `TextDocument_ResolveTranslation(key)` returns NULL for now (no string tables; architecture decision
-A9 keeps the rest for later), so translate components show their fallback, else their key.
+**Translations.** `TextDocument_ResolveTranslation(key)` returns NULL for now (no string tables yet), so translate
+components show their fallback, else their key.
 
 **Without an asset manager** (`assets` NULL, e.g. in tests) nothing is ever loaded: text uses the built-in font and
 sprites draw nothing, but they still take up their size.
@@ -63,8 +60,7 @@ nothing (AGENTS.md rule 3). A layout must not be drawn after its document is des
 - A shadow is drawn at the component's shadow offset, or at its font's (`GameFont_GetShadowOffset`, from the font
   definition's `shadow_offset`) when it sets none, both times its size.
 - A line ends at its last glyph or sprite: trailing spaces and the spacing after the last glyph count neither for
-  wrapping, shrinking or alignment, nor for underline and strikethrough. Spaces at the start of a line are kept (the
-  old label dropped them).
+  wrapping, shrinking or alignment, nor for underline and strikethrough. Spaces at the start of a line are kept.
 - Within a line, shorter runs are **bottom-aligned**. A line is as tall as its tallest run.
 - **Options** (`TextLayoutOptions`, start from `TextLayoutOptions_CreateDefault`):
   - `SizeMultiplier` scales every component size (a label's Size);

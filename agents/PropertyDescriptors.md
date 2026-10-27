@@ -7,22 +7,20 @@
 One static **property table** per data type describes every property of the type once: its key, binary (wire) id,
 type, field offset, default, rules and flags. Generic functions driven by the table do everything else, so a new
 property is one table row, not six hand-written places (struct, defaults, validation, copy, encoder, decoder) that
-must agree. The editor's inspector, scripts (the `Script` flag, types and descriptions feed the language's type
-checker and autocomplete, `handoff/2026-10_scripting_language/PROPOSAL.md` section 5), saves and the world files
-(T09) all read the same tables. Decided as architecture A1 / G1 (a), built in T04.
+must agree. The editor's inspector, scripts (later: the `Script` flag, types and descriptions feed the language's type
+checker and autocomplete), saves and the world files all read the same tables.
 
-**Clients:** `WorldEnvironment` ([WorldData.md](WorldData.md), "Environment"), `GameClock` ([GameClock.md](GameClock.md),
-T23), and since T05 the world objects (`world_object`, with T24's `data` row for tags and custom data and T08's
-`parent` row, both ReadOnly for `Properties_Set`, whose reads and copies the world reconciles in the table's `AfterSet`)
-and their components (`model_component`, with T10's override pairs and T11's LOD rows, `sprite_component`, with T26's 17
-override pairs,
-`light_component`; [WorldData.md](WorldData.md), "Property tables"), and since T26 a world sprite's settings
+**Clients:** `WorldEnvironment` ([WorldData.md](WorldData.md), "Environment"), `GameClock` ([GameClock.md](GameClock.md)),
+the world objects (`world_object`, with its `data` row for tags and custom data and its `parent` row, both ReadOnly for
+`Properties_Set`, whose reads and copies the world reconciles in the table's `AfterSet`) and their components
+(`model_component`, with its override pairs and LOD rows, `sprite_component`, with its 18 override pairs,
+`light_component`; [WorldData.md](WorldData.md), "Property tables"), and a world sprite's settings
 (`world_sprite` and `world_sprite_render`, which read its definition: [WorldSprites.md](WorldSprites.md)). The sprite
 component's value rows and the world sprite's rows come from the same macros (`source/WorldSpriteInternal.h`), so the
-two tables share every key, default, rule and text: a way to keep one copy of a row in two tables. Since T13 the same
+two tables share every key, default, rule and text: a way to keep one copy of a row in two tables. The same
 for characters: a character asset's settings (`character`) and the character component (`character_component`: the
 asset's name, then an override flag and a value per setting) share their rows (`source/CharacterInternal.h`;
-[Characters.md](Characters.md)). T16 adds the weather.
+[Characters.md](Characters.md)). The weather (later) gets a table too.
 
 ## Declaring a table
 
@@ -74,8 +72,7 @@ and checks that **every default passes its own rules**.
 
 ### Override flags
 
-A setting that a placement can override (a world model's draw distance on one placed object, decided in T10 with the
-owner's rule from G17) is **two rows**: the flag `overrides_<key>` (`PROPERTY_OVERRIDE_FLAG_PREFIX`), a `Bool` whose
+A setting that a placement can override (a world model's draw distance on one placed object) is **two rows**: the flag `overrides_<key>` (`PROPERTY_OVERRIDE_FLAG_PREFIX`), a `Bool` whose
 default is false, right before the value row `<key>`. While the flag is off the asset's value applies and the row's own
 value is kept, saved and shown, so switching the flag back on restores it. No sentinel values (0, an empty name, -1) and
 no `inherit` states: a flag cannot collide with a real value, and the editor shows a checkbox next to the field.
@@ -83,7 +80,7 @@ no `inherit` states: a flag cannot collide with a real value, and the editor sho
   name another row of its table; the editor and scripts pair them by these names.
 - Two plain rows rather than a new "optional value" property type: every reader, writer, `Properties_Set`, the copy and
   the comparison handle them as they are, JSON and GHDF carry both, and no type is needed per value type (bools,
-  floats, enums, names, T11's distance lists). The cost is that nothing stops a caller from reading a value without its
+  floats, enums, names, distance lists). The cost is that nothing stops a caller from reading a value without its
   flag: the type that owns the table resolves the pairs in one pure function (`WorldModelComponent_ResolveSettings`).
 - A plain multiplier with a neutral default (`draw_distance_multiplier` 1) is not an override: one row.
 
@@ -98,7 +95,7 @@ no `inherit` states: a flag cannot collide with a real value, and the editor sho
 | `Double` | `double`, always finite | number (shortest text that reads back) | Double |
 | `Angle` | `float`, **radians** | number, **degrees** (shortest text that reads back to the same radians) | Float, radians |
 | `Vector2` / `Vector3` | raylib vectors | `[x, y]` / `[x, y, z]` | Float array of 2 / 3 |
-| `Vector3Double` (T33) | `Vector3Double` (`wr/WRVectorMath.h`): positions in the world | `[x, y, z]`, each the shortest text that reads back to the same double (a float written before prints the same) | Double array of 3; a Float array of 3 reads too (older saves) |
+| `Vector3Double` | `Vector3Double` (`wr/WRVectorMath.h`): positions in the world | `[x, y, z]`, each the shortest text that reads back to the same double (a value written as a float's shortest text prints the same) | Double array of 3; a Float array of 3 reads too (older saves) |
 | `AngleVector3` | `Vector3`, **radians** (Euler rotations) | `[x, y, z]`, **degrees** (each the shortest text that reads back to the same radians) | Float array of 3, radians |
 | `Color` | raylib `Color` (RGBA all data) | `"#rrggbb"`, `"#rrggbbaa"` when not opaque | UInt8 array of 4 |
 | `RenderColor` | `RenderColor` | `"#rrggbb"` when brightness and opacity are 1, else `{tint: [r,g,b], brightness, opacity}` | Compound {1: UInt8[3] tint, 2: Float brightness, 3: Float opacity} |
@@ -108,12 +105,12 @@ no `inherit` states: a flag cannot collide with a real value, and the editor sho
 | `ObjectId` | `uint64_t`, 0 = none | like UInt64 | the smallest integer type that holds the value |
 | `Date` | `int64_t` day number ([GameCalendar.md](GameCalendar.md)), inside the calendar (years 1 to 9999) | `"yyyy-mm-dd"` only, e.g. `"2026-10-18"` | EncodedInteger (the day number; three bytes for this era) |
 | `DataMap` | owned `DataMap*` ([ObjectData.md](ObjectData.md)), NULL while empty (its only default) | two keys: the tags under the descriptor's `TagsKey` (`["town:lamp"]`), the values under its `Key` (`{"town:visits": 3}`) | Compound array of entry compounds |
-| `FloatList` (T11) | owned `PropertyFloatList*`, NULL while empty (its only default) | array of numbers, `[3.0, 6.0, 60.0]` (`[]` when empty) | Float array (empty when empty) |
-| `EnumSet` (T12) | `uint32_t` mask: bit N is the enum entry of value N | array of the entries' names in the table's order, `["world", "prop"]` (`[]` when empty) | the smallest unsigned integer type that holds the mask |
-| `AssetNameList` (T29) | owned `PropertyAssetNameList*`, NULL while empty (its only default) | array of strings, `["human_motions", "gestures"]` (`[]` when empty) | String array (empty when empty) |
-| `InstanceList` (B03) | owned `PropertyInstanceList*` of `PropertyInstanceEntry` (a `Vector3Double` position, a radians `Vector3` rotation, a `Vector3` scale, a `Color` tint), NULL while empty (its only default) | array of instances, each `{"position": [x, y, z], "rotation": [x, y, z], "scale": s or [x, y, z], "tint": "#rrggbb"}` with the defaults left out (rotation 0, scale 1, white; the position always written; rotations in degrees, a scale one number when even, the tint as a `Color`); any other key is refused; `[]` when empty | Compound {1: Double array of the positions (3 per instance), 2: Float array of the rotations in radians, 3: Float array of the scales, 4: UInt8 array of the tints (4 each)}; 2, 3 and 4 only when an instance differs from its default, each of exactly its length |
+| `FloatList` | owned `PropertyFloatList*`, NULL while empty (its only default) | array of numbers, `[3.0, 6.0, 60.0]` (`[]` when empty) | Float array (empty when empty) |
+| `EnumSet` | `uint32_t` mask: bit N is the enum entry of value N | array of the entries' names in the table's order, `["world", "prop"]` (`[]` when empty) | the smallest unsigned integer type that holds the mask |
+| `AssetNameList` | owned `PropertyAssetNameList*`, NULL while empty (its only default) | array of strings, `["human_motions", "gestures"]` (`[]` when empty) | String array (empty when empty) |
+| `InstanceList` | owned `PropertyInstanceList*` of `PropertyInstanceEntry` (a `Vector3Double` position, a radians `Vector3` rotation, a `Vector3` scale, a `Color` tint), NULL while empty (its only default) | array of instances, each `{"position": [x, y, z], "rotation": [x, y, z], "scale": s or [x, y, z], "tint": "#rrggbb"}` with the defaults left out (rotation 0, scale 1, white; the position always written; rotations in degrees, a scale one number when even, the tint as a `Color`); any other key is refused; `[]` when empty | Compound {1: Double array of the positions (3 per instance), 2: Float array of the rotations in radians, 3: Float array of the scales, 4: UInt8 array of the tints (4 each)}; 2, 3 and 4 only when an instance differs from its default, each of exactly its length |
 
-Since T09 the integer types are written in the smallest GHDF integer type that holds the value (a `parent` of 12 is one
+The integer types are written in the smallest GHDF integer type that holds the value (a `parent` of 12 is one
 UInt8 byte) and read from any GHDF integer type, fixed width or encoded, whose value fits the property's type
 ([GameGHDF.md](GameGHDF.md)); data written with wider types still reads. `Enum` and `Date` stay encoded integers.
 
@@ -121,7 +118,7 @@ JSON readers go through `GameJSON` ([GameJSON.md](GameJSON.md)), so they accept 
 (colors as arrays or `{r,g,b,a}`, vectors as `{x,y,z}`, numbers as numeric strings); `Vector2`, `Vector3` and
 `Vector3Double` arrays must have exactly 2 and 3 elements (`GameJSON_ParseVector3Double` reads each element as a
 double). A RenderColor's tint alpha is not part of its value: not written, read as 255,
-skipped by comparisons. Colors and vectors in GHDF match what the hand-written world encoder always wrote.
+skipped by comparisons.
 
 Rules (`PROPERTY_RULES_*`): minimum/maximum, each inclusive or exclusive, for `Int32`, `UInt32`, `Float`, `Double`,
 `Angle` (radians) and every vector component (`AngleVector3` in radians, `Vector3Double` in double: the object's
@@ -142,11 +139,11 @@ unknown name or one given twice is refused, naming its index (`[1]: ...`). The c
 collision layers) is the first. An `AssetNameList` takes `PROPERTY_RULES_ASSET_NAME_LIST(maxCount, maxLength)` (both
 required: 1 to `PROPERTY_ASSET_NAME_LIST_MAX_COUNT`, 64, names and 1 to `PROPERTY_ASSET_NAME_LIST_MAX_LENGTH`, 256,
 bytes each); every name must be a valid asset name (`AssetManager_IsValidAssetName`); its default must be NULL. The
-animator's `animation_libraries` (T29) is the first. An `InstanceList` takes `PROPERTY_RULES_INSTANCE_LIST(maxCount,
+animator's `animation_libraries` is the first. An `InstanceList` takes `PROPERTY_RULES_INSTANCE_LIST(maxCount,
 positionLimit)` (`Rules.MaxCount`, required: 1 to `PROPERTY_INSTANCE_LIST_MAX_COUNT`, 262 144, and every position's
 components within ±`positionLimit`); every rotation and scale must be finite; its default must be NULL. A refusal names
 the instance (`"...; instance 12's are not"`), and a JSON read's error its place (`[12].scale: Expected a number or
-three numbers.`). The model instances component's `instances` (B03) is the first.
+three numbers.`). The model instances component's `instances` is the first.
 
 Flags: `Persistent` (written and read by JSON and GHDF), `Editable` (inspector), `ReadOnly` (visible, refused by
 `Properties_Set`; reads from files still fill it), `Script`. `PROPERTY_FLAGS_SETTING` = Persistent | Editable | Script.
@@ -176,7 +173,7 @@ A property without `Persistent` is runtime state the table still copies, compare
   (`InvalidOperation`). Build values with `PropertyValue_From*`.
 - **JSON.** `Properties_WriteJSON(table, instance, pool, compound, options)` validates first, then sets one key per
   persistent property; by default values equal to their default are left out (`PropertyWriteOptions.
-  AreDefaultsWritten` writes them all). Since T09 WRJSON compounds keep insertion order, so the keys are serialized in
+  AreDefaultsWritten` writes them all). WRJSON compounds keep insertion order, so the keys are serialized in
   table order and a new key moves no other. `Properties_ReadJSON(table, compound, instance, options)`:
   - **All or nothing**: it reads into a scratch copy (on the stack up to 1 KiB of struct, a heap block above),
     validates it, then commits. On any failure the instance is unchanged.
@@ -220,11 +217,11 @@ that**; everything else respects the `_` convention and goes through the type's 
 range) and whether it owns memory (`PropertyInternal_IsOwnedType`: the strings and `DataMap`; an owned field is freed,
 cloned and handed over through `PropertyInternal_AdoptOwned` and `CloneOwned`), document it in the header's type table
 and here, and test it in `tests/PropertyDescriptorTests.c` (the test record has one field of every type but
-`DataMap`, which has its own record: it needs a key registry). `Double` and `Date` were added this way in T23,
-`AngleVector3` (an object's rotation) in T05, `DataMap` (tags and typed data) in T24, `FloatList` (a placement's LOD
-distances) in T11, `EnumSet` (a collider's layer mask) in T12, `Vector3Double` (an object's position, named
-`vector3_double`) in T33, `AssetNameList` (an animator's own animation libraries, named `asset_name_list`) in T29,
-`InstanceList` (a model instances component's copies, named `instance_list`) in B03.
+`DataMap`, which has its own record: it needs a key registry). Examples to follow: `Double` and `Date`,
+`AngleVector3` (an object's rotation), `DataMap` (tags and typed data), `FloatList` (a placement's LOD
+distances), `EnumSet` (a collider's layer mask), `Vector3Double` (an object's position, named
+`vector3_double`), `AssetNameList` (an animator's own animation libraries, named `asset_name_list`) and
+`InstanceList` (a model instances component's copies, named `instance_list`).
 
 ### Float lists
 
@@ -238,7 +235,7 @@ list over. The readers check the count against the row's `MaxCount` before they 
 
 ### Asset name lists
 
-`PropertyAssetNameList` (T29, in `PropertyDescriptor.h`) is one heap block too: its count, the name pointers (a flexible
+`PropertyAssetNameList` (in `PropertyDescriptor.h`) is one heap block too: its count, the name pointers (a flexible
 array member) and the names' bytes. The empty list is NULL. `PropertyAssetNameList_Create(names, count, &list)` copies
 (NULL for 0; at most `PROPERTY_ASSET_NAME_LIST_MAX_COUNT` names of at most `PROPERTY_ASSET_NAME_LIST_MAX_LENGTH` bytes;
 the names' grammar is the row's rule, checked on set and read), `_Destroy`, `_Clone`, `_Equals` (the same names in the
@@ -248,7 +245,7 @@ they allocate. Duplicates are allowed (the first one that has a clip wins, for t
 
 ### Instance lists
 
-`PropertyInstanceList` (B03, in `PropertyDescriptor.h`) is one heap block: its count and its entries (a flexible array
+`PropertyInstanceList` (in `PropertyDescriptor.h`) is one heap block: its count and its entries (a flexible array
 member of `PropertyInstanceEntry`). The empty list is NULL. `PropertyInstanceList_Create(entries, count, &list)` copies
 (NULL for 0; at most `PROPERTY_INSTANCE_LIST_MAX_COUNT`), `_Destroy`, `_Clone`, `_Equals` (every field of every entry,
 the position in double; NULL is empty), and the inline `_GetCount` / `_GetEntries`.

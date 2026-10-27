@@ -3,7 +3,7 @@
 `include/GameCalendar.h`, `source/GameCalendar.c`. Tests: `tests/GameCalendarTests.c`.
 
 The game's calendar: pure, stateless functions over dates in the proleptic Gregorian calendar (the Gregorian rules
-extended back to year 1). Built in T23 together with the game clock ([GameClock.md](GameClock.md)).
+extended back to year 1). The game clock ([GameClock.md](GameClock.md)) counts its days with it.
 
 ## Day numbers
 
@@ -11,8 +11,9 @@ The game counts dates as **day numbers**: days since 0001-01-01, which is day 0 
 calendar covers the years 1 to 9999: `GAME_CALENDAR_FIRST_DAY_NUMBER` (0) to `GAME_CALENDAR_LAST_DAY_NUMBER`
 (3652058, 9999-12-31). Some anchors: 1970-01-01 is 719162, 2000-01-01 is 730119, 2026-10-18 is 739906.
 
-Day numbers are what the game stores and counts with: the clock's `day`, the world environment's `date`, the property
-tables' `Date` type ([PropertyDescriptors.md](PropertyDescriptors.md)), later the scheduler and the moon. A day number
+Day numbers are what the game stores and counts with: the clock's `day`, the world environment's `date` (the moon's phase
+counts from it), the property tables' `Date` type ([PropertyDescriptors.md](PropertyDescriptors.md)), later the
+scheduler. A day number
 plus seconds since midnight is a full time (the clock). Adding days is integer arithmetic; only display and input go
 through dates.
 
@@ -42,7 +43,7 @@ A **date-time** is one moment of the calendar, for stored values (object data's 
 later saves and script values): an `int64_t` count of **microseconds since 0001-01-01T00:00:00**, from 0 to
 `GAME_CALENDAR_LAST_DATE_TIME` (the last microsecond of 9999-12-31). Its day number is the count divided by
 `GAME_CALENDAR_MICROSECONDS_PER_DAY`. Integers keep it exact (equality, ordering, adding durations); the game clock's
-day plus double seconds converts to it by rounding to the microsecond (added with T24).
+day plus double seconds converts to it by rounding to the microsecond.
 
 - `GameCalendar_IsDateTimeValid(dateTime)`.
 - `GameCalendar_FormatDateTime(dateTime, buffer)` appends `"yyyy-mm-ddThh:mm:ss"` (e.g. `"2026-10-18T09:30:00"`), and

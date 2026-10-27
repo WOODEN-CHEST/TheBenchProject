@@ -1,11 +1,11 @@
 # GameMath
 
-`include/GameMath.h` (header-only). Tests: `tests/WRVectorMathTests.c`. Added in T31, for large worlds (G25, G26).
+`include/GameMath.h` (header-only), for large worlds. Tests: `tests/WRVectorMathTests.c`.
 
 The bridge between WRFramework's double-precision maths, `WRVectorMath` (`include/wr/WRVectorMath.h`:
 `Vector3Double`, `Matrix4Double`, `BoundingBoxDouble`), and raylib's float `Vector3` and `Matrix`. The double types
 live in WRFramework so other projects can reuse them; WRFramework uses no raylib, so the conversions live here. Owns
-nothing; no lifecycle. `WRVectorMath` also has a `Vector2Double` (added after T31, for future 2D projects); there is
+nothing; no lifecycle. `WRVectorMath` also has a `Vector2Double` (for future 2D projects); there is
 no bridge to raylib's `Vector2` yet, since this game has no 2D doubles. Add `GameMath_FromVector2` and its siblings,
 like the `Vector3` ones, when one is needed.
 
@@ -60,7 +60,7 @@ The header documents every function; the essentials:
   singular matrix inverts to large entries. Code with a policy keeps its own check, as
   `WorldTransform_TryGetLocalMatrix` does with `MINIMUM_INVERTIBLE_VOLUME`.
 - **Far out, subtract first.** At 10 000 km a stored translation is rounded to the double's 1.9 nm step. A matrix times
-  its inverse there cancels terms as large as the translation: the T31 tests measured up to 22 nm in the translation
+  its inverse there cancels terms as large as the translation: measurements found up to 22 nm in the translation
   (2.5e-15 of it), and placing a child 0.5 mm from its parent as `inverse(parent) × world` came within 7 nm, as
   subtracting the translations first and turning the difference by the inverse's linear part came within 2 nm (the
   world translation's own rounding). Relative placements should subtract translations first.
@@ -74,17 +74,17 @@ The header documents every function; the essentials:
 
 ## Users
 
-- **The renderer (T32, render space: WorldRuntime.md):** `GameCamera.Position` is a `Vector3Double`; the render cache
+- **The renderer (render space: WorldRuntime.md):** `GameCamera.Position` is a `Vector3Double`; the render cache
   (`WorldRenderCache_Sync`) reads each object's double world matrix and position and makes their render-space floats
   with `GameMath_ToMatrixRelative` and `GameMath_ToVector3Relative` against the frame's origin; the collision debug
   draws and the debug grid convert the same way; `WorldRenderSpace` snaps the shadow cascades in double.
-- **The world (T33, WorldData.md, "Positions are doubles"):** objects' positions and world matrices, the hierarchy and
+- **The world (WorldData.md, "Positions are doubles"):** objects' positions and world matrices, the hierarchy and
   `WorldTransform` are doubles; queries compare distances in double; files and `vector3` data values keep doubles.
-- **Collision (T33, WorldCollision.md):** placements and poses are double; before every narrowphase call the world
+- **Collision (WorldCollision.md):** placements and poses are double; before every narrowphase call the world
   makes them relative to an origin near the test (`GameMath_ToVector3Relative`, and the collision world's own
   `WorldCollisionInternal_ToRelative` built on it); `GameMath_FromMatrix` widens a shape's float transform to compose it
   in double.
-- **Characters (T33, Characters.md):** the feet, ground points and eyes are doubles; moves (floats) are added with
+- **Characters (Characters.md):** the feet, ground points and eyes are doubles; moves (floats) are added with
   `GameMath_FromVector3`, and differences of positions come back as floats with `GameMath_ToVector3Relative`.
 - **The test frame:** the flycam moves the double camera; F11's far shift moves objects, the camera and the frame's
   own places in double.
