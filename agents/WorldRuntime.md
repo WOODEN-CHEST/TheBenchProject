@@ -19,6 +19,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
+| WorldInterior | `source/WorldInterior.h`, `source/WorldInterior.c` (private) | Interior lighting as pure maths (see "Interior lighting"): ambient zones in render space, their weights, the draws' choice of zones and their composition, the haze inside them, the sky's visibility map and its taps, the camera's interior and the light the eye is in: the C mirror of `shaders/common/interior.glsl`. |
 | WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs), `source/WorldTestAnimation.{h,c}` (private: the animation system and its keys), `source/WorldTestInstances.{h,c}` (private: the pebble field and the instancing A/B) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and walk mode (the player as a character) and test NPCs. |
 
 `source/main.c` is the composition root (bootstrap).
@@ -428,19 +429,22 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    sky
    (`WorldEnvironment_GetSkyLights`: the sun's and the moon's directions, daylight, the moon's phase and lit fraction,
    the two lights' intensities above the air), the stars' rotation (`StarsToWorld`), the render
-   clock (`TimeSeconds`), sizes, the night sky values (`WorldRendererSky_PrepareFrame`: skyglow, the moonlit sky's
+   clock (`TimeSeconds`), sizes, the camera's interior (`WorldRendererInterior_PrepareCamera`, see "Interior
+   lighting": whether it runs, the camera's openness and the ambient zones at it, eased), the night sky values (`WorldRendererSky_PrepareFrame`: skyglow, the moonlit sky's
    strength and the moon's disc; after the sky's light, `WorldRendererSky_PrepareNightSky`: the limiting magnitude
    and the Milky Way's radiance; first the star catalogue is rebuilt if the
    world's seed or density changed, and the sky textures reloaded if the world names others), the atmosphere's
    (`WorldRendererAtmosphere_PrepareFrame`: the air's coefficients, the height the sky is seen from, whether the
    tables draw the sky; the frame's haze, light pollution's light in the air, whether the volume hazes the frame),
    the sky's light (`WorldRendererLighting_PrepareSkyLight`, see "Sky's light on surfaces": the C mirror's tables
-   kept on the air, the light at the camera, the light the air is lit by, the sun's disc, the scene luminance, night
-   vision's field and calibration, and the shadow light chosen from the light through the air), every model's LOD and
+   kept on the air, the light at the camera, the light the air is lit by, the sun's disc, the scene luminance, the light
+   the eye is in (the sky's as the camera's interior leaves it, plus the rooms' own), night vision's field and
+   calibration, and the shadow light chosen from the light through the air), every model's LOD and
    its cross-fade (`WorldRenderCache_UpdateLods`, see "LODs"), and every
    pass decision:
    first which shadow passes run (`DecideShadows`) and their light matrices (`WorldRendererShadows_PrepareFrame`: both
-   cascades' view, projection and box, snapped to their texels; the cube shadow's lamp and far range), then the frame's visibility (what every
+   cascades' view, projection and box, snapped to their texels; the cube shadow's lamp and far range) and the sky's
+   visibility map's (`WorldRendererSkyVisibility_PrepareFrame`), then the frame's visibility (what every
    pass draws, see "Visibility"), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
 3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the shadow strength and the forward-light
    candidates (every light except the cube-shadow light) with their linear radiance.
@@ -456,7 +460,8 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    visibility list (the casters in its box; within the light's reach). Models (the LOD they show or fade to), the
    model instances' copies (each the LOD with the larger share, dithered by its own fade), terrain chunks (their
    back faces in the cascades, as the models') and cutout sprites cast; sprites turned toward the light; each
-   caster dithered by its fade.
+   caster dithered by its fade. Then the sky's visibility map (see "Interior lighting"): what keeps the sky out in its
+   box, seen from above.
 5. The normal/flag G-buffer (the camera's models, the LOD with the larger share, the copies the same way, terrain
    chunks and cutout sprites, solid below half their fade) and the AO pre-pass, when AO or outlines run.
 6. The scene pass: clear, atmospheric sky (the sky-view table's glow, with the moonlit sky and light pollution's
@@ -467,9 +472,11 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    instance cells (lit like the models, the lights per cell, both LODs of a copy's band), the camera's terrain
    chunks (the `world_terrain` shader, lit as the models, with up to `WORLD_MAX_FORWARD_LIGHTS` lights per chunk;
    before the sprites, so decals lie on it), the camera's lit sprites
-   (the cutout ones, then decals, then blended and additive ones back to front), light gizmos, and collider wireframes
-   and contact points while a collision world is set. The sky's glow and the models' and lit sprites' reflected light go through the
-   eye's night vision; every lit surface is seen through the haze in front of it. Then, while one is chosen, the haze's
+   (the cutout ones, then decals, then blended and additive ones back to front), light gizmos, the ambient zones'
+   wireframes while that debug view is chosen, and collider wireframes and contact points while a collision world is
+   set. The sky's glow and the models' and lit sprites' reflected light go through the
+   eye's night vision; every lit surface is seen through the haze in front of it (and through interior lighting's debug
+   view while one is chosen). Then, while one is chosen, the haze's
    debug view over the scene (`WorldRenderer_SetHazeView`, see "Haze").
 7. Outlines, then bloom and sun shafts from the (outlined) HDR scene.
 8. Eye adaptation, then the tonemapped point-upscale into the frame target.
@@ -676,9 +683,9 @@ blue, bright ones warm.
   then meets the sky with no haze in front of it). A draw multiplies the scale by its placement's `haze` (an override
   pair on models, model instances, sprites and terrain: [WorldModels.md](WorldModels.md),
   [WorldSprites.md](WorldSprites.md), [Terrain.md](Terrain.md)): 0 shows it as if the air were clear (a sign that must
-  read from far away). Every lit draw sets `hazeMultiplier` (`WorldRendererLighting_SetDrawHaze`), as the uniform keeps
-  the last draw's value. **The hook for interior lighting** (not built yet): an ambient zone's haze multiplier
-  multiplies the draw's where the callers of `WorldRendererLighting_SetDrawHaze` pass it.
+  read from far away). Every lit draw sets `hazeMultiplier` and its ambient zones (`WorldRendererLighting_SetDrawPlace`),
+  as the uniforms keep the last draw's values. The part of the line of sight inside the draw's ambient zones is hazed by
+  their own haze (`InteriorHazeDistance`, see "Interior lighting": a room's still air has none).
 - **The ground haze**: a low layer of mist, `ground_haze_density` x exp(-max(height - `ground_haze_base`, 0) /
   `ground_haze_thickness`), its optical depth along each ray in closed form (`hazeGroundDepth`, C mirror
   `WorldAtmosphere_GetGroundHazeDepth`: the mean density over the heights crossed, so a level ray needs no special case),
@@ -736,8 +743,8 @@ radiances are calibrated on.
   facing down (`sky_ground_albedo` x the sun's and the moon's light on the ground and the sky's irradiance). A surface
   with normal n takes (sky (1 + n.y) / 2 + ground (1 - n.y) / 2) / pi x `ambient_skylight_color` x
   `ambient_skylight_intensity` + the moonless night's own light (`night_light_color` x `night_light_intensity`), times its
-  albedo and AO (`AmbientLight` in `common/lighting`: **the hook** for interior lighting's sky visibility and ambient
-  zones, not built yet). At a clear noon shade is about a tenth
+  albedo and AO (`AmbientLight` in `common/lighting`; under roofs and in rooms all three take the surface's share of the
+  sky and the ambient zones add their own light: see "Interior lighting"). At a clear noon shade is about a tenth
   of sunlit ground (the default air is clear; hazier air brightens it), and walls facing away from the sun get the
   ground's bounce.
 - **The irradiance table** (`world_atmosphere_irradiance`, `shaders/atmosphere/irradiance.frag`): 65 x 32 RGBA16F, the
@@ -782,9 +789,10 @@ radiances are calibrated on.
   alike.
 - **The scene luminance** (`WorldSkyLight_GetSceneLuminance`): the ambient's luminance on a white surface facing up
   plus 0.40 (`WORLD_SKY_LIGHT_DIRECTIONAL_ADAPT_WEIGHT`) of the sun's and the moon's light, 0.371 at a clear noon in
-  the default haze. The eye adapts to the picture ("Eye adaptation"): this sets its anchor, and its split into
-  the daylight's share and the night lights' (`WorldSkyLight_GetDayLuminance`) is how the eye and night vision read the
-  game's light on the real scale (`NightVision_GetFieldLuminance`, "Night vision").
+  the default haze. The eye adapts to the picture ("Eye adaptation"): this, as interior lighting leaves it at the
+  camera (the light the eye is in), sets its anchor, and its split into the daylight's share and the night lights'
+  (`WorldSkyLight_GetDayLuminance`) is how the eye and night vision read the game's light on the real scale
+  (`NightVision_GetFieldLuminance`, "Night vision").
 - **The sun's disc** keeps its look on screen whatever the exposure: its radiance is `SUN_DISC_RADIANCE` (22,
   `world_sky`; C twin `WORLD_ATMOSPHERE_SUN_DISC_RADIANCE`) x `sun_color` x `sun_intensity` x 1.08 / the exposure (the
   eye's, before the frame's own is set; `SUN_DISC_SCREEN_EXPOSURE`), so the setting disc stays orange while the
@@ -798,6 +806,87 @@ radiances are calibrated on.
 - **Cost** (GTX 980 Ti): the values row 0.004 ms with the haze on, 0.0125 ms alone; the lit terrain
   about 0.06 ms more (5 to 8 %); the irradiance table 0.235 ms when the air changes; the C mirror 2.3 microseconds a
   frame.
+
+**Interior lighting** (the pure maths `source/WorldInterior.{h,c}`, tested in `tests/WorldInteriorTests.c`; the
+renderer's parts `source/WorldRendererSkyVisibility.c` and `source/WorldRendererInterior.c`; the lit shaders' part
+`shaders/common/interior.glsl`, which `common/lighting` includes). Roofs keep the sky's light out, rooms light
+themselves, and the eye adapts indoors.
+- **The sky's visibility map**: a top-down depth map around the camera, 1024 x 1024 texels over 96 m (9.4 cm texels)
+  and 1000 m deep (from 500 m above the camera to 500 m below), its centre snapped to whole texels in double, so it
+  stands still in the world while the camera moves. After the shadows it draws what keeps the sky out in its box (its
+  visibility list: models and instance cells whose `occludes_sky` is on, a world model's render setting that
+  placements override ([WorldModels.md](WorldModels.md)), and every terrain chunk, whether they cast shadows or not,
+  each dithered by its fade), from above, both faces, with the cascades' depth shaders. The lit programs read it on
+  unit 7.
+- **A surface's share of the sky.** A surface reads the map around the place it faces, 1.5 m in front of a steep one
+  (its sky lies on its side) and the point itself on a flat one, placed by its geometric normal (never a normal map's,
+  which would jitter it; a lit billboard sprite as a thing standing there, facing up, since its quad turns with the
+  camera; a card, a fixed sprite or decal, by its own facing): a centre tap with 4 taps 0.25 m around it (is the place itself open?) and 8 taps 1.5 m
+  around it (how much sky lies around?). A tap is covered when the map holds something above the surface there: above
+  both its own height and its tangent plane extended to the tap, plus 0.05 m (upright) to 0.25 m (facing up), so a
+  slope's uphill side, a curb or a pebble is no roof, and the top of a wall under a thin roof is as covered as the
+  rest of it; a surface facing down is covered by anything at or above its own height (a roof's underside lies under
+  the roof). The visibility is the inner taps' open share times the ring's; the sky's ambient, the ground's bounce and
+  the night's own light take 1 - 0.85 (1 - visibility) of themselves (`INTERIOR_SKY_FLOOR`, 0.15: the light doors and
+  windows let in). The sun and the moon are the shadows' to keep out. The debug view shows the share on every lit
+  surface.
+- **What the map cannot tell**: a wall from an open side under the same roof. So a room's floor and walls keep only the
+  floor's share whatever their windows, and the ground under deep eaves, a carport's floor and what lies under a desk
+  or a table darken as a room does (about 12 % under the test world's desk); a facade under its eaves, whose place lies
+  in front of them, keeps most of its sky. Light that comes in sideways, through doors and windows, is not in the map:
+  only the floor stands for it. The ring is coarse: within 1.5 m of anything that rises more than the bias (a bench, a
+  crate, a car) open ground loses the taps that land on it (up to 3/8 of its ring), more than the sky such a thing
+  hides; and in a space narrower than the step in front of a steep surface (1.5 m: a closet, a narrow corridor along an
+  outside wall) a wall's faced place can land outside, beyond the opposite wall, so the wall keeps sky light. Toward the
+  map's edge, from 33 to 45 m from the camera (horizontally), the visibility
+  fades to open, so no hard edge sweeps over shaded ground as the map moves with the camera; outside it everything is
+  open.
+- **Ambient zones** (`ambient_zone` components, [WorldData.md](WorldData.md)): boxes or spheres that set a room's own
+  light. The render cache lists, in render space, those of shown objects that have an inside. A lit draw takes at most
+  4 (`MAX_AMBIENT_ZONES`), those whose inside reaches its sphere, the highest priorities first, then the nearest; per
+  fragment they are laid over each other by priority, each group of equal priority blended by its members' weights and
+  covering what lies under it by its strongest member's. A zone's weight rises from 0 at its surface to 1 at its blend
+  distance inward (0.1 m by default), and a surface on or inside it that faces into it takes it whole; more than 1 cm
+  beyond its surface nothing does. A room's zone that reaches its blend distance into the walls, floor and ceiling (the
+  walls' middle) lights everything in the room whole and none of the walls' outside faces; one that ends at the walls'
+  inner faces still lights the walls (they face into it), but what stands within its blend distance of them takes only
+  the fade (a desk against a wall). Inside, a surface takes the zone's own light (its colour, made linear, times its
+  intensity, per unit of albedo, times the AO) and the sky's ambient (after the visibility) times its sky scale.
+- **The default light**: 0.02 (`WORLD_AMBIENT_ZONE_DEFAULT_INTENSITY`), about the 500 lux of a lit office: in the
+  default warm colour a white surface shows 0.013, where a clear noon's sky gives one facing up 0.07 and the sun 0.25
+  more, a lamp 0.06 at 2 m and a moonless night 0.005, so a lit room glows from the street at night and the street
+  looks dark from inside.
+- **The haze inside**: the part of the line of sight inside a draw's zones is hazed by their haze (0, a room's still
+  air: nothing in front of a wall across the room). A zone counts for a fragment only when its draw takes it; zones
+  that overlap on the line of sight each take their stretch off, whatever their priorities; a haze above 1 adds the
+  outside air's light (the volume's in-scatter), not the room's; and the outlines fade by the whole distance's haze
+  (the outline pass knows no zones), which shows only in thick air (a mist, a long `aerial_distance_scale`).
+- **The eye indoors.** The game measures how open the camera's surroundings are to the sky
+  (`WorldCollision_GetSkyOpenness`: 13 rays spread like the sky's light on a surface facing up; the test frame casts
+  them 30 m against the world and prop layers in `PrepareRender`) and hands it to `WorldRenderer_SetCameraOpenness`
+  (without it the camera counts as open). The renderer eases it and the zones at the camera (4 a second; the first frame
+  of a world sets them) into the light the eye is in (`WorldInterior_GetCameraLuminance`): the sky's light at the
+  camera, its ambient taken as a surface's by its visibility (the openness) and the zones' sky scale, the sun's and the
+  moon's by the openness, plus the zones' own light, which counts as daylight on the real scale (lamp light). The eye's
+  anchor and real scale and night vision's field follow it, and the zones' exposure bias at the camera multiplies the
+  exposure (`EyeAdaptation_GetBiasedExposure`). Inside the test room at noon the eye's light is 0.024 against the sky's
+  0.371, and looking out of its doorway the metered exposure is 7 (1.2 in the open start view): the room is seen well
+  lit and the doorway blows out, as for an eye or a camera. At night the room's 0.014 is above the street's 0.006.
+- **A/B and debug**: `WorldRenderer_SetInteriorLightingEnabled` (keypad 9 in the test frame): off, every surface
+  takes the whole sky's light, no zone applies, no map is drawn and the eye takes the sky's light at the camera, the
+  picture of the open sky's lighting exactly. `WorldRenderer_SetInteriorView` (keypad 0) shows the zones' wireframes (in
+  their light's hue), or the sky's share on every lit surface (white the whole sky, the floor's share dark grey) with the
+  zones' light over it.
+- **Far from the origin** the map's snapping in double and the taps in render space keep it steady: the test room
+  141 km out shades as at the origin, but for thin slivers at a roof's edge, where the map's texels meet the world at
+  another phase.
+- **Status**: a log line (whether it runs, the map and how many things keep the sky out in it, the zones, the
+  camera's openness and zone weight, the exposure bias, the eye's light against the sky's) and in
+  `WorldRendererStatus`: `IsInteriorLightingEnabled`, `AmbientZoneCount`, `SkyOccluderCount`, `CameraOpenness`,
+  `CameraZoneWeight`, `CameraSceneLuminance`, `ExposureBias` and `InteriorView`; the features "sky visibility" and
+  "ambient zones".
+- **Cost** (GTX 980 Ti, 1280 x 720): the map 0.14 to 0.25 ms; the lit models about 0.12 ms more (the taps and the
+  zones per fragment), the terrain and the sprites up to 0.04 ms more.
 
 **Night sky.** The pure maths is in the private `source/NightSky.{h,c}` (tested in `tests/NightSkyTests.c`); the GLSL
 the passes share is `shaders/common/night_sky.glsl`.
@@ -911,7 +1000,9 @@ private `source/NightVision.{h,c}` (tested in `tests/NightVisionTests.c`; its he
   0.5; the full blue looks like a film's day-for-night filter, Krawczyk's own tint reads violet), at the same luminance,
   so the night's tuned brightness does not change.
 - **Which luminance.** The larger of the pixel's own and the field luminance: the light the sky gives the whole scene
-  (the sun, the moon, the ambient; lamps do not enter it). It is read in two parts
+  (the sun, the moon, the ambient; lamps do not enter it), as interior lighting leaves it at the camera, plus the
+  rooms' own light (the light the eye is in: see "Interior lighting"), which counts as daylight (lamp light, real light):
+  a lit room at night is seen in colour. It is read in two parts
   (`NightVision_GetFieldLuminance`, the frame's `NightVisionField`): the daylight (the sun's and its sky's light) is on the
   real scale, linearly (the noon's 0.371 stands for 5000 cd/m^2), while the night's lights (the moon, the town, the
   moonless night's own light) are raised for play and go through the power law; their real luminances add. So the
@@ -930,9 +1021,8 @@ private `source/NightVision.{h,c}` (tested in `tests/NightVisionTests.c`; its he
 - **Switches.** The world's `NightVisionStrength` (1 the eye, 0 colourful nights: a long-exposure photo) and
   `NightVisionBlueShift`; the renderer toggle `WorldRenderer_SetNightVisionEnabled` (V in the test frame) for A/B.
   Cost: a `pow` per sky pixel and per lit fragment.
-- **Not modelled.** The rods' slow dark adaptation (minutes; the vision follows the sky's light at once), a lit
-  interior at night (its dark corners would grey: its light is not part of the field; revisit with interiors), the
-  loss of sharpness in the dark.
+- **Not modelled.** The rods' slow dark adaptation (minutes; the vision follows the light at once) and the loss of
+  sharpness in the dark.
 
 **Sun and moon shadows.** Two orthographic cascades around the camera (2048² depth textures), their centres snapped to
 their texel grids so shadow edges stand still while the camera moves (see "Render space"): NEAR (32 m, 1.6 cm texels,
@@ -992,8 +1082,9 @@ camera's meter does:
   drag the eye far below the light its ground is seen in. A pixel-pack buffer and a fence per copy (three in flight)
   bring the blocks to the CPU a frame or two later, never waiting; the C side weighs them toward the middle of the view
   (a Gaussian 0.35 view heights wide) into the view's log-average luminance.
-- **The anchor.** 0.11 (`EYE_ADAPTATION_ANCHOR_SHARE`) of the scene luminance at the camera: the log-average an open
-  view has under the sky's light (measured on the test world by day and by night). The eye starts there, and stays
+- **The anchor.** 0.11 (`EYE_ADAPTATION_ANCHOR_SHARE`) of the scene luminance at the camera (the light the eye is in:
+  the sky's in the open, a room's indoors, see "Interior lighting"): the log-average an open view has under the sky's
+  light (measured on the test world by day and by night). The eye starts there, and stays
   there where the meter is unavailable. A dark interior opens the eye at most 6 stops, a bright view closes it at most
   2 (closing it further would grey a white platform or a lamp-lit square at night); a black corner, the sun's disc or a bulb count no
   further. A window around the eye's own level would chase a black sky down without end.
@@ -1062,10 +1153,12 @@ get no AO and no outlines.
   is 0; the status adds the scale, the ground haze's density and the debug view), "reversed depth" the camera's reversed
   depth (see "Render space": unavailable without clip control, logged once, when the camera keeps raylib's
   projection and its 4 km; a camera pass's 32-bit depth that cannot be made is logged once and the pass's target fails
-  as any target does). It also counts what the camera's passes
+  as any target does), "sky visibility" the sky's visibility map (unavailable without the cascades' depth shader or its
+  target, inactive while interior lighting is off), "ambient zones" the zones' light (active while interior lighting
+  runs and a zone is listed). It also counts what the camera's passes
   drew and what culling and fading removed (see "Visibility"). The renderer logs the status once after its first
-  render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame), with a line for the atmosphere's tables
-  and one for the haze.
+  render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame), with a line for the atmosphere's tables,
+  one for the haze and one for interior lighting.
 
 ### Renderer structure (keep it clean)
 
@@ -1078,8 +1171,10 @@ get no AO and no outlines.
 | `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes; `WorldRendererGeometry_PrepareMaterial` builds each, the instanced draws use it too), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette; the unlit fallback's skinned shader; the LOD tinting, light gizmos, the pixelation filter. |
 | `WorldRendererInstances.c` | The model instances' copies (see "Model instances"): each entry's records buffer, the G-buffer's and the shadows' instanced twins (the lit one is the lighting file's), the instanced draw that mirrors `DrawMesh`, each pass's cells instanced or one at a time (the A/B and every fallback), the status line. |
 | `WorldRendererSprites.c` | The sprites: the unit quad, the lit sprite shader, each frame's sprite matrices (camera, cascades' light, cube's lamp) and transparent draw order, the lit cutout / decal / sorted transparent draws. The G-buffer and shadow passes draw sprites with this file's quad and matrices. |
-| `WorldRendererLighting.c` | The PBR programs (rigid, skinned, instanced: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: every PBR program, the sprite shader and the terrain shader, the night vision's among them), forward point lights, per-material factors. |
-| `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow (models, terrain chunks, and cutout sprites through alpha-tested depth shaders). |
+| `WorldRendererLighting.c` | The PBR programs (rigid, skinned, instanced: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: every PBR program, the sprite shader and the terrain shader, the night vision's and interior lighting's among them), forward point lights, each lit draw's place (`WorldRendererLighting_SetDrawPlace`: its haze multiplier and its ambient zones), per-material factors. |
+| `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow (models, terrain chunks, and cutout sprites through alpha-tested depth shaders); its model casters' draw (`WorldRendererShadows_DrawModelCasters`) also draws the sky's visibility map. |
+| `WorldRendererSkyVisibility.c` | The sky's visibility map (see "Interior lighting"): its depth target, its frame (the map's matrices and box), its pass (what keeps the sky out, from above, both faces, with the cascades' depth shaders) and its bind on unit 7. |
+| `WorldRendererInterior.c` | Interior lighting's other parts: the lit shaders' interior uniforms (`WorldRendererInteriorLocations`), the camera's interior for the eye (its openness and the ambient zones at it, eased), each lit draw's zones (through `WorldRendererLighting_SetDrawPlace`), the zones' wireframes (the debug view), the status line. |
 | `WorldRendererGBuffer.c` | The normal/flag G-buffer (models, terrain chunks and cutout sprites) and the AO pre-pass. |
 | `WorldRendererTerrain.c` | The terrain's chunks ([Terrain.md](Terrain.md)): their GPU meshes, kept by the renderer per terrain asset and chunk and uploaded again when a chunk's revision changes (all of them when the chunk layout changes; those of terrains no entry resolves any more unloaded); the `world_terrain` shader and its lit draw (per-chunk lights and dither; the unlit fallback with raylib's default shader); the G-buffer's and the shadow passes' draws with their shared shaders; the chunk key (the minus key: a colour per chunk and the wireframe); each terrain's materials as texture arrays (made once per terrain through `GLTextureArray`, bound on units 9 to 11), its materials' and rules' uniforms, each chunk's wrapped offsets, and the terrain views (the equals key). |
 | `GLTextureArray.c` (not a pass) | Texture arrays (`GL_TEXTURE_2D_ARRAY`): direct OpenGL calls, through the function pointers raylib's loader resolves (`rlGetProcAddress`), with their GL constants; private (`source/GLTextureArray.h`). |
@@ -1095,6 +1190,7 @@ get no AO and no outlines.
 | `WorldVisibility.c` (with the cache, not a pass) | The frame's visibility lists (per pass, the entries it draws, and every entry's fades) and the dither's C mirror; see "Visibility". |
 | `WorldLod.c` (with the cache, not a pass) | LOD selection and the cross-fade's state; the cache's `WorldRenderCache_UpdateLods` runs it per entry; see "LODs". |
 | `WorldAtmosphere.c` (pure maths, not a pass) | The atmosphere's model: the air from the environment, the stale check and the tables' build record, the view height, the tables' layout (the C mirror of `common/atmosphere`); see "Atmosphere". |
+| `WorldInterior.c` (pure maths, not a pass) | Interior lighting's model: zones in render space, their weights, the draws' choice and the composition, the haze inside, the sky's visibility map and its taps, the camera's interior and the light the eye is in (the C mirror of `common/interior`); see "Interior lighting". |
 | `WorldRenderSpace.c` (pure maths, not a pass) | The frame's origin and its rotation-only view and projection (`BuildFrame` calls it; also the reversed infinite projection and its inverse), the sky shader's ray in C, the cascades snapped to their texels and their grids from frame to frame (`WorldRendererShadows_PrepareFrame` calls it); see "Render space". |
 
 The renderer keeps receiving features, so:
@@ -1122,12 +1218,12 @@ The renderer keeps receiving features, so:
   | Units | Who | What |
   |---|---|---|
   | 0–11 | raylib's `DrawMesh` | A drawn material's maps, map i on unit i (`GL_TEXTURE_2D`, cubes on 7–9); the 2D batch uses 0–4. Free in a program whose materials carry no maps. |
-  | 7–8 | the sky pass and the stars; the lit programs (models, sprites, terrain) | In the sky pass and the stars 7 the transmittance table, 8 the sky-view table (`sampler2D`, `WorldRendererTextureUnit_Atmosphere*`). In the lit programs 8 the haze's volume (`sampler2D atmosphereVolume`, `WorldRendererTextureUnit_HazeVolume`, also for the sky's light by height in its last row, while the haze is off too: they read no table; their transmittance sampler on 7 is declared and unused, so 7 is free there for a `sampler2D` of the frame). raylib binds only cube maps there (`MATERIAL_MAP_CUBEMAP`, `_IRRADIANCE`, filled by no material of ours) and the 2D batch only 0–4, so what a pass binds stays bound; the lit passes bind the volume on 8 with their frame textures, the sky pass and the stars the tables before their draws (the sky pass and the outlines take the volume through `SetShaderValueTexture`). Units chosen because they are free in every lit program, the terrain's included, with no capability check (units 16 and up would have needed GL_MAX_TEXTURE_IMAGE_UNITS above 16). |
+  | 7–8 | the sky pass and the stars; the lit programs (models, sprites, terrain) | In the sky pass and the stars 7 the transmittance table, 8 the sky-view table (`sampler2D`, `WorldRendererTextureUnit_Atmosphere*`). In the lit programs 7 the sky's visibility map (`sampler2D skyVisibilityMap`, `WorldRendererTextureUnit_SkyVisibility`; their transmittance sampler there is declared and unused: they read no table) and 8 the haze's volume (`sampler2D atmosphereVolume`, `WorldRendererTextureUnit_HazeVolume`, also for the sky's light by height in its last row, while the haze is off too). raylib binds only cube maps there (`MATERIAL_MAP_CUBEMAP`, `_IRRADIANCE`, filled by no material of ours) and the 2D batch only 0–4, so what a pass binds stays bound; the lit passes bind the map on 7 and the volume on 8 with their frame textures, the sky pass and the stars the tables before their draws (the sky pass and the outlines take the volume through `SetShaderValueTexture`). Units chosen because they are free in every lit program, the terrain's included, with no capability check (units 16 and up would have needed GL_MAX_TEXTURE_IMAGE_UNITS above 16). |
   | 9–11 | the terrain program only | Its material arrays (`sampler2DArray`: albedo and height, normal, roughness and AO). The terrain draws with no raylib maps, and an array sampler reads only a unit's `GL_TEXTURE_2D_ARRAY` target, which nothing else binds, so the models' maps on the same units never meet them. |
   | 12–15 | every lit program | The frame's textures: the near and far cascades, the cube shadow, the screen's AO. Full. |
 
-  The sky visibility map (interior lighting) and the wetness and puddle masks (rain and wetness) will need units in the
-  lit programs too, and 12–15 are full: a frame texture for the model programs takes a unit below 12 that no material map the models
+  The wetness and puddle masks (rain and wetness) will need units in the lit programs too, and 7, 8 and 12–15 are
+  taken: a frame texture for the model programs takes a unit below 12 that no material map the models
   use binds (the PBR materials use maps 0, 1, 2 and 5: albedo, the packed ORM, normal, emission; raylib's glTF import
   also fills 3 (roughness) and 4 (occlusion) and its OBJ import 6 (height) when the file has those maps, so 10 and 11
   are the safe ones there), and the terrain program keeps 9–11 for its arrays (units 0–6 are free in it). Beyond that,
@@ -1210,8 +1306,10 @@ compositing, see "Haze"; used by `common/lighting`, `world_sky`, `world_stars` a
 (air mass, extinction and the skyglow profile, used by `world_sky` and `world_stars`) and `common/night_vision` (the eye's night vision: the rods' share
 and the blend into their grey; used by `world_sky` and `common/lighting`), `common/lighting` (the frame's lighting: its
 uniforms, the BRDF and its wrapped variant, the cascades' shadow, point lights and the cube shadow, the screen AO, the
-night vision and the haze through `common/haze`: `ApplyAerialPerspective`; used by `world_pbr`, `world_terrain` and
-`world_sprite`), `common/distance_packing` (the cube shadow's
+night vision, the haze through `common/haze`: `ApplyAerialPerspective`, and interior lighting through
+`common/interior`; used by `world_pbr`, `world_terrain` and `world_sprite`), `common/interior` (interior lighting: the
+ambient zones a draw takes, the sky's visibility map's taps, the haze inside zones and the debug view, see "Interior
+lighting"; used by `common/lighting`), `common/distance_packing` (the cube shadow's
 packed distance; used by `world_cube_depth`, `world_sprite_cube_depth` and `common/lighting`), `common/dither` (the
 dithered fades: the draw's fade and its part of a LOD cross-fade; used by every world geometry shader, see
 "Visibility") and `common/skinning` (the bone attributes and the palette, and a vertex's blended rows; used by
@@ -1254,9 +1352,9 @@ world models: two cubes behind the centre row, `variant_cube_left` (red) and `va
 lamp are placement overrides (`overrides_omit_pixelation`, `overrides_shadow_tier`). Its LODs: a row of six
 `lod_test` spheres (`lod_test_1` to `_6`, ids 25 to 30) along the left edge of the ground, at x = 8 from z = -6 to 9,
 switching at 13 and 16 m, and beside it `lod_test_forced` (id 31, LOD 2 forced) and `lod_test_own_distances` (id 32, its
-own switch distances 3 and 6 m). Its collision ([WorldCollision.md](WorldCollision.md)): 36 colliders (the slab,
+own switch distances 3 and 6 m). Its collision ([WorldCollision.md](WorldCollision.md)): 43 colliders (the slab,
 the cubes, the desk's parts, the LOD spheres' hulls, the PBR cube's mesh, the cup's and the tree trunk's cylinders, the
-sign's plane), a `door` (id 33, the `test_door` world model with a `closed` and an `open` set; movable, a
+sign's plane, the test room's walls and roof), a `door` (id 33, the `test_door` world model with a `closed` and an `open` set; movable, a
 kinematic mover that stops when blocked) on the right of the start view, and a `desk_trigger_zone` (id 34, an own box,
 a trigger) at the end of the desk's slide; the desk is movable. Its moving and pushing content (boxes, the `test` world model's `bounds`, every
 crate pushable and movable): a `pusher_wall` (id 35, kinematic) behind a row of five crates `row_crate_1` to `_5` (ids 36 to 40) on
@@ -1266,6 +1364,10 @@ static posts (`door_post_west`, `door_post_north`, ids 43 and 44) in the door's 
 a clip of its own: `humanoid_showcase` (id 45, x = -1.9: idle with a 0.3 s fade, the one the 5 key steps),
 `humanoid_walker` (id 46, x = -5.2: walk from a quarter of the way in), `humanoid_short_waver` (id 47, x = -2.8: the
 short figure waving, looped by its placement's override) and `humanoid_runner` (id 48, x = -6.1: run at half speed).
+Its interior lighting (see "Interior lighting"): a `test_room` (id 54) 15 m in front of the start view, a pivot at
+(1, 0.05, 8) whose children are four walls with a doorway facing the start view and a flat roof (`test` cubes with
+colliders, ids 55 to 61), around its ambient zone (`room_zone`, id 62: to the walls' middle and 0.1 m past the floor and
+the ceiling, still air, the default light).
 Edit the file and restart to change the test world.
 The frame owns a `WorldCollision` too, created after the world, and a `WorldCharacters` (the character
 system, [Characters.md](Characters.md)) created after that, with its test characters (the private
@@ -1288,7 +1390,9 @@ world-matrix step), so the renderer reads cached matrices, and last logs the cha
 starting or ending an action) and updates the player's look target. **`PrepareRender`** (GameFrame.md),
 once per shown frame: the pose step (`WorldAnimation_Pose`), `World_UpdateTransforms` again (what the poses moved: held
 items), then, in walk mode, the camera on the player's eyes (its body's eyes socket as posed) and the player named as
-the renderer's first-person object (`WorldRenderer_SetFirstPersonObject`; 0 out of walk mode).
+the renderer's first-person object (`WorldRenderer_SetFirstPersonObject`; 0 out of walk mode); last how open the
+camera's surroundings are to the sky (`WorldCollision_GetSkyOpenness`, 30 m against the world and prop layers,
+triggers left out) for interior lighting (`WorldRenderer_SetCameraOpenness`).
 **Game time:** the clock starts from the world environment's date and time of day (noon, 2026-10-18) at time scale
 720 (a 2-minute day; the clock's own default is 72). Every `Update` advances it,
 logs a new day when it crosses midnight, and writes its time of day and date into the environment, so the sky shows
@@ -1301,8 +1405,8 @@ mouse wheel (the flycam's speed, up faster and down slower, three notches to a d
 6 m/s at start; the sprint key still multiplies it by 3; each change is logged and the I key's camera line shows it;
 not while walking, and the UI takes it first while the pointer is over a widget) and the debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
-digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/` and the keypad's 1 to 8 are taken already; the keypad's 9 and 0 are
-free. Leave F12 free: raylib's `EndDrawing`
+digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/` and the keypad's digits are taken already; the keypad's
+operators are free. Leave F12 free: raylib's `EndDrawing`
 takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
@@ -1318,6 +1422,9 @@ takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png`
   `WorldTest: haze view: the volume's in-scatter at slice 20 (3420.0 m).`), keypad 6 the environment's
   `aerial_distance_scale` (1, 5, 10), keypad 7 a morning mist (`ground_haze_density` 0.02, `ground_haze_thickness` 15,
   or no ground haze), keypad 8 the haze strength (`fog_strength` 1 or 0: clear air); each logged;
+- **interior lighting (see "Interior lighting"):** keypad 9 switches it off and on (the A/B: off, every surface takes
+  the whole sky's light, no ambient zone applies and the eye takes the sky's light as in the open), keypad 0 steps its
+  debug view (off, the ambient zones' wireframes, the sky's share on every lit surface); each logged;
 - **the moon and the seasons:** F pins the moon full (`MoonPhaseSource` fixed at 0.5) and gives it back to the
   calendar; Y switches the seasons (`AreSeasonsEnabled`). Every clock and moon log line carries the moon: `WorldTest:
   next day: Mon 2026-10-19 12:00:00; first quarter (phase 0.27, 59% lit, from the calendar).`;

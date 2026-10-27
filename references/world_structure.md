@@ -97,7 +97,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `mobility` | `"static"` / `"movable"` | |
 | `tags` | array of keys | See "Tags and data". |
 | `data` | object | See "Tags and data". |
-| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`, `animator`, `terrain`, `model_instances`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component`, `animator_component`, `terrain_component`, `model_instances_component` in `agents/WorldData.md`, `agents/Characters.md`, `agents/Animation.md` and `agents/Terrain.md`). |
+| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`, `animator`, `terrain`, `model_instances`, `ambient_zone`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component`, `animator_component`, `terrain_component`, `model_instances_component`, `ambient_zone_component` in `agents/WorldData.md`, `agents/Characters.md`, `agents/Animation.md` and `agents/Terrain.md`). |
 
 An object has at most one component of each type. A block whose values are all defaults is still written (`"light":
 {}`): the component is there.
@@ -118,6 +118,7 @@ are no "inherit" values.
 | The shadow cascades | `overrides_shadow_tier` | `shadow_tier`: `both` (default), `near`, `far` |
 | Casting shadows | `overrides_casts_shadows` | `casts_shadows` (default true) |
 | The haze in front of it | `overrides_haze` | `haze`: in [0, 1000], times the air's haze (default 1; 0 as if the air were clear: a sign that must read from far away) |
+| Keeping the sky's light off what lies under it | `overrides_occludes_sky` | `occludes_sky` (default true: a roof, a wall, a canopy; false for grass, small plants, people and poles) |
 | The draw distance | `overrides_draw_distance` | `draw_distance`: metres, above 0 (default 600) |
 | Keeping it fixed against the quality setting | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` (default false) |
 | The LOD switch distances | `overrides_lod_distances` | `lod_distances`: metres, finest LOD first, each above 0 and above the one before, at most 8 (default `[]`) |
@@ -358,6 +359,34 @@ half as far:
     "overrides_casts_shadows": true,
     "casts_shadows": false,
     "draw_distance_multiplier": 0.5
+}
+```
+
+### The ambient zone block
+
+The `ambient_zone` component is a volume that sets a room's own light (`agents/WorldData.md`, "Ambient zone component";
+how it lights in `agents/WorldRuntime.md`, "Interior lighting"): a box or a sphere around the object's position, turned
+and scaled with the object, usually a child of the building it lights.
+
+| Key | Value (default) | |
+|---|---|---|
+| `shape` | `box` or `sphere` (`box`) | Its shape. |
+| `half_extents` | three numbers, each >= 0 ([2, 1.5, 2]) | A box's half sizes along the object's axes, in its own units. |
+| `radius` | >= 0 (2) | A sphere's radius, in the object's own units. |
+| `blend_distance` | metres, >= 0 (0.1) | How far inward from its surface it fades in; its light never reaches past its surface. Make a room's zone reach this far into its walls, floor and ceiling (to the walls' middle), and everything in the room takes its whole light. |
+| `ambient_color` | a colour (`#ffc896`, a warm white) | The colour of the room's own light. |
+| `ambient_intensity` | >= 0 (0.02) | Its strength, as a white surface shows it in the game's light units (0.02 a lit office, 0.004 a dim living room; a clear noon's sky gives a surface facing up 0.07). |
+| `sky_ambient_scale` | >= 0 (1) | Times the sky's light inside, after what the roof keeps out (0: a cellar). |
+| `exposure_bias` | stops, in [-8, 8] (0) | Added to the eye's exposure while the camera is inside. |
+| `priority` | an integer (0) | Where zones overlap the higher wins; equal ones blend. |
+| `haze` | in [0, 1000] (1) | Times the haze of the part of a view inside it (0: a room's still air). |
+
+The test world's room (object 62, a child of the room's pivot: to its walls' middle and 0.1 m past its floor and
+ceiling):
+```
+"ambient_zone": {
+    "half_extents": [1.9, 1.4, 1.7],
+    "haze": 0.0
 }
 ```
 

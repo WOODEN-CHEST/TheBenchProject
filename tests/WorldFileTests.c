@@ -8,6 +8,7 @@
 #include "NamespacedKey.h"
 #include "PropertyDescriptor.h"
 #include "World.h"
+#include "WorldAmbientZoneComponent.h"
 #include "WorldAnimatorComponent.h"
 #include "WorldTerrainComponent.h"
 #include "WorldColliderComponent.h"
@@ -1533,7 +1534,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 53U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 62U);
             // The terrain: one object placing the placeholder terrain around the ground slab.
             WorldComponent* Ground = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 51U, WorldComponentType_Terrain, &Ground)
@@ -1614,12 +1615,20 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                 TEST_CHECK(run, (Offer != NULL) && (Offer->Type == DataType_String)
                     && AreNamesEqual(Offer->StringValue, (const unsigned char*)Offers[Index].Action));
             }
-            // The collision examples: 36 colliders, among them a door of two sets, a trigger zone where the desk
+            // The collision examples: 43 colliders, among them a door of two sets, a trigger zone where the desk
             // slides, a pushing wall, a row of five pushable crates, its stop, a crate pinned in a corner of two posts
-            // in the door's swing, the bench and the coffee cup; the door turns, so it is movable.
+            // in the door's swing, the bench, the coffee cup and the test room's walls and roof; the door turns, so it is
+            // movable.
             size_t ColliderCount = 0U;
             World_GetComponents(&Loaded, WorldComponentType_Collider, &ColliderCount);
-            TEST_CHECK(run, ColliderCount == 36U);
+            TEST_CHECK(run, ColliderCount == 43U);
+            // The test room: its ambient zone, a child of the room filling it, with still air.
+            WorldComponent* RoomZone = NULL;
+            WorldObject* RoomZoneObject = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 62U, WorldComponentType_AmbientZone, &RoomZone)
+                && World_TryGetObject(&Loaded, 62U, &RoomZoneObject)
+                && (WorldObject_GetParentId(RoomZoneObject) == 54U)
+                && (WorldAmbientZoneComponent_GetHaze(WorldAmbientZoneComponent_FromComponent(RoomZone)) == 0.0f));
             WorldObject* Door = NULL;
             TEST_CHECK(run, World_TryGetObject(&Loaded, 33U, &Door)
                 && (WorldObject_GetMobility(Door) == WorldMobility_Movable));

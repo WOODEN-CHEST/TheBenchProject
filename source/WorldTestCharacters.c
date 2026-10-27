@@ -183,8 +183,13 @@ static uint64_t AddBox(WorldTestCharacters* self, uint64_t parent, const char* n
     WorldComponent* Component = NULL;
     if (Check(self, World_AddComponent(self->_world, Id, WorldComponentType_Model, &Component), "adding a body model"))
     {
-        Check(self, WorldModelComponent_SetWorldModel(WorldModelComponent_FromComponent(Component),
-            (const unsigned char*)u8"test"), "naming the body model");
+        WorldModelComponent* Body = WorldModelComponent_FromComponent(Component);
+        Check(self, WorldModelComponent_SetWorldModel(Body, (const unsigned char*)u8"test"), "naming the body model");
+        // An animal keeps no sky off the ground under it (its shade is the AO's and the shadows'), as the humanoids'
+        // world models say for people.
+        Check(self, WorldModelComponent_SetOverridden(Body, WorldModelSetting_OccludesSky, true),
+            "overriding the body's sky");
+        Check(self, WorldModelComponent_SetOccludesSky(Body, false), "keeping no sky out");
     }
     return Id;
 }

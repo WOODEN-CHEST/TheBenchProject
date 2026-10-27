@@ -8,6 +8,7 @@
 #include "WorldAnimatorComponent.h"
 #include "WorldTerrainComponent.h"
 #include "WorldModelInstancesComponent.h"
+#include "WorldAmbientZoneComponent.h"
 
 
 // Static functions.
@@ -59,6 +60,8 @@ const WorldComponentTypeInfo* WorldComponent_GetStandardTypeInfo(WorldComponentT
             return WorldTerrainComponent_GetTypeInfo();
         case WorldComponentType_ModelInstances:
             return WorldModelInstancesComponent_GetTypeInfo();
+        case WorldComponentType_AmbientZone:
+            return WorldAmbientZoneComponent_GetTypeInfo();
         case WorldComponentType_Count:
             break;
     }

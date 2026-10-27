@@ -12,30 +12,42 @@
 
 
 // Static functions.
-/* How many cd/m^2 one of the game's light units stands for in this frame's sky light at the camera. */
+/* How many cd/m^2 one of the game's light units stands for in the light the eye is in at the camera (the sky's, as
+ * the camera's openness and the zones at it leave it, plus the zones' own). */
 static double GetRealScale(const WorldRenderFrame* frame)
 {
-    float Day = WorldSkyLight_GetDayLuminance(&frame->SkyLight);
-    return EyeAdaptation_GetRealScale(Day, frame->BaseSceneLuminance - Day);
+    return EyeAdaptation_GetRealScale(frame->CameraDayLuminance,
+        frame->CameraSceneLuminance - frame->CameraDayLuminance);
+}
+
+/* The anchor: the level a view has in the light the eye is in at the camera (indoors, the room's). */
+static float GetAnchor(const WorldRenderFrame* frame)
+{
+    return EyeAdaptation_GetAnchor(frame->CameraSceneLuminance);
 }
 
 /* The eye's level, or the anchor's before the eye has started. */
 static float GetLevel(const WorldRenderer* self, const WorldRenderFrame* frame)
 {
     float Level = EyeAdaptation_GetLevel(&self->_exposure._eye);
-    return isfinite(Level) ? Level : EyeAdaptation_GetAnchor(frame->BaseSceneLuminance);
+    return isfinite(Level) ? Level : GetAnchor(frame);
 }
 
-/* Draws the meter's blocks of @p source, each pixel held within the window around the sky light's anchor, the sky's at
- * least the night's own light (Rec. 709 luminance, as the meter's). */
+/* The exposure for a level, with the zones' bias at the camera. */
+static float GetExposure(float level, const WorldRenderFrame* frame)
+{
+    return EyeAdaptation_GetBiasedExposure(EyeAdaptation_GetExposure(level, GetRealScale(frame)), frame->ExposureBias);
+}
+
+/* Draws the meter's blocks of @p source, each pixel held within the window around the anchor (of the light the eye is in
+ * at the camera), the sky's at least the night's own light (Rec. 709 luminance, as the meter's). */
 static void RenderMeter(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D source)
 {
     WorldRendererExposureState* State = &self->_exposure;
     Shader RayShader = GameShader_GetRaylibShader(State->_shader);
     const float* Night = frame->SkyLight.Night;
     float NightLuminance = 0.2126f * Night[0] + 0.7152f * Night[1] + 0.0722f * Night[2];
-    EyeAdaptationWindow Window = EyeAdaptation_GetWindow(EyeAdaptation_GetAnchor(frame->BaseSceneLuminance),
-        NightLuminance);
+    EyeAdaptationWindow Window = EyeAdaptation_GetWindow(GetAnchor(frame), NightLuminance);
     float Edges[3] = { Window.Low, Window.SkyLow, Window.High };
     SetShaderValue(RayShader, State->_locWindow, Edges, SHADER_UNIFORM_VEC3);
     float DepthMask = self->_scene._isDepthSamplable ? 1.0f : 0.0f;
@@ -64,8 +76,8 @@ void WorldRendererExposure_Load(WorldRenderer* self)
 {
     WorldRendererExposureState* State = &self->_exposure;
     EyeAdaptation_Construct(&State->_eye);
-    // Without any of the shader, the readback's functions, the target or its buffers the eye adapts to the sky's light at
-    // the camera (the anchor) instead: lamps then count for nothing.
+    // Without any of the shader, the readback's functions, the target or its buffers the eye adapts to the light it is in
+    // at the camera (the anchor) instead: lamps then count for nothing.
     State->_shader = WorldRendererCommon_LoadShader(self, LUMINANCE_SHADER_ASSET_NAME);
     if (State->_shader == NULL)
     {
@@ -80,7 +92,7 @@ void WorldRendererExposure_Load(WorldRenderer* self)
     {
         char Message[256];
         snprintf(Message, sizeof(Message), "WorldRenderer: readbacks are unavailable (%s is missing); the eye adapts to "
-            "the sky's light at the camera, not to the picture.",
+            "light at the camera, not to the picture.",
             (State->_readbackApi._missing != NULL) ? State->_readbackApi._missing : "?");
         WorldRendererCommon_WarnOnce(self, &State->_isFailureReported, (const unsigned char*)Message);
         return;
@@ -91,7 +103,7 @@ void WorldRendererExposure_Load(WorldRenderer* self)
     if (!State->_hasTarget)
     {
         WorldRendererCommon_WarnOnce(self, &State->_isFailureReported, (const unsigned char*)u8"WorldRenderer: could not "
-            u8"create the eye's meter target; the eye adapts to the sky's light at the camera, not to the picture.");
+            u8"create the eye's meter target; the eye adapts to the light at the camera, not to the picture.");
         return;
     }
     Error Result = GLReadback_Construct(&State->_readback, &State->_readbackApi, EYE_ADAPTATION_METER_WIDTH,
@@ -100,7 +112,7 @@ void WorldRendererExposure_Load(WorldRenderer* self)
     {
         char Message[384];
         snprintf(Message, sizeof(Message), "WorldRenderer: the eye's meter cannot be read back (%s); the eye adapts to the "
-            "sky's light at the camera, not to the picture.",
+            "light at the camera, not to the picture.",
             (Result.Message != NULL) ? (const char*)Result.Message : "an error");
         WorldRendererCommon_WarnOnce(self, &State->_isFailureReported, (const unsigned char*)Message);
         Error_Deconstruct(&Result);
@@ -125,7 +137,7 @@ bool WorldRendererExposure_IsAvailable(const WorldRenderer* self)
 
 float WorldRendererExposure_GetCurrent(const WorldRenderer* self, const WorldRenderFrame* frame)
 {
-    return EyeAdaptation_GetExposure(GetLevel(self, frame), GetRealScale(frame));
+    return GetExposure(GetLevel(self, frame), frame);
 }
 
 float WorldRendererExposure_Update(WorldRenderer* self, WorldRenderFrame* frame, RenderTexture2D source,
@@ -139,7 +151,7 @@ float WorldRendererExposure_Update(WorldRenderer* self, WorldRenderFrame* frame,
         float Aspect = (frame->SceneHeight > 0) ? (float)frame->SceneWidth / (float)frame->SceneHeight : 0.0f;
         Measurement = EyeAdaptation_Measure(State->_blocks, Aspect);
     }
-    EyeAdaptation_Update(&State->_eye, EyeAdaptation_GetAnchor(frame->BaseSceneLuminance), Measurement, deltaSeconds);
+    EyeAdaptation_Update(&State->_eye, GetAnchor(frame), Measurement, deltaSeconds);
     float Level = GetLevel(self, frame);
     if (State->_isAvailable)
     {
@@ -150,5 +162,5 @@ float WorldRendererExposure_Update(WorldRenderer* self, WorldRenderFrame* frame,
     frame->IsExposureMetered = EyeAdaptation_IsMeasured(&State->_eye);
     frame->AdaptedLuminance = isfinite(Level) ? exp2f(Level) : 0.0f;
     frame->AdaptedRealLuminance = (float)((double)frame->AdaptedLuminance * Scale);
-    return EyeAdaptation_GetExposure(Level, Scale);
+    return GetExposure(Level, frame);
 }

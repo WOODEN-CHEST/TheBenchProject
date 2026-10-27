@@ -16,6 +16,7 @@
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
+#include "WorldAmbientZoneComponent.h"
 #include "WorldTerrainComponent.h"
 #include "WorldModelInstancesComponent.h"
 #include "WorldInstancing.h"
@@ -438,7 +439,7 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
         || !TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"dark_box\", \"lods\": [{\"model\": \"box\", "
             "\"max_distance\": 20}], \"draw_distance\": 50, \"is_draw_distance_fixed\": true, \"render\": {"
             "\"has_outline\": false, \"omit_pixelation\": true, \"shadow_tier\": \"far\", \"casts_shadows\": false, "
-            "\"haze\": 0.5}}")
+            "\"haze\": 0.5, \"occludes_sky\": false}}")
         || ((ModelComponent = AddModel(run, &Fixture.World, "dark_box", Vector3Zero(), (Vector3){ 1.0f, 1.0f, 1.0f }))
             == NULL)
         || !CacheFixture_Sync(run, &Fixture))
@@ -450,7 +451,7 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
     TEST_CHECK(run, (Count == 1) && Models[0].IsDrawn && !Models[0].HasOutline && Models[0].OmitsPixelation
         && (Models[0].ShadowTier == WorldShadowTier_Far) && !Models[0].CastsShadows && (Models[0].DrawDistance == 50.0f)
-        && Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.5f));
+        && Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.5f) && !Models[0].OccludesSky);
 
     // The placement's own values (kept from before) apply once their flags are on; the multiplier always does.
     for (int Setting = 0; Setting < (int)WorldModelSetting_Count; Setting++)
@@ -466,7 +467,8 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
         Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
         TEST_CHECK(run, (Count == 1) && Models[0].HasOutline && !Models[0].OmitsPixelation
             && (Models[0].ShadowTier == WorldShadowTier_Near) && Models[0].CastsShadows
-            && (Models[0].DrawDistance == 60.0f) && !Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.0f));
+            && (Models[0].DrawDistance == 60.0f) && !Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.0f)
+            && Models[0].OccludesSky);
     }
 
     // Overrides off again: the world model's settings, its distance times the multiplier.
@@ -478,7 +480,8 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
     {
         Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
         TEST_CHECK(run, (Count == 1) && !Models[0].HasOutline && (Models[0].ShadowTier == WorldShadowTier_Far)
-            && (Models[0].DrawDistance == 100.0f) && Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.5f));
+            && (Models[0].DrawDistance == 100.0f) && Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.5f)
+            && !Models[0].OccludesSky);
     }
     CacheFixture_Deconstruct(run, &Fixture);
 }
@@ -1600,6 +1603,75 @@ static void ACameraTurningBackTurnsTheFadeAround(TestRun* run)
     CacheFixture_Deconstruct(run, &Fixture);
 }
 
+/* Ambient zones are listed in render space for the sync's origin (subtracted in double, 100 km out too), placed by their
+ * object's world matrix (a parent's too), with their light from their colour (sRGB, made linear) and intensity; a
+ * hidden object's, a disabled ancestor's and a zone with no inside are left out, and listed again once they are shown
+ * or have a size. */
+static void AmbientZonesAreListedInRenderSpace(TestRun* run)
+{
+    CacheFixture Fixture;
+    if (!CacheFixture_Construct(run, &Fixture))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    WorldAmbientZoneComponent* Room = WorldAmbientZoneComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+        WorldComponentType_AmbientZone));
+    WorldAmbientZoneComponent* Hidden = WorldAmbientZoneComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+        WorldComponentType_AmbientZone));
+    WorldAmbientZoneComponent* Flat = WorldAmbientZoneComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+        WorldComponentType_AmbientZone));
+    WorldAmbientZoneComponent* Inner = WorldAmbientZoneComponent_FromComponent(AddComponentObject(run, &Fixture.World,
+        WorldComponentType_AmbientZone));
+    WorldObject* House = NULL;
+    const Vector3Double Far = { 100000.37, 20.5, -100000.53 };
+    bool IsBuilt = (Room != NULL) && (Hidden != NULL) && (Flat != NULL) && (Inner != NULL)
+        && TEST_CHECK_SUCCESS(run, World_CreateObject(&Fixture.World, NULL, &House))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(House, Vector3Double_Add(Far, Vector3Double_Create(-3.0, 0.0,
+            4.0))))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(House, (Vector3){ 0.0f, 0.5f * PI, 0.0f }))
+        && TEST_CHECK_SUCCESS(run, World_SetParent(&Fixture.World, WorldObject_GetId(WorldComponent_GetOwner(&Inner->Base)),
+            WorldObject_GetId(House), false))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(&Inner->Base),
+            Vector3Double_Create(2.0, 1.0, 0.0)))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(WorldComponent_GetOwner(&Room->Base), Vector3Double_Add(Far,
+            Vector3Double_Create(6.0, 1.5, -2.0))))
+        && TEST_CHECK_SUCCESS(run, WorldAmbientZoneComponent_SetAmbientColor(Room, (Color){ 255, 128, 0, 255 }))
+        && TEST_CHECK_SUCCESS(run, WorldAmbientZoneComponent_SetAmbientIntensity(Room, 0.5f))
+        && TEST_CHECK_SUCCESS(run, WorldAmbientZoneComponent_SetPriority(Room, 4))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(WorldComponent_GetOwner(&Hidden->Base), false))
+        && TEST_CHECK_SUCCESS(run, WorldAmbientZoneComponent_SetHalfExtents(Flat, (Vector3){ 2.0f, 0.0f, 2.0f }))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(House, false));
+    if (IsBuilt && TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Far,
+        Fixture.Assets.Manager, Fixture.ModelUser, NULL)))
+    {
+        // Only the room: the hidden one, the flat one and the one in the disabled house are left out.
+        size_t Count = 0U;
+        const WorldInteriorZone* Zones = WorldRenderCache_GetAmbientZones(&Fixture.Cache, &Count);
+        TEST_CHECK(run, (Count == 1U) && IsNear(Zones[0].Center.x, 6.0f) && IsNear(Zones[0].Center.y, 1.5f)
+            && IsNear(Zones[0].Center.z, -2.0f) && (Zones[0].Ambient[0] == 0.5f)
+            && IsNear(Zones[0].Ambient[1], 0.5f * powf(128.0f / 255.0f, 2.2f)) && (Zones[0].Ambient[2] == 0.0f)
+            && (Zones[0].Priority == 4));
+
+        // Shown, given a size, the house enabled: all four, in the world's order; the inner one where its turned parent
+        // puts it (2 m along the house's x, which a quarter turn about Y takes to -Z).
+        TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(WorldComponent_GetOwner(&Hidden->Base), true));
+        TEST_CHECK_SUCCESS(run, WorldAmbientZoneComponent_SetHalfExtents(Flat, (Vector3){ 2.0f, 0.5f, 2.0f }));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetEnabled(House, true));
+        if (TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Far, Fixture.Assets.Manager,
+            Fixture.ModelUser, NULL)))
+        {
+            Zones = WorldRenderCache_GetAmbientZones(&Fixture.Cache, &Count);
+            TEST_CHECK(run, (Count == 4U) && IsNear(Zones[3].Center.x, -3.0f) && IsNear(Zones[3].Center.y, 1.0f)
+                && IsNear(Zones[3].Center.z, 2.0f) && IsNear(Zones[3].Axes[0].z, -1.0f));
+        }
+        WorldRenderCache_Reset(&Fixture.Cache);
+        WorldRenderCache_GetAmbientZones(&Fixture.Cache, &Count);
+        TEST_CHECK(run, Count == 0U);
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
 static void ResetForgetsEveryEntry(TestRun* run)
 {
     CacheFixture Fixture;
@@ -2005,6 +2077,9 @@ static void InstanceEntriesFollowTheirComponents(TestRun* run)
                 TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Instances, WorldModelSetting_Haze,
                     true));
                 TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetHaze(Instances, 2.5f));
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Instances,
+                    WorldModelSetting_OccludesSky, true));
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOccludesSky(Instances, false));
                 break;
             case 3: TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetInstances(Instances, Copies, 2U)); break;
             case 4: TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Owner, false)); break;
@@ -2049,12 +2124,14 @@ static void InstanceEntriesFollowTheirComponents(TestRun* run)
         switch (Step)
         {
             case 0: TEST_CHECK(run, IsResolved && (CellCount == 3U) && (Build == 1U)
-                && (Cells[0].DrawDistance == WORLD_MODEL_DEFAULT_DRAW_DISTANCE) && (Entries[0].Haze == 1.0f)); break;
+                && (Cells[0].DrawDistance == WORLD_MODEL_DEFAULT_DRAW_DISTANCE) && (Entries[0].Haze == 1.0f)
+                && Entries[0].OccludesSky && Cells[2].OccludesSky); break;
             // Moved: the same records, the cells moved with the object.
             case 1: TEST_CHECK(run, IsResolved && (CellCount == 3U) && (Build == LastBuild)
                 && IsNearDouble(Cells[0].WorldMatrix.M[12], 5.0 + 16.0)); break;
             case 2: TEST_CHECK(run, IsResolved && (CellCount == 3U) && (Build == LastBuild)
-                && (Cells[0].DrawDistance == 25.0f) && (Entries[0].Haze == 2.5f)); break;
+                && (Cells[0].DrawDistance == 25.0f) && (Entries[0].Haze == 2.5f) && !Entries[0].OccludesSky
+                && !Cells[0].OccludesSky && !Cells[2].OccludesSky); break;
             case 3: TEST_CHECK(run, IsResolved && (CellCount == 2U) && (Build > LastBuild)); break;
             case 4: TEST_CHECK(run, IsResolved && (CellCount == 0U) && (Build == LastBuild)); break;
             case 5: TEST_CHECK(run, IsResolved && (CellCount == 1U) && (Build > LastBuild)); break;
@@ -2232,6 +2309,7 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "lists_drawable_sprites_and_every_light", ListsDrawableSpritesAndEveryLight },
         { "disabled_and_hidden_objects_are_not_drawn", DisabledAndHiddenObjectsAreNotDrawn },
         { "entries_carry_the_settings_in_effect", EntriesCarryTheSettingsInEffect },
+        { "ambient_zones_are_listed_in_render_space", AmbientZonesAreListedInRenderSpace },
         { "swapping_the_world_model_keeps_the_object", SwappingTheWorldModelKeepsTheObject },
         { "variants_resolve_by_name_and_unknown_ones_warn_once", VariantsResolveByNameAndUnknownOnesWarnOnce },
         { "bounds_and_the_drawn_lod_come_from_the_world_model", BoundsAndTheDrawnLodComeFromTheWorldModel },

@@ -76,6 +76,8 @@ static void EnsureShaders(WorldRenderer* self)
     WorldRendererTerrain_LoadShader(self);
     // The instanced twins sit beside the lit, G-buffer and shadow shaders loaded above.
     WorldRendererInstances_LoadShaders(self);
+    // The sky's visibility map draws with the cascades' depth shaders.
+    WorldRendererSkyVisibility_Load(self);
 }
 
 // What each optional feature needs to be able to run at all (its shaders and targets), independent of whether it
@@ -173,7 +175,8 @@ static bool DoSpritesCastShadows(const WorldRenderer* self, const WorldRenderFra
 }
 
 /* The eye's night vision this frame: how strongly it applies (the renderer toggle x the world's strength), the field
- * luminance it compares with (the sky's light, NightVisionField, so it runs after WorldRendererLighting_PrepareSkyLight,
+ * luminance it compares with (the light the eye is in, NightVisionField, so it runs after
+ * WorldRendererLighting_PrepareSkyLight,
  * which also chose the frame's calibration; a non-finite one counts as daylight, changing nothing), the rods' grey (the
  * world's blue shift), and whether it changes anything: only while the field is below the full-colour luminance (by day
  * the shaders skip it). */
@@ -290,9 +293,10 @@ static void DecideShadows(WorldRenderer* self, WorldRenderFrame* frame)
 }
 
 /* Builds the frame's visibility from the render cache: what the camera's passes draw (its frustum, the draw distances
- * under the quality setting and the camera's zoom, the opacities) and which casters each shadow pass that runs draws
- * (each cascade's box, the cube's reach). Needs the shadow decisions and WorldRendererShadows_PrepareFrame. In render
- * space: the camera at the origin. */
+ * under the quality setting and the camera's zoom, the opacities), which casters each shadow pass that runs draws
+ * (each cascade's box, the cube's reach) and what keeps the sky out in the sky's visibility map (its box). Needs the
+ * shadow decisions, WorldRendererShadows_PrepareFrame and WorldRendererSkyVisibility_PrepareFrame. In render space: the
+ * camera at the origin. */
 static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     WorldVisibilityView View =
@@ -307,6 +311,8 @@ static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
         .IsPointShadowActive = frame->IsPointShadowActive,
         .PointShadowPosition = frame->PointShadowPosition,
         .PointShadowReach = frame->PointShadowFar,
+        .IsSkyVisibilityActive = frame->IsSkyVisibilityActive,
+        .SkyVisibilityBox = frame->SkyMapBox,
         .DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self),
         .ZoomFactor = frame->ZoomFactor
     };
@@ -547,6 +553,29 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->AdaptedLuminance = frame->AdaptedLuminance;
     Status->AdaptedRealLuminance = frame->AdaptedRealLuminance;
     Status->IsExposureMetered = frame->IsExposureMetered;
+
+    // Interior lighting.
+    Status->IsInteriorLightingEnabled = self->_interior._isEnabled;
+    WorldRenderCache_GetAmbientZones(&self->_cache, &Status->AmbientZoneCount);
+    size_t OccludingModels = 0;
+    size_t OccludingCells = 0;
+    size_t OccludingChunks = 0;
+    WorldVisibility_GetModels(&self->_visibility, &self->_cache, WorldVisibilityPass_SkyVisibility, &OccludingModels);
+    WorldVisibility_GetInstanceCells(&self->_visibility, &self->_cache, WorldVisibilityPass_SkyVisibility,
+        &OccludingCells);
+    WorldVisibility_GetTerrainChunks(&self->_visibility, &self->_cache, WorldVisibilityPass_SkyVisibility,
+        &OccludingChunks);
+    Status->SkyOccluderCount = frame->IsSkyVisibilityActive ? (OccludingModels + OccludingCells + OccludingChunks) : 0U;
+    Status->CameraOpenness = frame->CameraInterior.IsStarted ? frame->CameraInterior.Openness : 1.0f;
+    Status->CameraZoneWeight = frame->CameraInterior.IsStarted ? frame->CameraInterior.Zones.Weight : 0.0f;
+    Status->CameraSceneLuminance = frame->CameraSceneLuminance;
+    Status->ExposureBias = frame->ExposureBias;
+    Status->InteriorView = self->_interior._view;
+    Status->Features[WorldRendererFeature_SkyVisibility] = StateOf(WorldRendererSkyVisibility_IsAvailable(self),
+        frame->IsSkyVisibilityActive);
+    // The terrain's and the sprites' shaders take the zones too, so they run without the PBR shader as well.
+    Status->Features[WorldRendererFeature_AmbientZones] = StateOf(true,
+        frame->IsInteriorActive && (Status->AmbientZoneCount > 0U));
 }
 
 /* Appends the drawn models per LOD to the status line's LOD text, LOD 0 first, up to the coarsest LOD drawn: "9 / 3 / 1".
@@ -652,6 +681,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     WorldRendererSprites_Construct(Renderer);
     WorldRendererTerrain_Construct(Renderer);
     WorldRendererInstances_Construct(Renderer);
+    WorldRendererInterior_Construct(Renderer);
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardLights, INITIAL_FORWARD_LIGHT_CAPACITY,
         sizeof(WorldCullingLight));
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardRadiances, INITIAL_FORWARD_LIGHT_CAPACITY,
@@ -677,6 +707,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     WorldRendererAtmosphere_Unload(self);
     WorldRendererAtmosphere_Deconstruct(self);
     WorldRendererShadows_Unload(self);
+    WorldRendererSkyVisibility_Unload(self);
     WorldRendererStars_Unload(self);
     WorldRendererSprites_Deconstruct(self);
     WorldRendererSky_Deconstruct(self); // retires the sky textures' own asset users
@@ -721,6 +752,8 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
     WorldAtmosphereMedium Medium;
     WorldAtmosphere_GetMedium(World_GetEnvironment(world), &Medium);
     WorldSkyLight_PrepareBuilder(&self->_atmosphere._skyLight, &Medium);
+    // The camera's interior starts afresh in a new world (its first frame sets it at once).
+    WorldInteriorCamera_Construct(&self->_interior._camera);
 
     // Asset holds are not counted, so the models no object uses any more are released by resolving every model
     // the world uses under a fresh user and then retiring the old one: models both users hold stay loaded (no
@@ -787,6 +820,9 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     AdvanceRenderTime(self, deltaSeconds);
     WorldRenderFrame Frame;
     BuildFrame(self, world, camera, target, &Frame);
+    // Whether interior lighting runs, and the camera's interior: how open its surroundings are and the zones at it (the
+    // sky's light below takes the light the eye is in from it).
+    WorldRendererInterior_PrepareCamera(self, &Frame, (float)deltaSeconds);
     // The star catalogue follows the world's seed and density, the sky textures its names (each rebuilt or reloaded
     // only when they change).
     WorldRendererStars_SyncCatalogue(self, Frame.Environment);
@@ -800,11 +836,13 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     WorldRendererLighting_PrepareSkyLight(self, &Frame);
     // The stars and the Milky Way by the sky's brightness behind them (the twilight from the sky's light).
     WorldRendererSky_PrepareNightSky(&Frame);
-    // Every model's LOD and its cross-fade, then which shadow passes run and their light matrices, then what every pass
-    // draws: the camera's frustum, each cascade's box and the cube's reach cull, the draw distances and opacities fade.
+    // Every model's LOD and its cross-fade, then which shadow passes run and their light matrices and the sky's visibility
+    // map's box, then what every pass draws: the camera's frustum, each cascade's box, the cube's reach and the map's box
+    // cull, the draw distances and opacities fade.
     UpdateLods(self, &Frame, deltaSeconds);
     DecideShadows(self, &Frame);
     WorldRendererShadows_PrepareFrame(self, &Frame);
+    WorldRendererSkyVisibility_PrepareFrame(self, &Frame);
     Error VisibilityResult = BuildVisibility(self, &Frame);
     if (VisibilityResult.Code != ErrorCode_Success)
     {
@@ -817,7 +855,7 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     WorldRendererSprites_PrepareFrame(self, &Frame);
 
     // The atmosphere's tables and the haze's volume first: the sky, the stars and every lit surface read them.
-    // Then the shadow maps: the scene and crisp passes sample them.
+    // Then the shadow maps and the sky's visibility map: the scene and crisp passes sample them.
     WorldRendererAtmosphere_Render(self, &Frame);
     if (Frame.IsCascadeShadowActive)
     {
@@ -826,6 +864,11 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     if (Frame.IsPointShadowActive)
     {
         WorldRendererShadows_RenderPointLight(self, &Frame);
+    }
+    // The sky's visibility map: the lit passes read it for every surface's share of the sky's light.
+    if (Frame.IsSkyVisibilityActive)
+    {
+        WorldRendererSkyVisibility_Render(self, &Frame);
     }
 
     // The G-buffer feeds BOTH the AO pre-pass (samplable depth + surface flag) and the outline pass; it is drawn
@@ -924,6 +967,8 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_Haze:             return (const unsigned char*)u8"haze";
         case WorldRendererFeature_ExposureMetering: return (const unsigned char*)u8"exposure metering";
         case WorldRendererFeature_ReversedDepth:    return (const unsigned char*)u8"reversed depth";
+        case WorldRendererFeature_SkyVisibility:    return (const unsigned char*)u8"sky visibility";
+        case WorldRendererFeature_AmbientZones:     return (const unsigned char*)u8"ambient zones";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -976,11 +1021,12 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     Memory_Free(Lods._data);
     Memory_Free(Lists._data);
     // Each terrain's materials and texture arrays, the copies of the model instances components, the atmosphere's
-    // tables with the render's CPU time, and the light at the camera.
+    // tables with the render's CPU time, the light at the camera and interior lighting.
     WorldRendererTerrain_LogMaterials(self);
     WorldRendererInstances_LogStatus(self);
     WorldRendererAtmosphere_LogStatus(self);
     WorldRendererLighting_LogStatus(self);
+    WorldRendererInterior_LogStatus(self);
 }
 
 void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled)
@@ -1037,6 +1083,46 @@ const unsigned char* WorldRenderer_GetHazeViewName(WorldRendererHazeView view)
         case WorldRendererHazeView_InScatter:     return (const unsigned char*)u8"in-scatter";
         case WorldRendererHazeView_Transmittance: return (const unsigned char*)u8"transmittance";
         case WorldRendererHazeView_Count:         break;
+    }
+    return (const unsigned char*)u8"unknown";
+}
+
+void WorldRenderer_SetInteriorLightingEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_interior._isEnabled = enabled;
+}
+
+bool WorldRenderer_IsInteriorLightingEnabled(const WorldRenderer* self)
+{
+    return self->_interior._isEnabled;
+}
+
+void WorldRenderer_SetCameraOpenness(WorldRenderer* self, float openness)
+{
+    self->_interior._cameraOpenness = isnan(openness) ? 1.0f : fminf(fmaxf(openness, 0.0f), 1.0f);
+}
+
+void WorldRenderer_SetInteriorView(WorldRenderer* self, WorldRendererInteriorView view)
+{
+    if ((unsigned int)view < (unsigned int)WorldRendererInteriorView_Count)
+    {
+        self->_interior._view = view;
+    }
+}
+
+WorldRendererInteriorView WorldRenderer_GetInteriorView(const WorldRenderer* self)
+{
+    return self->_interior._view;
+}
+
+const unsigned char* WorldRenderer_GetInteriorViewName(WorldRendererInteriorView view)
+{
+    switch (view)
+    {
+        case WorldRendererInteriorView_Off:   return (const unsigned char*)u8"off";
+        case WorldRendererInteriorView_Zones: return (const unsigned char*)u8"zones";
+        case WorldRendererInteriorView_Sky:   return (const unsigned char*)u8"sky share";
+        case WorldRendererInteriorView_Count: break;
     }
     return (const unsigned char*)u8"unknown";
 }

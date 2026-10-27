@@ -1246,6 +1246,97 @@ static void ARayFindsAThinWallWhereItIs(TestRun* run)
     CollisionScene_Deconstruct(run, &Scene);
 }
 
+/* How open a point is to the sky: every ray escapes in an empty world (1) and none in a closed box (0); under a roof with
+ * open sides the steep rays hit it and the low ones pass beside it (between, and more the further the roof stops); a
+ * point inside a solid shape is closed; what the filter does not see (a trigger, a layer left out) keeps the sky open.
+ * Far from the world's origin in the far run. */
+static void SkyOpennessCountsTheRaysThatEscape(TestRun* run)
+{
+    CollisionScene Scene;
+    if (!CollisionScene_Construct(run, &Scene, NULL, NULL))
+    {
+        CollisionScene_Deconstruct(run, &Scene);
+        return;
+    }
+    WorldCollisionFilter Filter = WorldCollisionFilter_Create(COLLISION_LAYER_BIT(CollisionLayer_World)
+        | COLLISION_LAYER_BIT(CollisionLayer_Prop), WorldCollisionTriggerMode_Ignore);
+    WorldCollision_Sync(Scene.Collision);
+    TEST_CHECK(run, WorldCollision_GetSkyOpenness(Scene.Collision, TestWorld_At((Vector3){ 0.0f, 1.5f, 0.0f }), 30.0f,
+        &Filter) == 1.0f);
+
+    // A closed box around (20, 1.5, 0): six walls of a 4 m room.
+    const Vector3 Centers[] =
+    {
+        { 20.0f, -0.1f, 0.0f }, { 20.0f, 3.1f, 0.0f }, { 17.9f, 1.5f, 0.0f }, { 22.1f, 1.5f, 0.0f },
+        { 20.0f, 1.5f, -2.1f }, { 20.0f, 1.5f, 2.1f }
+    };
+    const Vector3 Halves[] =
+    {
+        { 2.2f, 0.1f, 2.2f }, { 2.2f, 0.1f, 2.2f }, { 0.1f, 1.7f, 2.2f }, { 0.1f, 1.7f, 2.2f }, { 2.2f, 1.7f, 0.1f },
+        { 2.2f, 1.7f, 0.1f }
+    };
+    bool IsBuilt = true;
+    for (size_t Index = 0U; Index < (sizeof(Centers) / sizeof(Centers[0])); Index++)
+    {
+        CollisionShape Panel = MakeBox(Halves[Index]);
+        WorldObject* Wall = AddObject(run, &Scene.World, Centers[Index], WorldMobility_Static);
+        IsBuilt = IsBuilt && (Wall != NULL) && (AddOwnShape(run, &Scene.World, Wall, &Panel) != NULL);
+    }
+    // A porch roof 1.5 m above (40, 1.5, 0), 2 m on every side, on no walls; another roof over (60, 1.5, 0) 6 m on
+    // every side; a solid block around (80, 1.5, 0).
+    CollisionShape PorchRoof = MakeBox((Vector3){ 2.0f, 0.1f, 2.0f });
+    WorldObject* Porch = AddObject(run, &Scene.World, (Vector3){ 40.0f, 3.1f, 0.0f }, WorldMobility_Static);
+    CollisionShape WideRoof = MakeBox((Vector3){ 6.0f, 0.1f, 6.0f });
+    WorldObject* Shelter = AddObject(run, &Scene.World, (Vector3){ 60.0f, 3.1f, 0.0f }, WorldMobility_Static);
+    CollisionShape Block = MakeBox((Vector3){ 1.0f, 1.0f, 1.0f });
+    WorldObject* Solid = AddObject(run, &Scene.World, (Vector3){ 80.0f, 1.5f, 0.0f }, WorldMobility_Static);
+    IsBuilt = IsBuilt && (Porch != NULL) && (AddOwnShape(run, &Scene.World, Porch, &PorchRoof) != NULL)
+        && (Shelter != NULL) && (AddOwnShape(run, &Scene.World, Shelter, &WideRoof) != NULL)
+        && (Solid != NULL) && (AddOwnShape(run, &Scene.World, Solid, &Block) != NULL);
+    // A trigger roof over (100, 1.5, 0) and a roof on the character layer over (120, 1.5, 0): neither keeps the sky out.
+    WorldObject* Trigger = AddObject(run, &Scene.World, (Vector3){ 100.0f, 3.1f, 0.0f }, WorldMobility_Static);
+    WorldObject* Other = AddObject(run, &Scene.World, (Vector3){ 120.0f, 3.1f, 0.0f }, WorldMobility_Static);
+    WorldColliderComponent* TriggerCollider = (Trigger != NULL) ? AddOwnShape(run, &Scene.World, Trigger, &WideRoof)
+        : NULL;
+    WorldColliderComponent* OtherCollider = (Other != NULL) ? AddOwnShape(run, &Scene.World, Other, &WideRoof) : NULL;
+    if (!IsBuilt || (TriggerCollider == NULL) || (OtherCollider == NULL))
+    {
+        CollisionScene_Deconstruct(run, &Scene);
+        return;
+    }
+    SetLayer(run, TriggerCollider, CollisionLayer_World, true);
+    SetLayer(run, OtherCollider, CollisionLayer_Character, false);
+    WorldCollision_Sync(Scene.Collision);
+
+    float Closed = WorldCollision_GetSkyOpenness(Scene.Collision, TestWorld_At((Vector3){ 20.0f, 1.5f, 0.0f }), 30.0f,
+        &Filter);
+    float UnderPorch = WorldCollision_GetSkyOpenness(Scene.Collision, TestWorld_At((Vector3){ 40.0f, 1.5f, 0.0f }),
+        30.0f, &Filter);
+    float UnderWideRoof = WorldCollision_GetSkyOpenness(Scene.Collision, TestWorld_At((Vector3){ 60.0f, 1.5f, 0.0f }),
+        30.0f, &Filter);
+    float Inside = WorldCollision_GetSkyOpenness(Scene.Collision, TestWorld_At((Vector3){ 80.0f, 1.5f, 0.0f }), 30.0f,
+        &Filter);
+    TEST_CHECK(run, (Closed == 0.0f) && (Inside == 0.0f));
+    // Under the porch the straight-up ray and the four steep ones hit, the eight low ones pass beside it: 8 / 13. Under
+    // the wider roof every ray hits it.
+    TEST_CHECK(run, fabsf(UnderPorch - (8.0f / (float)WORLD_COLLISION_SKY_OPENNESS_RAYS)) < 1e-6f);
+    TEST_CHECK(run, UnderWideRoof == 0.0f);
+    // The trigger and the character layer are not seen through this filter; with every layer and triggers, they are.
+    TEST_CHECK(run, WorldCollision_GetSkyOpenness(Scene.Collision, TestWorld_At((Vector3){ 100.0f, 1.5f, 0.0f }),
+        30.0f, &Filter) == 1.0f);
+    TEST_CHECK(run, WorldCollision_GetSkyOpenness(Scene.Collision, TestWorld_At((Vector3){ 120.0f, 1.5f, 0.0f }),
+        30.0f, &Filter) == 1.0f);
+    WorldCollisionFilter Everything = WorldCollisionFilter_Create(COLLISION_LAYER_MASK_ALL,
+        WorldCollisionTriggerMode_Include);
+    TEST_CHECK(run, (WorldCollision_GetSkyOpenness(Scene.Collision, TestWorld_At((Vector3){ 100.0f, 1.5f, 0.0f }),
+        30.0f, &Everything) == 0.0f) && (WorldCollision_GetSkyOpenness(Scene.Collision,
+        TestWorld_At((Vector3){ 120.0f, 1.5f, 0.0f }), 30.0f, &Everything) == 0.0f));
+    // A reach shorter than the way to the roof leaves the sky open.
+    TEST_CHECK(run, WorldCollision_GetSkyOpenness(Scene.Collision, TestWorld_At((Vector3){ 60.0f, 1.5f, 0.0f }), 1.0f,
+        &Filter) == 1.0f);
+    CollisionScene_Deconstruct(run, &Scene);
+}
+
 static void MeshesReportTheirTriangles(TestRun* run)
 {
     CollisionScene Scene;
@@ -1519,6 +1610,7 @@ void WorldCollisionTests_Run(TestRun* run)
         { "triggers_report_enter_and_exit_once", TriggersReportEnterAndExitOnce },
         { "queries_report_shapes_parts_and_push_outs", QueriesReportShapesPartsAndPushOuts },
         { "a_ray_finds_a_thin_wall_where_it_is", ARayFindsAThinWallWhereItIs },
+        { "sky_openness_counts_the_rays_that_escape", SkyOpennessCountsTheRaysThatEscape },
         { "meshes_report_their_triangles", MeshesReportTheirTriangles },
         { "planes_are_bounded_or_infinite", PlanesAreBoundedOrInfinite },
         { "the_debug_list_shows_every_active_shape", TheDebugListShowsEveryActiveShape },

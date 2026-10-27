@@ -21,7 +21,9 @@
  * gives six planes (Gribb and Hartmann) with unit normals pointing inward; a sphere is outside when it lies wholly behind
  * one of them. The camera's frustum culls what the scene, G-buffer and crisp passes draw. Shadow casters are never culled
  * by the camera (a caster off screen can still shadow what is on it): each shadow cascade culls its casters against its
- * own orthographic box, and the cube shadow keeps its reach test.
+ * own orthographic box, and the cube shadow keeps its reach test. The sky's visibility map (interior lighting) takes
+ * what keeps the sky out within its box the same way, whether it casts shadows or not: models and instance cells whose
+ * settings occlude the sky, and every terrain chunk.
  *
  * DRAW DISTANCE. Every entry has its own: a model's is its world model's, a sprite's its world sprite's or its kind's
  * default (sprites 150 m, decals 60 m), or the placement's own while that overrides it,
@@ -124,6 +126,9 @@ typedef enum WorldVisibilityPassEnum
     WorldVisibilityPass_FarCascade,
     /** @brief The point-light cube shadow's casters. */
     WorldVisibilityPass_PointShadow,
+    /** @brief What keeps the sky out in the sky's visibility map (its box): models and instance cells that occlude the
+     *  sky, every terrain chunk. */
+    WorldVisibilityPass_SkyVisibility,
     /** @brief The number of passes; not a pass. */
     WorldVisibilityPass_Count
 } WorldVisibilityPass;
@@ -164,6 +169,9 @@ typedef struct WorldVisibilityViewStruct
     bool IsPointShadowActive;
     Vector3 PointShadowPosition;
     float PointShadowReach;
+    /** @brief Whether the sky's visibility map is drawn, and its box. */
+    bool IsSkyVisibilityActive;
+    WorldFrustum SkyVisibilityBox;
     /** @brief The draw distance scale (the config's draw_distance_scale; finite and >= 0). */
     float DrawDistanceScale;
     /** @brief The camera's zoom factor (WorldVisibility_GetZoomFactor): the entries' distances are multiplied by it

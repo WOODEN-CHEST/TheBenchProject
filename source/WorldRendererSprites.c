@@ -99,6 +99,7 @@ static void LoadLitShader(WorldRenderer* self)
     self->_sprites._locIsLit = GetShaderLocation(RayShader, "isLit");
     self->_sprites._locEmission = GetShaderLocation(RayShader, "emission");
     self->_sprites._locLightWrap = GetShaderLocation(RayShader, "lightWrap");
+    self->_sprites._locIsCard = GetShaderLocation(RayShader, "isCard");
     self->_sprites._locUseScreenAo = GetShaderLocation(RayShader, "useScreenAo");
     WorldRendererCommon_PrepareDither(RayShader, &self->_sprites._dither);
 }
@@ -160,7 +161,10 @@ static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, 
     int AlphaMode = (int)sprite->AlphaMode;
     int IsLitValue = IsLit ? 1 : 0;
     // Wrap lighting only for billboards (round things seen from the front); cards are lit as cards.
-    float LightWrap = (sprite->Shape.Orientation == WorldSpriteOrientation_Fixed) ? 0.0f : sprite->LightWrap;
+    bool IsCard = sprite->Shape.Orientation == WorldSpriteOrientation_Fixed;
+    float LightWrap = IsCard ? 0.0f : sprite->LightWrap;
+    // Interior lighting reads a card's sky by its facing and a billboard's as a thing standing there.
+    int IsCardValue = IsCard ? 1 : 0;
     float DecalOffset = sprite->IsDecal ? sprite->DecalOffset : 0.0f;
     // The AO at the pixel is the sprite's own for a cutout sprite (when the G-buffer drew it: its shader is optional) and
     // its surface's for a decal; behind a blended or additive sprite it belongs to something else.
@@ -180,10 +184,12 @@ static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, 
     SetShaderValue(RayShader, self->_sprites._locIsLit, &IsLitValue, SHADER_UNIFORM_INT);
     SetShaderValue(RayShader, self->_sprites._locEmission, &Emission, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sprites._locLightWrap, &LightWrap, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_sprites._locIsCard, &IsCardValue, SHADER_UNIFORM_INT);
     SetShaderValue(RayShader, self->_sprites._locUseScreenAo, &UseScreenAo, SHADER_UNIFORM_INT);
     WorldRendererCommon_SetDither(RayShader, &self->_sprites._dither, DitherFade, 0.0f, false);
-    // Lit or unlit, a sprite is seen through the haze at its own multiplier.
-    WorldRendererLighting_SetDrawHaze(RayShader, &self->_sprites._lit, sprite->Haze);
+    // Lit or unlit, a sprite is seen through the haze at its own multiplier, and through the zones' air.
+    WorldRendererLighting_SetDrawPlace(self, RayShader, &self->_sprites._lit, sprite->Shape.Position,
+        sprite->BoundsRadius, sprite->Haze);
     if (IsLit)
     {
         WorldRendererLighting_UploadObjectLights(self, RayShader, &self->_sprites._lit, sprite->Shape.Position,

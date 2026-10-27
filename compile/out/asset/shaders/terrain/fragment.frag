@@ -470,10 +470,11 @@ void main()
     float shadowAmount = SkyShadowAmount(fragPosition, max(dot(geometric, normalize(shadowLightDirection)), 0.0));
     vec3 direct = SkyLight(light, n, v, shadowAmount, albedo, f0, roughness, 0.0);
     vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, geometric, albedo, f0, roughness, 0.0);
-    vec3 ambient = AmbientLight(light, n)*albedo*occlusion*ScreenAo();
+    vec3 ambient = AmbientLight(light, n, fragPosition, geometric)*albedo*occlusion*ScreenAo();
 
     vec3 color = NightVisionOf(ambient + direct + pointTotal);
     color = ApplyAerialPerspective(color, fragPosition);
+    color = InteriorViewColor(color, fragPosition, geometric);
 
     // The fade is tested last, after every derivative and mipmapped fetch above, so those stay defined for the pixels
     // that are drawn.

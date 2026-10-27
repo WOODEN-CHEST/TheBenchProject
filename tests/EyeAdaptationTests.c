@@ -302,6 +302,26 @@ static void ExposureFollowsPartialAdaptation(TestRun* run)
     TEST_CHECK(run, EyeAdaptation_GetExposure(-6.0f, 2.0 * Floor) > EyeAdaptation_GetExposure(-6.0f, Floor));
 }
 
+/* A room's bias multiplies the exposure by 2^stops: none (or a broken one) leaves it exactly, every stop doubles it, and
+ * the result keeps within the exposure's range. */
+static void BiasMultipliesTheExposure(TestRun* run)
+{
+    const float Exposures[] = { 0.5f, 1.88f, 42.0f };
+    for (size_t Index = 0U; Index < (sizeof(Exposures) / sizeof(Exposures[0])); Index++)
+    {
+        float Exposure = Exposures[Index];
+        TEST_CHECK(run, (EyeAdaptation_GetBiasedExposure(Exposure, 0.0f) == Exposure)
+            && (EyeAdaptation_GetBiasedExposure(Exposure, -0.0f) == Exposure)
+            && (EyeAdaptation_GetBiasedExposure(Exposure, NAN) == Exposure)
+            && (EyeAdaptation_GetBiasedExposure(Exposure, INFINITY) == Exposure));
+        TEST_CHECK(run, (EyeAdaptation_GetBiasedExposure(Exposure, 1.0f) == 2.0f * Exposure)
+            && (EyeAdaptation_GetBiasedExposure(Exposure, -2.0f) == 0.25f * Exposure)
+            && (fabsf(EyeAdaptation_GetBiasedExposure(Exposure, 0.5f) / (Exposure * 1.41421356f) - 1.0f) < 1e-6f));
+    }
+    TEST_CHECK(run, EyeAdaptation_GetBiasedExposure(EYE_ADAPTATION_MAX_EXPOSURE, 1.0f) == EYE_ADAPTATION_MAX_EXPOSURE);
+    TEST_CHECK(run, EyeAdaptation_GetBiasedExposure(EYE_ADAPTATION_MIN_EXPOSURE, -1.0f) == EYE_ADAPTATION_MIN_EXPOSURE);
+}
+
 
 // Public functions.
 void EyeAdaptationTests_Run(TestRun* run)
@@ -315,6 +335,7 @@ void EyeAdaptationTests_Run(TestRun* run)
         { "window_spans_the_anchor", WindowSpansTheAnchor },
         { "real_scale_reads_the_sky_light", RealScaleReadsTheSkyLight },
         { "exposure_follows_partial_adaptation", ExposureFollowsPartialAdaptation },
+        { "bias_multiplies_the_exposure", BiasMultipliesTheExposure },
     };
     TestRun_RunSuite(run, "EyeAdaptation", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

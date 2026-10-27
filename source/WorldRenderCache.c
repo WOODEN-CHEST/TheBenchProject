@@ -188,6 +188,7 @@ static void UpdateModel(WorldRenderModel* entry, Vector3Double origin, AssetMana
     entry->ShadowTier = Settings.ShadowTier;
     entry->CastsShadows = Settings.CastsShadows;
     entry->Haze = Settings.Haze;
+    entry->OccludesSky = Settings.OccludesSky;
     entry->DrawDistance = Settings.DrawDistance;
     entry->IsDrawDistanceFixed = Settings.IsDrawDistanceFixed;
 
@@ -398,6 +399,27 @@ static Error AddLight(WorldRenderCache* self, const WorldLightComponent* light, 
     return Error_CreateSuccess();
 }
 
+/* Lists the ambient zone of a shown object in render space for @p origin (its object's world matrix places it). */
+static Error AddAmbientZone(WorldRenderCache* self, const WorldAmbientZoneComponent* zone, Vector3Double origin)
+{
+    const WorldObject* Owner = WorldComponent_GetOwner(&zone->Base);
+    if (!IsObjectShown(Owner))
+    {
+        return Error_CreateSuccess();
+    }
+    Matrix4Double WorldMatrix = WorldObject_GetWorldMatrix(Owner);
+    WorldInteriorZone Entry = WorldInterior_MakeZone(zone, &WorldMatrix, origin);
+    if (!WorldInterior_HasInside(&Entry))
+    {
+        return Error_CreateSuccess(); // lights nothing
+    }
+    if (!GenericBuffer_AddLast(&self->_ambientZones, &Entry))
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "WorldRenderCache: could not grow the ambient zone list.");
+    }
+    return Error_CreateSuccess();
+}
+
 /* Brings every model entry up to date (in render space for @p origin). The n-th model component must own the n-th
  * entry; when an entry belongs to another component or id (or the counts differ) it stops with *outAreEntriesAligned
  * false so the caller re-matches. */
@@ -453,8 +475,8 @@ static void UpdateLod(WorldRenderModel* entry, const WorldRenderLodView* view, f
     WorldLodState_Update(&entry->Lod, Lod, view->DeltaSeconds, Settings.FadeSeconds);
 }
 
-/* Rebuilds this frame's sprite and light lists from the world's sprite and light components, in render space for
- * @p origin. */
+/* Rebuilds this frame's sprite, light and ambient zone lists from the world's sprite, light and ambient zone components,
+ * in render space for @p origin. */
 static Error BuildSpritesAndLights(WorldRenderCache* self, World* world, Vector3Double origin)
 {
     size_t SpriteCount = 0;
@@ -473,6 +495,17 @@ static Error BuildSpritesAndLights(WorldRenderCache* self, World* world, Vector3
     for (size_t Index = 0; Index < LightCount; Index++)
     {
         Error Result = AddLight(self, WorldLightComponent_FromComponent(Lights[Index]), origin);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+
+    size_t ZoneCount = 0;
+    WorldComponent* const* Zones = World_GetComponents(world, WorldComponentType_AmbientZone, &ZoneCount);
+    for (size_t Index = 0; Index < ZoneCount; Index++)
+    {
+        Error Result = AddAmbientZone(self, WorldAmbientZoneComponent_FromComponent(Zones[Index]), origin);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
@@ -831,7 +864,8 @@ static Error AddInstanceCells(WorldRenderCache* self, const WorldRenderInstances
         {
             .Entry = entryIndex, .Cell = Index, .FirstRecord = Source->FirstRecord, .RecordCount = Source->RecordCount,
             .HasOutline = entry->HasOutline, .ShadowTier = entry->ShadowTier, .CastsShadows = entry->CastsShadows,
-            .DrawDistance = entry->DrawDistance, .IsDrawDistanceFixed = entry->IsDrawDistanceFixed, .Tint = entry->Tint,
+            .OccludesSky = entry->OccludesSky, .DrawDistance = entry->DrawDistance,
+            .IsDrawDistanceFixed = entry->IsDrawDistanceFixed, .Tint = entry->Tint,
             .WorldMatrix = Matrix4Double_Multiply(&ToCenter, &entry->WorldMatrix),
             .Center = Matrix4Double_TransformPoint(&entry->WorldMatrix, Source->SphereCenter),
             .Radius = (float)(Source->SphereRadius * (double)entry->WorldStretch),
@@ -875,6 +909,7 @@ static Error UpdateInstancesEntry(WorldRenderCache* self, WorldRenderInstances* 
     entry->ShadowTier = Settings.ShadowTier;
     entry->CastsShadows = Settings.CastsShadows;
     entry->Haze = Settings.Haze;
+    entry->OccludesSky = Settings.OccludesSky;
     entry->DrawDistance = Settings.DrawDistance;
     entry->IsDrawDistanceFixed = Settings.IsDrawDistanceFixed;
     const WorldObject* Owner = WorldComponent_GetOwner(&Component->Base);
@@ -1035,6 +1070,7 @@ void WorldRenderCache_Construct(WorldRenderCache* self)
     GenericBuffer_AllocateVariable(&self->_rematch, INITIAL_LIST_CAPACITY, sizeof(WorldRenderModel));
     GenericBuffer_AllocateVariable(&self->_sprites, INITIAL_LIST_CAPACITY, sizeof(WorldRenderSprite));
     GenericBuffer_AllocateVariable(&self->_lights, INITIAL_LIST_CAPACITY, sizeof(WorldRenderLight));
+    GenericBuffer_AllocateVariable(&self->_ambientZones, INITIAL_LIST_CAPACITY, sizeof(WorldInteriorZone));
     GenericBuffer_AllocateVariable(&self->_terrains, INITIAL_LIST_CAPACITY, sizeof(WorldRenderTerrain));
     GenericBuffer_AllocateVariable(&self->_terrainRematch, INITIAL_LIST_CAPACITY, sizeof(WorldRenderTerrain));
     GenericBuffer_AllocateVariable(&self->_terrainChunks, INITIAL_LIST_CAPACITY, sizeof(WorldRenderTerrainChunk));
@@ -1061,6 +1097,7 @@ void WorldRenderCache_Deconstruct(WorldRenderCache* self)
     Memory_Free(self->_rematch._data);
     Memory_Free(self->_sprites._data);
     Memory_Free(self->_lights._data);
+    Memory_Free(self->_ambientZones._data);
     Memory_Free(self->_terrains._data);
     Memory_Free(self->_terrainRematch._data);
     Memory_Free(self->_terrainChunks._data);
@@ -1076,6 +1113,7 @@ void WorldRenderCache_Reset(WorldRenderCache* self)
     GenericBuffer_Clear(&self->_models);
     GenericBuffer_Clear(&self->_sprites);
     GenericBuffer_Clear(&self->_lights);
+    GenericBuffer_Clear(&self->_ambientZones);
     GenericBuffer_Clear(&self->_terrains);
     GenericBuffer_Clear(&self->_terrainChunks);
     FreeInstanceList(&self->_instances);
@@ -1180,6 +1218,7 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double 
 
     GenericBuffer_Clear(&self->_sprites);
     GenericBuffer_Clear(&self->_lights);
+    GenericBuffer_Clear(&self->_ambientZones);
     Error BuildResult = BuildSpritesAndLights(self, world, origin);
     if (BuildResult.Code != ErrorCode_Success)
     {

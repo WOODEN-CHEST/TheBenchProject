@@ -14,10 +14,11 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 |---|---|---|
 | WorldObject | `include/WorldObject.h`, `source/WorldObject.c` | The one object type: id, name, parent, transform (relative to the parent), tint, enabled, visible, mobility, and its component slots. |
 | WorldComponent | `include/WorldComponent.h`, `source/WorldComponent.c` | The component base, the component types and the registry entry that describes each (`WorldComponentTypeInfo`). |
-| WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A world model by asset name ([WorldModels.md](WorldModels.md)), the variant drawn, and the settings this placement overrides (explicit flags next to its own values: outline, crisp, shadow tier, casts shadows, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
+| WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A world model by asset name ([WorldModels.md](WorldModels.md)), the variant drawn, and the settings this placement overrides (explicit flags next to its own values: outline, crisp, shadow tier, casts shadows, haze, keeps the sky out, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
 | WorldModelInstancesComponent | `include/WorldModelInstancesComponent.h`, `source/WorldModelInstancesComponent.c`, `source/WorldModelComponentInternal.h` (the rows it shares with the model component) | Many copies of one world model: the model component's settings, shared through macros (all but `omit_pixelation`: copies are never crisp), and the copies as an `InstanceList` (each a double position, a rotation, a scale and a tint), with the pure functions that resolve the settings and the LOD settings in effect. |
 | WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A world sprite by asset name ([WorldSprites.md](WorldSprites.md)), bound by the world with its animation's playback instance, and every setting this placement overrides (explicit flags next to its own values: orientation, pivot, size, flips, alpha mode, lighting, decal, render flags, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
+| WorldAmbientZoneComponent | `include/WorldAmbientZoneComponent.h`, `source/WorldAmbientZoneComponent.c` | A volume that sets a room's own light (a box or a sphere: its light, the sky's share in it, the eye's exposure bias, its priority and its air's haze). |
 | WorldColliderComponent | `include/WorldColliderComponent.h`, `source/WorldColliderComponent.c` | How the object collides ([WorldCollision.md](WorldCollision.md)): its world model's collision set (or one primitive of its own), its layer, mask and trigger flag (each overriding the world model's default with an explicit flag), a local offset, rotation and scale, and a rotation mode, with the pure function that resolves the settings in effect. |
 | WorldCharacterComponent | `include/WorldCharacterComponent.h`, `source/WorldCharacterComponent.c` | The player or an NPC ([Characters.md](Characters.md)): a character asset by name and every setting this placement overrides (explicit flags next to its own values), the input its driver gives it and the state it is in; the first transform driver. |
 | WorldAnimatorComponent | `include/WorldAnimatorComponent.h`, `source/WorldAnimatorComponent.c` | What plays the object's skeletal animation ([Animation.md](Animation.md)): the clip row and how it plays, the placement's own libraries, and the pose the animation system publishes. |
@@ -195,10 +196,11 @@ carries **at most one component of each type**; a street lamp is one object with
 | `WorldComponentType_Animator` | 5 | `animator` | `WorldAnimatorComponent` ([Animation.md](Animation.md)) |
 | `WorldComponentType_Terrain` | 6 | `terrain` | `WorldTerrainComponent` ([Terrain.md](Terrain.md)) |
 | `WorldComponentType_ModelInstances` | 7 | `model_instances` | `WorldModelInstancesComponent` (the renderer's side in [WorldRuntime.md](WorldRuntime.md), "Model instances") |
+| `WorldComponentType_AmbientZone` | 8 | `ambient_zone` | `WorldAmbientZoneComponent` (the renderer's side in [WorldRuntime.md](WorldRuntime.md), "Interior lighting") |
 
 The values are explicit and never renumbered (world files save them). `WorldComponentType_Count` is the number
 of standard types; `WORLD_MAX_COMPONENT_TYPES` (16) is how many a world can hold, room for the types still to come
-(8 onward: interior lighting's ambient zone and the screen) and for test-only types.
+(9 onward: the screen) and for test-only types.
 
 **The registry.** Each type has one `WorldComponentTypeInfo` (a static constant of its module, handed out by
 `Xxx_GetTypeInfo`; `WorldComponent_GetStandardTypeInfo(type)` maps the standard types): `Type`, `Name` (the key of its
@@ -237,7 +239,9 @@ The settings a placement can override (`WorldModelSetting`) are each a pair: an 
 the world model's value applies), and the placement's own value, kept while the flag is off: `_hasOutline` (true),
 `_omitPixelation` (false: drawn crisp at full resolution over the pixelated image), `_shadowTier` (`WorldShadowTier`,
 declared in `WorldModel.h`: Both / Near / Far, the shadow cascade(s) it casts into), `_castsShadows` (true;
-false skips it in every shadow pass, it still receives shadows), `_drawDistance` (600 m, above 0) and
+false skips it in every shadow pass, it still receives shadows), `_haze` ([0, 1000], 1: how hazy it looks), `_occludesSky`
+(true: it keeps the sky's light off what lies under it, in the sky's visibility map of [WorldRuntime.md](WorldRuntime.md),
+"Interior lighting"; off for grass, small plants, people and poles), `_drawDistance` (600 m, above 0) and
 `_isDrawDistanceFixed` (false: the player's `draw_distance_scale` applies). `_drawDistanceMultiplier` (above 0, default
 1) multiplies whichever draw distance is in effect. The flags are set with `WorldModelComponent_SetOverridden(self,
 setting, isOverridden)` and read with `_IsOverridden`; `WorldModelComponent_ResolveSettings(self, modelSettings)` is the
@@ -265,7 +269,7 @@ Places many **copies** of one world model: trees, bushes, posts, fence pieces, l
 table shares the model component's rows through the `WORLD_MODEL_PLACEMENT_ROW_*` macros of
 `source/WorldModelComponentInternal.h` (the names, wire ids, defaults, rules and categories are the model component's):
 `world_model`, `uses_variant` / `variant`, the override pairs `has_outline`, `shadow_tier`,
-`casts_shadows`, `haze`, `draw_distance`, `is_draw_distance_fixed`, `draw_distance_multiplier`, the LOD rows (`lod_distances`
+`casts_shadows`, `haze`, `occludes_sky`, `draw_distance`, `is_draw_distance_fixed`, `draw_distance_multiplier`, the LOD rows (`lod_distances`
 with its flag, `lod_distance_multiplier`, `is_lod_forced` / `forced_lod`), **all but `omit_pixelation`**: copies are
 never crisp (`WorldModelInstancesComponent_SetOverridden(self, WorldModelSetting_OmitPixelation, ...)` is refused, and
 `ResolveSettings` gives `OmitsPixelation` false). Every setting applies to every copy; the variant too.
@@ -389,6 +393,23 @@ static-move warning). Not a transform driver. An object with a collider as well 
 `_castsShadows` (false). It uses its object's world position (a lamp carries its light); rotation, scale
 and tint do not affect it. A hidden or disabled object's light is off, also under a hidden or disabled ancestor.
 
+### Ambient zone component (`ambient_zone_component`)
+A volume that sets a room's own light (the warm office, the dim storeroom, the cellar no daylight reaches); how the
+renderer applies it is in [WorldRuntime.md](WorldRuntime.md), "Interior lighting". `_shape` (`WorldAmbientZoneShape`:
+`box` with `_halfExtents` (2, 1.5, 2), or `sphere` with `_radius` 2; each >= 0, in the object's own units, the other
+kept while unused), around the object's position: the object's world placement moves, turns and scales it, so a zone
+that is a child of a building moves with it. `_blendDistance` (0.1 m, >= 0) is how far inward from its surface it
+fades in, from nothing at its surface (0: a hard edge), so its light never leaks out of it; a surface on or inside it
+that faces into it takes it whole. A room's zone that reaches its blend distance into the walls, floor and ceiling (to
+the walls' middle) lights everything in the room whole and none of the walls' outside faces. Inside it every lit surface
+takes `_ambientColor` (a warm white, sRGB) x `_ambientIntensity` (>= 0, default `WORLD_AMBIENT_ZONE_DEFAULT_INTENSITY`
+0.02: about a lit office's 500 lux; the light a white surface shows, in the game's light units), the sky's ambient
+times `_skyAmbientScale` (>= 0, 1; 0 no sky light at all), and the part of a view inside it is hazed times `_haze`
+([0, 1000], 1 the outside air's, 0 a room's still air). While the camera is inside, the eye's exposure takes
+`_exposureBias` stops more (within ±8, default 0). Where zones overlap, the higher `_priority` (an `int32_t`, 0) wins
+and equal ones blend by their weights. A hidden or disabled object's zone is off, as a light is, also under a hidden or
+disabled ancestor, and so is a zone with no inside (a zero half size or radius, or a zero scale).
+
 ## World
 
 Holds the objects in creation order (`_objects`) with an id -> object map (`_objectsById`, a `WRHashMap`), the
@@ -511,6 +532,8 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `casts_shadows` | 5 | Bool | true |
 | | `overrides_haze` | 23 | Bool | false |
 | | `haze` | 24 | Float in [0, 1000] | 1 |
+| | `overrides_occludes_sky` | 25 | Bool | false |
+| | `occludes_sky` | 26 | Bool | true |
 | | `overrides_draw_distance` | 12 | Bool | false |
 | | `draw_distance` | 13 | Float > 0 | 600 |
 | | `draw_distance_multiplier` | 14 | Float > 0 | 1 |
@@ -563,10 +586,21 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `intensity` | 2 | Float >= 0 | 1 |
 | | `range` | 3 | Float >= 0 | 1 |
 | | `casts_shadows` | 4 | Bool | false |
+| `ambient_zone_component` | `shape` | 1 | Enum `box` / `sphere` | `box` |
+| | `half_extents` | 2 | Vector3, each >= 0 | (2, 1.5, 2) |
+| | `radius` | 3 | Float >= 0 | 2 |
+| | `blend_distance` | 4 | Float >= 0 | 0.1 |
+| | `ambient_color` | 5 | Color | (255, 200, 150) |
+| | `ambient_intensity` | 6 | Float >= 0 | 0.02 |
+| | `sky_ambient_scale` | 7 | Float >= 0 | 1 |
+| | `exposure_bias` | 8 | Float in [-8, 8] | 0 |
+| | `priority` | 9 | Int32 | 0 |
+| | `haze` | 10 | Float in [0, 1000] | 1 |
 
 The model component's wire 1 is `world_model` and wires 2 to 5 are the placement's own values behind their override
 flags; the LOD rows are 17 to 21, 22 is the model instances component's `instances` (the two share their wire ids) and
-23 and 24 are the haze's pair: its next free wire id is 25. The sprite component's wire 1 is `world_sprite`, wires 2 to
+23 and 24 are the haze's pair and 25 and 26 the sky's (`occludes_sky`, whose default is the world model's own
+`render.occludes_sky`, true): its next free wire id is 27. The sprite component's wire 1 is `world_sprite`, wires 2 to
 16 the placement's own values behind their flags (wires 17 to 31), 32 to 36 the draw distance rows and 37 and 38 the
 haze's pair, so its next free wire id is 39. The haze multiplies the haze in front of the placement
 ([WorldRuntime.md](WorldRuntime.md), "Haze"): 1 the real air's, 0 as if the air were clear (a sign that must read from far
@@ -575,7 +609,7 @@ share their key, type, default, rules and texts with the world sprite's tables (
 [WorldSprites.md](WorldSprites.md)). Each override flag sits right before its value, in table order (the inspector's and
 the JSON writer's order), and `PropertyTable_Check` checks the pairing. The collider's table is in
 [WorldCollision.md](WorldCollision.md), the character's in [Characters.md](Characters.md) and the animator's in
-[Animation.md](Animation.md).
+[Animation.md](Animation.md). The ambient zone component's next free wire id is 11.
 
 The object table's wire ids start at 3: 1 and 2 are the world file's own entries per object (the id and the
 components, [WorldFile.md](WorldFile.md)). `data` is one row (the tags and the values are one map, written as two JSON

@@ -6,6 +6,7 @@
 #include "SkeletalAnimation.h"
 #include "WorldAtmosphere.h"
 #include "WorldInstancing.h"
+#include "WorldInterior.h"
 #include "WorldLod.h"
 #include "WorldSkyLight.h"
 #include "WorldVisibility.h"
@@ -732,10 +733,11 @@ static void ShippedSkyLightMatchesItsMirror(TestRun* run)
             }
             bool IsShared = BufferContains(&Fixture.SourceList, "\"common/lighting\"")
                 && (CountOccurrences(&Fixture.Text, "SkyLightValues SkyLightAt(vec3 worldPos)") == 1U)
-                && (CountOccurrences(&Fixture.Text, "vec3 AmbientLight(SkyLightValues light, vec3 n)") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "vec3 AmbientLight(SkyLightValues light, vec3 n, vec3 worldPos, vec3 surfaceNormal)") == 1U)
                 && (CountOccurrences(&Fixture.Text, "uniform bool skyLightPerHeight;") == 1U)
                 && (CountOccurrences(&Fixture.Text, "SkyLightValues light = SkyLightAt(fragPosition);") == 1U)
-                && (CountOccurrences(&Fixture.Text, "AmbientLight(light, n)") == 1U);
+                && (CountOccurrences(&Fixture.Text, "AmbientLight(light, n, fragPosition, ") == 1U);
             bool IsOldLightGone = true;
             for (size_t Name = 0U; Name < (sizeof(Gone) / sizeof(Gone[0])); Name++)
             {
@@ -1125,6 +1127,128 @@ static void ShippedDepthReadersShareOneConvention(TestRun* run)
 }
 
 
+/* Whether an expanded text's INTERIOR_SKY_TAPS holds the taps' offsets the C mirror places (WorldInterior_GetSkyTap
+ * around a flat surface at the origin, per unit of each tap's ring), in its order. */
+static bool SkyTapsMatchTheMirror(const GenericBuffer* text)
+{
+    static const char Opening[] = "INTERIOR_SKY_TAPS[INTERIOR_SKY_TAP_COUNT] = vec2[]\n(";
+    const char* Cursor = (text->_count > 0U) ? strstr((const char*)text->_data, Opening) : NULL;
+    if (Cursor == NULL)
+    {
+        return false;
+    }
+    Cursor += strlen(Opening);
+    for (int Tap = 0; Tap < WORLD_INTERIOR_SKY_TAP_COUNT; Tap++)
+    {
+        Vector2 Place = WorldInterior_GetSkyTap((Vector3){ 0.0f, 0.0f, 0.0f }, (Vector3){ 0.0f, 1.0f, 0.0f }, Tap);
+        float Radius = (Tap <= WORLD_INTERIOR_SKY_INNER_TAPS) ? WORLD_INTERIOR_SKY_INNER_RADIUS
+            : WORLD_INTERIOR_SKY_RING_RADIUS;
+        double Expected[2] = { (double)(Place.x / Radius), (double)(Place.y / Radius) };
+        while ((*Cursor == ',') || (*Cursor == ' ') || (*Cursor == '\n') || (*Cursor == '\r'))
+        {
+            Cursor++;
+        }
+        if (strncmp(Cursor, "vec2(", 5U) != 0)
+        {
+            return false;
+        }
+        Cursor += 5;
+        for (int Axis = 0; Axis < 2; Axis++)
+        {
+            char* End = NULL;
+            double Value = strtod(Cursor, &End);
+            if ((End == Cursor) || (fabs(Value - Expected[Axis]) > 1e-6))
+            {
+                return false;
+            }
+            Cursor = End;
+            while ((*Cursor == ',') || (*Cursor == ' '))
+            {
+                Cursor++;
+            }
+        }
+        if (*Cursor != ')')
+        {
+            return false;
+        }
+        Cursor++;
+    }
+    while ((*Cursor == ' ') || (*Cursor == '\n') || (*Cursor == '\r'))
+    {
+        Cursor++;
+    }
+    return *Cursor == ')';
+}
+
+/* Whether the text's first @p later comes after its first @p earlier (both present). */
+static bool IsAfter(const GenericBuffer* text, const char* earlier, const char* later)
+{
+    const char* Earlier = (text->_count > 0U) ? strstr((const char*)text->_data, earlier) : NULL;
+    const char* Later = (text->_count > 0U) ? strstr((const char*)text->_data, later) : NULL;
+    return (Earlier != NULL) && (Later != NULL) && (Later > Earlier);
+}
+
+/* Interior lighting: every lit shader takes it from the one shared include through the lighting include, whose
+ * constants and taps are its C mirror's (source/WorldInterior.h: the zones a draw takes, the taps' rings, the biases,
+ * the floor, the edge's fade, the surface's tolerance), with the map's sampler once; each lit stage reads its ambient at
+ * its fragment and shows the debug view once, after the haze; a lit sprite reads a billboard's place as facing up. */
+static void ShippedInteriorMatchesItsMirror(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        const char* const Lit[] = { "pbr/fragment", "terrain/fragment", "sprite/fragment" };
+        for (size_t Index = 0U; Index < (sizeof(Lit) / sizeof(Lit[0])); Index++)
+        {
+            if (!ExpandShippedStage(run, &Fixture, Lit[Index]))
+            {
+                continue;
+            }
+            bool IsShared = BufferContains(&Fixture.SourceList, "\"common/interior\"")
+                && (CountOccurrences(&Fixture.Text, "uniform sampler2D skyVisibilityMap;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "float InteriorSkyVisibility(vec3 p, vec3 n)") == 1U);
+            bool IsTheMirrors = (GetDefinedValue(&Fixture.Text, "MAX_AMBIENT_ZONES")
+                    == (double)WORLD_INTERIOR_MAX_DRAW_ZONES)
+                && (GetDefinedValue(&Fixture.Text, "INTERIOR_SKY_INNER_TAPS") == (double)WORLD_INTERIOR_SKY_INNER_TAPS)
+                && (GetDefinedValue(&Fixture.Text, "INTERIOR_SKY_RING_TAPS") == (double)WORLD_INTERIOR_SKY_RING_TAPS)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_INNER_RADIUS") == WORLD_INTERIOR_SKY_INNER_RADIUS)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_RING_RADIUS") == WORLD_INTERIOR_SKY_RING_RADIUS)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_BIAS") == WORLD_INTERIOR_SKY_BIAS)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_UPRIGHT_BIAS") == WORLD_INTERIOR_SKY_UPRIGHT_BIAS)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_FLOOR") == WORLD_INTERIOR_SKY_FLOOR)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_MIN_UP") == WORLD_INTERIOR_SKY_MIN_UP)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_SELF") == WORLD_INTERIOR_SKY_SELF)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_DOWN_SCALE") == WORLD_INTERIOR_SKY_DOWN_SCALE)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_FADE_END") == WORLD_INTERIOR_SKY_FADE_END)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_FADE_WIDTH") == WORLD_INTERIOR_SKY_FADE_WIDTH)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_ZONE_SURFACE_TOLERANCE")
+                    == WORLD_INTERIOR_ZONE_SURFACE_TOLERANCE)
+                && SkyTapsMatchTheMirror(&Fixture.Text);
+            bool IsUsed = (CountOccurrences(&Fixture.Text, "AmbientLight(light, n, fragPosition, ") == 1U)
+                && (CountOccurrences(&Fixture.Text, "color = InteriorViewColor(color, fragPosition, ") == 1U)
+                && IsAfter(&Fixture.Text, "color = ApplyAerialPerspective(color, fragPosition);",
+                    "color = InteriorViewColor(color, fragPosition, ")
+                && (CountOccurrences(&Fixture.Text, "InteriorHazeDistance(worldPos, toPoint)") == 2U);
+            if (strcmp(Lit[Index], "sprite/fragment") == 0)
+            {
+                IsUsed = IsUsed && (CountOccurrences(&Fixture.Text, "uniform bool isCard;") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "placeNormal = isCard ? n : placeNormal;") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "AmbientLight(light, n, fragPosition, placeNormal)") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "InteriorViewColor(color, fragPosition, placeNormal)") == 1U);
+            }
+            if (!TEST_CHECK(run, IsShared && IsTheMirrors && IsUsed))
+            {
+                printf("    in \"%s\" (shared %d, the mirror's %d, used %d)\n", Lit[Index], (int)IsShared,
+                    (int)IsTheMirrors, (int)IsUsed);
+            }
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+
 // Public functions.
 void ShaderSourceTests_Run(TestRun* run)
 {
@@ -1151,6 +1275,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "shipped_instanced_twins_share_their_stages", ShippedInstancedTwinsShareTheirStages },
         { "shipped_meter_matches_its_mirror", ShippedMeterMatchesItsMirror },
         { "shipped_depth_readers_share_one_convention", ShippedDepthReadersShareOneConvention },
+        { "shipped_interior_matches_its_mirror", ShippedInteriorMatchesItsMirror },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

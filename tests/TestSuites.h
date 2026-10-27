@@ -145,8 +145,8 @@ void NightSkyTests_Run(TestRun* run);
 void NightVisionTests_Run(TestRun* run);
 
 /** @brief The eye's adaptation to the picture: the meter's centre-weighted mean, the estimate, the first
- *  measurement, the easing in stops, the window, the real scale and the partial adaptation's exposure
- *  (EyeAdaptationTests.c; a private module of source/). */
+ *  measurement, the easing in stops, the window, the real scale, the partial adaptation's exposure and a room's bias
+ *  on it (EyeAdaptationTests.c; a private module of source/). */
 void EyeAdaptationTests_Run(TestRun* run);
 
 /** @brief The renderer's per-object render cache (WorldRenderCacheTests.c; a private module of source/). */
@@ -232,6 +232,14 @@ void WorldAtmosphereTests_Run(TestRun* run);
  *  through the air, the light falling continuously into the night, the exposure, and the night vision's anchors on this
  *  scale (WorldSkyLightTests.c; a private module of source/). */
 void WorldSkyLightTests_Run(TestRun* run);
+
+/** @brief Interior lighting's pure maths: the ambient zone component's defaults and rules, zones placed by their
+ *  objects (turned, scaled, a million metres out, collapsed), their weights (the fade, surfaces facing in, the camera),
+ *  priorities laid over each other, the draws' choice of at most four, the haze inside them, the sky's visibility map on
+ *  its texel grid, the taps and their reference heights (flat, upright, sloped, facing down), the visibility on stand-in
+ *  heights (open, a room, a ceiling, a facade under eaves, a slope, a curb) and its fade toward the map's edge, the
+ *  share's floor, and the camera's easing and light (WorldInteriorTests.c; a private module of source/). */
+void WorldInteriorTests_Run(TestRun* run);
 
 
 /** @brief Log rotation, pruning and formatted output under a base directory (LoggerTests.c). */

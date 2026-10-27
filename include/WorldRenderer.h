@@ -180,6 +180,15 @@ typedef enum WorldRendererFeatureEnum
      *  control (OpenGL 4.5 or GL_ARB_clip_control; logged once): the camera then keeps raylib's projection and its far
      *  plane (4 km). */
     WorldRendererFeature_ReversedDepth,
+    /** @brief The sky's visibility: a top-down map of what keeps the sky out around the camera, drawn every frame, which
+     *  takes the sky's light (and the ground's bounce) from surfaces under roofs. Unavailable without the depth shader
+     *  (world_depth) or the map's target (logged once); inactive while interior lighting is switched off
+     *  (WorldRenderer_SetInteriorLightingEnabled). */
+    WorldRendererFeature_SkyVisibility,
+    /** @brief Ambient zones: rooms' own light, sky scale and haze on the surfaces inside them, and their exposure bias
+     *  while the camera is inside. Unavailable without the PBR shader; active while interior lighting is on and a shown
+     *  object has an ambient zone. */
+    WorldRendererFeature_AmbientZones,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -217,6 +226,23 @@ typedef enum WorldRendererHazeViewEnum
     /** @brief The number of views; not a view. */
     WorldRendererHazeView_Count = 3
 } WorldRendererHazeView;
+
+/**
+ * @brief What interior lighting's debug view shows (a debug aid: WorldRenderer_SetInteriorView).
+ */
+typedef enum WorldRendererInteriorViewEnum
+{
+    /** @brief No debug view: the scene (the default). */
+    WorldRendererInteriorView_Off = 0,
+    /** @brief The scene with the ambient zones as wireframes, each in its light's colour. */
+    WorldRendererInteriorView_Zones = 1,
+    /** @brief The share of the sky's light each lit surface takes (a light grey all of it, darker under roofs down to
+     *  the floor's share, black only where the zones' sky scale is 0), tinted by the zones' own light where they reach,
+     *  with the zones' wireframes. */
+    WorldRendererInteriorView_Sky = 2,
+    /** @brief The number of views; not a view. */
+    WorldRendererInteriorView_Count = 3
+} WorldRendererInteriorView;
 
 /** @brief What a feature did in the most recent render. */
 typedef enum WorldRendererFeatureStateEnum
@@ -346,6 +372,19 @@ typedef struct WorldRendererStatusStruct
     float AdaptedLuminance;
     float AdaptedRealLuminance;
     bool IsExposureMetered;
+    /** @brief Interior lighting: whether it was on (WorldRenderer_SetInteriorLightingEnabled), the ambient zones of shown
+     *  objects, the models, instance cells and terrain chunks the sky's visibility map drew, how open the camera's
+     *  surroundings were (eased: 0 enclosed .. 1 the open) and how much the zones covered it, the scene luminance of the
+     *  light the eye was in at the camera (the sky's taken by the openness and the zones, plus their own light: what the
+     *  eye's anchor and night vision followed), the zones' exposure bias at the camera (stops), and the debug view. */
+    bool IsInteriorLightingEnabled;
+    size_t AmbientZoneCount;
+    size_t SkyOccluderCount;
+    float CameraOpenness;
+    float CameraZoneWeight;
+    float CameraSceneLuminance;
+    float ExposureBias;
+    WorldRendererInteriorView InteriorView;
     /** @brief How long the render took on the CPU, in milliseconds (WorldRenderer_RenderToTarget from its start to its
      *  return; the GPU works on after it, and its share shows in the frame time when it is the slower), and the time
      *  since the render before, as the caller gave it (its deltaSeconds; 0 when that was not above 0). */
@@ -507,6 +546,59 @@ double WorldRenderer_GetHazeSliceDistance(int slice);
 
 /** @brief A name for a haze debug view, for logs ("off", "in-scatter", "transmittance"; "unknown" outside the enum). */
 const unsigned char* WorldRenderer_GetHazeViewName(WorldRendererHazeView view);
+
+/**
+ * @brief Enables or disables interior lighting: the sky's visibility (roofs keep the sky's light off what lies under
+ *        them), the ambient zones (rooms' own light, sky scale, haze and exposure bias) and the eye's adaptation indoors
+ *        (the camera's openness and zones).
+ *
+ * Off, every surface takes the whole sky's light, no zone applies and the eye takes the sky's light at the camera as
+ * in the open: an A/B for comparing. Default enabled. Applied on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true for interior lighting.
+ */
+void WorldRenderer_SetInteriorLightingEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether interior lighting is enabled (see WorldRenderer_SetInteriorLightingEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true when enabled.
+ */
+bool WorldRenderer_IsInteriorLightingEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Tells the renderer how open the camera's surroundings are to the sky, for the eye indoors.
+ *
+ * Measure it at the camera once per shown frame (WorldCollision_GetSkyOpenness, after the camera is placed) and pass it
+ * here before the render. The renderer eases toward it over a fraction of a second, so a ray slipping through a door
+ * never pops: the eye then takes the sky's light at the camera as a surface with that much of the sky takes it, and
+ * adapts further into a dark room than the picture alone would let it, and night vision follows. 1 (the default, also
+ * for a game that never measures it) is the open.
+ * @param self The renderer; must not be NULL.
+ * @param openness 0 enclosed .. 1 the open (clamped; NaN counts as 1).
+ */
+void WorldRenderer_SetCameraOpenness(WorldRenderer* self, float openness);
+
+/**
+ * @brief Chooses interior lighting's debug view: the scene, the ambient zones' wireframes, or the share of the sky's
+ *        light each surface takes (with the zones' light and wireframes).
+ *
+ * A debug aid. Default WorldRendererInteriorView_Off. Applied on the next render; shows nothing while interior lighting
+ * is off. A view outside the enum is ignored.
+ * @param self The renderer; must not be NULL.
+ * @param view The view.
+ */
+void WorldRenderer_SetInteriorView(WorldRenderer* self, WorldRendererInteriorView view);
+
+/**
+ * @brief Reports interior lighting's debug view (see WorldRenderer_SetInteriorView).
+ * @param self The renderer; must not be NULL.
+ * @returns The view.
+ */
+WorldRendererInteriorView WorldRenderer_GetInteriorView(const WorldRenderer* self);
+
+/** @brief A name for an interior debug view, for logs ("off", "zones", "sky share"; "unknown" outside the enum). */
+const unsigned char* WorldRenderer_GetInteriorViewName(WorldRendererInteriorView view);
 
 /**
  * @brief Enables or disables the whole post-effects pass (screen-space AO + depth/normal-edge outlines).

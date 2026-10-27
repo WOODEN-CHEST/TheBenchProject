@@ -1,8 +1,9 @@
 // The world's lighting, shared by the lit shaders (world_pbr and world_sprite), for #include "common/lighting": the
 // frame's lighting uniforms (the renderer uploads the same values to every shader that includes this file), the
 // Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the cascades' shadow, forward point
-// lights and the shadow-casting point light with its cube shadow, the sky's ambient light with the screen-space AO, the
-// eye's night vision and the haze in front of every surface (the aerial perspective and the ground haze, common/haze).
+// lights and the shadow-casting point light with its cube shadow, the sky's ambient light with the screen-space AO and
+// interior lighting (common/interior: what roofs keep out, rooms' own light), the eye's night vision and the haze in
+// front of every surface (the aerial perspective and the ground haze, common/haze).
 //
 // THE SKY'S LIGHT (one light scale): the sun and the moon reach a surface through the air (their light above the air
 // times the transmittance toward them at the surface's own height: reddened low over the horizon, gone once the disc has
@@ -26,6 +27,7 @@
 #include "common/math"
 #include "common/atmosphere"
 #include "common/haze"
+#include "common/interior"
 #include "common/night_vision"
 #include "common/distance_packing"
 
@@ -89,9 +91,8 @@ uniform float pointShadowBias;          // world-space depth bias to combat shad
 // The volume's screen directions are the scene camera's: a point's place among them is its position through the scene's
 // view-projection (the crisp pass, at the window's resolution, reads the same directions). A draw's own haze multiplies
 // the frame's: its placement's `haze` (1 the real air's, 0 none: a sign that must read from far away), set before every
-// lit draw.
-// Interior lighting (not built yet): its ambient zones' haze multiplier (a room's) will multiply hazeMultiplier where
-// the renderer sets it per draw.
+// lit draw. The part of the line of sight inside the draw's ambient zones is hazed by their own haze
+// (InteriorHazeDistance: a room's still air has none).
 uniform mat4 hazeViewProjection;
 uniform float hazeMultiplier;
 
@@ -302,15 +303,22 @@ vec3 SkyLightWrapped(SkyLightValues light, vec3 n, vec3 v, float shadowAmount, f
     return direct;
 }
 
-// The ambient light on a surface with the normal n, per unit of its albedo (times its AO by the caller): the sky's
-// irradiance over the upper half of its view and the ground's bounce over the lower half, as a Lambertian surface takes
-// them ((sky (1 + n.y) / 2 + ground (1 - n.y) / 2) / pi), tinted, plus the moonless night's own light.
-// Interior lighting (not built yet) plugs in here: the sky visibility and the ambient zones (the sky's part seen from
-// inside a room, a zone's light).
-vec3 AmbientLight(SkyLightValues light, vec3 n)
+// The ambient light on a surface with the normal n at the point worldPos, per unit of its albedo (times its AO by the
+// caller): the sky's irradiance over the upper half of its view and the ground's bounce over the lower half, as a
+// Lambertian surface takes them ((sky (1 + n.y) / 2 + ground (1 - n.y) / 2) / pi), tinted, plus the moonless night's own
+// light; under a roof all three times the share of the sky the surface sees (its geometric normal surfaceNormal places
+// its ring of taps: common/interior) and the zones' sky scale, plus the zones' own light.
+vec3 AmbientLight(SkyLightValues light, vec3 n, vec3 worldPos, vec3 surfaceNormal)
 {
     float up = clamp(n.y, -1.0, 1.0);
-    return (light.sky*(1.0 + up) + light.ground*(1.0 - up))*(0.5/PI)*ambientTint + nightLight;
+    vec3 skyAmbient = (light.sky*(1.0 + up) + light.ground*(1.0 - up))*(0.5/PI)*ambientTint + nightLight;
+    if (!interiorActive)
+    {
+        return skyAmbient;
+    }
+    InteriorZoneLight zones = InteriorZonesAt(worldPos, surfaceNormal);
+    float share = InteriorSkyShare(InteriorSkyVisibility(worldPos, surfaceNormal))*zones.skyScale;
+    return skyAmbient*share + zones.ambient;
 }
 
 
@@ -471,8 +479,8 @@ vec3 ApplyAerialPerspective(vec3 color, vec3 worldPos)
     }
     vec3 inScatter;
     vec3 transmittance;
-    hazeInFront(HazeScreenUv(worldPos), worldPos/toPoint, toPoint, hazeMultiplier, normalize(sunDirection),
-        normalize(moonDirection), inScatter, transmittance);
+    hazeInFront(HazeScreenUv(worldPos), worldPos/toPoint, InteriorHazeDistance(worldPos, toPoint), hazeMultiplier,
+        normalize(sunDirection), normalize(moonDirection), inScatter, transmittance);
     return color*transmittance + NightVisionOf(inScatter);
 }
 
@@ -481,6 +489,6 @@ vec3 ApplyAerialPerspective(vec3 color, vec3 worldPos)
 vec3 AerialTransmittance(vec3 worldPos)
 {
     float toPoint = length(worldPos);
-    return (toPoint > 0.0) ? hazeTransmittance(HazeScreenUv(worldPos), worldPos/toPoint, toPoint, hazeMultiplier)
-        : vec3(1.0);
+    return (toPoint > 0.0) ? hazeTransmittance(HazeScreenUv(worldPos), worldPos/toPoint,
+        InteriorHazeDistance(worldPos, toPoint), hazeMultiplier) : vec3(1.0);
 }

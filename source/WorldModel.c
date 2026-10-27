@@ -82,7 +82,8 @@ WorldModelSettings WorldModelSettings_CreateDefault(void)
         .CastsShadows = true,
         .DrawDistance = WORLD_MODEL_DEFAULT_DRAW_DISTANCE,
         .IsDrawDistanceFixed = false,
-        .Haze = 1.0f
+        .Haze = 1.0f,
+        .OccludesSky = true
     };
 }
 

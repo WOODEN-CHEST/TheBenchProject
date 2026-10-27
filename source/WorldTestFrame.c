@@ -84,6 +84,8 @@
 #define TEST_MIST_THICKNESS 15.0f
 /** Room for one haze key's log line. */
 #define HAZE_TEXT_CAPACITY ((size_t)160)
+/** How far the camera's openness rays reach, in metres: past it everything counts as open sky. */
+#define CAMERA_OPENNESS_REACH 30.0f
 /** The objects whose opacity the X key steps: the centre cube (a model) and the tree (a cutout sprite), both casting
  *  shadows. */
 #define OPACITY_TEST_OBJECT_COUNT 2U
@@ -693,6 +695,30 @@ static void HandleDebugAtmosphereInput(WorldTestFrame* frame, const GameInput* i
     HandleDebugHazeInput(frame, input, environment);
 }
 
+/* Interior lighting's keys: keypad 9 switches it off and on (the A/B: off, every surface takes the whole sky's light, no
+ * ambient zone applies and the eye takes the sky's light as in the open), keypad 0 steps its debug view (off, the
+ * ambient zones' wireframes, the sky's share on every surface with the zones). Each logged. */
+static void HandleDebugInteriorInput(WorldTestFrame* frame, const GameInput* input)
+{
+    if (GameInput_IsKeyPressed(input, GameKey_Keypad9))
+    {
+        bool Enabled = !WorldRenderer_IsInteriorLightingEnabled(frame->_renderer);
+        WorldRenderer_SetInteriorLightingEnabled(frame->_renderer, Enabled);
+        LogLine(frame, Enabled ? "interior lighting ON (roofs keep the sky's light out, ambient zones light rooms, the "
+            "eye adapts indoors)." : "interior lighting OFF (every surface takes the whole sky's light, no ambient zone, "
+            "the eye as in the open).");
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_Keypad0))
+    {
+        WorldRendererInteriorView View = WorldRenderer_GetInteriorView(frame->_renderer);
+        View = (WorldRendererInteriorView)(((int)View + 1) % (int)WorldRendererInteriorView_Count);
+        WorldRenderer_SetInteriorView(frame->_renderer, View);
+        char Text[HAZE_TEXT_CAPACITY];
+        snprintf(Text, sizeof(Text), "interior view: %s.", (const char*)WorldRenderer_GetInteriorViewName(View));
+        LogLine(frame, Text);
+    }
+}
+
 /* The moon's and the seasons' debug keys: F pins the moon full (a story's fixed phase) or gives it back to the
  * calendar, Y switches the seasons. Each change is logged with the date, time and moon. */
 static void HandleDebugSkyInput(WorldTestFrame* frame, const GameInput* input)
@@ -711,6 +737,7 @@ static void HandleDebugSkyInput(WorldTestFrame* frame, const GameInput* input)
         LogClock(frame, Environment->AreSeasonsEnabled ? "seasons ON (the sun follows the date)" : "seasons OFF");
     }
     HandleDebugAtmosphereInput(frame, input, Environment);
+    HandleDebugInteriorInput(frame, input);
 }
 
 // Static functions: the world file.
@@ -1795,8 +1822,9 @@ static bool WorldTestFrame_IsUnloaded(void* self)
 }
 
 /* The update side's last step before a render: the skeletons are posed once per shown frame, then the world
- * matrices of what the poses moved are brought up to date, so the render reads them cached, and the camera rides the
- * player's eyes (its body's eyes socket as posed) while walking. */
+ * matrices of what the poses moved are brought up to date, so the render reads them cached, the camera rides the
+ * player's eyes (its body's eyes socket as posed) while walking, and how open the sky is around the camera is
+ * measured for the eye. */
 static Error WorldTestFrame_PrepareRender(void* self, ProgramTime time)
 {
     (void)time;
@@ -1806,6 +1834,12 @@ static Error WorldTestFrame_PrepareRender(void* self, ProgramTime time)
     WorldTestCharacters_PlaceCamera(&Frame->_testCharacters, &Frame->_camera);
     // The player's body is seen from its eyes: the camera's passes leave out its head.
     WorldRenderer_SetFirstPersonObject(Frame->_renderer, WorldTestCharacters_GetPlayer(&Frame->_testCharacters));
+    // How open the camera's surroundings are to the sky, against what keeps the sky out (the world and prop layers): the
+    // eye adapts indoors by it.
+    WorldCollisionFilter Filter = WorldCollisionFilter_Create(COLLISION_LAYER_BIT(CollisionLayer_World)
+        | COLLISION_LAYER_BIT(CollisionLayer_Prop), WorldCollisionTriggerMode_Ignore);
+    WorldRenderer_SetCameraOpenness(Frame->_renderer, WorldCollision_GetSkyOpenness(Frame->_collision,
+        Frame->_camera.Position, CAMERA_OPENNESS_REACH, &Filter));
     return Error_CreateSuccess();
 }
 

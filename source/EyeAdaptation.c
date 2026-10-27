@@ -164,3 +164,13 @@ float EyeAdaptation_GetExposure(float level, double realScale)
     Exposure = (Exposure < Minimum) ? Minimum : ((Exposure > Maximum) ? Maximum : Exposure);
     return (float)exp2(Exposure);
 }
+
+float EyeAdaptation_GetBiasedExposure(float exposure, float stops)
+{
+    if (!(stops != 0.0f) || !isfinite(stops))
+    {
+        return exposure; // no bias, exactly
+    }
+    float Biased = exposure * exp2f(stops);
+    return fminf(fmaxf(Biased, EYE_ADAPTATION_MIN_EXPOSURE), EYE_ADAPTATION_MAX_EXPOSURE);
+}

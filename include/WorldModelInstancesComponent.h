@@ -35,8 +35,8 @@
  * Added with World_AddComponent(world, id, WorldComponentType_ModelInstances, &component); reach its fields with
  * WorldModelInstancesComponent_FromComponent. Its properties are the rows of its table ("model_instances_component"), in
  * this order: world_model, uses_variant, variant, overrides_has_outline, has_outline, overrides_shadow_tier, shadow_tier,
- * overrides_casts_shadows, casts_shadows, overrides_haze, haze, overrides_draw_distance, draw_distance,
- * draw_distance_multiplier,
+ * overrides_casts_shadows, casts_shadows, overrides_haze, haze, overrides_occludes_sky, occludes_sky,
+ * overrides_draw_distance, draw_distance, draw_distance_multiplier,
  * overrides_is_draw_distance_fixed, is_draw_distance_fixed, overrides_lod_distances, lod_distances,
  * lod_distance_multiplier, is_lod_forced, forced_lod and instances. Every change advances the component's revision
  * (WorldComponent_GetRevision); a change of the instances also advances their own revision
@@ -83,6 +83,11 @@ typedef struct WorldModelInstancesComponentStruct
     bool _overridesHaze;
     /** @brief This placement's haze multiplier, in [0, WORLD_MODEL_MAX_HAZE] (default 1: the real air's haze). */
     float _haze;
+    /** @brief Whether _occludesSky replaces the world model's (default false). */
+    bool _overridesOccludesSky;
+    /** @brief This placement's "every copy keeps the sky's light off what lies under it" (default true; off for grass and
+     *  small plants). */
+    bool _occludesSky;
     /** @brief Whether _drawDistance replaces the world model's draw distance (default false). */
     bool _overridesDrawDistance;
     /** @brief This placement's draw distance, in metres, above 0 (default WORLD_MODEL_DEFAULT_DRAW_DISTANCE). */
@@ -306,6 +311,26 @@ static inline float WorldModelInstancesComponent_GetHaze(const WorldModelInstanc
  *          range.
  */
 Error WorldModelInstancesComponent_SetHaze(WorldModelInstancesComponent* self, float haze);
+
+/**
+ * @brief Returns this placement's own "keeps the sky out" (it applies while WorldModelSetting_OccludesSky is
+ *        overridden).
+ * @param self The component; must not be NULL.
+ * @returns true if every copy keeps the sky's light off what lies under it.
+ */
+static inline bool WorldModelInstancesComponent_OccludesSky(const WorldModelInstancesComponent* self)
+{
+    return self->_occludesSky;
+}
+
+/**
+ * @brief Sets this placement's own "keeps the sky out" (it applies while WorldModelSetting_OccludesSky is overridden;
+ *        false for grass and small plants, which keep neither the sky's light nor the rain off the ground).
+ * @param self The component; must not be NULL.
+ * @param occludesSky Whether every copy keeps the sky's light off what lies under it.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldModelInstancesComponent_SetOccludesSky(WorldModelInstancesComponent* self, bool occludesSky);
 
 /**
  * @brief Returns this placement's own draw distance (it applies while WorldModelSetting_DrawDistance is overridden).

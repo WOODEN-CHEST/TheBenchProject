@@ -15,7 +15,8 @@
  *
  * Both tables give a setting the same wire id. Instances are never crisp: the instances table leaves out the two
  * omit_pixelation rows (wire ids 3 and 9 are the model component's alone); the instances table's list is wire id 22,
- * which the model component leaves unused, and the haze's pair is 23 and 24 in both.
+ * which the model component leaves unused, the haze's pair is 23 and 24 in both, and the sky's pair (occludes_sky) 25
+ * and 26.
  */
 
 
@@ -158,6 +159,18 @@
     .Category = WORLD_MODEL_PLACEMENT_CATEGORY_RENDERING, .DisplayName = u8"Haze", \
     .Description = u8"How hazy the object looks at a distance: it multiplies the haze in front of it, 1 the real air's, " \
         u8"0 as if the air were clear (a beacon, a sign that must read from far away; while \"Override haze\" is on)."
+
+#define WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_OCCLUDES_SKY \
+    .Key = u8"overrides_occludes_sky", .Type = PropertyType_Bool, .Default.BoolValue = false, \
+    .Flags = PROPERTY_FLAGS_SETTING, .Category = WORLD_MODEL_PLACEMENT_CATEGORY_RENDERING, \
+    .DisplayName = u8"Override keeps the sky out", \
+    .Description = u8"Uses this object's \"Keeps the sky out\" instead of its world model's."
+
+#define WORLD_MODEL_PLACEMENT_ROW_OCCLUDES_SKY \
+    .Key = u8"occludes_sky", .Type = PropertyType_Bool, .Default.BoolValue = true, .Flags = PROPERTY_FLAGS_SETTING, \
+    .Category = WORLD_MODEL_PLACEMENT_CATEGORY_RENDERING, .DisplayName = u8"Keeps the sky out", \
+    .Description = u8"Whether the object keeps the sky's light and the rain off what lies under it (a roof, a wall, a " \
+        u8"tree's canopy); off for grass, small plants, people and poles (while \"Override keeps the sky out\" is on)."
 
 #define WORLD_MODEL_PLACEMENT_ROW_IS_LOD_FORCED \
     .Key = u8"is_lod_forced", .Type = PropertyType_Bool, .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, \

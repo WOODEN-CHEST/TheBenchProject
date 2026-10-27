@@ -23,6 +23,15 @@
  */
 
 
+// Macros.
+/** The rays of WorldCollision_GetSkyOpenness's two rings (with the one straight up, WORLD_COLLISION_SKY_OPENNESS_RAYS). */
+#define SKY_OPENNESS_INNER_RAYS 4
+#define SKY_OPENNESS_OUTER_RAYS 8
+
+_Static_assert((1 + SKY_OPENNESS_INNER_RAYS + SKY_OPENNESS_OUTER_RAYS) == WORLD_COLLISION_SKY_OPENNESS_RAYS,
+    "the sky openness rays add up");
+
+
 // Types.
 /* One of a query's shapes, placed relative to the query's origin. */
 typedef struct QueryShapeStruct
@@ -756,6 +765,37 @@ bool WorldCollision_Raycast(WorldCollision* self, Vector3Double origin, Vector3 
     }
     *outHit = Probe.Best;
     return true;
+}
+
+float WorldCollision_GetSkyOpenness(WorldCollision* self, Vector3Double point, float maxDistance,
+    const WorldCollisionFilter* filter)
+{
+    // Equal shares of the sky's light on a surface facing up (cosine-weighted): the sky's directions projected onto the
+    // unit disk under it, cut into WORLD_COLLISION_SKY_OPENNESS_RAYS pieces of equal area: a middle disk (straight up)
+    // and two rings, a ray for each of a ring's pieces at the radius r that halves the ring's area (the ray leans r from
+    // the vertical), the outer ring's rays turned to fall between the inner ring's.
+    static const int RingRays[] = { 1, SKY_OPENNESS_INNER_RAYS, SKY_OPENNESS_OUTER_RAYS };
+    int OpenCount = 0;
+    int Before = 0;
+    for (int Ring = 0; Ring < (int)(sizeof(RingRays) / sizeof(RingRays[0])); Ring++)
+    {
+        float Radius = (Ring == 0) ? 0.0f
+            : sqrtf((float)(2 * Before + RingRays[Ring]) / (float)(2 * WORLD_COLLISION_SKY_OPENNESS_RAYS));
+        float Rise = sqrtf(1.0f - Radius * Radius);
+        float Turn = (Ring == 2) ? (PI / (float)RingRays[Ring]) : 0.0f;
+        for (int Index = 0; Index < RingRays[Ring]; Index++)
+        {
+            float Angle = Turn + (2.0f * PI * (float)Index) / (float)RingRays[Ring];
+            Vector3 Direction = { Radius * cosf(Angle), Rise, Radius * sinf(Angle) };
+            WorldRayHit Hit;
+            if (!WorldCollision_Raycast(self, point, Direction, maxDistance, filter, &Hit))
+            {
+                OpenCount++;
+            }
+        }
+        Before += RingRays[Ring];
+    }
+    return (float)OpenCount / (float)WORLD_COLLISION_SKY_OPENNESS_RAYS;
 }
 
 size_t WorldCollision_RaycastAll(WorldCollision* self, Vector3Double origin, Vector3 direction, float maxDistance,

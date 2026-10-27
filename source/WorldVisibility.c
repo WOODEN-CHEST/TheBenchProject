@@ -134,6 +134,15 @@ static bool AddCaster(GenericBuffer lists[WorldVisibilityPass_Count], const Worl
     return true;
 }
 
+/* Adds an entry that keeps the sky out (drawn this frame, not faded out) to the sky's visibility map's list when the map
+ * is drawn and the entry lies in its box. */
+static bool AddSkyOccluder(GenericBuffer* list, const WorldVisibilityView* view, Vector3 center, float radius,
+    size_t index)
+{
+    return !view->IsSkyVisibilityActive || !IsInVolume(view, &view->SkyVisibilityBox, center, radius)
+        || AddIndex(list, index);
+}
+
 /* Adds an entry that is not faded out to the camera's list when it is in view, and counts it. @p outIsInView (may be NULL)
  * says whether it joined the list. */
 static bool AddToCamera(WorldVisibility* self, GenericBuffer* cameraList, const WorldVisibilityView* view,
@@ -204,6 +213,11 @@ static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, con
         self->_counts.DrawnModelsByLod[(Lod < WORLD_MODEL_MAX_LODS) ? Lod : (WORLD_MODEL_MAX_LODS - 1U)]++;
         self->_counts.LodFadingCount += WorldLodState_IsFading(&model->Lod) ? 1U : 0U;
     }
+    if (model->OccludesSky && !AddSkyOccluder(&self->_models[WorldVisibilityPass_SkyVisibility], view,
+        model->RenderCenter, model->Radius, index))
+    {
+        return false;
+    }
     return !model->CastsShadows || AddCaster(self->_models, view, model->RenderCenter, model->Radius,
         ModelCastsIntoCascade(model->ShadowTier, true), ModelCastsIntoCascade(model->ShadowTier, false), index);
 }
@@ -265,6 +279,12 @@ static bool AddTerrainChunk(WorldVisibility* self, const WorldVisibilityView* vi
         self->_counts.DrawnTerrainChunkCount++;
         self->_counts.DrawnTerrainTriangleCount += chunk->TriangleCount;
     }
+    // The ground keeps the sky out wherever it overhangs (a cave, a cliff), whether it casts shadows or not.
+    if (!AddSkyOccluder(&self->_terrainChunks[WorldVisibilityPass_SkyVisibility], view, chunk->RenderCenter,
+        chunk->Radius, index))
+    {
+        return false;
+    }
     return !chunk->CastsShadows || AddCaster(self->_terrainChunks, view, chunk->RenderCenter, chunk->Radius,
         ModelCastsIntoCascade(chunk->ShadowTier, true), ModelCastsIntoCascade(chunk->ShadowTier, false), index);
 }
@@ -300,6 +320,11 @@ static bool AddInstanceCell(WorldVisibility* self, const WorldVisibilityView* vi
     else
     {
         self->_counts.InstanceCellsOutsideViewCount++;
+    }
+    if (cell->OccludesSky && !AddSkyOccluder(&self->_instanceCells[WorldVisibilityPass_SkyVisibility], view,
+        cell->RenderCenter, cell->Radius, index))
+    {
+        return false;
     }
     return !cell->CastsShadows || AddCaster(self->_instanceCells, view, cell->RenderCenter, cell->Radius,
         ModelCastsIntoCascade(cell->ShadowTier, true), ModelCastsIntoCascade(cell->ShadowTier, false), index);

@@ -154,6 +154,8 @@ typedef struct LoggerStruct Logger;
 /** @brief How many times one step may set blocked movers back and solve again (movers pushing into each other through
  *  pushables stop one more each time); past it, the movers still blocked push through for that step. */
 #define WORLD_COLLISION_MAX_BLOCK_ROUNDS 8U
+/** @brief The rays WorldCollision_GetSkyOpenness casts (each an equal share of the sky's light). */
+#define WORLD_COLLISION_SKY_OPENNESS_RAYS 13
 
 
 // Types.
@@ -755,6 +757,24 @@ bool WorldCollision_Raycast(WorldCollision* self, Vector3Double origin, Vector3 
  */
 size_t WorldCollision_RaycastAll(WorldCollision* self, Vector3Double origin, Vector3 direction, float maxDistance,
     const WorldCollisionFilter* filter, GenericBuffer* outHits);
+
+/**
+ * @brief How open a point is to the sky: the share of WORLD_COLLISION_SKY_OPENNESS_RAYS rays up from it that reach
+ *        @p maxDistance without hitting what the filter sees, each ray standing for an equal share of the sky's light on
+ *        a surface facing up (one straight up, four 61 degrees up, eight 34 degrees up, around the compass).
+ *
+ * 1 in the open, 0 in a closed room, between under a roof with open sides (a porch, a bus shelter) or beside a high
+ * wall. The renderer's eye adapts indoors by it (WorldRenderer_SetCameraOpenness): measure it at the camera once per
+ * shown frame, against the colliders that keep the sky out (the world and prop layers, triggers ignored), about 30 m.
+ * A point inside a solid shape hits it at once (0).
+ * @param self The collision world; must not be NULL.
+ * @param point Where the rays start, in the world (double).
+ * @param maxDistance How far they reach, in metres (above 0): beyond it everything counts as open sky.
+ * @param filter What they see (NULL: every layer, triggers ignored).
+ * @returns The openness, in [0, 1] (a multiple of 1 / WORLD_COLLISION_SKY_OPENNESS_RAYS).
+ */
+float WorldCollision_GetSkyOpenness(WorldCollision* self, Vector3Double point, float maxDistance,
+    const WorldCollisionFilter* filter);
 
 /**
  * @brief Moves shapes from one pose to another and finds their first contact on the way, whatever the speed.

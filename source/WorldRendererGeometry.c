@@ -218,19 +218,21 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, WorldRendererPixelFil
             continue;
         }
 
-        // The lit pass reach-culls the object's point lights and uploads them once for its LODs, then dithers each LOD
-        // by the object's fade (its draw distance, its opacity) and by its part of a LOD cross-fade: the two LODs of a
-        // cross-fade keep complementary pixels. A LOD's meshes share its dither. A posed object's skinned meshes draw
-        // with the skinned program, which gets the same.
+        // The lit pass reach-culls the object's point lights and ambient zones and uploads them once for its LODs, then
+        // dithers each LOD by the object's fade (its draw distance, its opacity) and by its part of a LOD cross-fade:
+        // the two LODs of a cross-fade keep complementary pixels. A LOD's meshes share its dither. A posed object's
+        // skinned meshes draw with the skinned program, which gets the same.
         bool IsPosed = HasLitSkinned && (Entry->CameraPose != NULL);
         WorldRendererLighting_UploadObjectLights(self, self->_pbr._rigid._passShader, &self->_pbr._rigid._lit,
             Entry->RenderCenter, Entry->Radius);
-        WorldRendererLighting_SetDrawHaze(self->_pbr._rigid._passShader, &self->_pbr._rigid._lit, Entry->Haze);
+        WorldRendererLighting_SetDrawPlace(self, self->_pbr._rigid._passShader, &self->_pbr._rigid._lit,
+            Entry->RenderCenter, Entry->Radius, Entry->Haze);
         if (IsPosed)
         {
             WorldRendererLighting_UploadObjectLights(self, self->_pbr._skinned._passShader, &self->_pbr._skinned._lit,
                 Entry->RenderCenter, Entry->Radius);
-            WorldRendererLighting_SetDrawHaze(self->_pbr._skinned._passShader, &self->_pbr._skinned._lit, Entry->Haze);
+            WorldRendererLighting_SetDrawPlace(self, self->_pbr._skinned._passShader, &self->_pbr._skinned._lit,
+                Entry->RenderCenter, Entry->Radius, Entry->Haze);
         }
         float Fade = WorldVisibility_GetModelFade(&self->_visibility, Index).Combined;
         WorldLodDraw Draws[WORLD_LOD_MAX_DRAWS];

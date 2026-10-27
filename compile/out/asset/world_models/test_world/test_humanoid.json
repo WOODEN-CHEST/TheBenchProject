@@ -11,5 +11,6 @@
         "hand_l": { "bone": "hand_l", "position": [ -0.03, -0.07, 0.0 ], "rotation": [ 100.0, 0.0, 0.0 ] },
         "eyes": { "bone": "head", "position": [ 0.0, 0.1, 0.1 ] }
     },
-    "first_person": { "eyes": "eyes", "hidden_bones": [ "neck" ] }
+    "first_person": { "eyes": "eyes", "hidden_bones": [ "neck" ] },
+    "render": { "occludes_sky": false }
 }

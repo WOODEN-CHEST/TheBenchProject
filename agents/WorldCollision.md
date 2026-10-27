@@ -277,6 +277,7 @@ Every query takes a `WorldCollisionFilter` (`WorldCollisionFilter_Create(layerMa
 | Query | Gives |
 |---|---|
 | `WorldCollision_Raycast` / `_RaycastAll` | The nearest hit / every hit (one per shape), nearest first. |
+| `WorldCollision_GetSkyOpenness(point, maxDistance, filter)` | How open a point is to the sky, 0 to 1: the share of `WORLD_COLLISION_SKY_OPENNESS_RAYS` (13) rays up that travel `maxDistance` without a hit, spread as the sky's light falls on a surface facing up (one straight up, rings of 4 and 8, each ray an equal share). The renderer's interior lighting takes the camera's ([WorldRuntime.md](WorldRuntime.md), "Interior lighting"); the test frame casts it 30 m against the world and prop layers. |
 | `WorldCollision_CastShape(shapes, count, start pose, end pose)` | The first contact of up to `WORLD_COLLISION_MAX_QUERY_SHAPES` (32) shapes moving between two poses. A motion without turning is a GJK ray cast, exact. A turning motion uses conservative advancement: it stops a hair (`COLLISION_TOI_TARGET`, 0.5 mm) before touching and never skips a contact. A shape inside something at the start is a hit at fraction 0 with its depth and push-out normal. Spheres, capsules, boxes, cylinders and hulls can be cast. |
 | `WorldCollision_SweepSphere` / `_SweepCapsule` / `_SweepBox` | Linear casts of one shape. A capsule is upright and given by its whole height. |
 | `WorldCollision_OverlapShape` / `_OverlapSphere` / `_OverlapCapsule` / `_OverlapBox` | The ids of the objects touched, ascending, each once. A bounded plane can be a query shape here. |

@@ -603,16 +603,16 @@ void WorldRendererInstances_DrawLit(WorldRenderer* self, const WorldRenderFrame*
     for (size_t Position = 0U; Position < VisibleCount; Position++)
     {
         const WorldRenderInstanceCell* Cell = &Cells[Visible[Position]];
-        // The cell's forward lights by its sphere and its component's haze multiplier, into the program that draws it
-        // (the twin, or world_pbr one at a time).
+        // The cell's forward lights and ambient zones by its sphere and its component's haze multiplier, into the
+        // program that draws it (the twin, or world_pbr one at a time).
         if (IsLit)
         {
             const WorldRendererPbrProgram* Program = (IsInstanced && (GetEntryBuffer(self, Cell->Entry) != 0U))
                 ? &self->_pbr._instanced : &self->_pbr._rigid;
             WorldRendererLighting_UploadObjectLights(self, Program->_passShader, &Program->_lit, Cell->RenderCenter,
                 Cell->Radius);
-            WorldRendererLighting_SetDrawHaze(Program->_passShader, &Program->_lit,
-                (Cell->Entry < EntryCount) ? Entries[Cell->Entry].Haze : 1.0f);
+            WorldRendererLighting_SetDrawPlace(self, Program->_passShader, &Program->_lit, Cell->RenderCenter,
+                Cell->Radius, (Cell->Entry < EntryCount) ? Entries[Cell->Entry].Haze : 1.0f);
         }
         if (DrawCell(self, &Pass, Cell, frame->ZoomFactor, DrawDistanceScale))
         {

@@ -471,7 +471,8 @@ void WorldRendererAtmosphere_UploadFrame(Shader shader, const WorldRendererAtmos
 }
 
 /* Bound manually: the stars draw with a direct draw, and the sky pass's 2D batch binds only units 0 to 4, so 7 and 8 stay
- * as set here until the lit passes bind the volume on 8 (WorldRendererAtmosphere_BindVolume). Unit 0 is made the active
+ * as set here until the lit passes bind the sky's visibility map on 7 (WorldRendererSkyVisibility_BindMap) and the volume
+ * on 8 (WorldRendererAtmosphere_BindVolume). Unit 0 is made the active
  * one again, where raylib's own binds expect it (a texture loaded later would otherwise land on unit 8). */
 void WorldRendererAtmosphere_BindTables(const WorldRenderer* self, const WorldRenderFrame* frame)
 {

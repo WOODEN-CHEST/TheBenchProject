@@ -32,6 +32,7 @@ uniform float alphaCutoff;    // cutout threshold on the texture's alpha
 uniform bool isLit;           // false: the colours are emitted light
 uniform float emission;       // an unlit sprite's brightness multiplier
 uniform float lightWrap;      // how far light wraps around the sprite: 0 for cards (fixed sprites, decals)
+uniform bool isCard;          // a card (a fixed sprite or decal), not a billboard
 uniform bool useScreenAo;     // whether the screen-space AO at this pixel is this sprite's (a cutout sprite, a decal)
 
 out vec4 finalColor;
@@ -64,10 +65,14 @@ void main()
     float alpha = (alphaMode == ALPHA_MODE_CUTOUT) ? 1.0 : texel.a*colDiffuse.a;
 
     vec3 color;
+    // Where interior lighting reads the sprite's sky and zones from: a card by its own facing; a billboard, whose quad
+    // turns with the camera, as a thing standing there (facing up), so its light does not change as the camera moves.
+    vec3 placeNormal = vec3(0.0, 1.0, 0.0);
     if (isLit)
     {
         vec3 v = normalize(-fragPosition); // render space: the camera at the origin
         vec3 n = FacingNormal(normalize(fragNormal), v);
+        placeNormal = isCard ? n : placeNormal;
 
         // The cascades are read on the sprite as their light sees it, with the slope bias of that quad's face toward
         // the light; the cube shadow likewise on the quad facing its light.
@@ -81,7 +86,7 @@ void main()
             SPRITE_METALLIC);
         vec3 pointTotal = PointLightsWrapped(n, v, fragPosition, fragPointShadowPosition, pointShadowNormal, lightWrap,
             albedo, SPRITE_F0, SPRITE_ROUGHNESS, SPRITE_METALLIC);
-        vec3 ambient = AmbientLight(light, n)*albedo*(useScreenAo ? ScreenAo() : 1.0);
+        vec3 ambient = AmbientLight(light, n, fragPosition, placeNormal)*albedo*(useScreenAo ? ScreenAo() : 1.0);
 
         // Reflected light goes through the eye's night vision, as the models' does.
         color = NightVisionOf(ambient + direct + pointTotal);
@@ -102,5 +107,9 @@ void main()
     }
 
     color = ApplyAerialPerspective(color, fragPosition);
+    if (isLit)
+    {
+        color = InteriorViewColor(color, fragPosition, placeNormal);
+    }
     finalColor = (alphaMode == ALPHA_MODE_BLEND) ? vec4(color*alpha, alpha) : vec4(color, 1.0);
 }

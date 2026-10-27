@@ -74,7 +74,9 @@ void main()
     rough = clamp(rough, 0.045, 1.0);
     metal = clamp(metal, 0.0, 1.0);
 
-    vec3 n = normalize(fragNormal);
+    // The geometric normal places the surface's taps of the sky's visibility (a normal map's bumps would jitter them).
+    vec3 surfaceNormal = normalize(fragNormal);
+    vec3 n = surfaceNormal;
     if (hasNormalMap)
     {
         vec3 mapN = texture(normalMap, fragTexCoord).xyz*2.0 - 1.0;
@@ -93,9 +95,10 @@ void main()
     vec3 direct = SkyLight(light, n, v, shadowAmount, albedo, f0, rough, metal);
     vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, n, albedo, f0, rough, metal);
 
-    // The sky's own light as the ambient (the sky above, the ground's bounce below, the night's light). Screen-space AO
-    // darkens ONLY this ambient term (never the direct light).
-    vec3 ambient = AmbientLight(light, n)*albedo*occlusion*ScreenAo();
+    // The sky's own light as the ambient (the sky above, the ground's bounce below, the night's light; under a roof only
+    // the share of the sky the surface sees, in a room its ambient zones' light). Screen-space AO darkens ONLY this
+    // ambient term (never the direct light).
+    vec3 ambient = AmbientLight(light, n, fragPosition, surfaceNormal)*albedo*occlusion*ScreenAo();
 
     vec3 emissive = emissiveColor*emissiveIntensity;
     if (hasEmissiveMap)
@@ -109,8 +112,9 @@ void main()
     reflected = NightVisionOf(reflected);
     vec3 color = reflected + emissive;
 
-    // The haze in front of it (aerial perspective, the ground haze).
+    // The haze in front of it (aerial perspective, the ground haze), then interior lighting's debug view while it is on.
     color = ApplyAerialPerspective(color, fragPosition);
+    color = InteriorViewColor(color, fragPosition, surfaceNormal);
 
     // The fade is tested last, after every derivative and mipmapped fetch above, so those stay defined for the pixels
     // that are drawn.

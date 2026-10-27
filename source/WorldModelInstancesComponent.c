@@ -27,6 +27,8 @@ typedef enum InstancesPropertyEnum
     InstancesProperty_CastsShadows,
     InstancesProperty_OverridesHaze,
     InstancesProperty_Haze,
+    InstancesProperty_OverridesOccludesSky,
+    InstancesProperty_OccludesSky,
     InstancesProperty_OverridesDrawDistance,
     InstancesProperty_DrawDistance,
     InstancesProperty_DrawDistanceMultiplier,
@@ -45,8 +47,8 @@ typedef enum InstancesPropertyEnum
 // Fields.
 /* Every property, in inspector order: the model component's rows with the model component's wire ids (shared through
  * source/WorldModelComponentInternal.h; no omit_pixelation, 3 and 9: copies are never crisp), then the copies. The wire
- * ids are the save schema: never renumber or reuse one. The haze's pair is 23 and 24, as in the model component, and
- * the copies 22. The next free wire id is 25. */
+ * ids are the save schema: never renumber or reuse one. The haze's pair is 23 and 24 and the sky's 25 and 26, as in the
+ * model component, and the copies 22. The next free wire id is 27. */
 static const PropertyDescriptor InstancesProperties[InstancesProperty_Count] =
 {
     [InstancesProperty_WorldModel] =
@@ -103,6 +105,16 @@ static const PropertyDescriptor InstancesProperties[InstancesProperty_Count] =
     {
         WORLD_MODEL_PLACEMENT_ROW_HAZE, .WireId = 24U, PROPERTY_MEMBER(WorldModelInstancesComponent, _haze),
         .SinceVersion = 1U
+    },
+    [InstancesProperty_OverridesOccludesSky] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_OCCLUDES_SKY, .WireId = 25U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _overridesOccludesSky), .SinceVersion = 1U
+    },
+    [InstancesProperty_OccludesSky] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_OCCLUDES_SKY, .WireId = 26U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _occludesSky), .SinceVersion = 1U
     },
     [InstancesProperty_OverridesDrawDistance] =
     {
@@ -281,6 +293,10 @@ static bool TryGetOverrideFlag(WorldModelInstancesComponent* self, WorldModelSet
             *outFlag = &self->_overridesHaze;
             *outProperty = InstancesProperty_OverridesHaze;
             return true;
+        case WorldModelSetting_OccludesSky:
+            *outFlag = &self->_overridesOccludesSky;
+            *outProperty = InstancesProperty_OverridesOccludesSky;
+            return true;
         case WorldModelSetting_OmitPixelation:
         case WorldModelSetting_Count:
             break;
@@ -367,6 +383,7 @@ bool WorldModelInstancesComponent_IsOverridden(const WorldModelInstancesComponen
         case WorldModelSetting_IsDrawDistanceFixed: return self->_overridesIsDrawDistanceFixed;
         case WorldModelSetting_LodDistances:        return self->_overridesLodDistances;
         case WorldModelSetting_Haze:                return self->_overridesHaze;
+        case WorldModelSetting_OccludesSky:         return self->_overridesOccludesSky;
         case WorldModelSetting_OmitPixelation:
         case WorldModelSetting_Count:
             break;
@@ -426,6 +443,16 @@ Error WorldModelInstancesComponent_SetCastsShadows(WorldModelInstancesComponent*
         return CreateNullSelfError("WorldModelInstancesComponent_SetCastsShadows");
     }
     SetBool(self, &self->_castsShadows, castsShadows, InstancesProperty_CastsShadows);
+    return Error_CreateSuccess();
+}
+
+Error WorldModelInstancesComponent_SetOccludesSky(WorldModelInstancesComponent* self, bool occludesSky)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelInstancesComponent_SetOccludesSky");
+    }
+    SetBool(self, &self->_occludesSky, occludesSky, InstancesProperty_OccludesSky);
     return Error_CreateSuccess();
 }
 
@@ -566,6 +593,10 @@ WorldModelSettings WorldModelInstancesComponent_ResolveSettings(const WorldModel
     if (self->_overridesHaze)
     {
         Settings.Haze = self->_haze;
+    }
+    if (self->_overridesOccludesSky)
+    {
+        Settings.OccludesSky = self->_occludesSky;
     }
     if (self->_overridesDrawDistance)
     {

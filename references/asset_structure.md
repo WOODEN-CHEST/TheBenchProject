@@ -559,7 +559,8 @@ default setting of this file for that one placement: an explicit override flag n
     "lod_fade_seconds": 0.3,                       // [OPTIONAL] default 0.3
     "lod_hysteresis": 0.05,                        // [OPTIONAL] default 0.05
     "render": {                                    // [OPTIONAL] each key [OPTIONAL]
-        "has_outline": true, "omit_pixelation": false, "shadow_tier": "both", "casts_shadows": true, "haze": 1.0
+        "has_outline": true, "omit_pixelation": false, "shadow_tier": "both", "casts_shadows": true, "haze": 1.0,
+        "occludes_sky": true
     },
     "variants": [                                  // [OPTIONAL] at most 64
         {
@@ -586,7 +587,7 @@ default setting of this file for that one placement: an explicit override flag n
 | `is_draw_distance_fixed` | boolean | true: the player's `draw_distance_scale` leaves the draw distance as it is (landmarks, gameplay-critical props). |
 | `lod_fade_seconds` | seconds, >= 0 | How long a LOD cross-fade takes: both LODs are drawn with complementary pixel dithers meanwhile; 0 swaps at once. |
 | `lod_hysteresis` | in [0, 1) | A LOD switches to a coarser one at its switch distance x (1 + h) and back at x (1 - h), so an object standing at a boundary does not flicker. |
-| `render` | object | The default render settings of the placements: `has_outline` (default true: a 1-pixel outline), `omit_pixelation` (default false: true draws it at full resolution over the pixelated image, for readable screens), `shadow_tier` (`both` (default), `near`: only the sharp near shadow, for small props, `far`: only the coarse far one, for big objects), `casts_shadows` (default true) and `haze` (in [0, 1000], default 1: times the air's haze in front of it; 0 as if the air were clear, for a beacon or a sign that must read from far away). |
+| `render` | object | The default render settings of the placements: `has_outline` (default true: a 1-pixel outline), `omit_pixelation` (default false: true draws it at full resolution over the pixelated image, for readable screens), `shadow_tier` (`both` (default), `near`: only the sharp near shadow, for small props, `far`: only the coarse far one, for big objects), `casts_shadows` (default true), `haze` (in [0, 1000], default 1: times the air's haze in front of it; 0 as if the air were clear, for a beacon or a sign that must read from far away) and `occludes_sky` (default true: it keeps the sky's light off what lies under it, as a roof, a wall or a tree's canopy does; false for grass, small plants, people and poles). |
 | `variants` | at most 64 `{ "name", "material_overrides" }` | Other looks of the same meshes (dark wood, a red car). `name`: `[a-z][a-z0-9_.-]*`, at most 128 bytes, unique in the world model. `material_overrides` (optional; at most 32, one per slot): what the variant changes in each material slot, below. A placed object picks one with `uses_variant` and `variant`. |
 | `bounds` | `{ "center": [x, y, z], "radius": metres >= 0 }` | The bounding sphere culling and draw distances use, in the object's own space (after each LOD's import transform). Left out, it is the sphere around LOD 0's mesh bounds, or, for an object an animator poses, the sphere around its pose. Give it to keep one fixed sphere whatever the pose. |
 | `animation_libraries` | at most 16 asset names, each once | The animation libraries (below, "Animation libraries") whose clips the placements play, loaded with the world model as its dependencies. Two of them may not hold a clip of the same name. The skinned LODs must share one skeleton: every LOD with bones must have the first one's bones and bind poses, or the world model is rejected (a coarse LOD may be rigid). A placement may play its own libraries instead (`references/world_structure.md`, the animator block). |
@@ -671,11 +672,11 @@ radius 0.5 m at 32x16, 16x8 and 8x4 segments). They collide: `test`, `pbr_metal`
 model `test_door`: the test cube made a 1 x 2 m panel by its import transform, hinged at its origin) has the sets
 `closed` and `open`, and an `opener` socket (where a character stands to push it). The others are `test_humanoid`
 and `test_humanoid_short` (the placeholder humanoid; they play the `test_humanoid` graph and have the sockets `hand_r`,
-`hand_l` and `eyes` and a first_person block), `test_bench` (the model `test_bench`, collision `bounds`,
+`hand_l` and `eyes` and a first_person block, and keep no sky out: `render.occludes_sky` false), `test_bench` (the model `test_bench`, collision `bounds`,
 its `seat` socket on the floor 0.55 m in front), `test_cup` (collision `bounds`, its `grip` on its side and its
 `reach` 0.52 m in front of it, facing it), and `test_tree` and `test_pebble`, the placeholders for instanced drawing
 (`asset_source/scripts/placeholder_instances.py`): a conifer of three LODs seen 250 m, which the test world's grove
-draws, and a pebble of two seen 45 m, which the test frame's pebble field draws.
+draws, and a pebble of two seen 45 m, which the test frame's pebble field draws (it keeps no sky out).
 
 
 ## World sprites.

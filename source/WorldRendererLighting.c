@@ -1,7 +1,8 @@
 // The PBR shader and the frame lighting every lit shader (models, sprites, terrain) gets through common/lighting (the sky's
 // light: the sun and the moon through the air and the sky's own light as the ambient; the haze, shadows, per-object
-// forward point lights and haze, the eye's night vision), and the PBR's per-material factors. The eye's adaptation is
-// WorldRendererExposure.c's.
+// forward point lights and each draw's place: its haze and its ambient zones; the eye's night vision), and the PBR's
+// per-material factors. The eye's adaptation is WorldRendererExposure.c's; interior lighting's parts are
+// WorldRendererInterior.c's and WorldRendererSkyVisibility.c's.
 
 #include <inttypes.h>
 #include <math.h>
@@ -252,9 +253,11 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
     AssignSamplerUnit(shader, outLocations->_locShadowMapFar, WorldRendererTextureUnit_ShadowFar);
     AssignSamplerUnit(shader, outLocations->_locPointShadowCube, WorldRendererTextureUnit_PointShadowCube);
     AssignSamplerUnit(shader, outLocations->_locAmbientOcclusionMap, WorldRendererTextureUnit_AmbientOcclusion);
-    // The air and the haze (the volume's sampler on its own unit).
+    // The air and the haze (the volume's sampler on its own unit), and interior lighting (the sky's visibility map on
+    // its own).
     WorldRendererAtmosphere_PrepareShader(shader, &outLocations->_atmosphere);
     WorldRendererAtmosphere_PrepareHazeShader(shader, true, &outLocations->_haze);
+    WorldRendererInterior_PrepareShader(shader, &outLocations->_interior);
 
     // The shader's point-light arrays must hold the WORLD_MAX_FORWARD_LIGHTS the culling may select; with fewer,
     // upload only as many as fit (the shader also clamps its loop to its own array size).
@@ -291,6 +294,10 @@ void WorldRendererLighting_PrepareSkyLight(WorldRenderer* self, WorldRenderFrame
         frame->LightPollutionRadiance, (double)frame->AtmosphereViewHeight, &frame->SkyLight);
     const WorldSkyLightFrame* Light = &frame->SkyLight;
     frame->BaseSceneLuminance = WorldSkyLight_GetSceneLuminance(Light);
+    // The light the eye is in: the sky's at the camera as its openness and the zones at it leave it, plus the zones' own
+    // (the sky's whole light in the open and while interior lighting is off).
+    WorldInterior_GetCameraLuminance(Light, &frame->CameraInterior, &frame->CameraSceneLuminance,
+        &frame->CameraDayLuminance);
     // The sun's disc for the eye's exposure (the one it is at: this render's is set after the scene is drawn).
     float Exposure = WorldRendererExposure_GetCurrent(self, frame);
     frame->LastExposure = Exposure;
@@ -307,9 +314,10 @@ void WorldRendererLighting_PrepareSkyLight(WorldRenderer* self, WorldRenderFrame
     // The lit shaders take it by height from the volume's last row while the atmosphere pass writes it there.
     frame->IsSkyLightPerHeight = frame->AreAtmosphereTablesActive && WorldRendererAtmosphere_IsVolumeAvailable(self);
     frame->IsMoonLit = frame->MoonSkyIntensity > 0.0f;
-    // Night vision reads the daylight on the real scale and the night's lights (raised for play) through its power law.
-    float DayLuminance = WorldSkyLight_GetDayLuminance(Light);
-    frame->NightVisionField = NightVision_GetFieldLuminance(DayLuminance, frame->BaseSceneLuminance - DayLuminance);
+    // Night vision reads the daylight on the real scale and the night's lights (raised for play) through its power law:
+    // the light the eye is in, a room's own light counted as daylight (it is lamp light, real light).
+    frame->NightVisionField = NightVision_GetFieldLuminance(frame->CameraDayLuminance,
+        frame->CameraSceneLuminance - frame->CameraDayLuminance);
     frame->NightVision = self->_nightVision;
     // The shadow light: the brighter of what the sun and the moon give the camera's surroundings.
     ChooseShadowLight(frame, Luminance(Light->Sun), Luminance(Light->Moon));
@@ -366,11 +374,14 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
 
     // The haze in front of every surface: the volume the atmosphere pass built for the scene camera's screen
     // directions (read through the scene's view-projection, also by the crisp pass), the frame's haze and the ground
-    // haze. Each draw sets its own multiplier; 1 until the first does.
+    // haze. Each draw sets its own multiplier and zones; 1 and none until the first does.
     WorldRendererAtmosphere_UploadFrame(shader, &lit->_atmosphere, frame);
     WorldRendererAtmosphere_UploadHaze(shader, &lit->_haze, frame);
     SetShaderValueMatrix(shader, lit->_locHazeViewProjection, frame->ViewProjection);
-    WorldRendererLighting_SetDrawHaze(shader, lit, 1.0f);
+    float NoHazeChange = 1.0f;
+    SetShaderValue(shader, lit->_locHazeMultiplier, &NoHazeChange, SHADER_UNIFORM_FLOAT);
+    // Interior lighting: the sky's visibility map and the debug view.
+    WorldRendererInterior_UploadFrame(self, frame, shader, &lit->_interior);
 
     // The eye's night vision for the reflected light and the haze (strength 0 leaves every colour as it is), calibrated on
     // the frame's light scale.
@@ -450,6 +461,7 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
 static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo)
 {
     WorldRendererAtmosphere_BindVolume(self, frame);
+    WorldRendererSkyVisibility_BindMap(self, frame);
     if (frame->IsCascadeShadowActive)
     {
         rlActiveTextureSlot(WorldRendererTextureUnit_ShadowNear);
@@ -555,9 +567,11 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
     }
 }
 
-void WorldRendererLighting_SetDrawHaze(Shader shader, const WorldRendererLitLocations* locations, float haze)
+void WorldRendererLighting_SetDrawPlace(const WorldRenderer* self, Shader shader,
+    const WorldRendererLitLocations* locations, Vector3 center, float radius, float haze)
 {
     SetShaderValue(shader, locations->_locHazeMultiplier, &haze, SHADER_UNIFORM_FLOAT);
+    WorldRendererInterior_UploadZones(self, shader, &locations->_interior, center, radius);
 }
 
 /* raylib's DrawMesh uploads colDiffuse and binds the material's textures (via the map-sampler locations of the
@@ -607,7 +621,7 @@ void WorldRendererLighting_LogStatus(const WorldRenderer* self)
         (double)Status->GroundIrradiance[0], (double)Status->GroundIrradiance[1], (double)Status->GroundIrradiance[2],
         (double)Status->NightLight[0], (double)Status->NightLight[1], (double)Status->NightLight[2],
         (double)Status->SceneLuminance, (double)Status->AdaptedLuminance,
-        Status->IsExposureMetered ? "measured" : "the sky light's anchor", (double)Status->Exposure,
+        Status->IsExposureMetered ? "measured" : "the anchor", (double)Status->Exposure,
         Status->SkyLightTableBuildCount,
         Status->IsSkyLightTableBuilding ? "; a rebuild is running" : "");
     Error_Deconstruct(&LogResult);

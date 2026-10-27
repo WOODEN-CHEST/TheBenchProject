@@ -98,7 +98,7 @@ Current module list:
   * WorldCollision - The collision world: every enabled collider in world space, synced once a tick (rebuilt or moved
     only when something changed; static and movable dynamic AABB trees, infinite planes in a list), queries with layer,
     trigger and ignore filters (rays, casts with rotation, overlaps, contact manifolds with local points and triangle
-    data), trigger enter/exit events with hysteresis, counts and a debug list the renderer draws as wireframes. Its
+    data, a point's openness to the sky), trigger enter/exit events with hysteresis, counts and a debug list the renderer draws as wireframes. Its
     step (WorldCollision_Step, the tick's collision step; source/WorldCollisionStep.c, the solver in
     source/WorldCollisionSolver.c, contacts and events in source/WorldCollisionEvents.c) sweeps every collider that
     moved (nothing tunnels: speculative contacts, then exact casts of every pushed motion), pushes everything that
@@ -253,7 +253,8 @@ Current module list:
     transform driver.
   * WorldModelComponent - A world model by asset name (WorldModels.md), the variant drawn, and the settings this
     placement overrides: each an explicit flag (overrides_<key>) next to the placement's own value (outline, crisp, shadow
-    tier, casts shadows, draw distance, fixed draw distance, LOD switch distances), plus a draw distance multiplier, a LOD
+    tier, casts shadows, haze, keeps the sky out, draw distance, fixed draw distance, LOD switch distances), plus a draw
+    distance multiplier, a LOD
     distance multiplier and a forced LOD; pure functions resolve the settings and the LOD settings in effect.
   * WorldModelInstancesComponent - Component type 7 (`model_instances`): many copies of one world model, each a
     double position, a rotation, a scale and a tint (an InstanceList, at most 262 144), with the model component's
@@ -268,6 +269,10 @@ Current module list:
     outline, crisp, draw distance, fixed draw distance), plus a draw distance multiplier; a pure function resolves the
     settings in effect (the draw distance from the placement, the world sprite or the kind).
   * WorldLightComponent - A point light (colour, intensity, range, casts shadows).
+  * WorldAmbientZoneComponent - Component type 8 (`ambient_zone`): a box or a sphere around its object that sets a
+    room's own light (its colour and intensity, the sky's share inside, the eye's exposure bias, its priority where
+    zones overlap, its air's haze), fading in from its surface (WorldData.md; the renderer's side in WorldRuntime.md,
+    "Interior lighting").
   * WorldColliderComponent - How the object collides (World collision, WorldCollision.md).
   * WorldTerrainComponent - Where a terrain lies and how it draws and collides (Terrain, Terrain.md).
   * WorldEnvironment - Per-world sky/sun/moon/night-sky/haze/effect settings, described by its property table
@@ -312,7 +317,11 @@ Current module list:
     which every lit surface, the sky, the stars and the outlines take; one light scale for the sky and the surfaces:
     the sun and the moon through the air at each surface's height and the sky's own light as the ambient, from the
     sky's irradiance table and the volume's last row; the eye adapting to the picture (source/WorldRendererExposure.c):
-    a meter pass over the HDR picture read back a frame or two later; the camera's passes in reversed 32-bit float
+    a meter pass over the HDR picture read back a frame or two later; interior lighting
+    (source/WorldRendererSkyVisibility.c, source/WorldRendererInterior.c and shaders/common/interior.glsl): a top-down
+    map of what keeps the sky out around the camera, which every lit surface reads for its share of the sky's light,
+    ambient zones that light rooms, and the eye adapting to the light at the camera indoors; the camera's passes in
+    reversed 32-bit float
     depth with no far plane where the GPU has clip control (GLDepth), so whatever has the draw distance draws at any
     distance), in render space: the world's orientation with the camera at the origin, every position relative to the
     camera (subtracted in double), shadow cascades snapped to their texels; separate from the world data and never
@@ -320,7 +329,7 @@ Current module list:
     read "Renderer structure" in WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features
     run.
   * WorldRenderCache - The renderer's private per-component cache (source/WorldRenderCache.h): one walk over the
-    world's model/sprite/light/terrain/model instances component arrays per frame builds the lists (every shown
+    world's model/sprite/light/terrain/model instances/ambient zone component arrays per frame builds the lists (every shown
     terrain's chunks too, and every shown model instances component's cells, built again only when its copies or its
     world model change) with the objects' world placements (in double,
     and in render space for the frame's origin: the one place a world position becomes the floats the GPU sees;
@@ -375,9 +384,15 @@ Current module list:
     scale and the night's raised lights through the power law) and the rods' blue-grey; the sky and PBR shaders apply it
     (shaders/common/night_vision).
   * EyeAdaptation - The eye's adaptation to the picture as pure maths (private, source/EyeAdaptation.h): the meter's centre-weighted log-average of its blocks, the anchor and the window around it (the sky's
-    floor at the night's own light), the eye eased in stops, and the partial adaptation's curve over night vision's real
-    light scale that gives the exposure; the renderer's meter pass and readback feed it (WorldRuntime.md, "Eye
-    adaptation").
+    floor at the night's own light), the eye eased in stops, the partial adaptation's curve over night vision's real
+    light scale that gives the exposure, and a room's bias on it; the renderer's meter pass and readback feed it
+    (WorldRuntime.md, "Eye adaptation").
+  * WorldInterior - Interior lighting as pure maths (private, source/WorldInterior.h): ambient zones in render space
+    (placed by their objects' world matrices), their weights (the fade from the surface, surfaces facing in), the at
+    most four a draw takes and their composition by priority, the haze inside them, the sky's visibility map on its
+    texel grid, a surface's taps and their reference heights, the visibility and the sky's share, and the camera's
+    interior (its openness and zones, eased) with the light the eye is in: the C mirror of
+    shaders/common/interior.glsl (WorldRuntime.md, "Interior lighting").
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world whose sky follows the frame's game
     clock and whose colliders it steps every tick (trigger, contact and motion events logged; F7 shows the colliders,
     F8 the contact points, F6 swings the door, F9 sends a wall through a row of crates, F10 moves the door's crate),
@@ -393,7 +408,9 @@ Current module list:
     apostrophe shows a field of 20 000 instanced pebbles (a runtime object) and the semicolon switches instanced
     drawing for the A/B (the private source/WorldTestInstances.{h,c}). The keypad's 1 switches the atmosphere's tables
     (the A/B against the direct march), 2 the multiple scattering and 3 the ozone, and I adds the frame times; the
-    keypad's 4 to 8 drive the haze (its debug view and slice, the distance scale, a morning mist, the haze strength).
+    keypad's 4 to 8 drive the haze (its debug view and slice, the distance scale, a morning mist, the haze strength),
+    the keypad's 9 switches interior lighting (the A/B) and 0 steps its debug view (the zones, the sky's share). Its
+    world has a test room with an ambient zone, and its PrepareRender measures how open the camera is to the sky.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown

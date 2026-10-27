@@ -780,11 +780,12 @@ void WorldRendererTerrain_DrawLit(WorldRenderer* self)
         }
         if (IsLit)
         {
-            // Each chunk takes the forward lights its sphere reaches, its haze multiplier, and dithers by its fade (its
-            // draw distance, its object's opacity).
+            // Each chunk takes the forward lights and the ambient zones its sphere reaches, its haze multiplier, and
+            // dithers by its fade (its draw distance, its object's opacity).
             WorldRendererLighting_UploadObjectLights(self, Draw.shader, &self->_terrain._lit, Entry->RenderCenter,
                 Entry->Radius);
-            WorldRendererLighting_SetDrawHaze(Draw.shader, &self->_terrain._lit, Entry->Haze);
+            WorldRendererLighting_SetDrawPlace(self, Draw.shader, &self->_terrain._lit, Entry->RenderCenter,
+                Entry->Radius, Entry->Haze);
             WorldRendererCommon_SetDither(Draw.shader, &self->_terrain._dither,
                 WorldVisibility_GetTerrainChunkFade(&self->_visibility, Index).Combined, 0.0f, false);
             float Tint[4] = { (float)Key.r / 255.0f, (float)Key.g / 255.0f, (float)Key.b / 255.0f,

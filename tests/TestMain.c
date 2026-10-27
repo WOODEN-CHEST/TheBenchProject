@@ -60,6 +60,7 @@ int main(void)
     WorldInstancingTests_Run(&Run);
     WorldAtmosphereTests_Run(&Run);
     WorldSkyLightTests_Run(&Run);
+    WorldInteriorTests_Run(&Run);
     AnimationLibraryTests_Run(&Run);
     AnimationGraphTests_Run(&Run);
     AnimationGraphPlayerTests_Run(&Run);

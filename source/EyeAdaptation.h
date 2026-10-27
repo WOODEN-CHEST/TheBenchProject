@@ -67,7 +67,7 @@
  *  dull one). Tuned on rendered frames for the night's look. */
 #define EYE_ADAPTATION_POWER 0.0596f
 /** @brief The exposure's range: a guard for skies far outside the tuned ones (a sun hundreds of times too bright, a
- *  world without light). The meter's window already keeps the eye within a few stops of the sky light's anchor: a clear
+ *  world without light). The meter's window already keeps the eye within a few stops of the anchor: a clear
  *  noon's exposures lie between about 0.5 and 4, the night's between about 10 and 150. */
 #define EYE_ADAPTATION_MIN_EXPOSURE (1.0f / 64.0f)
 #define EYE_ADAPTATION_MAX_EXPOSURE 512.0f
@@ -195,3 +195,12 @@ double EyeAdaptation_GetRealScale(float dayLuminance, float nightLuminance);
  * @returns The exposure.
  */
 float EyeAdaptation_GetExposure(float level, double realScale);
+
+/**
+ * @brief Returns an exposure with a bias in stops (a room's: its ambient zone's exposure_bias at the camera): times
+ *        2^stops, within [EYE_ADAPTATION_MIN_EXPOSURE, EYE_ADAPTATION_MAX_EXPOSURE].
+ * @param exposure The eye's exposure (EyeAdaptation_GetExposure).
+ * @param stops The bias; 0 (or one that is not finite) returns @p exposure exactly.
+ * @returns The exposure.
+ */
+float EyeAdaptation_GetBiasedExposure(float exposure, float stops);

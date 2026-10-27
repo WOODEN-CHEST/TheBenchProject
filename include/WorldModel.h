@@ -146,6 +146,10 @@ typedef struct WorldModelSettingsStruct
      *  air's, 0 as if the air were clear (a beacon, a sign that must read from far away). In
      *  [0, WORLD_MODEL_MAX_HAZE]. */
     float Haze;
+    /** @brief Whether the model keeps the sky's light (and the rain) off what lies under it: roofs, walls, tree canopies
+     *  (true, the default); false for things that hardly shade anything from the sky, such as grass, small plants,
+     *  people and poles, which would otherwise darken the ground around them. */
+    bool OccludesSky;
 } WorldModelSettings;
 
 /**

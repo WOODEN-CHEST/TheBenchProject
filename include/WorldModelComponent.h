@@ -39,7 +39,8 @@
  * WorldModelComponent_FromComponent. Its properties are the rows of its table ("model_component"), in this order:
  * world_model, uses_variant, variant, overrides_has_outline, has_outline, overrides_omit_pixelation, omit_pixelation,
  * overrides_shadow_tier, shadow_tier ("both" / "near" / "far"), overrides_casts_shadows, casts_shadows, overrides_haze,
- * haze, overrides_draw_distance, draw_distance, draw_distance_multiplier, overrides_is_draw_distance_fixed,
+ * haze, overrides_occludes_sky, occludes_sky, overrides_draw_distance, draw_distance, draw_distance_multiplier,
+ * overrides_is_draw_distance_fixed,
  * is_draw_distance_fixed, overrides_lod_distances, lod_distances, lod_distance_multiplier, is_lod_forced and forced_lod.
  * Every change advances the component's revision (WorldComponent_GetRevision).
  */
@@ -73,6 +74,8 @@ typedef enum WorldModelSettingEnum
     WorldModelSetting_LodDistances,
     /** @brief How hazy it looks at a distance (haze, flag overrides_haze). */
     WorldModelSetting_Haze,
+    /** @brief Keeping the sky's light off what lies under it (occludes_sky, flag overrides_occludes_sky). */
+    WorldModelSetting_OccludesSky,
     /** @brief The number of settings; not a setting. */
     WorldModelSetting_Count
 } WorldModelSetting;
@@ -113,6 +116,10 @@ typedef struct WorldModelComponentStruct
     /** @brief This placement's haze multiplier, in [0, WORLD_MODEL_MAX_HAZE] (default 1: the real air's haze; 0 as if the
      *  air were clear). */
     float _haze;
+    /** @brief Whether _occludesSky replaces the world model's (default false). */
+    bool _overridesOccludesSky;
+    /** @brief This placement's "keeps the sky's light off what lies under it" (default true). */
+    bool _occludesSky;
     /** @brief Whether _drawDistance replaces the world model's draw distance (default false). */
     bool _overridesDrawDistance;
     /** @brief This placement's draw distance, in metres, above 0 (default WORLD_MODEL_DEFAULT_DRAW_DISTANCE). */
@@ -346,6 +353,26 @@ static inline float WorldModelComponent_GetHaze(const WorldModelComponent* self)
  *          range.
  */
 Error WorldModelComponent_SetHaze(WorldModelComponent* self, float haze);
+
+/**
+ * @brief Returns this placement's own "keeps the sky out" (it applies while WorldModelSetting_OccludesSky is
+ *        overridden).
+ * @param self The model component; must not be NULL.
+ * @returns true if it keeps the sky's light off what lies under it.
+ */
+static inline bool WorldModelComponent_OccludesSky(const WorldModelComponent* self)
+{
+    return self->_occludesSky;
+}
+
+/**
+ * @brief Sets this placement's own "keeps the sky out" (it applies while WorldModelSetting_OccludesSky is overridden;
+ *        false leaves the object out of the sky's visibility, so it darkens nothing under or around it).
+ * @param self The model component; must not be NULL.
+ * @param occludesSky Whether it keeps the sky's light off what lies under it.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldModelComponent_SetOccludesSky(WorldModelComponent* self, bool occludesSky);
 
 /**
  * @brief Returns this placement's own draw distance (it applies while WorldModelSetting_DrawDistance is overridden).

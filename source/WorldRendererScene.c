@@ -251,6 +251,9 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
         WorldRendererGeometry_DrawLightGizmos(self);
     }
 
+    // Ambient zone wireframes: interior lighting's debug views.
+    WorldRendererInterior_DrawZones(self, frame);
+
     // Collider wireframes: a debug aid (the collision world's read-only debug list), off unless a collision world is set.
     if (self->_collisionDebug != NULL)
     {

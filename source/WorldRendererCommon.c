@@ -325,6 +325,39 @@ RenderTexture2D WorldRendererCommon_CreateColorTarget(int width, int height, Pix
     return Target;
 }
 
+RenderTexture2D WorldRendererCommon_CreateDepthTarget(int width, int height)
+{
+    RenderTexture2D Target = { 0 };
+    Target.id = rlLoadFramebuffer();
+    if (Target.id == 0)
+    {
+        return Target;
+    }
+
+    rlEnableFramebuffer(Target.id);
+    // No colour attachment (depth-only). BeginTextureMode reads .texture size for the viewport, so set it.
+    Target.texture.width = width;
+    Target.texture.height = height;
+    Target.depth.id = rlLoadTextureDepth(width, height, false); // false => a samplable depth TEXTURE
+    Target.depth.width = width;
+    Target.depth.height = height;
+    Target.depth.format = SCENE_DEPTH_FORMAT;
+    Target.depth.mipmaps = 1;
+    rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);
+    bool Complete = (Target.depth.id != 0) && rlFramebufferComplete(Target.id);
+    rlDisableFramebuffer();
+
+    if (!Complete)
+    {
+        rlUnloadFramebuffer(Target.id); // also deletes the attached depth texture
+        return (RenderTexture2D){ 0 };
+    }
+    // Readers compare raw depth texels (a shadow test, a tap of the sky's visibility): interpolated depths would blur
+    // the comparison.
+    SetTextureFilter(Target.depth, TEXTURE_FILTER_POINT);
+    return Target;
+}
+
 void WorldRendererCommon_UnloadTarget(RenderTexture2D* target, bool* hasTarget)
 {
     if (*hasTarget)

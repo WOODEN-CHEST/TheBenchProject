@@ -42,38 +42,6 @@
 
 
 // Static functions.
-/* Creates a depth-only framebuffer whose depth attachment is a samplable texture, for a shadow cascade (the
- * depth texture lives in .depth). Returns a zero target (id 0) if the framebuffer could not be made complete. */
-static RenderTexture2D LoadShadowMap(int width, int height)
-{
-    RenderTexture2D Target = { 0 };
-    Target.id = rlLoadFramebuffer();
-    if (Target.id == 0)
-    {
-        return Target;
-    }
-
-    rlEnableFramebuffer(Target.id);
-    // No colour attachment (depth-only). BeginTextureMode reads .texture size for the viewport, so set it.
-    Target.texture.width = width;
-    Target.texture.height = height;
-    Target.depth.id = rlLoadTextureDepth(width, height, false); // false => a samplable depth TEXTURE
-    Target.depth.width = width;
-    Target.depth.height = height;
-    Target.depth.format = SCENE_DEPTH_FORMAT;
-    Target.depth.mipmaps = 1;
-    rlFramebufferAttach(Target.id, Target.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);
-    bool Complete = (Target.depth.id != 0) && rlFramebufferComplete(Target.id);
-    rlDisableFramebuffer();
-
-    if (!Complete)
-    {
-        rlUnloadFramebuffer(Target.id); // also deletes the attached depth texture
-        Target = (RenderTexture2D){ 0 };
-    }
-    return Target;
-}
-
 /* Creates the point-light omnidirectional shadow resources: an RGBA8 colour CUBE (rlgl cannot make empty float
  * cube maps, so linear distance is PACKED into RGBA8), a depth renderbuffer, and a framebuffer with the depth +
  * face 0 attached (the colour face is re-pointed per face at render time). Sets _hasCube on success; on any
@@ -117,11 +85,9 @@ static void LoadPointShadowCube(WorldRenderer* self)
     self->_pointShadow._hasCube = true;
 }
 
-/* Draws the depth of a shadow pass's model casters (its visibility list) through @p shaders, each dithered by its fade
- * (into the skinned shader too, through @p skinnedDither, while the caster has a pose). A caster mid LOD cross-fade casts
- * the LOD it heads to, solid (no cross-fade dither), so its shadow changes once per change and never shimmers. Ignores
- * the pixelation filter (every pixelation state casts). The sprites are DrawSpriteCasters'. */
-static void DrawShadowCasters(WorldRenderer* self, const WorldRendererMeshShaders* shaders,
+/* The model casters' depth (WorldRendererShadows_DrawModelCasters, declared in WorldRendererInternal.h): the sprites are
+ * DrawSpriteCasters'. */
+void WorldRendererShadows_DrawModelCasters(WorldRenderer* self, const WorldRendererMeshShaders* shaders,
     const WorldRendererDitherLocations* dither, const WorldRendererDitherLocations* skinnedDither,
     WorldVisibilityPass pass)
 {
@@ -220,7 +186,8 @@ static void RenderShadowCascade(WorldRenderer* self, const WorldRenderFrame* fra
     // Render BACK faces into the shadow map (cull front). The lit front faces then sit well in front of the
     // stored depth, which removes most self-shadowing acne without a large (peter-panning) depth bias.
     rlSetCullFace(RL_CULL_FACE_FRONT);
-    DrawShadowCasters(self, &Shaders, &self->_cascades._dither, &self->_cascades._skinnedDither, pass);
+    WorldRendererShadows_DrawModelCasters(self, &Shaders, &self->_cascades._dither, &self->_cascades._skinnedDither,
+        pass);
     // The model instances components' copies, each as the LOD with the larger share, dithered by its own fade.
     WorldRendererInstances_DrawCasters(self, frame, DepthShader, &self->_cascades._dither, pass);
     // The terrain's chunks the same way: a hill's far side, facing away from the light, shades what lies behind it.
@@ -242,7 +209,8 @@ static void RenderShadowCascade(WorldRenderer* self, const WorldRenderFrame* fra
  * the near cascade only). Each failure is logged; this runs once, at shader load. */
 static void CreateCascadeMaps(WorldRenderer* self)
 {
-    self->_cascades._nearMap = LoadShadowMap(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    // Manual PCF compares raw depth texels: the maps are read with point filtering.
+    self->_cascades._nearMap = WorldRendererCommon_CreateDepthTarget(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
     self->_cascades._hasNearMap = (self->_cascades._nearMap.id != 0);
     if (!self->_cascades._hasNearMap)
     {
@@ -250,17 +218,10 @@ static void CreateCascadeMaps(WorldRenderer* self)
             (const unsigned char*)u8"WorldRenderer: could not create the shadow map; sun and moon shadows are off.");
         return;
     }
-    // Manual PCF compares raw depth texels, so nearest (point) sampling is required; linear filtering would
-    // interpolate depths and corrupt the comparison.
-    SetTextureFilter(self->_cascades._nearMap.depth, TEXTURE_FILTER_POINT);
 
-    self->_cascades._farMap = LoadShadowMap(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    self->_cascades._farMap = WorldRendererCommon_CreateDepthTarget(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
     self->_cascades._hasFarMap = (self->_cascades._farMap.id != 0);
-    if (self->_cascades._hasFarMap)
-    {
-        SetTextureFilter(self->_cascades._farMap.depth, TEXTURE_FILTER_POINT);
-    }
-    else
+    if (!self->_cascades._hasFarMap)
     {
         WorldRendererCommon_Warn(self, (const unsigned char*)u8"WorldRenderer: could not create the far shadow "
             u8"cascade; distant objects cast no sun or moon shadow.");
@@ -496,8 +457,8 @@ void WorldRendererShadows_RenderPointLight(WorldRenderer* self, const WorldRende
         // Default (back-face) culling + the PBR shader's slope-scaled bias handles acne; front-face culling
         // here caused peter-panning + seam artifacts, so it is intentionally not used. The casters are those within the
         // light's reach (the visibility's cube list).
-        DrawShadowCasters(self, &Shaders, &self->_pointShadow._dither, &self->_pointShadow._skinnedDither,
-            WorldVisibilityPass_PointShadow);
+        WorldRendererShadows_DrawModelCasters(self, &Shaders, &self->_pointShadow._dither,
+            &self->_pointShadow._skinnedDither, WorldVisibilityPass_PointShadow);
         WorldRendererInstances_DrawCasters(self, frame, CubeShader, &self->_pointShadow._dither,
             WorldVisibilityPass_PointShadow);
         WorldRendererTerrain_DrawCasters(self, CubeShader, &self->_pointShadow._dither, WorldVisibilityPass_PointShadow);

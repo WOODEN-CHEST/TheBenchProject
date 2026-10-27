@@ -128,7 +128,7 @@ static const unsigned char* const RootKeys[] =
 static const unsigned char* const LodKeys[] = { u8"model", u8"max_distance" };
 static const unsigned char* const RenderKeys[] =
 {
-    u8"has_outline", u8"omit_pixelation", u8"shadow_tier", u8"casts_shadows", u8"haze"
+    u8"has_outline", u8"omit_pixelation", u8"shadow_tier", u8"casts_shadows", u8"haze", u8"occludes_sky"
 };
 static const unsigned char* const VariantKeys[] = { u8"name", u8"material_overrides" };
 static const unsigned char* const OverrideKeys[] =
@@ -449,7 +449,8 @@ static Error ParseShadowTier(const ParseContext* context, JSONCompound* render, 
     return Result;
 }
 
-/* "render": the default render settings of the placements (outline, crisp, shadow tier, casts shadows, haze). */
+/* "render": the default render settings of the placements (outline, crisp, shadow tier, casts shadows, haze, occludes
+ * the sky). */
 static Error ParseRender(const ParseContext* context, JSONCompound* root)
 {
     JSONCompound* Render = NULL;
@@ -478,6 +479,11 @@ static Error ParseRender(const ParseContext* context, JSONCompound* root)
     {
         Result = ReadBoolean(context, Render, (const unsigned char*)u8"casts_shadows", Settings->CastsShadows, "render",
             &Settings->CastsShadows);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadBoolean(context, Render, (const unsigned char*)u8"occludes_sky", Settings->OccludesSky, "render",
+            &Settings->OccludesSky);
     }
     if (Result.Code == ErrorCode_Success)
     {

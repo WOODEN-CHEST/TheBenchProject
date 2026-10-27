@@ -14,6 +14,7 @@
 #include "WorldTerrainComponent.h"
 #include "WorldModelInstancesComponent.h"
 #include "WorldInstancing.h"
+#include "WorldInterior.h"
 #include "SpriteAnimation.h"
 #include "SpriteTransform.h"
 #include "raylib/raylib.h"
@@ -145,6 +146,8 @@ typedef struct WorldRenderModelStruct
     bool CastsShadows;
     /** @brief The haze multiplier in effect: the lit passes multiply the haze in front of the model by it. */
     float Haze;
+    /** @brief Whether it keeps the sky's light off what lies under it (in effect): the sky's visibility map draws it. */
+    bool OccludesSky;
     /** @brief The draw distance in effect, in metres, times the component's multiplier (>= 0: +infinity never fades, 0
      *  is never drawn), and whether the player's draw_distance_scale leaves it as it is (this frame). WorldVisibility
      *  applies the scale and the zoom. */
@@ -345,6 +348,7 @@ typedef struct WorldRenderInstancesStruct
     WorldShadowTier ShadowTier;
     bool CastsShadows;
     float Haze;
+    bool OccludesSky;
     float DrawDistance;
     bool IsDrawDistanceFixed;
     /** @brief The object's final tint colour (its alpha is the object's opacity: every copy's is multiplied by it). */
@@ -372,6 +376,7 @@ typedef struct WorldRenderInstanceCellStruct
     bool HasOutline;
     WorldShadowTier ShadowTier;
     bool CastsShadows;
+    bool OccludesSky;
     float DrawDistance;
     bool IsDrawDistanceFixed;
     Color Tint;
@@ -422,6 +427,9 @@ typedef struct WorldRenderCacheStruct
     GenericBuffer _sprites;
     /** @brief WorldRenderLight entries of this frame, in the world's component order. */
     GenericBuffer _lights;
+    /** @brief WorldInteriorZone entries of this frame (the ambient zones in render space), in the world's component
+     *  order. */
+    GenericBuffer _ambientZones;
     /** @brief WorldRenderTerrain entries, one per terrain component, in the world's component order; a scratch
      *  buffer for re-matching them; and this frame's WorldRenderTerrainChunk entries. */
     GenericBuffer _terrains;
@@ -587,6 +595,21 @@ static inline const WorldRenderLight* WorldRenderCache_GetLights(const WorldRend
 {
     const void* Entries = self->_lights._data;
     *outCount = self->_lights._count;
+    return Entries;
+}
+
+/**
+ * @brief Returns this frame's ambient zones in render space (WorldInterior_MakeZone): every ambient zone component on an
+ *        effectively enabled and visible object that has an inside (WorldInterior_HasInside).
+ * @param self The cache; must not be NULL.
+ * @param outCount [out] Receives the entry count. Must not be NULL.
+ * @returns The entries (borrowed until the next Sync or Reset); NULL when there are none.
+ */
+static inline const WorldInteriorZone* WorldRenderCache_GetAmbientZones(const WorldRenderCache* self,
+    size_t* outCount)
+{
+    const void* Entries = self->_ambientZones._data;
+    *outCount = self->_ambientZones._count;
     return Entries;
 }
 
