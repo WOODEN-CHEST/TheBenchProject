@@ -4,7 +4,7 @@
 
 /*
  * The dynamic bounding volume tree (source/WorldCollisionTree.h), after Box2D's b2DynamicTree: surface-area-guided
- * insertion, AVL rotations on the way back up, a free list of nodes in one array. Boxes in double (T33).
+ * insertion, AVL rotations on the way back up, a free list of nodes in one array. Boxes in double.
  */
 
 

@@ -10,7 +10,7 @@
 #include "wr/WRString.h"
 
 /*
- * A world model definition's "sockets" and "first_person" sections (T30; source/WorldModelSocketInternal.h):
+ * A world model definition's "sockets" and "first_person" sections (source/WorldModelSocketInternal.h):
  *   "sockets": { "hand_r": { "bone": "hand_r", "position": [x, y, z], "rotation": [x, y, z] }, "seat": { ... } }
  *   "first_person": { "eyes": "<socket>", "hidden_bones": ["head", ...] }
  * A socket with a bone follows it (its position and rotation in the bone's space); one without is fixed in the object's

@@ -7,7 +7,7 @@
 // and parents brought by reads both check it before linking. Upward walks are bounded by that depth on top; subtree
 // walks follow the child and sibling links without recursion.
 //
-// Sockets (T30): an object hanging on a socket of its parent sits in the socket's frame, which the parent's animator
+// Sockets: an object hanging on a socket of its parent sits in the socket's frame, which the parent's animator
 // publishes with its pose (object space); its world matrix is local * socket * parent's world.
 
 #include <inttypes.h>
@@ -212,7 +212,7 @@ static void LogRefusedParentOnce(World* world, const WorldObject* object, uint64
 }
 
 
-// Static functions: world matrices (in double: positions are, T33).
+// Static functions: world matrices (in double: positions are).
 /* A socket's frame in @p object's own space in its animator's current pose; false when the pose has no such socket (no
  * animator, no pose, another name). */
 static bool TryGetSocketFrame(const WorldObject* object, const unsigned char* socket, Matrix4Double* outFrame)

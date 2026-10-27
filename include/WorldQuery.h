@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "wr/WRError.h"
 #include "wr/WRMemory.h"
-// Vector3Double comes from WRVectorMath: the query's origin and box are positions, in double like the objects' (T33).
+// Vector3Double comes from WRVectorMath: the query's origin and box are positions, in double like the objects'.
 #include "wr/WRVectorMath.h"
 #include "DataValue.h"
 #include "World.h"

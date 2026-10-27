@@ -1,11 +1,11 @@
 #version 330
 
-// The aerial-perspective volume (T35; Hillaire 2020, section 5.6): per texel of its texture (common/atmosphere's
+// The aerial-perspective volume (Hillaire 2020, section 5.6): per texel of its texture (common/atmosphere's
 // layout), for one of 32 x 32 screen directions at one of its slices, the light the air scattered toward the camera
 // along the path so far (the in-scatter's tiles, in the sky's light units) or the path's transmittance (the
 // transmittance's tiles); the last slice holds the whole ray, to the top of the atmosphere. Lit by the sun, by the moon
 // while the moonlit sky shows, and by light pollution's light in the air. The last row holds the frame's values: the
-// light at the ground haze's base, and (T36) the sky's light by height: the sun's and the moon's through the air, the
+// light at the ground haze's base, and the sky's light by height: the sun's and the moon's through the air, the
 // sky's irradiance and the ground's bounce, what lights every surface at that height. Built every frame after the
 // sky-view table, from the transmittance, multiple scattering and irradiance tables (source/WorldRendererAtmosphere.c;
 // only its last row while the haze is off); the lit shaders, the sky pass and the outlines read it (common/haze,

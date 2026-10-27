@@ -170,7 +170,7 @@ static void AMinimalDefinitionGetsTheDefaults(TestRun* run)
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
 
-/* The task's example: three LODs, every setting, a variant with a texture and factors, and explicit bounds. */
+/* A full definition: three LODs, every setting, a variant with a texture and factors, and explicit bounds. */
 static void AFullDefinitionReadsEveryKey(TestRun* run)
 {
     TestAssetFixture Fixture;
@@ -833,7 +833,7 @@ static void TheFlagsChooseBetweenTheWorldModelAndThePlacement(TestRun* run)
 }
 
 /* The component starts at its documented defaults: no world model, no variant, no override, the placement's own values
- * at the old component defaults, 600 m and a multiplier of 1. */
+ * at the settings' defaults, 600 m and a multiplier of 1. */
 static void TheComponentStartsAtItsDefaults(TestRun* run)
 {
     World TestWorld;
@@ -1027,7 +1027,7 @@ static void ThePlacementPicksItsLodSettings(TestRun* run)
 }
 
 
-// Tests: the model instances component (B03).
+// Tests: the model instances component.
 /* Two texts equal byte for byte (both NULL counts as equal). */
 static bool AreTextsEqual(const unsigned char* a, const unsigned char* b)
 {
@@ -1301,7 +1301,7 @@ static const TestSkeletonBone SocketFigureBones[4] =
         .scale = { 1.0f, 1.0f, 1.0f } } },
 };
 
-/* T30: a world model names its animation graph (a dependency), its sockets on bones and fixed ones, and what a
+/* A world model names its animation graph (a dependency), its sockets on bones and fixed ones, and what a
  * first-person camera rides and hides; bone names resolve against its skeleton when it loads. */
 static void SocketsTheGraphAndTheFirstPersonBlockLoadWithTheSkeleton(TestRun* run)
 {

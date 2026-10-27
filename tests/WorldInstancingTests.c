@@ -499,7 +499,7 @@ static void TheZoomAndTheSphereMeasureTheCopy(TestRun* run)
     TEST_CHECK(run, (State.Fade > 0.0f) && (fabsf(State.Fade - Expected) < 1e-5f));
 }
 
-/* A copy's draw-distance fade is T07's rule exactly (the models' and sprites'), its opacity the object's times its own,
+/* A copy's draw-distance fade is the models' and sprites' rule exactly, its opacity the object's times its own,
  * and the larger fade counts; nothing reaches a draw distance of infinity; none above 0 fades everything out. */
 static void FadesFollowTheModelsRule(TestRun* run)
 {

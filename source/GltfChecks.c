@@ -8,8 +8,8 @@
 #include "wr/WRMemory.h"
 
 /*
- * Reading hostile glTF files over cgltf (source/GltfChecks.h). Moved here from the animation library's reader (T29) when
- * the terrain's import (B01) needed the same checks; the messages are the ones that reader gave.
+ * Reading hostile glTF files over cgltf (source/GltfChecks.h): the checks, and their messages, that the animation
+ * library's reader and the terrain's import share.
  *
  * WHAT CGLTF MAY ALLOCATE. cgltf's parse allocates every JSON array's elements (and its token list) before any check
  * here can run, so a small file listing millions of empty objects would take gigabytes, and Memory_Allocate aborts the

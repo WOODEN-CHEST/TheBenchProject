@@ -41,14 +41,16 @@ When you implement a new module, create an md file in the agents directory descr
 its usage, then in this file, in the modules list, add the module, the md file reference and a short
 description of what the module is for.
 
-The docs in agents/ (this file too), references/ and BUILDING.md describe the project as it is now, not how it got
-there: what a module is, how to use it, its rules and pitfalls, and why, where a choice is not obvious. Leave the
-history out: no dates of decisions or changes, no task, decision or plan ids (T15, G41, B02, fix plan phases), no
-"the owner decided ...", no "since T27", "as before" or "used to", and no paths into handoff/ (it is gitignored, so
-such references work on one machine only). When a change makes a doc wrong, rewrite the text it affects to describe
-the new state instead of appending to it. What stays: the reasons behind choices (as reasons, not as a decision
-record), rules (as rules), intended behaviour that looks like a bug, open questions for the owner, and features that
-are not built yet (named, not numbered). The history itself lives in git and in handoff/.
+The docs in agents/ (this file too), references/ and BUILDING.md, and every comment in the code (source/, include/,
+tests/, the shaders, the asset scripts) describe the project as it is now, not how it got there: what a module or a
+piece of code is, how to use it, its rules and pitfalls, and why, where a choice is not obvious. Leave the history
+out: no dates of decisions or changes, no task, decision or plan ids (T15, G41, B02, fix plan phases), no "the owner
+decided ...", no "since T27", "as before", "used to" or "the old ...", and no paths into handoff/ (it is gitignored, so
+such references work on one machine only). Log messages follow the same rule. When a change makes a doc or a comment
+wrong, rewrite the text it affects to describe the new state instead of appending to it; a test that guards against a
+past bug says what it guards, not when the bug was found. What stays: the reasons behind choices (as reasons, not as
+a decision record), rules (as rules), intended behaviour that looks like a bug, open questions for the owner, and
+features that are not built yet (named, not numbered). The history itself lives in git and in handoff/.
 
 Current module list:
 * Config (Config.md) - Loads the game's JSON config file (window/render settings) into a plain, expandable GameConfig struct.

@@ -33,7 +33,7 @@
  * This uses the #line rules of GLSL 3.30 and later (the next line gets the number written); every shader of the game
  * declares #version 330.
  *
- * DEFINES (B03). A shader definition may name preprocessor symbols for both its stages ("defines", ShaderDefinition.c),
+ * DEFINES. A shader definition may name preprocessor symbols for both its stages ("defines", ShaderDefinition.c),
  * so one source serves a shader and its variants: shared files test them with #ifdef (the instanced twins define
  * WORLD_INSTANCED, and common/dither then reads each copy's values from the vertex stage instead of uniforms). Each
  * becomes a line `#define <name>` right after the main file's first #version line, followed by

@@ -4,8 +4,8 @@
 // star's direction, and its corner offset widens the star into a square exactly one scene pixel wide: such a square
 // always covers exactly one pixel centre, so each star lights one pixel at a steady brightness (no flicker) and steps
 // from pixel to pixel as the sky turns, like everything else in the pixelated world. Near the horizon the air dims and
-// reddens them: since T15 by the atmosphere's transmittance table (relative to the zenith, where their brightness is
-// tuned), or by the air mass while the tables are off (the A/B, the fallback). Since T35 the ground haze dims them too
+// reddens them: by the atmosphere's transmittance table (relative to the zenith, where their brightness is
+// tuned), or by the air mass while the tables are off (the A/B, the fallback). The ground haze dims them too
 // (common/haze: its transmittance toward each star).
 
 in vec3 vertexPosition;   // the star's unit direction in the star frame
@@ -72,7 +72,7 @@ void main()
     }
     else
     {
-        // TODO: remove with the direct march once the owner approves the tables' sky (T15).
+        // TODO: remove with the direct march once the owner approves the tables' sky.
         magnitude += NIGHT_SKY_EXTINCTION_PER_AIRMASS*(airmass - 1.0);
     }
     float visibility = clamp((limitingMagnitude - magnitude)/STAR_FADE_MAGNITUDES, 0.0, 1.0);

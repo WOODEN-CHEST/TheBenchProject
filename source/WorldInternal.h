@@ -89,7 +89,7 @@ const uint64_t* WorldInternal_GetTagMembers(World* world, uint32_t tag, size_t* 
 void WorldInternal_MarkTransformChanged(World* world, WorldObject* object);
 
 /**
- * After an object's pose changed (T30: the animation system posed or cleared its animator): marks the children hanging
+ * After an object's pose changed (the animation system posed or cleared its animator): marks the children hanging
  * on its sockets changed (WorldInternal_MarkTransformChanged on each), so their world matrices follow the sockets.
  * Children in the object's own space are left alone. Cheap without such children: one walk over its direct children.
  */

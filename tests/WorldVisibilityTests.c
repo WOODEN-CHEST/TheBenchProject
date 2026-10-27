@@ -43,10 +43,10 @@
 
 
 // Types.
-/* An asset fixture with a "box" model (unit cube bounds) and a "box" world model over it (600 m, the draw distance
- * models had before world models), three 2 m world sprites over a one-frame animation (1x1 pixels) without draw
- * distances of their own: "cutout", "smoke" (blended) and "decal" (fixed, a decal), a world built with them, a render
- * cache and the visibility lists. */
+/* An asset fixture with a "box" model (unit cube bounds) and a "box" world model over it (600 m, a placement's default
+ * draw distance), three 2 m world sprites over a one-frame animation (1x1 pixels) without draw distances of their own:
+ * "cutout", "smoke" (blended) and "decal" (fixed, a decal), a world built with them, a render cache and the visibility
+ * lists. */
 typedef struct VisibilityFixtureStruct
 {
     TestAssetFixture Assets;
@@ -328,7 +328,7 @@ static void FrustumPlanesFromAViewProjection(TestRun* run)
     TEST_CHECK(run, !WorldVisibility_IsSphereInFrustum(&Frustum, (Vector3){ 0.0f, 0.0f, 10.0f }, NAN));
 }
 
-/* The reversed infinite projection's frustum (T39): the sides are the standard frustum's, the near plane lies 0.05 m
+/* The reversed infinite projection's frustum: the sides are the standard frustum's, the near plane lies 0.05 m
  * ahead, and nothing is too far: a sphere 20 km, 1000 km and 1e7 m ahead is inside (the standard frustum drops it past
  * 4 km), while behind the camera and beside the view stay outside. */
 static void ReversedFrustumHasNoFarPlane(TestRun* run)
@@ -478,7 +478,7 @@ static void OpacityFadeAndTheMaxRule(TestRun* run)
 
 // Tests: the dither.
 /* The C mirror of shaders/common/dither.glsl: every 4x4 block holds each threshold (k + 0.5) / 16 once and repeats; with
- * either pattern a fade of k/16 keeps 16 - k pixels of a block; a draw at fade p and an inverted one at 1 - p (T11's two
+ * either pattern a fade of k/16 keeps 16 - k pixels of a block; a draw at fade p and an inverted one at 1 - p (two
  * LODs mid cross-fade) split every pixel between them; half a fade is a checkerboard; the crisp overlay's pixel scale
  * lands every window pixel in its scene pixel's cell. */
 static void DitherMatchesTheShaderFormula(TestRun* run)
@@ -871,7 +871,7 @@ static void SpritesCullAndFadeByTheirKind(TestRun* run)
     VisibilityFixture_Deconstruct(run, &Fixture);
 }
 
-/* A sprite fades at its own draw distance, with the models' rules (G17): its world sprite's, or the placement's own while
+/* A sprite fades at its own draw distance, with the models' rules: its world sprite's, or the placement's own while
  * it overrides it, times the placement's multiplier, then the quality scale unless it is fixed, against its distance
  * times the zoom factor. */
 static void SpritesFadeAtTheirOwnDrawDistance(TestRun* run)
@@ -1135,7 +1135,7 @@ static bool AreSnapshotsAlike(const ShiftSnapshot* a, const ShiftSnapshot* b)
     return IsAlike;
 }
 
-/* Render space (T32): a scene's lists, fades and LOD choices are the same with the camera at its place near the origin
+/* Render space: a scene's lists, fades and LOD choices are the same with the camera at its place near the origin
  * and with the scene and the camera shifted together 20 km out (where the world's floats round to 2 mm): the cache syncs
  * for the camera's position, and the view and the cascades are in render space, around the camera at (0, 0, 0). A scene
  * left behind (the camera alone moved) is drawn nowhere. */
@@ -1261,7 +1261,7 @@ static void ListsFollowTheirCache(TestRun* run)
 }
 
 
-// Tests: terrain chunks (B01).
+// Tests: terrain chunks.
 /* Places the terrain @p name at @p position; returns its object (NULL with a failed check). */
 static WorldObject* AddTerrainObject(TestRun* run, World* world, const char* name, Vector3 position)
 {

@@ -1,4 +1,4 @@
-// The atmosphere's model as pure maths (T15): the air's coefficients, the height the sky is seen from, and the lookup
+// The atmosphere's model as pure maths: the air's coefficients, the height the sky is seen from, and the lookup
 // tables' layout, the C mirror of shaders/common/atmosphere.glsl (WorldAtmosphere.h).
 
 #include <math.h>
@@ -28,7 +28,7 @@
 
 
 // Fields.
-/* Earth's air at sea level: its Rayleigh scattering per metre (red, green, blue), the sky's coefficients before T15. */
+/* Earth's air at sea level: its Rayleigh scattering per metre (red, green, blue). */
 static const float RayleighScattering[3] = { 5.5e-6f, 13.0e-6f, 22.4e-6f };
 /* The ozone layer's absorption per metre at its densest (Bruneton 2017, Hillaire 2020: its Chappuis band, mostly orange
  * and red). */

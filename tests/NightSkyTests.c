@@ -198,7 +198,7 @@ static void ColorsAreMostlyWhiteToYellow(TestRun* run)
 
 
 // Tests: visibility.
-/* Schaefer's threshold (T38): the naked eye sees to about 6.5 against a dark site's sky (2.2e-4 cd/m^2), to 3.2 at the
+/* Schaefer's threshold: the naked eye sees to about 6.5 against a dark site's sky (2.2e-4 cd/m^2), to 3.2 at the
  * end of the civil twilight (about 1 cd/m^2), no star against daylight, and 7.93 against black; it falls as the
  * background brightens, without a step where the rods hand over to the cones; its inverse gives the background back. */
 static void ThresholdFollowsSchaefer(TestRun* run)

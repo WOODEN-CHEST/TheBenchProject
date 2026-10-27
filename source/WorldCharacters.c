@@ -71,7 +71,7 @@ typedef struct CharacterStepStruct
 
 
 // Static functions: helpers.
-/* Whether the character's action keeps it from moving (no moves, jumps, crouching or flight changes; T30). */
+/* Whether the character's action keeps it from moving (no moves, jumps, crouching or flight changes). */
 static bool IsMovingLocked(const WorldCharacterComponent* character)
 {
     CharacterMovementLock Lock = character->_actionControl.Lock;
@@ -99,7 +99,7 @@ static bool IsHeld(const WorldCharacterComponent* character)
 }
 
 /* Queues an event of the character the step updates and notes it in its state (the last update's events, for its
- * animation; T30). */
+ * animation). */
 static void RaiseEvent(const CharacterStep* step, WorldCharacterEventKind kind, uint64_t otherId, float value)
 {
     WorldCharacterState* State = &step->Character->_state;
@@ -373,7 +373,7 @@ static void EnsureCollider(CharacterStep* step)
         }
     }
     WorldColliderComponent* Collider = WorldColliderComponent_FromComponent(Component);
-    // Held on its action's anchor it is not pushed off it (T30).
+    // Held on its action's anchor it is not pushed off it.
     Error SyncResult = SyncCollider(Collider, &step->Settings, step->Character->_state.Height,
         step->Settings.IsPushable && !IsHeld(step->Character));
     if (SyncResult.Code != ErrorCode_Success)
@@ -641,7 +641,7 @@ static void UpdateStance(CharacterStep* step, Vector3Double feet)
         && (State->Mode == CharacterMovementMode_Walking);
     if (IsMovingLocked(step->Character) || IsApproaching(step->Character))
     {
-        // An action holds the stance it found (T30).
+        // An action holds the stance it found.
         WantsCrouch = State->Stance == CharacterStance_Crouching;
     }
     if (State->Stance == CharacterStance_Standing)
@@ -998,7 +998,7 @@ static void Move(CharacterStep* step, Vector3Double* feet)
     State->TimeInAir = 0.0f;
 }
 
-/* While approaching its anchor (T30): turns toward the anchor's facing fast enough to face it by the end of the approach
+/* While approaching its anchor: turns toward the anchor's facing fast enough to face it by the end of the approach
  * (at least at its turn speed). */
 static void TurnToAnchor(CharacterStep* step)
 {
@@ -1014,7 +1014,7 @@ static void TurnToAnchor(CharacterStep* step)
     State->TurnRate = Turn / step->DeltaSeconds;
 }
 
-/* While approaching its anchor (T30): the velocity that takes the feet there across the ground by the end of the
+/* While approaching its anchor: the velocity that takes the feet there across the ground by the end of the
  * approach (at once for an approach of 0 seconds); a walker in the air still falls. */
 static void SetApproachVelocity(CharacterStep* step, Vector3Double feet)
 {
@@ -1039,7 +1039,7 @@ static void SetApproachVelocity(CharacterStep* step, Vector3Double feet)
     }
 }
 
-/* After the move (T30): an approach that came within the tolerances has arrived (facing the anchor's way exactly);
+/* After the move: an approach that came within the tolerances has arrived (facing the anchor's way exactly);
  * one past its time and the grace has failed. Either way it stops sliding. */
 static void UpdateApproach(CharacterStep* step, Vector3Double feet)
 {

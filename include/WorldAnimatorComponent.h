@@ -10,7 +10,7 @@
 
 /** @brief A world model asset (WorldModel.h): the pose remembers which one it was made for. */
 typedef struct WorldModelStruct WorldModel;
-/** @brief One socket of a world model (WorldModel.h): the pose carries its sockets' places (T30). */
+/** @brief One socket of a world model (WorldModel.h): the pose carries its sockets' places. */
 typedef struct WorldModelSocketStruct WorldModelSocket;
 /** @brief What the animation system keeps per animator (source/WorldAnimationInternal.h, private). */
 typedef struct WorldAnimatorRuntimeStruct WorldAnimatorRuntime;
@@ -18,26 +18,26 @@ typedef struct WorldAnimatorRuntimeStruct WorldAnimatorRuntime;
 
 /**
  * @file WorldAnimatorComponent.h
- * @brief The animator component: what plays an object's skeletal animation (T29).
+ * @brief The animator component: what plays an object's skeletal animation.
  *
  * WHAT. A skinned model (a model component whose world model has a skeleton, WorldModel.h) bends with a pose. The
  * animator holds that pose's playback: its rows say which clip it plays from the start and how (the speed, a start
  * phase so placements do not move in step, pause, the cross-fade time, a loop override, its own animation libraries
  * instead of its world model's); at runtime it holds the clips playing (a SkeletalMixer: their times and weights) and the
- * pose they make: the skinning palette the renderer uploads, each bone's matrix (for sockets: T30 hangs held items on
+ * pose they make: the skinning palette the renderer uploads, each bone's matrix (for sockets: held items hang on
  * them) and the box that holds every vertex of the posed model.
  *
  * WHO PLAYS IT. The animation system (WorldAnimation.h), once a tick in the tick's animation step. It binds the animator
  * to the world model its object's model component names (again when that changes) and to its libraries, matching their
  * bones to the skeleton by name (SkeletalAnimation.h); it applies the rows (a new clip cross-fades in over fade_seconds),
- * advances the mix and poses the skeleton. Code plays clips through the system (WorldAnimation_PlayClip, _SetClipWeight):
- * the test frame, T30's state graph and scripts later. Without a model component, a world model with a skeleton, or a
- * clip, the model is drawn as it is bound.
+ * advances the mix and poses the skeleton. Code plays clips through the system (WorldAnimation_PlayClip,
+ * _SetClipWeight), as scripts will. Without a model component, a world model with a skeleton, or a clip, the model is
+ * drawn as it is bound.
  *
  * Added with World_AddComponent(world, id, WorldComponentType_Animator, &component); reach its fields with
  * WorldAnimatorComponent_FromComponent. Its table ("animator_component") holds plays_clip and clip, phase, speed,
  * is_paused, fade_seconds, overrides_is_looped and is_looped, overrides_animation_libraries and animation_libraries,
- * and (T30) overrides_animation_graph and animation_graph: the graph it plays (AnimationGraph.h) instead of its world
+ * and overrides_animation_graph and animation_graph: the graph it plays (AnimationGraph.h) instead of its world
  * model's. Clips from the clip row and from code play over the graph, by their weight.
  * The playback itself (times, weights, the pose) is runtime state, never saved.
  */
@@ -84,11 +84,11 @@ typedef struct WorldAnimatorPoseStruct
     /** @brief Whether the model has vertices to bound. */
     bool _hasBounds;
     /** @brief The world model's sockets (borrowed, as _worldModel: their names and bones), and their frames in this pose
-     *  in the object's own space (the socket's space to the object's), _socketCount of each (T30). */
+     *  in the object's own space (the socket's space to the object's), _socketCount of each. */
     const WorldModelSocket* _sockets;
     const Matrix* _socketMatrices;
     uint32_t _socketCount;
-    /** @brief The eyes' socket (an index in _sockets) when the world model has a first_person block (T30, G34): the
+    /** @brief The eyes' socket (an index in _sockets) when the world model has a first_person block: the
      *  camera of a first-person view rides it. Not below _socketCount without one. */
     uint32_t _eyesSocket;
     /** @brief Advances (wrapping) whenever the pose changes. */
@@ -124,7 +124,7 @@ typedef struct WorldAnimatorComponentStruct
     bool _overridesAnimationLibraries;
     /** @brief The placement's own libraries (owned; NULL while empty); used while _overridesAnimationLibraries. */
     PropertyAssetNameList* _animationLibraries;
-    /** @brief Whether _animationGraph replaces the world model's graph (default false; T30). */
+    /** @brief Whether _animationGraph replaces the world model's graph (default false). */
     bool _overridesAnimationGraph;
     /** @brief The placement's own animation graph (an owned asset name of at most WORLD_ANIMATOR_GRAPH_NAME_MAX_LENGTH
      *  bytes, or NULL: none); used while _overridesAnimationGraph. */
@@ -308,7 +308,7 @@ Error WorldAnimatorComponent_SetFadeSeconds(WorldAnimatorComponent* self, float 
 Error WorldAnimatorComponent_SetLoopOverride(WorldAnimatorComponent* self, bool overridesIsLooped, bool isLooped);
 
 /**
- * @brief Sets the placement's own animation graph and whether it replaces its world model's (T30).
+ * @brief Sets the placement's own animation graph and whether it replaces its world model's.
  * @param self The animator; must not be NULL.
  * @param overridesGraph Whether @p graph replaces the world model's graph (off: the world model's plays).
  * @param graph The graph's asset name (copied; at most WORLD_ANIMATOR_GRAPH_NAME_MAX_LENGTH bytes), or NULL: no graph

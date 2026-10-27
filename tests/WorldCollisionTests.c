@@ -1203,7 +1203,7 @@ static void QueriesReportShapesPartsAndPushOuts(TestRun* run)
     CollisionScene_Deconstruct(run, &Scene);
 }
 
-/* T33: a ray finds a 1 cm wall where it is, to a micrometre, straight at its face, slanted across it and half a
+/* A ray finds a 1 cm wall where it is, to a micrometre, straight at its face, slanted across it and half a
  * millimetre inside its edge: 173 km from the world's origin in the far run, where a float's step is 8 mm. */
 static void ARayFindsAThinWallWhereItIs(TestRun* run)
 {

@@ -433,7 +433,7 @@ their events, the motion events, the results and the trigger pairs.
 - **Motion events** (`WorldCollision_GetMotionEvents`, until `_ClearMotionEvents`), when a state begins and ends:
   blocked (the mover, the pushable that blocked it, whether it stopped) and crushed (the pushable, what it is pressed
   into, the depth). A collider removed while blocked or crushed ends it.
-- **Motion results** (`WorldCollision_GetMotionResult`), for drivers (the characters): the collider's velocity over
+- **Motion results** (`WorldCollision_GetMotionResult`), for drivers: the collider's velocity over
   the step, its correction (a pushable's push, the motion a stopped mover lost), its touching contacts (a pushable's
   with those of the colliders it carries), its ground (the most upward-facing of them: the object, the normal into the
   collider, the point and that point's velocity, for moving platforms), blocked (by what, whether it stopped) and

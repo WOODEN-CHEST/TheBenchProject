@@ -16,7 +16,7 @@
  * points from A to B. A cast's result gives the hit surface's normal facing the moving shape (the narrowphase's normal
  * negated).
  *
- * ORIGINS (T33). Every query runs the narrowphase relative to its own origin: a ray's origin, a cast's start, an
+ * ORIGINS. Every query runs the narrowphase relative to its own origin: a ray's origin, a cast's start, an
  * overlap's or a contact query's position, an object's shape. The world's shapes are placed relative to it
  * (WorldCollisionInternal_PlaceShapeRelative), the query's own shapes and boxes are relative to it, and the points that
  * come back become world positions when the origin is added back in double.
@@ -1060,8 +1060,8 @@ size_t WorldCollision_CollideObject(WorldCollision* self, uint64_t objectId, flo
         CollisionConvex Convex;
         if (!Own->IsValid || !IsConvex || !CollisionConvex_FromShape(Own->Shape, &OwnToWorld, &Convex))
         {
-            // TODO: an object whose own shape is a plane or a mesh against the convex shapes around it (T27 needs it
-            // only for movers, which are convex).
+            // TODO: an object whose own shape is a plane or a mesh against the convex shapes around it (no caller needs
+            // it yet: the collision step does not use this query).
             continue;
         }
         Vector3 OwnMin = GameMath_ToVector3Relative(Own->Box.Min, Origin);

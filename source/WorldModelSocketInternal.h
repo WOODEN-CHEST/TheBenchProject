@@ -5,8 +5,8 @@
 #include "wr/WRJSON.h"
 
 /*
- * Private header (source/): a world model definition's "sockets" and "first_person" sections (T30;
- * references/asset_structure.md, "World models"), parsed while the definition is read and built while the world model
+ * Private header (source/): a world model definition's "sockets" and "first_person" sections
+ * (references/asset_structure.md, "World models"), parsed while the definition is read and built while the world model
  * loads. Used by the world model type (source/WorldModelDefinition.c).
  *
  * PARSING checks every rule it can without the models (names, keys, vectors, counts, the eyes naming a socket) and

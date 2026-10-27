@@ -376,10 +376,10 @@ typedef struct StandardAssetTypesStruct
      *  actions), which world models name next to their animation libraries (AnimationGraph.h). */
     AssetTypeID AnimationGraph;
     /** @brief Terrain type id: a terrain's free-form mesh with its painted weights and densities, its palette and its
-     *  placements' defaults (TerrainAsset.h, B01). */
+     *  placements' defaults (TerrainAsset.h). */
     AssetTypeID Terrain;
     /** @brief Terrain material type id: one material of a terrain's palette, its maps' pixels (built on texture assets'
-     *  images) and its settings (TerrainMaterial.h, B02). */
+     *  images) and its settings (TerrainMaterial.h). */
     AssetTypeID TerrainMaterial;
 } StandardAssetTypes;
 
@@ -1037,7 +1037,7 @@ Error AssetManager_LoadAnimationGraph(AssetManager* self, const unsigned char* n
 
 /**
  * @brief Loads a terrain by name (TerrainAsset.h): its mesh, imported from the .glb its definition names or read from its
- *        binary form, cut into chunks, its rules, and its palette's terrain materials as its dependencies (B02; their
+ *        binary form, cut into chunks, its rules, and its palette's terrain materials as its dependencies (their
  *        maps of one kind must share one size). Requires the standard types (AssetManager_CreateStandardAssetTypes) and
  *        that definitions were read. See AssetManager_LoadSpriteSheet for semantics.
  */

@@ -28,11 +28,11 @@
  *
  * The loaded WorldModel is pure data: the LODs' models and the variants' textures are borrowed pointers into those
  * dependencies, and the variants, their overrides and their names live in one allocation the asset owns. Nothing in it
- * points into the definition, which may be replaced while the asset is loaded. The "collision" section (T12) is parsed
+ * points into the definition, which may be replaced while the asset is loaded. The "collision" section is parsed
  * and loaded by source/WorldModelCollisionDefinition.c: its sets live in a second block the asset owns, with the hulls
- * and meshes built from models that load as further dependencies. The animation libraries (T29) are dependencies too;
- * the skeleton is the first skinned LOD's, which every other skinned LOD must share. The animation graph (T30) is a
- * dependency as well; the "sockets" and "first_person" sections (T30) are parsed and loaded by
+ * and meshes built from models that load as further dependencies. The animation libraries are dependencies too;
+ * the skeleton is the first skinned LOD's, which every other skinned LOD must share. The animation graph is a
+ * dependency as well; the "sockets" and "first_person" sections are parsed and loaded by
  * source/WorldModelSocketDefinition.c into a third block the asset owns.
  */
 
@@ -96,8 +96,8 @@ typedef struct WorldModelDefinitionStruct
     WorldModelCollisionDefinition* Collision; // owned, NULL without a "collision" section
     unsigned char* AnimationLibraries[WORLD_MODEL_MAX_ANIMATION_LIBRARIES]; // owned asset names
     size_t AnimationLibraryCount;
-    unsigned char* AnimationGraph;       // owned asset name, NULL without one (T30)
-    WorldModelSocketDefinition* Sockets; // owned, NULL without "sockets" and "first_person" (T30)
+    unsigned char* AnimationGraph;       // owned asset name, NULL without one
+    WorldModelSocketDefinition* Sockets; // owned, NULL without "sockets" and "first_person"
 } WorldModelDefinition;
 
 /* The definition being read and its name in printable form, for messages. */
@@ -706,7 +706,7 @@ static Error ParseBounds(const ParseContext* context, JSONCompound* root)
     return Error_CreateSuccess();
 }
 
-/* "animation_libraries": up to WORLD_MODEL_MAX_ANIMATION_LIBRARIES animation library asset names, each once (T29). */
+/* "animation_libraries": up to WORLD_MODEL_MAX_ANIMATION_LIBRARIES animation library asset names, each once. */
 static Error ParseAnimationLibraries(const ParseContext* context, JSONCompound* root)
 {
     JSONArray* Libraries = NULL;
@@ -866,7 +866,7 @@ static Error LoadLods(const WorldModelDefinition* definition, AssetManager* mana
     return Result;
 }
 
-/* The skeleton (T29): the first LOD whose model has one; every other LOD with one must have the same bones bound the same
+/* The skeleton: the first LOD whose model has one; every other LOD with one must have the same bones bound the same
  * way, so one pose's palette skins them all. */
 static Error FindSkeleton(const WorldModelDefinition* definition, WorldModel* model)
 {
@@ -917,7 +917,7 @@ static void CopyAnimationLibraryNames(const WorldModelDefinition* definition, Wo
     *outBlock = Block;
 }
 
-/* Loads the animation libraries as dependencies and checks that no clip name repeats across them (T29); on success
+/* Loads the animation libraries as dependencies and checks that no clip name repeats across them; on success
  * *outNameBlock holds their names (owned by the caller; NULL without libraries). */
 static Error LoadAnimationLibraries(const WorldModelDefinition* definition, AssetManager* manager,
     AssetUserID dependencyUser, WorldModel* model, void** outNameBlock)
@@ -978,7 +978,7 @@ static Error LoadAnimationLibraries(const WorldModelDefinition* definition, Asse
     return Result;
 }
 
-/* Loads the animation graph as a dependency (T30); on success *outName holds a copy of its name (owned by the caller;
+/* Loads the animation graph as a dependency; on success *outName holds a copy of its name (owned by the caller;
  * NULL without a graph). */
 static Error LoadAnimationGraph(const WorldModelDefinition* definition, AssetManager* manager, AssetUserID dependencyUser,
     WorldModel* model, unsigned char** outName)

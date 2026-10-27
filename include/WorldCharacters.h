@@ -15,7 +15,7 @@ typedef struct LoggerStruct Logger;
 
 /**
  * @file WorldCharacters.h
- * @brief The character system: moves every character of a world once a tick (T13).
+ * @brief The character system: moves every character of a world once a tick.
  *
  * A character is an object with a character component (WorldCharacterComponent.h): an upright capsule whose feet are at
  * its object's position, set up by a character asset and its placement's overrides, driven by a CharacterInput that the
@@ -33,7 +33,7 @@ typedef struct LoggerStruct Logger;
  *    by default) and land;
  * 6. turns its body, eases its eyes between the standing and the crouched height, and writes its object's transform;
  * 7. answers a use press with a "used" event naming what it looks at.
- * An ACTION (T30) may constrain it (WorldCharacterComponent_SetActionControl, set by the animation system): a movement
+ * An ACTION may constrain it (WorldCharacterComponent_SetActionControl, set by the animation system): a movement
  * lock (no moving: no move, jump, crouch or flight changes; no turning: the body keeps its facing; locked: both, the
  * look still free), and an ANCHOR: the character slides there instead of walking, swept against walls like any move,
  * turning to the anchor's facing, over the approach time; within CHARACTER_ANCHOR_TOLERANCE and
@@ -57,7 +57,7 @@ typedef struct LoggerStruct Logger;
 #define CHARACTER_SKIN WORLD_COLLISION_SKIN
 /** @brief The most planes one move slides along before it stops. */
 #define CHARACTER_MAX_SLIDE_ITERATIONS 4U
-/** @brief How near its anchor a character's feet must come to have arrived, in metres (T30). */
+/** @brief How near its anchor a character's feet must come to have arrived, in metres. */
 #define CHARACTER_ANCHOR_TOLERANCE 0.01f
 /** @brief How near its anchor's facing a character must turn to have arrived, in radians (1 degree). */
 #define CHARACTER_ANCHOR_YAW_TOLERANCE 0.017453292f

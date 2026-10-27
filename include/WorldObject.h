@@ -22,7 +22,7 @@
  * visible, and its mobility), and its tags and custom data. What an object is comes from its components
  * (WorldComponent.h): a model, a sprite, a light, at most one of each type.
  *
- * POSITIONS ARE DOUBLES (T33). Worlds reach tens or hundreds of kilometres from their origin, where a float's step is
+ * POSITIONS ARE DOUBLES. Worlds reach tens or hundreds of kilometres from their origin, where a float's step is
  * millimetres: the position is a Vector3Double and world matrices are Matrix4Doubles (WRVectorMath), exact to a
  * double's step (2 nm at 10 000 km). Rotations, scales, directions and sizes stay floats. A position must be finite
  * and within WORLD_POSITION_LIMIT of the parent's origin on every axis. Whatever needs floats (the renderer, the
@@ -45,7 +45,7 @@
  *   without storing it, so reading never changes anything (the renderer may read it).
  * - WorldObject_IsEffectivelyEnabled and WorldObject_IsEffectivelyVisible: a disabled parent disables its subtree, an
  *   invisible parent hides it. Systems read these, not the object's own flags.
- * SOCKETS (T30). An object may hang on a SOCKET of its parent (World_SetParentSocket; the parent_socket row): a named
+ * SOCKETS. An object may hang on a SOCKET of its parent (World_SetParentSocket; the parent_socket row): a named
  * place of the parent's world model, on a bone (a hand) or fixed (WorldModel.h). Its transform is then relative to the
  * socket's frame in the parent's current pose (its animator publishes it, WorldAnimatorComponent.h), so a held cup
  * follows the hand: its world matrix is its local matrix times the socket's frame times the parent's world matrix.
@@ -67,8 +67,8 @@
  * row of the table is ReadOnly for Properties_Set; world files and copies still fill it.
  *
  * FLAGS.
- * - is_enabled (default true): false means every system skips the object: the renderer, and later collision and
- *   scripts' searches.
+ * - is_enabled (default true): false means every system skips the object: the renderer, collision, the characters,
+ *   animation, and later scripts' searches.
  * - is_visible (default true): false means the renderer skips it (its model, its sprite and its light), but it still
  *   exists for collision and interaction (invisible walls, hidden triggers).
  * - mobility (default static): a hint for performance, never a lock. Static is scenery that does not move in play;
@@ -83,7 +83,7 @@
 // Macros.
 /** @brief The most bytes an object's name may have (without the terminator). */
 #define WORLD_OBJECT_NAME_MAX_LENGTH ((size_t)256)
-/** @brief The most bytes the name of the socket an object hangs on may have ([a-z][a-z0-9_.-]*; T30). */
+/** @brief The most bytes the name of the socket an object hangs on may have ([a-z][a-z0-9_.-]*). */
 #define WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH ((size_t)64)
 /** @brief The most entries (tags included) an object's data may hold. */
 #define WORLD_OBJECT_DATA_MAX_ENTRIES ((size_t)256)
@@ -123,7 +123,7 @@ typedef struct WorldObjectStruct
     unsigned char* _name;
     /** @brief The parent's id, 0 for a root: the table's parent row. The world keeps it the id of _parent. */
     uint64_t _parentId;
-    /** @brief The socket of its parent it hangs on (T30: an owned name of at most WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH
+    /** @brief The socket of its parent it hangs on (an owned name of at most WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH
      *  bytes, [a-z][a-z0-9_.-]*), or NULL: the parent's own space. The table's parent_socket row. */
     unsigned char* _parentSocket;
     /** @brief Position relative to the parent (world space for a root), in metres: finite and within
@@ -212,7 +212,7 @@ static inline void WorldObject_SetPersistent(WorldObject* self, bool isPersisten
  * @brief Returns the property table of world objects ("world_object").
  *
  * Its rows: name, parent (an ObjectId, ReadOnly for Properties_Set: World_SetParent changes it), parent_socket (the
- * parent's socket it hangs on, T30), position, rotation (an AngleVector3: degrees in JSON), scale, tint, is_enabled,
+ * parent's socket it hangs on), position, rotation (an AngleVector3: degrees in JSON), scale, tint, is_enabled,
  * is_visible, mobility ("static" / "movable") and data (tags and custom data). Its AfterSet advances the object's revision; after a change of the transform it marks the object's
  * subtree dirty, and after a read or a copy the world attaches the object to the parent it brought (or refuses it). Wire
  * ids start at 3: 1 and 2 are left for the world file's own entries per object (the id and the components).
@@ -470,7 +470,7 @@ static inline uint64_t WorldObject_GetParentId(const WorldObject* self)
 }
 
 /**
- * @brief Returns the socket of its parent the object hangs on (T30).
+ * @brief Returns the socket of its parent the object hangs on.
  * @param self The object; must not be NULL.
  * @returns The socket's name (borrowed until it changes), or NULL: it sits in its parent's own space (or is a root).
  */

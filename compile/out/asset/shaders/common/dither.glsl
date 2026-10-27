@@ -4,7 +4,7 @@
 // or blending:
 // - the draw's fade (ditherFade: its draw distance, its opacity) from 0 (solid) to 1 (gone): the draw keeps the pixels
 //   whose threshold lies above it;
-// - the LOD cross-fade (T11): while an object swaps LODs both are drawn, and the incoming LOD takes the share of the
+// - the LOD cross-fade: while an object swaps LODs both are drawn, and the incoming LOD takes the share of the
 //   pixels given by the fade's progress (ditherLodProgress): it keeps the pixels whose threshold is at or below the
 //   progress (ditherIsIncomingLod), the outgoing LOD the others. The two compare the same value, so every pixel is drawn
 //   by exactly one of them; the draw's fade then removes its pixels from both alike. A LOD drawn alone has progress 0
@@ -23,7 +23,7 @@
 // Test it last in a shader that takes derivatives or samples mipmapped textures (after those), so they stay defined for
 // the pixels that are drawn.
 //
-// The instanced twins (B03: their definitions define WORLD_INSTANCED) take the fade and the LOD band per copy from their
+// The instanced twins (their definitions define WORLD_INSTANCED) take the fade and the LOD band per copy from their
 // vertex stage (common/instancing) as flat varyings instead of the uniforms: the same formula with values from two
 // sources.
 

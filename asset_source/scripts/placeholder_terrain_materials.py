@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates B02's placeholder terrain materials for the test terrain: grass, dirt, rock and gravel.
+"""Generates the placeholder terrain materials for the test terrain: grass, dirt, rock and gravel.
 
 Run it from anywhere (only the Python standard library is needed):
 

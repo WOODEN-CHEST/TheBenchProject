@@ -53,8 +53,8 @@ typedef enum TerrainPropertyEnum
 
 // Fields.
 /* Every property, in inspector order: each override flag sits right before the value it switches on. The wire ids are
- * the save schema: never renumber or reuse one; a removed property's id goes into the table's retired list. (T35 added
- * the haze's pair, 19 and 20.) The next free wire id is 21. */
+ * the save schema: never renumber or reuse one; a removed property's id goes into the table's retired list. The haze's
+ * pair is 19 and 20, out of the rows' order. The next free wire id is 21. */
 static const PropertyDescriptor TerrainProperties[TerrainProperty_Count] =
 {
     [TerrainProperty_Terrain] =

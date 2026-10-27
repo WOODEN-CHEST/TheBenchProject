@@ -16,8 +16,8 @@ typedef struct CollisionMeshStruct CollisionMesh;
 
 /**
  * @file TerrainMesh.h
- * @brief A terrain's mesh: one free-form triangle mesh (vertices anywhere, overhangs allowed: decision W1) with painted
- *        material weights and vegetation densities per vertex and holes and face materials per triangle, cut into chunks
+ * @brief A terrain's mesh: one free-form triangle mesh (vertices anywhere, overhangs allowed) with painted material
+ *        weights and vegetation densities per vertex and holes and face materials per triangle, cut into chunks
  *        of about 32 m for drawing and collision. Pure data with no GL: it loads headless.
  *
  * THE DATA. In the terrain's own space (metres, +Y up), within TERRAIN_MESH_EXTENT of its origin on every axis, where a
@@ -450,7 +450,7 @@ Error TerrainMesh_LoadGHDF(const unsigned char* path, float chunkSize, const uns
  *
  * The vertex groups (one per position) stay as they were built: move every vertex at a position together, and never
  * onto another group's position, or the normals and edges there go on following the old grouping (a TODO for the
- * editor round's topology edits).
+ * editor's topology edits).
  * @param self The mesh; must not be NULL.
  * @param vertices The vertices' indices; borrowed. Must not be NULL unless @p count is 0.
  * @param positions Their new positions (terrain space); borrowed.
@@ -531,7 +531,7 @@ Error TerrainMesh_SplitChunkSurface(const TerrainMesh* self, uint32_t chunk, uin
     GenericBuffer* outVertices, GenericBuffer* outIndices);
 
 /**
- * @brief Builds the collision mesh of one chunk (B01): its surface triangles (holes left out) at their positions
+ * @brief Builds the collision mesh of one chunk: its surface triangles (holes left out) at their positions
  *        relative to the chunk's centre (the caller places the mesh at the centre). Each triangle keeps its terrain
  *        triangle's active edges (computed over the whole terrain, so seams between chunks do not catch) and reports
  *        its terrain triangle as its source index (CollisionMeshTriangle._sourceIndex). The surface is cut into parts of

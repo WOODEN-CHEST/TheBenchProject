@@ -1,4 +1,4 @@
-// The sprites: the unit quad every sprite draws with, the lit sprite shader (lights, shadows, fog, night vision; cutout,
+// The sprites: the unit quad every sprite draws with, the lit sprite shader (lights, shadows, haze, night vision; cutout,
 // blended and additive alpha), each frame's sprite matrices (facing the camera, and facing each shadow light), and the
 // lit draws of the scene and crisp passes (the sprites the camera's visibility list holds): the cutout sprites, then the
 // decals, then the blended and additive sprites back to front. The G-buffer and shadow passes draw sprites through this
@@ -150,8 +150,7 @@ static void GetFadedDraw(const WorldRenderSprite* sprite, WorldVisibilityFade fa
 }
 
 /* Uploads one sprite's settings, its fade and its forward point lights to the lit shader and draws it facing the camera.
- * With sprite lighting switched off (the A/B toggle) every sprite draws unlit at its full colours, as before sprites
- * were lit. */
+ * With sprite lighting switched off (the A/B toggle) every sprite draws unlit at its full colours. */
 static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, const WorldRendererSpriteFrame* matrices,
     WorldVisibilityFade fade, bool applyScreenAo)
 {
@@ -183,7 +182,7 @@ static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, 
     SetShaderValue(RayShader, self->_sprites._locLightWrap, &LightWrap, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sprites._locUseScreenAo, &UseScreenAo, SHADER_UNIFORM_INT);
     WorldRendererCommon_SetDither(RayShader, &self->_sprites._dither, DitherFade, 0.0f, false);
-    // Lit or unlit, a sprite is seen through the haze at its own multiplier (T35).
+    // Lit or unlit, a sprite is seen through the haze at its own multiplier.
     WorldRendererLighting_SetDrawHaze(RayShader, &self->_sprites._lit, sprite->Haze);
     if (IsLit)
     {

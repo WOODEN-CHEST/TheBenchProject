@@ -2,9 +2,9 @@
 // frame's lighting uniforms (the renderer uploads the same values to every shader that includes this file), the
 // Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the cascades' shadow, forward point
 // lights and the shadow-casting point light with its cube shadow, the sky's ambient light with the screen-space AO, the
-// eye's night vision and the haze in front of every surface (T35's aerial perspective and ground haze, common/haze).
+// eye's night vision and the haze in front of every surface (the aerial perspective and the ground haze, common/haze).
 //
-// THE SKY'S LIGHT (T36, one light scale): the sun and the moon reach a surface through the air (their light above the air
+// THE SKY'S LIGHT (one light scale): the sun and the moon reach a surface through the air (their light above the air
 // times the transmittance toward them at the surface's own height: reddened low over the horizon, gone once the disc has
 // set there), and its ambient is the sky's own light, the sky's irradiance from above and the ground's bounce from below
 // (AmbientLight), plus the moonless night's own light. The atmosphere pass writes that light by height into the haze
@@ -13,10 +13,10 @@
 //
 // Two families of light functions: the plain ones (SkyLight, PointLights) the PBR shader uses, and the wrapped ones
 // (SkyLightWrapped, PointLightsWrapped) sprites use, whose diffuse part reaches past the terminator ("wrap lighting",
-// for billboards standing in for round things). They are kept apart on purpose: the plain ones compute exactly what
-// the PBR shader computed before they moved here, so its image did not change by a single bit.
+// for billboards standing in for round things). They are kept apart on purpose: the plain ones are exactly the PBR
+// shader's BRDF, untouched by the wrap.
 //
-// RENDER SPACE (T32). "World space" here, and in every shader that includes this file, means render space: the world's
+// RENDER SPACE. "World space" here, and in every shader that includes this file, means render space: the world's
 // orientation with the camera at (0, 0, 0). Fragment positions, light positions and the shadow matrices are relative to
 // the camera (the renderer subtracts its position in double), so the camera needs no uniform: the view vector is
 // -worldPos, the haze's distance length(worldPos). A pattern anchored to the world must not use these positions alone:
@@ -32,7 +32,7 @@
 // Lighting, set by WorldRenderer each frame. Light colours are LINEAR.
 uniform vec3 sunDirection;     // unit direction TO the sun, world space (also the ground haze's sun)
 uniform vec3 moonDirection;    // unit direction TO the moon, world space (also the ground haze's moon)
-// The sky's light (T36). While skyLightPerHeight is on, the light at each fragment's height comes from the volume's last
+// The sky's light. While skyLightPerHeight is on, the light at each fragment's height comes from the volume's last
 // row; otherwise these four hold it at the camera for every fragment (the light on a surface facing the sun, facing the
 // moon, the sky's irradiance on one facing up, the ground's bounce on one facing down).
 uniform bool skyLightPerHeight;
@@ -85,12 +85,13 @@ uniform samplerCube pointShadowCube;    // packed (RGBA8) linear distance from t
 uniform float pointShadowFar;           // far range the stored distance was normalized by
 uniform float pointShadowBias;          // world-space depth bias to combat shadow acne
 
-// The haze in front of a surface (T35, common/haze): the air's from the aerial-perspective volume, and the ground haze.
+// The haze in front of a surface (common/haze): the air's from the aerial-perspective volume, and the ground haze.
 // The volume's screen directions are the scene camera's: a point's place among them is its position through the scene's
 // view-projection (the crisp pass, at the window's resolution, reads the same directions). A draw's own haze multiplies
 // the frame's: its placement's `haze` (1 the real air's, 0 none: a sign that must read from far away), set before every
 // lit draw.
-// T14: the ambient zones' haze multiplier (a room's) multiplies hazeMultiplier where the renderer sets it per draw.
+// Interior lighting (not built yet): its ambient zones' haze multiplier (a room's) will multiply hazeMultiplier where
+// the renderer sets it per draw.
 uniform mat4 hazeViewProjection;
 uniform float hazeMultiplier;
 
@@ -231,7 +232,7 @@ float SkyShadowAmount(vec3 shadowPos, float nDotL)
     return shadow*clamp(shadowStrength, 0.0, 1.0);
 }
 
-// ---- The sky's light at a point (T36) --------------------------------------------------------------------------
+// ---- The sky's light at a point --------------------------------------------------------------------------------
 // What lights a surface at a point: the sun's light on a surface facing it, the moon's, the sky's irradiance on a surface
 // facing up and the ground's bounce on one facing down.
 struct SkyLightValues
@@ -304,7 +305,8 @@ vec3 SkyLightWrapped(SkyLightValues light, vec3 n, vec3 v, float shadowAmount, f
 // The ambient light on a surface with the normal n, per unit of its albedo (times its AO by the caller): the sky's
 // irradiance over the upper half of its view and the ground's bounce over the lower half, as a Lambertian surface takes
 // them ((sky (1 + n.y) / 2 + ground (1 - n.y) / 2) / pi), tinted, plus the moonless night's own light.
-// T14: the sky visibility and the ambient zones plug in here (the sky's part seen from inside a room, a zone's light).
+// Interior lighting (not built yet) plugs in here: the sky visibility and the ambient zones (the sky's part seen from
+// inside a room, a zone's light).
 vec3 AmbientLight(SkyLightValues light, vec3 n)
 {
     float up = clamp(n.y, -1.0, 1.0);

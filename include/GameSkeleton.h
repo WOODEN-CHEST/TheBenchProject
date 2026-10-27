@@ -11,7 +11,7 @@
 
 /**
  * @file GameSkeleton.h
- * @brief The skeleton of a skinned model (T29): its bones, their rest and bind poses, and what the renderer and the
+ * @brief The skeleton of a skinned model: its bones, their rest and bind poses, and what the renderer and the
  *        animation need to bend its meshes.
  *
  * WHAT. A model asset (GameModel.h) whose file has a skin (a glTF armature, an IQM or M3D skeleton) gets a skeleton when

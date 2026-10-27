@@ -4,14 +4,14 @@
 #include "WorldEnvironment.h"
 
 /*
- * Private header (source/): the sky's light on the world's surfaces as pure maths (T36, decision G39: one light scale for
+ * Private header (source/): the sky's light on the world's surfaces as pure maths (one light scale for
  * the sky and the surfaces), tested headless (tests/WorldSkyLightTests.c). The renderer's atmosphere pass computes the
  * same light on the GPU, per height, for every lit surface (the irradiance table and the volume's last row,
  * WorldAtmosphere.h has their layout); this file is its C mirror at the camera, which the eye's exposure, its night
  * vision, the choice of the shadow light, the status line and the lit shaders' fallback take.
  *
  * ONE SCALE. The sun above the air lights a surface facing it with WORLD_ATMOSPHERE_SUN_LIGHT x sun_intensity x
- * sun_color (linear): the game's light units, the lamps' and the emitters' as before T36. The air is lit by the same
+ * sun_color (linear): the game's light units, the lamps' and the emitters'. The air is lit by the same
  * light, so the sky, the haze and the far ground are on the surfaces' scale. The moon above the air is moon_intensity x
  * its phase's brightness x (1 - the daylight factor) x the sun's light, in moon_color.
  *
@@ -53,10 +53,10 @@
  *    exponential densities; the multiple scattering's glow once per zenith ring, at the mean of its azimuths' light
  *    angles.
  * Against a fine integral of the same model (the same tables) it is within 2 % from the zenith to 4 degrees below the
- * horizon, in the default 20 km haze (T37) as in the clearest air, and light pollution's within 2 %
+ * horizon, in the default 20 km haze as in the clearest air, and light pollution's within 2 %
  * (tests/WorldSkyLightTests.c).
  *
- * THE EYE. Since T37 the eye adapts to the picture (EyeAdaptation.h). The scene luminance here
+ * THE EYE. The eye adapts to the picture (EyeAdaptation.h). The scene luminance here
  * (WorldSkyLight_GetSceneLuminance) is where it starts before its first measurement, and the split of it into the
  * daylight's share and the night lights' (WorldSkyLight_GetDayLuminance) is how it, and night vision, read the game's
  * light on the real scale.
@@ -93,7 +93,7 @@
 #define WORLD_SKY_LIGHT_LIGHT_POLLUTION_DEPTH 10.0
 /** @brief The steps of a build of the C tables (WorldSkyLight_BuildTablesStep), in order: the transmittance table's rows,
  *  the multiple scattering table's rows, the irradiance table's rows in WORLD_SKY_LIGHT_IRRADIANCE_ROW_PARTS parts each,
- *  then its light pollution column. None takes more than about 0.75 ms (T37's 6 x 6 haze quadrature). */
+ *  then its light pollution column. None takes more than about 0.75 ms (with the 6 x 6 haze quadrature). */
 #define WORLD_SKY_LIGHT_IRRADIANCE_ROW_PARTS 4
 #define WORLD_SKY_LIGHT_BUILD_STEP_COUNT (WORLD_SKY_LIGHT_TRANSMITTANCE_HEIGHT + WORLD_SKY_LIGHT_MULTISCATTER_SIZE \
     + WORLD_ATMOSPHERE_IRRADIANCE_HEIGHT * WORLD_SKY_LIGHT_IRRADIANCE_ROW_PARTS + 1)
@@ -111,8 +111,8 @@
 #define WORLD_SKY_LIGHT_MOON_FADE_START (-0.105f)
 #define WORLD_SKY_LIGHT_MOON_FADE_END (-0.052f)
 /** @brief The share of a directional light (the sun, the moon) in the scene luminance: a surface facing it gets all of
- *  it, one facing away none. Tuned in T36 on rendered frames, when the eye adapted to this luminance (with nearby lamps
- *  added); since T37 it sets where the eye starts and the night vision's field, whose dusk colours were tuned with it. */
+ *  it, one facing away none. Tuned on rendered frames as the level an eye adapts to (with nearby lamps added); it sets
+ *  where the eye starts and the night vision's field, whose dusk colours are tuned with it. */
 #define WORLD_SKY_LIGHT_DIRECTIONAL_ADAPT_WEIGHT 0.40f
 
 
@@ -377,7 +377,7 @@ float WorldSkyLight_GetMoonGate(float sunCosZenith, float moonCosZenith);
 
 /**
  * @brief The scene luminance: the luminance of the sky's light on a white surface (the eye starts from it before it
- *        measures the picture, T37): the ambient on one facing up (the sky's irradiance over pi times the tint, plus the
+ *        measures the picture): the ambient on one facing up (the sky's irradiance over pi times the tint, plus the
  *        night's light) plus WORLD_SKY_LIGHT_DIRECTIONAL_ADAPT_WEIGHT of the sun's and the moon's through the air.
  * @param frame The light (WorldSkyLight_GetFrameLight); must not be NULL.
  * @returns The luminance (Rec. 709 weights on linear RGB), >= 0 for valid light.
@@ -395,7 +395,7 @@ float WorldSkyLight_GetSceneLuminance(const WorldSkyLightFrame* frame);
 float WorldSkyLight_GetDayLuminance(const WorldSkyLightFrame* frame);
 
 /**
- * @brief The twilight's luminance behind the stars (T38): the sky's mean luminance from the sun (the luminance of the
+ * @brief The twilight's luminance behind the stars: the sky's mean luminance from the sun (the luminance of the
  *        sun's part of its irradiance, frame->SunSky, over pi) on the real scale (WORLD_ATMOSPHERE_SUN_LIGHT_CANDELAS per
  *        WORLD_ATMOSPHERE_SUN_LIGHT). The mean stands for the sky overhead: at dusk the sky is brighter toward the sun,
  *        darker at the zenith.

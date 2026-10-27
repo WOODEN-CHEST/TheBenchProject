@@ -1,4 +1,4 @@
-// Periodic value noise for patterns anchored to the world, for #include "common/value_noise" (B02: the terrain's rules).
+// Periodic value noise for patterns anchored to the world, for #include "common/value_noise" (the terrain's rules).
 // Random values at the integer cells, hashed with pcg3d (Jarzynski and Olano 2020, "Hash Functions for GPU Rendering"),
 // blended with a quintic fade; the cells wrap every VALUE_NOISE_PERIOD along each axis, so the noise repeats there.
 //

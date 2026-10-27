@@ -15,7 +15,7 @@
 typedef struct GameTextureStruct GameTexture;
 /** @brief An animation library asset (AnimationLibrary.h); a world model names the ones its placements play. */
 typedef struct AnimationLibraryStruct AnimationLibrary;
-/** @brief An animation graph asset (AnimationGraph.h); a world model names the one its placements play (T30). */
+/** @brief An animation graph asset (AnimationGraph.h); a world model names the one its placements play. */
 typedef struct AnimationGraphStruct AnimationGraph;
 
 
@@ -28,7 +28,7 @@ typedef struct AnimationGraphStruct AnimationGraph;
  * distance (its LODs, 1 to WORLD_MODEL_MAX_LODS), how far it is seen (its draw distance, and whether the player's
  * draw_distance_scale may change it), the default render settings of its placements, its material variants and its
  * bounding sphere. A model asset stays a plain asset that is usable outside the world (the UI); what only matters in
- * the world lives here (the owner's decision G17).
+ * the world lives here.
  *
  * A placed object names its world model in its model component (WorldModelComponent.h), and may override each default
  * setting with an explicit flag next to the value; WorldModelComponent_ResolveSettings turns the two into the settings
@@ -42,30 +42,30 @@ typedef struct AnimationGraphStruct AnimationGraph;
  * VARIANTS apply at draw time, never to an asset: the renderer copies a mesh's material maps for each draw and
  * WorldModel_ApplyVariant changes that copy (textures, then the factors), the same rule as the object's tint.
  *
- * COLLISION (T12). A world model may have collision sets (WorldModelCollision): named compounds of shapes in its own
- * space, one of them the default, and the defaults of its placements' colliders (a layer, a mask, a trigger flag and,
- * since T27, a mass). A placement's collider picks a set and may override each default (WorldColliderComponent.h).
+ * COLLISION. A world model may have collision sets (WorldModelCollision): named compounds of shapes in its own
+ * space, one of them the default, and the defaults of its placements' colliders (a layer, a mask, a trigger flag and a
+ * mass). A placement's collider picks a set and may override each default (WorldColliderComponent.h).
  * Hulls and meshes built from models are the world model's own (their models load as dependencies), shared by every
  * placement. Without a "collision" section a world model has no collision.
  *
  * LODS. Each LOD is drawn while the object is nearer than its max distance (at the default 60-degree field of view), the
  * last one until the draw distance; a placement may give its own switch distances, scale them or force a LOD
  * (WorldModelComponent_ResolveLodSettings). The renderer picks the LOD by the camera's distance with the hysteresis
- * stored here, and cross-fades a change over the fade time with a dither (T11).
+ * stored here, and cross-fades a change over the fade time with a dither.
  *
- * ANIMATION (T29). A world model whose LOD models are skinned has a skeleton (WorldModel_GetSkeleton: every skinned LOD
+ * ANIMATION. A world model whose LOD models are skinned has a skeleton (WorldModel_GetSkeleton: every skinned LOD
  * shares it, bones and bind poses alike, so one pose bends them all; LODs without bones draw as they are), and it may
  * name animation libraries (AnimationLibrary.h) whose clips its placements play: an animator component on the object
  * (WorldAnimatorComponent.h) plays them, matched to the skeleton by bone name. The libraries load as dependencies, and
- * their clips' names must not repeat across them. Since T30 it may name an animation graph (AnimationGraph.h: which
+ * their clips' names must not repeat across them. It may also name an animation graph (AnimationGraph.h: which
  * clip plays when, the special actions), a dependency too, that its placements' animators play with those clips.
  *
- * SOCKETS (T30). Named places on the model: on a bone (a hand: the place follows the pose, so a held item hangs there)
+ * SOCKETS. Named places on the model: on a bone (a hand: the place follows the pose, so a held item hangs there)
  * with an offset in the bone's space, or fixed in the object's own space (a bench's seat: where a sitting character
  * stands, facing the way it sits). An object hangs on a socket of its parent (WorldObject's parent_socket), and an
  * action's anchor is a socket of its target. A skinned world model may say what a first-person camera rides and leaves
  * out (WorldModel_GetFirstPerson): the socket of its eyes and the bones (with their subtrees) the camera's passes hide,
- * the head (the owner's decision G34).
+ * the head.
  *
  * Every field is read-only (underscore-prefixed): read them through the accessors.
  */
@@ -80,19 +80,19 @@ typedef struct AnimationGraphStruct AnimationGraph;
 #define WORLD_MODEL_MAX_VARIANT_OVERRIDES ((size_t)32)
 /** @brief The most bytes a variant's name may have (without the terminator). */
 #define WORLD_MODEL_VARIANT_NAME_MAX_LENGTH ((size_t)128)
-/** @brief How long a LOD cross-fade takes when the definition does not say, in seconds (T11). */
+/** @brief How long a LOD cross-fade takes when the definition does not say, in seconds. */
 #define WORLD_MODEL_DEFAULT_LOD_FADE_SECONDS 0.3f
-/** @brief The LOD hysteresis when the definition does not say: a share of each switch distance (T11). */
+/** @brief The LOD hysteresis when the definition does not say: a share of each switch distance. */
 #define WORLD_MODEL_DEFAULT_LOD_HYSTERESIS 0.05f
 /** @brief The draw distance of WorldModelSettings_CreateDefault, in metres: what a model component's own draw distance
  *  starts at (its override is off by default). A world model's own draw distance defaults to its last LOD's. */
 #define WORLD_MODEL_DEFAULT_DRAW_DISTANCE 600.0f
-/** @brief The largest haze multiplier a world model or a placement may give (T35; render.haze, the components' haze):
+/** @brief The largest haze multiplier a world model or a placement may give (render.haze, the components' haze):
  *  far beyond it every surface is the sky already. Terrain and model instances take the same bound. */
 #define WORLD_MODEL_MAX_HAZE 1000.0f
-/** @brief The most animation libraries a world model may name (T29). */
+/** @brief The most animation libraries a world model may name. */
 #define WORLD_MODEL_MAX_ANIMATION_LIBRARIES ((size_t)16)
-/** @brief The most sockets a world model may have (T30). */
+/** @brief The most sockets a world model may have. */
 #define WORLD_MODEL_MAX_SOCKETS ((size_t)32)
 /** @brief The most bytes a socket's name may have ([a-z][a-z0-9_.-]*, without the terminator). */
 #define WORLD_MODEL_SOCKET_NAME_MAX_LENGTH ((size_t)64)
@@ -142,8 +142,8 @@ typedef struct WorldModelSettingsStruct
     /** @brief Whether the player's draw_distance_scale leaves DrawDistance as it is (landmarks, gameplay-critical
      *  props). */
     bool IsDrawDistanceFixed;
-    /** @brief How hazy the model looks at a distance (T35): it multiplies the haze in front of it, 1 (the default) the
-     *  real air's, 0 as if the air were clear (a beacon, a sign that must read from far away). In
+    /** @brief How hazy the model looks at a distance: it multiplies the haze in front of it, 1 (the default) the real
+     *  air's, 0 as if the air were clear (a beacon, a sign that must read from far away). In
      *  [0, WORLD_MODEL_MAX_HAZE]. */
     float Haze;
 } WorldModelSettings;
@@ -231,14 +231,14 @@ typedef struct WorldModelCollisionStruct
     /** @brief Whether its placements' colliders are triggers by default. */
     bool _isTrigger;
     /** @brief The default mass of its placements' colliders, in kilograms (above 0, at most COLLISION_MAX_MASS;
-     *  COLLISION_DEFAULT_MASS when the section gives none): how pushables share a push (T27). */
+     *  COLLISION_DEFAULT_MASS when the section gives none): how pushables share a push. */
     float _mass;
     /** @brief Whether the sets are the built-in "bounds" fallback (one box around LOD 0). */
     bool _isBoundsFallback;
 } WorldModelCollision;
 
 /**
- * @brief One socket of a world model: a named place on a bone or fixed on the model (T30). Read-only; part of its world
+ * @brief One socket of a world model: a named place on a bone or fixed on the model. Read-only; part of its world
  *        model.
  */
 typedef struct WorldModelSocketStruct
@@ -277,14 +277,14 @@ typedef struct WorldModelStruct
      *  import transform for its mesh bounds. */
     Matrix _boundsTransform;
     /** @brief Whether the sphere is the definition's "bounds" (otherwise the one around LOD 0's mesh bounds, which a
-     *  posed placement replaces with its pose's: T29). */
+     *  posed placement replaces with its pose's). */
     bool _hasOwnBounds;
     /** @brief The variants (owned), and their count (0 to WORLD_MODEL_MAX_VARIANTS). */
     const WorldModelVariant* _variants;
     size_t _variantCount;
     /** @brief The collision (owned), or NULL: no collision. */
     const WorldModelCollision* _collision;
-    /** @brief The skeleton its skinned LODs share (owned by that LOD's model), or NULL when no LOD has bones (T29). */
+    /** @brief The skeleton its skinned LODs share (owned by that LOD's model), or NULL when no LOD has bones. */
     const GameSkeleton* _skeleton;
     /** @brief The first LOD with that skeleton (valid while _skeleton is not NULL): its import transform places the
      *  skeleton's mesh space in the object's own space. */
@@ -296,7 +296,7 @@ typedef struct WorldModelStruct
     const unsigned char* _animationLibraryNames[WORLD_MODEL_MAX_ANIMATION_LIBRARIES];
     /** @brief How many it names (0 to WORLD_MODEL_MAX_ANIMATION_LIBRARIES). */
     size_t _animationLibraryCount;
-    /** @brief The animation graph its placements play (held under its dependency user), or NULL (T30). */
+    /** @brief The animation graph its placements play (held under its dependency user), or NULL. */
     const AnimationGraph* _animationGraph;
     /** @brief The graph's asset name (owned by the world model), or NULL. */
     const unsigned char* _animationGraphName;
@@ -328,7 +328,7 @@ extern const PropertyEnumTable WORLD_SHADOW_TIER_ENUM;
 WorldModelSettings WorldModelSettings_CreateDefault(void);
 
 /**
- * @brief Returns the skeleton the world model's skinned LODs share (T29).
+ * @brief Returns the skeleton the world model's skinned LODs share.
  * @param self The world model; must not be NULL.
  * @returns The skeleton (valid while the world model is loaded), or NULL when no LOD has bones.
  */
@@ -348,7 +348,7 @@ static inline size_t WorldModel_GetSkeletonLod(const WorldModel* self)
     return self->_skeletonLod;
 }
 
-/** @brief Returns how many animation libraries the world model names (T29). @param self The world model; must not be
+/** @brief Returns how many animation libraries the world model names. @param self The world model; must not be
  *  NULL. */
 static inline size_t WorldModel_GetAnimationLibraryCount(const WorldModel* self)
 {
@@ -378,7 +378,7 @@ static inline const unsigned char* WorldModel_GetAnimationLibraryName(const Worl
 }
 
 /**
- * @brief Returns the animation graph the world model's placements play (T30).
+ * @brief Returns the animation graph the world model's placements play.
  * @param self The world model; must not be NULL.
  * @returns The graph (valid while the world model is loaded), or NULL when it names none.
  */
@@ -397,7 +397,7 @@ static inline const unsigned char* WorldModel_GetAnimationGraphName(const WorldM
     return self->_animationGraphName;
 }
 
-/** @brief Returns how many sockets the world model has (T30). @param self The world model; must not be NULL. */
+/** @brief Returns how many sockets the world model has. @param self The world model; must not be NULL. */
 static inline uint32_t WorldModel_GetSocketCount(const WorldModel* self)
 {
     return self->_socketCount;
@@ -424,7 +424,7 @@ static inline const WorldModelSocket* WorldModel_GetSocket(const WorldModel* sel
 bool WorldModel_TryFindSocket(const WorldModel* self, const unsigned char* name, uint32_t* outIndex);
 
 /**
- * @brief Returns what a first-person camera rides and hides on the world model (T30).
+ * @brief Returns what a first-person camera rides and hides on the world model.
  * @param self The world model; must not be NULL.
  * @param outEyesSocket [out] Receives the eyes' socket (an index); may be NULL.
  * @param outHiddenBones [out] Receives the hidden bones (skeleton indices, valid while the world model is loaded); may
@@ -548,7 +548,7 @@ static inline Matrix WorldModel_GetBoundsTransform(const WorldModel* self)
 
 /**
  * @brief Returns whether the bounding sphere is the definition's own ("bounds"), which holds whatever its placements do:
- *        a posed placement's renderer then keeps it, and otherwise bounds the placement by its pose (T29).
+ *        a posed placement's renderer then keeps it, and otherwise bounds the placement by its pose.
  * @param self The world model; must not be NULL.
  * @returns Whether the definition gives the sphere.
  */

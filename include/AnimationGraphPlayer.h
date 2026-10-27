@@ -11,7 +11,7 @@
 
 /**
  * @file AnimationGraphPlayer.h
- * @brief Playing an animation graph (AnimationGraph.h) on one skeleton (T30): binding it to the skeleton and its
+ * @brief Playing an animation graph (AnimationGraph.h) on one skeleton: binding it to the skeleton and its
  *        libraries, its parameters and events, its layers' states with their cross-fades and times, its timed events,
  *        and the pose it makes, look-at included.
  *

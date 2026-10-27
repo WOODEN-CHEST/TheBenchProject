@@ -1,4 +1,4 @@
-// The world test frame's animation (T29, WorldTestAnimation.h): the animation system the frame ticks and its debug keys:
+// The world test frame's animation (WorldTestAnimation.h): the animation system the frame ticks and its debug keys:
 // the showcase figure's clips, a crowd of placeholder figures and slow motion.
 
 #include <inttypes.h>

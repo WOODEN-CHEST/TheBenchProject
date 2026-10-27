@@ -1,8 +1,7 @@
 // Drawing of world model objects and light gizmos for the renderer's passes, from the render cache's lists. Meshes draw
 // with materials built on the stack, so no pass writes into a shared model asset. A model is drawn one LOD at a time:
 // the lit passes draw both LODs of a cross-fade with complementary dithers (WorldLod.h). A posed object's skinned meshes
-// draw with each pass's skinned shader and the pose's palette (T29). Sprites have their own file
-// (WorldRendererSprites.c).
+// draw with each pass's skinned shader and the pose's palette. Sprites have their own file (WorldRendererSprites.c).
 
 #include "WorldRendererInternal.h"
 #include "GameSkeleton.h"
@@ -17,7 +16,7 @@
 /** How strongly a tinted LOD past LOD 0 glows in its colour (linear emissive intensity): faint by day, where the
  *  albedo's tint shows, and clear at night, where the eye's night vision greys reflected colour but not emitted light. */
 #define LOD_TINT_GLOW_INTENSITY 0.05f
-/** Asset name of the unlit fallback's skinned shader (T29). */
+/** Asset name of the unlit fallback's skinned shader. */
 #define UNLIT_SKINNED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_unlit_skinned")
 
 
@@ -61,7 +60,7 @@ static LodLook GetLodLook(const WorldRenderer* self, const WorldRenderModel* mod
  * skinned shader holds the pose's palette (uploaded here when it does not yet). */
 static bool CanSkin(const WorldRenderModel* model, const GameSkeleton* skeleton, const WorldRendererMeshShaders* shaders)
 {
-    // The camera's passes draw the first-person object without the bones it hides (T30); a light's see all of it.
+    // The camera's passes draw the first-person object without the bones it hides; a light's see all of it.
     const WorldAnimatorPose* Pose = shaders->IsCameraView ? model->CameraPose : model->Pose;
     return (Pose != NULL) && (skeleton != NULL) && (shaders->Skinned != NULL) && (shaders->Palette != NULL)
         && (GameSkeleton_GetBoneCount(skeleton) == Pose->_boneCount)

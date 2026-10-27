@@ -17,7 +17,7 @@
  * rule is checked when the definition is read.
  *
  * A placed object names its character in its character component (WorldCharacterComponent.h) and may override EVERY
- * setting with an explicit flag next to its own value (the owner's decision G24); WorldCharacterComponent_ResolveSettings
+ * setting with an explicit flag next to its own value; WorldCharacterComponent_ResolveSettings
  * turns the two into the settings that apply. Changing the component's name swaps the kind of character and keeps the
  * object. Gravity is the world's (WorldEnvironment's gravity); a character multiplies it.
  *
@@ -73,7 +73,7 @@ typedef enum CharacterSettingEnum
     CharacterSetting_Height,
     /** @brief eye_height: the eyes above the feet while standing, metres. */
     CharacterSetting_EyeHeight,
-    /** @brief mass: kilograms, for pushing (T27). */
+    /** @brief mass: kilograms, for pushing. */
     CharacterSetting_Mass,
     /** @brief is_pushable: whether others push it. */
     CharacterSetting_IsPushable,
@@ -87,8 +87,7 @@ typedef enum CharacterSettingEnum
     CharacterSetting_RunSpeed,
     /** @brief acceleration: how fast the movement keys push it on the ground, metres per second squared. */
     CharacterSetting_Acceleration,
-    /** @brief ground_friction: how fast the ground slows it, metres per second squared (was deceleration: the same
-     *  wire id). */
+    /** @brief ground_friction: how fast the ground slows it, metres per second squared. */
     CharacterSetting_GroundFriction,
     /** @brief step_height: the highest step it climbs, metres. */
     CharacterSetting_StepHeight,
@@ -191,7 +190,7 @@ typedef struct CharacterSettingsStruct
     float Height;
     /** @brief The eyes above the feet while standing (at least 0): the camera's height, the interaction ray's start. */
     float EyeHeight;
-    /** @brief The mass in kilograms (above 0, at most COLLISION_MAX_MASS): how pushes are shared (T27). */
+    /** @brief The mass in kilograms (above 0, at most COLLISION_MAX_MASS): how pushes are shared. */
     float Mass;
     /** @brief Whether other characters, movers and pushables push it (its collider is then pushable); off, it is
      *  kinematic: it pushes and is never pushed. */
@@ -210,7 +209,7 @@ typedef struct CharacterSettingsStruct
     /** @brief How fast the ground's friction slows it (at least 0: 0 slides like ice): it stops a character whose keys
      *  let go, and takes what the keys do not drive (speed above walking after a sprint-jump; with the push control,
      *  an old direction after a turn). A constant deceleration. */
-    // TODO: scale it by the ground's material (ice, mud) once colliders have one (T28).
+    // TODO: scale it by the ground's material (ice, mud) once colliders have one (rigid bodies' physics materials).
     float GroundFriction;
     /** @brief How the movement keys act on the ground. */
     CharacterGroundControl GroundControl;

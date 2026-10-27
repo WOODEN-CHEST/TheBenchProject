@@ -42,11 +42,11 @@ typedef enum ModelPropertyEnum
 
 // Fields.
 /* Every property, in inspector order: each override flag sits right before the value it switches on. The rows' keys,
- * types, defaults, rules and texts are shared with the model instances component (source/WorldModelComponentInternal.h,
- * B03). The wire ids are the save schema: never renumber or reuse one; a removed property's id goes into the table's
- * retired list. (T10 renamed wire 1 from "model", a model asset, to "world_model", and made rows 2 to 5 the placement's
- * own values behind their override flags; T11 added the LOD rows, 17 to 21; T35 the haze's pair, 23 and 24, as in the
- * model instances component, whose list is 22.) The next free wire id is 25. */
+ * types, defaults, rules and texts are shared with the model instances component
+ * (source/WorldModelComponentInternal.h). The wire ids are the save schema: never renumber or reuse one; a removed
+ * property's id goes into the table's retired list. They do not follow the rows' order: 1 is world_model, 2 to 5 the
+ * placement's own values behind the override flags 8 to 11, 17 to 21 the LOD rows and 23 and 24 the haze's pair, as in
+ * the model instances component, whose list is 22. The next free wire id is 25. */
 static const PropertyDescriptor ModelProperties[ModelProperty_Count] =
 {
     [ModelProperty_WorldModel] =

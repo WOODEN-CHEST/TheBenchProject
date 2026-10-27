@@ -12,7 +12,7 @@
  *
  * A GameModel holds a loaded Raylib Model (meshes + materials, with its import transform baked into the
  * Model's transform matrix). It is the static-state model asset produced by the asset manager's model type
- * (load one with AssetManager_LoadModel). A model whose file has a skin also holds its skeleton (GameSkeleton.h, T29):
+ * (load one with AssetManager_LoadModel). A model whose file has a skin also holds its skeleton (GameSkeleton.h):
  * what a pose needs to bend its meshes, which are then drawn by the world renderer's skinned shaders. The asset is never
  * posed itself (raylib's UpdateModelAnimation would pose the shared model for everyone): each animated object keeps its
  * own pose (WorldAnimatorComponent.h).

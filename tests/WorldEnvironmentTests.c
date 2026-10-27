@@ -155,13 +155,13 @@ static void DefaultsAreValid(TestRun* run)
     TEST_CHECK(run, Environment.IsMoonEnabled && (Environment.MoonPhaseSource == WorldMoonPhaseSource_Calendar));
     TEST_CHECK(run, (Environment.MoonCycleDays == WORLD_ENVIRONMENT_MOON_CYCLE_DAYS) && !Environment.AreSeasonsEnabled);
     TEST_CHECK(run, (Environment.NightVisionStrength == 1.0f) && (Environment.NightVisionBlueShift == 0.5f));
-    // The air (T15; T37: 20 km of visibility, turbidity 24): a 1200 m haze of albedo about 0.9, g 0.758, Earth's air
+    // The air (20 km of visibility, turbidity 24): a 1200 m haze of albedo about 0.9, g 0.758, Earth's air
     // and ozone, all of the multiple scattering.
     TEST_CHECK(run, (Environment.SkyTurbidity == 24.0f) && (Environment.HazeHeight == 1200.0f));
     TEST_CHECK(run, (Environment.HazeAlbedo.r == 244) && (Environment.HazeAlbedo.g == 244) && (Environment.HazeAlbedo.b == 244));
     TEST_CHECK(run, (Environment.SunGlow == 0.758f) && (Environment.AirDensity == 1.0f) && (Environment.Ozone == 1.0f));
     TEST_CHECK(run, Environment.MultipleScattering == 1.0f);
-    // The haze (T35): the real air (no extra distance, the whole of it, from the camera), no ground haze, a near-white mist
+    // The haze: the real air (no extra distance, the whole of it, from the camera), no ground haze, a near-white mist
     // of glow 0.8 when one is set, the far ground at world Y 0.
     TEST_CHECK(run, (Environment.FogStrength == 1.0f) && (Environment.AerialDistanceScale == 1.0f)
         && (Environment.HazeStartDistance == 0.0f));
@@ -169,7 +169,7 @@ static void DefaultsAreValid(TestRun* run)
         && (Environment.GroundHazeThickness == 20.0f) && (Environment.GroundHazeGlow == 0.8f));
     TEST_CHECK(run, (Environment.GroundHazeAlbedo.r == 250) && (Environment.GroundHazeAlbedo.b == 250)
         && (Environment.HorizonGroundHeight == 0.0f));
-    // The light (T36): a white sun above the air (the air reddens it), the sky's own light as the ambient, untinted, and
+    // The light: a white sun above the air (the air reddens it), the sky's own light as the ambient, untinted, and
     // the moonless night's own light, blue-white.
     TEST_CHECK(run, (Environment.SunColor.r == 255) && (Environment.SunColor.g == 255) && (Environment.SunColor.b == 255)
         && (Environment.SunIntensity == 1.0f));
@@ -258,7 +258,7 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.NightVisionBlueShift = -0.25f;
     CheckRejected(run, &Environment, "NightVisionBlueShift");
 
-    // The air's settings (T15).
+    // The air's settings.
     ResetEnvironment(&Environment);
     Environment.HazeHeight = 5.0f;
     CheckRejected(run, &Environment, "world_environment.haze_height (HazeHeight) must be finite and in [10, 100000]");
@@ -290,7 +290,7 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.MultipleScattering = -0.5f;
     CheckRejected(run, &Environment, "MultipleScattering");
 
-    // The haze's settings (T35).
+    // The haze's settings.
     ResetEnvironment(&Environment);
     Environment.AerialDistanceScale = -1.0f;
     CheckRejected(run, &Environment, "AerialDistanceScale");
@@ -324,7 +324,7 @@ static void ValidateNamesTheBrokenField(TestRun* run)
     Environment.HorizonGroundHeight = 2.0e7f;
     CheckRejected(run, &Environment, "HorizonGroundHeight");
 
-    // The night's own light (T36).
+    // The night's own light.
     ResetEnvironment(&Environment);
     Environment.NightLightIntensity = -0.01f;
     CheckRejected(run, &Environment, "NightLightIntensity");
@@ -526,8 +526,9 @@ static void CopyToCopiesEverySetting(TestRun* run)
     WorldEnvironment_Deconstruct(&Destination);
 }
 
-/* The environment no longer keeps time; its date and time of day start where a new game clock starts (noon,
- * 2026-10-18), and the clock writes them as a game would. The removed day-night settings' wire ids stay retired. */
+/* The environment does not keep time; its date and time of day start where a new game clock starts (noon,
+ * 2026-10-18), and the clock writes them as a game would. It has no day-night cycle settings; their wire ids (2 and 3)
+ * stay retired. */
 static void DateAndTimeComeFromTheClock(TestRun* run)
 {
     WorldEnvironment Environment;
@@ -752,8 +753,8 @@ static void MoonIlluminationFollowsThePhase(TestRun* run)
 }
 
 /* Moonlight above the air: a full moon at midnight gives all of it, none by day, and one just risen in the twilight is
- * dimmed by the twilight alone (since T36 the air dims a low moon, in the renderer, not this factor: a quarter moon set
- * after midnight keeps its factor); a quarter moon an hour after sunset gives a tenth of it; no moon, none. */
+ * dimmed by the twilight alone (the air dims a low moon, in the renderer, not this factor: a quarter moon set after
+ * midnight keeps its factor); a quarter moon an hour after sunset gives a tenth of it; no moon, none. */
 static void MoonlightFollowsThePhaseAndDaylight(TestRun* run)
 {
     WorldEnvironment Environment;
@@ -766,8 +767,8 @@ static void MoonlightFollowsThePhaseAndDaylight(TestRun* run)
     WorldSkyLights Lights;
     WorldEnvironment_GetSkyLights(&Environment, &Lights);
     TEST_CHECK(run, fabsf(Lights.MoonIntensity - Environment.MoonIntensity) < 1e-6f);
-    // The sun above the air keeps its intensity at night (since T36 the air and the planet take it away, in the
-    // renderer); the daylight is gone.
+    // The sun above the air keeps its intensity at night (the air and the planet take it away, in the renderer); the
+    // daylight is gone.
     TEST_CHECK(run, (Lights.SunIntensity == Environment.SunIntensity) && (Lights.Daylight == 0.0f));
     TEST_CHECK(run, (Lights.MoonPhase == 0.5f) && (Lights.MoonIllumination > 0.9999f));
 

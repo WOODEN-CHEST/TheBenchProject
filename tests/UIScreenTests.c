@@ -624,7 +624,7 @@ static void DestroyTakesTheSubtreeChildrenFirst(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-// The review's crash: a widget destroyed inside its own hook, or a hook destroying its parent mid-routing.
+// A widget may be destroyed inside its own hook, and a hook may destroy its parent mid-routing.
 static void WidgetsCanBeDestroyedInsideHooks(TestRun* run)
 {
     UIFixture Fixture;
@@ -659,7 +659,7 @@ static void WidgetsCanBeDestroyedInsideHooks(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-// The review's bug: a focus change made inside a focus hook could leave two widgets focused.
+// A focus change made inside a focus hook leaves one widget focused, not two.
 static void FocusChangedInAFocusHookLeavesOneWidgetFocused(TestRun* run)
 {
     UIFixture Fixture;
@@ -689,7 +689,7 @@ static void FocusChangedInAFocusHookLeavesOneWidgetFocused(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-// The review's bugs: removing a root could detach the wrong one, and left the removed widget hovered.
+// Removing a root detaches that root, not another one, and ends the removed widget's hover.
 static void RemovingARootDetachesItAndEndsItsHover(TestRun* run)
 {
     UIFixture Fixture;
@@ -957,7 +957,7 @@ static void NavigationFollowsReadingOrderAndArrows(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-// The review's bug: leaving keyboard navigation could leave widgets stuck "tabbed".
+// Leaving keyboard navigation leaves no widget stuck "tabbed".
 static void AcceptEntersContainersAndLeavingClearsTabbed(TestRun* run)
 {
     UIFixture Fixture;
@@ -994,7 +994,7 @@ static void AcceptEntersContainersAndLeavingClearsTabbed(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-// The review's bug: navigation consumed its key, so holding Tab or an arrow never repeated. A repeat follows the modifiers
+// Holding Tab or an arrow repeats navigation, although navigation consumes its key. A repeat follows the modifiers
 // held at that moment.
 static void HoldingANavigationKeyRepeatsNavigation(TestRun* run)
 {
@@ -1048,8 +1048,8 @@ static void HoldingANavigationKeyRepeatsNavigation(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-// The review's bug: navigation assumed ui_previous held the Shift chord, so with the Tab bindings swapped Shift+Tab went
-// backwards as well.
+// Navigation does not assume ui_previous holds the Shift chord: with the Tab bindings swapped, Shift+Tab goes forwards
+// and Tab backwards.
 static void SwappedTabBindingsNavigateBothWays(TestRun* run)
 {
     UIFixture Fixture;
@@ -1102,8 +1102,8 @@ static void EnterOpensAContainerFocusedByAClick(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-// The review's bug: when focus moved without navigation, the entered widgets no longer led to it and one could stay
-// tabbed. The next navigation step brings them back in line with focus.
+// Focus can move without navigation (here the game moves it): the next navigation step brings the entered widgets back
+// in line with focus, so none stays tabbed.
 static void NavigationFollowsFocusMovedByTheGame(TestRun* run)
 {
     UIFixture Fixture;
@@ -1128,7 +1128,7 @@ static void NavigationFollowsFocusMovedByTheGame(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-// The review's bug: a hook that detached the widget navigation was entering left focus inside the detached subtree.
+// A hook that detaches the widget navigation is entering leaves no focus inside the detached subtree.
 static void AHookThatDetachesTheEnteredWidgetLeavesNoDetachedFocus(TestRun* run)
 {
     UIFixture Fixture;
@@ -1150,8 +1150,8 @@ static void AHookThatDetachesTheEnteredWidgetLeavesNoDetachedFocus(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-// The same bug one level deeper: starting navigation enters Menu then Sub, and Menu's hook detaches Sub on the way. Sub must
-// not end up tabbed (it is off the path), and nothing inside it focused.
+// The same one level deeper: starting navigation enters Menu then Sub, and Menu's hook detaches Sub on the way. Sub
+// must not end up tabbed (it is off the path), and nothing inside it focused.
 static void AHookThatDetachesAnInnerEnteredWidgetLeavesItUntabbed(TestRun* run)
 {
     UIFixture Fixture;
@@ -1196,8 +1196,8 @@ static void NonFocusableWidgetsAreTransparentToNavigation(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-// The review's bug: a click on a button also reached the game. A press over a widget is consumed, its release
-// follows it; a press over empty space reaches the game and clears focus.
+// A click on a button does not also reach the game: a press over a widget is consumed, its release follows it; a press
+// over empty space reaches the game and clears focus.
 static void ClicksOverWidgetsAreConsumed(TestRun* run)
 {
     UIFixture Fixture;
@@ -1303,7 +1303,7 @@ static void ScreensRouteOnlyWhatTheirHostGives(TestRun* run)
 }
 
 
-// The review's bug: the repeats and the release of a key a widget handled went to whatever was focused by then.
+// The repeats and the release of a key a widget handled go to that widget, not to whatever is focused by then.
 static void AHandledKeyRepeatsAndReleasesToItsHandler(TestRun* run)
 {
     UIFixture Fixture;
@@ -1346,7 +1346,7 @@ static void AHandledKeyRepeatsAndReleasesToItsHandler(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-// The review's bug: a press still reached a widget that a focus hook had just detached.
+// A press does not reach a widget that a focus hook has just detached.
 static void AFocusHookThatDetachesTheClickedWidgetGetsNoPress(TestRun* run)
 {
     UIFixture Fixture;
@@ -1372,7 +1372,8 @@ static void AFocusHookThatDetachesTheClickedWidgetGetsNoPress(TestRun* run)
 
 
 // Tests: drawing order and hit testing.
-// The review's bug: an unstable per-tick sort swapped siblings of equal z and changed what GetSubWidgetAt returned.
+// Siblings of equal z keep their insertion order from tick to tick: an unstable per-tick sort would swap them and
+// change what GetSubWidgetAt returns.
 static void SiblingsOfEqualZKeepInsertionOrder(TestRun* run)
 {
     UIFixture Fixture;
@@ -1587,8 +1588,8 @@ static void NotificationsWaitForTheEndOfTheUpdate(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-// The review's bug: a state change was queued after the widget's hook, so when the hook moved focus again the last
-// notification about the widget told a stale state.
+// When a widget's focus hook moves focus again, the last notification about the widget tells its final state (a state
+// change queued after the hook would tell a stale one).
 static void NotificationsTellTheFinalStateWhenHooksMoveFocus(TestRun* run)
 {
     UIFixture Fixture;

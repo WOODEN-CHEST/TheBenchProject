@@ -1,6 +1,6 @@
 #version 330
 
-// The unlit fallback's fragment stage (world_unlit_skinned, T29): raylib's default fragment shader, the material's
+// The unlit fallback's fragment stage (world_unlit_skinned): raylib's default fragment shader, the material's
 // albedo texture times its colour times the vertex colour, so a skinned mesh looks as the rigid ones drawn with
 // raylib's default shader do.
 

@@ -1,6 +1,6 @@
-// The world test frame's characters (T13, WorldTestCharacters.h): walk mode, the test NPCs and their scripted brains,
-// the character events, the look target and the status line; since T30 the humans' bodies and their actions. Test
-// content only.
+// The world test frame's characters (WorldTestCharacters.h): walk mode, the test NPCs and their scripted brains,
+// the character events, the look target, the status line, and the humans' bodies and their actions. Test content
+// only.
 
 #include <inttypes.h>
 #include <math.h>
@@ -44,7 +44,7 @@
 #define PIGEON_CLIMB_SECONDS 1.2f
 #define PIGEON_CIRCLE_SECONDS 5.0f
 #define PIGEON_CIRCLE_RADIUS 3.0f
-/** A human's body (T30): the placeholder humanoid's world model, whose animator plays its graph. */
+/** A human's body: the placeholder humanoid's world model, whose animator plays its graph. */
 #define HUMAN_WORLD_MODEL ((const unsigned char*)u8"test_humanoid")
 /** The data key under which an object offers an action to whoever uses it (text: the action's name), the test world's
  *  bench, and the socket a human holds things in. */
@@ -189,7 +189,7 @@ static uint64_t AddBox(WorldTestCharacters* self, uint64_t parent, const char* n
     return Id;
 }
 
-/* A human's body (T30): the placeholder humanoid on the character's own object, its animator playing the world model's
+/* A human's body: the placeholder humanoid on the character's own object, its animator playing the world model's
  * graph (the camera's passes leave its head out while it is the player's in first person). */
 static void AddHumanBody(WorldTestCharacters* self, uint64_t id)
 {
@@ -375,7 +375,7 @@ static void TogglePlayerFlight(WorldTestCharacters* self)
 }
 
 
-// Static functions: actions (T30).
+// Static functions: actions.
 /* The first object named @p name, or 0. */
 static uint64_t FindNamedObject(World* world, const unsigned char* name)
 {
@@ -633,7 +633,6 @@ static void Settle(WorldTestCharacters* self, uint64_t id)
         Hit.Point.Y, From.Z);
 }
 
-/* Who an event is about, for the log: "you", the object's name, or its id once it is gone. */
 /* Puts down what a holder holds, where it is, and sets it on what is under it; forgets the holder's grab. */
 static void DropHeld(WorldTestCharacters* self, uint64_t holderId)
 {
@@ -645,6 +644,7 @@ static void DropHeld(WorldTestCharacters* self, uint64_t holderId)
     }
 }
 
+/* Who an event is about, for the log: "you", the object's name, or its id once it is gone. */
 static const char* GetWho(WorldTestCharacters* self, uint64_t id, char* buffer, size_t capacity)
 {
     if (id == self->_playerId)
@@ -1099,7 +1099,7 @@ void WorldTestCharacters_LogStatus(WorldTestCharacters* self)
     {
         snprintf(Looking, sizeof(Looking), "looking at nothing within %.1f m", (double)Settings.InteractionReach);
     }
-    // What the body does (T30): its action (and on what) and what its hand holds.
+    // What the body does: its action (and on what) and what its hand holds.
     char Doing[200];
     const unsigned char* Action = NULL;
     uint64_t ActionTarget = 0U;

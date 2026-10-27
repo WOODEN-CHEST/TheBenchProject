@@ -1,4 +1,4 @@
-// The haze in front of what the camera sees (T35, decisions G36 and G37), for #include "common/haze": the readers' side
+// The haze in front of what the camera sees, for #include "common/haze": the readers' side
 // of the aerial-perspective volume the atmosphere pass builds every frame (shaders/atmosphere/volume.frag; its layout is
 // in common/atmosphere), and the ground haze, a low layer of mist integrated per pixel in closed form. The lit shaders
 // apply it through common/lighting (ApplyAerialPerspective), the sky pass and the stars take the ground haze in front of

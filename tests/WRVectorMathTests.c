@@ -9,7 +9,7 @@
 
 
 /**
- * WRFramework's double-precision maths (WRVectorMath, added in T31 for large worlds) and this project's bridge to
+ * WRFramework's double-precision maths (WRVectorMath, for large worlds) and this project's bridge to
  * raylib's types (GameMath). The library has no tests of its own, so they live here: hand-checked values for every
  * operation, raymath's conventions on the same inputs, the column-major layout against MatrixToFloatV and raylib's
  * Matrix fields, the conversions relative to a far origin, inverses 10 000 km out, boxes around transformed boxes and

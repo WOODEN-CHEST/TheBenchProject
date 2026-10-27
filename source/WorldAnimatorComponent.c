@@ -114,7 +114,7 @@ static const PropertyDescriptor AnimatorProperties[AnimatorProperty_Count] =
     },
     [AnimatorProperty_OverridesAnimationGraph] =
     {
-        // T30: added at the end of the table, so files without them read as before (no new table version).
+        // Version 1 like the rest: a file without the graph rows reads them as their defaults (no new table version).
         .Key = u8"overrides_animation_graph", .WireId = 11U, .Type = PropertyType_Bool,
         PROPERTY_MEMBER(WorldAnimatorComponent, _overridesAnimationGraph), .Default.BoolValue = false,
         .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_ANIMATION, .DisplayName = u8"Override animation graph",
@@ -168,7 +168,7 @@ static void DeconstructAnimator(WorldComponent* component)
     Properties_Deconstruct(&AnimatorTable, Self);
 }
 
-/* An animator leaving its object ends its action first (T30), so the character it locked is not left locked, and what
+/* An animator leaving its object ends its action first, so the character it locked is not left locked, and what
  * hangs on its sockets is marked dirty: their frames go with the pose (they fall back to the object's own space). */
 static void DetachAnimator(World* world, WorldObject* object, WorldComponent* component)
 {

@@ -2,10 +2,9 @@
 
 // Screen-space ambient occlusion, computed as a PRE-pass (before the scene colour pass) from the low-res
 // normal/flag G-buffer's samplable depth + surface flag. The result is an ambient MULTIPLIER (1 = fully open,
-// < 1 = occluded) that the PBR scene pass samples and applies to ONLY its ambient term. This replaces the old
-// approach of multiplying AO onto the final scene colour in world_postfx, which also dimmed the direct sun /
-// point-light contribution (AO should darken indirect/ambient light only). All sampling uses gl_FragCoord for
-// orientation-consistency with the G-buffer, matching the other post passes.
+// < 1 = occluded) that the PBR scene pass samples and applies to ONLY its ambient term: multiplied onto the final
+// scene colour, AO would also dim the direct sun / point-light contribution (AO should darken indirect/ambient light
+// only). All sampling uses gl_FragCoord for orientation-consistency with the G-buffer, matching the other post passes.
 
 in vec2 fragTexCoord;   // unused (see the gl_FragCoord note); kept so the blit has an output
 in vec4 fragColor;
@@ -25,7 +24,7 @@ out vec4 finalColor;
 
 const float SURFACE_ON = 0.25;   // G-buffer alpha above this = a solid world-model surface (0 = sky / grid)
 
-// ---- SSAO tuning (kept identical to the values the postfx pass used before AO moved here) ----
+// ---- SSAO tuning ----
 const int   AO_KERNEL_SIZE = 12;
 const float AO_RADIUS = 0.5;     // hemisphere radius, view-space units
 const float AO_TANGENT_BIAS = 0.02; // occluder must rise this far above the tangent plane to start counting

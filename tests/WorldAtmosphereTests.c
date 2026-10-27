@@ -7,7 +7,7 @@
 
 
 /**
- * The atmosphere's model (T15, source/WorldAtmosphere.h): the air's coefficients from the environment, the height the sky
+ * The atmosphere's model (source/WorldAtmosphere.h): the air's coefficients from the environment, the height the sky
  * is seen from, and the lookup tables' layout, the C mirror of shaders/common/atmosphere.glsl (the same formulas; the
  * shader source tests pin the constants). The mappings round-trip, put their texels where the sky changes fastest, and
  * keep a millimetre's precision near the ground.
@@ -62,9 +62,8 @@ static bool AreColorsClose(const float a[3], const float b[3], double relativeTo
 
 
 // Static functions: tests.
-/* The defaults are the sky before T15's coefficients (the same Rayleigh coefficients and reference haze, the haze's albedo
- * about 1 / 1.1) with the haze of T37's 20 km visibility (turbidity 24: the reference haze times 8), plus the ozone layer
- * and all of the multiple scattering. */
+/* The defaults: Earth's Rayleigh coefficients and the reference haze (its albedo about 1 / 1.1) with the haze of 20 km
+ * visibility (turbidity 24: the reference haze times 8), plus the ozone layer and all of the multiple scattering. */
 static void MediumDefaultsAreTheSkyBeforeTheTables(TestRun* run)
 {
     WorldEnvironment Environment;
@@ -240,7 +239,7 @@ static void TableRecordBuildsOnlyWhenNeeded(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
-/* The irradiance table (T36) is stale when the tables it reads are, and also when the haze's forward scattering or the
+/* The irradiance table is stale when the tables it reads are, and also when the haze's forward scattering or the
  * share of multiple scattering changes (it holds both); its record builds on the first frame and then only then. */
 static void IrradianceIsStaleWithItsInputs(TestRun* run)
 {
@@ -569,7 +568,7 @@ static void HazeFollowsTheEnvironment(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
-/* The volume's distance slices grow by one ratio from 1 m to 200 km, 21 of them within the 4 km far plane, and a
+/* The volume's distance slices grow by one ratio from 1 m to 200 km, 21 of them within 4 km, and a
  * distance and its slice coordinate round-trip: linear in distance between two slices, from the camera to the first,
  * and from the last distance slice to the whole ray's. */
 static void VolumeSlicesRoundTrip(TestRun* run)
@@ -929,7 +928,7 @@ static void GroundHazeFollowsTheCurvedPlanet(TestRun* run)
     TEST_CHECK(run, WorldAtmosphere_GetGroundHazeDepthCurved(0.02, 15.0, 1.7, 0.0, 6.4e6, 5.0, 5.0) == 0.0);
 }
 
-/* The sky's light by height (T36): its heights from the ground to WORLD_ATMOSPHERE_SKY_LIGHT_HIGHEST, closest near the
+/* The sky's light by height: its heights from the ground to WORLD_ATMOSPHERE_SKY_LIGHT_HIGHEST, closest near the
  * ground, round-trip through their coordinates, and heights outside clamp; its blocks lie in the volume's last row after
  * the ground haze's values, one per value, side by side. */
 static void SkyLightLayoutRoundTrips(TestRun* run)
@@ -964,7 +963,7 @@ static void SkyLightLayoutRoundTrips(TestRun* run)
             == WorldAtmosphere_GetSkyLightColumn(WorldAtmosphereSkyLight_Sky, Last)));
 }
 
-/* The irradiance table's layout (T36) round-trips: across, the light's elevation from the lowest to the zenith, dense at
+/* The irradiance table's layout round-trips: across, the light's elevation from the lowest to the zenith, dense at
  * the horizon (even in its asinh over the elevation scale); up, the height, even near the ground (in log(1 + height /
  * the height scale)); lower lights and heights outside clamp; the lights' part takes the texture's first columns from
  * texel centre to texel centre, light pollution the last one, at the same rows. */

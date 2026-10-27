@@ -75,7 +75,7 @@ static const PropertyDescriptor ObjectProperties[ObjectProperty_Count] =
     },
     [ObjectProperty_ParentSocket] =
     {
-        // T30. A new row: files without it read as before (the table's version stays). Next free wire id: 14.
+        // A file without this row reads as no socket, so the row needs no new table version. Next free wire id: 14.
         .Key = u8"parent_socket", .WireId = 13U, .Type = PropertyType_AssetName,
         PROPERTY_MEMBER(WorldObject, _parentSocket), .Default.StringValue = NULL,
         .Rules = PROPERTY_RULES_STRING(WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH, true), .Flags = PROPERTY_FLAGS_SETTING,
@@ -86,7 +86,7 @@ static const PropertyDescriptor ObjectProperties[ObjectProperty_Count] =
     },
     [ObjectProperty_Position] =
     {
-        // In double (T33): worlds reach far from their origin. GHDF files written before, as a Float array, still read.
+        // In double: worlds reach far from their origin. A GHDF Float array of 3 still reads.
         .Key = u8"position", .WireId = 4U, .Type = PropertyType_Vector3Double, PROPERTY_MEMBER(WorldObject, _position),
         .Default.Vector3DoubleValue = { 0.0, 0.0, 0.0 },
         .Rules = PROPERTY_RULES_BETWEEN(-WORLD_POSITION_LIMIT, WORLD_POSITION_LIMIT), .Flags = PROPERTY_FLAGS_SETTING,

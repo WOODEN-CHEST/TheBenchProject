@@ -10,27 +10,27 @@
 
 
 /**
- * Render space (T32, source/WorldRenderSpace.h): the renderer's view with the camera at the origin, the sky shader's ray
+ * Render space (source/WorldRenderSpace.h): the renderer's view with the camera at the origin, the sky shader's ray
  * and the shadow cascades snapped to their texels. The float pipeline the GPU runs (raylib's DrawMesh matrix products,
  * the shaders' matrix-vector products) is replayed in C and measured against a double-precision reference camera, 50 km
- * out and near the origin; each test also replays the world-space maths the renderer had before, to show it fails the
- * same check far out (so the check can see the problem).
+ * out and near the origin; each test also replays the maths without render space, to show it fails the same check far
+ * out (so the check can see the problem).
  */
 
 
 // Macros.
 /** Pi in double (raymath's PI is a float). */
 #define DOUBLE_PI 3.14159265358979323846
-/** The scene the probe ran at: 640 x 360 scene pixels, a 60-degree vertical field of view. */
+/** The scene the probe measures in: 640 x 360 scene pixels, a 60-degree vertical field of view. */
 #define SCENE_WIDTH 640.0
 #define SCENE_HEIGHT 360.0
 #define SCENE_FOV_Y 60.0f
 /** How close to the reference the render-space pipeline must put a point or a ray, in scene pixels. */
 #define PIXEL_TOLERANCE 0.01
-/** How far off the old world-space pipeline must be at 50 km, at least, for the checks to show they see its error. */
+/** How far off the world-space pipeline must be at 50 km, at least, for the checks to show they see its error. */
 #define OLD_POINT_ERROR_MINIMUM 0.1
 #define OLD_RAY_ERROR_MINIMUM 1.0
-/** How close the render-space pipeline must match the old one near the origin (float rounding only), in pixels. */
+/** How close the render-space and world-space pipelines must match near the origin (float rounding only), in pixels. */
 #define ORIGIN_PIXEL_TOLERANCE 1e-3
 /** Fifty kilometres, and ten thousand, in metres. */
 #define FAR_DISTANCE 50000.0
@@ -55,7 +55,7 @@
  *  frames, before its 28 km jump. */
 #define GRID_STEP 0.003
 #define GRID_FRAME_COUNT 30
-/** The reversed projection's round trip (T39): how close a point must come back through the inverse, as a share of its
+/** The reversed projection's round trip: how close a point must come back through the inverse, as a share of its
  *  distance, and how close the closed-form inverse must match MatrixInvert's, as a share of each element. */
 #define REVERSED_ROUND_TRIP_TOLERANCE 1e-6
 #define REVERSED_INVERSE_TOLERANCE 1e-6
@@ -155,7 +155,7 @@ static Pixel DrawnPixel(Matrix model, Matrix view, Matrix projection, Vector3 ve
     return (Pixel){ .X = ((double)(X / W) + 1.0) * 0.5 * SCENE_WIDTH, .Y = ((double)(Y / W) + 1.0) * 0.5 * SCENE_HEIGHT };
 }
 
-/* The view the renderer had before render space: raylib's camera at the camera's float position. */
+/* The view in world space, without render space: raylib's camera at the camera's float position. */
 static Matrix WorldSpaceView(const GameCamera* camera)
 {
     Vector3 Position = GameMath_ToVector3(camera->Position);
@@ -163,8 +163,8 @@ static Matrix WorldSpaceView(const GameCamera* camera)
     return MatrixLookAt(Position, Vector3Add(Position, Forward), GameCamera_GetUp(camera));
 }
 
-/* The old sky shader's ray: the far plane's point through the world-space inverse view-projection, minus the camera's
- * float position. */
+/* The sky shader's ray in world space: the far plane's point through the world-space inverse view-projection, minus
+ * the camera's float position. */
 static Vector3Double WorldSpaceSkyRay(const GameCamera* camera, Matrix projection, double pixelX, double pixelY)
 {
     Matrix Inverse = MatrixInvert(MatrixMultiply(WorldSpaceView(camera), projection));
@@ -202,7 +202,7 @@ static WorldRenderView BuildView(const GameCamera* camera)
         false);
 }
 
-/* The camera's view with reversed depth (T39), as the renderer builds it where the GPU has clip control. */
+/* The camera's view with reversed depth, as the renderer builds it where the GPU has clip control. */
 static WorldRenderView BuildReversedView(const GameCamera* camera)
 {
     return WorldRenderSpace_BuildView(camera, SCENE_WIDTH / SCENE_HEIGHT, RL_CULL_DISTANCE_NEAR, RL_CULL_DISTANCE_FAR,
@@ -258,8 +258,8 @@ static Pixel TexelOf(Matrix viewProjection, Vector3 position)
     };
 }
 
-/* The cascade the renderer had before the snapping: the same box centred on the camera (with the same up as the
- * snapped one: +Z for a light near straight up). */
+/* The cascade without the snapping: the same box centred on the camera (with the same up as the snapped one: +Z for a
+ * light near straight up). */
 static Matrix UnsnappedViewProjection(Vector3 towardLight)
 {
     Vector3 Up = (fabsf(towardLight.y) > 0.99f) ? (Vector3){ 0.0f, 0.0f, 1.0f } : (Vector3){ 0.0f, 1.0f, 0.0f };
@@ -312,9 +312,9 @@ static void TheViewIsARotationWhereverTheCameraIs(TestRun* run)
     TEST_CHECK(run, memcmp(&NearView.InvViewProjection, &FarView.InvViewProjection, sizeof(Matrix)) == 0);
 }
 
-/* The probe as a test: 50 km from the origin, points 0.6 m, 3 m and 30 m from the camera land within a hundredth of a
+/* The probe: 50 km from the origin, points 0.6 m, 3 m and 30 m from the camera land within a hundredth of a
  * scene pixel of where the exact camera sees them, through the draw path (the world matrix relative to the origin, in
- * double, then raylib's float products). The world-space floats the renderer used before miss by more. */
+ * double, then raylib's float products). The same points through world-space floats miss by more. */
 static void PointsLandWithinAHundredthOfAPixelFiftyKilometresOut(TestRun* run)
 {
     GameCamera Viewer = MakeCamera(Vector3Double_Create(FAR_DISTANCE * 0.6, 1.7, -FAR_DISTANCE * 0.8));
@@ -352,7 +352,7 @@ static void NearTheOriginPointsLandWhereTheyDid(TestRun* run)
 }
 
 /* The sky's ray (the C mirror of the shader's) at every corner pixel is the exact camera's ray within a hundredth of a
- * pixel, at the origin, 1 km and 50 km out: it comes from the rotation alone. The old world-space ray misses by more
+ * pixel, at the origin, 1 km and 50 km out: it comes from the rotation alone. The world-space ray misses by more
  * than a pixel 50 km out. */
 static void SkyRaysAreExactAtAnyDistance(TestRun* run)
 {
@@ -385,7 +385,7 @@ static void SkyRaysAreExactAtAnyDistance(TestRun* run)
     }
 }
 
-/* The reversed infinite projection (T39): depth is 1 at the near plane, a half at twice its distance, and falls as 1
+/* The reversed infinite projection: depth is 1 at the near plane, a half at twice its distance, and falls as 1
  * over the distance toward 0, which no finite distance reaches (10 000 km: 5e-9, a normal float); points 1 m apart at
  * 20 km and 1 km apart at 10 000 km keep distinct float depths, nearer greater; x and y are MatrixPerspective's, so a
  * point lands within a thousandth of a pixel of where the standard projection puts it. */
@@ -446,8 +446,8 @@ static void ReversedDepthComesBackThroughItsInverse(TestRun* run)
     TEST_CHECK(run, IsSame);
 }
 
-/* With reversed depth (T39) the view carries the reversed projection, its closed-form inverse and their products with the
- * rotation, and the sky's rays (the C mirror of the shader's, whose clip depth 1 is now the near plane's) are the exact
+/* With reversed depth the view carries the reversed projection, its closed-form inverse and their products with the
+ * rotation, and the sky's rays (the C mirror of the shader's, whose clip depth 1 is the near plane's) are the exact
  * camera's within a hundredth of a pixel at every corner, at the origin and 50 km out. */
 static void ReversedViewsKeepTheSkyRaysExact(TestRun* run)
 {
@@ -485,8 +485,7 @@ static void ReversedViewsKeepTheSkyRaysExact(TestRun* run)
  * point keeps its shadow-map texel coordinates until the box's centre steps, and then they change by whole texels; the
  * centre (the anchor each frame passes on) stays within half a texel of the camera along the light's right and up. Near
  * the origin and 10 000 km out, for a light at an angle and one near straight up (the light's view takes +Z as its up
- * there). The cascade the renderer had before (centred on the camera) moves the point by fractions of a texel every
- * frame. */
+ * there). The unsnapped cascade (centred on the camera) moves the point by fractions of a texel every frame. */
 static void CascadeTexelsStandStillAsTheCameraMoves(TestRun* run)
 {
     WorldRenderCascadeShape Shape = MakeCascadeShape();

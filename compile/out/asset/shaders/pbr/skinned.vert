@@ -1,6 +1,6 @@
 #version 330
 
-// The PBR shader's vertex stage for skinned meshes (world_pbr_skinned, T29): pbr/vertex with the position and the normal
+// The PBR shader's vertex stage for skinned meshes (world_pbr_skinned): pbr/vertex with the position and the normal
 // moved by the object's pose first (common/skinning). The fragment stage is world_pbr's own.
 
 #include "common/skinning"

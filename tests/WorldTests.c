@@ -25,8 +25,8 @@
 
 
 // Types.
-/* A test-only component type: a transform driver with one property, so the one-driver rule can be tested before the
- * game has a real driver (the character controller). */
+/* A test-only component type: a transform driver with one property, so the one-driver rule can be tested with two
+ * driver types (the game has one, the character). */
 typedef struct TestDriverComponentStruct
 {
     WorldComponent Base;
@@ -388,7 +388,7 @@ static void ObjectPropertiesValidateAndAdvanceTheRevision(TestRun* run)
         Revision = WorldObject_GetRevision(Object);
         TEST_CHECK_ERROR(run, WorldObject_SetPosition(Object, Vector3Double_Create(NAN, 0.0, 0.0)),
             ErrorCode_ArgumentOutOfRange);
-        // Positions are doubles within WORLD_POSITION_LIMIT (10 000 km) of the parent's origin on every axis (T33).
+        // Positions are doubles within WORLD_POSITION_LIMIT (10 000 km) of the parent's origin on every axis.
         TEST_CHECK_ERROR(run, WorldObject_SetPosition(Object, Vector3Double_Create(0.0, INFINITY, 0.0)),
             ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldObject_SetPosition(Object, Vector3Double_Create(0.0, 0.0, -1.0000001e7)),

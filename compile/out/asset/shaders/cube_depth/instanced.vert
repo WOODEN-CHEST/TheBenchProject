@@ -1,6 +1,6 @@
 #version 330
 
-// Vertex stage of the point-light cube shadow for instanced copies (world_cube_depth_instanced, B03): cube_depth/vertex
+// Vertex stage of the point-light cube shadow for instanced copies (world_cube_depth_instanced): cube_depth/vertex
 // over every copy of a cell at once, each placed by its record and dropped when this draw does not show it
 // (common/instancing). The fragment stage is world_cube_depth's own, its dither the copy's (WORLD_INSTANCED).
 

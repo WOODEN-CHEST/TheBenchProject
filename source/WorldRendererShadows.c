@@ -16,7 +16,7 @@
 #define DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_depth")
 /** Asset name of the point-light omnidirectional (cube) shadow depth shader (stores packed linear distance). */
 #define CUBE_DEPTH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_cube_depth")
-/** Asset names of the two depth shaders' skinned twins (T29): the same fragment stages over vertex stages that skin. */
+/** Asset names of the two depth shaders' skinned twins: the same fragment stages over vertex stages that skin. */
 #define DEPTH_SKINNED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_depth_skinned")
 #define CUBE_DEPTH_SKINNED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_cube_depth_skinned")
 /** Asset names of the cutout sprites' alpha-tested variants of the two depth shaders. */
@@ -221,9 +221,9 @@ static void RenderShadowCascade(WorldRenderer* self, const WorldRenderFrame* fra
     // stored depth, which removes most self-shadowing acne without a large (peter-panning) depth bias.
     rlSetCullFace(RL_CULL_FACE_FRONT);
     DrawShadowCasters(self, &Shaders, &self->_cascades._dither, &self->_cascades._skinnedDither, pass);
-    // The model instances components' copies (B03), each as the LOD with the larger share, dithered by its own fade.
+    // The model instances components' copies, each as the LOD with the larger share, dithered by its own fade.
     WorldRendererInstances_DrawCasters(self, frame, DepthShader, &self->_cascades._dither, pass);
-    // The terrain's chunks (B01) the same way: a hill's far side, facing away from the light, shades what lies behind it.
+    // The terrain's chunks the same way: a hill's far side, facing away from the light, shades what lies behind it.
     WorldRendererTerrain_DrawCasters(self, DepthShader, &self->_cascades._dither, pass);
     rlSetCullFace(RL_CULL_FACE_BACK);  // restore the default culling for the scene pass
     // Cutout sprites, facing the light, alpha-tested.
@@ -283,7 +283,7 @@ void WorldRendererShadows_LoadShaders(WorldRenderer* self)
     {
         CreateCascadeMaps(self);
     }
-    // Its skinned twin (T29; optional: without it skinned meshes cast the shadow of their bind pose).
+    // Its skinned twin (optional: without it skinned meshes cast the shadow of their bind pose).
     self->_cascades._skinnedDepthShader = (self->_cascades._depthShader != NULL)
         ? WorldRendererCommon_LoadShader(self, DEPTH_SKINNED_SHADER_ASSET_NAME) : NULL;
     self->_cascades._skinnedPalette = (WorldRendererPalette){ ._location = -1 };
@@ -325,7 +325,7 @@ void WorldRendererShadows_LoadShaders(WorldRenderer* self)
         self->_pointShadow._locLightPos = GetShaderLocation(RayShader, "lightPosition");
         self->_pointShadow._locLightFar = GetShaderLocation(RayShader, "lightFar");
         WorldRendererCommon_PrepareDither(RayShader, &self->_pointShadow._dither);
-        // Its skinned twin (T29; optional: without it skinned meshes cast the shadow of their bind pose).
+        // Its skinned twin (optional: without it skinned meshes cast the shadow of their bind pose).
         self->_pointShadow._skinnedShader = WorldRendererCommon_LoadShader(self, CUBE_DEPTH_SKINNED_SHADER_ASSET_NAME);
         self->_pointShadow._skinnedPalette = (WorldRendererPalette){ ._location = -1 };
         if (self->_pointShadow._skinnedShader != NULL)

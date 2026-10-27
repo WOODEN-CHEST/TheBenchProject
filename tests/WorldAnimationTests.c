@@ -81,7 +81,7 @@ static const float SpinValues[] = { 0.0f, 1.0f, 0.0f, 0.0f, 3.0f, 0.0f };
 
 
 // Static functions: helpers.
-/* One tick and the frame after it: the update, then the pose step (G35: poses are made once per shown frame). */
+/* One tick and the frame after it: the update, then the pose step (poses are made once per shown frame). */
 static void Tick(AnimationScene* scene, float seconds)
 {
     WorldAnimation_Update(scene->Animation, seconds);

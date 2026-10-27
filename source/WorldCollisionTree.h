@@ -14,7 +14,7 @@
  * A proxy's box is FATTENED by the tree's margin: a moving proxy is re-inserted only when its tight box leaves its fat
  * one, so small moves cost nothing. The static tree uses a margin of 0.
  *
- * The boxes are doubles (T33): colliders far from the world's origin keep their boxes to a double's precision there,
+ * The boxes are doubles: colliders far from the world's origin keep their boxes to a double's precision there,
  * where a float's step would be millimetres. Rays start at a double origin; their directions and lengths are floats.
  *
  * Nodes live in one growable array with a free list; proxy ids are node indices, stable until removed. Walks use an

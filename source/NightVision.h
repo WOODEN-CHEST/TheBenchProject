@@ -19,15 +19,15 @@
  * day-for-night filter, and Krawczyk's own tint, (1.05, 0.97, 1.27), reads violet). The grey keeps the pixel's
  * luminance, so the night's tuned brightness does not change.
  *
- * THE GAME'S LIGHT. The game compresses light levels: its noon (a scene luminance of about 0.37 in its own units, T36's
- * light scale, in T37's default 20 km haze) stands for about 5000 cd/m^2, its moonless night (about 0.006 with the
+ * THE GAME'S LIGHT. The game compresses light levels: its noon (a scene luminance of about 0.37 in its own units, in
+ * the default 20 km haze) stands for about 5000 cd/m^2, its moonless night (about 0.006 with the
  * default light pollution) for about 0.001 cd/m^2: a range of about 10^2 in the game for 10^7 in the world. A game
  * luminance Y is read as the real luminance 5000 x (Y / 0.371)^g cd/m^2, the power g (about 3.7) set by those two
  * anchors. Hunt's sensitivity then becomes sigma = 1 / (1 + (Y / Yh)^g), half at Yh (about 0.016): the game's level of
  * 0.04 cd/m^2.
  *
  * WHICH LUMINANCE. The larger of the pixel's own and the field luminance: the light the sky (the sun, the moon, the
- * sky's glow, light pollution) gives the whole scene. Since T36 the daylight in it (the sun's and the sky's light from
+ * sky's glow, light pollution) gives the whole scene. The daylight in it (the sun's and the sky's light from
  * the sun) is on the real scale, linearly, while the night's lights (the moon, the moonless night's own light, the town's)
  * are raised for play and are read through the anchors' power law: NightVision_GetFieldLuminance adds their real
  * luminances, so the twilight keeps its colours until the sun is a few degrees down, as it does for the eye. By day the field is bright
@@ -111,8 +111,8 @@ double NightVision_GetRealLuminance(float luminance);
 /**
  * @brief Returns the real luminance of the scene luminance split in two (NightVision_GetFieldLuminance has the split):
  *        the daylight's share linearly (NIGHT_VISION_NOON_LUMINANCE stands for NIGHT_VISION_NOON_CANDELAS), the night
- *        lights' through NightVision_GetRealLuminance, added. The eye's adaptation reads its level on it (T37,
- *        EyeAdaptation_GetRealScale).
+ *        lights' through NightVision_GetRealLuminance, added. The eye's adaptation reads its level on it
+ *        (EyeAdaptation_GetRealScale).
  * @param dayLuminance The daylight's share; a value that is not positive (or NaN) gives none.
  * @param nightLuminance The night lights' share; likewise.
  * @returns The luminance in cd/m^2 (infinite for an infinite share).
@@ -120,7 +120,7 @@ double NightVision_GetRealLuminance(float luminance);
 double NightVision_GetRealFieldLuminance(float dayLuminance, float nightLuminance);
 
 /**
- * @brief Returns the field luminance the shaders' night vision compares with, on the game's light scale (T36), from the
+ * @brief Returns the field luminance the shaders' night vision compares with, on the game's light scale, from the
  *        scene luminance split in two: the daylight's share (the sun's and the sky's light from the sun, on the real
  *        scale: NIGHT_VISION_NOON_LUMINANCE stands for NIGHT_VISION_NOON_CANDELAS, linearly) and the night lights' (the
  *        moon's, the moonless night's own light, the town's: raised for play, so NightVision_GetRealLuminance). Their real

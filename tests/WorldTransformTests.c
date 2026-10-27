@@ -382,7 +382,7 @@ static void MaxScaleIsTheLongestAxisAndBoundsShear(TestRun* run)
     Random_Deconstruct1(&Generator);
 }
 
-/* T33: far from the world's origin the positions keep their precision. A double's step at 10 000 km is 1.9 nm: every
+/* Far from the world's origin the positions keep their precision. A double's step at 10 000 km is 1.9 nm: every
  * offset below is kept to a few steps, where floats would round it to a metre. */
 static void FarPlacementsKeepTheirPrecision(TestRun* run)
 {

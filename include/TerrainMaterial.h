@@ -9,7 +9,7 @@
 
 /**
  * @file TerrainMaterial.h
- * @brief A terrain material (B02): one material of a terrain's palette (grass, dirt, rock, gravel, asphalt), its maps'
+ * @brief A terrain material: one material of a terrain's palette (grass, dirt, rock, gravel, asphalt), its maps'
  *        pixels and its settings.
  *
  * A terrain material is an asset of the "terrain_material" type (JSON definitions in a resource pack's
@@ -17,7 +17,7 @@
  * AssetManager_LoadTerrainMaterial). A terrain names up to sixteen of them as its palette and loads them as its
  * dependencies (TerrainAsset.h); every vertex weighs them, a face may take one outright, and the terrain's rules move
  * the weights by slope, height and noise. The renderer makes one texture array per map kind of a terrain, one layer per
- * palette material (decision W7), so the maps of one kind must share one size across a terrain's materials (the terrain
+ * palette material, so the maps of one kind must share one size across a terrain's materials (the terrain
  * refuses a mismatch, naming both sizes).
  *
  * THE MAPS are texture assets the definition names (their image files are read on the CPU through
@@ -129,9 +129,9 @@ typedef struct TerrainMaterialSettingsStruct
      *  "ground" in a definition reads as "tbp:ground"): footsteps, the scattering's limits, later systems. */
     unsigned char* Surface;
     /** @brief How much rain's puddles may form on it, 0 to 1 (default 0; asphalt 1, grass 0). Read by the weather's
-     *  wetness (T18). */
+     *  wetness (not built yet). */
     float Puddles;
-    /** @brief How much wetness darkens it, 0 to 1 (default 0.5). Read by the weather's wetness (T18). */
+    /** @brief How much wetness darkens it, 0 to 1 (default 0.5). Read by the weather's wetness (not built yet). */
     float Porosity;
 } TerrainMaterialSettings;
 

@@ -168,8 +168,8 @@ static bool IsSettingFromPlacement(const WorldSpriteSettings* resolved, WorldSpr
 
 
 // Tests: definitions.
-/* A definition with just its name and its animation gets the defaults the sprite component had (T06), and no draw
- * distance of its own; it plays the animation it names. */
+/* A definition with just its name and its animation gets the documented defaults, and no draw distance of its own; it
+ * plays the animation it names. */
 static void AMinimalDefinitionGetsTheDefaults(TestRun* run)
 {
     TestAssetFixture Fixture;
@@ -204,7 +204,7 @@ static void AMinimalDefinitionGetsTheDefaults(TestRun* run)
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
 
-/* The task's example, with a value unlike its default for every key. */
+/* A full definition, with a value unlike its default for every key. */
 static void AFullDefinitionReadsEveryKey(TestRun* run)
 {
     const char* Json =
@@ -842,8 +842,8 @@ static void TheShippedWorldSpritesAreRead(TestRun* run)
 }
 
 
-/* The shipped world sprites hold the look the test world's placements held before T26 (T06's settings): each file is
- * read as it ships and loaded over a code-built animation of the name it plays. */
+/* The shipped world sprites hold the test world's look, the settings listed below: each file is read as it ships and
+ * loaded over a code-built animation of the name it plays. */
 static void TheShippedWorldSpritesKeepTheTestWorldsLook(TestRun* run)
 {
     static const char* const Files[] = { "sprite", "tire_mark", "tree", "sign", "smoke", "glow", "neon" };

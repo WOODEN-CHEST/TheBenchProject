@@ -1,4 +1,4 @@
-// The model instances components' copies (B03): each cache entry's records on the GPU (one vertex buffer per build of
+// The model instances components' copies: each cache entry's records on the GPU (one vertex buffer per build of
 // its cells, uploaded once), and their draws in every geometry pass. A cell is drawn one LOD at a time, only the LODs
 // its copies can show (WorldRenderInstanceCell.LodMask): every mesh of the LOD once for all the cell's copies (an
 // instanced draw), with the cell's render-space matrix as the model matrix and the records as instanced attributes
@@ -603,8 +603,8 @@ void WorldRendererInstances_DrawLit(WorldRenderer* self, const WorldRenderFrame*
     for (size_t Position = 0U; Position < VisibleCount; Position++)
     {
         const WorldRenderInstanceCell* Cell = &Cells[Visible[Position]];
-        // The cell's forward lights by its sphere and its component's haze multiplier (T35), into the program that draws
-        // it (the twin, or world_pbr one at a time).
+        // The cell's forward lights by its sphere and its component's haze multiplier, into the program that draws it
+        // (the twin, or world_pbr one at a time).
         if (IsLit)
         {
             const WorldRendererPbrProgram* Program = (IsInstanced && (GetEntryBuffer(self, Cell->Entry) != 0U))

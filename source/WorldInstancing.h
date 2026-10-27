@@ -10,7 +10,7 @@
 #include "wr/WRVectorMath.h"
 
 /*
- * Private header (source/): instanced drawing as pure maths (B03), tested headless (tests/WorldInstancingTests.c). The
+ * Private header (source/): instanced drawing as pure maths, tested headless (tests/WorldInstancingTests.c). The
  * render cache builds a model instances component's cells with it, the renderer draws them, and the instanced vertex
  * stages (shaders/common/instancing.glsl) compute what WorldInstancing_Evaluate computes here: this file is their C
  * mirror, for the tests and for the A/B path that draws every copy on its own.
@@ -23,19 +23,20 @@
  * rounded once), its tint and a stable random value from the object's id and the copy's index. Its bounding sphere holds
  * every copy's sphere (the world model's under the copy's matrix) in the object's space. Records are what the GPU reads
  * (WorldInstanceRecord): a cell is drawn with one matrix, the object's world matrix times the translation to its centre in
- * render space, so the camera's movement never touches the records (T32).
+ * render space, so the camera's movement never touches the records.
  *
  * A COPY'S FADE AND LOD (per copy, every frame, in the vertex stage). A copy is measured as an object is: its LOD by the
  * camera's distance to its bounding sphere's centre, its fade by the distance to the sphere's nearest point, both times
- * the zoom factor. The fade is T07's: the draw distance in effect (WorldVisibility_ScaleDrawDistance) fades it over its
- * last band (WorldVisibility_GetFadeBand), and 1 - its opacity (the object's times the copy's) asks for a fade too; the
- * larger counts. LOD changes are DISTANCE BANDS, not timed cross-fades (100 000 copies cannot keep T11's state): around
- * each switch distance s (times the lod_distance_scale), from s(1 - h) to s(1 + h), h the world model's lod_hysteresis,
- * the copy hands over from LOD i to LOD i + 1, the incoming LOD's share rising linearly across the band, drawn with T11's
- * complementary dither. A band never reaches past the middle between two switch distances, so bands never overlap. A
- * standing camera never changes the picture; a moving one moves the bands with it.
+ * the zoom factor. The fade follows the objects' rule: the draw distance in effect (WorldVisibility_ScaleDrawDistance)
+ * fades it over its last band (WorldVisibility_GetFadeBand), and 1 - its opacity (the object's times the copy's) asks
+ * for a fade too; the larger counts. LOD changes are DISTANCE BANDS, not timed cross-fades (100 000 copies cannot each
+ * keep an object's LOD state, WorldLod.h): around each switch distance s (times the lod_distance_scale), from s(1 - h)
+ * to s(1 + h), h the world model's lod_hysteresis, the copy hands over from LOD i to LOD i + 1, the incoming LOD's
+ * share rising linearly across the band, drawn with the LOD cross-fades' complementary dither. A band never reaches
+ * past the middle between two switch distances, so bands never overlap. A standing camera never changes the picture;
+ * a moving one moves the bands with it.
  *
- * THE PASSES' RULES, per copy (WorldInstancing_GetDraw), as T07 and T11 set them for objects: the lit pass draws both
+ * THE PASSES' RULES, per copy (WorldInstancing_GetDraw), as for objects: the lit pass draws both
  * LODs of a band, each with its part of the dither, and the copy's fade; the G-buffer draws the LOD with the larger share,
  * solid, while the fade is below WORLD_VISIBILITY_GBUFFER_FADE_LIMIT; the shadow passes draw the LOD with the larger
  * share, solid but for the copy's own fade; the unlit fallback draws the LOD with the larger share, solid. A copy whose
@@ -304,8 +305,9 @@ void WorldInstancing_GetLodBands(const WorldModelLodSettings* settings, float di
 
 /**
  * @brief Fills a view's draw distance, where its fade band starts and the band's length, from the draw distance in
- *        effect (already scaled by the quality setting): T07's rule (WorldVisibility_GetFadeBand), as the vertex stage
- *        receives it (an infinite distance as FLT_MAX, which nothing reaches; none above 0 fades everything).
+ *        effect (already scaled by the quality setting): the objects' rule (WorldVisibility_GetFadeBand), as the
+ *        vertex stage receives it (an infinite distance as FLT_MAX, which nothing reaches; none above 0 fades
+ *        everything).
  * @param self The view; must not be NULL.
  * @param drawDistance The draw distance in effect, in metres.
  */

@@ -1,4 +1,4 @@
-// The scene's depth as the camera's passes store it (T39, decision G41; source/GLDepth.h). Reversed where the GPU has
+// The scene's depth as the camera's passes store it (source/GLDepth.h). Reversed where the GPU has
 // clip control: 1 at the near plane, 0 at infinity, a 32-bit float cleared to 0, so the sky (nothing drawn) is exactly 0
 // and anything at any finite distance above it. Standard otherwise (raylib's): 0 at the near plane, 1 at its 4 km far
 // plane, cleared to 1. Every pass that reads the scene's, the G-buffer's or the crisp overlay's depth takes it through

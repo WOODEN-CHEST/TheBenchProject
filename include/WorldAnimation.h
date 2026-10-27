@@ -12,7 +12,7 @@
 
 /**
  * @file WorldAnimation.h
- * @brief The animation system (T29): once a tick it plays every animator component of a world, posing its object's
+ * @brief The animation system: once a tick it plays every animator component of a world, posing its object's
  *        skinned model; it plays clips for code and answers where a bone is (sockets).
  *
  * THE TICK. WorldAnimation_Update runs in the tick's animation step (after the collision step and its events, before
@@ -28,7 +28,7 @@
  *     once;
  *  3. advances its clips by the tick's seconds times their speed and the animator's (nothing moves while paused).
  *
- * THE POSE STEP (the owner's decision G35). A rendered frame shows one pose in four to eight ticks, so poses are made
+ * THE POSE STEP. A rendered frame shows one pose in four to eight ticks, so poses are made
  * once per shown frame: WorldAnimation_Pose runs in the frame's step right before its render (GameFrame's PrepareRender:
  * the update side, rendering never writes), and for every effectively enabled animator whose playback changed since its
  * last pose it samples the mixed local pose and computes each bone's matrix, the skinning palette and the pose's bounds,
@@ -46,10 +46,10 @@
  *
  * SOCKETS. WorldAnimation_TryFindBone gives a bone's index by name, WorldAnimation_TryGetBoneWorldMatrix its world matrix
  * in the last published pose (the rest pose before the first): the object's world matrix (double) times the skeleton's LOD
- * import transform times the bone's matrix, so a held item does not wobble far from the world's origin (T30 hangs items
+ * import transform times the bone's matrix, so a held item does not wobble far from the world's origin (held items hang
  * on it).
  *
- * GRAPHS (T30; the owner's decision G31). An animator whose world model names an animation graph (AnimationGraph.h), or
+ * GRAPHS. An animator whose world model names an animation graph (AnimationGraph.h), or
  * that names its own (overrides_animation_graph), plays it: the graph is bound with the animator (its clips from the
  * animator's libraries) and runs in the tick's step before the clips from the rows and code, which play over the
  * graph's pose by their weight (a clip at full weight covers it; fading out, it hands back to the graph). Every tick the
@@ -62,7 +62,7 @@
  * (World_SetParentSocket, gripped by the target's own socket when the event names one), "detach" puts what hangs on a
  * socket back in the world where it is.
  *
- * ACTIONS (T30). WorldAnimation_StartAction starts one of the graph's actions on an object, for the player and NPCs
+ * ACTIONS. WorldAnimation_StartAction starts one of the graph's actions on an object, for the player and NPCs
  * alike, with a target when the action takes one. An action with an anchor (a socket of its target: a bench's seat)
  * first has the object's character slide there and face the socket's way (WorldCharacterComponent_SetActionControl;
  * the character system moves it, swept), then enters the action's first state; one without enters at once. While it
@@ -132,9 +132,9 @@ typedef struct WorldAnimationStatusStruct
     size_t PosedCount;
     /** @brief The clips playing on all of them together, at the last update. */
     size_t ClipCount;
-    /** @brief The animators playing a graph, at the last update (T30). */
+    /** @brief The animators playing a graph, at the last update. */
     size_t GraphCount;
-    /** @brief The actions playing or approaching, at the last update (T30). */
+    /** @brief The actions playing or approaching, at the last update. */
     size_t ActionCount;
     /** @brief The animators whose pose the last pose step recomputed (resting and unchanged ones are not). */
     size_t RecomputedCount;
@@ -180,7 +180,7 @@ void WorldAnimation_Update(WorldAnimation* self, float deltaSeconds);
  *
  * Costs one sampled and blended pose, its bone matrices, palette and bounds per changed animator; nothing for the
  * others. Call it after the frame's last update, then World_UpdateTransforms (what hangs on the poses' bones follows
- * them, T30), then render.
+ * them), then render.
  * @param self The system; must not be NULL.
  */
 void WorldAnimation_Pose(WorldAnimation* self);
@@ -253,7 +253,7 @@ bool WorldAnimation_TryGetBoneWorldMatrix(WorldAnimation* self, uint64_t objectI
 WorldAnimationStatus WorldAnimation_GetStatus(const WorldAnimation* self);
 
 /**
- * @brief Sets a parameter of an object's graph (T30): a built-in one (the character's are overwritten every tick) or a
+ * @brief Sets a parameter of an object's graph: a built-in one (the character's are overwritten every tick) or a
  *        custom float (clamped into its bounds) or bool (true above 0.5).
  * @param self The system; must not be NULL.
  * @param objectId The object; it must have an animator playing a graph.

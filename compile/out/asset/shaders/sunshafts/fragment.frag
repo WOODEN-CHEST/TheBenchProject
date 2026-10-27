@@ -14,7 +14,7 @@ uniform sampler2D depthTexture;  // scene depth: sky (unoccluded) keeps the clea
 uniform vec4 colDiffuse;
 uniform vec2 resolution;         // this target's pixel size
 uniform vec2 sunScreenPos;       // sun position in UV [0,1] (same gl_FragCoord/resolution convention as here)
-uniform float sourceLimit;       // the most luminance one sample adds (linear HDR; T36): the sky's glow passes, the
+uniform float sourceLimit;       // the most luminance one sample adds (linear HDR): the sky's glow passes, the
                                  // sun's few disc pixels are held to it, so their square shape does not smear into a
                                  // blocky cross
 
@@ -38,8 +38,8 @@ void main()
     for (int i = 0; i < SAMPLES; i++)
     {
         samplePos += delta;
-        // Beyond the screen nothing is known: the march ends there (clamped to the edge, its samples repeated the
-        // edge's pixels into streaks when the sun was off-screen).
+        // Beyond the screen nothing is known: the march ends there (clamped to the edge, its samples would repeat the
+        // edge's pixels into streaks when the sun is off-screen).
         if (any(lessThan(samplePos, vec2(0.0))) || any(greaterThan(samplePos, vec2(1.0))))
         {
             break;

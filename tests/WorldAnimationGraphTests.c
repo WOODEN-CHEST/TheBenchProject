@@ -666,7 +666,7 @@ static void ARebindOrTheSystemsEndFreesTheCharacter(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
-/* T30, G34: the player's camera rides its body's eyes socket as posed (the pose and the object's turn move it); a body
+/* The player's camera rides its body's eyes socket as posed (the pose and the object's turn move it); a body
  * whose world model has no first_person block leaves it at the character's eye height. */
 static void ThePlayersCameraRidesTheEyesSocket(TestRun* run)
 {
@@ -731,7 +731,7 @@ static uint64_t AddBoxCollider(TestRun* run, GraphScene* self, const char* name,
     return WorldObject_GetId(Object);
 }
 
-/* T30: the built-in parameters read the character in its body's frame: strafing to its right is side speed, a look to
+/* The built-in parameters read the character in its body's frame: strafing to its right is side speed, a look to
  * its left is look_yaw relative to its facing, and a fall is vertical speed, not speed across the ground. */
 static void BuiltInsReadTheCharacterInItsBodysFrame(TestRun* run)
 {
@@ -767,7 +767,7 @@ static void BuiltInsReadTheCharacterInItsBodysFrame(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
-/* T30: an approach a wall blocks fails the action: the failure is queued and the character is free again. */
+/* An approach a wall blocks fails the action: the failure is queued and the character is free again. */
 static void ABlockedApproachFailsTheAction(TestRun* run)
 {
     GraphScene Scene;
@@ -787,7 +787,7 @@ static void ABlockedApproachFailsTheAction(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
-/* T30: standing on the anchor already, the character still turns to its way before it has arrived. */
+/* Standing on the anchor already, the character still turns to its way before it has arrived. */
 static void AnApproachArrivesOnlyFacingTheAnchorsWay(TestRun* run)
 {
     GraphScene Scene;
@@ -810,7 +810,7 @@ static void AnApproachArrivesOnlyFacingTheAnchorsWay(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
-/* T30: a pushable held on a socket is its holder's in the collision step: it is not pushed out of the hand when it
+/* A pushable held on a socket is its holder's in the collision step: it is not pushed out of the hand when it
  * touches a wall (what gives way is the holder, which carries it). */
 static void AHeldPushableStaysInTheHand(TestRun* run)
 {
@@ -850,7 +850,7 @@ static void AHeldPushableStaysInTheHand(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
-/* T30 review: an action replaces one playing on its own layer, but one playing on another layer must end first:
+/* An action replaces one playing on its own layer, but one playing on another layer must end first:
  * replacing it would leave that layer in its states (sitting) with nothing to take it out, the character freed. */
 static void AnActionOnAnotherLayerWaitsForThePlayingOne(TestRun* run)
 {
@@ -885,7 +885,7 @@ static void AnActionOnAnotherLayerWaitsForThePlayingOne(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
-/* T30 review: an animator removed from a holder takes its sockets' frames with it: what hangs on them falls back to the
+/* An animator removed from a holder takes its sockets' frames with it: what hangs on them falls back to the
  * holder's own space at once (their cached world matrices are marked dirty), not left where the hand was. */
 static void RemovingTheAnimatorDropsTheSocketFrames(TestRun* run)
 {
@@ -908,7 +908,7 @@ static void RemovingTheAnimatorDropsTheSocketFrames(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
-/* T30: an animator removed mid-action ends the action as it goes: its character is free, and the end is queued. */
+/* An animator removed mid-action ends the action as it goes: its character is free, and the end is queued. */
 static void RemovingTheAnimatorEndsItsAction(TestRun* run)
 {
     GraphScene Scene;

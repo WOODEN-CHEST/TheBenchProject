@@ -1,4 +1,4 @@
-// The eye's adaptation to the picture (T37): the meter pass over the HDR scene, its readback a frame or two later, and
+// The eye's adaptation to the picture: the meter pass over the HDR scene, its readback a frame or two later, and
 // the exposure the tonemap takes (the eye's model is EyeAdaptation.h's, the readback GLReadback.h's).
 
 #include <math.h>

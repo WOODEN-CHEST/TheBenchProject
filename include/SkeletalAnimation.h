@@ -11,11 +11,12 @@
 
 /**
  * @file SkeletalAnimation.h
- * @brief Skeletal animation's runtime maths (T29): playing a library's clips on a model's skeleton, blending and
+ * @brief Skeletal animation's runtime maths: playing a library's clips on a model's skeleton, blending and
  *        cross-fading them, and the pose's matrices, skinning palette and bounds.
  *
  * Pure functions over caller-owned memory: nothing here allocates, touches a world or needs a GL context, so the
- * animation system (WorldAnimation.h) and later T30's state graph build on it and the tests reach all of it.
+ * animation system (WorldAnimation.h) and the animation graphs (AnimationGraphPlayer.h) build on it and the tests
+ * reach all of it.
  *
  * BINDING A LIBRARY TO A SKELETON (SkeletalBinding_Build). A library's clips name bones; a model's skeleton has its own.
  * Each skeleton bone takes the library bone of the same name (as both keep names: their first 31 bytes), so one
@@ -38,7 +39,7 @@
  * THE MIXER (SkeletalMixer). Up to SKELETAL_MIXER_MAX_CLIPS clips play at once, each with its time, speed and weight.
  * Play cross-fades: the clip's weight rises to 1 while every other clip's falls to 0, all over the same fade, so the
  * weights keep their sum (a fade from nothing fades in from the rest pose). SetWeight moves one clip's weight on its
- * own (blends, T30's blend spaces). Looping clips wrap; others stop at their end and hold their last pose.
+ * own (blends). Looping clips wrap; others stop at their end and hold their last pose.
  *
  * THE POSE. A local pose is one Transform per skeleton bone. SkeletalPose_ComputeModelMatrices turns it into each bone's
  * matrix in mesh space (in the skeleton's evaluation order); SkeletalPose_ComputePalette into the skinning palette
@@ -383,7 +384,7 @@ void SkeletalMixer_SamplePose(const SkeletalMixer* self, const SkeletalBinding* 
 /**
  * @brief Adds every playing clip of the mixer to a blend by its weight (the blend is not cleared first): what
  *        SkeletalMixer_SamplePose blends, without the rest pose filling the rest, so the clips can play over another pose
- *        (SkeletalPose_BlendOver: clips from code over an animation graph's pose, T30).
+ *        (SkeletalPose_BlendOver: clips from code over an animation graph's pose).
  * @param self The mixer; must not be NULL.
  * @param bindings The bindings, as SkeletalMixer_SamplePose's.
  * @param bindingCount How many bindings.

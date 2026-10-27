@@ -20,7 +20,7 @@ typedef struct SpriteAnimationStruct SpriteAnimation;
  * holds the defaults of its placements (WorldSpriteSettings): the shape (orientation, pivot, pixels per unit, flips),
  * the transparency, the lighting, whether it is a decal, the render flags and the draw distance. A sprite animation
  * stays a plain asset that text components use too, where these settings mean nothing; what only matters in the world
- * lives here (the owner's decision G17), as world models do for models (WorldModel.h).
+ * lives here, as world models do for models (WorldModel.h).
  *
  * A placed object names its world sprite in its sprite component (WorldSpriteComponent.h) and may override EVERY
  * setting with an explicit flag next to its own value; WorldSpriteComponent_ResolveSettings turns the two into the
@@ -59,7 +59,7 @@ typedef struct SpriteAnimationStruct SpriteAnimation;
 /** @brief How far a decal is seen when neither its world sprite nor its placement gives a draw distance, in metres,
  *  before the player's draw_distance_scale. */
 #define WORLD_SPRITE_DEFAULT_DECAL_DRAW_DISTANCE 60.0f
-/** @brief The largest haze multiplier a world sprite or a placement may give (T35; render.haze, the sprite component's
+/** @brief The largest haze multiplier a world sprite or a placement may give (render.haze, the sprite component's
  *  haze): far beyond it every surface is the sky already. */
 #define WORLD_SPRITE_MAX_HAZE 1000.0f
 
@@ -110,8 +110,8 @@ typedef struct WorldSpriteRenderSettingsStruct
     bool OmitsPixelation;
     /** @brief Whether the sprite casts shadows (cutout sprites that are not decals; it receives them either way). */
     bool CastsShadows;
-    /** @brief How hazy the sprite looks at a distance (T35): it multiplies the haze in front of it, 1 (the default) the
-     *  real air's, 0 as if the air were clear (a sign that must read from far away). In [0, WORLD_SPRITE_MAX_HAZE]. */
+    /** @brief How hazy the sprite looks at a distance: it multiplies the haze in front of it, 1 (the default) the real
+     *  air's, 0 as if the air were clear (a sign that must read from far away). In [0, WORLD_SPRITE_MAX_HAZE]. */
     float Haze;
 } WorldSpriteRenderSettings;
 
@@ -142,7 +142,7 @@ typedef struct WorldSpriteSettingsStruct
     /** @brief The cutout threshold, in [0, 1]. */
     float AlphaCutoff;
     /** @brief Whether the sprite is lit like the models around it; false shows its colours as emitted light (neon,
-     *  fire), still fogged. */
+     *  fire), still hazed. */
     bool IsLit;
     /** @brief Brightness multiplier of an unlit sprite's light (>= 0); unused while lit. */
     float Emission;

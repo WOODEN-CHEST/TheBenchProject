@@ -446,7 +446,7 @@ static bool AreGHDFCompoundsEqual(GHDFCompound* a, GHDFCompound* b, size_t depth
 }
 
 
-// Static functions: the hand-written environment encoder before T04, frozen as the reference for the GHDF output.
+// Static functions: the hand-written environment encoder, frozen as the reference for the GHDF output.
 static Error ReferencePutFloat(GHDFCompound* compound, GHDFEntryID id, float value)
 {
     GHDFObjectValue Value = GHDFObjectValue_CreateFloat(value);
@@ -492,9 +492,9 @@ static Error ReferencePutColor(GHDFObjectPool* pool, GHDFCompound* compound, GHD
     return Result;
 }
 
-/* The pre-T04 EncodeEnvironment of source/WorldEncoder.c (removed in T05), with its field ids as literals. Ids 2 and
- * 3 held the day-night cycle switch and day length that T23 retired: they are written with their old defaults, as data
- * saved before T23 would hold them. The old encoder had no date (T23's id 30). */
+/* The reference encoder: ids 1 to 29 as the hand-written encoder wrote them, with the field ids as literals. Ids 2 and
+ * 3 hold the retired day-night cycle switch and day length: they are written with their last defaults, as saved data
+ * may hold them. It writes no date (id 30). */
 static Error ReferenceEncodeEnvironment(GHDFObjectPool* pool, GHDFCompound* compound, const WorldEnvironment* environment)
 {
     Error Result = ReferencePutFloat(compound, 1, environment->TimeOfDay);
@@ -577,10 +577,9 @@ static void FillEnvironment(WorldEnvironment* environment)
     environment->AmbientOcclusionStrength = 16.0f;
 }
 
-/* The settings added after the hand-written encoder's time: T03's (the moon, the seasons, the sky texture names, ids 31
- * to 43), the night vision's (44 and 45), the gravity (46), the air's (T15, 47 to 52), the haze's (T35, 53 to 60) and the
- * night's own light (T36, 61 and 62), every one off its default. The names go through the table, which clones them and
- * frees the old ones. */
+/* The settings the reference encoder lacks: the moon's, the seasons' and the sky texture names (ids 31 to 43), the
+ * night vision's (44 and 45), the gravity (46), the air's (47 to 52), the haze's (53 to 60) and the night's own light
+ * (61 and 62), every one off its default. The names go through the table, which clones them and frees the old ones. */
 static const uint16_t LaterSettingWireIds[] =
     { 31U, 32U, 33U, 34U, 35U, 36U, 37U, 38U, 39U, 40U, 41U, 42U, 43U, 44U, 45U, 46U, 47U, 48U, 49U, 50U, 51U, 52U, 53U,
         54U, 55U, 56U, 57U, 58U, 59U, 60U, 61U, 62U };
@@ -1517,9 +1516,9 @@ static void PutEntry(TestRun* run, GHDFCompound* compound, GHDFEntryID id, GHDFO
     TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(compound, id, GHDF_CreateRegularType(value.Type), &value));
 }
 
-/* Since T09 every integer property takes the smallest GHDF type that holds its value (GameGHDF), and is read from any
- * integer type whose value fits its own type: older data and other tools still read. A value that does not fit, a
- * negative one for an unsigned property, another type or an array fails the read. */
+/* Every integer property takes the smallest GHDF type that holds its value (GameGHDF), and is read from any integer
+ * type whose value fits its own type: data written with wider types and other tools' data still read. A value that
+ * does not fit, a negative one for an unsigned property, another type or an array fails the read. */
 static void IntegersTakeTheSmallestGHDFType(TestRun* run)
 {
     GHDFObjectPool* Pool = NULL;
@@ -2010,9 +2009,10 @@ static void MigrationRunsForOlderData(TestRun* run)
     TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
 }
 
-/* The table-driven encoder writes the same GHDF tree as the hand-written one did, for defaults and for changed values,
- * except for T23's changes (no retired ids 2 and 3, the date as id 30) and the settings added since (ids 31 to 46, left
- * out of the comparison here; environment_ghdf_round_trip covers them). Data written before T23 still reads. */
+/* The table writes the same GHDF tree as the reference encoder, for defaults and for changed values, except for the
+ * retired ids 2 and 3 (left out), the date (id 30) and the settings the reference lacks (ids 31 to 62, left out of the
+ * comparison here; environment_ghdf_round_trip covers them). The reference's tree, with the retired ids and no date,
+ * still reads. */
 static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
 {
     GHDFObjectPool* Pool = NULL;
@@ -2038,7 +2038,7 @@ static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
             TEST_CHECK_SUCCESS(run, ReferenceEncodeEnvironment(Pool, Expected, &Environment));
             TEST_CHECK(run, GHDFCompound_GetEntryCount(Expected) == 29U);
 
-            // Old data reads: the retired ids are skipped, and the missing date reads as its default.
+            // The reference's tree reads: the retired ids are skipped, and the missing date reads as its default.
             WorldEnvironment Restored;
             WorldEnvironment_SetDefaults(&Restored);
             TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(Table, Expected, &Restored, NULL));
@@ -2047,9 +2047,9 @@ static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
             TEST_CHECK(run, Properties_Equals(Table, &Environment, &Restored));
             WorldEnvironment_Deconstruct(&Restored);
 
-            // The table writes the old entries without the retired ids, plus the date as an encoded day number. Since
-            // T09 integers take the smallest type that holds them: the old encoder's UInt64 seed (read above) is now a
-            // UInt8 for the default seed (0), still a UInt64 for the filled one.
+            // The table writes the reference's entries without the retired ids, plus the date as an encoded day number.
+            // Integers take the smallest type that holds them: the seed, a UInt64 in the reference (read above), is a
+            // UInt8 for the default seed (0), a UInt64 for the filled one.
             TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Expected, 2U));
             TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Expected, 3U));
             TEST_CHECK_SUCCESS(run, GameGHDF_PutUnsigned(Expected, 10U, Environment.StarSeed));
@@ -2110,7 +2110,7 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
         TEST_CHECK(run, Restored.Date == TEST_DUE_LATER);
         TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
     }
-    // The removed day-night settings are unknown keys now (no world file was written with them).
+    // The retired day-night settings are unknown keys (no world file holds them).
     if (TestText_ParseJSON(run, Pool, "{\"day_length_seconds\": 120}", &Value))
     {
         const char* const Fragments[] = { "world_environment: unknown key", "\"day_length_seconds\"", NULL };
@@ -2155,7 +2155,7 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
         TEST_CHECK(run, AreStringsEqual(Restored.MoonTexture, u8"stories.harvest_moon"));
         TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
     }
-    // The air's settings as a creator writes them (T15): an absent key keeps its default.
+    // The air's settings as a creator writes them: an absent key keeps its default.
     if (TestText_ParseJSON(run, Pool, "{\"haze_height\": 300, \"sun_glow\": 0.9, \"ozone\": 0, \"haze_albedo\": \"#806040\"}",
         &Value))
     {
@@ -2173,7 +2173,7 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
         TEST_CHECK(run, Restored.SunGlow == 0.9f);
         TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
     }
-    // The haze's settings as a creator writes them (T35): a bigger, hazier town and a morning mist.
+    // The haze's settings as a creator writes them: a bigger, hazier town and a morning mist.
     if (TestText_ParseJSON(run, Pool, "{\"aerial_distance_scale\": 5, \"ground_haze_density\": 0.02, "
         "\"ground_haze_thickness\": 15, \"horizon_ground_height\": -20.5}", &Value))
     {
@@ -2230,7 +2230,7 @@ static void EnvironmentGHDFRoundTrip(TestRun* run)
 
 
 // Public functions.
-/* An asset name list's own record (T29): a list row and a flag row. */
+/* An asset name list's own record: a list row and a flag row. */
 typedef struct NameListRecordStruct
 {
     PropertyAssetNameList* Libraries;
@@ -2442,7 +2442,7 @@ static void AssetNameListRowsAreChecked(TestRun* run)
     TEST_CHECK(run, strcmp((const char*)PropertyType_GetName(PropertyType_AssetNameList), "asset_name_list") == 0);
 }
 
-/* An instance list's own record (B03): a list row (at most four instances, positions within 1000 m) and a flag row. */
+/* An instance list's own record: a list row (at most four instances, positions within 1000 m) and a flag row. */
 typedef struct InstanceListRecordStruct
 {
     PropertyInstanceList* Instances;

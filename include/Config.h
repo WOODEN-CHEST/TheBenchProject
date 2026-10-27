@@ -65,7 +65,7 @@ typedef struct GameConfigStruct
      *  Default 1. Scales how strongly screen-space AO darkens creased/contact areas. */
     float AmbientOcclusionStrength;
     /** @brief Config-side haze strength multiplier (times the world's FogStrength). Default 1. Multiplies every haze
-     *  distance and the ground haze's depth (T35's aerial perspective): 1 the real air, 0 no haze on anything (an
+     *  distance and the ground haze's depth (the aerial perspective): 1 the real air, 0 no haze on anything (an
      *  accessibility setting: far things stay crisp). */
     float FogStrength;
     /** @brief Scales every draw distance that is not fixed (each world model's and world sprite's own, or a placement's;

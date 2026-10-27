@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates T29's placeholder humanoid: box-figure models and their motion library, as binary glTF (.glb).
+"""Generates the placeholder humanoid: box-figure models and their motion library, as binary glTF (.glb).
 
 Run it from anywhere (only the Python standard library is needed):
 
@@ -15,7 +15,7 @@ It writes, relative to the repository root:
                                                                   the clips on the tall skeleton, with no mesh and no
                                                                   skin (what Blender writes when it exports actions only)
     tests/data/placeholder_humanoid_with_clips.glb                the tall model, its skin and the clips in one file
-    compile/out/asset/models/placeholder_props/bench.glb          T30's props: a bench (its seat 0.45 m up) and a
+    compile/out/asset/models/placeholder_props/bench.glb          the test props: a bench (its seat 0.45 m up) and a
     compile/out/asset/models/placeholder_props/cup.glb            cup, rigid (no skin)
 
 Conventions: metres, +Y up, the figure faces +Z (its left is +X) and stands on the origin. Every bone's rest rotation is
@@ -24,7 +24,7 @@ them, with the last key exactly at the clip's end (the case raylib's own glTF cl
 (no root motion). The legs are placed by a two-bone IK in the side view, so the feet stay on the ground while they
 should.
 
-The action clips (T30: sit_down, sit_idle, stand_up, pick_up, hold_r, put_down, open_door) are made for the test
+The action clips (sit_down, sit_idle, stand_up, pick_up, hold_r, put_down, open_door) are made for the test
 props and the anchors of their actions: an action first slides the character's feet (the model's origin) onto a socket
 of its target, so these clips know where the seat, the cup and the door are from there. Their arms are placed by the
 same kind of IK (the right hand meets the cup's grip and the door), checked by forward kinematics when they are written.
@@ -134,7 +134,7 @@ LOD1_TORSO_RINGS = [TORSO_RINGS[0], TORSO_RINGS[-1]]
 # The short figure: every position scaled (x, y, z): 85% of the height, 15% wider, 10% deeper.
 SHORT_SCALE = (1.15, 0.85, 1.10)
 
-# The actions' places (T30), from the feet where the anchor puts them (z ahead, y up). Sitting: the seat's top 0.45 m up
+# The actions' places, from the feet where the anchor puts them (z ahead, y up). Sitting: the seat's top 0.45 m up
 # with its front edge 0.36 m behind the feet; the hips joint seated rests 0.11 m above it (the hips box's underside on
 # the seat), 0.48 m behind the feet; the ankles 5 cm ahead. Picking up and putting down: the right hand's socket (the
 # palm, HAND_SOCKET) meets the test cup's grip on the test desk, 0.52 m ahead and 0.83 m up; opening the door: it
@@ -372,7 +372,7 @@ def wave(t):
     return pose
 
 
-# The actions' clips (T30).
+# The actions' clips.
 def lean_shoulder(hips_y, hips_z, spine_lean, chest_lean):
     """Where the right shoulder joint is in the side view (z, y) with the hips at (hips_y, hips_z) and the spine and the
     chest leaning forward by their degrees."""
@@ -851,7 +851,7 @@ def write_library(path):
     writer.write(path, document)
 
 
-# The props (T30): rigid boxes, one primitive per material, no skin. The bench faces +Z (its sitter's way), its seat's
+# The props: rigid boxes, one primitive per material, no skin. The bench faces +Z (its sitter's way), its seat's
 # top SEAT_HEIGHT up, 0.38 m deep around z = 0; the cup stands on its origin, its grip on its -X side.
 BENCH_MATERIALS = [("wood", (0.45, 0.30, 0.18)), ("iron", (0.12, 0.12, 0.13))]
 BENCH_BOXES = [

@@ -127,7 +127,7 @@ void TestTerrain_WriteGlb(const TestGltfMesh* mesh, GenericBuffer* outBytes);
 bool TestTerrain_ReplaceInGlbJson(const GenericBuffer* glb, const char* find, const char* replacement,
     GenericBuffer* outBytes);
 
-/** @brief What TestTerrain_WriteMaterialFiles writes for one terrain material (B02) into a pack: square maps of the sizes
+/** @brief What TestTerrain_WriteMaterialFiles writes for one terrain material into a pack: square maps of the sizes
  *  given (0 leaves the map out; the albedo is always written), each a texture named "<name>_<map>". */
 typedef struct TestTerrainMaterialFilesStruct
 {

@@ -928,7 +928,7 @@ static void GHDFRefusesNonFiniteVectors(TestRun* run)
     TEST_CHECK(run, TEST_CHECK_SUCCESS(run, DataValue_ReadGHDF(Fine, &Keys, &Value))
         && (Value.Type == DataType_Vector3) && (Value.Vector3Value.Y == 2.0));
 
-    // Double arrays, which the writer writes since T33, likewise.
+    // Double arrays, which the writer writes, likewise.
     GHDFArray* InfiniteDoubles = NULL;
     if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowArray(Pool, GHDFValueType_Double, &InfiniteDoubles)))
     {
@@ -955,8 +955,8 @@ static void GHDFRefusesNonFiniteVectors(TestRun* run)
     KeyRegistry_Deconstruct(&Keys);
 }
 
-/* T33: a vector3 is three doubles (it often holds a far position), written as a Double array; the Float arrays and the
- * JSON floats written before read as the same numbers. */
+/* A vector3 is three doubles (it often holds a far position), written as a Double array; a Float array, and JSON whose
+ * numbers are the shortest texts of floats, read as the same numbers. */
 static void Vector3sAreDoublesAndOldFormsRead(TestRun* run)
 {
     KeyRegistry Keys;
@@ -1007,7 +1007,7 @@ static void Vector3sAreDoublesAndOldFormsRead(TestRun* run)
     }
     DataValue_Deconstruct(&List);
 
-    // A Float array, as saves wrote before T33, reads as those floats widened exactly; alone and in a list.
+    // A Float array (a vector3 saved in single precision) reads as those floats widened exactly; alone and in a list.
     const float Old[] = { 0.1f, -2.5f, 16777217.0f };
     GHDFCompound* Single = MakeArrayValueCompound(run, Pool, DataType_Vector3, DataType_Tag,
         MakeFloatArray(run, Pool, Old, 3U));

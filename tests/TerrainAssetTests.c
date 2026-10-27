@@ -110,7 +110,7 @@ static bool CreatePackFiles(TestRun* run, TerrainPack* pack, const char* name, c
     return true;
 }
 
-/* Writes a plain terrain material (B02: a 4 x 4 albedo, no other maps) for each name, so the terrains naming them load:
+/* Writes a plain terrain material (a 4 x 4 albedo, no other maps) for each name, so the terrains naming them load:
  * a terrain loads its palette's materials as its dependencies. */
 static bool WriteMaterials(TestRun* run, const TerrainPack* pack, const char* const* names, size_t count)
 {
@@ -476,7 +476,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
             ErrorCode_InvalidAssetDefinition, "collision.collides_with[1] must be a layer's name, each named once." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"collision\": {\"collides_with\": [5]}}",
             ErrorCode_InvalidAssetDefinition, "collision.collides_with[0] must be a layer's name" },
-        // The rules (B02).
+        // The rules.
         { DATA_HEAD "\"materials\": [\"g\"], \"rules\": {}}", ErrorCode_InvalidAssetDefinition,
             "\"rules\" must be an array." },
         { DATA_HEAD "\"materials\": [\"g\"], \"rules\": [3]}", ErrorCode_InvalidAssetDefinition,
@@ -562,7 +562,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
 }
 
 
-/* The rules (B02) are read in order with every key; left-out keys take their defaults (opacity 1, every material
+/* The rules are read in order with every key; left-out keys take their defaults (opacity 1, every material
  * covered, open bounds, no ramp; noise of 4 m cells, strength 1, seed 0); at the limits they are accepted. */
 static void TheRulesAreReadInOrder(TestRun* run)
 {
@@ -1186,7 +1186,7 @@ static void TheShippedTerrainLoads(TestRun* run)
             Graveled += (Weights[3] == 255U) ? 1U : 0U;
         }
         TEST_CHECK(run, AreWeightsWhole && (Wooded > 1000U) && (Wooded < TerrainMesh_GetVertexCount(Terrain)));
-        // B02: the painted gravel patch (a 3.5 m disc of 1 m quads is about 40 vertices of pure gravel); the rock and the
+        // The painted gravel patch (a 3.5 m disc of 1 m quads is about 40 vertices of pure gravel); the rock and the
         // valley's dirt come from the rules, so no vertex paints rock.
         TEST_CHECK(run, (Graveled > 30U) && (Graveled < 60U));
         bool HasPaintedRock = false;

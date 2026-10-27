@@ -55,11 +55,11 @@
 #define ASSET_TYPE_NAME_ANIMATION_GRAPH      ((const unsigned char*)u8"animation_graph")
 #define ASSET_TYPE_DIRECTORY_ANIMATION_GRAPH ((const unsigned char*)u8"animation_graphs")
 /** @brief Standard terrain type name / directory (TerrainAsset.h: a terrain's free-form mesh, its palette and density
- *  channels, and the defaults of its placements; B01). */
+ *  channels, and the defaults of its placements). */
 #define ASSET_TYPE_NAME_TERRAIN      ((const unsigned char*)u8"terrain")
 #define ASSET_TYPE_DIRECTORY_TERRAIN ((const unsigned char*)u8"terrains")
 /** @brief Standard terrain material type name / directory (TerrainMaterial.h: one material of a terrain's palette, its
- *  maps' pixels and settings; B02). */
+ *  maps' pixels and settings). */
 #define ASSET_TYPE_NAME_TERRAIN_MATERIAL      ((const unsigned char*)u8"terrain_material")
 #define ASSET_TYPE_DIRECTORY_TERRAIN_MATERIAL ((const unsigned char*)u8"terrain_materials")
 

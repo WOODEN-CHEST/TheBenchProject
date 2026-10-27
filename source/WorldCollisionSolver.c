@@ -17,10 +17,10 @@
  * 3. solves the rows by projected Gauss-Seidel: each row pushes its owners apart by its violation, shared by inverse
  *    mass, its accumulated push clamped at 0 (a push never pulls), sweeping forward and backward in turn until no pushed
  *    body moves by more than WORLD_COLLISION_SKIN / 100 in an iteration. Every solve starts from no push (no warm
- *    starting: last step's pushes, re-applied row by row, threw a light pushable pinned by a heavy one around). Rows
- *    against what neither moves nor gives way (static colliders, kinematic ones standing still) close every iteration,
- *    so what cannot fit is left between pushables and movers, never in a wall. Only the normal part of a motion is
- *    touched, so pushed things slide;
+ *    starting: last step's pushes, re-applied row by row, would throw a light pushable pinned by a heavy one around).
+ *    Rows against what neither moves nor gives way (static colliders, kinematic ones standing still) close every
+ *    iteration, so what cannot fit is left between pushables and movers, never in a wall. Only the normal part of a
+ *    motion is touched, so pushed things slide;
  * 4. SWEEPS every continuous pushed motion with its push: exact casts of each pushed shape against everything near it,
  *    the other side moving too, wherever the two move in straight lines relative to each other (a side whose motion is
  *    not continuous stands where it ends: it jumps there); a pushed body that turns is swept along its straight path at
@@ -43,7 +43,7 @@
  * the blocked and crushed flags come from them and from the sweeps. A solve that may stop movers ends early once one
  * that stops when blocked is blocked and can be set back: the step sets it back and solves again.
  *
- * ORIGINS (T33). The poses are doubles; the narrowphase runs relative to a pair's ORIGIN: its first body's From
+ * ORIGINS. The poses are doubles; the narrowphase runs relative to a pair's ORIGIN: its first body's From
  * position (where the solve's contacts and sweeps of the pair are taken). Contact points, the material points a row
  * measures and a sweep's points are all relative to it; a manifold keeps its origin for the contacts the step reports.
  */

@@ -519,7 +519,7 @@ static void HostileFilesAreRefused(TestRun* run)
         "{\"uri\":\"b.bin\",\"byteLength\":68435457},{", ErrorCode_InvalidAssetData, "buffer 1 declares 68435457 bytes;");
 
     // What the terrain reads must be stored in the file: an accessor without a buffer view is zeros of any count, memory
-    // the file never paid for (a 240-byte file once took 1.9 GiB this way).
+    // the file never paid for (a 240-byte file could take 1.9 GiB this way).
     CheckPatchedRefused(run, &Bytes, "{\"bufferView\":0,\"componentType\":5126,", "{\"componentType\":5126,",
         ErrorCode_InvalidAssetData, "mesh \"terrain\"'s positions are not stored in the file (an accessor without a "
         "buffer view)");

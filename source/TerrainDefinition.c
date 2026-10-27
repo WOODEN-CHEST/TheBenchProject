@@ -16,8 +16,8 @@
  * names, the attribute mappings against them, the chunk size, the render and collision blocks), and the loader, which
  * imports the .glb (source "model": TerrainMesh_CreateFromGltfFile, the file treated as hostile) or reads the binary form
  * (source "data": TerrainMesh_LoadGHDF) and checks it against the definition, then loads the palette's terrain materials
- * as its dependencies (B02) and checks that their maps of one kind share one size (a texture array holds one). The
- * definition's "rules" (B02) are read with the palette's names and copied into the asset. The loaded asset owns its
+ * as its dependencies and checks that their maps of one kind share one size (a texture array holds one). The
+ * definition's "rules" are read with the palette's names and copied into the asset. The loaded asset owns its
  * mesh, the names and the rules.
  */
 
@@ -865,7 +865,7 @@ static Error ParseRuleMaterials(const TerrainDefinition* definition, JSONCompoun
     return Error_CreateSuccess();
 }
 
-/* "rules" (B02): at most TERRAIN_MAX_RULES, each { "material", "opacity", "only_on", "slope", "height", "noise" }. */
+/* "rules": at most TERRAIN_MAX_RULES, each { "material", "opacity", "only_on", "slope", "height", "noise" }. */
 static Error ParseRules(TerrainDefinition* definition, JSONCompound* root)
 {
     JSONArray* Rules = NULL;

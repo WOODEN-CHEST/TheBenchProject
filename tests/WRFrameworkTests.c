@@ -17,7 +17,7 @@
 
 
 /**
- * WRFramework behaviours the game relies on since T09 (world files), changed in ../WRFramework at the owner's request:
+ * WRFramework behaviours the game relies on (most of them for its world files):
  * JSON compounds keep insertion order and pretty output keeps arrays of scalars on one line; GHDF strings cannot make
  * the reader reserve what the data does not hold, a pool frees containers still borrowed without touching freed pools,
  * truncated documents do not leak; both readers can refuse a document whose tree would take too much memory;
@@ -30,8 +30,8 @@
 #define FRAMEWORK_TEST_TEXT_CAPACITY ((size_t)256)
 /** A string longer than four of the GHDF reader's 64 KiB chunks. */
 #define FRAMEWORK_TEST_LONG_STRING_LENGTH ((size_t)200003)
-/** Elements of the large sort cases: past the ~87 000 where the old quicksort overflowed the stack on sorted input (it
- *  recursed once per element, and took minutes before that). */
+/** Elements of the large sort cases: past the ~87 000 where a quicksort with its last element as the pivot overflows
+ *  the stack on sorted input (it recurses once per element, and takes minutes before that). */
 #define FRAMEWORK_TEST_SORT_COUNT ((size_t)100000)
 /** The small sort cases cover every length up to this (the introsort switches to insertion sort at 16). */
 #define FRAMEWORK_TEST_SMALL_SORT_LENGTH ((size_t)64)
@@ -44,8 +44,8 @@
 
 
 // Types.
-/* The inputs the sorts are tried on: the old quicksort took its last element as the pivot and recursed into both
- * sides, so sorted, reversed and equal input made it quadratic and recurse once per element. */
+/* The inputs the sorts are tried on: a quicksort that takes its last element as the pivot and recurses into both sides
+ * turns quadratic on sorted, reversed and equal input, and recurses once per element. */
 typedef enum SortPatternEnum
 {
     SortPattern_Ascending,
@@ -451,7 +451,7 @@ static void PrettyJSONKeepsScalarArraysOnOneLine(TestRun* run)
         {
             printf("      written:\n%s\n", (const char*)Text._data);
         }
-        // Without the flag pretty output keeps one element per line, as before.
+        // Without the flag pretty output keeps one element per line.
         GenericBuffer_Clear(&Text);
         TEST_CHECK(run, SerializeTo(run, &Root, JSONSerializeFlags_PrettyPrinted, &Text)
             && (strstr((const char*)Text._data, "\"position\": [\n        1.5,\n") != NULL));
@@ -544,8 +544,8 @@ static void TruncatedGHDFLeavesNothingBehind(TestRun* run)
             MemoryStream_Deconstruct(&Stream);
         }
         TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Root, true));
-        // Every cut fails, and each failure frees what it made (the run's leak check counts every allocation: the
-        // encoded-integer reader used to drop the stream's error without freeing it).
+        // Every cut fails, and each failure frees what it made (the run's leak check counts every allocation, so an
+        // encoded-integer reader that dropped the stream's error without freeing it would show).
         for (size_t Length = 0U; Length < Bytes._count; Length++)
         {
             GenericBuffer Cut;
@@ -565,8 +565,8 @@ static void TruncatedGHDFLeavesNothingBehind(TestRun* run)
 
 static void GHDFPoolsFreeContainersStillBorrowed(TestRun* run)
 {
-    // A compound still borrowed at teardown, holding a string and an array of compounds holding strings: the pool used
-    // to release them into sub-pools it had already freed (a use-after-free the sanitizer build shows).
+    // A compound still borrowed at teardown, holding a string and an array of compounds holding strings: the pool must
+    // not release them into sub-pools it has already freed (a use-after-free the sanitizer build shows).
     GHDFObjectPool* Pool = NULL;
     if (!TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&Pool)))
     {

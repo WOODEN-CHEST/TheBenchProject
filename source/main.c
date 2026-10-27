@@ -396,7 +396,7 @@ int main(int argc, char** argv)
 
     if (!HasExecutableDirectory)
     {
-        // Fall back to the working directory (the old behaviour) so the game can still start, and say so.
+        // Fall back to the working directory so the game can still start, and say so.
         // GetWorkingDirectory returns a static buffer, so copy it.
         LogWarningAndRelease(&Log, (const unsigned char*)u8"Could not determine the executable's directory; using the working directory instead: %s",
             &BaseDirectoryResult);

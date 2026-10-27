@@ -1,7 +1,7 @@
 #version 330
 
-// The terrain's lit fragment stage (B01; the materials since B02): up to sixteen terrain materials blended per pixel
-// from texture arrays (decision W7), lit as world_pbr lights a dielectric (the sun and the moon with the cascades'
+// The terrain's lit fragment stage: up to sixteen terrain materials blended per pixel from texture arrays, lit as
+// world_pbr lights a dielectric (the sun and the moon with the cascades'
 // shadow, the point lights, the ambient with the screen's AO, the night vision and the haze), dithered by the draw's
 // fade. The blend, in order (its C mirror is source/TerrainBlend.c: change both together):
 // 1. the painted weights, interpolated and divided by their sum (none at all: the first material);
@@ -16,8 +16,8 @@
 // the terrain's space, like the maps.
 // Without the arrays (texture arrays unavailable) each material shows its mean colour. terrainView shows the steps.
 // Steps 3 and 4 stream over the materials (the best score, then each material's share and surface summed), holding no
-// array per material but the weights: arrays of scores, shares and samples nearly doubled this pass's cost (B02 measured
-// 3.3 to 3.7 against 1.5 to 2.0 ms for views full of terrain at 1280 x 720 on a GTX 980 Ti). Keep it that way.
+// array per material but the weights: arrays of scores, shares and samples nearly double this pass's cost (3.3 to 3.7
+// against 1.5 to 2.0 ms for views full of terrain at 1280 x 720 on a GTX 980 Ti). Keep it that way.
 
 in vec3 fragPosition;
 in vec3 fragNormal;
@@ -46,7 +46,7 @@ uniform bool hasMaterialArrays;        // false: the materials' mean colours, no
 uniform vec4 materialTint[16];         // rgb: the albedo tint, linear
 uniform vec4 materialSurface[16];      // x: 1 / tile size, y: roughness, z: normal strength, w: height blend strength
 uniform vec4 materialProjection[16];   // x: triplanar (0 off, 1 steep, 2 always), y: triplanar slope (degrees),
-                                       // z: puddles, w: porosity (both read by the weather's wetness, T18)
+                                       // z: puddles, w: porosity (both for the weather's wetness, not built yet)
 uniform vec4 materialMeanColor[16];    // rgb: the albedo's mean times the tint, linear
 uniform sampler2DArray materialAlbedoHeight; // a layer per material: rgb the albedo (sRGB), a the height
 uniform sampler2DArray materialNormal;       // rg: the normal map's x and y (OpenGL's convention)
@@ -83,10 +83,10 @@ const float WEIGHT_EPSILON = 0.5/255.0;
 const float TRIPLANAR_RAMP_DEGREES = 10.0;
 // A material without a height map is flat at mid-height (TERRAIN_MATERIAL_FLAT_HEIGHT).
 const float FLAT_HEIGHT = 128.0/255.0;
-// The debug views' roughness (B01's look).
+// The debug views' roughness.
 const float DEBUG_ROUGHNESS = 0.9;
 
-// The debug colour of each palette entry, sRGB: distinct and earthy, in palette order (B01's).
+// The debug colour of each palette entry, sRGB: distinct and earthy, in palette order.
 const vec3 DEBUG_PALETTE[16] = vec3[16](
     vec3(0.33, 0.52, 0.22),  // 0: grass green
     vec3(0.47, 0.35, 0.22),  // 1: earth brown

@@ -40,8 +40,8 @@
  * OVERRIDES. Every setting of the world sprite (WorldSpriteSetting) can be overridden by the placement: a pair of
  * properties, an override flag ("overrides_" + the setting's key, false by default: the world sprite's value applies)
  * and the placement's own value. The value is kept, and saved, while its flag is off, so switching the flag back on
- * restores it; there are no sentinel values and no "inherit" states (the owner's rule, G17). The getters of the values
- * return the placement's own values; WorldSpriteComponent_ResolveSettings turns the world sprite's settings and the
+ * restores it; there are no sentinel values and no "inherit" states. The getters of the values return the placement's
+ * own values; WorldSpriteComponent_ResolveSettings turns the world sprite's settings and the
  * overrides into the settings that apply. The draw distance also has a plain multiplier (1 changes nothing, 2 = seen
  * twice as far), which applies to whichever distance is in effect.
  *
@@ -109,7 +109,7 @@ typedef enum WorldSpriteSettingEnum
     WorldSpriteSetting_HasOutline,
     /** @brief Drawing at full resolution (omit_pixelation). */
     WorldSpriteSetting_OmitPixelation,
-    /** @brief How hazy it looks at a distance (haze; T35). */
+    /** @brief How hazy it looks at a distance (haze). */
     WorldSpriteSetting_Haze,
     /** @brief The draw distance (draw_distance). */
     WorldSpriteSetting_DrawDistance,
@@ -438,7 +438,7 @@ static inline bool WorldSpriteComponent_IsLit(const WorldSpriteComponent* self)
 
 /**
  * @brief Sets this placement's own lighting: lit like the models around it, or its colours shown as emitted light
- *        (neon, fire; still fogged). It applies while WorldSpriteSetting_IsLit is overridden.
+ *        (neon, fire; still hazed). It applies while WorldSpriteSetting_IsLit is overridden.
  * @param self The sprite component; must not be NULL.
  * @param isLit Whether it is lit.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.

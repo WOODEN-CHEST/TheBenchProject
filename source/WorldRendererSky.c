@@ -1,4 +1,4 @@
-// The atmospheric sky pass, with the moon, the Milky Way and light pollution's light. Since T15 its glow comes from the
+// The atmospheric sky pass, with the moon, the Milky Way and light pollution's light. Its glow comes from the
 // atmosphere's tables (WorldRendererAtmosphere.c, built first in the frame), or the direct march while they are off. The
 // stars are their own pass (WorldRendererStars.c), drawn right after this one.
 
@@ -146,7 +146,7 @@ static void DeconstructSkyTexture(WorldRenderer* self, WorldRendererSkyTexture* 
     slot->_name = (GenericBuffer){ 0 };
 }
 
-/* The moon's light on the atmosphere (the moonlit sky) and its disc. Since T36 the moonlit sky is lit by all of the moon's
+/* The moon's light on the atmosphere (the moonlit sky) and its disc. The moonlit sky is lit by all of the moon's
  * light above the air (the frame's MoonIntensity: the phase's brightness and the daylight gate in), the surfaces by the
  * same. */
 static void PrepareMoon(WorldRenderFrame* frame)
@@ -282,7 +282,7 @@ void WorldRendererSky_PrepareNightSky(WorldRenderFrame* frame)
             * WorldEnvironment_GetMoonBrightness(frame->MoonIllumination)
             * SmoothStep(MOONLIT_STARS_FADE_START, MOONLIT_STARS_FADE_END, frame->MoonDirection.y);
     }
-    // The twilight behind the stars (T38): the sky's light from the sun as its mean luminance, on the real scale.
+    // The twilight behind the stars: the sky's light from the sun as its mean luminance, on the real scale.
     frame->LimitingMagnitude = NightSky_GetLimitingMagnitude(Environment->LightPollution, MoonlitSky,
         WorldSkyLight_GetTwilightLuminance(&frame->SkyLight));
     frame->MilkyWayRadiance = MILKY_WAY_BASE_RADIANCE * fmaxf(Environment->MilkyWayBrightness, 0.0f)
@@ -313,7 +313,7 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     SetShaderValue(RayShader, self->_sky._locSunIntensity, frame->AirSunIntensity, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, self->_sky._locSunDiscIntensity, frame->SunDiscIntensity, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, self->_sky._locSunSize, &Environment->SunSizeMultiplier, SHADER_UNIFORM_FLOAT);
-    // The air, and the tables or the direct march (T15); the ground haze in front of the sky (T35).
+    // The air, and the tables or the direct march; the ground haze in front of the sky.
     WorldRendererAtmosphere_UploadFrame(RayShader, &self->_sky._atmosphere, frame);
     WorldRendererAtmosphere_UploadHaze(RayShader, &self->_sky._haze, frame);
 

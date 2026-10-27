@@ -2,7 +2,7 @@
 #include <stdbool.h>
 
 /*
- * Private header (source/): the eye's adaptation to the picture (T37, decision G42). Pure maths and the eye's state, no
+ * Private header (source/): the eye's adaptation to the picture. Pure maths and the eye's state, no
  * GL: the renderer meters each frame's brightness on the GPU (shaders/luminance/fragment.frag, read back by GLReadback.h
  * a frame or two later) and this turns the measurements into the exposure the tonemap multiplies the scene by.
  *
@@ -45,7 +45,7 @@
 /** @brief The pixels a block samples along each side (a regular grid over it, nearest pixels). */
 #define EYE_ADAPTATION_METER_SAMPLES 8
 /** @brief The share of the sky's scene luminance at the camera a view in the open has as its log-average: the anchor.
- *  Measured on the test world's open fields, by day and by night (T37's status block). */
+ *  Measured on the test world's open fields, by day and by night. */
 #define EYE_ADAPTATION_ANCHOR_SHARE 0.11f
 /** @brief The meter's window around the anchor, in stops: a pixel counts as at least WINDOW_BELOW under it (how far the
  *  eye opens up in a dark place) and at most WINDOW_ABOVE over it (how far a bright view closes it: further would grey a
@@ -58,13 +58,13 @@
 #define EYE_ADAPTATION_CENTRE_SPREAD 0.35f
 /** @brief ===== EXPOSURE KNOB =====
  *  The screen level (linear, before the tonemap) of a view whose log-average is a white surface's under a clear noon
- *  (R = NIGHT_VISION_NOON_CANDELAS). Higher brightens every scene alike. Tuned on rendered frames so the noon keeps its
- *  look from before T37 (T37's status block has the measurements). */
+ *  (R = NIGHT_VISION_NOON_CANDELAS). Higher brightens every scene alike. Tuned on rendered frames for the noon's
+ *  look. */
 #define EYE_ADAPTATION_KEY 0.0873f
 /** @brief ===== DAY AND NIGHT CONTRAST KNOB =====
  *  How much of a change in the real light the screen keeps, in stops per stop: 0 shows every scene alike (the eye fully
  *  adapted), 1 not at all. Higher darkens the dusk and the night against the day (and brightens a sunny day against a
- *  dull one). Tuned so the night keeps its look from before T37. */
+ *  dull one). Tuned on rendered frames for the night's look. */
 #define EYE_ADAPTATION_POWER 0.0596f
 /** @brief The exposure's range: a guard for skies far outside the tuned ones (a sun hundreds of times too bright, a
  *  world without light). The meter's window already keeps the eye within a few stops of the sky light's anchor: a clear

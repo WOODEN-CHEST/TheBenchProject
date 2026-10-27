@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Generates B03's placeholder content for instanced drawing: a tree with three LODs, a pebble with two, their world
-models, and the test world's grove (about 400 trees on B01's placeholder terrain), as binary glTF (.glb) and JSON.
+"""Generates the placeholder content for instanced drawing: a tree with three LODs, a pebble with two, their world
+models, and the test world's grove (about 400 trees on the placeholder terrain), as binary glTF (.glb) and JSON.
 
 Run it from anywhere (only the Python standard library is needed):
 

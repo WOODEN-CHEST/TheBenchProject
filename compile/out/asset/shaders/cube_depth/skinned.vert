@@ -1,6 +1,6 @@
 #version 330
 
-// The point-light shadow's vertex stage for skinned meshes (world_cube_depth_skinned, T29): cube_depth/vertex with the
+// The point-light shadow's vertex stage for skinned meshes (world_cube_depth_skinned): cube_depth/vertex with the
 // position moved by the object's pose first (common/skinning). The fragment stage is world_cube_depth's own.
 
 #include "common/skinning"

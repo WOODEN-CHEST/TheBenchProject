@@ -385,7 +385,7 @@ static void DefinesFollowTheVersionLine(TestRun* run)
         {
             CHECK_TEXT(run, &Fixture.Text, "#version 330\r\n#define WORLD_INSTANCED\n#line 2 0\n#version 330\n");
         }
-        // No defines: the text as before.
+        // No defines: the text unchanged.
         if (TEST_CHECK_SUCCESS(run, ShaderFixture_ExpandWithDefines(&Fixture, "#version 330\nfloat x;\n", NULL, 0U)))
         {
             CHECK_TEXT(run, &Fixture.Text, "#version 330\nfloat x;\n");
@@ -506,12 +506,12 @@ static long GetConstIntValue(const GenericBuffer* text, const char* name)
     return (Constant != NULL) ? strtol(Constant + strlen(Opening), NULL, 10) : -1L;
 }
 
-/* The atmosphere (T15): every shader that reads or builds its tables (and since T35 the haze's volume) takes them from
- * the one shared include, which declares the air, the view height and the tables once, and whose constants are its C
- * mirror's (source/WorldAtmosphere.h): the planet, the air's scale height, the ozone layer, the tables' sizes, what
- * counts as vertical, the volume's layout, steps and values and light pollution's reach, and (T36) the sun's light on
- * the one light scale, the lights' discs, the sky's light by height in the volume's last row and the irradiance table's
- * layout; the sky's old radiance is gone. */
+/* The atmosphere: every shader that reads or builds its tables (and the haze's volume) takes them from the one shared
+ * include, which declares the air, the view height and the tables once, and whose constants are its C mirror's
+ * (source/WorldAtmosphere.h): the planet, the air's scale height, the ozone layer, the tables' sizes, what counts as
+ * vertical, the volume's layout, steps and values and light pollution's reach, and the sun's light on the one light
+ * scale, the lights' discs, the sky's light by height in the volume's last row and the irradiance table's layout; the
+ * sky has no radiance scale of its own (no ATMOSPHERE_SUN_RADIANCE). */
 static void ShippedAtmosphereMatchesItsMirror(TestRun* run)
 {
     ShaderFixture Fixture;
@@ -662,7 +662,7 @@ static bool ArrayIs(const GenericBuffer* text, const char* opening, const double
     return *Cursor == ')';
 }
 
-/* The sky's light on the surfaces (T36): the irradiance table's builder takes the C mirror's quadrature
+/* The sky's light on the surfaces: the irradiance table's builder takes the C mirror's quadrature
  * (source/WorldSkyLight.h: the same rings, azimuths, stretches and depth, the same limits, the Gauss-Legendre nodes and
  * weights of its rings), and every lit shader takes the sky's light from the lighting include once (by height from the
  * volume's last row, or the camera's from its uniforms) with the ambient from its one function, as the volume's builder
@@ -715,8 +715,8 @@ static void ShippedSkyLightMatchesItsMirror(TestRun* run)
         {
             TEST_CHECK(run, GetConstValue(&Fixture.Text, "HALF_FLOAT_MAX") == WORLD_SKY_LIGHT_MAX_LIGHT);
         }
-        // The sun's disc's radiance is its C twin's: the renderer clamps the disc's intensity and draws the light before
-        // T36's disc by it.
+        // The sun's disc's radiance is its C twin's: the renderer clamps the disc's intensity by it, and the sky pass
+        // draws the disc by it.
         if (ExpandShippedStage(run, &Fixture, "sky/fragment"))
         {
             TEST_CHECK(run, GetConstValue(&Fixture.Text, "SUN_DISC_RADIANCE") == WORLD_ATMOSPHERE_SUN_DISC_RADIANCE);
@@ -752,10 +752,10 @@ static void ShippedSkyLightMatchesItsMirror(TestRun* run)
 }
 
 
-/* The haze (T35): every lit shader applies it once through the lighting include (an additive sprite takes its
- * transmittance alone), the sky pass (the discs only where a ray misses the planet), the stars and the outlines take it
- * from the same include, the fog is gone from all of them, the include's series limits and its scaled erfc's coefficients
- * are its C mirror's (WorldAtmosphere.c), and the G-buffer's shaders encode an outlined surface's haze from the value the
+/* The haze: every lit shader applies it once through the lighting include (an additive sprite takes its transmittance
+ * alone), the sky pass (the discs only where a ray misses the planet), the stars and the outlines take it from the
+ * same include, none of them has a fog of its own, the include's series limits and its scaled erfc's coefficients are
+ * its C mirror's (WorldAtmosphere.c), and the G-buffer's shaders encode an outlined surface's haze from the value the
  * outline pass decodes it with, above its outline threshold. */
 static void ShippedShadersShareOneHaze(TestRun* run)
 {
@@ -921,7 +921,7 @@ static void ShippedGeometryShadersShareOneDither(TestRun* run)
 }
 
 
-/* Every skinned vertex stage (T29) skins through the one shared include, once: the bone attributes raylib binds, the
+/* Every skinned vertex stage skins through the one shared include, once: the bone attributes raylib binds, the
  * palette of three rows per bone the C side fills (SKELETAL_PALETTE_FLOATS_PER_BONE), no larger than the largest
  * skeleton the renderer probes for (GAME_SKELETON_MAX_BONES). */
 static void ShippedSkinnedStagesShareOneSkinning(TestRun* run)
@@ -981,7 +981,7 @@ static double GetDefinedValue(const GenericBuffer* text, const char* name)
     return (Define != NULL) ? strtod(Define + strlen(Opening), NULL) : NAN;
 }
 
-/* The instanced twins (B03): each definition loads, defines WORLD_INSTANCED and pairs its own vertex stage with its rigid
+/* The instanced twins: each definition loads, defines WORLD_INSTANCED and pairs its own vertex stage with its rigid
  * shader's fragment stage. Every instanced vertex stage places its copies through the one shared include, which takes
  * the records at locations 9 to 13 and whose constants are its C mirror's (source/WorldInstancing.h); with the define,
  * the fragment stages' dither reads the copy's flat values through the formula the uniforms use. */
@@ -1063,7 +1063,7 @@ static void ShippedInstancedTwinsShareTheirStages(TestRun* run)
     ShaderFixture_Deconstruct(run, &Fixture);
 }
 
-/* The eye's meter (T37): its blocks and samples are its C mirror's (source/EyeAdaptation.h, whose readback and weights
+/* The eye's meter: its blocks and samples are its C mirror's (source/EyeAdaptation.h, whose readback and weights
  * take that many blocks), and its window is the one vec3 the renderer uploads. */
 static void ShippedMeterMatchesItsMirror(TestRun* run)
 {
@@ -1083,7 +1083,7 @@ static void ShippedMeterMatchesItsMirror(TestRun* run)
     ShaderFixture_Deconstruct(run, &Fixture);
 }
 
-/* Every stage that reads the camera's depth or writes its own (T39: the eye's meter, the bloom's prefilter, the sun
+/* Every stage that reads the camera's depth or writes its own (the eye's meter, the bloom's prefilter, the sun
  * shafts, the crisp composite, the AO, the outlines and the stars) takes the depth convention from the one shared
  * include, with the renderer's depthReversed uniform once, and keeps no sky depth of its own; the include's tests are the
  * conventions GLDepth.h states (reversed: the sky exactly 0, clip control's depth as stored, nearer greater; standard:

@@ -1,13 +1,13 @@
 // The atmosphere, for #include "common/atmosphere": the air (the Rayleigh scattering of the air itself, the haze's Mie
 // scattering and absorption, the ozone layer's absorption) and the light it scatters toward the eye, lit by the sun by
 // day and by the moon at night (the same model, a dimmer light). Two ways to get that light:
-//  - THE TABLES (T15; Hillaire, "A Scalable and Production Ready Sky and Atmosphere Rendering Technique", EGSR 2020):
+//  - THE TABLES (Hillaire, "A Scalable and Production Ready Sky and Atmosphere Rendering Technique", EGSR 2020):
 //    the atmosphere pass (source/WorldRendererAtmosphere.c) builds them first in every frame (the transmittance and the
 //    multiple scattering only when the air changes: shaders/atmosphere/), and the sky pass and the stars read them, with
-//    the light scattered more than once. Since T35 the sky-view table ends its rays below the horizon on the far ground,
+//    the light scattered more than once. The sky-view table ends its rays below the horizon on the far ground,
 //    and the pass also builds the aerial-perspective volume from them (the haze in front of every surface: its layout
 //    is here, its readers' side in common/haze);
-//  - THE DIRECT MARCH (atmosphere(), T34's: single scattering per pixel): the A/B path while the tables are switched
+//  - THE DIRECT MARCH (atmosphere(): single scattering per pixel): the A/B path while the tables are switched
 //    off, and the fallback where they are unavailable (atmosphereTablesActive false).
 // World space (render space: the camera at the origin), +Y up, distances in metres; the planet's centre lies straight
 // below the camera, atmosphereViewHeight beneath it plus the planet's radius.
@@ -33,8 +33,8 @@ const float ATMOSPHERE_RAYLEIGH_HEIGHT = 8000.0;
 const float ATMOSPHERE_OZONE_CENTER = 25000.0;
 const float ATMOSPHERE_OZONE_HALF_WIDTH = 15000.0;
 // The sun's light above the air on a surface facing it, at sun_intensity 1 and a white sun_color, in the game's light
-// units, the surfaces' and the sky's alike since T36 (WORLD_ATMOSPHERE_SUN_LIGHT: the sun 60 degrees up then lights the
-// ground at sea level as it did before). A light's intensity uniform (its colour in it) multiplies it.
+// units, the surfaces' and the sky's alike (WORLD_ATMOSPHERE_SUN_LIGHT: chosen so the sun 60 degrees up lights the
+// ground at sea level with a luminance of 0.911). A light's intensity uniform (its colour in it) multiplies it.
 const float ATMOSPHERE_SUN_LIGHT = 1.078;
 // The angular diameter of the sun's disc (and the moon's), radians: the planet's shadow on the air is soft over it.
 const float ATMOSPHERE_LIGHT_DIAMETER = 0.0093;
@@ -51,11 +51,11 @@ const float ATMOSPHERE_SKY_VIEW_WIDTH = 192.0;
 const float ATMOSPHERE_SKY_VIEW_HEIGHT = 108.0;
 const float ATMOSPHERE_SKY_VIEW_HALF_COUNT = 2.0;
 
-// The direct march's steps (T34): 16 along the view ray, 8 toward the light.
+// The direct march's steps: 16 along the view ray, 8 toward the light.
 const int ATMOSPHERE_PRIMARY_STEPS = 16;
 const int ATMOSPHERE_LIGHT_STEPS = 8;
 
-// The aerial-perspective volume (T35; WORLD_ATMOSPHERE_VOLUME_*): 32 by 32 screen directions at 32 slices, the slices'
+// The aerial-perspective volume (WORLD_ATMOSPHERE_VOLUME_*): 32 by 32 screen directions at 32 slices, the slices'
 // distances growing by a fixed ratio from the first (1 m) to the last distance slice (200 km), then one for the whole
 // ray to the top of the atmosphere. One texture holds it: the slices side by side, the in-scatter's tiles in the lower
 // rows, the transmittance's above them, and one row of the frame's values on top.
@@ -78,7 +78,7 @@ const int ATMOSPHERE_VOLUME_RAY_STEPS = 32;
 const int ATMOSPHERE_VOLUME_GROUND_HAZE_SUN = 0;
 const int ATMOSPHERE_VOLUME_GROUND_HAZE_MOON = 1;
 const int ATMOSPHERE_VOLUME_GROUND_HAZE_AMBIENT = 2;
-// The sky's light by height in the volume's last row (T36; WORLD_ATMOSPHERE_SKY_LIGHT_*, WorldAtmosphereSkyLight): this
+// The sky's light by height in the volume's last row (WORLD_ATMOSPHERE_SKY_LIGHT_*, WorldAtmosphereSkyLight): this
 // many heights from the ground to the highest, even in the height's square root, a block of columns each for the sun's
 // light through the air, the moon's, the sky's irradiance on a surface facing up and the ground's bounce on one facing
 // down (the light that lights a surface at that height), from the first column on.
@@ -90,7 +90,7 @@ const int ATMOSPHERE_SKY_LIGHT_MOON = 1;
 const int ATMOSPHERE_SKY_LIGHT_SKY = 2;
 const int ATMOSPHERE_SKY_LIGHT_GROUND = 3;
 const int ATMOSPHERE_SKY_LIGHT_COUNT = 4;
-// The sky's irradiance table (T36; WORLD_ATMOSPHERE_IRRADIANCE_*): the light the sky sends a surface facing up per unit of
+// The sky's irradiance table (WORLD_ATMOSPHERE_IRRADIANCE_*): the light the sky sends a surface facing up per unit of
 // a light above the air, by the light's elevation across (from the lowest to the zenith, even in
 // asinh(elevation / ELEVATION_SCALE): dense at the horizon) and the height up (even in log(1 + height / HEIGHT_SCALE):
 // even in the height near the ground), then one column of light pollution's irradiance per unit of its radiance; each
@@ -102,7 +102,7 @@ const float ATMOSPHERE_IRRADIANCE_LOWEST_ELEVATION = -0.3490658503988659;
 const float ATMOSPHERE_IRRADIANCE_LOG_FLOOR = -46.0;
 const float ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE = 0.07;
 const float ATMOSPHERE_IRRADIANCE_HEIGHT_SCALE = 1000.0;
-// Light pollution's light in the air (T35): the town's light fills the air below about this height and within about this
+// Light pollution's light in the air: the town's light fills the air below about this height and within about this
 // horizontal distance of the camera (metres; WORLD_ATMOSPHERE_LIGHT_POLLUTION_HEIGHT, _REACH).
 const float ATMOSPHERE_LIGHT_POLLUTION_HEIGHT = 500.0;
 const float ATMOSPHERE_LIGHT_POLLUTION_REACH = 10000.0;
@@ -130,7 +130,7 @@ uniform bool atmosphereTablesActive;
 uniform sampler2D atmosphereTransmittanceTable;
 uniform sampler2D atmosphereMultiscatterTable;
 uniform sampler2D atmosphereSkyViewTable;
-// The sky's irradiance table (T36), read while the sky view and the volume are built.
+// The sky's irradiance table, read while the sky view and the volume are built.
 uniform sampler2D atmosphereIrradianceTable;
 
 
@@ -389,7 +389,7 @@ vec3 atmosphereMultipleScattering(float height, float lightCosZenith)
 
 // The sky's light toward a direction from one half of the sky-view table (0 the sun's, with light pollution's glow and
 // the far ground's ambient; 1 the moon's), as the atmosphere pass built it for this frame: below the horizon, the far
-// ground seen through the haze (T35). `direction` is a unit vector.
+// ground seen through the haze. `direction` is a unit vector.
 vec3 atmosphereSkyView(vec3 direction, vec3 lightDirection, float tableHalf)
 {
     vec2 unit = atmosphereSkyViewUnit(atmosphereViewHeight, direction.y,
@@ -478,7 +478,7 @@ vec3 atmosphereScatteredLight(float height, float cosZenith, float lightCosZenit
 }
 
 
-// ---- The aerial-perspective volume's layout (T35) ---------------------------------------------------------------
+// ---- The aerial-perspective volume's layout ---------------------------------------------------------------------
 // The distance of one of the volume's distance slices, in metres (WorldAtmosphere_GetVolumeSliceDistance).
 float atmosphereVolumeSliceDistance(float slice)
 {
@@ -533,7 +533,7 @@ ivec2 atmosphereVolumeValueTexel(int value)
 }
 
 
-// ---- The sky's light by height and the irradiance table (T36) ---------------------------------------------------
+// ---- The sky's light by height and the irradiance table ---------------------------------------------------------
 // A height's place among the sky's light's heights (WorldAtmosphere_GetSkyLightCoordinate): (count - 1) x sqrt(height /
 // highest), clamped; the readers blend the two whole coordinates around it.
 float atmosphereSkyLightCoordinate(float height)
@@ -621,9 +621,9 @@ vec3 atmosphereLightPollutionIrradiance(float height)
 }
 
 
-// ---- The direct march (T34): the A/B path and the fallback -----------------------------------------------------
+// ---- The direct march: the A/B path and the fallback -----------------------------------------------------------
 // TODO: remove the direct march (here, and its branches in the sky pass and the stars) with the A/B switch
-// once the owner approves the tables' sky (T15; WorldRenderer_SetAtmosphereTablesEnabled).
+// once the owner approves the tables' sky (WorldRenderer_SetAtmosphereTablesEnabled).
 // Ray-sphere intersection, sphere centred at origin, radius sr. Returns (near, far); near > far means miss.
 vec2 raySphere(vec3 origin, vec3 dir, float sr)
 {
@@ -666,12 +666,12 @@ vec3 atmosphere(vec3 rayDir, vec3 sunDir, vec3 iSun, out vec3 transmittance)
     float mieHeight = max(atmosphereMieHeight, 1.0);
 
     // The steps grow with the square of their index: short near the viewer, where every ray meets the densest air (a
-    // level ray rises with the square of its distance as the planet curves away). Equal steps were about 70 km long
-    // on a level ray, so the low air the horizon's light comes from fell inside the first one, and each step's light
-    // was dimmed as if it all came from the step's far end: the horizon came out at a quarter to a third of the
-    // brightness three degrees higher, a dark brown band, and the sky as a whole about 30 % off. Measured against 1024
-    // steps, this march is about 1 % off on average and 6 % at worst at the default haze, for 8 % more time than the old
-    // one (T34; integrating each step's light exactly was no more accurate and took 22 % more).
+    // level ray rises with the square of its distance as the planet curves away). Equal steps would be about 70 km
+    // long on a level ray, so the low air the horizon's light comes from would fall inside the first one; with each
+    // step's light dimmed as if it all came from the step's far end, that gives a horizon a quarter to a third as
+    // bright as the sky three degrees higher, a dark brown band, and a sky about 30 % off as a whole. Measured against
+    // 1024 steps, this march is about 1 % off on average and 6 % at worst at the default haze, for 8 % more time than a
+    // march of equal steps (integrating each step's light exactly is no more accurate and takes 22 % more).
     for (int i = 0; i < ATMOSPHERE_PRIMARY_STEPS; i++)
     {
         float stepFrom = float(i)/float(ATMOSPHERE_PRIMARY_STEPS);

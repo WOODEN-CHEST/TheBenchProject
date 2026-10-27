@@ -691,8 +691,8 @@ Error WorldFile_BuildPath(const unsigned char* baseDirectory, const unsigned cha
         return Error_Construct2(ErrorCode_IllegalArgument,
             "WorldFile_BuildPath: the base directory, a non-empty name and the path buffer are required.");
     }
-    // TODO: story packs (architecture A5) give each pack its own worlds folder and name worlds by pack; until they exist
-    // every world lives in <base>/worlds.
+    // TODO: story packs give each pack its own worlds folder and name worlds by pack; until they exist every world
+    // lives in <base>/worlds.
     const unsigned char* Extension = WORLD_FILE_JSON_EXTENSION;
     switch (format)
     {

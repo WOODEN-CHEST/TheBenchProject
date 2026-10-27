@@ -6,7 +6,7 @@
 // Macros.
 /** The days from 1600-01-01 to 2400-12-31, both included: 801 years, 195 of them leap years. */
 #define DAYS_1600_TO_2400 ((int64_t)292560)
-/** Known day numbers (days since 0001-01-01): the Unix epoch, the year 2000 and the plan's date. */
+/** Known day numbers (days since 0001-01-01): the Unix epoch, the year 2000 and the tests' sample date. */
 #define DAY_1970_01_01 ((int64_t)719162)
 #define DAY_2000_01_01 ((int64_t)730119)
 #define DAY_2026_10_18 ((int64_t)739906)

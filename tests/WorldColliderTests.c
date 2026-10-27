@@ -398,7 +398,7 @@ static void TheColliderStartsAtItsDefaults(TestRun* run)
         CollisionShape Own = WorldColliderComponent_GetOwnShape(Collider);
         TEST_CHECK(run, (Own.Type == CollisionShapeType_Box) && IsNear(Own.HalfExtents.x, COLLISION_SHAPE_DEFAULT_SIZE)
             && Own.IsBounded && IsNear(Own.Depth, 0.0f));
-        // T27: kinematic on a movable object (not pushable), 1 kg, stops when blocked, swept, no persisting contacts.
+        // Kinematic on a movable object (not pushable), 1 kg, stops when blocked, swept, no persisting contacts.
         TEST_CHECK(run, !WorldColliderComponent_IsPushable(Collider)
             && IsNear(WorldColliderComponent_GetMass(Collider), COLLISION_DEFAULT_MASS)
             && (WorldColliderComponent_GetWhenBlocked(Collider) == WorldColliderBlockedMode_Stop)

@@ -621,7 +621,7 @@ static void EndMotions(WorldCollision* self)
 // Internal functions (WorldCollisionInternal.h).
 bool WorldCollisionInternal_IsPushable(const WorldCollisionInstance* instance)
 {
-    // A pushable held on a socket of its parent (T30: a crate in someone's hands) is the holder's: it moves with the
+    // A pushable held on a socket of its parent (a crate in someone's hands) is the holder's: it moves with the
     // hand, carried as any child of a pushable is, not pushed out of it. Instance data only: queries call this for
     // instances of objects removed since the sync.
     return instance->IsUsed && instance->IsActive && instance->Settings.IsPushable && !instance->IsStatic

@@ -45,8 +45,8 @@ typedef enum InstancesPropertyEnum
 // Fields.
 /* Every property, in inspector order: the model component's rows with the model component's wire ids (shared through
  * source/WorldModelComponentInternal.h; no omit_pixelation, 3 and 9: copies are never crisp), then the copies. The wire
- * ids are the save schema: never renumber or reuse one. (T35 added the haze's pair, 23 and 24, as in the model
- * component.) The next free wire id is 25. */
+ * ids are the save schema: never renumber or reuse one. The haze's pair is 23 and 24, as in the model component, and
+ * the copies 22. The next free wire id is 25. */
 static const PropertyDescriptor InstancesProperties[InstancesProperty_Count] =
 {
     [InstancesProperty_WorldModel] =

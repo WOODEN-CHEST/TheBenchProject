@@ -22,8 +22,8 @@ typedef struct DataMapStruct DataMap;
  * @brief Property tables: one static table per data type describes every property of the type (key, binary id,
  *        type, default, rules, flags), and generic functions driven by the table do the rest.
  *
- * A data type that holds settings or saved state (the world environment, later world objects and their components,
- * the game clock, weather) declares a PropertyTable next to its struct: one PropertyDescriptor per field, written
+ * A data type that holds settings or saved state (the world environment, world objects and their components, the game
+ * clock, later the weather) declares a PropertyTable next to its struct: one PropertyDescriptor per field, written
  * once. Everything else comes from the table, so a new property is one table row instead of six hand-written places:
  * - defaults: Properties_Construct (zero the struct, then write every default; owned strings are cloned) and
  *   Properties_Deconstruct (free the owned strings);
@@ -81,12 +81,12 @@ typedef struct DataMapStruct DataMap;
  * registry, to intern the keys. A FloatList (a world model placement's LOD distances) is a list of finite floats: an
  * empty list is NULL, written [] in JSON and as an empty Float array in GHDF when defaults are written. An EnumSet (a
  * collider's layer mask) is a set of an enum table's entries, whose values are their bit indices (0 to 31): JSON
- * names them in an array, GHDF stores the mask. A Vector3Double (an object's position, T33) writes each component as
- * the shortest text that reads back to the same double, so a float written by a Vector3 row reads back as the double
- * that prints the same text; its GHDF reader also takes a Float array of 3, the form a Vector3 row wrote. An
- * AssetNameList (a placement's animation libraries, T29) is a list of valid asset names, each at most Rules.MaxLength
+ * names them in an array, GHDF stores the mask. A Vector3Double (an object's position) writes each component as the
+ * shortest text that reads back to the same double, so a float written by a Vector3 row reads back as the double that
+ * prints the same text; its GHDF reader also takes a Float array of 3, the form a Vector3 row writes. An
+ * AssetNameList (a placement's animation libraries) is a list of valid asset names, each at most Rules.MaxLength
  * bytes: an empty list is NULL, written [] in JSON and as an empty String array in GHDF when defaults are written. An
- * InstanceList (the many copies a model instances component draws, B03) is a list of instances, each a position (in
+ * InstanceList (the many copies a model instances component draws) is a list of instances, each a position (in
  * double), a rotation (Euler XYZ, radians in memory and in GHDF, degrees in JSON), a scale and a tint whose alpha is an
  * opacity: JSON writes one compound per instance and leaves out a rotation of 0, a scale of 1 and an opaque white tint
  * (a scale whose three components are equal is one number); GHDF writes a compound of parallel arrays, three doubles of
@@ -163,9 +163,9 @@ typedef struct DataMapStruct DataMap;
  *
  * A setting a placement can override (a world model's draw distance, say) is two rows: the flag `overrides_<key>` (a
  * Bool, false by default: the asset's value applies) and the value `<key>` next to it, which is kept, and saved, while
- * the flag is off, so switching it back on restores it. No sentinel values and no "inherit" states (the owner's rule,
- * G17). PropertyTable_Check requires every row whose key starts with the prefix to be a Bool that names another row of
- * its table; the editor pairs them by the names.
+ * the flag is off, so switching it back on restores it. No sentinel values and no "inherit" states. PropertyTable_Check
+ * requires every row whose key starts with the prefix to be a Bool that names another row of its table; the editor
+ * pairs them by the names.
  */
 #define PROPERTY_OVERRIDE_FLAG_PREFIX u8"overrides_"
 
@@ -236,7 +236,7 @@ typedef enum PropertyTypeEnum
      *  name is a valid asset name (AssetManager_IsValidAssetName) of at most Rules.MaxLength bytes (required, at most
      *  PROPERTY_ASSET_NAME_LIST_MAX_LENGTH); Rules.MaxCount (required) bounds the count. */
     PropertyType_AssetNameList,
-    /** @brief A list of instances (B03): an owned `PropertyInstanceList*`, NULL while empty, which is its only default.
+    /** @brief A list of instances: an owned `PropertyInstanceList*`, NULL while empty, which is its only default.
      *  Every position component is finite and within the optional bounds (compared in double precision), every rotation
      *  and scale component finite; Rules.MaxCount (required, at most PROPERTY_INSTANCE_LIST_MAX_COUNT) bounds the
      *  count. */
@@ -1158,7 +1158,7 @@ Error Properties_ReadJSON(const PropertyTable* table, JSONCompound* compound, vo
  * @brief Writes an instance's persistent properties into a GHDF compound, keyed by their wire ids.
  *
  * Validates the instance first. By default values equal to their default are left out (see PropertyWriteOptions;
- * saves that must match the old world encoder write them). A NULL string is never written. Entries already in
+ * saves that must keep their exact state write them). A NULL string is never written. Entries already in
  * @p compound under a property's wire id are overwritten; other entries stay.
  * @param table The table; must not be NULL.
  * @param instance The instance; must not be NULL.

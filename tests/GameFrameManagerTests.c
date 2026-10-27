@@ -139,8 +139,8 @@ static bool HasCalls(const CallLog* log, const char* expected)
 
 
 // Tests.
-/* G35: PrepareRender runs top-down over the active frames that are updated and rendered, skips those without the slot,
- * and a failure stops the manager. */
+/* PrepareRender runs top-down over the active frames that are updated and rendered, skips those without the slot, and
+ * a failure stops the manager. */
 static void PrepareRenderRunsTopDownOverTheActiveFrames(TestRun* run)
 {
     Logger Log;

@@ -3,8 +3,8 @@
 #include "wr/WRMemory.h"
 
 /*
- * 2D texture arrays through the GL functions raylib's loader resolves (GLTextureArray.h): direct OpenGL calls (decision
- * W7; GLReadback.c holds the only others).
+ * 2D texture arrays through the GL functions raylib's loader resolves (GLTextureArray.h): direct OpenGL calls
+ * (GLReadback.c and GLDepth.c hold the only others).
  */
 
 

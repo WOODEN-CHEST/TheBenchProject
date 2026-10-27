@@ -1,14 +1,14 @@
 #version 330
 
-// The atmosphere's sky-view table (T15): per texel of one half, the light the sky sends toward the camera from a
+// The atmosphere's sky-view table: per texel of one half, the light the sky sends toward the camera from a
 // direction, seen from the camera's height (common/atmosphere's layout), lit by one light: the sun in the first half
 // (with light pollution's light in the air), the moon in the second (while the moonlit sky shows). Single scattering
 // through the transmittance table, plus the multiple scattering table's glow. Drawn every frame, one half at a time,
 // before everything that reads it (source/WorldRendererAtmosphere.c): the sky pass samples it by direction.
 //
-// Below the horizon (T35) a ray ends on the far ground: the planet's surface at the atmosphere's ground height, seen
+// Below the horizon a ray ends on the far ground: the planet's surface at the atmosphere's ground height, seen
 // through the haze in front of it. The ground is the frame's sky_ground_albedo lit as the lit shaders light a dielectric
-// facing up, so the far ground meets a terrain's edge without a seam: since T36 by the half's light (the sun's, or the
+// facing up, so the far ground meets a terrain's edge without a seam: by the half's light (the sun's, or the
 // moon's) through the air at that point of the curved planet (reddened as it sets there, none once it has set) and the
 // sky's irradiance there (the irradiance table at the light's own height over the point; in the sun's half light
 // pollution's and the night's own light too), tinted as the lit shaders tint the ambient. The haze in front of it
@@ -35,7 +35,7 @@ out vec4 finalColor;
 
 #include "common/atmosphere"
 
-// Steps along each view ray, growing with the square of their index (T15's status block has their accuracy).
+// Steps along each view ray, growing with the square of their index.
 const int SKY_VIEW_STEPS = 32;
 // The largest value a texel of the table (RGBA16F) holds.
 const float HALF_FLOAT_MAX = 65504.0;

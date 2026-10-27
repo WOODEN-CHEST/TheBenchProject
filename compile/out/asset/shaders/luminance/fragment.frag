@@ -1,6 +1,6 @@
 #version 330
 
-// The eye's meter (T37, source/EyeAdaptation.h): one texel per block of the linear-HDR scene, the mean log2 luminance
+// The eye's meter (source/EyeAdaptation.h): one texel per block of the linear-HDR scene, the mean log2 luminance
 // of a SAMPLES x SAMPLES grid of the block's pixels, each held within the meter's window around the sky light's anchor,
 // so the sun's disc, a lamp's bulb or a black corner count no further than its edges; the sky (no geometry: the far
 // depth) counts as at least the night's own light, the natural night sky's glow the game lights surfaces with but does

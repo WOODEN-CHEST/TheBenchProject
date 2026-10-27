@@ -374,7 +374,7 @@ static Error ChargeValue(const GHDFRead* read, DataValue* value)
     return Result;
 }
 
-/* Whether a GHDF array type can hold vector3 components: Double since T33, Float as written before. */
+/* Whether a GHDF array type can hold vector3 components: Double, as written, or Float, which still reads. */
 static bool IsVector3ArrayType(GHDFValueType type)
 {
     return (type == GHDFValueType_Double) || (type == GHDFValueType_Float);

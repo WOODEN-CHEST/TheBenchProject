@@ -27,8 +27,8 @@
  * inverse transpose. Its determinant is negative when exactly one of the image's axes is mirrored (draw sprites with
  * culling off).
  *
- * Positions (the shape's and a point viewer's) may be in any space the two share. The renderer uses render space (T32:
- * the world's orientation with the camera at the origin), so a billboard facing the camera has the viewer at (0, 0, 0).
+ * Positions (the shape's and a point viewer's) may be in any space the two share. The renderer uses render space (the
+ * world's orientation with the camera at the origin), so a billboard facing the camera has the viewer at (0, 0, 0).
  */
 
 

@@ -37,7 +37,7 @@ typedef enum CollisionLayerEnum
     CollisionLayer_Character = 2,
     /** @brief Cars (later). */
     CollisionLayer_Vehicle = 3,
-    /** @brief Physics objects (later, T28). */
+    /** @brief Physics objects (rigid bodies, later). */
     CollisionLayer_Dynamic = 4,
     /** @brief Trigger volumes: zones, cutscene triggers. */
     CollisionLayer_Trigger = 5,

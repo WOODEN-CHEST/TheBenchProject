@@ -1,4 +1,4 @@
-// Skinning (T29) for the world's skinned vertex stages, for #include "common/skinning": a vertex follows up to four bones
+// Skinning for the world's skinned vertex stages, for #include "common/skinning": a vertex follows up to four bones
 // of its model's skeleton, each by its weight, through the bone palette the renderer uploads per object. Included files
 // never declare #version: the main file does.
 //

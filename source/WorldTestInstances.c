@@ -1,4 +1,4 @@
-// The world test frame's instanced copies (B03, WorldTestInstances.h): the pebble field and the instancing A/B. Test
+// The world test frame's instanced copies (WorldTestInstances.h): the pebble field and the instancing A/B. Test
 // content only.
 
 #include <inttypes.h>

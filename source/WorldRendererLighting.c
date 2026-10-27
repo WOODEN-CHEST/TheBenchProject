@@ -1,7 +1,7 @@
 // The PBR shader and the frame lighting every lit shader (models, sprites, terrain) gets through common/lighting (the sky's
-// light: the sun and the moon through the air and the sky's own light as the ambient, T36; the haze, shadows, per-object
+// light: the sun and the moon through the air and the sky's own light as the ambient; the haze, shadows, per-object
 // forward point lights and haze, the eye's night vision), and the PBR's per-material factors. The eye's adaptation is
-// WorldRendererExposure.c's (T37).
+// WorldRendererExposure.c's.
 
 #include <inttypes.h>
 #include <math.h>
@@ -16,19 +16,19 @@
 // Macros.
 /** Asset name of the world PBR (metallic/roughness) shader used to shade model objects. */
 #define PBR_SHADER_ASSET_NAME ((const unsigned char*)u8"world_pbr")
-/** Asset name of its skinned twin (T29): the same fragment stage over a vertex stage that skins. */
+/** Asset name of its skinned twin: the same fragment stage over a vertex stage that skins. */
 #define PBR_SKINNED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_pbr_skinned")
-/** Asset name of its instanced twin (B03): the same fragment stage over a vertex stage that places every copy of a cell
+/** Asset name of its instanced twin: the same fragment stage over a vertex stage that places every copy of a cell
  *  (WorldRendererInstances.c draws with it). */
 #define PBR_INSTANCED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_pbr_instanced")
 /** Base shadow depth bias (normalized light-clip depth) to combat acne; slope-scaled in the shader. Tuned
  *  for the shadow frustum's near..far range: ~0.0009 * (far-near) is the world-space offset (a few cm here). */
 #define SHADOW_BIAS 0.0009f
-/** The exposure the sun's disc is drawn for whatever the eye's (T36): the disc's radiance is divided by the exposure and
+/** The exposure the sun's disc is drawn for whatever the eye's: the disc's radiance is divided by the exposure and
  *  multiplied by this, so it keeps its look on screen through dusk, when the exposure rises far above the noon's (it
- *  would turn the setting disc white): the exposure of a clear noon before T36, so the disc looks as it did then. */
+ *  would turn the setting disc white): about a clear noon's exposure, the one the disc's look is tuned at. */
 #define SUN_DISC_SCREEN_EXPOSURE 1.08f
-/** The most the sun's disc's intensity holds (T36): its radiance, WORLD_ATMOSPHERE_SUN_DISC_RADIANCE times it, stays
+/** The most the sun's disc's intensity holds: its radiance, WORLD_ATMOSPHERE_SUN_DISC_RADIANCE times it, stays
  *  within the scene's half floats whatever sun_intensity is (an infinity there times the moon's cover or a sky_tint of
  *  0 would be a NaN). */
 #define SUN_DISC_MAX_INTENSITY (WORLD_SKY_LIGHT_MAX_LIGHT / WORLD_ATMOSPHERE_SUN_DISC_RADIANCE)
@@ -252,7 +252,7 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
     AssignSamplerUnit(shader, outLocations->_locShadowMapFar, WorldRendererTextureUnit_ShadowFar);
     AssignSamplerUnit(shader, outLocations->_locPointShadowCube, WorldRendererTextureUnit_PointShadowCube);
     AssignSamplerUnit(shader, outLocations->_locAmbientOcclusionMap, WorldRendererTextureUnit_AmbientOcclusion);
-    // The air (T15) and the haze (T35: the volume's sampler on its own unit).
+    // The air and the haze (the volume's sampler on its own unit).
     WorldRendererAtmosphere_PrepareShader(shader, &outLocations->_atmosphere);
     WorldRendererAtmosphere_PrepareHazeShader(shader, true, &outLocations->_haze);
 
@@ -364,7 +364,7 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     SetShaderValue(shader, lit->_locAmbientTint, Light->AmbientTint, SHADER_UNIFORM_VEC3);
     SetShaderValue(shader, lit->_locNightLight, Light->Night, SHADER_UNIFORM_VEC3);
 
-    // The haze in front of every surface (T35): the volume the atmosphere pass built for the scene camera's screen
+    // The haze in front of every surface: the volume the atmosphere pass built for the scene camera's screen
     // directions (read through the scene's view-projection, also by the crisp pass), the frame's haze and the ground
     // haze. Each draw sets its own multiplier; 1 until the first does.
     WorldRendererAtmosphere_UploadFrame(shader, &lit->_atmosphere, frame);

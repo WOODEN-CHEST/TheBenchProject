@@ -1,9 +1,9 @@
 #version 330
 
-// The terrain's vertex stage (B01, B02): rigid. A chunk's vertices are relative to its centre, which its render-space
+// The terrain's vertex stage: rigid. A chunk's vertices are relative to its centre, which its render-space
 // matrix places. The palette's sixteen weights come four normalized bytes at a time at attribute locations 9 to 12:
 // raylib's instance-matrix locations, free here because a terrain is never instanced nor skinned (agents/WorldRuntime.md,
-// "Vertex attributes"); location 13 carries the vertex's flags (B02). A face material's vertices carry that material's
+// "Vertex attributes"); location 13 carries the vertex's flags. A face material's vertices carry that material's
 // weight alone and the face-material flag, so its faces take it outright and the rules leave them as they are.
 
 in vec3 vertexPosition;

@@ -343,7 +343,7 @@ static void NumberShorthandsOwnTheirText(TestRun* run)
     TEST_CHECK_SUCCESS(run, TextComponentFactory_CreateCodepoint(&Factory, (CodePoint)0x0101, &Letter));
     if ((Five != NULL) && (Seven != NULL) && (Hex != NULL) && (Half != NULL) && (Letter != NULL))
     {
-        // Each owns its text: creating the second number no longer extends the first one.
+        // Each owns its text: creating the second number does not extend the first one.
         TEST_CHECK(run, TextEquals(StringComponent_GetText(Five), "5"));
         TEST_CHECK(run, TextEquals(StringComponent_GetText(Seven), "7"));
         TEST_CHECK(run, (strcmp((const char*)StringComponent_GetText(Hex), "0xFF") == 0)

@@ -15,7 +15,7 @@
 
 /**
  * @file WorldColliderComponent.h
- * @brief The collider component: how an object takes part in collision (T12).
+ * @brief The collider component: how an object takes part in collision.
  *
  * WHICH SHAPES. By default the collider uses its object's world model (the model component's world model) and that
  * model's default collision set; with overrides_collision_set on, the set named by collision_set (switching sets is how
@@ -27,7 +27,7 @@
  * HOW IT COLLIDES. A layer (CollisionLayer.h), the mask of layers it collides with, and whether it is a trigger (it is
  * then reported by overlaps and trigger events and never blocks). Each defaults to its world model's collision section
  * (a layer, an optional mask, a trigger flag; without one: prop, the layer's default mask, no trigger), and each can be
- * overridden by the placement with an explicit flag next to its value (the owner's rule, G17): overrides_layer with
+ * overridden by the placement with an explicit flag next to its value: overrides_layer with
  * layer, overrides_collides_with with collides_with, overrides_is_trigger with is_trigger. While a flag is off its value
  * is kept and saved. WorldColliderComponent_ResolveSettings is the pure function that gives the settings in effect.
  *
@@ -36,7 +36,7 @@
  * object), yaw_only (they stay upright: only the turn about the world's up axis) or none (they stay axis-aligned). An
  * uneven scale applies exactly to every shape (an unevenly scaled sphere is an ellipsoid).
  *
- * HOW IT MOVES (T27). The collision step (WorldCollision_Step) sweeps every moving collider and pushes apart what
+ * HOW IT MOVES. The collision step (WorldCollision_Step) sweeps every moving collider and pushes apart what
  * overlaps. A movable object's collider with is_pushable on is PUSHED: characters, NPCs, crates (later physics objects);
  * pushables share a push by mass (overrides_mass with mass over its world model's mass, 1 kg without one; equal
  * masses give way equally). A movable object's collider that is not pushable is KINEMATIC: doors, elevators, anything a
@@ -73,7 +73,7 @@ typedef enum WorldColliderRotationModeEnum
 
 /**
  * @brief What a kinematic mover does when its push cannot be satisfied: it would squeeze a pushable against something
- *        that does not give way (T27). Saved by value: never renumber.
+ *        that does not give way. Saved by value: never renumber.
  */
 typedef enum WorldColliderBlockedModeEnum
 {
@@ -96,7 +96,7 @@ typedef enum WorldColliderSettingEnum
     WorldColliderSetting_CollidesWith,
     /** @brief The trigger flag (is_trigger, flag overrides_is_trigger). */
     WorldColliderSetting_IsTrigger,
-    /** @brief The mass (mass, flag overrides_mass; T27). */
+    /** @brief The mass (mass, flag overrides_mass). */
     WorldColliderSetting_Mass,
     /** @brief The number of settings; not a setting. */
     WorldColliderSetting_Count

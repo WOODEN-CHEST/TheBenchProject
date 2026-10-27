@@ -61,8 +61,8 @@ typedef struct GameModelStruct GameModel;
 #define COLLISION_MESH_MAX_TRIANGLES ((uint32_t)1U << 20U)
 /** @brief The size every primitive starts at in CollisionShape_Create: a radius, half height or half extent, metres. */
 #define COLLISION_SHAPE_DEFAULT_SIZE 0.5f
-/** @brief A collider's mass when neither its world model nor its placement gives one, in kilograms (T27: how pushes are
- *  shared; T28: physics). */
+/** @brief A collider's mass when neither its world model nor its placement gives one, in kilograms (how pushes are
+ *  shared; rigid bodies, not built yet, will use it too). */
 #define COLLISION_DEFAULT_MASS 1.0f
 /** @brief The largest mass a world model or a collider may give (above 0 up to this, kilograms): a ratio of masses past
  *  about 1e6 would lose the lighter one's push to float rounding. */
@@ -144,7 +144,8 @@ typedef struct CollisionMeshTriangleStruct
     uint32_t _indices[3];
     /** @brief The model's mesh (raylib's mesh index) it came from. */
     uint32_t _part;
-    /** @brief Its index among that mesh's own triangles (with the part, it finds the model's UVs; T19). */
+    /** @brief Its index among that mesh's own triangles (with the part, it finds the model's UVs, for surface picking,
+     *  not built yet). */
     uint32_t _sourceIndex;
     /** @brief Which edges are active: bit 0 for (v0, v1), bit 1 for (v1, v2), bit 2 for (v2, v0). An inactive edge is
      *  shared with a neighbour across a flat or concave seam: contacts on it take the face normal, so shapes slide over

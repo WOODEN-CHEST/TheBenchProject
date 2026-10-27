@@ -1068,9 +1068,9 @@ static void RandomTurningCastsNeverMissAContact(TestRun* run)
 
 
 // Public functions.
-// Static functions: the review's cases (2026-10-21), each once a defect.
-/* A 2 m plank tilted a hair over a 10 m floor box: GJK's direction to a large face near the origin once tilted in float
- * and read a resting plank 0.4 mm inside as 0.6 mm apart. */
+// Static functions: edge cases, each guarding against a defect.
+/* A 2 m plank tilted a hair over a 10 m floor box: a GJK direction to a large face near the origin that tilts in float
+ * would read a resting plank 0.4 mm inside as 0.6 mm apart. */
 static void RestingBoxesReadTheirTrueDistance(TestRun* run)
 {
     CollisionConvex Floor = Box(V3(0.0f, -1.0f, 0.0f), V3(5.0f, 1.0f, 5.0f), V3(0.0f, 0.0f, 0.0f));
@@ -1093,10 +1093,10 @@ static void RestingBoxesReadTheirTrueDistance(TestRun* run)
     TEST_CHECK(run, Wrong == 0U);
 }
 
-/* A character's capsule 1 mm above the middle of floor boxes 1 to 120 m wide (T13's review): GJK's first direction there
- * leans a hair toward a corner tens of metres away, and the step that reached the face (no closer than the edge before
- * it) once ended the search on that leaning bound, 1.5 mm short at 40 m and 4.4 mm at 120 m: a capsule resting on the
- * floor read as inside it. */
+/* A character's capsule 1 mm above the middle of floor boxes 1 to 120 m wide: GJK's first direction there leans a hair
+ * toward a corner tens of metres away, and the step that reaches the face (no closer than the edge before it) must not
+ * end the search on that leaning bound, 1.5 mm short at 40 m and 4.4 mm at 120 m: a capsule resting on the floor would
+ * read as inside it. */
 static void ACapsuleAboveTheMiddleOfALargeBoxReadsItsGap(TestRun* run)
 {
     static const float Halves[] = { 0.5f, 5.0f, 20.0f, 60.0f };
@@ -1121,7 +1121,7 @@ static void ACapsuleAboveTheMiddleOfALargeBoxReadsItsGap(TestRun* run)
 }
 
 /* A shape left where a cast stopped (within rounding of touching) moves away and along freely and is stopped only going
- * deeper, by the linear and the turning cast alike; once every follow-up was blocked at fraction 0. */
+ * deeper, by the linear and the turning cast alike (rounding must not block every follow-up at fraction 0). */
 static void CastsFromRestMoveAwayFreely(TestRun* run)
 {
     CollisionConvex Floor = Box(V3(0.0f, -1.0f, 0.0f), V3(5.0f, 1.0f, 5.0f), V3(0.0f, 0.0f, 0.0f));
@@ -1152,7 +1152,7 @@ static void CastsFromRestMoveAwayFreely(TestRun* run)
 }
 
 /* A plank resting a hair above a floor tips 45 degrees: its corner digs in at once, also against every kind of plane
- * (the turning plane cast once dropped the turn there); yawing on the floor digs nothing (a turn about the normal). */
+ * (the turning plane cast must not drop the turn there); yawing on the floor digs nothing (a turn about the normal). */
 static void TurningCastsNearAFloorKeepTheirTurn(TestRun* run)
 {
     CollisionShape Shape = CollisionShape_Create(CollisionShapeType_Box);
@@ -1181,7 +1181,7 @@ static void TurningCastsNearAFloorKeepTheirTurn(TestRun* run)
     TEST_CHECK(run, !CollisionGeometry_CastMotion(&Plank, &From, &Yawed, &Floor, &Hit));
 }
 
-/* A capsule spinning about its own axis near a wall moves nothing toward it (once false hits a few millimetres off). */
+/* A capsule spinning about its own axis near a wall moves nothing toward it (no false hits a few millimetres off). */
 static void SpinningInPlaceHitsNothing(TestRun* run)
 {
     CollisionShape Shape = CollisionShape_Create(CollisionShapeType_Capsule);
@@ -1219,7 +1219,7 @@ static void OneSidedTrianglesArePassedFromBehind(TestRun* run)
     CollisionMesh_Destroy(Quad);
 }
 
-/* A thin ellipsoid's reduced hull keeps its thickness (plain directions once picked its rim and lost 83% of it). */
+/* A thin ellipsoid's reduced hull keeps its thickness (plain directions would pick its rim and lose 83% of it). */
 static void ThinHullsKeepTheirThickness(TestRun* run)
 {
     Vector3 Points[600];
@@ -1239,7 +1239,7 @@ static void ThinHullsKeepTheirThickness(TestRun* run)
             && IsNear(Hull->_boundsMin.y, -Top, Top * 0.01f));
     }
     CollisionHull_Destroy(Hull);
-    // A sphere's reduced hull still wraps every point closely, below as above (a pass that stopped early once picked
+    // A sphere's reduced hull still wraps every point closely, below as above (a pass that stopped early would pick
     // only directions near the top: a dome on a cone).
     for (uint32_t Index = 0U; Index < 600U; Index++)
     {
@@ -1261,7 +1261,7 @@ static void ThinHullsKeepTheirThickness(TestRun* run)
         TEST_CHECK(run, (Hull->_vertexCount == 64U) && (WorstOutside < 0.06f));
     }
     CollisionHull_Destroy(Hull);
-    // The most points a hull takes builds in a moment (the faces' extraction was once quadratic: two minutes).
+    // The most points a hull takes builds in a moment (a quadratic extraction of the faces would take two minutes).
     Vector3* Many = Memory_Allocate(16384U * sizeof(Vector3));
     for (uint32_t Index = 0U; Index < 16384U; Index++)
     {
@@ -1274,8 +1274,8 @@ static void ThinHullsKeepTheirThickness(TestRun* run)
     Memory_Free(Many);
 }
 
-/* Capsules crossed at an angle touch at one point; lying side by side, along their overlap (two). Crossed ones once got
- * two points where their surfaces were apart. */
+/* Capsules crossed at an angle touch at one point; lying side by side, along their overlap (two). Crossed ones must not
+ * get a second point where their surfaces are apart. */
 static void CrossedCapsulesTouchAtOnePoint(TestRun* run)
 {
     CollisionConvex Lower = Capsule(V3(0.0f, 0.0f, 0.0f), 0.1f, 1.0f, V3(0.0f, 0.0f, 90.0f));
@@ -1295,9 +1295,9 @@ static void CrossedCapsulesTouchAtOnePoint(TestRun* run)
 
 /* A capsule standing beside a box of twelve mesh triangles (raylib's OBJ fans, as the test world's glowing cube is),
  * pressed 5 mm into its side, is pushed out sideways by every triangle it touches: the witness point of a contact on
- * the box's bottom or top edge was read as inside the bottom or top triangle, whose face normal and plane distance then
- * pushed the capsule down or up by most of its height (T13's first tuning: jumping against the cube threw the player
- * up and down). */
+ * the box's bottom or top edge must not read as inside the bottom or top triangle, whose face normal and plane distance
+ * would push the capsule down or up by most of its height (jumping against the cube would throw the player up and
+ * down). */
 static void ACapsuleBesideAMeshBoxIsPushedOutSideways(TestRun* run)
 {
     static const float Vertices[] = { 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f, 0.5f, 0.5f,
@@ -1398,8 +1398,8 @@ static void RaysDoNotSlipBetweenMeshTriangles(TestRun* run)
 }
 
 /* Random casts: the hit's normal faces the motion and agrees with the gap's direction a millimetre before the contact,
- * the two points coincide on their surfaces, and at the contact touching shapes have no depth. A sliver simplex once
- * placed points millimetres off, EPA once read touching ellipsoids as 4 mm deep, and normals once pointed backwards. */
+ * the two points coincide on their surfaces, and at the contact touching shapes have no depth. This guards against a
+ * sliver simplex placing points millimetres off, EPA reading touching ellipsoids as 4 mm deep, and backward normals. */
 static void RandomCastHitsAreWhereTheShapesMeet(TestRun* run)
 {
     CollisionHull* Hull = MakeCubeHull(run, 0.5f);
@@ -1437,8 +1437,9 @@ static void RandomCastHitsAreWhereTheShapesMeet(TestRun* run)
     CollisionHull_Destroy(Hull);
 }
 
-/* A tilted box dropped onto a bounded floor plane, turning a little: a turning cast's step once landed in the overlap and
- * kept a placeholder normal, and the plane took it for a hit from behind (84 of 2000 passed straight through). */
+/* A tilted box dropped onto a bounded floor plane, turning a little: a turning cast's step that lands in the overlap
+ * must not keep a placeholder normal, which the plane would take for a hit from behind (84 of 2000 would pass straight
+ * through). */
 static void TurningDropsLandOnBoundedFloors(TestRun* run)
 {
     CollisionPlaneView Floor = MakePlane(V3(0.0f, 0.0f, 0.0f), V3(0.0f, 0.0f, 0.0f), true, (Vector2){ 5.0f, 5.0f }, 0.5f);

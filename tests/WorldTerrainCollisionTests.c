@@ -540,7 +540,7 @@ static Vector3 WalkOntoASlope(TestRun* run, TestTerrainHeightFunction height, ui
     return Feet;
 }
 
-/* T13's slope limit holds on terrain as on any mesh: a 30 degree slope is walked (the feet as high above it as the
+/* The slope limit holds on terrain as on any mesh: a 30 degree slope is walked (the feet as high above it as the
  * round bottom puts them on a ramp), a 60 degree one is not, and dropped onto it a character slides down to the flat. */
 static void ACharacterWalksAGentleSlopeAndSlidesOffASteepOne(TestRun* run)
 {

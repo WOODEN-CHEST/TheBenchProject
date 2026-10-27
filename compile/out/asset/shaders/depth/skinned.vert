@@ -1,6 +1,6 @@
 #version 330
 
-// The sun and moon shadows' vertex stage for skinned meshes (world_depth_skinned, T29): the position moved by the
+// The sun and moon shadows' vertex stage for skinned meshes (world_depth_skinned): the position moved by the
 // object's pose (common/skinning), then the light's MVP, as raylib's default vertex stage does for world_depth. The
 // fragment stage is world_depth's own.
 

@@ -11,7 +11,7 @@
  * Private header (source/): what the world renderer draws this frame (frustum culling, draw distances, fades and
  * opacity), as pure maths and per-frame lists, tested headless (tests/WorldVisibilityTests.c).
  *
- * RENDER SPACE (T32). The lists are built from the render cache's render-space values (RenderCenter, the sprites'
+ * RENDER SPACE. The lists are built from the render cache's render-space values (RenderCenter, the sprites'
  * Shape, the lights' RenderPosition: relative to the frame's origin, the camera's position) with the camera's and the
  * shadows' matrices in that space, so the camera sits at (0, 0, 0) and every distance and test is between small numbers,
  * however far from the world's origin the camera is. Nothing here depends on that: the maths works in whatever space the
@@ -23,13 +23,13 @@
  * by the camera (a caster off screen can still shadow what is on it): each shadow cascade culls its casters against its
  * own orthographic box, and the cube shadow keeps its reach test.
  *
- * DRAW DISTANCE. Every entry has its own (decision G17): a model's is its world model's (T10), a sprite's its world
- * sprite's or its kind's default (T26: sprites 150 m, decals 60 m), or the placement's own while that overrides it,
+ * DRAW DISTANCE. Every entry has its own: a model's is its world model's, a sprite's its world sprite's or its kind's
+ * default (sprites 150 m, decals 60 m), or the placement's own while that overrides it,
  * times the placement's multiplier (the render cache resolves it); then times the config's draw_distance_scale unless
  * it is fixed (WorldVisibility_ScaleDrawDistance). An entry's distance is the camera's distance to the nearest point of
  * its bounding sphere (0 inside it), so a large object does not fade while its near end is close, multiplied by the
  * zoom factor (WorldVisibility_GetZoomFactor: tan(fovY/2) / tan(30 degrees), 1 at the default 60-degree field of view,
- * below 1 zoomed in), so a zoomed view (binoculars, a camera) shows far objects instead of fading them. T11's LOD
+ * below 1 zoomed in), so a zoomed view (binoculars, a camera) shows far objects instead of fading them. The LOD
  * selection uses the same factor. Beyond its draw distance an entry is not drawn; over the last stretch (10% of the
  * distance, at least 3 m, at most all of it) its distance fade rises linearly from 0 to 1.
  *
@@ -41,21 +41,21 @@
  *
  * THE DITHER. shaders/common/dither.glsl keeps a share of a draw's pixels by a 4x4 ordered (Bayer) pattern on the scene's
  * pixel grid: cell = floor(gl_FragCoord.xy / ditherPixelScale) mod 4, threshold = (BAYER[cell.y][cell.x] + 0.5) / 16. A
- * pixel is kept when both masks keep it: the draw's fade (threshold > fade) and its part of a LOD cross-fade (T11: the
+ * pixel is kept when both masks keep it: the draw's fade (threshold > fade) and its part of a LOD cross-fade (the
  * outgoing LOD keeps threshold > progress, the incoming one threshold <= progress, so the two keep complementary pixels;
  * a LOD drawn alone has progress 0 and keeps every pixel). WorldVisibility_GetDitherCell,
  * WorldVisibility_GetDitherThreshold and WorldVisibility_IsDitherDiscarded are that formula in C, for the tests.
  *
  * LISTS. WorldVisibility_Build fills, from the render cache, one list per pass (WorldVisibilityPass) of the entries it
- * draws, as indices into the cache's models, sprites and terrain chunks, plus every entry's fades and the counts the
- * renderer's status reports. The lists are rebuilt every frame and grow with the world; once grown, a build allocates
- * nothing.
+ * draws, as indices into the cache's models, sprites, terrain chunks and instance cells, plus every entry's fades and
+ * the counts the renderer's status reports. The lists are rebuilt every frame and grow with the world; once grown, a
+ * build allocates nothing.
  *
- * TERRAIN CHUNKS (B01) take the models' rules: their own draw distance (the terrain's, 4 km and fixed by default),
+ * TERRAIN CHUNKS take the models' rules: their own draw distance (the terrain's, 4 km and fixed by default),
  * the camera's frustum, each cascade by their shadow tier, the cube's reach, the opacity of their object's tint. They
  * are never crisp, and have counts of their own (not in the models' and sprites').
  *
- * INSTANCE CELLS (B03) take them too, each by its sphere around every copy of the cell: their component's draw distance
+ * INSTANCE CELLS take them too, each by its sphere around every copy of the cell: their component's draw distance
  * measured to the sphere's nearest point with the zoom factor, the camera's frustum, each cascade by their shadow tier,
  * the cube's reach, their object's opacity. A cell in a list is drawn copy by copy: every copy fades and picks its LOD
  * on its own in the vertex stage (WorldInstancing.h). Never crisp; counts of their own.
@@ -151,7 +151,7 @@ typedef struct WorldVisibilityViewStruct
     /** @brief The camera's frustum. */
     WorldFrustum CameraFrustum;
     /** @brief Whether the camera's frustum and the cascades' boxes cull (false: an A/B toggle that keeps everything the
-     *  draw distances and opacities leave, as before culling existed; the cube's reach test stays). */
+     *  draw distances and opacities leave; the cube's reach test stays). */
     bool IsCullingEnabled;
     /** @brief Whether the near cascade runs, and its box. */
     bool IsNearCascadeActive;
@@ -188,10 +188,10 @@ typedef struct WorldVisibilityCountsStruct
     size_t DrawnModelsByLod[WORLD_MODEL_MAX_LODS];
     /** @brief Of the drawn models, those cross-fading between two LODs. */
     size_t LodFadingCount;
-    /** @brief Terrain chunks the camera's passes draw (B01), and the triangles of their surfaces. */
+    /** @brief Terrain chunks the camera's passes draw, and the triangles of their surfaces. */
     size_t DrawnTerrainChunkCount;
     size_t DrawnTerrainTriangleCount;
-    /** @brief Instance cells (B03) the camera's passes draw, and the copies in them; those within their draw distance but
+    /** @brief Instance cells the camera's passes draw, and the copies in them; those within their draw distance but
      *  outside the view; those beyond it or of a fully transparent object. */
     size_t DrawnInstanceCellCount;
     size_t DrawnInstanceCount;
@@ -216,11 +216,11 @@ typedef struct WorldVisibilityStruct
     /** @brief Per pass, the indices (size_t, ascending) of the cache sprites it draws. */
     GenericBuffer _sprites[WorldVisibilityPass_Count];
     /** @brief WorldVisibilityFade per cache terrain chunk, and per pass the indices (size_t, ascending) of the chunks it
-     *  draws (B01). */
+     *  draws. */
     GenericBuffer _terrainChunkFades;
     GenericBuffer _terrainChunks[WorldVisibilityPass_Count];
     /** @brief WorldVisibilityFade per cache instance cell, and per pass the indices (size_t, ascending) of the cells it
-     *  draws (B03). */
+     *  draws. */
     GenericBuffer _instanceCellFades;
     GenericBuffer _instanceCells[WorldVisibilityPass_Count];
     /** @brief The last build's counts. */
@@ -241,7 +241,7 @@ typedef struct WorldVisibilityStruct
 WorldFrustum WorldVisibility_ExtractFrustum(Matrix viewProjection);
 
 /**
- * @brief Extracts the planes of a reversed infinite projection's view volume (T39: clip control's 0 <= z <= w, the near
+ * @brief Extracts the planes of a reversed infinite projection's view volume (clip control's 0 <= z <= w, the near
  *        plane at clip z = w, infinity at z = 0): the four sides as WorldVisibility_ExtractFrustum's, the near plane, and
  *        a far plane that holds everything (zero normal, the largest float as its offset): draw distances alone decide how
  *        far the camera sees.
@@ -277,7 +277,7 @@ float WorldVisibility_ScaleDrawDistance(float drawDistance, bool isFixed, float 
 /**
  * @brief The zoom factor of a field of view: tan(fovY / 2) / tan(WORLD_VISIBILITY_REFERENCE_FOV_Y / 2).
  *
- * Distances are multiplied by it before they are compared with draw distances (and, from T11, LOD switch distances):
+ * Distances are multiplied by it before they are compared with draw distances (and LOD switch distances):
  * 1 at the reference 60 degrees (exactly), below 1 when zoomed in, so a narrower view keeps far objects visible and
  * detailed, and above 1 for a wider one.
  * @param fovYDegrees The camera's vertical field of view, in degrees.
@@ -389,7 +389,7 @@ void WorldVisibility_Deconstruct(WorldVisibility* self);
  * A model's sphere is its bounding sphere (around RenderCenter); a sprite's is the sphere around its pivot (Shape.Position)
  * that holds its quad in every orientation (WorldRenderSprite.BoundsRadius), so one sphere serves the camera and the
  * lights; a terrain chunk's is its bounding sphere, and it joins the lists as a model does (never crisp), and so does an
- * instance cell (B03). Everything is in render space. With culling off the
+ * instance cell. Everything is in render space. With culling off the
  * camera's frustum and the cascades' boxes cull nothing. Main thread only; no allocation once the lists have grown.
  * @param self The visibility; must not be NULL.
  * @param cache The render cache, synced for this frame; must not be NULL. Its entries are read, never written.

@@ -12,7 +12,7 @@
 
 
 /**
- * The sky's light on the world's surfaces (T36, source/WorldSkyLight.h): the C mirror at the camera that the renderer's
+ * The sky's light on the world's surfaces (source/WorldSkyLight.h): the C mirror at the camera that the renderer's
  * exposure, night vision, shadow light, status line and fallback uniforms take, and through it the GPU's irradiance
  * quadrature (the same in shaders/atmosphere/irradiance.frag; the shader source tests pin its constants). The
  * transmittance is exact, the C tables hold it, the sky's and light pollution's irradiance are within 2 % of fine
@@ -35,7 +35,7 @@
 #define IRRADIANCE_TOLERANCE 0.02
 /** The fine integral of the sky's irradiance: Gauss-Legendre nodes in the zenith cosine, azimuths over half a turn and
  *  midpoint steps along each direction for the air's own light; rings around the light, their azimuths and steps for the
- *  haze's. Within 0.11 % of one about four times finer on the default air (measured when T36 was written). */
+ *  haze's. Within 0.11 % of one about four times finer on the default air (measured). */
 #define REFERENCE_ZENITH_NODES 16
 #define REFERENCE_AZIMUTHS 16
 #define REFERENCE_STEPS 128
@@ -396,7 +396,7 @@ static void GetDirectLuminances(const WorldAtmosphereMedium* medium, const World
     *outMoon = Luminance(Moon);
 }
 
-/* The exposure the eye starts at under a frame's light (T37: its anchor, read on the real scale at the frame's mix). */
+/* The exposure the eye starts at under a frame's light (its anchor, read on the real scale at the frame's mix). */
 static float GetAnchorExposure(const WorldSkyLightFrame* frame)
 {
     float Scene = WorldSkyLight_GetSceneLuminance(frame);
@@ -1227,7 +1227,7 @@ static void ShadowLightHandsOverAtDusk(TestRun* run)
 /* From noon into a moonless night the scene luminance falls without a jump (less than 10 % in any 10 game seconds) to the
  * night's own light, never rising by more than 0.1 % in 10 seconds (light pollution's glow comes on as the daylight
  * fades: in the default haze it rises by about 0.01 % a step while the twilight is about 6 degrees down). The eye at
- * its anchor follows it (T37): the screen level of the scene luminance falls steadily too (never rising by more than
+ * its anchor follows it: the screen level of the scene luminance falls steadily too (never rising by more than
  * 0.1 %) from noon's to the night's; the exposure, which rises through the dusk and falls back as the twilight's real
  * light fades, changes by less than 10 % in 10 seconds. */
 static void LightFallsContinuouslyIntoTheNight(TestRun* run)
@@ -1276,8 +1276,7 @@ static void LightFallsContinuouslyIntoTheNight(TestRun* run)
             (int)IsScreenFalling, WorstDrop, WorstExposureStep);
     }
     // At 20:00 the night's own light and the town's are all there is: the eye at its anchor shows a white surface at
-    // about two fifths of the noon's (the curve's calibration, T37: the open field's views keep their exposures from
-    // before T37 at noon and at night).
+    // about two fifths of the noon's (the curve's calibration, set on the open field's views at noon and at night).
     TEST_CHECK(run, ((double)Scene >= NightLuminance) && ((double)Scene < 1.5 * NightLuminance));
     double NightShare = PreviousScreen / FirstScreen;
     if (!TEST_CHECK(run, (NightShare > 0.38) && (NightShare < 0.42)))
@@ -1288,7 +1287,7 @@ static void LightFallsContinuouslyIntoTheNight(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
-/* The stars come out through the dusk (T38): against the twilight's real luminance (the sky's light from the sun) and the
+/* The stars come out through the dusk: against the twilight's real luminance (the sky's light from the sun) and the
  * night's in the default air, a new moon and the default light pollution, the faintest star seen rises steadily as the
  * sun sinks: none with the sun 5 degrees up or higher, about 3.5 at the end of the civil twilight, the night's limit at
  * full night; the Milky Way shows only once the sun is 10 degrees down, and most of its night's strength by 14. */
@@ -1341,7 +1340,7 @@ static void StarsComeOutThroughTheDusk(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
-/* Night vision reads the daylight on the real scale (T36): from noon into a moonless night the field luminance keeps the
+/* Night vision reads the daylight on the real scale: from noon into a moonless night the field luminance keeps the
  * rods out (the colours stay) until the sun is 4 degrees below the horizon, lets them in through the nautical twilight,
  * and leaves them most of vision by 12 degrees below, as the eye does; the field never rises on the way. Without the split
  * the night's own light alone would grey the sunset. */

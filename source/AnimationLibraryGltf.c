@@ -16,7 +16,7 @@
 /*
  * Reads an animation library from glTF (AnimationLibrary.h) with cgltf, the glTF parser raylib bundles (its
  * implementation is compiled into libraylib.a; include/raylib/cgltf.h is the same version's header). Every file is
- * hostile: source/GltfChecks.h checks the file's structure before cgltf loads its buffers and validates it (since B01 the
+ * hostile: source/GltfChecks.h checks the file's structure before cgltf loads its buffers and validates it (the
  * terrain's import shares those checks), and this reader then checks the rest (accessor shapes, key times and values,
  * limits) before it trusts a number.
  *

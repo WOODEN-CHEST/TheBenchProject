@@ -208,7 +208,7 @@ static void ActionsFollowTheirBindingsAndModifiers(TestRun* run)
     TEST_CHECK_SUCCESS(run, GameInput_Deconstruct(&Input));
 }
 
-// The review's bug: navigation assumed ui_previous held the Shift chord. With Tab and Shift+Tab swapped between actions,
+// Navigation must not assume ui_previous holds the Shift chord: with Tab and Shift+Tab swapped between actions,
 // Shift+Tab is still only the chord's action; a binding asking for modifiers that are not all held shadows nothing.
 // GameInput_GetActionKeys reports exactly what GameInput_ConsumeAction consumes.
 static void TheMostSpecificBindingWins(TestRun* run)

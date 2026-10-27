@@ -1,6 +1,6 @@
 #version 330
 
-// The unlit fallback's vertex stage for skinned meshes (world_unlit_skinned, T29). Without the PBR shader the renderer
+// The unlit fallback's vertex stage for skinned meshes (world_unlit_skinned). Without the PBR shader the renderer
 // draws models with their materials' own shaders (raylib's default); a skinned mesh draws with this one instead, which
 // shades as raylib's default does (unlit/fragment) after moving the position by the object's pose (common/skinning).
 

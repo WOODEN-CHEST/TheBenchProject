@@ -4,7 +4,7 @@
 #include "wr/WRError.h"
 
 /*
- * Private header (source/): reversed depth (T39, decision G41), the third module of direct OpenGL calls (BUILDING.md,
+ * Private header (source/): reversed depth, one of the three modules of direct OpenGL calls (BUILDING.md,
  * "Direct OpenGL calls"; GLTextureArray.h and GLReadback.h are the others). The scene's camera passes draw with a depth
  * that runs from 1 at the near plane to 0 at infinity, in 32-bit float: a float's exponent spreads its precision
  * evenly over the distance's orders of magnitude, so a hill 20 km away is as well resolved, relative to its distance, as

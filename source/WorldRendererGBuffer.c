@@ -8,7 +8,7 @@
 /** Asset name of the normal/mask G-buffer shader: writes a view-space normal (RGB) + surface/outline flag (A)
  *  that the outline pass edge-detects and the AO pass reads. */
 #define NORMAL_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal")
-/** Asset name of its skinned twin (T29): the same fragment stage over a vertex stage that skins. */
+/** Asset name of its skinned twin: the same fragment stage over a vertex stage that skins. */
 #define NORMAL_SKINNED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal_skinned")
 /** Asset name of the sprite normal/mask shader: writes cutout sprites into the G-buffer with an alpha test at their
  *  cutoff (so the outline follows the sprite's shape, not its quad's rectangle) and their quad's view normal. */
@@ -184,7 +184,7 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
         WorldRendererCommon_PrepareDither(RayShader, &self->_gbuffer._dither); // stays solid (IsSolidInGBuffer)
     }
 
-    // Its skinned twin (T29). Optional: without it skinned meshes draw their bind pose into the G-buffer.
+    // Its skinned twin. Optional: without it skinned meshes draw their bind pose into the G-buffer.
     self->_gbuffer._skinnedShader = (self->_gbuffer._shader != NULL)
         ? WorldRendererCommon_LoadShader(self, NORMAL_SKINNED_SHADER_ASSET_NAME) : NULL;
     self->_gbuffer._skinnedPalette = (WorldRendererPalette){ ._location = -1 };
@@ -275,19 +275,19 @@ void WorldRendererGBuffer_ReleaseTargets(WorldRenderer* self)
 void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     BeginTextureMode(self->_gbuffer._target);
-    WorldRendererCommon_BeginCameraDepth(self, frame); // the scene's depth convention (T39)
+    WorldRendererCommon_BeginCameraDepth(self, frame); // the scene's depth convention
     ClearBackground(BLANK); // RGBA (0,0,0,0): A=0 = "not a surface" everywhere the geometry does not draw
     rlDisableColorBlend();  // write RGB (normal) + A (flag) directly; no alpha blend
     BeginMode3D(frame->RenderCamera);
     WorldRendererCommon_LoadCameraProjection(frame);
     DrawNormalBufferModels(self, frame->SceneFilter);
-    // The model instances components' copies (B03; never crisp), each with its component's outline flag and haze.
+    // The model instances components' copies (never crisp), each with its component's outline flag and haze.
     if (frame->SceneFilter != WorldRendererPixelFilter_CrispOnly)
     {
         WorldRendererInstances_DrawNormals(self, frame, GameShader_GetRaylibShader(self->_gbuffer._shader),
             self->_gbuffer._locOutlineFlag, self->_gbuffer._locHazeMultiplier);
     }
-    // The terrain's chunks (B01), with their outline flags and haze.
+    // The terrain's chunks, with their outline flags and haze.
     WorldRendererTerrain_DrawNormals(self, GameShader_GetRaylibShader(self->_gbuffer._shader),
         self->_gbuffer._locOutlineFlag, self->_gbuffer._locHazeMultiplier);
     // Cutout sprites into the same G-buffer (alpha-tested) so they get silhouette outlines and AO too.

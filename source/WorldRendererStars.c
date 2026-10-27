@@ -222,8 +222,8 @@ void WorldRendererStars_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     float MoonCosRadius = frame->IsMoonActive ? frame->MoonDisc.CosRadius : NO_MOON_COS_RADIUS;
     SetShaderValue(RayShader, self->_stars._locMoonCosRadius, &MoonCosRadius, SHADER_UNIFORM_FLOAT);
     WorldRendererCommon_SetDepthConvention(RayShader, self->_stars._locDepthReversed, frame);
-    // The air dims and reddens the stars near the horizon through the transmittance table (T15), or the air mass; the
-    // ground haze dims them too (T35).
+    // The air dims and reddens the stars near the horizon through the transmittance table, or the air mass; the
+    // ground haze dims them too.
     WorldRendererAtmosphere_UploadFrame(RayShader, &self->_stars._atmosphere, frame);
     WorldRendererAtmosphere_UploadHaze(RayShader, &self->_stars._haze, frame);
     WorldRendererAtmosphere_BindTables(self, frame);

@@ -193,7 +193,7 @@ void WorldRendererScene_ReleaseTargets(WorldRenderer* self)
 void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     BeginTextureMode(self->_scene._target);
-    // The camera's depth (T39): reversed, from the clear (to 0) to the last draw, where the GPU has clip control.
+    // The camera's depth: reversed, from the clear (to 0) to the last draw, where the GPU has clip control.
     WorldRendererCommon_BeginCameraDepth(self, frame);
 
     // Clear the depth buffer (and colour). When the atmospheric sky shader is present it overwrites every
@@ -234,10 +234,10 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
     // unavailable). Filtered by OmitPixelation: crisp objects are drawn by the crisp overlay pass instead.
     WorldRendererGeometry_DrawModels(self, frame->SceneFilter);
 
-    // The model instances components' copies (B03; never crisp), lit like the models.
+    // The model instances components' copies (never crisp), lit like the models.
     WorldRendererInstances_DrawLit(self, frame, frame->SceneFilter);
 
-    // The terrain's chunks (B01; never crisp), before the sprites: decals lie on it.
+    // The terrain's chunks (never crisp), before the sprites: decals lie on it.
     WorldRendererTerrain_DrawLit(self);
 
     // Sprites, lit like the models: the cutout ones (opaque, writing depth), then the decals over the opaque world, then

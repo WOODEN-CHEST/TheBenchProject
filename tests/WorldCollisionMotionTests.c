@@ -997,7 +997,7 @@ static void AReparentedMoverPushesThroughInsteadOfJumping(TestRun* run)
 
 
 // Static functions: events, results, sleeping, determinism.
-/* T33: spheres their drivers push onto a box every tick, one down onto its top and one sideways against its side, rest
+/* Spheres their drivers push onto a box every tick, one down onto its top and one sideways against its side, rest
  * the skin from it, to a micrometre, and slide nowhere along it; their contacts and ground points lie where they
  * touch, to a micrometre; one driven along the top reports the velocity it slides at. 173 km from the world's origin in
  * the far run, where a float's step is 8 mm. */
@@ -1354,9 +1354,9 @@ static void TheSameSceneTwiceGivesTheSamePoses(TestRun* run)
 }
 
 
-/* T30 review: an object removed since the last sync keeps its shapes for queries until the next one, but its collider
- * and object are freed: a query that skips pushables (every character's move) must not follow them (AddressSanitizer
- * caught it doing so). The removed pushable reads as pushable still, so it is skipped. */
+/* An object removed since the last sync keeps its shapes for queries until the next one, but its collider and object
+ * are freed: a query that skips pushables (every character's move) must not follow them (a use-after-free the
+ * sanitizer build shows). The removed pushable reads as pushable still, so it is skipped. */
 static void QueriesSkipARemovedPushableSafely(TestRun* run)
 {
     MotionScene Scene;

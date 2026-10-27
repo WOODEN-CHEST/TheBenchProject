@@ -1,6 +1,6 @@
 #version 330
 
-// The sun and moon shadows' vertex stage for instanced copies (world_depth_instanced, B03): the light's MVP over every
+// The sun and moon shadows' vertex stage for instanced copies (world_depth_instanced): the light's MVP over every
 // copy of a cell at once, each placed by its record and dropped when this draw does not show it (common/instancing), as
 // raylib's default vertex stage does for world_depth. The fragment stage is world_depth's own, its dither the copy's
 // (WORLD_INSTANCED).

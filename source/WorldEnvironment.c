@@ -14,8 +14,8 @@
 #define DEFAULT_SKY_TURBIDITY 24.0f
 /** Default scale height of the haze, in metres (Earth's typical aerosol layer). */
 #define DEFAULT_HAZE_HEIGHT 1200.0f
-/** Default single-scattering albedo of the haze, sRGB: 244 is linear 0.907, about the 1 / 1.1 the sky had before T15
- *  made it a setting. */
+/** Default single-scattering albedo of the haze, sRGB: 244 is linear 0.907, about 1 / 1.1 (the haze's extinction is 1.1
+ *  times its scattering: WORLD_ATMOSPHERE_MIE_EXTINCTION). */
 #define DEFAULT_HAZE_ALBEDO 244U
 /** Default forward scattering of the haze (the Mie anisotropy g). */
 #define DEFAULT_SUN_GLOW 0.758f
@@ -41,9 +41,9 @@
 #define DEFAULT_AMBIENT_INTENSITY 1.0f
 /** ===== NIGHT DARKNESS KNOB =====
  *  Default colour (sRGB) and strength (linear) of the moonless night's own light on surfaces: a faint blue, linear
- *  (0.0040, 0.0050, 0.0110), the dark-site floor of the night's ambient before T36. The eye adapts to most of it
- *  (T37): the night's brightness on screen follows the eye's curve (EyeAdaptation.h, EYE_ADAPTATION_POWER), and night
- *  vision's anchors are set by it. */
+ *  (0.0040, 0.0050, 0.0110), the dark-site floor of the night's ambient. The eye adapts to most of it: the night's
+ *  brightness on screen follows the eye's curve (EyeAdaptation.h, EYE_ADAPTATION_POWER), and night vision's anchors are
+ *  set by it. */
 #define DEFAULT_NIGHT_LIGHT_RED 161U
 #define DEFAULT_NIGHT_LIGHT_GREEN 178U
 #define DEFAULT_NIGHT_LIGHT_BLUE 255U
@@ -618,8 +618,8 @@ static const PropertyDescriptor EnvironmentProperties[] =
     },
 };
 
-/* Removed settings, never to be used again: 2 is_day_night_cycle_enabled and 3 day_length_seconds, which the game
- * clock's pause and time scale replaced (T23). */
+/* Removed settings, never to be used again: 2 is_day_night_cycle_enabled and 3 day_length_seconds (the game clock's
+ * pause and time scale do their work). */
 static const uint16_t EnvironmentRetiredWireIds[] = { 2U, 3U };
 
 static const PropertyTable EnvironmentTable =

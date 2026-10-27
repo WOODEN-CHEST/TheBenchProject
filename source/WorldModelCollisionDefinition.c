@@ -20,7 +20,7 @@
  *     "default_set": "closed",       the set placements use (default: the first)
  *     "layer": "prop",               the placements' default layer, mask ("collides_with": layer names; left out: the
  *     "collides_with": [...],        layer's default mask), trigger flag and mass (kilograms, above 0: how pushables
- *     "is_trigger": false,           share a push, T27)
+ *     "is_trigger": false,           share a push)
  *     "mass": 1,
  *     "sets": [ { "name": "closed", "shapes": [ { "type": "box", ... }, ... ] }, ... ]
  *   }

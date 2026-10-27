@@ -623,8 +623,8 @@ static bool AdjustForTriangle(const CollisionConvex* a, const CollisionConvex* b
     if (Region == 0U)
     {
         // Read as inside, the contact's feature would take the face normal and the face's plane distance: for a
-        // capsule beside a mesh box's convex edge, a push-out of most of its height (T13's first tuning: the test
-        // world's glowing cube threw a player jumping against it up and down).
+        // capsule beside a mesh box's convex edge, a push-out of most of its height (a player jumping against a mesh
+        // cube would be thrown up and down).
         Region = GetBoundaryRegion(Weights);
     }
     uint8_t Active = Triangle->ActiveEdges;

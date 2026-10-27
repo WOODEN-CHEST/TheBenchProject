@@ -9,7 +9,7 @@
 #include "wr/WRString.h"
 
 /*
- * The animation system's graphs (T30; WorldAnimation.h, "Graphs"): binding the graph an animator plays to its skeleton
+ * The animation system's graphs (WorldAnimation.h, "Graphs"): binding the graph an animator plays to its skeleton
  * and libraries, feeding it its character's state and events every tick, advancing it (socket conditions asked of the
  * world, events handed to their effects and queued), and the functions code uses on it: parameters, triggers, states.
  */

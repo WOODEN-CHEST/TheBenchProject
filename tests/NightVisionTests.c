@@ -5,7 +5,7 @@
 
 // Macros.
 /** The scene luminance (the field) of a clear noon, a moonless night and a full-moon night, in the game's light units
- *  (T36's scale: WorldSkyLight_GetSceneLuminance with the default environment). */
+ *  (what WorldSkyLight_GetSceneLuminance gives with the default environment). */
 #define TEST_NOON_LUMINANCE 0.371f
 #define TEST_MOONLESS_LUMINANCE 0.00602f
 #define TEST_FULL_MOON_LUMINANCE 0.016f
@@ -37,7 +37,7 @@ static void CalibrationFollowsTheAnchors(TestRun* run)
         && (Anchored.FullColourLuminance == Calibration.FullColourLuminance));
 }
 
-/* The field luminance from the light split in two (T36): the daylight on the real scale, linearly, the night's lights
+/* The field luminance from the light split in two: the daylight on the real scale, linearly, the night's lights
  * through the power law, their real luminances added: noon's daylight is noon, the night's lights alone are themselves,
  * and the sum of a little daylight and the night stands above both, far above the night alone in the twilight. */
 static void FieldAddsDaylightAndTheNight(TestRun* run)

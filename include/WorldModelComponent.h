@@ -21,14 +21,14 @@
  * OVERRIDES. Each setting a placement can override (WorldModelSetting) is a pair of properties: an override flag,
  * "overrides_" + the setting's key (false by default: the world model's value applies), and the placement's own value.
  * The value is kept, and saved, while its flag is off, so switching the flag back on restores it; there are no sentinel
- * values and no "inherit" states (the owner's rule, G17). WorldModelComponent_ResolveSettings turns the world model's
- * settings and the overrides into the settings that apply. The draw distance also has a plain multiplier (1 changes
+ * values and no "inherit" states. WorldModelComponent_ResolveSettings turns the world model's settings and the
+ * overrides into the settings that apply. The draw distance also has a plain multiplier (1 changes
  * nothing, 2 = seen twice as far), which applies to whichever distance is in effect.
  *
  * VARIANTS. With uses_variant on, the object is drawn with the world model's variant of the given name (another look of
  * the same meshes); an unknown name draws the model's own materials, and the renderer warns once.
  *
- * LODS (T11). The world model says up to which distance each of its LODs is drawn; a placement may replace those switch
+ * LODS. The world model says up to which distance each of its LODs is drawn; a placement may replace those switch
  * distances with its own list (overrides_lod_distances with lod_distances: it applies only while the list has as many
  * distances as the world model has LODs), scale whichever are in effect (lod_distance_multiplier: 2 keeps each LOD twice
  * as far, more detail), or force one LOD (is_lod_forced with forced_lod). WorldModelComponent_ResolveLodSettings turns
@@ -71,7 +71,7 @@ typedef enum WorldModelSettingEnum
     WorldModelSetting_IsDrawDistanceFixed,
     /** @brief The LOD switch distances (lod_distances, flag overrides_lod_distances). */
     WorldModelSetting_LodDistances,
-    /** @brief How hazy it looks at a distance (haze, flag overrides_haze; T35). */
+    /** @brief How hazy it looks at a distance (haze, flag overrides_haze). */
     WorldModelSetting_Haze,
     /** @brief The number of settings; not a setting. */
     WorldModelSetting_Count

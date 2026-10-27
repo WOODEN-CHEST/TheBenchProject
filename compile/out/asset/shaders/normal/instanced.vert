@@ -1,6 +1,6 @@
 #version 330
 
-// The G-buffer's vertex stage for instanced copies (world_normal_instanced, B03): normal/vertex for every copy of a cell
+// The G-buffer's vertex stage for instanced copies (world_normal_instanced): normal/vertex for every copy of a cell
 // at once, each placed by its record and dropped when this draw does not show it (common/instancing). The fragment stage
 // is world_normal's own, its dither the copy's (solid in the G-buffer; WORLD_INSTANCED).
 

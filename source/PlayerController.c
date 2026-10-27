@@ -188,7 +188,7 @@ bool PlayerController_TryGetEyes(World* world, uint64_t characterId, Vector3Doub
     {
         return false;
     }
-    // The body's eyes socket as posed (G34: the real body; its every step, crouch and seat move the view).
+    // The body's eyes socket as posed (the real body: its every step, crouch and seat move the view).
     WorldComponent* Component = NULL;
     const WorldAnimatorPose* Pose = World_TryGetComponent(world, characterId, WorldComponentType_Animator, &Component)
         ? WorldAnimatorComponent_GetPose(WorldAnimatorComponent_FromComponent(Component)) : NULL;

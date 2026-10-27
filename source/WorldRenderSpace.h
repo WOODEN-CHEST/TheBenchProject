@@ -4,7 +4,7 @@
 #include "wr/WRVectorMath.h"
 
 /*
- * Private header (source/): render space, the space the world renderer draws in (T32), as pure maths tested headless
+ * Private header (source/): render space, the space the world renderer draws in, as pure maths tested headless
  * (tests/WorldRenderSpaceTests.c).
  *
  * RENDER SPACE is the world's orientation with the camera at (0, 0, 0). Each frame takes the camera's world position, in
@@ -17,10 +17,9 @@
  * THE VIEW (WorldRenderSpace_BuildView). raylib's camera sits at the origin and looks along the camera's forward
  * (GameCamera_ToRenderCamera), so the view matrix is a pure rotation and the view-projection and its inverse hold no
  * large numbers: the sky's rays come from the rotation alone (WorldRenderSpace_GetSkyRay is the C mirror of the sky
- * shader's ray), and the stars and the sun's place on screen are directions (w = 0). Since T39 (decision G41) the
- * projection may be REVERSED and infinite (WorldRenderSpace_GetReversedProjection): the near plane at depth 1, infinity
- * at 0, no far plane, for the camera's passes where the GPU has clip control (GLDepth.h); otherwise raylib's, with its far
- * plane.
+ * shader's ray), and the stars and the sun's place on screen are directions (w = 0). The projection may be REVERSED
+ * and infinite (WorldRenderSpace_GetReversedProjection): the near plane at depth 1, infinity at 0, no far plane, for
+ * the camera's passes where the GPU has clip control (GLDepth.h); otherwise raylib's, with its far plane.
  *
  * THE SHADOW CASCADES (WorldRenderSpace_GetCascade, WorldRenderSpace_StepCascade). Each cascade is a fixed-size
  * orthographic box around the camera, looking along the shadow light. Its centre is kept on the cascade's texel grid in
@@ -107,7 +106,7 @@ typedef struct WorldRenderCascadeGridStruct
 
 // Functions.
 /**
- * @brief Returns the reversed infinite perspective projection (T39): x and y as MatrixPerspective's, clip z the near
+ * @brief Returns the reversed infinite perspective projection: x and y as MatrixPerspective's, clip z the near
  *        plane's distance and clip w the view distance, so with clip control's 0-to-1 depth a point at the near plane
  *        has depth 1, one twice as far 0.5, infinity 0; nothing is clipped far away. In raymath's layout.
  * @param fovY The vertical field of view, in radians (above 0, below pi).
@@ -130,7 +129,7 @@ Matrix WorldRenderSpace_GetReversedProjection(double fovY, double aspect, double
  * @param aspect The target's width over its height (above 0).
  * @param nearPlane The projection's near plane, in metres (raylib's cull distance for the scene).
  * @param farPlane The projection's far plane, in metres (unused for reversed depth: no far plane).
- * @param isDepthReversed Whether the projection is the reversed infinite one (T39).
+ * @param isDepthReversed Whether the projection is the reversed infinite one.
  * @returns The view.
  */
 WorldRenderView WorldRenderSpace_BuildView(const GameCamera* camera, double aspect, double nearPlane, double farPlane,

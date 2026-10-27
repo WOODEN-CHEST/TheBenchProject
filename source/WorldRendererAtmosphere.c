@@ -1,7 +1,7 @@
-// The atmosphere's lookup tables (T15; Hillaire, "A Scalable and Production Ready Sky and Atmosphere Rendering
+// The atmosphere's lookup tables (Hillaire, "A Scalable and Production Ready Sky and Atmosphere Rendering
 // Technique", EGSR 2020), built first in every frame: the transmittance and the multiple scattering when the air changes,
-// the sky's irradiance after them (T36), the sky view every frame; and the aerial-perspective volume built from them every
-// frame (T35), whose last row holds the sky's light by height (T36). The sky pass and the stars read the tables; every
+// the sky's irradiance after them, the sky view every frame; and the aerial-perspective volume built from them every
+// frame, whose last row holds the sky's light by height. The sky pass and the stars read the tables; every
 // lit surface, the sky pass's ground haze and the outlines read the volume (WorldAtmosphere.h has their layout,
 // shaders/common/atmosphere.glsl and shaders/common/haze.glsl their GLSL).
 
@@ -22,7 +22,7 @@
 #define SKY_VIEW_SHADER_ASSET_NAME ((const unsigned char*)u8"world_atmosphere_skyview")
 #define VOLUME_SHADER_ASSET_NAME ((const unsigned char*)u8"world_atmosphere_volume")
 #define IRRADIANCE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_atmosphere_irradiance")
-/** How long a frame spends on a rebuild of the C mirror's tables when the air changes (T36), in nanoseconds: a step
+/** How long a frame spends on a rebuild of the C mirror's tables when the air changes, in nanoseconds: a step
  *  (WorldSkyLight_RunBuildStep, at most about 0.75 ms) runs while the time so far and the last step's fit in it; the
  *  first always runs. */
 #define SKY_LIGHT_BUILD_BUDGET_NANOSECONDS 1000000ULL
@@ -130,7 +130,7 @@ static void BuildMultiscatter(WorldRenderer* self, const WorldRenderFrame* frame
     EndTable();
 }
 
-/* The sky's irradiance table (T36), from the transmittance and multiple scattering tables. */
+/* The sky's irradiance table, from the transmittance and multiple scattering tables. */
 static void BuildIrradiance(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     WorldRendererAtmosphereState* State = &self->_atmosphere;
@@ -169,7 +169,7 @@ static void DrawSkyViewHalf(WorldRenderer* self, Shader builder, const SkyViewLi
 /* The sky-view table: the sun's half every frame (its glow with light pollution's light, the far ground lit by the sun,
  * the sky's irradiance and the night's light), the moon's while the moonlit sky shows (the far ground lit by the moon
  * and its sky). The far ground is lit as the lit shaders light the terrain (the shader: through the air at the far
- * point, T36), so it meets a terrain's edge without a seam. */
+ * point), so it meets a terrain's edge without a seam. */
 static void BuildSkyView(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     WorldRendererAtmosphereState* State = &self->_atmosphere;
@@ -209,9 +209,9 @@ static void BuildSkyView(WorldRenderer* self, const WorldRenderFrame* frame)
     EndTable();
 }
 
-/* The aerial-perspective volume (T35): the air's in-scatter and transmittance for the camera's screen directions at the
+/* The aerial-perspective volume: the air's in-scatter and transmittance for the camera's screen directions at the
  * volume's slices, lit by the sun, the moon (while the moonlit sky shows) and light pollution, and its last row, the
- * frame's values: the light at the ground haze's base and the sky's light by height (T36). Only the last row while the
+ * frame's values: the light at the ground haze's base and the sky's light by height. Only the last row while the
  * haze is off (frame->IsHazeActive false, frame->IsSkyLightPerHeight true): the lit shaders read nothing else then. */
 static void BuildVolume(WorldRenderer* self, const WorldRenderFrame* frame)
 {
@@ -287,7 +287,7 @@ static void CacheSkyViewLocations(WorldRendererAtmosphereState* state)
 void WorldRendererAtmosphere_Construct(WorldRenderer* self)
 {
     self->_atmosphere = (WorldRendererAtmosphereState){ ._isEnabled = true, ._view = WorldRendererHazeView_Off };
-    // The C mirror's two table sets (T36), about 85 KB each: on the heap, with the renderer (built when a world is
+    // The C mirror's two table sets, about 85 KB each: on the heap, with the renderer (built when a world is
     // prepared, or on the first frame).
     WorldSkyLight_ConstructBuilder(&self->_atmosphere._skyLight);
 }
@@ -357,7 +357,7 @@ void WorldRendererAtmosphere_LoadShaders(WorldRenderer* self)
         return;
     }
 
-    // The volume (T35), from the tables.
+    // The volume, from the tables.
     State->_volumeShader = LoadBuilder(self, VOLUME_SHADER_ASSET_NAME, &State->_volumeLocations);
     if (State->_volumeShader == NULL)
     {
@@ -522,7 +522,7 @@ void WorldRendererAtmosphere_UploadHaze(Shader shader, const WorldRendererHazeLo
 }
 
 /* Bound manually, as the tables are (WorldRendererAtmosphere_BindTables): the lit passes draw with DrawMesh. Bound
- * while it holds the haze or the sky's light by height (its last row, T36). */
+ * while it holds the haze or the sky's light by height (its last row). */
 void WorldRendererAtmosphere_BindVolume(const WorldRenderer* self, const WorldRenderFrame* frame)
 {
     if (!frame->IsHazeActive && !frame->IsSkyLightPerHeight)

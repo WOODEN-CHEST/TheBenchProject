@@ -11,7 +11,7 @@
 #include "wr/WRString.h"
 
 /*
- * The animation system's special actions (T30; WorldAnimation.h, "Actions"): starting one (its target and anchor
+ * The animation system's special actions (WorldAnimation.h, "Actions"): starting one (its target and anchor
  * checked, its character's movement locked and sent to the anchor), following it (an approach that arrives enters the
  * action's first state; a playing action ends when its layer leaves its states), ending it, and the effects of the
  * events its states fire: hanging the action's target on a socket of the object, and putting what hangs on a socket

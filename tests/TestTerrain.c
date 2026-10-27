@@ -471,7 +471,7 @@ bool TestTerrain_ReplaceInGlbJson(const GenericBuffer* glb, const char* find, co
 }
 
 
-// Functions: terrain materials (B02).
+// Functions: terrain materials.
 /* Writes one map: a square PNG of @p size filled by @p texel(x, y), and its texture definition, as "<name>_<map>". */
 static Error WriteMaterialMap(const unsigned char* root, const char* name, const char* map, int32_t size,
     Color (*texel)(int32_t x, int32_t y, int32_t size, Color albedo), Color albedo)

@@ -433,7 +433,7 @@ static bool BuildFullWorld(TestRun* run, World* world, KeyRegistry* keys)
     }
     TEST_CHECK_SUCCESS(run, World_SetParent(world, 7U, 1U, false));
     TEST_CHECK_SUCCESS(run, World_SetParent(world, 2U, 1U, false));
-    // The leaf hangs on a socket of its parent (T30; the parent has no pose: the parent's own space).
+    // The leaf hangs on a socket of its parent (the parent has no pose: the parent's own space).
     TEST_CHECK_SUCCESS(run, World_SetParentSocket(world, 3U, 2U, (const unsigned char*)u8"hand_r", false));
     TEST_CHECK_SUCCESS(run, World_SetParent(world, 4U, 5U, false));
     FillData(run, world, 1U, 5U, keys);
@@ -1202,8 +1202,8 @@ static void HostileGHDFIsRefusedWithNothingLeft(TestRun* run)
         CheckRefusedGHDF(run, &Keys, &Cut, Trailing);
     }
 
-    // Strings declaring more than the data holds are refused before anything is reserved for them: 2^50 bytes (once an
-    // abort), more than GHDF reads at all, and 1000 bytes with 3 present.
+    // Strings declaring more than the data holds are refused before anything is reserved for them: 2^50 bytes
+    // (reserving those would abort), more than GHDF reads at all, and 1000 bytes with 3 present.
     const char* const Declared[] = { "declares", NULL };
     GenericBuffer_Clear(&Cut);
     BuildDeclaredStringDocument(&Cut, (uint64_t)1 << 50U, 0U);
@@ -1319,7 +1319,7 @@ static void UnknownNamesAreSkippedWithOneWarningEach(TestRun* run)
         }
 
         // The same in GHDF: an unknown root entry, an unknown object entry, an unknown component type; the retired
-        // environment ids 2 and 3 (T23) are skipped silently.
+        // environment ids 2 and 3 are skipped silently.
         World Source;
         GenericBuffer Bytes;
         GenericBuffer_AllocateVariable(&Bytes, WORLD_FILE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
@@ -1534,22 +1534,22 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
             TEST_CHECK(run, World_GetObjectCount(&Loaded) == 53U);
-            // The terrain (B01): one object placing the placeholder terrain around the ground slab.
+            // The terrain: one object placing the placeholder terrain around the ground slab.
             WorldComponent* Ground = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 51U, WorldComponentType_Terrain, &Ground)
                 && AreNamesEqual(WorldTerrainComponent_GetTerrain(WorldTerrainComponent_FromComponent(Ground)),
                     (const unsigned char*)u8"placeholder_terrain"));
             TEST_CHECK(run, AreNamesEqual(World_GetName(&Loaded), (const unsigned char*)u8"test"));
-            // The file predates the air's settings (T15): they read as their defaults, and (below) are left out again.
+            // The file holds none of the air's settings: they read as their defaults, and (below) are left out again.
             const WorldEnvironment* Environment = World_GetEnvironment(&Loaded);
             TEST_CHECK(run, (Environment->HazeHeight == 1200.0f) && (Environment->SunGlow == 0.758f)
                 && (Environment->AirDensity == 1.0f) && (Environment->Ozone == 1.0f)
                 && (Environment->MultipleScattering == 1.0f) && (Environment->HazeAlbedo.r == 244));
-            // And the haze's (T35): the real air, no ground haze, the far ground at Y 0.
+            // Nor the haze's: the real air, no ground haze, the far ground at Y 0.
             TEST_CHECK(run, (Environment->AerialDistanceScale == 1.0f) && (Environment->HazeStartDistance == 0.0f)
                 && (Environment->GroundHazeDensity == 0.0f) && (Environment->GroundHazeThickness == 20.0f)
                 && (Environment->HorizonGroundHeight == 0.0f) && (Environment->FogStrength == 1.0f));
-            // The animation examples (T29): four placeholder figures, each animator playing a clip of its own; the short
+            // The animation examples: four placeholder figures, each animator playing a clip of its own; the short
             // one waves in a loop its library does not give the clip (the placement's loop override).
             size_t AnimatorCount = 0U;
             World_GetComponents(&Loaded, WorldComponentType_Animator, &AnimatorCount);
@@ -1561,7 +1561,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                     (const unsigned char*)u8"wave")
                 && WorldAnimatorComponent_OverridesIsLooped(WorldAnimatorComponent_FromComponent(Waver))
                 && WorldAnimatorComponent_IsLooped(WorldAnimatorComponent_FromComponent(Waver)));
-            // The LOD examples (T11): a row of lod_test spheres, one forcing its coarsest LOD, one with its own distances.
+            // The LOD examples: a row of lod_test spheres, one forcing its coarsest LOD, one with its own distances.
             WorldComponent* Forced = NULL;
             WorldComponent* OwnDistances = NULL;
             size_t DistanceCount = 0U;
@@ -1578,7 +1578,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                     &DistanceCount) != NULL) && (DistanceCount == 3U)
                 && (WorldModelComponent_GetLodDistances(WorldModelComponent_FromComponent(OwnDistances),
                     &DistanceCount)[1] == 6.0f));
-            // The world sprite example (T26): the tree placed a second time, mirrored by its placement.
+            // The world sprite example: the tree placed a second time, mirrored by its placement.
             WorldComponent* Mirrored = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 24U, WorldComponentType_Sprite, &Mirrored)
                 && AreNamesEqual(WorldSpriteComponent_GetWorldSprite(WorldSpriteComponent_FromComponent(Mirrored)),
@@ -1586,19 +1586,19 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                 && WorldSpriteComponent_IsOverridden(WorldSpriteComponent_FromComponent(Mirrored),
                     WorldSpriteSetting_FlipX)
                 && WorldSpriteComponent_IsFlippedX(WorldSpriteComponent_FromComponent(Mirrored)));
-            // The variant example (T10): two cubes of one world model, red and blue.
+            // The variant example: two cubes of one world model, red and blue.
             WorldComponent* Painted = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 23U, WorldComponentType_Model, &Painted)
                 && WorldModelComponent_UsesVariant(WorldModelComponent_FromComponent(Painted))
                 && AreNamesEqual(WorldModelComponent_GetVariant(WorldModelComponent_FromComponent(Painted)),
                     (const unsigned char*)u8"blue"));
-            // The desk holds six parts (since T30 a coffee cup to pick up), the lamp its light; it moves (the J key), so
-            // it is movable.
+            // The desk holds six parts (one a coffee cup to pick up), the lamp its light; it moves (the J key), so it
+            // is movable.
             WorldObject* Desk = NULL;
             WorldObject* LampLight = NULL;
             TEST_CHECK(run, World_TryGetObject(&Loaded, 15U, &Desk) && (WorldObject_GetChildCount(Desk) == 6U)
                 && (WorldObject_GetMobility(Desk) == WorldMobility_Movable));
-            // The actions' props (T30): a bench to sit on, the coffee cup and the door, each offering its action as
+            // The actions' props: a bench to sit on, the coffee cup and the door, each offering its action as
             // text under tbp:action (the test frame's stand-in for an interactable component).
             static const struct { uint64_t Id; const char* Action; } Offers[] =
             {
@@ -1614,10 +1614,9 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                 TEST_CHECK(run, (Offer != NULL) && (Offer->Type == DataType_String)
                     && AreNamesEqual(Offer->StringValue, (const unsigned char*)Offers[Index].Action));
             }
-            // The collision examples (T12): 24 colliders, a door of two sets, a trigger zone where the desk slides;
-            // since T27 ten more (a pushing wall, a row of five pushable crates, its stop, a crate pinned in a corner
-            // of two posts in the door's swing), and the door turns, so it is movable; since T30 the bench and the
-            // coffee cup.
+            // The collision examples: 36 colliders, among them a door of two sets, a trigger zone where the desk
+            // slides, a pushing wall, a row of five pushable crates, its stop, a crate pinned in a corner of two posts
+            // in the door's swing, the bench and the coffee cup; the door turns, so it is movable.
             size_t ColliderCount = 0U;
             World_GetComponents(&Loaded, WorldComponentType_Collider, &ColliderCount);
             TEST_CHECK(run, ColliderCount == 36U);
@@ -1640,7 +1639,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                 && (WorldColliderComponent_GetLayer(WorldColliderComponent_FromComponent(Zone)) == CollisionLayer_Trigger));
             TEST_CHECK(run, World_TryGetObject(&Loaded, 21U, &LampLight)
                 && (WorldObject_GetParentId(LampLight) == 20U));
-            // The grove (B03): 400 copies of the placeholder tree on the terrain, turned, scaled (some unevenly) and
+            // The grove: 400 copies of the placeholder tree on the terrain, turned, scaled (some unevenly) and
             // tinted, every 40th half transparent (asset_source/scripts/placeholder_instances.py).
             WorldComponent* Grove = NULL;
             size_t TreeCount = 0U;
@@ -1657,7 +1656,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
             TEST_CHECK(run, (Trees != NULL) && (TreeCount == 400U) && AreNamesEqual(
                 WorldModelInstancesComponent_GetWorldModel(WorldModelInstancesComponent_FromComponent(Grove)),
                 (const unsigned char*)u8"test_tree") && (UnevenCount == 133U) && (HalfCount == 10U));
-            // Its lamp, in a clearing: the copies' cube shadows (B03's run list).
+            // Its lamp, in a clearing: the copies' cube shadows.
             WorldComponent* GroveLamp = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 53U, WorldComponentType_Light, &GroveLamp)
                 && WorldLightComponent_CastsShadows(WorldLightComponent_FromComponent(GroveLamp)));
@@ -1690,8 +1689,8 @@ static void PutGHDFPosition(TestRun* run, GHDFObjectPool* pool, GHDFCompound* ob
     TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(object, 4U, GHDF_CreateArrayType(GHDFValueType_Double), &Value));
 }
 
-/* T33: positions are doubles. Far positions keep every digit through both formats; one beyond the limit or not finite
- * is refused; a GHDF save written before T33 (positions as Float arrays) loads, each position the float it held. */
+/* Positions are doubles. Far positions keep every digit through both formats; one beyond the limit or not finite is
+ * refused; a GHDF save holding positions as Float arrays loads, each position the float it held. */
 static void PositionsAreDoublesAndOldSavesLoad(TestRun* run)
 {
     KeyRegistry Keys;
@@ -1791,8 +1790,8 @@ static void PositionsAreDoublesAndOldSavesLoad(TestRun* run)
         TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Pool));
     }
 
-    // The shipped test world as HEAD's code saved it before T33 (positions as Float arrays): it loads, and each
-    // position is the float the JSON's text rounds to, exactly.
+    // The fixture, the shipped test world saved with positions as Float arrays: it loads, and each position is the
+    // float the JSON's text rounds to, exactly.
     GenericBuffer Path;
     GenericBuffer_AllocateVariable(&Path, WORLD_FILE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
     World FromJSON;
@@ -1804,7 +1803,7 @@ static void PositionsAreDoublesAndOldSavesLoad(TestRun* run)
         if (TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, "compile/out/worlds/test.world.json", &Path))
             && TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &FromJSON)))
         {
-            // The fixture holds the 44 objects the world had then (T29 added more after them).
+            // The fixture holds 44 objects; the shipped world holds those and more.
             size_t Count = World_GetObjectCount(&Loaded);
             TEST_CHECK(run, (Count == 44U) && (World_GetObjectCount(&FromJSON) > Count));
             size_t Exact = 0U;
@@ -2072,9 +2071,9 @@ static void TheTreeLimitRefusesLargeFiles(TestRun* run)
 
 static void AWorldAtTheObjectLimitSavesAndLoads(TestRun* run)
 {
-    // The most objects a file holds, all roots, created in descending id order: the writer sorts the roots by id, and
-    // the old quicksort recursed once per element on such input (a 100 000-object save overflowed the stack). Reading
-    // them back borrows and returns a node per value from the readers' pools, which grew quadratic before T09.
+    // The most objects a file holds, all roots, created in descending id order: the writer sorts the roots by id, and a
+    // quicksort recursing once per element on such input would overflow the stack on a 100 000-object save. Reading
+    // them back borrows and returns a node per value from the readers' pools, which must not grow quadratic.
     KeyRegistry Keys;
     World Source;
     if (!TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys)))

@@ -1,6 +1,6 @@
 // Debug wireframes of the collision world's shapes (WorldRenderer_SetCollisionDebug): each shape of the collision world's
 // debug list drawn in its own space under its world transform (uneven scales and shear included, so an ellipsoid looks
-// like one), coloured by layer; and (T27) its debug contacts: each point a small cross, its normal a short line, its
+// like one), coloured by layer; and its debug contacts: each point a small cross, its normal a short line, its
 // push a red line along the normal as long as the push's speed over CONTACT_PUSH_SECONDS. Everything is drawn in render
 // space: each transform's translation and each point relative to the frame's origin, in double. Rule 3: it only reads
 // the lists; nothing here touches the world or the collision world.

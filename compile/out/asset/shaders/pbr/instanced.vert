@@ -1,6 +1,6 @@
 #version 330
 
-// The PBR shader's vertex stage for instanced copies (world_pbr_instanced, B03): pbr/vertex for every copy of a cell at
+// The PBR shader's vertex stage for instanced copies (world_pbr_instanced): pbr/vertex for every copy of a cell at
 // once, each placed by its record and its colour tinted by it, and dropped when this draw does not show it
 // (common/instancing). The fragment stage is world_pbr's own, its dither the copy's (WORLD_INSTANCED).
 

@@ -15,7 +15,8 @@ typedef struct WorldObjectStruct WorldObject;
  * @brief Components: the parts a world object is made of, and the registry that describes each component type.
  *
  * A world object (WorldObject.h) is one concrete type: an id, a name, a transform, a tint and its flags. What it IS
- * comes from its components: a model, a sprite, a light, and later a collider, a character, a screen, an ambient zone.
+ * comes from its components: a model, a sprite, a light, a collider, a character, an animator, a terrain, model
+ * instances, and later a screen, an ambient zone.
  * An object carries at most one component of each type; a street lamp is one object with a model and a light.
  *
  * A component is a struct that embeds WorldComponent as its FIRST member (so a pointer to it is also a valid
@@ -34,11 +35,11 @@ typedef struct WorldObjectStruct WorldObject;
  * component that holds runtime state for a property (the sprite's bound world sprite and its playing animation) stays
  * in step with it.
  *
- * TRANSFORM DRIVERS. A type flagged IsTransformDriver writes its object's transform every tick (later: the character
- * controller, vehicles, rigid bodies). An object carries at most one driver, so two systems never fight over where an
+ * TRANSFORM DRIVERS. A type flagged IsTransformDriver writes its object's transform every tick (the character; later
+ * vehicles and rigid bodies). An object carries at most one driver, so two systems never fight over where an
  * object is, and adding one makes the object movable (WorldObject_GetMobility).
  *
- * New component types mean one enum value (WorldComponentType, explicit and never renumbered: world files will save
+ * New component types mean one enum value (WorldComponentType, explicit and never renumbered: world files save
  * it), one registry entry returned by WorldComponent_GetStandardTypeInfo, a table and the hooks.
  */
 
@@ -47,8 +48,8 @@ typedef struct WorldObjectStruct WorldObject;
 /**
  * @brief How many component types a world can hold: every object has one slot per type.
  *
- * Above WorldComponentType_Count to leave room for the types later tasks add (character, screen, ambient zone, ...) and
- * for test-only types.
+ * Above WorldComponentType_Count to leave room for types not built yet (a screen, an ambient zone, ...) and for
+ * test-only types.
  */
 #define WORLD_MAX_COMPONENT_TYPES ((size_t)16)
 
@@ -56,7 +57,7 @@ typedef struct WorldObjectStruct WorldObject;
 // Types.
 /**
  * @brief The standard component types. The value indexes the object's component slots and the world's per-type
- *        arrays; values are explicit and never renumbered (world files will save them).
+ *        arrays; values are explicit and never renumbered (world files save them).
  */
 typedef enum WorldComponentTypeEnum
 {
@@ -66,16 +67,16 @@ typedef enum WorldComponentTypeEnum
     WorldComponentType_Sprite = 1,
     /** @brief A point light (WorldLightComponent.h). */
     WorldComponentType_Light = 2,
-    /** @brief A collider: the object's part in collision (WorldColliderComponent.h, T12). */
+    /** @brief A collider: the object's part in collision (WorldColliderComponent.h). */
     WorldComponentType_Collider = 3,
-    /** @brief A character: the player or an NPC, a transform driver (WorldCharacterComponent.h, T13). */
+    /** @brief A character: the player or an NPC, a transform driver (WorldCharacterComponent.h). */
     WorldComponentType_Character = 4,
-    /** @brief An animator: what plays the skeletal animation of the object's skinned model (WorldAnimatorComponent.h,
-     *  T29). */
+    /** @brief An animator: what plays the skeletal animation of the object's skinned model
+     *  (WorldAnimatorComponent.h). */
     WorldComponentType_Animator = 5,
-    /** @brief A terrain: places a terrain asset's mesh, drawn in chunks and solid (WorldTerrainComponent.h, B01). */
+    /** @brief A terrain: places a terrain asset's mesh, drawn in chunks and solid (WorldTerrainComponent.h). */
     WorldComponentType_Terrain = 6,
-    /** @brief Model instances: many copies of one world model, drawn instanced (WorldModelInstancesComponent.h, B03). */
+    /** @brief Model instances: many copies of one world model, drawn instanced (WorldModelInstancesComponent.h). */
     WorldComponentType_ModelInstances = 7,
     /** @brief The number of standard types (not a type). */
     WorldComponentType_Count = 8

@@ -445,7 +445,7 @@ Error TextDocument_ResolveAnimation(TextDocument* self, const unsigned char* ani
 
 const unsigned char* TextDocument_ResolveTranslation(const TextDocument* self, const unsigned char* key)
 {
-    // TODO: string tables (architecture decision A9: translations beyond the translate component are decided later).
+    // TODO: string tables (translations beyond the translate component are still to be designed).
     (void)self;
     (void)key;
     return NULL;

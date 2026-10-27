@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 // Vector3 and Quaternion are raylib types in the queries' arguments and results (directions, normals, rotations); this
-// include is unavoidable here. Positions are WRVectorMath's doubles (T33).
+// include is unavoidable here. Positions are WRVectorMath's doubles.
 #include "raylib/raylib.h"
 #include "wr/WRVectorMath.h"
 #include "AssetManager.h"
@@ -20,14 +20,14 @@ typedef struct LoggerStruct Logger;
 /**
  * @file WorldCollision.h
  * @brief The collision world: every enabled collider of a world (WorldColliderComponent.h) in world space, kept in step
- *        with the world every tick, and the queries over it (T12).
+ *        with the world every tick, and the queries over it.
  *
  * WHAT IT HOLDS. One instance per enabled collider of an effectively enabled object: its shapes in world space (the
  * object's world matrix, the collider's rotation mode and local transform, each shape's centre and rotation; any
  * affine transform, uneven scales and parents' shear included), its world bounds, its layer, mask and trigger flag
  * (the settings in effect, WorldColliderComponent_ResolveSettings). The shapes come from the object's world model's
  * collision sets (resolved by name under the collision world's own asset user, AGENTS.md rule 1) or from the
- * collider's own primitive. An object with a terrain component (B01) and no collider is a TERRAIN instance: one
+ * collider's own primitive. An object with a terrain component and no collider is a TERRAIN instance: one
  * one-sided triangle mesh shape per chunk of its terrain (the shape's index is the chunk's; a hit's MeshPart names the
  * chunk and its SourceTriangle the terrain's triangle) with the terrain's own active edges, so nothing bumps where
  * chunks meet; its layer, mask and enabled flag are the terrain's settings in effect
@@ -62,16 +62,17 @@ typedef struct LoggerStruct Logger;
  * stops qualifying). An exit needs WORLD_COLLISION_TRIGGER_EXIT_MARGIN of separation, so a collider resting on a
  * boundary does not flicker. Two triggers never pair, a static trigger never pairs with a static collider, and both
  * must collide by layer. Events queue in a deterministic order (by ids) until WorldCollision_ClearTriggerEvents: game
- * logic drains them at one point of the tick (architecture A4).
+ * logic drains them at one point of the tick.
  *
- * MOVING AND PUSHING (T27). WorldCollision_Step is the tick's collision step: the sync above, then every collider that
+ * MOVING AND PUSHING. WorldCollision_Step is the tick's collision step: the sync above, then every collider that
  * moved since the last step is SWEPT from where it was to where its driver, script, animation or parent put it, turns
  * included, and one solver pushes everything that overlaps apart at once.
  * - Who gives way: a static object's collider never moves in play; a movable object's collider that is pushable
  *   (is_pushable) is pushed, pushables sharing a push by mass; any other movable collider is KINEMATIC (doors,
  *   elevators): it pushes and is never pushed. The colliders an object carries (its children, unless pushable
  *   themselves) move with its push; a pushable under it is pushed on its own. Pushes only translate (rotation from
- *   contacts is T28's), and only along each contact's normal, so a pushed collider slides along walls.
+ *   contacts is left to rigid bodies, not built yet), and only along each contact's normal, so a pushed collider
+ *   slides along walls.
  * - Nothing passes through anything: contacts are taken before the motion out to how far each pair can close
  *   (speculative contacts), and every pushed motion longer than WORLD_COLLISION_SPECULATIVE_DISTANCE is checked
  *   afterwards with exact linear casts against everything around it, both sides moving; what still hits gets a new
@@ -90,16 +91,16 @@ typedef struct LoggerStruct Logger;
  *   teleports too.
  * - Pushables that nothing moved near sleep: a step costs nothing for a pile at rest.
  *
- * CONTACTS AND THEIR EVENTS (T27). After each step every pair of colliders, one of them pushable, that lies within
+ * CONTACTS AND THEIR EVENTS. After each step every pair of colliders, one of them pushable, that lies within
  * WORLD_COLLISION_CONTACT_DISTANCE (touching) or a little farther (speculative) has a contact per pair of shapes
- * (WorldContact: T12's manifold at the final poses, plus each point's relative velocity, push, age and whether it
+ * (WorldContact: the manifold at the final poses, plus each point's relative velocity, push, age and whether it
  * touches). Per OBJECT pair a contact event begins when they first touch, persists every tick while they stay in contact
  * (only when either collider reports persisting contacts) and ends when they are WORLD_COLLISION_CONTACT_END_MARGIN
  * beyond touching, or either is removed, disabled or stops qualifying. Blocked and crushed states give motion events
  * when they begin and end. WorldCollision_GetMotionResult gives each object's feedback for its driver: its push, its
  * contacts, its ground, blocked or crushed.
  *
- * DOUBLES OUTSIDE, FLOATS INSIDE (T33). Every position the collision world takes or gives is a double (Vector3Double:
+ * DOUBLES OUTSIDE, FLOATS INSIDE. Every position the collision world takes or gives is a double (Vector3Double:
  * query origins and poses, hit and contact points, grounds, the debug list's placements), so worlds hundreds of
  * kilometres across collide as they do at their origin: the skin, the rest gaps and the sweep thresholds (millimetres)
  * mean the same everywhere. Directions, normals, velocities, pushes, sizes and local positions stay floats. Inside, the
@@ -198,7 +199,7 @@ typedef struct WorldCollisionFilterStruct
     bool IsIgnoredSubtree;
     /** @brief Whether pushable colliders are skipped, and the movable colliders a pushable carries (its children's, which
      *  its push moves; default false): a character's own movement sweeps past them and leaves them to the collision
-     *  step, which pushes both by mass (T13). Kinematic and static colliders still count. */
+     *  step, which pushes both by mass. Kinematic and static colliders still count. */
     bool ArePushablesIgnored;
     /** @brief Whether the query collides as a collider on OwnLayer would (default false): it then also skips colliders
      *  whose mask lacks that layer, the other half of CollisionLayer_DoCollide's symmetric rule (a character's sweeps
@@ -231,7 +232,7 @@ typedef struct WorldCollisionShapeInfoStruct
     /** @brief The triangle's index in the mesh (CollisionMesh's order). */
     uint32_t TriangleIndex;
     /** @brief The model's mesh the triangle came from, and its index among that mesh's own triangles (with the
-     *  barycentrics, the model's UVs at the hit: T19). */
+     *  barycentrics, the model's UVs at the hit, for surface picking, not built yet). */
     uint32_t MeshPart;
     uint32_t SourceTriangle;
     /** @brief The mesh part's material index, -1 for none. */
@@ -383,11 +384,11 @@ typedef struct WorldContactPointDetailStruct
 } WorldContactPointDetail;
 
 /**
- * @brief One contact between a shape of one object and a shape of another, at the end of a step (T27).
+ * @brief One contact between a shape of one object and a shape of another, at the end of a step.
  */
 typedef struct WorldContactStruct
 {
-    /** @brief T12's manifold at the final poses: A the object with the lower id, the normal from A to B, the points'
+    /** @brief The manifold at the final poses: A the object with the lower id, the normal from A to B, the points'
      *  world and local positions, separations and feature ids, triangle data. */
     WorldContactManifold Manifold;
     /** @brief One per point of the manifold. */
@@ -475,7 +476,7 @@ typedef struct WorldMotionEventStruct
 } WorldMotionEvent;
 
 /**
- * @brief An object's feedback from the last step, for its driver (T13's character reads it).
+ * @brief An object's feedback from the last step, for its driver.
  */
 typedef struct WorldMotionResultStruct
 {
@@ -542,12 +543,12 @@ typedef struct WorldCollisionStatsStruct
     /** @brief How often an instance's shapes were rebuilt, and how often an instance moved, since construction. */
     uint64_t RebuildCount;
     uint64_t MoveCount;
-    /** @brief How many terrain chunks' collision meshes were built since construction (B01: a chunk's again only when it
+    /** @brief How many terrain chunks' collision meshes were built since construction (a chunk's again only when it
      *  changes). */
     uint64_t TerrainChunkBuildCount;
     /** @brief The number of syncs and steps so far. */
     uint64_t Tick;
-    /** @brief The last step (T27): colliders that moved, pushables that took part, pairs of shapes the solver looked
+    /** @brief The last step: colliders that moved, pushables that took part, pairs of shapes the solver looked
      *  at, contacts (touching ones, and the object pairs in contact), solver iterations, substeps, the deepest overlap
      *  left (metres), blocked movers, crushed pushables, and how often the step was solved again for stopped movers. */
     size_t MoverCount;
@@ -627,7 +628,7 @@ void WorldCollision_Destroy(WorldCollision* self);
 void WorldCollision_Sync(WorldCollision* self);
 
 /**
- * @brief The tick's collision step (T27): syncs, sweeps every collider that moved since the last step, pushes apart
+ * @brief The tick's collision step: syncs, sweeps every collider that moved since the last step, pushes apart
  *        what overlaps, writes the pushes into the objects, then finds the contacts, events and results and the
  *        trigger pairs.
  *

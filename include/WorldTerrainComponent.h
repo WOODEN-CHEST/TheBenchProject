@@ -23,7 +23,7 @@
  *
  * OVERRIDES. Each default of the terrain asset a placement may change is two rows: an override flag
  * ("overrides_<key>", false: the asset's value applies) and the placement's own value next to it, kept (and saved) while
- * the flag is off: has_outline, shadow_tier, casts_shadows, haze (T35), draw_distance, is_draw_distance_fixed,
+ * the flag is off: has_outline, shadow_tier, casts_shadows, haze, draw_distance, is_draw_distance_fixed,
  * is_collision_enabled, collision_layer and collides_with. draw_distance_multiplier (above 0, default 1) multiplies whichever draw distance
  * applies. WorldTerrainComponent_ResolveSettings is the pure function that gives the settings in effect. Its table is
  * "terrain_component", in that order with "terrain" first; every change advances the component's revision.
@@ -57,7 +57,7 @@ typedef enum WorldTerrainSettingEnum
     WorldTerrainSetting_CollisionLayer,
     /** @brief collides_with. */
     WorldTerrainSetting_CollidesWith,
-    /** @brief haze (T35). */
+    /** @brief haze. */
     WorldTerrainSetting_Haze,
     /** @brief The number of settings (not a setting). */
     WorldTerrainSetting_Count

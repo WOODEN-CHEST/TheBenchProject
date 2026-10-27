@@ -8,7 +8,7 @@
 #include "WorldRenderer.h"
 
 /*
- * Private header (source/) of the world test frame's instanced copies (B03): the pebble field and the instancing A/B.
+ * Private header (source/) of the world test frame's instanced copies: the pebble field and the instancing A/B.
  * Test content only: WorldTestFrame.c calls it from its tick. The grove (the test world's object 52, a model_instances
  * component of test_tree) is ordinary world-file content.
  *

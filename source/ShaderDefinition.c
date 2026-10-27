@@ -13,15 +13,15 @@
 /*
  * The shader definition loads an optional vertex stage and an optional fragment stage, either of which may
  * be omitted to fall back to Raylib's built-in stage. The definition keys are "vertex_location" and
- * "fragment_location"; a bare "location" is accepted as a back-compat alias for the fragment stage (the
- * original single-stage behavior). At least one stage must be specified. A location names a file without
+ * "fragment_location"; a bare "location" is accepted as a back-compat alias for the fragment stage (when there is
+ * no "fragment_location"). At least one stage must be specified. A location names a file without
  * its extension, and both stage extensions (vert, frag, vs, fs, glsl) are accepted for either stage, so the
  * two source files must have DISTINCT stems (e.g. "pbr/vertex" + "pbr/fragment"); two files sharing a stem
  * would make the location ambiguous. Shader source is loaded as text, so this loader uses the streaming
  * resource API rather than a temp file, and a reference location needs no format. Each stage's #include lines
  * are expanded before it is compiled (ShaderSource.h).
  *
- * An optional "defines" array names preprocessor symbols for both stages (B03): ["WORLD_INSTANCED"] makes a twin of a
+ * An optional "defines" array names preprocessor symbols for both stages: ["WORLD_INSTANCED"] makes a twin of a
  * shader from the same files, the shared files testing the symbol with #ifdef. Each name is a GLSL identifier that is not
  * reserved (ShaderSource_IsDefineName), at most once per definition.
  */
@@ -359,7 +359,7 @@ Error ShaderDefinition_Construct(AssetManager* manager, const UserData* userData
     }
     if ((Result.Code == ErrorCode_Success) && !Definition->HasFragment)
     {
-        // Back-compat: a bare "location" is the fragment shader (the original single-stage behavior).
+        // Back-compat: a bare "location" is the fragment shader.
         Result = ReadOptionalLocation(RootCompound, (const unsigned char*)u8"location", sourceDescription,
             &Definition->HasFragment, &Definition->FragmentLocation);
     }

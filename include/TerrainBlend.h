@@ -11,9 +11,9 @@
 
 /**
  * @file TerrainBlend.h
- * @brief The terrain's material blend in C (B02): what the terrain shader (shaders/terrain/fragment.frag) works out per
- *        pixel, mirrored as the dither is (WorldVisibility.h), so tests, the scattering's limits (B09), footsteps and
- *        anything else that asks "what is the ground here" get the shader's answer.
+ * @brief The terrain's material blend in C: what the terrain shader (shaders/terrain/fragment.frag) works out per
+ *        pixel, mirrored as the dither is (WorldVisibility.h), so tests, the scattering's limits (not built yet),
+ *        footsteps and anything else that asks "what is the ground here" get the shader's answer.
  *
  * Per pixel, in order:
  * 1. **The painted weights**: a vertex's sixteen weight bytes (one per palette material, byte / 255), interpolated over

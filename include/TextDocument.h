@@ -207,8 +207,8 @@ Error TextDocument_ResolveAnimation(TextDocument* self, const unsigned char* ani
 /**
  * @brief Returns the translation of a key in the document's language.
  *
- * TODO: there are no string tables yet (architecture decision A9 keeps the rest of translation for later), so this
- * always returns NULL and translate components show their fallback.
+ * TODO: there are no string tables yet (the rest of translation comes later), so this always returns NULL and
+ * translate components show their fallback.
  * @param self The document; must not be NULL.
  * @param key The translation key; must not be NULL.
  * @returns The borrowed translated text, or NULL when the key has no translation.

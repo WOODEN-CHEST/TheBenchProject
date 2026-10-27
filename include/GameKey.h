@@ -179,7 +179,7 @@ typedef enum GameKeyEnum
     /** @brief The back mouse button. */
     GameKey_MouseBack,
 
-    // TODO: gamepad buttons go here, after the mouse buttons (FIX_PLAN D7: GameKey leaves room for them).
+    // TODO: gamepad buttons go here, after the mouse buttons (GameKey leaves room for them).
 
     /** @brief One past the last key; equals the number of keys including GameKey_Unknown. Not a real key. */
     GameKey_Count

@@ -68,9 +68,9 @@
  * hold entry 1, their name (String). A list is an array of its elements: Boolean, the smallest integer type for ints
  * (unsigned for objects), Float or Double for floats, String for strings and keys, Double (3 per element) for vector3,
  * UInt8 (4 per element) for colors, Int64 for date_times, and a Compound array of value compounds (entries 2 to 4) for
- * lists and compounds. Unknown entry ids are skipped (forward compatibility). A vector3 is three doubles since T33 (it
- * often holds a position: a waypoint, a spawn point); its readers also take the Float arrays written before, and a JSON
- * vector3 written then reads as the doubles that print the same text.
+ * lists and compounds. Unknown entry ids are skipped (forward compatibility). A vector3 is three doubles (it often
+ * holds a position: a waypoint, a spawn point); its readers also take Float arrays, and a JSON vector3 written from
+ * floats reads as the doubles that print the same text.
  *
  * Not thread-safe.
  */

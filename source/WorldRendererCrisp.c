@@ -58,9 +58,9 @@ void WorldRendererCrisp_ReleaseTargets(WorldRenderer* self)
 void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     BeginTextureMode(self->_crisp._target);
-    WorldRendererCommon_BeginCameraDepth(self, frame); // the scene's depth convention (T39)
+    WorldRendererCommon_BeginCameraDepth(self, frame); // the scene's depth convention
     ClearBackground(BLANK); // clears colour to (0,0,0,0) and depth to the farthest (0 reversed): "no crisp object here"
-    // Re-upload the lighting (sun/ambient/fog/shadow + re-bind the shadow map) — the crisp pass runs after
+    // Re-upload the lighting (sun/ambient/haze/shadow + re-bind the shadow map) — the crisp pass runs after
     // the bloom/shaft passes, which may have changed GL texture-slot / shader state. applyScreenAo=false: this
     // is a full-res pass, so the low-res AO map (sampled by gl_FragCoord) would mis-align; crisp objects get no AO.
     // For the same reason the dither's pixel scale is window / scene: a fading crisp object dithers in scene pixels,

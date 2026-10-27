@@ -775,7 +775,7 @@ Error TerrainMesh_SetVertexPositions(TerrainMesh* self, const uint32_t* vertices
     {
         MarkAroundGroup(self, self->_groups[vertices[Index]]);
     }
-    // TODO: the groups are kept as they were built (the editor round's topology edits will group again): moving one
+    // TODO: the groups are kept as they were built (the editor's topology edits will group again): moving one
     // vertex of a group separates it from the others at that position (an imported hard edge's other side), and moving
     // a vertex onto another group's position does not join them, so the normals and edges there keep the old grouping.
     // Until then the editor moves every vertex at a position together and keeps positions apart.

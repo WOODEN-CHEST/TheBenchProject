@@ -1,4 +1,4 @@
-// The copies of an instanced draw (B03), for #include "common/instancing" in the instanced twins' vertex stages, whose
+// The copies of an instanced draw, for #include "common/instancing" in the instanced twins' vertex stages, whose
 // definitions define WORLD_INSTANCED (common/dither then reads the copy's dither from the flat outputs below). One draw is
 // one LOD of one cell of a model instances component: raylib's matrices place the cell (matModel: the object's world
 // matrix times the translation to the cell's centre, in render space; mvp: that times the pass's view and projection),
@@ -10,7 +10,7 @@
 // - its sphere: the world model's (instanceBoundsCenter, instanceBoundsRadius) under its matrix (the radius times its
 //   longest axis), placed by matModel; its LOD distance is the camera's (render space's origin) to the centre, its fade
 //   distance to the nearest point, both times the zoom factor;
-// - its fade: T07's distance fade over the last band of the draw distance in effect, against 1 - its opacity (the
+// - its fade: the distance fade over the last band of the draw distance in effect, against 1 - its opacity (the
 //   object's times its tint's alpha): the larger counts;
 // - its LOD: before a band, the band's outgoing LOD; inside it both, the incoming one's share rising linearly across it;
 // - whether this draw (its pass, its LOD) shows it, and with which dither (WorldInstancing_GetDraw).
@@ -27,7 +27,7 @@ layout(location = 9) in vec4 instanceRow0;
 layout(location = 10) in vec4 instanceRow1;
 layout(location = 11) in vec4 instanceRow2;
 layout(location = 12) in vec4 instanceTint;    // normalized bytes: red, green and blue multiply its colour, alpha is its opacity
-layout(location = 13) in float instanceRandom; // stable per copy, in [0, 1); unused until B10's wind
+layout(location = 13) in float instanceRandom; // stable per copy, in [0, 1); unused: for grass and wind, not built yet
 
 // The passes (WorldInstancePass in source/WorldInstancing.h).
 #define INSTANCE_PASS_LIT 0

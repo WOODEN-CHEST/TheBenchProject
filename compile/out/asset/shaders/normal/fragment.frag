@@ -9,7 +9,7 @@
 //   A   = surface + outline flag:
 //           0.0       = not a surface (the cleared value: sky / debug grid / anything not drawn here)
 //           0.5       = surface, outlines DISABLED for this object
-//           0.76..1.0 = surface, outlines ENABLED for this object, its haze multiplier (0..1) over that range (T35: the
+//           0.76..1.0 = surface, outlines ENABLED for this object, its haze multiplier (0..1) over that range (the
 //                       postfx pass fades its outline by the haze in front of it at the object's own haze)
 //
 // The pass is drawn with colour blending DISABLED (see RenderNormalBuffer), so RGB and A are written verbatim;

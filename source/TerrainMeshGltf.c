@@ -11,7 +11,7 @@
 #include "wr/WRVectorMath.h"
 
 /*
- * A terrain imported from glTF (TerrainMesh_CreateFromGltf, TerrainMesh.h): what Blender writes (decision W6). The file is
+ * A terrain imported from glTF (TerrainMesh_CreateFromGltf, TerrainMesh.h): what Blender writes. The file is
  * hostile: source/GltfChecks.h checks its structure before cgltf trusts a number, and this reader checks every count,
  * index, attribute shape and transform before it reads one.
  *

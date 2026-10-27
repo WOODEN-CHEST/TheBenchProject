@@ -172,7 +172,7 @@ static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, con
     if (model->IsDrawn)
     {
         // Its own draw distance (the world model's or the placement's, times its multiplier), scaled by the quality
-        // setting unless it is fixed, against the zoomed distance (G17).
+        // setting unless it is fixed, against the zoomed distance.
         float DrawDistance = WorldVisibility_ScaleDrawDistance(model->DrawDistance, model->IsDrawDistanceFixed,
             view->DrawDistanceScale);
         Fade = GetFade(view, model->RenderCenter, model->Radius, DrawDistance, GetZoomFactor(view), model->Tint);
@@ -214,7 +214,7 @@ static bool AddSprite(WorldVisibility* self, const WorldVisibilityView* view, co
     size_t index)
 {
     // Its own draw distance (the world sprite's, its kind's or the placement's, times its multiplier), with the models'
-    // rules: scaled by the quality setting unless it is fixed, against the zoomed distance (G17).
+    // rules: scaled by the quality setting unless it is fixed, against the zoomed distance.
     float DrawDistance = WorldVisibility_ScaleDrawDistance(sprite->DrawDistance, sprite->IsDrawDistanceFixed,
         view->DrawDistanceScale);
     WorldVisibilityFade Fade = GetFade(view, sprite->Shape.Position, sprite->BoundsRadius, DrawDistance,
@@ -239,7 +239,7 @@ static bool AddSprite(WorldVisibility* self, const WorldVisibilityView* view, co
         || AddCaster(self->_sprites, view, sprite->Shape.Position, sprite->BoundsRadius, true, true, index);
 }
 
-/* One terrain chunk entry (B01; the cache lists only chunks of shown terrains): its fades, then the camera's list when it
+/* One terrain chunk entry (the cache lists only chunks of shown terrains): its fades, then the camera's list when it
  * is in view (counted with its triangles), and the shadow passes' lists by its shadow tier, as a model's. */
 static bool AddTerrainChunk(WorldVisibility* self, const WorldVisibilityView* view, const WorldRenderTerrainChunk* chunk,
     size_t index)
@@ -269,7 +269,7 @@ static bool AddTerrainChunk(WorldVisibility* self, const WorldVisibilityView* vi
         ModelCastsIntoCascade(chunk->ShadowTier, true), ModelCastsIntoCascade(chunk->ShadowTier, false), index);
 }
 
-/* One instance cell entry (B03; the cache lists only cells of drawn components): its fades by its sphere around every
+/* One instance cell entry (the cache lists only cells of drawn components): its fades by its sphere around every
  * copy, then the camera's list when it is in view (counted with its copies), and the shadow passes' lists by its shadow
  * tier, as a model's. */
 static bool AddInstanceCell(WorldVisibility* self, const WorldVisibilityView* view, const WorldRenderInstanceCell* cell,

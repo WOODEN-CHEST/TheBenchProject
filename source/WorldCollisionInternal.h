@@ -16,19 +16,19 @@
 /*
  * Private header (source/): the collision world's state, shared by its files: source/WorldCollision.c (lifetime, sync,
  * debug list, stats), source/WorldCollisionQuery.c (the queries), source/WorldCollisionTrigger.c (trigger pairs and
- * events), and since T27 source/WorldCollisionStep.c (the step: motions, who takes part, blocked movers, the write-back,
+ * events), source/WorldCollisionStep.c (the step: motions, who takes part, blocked movers, the write-back,
  * the results), source/WorldCollisionSolver.c (pairs, contacts at poses, the sweeps, the push-out solver) and
  * source/WorldCollisionEvents.c (contacts across steps, contact and motion events, the debug contacts).
  *
  * INSTANCES live in slots (one growable array with a free list), so a tree proxy can name its shape by (slot, shape
- * index) for as long as the instance lives. An object has at most one: its collider's, or (B01) its terrain
+ * index) for as long as the instance lives. An object has at most one: its collider's, or its terrain
  * component's when it has no collider (a terrain instance holds one mesh shape per chunk, its shape index the chunk's).
  * Between changes of the world's component set, _order maps each collider of the world's dense collider array, then
  * each terrain of its terrain array, to its slot, so a sync is one walk in the world's order; _lookup (sorted by object
  * id) finds an object's instance for the queries. Every instance holds its shapes in world space (WorldCollisionShape:
  * the transform both ways, the box, the proxy).
  *
- * DOUBLES OUTSIDE, FLOATS INSIDE (T33, as Jolt's double-precision build). Everything that says where something is in
+ * DOUBLES OUTSIDE, FLOATS INSIDE (as Jolt's double-precision build). Everything that says where something is in
  * the world is a double: the shapes' and objects' placements (WorldCollisionPlacement: float axes, a double
  * translation), the motion poses (WorldCollisionPose: a double position), the trees' boxes and the step's swept boxes
  * (BoundingBoxDouble). The narrowphase (source/CollisionGeometry.h) stays in float: before each call the world layer
@@ -38,7 +38,7 @@
  * back in double. A step's manifold keeps the origin its points are relative to. Directions, normals, separations,
  * pushes and sizes stay floats: they mean the same anywhere.
  *
- * THE STEP (T27). Each instance keeps its motion frame (Pose: its object's world position and its turn by the rotation
+ * THE STEP. Each instance keeps its motion frame (Pose: its object's world position and its turn by the rotation
  * mode, rigid) and where that was at the end of the last step (LastPose); each shape keeps its transform relative to the
  * pose (ShapeToPose), so it can be placed anywhere along a motion. A step gives every instance that takes part a BODY:
  * pushables that are awake (moved, pushed, or near something that moved), kinematic and static instances that pair with
@@ -101,11 +101,11 @@ typedef struct WorldCollisionShapeStruct
     BoundingBoxDouble Box;
     /** Its proxy in the instance's tree, or COLLISION_TREE_NULL. */
     int32_t Proxy;
-    /** Shape space to the instance's pose (T27): the shape placed at any pose P is P * ShapeToPose. */
+    /** Shape space to the instance's pose: the shape placed at any pose P is P * ShapeToPose. */
     CollisionAffine ShapeToPose;
 } WorldCollisionShape;
 
-/** What a terrain instance keeps for one chunk of its terrain's mesh (B01): the chunk's mesh shape, placed at the
+/** What a terrain instance keeps for one chunk of its terrain's mesh: the chunk's mesh shape, placed at the
  *  chunk's centre in the terrain's space (exact in float: on the position grid, within the extent), one-sided; its mesh
  *  (owned; NULL for a chunk of holes only, or one whose mesh could not be built); and the chunk revision it was built
  *  from. */
@@ -116,7 +116,7 @@ typedef struct WorldCollisionTerrainChunkStruct
     uint32_t Revision;
 } WorldCollisionTerrainChunk;
 
-/** One collision source of an object: its collider, or (B01) its terrain component when it has no collider. */
+/** One collision source of an object: its collider, or its terrain component when it has no collider. */
 typedef struct WorldCollisionInstanceStruct
 {
     /** Whether the slot holds an instance. */
@@ -139,7 +139,7 @@ typedef struct WorldCollisionInstanceStruct
      *  world's user; NULL when there is none or it failed, which is not retried until the name changes). */
     unsigned char* WorldModelName;
     const WorldModel* WorldModel;
-    /** B01, a terrain instance: its terrain resolved as the world model is (an owned copy of the name and the asset);
+    /** For a terrain instance: its terrain resolved as the world model is (an owned copy of the name and the asset);
      *  a record per chunk of its mesh (an owned block, which the shapes point into: replaced only with them) for the
      *  layout revision they were cut from; and the mesh's revision they were last compared with (TerrainMesh_GetRevision:
      *  while it is unchanged no chunk changed). */
@@ -152,11 +152,11 @@ typedef struct WorldCollisionInstanceStruct
     /** Whether the shapes are in the trees, and in which. */
     bool IsActive;
     bool IsStatic;
-    /** Whether its object hangs on a socket of its parent (T30: a crate in someone's hands), as of the last sync: a
+    /** Whether its object hangs on a socket of its parent (a crate in someone's hands), as of the last sync: a
      *  pushable held so is its holder's (WorldCollisionInternal_IsPushable). Kept here so queries never follow the
      *  collider pointer, which an object removed since the sync has freed. */
     bool IsOnSocket;
-    /** T27, kept beside IsActive and IsStatic (the step's passes over every instance read little else of a static one):
+    /** Kept beside IsActive and IsStatic (the step's passes over every instance read little else of a static one):
      *  its shapes were rebuilt, or it was placed for the first time, since the last step (it wakes what is near it); a
      *  pushable that stays awake into the next step (left overlapping beyond the slop); whether it was blocked or crushed
      *  after the last step (the motion events' edges). */
@@ -182,12 +182,12 @@ typedef struct WorldCollisionInstanceStruct
     bool HasWarnedFlatShape;
     bool HasWarnedPushableShape;
     bool HasWarnedWriteBack;
-    /** B01: a terrain chunk whose collision mesh could not be built; on a collider's instance, a terrain component on
+    /** A terrain chunk whose collision mesh could not be built; on a collider's instance, a terrain component on
      *  the same object (the collider wins). */
     bool HasWarnedTerrainChunk;
     bool HasWarnedTerrainIgnored;
 
-    /* T27: motion. */
+    /* Motion. */
     /** The motion frame now (rigid: the object's world position, its turn by the rotation mode), and at the end of the
      *  last step (valid while HasLastPose: from the instance's first placement; cleared when it leaves the trees). */
     WorldCollisionPose Pose;
@@ -437,10 +437,10 @@ struct WorldCollisionStruct
     uint64_t _tick;
     uint64_t _rebuildCount;
     uint64_t _moveCount;
-    /** B01: how many terrain chunks' collision meshes were built. */
+    /** How many terrain chunks' collision meshes were built. */
     uint64_t _terrainChunkBuildCount;
 
-    /* T27: the step. */
+    /* The step. */
     float _deltaSeconds;
     /** The tick of the last step (results stamped with another tick read as empty). */
     uint64_t _stepTick;
@@ -478,7 +478,7 @@ struct WorldCollisionStruct
     /** WorldCollisionDebugContact, while enabled. */
     bool _isDebugContactsEnabled;
     GenericBuffer _debugContacts;
-    /** The last step's counts (WorldCollisionStats' T27 part). */
+    /** The last step's counts (WorldCollisionStats' step part). */
     WorldCollisionStats _stepStats;
 };
 
@@ -539,7 +539,7 @@ static inline bool WorldCollisionInternal_IsCandidateNear(const WorldCollisionIn
 }
 
 
-// Functions: doubles outside, floats inside (T33).
+// Functions: doubles outside, floats inside.
 /* A placement relative to @p origin, for the narrowphase: its axes, and its translation less the origin, subtracted in
  * double and rounded once. */
 static inline CollisionAffine WorldCollisionInternal_ToRelative(const WorldCollisionPlacement* placement,
@@ -622,7 +622,7 @@ void WorldCollisionInternal_FillShapeInfo(const WorldCollisionInstance* instance
     WorldCollisionShapeInfo* outInfo);
 
 /* Fills what a result says about a triangle of an instance's mesh shape (its index, model part, source triangle and
- * material; not the barycentrics). A terrain's part is its chunk and its source triangle the terrain's (B01). */
+ * material; not the barycentrics). A terrain's part is its chunk and its source triangle the terrain's. */
 void WorldCollisionInternal_FillTriangleInfo(const WorldCollisionInstance* instance, const WorldCollisionShape* shape,
     uint32_t triangle, WorldCollisionShapeInfo* info);
 

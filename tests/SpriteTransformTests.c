@@ -303,7 +303,7 @@ static void BlendedListSortsBackToFront(TestRun* run)
 }
 
 
-/* The property render space relies on (T32): a sprite drawn relative to the camera (its pivot minus the camera's
+/* The property render space relies on: a sprite drawn relative to the camera (its pivot minus the camera's
  * position, the camera at the origin) is the sprite drawn in the world, moved by the camera's position: the same axes,
  * the translation minus the camera's. For a billboard and an axis billboard facing the camera, and a billboard facing a
  * lamp (the lamp relative to the camera too). It pins SpriteTransform's maths, not the renderer's use of it: the

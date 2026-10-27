@@ -397,7 +397,7 @@ static void TheInputIsCheckedAndNormalised(TestRun* run)
         Vector3 Direction = CharacterInput_GetLookDirection(&Input);
         TEST_CHECK(run, IsNear(Direction.x, 0.70710678f, 1e-5f) && IsNear(Direction.y, 0.70710678f, 1e-5f));
 
-        // Huge but finite moves are directions too (their length once overflowed to infinity and back to zero).
+        // Huge but finite moves are directions too (a float length would overflow to infinity and scale them to zero).
         Input = CreateWalk((Vector3){ 1e20f, 0.0f, 0.0f });
         TEST_CHECK_SUCCESS(run, WorldCharacterComponent_SetInput(Character, &Input));
         TEST_CHECK(run, IsNear(Stored->MoveDirection.x, 1.0f, 1e-6f) && (Stored->MoveDirection.y == 0.0f));
@@ -441,7 +441,7 @@ static void ACharacterGetsACapsuleColliderAndStandsStill(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
-/* T33: a character standing on the floor keeps its feet the skin and the rest gap (2 mm) above it, to a micrometre, and
+/* A character standing on the floor keeps its feet the skin and the rest gap (2 mm) above it, to a micrometre, and
  * does not drift for 10 000 ticks: 173 km from the world's origin in the far run, where a float's step is 8 mm. (Its
  * ground follow lets the feet wobble about a tenth of a micrometre up and down, the same at the origin; across, they
  * stay put.) */
@@ -523,7 +523,7 @@ static void WalkSquare(TestRun* run, Vector3Double offset, SquareWalk* outWalk)
     TestWorld_SetOffset(Previous);
 }
 
-/* T33: the same walk around a square, at the world's origin and 173 km from it (where a float's step is 8 mm), goes
+/* The same walk around a square, at the world's origin and 173 km from it (where a float's step is 8 mm), goes
  * the same way tick by tick and ends at the same place of its scene, the crate it shoved too. */
 static void ASquareWalkedFarAwayEndsWhereItEndsAtTheOrigin(TestRun* run)
 {
@@ -758,7 +758,7 @@ static Vector3 WalkDownStairs(TestRun* run, bool isSnapOverridden, float snap, E
     return Feet;
 }
 
-/* By default a walker falls off every step, stairs too (T13's first tuning); a step-down distance keeps it on them. */
+/* By default a walker falls off every step, stairs too; a step-down distance keeps it on them. */
 static void WalkingDownStairsFallsOffEachStepUnlessItStepsDown(TestRun* run)
 {
     EventCounts Counts = { 0 };
@@ -1173,7 +1173,7 @@ static void ACharacterNobodyDrivesFallsAndRides(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
-// Static functions: actions (T30).
+// Static functions: actions.
 /* A control asking for an anchor at @p feet of the scene facing @p yaw, reached in @p seconds, with @p lock. */
 static CharacterActionControl CreateAnchor(Vector3 feet, float yaw, float seconds, CharacterMovementLock lock)
 {
@@ -1338,7 +1338,7 @@ static void SettingsChangedAtRuntimeTakeEffect(TestRun* run)
 }
 
 
-// Static functions: T13's review (2026-10-21); each case failed before its fix.
+// Static functions: corner cases of the motion (steps, landings, slides, lifts, curbs, re-enabling, teleports, walls).
 /* Whether a character walking along +X at @p speed from x = @p startX stands on a step of @p height (its riser at
  * x = 1.5) after @p ticks. */
 static bool ClimbsAStep(TestRun* run, float height, float speed, float startX, uint32_t ticks)
@@ -1361,8 +1361,8 @@ static bool ClimbsAStep(TestRun* run, float height, float speed, float startX, u
     return IsOnTop;
 }
 
-/* A riser met with a hair of the tick's move left, or by a slow walker, was never climbed: the step up went no further
- * than the move had left, short of the step's edge. */
+/* A riser is climbed however little of the tick's move is left when the walker meets it, and by a slow walker too: a
+ * step up going no further than the move left would stop short of the step's edge. */
 static void ARiserIsClimbedWhereverTheTickMeetsIt(TestRun* run)
 {
     static const float Heights[] = { 0.1f, 0.25f, 0.34f };
@@ -1409,8 +1409,9 @@ static void DropOntoAPushable(TestRun* run, float drop, bool isOntoAHead)
     Scene_Deconstruct(run, &Scene);
 }
 
-/* Pushables were left to the collision step: a falling character sank into a crate or a head and was pushed back up
- * tick after tick, landing late or never. (Drops beyond the step height: nearer, the placement stands it on it.) */
+/* A falling character lands on a crate or a head (pushables) and stands on it: were pushables left to the collision
+ * step, it would sink in and be pushed back up tick after tick, landing late or never. (Drops beyond the step height:
+ * nearer, the placement stands it on it.) */
 static void ACharacterDroppedOntoACrateOrAHeadLandsOnIt(TestRun* run)
 {
     static const float Drops[] = { 0.5f, 1.1f, 3.1f };
@@ -1420,8 +1421,8 @@ static void ACharacterDroppedOntoACrateOrAHeadLandsOnIt(TestRun* run)
         DropOntoAPushable(run, Drops[Drop], true);
     }
 
-    // A 2 cm pushable plank on a pillar, fallen onto from 30 m (5 cm a tick): passed straight through in one tick, it
-    // was not even found below.
+    // A 2 cm pushable plank on a pillar, fallen onto from 30 m (5 cm a tick): it is found below, not passed straight
+    // through in one tick.
     CharacterScene Scene;
     if (Scene_Construct(run, &Scene))
     {
@@ -1445,8 +1446,8 @@ static float NextSigned(uint32_t* state)
     return ((float)(*state >> 8) / 8388608.0f) - 1.0f;
 }
 
-/* A move going into a plane at speed came back from the clip as no move at all, about 1 in 500 at 10 m/s: the rounding
- * left along the plane was weighed against the short slide's own length instead of the move's. */
+/* A move going into a plane at speed keeps its slide: the rounding left along the plane is weighed against the move's
+ * length, not the short slide's own (which would turn about 1 in 500 at 10 m/s into no move at all). */
 static void AFastMoveIntoAPlaneKeepsItsSlide(TestRun* run)
 {
     static const float Speeds[] = { 10.0f, 55.0f, CHARACTER_MAX_SPEED };
@@ -1510,8 +1511,8 @@ static float JumpOffALift(TestRun* run, float liftSpeed)
     return Vertical;
 }
 
-/* A jump off a moving lift set the vertical velocity to the jump speed, dropping the lift's: off a rising lift it fell
- * back onto it. */
+/* A jump off a moving lift adds the jump speed to the lift's vertical velocity (set to the jump speed alone, a jump off
+ * a rising lift would fall back onto it). */
 static void AJumpOffAMovingLiftKeepsTheLiftsVelocity(TestRun* run)
 {
     // The jump speed (3 m/s) on top of the lift's, less two and a half ticks of gravity.
@@ -1521,8 +1522,9 @@ static void AJumpOffAMovingLiftKeepsTheLiftsVelocity(TestRun* run)
     TEST_CHECK(run, IsNear(JumpOffALift(run, -2.0f), 1.0f - Fallen, 0.02f));
 }
 
-/* A ground snap distance of 0 looked for no ground at all, and the character left the ground every tick; and over the
- * middle of a large floor box the distance query read the capsule 3 mm inside it, so a short look found nothing. */
+/* A ground snap distance of 0, or a very short one, still keeps a character on flat ground: with no look for the ground
+ * at all it would leave the ground every tick, and over the middle of a large floor box a short look must still find
+ * the floor (a distance query reading the capsule millimetres inside it would find nothing). */
 static void NoGroundSnapStillStandsOnFlatGround(TestRun* run)
 {
     static const float Snaps[] = { 0.0f, 0.0005f, 0.002f };
@@ -1555,8 +1557,8 @@ static void NoGroundSnapStillStandsOnFlatGround(TestRun* run)
     }
 }
 
-/* A collider hanging under a pushable (a handle on a crate) was a wall to the walker's sweep, which skips only
- * pushables: it stopped at the handle instead of shoving the crate. */
+/* A collider hanging under a pushable (a handle on a crate) is no wall to the walker's sweep, which skips pushables and
+ * what they carry: the walker shoves the crate instead of stopping at the handle. */
 static void ACarriedPartPushesTheCrateItHangsFrom(TestRun* run)
 {
     CharacterScene Scene;
@@ -1624,9 +1626,10 @@ static bool WalkIntoACurb(TestRun* run, float height, float stepHeight, float sn
     return IsOnTop;
 }
 
-/* The round bottom rolls over any edge up to radius x (1 - cos slope_limit) high (8.8 cm for a human): with a step
- * height of 0 a walker still rolled onto curbs, walking up an edge as up a slope; with a short ground snap it lost the
- * ground against them and slid up in the air. An edge counts against the step height above the ground walked on. */
+/* The round bottom rolls over any edge up to radius x (1 - cos slope_limit) high (8.8 cm for a human), so the step
+ * height limits the edges it may roll over: with a step height of 0 a walker pressing against a curb stays put, neither
+ * rolling onto it as up a slope nor, with a short ground snap, losing the ground and sliding up in the air. An edge
+ * counts against the step height above the ground walked on. */
 static void AStepHeightLimitsTheEdgesTheRoundBottomRollsOver(TestRun* run)
 {
     static const float Curbs[] = { 0.002f, 0.005f, 0.02f, 0.05f, 0.08f };
@@ -1700,8 +1703,8 @@ static void AStepHeightLimitsTheEdgesTheRoundBottomRollsOver(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
-/* Disabled on a platform that then moved away and enabled again with a jump, a character took the platform's whole
- * move as one tick's carry (2 m in a tick: 960 m/s) and kept it as the jump's velocity. */
+/* Disabled on a platform that then moves away and enabled again with a jump, a character takes nothing of the
+ * platform's move (as one tick's carry it would be 2 m in a tick, 960 m/s, kept as the jump's velocity). */
 static void AReenabledCharacterIsNotThrownByWhatMovedMeanwhile(TestRun* run)
 {
     CharacterScene Scene;
@@ -1734,9 +1737,7 @@ static void AReenabledCharacterIsNotThrownByWhatMovedMeanwhile(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
-/* A character teleported while in the air after a jump kept the jump's mark: walking off the next edge, its late jump
- * was refused. A teleport places it afresh. */
-/* T33: a teleport refuses a place the world cannot hold (not finite, or where the object's position, its local one
+/* A teleport refuses a place the world cannot hold (not finite, or where the object's position, its local one
  * under a parent, would pass WORLD_POSITION_LIMIT, which the object's position row would refuse, leaving it where it
  * was without a word): the character stays put. */
 static void ATeleportRefusesPlacesTheWorldCannotHold(TestRun* run)
@@ -1789,6 +1790,8 @@ static void ATeleportRefusesPlacesTheWorldCannotHold(TestRun* run)
     Scene_Deconstruct(run, &Scene);
 }
 
+/* A teleport places a character afresh: one teleported while in the air after a jump keeps no mark of that jump, so
+ * walking off the next edge it may still jump late. */
 static void ATeleportGivesBackTheLateJump(TestRun* run)
 {
     CharacterScene Scene;
@@ -1841,10 +1844,10 @@ static Vector3 AddTurnedWall(TestRun* run, CharacterScene* scene, float yawDegre
     return Normal;
 }
 
-/* A run along a wall drifted into it by rounding, a hair a tick, until the capsule touched it and every move into it
- * stopped dead (a run along a turned wall stalled tick after tick); and the collision step, which keeps the skin, pushed
- * walkers out of walls and curbs every tick. Every move now keeps the skin to everything it passes, and gives back the
- * room rounding took. */
+/* A run along a turned wall never stalls, and the collision step never pushes the walker: every move keeps the skin to
+ * everything it passes and gives back the room rounding took. (Drifting into the wall a hair a tick, the capsule would
+ * touch it and every move into it stop dead; and the collision step, which keeps the skin, would push walkers out of
+ * walls and curbs every tick.) */
 static void ARunAlongATurnedWallNeverStallsAndNothingPushesTheWalker(TestRun* run)
 {
     static const float Speeds[] = { 3.5f, 30.0f };
@@ -1911,7 +1914,7 @@ static void ARunAlongATurnedWallNeverStallsAndNothingPushesTheWalker(TestRun* ru
 }
 
 
-// Static functions: T13's first tuning (2026-10-22).
+// Static functions: rolling off edges, jumps, air and ground control, the crouch's ease.
 /* The horizontal speed of a character's last move. */
 static float GetGroundSpeed(CharacterScene* scene, uint64_t id)
 {
@@ -1919,9 +1922,9 @@ static float GetGroundSpeed(CharacterScene* scene, uint64_t id)
     return sqrtf((Velocity.x * Velocity.x) + (Velocity.z * Velocity.z));
 }
 
-/* Walking off a block 0.3 m high, the round bottom rolled down its edge while the walker stayed on the ground, and the
- * ground snap (then 0.35 m) dropped it the rest in a tick. It rolls only as far as the contact stays walkable (r (1 -
- * cos 45 degrees): 8.8 cm), and then falls. */
+/* Walking off a block 0.3 m high, the walker rolls its round bottom down the edge only as far as the contact stays
+ * walkable (r (1 - cos 45 degrees): 8.8 cm), and then falls, never staying on the ground to be snapped down the rest in
+ * a tick. */
 static void WalkingOffABlockRollsALittleThenFalls(TestRun* run)
 {
     for (uint32_t Running = 0U; Running < 2U; Running++)
@@ -1966,9 +1969,9 @@ static void WalkingOffABlockRollsALittleThenFalls(TestRun* run)
     }
 }
 
-/* Running off a ledge higher than the step height, the walker kept the downward speed of its roll over the edge, as
- * fast as it ran: it dived. A fall from the top of the edge sets the most it keeps, so a metre's drop lands at a
- * metre's fall. */
+/* Running off a ledge higher than the step height, the walker does not keep the downward speed of its roll over the
+ * edge, as fast as it ran (it would dive): a fall from the top of the edge sets the most it keeps, so a metre's drop
+ * lands at a metre's fall. */
 static void RunningOffALedgeLandsAsFromItsTop(TestRun* run)
 {
     CharacterScene Scene;
@@ -2144,9 +2147,9 @@ static Vector3 SteerInTheAir(TestRun* run, float airAcceleration, Vector3 keys, 
     return Velocity;
 }
 
-/* In the air the keys did all a walker's acceleration did, braking it toward a standstill when let go. Now, by
- * default, they do nothing; with air control they push along their direction up to the wished speed, steering and
- * braking but never raising the speed across the ground past it (or past what it had). */
+/* In the air the keys do nothing by default (letting go does not brake the character toward a standstill as on the
+ * ground); with air control they push along their direction up to the wished speed, steering and braking but never
+ * raising the speed across the ground past it (or past what it had). */
 static void TheAirKeysSteerAndBrakeButNeverSpeedUp(TestRun* run)
 {
     float Run = CharacterSettings_CreateDefault().RunSpeed;
@@ -2281,7 +2284,7 @@ static void SteeringTurnsQuickerThanPushingAndFrictionStops(TestRun* run)
 }
 
 /* The eyes go down fast at first and slow as they near the crouched height, there after the crouch time (a linear ease
- * looked mechanical). */
+ * looks mechanical). */
 static void TheEyesEaseIntoACrouch(TestRun* run)
 {
     CharacterScene Scene;
@@ -2693,7 +2696,7 @@ static void ThePlayersLookTargetReportsItsChanges(TestRun* run)
 }
 
 
-/* The character a player controller let go of kept the input it last had: it walked on forever. */
+/* The character a player controller lets go of drops the input it last had (keeping it, it would walk on forever). */
 static void TheCharacterLetGoOfStopsWalking(TestRun* run)
 {
     CharacterScene Scene;

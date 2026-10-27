@@ -456,7 +456,7 @@ static void ReparentingKeepsTheWorldPlacementWhenAsked(TestRun* run)
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
-/* T33: far from the world's origin the hierarchy keeps a double's precision. A child 0.5 mm from its parent at
+/* Far from the world's origin the hierarchy keeps a double's precision. A child 0.5 mm from its parent at
  * 10 000 km keeps its 0.5 mm in the world matrix; moved under another parent there, keeping its place, it stays within
  * a few double steps (1.9 nm there); 100 km out, within 1e-9 m. A float would round both to a metre and a centimetre.
  * A parent so far away that the local position would pass WORLD_POSITION_LIMIT is refused. */

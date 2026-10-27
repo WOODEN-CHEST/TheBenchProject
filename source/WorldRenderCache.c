@@ -146,7 +146,7 @@ static void ResolveModel(WorldRenderModel* entry, AssetManager* assets, AssetUse
     ResolveVariant(entry, logger);
 }
 
-/* The pose of the object's animator when it was made for @p asset (T29), or NULL. */
+/* The pose of the object's animator when it was made for @p asset, or NULL. */
 static const WorldAnimatorPose* GetPose(const WorldObject* owner, const WorldModel* asset)
 {
     const WorldAnimatorComponent* Animator = WorldAnimatorComponent_FromComponent(WorldObject_GetComponent(owner,
@@ -158,7 +158,7 @@ static const WorldAnimatorPose* GetPose(const WorldObject* owner, const WorldMod
 /* Brings one model entry up to date for this frame: re-resolves its world model if its name changed (or its variant if
  * that changed), then takes the settings in effect (WorldModelComponent_ResolveSettings) and recomputes whether it is
  * drawn, its tint, its world matrix (scale -> Euler XYZ -> translation, as raylib's DrawModelEx composes them, times its
- * parents'; each LOD is drawn with its import transform inside it), its pose (T29) and its world bounding sphere (the
+ * parents'; each LOD is drawn with its import transform inside it), its pose and its world bounding sphere (the
  * world model's, or its pose's box's when it has a pose and the world model no bounds of its own, through its own
  * transform composed with the world matrix: conservative also when the hierarchy shears it, and exactly LOD 0's sphere
  * when the world model has no bounds of its own and the object no pose), both in double, and both in render space for
@@ -957,7 +957,7 @@ static void UpdateInstanceCellLods(WorldRenderInstanceCell* cell, const WorldRen
 }
 
 // Internal functions (declared in WorldRenderCache.h).
-/* The first-person object's camera pose (T30): its pose with every bone its world model's first_person block hides, and
+/* The first-person object's camera pose: its pose with every bone its world model's first_person block hides, and
  * each one's subtree, skinned to its hidden ancestor's joint (every vertex it moves lands on one point: nothing to draw),
  * in the cache's own copy of the palette. */
 static void UpdateFirstPerson(WorldRenderCache* self)
@@ -1132,7 +1132,7 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double 
     }
     UpdateFirstPerson(self);
 
-    // The terrains follow the world's terrain components the same way (B01).
+    // The terrains follow the world's terrain components the same way.
     bool AreTerrainsAligned = false;
     for (int Attempt = 0; (Attempt < 2) && !AreTerrainsAligned; Attempt++)
     {
@@ -1155,7 +1155,7 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double 
             "WorldRenderCache_Sync: the terrain entries do not follow the world.");
     }
 
-    // The model instances follow the world's model instances components the same way (B03).
+    // The model instances follow the world's model instances components the same way.
     bool AreInstancesAligned = false;
     for (int Attempt = 0; (Attempt < 2) && !AreInstancesAligned; Attempt++)
     {

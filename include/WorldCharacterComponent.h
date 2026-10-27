@@ -13,12 +13,12 @@
 
 /**
  * @file WorldCharacterComponent.h
- * @brief The character component: what makes an object walk, crouch, jump, fly and look around (T13), the player and
+ * @brief The character component: what makes an object walk, crouch, jump, fly and look around, the player and
  *        NPCs alike.
  *
  * WHAT. A character is an upright capsule whose feet are at its object's position. Its settings come from a character
  * asset (CharacterAsset.h: a human, a dog, a pigeon) named by the character row, and the placement may override EVERY
- * setting with an explicit flag next to its own value (overrides_<key> with <key>; the owner's decision G24). Without a
+ * setting with an explicit flag next to its own value (overrides_<key> with <key>). Without a
  * character asset (none named, a world without assets, a failed load, logged once) the table's defaults apply.
  * WorldCharacterComponent_ResolveSettings gives the settings in effect. Changing the name swaps the kind of character
  * and keeps the object.
@@ -35,7 +35,7 @@
  * belong to the character. The object's scale should stay 1.
  *
  * WHAT IT SHOWS. WorldCharacterComponent_GetState: the movement mode, the stance, the ground, the velocity, the facing,
- * the eye height, the crouch amount, the time in the air: what the camera, the animation (T29, T30) and scripts read.
+ * the eye height, the crouch amount, the time in the air: what the camera, the animation and scripts read.
  *
  * Added with World_AddComponent(world, id, WorldComponentType_Character, &component); reach its fields with
  * WorldCharacterComponent_FromComponent. Its table ("character_component") holds the character's name, then for each
@@ -87,7 +87,7 @@ typedef enum CharacterFacingEnum
 } CharacterFacing;
 
 /**
- * @brief How much of a character's movement an action locks (T30). Runtime state, not saved; the values are stable (an
+ * @brief How much of a character's movement an action locks. Runtime state, not saved; the values are stable (an
  *        animation graph's actions say it: AnimationGraphMovementLock has the same values).
  */
 typedef enum CharacterMovementLockEnum
@@ -103,7 +103,7 @@ typedef enum CharacterMovementLockEnum
 } CharacterMovementLock;
 
 /**
- * @brief Where a character's anchor approach is (T30). Runtime state; the values are stable.
+ * @brief Where a character's anchor approach is. Runtime state; the values are stable.
  */
 typedef enum CharacterApproachEnum
 {
@@ -118,7 +118,7 @@ typedef enum CharacterApproachEnum
 } CharacterApproach;
 
 /**
- * @brief What an action asks of a character's movement (T30): a lock, and optionally an anchor to slide onto first.
+ * @brief What an action asks of a character's movement: a lock, and optionally an anchor to slide onto first.
  *        A plain value type, set by the animation system (WorldCharacterComponent_SetActionControl), runtime only.
  */
 typedef struct CharacterActionControlStruct
@@ -210,12 +210,12 @@ typedef struct WorldCharacterStateStruct
     /** @brief Seconds since it left the ground (0 while grounded or flying). */
     float TimeInAir;
     /** @brief The events its last update raised: bit i set for WorldCharacterEventKind i (WorldCharacters.h), what its
-     *  animation reacts to (T30). */
+     *  animation reacts to. */
     uint32_t Events;
     /** @brief The impact speed of its last landing, metres per second downward (kept until the next landing; 0 before
      *  the first). */
     float LastLandingSpeed;
-    /** @brief Where its action's anchor approach is (T30). */
+    /** @brief Where its action's anchor approach is. */
     CharacterApproach Approach;
 } WorldCharacterState;
 
@@ -256,7 +256,7 @@ typedef struct WorldCharacterRuntimeStruct
     /** Where the update left the feet (the collision step's pushes show as the difference next tick). */
     bool _hasLastPosition;
     Vector3Double _lastPosition;
-    /** The anchor approach (T30): its seconds so far. */
+    /** The anchor approach: its seconds so far. */
     float _approachSeconds;
     /** Warnings given once per character. */
     bool _hasWarnedScale;
@@ -286,7 +286,7 @@ typedef struct WorldCharacterComponentStruct
     CharacterInput _input;
     /** @brief What it is doing (runtime, not saved). */
     WorldCharacterState _state;
-    /** @brief What its action asks of its movement (runtime, not saved; T30). */
+    /** @brief What its action asks of its movement (runtime, not saved). */
     CharacterActionControl _actionControl;
     /** @brief The system's bookkeeping (runtime). */
     WorldCharacterRuntime _runtime;
@@ -467,7 +467,7 @@ Error WorldCharacterComponent_SetInput(WorldCharacterComponent* self, const Char
 CharacterActionControl CharacterActionControl_CreateFree(void);
 
 /**
- * @brief Returns what the character's action asks of its movement (T30).
+ * @brief Returns what the character's action asks of its movement.
  * @param self The component; must not be NULL.
  * @returns The control (borrowed: valid until the next set).
  */
@@ -477,7 +477,7 @@ static inline const CharacterActionControl* WorldCharacterComponent_GetActionCon
 }
 
 /**
- * @brief Sets what an action asks of the character's movement (T30; the animation system does, for the actions of its
+ * @brief Sets what an action asks of the character's movement (the animation system does, for the actions of its
  *        graph), kept until the next set; the system acts on it at its next update.
  *
  * A control with an anchor starts an approach (WorldCharacterState.Approach becomes Approaching, even when the same

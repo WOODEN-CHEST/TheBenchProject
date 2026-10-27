@@ -14,19 +14,19 @@
 
 /*
  * The collision world (include/WorldCollision.h): lifetime, the sync, the debug list and the counts. Queries are in
- * source/WorldCollisionQuery.c, trigger pairs in source/WorldCollisionTrigger.c, the step (T27) in
+ * source/WorldCollisionQuery.c, trigger pairs in source/WorldCollisionTrigger.c, the step in
  * source/WorldCollisionStep.c with source/WorldCollisionSolver.c and source/WorldCollisionEvents.c; the shared state in
  * source/WorldCollisionInternal.h.
  *
- * A SYNC walks the world's colliders, then its terrains (B01), in its own order (_order maps each to its instance's
+ * A SYNC walks the world's colliders, then its terrains, in its own order (_order maps each to its instance's
  * slot; re-matched by object id whenever the world's component set changes, so an added, removed or replaced component
  * is noticed) and for each: out of the trees when it or an ancestor is disabled; its shapes rebuilt when the collider
  * changed (its revision), its world model's name changed, it moved between the static and the movable tree, or it was
  * just (re)enabled; moved (new transforms, boxes and proxies) when only its object's transform revision changed. Either
- * way its motion pose (T27) follows: the rigid frame its shapes move with, each shape's place relative to it, and how
+ * way its motion pose follows: the rigid frame its shapes move with, each shape's place relative to it, and how
  * far they reach.
  *
- * A TERRAIN (B01) is an object's source when it has no collider (with both, the collider wins: warned once). Its
+ * A TERRAIN is an object's source when it has no collider (with both, the collider wins: warned once). Its
  * instance keeps a record per chunk of its terrain's mesh: the chunk's collision mesh (TerrainMesh.h,
  * TerrainMesh_CreateChunkCollisionMesh: the terrain's own active edges, so seams do not catch) in a one-sided mesh shape
  * at the chunk's centre, one shape per chunk in chunk order. The meshes are cut again when the terrain or its chunk
@@ -34,7 +34,7 @@
  * again when the object moves and rebuilt, the meshes kept, when a setting changes or the instance comes back. The
  * layer, the mask and "collides" are the terrain's settings in effect (WorldTerrainComponent_ResolveSettings).
  *
- * The placements come from the objects' double world matrices (T33): each shape's transform is composed in double, its
+ * The placements come from the objects' double world matrices: each shape's transform is composed in double, its
  * axes rounded to floats and its translation kept in double (WorldCollisionPlacement), its box transformed in double.
  */
 
@@ -151,7 +151,7 @@ static void FreeTerrainChunks(WorldCollisionInstance* instance)
 static void FreeSlot(WorldCollision* self, uint32_t slot)
 {
     WorldCollisionInstance* Instance = WorldCollisionInternal_GetInstance(self, slot);
-    // A collider that goes while blocked or crushed ends that state (T27's motion events).
+    // A collider that goes while blocked or crushed ends that state (a BlockedEnd or CrushedEnd motion event).
     WorldMotionEvent Ends[2] =
     {
         { .Kind = WorldMotionEventKind_BlockedEnd, .ObjectId = Instance->ObjectId, .Tick = self->_tick },
@@ -348,7 +348,7 @@ static bool IsEffectivelyStatic(const WorldObject* object)
  * rotation mode, then the collider's own transform; for a terrain (no collider) the object's world matrix. yaw_only and
  * none rebuild the frame from the world transform's decomposition (a mirror lives in its scale, so the turn they keep is
  * a proper rotation) with the object's scale along the turned (or the world's) axes. The frame's rigid part is the
- * motion's pose (T27): the object's world position, turned as the shapes turn. */
+ * motion's pose: the object's world position, turned as the shapes turn. */
 static Matrix4Double GetInstanceFrame(const WorldCollisionInstance* instance, const WorldObject* object,
     const Matrix4Double* objectWorld, WorldCollisionPose* outPose)
 {
@@ -402,7 +402,7 @@ static bool IsShapeFrameChanged(const CollisionAffine* before, const CollisionAf
     return false;
 }
 
-/* Places each shape relative to the instance's pose and finds how far the valid ones reach from its origin (T27).
+/* Places each shape relative to the instance's pose and finds how far the valid ones reach from its origin.
  * Returns whether a valid shape's place relative to the pose changed (a scale or a shear: no motion of the pose shows
  * it). The shapes are taken relative to the pose's position first, in double, so the place holds far out. */
 static bool UpdatePoseShapes(WorldCollisionInstance* instance)
@@ -528,7 +528,7 @@ static void FinishRebuild(WorldCollision* self, WorldCollisionInstance* instance
     instance->ChainCount = 0U; // a chain recorded before may name other objects now
     if (isStatic)
     {
-        // A static collider never sweeps and nothing pushes it (T27): it starts every step where it is, unowned.
+        // A static collider never sweeps and nothing pushes it: it starts every step where it is, unowned.
         instance->LastPose = instance->Pose;
         instance->HasLastPose = true;
         instance->OwnerSlot = WORLD_COLLISION_NO_SLOT;
@@ -631,14 +631,14 @@ static void Move(WorldCollision* self, WorldCollisionInstance* instance, uint32_
         }
     }
     // A shape whose place relative to the pose changed (a scale) moved in a way no motion of the pose shows: the
-    // instance is changed (T27), so the step wakes what is near it and pushes it out.
+    // instance is changed, so the step wakes what is near it and pushes it out.
     if (UpdatePoseShapes(instance))
     {
         instance->IsChanged = true;
     }
     if (instance->IsStatic)
     {
-        // A static object never moves in play: its move is a teleport (T27), with no sweep.
+        // A static object never moves in play: its move is a teleport, with no sweep.
         instance->IsChanged = true;
         instance->LastPose = instance->Pose;
         instance->HasLastPose = true;
@@ -676,7 +676,7 @@ static void ResolveWorldModel(WorldCollision* self, WorldCollisionInstance* inst
     WarnAbout(self, instance, "has no collision from its world model", name, "", &Result);
 }
 
-// Static functions: terrains (B01).
+// Static functions: terrains.
 /* Resolves a terrain instance's terrain for a new name (a failure is warned about once and not retried until the name
  * changes again). The old terrain's chunk records go: they were cut from its mesh. */
 static void ResolveTerrain(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot,
@@ -792,7 +792,7 @@ static void RebuildTerrainShapes(WorldCollision* self, WorldCollisionInstance* i
 
 /* Rebuilds the collision meshes of the chunks whose revision moved. With @p isPlacing (the instance is in the trees and
  * keeps its other shapes) each rebuilt chunk's shape is placed again and put back into its tree, and the instance is
- * changed (T27: the step wakes what is near it); otherwise the caller rebuilds every shape. */
+ * changed (the step wakes what is near it); otherwise the caller rebuilds every shape. */
 static void UpdateTerrainChunks(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot,
     const TerrainMesh* mesh, bool isPlacing)
 {

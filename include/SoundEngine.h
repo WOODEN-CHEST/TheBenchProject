@@ -21,8 +21,7 @@
  *
  * STATUS: DISABLED. AudioEngine_Construct1 always fails with ErrorCode_InvalidOperation until the engine's
  * threading model is redesigned; agents/SoundEngine.md describes the defects and the planned redesign.
- * Nothing in this API is thread-safe. The thread-safety guarantees this header used to give (track and engine
- * calls usable from any thread at any time) did not hold.
+ * Nothing in this API is thread-safe, track and engine calls included.
  *
  * The audio engine, sound, track and modifier pointers and all stable and won't change after creation.
  *

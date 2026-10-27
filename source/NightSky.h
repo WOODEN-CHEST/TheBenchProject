@@ -13,12 +13,12 @@
  * brightness: light pollution, the moonlit sky, the twilight), the air mass toward an altitude, star colours, and the
  * fixed orientation of the galaxy among the stars. No GL, no state.
  *
- * THE LIMIT (T38). The faintest star the eye sees overhead follows the sky's luminance behind it: Schaefer's threshold
+ * THE LIMIT. The faintest star the eye sees overhead follows the sky's luminance behind it: Schaefer's threshold
  * ("Astronomy and the limits of vision", 1993) against the background, the rods' and the cones' alike, the lower one
  * counting (NightSky_GetThresholdMagnitude): about 6.5 under a dark site's 2.2e-4 cd/m^2, 3 to 3.5 at the end of the
  * civil twilight, none by day. The background is the twilight's (the renderer's sky light from the sun, in cd/m^2) added
- * to the night's: the sky light pollution and the moon brighten, expressed as the background that gives the limits T02
- * and T03 tuned for them (NightSky_GetThresholdBackground of the night limit), the natural night sky's glow in it.
+ * to the night's: the sky light pollution and the moon brighten, expressed as the background that gives the limits
+ * tuned for them (NightSky_GetThresholdBackground of the night limit), the natural night sky's glow in it.
  *
  * FRAMES. Stars are placed in the star frame of WorldEnvironment_GetStarsToWorld: the celestial frame (the pole above
  * the horizon at -z) of the moment the sun stands at right ascension 90 degrees, the June solstice. The renderer turns
@@ -143,7 +143,7 @@ double NightSky_GetThresholdBackground(float limitingMagnitude);
 
 /**
  * @brief Returns the night limit: the faintest magnitude visible overhead at full night for a light pollution and a
- *        moonlit sky (T02 and T03's tuning): NIGHT_SKY_DARK_SITE_LIMITING_MAGNITUDE, minus
+ *        moonlit sky: NIGHT_SKY_DARK_SITE_LIMITING_MAGNITUDE, minus
  *        NIGHT_SKY_LIGHT_POLLUTION_MAGNITUDES x lightPollution, minus the moon's share: NIGHT_SKY_FULL_MOON_MAGNITUDES x
  *        log10(1 + 20 m) / log10(21) for the moonlit sky m, times (1 - lightPollution). The logarithm follows the eye:
  *        a quarter moon (a tenth of the full moon's light) still takes about 0.6 magnitudes; and an already bright city
@@ -157,7 +157,7 @@ double NightSky_GetThresholdBackground(float limitingMagnitude);
 float NightSky_GetNightLimitingMagnitude(float lightPollution, float moonlitSky);
 
 /**
- * @brief Returns the faintest magnitude visible overhead (T38): the threshold (NightSky_GetThresholdMagnitude) against the
+ * @brief Returns the faintest magnitude visible overhead: the threshold (NightSky_GetThresholdMagnitude) against the
  *        twilight's background added to the night's, the background that gives the night limit
  *        (NightSky_GetThresholdBackground of NightSky_GetNightLimitingMagnitude). So at full night it is the night limit,
  *        and through dusk it rises with the twilight's fading light: the brightest stars at sunset, the limit of 3 to

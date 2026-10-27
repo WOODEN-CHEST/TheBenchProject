@@ -800,8 +800,8 @@ static void TheFirstThatHoldsWinsAndOnlyTheCurrentStateFires(TestRun* run)
     Scene_Deconstruct(&Scene);
 }
 
-/* T30 review: a looping clip of no length (one key: a held pose) fires its events once as its state starts, not every
- * tick (its time stays 0, so a later event would be passed again each tick). */
+/* A looping clip of no length (one key: a held pose) fires its events once as its state starts, not every tick (its
+ * time stays 0, so a later event would be passed again each tick). */
 static void AClipOfOnePoseFiresItsEventsOnce(TestRun* run)
 {
     static const char* const Graph =
@@ -829,7 +829,7 @@ static bool IsShippedInState(const AnimationGraph* graph, const AnimationGraphIn
         && (AnimationGraphInstance_GetCurrentState(instance, layer) == State);
 }
 
-/* T30: the shipped humanoid graph (compile/out/asset/animation_graphs/test_world) on the shipped library, bound to a
+/* The shipped humanoid graph (compile/out/asset/animation_graphs/test_world) on the shipped library, bound to a
  * skeleton of the library's own bones (the placeholder models share them): every clip, mask bone and look-at bone it
  * names is there; it walks by speed, sits through its action's states and holds what the right hand's socket holds.
  * Every shipped definition reads, the world models' sockets and first_person blocks among them. */

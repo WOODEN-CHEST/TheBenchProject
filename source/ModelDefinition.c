@@ -12,7 +12,7 @@
  * Static-model loader: loads meshes + materials, bakes an optional import transform into the model's
  * transform matrix, seeds sensible PBR scalar defaults, and applies optional material overrides (rebinding a
  * slot's albedo / normal / ORM (occlusion-roughness-metallic) / emissive textures and its tint + metallic /
- * roughness / emissive scalar factors). A model with bones also gets its skeleton (GameSkeleton.h, T29); the clips it
+ * roughness / emissive scalar factors). A model with bones also gets its skeleton (GameSkeleton.h); the clips it
  * plays are animation library assets of their own. Material addressing by name is out of scope for now (slots are
  * addressed by index).
  *

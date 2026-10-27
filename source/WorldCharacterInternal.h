@@ -10,7 +10,7 @@
 /*
  * Private header (source/) of the character system: the capsule's motion against the collision world
  * (WorldCharacterMotion.c), used by the system's update (WorldCharacters.c). Positions are the capsule's FEET (the
- * bottom of its bottom cap); the capsule stands upright above them. Positions are doubles (T33: feet, contact and
+ * bottom of its bottom cap); the capsule stands upright above them. Positions are doubles (feet, contact and
  * support points, as the collision world gives them), so a character 100 km out moves as one at the origin;
  * displacements, directions, normals and velocities are floats.
  *
@@ -19,8 +19,8 @@
  * just inside the contact looks at the face the edge belongs to. Standing on such an edge is how the round bottom
  * rolls over a step's edge after a step up lands on it. Only a climb does: going off a ledge or down a stair, the round
  * bottom rolls over the edge only as far as the contact stays walkable (a human's 0.3 m radius and 45 degree slope
- * limit sink it 8.8 cm), and then the walker falls (T13's first tuning: rolling on down the edge kept a walker on the
- * ground while it sank most of its radius, and the ground snap then dropped it the rest in a tick).
+ * limit sink it 8.8 cm), and then the walker falls (rolling on down the edge would keep a walker on the ground while it
+ * sank most of its radius, and the ground snap would then drop it the rest in a tick).
  *
  * STEPS. A walker's ground is also the plane its moves are measured from: an edge (a contact that is not on a face)
  * higher than the step height above that plane, measured straight up, is a wall to the slide and no support to the

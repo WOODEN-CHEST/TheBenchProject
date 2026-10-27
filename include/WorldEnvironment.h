@@ -13,7 +13,7 @@
  * @brief Per-world, player-editable environment and graphics settings (persisted with the world).
  *
  * A world carries an environment: the settings that let each player-authored world look different — the
- * physically based sky and sun, the moon, the night sky (stars, Milky Way, light pollution), fog, and the world-side
+ * physically based sky and sun, the moon, the night sky (stars, Milky Way, light pollution), haze, and the world-side
  * multipliers for the post effects (bloom, sunshafts, shadows) that combine with the game config's
  * multipliers. These are DATA ONLY; the world renderer reads them, but this module has no rendering
  * logic and no dependency on the renderer.
@@ -56,9 +56,9 @@
 #define WORLD_ENVIRONMENT_MOON_CYCLE_DAYS 29.530588f
 /** @brief MoonIntensity's default: the light of a full moon above the air, relative to the sun's. Far above the real
  *  moon's (about 1/400000), so that at the night exposure a full-moon night is clearly lighter than a new-moon one,
- *  with soft shadows, and still reads as night (tuned on rendered frames: 8% lit the test world nearly like day). Since
- *  T36 it lights the surfaces through the air with the moonlit sky's own light as their fill (before T36 a painted fill
- *  of 30 % of it): twice the old 0.02 keeps a full-moon night's ground as bright as before (tuned on rendered frames). */
+ *  with soft shadows, and still reads as night (tuned on rendered frames: 8% lit the test world nearly like day). It
+ *  lights the surfaces through the air, with the moonlit sky's own light as their fill (the brightness of a full-moon
+ *  night's ground tuned on rendered frames too). */
 #define WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY 0.04f
 /** @brief The default gravity, in metres per second squared. */
 #define WORLD_ENVIRONMENT_DEFAULT_GRAVITY 15.0f
@@ -123,7 +123,7 @@ typedef enum WorldShadowLightEnum
  * @brief The sky's two directional lights at one moment, above the air.
  *
  * A plain value, filled by WorldEnvironment_GetSkyLights from the date, the time and the settings. Intensities are
- * multipliers on the lights' colours (SunColor, MoonColor) above the air (since T36: the renderer takes them through the
+ * multipliers on the lights' colours (SunColor, MoonColor) above the air (the renderer takes them through the
  * air, whose transmittance reddens and ends them as they set); the moon's phase and the daylight are already in the
  * moon's.
  */
@@ -222,7 +222,7 @@ typedef struct WorldEnvironmentStruct
     /** @brief Tint applied to the computed sky color, so worlds can push alien skies. Alpha ignored. */
     Color SkyTint;
 
-    /** @brief The sun's colour above the air (white by default since T36): its light, its disc and the light it gives
+    /** @brief The sun's colour above the air (white by default): its light, its disc and the light it gives
      *  the air (the sky, the haze); the air reddens it toward the horizon by itself. Alpha ignored. */
     Color SunColor;
     /** @brief Sun radiance multiplier. Finite and >= 0. */
@@ -287,7 +287,7 @@ typedef struct WorldEnvironmentStruct
     unsigned char* MoonTexture;
 
     // ---- Ambient / skylight ----
-    /** @brief Tints the sky's light on surfaces (since T36 the ambient is the sky's own irradiance and the ground's
+    /** @brief Tints the sky's light on surfaces (the ambient is the sky's own irradiance and the ground's
      *  bounce: blue by day, the twilight's colours, the moonlit sky, the town's glow): WHITE (the default) leaves it as
      *  it is. Alpha ignored. */
     Color AmbientSkylightColor;
@@ -301,7 +301,7 @@ typedef struct WorldEnvironmentStruct
     float NightLightIntensity;
 
     // ---- Haze: the air in front of distant things, the mist near the ground, the far ground ----
-    /** @brief Legacy flat fog colour. Not read by the renderer (since T35 distant things fade into the haze of the air in
+    /** @brief Legacy flat fog colour. Not read by the renderer (distant things fade into the haze of the air in
      *  front of them, from the same atmosphere as the sky); kept for saved data. Alpha ignored. */
     Color FogColor;
     /** @brief Multiplies the haze on surfaces and the ground haze (with the game config's FogStrength, the player's own):
@@ -554,7 +554,7 @@ float WorldEnvironment_GetMoonBrightness(float illumination);
  * @brief Returns how much of a full moon's light lights the world right now, above the air, 0..1: the phase's
  *        brightness (WorldEnvironment_GetMoonBrightness), faded out by daylight (x (1 -
  *        WorldEnvironment_GetDaylightFactor)): the moonlight is far brighter than the real moon's, for play, so by day it
- *        must not show. 0 when IsMoonEnabled is false. Since T36 the air dims it toward the horizon (the renderer's
+ *        must not show. 0 when IsMoonEnabled is false. The air dims it toward the horizon (the renderer's
  *        transmittance), not this factor.
  *
  * The moon's intensity above the air is MoonIntensity times this.
@@ -605,7 +605,7 @@ float WorldEnvironment_GetDaylightForElevation(float sunElevation);
  *
  * A smooth 0..1 factor derived from the sun's elevation (the Y of WorldEnvironment_GetSunDirection): it is 1 while the
  * sun is well above the horizon, ramps down through twilight as the sun approaches and crosses the horizon, and is 0
- * once the sun is about 7 degrees below it. Since T36 the sun's light comes through the air (the renderer), not through
+ * once the sun is about 7 degrees below it. The sun's light comes through the air (the renderer), not through
  * this factor; it fades out what is far brighter than the real thing and must not show by day: the moonlight and the
  * town's light in the air.
  * @param self The environment; must not be NULL.
@@ -617,8 +617,8 @@ float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self);
  * @brief Computes the sky/background color for the current time of day (a day-night gradient, tinted).
  *
  * Blends between day, horizon (sunrise/sunset) and night colors by the sun's elevation, then multiplies by
- * SkyTint so a world can push the sky toward alien hues. This is a cheap CPU approximation; the full
- * atmospheric-scattering sky pass replaces it later but is driven by the same time-of-day.
+ * SkyTint so a world can push the sky toward alien hues. This is a cheap CPU approximation: the renderer clears the
+ * scene to it only when the atmospheric-scattering sky pass (driven by the same time-of-day) is unavailable.
  * @param self The environment; must not be NULL.
  * @returns The opaque sky color.
  */

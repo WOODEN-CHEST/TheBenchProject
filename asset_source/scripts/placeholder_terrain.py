@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Generates B01's placeholder terrain for the test world, as binary glTF (.glb) the terrain asset imports (repainted
-for B02's materials).
+"""Generates the placeholder terrain for the test world, as binary glTF (.glb) the terrain asset imports (painted
+for its terrain materials).
 
 Run it from anywhere (only the Python standard library is needed):
 
@@ -25,7 +25,7 @@ The terrain is a ring around the test world's ground slab (20 m square, its top 
     - an outer edge that slopes down to y = 0.
 
 Its data, as the definition maps them: COLOR_0's red, green, blue and alpha are the weights of grass, dirt, rock and
-gravel (B02's terrain materials: asset_source/scripts/placeholder_terrain_materials.py), painted by place: dirt on the
+gravel (the terrain materials: asset_source/scripts/placeholder_terrain_materials.py), painted by place: dirt on the
 path east of the slab, a round patch of gravel north-east of the slab (soft at its rim), grass elsewhere. The rock on the
 steep and the dirt on the valley floor are not painted: the definition's rules put them there (rock above 35 degrees,
 dirt below 4.5 m under the slab, broken up by noise). _DENSITY_0 is the trees' density (on gentle hills, none near the
@@ -75,7 +75,7 @@ VALLEY_X = (60.0, 120.0)
 VALLEY_FLOOR = -6.0
 PATH_HALF_WIDTH = 1.5
 DIRT_PATCH = ((-30.0, -24.0), (14.0, 20.0))
-# The painted gravel (B02): a round patch north-east of the slab, in the start view: its centre (x, z), its full radius
+# The painted gravel: a round patch north-east of the slab, in the start view: its centre (x, z), its full radius
 # and the soft rim beyond it.
 GRAVEL_PATCH = (6.0, 17.0, 3.5, 3.0)
 

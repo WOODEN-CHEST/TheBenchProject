@@ -17,7 +17,7 @@ uniform float softKnee;       // 0..1 width of the soft roll-in just below the t
 
 // Sky exclusion: the sky (with its sun disc + stars) is drawn as a full-screen pass that writes NO depth, so
 // its pixels keep the cleared depth (common/depth's depthIsSky) while every object writes real depth. depthMask > 0.5
-// masks those sky pixels out of the bloom so only OBJECTS glow (the bright sun no longer smears a white halo across the
+// masks those sky pixels out of the bloom so only OBJECTS glow (else the bright sun would smear a white halo across the
 // sky). depthMask <= 0.5 blooms everything (used when the scene depth is not a samplable texture).
 uniform sampler2D depthTexture;
 uniform float depthMask;

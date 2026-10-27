@@ -70,10 +70,9 @@ typedef enum SpritePropertyEnum
 // Fields.
 /* Every property, in inspector order: each override flag sits right before the value it switches on, and the values
  * share their rows with the world sprite's tables (WorldSpriteInternal.h). The wire ids are the save schema: never
- * renumber or reuse one; a removed property's id goes into the table's retired list. (T26 renamed wire 1 from
- * "sprite_animation", a sprite animation, to "world_sprite", a world sprite, and made rows 2 to 16 the placement's own
- * values behind their override flags; T35 added the haze's pair, 37 and 38, the haze's id the world sprite's render
- * table's.) The next free wire id is 39. */
+ * renumber or reuse one; a removed property's id goes into the table's retired list. They do not follow the rows'
+ * order: 1 is world_sprite, 2 to 16 the placement's own values and 17 to 31 their override flags, and the haze's pair
+ * is 37 and 38 (the haze's id the world sprite's render table's). The next free wire id is 39. */
 static const PropertyDescriptor SpriteProperties[SpriteProperty_Count] =
 {
     [SpriteProperty_WorldSprite] =

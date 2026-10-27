@@ -277,7 +277,7 @@
     .Flags = PROPERTY_FLAGS_SETTING, .Category = CHARACTER_CATEGORY_INTERACTION, .DisplayName = u8"Sees", \
     .Description = u8"The collision layers its look and use ray sees; triggers are never seen."
 
-// Added in T13's first tuning (2026-10-22), at the end of the settings (their wire ids follow the enum).
+// The settings from here on come last in CharacterSetting, whatever their category (their wire ids follow the enum).
 #define CHARACTER_ROW_GROUND_CONTROL \
     .Key = u8"ground_control", .Type = PropertyType_Enum, .Default.EnumValue = CharacterGroundControl_Steer, \
     .EnumTable = &CHARACTER_GROUND_CONTROL_ENUM, .Flags = PROPERTY_FLAGS_SETTING, \

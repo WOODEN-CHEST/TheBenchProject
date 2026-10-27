@@ -1,6 +1,6 @@
 #version 330
 
-// The G-buffer's vertex stage for skinned meshes (world_normal_skinned, T29): normal/vertex with the position and the
+// The G-buffer's vertex stage for skinned meshes (world_normal_skinned): normal/vertex with the position and the
 // normal moved by the object's pose first (common/skinning). The fragment stage is world_normal's own.
 
 #include "common/skinning"

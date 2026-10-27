@@ -19,7 +19,7 @@
 #define TEST_BUFFER_CAPACITY 512U
 /** The shipped placeholder files (asset_source/scripts/placeholder_humanoid.py writes them). */
 #define MOTIONS_PATH "compile/out/asset/animation_libraries/placeholder_humanoid/motions.glb"
-/** The placeholder library's clips: T29's nine, and T30's seven for the actions. */
+/** The placeholder library's clips: nine (the movements and a wave), and seven for the actions. */
 #define PLACEHOLDER_CLIP_COUNT 16U
 #define MODEL_WITH_CLIPS_PATH "tests/data/placeholder_humanoid_with_clips.glb"
 
@@ -335,8 +335,8 @@ static void RotationsTakeTheShorterArcAndComeNormalized(TestRun* run)
         Memory_Free(Text._data);
     }
 
-    // A rotation so long that its float square overflows (the review's harness): normalized all the same, a half turn
-    // about X, as a key and as a node's rest pose, never a rotation of length 0.
+    // A rotation so long that its float square overflows: normalized all the same, a half turn about X, as a key and
+    // as a node's rest pose, never a rotation of length 0.
     const float Long[] = { 3e19f, 0.0f, 0.0f, 0.0f, 3e19f, 0.0f, 0.0f, 0.0f };
     TestGltfChannel LongChannel = { .Node = 0, .Path = "rotation", .Interpolation = "LINEAR", .Times = Times,
         .KeyCount = 2U, .Values = Long, .ValueComponents = 4U };
@@ -570,7 +570,7 @@ static void HostileFilesAreRefused(TestRun* run)
     // A node whose rest pose is not finite.
     CheckRefusedVariant(run, "\"scale\":[1,1,1]", "\"scale\":[1,1e39,1]", ErrorCode_InvalidAssetData);
 
-    // Numbers cgltf's own sums would overflow or trust (the review's findings): checked before cgltf loads or validates.
+    // Numbers cgltf's own sums would overflow or trust: checked before cgltf loads or validates.
     // A stride that wraps the view's reach and strides glTF does not allow (refused by the view's check: the accessor's
     // would refuse them too), a stride below an element, a meshopt-compressed view.
     CheckRefusedVariantSaying(run, "\"byteOffset\":12,\"byteLength\":36}",
@@ -954,7 +954,7 @@ static void TheLibraryAssetLoadsItsFile(TestRun* run)
             && AnimationClip_IsLooped(AnimationLibrary_GetClip(Library, Walk)));
         TEST_CHECK(run, AnimationLibrary_TryFindClip(Library, (const unsigned char*)u8"sprint", &Sprint)
             && (AnimationClip_GetSpeed(AnimationLibrary_GetClip(Library, Sprint)) == 1.25f));
-        // The distance a clip covers per cycle, when the definition says (T30's speed matching).
+        // The distance a clip covers per cycle, when the definition says (a graph's match_speed plays a gait by it).
         float Distance = 0.0f;
         TEST_CHECK(run, AnimationClip_TryGetDistance(AnimationLibrary_GetClip(Library, Walk), &Distance)
             && (Distance == 1.1f) && !AnimationClip_TryGetDistance(AnimationLibrary_GetClip(Library, Sprint), NULL));
@@ -976,8 +976,8 @@ static void TheLibraryAssetLoadsItsFile(TestRun* run)
 
 
 /* The game's own library definition (compile/out/asset/animation_libraries): it loads its placeholder file through the
- * asset manager with the definition's loops, as the test world's figures play it, and (T30) the metres the gaits cover
- * per cycle: the placeholder generator's strides (twice the half stride over the stance's share of the cycle). */
+ * asset manager with the definition's loops, as the test world's figures play it, and the metres the gaits cover per
+ * cycle: the placeholder generator's strides (twice the half stride over the stance's share of the cycle). */
 static void TheShippedLibraryDefinitionLoadsItsClips(TestRun* run)
 {
     static const char* const Looped[] = { "idle", "walk", "run", "crouch_idle", "crouch_walk", "fall", "sit_idle", "hold_r" };

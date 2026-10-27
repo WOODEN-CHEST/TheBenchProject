@@ -24,7 +24,7 @@
  * In order: the shadow cascades of the sky's shadow light (the sun by day, the moon on bright nights) and the
  * point-light cube shadow; a normal/flag G-buffer and screen-space ambient occlusion (applied to the ambient term
  * only); the scene pass (atmospheric sky with the moon, the moonlit sky, the Milky Way and light pollution's skyglow,
- * the star field, PBR-lit models with the sun, the moon and forward-shaded point lights and distance fog, lit sprites
+ * the star field, PBR-lit models with the sun, the moon and forward-shaded point lights in the haze, lit sprites
  * (cutout, then decals, then blended and additive ones back to front), debug grid and light gizmos; the sky's dim light
  * and the reflected light go through the eye's night vision, which greys them at night as the eye does);
  * depth/normal-edge outlines; bloom and sun shafts (added in HDR); the tonemap with eye adaptation; and last
@@ -142,40 +142,40 @@ typedef enum WorldRendererFeatureEnum
     WorldRendererFeature_SpriteLighting,
     /** @brief Shadows cast by cutout sprites, facing the light (inactive while no sprite casts or no shadow runs). */
     WorldRendererFeature_SpriteShadows,
-    /** @brief Skinned models bending with their animators' poses (T29): available with the skinned twin of the shader
+    /** @brief Skinned models bending with their animators' poses: available with the skinned twin of the shader
      *  models draw with (world_pbr_skinned, or world_unlit_skinned while PBR lighting is unavailable) and its bone
      *  palette, active while a shown model has a pose. Without it skinned meshes draw in their bind pose (also in a
      *  pass whose own skinned twin is missing: the G-buffer's, a shadow's). */
     WorldRendererFeature_Skinning,
-    /** @brief The lit terrain shader (world_terrain, B01): terrain chunks lit like models. Without it they draw unlit with
+    /** @brief The lit terrain shader (world_terrain): terrain chunks lit like models. Without it they draw unlit with
      *  raylib's default shader. */
     WorldRendererFeature_TerrainShading,
-    /** @brief The terrains' materials from texture arrays (B02): active while a drawn terrain has its arrays; unavailable
+    /** @brief The terrains' materials from texture arrays: active while a drawn terrain has its arrays; unavailable
      *  without texture arrays (a GL function missing, logged once: the terrains then show their materials' mean colours)
      *  or without the lit terrain shader. */
     WorldRendererFeature_TerrainMaterials,
-    /** @brief Instanced drawing of model instances components (B03): every copy of a cell in one draw per mesh and LOD,
+    /** @brief Instanced drawing of model instances components: every copy of a cell in one draw per mesh and LOD,
      *  each copy fading and changing LOD on its own. Unavailable without PBR lighting or its instanced twin
      *  (world_pbr_instanced); inactive while switched off (WorldRenderer_SetInstancingEnabled) or no cell is in view.
      *  Without it, or without a pass's own twin, the copies draw one at a time, looking the same. */
     WorldRendererFeature_Instancing,
-    /** @brief The atmosphere's tables (T15): the transmittance, the multiple scattering and the sky view, built first in
+    /** @brief The atmosphere's tables: the transmittance, the multiple scattering and the sky view, built first in
      *  every frame (the first two only when the air changes); the sky reads them, with the light the air scatters more
-     *  than once, and since T35 the far ground below the horizon. Unavailable without their shaders or targets; inactive
+     *  than once, and the far ground below the horizon. Unavailable without their shaders or targets; inactive
      *  while switched off (WorldRenderer_SetAtmosphereTablesEnabled). Without them the sky is marched per pixel, single
      *  scattering only, and nothing is hazed. */
     WorldRendererFeature_AtmosphereTables,
-    /** @brief The haze (T35): the aerial-perspective volume built every frame from the atmosphere's tables, which hazes
+    /** @brief The haze: the aerial-perspective volume built every frame from the atmosphere's tables, which hazes
      *  every lit surface (the air's in-scatter and transmittance in front of it), and the ground haze. Unavailable
      *  without the tables or the volume's shader or target; inactive while the tables are switched off or the frame's
      *  haze is 0 (the fog strengths). */
     WorldRendererFeature_Haze,
-    /** @brief The eye's metering of the picture (T37): each frame's brightness measured on the GPU and read back a frame or
+    /** @brief The eye's metering of the picture: each frame's brightness measured on the GPU and read back a frame or
      *  two later, which the eye adapts to (lamps count by what they light on screen). Inactive until the first
      *  measurement arrives; unavailable without its shader (world_luminance), its target or the readback's GL functions
      *  (logged once): the eye then adapts to the sky's light at the camera. */
     WorldRendererFeature_ExposureMetering,
-    /** @brief Reversed depth for the camera's passes (T39): a 32-bit float depth from 1 at the near plane to 0 at
+    /** @brief Reversed depth for the camera's passes: a 32-bit float depth from 1 at the near plane to 0 at
      *  infinity and no far plane, so whatever has a long draw distance draws at any distance. Unavailable without clip
      *  control (OpenGL 4.5 or GL_ARB_clip_control; logged once): the camera then keeps raylib's projection and its far
      *  plane (4 km). */
@@ -185,14 +185,14 @@ typedef enum WorldRendererFeatureEnum
 } WorldRendererFeature;
 
 /**
- * @brief What the terrains show (B02, a debug aid: WorldRenderer_SetTerrainView). Every view but the first colours each
+ * @brief What the terrains show (a debug aid: WorldRenderer_SetTerrainView). Every view but the first colours each
  *        palette material with a debug colour of its own (green, brown, grey, sand, ... by palette index), lit.
  */
 typedef enum WorldRendererTerrainViewEnum
 {
     /** @brief The materials, blended and shaded (the default). */
     WorldRendererTerrainView_Shaded = 0,
-    /** @brief The painted weights as they were painted (B01's colours): before the rules. */
+    /** @brief The painted weights as they were painted: before the rules. */
     WorldRendererTerrainView_PaintedWeights = 1,
     /** @brief The weights after the terrain's rules (slope, height, noise). */
     WorldRendererTerrainView_RuleWeights = 2,
@@ -203,7 +203,7 @@ typedef enum WorldRendererTerrainViewEnum
 } WorldRendererTerrainView;
 
 /**
- * @brief What the haze's debug view shows over the scene (T35, a debug aid: WorldRenderer_SetHazeView): one slice of the
+ * @brief What the haze's debug view shows over the scene (a debug aid: WorldRenderer_SetHazeView): one slice of the
  *        aerial-perspective volume stretched over the screen, as the lit shaders sample it.
  */
 typedef enum WorldRendererHazeViewEnum
@@ -249,7 +249,7 @@ typedef struct WorldRendererStatusStruct
     size_t ModelCount;
     /** @brief Model components that draw nothing: no model name, or a model that failed to load (logged once). */
     size_t ModelWithoutAssetCount;
-    /** @brief Of the shown models, those with a pose (T29): their skinned meshes bend with their animators. */
+    /** @brief Of the shown models, those with a pose: their skinned meshes bend with their animators. */
     size_t PosedModelCount;
     /** @brief Sprite components with a frame to draw, on enabled and visible objects. */
     size_t SpriteCount;
@@ -281,7 +281,7 @@ typedef struct WorldRendererStatusStruct
     /** @brief Whether the LOD tinting was on (WorldRenderer_SetLodTintingEnabled). */
     bool IsLodTintingEnabled;
     /** @brief Terrain components with a usable terrain, and those that draw none (no terrain named, or one that failed
-     *  to load: logged once) (B01). */
+     *  to load: logged once). */
     size_t TerrainCount;
     size_t TerrainWithoutAssetCount;
     /** @brief The chunks of the terrains on enabled and visible objects, those the camera's passes drew, and the
@@ -291,10 +291,10 @@ typedef struct WorldRendererStatusStruct
     size_t DrawnTerrainTriangleCount;
     /** @brief Whether the chunk key was on (WorldRenderer_SetTerrainKeyEnabled). */
     bool IsTerrainKeyEnabled;
-    /** @brief What the terrains showed (WorldRenderer_SetTerrainView, B02). */
+    /** @brief What the terrains showed (WorldRenderer_SetTerrainView). */
     WorldRendererTerrainView TerrainView;
     /** @brief Model instances components with a usable world model, and those that draw no copies (no world model named,
-     *  or one that failed to load: logged once) (B03). */
+     *  or one that failed to load: logged once). */
     size_t InstanceComponentCount;
     size_t InstanceComponentWithoutAssetCount;
     /** @brief The copies of the components on enabled and visible objects, and their cells. */
@@ -310,20 +310,20 @@ typedef struct WorldRendererStatusStruct
     bool IsInstancingEnabled;
     /** @brief Whether the atmosphere's tables were switched on (WorldRenderer_SetAtmosphereTablesEnabled), how many times
      *  their transmittance and multiple scattering tables were built (whenever the air changes) and the sky's
-     *  irradiance table (T36: after them, or when the haze's forward scattering or the multiple scattering's share
-     *  changes), and the height above sea level the sky was seen from, in metres (the camera's, at least 1 m) (T15). */
+     *  irradiance table (after them, or when the haze's forward scattering or the multiple scattering's share
+     *  changes), and the height above sea level the sky was seen from, in metres (the camera's, at least 1 m). */
     bool AreAtmosphereTablesEnabled;
     uint32_t AtmosphereTableBuildCount;
     uint32_t IrradianceTableBuildCount;
     float AtmosphereViewHeight;
-    /** @brief The frame's haze (T35): its distance scale (the environment's aerial_distance_scale and fog_strength times
+    /** @brief The frame's haze: its distance scale (the environment's aerial_distance_scale and fog_strength times
      *  the player's fog strength; 1 the real air) and the ground haze's density at its base (per metre; 0: none), and
      *  what the haze's debug view showed (WorldRenderer_SetHazeView) and its slice. */
     float HazeDistanceScale;
     float GroundHazeDensity;
     WorldRendererHazeView HazeView;
     int HazeViewSlice;
-    /** @brief The last render's light at the camera (T36): whether the lit surfaces took it by their height (false: the
+    /** @brief The last render's light at the camera: whether the lit surfaces took it by their height (false: the
      *  camera's for all), the sun's and the moon's light on a surface facing them, the sky's irradiance on a surface
      *  facing up, the ground's bounce on one facing down and the moonless night's own light (linear RGB, the game's light
      *  units), the scene luminance (a white surface's under the sky's light: what the eye starts from before it measures
@@ -340,7 +340,7 @@ typedef struct WorldRendererStatusStruct
     float NightLight[3];
     float SceneLuminance;
     float Exposure;
-    /** @brief The eye (T37): the luminance it was adapted to (the view's log-average in the game's light units: the sky
+    /** @brief The eye: the luminance it was adapted to (the view's log-average in the game's light units: the sky
      *  light's anchor before the first measurement), the real luminance that stands for (cd/m^2, on night vision's scale
      *  at the camera's mix of daylight and the night's lights), and whether a measurement of the picture set it. */
     float AdaptedLuminance;
@@ -382,8 +382,8 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self);
  * @brief Loads the shaders, the sky textures the world's environment names and the models of the world's objects, so
  *        the first frames do not stall on them, and makes the sky's light follow the world's air at once.
  *
- * The sky's light at the camera (T36) is computed from tables of the air built on the CPU: when the world's air differs
- * from what they hold (or on the first call) they are built whole here, about 55 ms; a later change of the air is
+ * The sky's light at the camera is computed from tables of the air built on the CPU: when the world's air differs
+ * from what they hold (or on the first call) they are built whole here, about 70 ms; a later change of the air is
  * rebuilt over frames instead. Resolves every model component's model under a fresh asset user and then retires the previous one, so models
  * that no world object uses any more are released (asset holds are not counted, so this swap is how unused
  * models get released). Failures are logged once and skipped, not fatal. Components added later are resolved by
@@ -458,12 +458,12 @@ void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled);
 bool WorldRenderer_IsPixelationEnabled(const WorldRenderer* self);
 
 /**
- * @brief Switches the atmosphere's tables on or off (default on), for A/B-ing the sky (T15).
+ * @brief Switches the atmosphere's tables on or off (default on), for A/B-ing the sky.
  *
- * On, the sky and the fog's sky come from the tables built first in every frame, with the light the air scatters more
- * than once; off, they are marched per pixel as before the tables (single scattering only), with the same air.
+ * On, the sky and the haze come from the tables built first in every frame, with the light the air scatters more
+ * than once; off, the sky is marched per pixel (single scattering only), with the same air, and nothing is hazed.
  * Applied on the next render.
- * TODO: remove the switch and the direct march once the owner approves the tables' sky (T15).
+ * TODO: remove the switch and the direct march once the owner approves the tables' sky.
  * @param self The renderer; must not be NULL.
  * @param enabled true to draw the sky from the tables.
  */
@@ -477,7 +477,7 @@ void WorldRenderer_SetAtmosphereTablesEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_AreAtmosphereTablesEnabled(const WorldRenderer* self);
 
 /**
- * @brief Chooses the haze's debug view (T35): the scene, or one slice of the aerial-perspective volume (its in-scatter or
+ * @brief Chooses the haze's debug view: the scene, or one slice of the aerial-perspective volume (its in-scatter or
  *        its transmittance) stretched over the screen in its place, as the lit shaders sample it.
  *
  * A debug aid. Default WorldRendererHazeView_Off. Applied on the next render; shows nothing while the haze is inactive.
@@ -498,7 +498,7 @@ void WorldRenderer_SetHazeView(WorldRenderer* self, WorldRendererHazeView view, 
 WorldRendererHazeView WorldRenderer_GetHazeView(const WorldRenderer* self, int* outSlice);
 
 /**
- * @brief The distance a slice of the haze's volume holds, in metres (T35): from 1 m to 200 km by a fixed ratio; the last
+ * @brief The distance a slice of the haze's volume holds, in metres: from 1 m to 200 km by a fixed ratio; the last
  *        slice holds the whole ray (returns 0 for it, and for a slice outside the volume).
  * @param slice The slice.
  * @returns The distance.
@@ -511,9 +511,8 @@ const unsigned char* WorldRenderer_GetHazeViewName(WorldRendererHazeView view);
 /**
  * @brief Enables or disables the whole post-effects pass (screen-space AO + depth/normal-edge outlines).
  *
- * When disabled the scene is blitted straight to the tonemap stage, bit-exact with the pipeline before the
- * post pass existed — useful for A/B-ing whether a visual artifact comes from the post effects. Default
- * enabled. Applied on the next render.
+ * When disabled the scene is blitted straight to the tonemap stage, with no AO and no outlines — useful for
+ * A/B-ing whether a visual artifact comes from the post effects. Default enabled. Applied on the next render.
  * @param self The renderer; must not be NULL.
  * @param enabled true to run the post-effects pass, false to bypass it entirely.
  */
@@ -548,9 +547,8 @@ bool WorldRenderer_IsNightVisionEnabled(const WorldRenderer* self);
  * @brief Enables or disables sprite lighting: lit sprites taking the sun, the moon, lamps, shadows, wrap lighting and
  *        the night vision like the models around them.
  *
- * A code-side toggle for A/B-ing it: when disabled every sprite draws unlit at its full colours (as sprites did before
- * they were lit; unlit sprites keep their emission), still fogged, still casting shadows. Default enabled. Applied on
- * the next render.
+ * A code-side toggle for A/B-ing it: when disabled every sprite draws unlit at its full colours (unlit sprites keep
+ * their emission), still hazed, still casting shadows. Default enabled. Applied on the next render.
  * @param self The renderer; must not be NULL.
  * @param enabled true to light the lit sprites, false to draw every sprite unlit.
  */
@@ -568,7 +566,7 @@ bool WorldRenderer_IsSpriteLightingEnabled(const WorldRenderer* self);
  *        cascade only the casters in its box.
  *
  * A code-side toggle for A/B-ing it: when disabled every object within its draw distance is drawn (the GPU clips what
- * lies outside the view), as before culling existed; the image must not change, only the frame time. Draw distances,
+ * lies outside the view); the image must not change, only the frame time. Draw distances,
  * fades, opacity and the cube shadow's reach test stay. Default enabled. Applied on the next render.
  * @param self The renderer; must not be NULL.
  * @param enabled true to cull, false to draw everything within its draw distance.
@@ -603,7 +601,7 @@ void WorldRenderer_SetLodTintingEnabled(WorldRenderer* self, bool enabled);
 bool WorldRenderer_IsLodTintingEnabled(const WorldRenderer* self);
 
 /**
- * @brief Enables or disables the terrain's chunk key (B01): every terrain chunk tinted by its cell (neighbouring chunks
+ * @brief Enables or disables the terrain's chunk key: every terrain chunk tinted by its cell (neighbouring chunks
  *        always differ) and the terrain's wireframe drawn over it, to see how a terrain is cut and how dense it is.
  *
  * A debug aid. Default disabled. Applied on the next render.
@@ -620,7 +618,7 @@ void WorldRenderer_SetTerrainKeyEnabled(WorldRenderer* self, bool enabled);
 bool WorldRenderer_IsTerrainKeyEnabled(const WorldRenderer* self);
 
 /**
- * @brief Switches instanced drawing (B03): on, every pass draws all the copies of a cell of a model instances component
+ * @brief Switches instanced drawing: on, every pass draws all the copies of a cell of a model instances component
  *        at once (one draw per mesh and LOD); off, it draws each copy on its own through the ordinary shaders, with the
  *        same fades and LODs (an A/B for the instanced path: the picture must not change).
  *
@@ -638,7 +636,7 @@ void WorldRenderer_SetInstancingEnabled(WorldRenderer* self, bool enabled);
 bool WorldRenderer_IsInstancingEnabled(const WorldRenderer* self);
 
 /**
- * @brief Chooses what the terrains show (B02): their shaded materials, or a debug view of the blend's steps (the painted
+ * @brief Chooses what the terrains show: their shaded materials, or a debug view of the blend's steps (the painted
  *        weights, the weights after the rules, the dominant material).
  *
  * A debug aid. Default WorldRendererTerrainView_Shaded. Applied on the next render. A value outside the enum is ignored.
@@ -739,7 +737,7 @@ bool WorldRenderer_AreLightGizmosEnabled(const WorldRenderer* self);
  * @brief Sets the collision world whose shapes are drawn as wireframes (a debug aid), or NULL to draw none (the
  *        default).
  *
- * The renderer only reads the collision world's debug lists (WorldCollision_GetDebugShapes and, since T27,
+ * The renderer only reads the collision world's debug lists (WorldCollision_GetDebugShapes and
  * WorldCollision_GetDebugContacts; rule 3), so nothing shows until WorldCollision_SetDebugListEnabled or
  * WorldCollision_SetDebugContactsEnabled turns a list on. The shapes are drawn in the scene pass after the light gizmos,
  * depth-tested, coloured by layer (triggers violet whatever their layer; static shapes darker); the contact points as
@@ -757,7 +755,7 @@ void WorldRenderer_SetCollisionDebug(WorldRenderer* self, const WorldCollision* 
 const WorldCollision* WorldRenderer_GetCollisionDebug(const WorldRenderer* self);
 
 /**
- * @brief Names the object the camera rides (T30: the player's body in first person), or none (0).
+ * @brief Names the object the camera rides (the player's body in first person), or none (0).
  *
  * From the next frame its world model's first_person block takes effect in the camera's passes (the G-buffer, the lit
  * pass, the unlit fallback): the bones it hides, and their subtrees, are drawn collapsed to their joint, so the camera

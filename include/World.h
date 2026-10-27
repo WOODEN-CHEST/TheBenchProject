@@ -20,7 +20,7 @@
  * @brief A live 3D world: its objects, their components, the id counter and the environment.
  *
  * A World owns every object in it (WorldObject.h) and every component of those objects (WorldComponent.h), plus the
- * WorldEnvironment describing its sky, fog and effects. It mints the unique object ids (a uint64 counter starting at
+ * WorldEnvironment describing its sky, haze and effects. It mints the unique object ids (a uint64 counter starting at
  * 1; 0 is never a valid id) and keeps:
  * - the objects in creation order, with an id -> object map for lookups;
  * - the hierarchy: each object's parent and children (World_SetParent), and each object's cached world matrix;
@@ -33,7 +33,7 @@
  *
  * HIERARCHY. World_SetParent places an object under another: its position, rotation and scale become relative to the
  * parent, so it follows the parent (a cup on a desk, a light on a lamp, the parts of a door); World_SetParentSocket
- * places it on a socket of the parent (T30: a named place of its model, on a bone that moves with its pose: a cup in a
+ * places it on a socket of the parent (a named place of its model, on a bone that moves with its pose: a cup in a
  * hand). It refuses unknown ids, an
  * object as its own parent, cycles (a parent inside the object's own subtree) and hierarchies of more than
  * WORLD_HIERARCHY_MAX_DEPTH levels; with keepWorldTransform it rewrites the object's local transform so it stays where it
@@ -54,8 +54,8 @@
  * variables will use the same DataMap type, outside worlds.
  *
  * Values set in the editor are saved in the world file (through the object table's data row). Values scripts set at
- * runtime will be saved in game saves as differences from the world, once the save round designs them (architecture
- * 3.7); nothing here prevents that.
+ * runtime will be saved in game saves as differences from the world, once game saves are designed; nothing here
+ * prevents that.
  *
  * BUILDING. World_CreateObject makes an object, World_AddComponent gives it components:
  * @code
@@ -79,9 +79,11 @@
  * revisions instead.
  *
  * THE TICK. Systems that change a world run in this order each game tick, so each knows its slot:
- * 1. input; 2. scripts (later); 3. transform drivers: characters, vehicles, physics (later); 4. collision sync
- * (later); 5. queued events: trigger enter and exit, later contacts (later); 6. animation (sprite playback today);
- * 7. World_UpdateTransforms: the world matrices of everything that moved this tick; 8. the renderer, which only reads.
+ * 1. input; 2. scripts (later); 3. transform drivers: scripted movers, then characters (vehicles and physics later);
+ * 4. the collision step (WorldCollision_Step: it syncs, sweeps and pushes); 5. queued events: trigger enter and exit,
+ * contacts and motion; 6. animation: the skeletons' playback and its events, then sprite playback;
+ * 7. World_UpdateTransforms: the world matrices of everything that moved this tick; 8. once per shown frame, the pose
+ * step (WorldAnimation_Pose) and World_UpdateTransforms again; 9. the renderer, which only reads.
  */
 
 
@@ -156,7 +158,7 @@ typedef struct WorldStruct
     Logger* _logger;
     /** @brief The world's own asset user; ASSET_USER_ID_INVALID without assets. */
     AssetUserID _assetUser;
-    /** @brief This world's environment settings (sky, sun, moon, fog, effects). */
+    /** @brief This world's environment settings (sky, sun, moon, haze, effects). */
     WorldEnvironment Environment;
 } World;
 
@@ -384,7 +386,7 @@ bool World_TryFindComponentType(const World* self, const unsigned char* name, Wo
 Error World_SetParent(World* self, uint64_t childId, uint64_t parentId, bool keepWorldTransform);
 
 /**
- * @brief Places an object on a socket of a parent (T30: a cup in a hand, a hat on a head), or under it with @p socket
+ * @brief Places an object on a socket of a parent (a cup in a hand, a hat on a head), or under it with @p socket
  *        NULL as World_SetParent does; its subtree comes with it.
  *
  * As World_SetParent, but the object's position, rotation and scale become relative to the socket's frame: a named
@@ -404,7 +406,7 @@ Error World_SetParentSocket(World* self, uint64_t childId, uint64_t parentId, co
     bool keepWorldTransform);
 
 /**
- * @brief Gives a socket's world matrix: the socket's frame in the object's current pose (its animator's, T30) times the
+ * @brief Gives a socket's world matrix: the socket's frame in the object's current pose (its animator's) times the
  *        object's world matrix, in double. Reading never changes the world.
  * @param self The world; must not be NULL.
  * @param objectId The object (with an animator whose pose has the socket).

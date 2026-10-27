@@ -13,7 +13,7 @@ typedef struct WorldCharactersStruct WorldCharacters;
 
 /**
  * @file PlayerController.h
- * @brief The player's side of a character (T13): turns the tick's GameInput into the character's CharacterInput, puts
+ * @brief The player's side of a character: turns the tick's GameInput into the character's CharacterInput, puts
  *        the camera at the character's eyes, and keeps what the player looks at.
  *
  * The character itself (WorldCharacterComponent.h) does not know who drives it: an NPC's brain fills the same
@@ -23,14 +23,14 @@ typedef struct WorldCharactersStruct WorldCharacters;
  * body faces the look. A turn the ground gives the character (a turning platform) turns the view too, since the look is
  * read back from the character every tick.
  *
- * The eyes (T30, G34): a character with a posed body whose world model has a first_person block sees from that block's
+ * The eyes: a character with a posed body whose world model has a first_person block sees from that block's
  * eyes socket, so the camera moves as the body does (each step, a crouch, a seat); the renderer leaves out the bones the
  * block hides (WorldRenderer_SetFirstPersonObject). Without one the camera sits at the character's eye height above
  * its feet.
  *
  * Call PlayerController_Update in a frame's Update, after the UI had first refusal and before the characters update;
  * PlayerController_UpdateLookTarget after the tick's collision step; PlayerController_ApplyCamera once per shown frame,
- * after the pose step (GameFrame's PrepareRender, G35) and World_UpdateTransforms, so the camera shows where the
+ * after the pose step (GameFrame's PrepareRender) and World_UpdateTransforms, so the camera shows where the
  * character and its body ended up. Input is read only through GameInput, only in Update (AGENTS.md rule 9).
  */
 
@@ -137,7 +137,7 @@ void PlayerController_ApplyCamera(const PlayerController* self, World* world, Ga
 
 /**
  * @brief Finds where a character's eyes are now: its body's eyes socket when its animator's pose has one (its world
- *        model's first_person block, T30), else its eye height above its feet (WorldCharacterComponent_GetEyePosition).
+ *        model's first_person block), else its eye height above its feet (WorldCharacterComponent_GetEyePosition).
  * @param world The world; must not be NULL.
  * @param characterId The character's object.
  * @param outEyes [out] Receives the eyes' world position. Must not be NULL.

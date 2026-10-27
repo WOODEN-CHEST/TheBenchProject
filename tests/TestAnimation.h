@@ -7,7 +7,7 @@
 
 
 /**
- * Helpers for the animation tests (T29): glTF files written in memory, so the reader's every rule can be tried with
+ * Helpers for the animation tests: glTF files written in memory, so the reader's every rule can be tried with
  * exact values and hostile variations, and raylib skinned models built in code (CPU arrays only, never uploaded), so a
  * skeleton can be made without a GL context.
  */

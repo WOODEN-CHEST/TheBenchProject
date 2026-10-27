@@ -11,7 +11,7 @@
 #include "wr/WRError.h"
 
 /*
- * Private header (source/) of the world test frame's animation (T29): the animation system the frame ticks and poses,
+ * Private header (source/) of the world test frame's animation: the animation system the frame ticks and poses,
  * and its debug keys. Test content only: WorldTestFrame.c calls it from its tick and its PrepareRender.
  *
  * Keys (raw debug keys, read in Update after the UI had first refusal): 5 steps the showcase figure (the test world's

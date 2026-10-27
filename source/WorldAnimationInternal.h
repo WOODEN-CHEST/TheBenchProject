@@ -29,7 +29,7 @@
 
 // Types.
 /**
- * Where an action is (T30): sliding its character onto its anchor, or playing its states.
+ * Where an action is: sliding its character onto its anchor, or playing its states.
  */
 typedef enum WorldAnimationActionPhaseEnum
 {
@@ -39,7 +39,7 @@ typedef enum WorldAnimationActionPhaseEnum
 } WorldAnimationActionPhase;
 
 /**
- * The action an animator plays (T30): which, with what, where it is.
+ * The action an animator plays: which, with what, where it is.
  */
 typedef struct WorldAnimationActionStruct
 {
@@ -97,7 +97,7 @@ struct WorldAnimatorRuntimeStruct
     /** Whether the playback changed since the pose was last published: the next pose step (WorldAnimation_Pose)
      *  recomputes it. */
     bool IsPoseStale;
-    /** The graph it plays (T30): its world model's (held with it) or the placement's own (held under the system's
+    /** The graph it plays: its world model's (held with it) or the placement's own (held under the system's
      *  asset user); NULL without one. Whether the placement's own was bound, and a copy of its name (owned, or NULL). */
     const AnimationGraph* Graph;
     bool BoundOverridesGraph;
@@ -106,7 +106,7 @@ struct WorldAnimatorRuntimeStruct
     void* GraphBlock;
     AnimationGraphBinding GraphBinding;
     AnimationGraphInstance GraphInstance;
-    /** The action it plays (T30). */
+    /** The action it plays. */
     WorldAnimationAction Action;
     /** Warnings given once per animator (reset when what they are about changes). */
     bool HasWarnedWorldModel;
@@ -148,7 +148,7 @@ void WorldAnimationInternal_DestroyRuntime(WorldAnimatorRuntime* runtime);
 void WorldAnimationInternal_Warn(const WorldAnimation* self, const WorldAnimatorComponent* animator, bool* isWarned,
     const char* format, ...);
 
-/** An animator leaving its object (its component's OnDetach, T30): its action ends as WorldAnimation_EndAction's
+/** An animator leaving its object (its component's OnDetach): its action ends as WorldAnimation_EndAction's
  *  would at once (the character it locked is free, the end is queued). Nothing without a runtime. */
 void WorldAnimationInternal_DetachAnimator(WorldAnimatorComponent* animator);
 
@@ -189,6 +189,6 @@ void WorldAnimationInternal_UpdateAction(WorldAnimation* self, WorldAnimatorComp
 void WorldAnimationInternal_StopAction(WorldAnimation* self, WorldAnimatorComponent* animator,
     WorldAnimatorRuntime* runtime, WorldAnimationEventKind kind);
 
-/** An event's effects (T30): attaching the action's target to a socket, detaching what hangs on one. */
+/** An event's effects: attaching the action's target to a socket, detaching what hangs on one. */
 void WorldAnimationInternal_ApplyEventEffects(WorldAnimation* self, WorldAnimatorComponent* animator,
     WorldAnimatorRuntime* runtime, const AnimationGraphEventRecord* event);

@@ -638,8 +638,8 @@ static void AReplacedComponentGetsItsOwnVariant(TestRun* run)
 }
 
 /* Without "bounds", the sphere is LOD 0's mesh sphere through its import transform composed with the world matrix:
- * the drawn model's own sphere, as tight as before world models even when an uneven import scale meets an uneven
- * placement scale (taking the two stretches apart would multiply them up). */
+ * the drawn model's own sphere, tight even when an uneven import scale meets an uneven placement scale (taking the two
+ * stretches apart would multiply them up). */
 static void DerivedBoundsComposeTheImportWithThePlacement(TestRun* run)
 {
     CacheFixture Fixture;
@@ -722,7 +722,7 @@ static void BoundsAndTheDrawnLodComeFromTheWorldModel(TestRun* run)
     CacheFixture_Deconstruct(run, &Fixture);
 }
 
-/* T29: an object whose animator is posed for its world model takes the pose, and its bounds are the pose's box (through
+/* An object whose animator is posed for its world model takes the pose, and its bounds are the pose's box (through
  * the skeleton LOD's import transform) unless the world model gives its own; a pose made for another world model is not
  * taken. */
 static void PosedObjectsTakeTheirPoseAndItsBounds(TestRun* run)
@@ -848,7 +848,7 @@ static bool IsCollapsedTo(const float* palette, uint32_t bone, Vector3 joint)
     return IsNear(Rows[3], joint.x) && IsNear(Rows[7], joint.y) && IsNear(Rows[11], joint.z);
 }
 
-/* T30, G34: the first-person object's camera pose hides the bones its world model's first_person block lists, and their
+/* The first-person object's camera pose hides the bones its world model's first_person block lists, and their
  * subtrees, by skinning them to the hidden bone's joint, in a copy: its shadows (Pose) keep the whole body, and every
  * other entry's camera pose is its pose. Naming another object, one whose world model hides nothing, or none moves it. */
 static void TheFirstPersonObjectHidesItsBonesFromTheCamera(TestRun* run)
@@ -1060,7 +1060,7 @@ static void SpriteEntriesCarryTheirQuadAndSettings(TestRun* run)
     CacheFixture_Deconstruct(run, &Fixture);
 }
 
-/* Render space (T32): synced for an origin far out, every entry's render-space values are its world placement minus the
+/* Render space: synced for an origin far out, every entry's render-space values are its world placement minus the
  * origin, subtracted in double and rounded once, and the entry keeps the world placement in double: a model's render
  * matrix (its LOD's draw transform with it) and its sphere's centre, a light's position, a sprite's pivot and a fixed
  * sprite's matrix. The origin is not a float out there, so rounding it first would land them a fraction of a
@@ -1621,7 +1621,7 @@ static void ResetForgetsEveryEntry(TestRun* run)
 }
 
 
-// Tests: terrains (B01).
+// Tests: terrains.
 static float TerrainTilt(float x, float z)
 {
     return (0.25f * x) - (0.125f * z);
@@ -1819,7 +1819,7 @@ static void TerrainEntriesFollowTheirComponents(TestRun* run)
     Memory_Free(Directory._data);
 }
 
-// Public functions.
+// Tests: model instances.
 /* Creates an object with a model instances component of "box" holding @p copies; returns the component, or NULL with a
  * failed check. */
 static WorldModelInstancesComponent* AddInstances(TestRun* run, World* world, const PropertyInstanceEntry* copies,
@@ -2218,6 +2218,8 @@ static void InstanceLodListsThatDoNotFitAreLoggedOnce(TestRun* run)
     Memory_Free(Directory._data);
 }
 
+
+// Public functions.
 void WorldRenderCacheTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =

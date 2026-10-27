@@ -1,6 +1,6 @@
 #version 330
 
-// The sky's irradiance table (T36, one light scale; common/atmosphere's layout): per texel, the light the sky sends a
+// The sky's irradiance table (one light scale; common/atmosphere's layout): per texel, the light the sky sends a
 // surface facing up at a height, per unit of a light above the air at an elevation (the sun's or the moon's), from the
 // same model as the sky: single scattering through the transmittance table with the phase functions, plus
 // multipleScattering of the multiple scattering table's glow; the last column light pollution's light in the air (per unit

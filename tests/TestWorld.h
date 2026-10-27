@@ -14,7 +14,7 @@
  * Helpers shared by the world suites (objects and components, object data and queries, the render cache): a world
  * needs the program's key registry, so a test builds one for each world it makes.
  *
- * THE FAR RUNS (T33). The hierarchy, world file, collision, motion and character suites run twice (TestWorld_RunSuite):
+ * THE FAR RUNS. The hierarchy, world file, collision, motion and character suites run twice (TestWorld_RunSuite):
  * as they are, then with every scene shifted by TEST_WORLD_FAR_OFFSET, 100 km along each axis (173 km from the world's
  * origin), where a float's step is 8 mm: the test that finds a forgotten float. The offset is off the float grid on
  * every axis: a whole number of float steps would shift scene values on a 1/128 m grid (0.5, 2.5, ...) without any

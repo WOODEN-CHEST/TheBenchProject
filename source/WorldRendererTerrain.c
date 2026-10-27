@@ -1,12 +1,12 @@
-// The terrain's draws (B01): each chunk of the render cache's terrains as GPU meshes the renderer keeps (the terrain asset
+// The terrain's draws: each chunk of the render cache's terrains as GPU meshes the renderer keeps (the terrain asset
 // stays CPU data, which render only reads), uploaded again when a chunk's revision changes; the lit terrain shader in the
 // scene pass, the shared G-buffer and depth shaders in the others, and the chunk key (each chunk tinted by its cell, and
 // the wireframe). A chunk's vertices are its surface's (TerrainChunk_GetPositions: relative to its centre, which its
 // render-space matrix places), cut into parts of at most 65536 vertices: raylib's indices are unsigned shorts.
 // TerrainMesh_SplitChunkSurface cuts them as it does for collision.
 //
-// THE MATERIALS (B02). Each terrain the renderer keeps gets three texture arrays, one layer per palette material (decision
-// W7, GLTextureArray.h): the albedo with the height in its alpha, the normal maps, the roughness and AO; made once from
+// THE MATERIALS. Each terrain the renderer keeps gets three texture arrays, one layer per palette material
+// (GLTextureArray.h): the albedo with the height in its alpha, the normal maps, the roughness and AO; made once from
 // the materials' CPU pixels (the asset is read, never written) and bound to their units before the terrain's chunks draw,
 // with the materials' and rules' uniforms. Per chunk the shader gets the chunk's centre in the terrain's own space
 // wrapped by each material's tile size and by each rule's noise period, in double (the maps and the noise lie in the
@@ -34,7 +34,7 @@
  *  locations they take (four palette weights each). */
 #define WEIGHT_ATTRIBUTE_LOCATION 9U
 #define WEIGHT_ATTRIBUTE_COUNT 4U
-/** The vertex flags' attribute location (B02; free on terrain, which is never instanced) and its bytes: x the face
+/** The vertex flags' attribute location (free on terrain, which is never instanced) and its bytes: x the face
  *  material (255 on a face material's vertices), the rest 0. */
 #define FLAG_ATTRIBUTE_LOCATION 13U
 #define FLAG_ATTRIBUTE_BYTES 4U
@@ -244,7 +244,7 @@ static void BuildChunkMesh(const TerrainMesh* mesh, uint32_t chunk, WorldRendere
     Memory_Free(Parts._data);
 }
 
-// Static functions: the materials (B02).
+// Static functions: the materials.
 static float ToLinear(uint8_t value)
 {
     return powf((float)value / 255.0f, SRGB_GAMMA);
@@ -780,8 +780,8 @@ void WorldRendererTerrain_DrawLit(WorldRenderer* self)
         }
         if (IsLit)
         {
-            // Each chunk takes the forward lights its sphere reaches, its haze multiplier (T35), and dithers by its fade
-            // (its draw distance, its object's opacity).
+            // Each chunk takes the forward lights its sphere reaches, its haze multiplier, and dithers by its fade (its
+            // draw distance, its object's opacity).
             WorldRendererLighting_UploadObjectLights(self, Draw.shader, &self->_terrain._lit, Entry->RenderCenter,
                 Entry->Radius);
             WorldRendererLighting_SetDrawHaze(Draw.shader, &self->_terrain._lit, Entry->Haze);

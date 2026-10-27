@@ -162,8 +162,8 @@ static void InvalidNameIsRejected(TestRun* run)
     AssetFixture_Deconstruct(run, &Fixture);
 }
 
-/* A shader definition's "defines" (B03): an array of at most 16 distinct names GLSL lets a shader define; anything else
- * fails the definition. */
+/* A shader definition's "defines": an array of at most 16 distinct names GLSL lets a shader define; anything else fails
+ * the definition. */
 static void ShaderDefinitionsCheckTheirDefines(TestRun* run)
 {
     AssetFixture Fixture;

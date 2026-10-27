@@ -4,16 +4,16 @@
 // light pollution's light; a sun disc, the moon's disc and the Milky Way. The eye's night vision
 // (shaders/common/night_vision.glsl) greys the dim sky, not the discs. The stars are a separate pass drawn over this one
 // (shaders/stars).
-// Since T15 the sky's glow comes from the atmosphere's tables, built first in the frame (the sky-view table by direction:
+// The sky's glow comes from the atmosphere's tables, built first in the frame (the sky-view table by direction:
 // single and multiple scattering, with light pollution's light; the transmittance table dims the discs and the Milky
-// Way); with the tables off (the A/B, or unavailable) it is marched per pixel as before (T34: single scattering, light
-// pollution as T02's skyglow). Since T35 the table holds the far ground below the horizon (the haze in front of it
+// Way); with the tables off (the A/B, or unavailable) it is marched per pixel (single scattering, light pollution as
+// common/night_sky's skyglow). The table holds the far ground below the horizon (the haze in front of it
 // included), and the ground haze (common/haze) lies in front of the sky and the far ground as it lies in front of the
 // world's surfaces, so a misty horizon meets misty ground without a seam.
 // Drawn behind the 3D geometry into the linear-HDR scene buffer; the tonemap post-pass maps it to display.
 // The per-pixel ray is reconstructed from the inverse view-projection so the sky lines up exactly with the 3D
 // camera. The renderer works in render space (the world's orientation with the camera at the origin), so that matrix
-// is a rotation and a projection: the point at clip depth 1 (the far plane's, or with reversed depth, T39, the near
+// is a rotation and a projection: the point at clip depth 1 (the far plane's, or with reversed depth the near
 // plane's) IS the ray, exact however far the camera is from the world's origin. Directions are the world's, with +Y up,
 // matching WorldEnvironment_GetSunDirection. The C mirror of the ray is WorldRenderSpace_GetSkyRay
 // (source/WorldRenderSpace.c).
@@ -66,8 +66,8 @@ out vec4 finalColor;
 
 // The moon's face where no texture is bound (sRGB grey).
 const float MOON_FLAT_ALBEDO = 0.7;
-// The sun's disc's radiance at sun_intensity 1 (T36: a constant of its own, the sky's sun before T36). Far dimmer than the
-// real sun's, so that it keeps its colour on screen.
+// The sun's disc's radiance at sun_intensity 1 (a constant of its own, not the sun's light ATMOSPHERE_SUN_LIGHT). Far
+// dimmer than the real sun's, so that it keeps its colour on screen.
 const float SUN_DISC_RADIANCE = 22.0;
 
 // The Milky Way toward a world direction. The panorama is in galactic coordinates: the galactic centre in the middle,
@@ -127,8 +127,8 @@ void main()
     vec3 iSun = ATMOSPHERE_SUN_LIGHT*max(sunIntensity, vec3(0.0));
     vec3 iMoon = ATMOSPHERE_SUN_LIGHT*max(moonSkyIntensity, vec3(0.0));
     bool isMoonlitSky = any(greaterThan(iMoon, vec3(0.0)));
-    // With the tables the planet's surface ends every ray below its horizon (the far ground, T35), and nothing beyond the
-    // air shows there; the direct march mirrors the sky below the horizon and draws the discs down to -0.02, as before.
+    // With the tables the planet's surface ends every ray below its horizon (the far ground), and nothing beyond the
+    // air shows there; the direct march mirrors the sky below the horizon and draws the discs down to -0.02.
     float toGround = atmosphereDistanceToGround(atmosphereViewHeight, rayDir.y);
     bool isBeyondAirShown = atmosphereTablesActive ? (toGround < 0.0) : (rayDir.y > -0.02);
 
@@ -141,7 +141,7 @@ void main()
     vec3 milkyWayExtinction;
     if (atmosphereTablesActive)
     {
-        // The tables (T15): the sun's glow with light pollution's, and the moonlit sky (the same atmosphere lit by the
+        // The tables: the sun's glow with light pollution's, and the moonlit sky (the same atmosphere lit by the
         // moon: blue for the same reason the day is, far dimmer), each with its multiple scattering, already tinted; the
         // far ground below the horizon is theirs.
         sky = atmosphereSkyView(rayDir, sunDir, 0.0);
@@ -156,8 +156,8 @@ void main()
     }
     else
     {
-        // TODO: remove with the direct march once the owner approves the tables' sky (T15).
-        // The direct march (T34), with the ray mirrored into the upper hemisphere (abs(y)) so every direction gets a sky
+        // TODO: remove with the direct march once the owner approves the tables' sky.
+        // The direct march, with the ray mirrored into the upper hemisphere (abs(y)) so every direction gets a sky
         // colour.
         vec3 skyRay = vec3(rayDir.x, abs(rayDir.y), rayDir.z);
         sky = atmosphere(skyRay, sunDir, iSun, transmittance);
@@ -187,7 +187,7 @@ void main()
         sky += milkyWay(rayDir)*milkyWayExtinction*(1.0 - moonCover)*tint;
     }
 
-    // The ground haze in front of all of it (T35): up to the far ground below the horizon (where the table's rays end),
+    // The ground haze in front of all of it: up to the far ground below the horizon (where the table's rays end),
     // through the whole sky above it, along the curved planet for the rays that pass over the horizon. It dims the discs
     // too.
     float mistTransmittance = 1.0;
@@ -208,7 +208,7 @@ void main()
     // The discs are emitters, far brighter than the game draws them, so they keep their colour: the sun disc, only
     // above the horizon (not over the far ground, nor as a second sun in the direct march's mirror), and the moon, both
     // dimmed and reddened by the air in front of them (the moon pale by day under the bright in-scatter, bright at night,
-    // orange as it rises; the sun orange as it sets). The direct march leaves the sun's disc undimmed, as before T15.
+    // orange as it rises; the sun orange as it sets). The direct march leaves the sun's disc undimmed.
     vec3 discs = vec3(0.0);
     float discCos = cos(radians(0.5*max(sunSize, 0.01)));
     if (isBeyondAirShown && (dot(rayDir, sunDir) > discCos))

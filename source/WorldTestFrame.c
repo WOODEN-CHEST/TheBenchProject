@@ -46,7 +46,7 @@
 #define MOVE_SPEED 6.0f
 /** Multiplier applied to movement speed while the sprint key is held. */
 #define SPRINT_MULTIPLIER 3.0f
-/** The mouse wheel steps the flycam's speed (T34): each notch multiplies it by the cube root of two, so this many notches
+/** The mouse wheel steps the flycam's speed: each notch multiplies it by the cube root of two, so this many notches
  *  double it. */
 #define FLY_SPEED_STEPS_PER_DOUBLING 3
 /** The slowest step: MOVE_SPEED / 16, under 0.4 m a second, for looking closely. */
@@ -78,8 +78,8 @@
 #define SECONDS_PER_REAL_MINUTE 60.0
 /** How far above the current light pollution the N key's next step must be (so 0.35 steps on to 0.7). */
 #define LIGHT_POLLUTION_STEP_EPSILON 0.001f
-/** The morning mist keypad 7 lays down (T35): its density per metre at its base and how fast it thins above it, the
- *  task's example (ground_haze_density 0.02, ground_haze_thickness 15). */
+/** The morning mist keypad 7 lays down: its density per metre at its base and how fast it thins above it
+ *  (ground_haze_density 0.02, ground_haze_thickness 15). */
 #define TEST_MIST_DENSITY 0.02f
 #define TEST_MIST_THICKNESS 15.0f
 /** Room for one haze key's log line. */
@@ -87,15 +87,15 @@
 /** The objects whose opacity the X key steps: the centre cube (a model) and the tree (a cutout sprite), both casting
  *  shadows. */
 #define OPACITY_TEST_OBJECT_COUNT 2U
-/** The test world's hierarchy (T08): the desk (an empty object holding its parts) and how the J key slides it along X:
+/** The test world's hierarchy: the desk (an empty object holding its parts) and how the J key slides it along X:
  *  back and forth by this many metres either way around where it was loaded, once per period. */
 #define TEST_DESK_OBJECT_NAME ((const unsigned char*)u8"desk")
-/** The test world's door (T12; it turns since T27): the F6 key swings it open (a quarter turn about its hinge, toward
- *  +Z) and closed at DOOR_SWING_SPEED radians a second. It stops on the crate pinned in the corner in its way. */
+/** The test world's door: the F6 key swings it open (a quarter turn about its hinge, toward +Z) and closed at
+ *  DOOR_SWING_SPEED radians a second. It stops on the crate pinned in the corner in its way. */
 #define TEST_DOOR_OBJECT_NAME "door"
 #define DOOR_OPEN_TURN (-0.5f * PI)
 #define DOOR_SWING_SPEED (PI / 3.0f)
-/** The pushing wall (T27): the F9 key sends it PUSHER_TRAVEL metres along +X at PUSHER_SPEED, through a row of five
+/** The pushing wall: the F9 key sends it PUSHER_TRAVEL metres along +X at PUSHER_SPEED, through a row of five
  *  pushable crates that it pushes against a stop (where it is blocked and stops), and back; back where it started, the
  *  crates go back where they were (a teleport). */
 #define TEST_PUSHER_OBJECT_NAME "pusher_wall"
@@ -103,12 +103,12 @@
 #define ROW_CRATE_COUNT 5U
 #define PUSHER_TRAVEL 2.5f
 #define PUSHER_SPEED 0.6f
-/** The crate the door stops on (T27): the F10 key teleports it out of the door's way and back. */
+/** The crate the door stops on: the F10 key teleports it out of the door's way and back. */
 #define TEST_DOOR_CRATE_OBJECT_NAME "door_crate"
 #define DOOR_CRATE_ASIDE_SHIFT 1.2f
 #define DESK_SLIDE_DISTANCE 1.2f
 #define DESK_SLIDE_PERIOD_SECONDS 6.0
-/** The test world's variant example (T10): two cubes of the "painted_cube" world model, and how many looks the E key
+/** The test world's variant example: two cubes of the "painted_cube" world model, and how many looks the E key
  *  steps them through (VariantSteps). */
 #define VARIANT_TEST_OBJECT_COUNT 2U
 #define VARIANT_STEP_COUNT 3U
@@ -219,21 +219,21 @@ typedef struct WorldTestFrameStruct
     uint64_t _doorCrateId;
     Vector3Double _doorCrateHome;
     bool _isDoorCrateAside;
-    /** The world's characters, moved every tick after the other drivers (T13); owned. */
+    /** The world's characters, moved every tick after the other drivers; owned. */
     WorldCharacters* _characters;
-    /** The test characters: walk mode (F1), the test NPCs (F2), the player's options (F3, F4) and, since T30, the
+    /** The test characters: walk mode (F1), the test NPCs (F2), the player's options (F3, F4) and the
      *  bodies' actions (E, 8, 9, 0); owned. */
     WorldTestCharacters _testCharacters;
-    /** The animation system, ticked after the collision step's events (T29), and its debug keys: the showcase's clips
+    /** The animation system, ticked after the collision step's events, and its debug keys: the showcase's clips
      *  (5), the crowd (6), slow motion (7); owned. */
     WorldTestAnimation _testAnimation;
-    /** The instanced copies' test content (B03): the pebble field (the apostrophe) and the instancing A/B (the
+    /** The instanced copies' test content: the pebble field (the apostrophe) and the instancing A/B (the
      *  semicolon). */
     WorldTestInstances _testInstances;
     /** Where the F11 key's far shift has moved the test world, its characters and the camera: an index into FarShifts
      *  (0: not moved). */
     size_t _farShiftIndex;
-    /** The last tick's update time, in milliseconds, for the I key's frame line (T15; the frame time and the render's
+    /** The last tick's update time, in milliseconds, for the I key's frame line (the frame time and the render's
      *  CPU time are in the renderer's status). */
     double _lastUpdateMilliseconds;
 } WorldTestFrame;
@@ -259,8 +259,8 @@ static const char* const VariantSteps[VARIANT_STEP_COUNT][VARIANT_TEST_OBJECT_CO
     { "red", "blue" }, { "blue", "red" }, { NULL, NULL }
 };
 /* The far shift's offsets (FAR_SHIFT_COUNT), in the order the F11 key steps through them and back to the first: none,
- * 28 km from the world's origin (20 km along X and Z, T32), and 141 km (100 km along X and -Z, T33: the far-away
- * tests' offset). Out there nothing may shake or sink: the renderer draws relative to the camera, and positions are
+ * 28 km from the world's origin (20 km along X and Z), and 141 km (100 km along X and -Z: the far-away tests' offset
+ * along the ground). Out there nothing may shake or sink: the renderer draws relative to the camera, and positions are
  * doubles. */
 static const Vector3Double FarShifts[FAR_SHIFT_COUNT] =
 {
@@ -475,7 +475,7 @@ static void LogCameraStatus(WorldTestFrame* frame)
     Error_Deconstruct(&LogResult);
 }
 
-/* The I key's frame line (T15): the time between the last two renders (the frame time: the GPU's share shows in it when it
+/* The I key's frame line: the time between the last two renders (the frame time: the GPU's share shows in it when it
  * is the slower), the last tick's update and the last render's CPU time. */
 static void LogFrameTimes(WorldTestFrame* frame)
 {
@@ -497,8 +497,8 @@ static void LogFrameTimes(WorldTestFrame* frame)
 /* Starts the clock at the test speed, where the world's sky starts: the environment's date and time of day. */
 static Error StartClock(GameClock* clock, const WorldEnvironment* environment)
 {
-    // TODO: start the clock from the story's settings (its start date, time and speed) once stories have a manifest
-    // (architecture A5); until then the world's environment is the starting point.
+    // TODO: start the clock from the story's settings (its start date, time and speed) once stories have a manifest;
+    // until then the world's environment is the starting point.
     Error Result = GameClock_SetTimeScale(clock, TEST_TIME_SCALE);
     if (Result.Code != ErrorCode_Success)
     {
@@ -617,7 +617,7 @@ static void LogHazeView(WorldTestFrame* frame)
     LogLine(frame, Text);
 }
 
-/* The haze's keys (T35): keypad 4 steps the debug view (off, a slice's in-scatter, its transmittance), keypad 5 the slice
+/* The haze's keys: keypad 4 steps the debug view (off, a slice's in-scatter, its transmittance), keypad 5 the slice
  * it shows (wrapping), keypad 6 the environment's aerial_distance_scale (1, 5, 10), keypad 7 a morning mist (the ground
  * haze off or on), keypad 8 the haze strength (fog_strength 1 or 0: clear air). Each logged. */
 static void HandleDebugHazeInput(WorldTestFrame* frame, const GameInput* input, WorldEnvironment* environment)
@@ -662,19 +662,19 @@ static void HandleDebugHazeInput(WorldTestFrame* frame, const GameInput* input, 
     }
 }
 
-/* The atmosphere's keys (T15): keypad 1 switches the tables off and on (the A/B against the direct march of T34), keypad 2
+/* The atmosphere's keys: keypad 1 switches the tables off and on (the A/B against the direct march), keypad 2
  * the multiple scattering (1 or 0) and keypad 3 the ozone (1 or 0), so the sky's parts can be seen one at a time. Each
  * logged. Then the haze's (keypad 4 to 8). */
 static void HandleDebugAtmosphereInput(WorldTestFrame* frame, const GameInput* input, WorldEnvironment* environment)
 {
-    // TODO: remove keypad 1 with the direct march once the owner approves the tables' sky (T15).
+    // TODO: remove keypad 1 with the direct march once the owner approves the tables' sky.
     if (GameInput_IsKeyPressed(input, GameKey_Keypad1))
     {
         bool Enabled = !WorldRenderer_AreAtmosphereTablesEnabled(frame->_renderer);
         WorldRenderer_SetAtmosphereTablesEnabled(frame->_renderer, Enabled);
         LogLine(frame, Enabled ? "atmosphere tables ON (the sky and the far ground from the tables, with the light "
             "scattered more than once, and the haze)."
-            : "atmosphere tables OFF (the direct march, as before T15: single scattering per pixel, and no haze).");
+            : "atmosphere tables OFF (the direct march: single scattering per pixel, and no haze).");
     }
     if (GameInput_IsKeyPressed(input, GameKey_Keypad2))
     {
@@ -851,8 +851,8 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         }
     }
 
-    // K toggles sprite lighting: off draws every sprite unlit at its full colours (the look before sprites were lit),
-    // for A/B-ing how they sit in the light at night and in shade.
+    // K toggles sprite lighting: off draws every sprite unlit at its full colours, for A/B-ing how they sit in the
+    // light at night and in shade.
     if (GameInput_IsKeyPressed(input, GameKey_K))
     {
         bool Enabled = !WorldRenderer_IsSpriteLightingEnabled(frame->_renderer);
@@ -982,7 +982,7 @@ static void AdvanceSpriteAnimations(World* world, double deltaSeconds)
 }
 
 
-// Static functions: the world models (T10).
+// Static functions: the world models.
 /* Gives one variant cube the variant of the current step (NULL: none), through the component's setters, so the
  * renderer's cache resolves the variant again. */
 static void ApplyTestVariant(WorldTestFrame* frame, uint64_t objectId, const char* variant)
@@ -1045,7 +1045,7 @@ static void HandleDebugModelInput(WorldTestFrame* frame, const GameInput* input)
             Error_Deconstruct(&LogResult);
         }
     }
-    // Minus shows the terrain's chunk key (B01): each chunk tinted by its cell, and the terrain's wireframe. Not F12:
+    // Minus shows the terrain's chunk key: each chunk tinted by its cell, and the terrain's wireframe. Not F12:
     // raylib's EndDrawing takes a screenshot on it (SUPPORT_SCREEN_CAPTURE).
     if (GameInput_IsKeyPressed(input, GameKey_Minus))
     {
@@ -1058,7 +1058,7 @@ static void HandleDebugModelInput(WorldTestFrame* frame, const GameInput* input)
             Error_Deconstruct(&LogResult);
         }
     }
-    // Equals cycles what the terrain shows (B02): shaded, the painted weights, the weights after the rules, the dominant
+    // Equals cycles what the terrain shows: shaded, the painted weights, the weights after the rules, the dominant
     // material, shaded again.
     if (GameInput_IsKeyPressed(input, GameKey_Equal))
     {
@@ -1140,7 +1140,7 @@ static void SlideDesk(WorldTestFrame* frame, double deltaSeconds)
 }
 
 
-// Static functions: collision (T12).
+// Static functions: collision.
 static const char* GetNameOf(World* world, uint64_t id)
 {
     WorldObject* Object = NULL;
@@ -1248,7 +1248,7 @@ static void SwingDoor(WorldTestFrame* frame, float deltaSeconds)
     Error_Deconstruct(&Result); // cannot fail: the rotation is finite
 }
 
-/* F6, or a character's push (its open_door action, T30): the door swings open, or closed again. */
+/* F6, or a character's push (its open_door action): the door swings open, or closed again. */
 static void SwingDoorOpenOrClosed(WorldTestFrame* frame)
 {
     frame->_isDoorOpen = !frame->_isDoorOpen;
@@ -1350,7 +1350,7 @@ static void HandleDebugCollisionInput(WorldTestFrame* frame, const GameInput* in
 }
 
 
-// Static functions: the far shift (T32).
+// Static functions: the far shift.
 /* Moves every root object by @p offset (their children follow), the characters too, each as a teleport, so the
  * collision step does not sweep the move. Everything moves before the collision world syncs again, so no trigger sees
  * anything leave. Returns how many moved. */
@@ -1395,7 +1395,7 @@ static void ShiftHomes(WorldTestFrame* frame, Vector3Double offset)
 /* F11: moves every root object (the characters among them) and the camera to the far shift's next place (FarShifts),
  * so the picture and the play can be compared out there. The objects move as teleports; then the collision world is
  * synced and every character is placed again where it now stands, through the character system, so its motion starts
- * afresh on its moved ground. Positions are doubles (T33): a trip out and back returns everything to within a double's
+ * afresh on its moved ground. Positions are doubles: a trip out and back returns everything to within a double's
  * step out there (1.5e-11 m at 100 km). */
 static void StepFarShift(WorldTestFrame* frame)
 {
@@ -1420,7 +1420,7 @@ static void StepFarShift(WorldTestFrame* frame)
     }
 }
 
-/* The far shift's key (T32, T33): F11 moves everything 28 km out, then 141 km, then back. */
+/* The far shift's key: F11 moves everything 28 km out, then 141 km, then back. */
 static void HandleDebugFarShiftInput(WorldTestFrame* frame, const GameInput* input)
 {
     if (GameInput_IsKeyPressed(input, GameKey_F11))
@@ -1722,8 +1722,7 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     // things (the desk, the door, the pushing wall, then the characters, so what moved this tick carries them), the
     // collision step sweeps and pushes (it syncs first and writes the pushes back), its queued trigger, contact and
     // motion events and the characters' events are handled, then the animations (the skeletons' playback and their
-    // graphs and actions, T29 and T30: their poses wait for PrepareRender, once per shown frame) and their events, and
-    // the sprites'.
+    // graphs and actions: their poses wait for PrepareRender, once per shown frame) and their events, and the sprites'.
     WorldTestCharacters_UpdateBrains(&Frame->_testCharacters, Delta);
     SlideDesk(Frame, time.PassedTime);
     SwingDoor(Frame, Delta);
@@ -1734,7 +1733,7 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     LogContactEvents(Frame);
     LogMotionEvents(Frame);
     WorldTestAnimation_Update(&Frame->_testAnimation, Delta);
-    // The animation events (T30): the actions logged, a released cup settled, the door's push swings it.
+    // The animation events: the actions logged, a released cup settled, the door's push swings it.
     uint64_t Pushed = WorldTestCharacters_HandleAnimationEvents(&Frame->_testCharacters);
     if ((Pushed != 0U) && (Pushed == Frame->_doorId))
     {
@@ -1795,9 +1794,9 @@ static bool WorldTestFrame_IsUnloaded(void* self)
     return true;
 }
 
-/* The update side's last step before a render (G35): the skeletons are posed once per shown frame, then the world
+/* The update side's last step before a render: the skeletons are posed once per shown frame, then the world
  * matrices of what the poses moved are brought up to date, so the render reads them cached, and the camera rides the
- * player's eyes (its body's eyes socket as posed, T30) while walking. */
+ * player's eyes (its body's eyes socket as posed) while walking. */
 static Error WorldTestFrame_PrepareRender(void* self, ProgramTime time)
 {
     (void)time;
@@ -1805,7 +1804,7 @@ static Error WorldTestFrame_PrepareRender(void* self, ProgramTime time)
     WorldTestAnimation_Pose(&Frame->_testAnimation);
     World_UpdateTransforms(&Frame->_world);
     WorldTestCharacters_PlaceCamera(&Frame->_testCharacters, &Frame->_camera);
-    // The player's body is seen from its eyes: the camera's passes leave out its head (G34).
+    // The player's body is seen from its eyes: the camera's passes leave out its head.
     WorldRenderer_SetFirstPersonObject(Frame->_renderer, WorldTestCharacters_GetPlayer(&Frame->_testCharacters));
     return Error_CreateSuccess();
 }

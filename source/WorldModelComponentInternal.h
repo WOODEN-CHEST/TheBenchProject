@@ -5,7 +5,7 @@
 
 /*
  * Private header (source/): the property rows of a world model's placement, shared by the model component's table
- * (WorldModelComponent.c: one placement) and the model instances component's table (WorldModelInstancesComponent.c, B03:
+ * (WorldModelComponent.c: one placement) and the model instances component's table (WorldModelInstancesComponent.c:
  * many placements of one world model). Each macro holds a row's key, type, default, rules, flags and texts, so a setting
  * has them once whichever component stores it; a table's row adds its wire id, its member (PROPERTY_MEMBER) and its
  * SinceVersion:
@@ -14,8 +14,8 @@
  *         .SinceVersion = 1U }
  *
  * Both tables give a setting the same wire id. Instances are never crisp: the instances table leaves out the two
- * omit_pixelation rows (wire ids 3 and 9 are the model component's alone); the instances table's list is wire id 22, so
- * the haze's pair (T35) is 23 and 24 in both.
+ * omit_pixelation rows (wire ids 3 and 9 are the model component's alone); the instances table's list is wire id 22,
+ * which the model component leaves unused, and the haze's pair is 23 and 24 in both.
  */
 
 

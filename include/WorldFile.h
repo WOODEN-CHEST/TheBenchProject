@@ -164,7 +164,7 @@ static inline WorldFileReadOptions WorldFileReadOptions_Create(KeyRegistry* keys
 /**
  * @brief Builds a world's file path: "<baseDirectory>/worlds/<name><extension>", e.g. ".../worlds/test.world.json".
  *
- * Until story packs exist (architecture A5) every world lives in the game's worlds directory.
+ * Until story packs exist every world lives in the game's worlds directory.
  * @param baseDirectory The game's base directory (Services.BaseDirectory); must not be NULL.
  * @param name The world's file name without its ending, e.g. u8"test"; must not be NULL or empty.
  * @param format The file's form, which gives its ending: WORLD_FILE_JSON_EXTENSION or WORLD_FILE_GHDF_EXTENSION.

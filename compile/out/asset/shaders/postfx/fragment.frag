@@ -7,12 +7,11 @@
 //   * SILHOUETTES (depth / surface discontinuities) darken the near object's rim.
 //   * INTERIOR CREASES (view-normal discontinuities) darken on the sun-lit side and brighten on the shadowed
 //     side, tying the line art to the same sun that casts the shadows.
-// (Screen-space ambient occlusion USED to live here too, as a multiply on the final colour; it moved to a
-// dedicated PRE-pass — shaders/ao/fragment.frag — that feeds AO into ONLY the PBR ambient term, so it no
-// longer dims direct light.)
+// (Screen-space ambient occlusion is not done here: a dedicated PRE-pass — shaders/ao/fragment.frag — feeds AO
+// into ONLY the PBR ambient term, so it never dims direct light.)
 // The G-buffer packs a VIEW-SPACE normal in RGB (encoded n*0.5+0.5) and a surface/outline flag in A:
 //   A = 0.0 -> not a surface (sky / grid);  0.5 -> surface, no outline;  0.76..1.0 -> surface, outline enabled, the
-//   object's haze multiplier (0..1) over that range (T35: its outline fades with its own haze).
+//   object's haze multiplier (0..1) over that range (its outline fades with its own haze).
 // Because the sky is never drawn into the G-buffer it has A = 0, so it is neither ambient-occluded nor
 // outlined (outlines are never applied to the sky). Everything stays in linear HDR; the later tonemap pass
 // maps it to display. All sampling uses gl_FragCoord (the true framebuffer pixel), NOT fragTexCoord, so the
@@ -31,7 +30,7 @@ uniform sampler2D normalTexture; // the normal/mask G-buffer (RGB = view normal,
 
 uniform vec2 resolution;         // scene target size in pixels
 uniform mat4 invProjection;      // inverse of the perspective projection used by the scene pass
-uniform mat4 projection;         // the perspective projection used by the scene pass (for SSAO re-projection)
+uniform mat4 projection;         // the perspective projection used by the scene pass (unused: SSAO is shaders/ao's)
 uniform vec3 sunDirectionView;   // unit direction TO the sun, in VIEW space (for sun-aware crease colouring)
 
 uniform float outlineStrength;   // effective outline strength (0..1); 0 disables outlines
@@ -39,7 +38,7 @@ uniform vec3 worldUpView;        // the world's up (+Y) in view space: the haze'
 
 out vec4 finalColor;
 
-// The haze (T35): the outline fades by its transmittance, the volume's and the ground haze's (the frame's haze values;
+// The haze: the outline fades by its transmittance, the volume's and the ground haze's (the frame's haze values;
 // the volume bound with SetShaderValueTexture).
 #include "common/haze"
 #include "common/depth"
@@ -169,8 +168,8 @@ void main()
             coeff = 1.0 - OUTLINE_CREASE_DARKEN*nei*litSide + OUTLINE_CREASE_BRIGHTEN*nei*(1.0 - litSide);
         }
         // The line fades with the haze, as the surface's own light does: a hill the haze has all but hidden keeps no
-        // dark rim (T34). The share that still shows is the haze's transmittance to this pixel (T35: the volume's and
-        // the ground haze's, per colour, at the object's own haze), so in clear air the line is as before.
+        // dark rim. The share that still shows is the haze's transmittance to this pixel (the volume's and the ground
+        // haze's, per colour, at the object's own haze), so in clear air the line keeps its full strength.
         float toPoint = length(viewPos);
         vec3 haze = vec3(1.0);
         if (toPoint > 0.0)

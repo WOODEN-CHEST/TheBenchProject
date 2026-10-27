@@ -18,7 +18,7 @@
  * The animation system (WorldAnimation.h): binds animators to their world models' skeletons and libraries, applies their
  * rows and advances their clips once a tick, and poses them once per shown frame. Per-animator state is the component's
  * runtime (WorldAnimationInternal.h); the system keeps its asset user, scratch room for one pose (grown to the largest
- * skeleton it posed) and its queued events. Graphs (T30) are bound and advanced by WorldAnimationGraph.c, actions by
+ * skeleton it posed) and its queued events. Graphs are bound and advanced by WorldAnimationGraph.c, actions by
  * WorldAnimationActions.c.
  */
 
@@ -233,7 +233,7 @@ static void EnsureScratch(WorldAnimation* self, uint32_t boneCount)
 }
 
 /* Turns the local pose in the scratch room into the runtime's bone matrices, socket frames and palette, publishes the
- * pose, and marks what hangs on the object's sockets changed (T30). */
+ * pose, and marks what hangs on the object's sockets changed. */
 static void PublishPose(WorldAnimation* self, WorldAnimatorComponent* animator, WorldAnimatorRuntime* runtime,
     const Transform* localPose)
 {
@@ -379,7 +379,7 @@ static void UpdateSpeeds(const WorldAnimatorComponent* animator, WorldAnimatorRu
 static void Bind(WorldAnimation* self, WorldAnimatorComponent* animator, WorldAnimatorRuntime* runtime,
     const unsigned char* worldModelName)
 {
-    // An action does not survive a bind: its graph may be another (T30).
+    // An action does not survive a bind: its graph may be another.
     WorldAnimationInternal_StopAction(self, animator, runtime, WorldAnimationEventKind_ActionEnded);
     if (!runtime->IsBound || !WorldInternal_AreStringsEqual(worldModelName, runtime->WorldModelName))
     {
@@ -633,7 +633,7 @@ void WorldAnimation_Destroy(WorldAnimation* self)
         WorldAnimatorComponent* Animator = WorldAnimatorComponent_FromComponent(Animators[Index]);
         if (Animator->_runtime != NULL)
         {
-            // The characters its actions held are freed (T30).
+            // The characters its actions held are freed.
             WorldAnimationInternal_StopAction(self, Animator, Animator->_runtime, WorldAnimationEventKind_ActionEnded);
         }
         WorldAnimationInternal_DestroyRuntime(Animator->_runtime);

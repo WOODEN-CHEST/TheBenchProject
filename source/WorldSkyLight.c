@@ -1,4 +1,4 @@
-// The sky's light on the world's surfaces as pure maths (T36): the light through the air at the camera, the C mirror's
+// The sky's light on the world's surfaces as pure maths: the light through the air at the camera, the C mirror's
 // own transmittance and multiple scattering tables and the GPU's irradiance table built from them by the GPU's
 // quadrature, their rebuild over frames, the frame's light and the eye's exposure on that scale (WorldSkyLight.h).
 

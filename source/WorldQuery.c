@@ -228,7 +228,7 @@ static bool MatchesData(const WorldObject* object, const WorldQuery* query)
     return true;
 }
 
-/* In double, as the positions are (T33): far from the world's origin a float would round both to millimetres. */
+/* In double, as the positions are: far from the world's origin a float would round both to millimetres. */
 static bool MatchesPlace(const WorldObject* object, const WorldQuery* query)
 {
     if (!query->HasMaximumDistance && !query->HasBox)

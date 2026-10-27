@@ -33,12 +33,12 @@
  * through its parents (WorldObject_GetWorldMatrix,
  * WorldObject_GetWorldTransform, WorldObject_GetWorldPosition), read without writing to the world.
  *
- * RENDER SPACE (T32, WorldRenderSpace.h). Each entry keeps its world placement in double (WorldMatrix and Center,
+ * RENDER SPACE (WorldRenderSpace.h). Each entry keeps its world placement in double (WorldMatrix and Center,
  * Position) and, for the frame the lists are synced for, the same placement in render space: relative to the frame's
  * origin (the camera's position), subtracted in double and rounded to float once (RenderMatrix, RenderCenter, the
  * sprites' Shape and FixedTransform, RenderPosition). The passes, the visibility and the LOD selection read only the
  * render-space values, so this sync is the one place a world position becomes a float the GPU sees. The world stores
- * its positions and world matrices in double (T33), which this sync reads as they are.
+ * its positions and world matrices in double, which this sync reads as they are.
  *
  * Objects that are disabled or hidden, or under a disabled or hidden ancestor (WorldObject_IsEffectivelyEnabled,
  * WorldObject_IsEffectivelyVisible), are not drawn: their model entries stay (keeping the resolved model) but are not
@@ -56,19 +56,19 @@
  * cache; the per-frame walk also checks each entry's component, so a world rebuilt at the same address is caught as soon
  * as a component differs.
  *
- * POSES (T29). An entry whose object has an animator posed for the entry's world model (the animator's pose names that
+ * POSES. An entry whose object has an animator posed for the entry's world model (the animator's pose names that
  * asset: WorldAnimatorComponent_GetPose) takes the pose (Pose): the passes skin its skinned meshes with it, and unless
  * the world model gives bounds of its own its bounding sphere is the pose's box, through the skeleton LOD's import
  * transform, instead of LOD 0's bind pose (WorldModel_HasOwnBounds). A pose made for another world model (the animator
  * not yet rebound after a change) is not taken.
  *
- * LODS (T11). Each model entry keeps its LOD state across frames (WorldLod.h: the two LODs of a cross-fade, the fade's
+ * LODS. Each model entry keeps its LOD state across frames (WorldLod.h: the two LODs of a cross-fade, the fade's
  * progress and direction); WorldRenderCache_UpdateLods, once per frame after the sync, picks every drawn entry's LOD by
  * the camera's distance and moves its cross-fade on. A LOD is drawn with its own import transform inside the object's
  * render-space matrix (WorldRenderModel_GetLodTransform); the bounding sphere is the world model's, the same for every
  * LOD.
  *
- * TERRAINS (B01). Each terrain component has an entry kept across frames (WorldRenderTerrain), resolved as a model's is
+ * TERRAINS. Each terrain component has an entry kept across frames (WorldRenderTerrain), resolved as a model's is
  * (the terrain loaded under the model user when the name changes, a failure logged once), and matched to the world's
  * terrain components by owner id and component serial. Every frame, each chunk with a surface of a terrain whose object
  * is shown is listed (WorldRenderTerrainChunk), in the terrain's chunk order, with the terrain's settings in effect
@@ -76,7 +76,7 @@
  * chunk's centre, in double and in render space, and the chunk's bounding sphere through it. The chunks' GPU meshes are
  * the renderer's (WorldRendererTerrain.c): the cache lists, the renderer uploads.
  *
- * MODEL INSTANCES (B03). Each model instances component has an entry kept across frames (WorldRenderInstances), matched
+ * MODEL INSTANCES. Each model instances component has an entry kept across frames (WorldRenderInstances), matched
  * by owner id and component serial; its world model and variant are resolved as a model's are (under the model user,
  * again only when the name or the variant changes; failures logged once). Its copies are sorted into cells
  * (WorldInstancing.h: records relative to each cell's centre, in the object's space) when the entry is new, when the
@@ -143,7 +143,7 @@ typedef struct WorldRenderModelStruct
     bool OmitsPixelation;
     WorldShadowTier ShadowTier;
     bool CastsShadows;
-    /** @brief The haze multiplier in effect (T35): the lit passes multiply the haze in front of the model by it. */
+    /** @brief The haze multiplier in effect: the lit passes multiply the haze in front of the model by it. */
     float Haze;
     /** @brief The draw distance in effect, in metres, times the component's multiplier (>= 0: +infinity never fades, 0
      *  is never drawn), and whether the player's draw_distance_scale leaves it as it is (this frame). WorldVisibility
@@ -164,10 +164,10 @@ typedef struct WorldRenderModelStruct
     /** @brief The object's final tint colour (this frame). */
     Color Tint;
     /** @brief The object's animator's pose (this frame; borrowed from the animator, valid until the animation system's
-     *  next update) when it was made for this entry's world model, or NULL: no animator, no pose, or another world model
-     *  (T29). */
+     *  next update) when it was made for this entry's world model, or NULL: no animator, no pose, or another world
+     *  model. */
     const WorldAnimatorPose* Pose;
-    /** @brief The pose the camera's passes draw (T30): Pose, except for the first-person object
+    /** @brief The pose the camera's passes draw: Pose, except for the first-person object
      *  (WorldRenderCache_SetFirstPersonObject), whose world model's first_person block hides bones: a copy of its pose
      *  (the cache's) with their skinning collapsed to their joint, so the camera riding its eyes does not see them. Its
      *  shadows keep Pose. */
@@ -216,7 +216,7 @@ typedef struct WorldRenderSpriteStruct
     /** @brief Whether it is drawn crisp: omit_pixelation on a cutout sprite that is not a decal (the crisp overlay
      *  composites opaque surfaces only, so the others stay pixelated). */
     bool OmitsPixelation;
-    /** @brief The haze multiplier in effect (T35): the lit pass multiplies the haze in front of the sprite by it. */
+    /** @brief The haze multiplier in effect: the lit pass multiplies the haze in front of the sprite by it. */
     float Haze;
     /** @brief The draw distance in effect, in metres, times the component's multiplier (>= 0: +infinity never fades, 0
      *  is never drawn), and whether the player's draw_distance_scale leaves it as it is (this frame). WorldVisibility
@@ -245,7 +245,7 @@ typedef struct WorldRenderLightStruct
     bool CastsShadows;
 } WorldRenderLight;
 
-/** @brief A terrain component as the cache resolves it (B01), kept across frames. */
+/** @brief A terrain component as the cache resolves it, kept across frames. */
 typedef struct WorldRenderTerrainStruct
 {
     /** @brief Id of the object that carries the component, and the component's serial when the entry was made (a
@@ -264,7 +264,7 @@ typedef struct WorldRenderTerrainStruct
     const TerrainAsset* Asset;
 } WorldRenderTerrain;
 
-/** @brief One chunk of a placed terrain as the passes draw it this frame (B01): every chunk with a surface of a terrain
+/** @brief One chunk of a placed terrain as the passes draw it this frame: every chunk with a surface of a terrain
  *  whose object is shown (effectively enabled and visible) is listed. */
 typedef struct WorldRenderTerrainChunkStruct
 {
@@ -281,7 +281,7 @@ typedef struct WorldRenderTerrainChunkStruct
     bool HasOutline;
     WorldShadowTier ShadowTier;
     bool CastsShadows;
-    /** @brief The haze multiplier in effect (T35). */
+    /** @brief The haze multiplier in effect. */
     float Haze;
     /** @brief The draw distance in effect, in metres, times the placement's multiplier (>= 0: +infinity never fades),
      *  and whether the player's draw_distance_scale leaves it as it is. WorldVisibility applies the scale and the zoom. */
@@ -302,7 +302,7 @@ typedef struct WorldRenderTerrainChunkStruct
     Color Tint;
 } WorldRenderTerrainChunk;
 
-/** @brief A model instances component as the cache resolves it (B03), kept across frames. */
+/** @brief A model instances component as the cache resolves it, kept across frames. */
 typedef struct WorldRenderInstancesStruct
 {
     /** @brief Id of the object that carries the component, and the component's serial when the entry was made (a
@@ -340,7 +340,7 @@ typedef struct WorldRenderInstancesStruct
      *  and visible. */
     bool IsDrawn;
     /** @brief The settings in effect (this frame; WorldModelInstancesComponent_ResolveSettings, never crisp): the
-     *  haze multiplier (T35) among them, which the lit pass takes for every cell of the entry. */
+     *  haze multiplier among them, which the lit pass takes for every cell of the entry. */
     bool HasOutline;
     WorldShadowTier ShadowTier;
     bool CastsShadows;
@@ -358,7 +358,7 @@ typedef struct WorldRenderInstancesStruct
     WorldInstanceLodBands Bands;
 } WorldRenderInstances;
 
-/** @brief One cell of a model instances component as the passes draw it this frame (B03): every cell of every drawn
+/** @brief One cell of a model instances component as the passes draw it this frame: every cell of every drawn
  *  entry is listed, entry by entry in world order, each entry's cells in their order. */
 typedef struct WorldRenderInstanceCellStruct
 {
@@ -422,12 +422,12 @@ typedef struct WorldRenderCacheStruct
     GenericBuffer _sprites;
     /** @brief WorldRenderLight entries of this frame, in the world's component order. */
     GenericBuffer _lights;
-    /** @brief WorldRenderTerrain entries, one per terrain component, in the world's component order (B01); a scratch
+    /** @brief WorldRenderTerrain entries, one per terrain component, in the world's component order; a scratch
      *  buffer for re-matching them; and this frame's WorldRenderTerrainChunk entries. */
     GenericBuffer _terrains;
     GenericBuffer _terrainRematch;
     GenericBuffer _terrainChunks;
-    /** @brief WorldRenderInstances entries, one per model instances component, in the world's component order (B03); a
+    /** @brief WorldRenderInstances entries, one per model instances component, in the world's component order; a
      *  scratch buffer for re-matching them; this frame's WorldRenderInstanceCell entries; the next cells' build id. */
     GenericBuffer _instances;
     GenericBuffer _instancesRematch;
@@ -439,7 +439,7 @@ typedef struct WorldRenderCacheStruct
     uint64_t _componentSetVersion;
     /** @brief Whether the entries were matched at least once since construction or the last reset. */
     bool _isMatched;
-    /** @brief The object the camera rides (T30; 0: none), and the copy of its pose its camera passes draw, with its own
+    /** @brief The object the camera rides (0: none), and the copy of its pose its camera passes draw, with its own
      *  palette (_firstPersonPaletteBones bones of room; owned). */
     uint64_t _firstPersonObjectId;
     WorldAnimatorPose _firstPersonPose;
@@ -462,7 +462,7 @@ void WorldRenderCache_Construct(WorldRenderCache* self);
 void WorldRenderCache_Deconstruct(WorldRenderCache* self);
 
 /**
- * @brief Names the object the camera rides (T30: the player in first person), or none (0): from the next Sync, its
+ * @brief Names the object the camera rides (the player in first person), or none (0): from the next Sync, its
  *        entry's CameraPose leaves out the bones its world model's first_person block hides.
  * @param self The cache; must not be NULL.
  * @param objectId The object's id, or 0.
@@ -484,18 +484,18 @@ void WorldRenderCache_Reset(WorldRenderCache* self);
 /**
  * @brief Brings the cache up to date with @p world and rebuilds this frame's lists, in render space for @p origin.
  *
- * One walk over the world's model, sprite, light and terrain components. Every entry gets its world placement (in
- * double) and the same placement relative to @p origin (subtracted in double, rounded to float once): the render-space
- * values the passes draw with. A world other than the last one resets the cache;
+ * One walk over the world's model, sprite, light, terrain and model instances components. Every entry gets its world
+ * placement (in double) and the same placement relative to @p origin (subtracted in double, rounded to float once):
+ * the render-space values the passes draw with. A world other than the last one resets the cache;
  * entries are re-matched to the model components (by owner id and world model name) when the component-set version
  * changed since the last Sync, or when an entry no longer belongs to the component at its position. A world model whose
  * entry is new or whose name changed is resolved with AssetManager_LoadWorldModel under @p modelUser; a failure is
  * logged once (warning) and leaves the entry without an asset until the name changes. Variants are resolved with the
  * world model and when the component's variant changes (an unknown one logged once). Terrains are matched (by owner id
- * and component serial) and resolved the same way (AssetManager_LoadTerrain), and their chunks listed (B01); model
+ * and component serial) and resolved the same way (AssetManager_LoadTerrain), and their chunks listed; model
  * instances likewise, their copies sorted into cells when they or their world model changed, and the cells of shown
- * objects listed (B03). Every model's settings, transform and bounds are recomputed. Main thread only; resolving a world model loads its LOD
- * models, which needs the GL context.
+ * objects listed. Every model's settings, transform and bounds are recomputed. Main thread only; resolving a world
+ * model loads its LOD models, which needs the GL context.
  * @param self The cache; must not be NULL.
  * @param world The world to draw; must not be NULL.
  * @param origin The frame's origin, render space's (0, 0, 0): the camera's world position (any origin while only the
@@ -512,7 +512,7 @@ Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double 
 
 /**
  * @brief Picks the LOD every drawn model entry shows this frame and advances its cross-fade (WorldLod.h), and gives every
- *        drawn model instances entry its LOD bands and each of its cells the LODs its copies can show (B03). Call it
+ *        drawn model instances entry its LOD bands and each of its cells the LODs its copies can show. Call it
  *        once per frame, after WorldRenderCache_Sync.
  *
  * For each entry that is drawn: its LOD settings in effect (WorldModelComponent_ResolveLodSettings; when the placement's

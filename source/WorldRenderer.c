@@ -50,7 +50,7 @@ static void EnsureShaders(WorldRenderer* self)
     }
     self->_shadersLoadAttempted = true;
 
-    // Reversed depth for the camera's passes (T39) before any target is made: their depth buffers follow it.
+    // Reversed depth for the camera's passes before any target is made: their depth buffers follow it.
     self->_depth._isReversed = GLDepth_LoadApi(&self->_depth._api);
     if (!self->_depth._isReversed)
     {
@@ -61,7 +61,7 @@ static void EnsureShaders(WorldRenderer* self)
         WorldRendererCommon_WarnOnce(self, &self->_depth._isFailureReported, (const unsigned char*)Message);
     }
 
-    // The atmosphere's tables first: the sky and every lit shader read them (T15).
+    // The atmosphere's tables first: the sky and every lit shader read them.
     WorldRendererAtmosphere_LoadShaders(self);
     WorldRendererLighting_LoadShader(self);
     WorldRendererGeometry_LoadShaders(self);
@@ -74,7 +74,7 @@ static void EnsureShaders(WorldRenderer* self)
     WorldRendererSky_LoadShader(self);
     WorldRendererStars_LoadShader(self);
     WorldRendererTerrain_LoadShader(self);
-    // The instanced twins sit beside the lit, G-buffer and shadow shaders loaded above (B03).
+    // The instanced twins sit beside the lit, G-buffer and shadow shaders loaded above.
     WorldRendererInstances_LoadShaders(self);
 }
 
@@ -220,7 +220,7 @@ static void BuildSky(WorldRenderFrame* frame)
 /* Fills the frame's world, camera and sky fields and the scene matrices in render space (WorldRenderSpace_BuildView):
  * the origin (the camera's position), the camera at (0, 0, 0) with its rotation-only view, and the projection the camera's
  * passes draw with (the camera's vertical FOV, the scene aspect, raylib's near plane; the reversed infinite projection
- * where the GPU has clip control, T39, else BeginMode3D's with raylib's far plane), so every pass that reconstructs
+ * where the GPU has clip control, else BeginMode3D's with raylib's far plane), so every pass that reconstructs
  * positions from depth, or rays from pixels, matches the geometry exactly. */
 static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera* camera, RenderTexture2D target,
     WorldRenderFrame* outFrame)
@@ -529,7 +529,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->HazeView = self->_atmosphere._view;
     Status->HazeViewSlice = self->_atmosphere._viewSlice;
 
-    // The light at the camera (T36).
+    // The light at the camera.
     const WorldSkyLightFrame* Light = &frame->SkyLight;
     Status->IsSkyLightPerHeight = frame->IsSkyLightPerHeight;
     Status->SkyLightTableBuildCount = self->_atmosphere._skyLight.Record.BuildCount;
@@ -713,9 +713,9 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
     }
 
     // Preload the shaders and the sky textures the world names, so the first frame does not stall on them (idempotent,
-    // logged on failure), and make the C mirror's tables hold the world's air (T36: a whole build, about 70 ms, unless
-    // they already hold it; without this the first frame builds them, and a new world's air would otherwise come in
-    // over frames).
+    // logged on failure), and make the C mirror's tables hold the world's air (a whole build, about 70 ms, unless they
+    // already hold it; without this the first frame builds them, and a new world's air would otherwise come in over
+    // frames).
     EnsureShaders(self);
     WorldRendererSky_SyncTextures(self, World_GetEnvironment(world));
     WorldAtmosphereMedium Medium;
@@ -773,9 +773,9 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     }
     // The skinned shaders' palettes hold no pose yet this frame (an animator's memory may be another's since the last).
     WorldRendererGeometry_ResetPalettes(self);
-    // The terrains' chunks on the GPU: new and changed ones uploaded, those of terrains no longer placed unloaded (B01).
+    // The terrains' chunks on the GPU: new and changed ones uploaded, those of terrains no longer placed unloaded.
     WorldRendererTerrain_PrepareFrame(self);
-    // The copies' records on the GPU: new builds of cells uploaded, the buffers no component holds unloaded (B03).
+    // The copies' records on the GPU: new builds of cells uploaded, the buffers no component holds unloaded.
     WorldRendererInstances_PrepareFrame(self);
     // Recreates the targets after a resize or a pixelation change; only a missing scene target is fatal.
     Error TargetResult = WorldRendererScene_EnsureTargets(self, target.texture.width, target.texture.height);
@@ -792,13 +792,13 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     WorldRendererStars_SyncCatalogue(self, Frame.Environment);
     WorldRendererSky_SyncTextures(self, Frame.Environment);
     WorldRendererSky_PrepareFrame(&Frame);
-    // The air, the haze and the height the sky is seen from (T15, T35), and whether the atmosphere's tables draw the sky
-    // and the volume hazes it this frame. Then the sky's light (T36): what reaches the surfaces at the camera through
-    // the air, the sky's irradiance there, the light the air is lit by, the scene luminance the eye adapts from, the
-    // night vision's calibration and the shadows' light.
+    // The air, the haze and the height the sky is seen from, and whether the atmosphere's tables draw the sky and the
+    // volume hazes it this frame. Then the sky's light: what reaches the surfaces at the camera through the air, the
+    // sky's irradiance there, the light the air is lit by, the scene luminance the eye adapts from, the night vision's
+    // calibration and the shadows' light.
     WorldRendererAtmosphere_PrepareFrame(self, &Frame);
     WorldRendererLighting_PrepareSkyLight(self, &Frame);
-    // The stars and the Milky Way by the sky's brightness behind them (T38: the twilight from the sky's light).
+    // The stars and the Milky Way by the sky's brightness behind them (the twilight from the sky's light).
     WorldRendererSky_PrepareNightSky(&Frame);
     // Every model's LOD and its cross-fade, then which shadow passes run and their light matrices, then what every pass
     // draws: the camera's frustum, each cascade's box and the cube's reach cull, the draw distances and opacities fade.
@@ -816,7 +816,7 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     // Every sprite's matrices for the camera and the shadow lights, and the transparent ones' draw order.
     WorldRendererSprites_PrepareFrame(self, &Frame);
 
-    // The atmosphere's tables and the haze's volume first (T15, T35): the sky, the stars and every lit surface read them.
+    // The atmosphere's tables and the haze's volume first: the sky, the stars and every lit surface read them.
     // Then the shadow maps: the scene and crisp passes sample them.
     WorldRendererAtmosphere_Render(self, &Frame);
     if (Frame.IsCascadeShadowActive)
@@ -862,7 +862,7 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
         WorldRendererPost_RenderSunshafts(self, &Frame, CompositeSource);
     }
 
-    // The eye adapts to the picture (T37): it eases toward the brightness the meter measured a frame or two ago, and
+    // The eye adapts to the picture: it eases toward the brightness the meter measured a frame or two ago, and
     // meters this one. Then the tonemapped upscale into the frame target.
     Frame.Exposure = WorldRendererExposure_Update(self, &Frame, CompositeSource, (float)deltaSeconds);
     WorldRendererPost_Tonemap(self, &Frame, CompositeSource, target);
@@ -975,8 +975,8 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     Error_Deconstruct(&LogResult);
     Memory_Free(Lods._data);
     Memory_Free(Lists._data);
-    // Each terrain's materials and texture arrays (B02), the copies of the model instances components (B03), the
-    // atmosphere's tables with the render's CPU time (T15), and the light at the camera (T36).
+    // Each terrain's materials and texture arrays, the copies of the model instances components, the atmosphere's
+    // tables with the render's CPU time, and the light at the camera.
     WorldRendererTerrain_LogMaterials(self);
     WorldRendererInstances_LogStatus(self);
     WorldRendererAtmosphere_LogStatus(self);

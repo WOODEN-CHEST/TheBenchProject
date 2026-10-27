@@ -1,6 +1,6 @@
 #version 330
 
-// The atmosphere's multiple scattering table (T15; Hillaire 2020, section 5.5): per texel, the light scattered twice or
+// The atmosphere's multiple scattering table (Hillaire 2020, section 5.5): per texel, the light scattered twice or
 // more toward a point, by its height and the light's zenith angle, for a light of radiance 1, per unit of the air's
 // scattering (the sky-view pass multiplies it by the scattering at each step, as an even glow). From 64 directions around
 // the point: the light the air scatters toward it once more (the second order, with an even phase function, and the

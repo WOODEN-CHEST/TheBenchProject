@@ -19,7 +19,7 @@
  * through raylib, and never keep the pointer or a by-value copy of the Texture2D past your asset user.
  *
  * COLOUR SPACE. GameTexture_IsSrgb reports the definition's "color_space". It is metadata for the shader that samples
- * the texture: colour textures are sRGB-encoded and shaders linearize them themselves (as they do today), data textures
+ * the texture: colour textures are sRGB-encoded and shaders linearize them themselves, data textures
  * (normal maps, masks, noise) are linear and used as they are. The GPU format is the same in both cases.
  */
 
@@ -64,7 +64,7 @@ static inline bool GameTexture_IsSrgb(const GameTexture* self)
 
 /**
  * @brief A texture asset's image decoded into CPU memory as 8-bit RGBA, for code that needs the pixels themselves rather
- *        than a GPU texture (the terrain materials, whose maps become texture arrays, B02).
+ *        than a GPU texture (the terrain materials, whose maps become texture arrays).
  *
  * Filled by AssetManager_LoadTexturePixels, which reads the image file the texture's definition names without loading the
  * texture asset (no hold, nothing uploaded). The caller owns the pixels: release them with TexturePixels_Deconstruct.

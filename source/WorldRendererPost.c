@@ -41,14 +41,13 @@
 /** Elevation band (above SUNSHAFT_MIN_ELEVATION) over which the shafts fade in, so they also ease off gently at
  *  the horizon instead of cutting out abruptly. */
 #define SUNSHAFT_ELEVATION_FADE_BAND 0.15f
-/** T36: the sun shafts' strength is multiplied by this over the exposure, so their light on screen is this times the
- *  sky pixels they gather toward the sun (linear HDR), not the eye's exposure times them (which rises up to 24 at dusk
- *  and would make them glare). Their light comes mostly from the sun's disc, itself drawn against the exposure
- *  (SUN_DISC_SCREEN_EXPOSURE), so it falls as the exposure rises. Tuned on pictures against the light before T36: the
- *  shafts' added light on screen is within about 25 % of before with the sun 30, 15 and 5 degrees up (T36's status
- *  block). */
+/** The sun shafts' strength is multiplied by this over the exposure, so their light on screen is this times the sky
+ *  pixels they gather toward the sun (linear HDR), not the eye's exposure times them (which rises up to 24 at dusk and
+ *  would make them glare). Their light comes mostly from the sun's disc, itself drawn against the exposure
+ *  (SUN_DISC_SCREEN_EXPOSURE), so it falls as the exposure rises. Tuned on pictures with the sun 30, 15 and 5 degrees
+ *  up. */
 #define SUNSHAFT_SKY_SCREEN_SCALE 8.0f
-/** T36: the most a sky pixel adds to the shafts, as its brightness on screen (linear, its HDR luminance times the
+/** The most a sky pixel adds to the shafts, as its brightness on screen (linear, its HDR luminance times the
  *  exposure): about the sky's glow near the sun, so the sun's disc (a few pixels about 20 times brighter on screen)
  *  adds no more than the glow around it and its square pixels do not smear into a blocky cross. */
 #define SUNSHAFT_SOURCE_SCREEN_LIMIT 1.0f
@@ -180,7 +179,7 @@ void WorldRendererPost_LoadShaders(WorldRenderer* self)
         self->_outline._locStrength = GetShaderLocation(RayShader, "outlineStrength");
         self->_outline._locWorldUpView = GetShaderLocation(RayShader, "worldUpView");
         self->_outline._locDepthReversed = GetShaderLocation(RayShader, "depthReversed");
-        // The haze the lines fade by (T35): the volume bound per draw, as a 2D pass's extra textures are.
+        // The haze the lines fade by: the volume bound per draw, as a 2D pass's extra textures are.
         WorldRendererAtmosphere_PrepareShader(RayShader, &self->_outline._atmosphere);
         WorldRendererAtmosphere_PrepareHazeShader(RayShader, false, &self->_outline._haze);
     }
@@ -253,8 +252,8 @@ void WorldRendererPost_RenderOutlines(WorldRenderer* self, const WorldRenderFram
     float OutlineStrength = self->_outline._isEnabled ? OUTLINE_BASE_STRENGTH : 0.0f;
     SetShaderValue(RayShader, self->_outline._locStrength, &OutlineStrength, SHADER_UNIFORM_FLOAT);
 
-    // The haze, so a line fades with the haze as the surface under it does (T34, T35): the frame's, and the world's up
-    // in view space, along which the haze's rays climb.
+    // The haze, so a line fades with the haze as the surface under it does: the frame's, and the world's up in view
+    // space, along which the haze's rays climb.
     WorldRendererAtmosphere_UploadFrame(RayShader, &self->_outline._atmosphere, frame);
     WorldRendererAtmosphere_UploadHaze(RayShader, &self->_outline._haze, frame);
     Vector3 ViewUp = Vector3Transform((Vector3){ 0.0f, 1.0f, 0.0f }, frame->View);
@@ -405,7 +404,7 @@ void WorldRendererPost_RenderSunshafts(WorldRenderer* self, const WorldRenderFra
     Shader Shaft = GameShader_GetRaylibShader(self->_sunshaft._shader);
     float Resolution[2] = { (float)self->_sunshaft._width, (float)self->_sunshaft._height };
     float SunPos[2] = { frame->SunScreenUv.x, frame->SunScreenUv.y };
-    // T36: a sample adds at most the sky glow's brightness on screen (the last exposure's), so the sun's disc does not
+    // A sample adds at most the sky glow's brightness on screen (the last exposure's), so the sun's disc does not
     // outshine it.
     float SourceLimit = (frame->LastExposure > 0.0f) ? SUNSHAFT_SOURCE_SCREEN_LIMIT / frame->LastExposure : FLT_MAX;
     Rectangle SourceRect = { 0.0f, 0.0f, (float)source.texture.width, (float)source.texture.height };
@@ -449,7 +448,7 @@ void WorldRendererPost_Tonemap(WorldRenderer* self, const WorldRenderFrame* fram
         float SunshaftStrength = frame->AreSunshaftsActive ? frame->SunshaftStrength : 0.0f;
         if (frame->Exposure > 0.0f)
         {
-            // T36: the shafts follow the sky on screen, not the eye's exposure.
+            // The shafts follow the sky on screen, not the eye's exposure.
             SunshaftStrength *= SUNSHAFT_SKY_SCREEN_SCALE / frame->Exposure;
         }
         SetShaderValue(TonemapRay, self->_tonemap._locSunshaftStrength, &SunshaftStrength, SHADER_UNIFORM_FLOAT);

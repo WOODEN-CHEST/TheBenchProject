@@ -8,9 +8,8 @@
 
 /**
  * @file AnimationGraph.h
- * @brief Animation graphs (T30): which clip an animated object plays when, as data creators edit (the owner's decision
- *        G31), read from the "animation_graph" asset type (JSON in animation_graphs/; references/asset_structure.md,
- *        "Animation graphs").
+ * @brief Animation graphs: which clip an animated object plays when, as data creators edit, read from the
+ *        "animation_graph" asset type (JSON in animation_graphs/; references/asset_structure.md, "Animation graphs").
  *
  * WHAT. A graph is a set of LAYERS, each a state machine. A layer's STATES play nothing (an empty state), one clip, or
  * a blend of clips by a parameter (idle, walk and run by the character's speed), and its TRANSITIONS move it from state

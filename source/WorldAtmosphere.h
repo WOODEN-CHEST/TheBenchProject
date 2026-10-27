@@ -5,7 +5,7 @@
 #include "wr/WRVectorMath.h"
 
 /*
- * Private header (source/): the atmosphere as the world renderer models it (T15), pure maths tested headless
+ * Private header (source/): the atmosphere as the world renderer models it, pure maths tested headless
  * (tests/WorldAtmosphereTests.c): the air's coefficients from a world's environment, the height the sky is seen from,
  * and the layout of the atmosphere's lookup tables. The renderer's atmosphere pass (WorldRendererAtmosphere.c) builds
  * the tables on the GPU with shaders/common/atmosphere.glsl, whose mappings are the formulas below in float: this file
@@ -20,7 +20,6 @@
  *    function's g);
  *  - the ozone layer (absorption only, mostly of orange and red light), a tent from 10 to 40 km densest at 25 km, times
  *    Ozone: the light that reaches the sky overhead at twilight crosses it, which keeps that sky blue.
- * The defaults are the sky of T34 (single scattering, the same coefficients) plus the ozone and multiple scattering.
  *
  * THE TABLES (Hillaire, "A Scalable and Production Ready Sky and Atmosphere Rendering Technique", EGSR 2020):
  *  - TRANSMITTANCE (WORLD_ATMOSPHERE_TRANSMITTANCE_WIDTH x _HEIGHT): the share of light that crosses the air from a
@@ -39,7 +38,7 @@
  *    from it.
  * The renderer keeps them on fixed texture units for every reader (WorldRendererTextureUnit_Atmosphere*).
  *
- * THE HAZE (T35, decisions G36 and G37). Far things fade into the haze of the air in front of them, from the same
+ * THE HAZE. Far things fade into the haze of the air in front of them, from the same
  * atmosphere as the sky (aerial perspective):
  *  - THE VOLUME (Hillaire's aerial-perspective volume): for WORLD_ATMOSPHERE_VOLUME_SIZE squared screen directions, at
  *    WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT distances, the light the air scattered toward the camera along the path so far
@@ -69,8 +68,8 @@
 #define WORLD_ATMOSPHERE_TOP_RADIUS 6471000.0
 /** @brief The air's (Rayleigh) scale height, in metres (ATMOSPHERE_RAYLEIGH_HEIGHT). */
 #define WORLD_ATMOSPHERE_RAYLEIGH_HEIGHT 8000.0
-/** @brief The haze's extinction per metre at sea level at turbidity 3: 1.1 times its scattering of 21e-6 in the sky before
- *  T15 (which held its albedo at 1 / 1.1). */
+/** @brief The haze's extinction per metre at sea level at turbidity 3: 1.1 times 21e-6, so the default HazeAlbedo
+ *  (about 1 / 1.1) scatters about 21e-6 of it. */
 #define WORLD_ATMOSPHERE_MIE_EXTINCTION 23.1e-6
 /** @brief The ozone layer, a tent: densest at this height, gone this far above and below it (metres;
  *  ATMOSPHERE_OZONE_CENTER, ATMOSPHERE_OZONE_HALF_WIDTH). */
@@ -99,7 +98,7 @@
  *  it, a smooth step of the light's zenith cosine from half of it below the horizon's to half of it above
  *  (ATMOSPHERE_LIGHT_DIAMETER). */
 #define WORLD_ATMOSPHERE_LIGHT_DIAMETER 0.0093
-/** @brief The aerial-perspective volume (T35): its screen directions across and up, and its slices (distances along
+/** @brief The aerial-perspective volume: its screen directions across and up, and its slices (distances along
  *  each direction; ATMOSPHERE_VOLUME_SIZE, _SLICE_COUNT). */
 #define WORLD_ATMOSPHERE_VOLUME_SIZE 32
 #define WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT 32
@@ -115,21 +114,21 @@
 #define WORLD_ATMOSPHERE_VOLUME_HEIGHT (2 * WORLD_ATMOSPHERE_VOLUME_SIZE + 1)
 /** @brief The steps each slice's march takes (growing with the square of their index): within this distance, beyond
  *  it, and for the whole ray (the sky view's: ATMOSPHERE_VOLUME_NEAR_DISTANCE, _NEAR_STEPS, _FAR_STEPS, _RAY_STEPS).
- *  Measured against 512 steps (T35's status block): within 4 km the near steps are 0.13 % off at worst, beyond it the
+ *  Measured against 512 steps: within 4 km the near steps are 0.13 % off at worst, beyond it the
  *  far steps 1.2 % (of the light of the whole ray). */
 #define WORLD_ATMOSPHERE_VOLUME_NEAR_DISTANCE 4096.0
 #define WORLD_ATMOSPHERE_VOLUME_NEAR_STEPS 8
 #define WORLD_ATMOSPHERE_VOLUME_FAR_STEPS 24
 #define WORLD_ATMOSPHERE_VOLUME_RAY_STEPS 32
-/** @brief Light pollution's light in the air (T35): the town's light fills the air below about this height and within
+/** @brief Light pollution's light in the air: the town's light fills the air below about this height and within
  *  about this horizontal distance of the camera, in metres (scale lengths of its exponential falloffs:
- *  ATMOSPHERE_LIGHT_POLLUTION_HEIGHT, _REACH). Chosen so the glow's shape over the sky is T02's tuned one: at the default
- *  air the zenith gets 5.5 % of the horizon's glow (T02: 6 %). */
+ *  ATMOSPHERE_LIGHT_POLLUTION_HEIGHT, _REACH). Chosen so the glow's shape over the sky is the tuned skyglow profile's
+ *  (common/night_sky's): at the default air the zenith gets 5.5 % of the horizon's glow (the profile: 6 %). */
 #define WORLD_ATMOSPHERE_LIGHT_POLLUTION_HEIGHT 500.0
 #define WORLD_ATMOSPHERE_LIGHT_POLLUTION_REACH 10000.0
 /** @brief The radiance of light pollution's light in the air at the camera's foot, at LightPollution 1 at night, in the
  *  sky's light units (times the linear LightPollutionColor): the glow it gives at the horizon in the default air is
- *  T02's skyglow there (0.012; T35's status block has the calibration). */
+ *  the tuned skyglow's there (0.012, WorldRendererSky.c's SKYGLOW_BASE_RADIANCE). */
 #define WORLD_ATMOSPHERE_LIGHT_POLLUTION_RADIANCE 0.049
 /** @brief How far a ray of the sky goes through the ground haze, in metres: past every mist, and finite, so no infinity
  *  meets a zero (ATMOSPHERE_SKY_DISTANCE). */
@@ -138,22 +137,22 @@
  *  already; the bound keeps hostile multipliers finite. */
 #define WORLD_ATMOSPHERE_MAX_HAZE_SCALE 1.0e9
 /** @brief The sun's light above the air on a surface facing it, at sun_intensity 1 and a white sun_color, in the game's
- *  light units (T36, decision G39: one scale for the sky and the surfaces; ATMOSPHERE_SUN_LIGHT). Chosen so that the sun
- *  60 degrees up lights the ground at sea level in the default air as the sun lit it before T36: the transmittance
- *  toward it is (0.910, 0.831, 0.786), luminance 0.845, and 1.078 times that is 0.911, the luminance of sun_color's old
- *  default, (255, 244, 214) linear. Before T36 the sky's sun was 22. */
+ *  light units (one scale for the sky and the surfaces; ATMOSPHERE_SUN_LIGHT). Chosen so that the sun 60 degrees up
+ *  lights the ground at sea level in the default air with a luminance of 0.911, that of (255, 244, 214) linear, the
+ *  sunlight the lamps and the surfaces' look are tuned against: the transmittance toward it is (0.910, 0.831, 0.786),
+ *  luminance 0.845, and 1.078 times that is 0.911. */
 #define WORLD_ATMOSPHERE_SUN_LIGHT 1.078
-/** @brief What WORLD_ATMOSPHERE_SUN_LIGHT stands for on the real scale (T38): the luminance of a white surface facing the
+/** @brief What WORLD_ATMOSPHERE_SUN_LIGHT stands for on the real scale: the luminance of a white surface facing the
  *  sun above the air, the solar illuminance (128 klux) over pi, in cd/m^2. So one of the game's light units is about
  *  37800 cd/m^2 of radiance: the sky's luminance on the real scale (the stars' background). Night vision and the eye
  *  read the game's light at the eye's adaptation level instead (NightVision.h: a clear noon's scene luminance for 5000
  *  cd/m^2, the light of a sunlit view, not of a white surface). */
 #define WORLD_ATMOSPHERE_SUN_LIGHT_CANDELAS 40743.665431525208
 /** @brief The sun's disc's radiance per unit of the sky pass's sunDiscIntensity (the C twin of sky/fragment.frag's
- *  SUN_DISC_RADIANCE): the sky's sun before T36, so the disc keeps its look (the renderer scales the intensity by the
- *  exposure). */
+ *  SUN_DISC_RADIANCE): a constant of its own, which the disc's look is tuned with (the renderer scales the intensity
+ *  by the exposure). */
 #define WORLD_ATMOSPHERE_SUN_DISC_RADIANCE 22.0
-/** @brief The sky's irradiance table (T36): the light the sky sends a surface facing up, per unit of the light above the
+/** @brief The sky's irradiance table: the light the sky sends a surface facing up, per unit of the light above the
  *  air, by the light's elevation across (WORLD_ATMOSPHERE_IRRADIANCE_WIDTH columns from
  *  WORLD_ATMOSPHERE_IRRADIANCE_LOWEST_ELEVATION to the zenith, even in asinh(elevation / _ELEVATION_SCALE): about 0.4
  *  degrees apart at the horizon, where the twilight's light falls fastest, 9 at the zenith) and the height up
@@ -174,7 +173,7 @@
 #define WORLD_ATMOSPHERE_IRRADIANCE_LOWEST_ELEVATION (-0.34906585039886590)
 /** @brief The logarithm the irradiance table stores for no light (e^-46: about 1e-20). */
 #define WORLD_ATMOSPHERE_IRRADIANCE_LOG_FLOOR (-46.0)
-/** @brief The sky's light by height in the volume's last row (T36): WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT heights from
+/** @brief The sky's light by height in the volume's last row: WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT heights from
  *  the ground to WORLD_ATMOSPHERE_SKY_LIGHT_HIGHEST metres, even in the height's square root (5 m, 20 m, 45 m, ... apart
  *  from the ground: the sun's light changes fastest there at sunset), for each value (WorldAtmosphereSkyLight) a block of
  *  that many columns from WORLD_ATMOSPHERE_SKY_LIGHT_FIRST_COLUMN on (ATMOSPHERE_SKY_LIGHT_*). */
@@ -262,7 +261,7 @@ typedef enum WorldAtmosphereVolumeValueEnum
     WorldAtmosphereVolumeValue_Count
 } WorldAtmosphereVolumeValue;
 
-/** @brief The sky's light by height in the volume's last row (T36), one block of columns each (the values are the
+/** @brief The sky's light by height in the volume's last row, one block of columns each (the values are the
  *  shaders' block indices): what lights a surface at that height, in the game's light units. */
 typedef enum WorldAtmosphereSkyLightEnum
 {
@@ -354,7 +353,7 @@ bool WorldAtmosphere_AreTablesStale(const WorldAtmosphereMedium* builtFor, const
 bool WorldAtmosphere_UpdateTableRecord(WorldAtmosphereTableRecord* record, const WorldAtmosphereMedium* medium);
 
 /**
- * @brief Whether the irradiance table (T36) built for one medium is out of date for another: when the transmittance and
+ * @brief Whether the irradiance table built for one medium is out of date for another: when the transmittance and
  *        multiple scattering tables it reads are (WorldAtmosphere_AreTablesStale), or the haze's forward scattering or
  *        the share of multiple scattering differs (its single scattering's phase and its glow's share).
  */
@@ -422,7 +421,7 @@ WorldAtmosphereRay WorldAtmosphere_GetTransmittanceRay(Vector2Double uv);
  * @brief Where a transmittance table of any size holds a ray, in unit coordinates ([0, 1] both ways: across the distance
  *        to the top, from straight up to the horizon; up the distance to the planet's axis) before
  *        WorldAtmosphere_UnitToTexel. WorldAtmosphere_GetTransmittanceUv is this for the GPU's table; the C mirror's own
- *        smaller one (WorldSkyLight.h, T36) maps rays the same way. A ray below the horizon gets the horizon's.
+ *        smaller one (WorldSkyLight.h) maps rays the same way. A ray below the horizon gets the horizon's.
  */
 Vector2Double WorldAtmosphere_GetTransmittanceUnit(WorldAtmosphereRay ray);
 
@@ -519,7 +518,7 @@ Vector2Double WorldAtmosphere_GetVolumeUv(Vector2Double screenUv, int slice, Wor
 Vector2Double WorldAtmosphere_GetVolumeValueUv(WorldAtmosphereVolumeValue value);
 
 /**
- * @brief Where the sky's light by height (T36) holds a height (the shaders' atmosphereSkyLightCoordinate): the height's
+ * @brief Where the sky's light by height holds a height (the shaders' atmosphereSkyLightCoordinate): the height's
  *        place among the WORLD_ATMOSPHERE_SKY_LIGHT_HEIGHT_COUNT heights, (count - 1) x sqrt(height /
  *        WORLD_ATMOSPHERE_SKY_LIGHT_HIGHEST), clamped: below the ground counts as on it, above the highest as there.
  *        Between two whole coordinates the readers blend the two heights linearly.
@@ -537,7 +536,7 @@ double WorldAtmosphere_GetSkyLightHeight(int index);
 int WorldAtmosphere_GetSkyLightColumn(WorldAtmosphereSkyLight value, int index);
 
 /**
- * @brief Where the irradiance table (T36) holds a light's zenith cosine and a height, in unit coordinates before
+ * @brief Where the irradiance table holds a light's zenith cosine and a height, in unit coordinates before
  *        WorldAtmosphere_UnitToTexel: across, the light's elevation from WORLD_ATMOSPHERE_IRRADIANCE_LOWEST_ELEVATION to
  *        the zenith, even in asinh(elevation / WORLD_ATMOSPHERE_IRRADIANCE_ELEVATION_SCALE) (lower lights get the
  *        lowest); up, log(1 + height / WORLD_ATMOSPHERE_IRRADIANCE_HEIGHT_SCALE) over the atmosphere's (clamped).

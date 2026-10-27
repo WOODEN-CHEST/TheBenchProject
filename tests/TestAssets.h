@@ -14,13 +14,13 @@
  * exercise code that holds real assets (the world's sprite animations, the renderer's per-object cache):
  *  - a sprite animation with one texture-less frame, or with several frames and running playback;
  *  - a model without meshes whose mesh-space bounds are given (enough for anything that does not draw);
- *  - a skinned model with its skeleton, its mesh in CPU memory only (enough to pose it, T29);
+ *  - a skinned model with its skeleton, its mesh in CPU memory only (enough to pose it);
  *  - an animation library read from a glTF file written in memory (TestGltf_Write), by the real reader;
  *  - a monospace font of the printable ASCII glyphs with metrics but no texture (enough to measure text);
  *  - a texture that names a made-up GPU id and was never uploaded (enough for anything that only copies it);
  *  - world models built from JSON by the real "world_model" type, over the code-built models and textures above;
  *  - world sprites built from JSON by the real "world_sprite" type, over the code-built sprite animations above;
- *  - a terrain whose mesh is a copy of one built in code, read again from its binary form at every load (B01).
+ *  - a terrain whose mesh is a copy of one built in code, read again from its binary form at every load.
  * Each definition can count how often its asset is loaded and unloaded, which shows when an asset user really
  * releases it.
  */
@@ -171,8 +171,8 @@ bool TestAssets_AddTexture(TestRun* run, TestAssetFixture* fixture, const char* 
 bool TestAssets_AddWorldModel(TestRun* run, TestAssetFixture* fixture, const char* json);
 
 /**
- * @brief Registers a world model named @p name with one LOD, the model @p modelName, used up to 600 m (the draw
- *        distance models had before world models), and the default settings.
+ * @brief Registers a world model named @p name with one LOD, the model @p modelName, used up to 600 m (the default
+ *        draw distance, WORLD_MODEL_DEFAULT_DRAW_DISTANCE), and the default settings.
  * @returns true when it was built and registered.
  */
 bool TestAssets_AddWorldModelOf(TestRun* run, TestAssetFixture* fixture, const char* name, const char* modelName);

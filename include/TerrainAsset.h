@@ -13,22 +13,22 @@
 /**
  * @file TerrainAsset.h
  * @brief The terrain asset: a terrain's mesh (TerrainMesh.h), its palette of materials and its density channels, and the
- *        default render and collision settings of its placements (decision W5: a terrain lives in an asset, which a
- *        world's terrain object names, so stories set in one town share it and a story's pack overrides it).
+ *        default render and collision settings of its placements (a terrain lives in an asset, which a world's
+ *        terrain object names, so stories set in one town share it and a story's pack overrides it).
  *
  * A terrain is an asset of the "terrain" type (JSON definitions in a resource pack's terrains/ folder,
  * references/asset_structure.md, "Terrains"; load one with AssetManager_LoadTerrain). Its mesh comes from a Blender .glb
- * imported when it loads (source "model", decision W6), or from its binary form (source "data", a .terrain.ghdf file the
+ * imported when it loads (source "model"), or from its binary form (source "data", a .terrain.ghdf file the
  * editor will write: TerrainMesh_SaveGHDF). Unknown keys are refused everywhere in a definition and every rule is
  * checked when it is read; the mesh's own limits when it loads (the file is hostile).
  *
- * The PALETTE names 1 to TERRAIN_MAX_MATERIALS terrain materials (TerrainMaterial.h, B02), loaded as the terrain's
+ * The PALETTE names 1 to TERRAIN_MAX_MATERIALS terrain materials (TerrainMaterial.h), loaded as the terrain's
  * dependencies: a vertex weighs each of them, a face material takes one outright (so a model's palette names no material
  * "hole" or as its blend slot: those slots are read first). The renderer makes one texture array per map kind, one layer
  * per material, so the materials' maps of one kind must share one size (the load refuses a mismatch, naming both). The
- * RULES (at most TERRAIN_MAX_RULES, B02) move the weights toward a material by the ground's slope, its height and noise,
+ * RULES (at most TERRAIN_MAX_RULES) move the weights toward a material by the ground's slope, its height and noise,
  * in order, per pixel (TerrainBlend.h is their C mirror). The DENSITY CHANNELS (at most TERRAIN_MAX_DENSITY_CHANNELS) are
- * named for the scattering (B09); their bytes are kept per vertex.
+ * named for the scattering (not built yet); their bytes are kept per vertex.
  *
  * A placed object names its terrain in its terrain component (WorldTerrainComponent.h) and may override each default
  * setting with an explicit flag next to the value; WorldTerrainComponent_ResolveSettings turns the two into the settings
@@ -73,8 +73,8 @@ typedef struct TerrainRenderSettingsStruct
     float DrawDistance;
     /** @brief Whether the player's draw_distance_scale leaves the draw distance as it is (default true). */
     bool IsDrawDistanceFixed;
-    /** @brief How hazy it looks at a distance (T35): it multiplies the haze in front of it, 1 (the default) the real
-     *  air's, 0 as if the air were clear. In [0, WORLD_MODEL_MAX_HAZE]. */
+    /** @brief How hazy it looks at a distance: it multiplies the haze in front of it, 1 (the default) the real air's,
+     *  0 as if the air were clear. In [0, WORLD_MODEL_MAX_HAZE]. */
     float Haze;
 } TerrainRenderSettings;
 
@@ -142,7 +142,7 @@ typedef struct TerrainRuleNoiseStruct
 } TerrainRuleNoise;
 
 /**
- * @brief One of a terrain's rules (B02): where its conditions hold, it moves the weights toward its material. A plain
+ * @brief One of a terrain's rules: where its conditions hold, it moves the weights toward its material. A plain
  *        value type, read from the terrain's definition (its "rules").
  *
  * Per pixel (and in TerrainBlend_ApplyRules), in order: the rule's strength is Opacity x the slope's condition x the

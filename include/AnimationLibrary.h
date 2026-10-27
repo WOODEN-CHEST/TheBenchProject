@@ -11,7 +11,7 @@
 
 /**
  * @file AnimationLibrary.h
- * @brief Animation libraries: named skeletal animation clips read from a glTF file (T29), and how to sample them.
+ * @brief Animation libraries: named skeletal animation clips read from a glTF file, and how to sample them.
  *
  * WHAT. An animation library is the clips of one glTF file (.glb or .gltf): Blender's actions, each a set of tracks
  * that move bones over time. It is a plain asset type of its own ("animation_library", JSON definitions in
@@ -122,7 +122,7 @@ typedef struct AnimationClipStruct
     float _speed;
     /** @brief Whether the definition says how far the clip covers per cycle (a walk or a run in place), and that
      *  distance in metres at the library's own size, in (0, ANIMATION_CLIP_MAX_DISTANCE]: an animation graph plays it
-     *  at the speed a character really moves (T30). */
+     *  at the speed a character really moves. */
     bool _hasDistance;
     float _distance;
     /** @brief One entry per library bone, in the library's bone order. */

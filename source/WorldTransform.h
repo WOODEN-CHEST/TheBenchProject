@@ -6,7 +6,7 @@
 /*
  * Private header (source/): the pure maths of world object transforms, tested headless (tests/WorldTransformTests.c).
  *
- * An object stores its transform as a position (a double: worlds reach far from their origin, T33), an Euler XYZ
+ * An object stores its transform as a position (a double: worlds reach far from their origin), an Euler XYZ
  * rotation in radians (what raylib's MatrixRotateXYZ takes) and a per-axis scale (floats), relative to its parent. The
  * world turns them into a double matrix (WorldTransform_Compose: the scale, then the rotation, then the translation,
  * raylib's DrawModelEx order) and multiplies those down its hierarchy in double. Matrices are WRVectorMath's, with

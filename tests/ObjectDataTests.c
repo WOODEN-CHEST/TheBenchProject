@@ -573,7 +573,7 @@ static void QueriesSortByDistanceAndLimit(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
-/* T33: places are compared in double, as positions are. 100 km out a float steps by 7.8 mm, so these two objects a
+/* Places are compared in double, as positions are. 100 km out a float steps by 7.8 mm, so these two objects a
  * millimetre apart would be one point: the distance, the box and the order still tell them apart. */
 static void QueriesCompareFarPlacesInDouble(TestRun* run)
 {
@@ -1507,7 +1507,7 @@ static void ValuesFromTheSameDataAreCopiedFirst(TestRun* run)
 }
 
 
-/* The tags and data example T24 documented (references/world_structure.md has it now, in a world file), which must
+/* The tags and data example of the documentation (references/world_structure.md has it in a world file), which must
  * keep reading (and writing back unchanged). */
 static const char* const DocumentedExample =
     "{\"name\": \"street lamp\", \"tags\": [\"game:office\", \"town:street_lamp\"], \"data\": {"
