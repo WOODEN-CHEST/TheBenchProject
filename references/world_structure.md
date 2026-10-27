@@ -6,7 +6,7 @@ tags, data and components. It has two forms with the same content:
 - **JSON** (`<name>.world.json`): authored worlds. Readable, editable by hand, and written so that git diffs stay
   small.
 - **GHDF** (`<name>.world.ghdf`, `references/ghdf.txt`): saves, packed stories and worlds sent over the network.
-  Compact: the test world is 9913 bytes as JSON and 1931 bytes as GHDF.
+  Compact: the test world is 128 226 bytes as JSON and 25 062 bytes as GHDF.
 
 `WorldFile` reads and writes both (`agents/WorldFile.md`). Until story packs exist, worlds live in
 `<base>/worlds/` next to the executable; the test frame loads `worlds/test.world.json`.
@@ -80,7 +80,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `format_version` | integer, required | The format the file is written in: 1. A newer version is refused ("newer than this game reads"). |
 | `name` | string or `null` | The world's name: at most 256 bytes of UTF-8. |
 | `next_object_id` | integer | The id the world hands to its next new object, so ids of removed objects are not reused; 18446744073709551615 once every id was handed out (no id is that large). When it is not above every object id it is raised to one that is, with a warning; without it, one above the largest id. |
-| `environment` | object | The environment's settings by key (the `world_environment` table; `agents/WorldData.md`, "Environment", lists them with their rules). Absent keys keep their defaults. Since T15 the air's settings are among them: `haze_height`, `haze_albedo`, `sun_glow`, `air_density`, `ozone` and `multiple_scattering` (with `sky_turbidity` and `sky_ground_albedo`), e.g. `{"haze_height": 300, "sun_glow": 0.9, "ozone": 0}`. Since T35 the haze's settings: `aerial_distance_scale` (every haze distance that many times longer; 5 for a bigger, hazier town), `haze_start_distance`, the ground haze's `ground_haze_density` (0.02 a morning mist), `ground_haze_base`, `ground_haze_thickness` (15 for that mist), `ground_haze_albedo` and `ground_haze_glow`, and `horizon_ground_height` (the far ground's height); `fog_strength` multiplies the haze (1 the real air, 0 clear air) and `fog_color` is no longer used, e.g. `{"ground_haze_density": 0.02, "ground_haze_thickness": 15}`. Since T36 one light scale lights the sky and the surfaces: `sun_color` is the sun's colour above the air (default white: the air reddens it), `moon_intensity` the full moon's light above the air (default 0.04), `ambient_skylight_color` and `ambient_skylight_intensity` tint and scale the sky's own light on surfaces (white and 1: the sky's own), and `night_light_color` and `night_light_intensity` set the moonless night's own light, e.g. `{"night_light_intensity": 0}` for a pitch-black moonless night. |
+| `environment` | object | The environment's settings by key (the `world_environment` table; `agents/WorldData.md`, "Environment", lists them with their rules). Absent keys keep their defaults. The air's settings are among them: `haze_height`, `haze_albedo`, `sun_glow`, `air_density`, `ozone` and `multiple_scattering` (with `sky_turbidity` and `sky_ground_albedo`), e.g. `{"haze_height": 300, "sun_glow": 0.9, "ozone": 0}`. The haze's settings: `aerial_distance_scale` (every haze distance that many times longer; 5 for a bigger, hazier town), `haze_start_distance`, the ground haze's `ground_haze_density` (0.02 a morning mist), `ground_haze_base`, `ground_haze_thickness` (15 for that mist), `ground_haze_albedo` and `ground_haze_glow`, and `horizon_ground_height` (the far ground's height); `fog_strength` multiplies the haze (1 the real air, 0 clear air) and `fog_color` is not used, e.g. `{"ground_haze_density": 0.02, "ground_haze_thickness": 15}`. One light scale lights the sky and the surfaces: `sun_color` is the sun's colour above the air (default white: the air reddens it), `moon_intensity` the full moon's light above the air (default 0.04), `ambient_skylight_color` and `ambient_skylight_intensity` tint and scale the sky's own light on surfaces (white and 1: the sky's own), and `night_light_color` and `night_light_intensity` set the moonless night's own light, e.g. `{"night_light_intensity": 0}` for a pitch-black moonless night. |
 | `objects` | array of objects | The objects. |
 
 ### An object
@@ -90,7 +90,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `id` | integer, required | Unique in the world, from 1 to 18446744073709551614. Integers above 9223372036854775807 are written as strings. |
 | `name` | string or `null` | At most 256 bytes; need not be unique. |
 | `parent` | integer | The id of the object this one is placed on; 0 or absent for none. |
-| `parent_socket` | string or `null` | A socket of the parent's world model this object hangs on (T30: a cup in a hand, `[a-z][a-z0-9_.-]*`, at most 64 bytes): its position, rotation and scale are then relative to the socket's frame in the parent's current pose. A socket the parent's pose lacks is the parent's own space. Absent: the parent itself. |
+| `parent_socket` | string or `null` | A socket of the parent's world model this object hangs on (a cup in a hand, `[a-z][a-z0-9_.-]*`, at most 64 bytes): its position, rotation and scale are then relative to the socket's frame in the parent's current pose. A socket the parent's pose lacks is the parent's own space. Absent: the parent itself. |
 | `position`, `rotation`, `scale` | `[x, y, z]` | Relative to the parent. The position is in metres, read and written as doubles (every digit is kept), each axis within ±10 000 000 (10 000 km); the rotation is in degrees, applied X, then Y, then Z. |
 | `tint` | colour | `"#rrggbb"`, or `{"tint": [r, g, b], "brightness": b, "opacity": o}` when brightness or opacity is not 1. |
 | `is_enabled`, `is_visible` | `true` / `false` | |
@@ -117,13 +117,13 @@ are no "inherit" values.
 | Full resolution over the pixelated image | `overrides_omit_pixelation` | `omit_pixelation` (default false) |
 | The shadow cascades | `overrides_shadow_tier` | `shadow_tier`: `both` (default), `near`, `far` |
 | Casting shadows | `overrides_casts_shadows` | `casts_shadows` (default true) |
-| The haze in front of it (T35) | `overrides_haze` | `haze`: in [0, 1000], times the air's haze (default 1; 0 as if the air were clear: a sign that must read from far away) |
+| The haze in front of it | `overrides_haze` | `haze`: in [0, 1000], times the air's haze (default 1; 0 as if the air were clear: a sign that must read from far away) |
 | The draw distance | `overrides_draw_distance` | `draw_distance`: metres, above 0 (default 600) |
 | Keeping it fixed against the quality setting | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` (default false) |
 | The LOD switch distances | `overrides_lod_distances` | `lod_distances`: metres, finest LOD first, each above 0 and above the one before, at most 8 (default `[]`) |
 
 `draw_distance_multiplier` (above 0, default 1) multiplies the draw distance in effect, the world model's or the
-placement's own: 2 is seen twice as far. It is a plain setting, not an override. The LODs (T11):
+placement's own: 2 is seen twice as far. It is a plain setting, not an override. The LODs:
 - `lod_distances` applies only while it holds one distance per LOD of the world model; when the world model gains or
   loses a LOD, the world model's distances apply instead (the game warns once) until the list fits again.
 - `lod_distance_multiplier` (above 0, default 1) multiplies the switch distances in effect: 2 keeps each LOD twice as
@@ -146,7 +146,7 @@ placement's own: 2 is seen twice as far. It is a plain setting, not an override.
 
 ### The model instances block
 
-The `model_instances` component (B03) places many copies of one world model, drawn a cell at a time (a few draws for
+The `model_instances` component places many copies of one world model, drawn a cell at a time (a few draws for
 thousands of copies; `agents/WorldRuntime.md`, "Model instances"). It takes every key of the model block, with the same
 meaning and defaults, but `overrides_omit_pixelation` and `omit_pixelation` (copies are never drawn at full resolution
 over the pixelated image), and applies them to every copy; and `instances`, the copies:
@@ -205,7 +205,7 @@ while its flag is off.
 | A decal's lift | `overrides_decal_offset` | `decal_offset`: metres, >= 0 (0.01) |
 | The outline | `overrides_has_outline` | `has_outline` (true) |
 | Full resolution over the pixelated image | `overrides_omit_pixelation` | `omit_pixelation` (false) |
-| The haze in front of it (T35) | `overrides_haze` | `haze`: in [0, 1000] (1; 0 as if the air were clear) |
+| The haze in front of it | `overrides_haze` | `haze`: in [0, 1000] (1; 0 as if the air were clear) |
 | The draw distance | `overrides_draw_distance` | `draw_distance`: metres, above 0 (150) |
 | Keeping it fixed against the quality setting | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` (false) |
 
@@ -223,10 +223,10 @@ a plain setting, not an override.
 
 ### The collider block
 
-The `collider` component (T12) makes the object collide: with its world model's collision (the model block's world
+The `collider` component makes the object collide: with its world model's collision (the model block's world
 model, `references/asset_structure.md`, "World models", `collision`) or with one shape of its own. Without it an object
 does not collide, whatever its world model holds. Its layer, mask, trigger flag and mass come from the world model, each
-overridable with the same two keys as the model block. Since T27 it also says how the object takes part in the
+overridable with the same two keys as the model block. It also says how the object takes part in the
 collision step: a movable object's collider is pushed (`is_pushable`) or kinematic (it pushes, and is never pushed);
 a static object's collider never moves in play.
 
@@ -272,7 +272,7 @@ A crate that a door or a character pushes (its object `movable`), heavier than i
 
 ### The character block
 
-The `character` component (T13) makes the object a character: the player or an NPC, an upright capsule whose feet are at
+The `character` component makes the object a character: the player or an NPC, an upright capsule whose feet are at
 the object's position (`agents/Characters.md`). It names a character asset (`references/asset_structure.md`,
 "Characters") and may override every one of its settings, each with its own flag next to its value, as the sprite block
 does: `overrides_radius` with `radius`, `overrides_walk_speed` with `walk_speed`, ..., one pair per key of a character
@@ -297,7 +297,7 @@ Characters made at runtime (the player, spawned NPCs) are not written into world
 
 ### The animator block
 
-The `animator` component (T29) plays the object's skeletal animation: its model component's world model must have a
+The `animator` component plays the object's skeletal animation: its model component's world model must have a
 skinned LOD and animation libraries (`references/asset_structure.md`, "World models" and "Animation libraries";
 `agents/Animation.md`). What it plays right now (clip times, weights, fades) is not saved; these keys say how it starts
 and how it plays.
@@ -312,7 +312,7 @@ and how it plays.
 | `fade_seconds` | 0 to 60 (0.2) | How long a change of `clip` cross-fades. |
 | `overrides_is_looped`, `is_looped` | false, false | Whether the clip loops, instead of its library's setting. |
 | `overrides_animation_libraries`, `animation_libraries` | false, `[]` (at most 16 asset names) | The placement's own animation libraries instead of its world model's. |
-| `overrides_animation_graph`, `animation_graph` | false, `null` (an asset name) | The placement's own animation graph instead of its world model's (T30); on with no name: no graph. |
+| `overrides_animation_graph`, `animation_graph` | false, `null` (an asset name) | The placement's own animation graph instead of its world model's; on with no name: no graph. |
 
 A placed figure that waves in a loop, though its library plays the wave once:
 ```
@@ -326,7 +326,7 @@ A placed figure that waves in a loop, though its library plays the wave once:
 
 ### The terrain block
 
-The `terrain` component (B01) places a terrain: a `terrain` asset (`references/asset_structure.md`, "Terrains";
+The `terrain` component places a terrain: a `terrain` asset (`references/asset_structure.md`, "Terrains";
 `agents/Terrain.md`) whose mesh lies in the object's space, drawn in chunks and solid. The object is normally `static`
 (the default) and has no other component; a collider on the same object wins (its terrain then does not collide). Every
 render and collision setting of the terrain asset can be overridden with the two keys the model block uses.
@@ -337,7 +337,7 @@ render and collision setting of the terrain asset can be overridden with the two
 | `overrides_has_outline`, `has_outline` | false, true | The outline. |
 | `overrides_shadow_tier`, `shadow_tier` | false, `both` | Which cascades it casts into: `near`, `far`, `both`. |
 | `overrides_casts_shadows`, `casts_shadows` | false, true | Off: it casts no shadow (it still receives them). |
-| `overrides_haze`, `haze` | false, 1 | Times the air's haze in front of it, in [0, 1000] (T35; 0 as if the air were clear). |
+| `overrides_haze`, `haze` | false, 1 | Times the air's haze in front of it, in [0, 1000] (0 as if the air were clear). |
 | `overrides_draw_distance`, `draw_distance` | false, 4000 | How far each chunk is seen, in metres (above 0). |
 | `draw_distance_multiplier` | above 0 (1) | Times the draw distance in effect. |
 | `overrides_is_draw_distance_fixed`, `is_draw_distance_fixed` | false, true | On: the player's draw distance setting leaves it as it is. |
@@ -345,8 +345,8 @@ render and collision setting of the terrain asset can be overridden with the two
 | `overrides_collision_layer`, `collision_layer` | false, `world` | Its chunks' layer. |
 | `overrides_collides_with`, `collides_with` | false, an array of layers (world's default mask) | The layers it blocks and is blocked by; without it, the asset's mask or the layer's default. |
 
-The test world's terrain (object 51), as the shipped file writes it, and a copy that casts no shadow and is seen half as
-far:
+The test world's terrain (object 51) without its draw distance override, and a copy that casts no shadow and is seen
+half as far:
 ```
 "terrain": {
     "terrain": "placeholder_terrain"
@@ -447,11 +447,11 @@ every integer in the smallest GHDF type that holds it.
 |---|---|
 | 1 | The id (an unsigned integer). |
 | 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`, 5 `character`, 6 `animator`, 7 `terrain`, 8 `model_instances`), each a compound keyed by the type's wire ids (`model_instances` shares the model block's, without 3 and 9, `omit_pixelation`'s pair, and adds 22 `instances`). |
-| 3 and up | The `world_object` table's wire ids: 3 `name`, 4 `position`, 5 `rotation`, 6 `scale`, 7 `tint`, 8 `is_enabled`, 9 `is_visible`, 10 `mobility`, 11 the tags and data, 12 `parent`, 13 `parent_socket` (T30). |
+| 3 and up | The `world_object` table's wire ids: 3 `name`, 4 `position`, 5 `rotation`, 6 `scale`, 7 `tint`, 8 `is_enabled`, 9 `is_visible`, 10 `mobility`, 11 the tags and data, 12 `parent`, 13 `parent_socket`. |
 
 How each type is stored (`agents/PropertyDescriptors.md`, "Types"): integers in the smallest integer type (readers take
 any integer type whose value fits), floats as Float (angles in radians), vectors and float lists as Float arrays, but
-positions as Double arrays (files written before positions were doubles hold Float arrays, which still read),
+positions as Double arrays (a Float array of three also reads as a position),
 colours as UInt8 arrays, render colours as a compound, strings as strings, enums and dates as encoded integers, sets of
 enum entries as their mask in the smallest unsigned integer type, the tags
 and data as an array of entry compounds (`agents/ObjectData.md`, "GHDF"), and a model instances block's copies as a
@@ -478,16 +478,6 @@ Downloaded worlds use the same code, so loading treats every file as hostile:
   not know. GHDF entry ids a table retired are skipped silently.
 - **Versions:** the format version is raised only for changes an older game cannot read by skipping what it does not
   know (a renamed key, a value read another way); new keys and new component types keep it. Every table a world file
-  holds is at its version 1 under format 1. Two exceptions, while the test world was the only world file, made without
-  a new format version:
-  - World models (task T10) renamed the model block's `model` (a model asset) to `world_model` (a world model) and made
-    its `has_outline`, `omit_pixelation`, `shadow_tier` and `casts_shadows` the placement's own values behind override
-    flags. A JSON file written before reads with its `model` key skipped as unknown (the object draws nothing); a GHDF
-    one keeps the name on entry 1, which now reads as the world model's name (it draws where a world model has the
-    model's name). Either way its render settings stay unused until their flags are set.
-  - World sprites (task T26) did the same to the sprite block: `sprite_animation` (a sprite animation) became
-    `world_sprite` (a world sprite) on the same entry 1, and every look setting (`orientation` to `omit_pixelation`)
-    became the placement's own value behind an override flag. A JSON file written before draws no sprite (its
-    `sprite_animation` key is skipped as unknown); a GHDF one reads the name as a world sprite's (it draws where a
-    world sprite has the animation's name, as every shipped one has), with the world sprite's look until the flags are
-    set.
+  holds is at its version 1 under format 1. Once other worlds must keep loading, a change of a row's meaning (a key or
+  wire id that comes to name something else) raises the table's version with a `Migrate` (and a GHDF migration slot,
+  which the tables do not have yet) and the format version.

@@ -25,9 +25,8 @@ non-default raylib configuration.
 | raylib | https://github.com/raysan5/raylib (local copy: `../raylib/6.0`) | commit `65abee1` (2026-07-04), reports `6.1-dev` | CMake, see below |
 | WRFramework | `../WRFramework` | commit `e6085fead5630602416729efe00dc4e60d60fa54` | its `compile/compile_linux_x11.sh` → `compile/libwr.a` |
 
-`lib/libwr.a`, `include/wr/` and `agents/WRFramework.md` match the commit above, `e6085fe` (`Vector2Double` and
-raymath's other vector operations, on top of `c341ca5`'s `WRVectorMath` from T31 and `8c9af0b`'s `WRArena`); checked
-file for file on 2026-10-22, at T32, which changed nothing in WRFramework.
+`lib/libwr.a`, `include/wr/` and `agents/WRFramework.md` match the commit above, `e6085fe`, file for file: the
+version with `WRVectorMath` (`Vector2Double` and raymath's other vector operations included) and `WRArena`.
 
 The project's `include/raylib/` and `include/wr/` headers must come from the same versions as the libraries.
 To update WRFramework: build it with its own script, then copy its `include/*.h` into `include/wr/`,
@@ -45,7 +44,7 @@ To update WRFramework: build it with its own script, then copy its `include/*.h`
    - leave `config.h` untouched and configure CMake with
      `-DCUSTOMIZE_BUILD=ON -DSUPPORT_CUSTOM_FRAME_CONTROL=ON`. `CUSTOMIZE_BUILD` turns every `config.h` flag
      into a CMake option that defaults to its `config.h` value, so nothing else changes.
-2. **`SUPPORT_GPU_SKINNING` must be enabled (T29).** Skinned models bend on the GPU: the world renderer's skinned
+2. **`SUPPORT_GPU_SKINNING` must be enabled.** Skinned models bend on the GPU: the world renderer's skinned
    vertex stages read each vertex's bone indices and weights, which raylib uploads (vertex buffers 7 and 8) only when
    built with it, and every object's pose stays its own (a palette per draw), where raylib's CPU skinning would pose
    the shared model in place. Without it skinned models load, but their meshes draw as bound and never bend; the game
@@ -68,8 +67,9 @@ To update WRFramework: build it with its own script, then copy its `include/*.h`
      exactly that many maps into each per-draw material and keeps its own samplers on texture units 12–15,
      above raylib's material units: `WORLD_RENDERER_MATERIAL_MAP_COUNT` in `source/WorldRendererInternal.h`
      must match it.
-   - glTF support (`SUPPORT_FILEFORMAT_GLTF`): the animation library reader (`source/AnimationLibraryGltf.c`, T29)
-     calls the cgltf that raylib compiles into `libraylib.a`, through a copy of raylib's `src/external/cgltf.h` in
+   - glTF support (`SUPPORT_FILEFORMAT_GLTF`): the animation library reader (`source/AnimationLibraryGltf.c`) and the
+     terrain's import (`source/TerrainMeshGltf.c`, both checked by `source/GltfChecks.c`) call the cgltf that raylib
+     compiles into `libraylib.a`, through a copy of raylib's `src/external/cgltf.h` in
      `include/raylib/cgltf.h` (cgltf 1.15, MIT: `licenses/cgltf/`). Keep the two the same version: copy the header
      again whenever raylib is updated.
 
@@ -97,30 +97,29 @@ Reusing an existing build directory works too: re-run the `cmake -B build ...` l
 
 - **Optimisation:** check the build directory, not the archive: `grep CMAKE_BUILD_TYPE build/CMakeCache.txt`
   should say `Release`, and `build/raylib/CMakeFiles/raylib.dir/flags.make` should contain `-O3`.
-- **GPU skinning:** run the game (or the windowless harness) with the test world: the log must not carry the
+- **GPU skinning:** run the game with the test world: the log must not carry the
   "bone weights the GPU does not have" warning above, and `WorldRenderer_LogStatus` (the I key) lists `skinning` as
   active.
 
 ### Current state
 
-`lib/libraylib.a` was rebuilt on 2026-10-23 (T29) as **Release** (`-O3 -DNDEBUG`) from `../raylib/6.0` (commit
-`65abee1` with both `config.h` edits: custom frame control, and GPU skinning since T29), reusing its existing `build/`
-directory: `cmake --build build --target raylib`, then copied to `lib/`. The checks above confirm custom frame control
-and GPU skinning (the test world's figures bend, no warning). The 2026-10-17 build (Release, custom frame control, no
-GPU skinning) was the one before; until that one it had been built with an empty build type, i.e. unoptimised.
+`lib/libraylib.a` is a **Release** build (`-O3 -DNDEBUG`) of `../raylib/6.0` at commit `65abee1` with both `config.h`
+edits (custom frame control and GPU skinning), built in that copy's existing `build/` directory
+(`cmake --build build --target raylib`) and copied to `lib/`. It passes the checks above: custom frame control, and GPU
+skinning (the test world's figures bend, no warning).
 
-## Direct OpenGL calls (B02, decision W7; T37; T39)
+## Direct OpenGL calls
 
 Everything draws through raylib, with three exceptions, each in a private module of its own and nowhere else:
 - **texture arrays** (`GL_TEXTURE_2D_ARRAY`, `source/GLTextureArray.{h,c}`), which raylib does not have and the
   terrain's materials need (up to sixteen materials blended per pixel, one array layer each);
-- **readbacks that do not wait** (`source/GLReadback.{h,c}`, T37): raylib reads a texture back only by stalling until
+- **readbacks that do not wait** (`source/GLReadback.{h,c}`): raylib reads a texture back only by stalling until
   the GPU has finished everything before it; the eye's meter copies its target into a pixel-pack buffer, fences the
   copy and takes the values a frame or two later (`glGenBuffers`, `glDeleteBuffers`, `glBindBuffer`, `glBufferData`,
   `glGetBufferSubData`, `glReadPixels`, `glPixelStorei`, `glGetIntegerv`, `glFenceSync`, `glClientWaitSync`,
   `glDeleteSync`, `glGetError`: OpenGL 3.2 core at the newest, the sync objects; a missing one leaves the eye adapting
   to the sky's light at the camera, logged once);
-- **reversed depth** (`source/GLDepth.{h,c}`, T39, decision G41): raylib's camera depth runs from 0 at the near plane to
+- **reversed depth** (`source/GLDepth.{h,c}`): raylib's camera depth runs from 0 at the near plane to
   1 at its fixed 4 km far plane, in a depth buffer whose format the driver picks (24 bits here), so nothing past 4 km
   draws; the camera's passes instead draw with depth 1 at the near plane falling toward 0 at infinity, into 32-bit
   float depth buffers, which keeps about the same relative precision at every distance (`glClipControl` for the 0-to-1

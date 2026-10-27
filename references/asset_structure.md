@@ -204,7 +204,7 @@ Both forms are acceptable for both integer and decimal vectors. Integer vectors,
 }
 ```
 
-Every key is optional, and leaving one out keeps the behaviour textures had before the key existed.
+Every key is optional, and leaving one out gives its default above.
 * `filtering`: `point` keeps hard pixels, `bilinear` smooths between texels, `trilinear` also blends between mip levels
   (the smoothest choice for textures seen at many distances, such as a sky panorama).
 * `wrap`: what texture coordinates outside 0..1 read: `repeat` tiles, `clamp` stretches the edge texels,
@@ -365,17 +365,17 @@ pixel fonts with one-pixel strokes. raylib's built-in font uses the default.
     "name": "world_pbr",
     "vertex_location": asset location,   // [OPTIONAL] the vertex-stage source; omit to use Raylib's default
     "fragment_location": asset location, // [OPTIONAL] the fragment-stage source; omit to use Raylib's default
-    "defines": [ string, ... ]           // [OPTIONAL] names #defined in both stages (B03); none by default
+    "defines": [ string, ... ]           // [OPTIONAL] names #defined in both stages; none by default
 }
 ```
 
-At least one of `vertex_location` / `fragment_location` must be present. A bare `"location"` is accepted as a
-back-compat alias for `fragment_location` (the original single-stage behavior). Every shader-stage extension
+At least one of `vertex_location` / `fragment_location` must be present. A bare `"location"` is accepted as an
+alias for `fragment_location`. Every shader-stage extension
 (`vert`, `frag`, `vs`, `fs`, `glsl`) is accepted for either stage, so two stage files with the same name but
 different extensions would make the location ambiguous: give the two stage files DISTINCT names — e.g.
 `shaders/pbr/vertex.vert` and `shaders/pbr/fragment.frag`, referenced as `"pbr/vertex"` and `"pbr/fragment"`.
 
-`defines` (B03) names preprocessor symbols for both stages, so one source serves a shader and its variants: each name
+`defines` names preprocessor symbols for both stages, so one source serves a shader and its variants: each name
 becomes a line `#define <name>` right after the main file's `#version` line (first, when it has none), followed by a
 `#line` that keeps the file's line numbers, and shared files test it with `#ifdef`. At most 16 names, each at most once;
 a name is a GLSL identifier (a letter or `_`, then letters, digits or `_`) that neither starts with `GL_` nor holds `__`
@@ -413,14 +413,14 @@ A stage source may pull in shared GLSL with a line of its own:
   means line 27 of file 1, and the load error the game logs lists which number is which file. A missing include fails
   the load with an error naming the include, the including file and the line.
 
-Shared files today: `common/math` (`PI`), `common/atmosphere` (the air, the atmosphere's tables and their march: the sky
-the sky pass draws, and the haze's volume), `common/haze` (T35: the haze in front of what the camera sees, the volume's
+The shared files: `common/math` (`PI`), `common/atmosphere` (the air, the atmosphere's tables and their march: the sky
+the sky pass draws, and the haze's volume), `common/haze` (the haze in front of what the camera sees, the volume's
 readers and the ground haze), `common/night_sky` (the air mass and extinction near the horizon, and the profile of
 light pollution's skyglow), `common/night_vision`, `common/lighting`, `common/distance_packing`,
-`common/dither` and `common/skinning` (T29: the bone attributes, the bone palette and a vertex's blended skinning rows,
-included by every skinned vertex stage; `agents/Animation.md`).
+`common/dither`, `common/depth`, `common/instancing`, `common/value_noise` and `common/skinning` (the bone attributes,
+the bone palette and a vertex's blended skinning rows, included by every skinned vertex stage; `agents/Animation.md`).
 
-**Skinned twins (T29).** Every world geometry shader that draws models has a twin for skinned meshes, named with
+**Skinned twins.** Every world geometry shader that draws models has a twin for skinned meshes, named with
 `_skinned`: `world_pbr_skinned`, `world_normal_skinned`, `world_depth_skinned`, `world_cube_depth_skinned` (each its
 directory's `skinned.vert` with the rigid shader's own fragment stage) and `world_unlit_skinned` (`unlit/`, for
 models drawn without the PBR shader). A resource pack that replaces a rigid shader's fragment stage changes its twin
@@ -478,7 +478,7 @@ with it; one that replaces a vertex stage should replace the twin's too.
 }
 ```
 
-**Skinned models (T29).** A glTF (`gltf`, `glb`) file with a skin loads its skeleton and each vertex's bone
+**Skinned models.** A glTF (`gltf`, `glb`) file with a skin loads its skeleton and each vertex's bone
 indices and weights (at most four bones a vertex) with it: such a model bends with the pose of the object it is placed
 on, playing an animation library's clips (`agents/Animation.md`). The skeleton is checked when the model loads (at most
 256 bones, every parent a bone listed in the file and no cycle); a mesh with an index past the bones or a weight that is
@@ -492,7 +492,7 @@ Every number must be finite and fit a float.
 
 ## Textures.
 A standalone texture: one image file uploaded to the GPU as it is, for things such as sky panoramas, the moon, noise,
-normal maps and masks. (Sprites still come from sprite sheets and sprite animations, model maps from model
+normal maps and masks. (Sprites come from sprite sheets and sprite animations, model maps from model
 definitions.) Definitions and images live under `textures/`.
 
 ```
@@ -568,14 +568,14 @@ default setting of this file for that one placement: an explicit override flag n
         }
     ],
     "bounds": { "center": [0, 0.4, 0], "radius": 1.1 }, // [OPTIONAL] default: LOD 0's (a posed object's: its pose's)
-    "animation_libraries": [ "human_motions" ],    // [OPTIONAL] at most 16 (T29)
-    "animation_graph": "human",                    // [OPTIONAL] (T30)
-    "sockets": {                                   // [OPTIONAL] at most 32 (T30)
+    "animation_libraries": [ "human_motions" ],    // [OPTIONAL] at most 16
+    "animation_graph": "human",                    // [OPTIONAL]
+    "sockets": {                                   // [OPTIONAL] at most 32
         "hand_r": { "bone": "hand_r", "position": [0.03, -0.07, 0], "rotation": [100, 0, 0] },
         "eyes": { "bone": "head", "position": [0, 0.1, 0.1] },
         "seat": { "position": [0, 0, 0.55] }      // no bone: fixed in the object's own space
     },
-    "first_person": { "eyes": "eyes", "hidden_bones": [ "neck" ] } // [OPTIONAL] (T30)
+    "first_person": { "eyes": "eyes", "hidden_bones": [ "neck" ] } // [OPTIONAL]
 }
 ```
 
@@ -586,13 +586,13 @@ default setting of this file for that one placement: an explicit override flag n
 | `is_draw_distance_fixed` | boolean | true: the player's `draw_distance_scale` leaves the draw distance as it is (landmarks, gameplay-critical props). |
 | `lod_fade_seconds` | seconds, >= 0 | How long a LOD cross-fade takes: both LODs are drawn with complementary pixel dithers meanwhile; 0 swaps at once. |
 | `lod_hysteresis` | in [0, 1) | A LOD switches to a coarser one at its switch distance x (1 + h) and back at x (1 - h), so an object standing at a boundary does not flicker. |
-| `render` | object | The default render settings of the placements: `has_outline` (default true: a 1-pixel outline), `omit_pixelation` (default false: true draws it at full resolution over the pixelated image, for readable screens), `shadow_tier` (`both` (default), `near`: only the sharp near shadow, for small props, `far`: only the coarse far one, for big objects), `casts_shadows` (default true) and `haze` (T35, in [0, 1000], default 1: times the air's haze in front of it; 0 as if the air were clear, for a beacon or a sign that must read from far away). |
+| `render` | object | The default render settings of the placements: `has_outline` (default true: a 1-pixel outline), `omit_pixelation` (default false: true draws it at full resolution over the pixelated image, for readable screens), `shadow_tier` (`both` (default), `near`: only the sharp near shadow, for small props, `far`: only the coarse far one, for big objects), `casts_shadows` (default true) and `haze` (in [0, 1000], default 1: times the air's haze in front of it; 0 as if the air were clear, for a beacon or a sign that must read from far away). |
 | `variants` | at most 64 `{ "name", "material_overrides" }` | Other looks of the same meshes (dark wood, a red car). `name`: `[a-z][a-z0-9_.-]*`, at most 128 bytes, unique in the world model. `material_overrides` (optional; at most 32, one per slot): what the variant changes in each material slot, below. A placed object picks one with `uses_variant` and `variant`. |
-| `bounds` | `{ "center": [x, y, z], "radius": metres >= 0 }` | The bounding sphere culling and draw distances use, in the object's own space (after each LOD's import transform). Left out, it is the sphere around LOD 0's mesh bounds, or for an object an animator poses (T29) the sphere around its pose. Give it to keep one fixed sphere whatever the pose. |
-| `animation_libraries` | at most 16 asset names, each once | The animation libraries (below, "Animation libraries") whose clips the placements play (T29), loaded with the world model as its dependencies. Two of them may not hold a clip of the same name. The skinned LODs must share one skeleton: every LOD with bones must have the first one's bones and bind poses, or the world model is rejected (a coarse LOD may be rigid). A placement may play its own libraries instead (`references/world_structure.md`, the animator block). |
-| `animation_graph` | an asset name | The animation graph (below, "Animation graphs") the placements' animators play with those clips (T30), loaded with the world model as a dependency. A placement may play its own instead (the animator block). |
-| `sockets` | at most 32 `"name": { "bone", "position", "rotation" }` | Named places on the model (T30): where a held item hangs (a hand), where an action's anchor puts a character (a bench's seat, in front of a cup), where a first-person camera sits. The name: `[a-z][a-z0-9_.-]*`, at most 64 bytes. `bone` (optional, at most 31 bytes): a bone of the skeleton the socket follows, its `position` ([x, y, z] metres, default the origin) and `rotation` (degrees about X, Y and Z in that order, default none) along the bone's axes (its frame in the object's space, without any scale a bone or the import transform carries); without a bone the socket is fixed in the object's own space. Its +Z is the way it faces (an anchor turns a character that way). A bone socket on a world model without a skeleton, or on a bone its skeleton lacks, fails the load. |
-| `first_person` | `{ "eyes", "hidden_bones" }` | What a first-person camera does with this body (T30): `eyes` (required) names one of its sockets, the camera's place; `hidden_bones` (at most 16 bone names) the bones the camera's passes leave out, each with its subtree (the head, from inside). Hidden bones need a skeleton that has them. |
+| `bounds` | `{ "center": [x, y, z], "radius": metres >= 0 }` | The bounding sphere culling and draw distances use, in the object's own space (after each LOD's import transform). Left out, it is the sphere around LOD 0's mesh bounds, or, for an object an animator poses, the sphere around its pose. Give it to keep one fixed sphere whatever the pose. |
+| `animation_libraries` | at most 16 asset names, each once | The animation libraries (below, "Animation libraries") whose clips the placements play, loaded with the world model as its dependencies. Two of them may not hold a clip of the same name. The skinned LODs must share one skeleton: every LOD with bones must have the first one's bones and bind poses, or the world model is rejected (a coarse LOD may be rigid). A placement may play its own libraries instead (`references/world_structure.md`, the animator block). |
+| `animation_graph` | an asset name | The animation graph (below, "Animation graphs") the placements' animators play with those clips, loaded with the world model as a dependency. A placement may play its own instead (the animator block). |
+| `sockets` | at most 32 `"name": { "bone", "position", "rotation" }` | Named places on the model: where a held item hangs (a hand), where an action's anchor puts a character (a bench's seat, in front of a cup), where a first-person camera sits. The name: `[a-z][a-z0-9_.-]*`, at most 64 bytes. `bone` (optional, at most 31 bytes): a bone of the skeleton the socket follows, its `position` ([x, y, z] metres, default the origin) and `rotation` (degrees about X, Y and Z in that order, default none) along the bone's axes (its frame in the object's space, without any scale a bone or the import transform carries); without a bone the socket is fixed in the object's own space. Its +Z is the way it faces (an anchor turns a character that way). A bone socket on a world model without a skeleton, or on a bone its skeleton lacks, fails the load. |
+| `first_person` | `{ "eyes", "hidden_bones" }` | What a first-person camera does with this body: `eyes` (required) names one of its sockets, the camera's place; `hidden_bones` (at most 16 bone names) the bones the camera's passes leave out, each with its subtree (the head, from inside). Hidden bones need a skeleton that has them. |
 
 **A variant's material override** takes the same keys as a model's `material_overrides` and reads them with the same
 parser, with one difference: the maps name **texture assets** (`textures/`, see "Textures"), so a texture several
@@ -607,7 +607,7 @@ variants or world models share loads once, and its filtering, wrap and mipmaps c
 A variant is applied when the object is drawn, to the renderer's copy of each material, never to the model asset, so
 the same model can show every variant at once.
 
-**Collision** (`collision`, optional, T12): the hitboxes of the objects placed with this world model, as named
+**Collision** (`collision`, optional): the hitboxes of the objects placed with this world model, as named
 **collision sets**. Each set is a compound of shapes placed in the world model's own space (after the LOD models' import
 transforms, like the meshes they stand for). A placed object needs a collider component to collide; it uses the default
 set, or the one it names (a door swaps between `closed` and `open`), and may override the layer, the mask, the
@@ -618,7 +618,7 @@ trigger flag and the mass (`references/world_structure.md`, the collider block).
     "layer": "world",                              // [OPTIONAL] the placements' layer; default "prop"
     "collides_with": ["character", "vehicle"],     // [OPTIONAL] default: the layer's default mask
     "is_trigger": false,                           // [OPTIONAL] default false
-    "mass": 1.0,                                   // [OPTIONAL] kilograms, above 0, at most 1000000; default 1 (T27)
+    "mass": 1.0,                                   // [OPTIONAL] kilograms, above 0, at most 1000000; default 1
     "sets": [                                      // 1 to 32 sets, at most 1024 shapes together
         { "name": "closed", "shapes": [            // 1 to 128 shapes
             { "type": "box", "name": "panel", "center": [0.5, 1, 0], "half_extents": [0.5, 1, 0.05] },
@@ -644,35 +644,38 @@ of another type is refused, so a typo is caught):
 | `cylinder` | `radius` (> 0), `half_height` (> 0) | Along local Y. |
 | `convex_hull` | `points` ([[x, y, z], ...], 4 to 65536, spanning a volume) or `model` (a model asset: its vertices after its import transform); optional `max_vertices` (4 to 256, default 64) | The convex hull of the points. A finer hull is reduced to `max_vertices`, keeping its extremes. |
 | `plane` | optional `is_bounded` (default true), `half_extents` ([x, z], each > 0, required while bounded), `depth` (>= 0, default 0) | The front is local +Y. Bounded: a rectangle in local XZ, solid `depth` metres behind it within the rectangle (depth 0: a flat rectangle, solid from the front only). Unbounded: an infinite half-space, solid without limit behind it. Contacts and casts push to the front; rays hit the front only. |
-| `mesh` | `model` (a model asset: its triangles after its import transform); optional `is_two_sided` (default true) | For architecture and terrain: never pushed (T27). Vertices at the same place are welded, degenerate triangles skipped; seams between flat or concave neighbours let shapes slide without catching. One-sided meshes are hit from their front (counter-clockwise) side only. |
+| `mesh` | `model` (a model asset: its triangles after its import transform); optional `is_two_sided` (default true) | For architecture and terrain: never pushed. Vertices at the same place are welded, degenerate triangles skipped; seams between flat or concave neighbours let shapes slide without catching. One-sided meshes are hit from their front (counter-clockwise) side only. |
 
 `layer` and the names in `collides_with` are collision layers: `world`, `prop`, `character`, `vehicle`, `dynamic`,
 `trigger`, `interaction`. Two colliders block each other when each one's mask holds the other's layer; left out, a mask
 is its layer's default (the solid layers collide with each other, `trigger` sees `prop`, `character`, `vehicle` and
 `dynamic`, `interaction` collides with nothing). A trigger reports what touches it and blocks nothing. The `mass` is
-how pushable placements share a push (T27): equal masses give way equally, a heavy one barely moves. A `model` of a
+how pushable placements share a push: equal masses give way equally, a heavy one barely moves. A `model` of a
 hull or mesh loads with the world model as one more dependency; a missing one fails the world model. Loading a model
 needs the GPU, so tools without it can use only `points` hulls.
 
 **Rules.** A definition that breaks one is rejected when the definitions are read, with a message naming the key and
 where it is (`World model "desk": lods[1].max_distance (12) must be above lods[0].max_distance (15)...`). Unknown keys
 are rejected in the root, each LOD, `render`, each variant, each material override, `bounds`, `collision`, each set and
-each shape, with the keys allowed there: the `surfaces` (T19) section comes with its task. (Vectors and colours accept their
+each shape, with the keys allowed there: a `surfaces` section is not part of the format yet and is refused as unknown.
+(Vectors and colours accept their
 usual forms, see "Common data structures".) The LOD models and variant textures must exist when the world model loads; a missing
 one fails the load (logged once, like every load failure) and the objects using it draw nothing.
 
 The test world's world models are in `world_models/test_world/`: `test`, `pbr_demo` and `pbr_metal`, one LOD each, the
-model of the same name, seen 600 m (the draw distance every model had before world models), `painted_cube`, the test
+model of the same name, seen 600 m, `painted_cube`, the test
 cube with two variants, `red` and `blue` (tints only), and `lod_test`, three LODs of a sphere switching at 13 and 16 m and
 seen 60 m: the placeholder models `lod_test_lod0` to `lod_test_lod2` (`models/placeholder_lod_test/`, UV spheres of
-radius 0.5 m at 32x16, 16x8 and 8x4 segments). Since T12 they collide: `test`, `pbr_metal` and `painted_cube` with
+radius 0.5 m at 32x16, 16x8 and 8x4 segments). They collide: `test`, `pbr_metal` and `painted_cube` with
 `"bounds"`, `lod_test` with a hull of `lod_test_lod0`, `pbr_demo` with a mesh of its own model; and `test_door` (the
 model `test_door`: the test cube made a 1 x 2 m panel by its import transform, hinged at its origin) has the sets
-`closed` and `open`, and since T30 an `opener` socket (where a character stands to push it). Since T29 `test_humanoid`
-and `test_humanoid_short` (the placeholder humanoid; T30 gave them the `test_humanoid` graph, the sockets `hand_r`,
-`hand_l` and `eyes` and a first_person block), and since T30 `test_bench` (the model `test_bench`, collision `bounds`,
-its `seat` socket on the floor 0.55 m in front) and `test_cup` (collision `bounds`, its `grip` on its side and its
-`reach` 0.52 m in front of it, facing it).
+`closed` and `open`, and an `opener` socket (where a character stands to push it). The others are `test_humanoid`
+and `test_humanoid_short` (the placeholder humanoid; they play the `test_humanoid` graph and have the sockets `hand_r`,
+`hand_l` and `eyes` and a first_person block), `test_bench` (the model `test_bench`, collision `bounds`,
+its `seat` socket on the floor 0.55 m in front), `test_cup` (collision `bounds`, its `grip` on its side and its
+`reach` 0.52 m in front of it, facing it), and `test_tree` and `test_pebble`, the placeholders for instanced drawing
+(`asset_source/scripts/placeholder_instances.py`): a conifer of three LODs seen 250 m, which the test world's grove
+draws, and a pebble of two seen 45 m, which the test frame's pebble field draws.
 
 
 ## World sprites.
@@ -723,7 +726,7 @@ every setting of this file for that one placement: an explicit override flag nex
 | `light_wrap` | in [0, 1] | Billboards only: how far light wraps around the sprite. 0 lights it as a flat card facing you, 1 as a round thing, half lit from the side. |
 | `is_decal` | boolean | With `fixed`: lies on a surface (dirt, tire marks), drawn over it without shadow or outline. |
 | `decal_offset` | metres, >= 0 | How far a decal is lifted off its surface so it does not flicker against it. |
-| `render` | object | `has_outline` (a 1-pixel outline), `omit_pixelation` (drawn at full resolution over the pixelated image) and `casts_shadows`: all three for cutout sprites that are not decals only; and `haze` (T35, in [0, 1000], default 1: times the air's haze in front of every kind of sprite; 0 as if the air were clear). The same block as a world model's, without `shadow_tier` (sprites cast into both shadow cascades). |
+| `render` | object | `has_outline` (a 1-pixel outline), `omit_pixelation` (drawn at full resolution over the pixelated image) and `casts_shadows`: all three for cutout sprites that are not decals only; and `haze` (in [0, 1000], default 1: times the air's haze in front of every kind of sprite; 0 as if the air were clear). The same block as a world model's, without `shadow_tier` (sprites cast into both shadow cascades). |
 | `has_draw_distance` | boolean | Whether `draw_distance` applies. Left out, it is on exactly when `draw_distance` is given, so a hand-written file just gives the distance. Off, the sprite is seen as far as its kind: 150 m, or 60 m for a decal, decided for each placement (a placement may turn a sprite into a decal), and a `draw_distance` next to it is kept unused. A tool that writes definitions and leaves out default values must still write this key whenever it writes `draw_distance`. |
 | `draw_distance` | metres, above 0 | How far the sprite is seen while `has_draw_distance` is on. The player's `draw_distance_scale` (`config.json`) multiplies it unless it is fixed, and a narrower field of view (zooming in) pushes it out. Over its last tenth (at least 3 m) the sprite dithers away (blended and additive ones fade their alpha). |
 | `is_draw_distance_fixed` | boolean | true: the player's `draw_distance_scale` leaves the draw distance as it is (landmarks, gameplay-critical signs). |
@@ -741,15 +744,15 @@ and the objects using it draw nothing.
 
 The test world's world sprites are in `world_sprites/test_world/`, each named as the animation it plays: `test_sprite`
 (the test image at 1280 pixels per metre), `test_tire_mark`, `test_tree`, `test_sign`, `test_smoke`, `test_glow` and
-`test_neon` (T06's placeholders, with the look the test world gave them).
+`test_neon` (placeholders).
 
 ## Characters.
 A character is the reusable definition of a kind of character (a human, a dog, a pigeon): its body and how it moves. The
 player and NPCs are world objects with a character component that names one (`references/world_structure.md`), and a
 placement may override every key of this file for that one character, with an explicit override flag next to its own
 value. Gravity itself is the world's (the environment's `gravity`); a character multiplies it. Definitions live under
-`characters/` and have no resource files and no dependencies. How a character's model looks and animates comes later
-(T29, T30).
+`characters/` and have no resource files and no dependencies. A character has no model of its own: another component on
+its object (a world model, posed by its animator: `agents/Animation.md`) or child objects show it.
 
 ```
 {
@@ -801,7 +804,7 @@ value. Gravity itself is the world's (the environment's `gravity`); a character 
 
 | Key | Value | Meaning |
 |---|---|---|
-| `radius` | metres, above 0, at most 100 | The radius of the character's upright capsule: how close it comes to walls and how narrow a gap it fits through. Every character is an upright capsule (the owner's decision G22); a dog's nose and tail may poke past it. |
+| `radius` | metres, above 0, at most 100 | The radius of the character's upright capsule: how close it comes to walls and how narrow a gap it fits through. Every character is an upright capsule; a dog's nose and tail may poke past it. |
 | `height` | metres, above 0, at most 100 | The standing capsule's whole height, from the feet (the object's position) to the top of the head; at least twice the radius. |
 | `eye_height` | metres, 0 to 100 | The eyes above the feet while standing: where the player's camera sits and where the character looks from. |
 | `mass` | kilograms, above 0, at most 1000000 | How pushes are shared: characters and crates push each other by mass (equal masses give way equally). |
@@ -850,14 +853,14 @@ the rule (`Character "dog": character.radius (Radius) must be finite and in ...`
 `height` (`Character "dog": character: height (0.5 m) must be at least twice the radius (0.3 m): ...`). A placement whose
 overrides break them gets the nearest heights that fit. Unknown keys are rejected, with the keys allowed.
 
-The test characters are in `characters/test_world/`: `test_human` (the owner's tuning: 1.8 m tall, walks at 2 and runs at
-5 m/s, jumps at 5 m/s with a 1 m/s running boost, acceleration 64, friction 16, air control 4), `test_dog` (0.28 m by
+The test characters are in `characters/test_world/`: `test_human` (tuned by hand: 1.8 m tall, walks at 2 and runs at
+5 m/s, jumps at 5 m/s with a 1 m/s running boost, acceleration 48, friction 16, air control 4), `test_dog` (0.28 m by
 0.7 m, 25 kg, runs at 6 m/s, lies down as its crouch) and `test_pigeon` (0.1 m by 0.3 m, 0.35 kg, flies at 6 m/s and
 cannot crouch).
 
 
 ## Animation libraries.
-An animation library (T29) is a file of animation clips, kept apart from the models that play it, so one library plays
+An animation library is a file of animation clips, kept apart from the models that play it, so one library plays
 on every model whose skeleton names its bones alike: the humans of every height and build share one walk. Definitions
 live under `animation_libraries/`, next to their `.glb` or `.gltf` file (a `.gltf`'s buffer files beside it). How clips
 play on a model, retargeted to its bone lengths, is in `agents/Animation.md`.
@@ -883,7 +886,7 @@ play on a model, retargeted to its bone lengths, is in `agents/Animation.md`.
 | `clips[].source` | text, at most 256 bytes; default: `name` | The clip's name in the file (any text, as Blender names actions). It must be a clip of the file. |
 | `clips[].is_looped` | boolean; default false | Whether the clip loops; a clip that does not stops at its end and holds its last pose. A placement may override it. |
 | `clips[].speed` | above 0, at most 100; default 1 | How fast the clip plays (an animator's speed multiplies it). |
-| `clips[].distance` | metres, above 0, at most 1000; default none | How far the clip carries the body per cycle at speed 1 (a gait's stride length times its steps per cycle, T30): a graph state's `match_speed` plays it at the character's real speed from it, scaled by the skeleton's height ratio. |
+| `clips[].distance` | metres, above 0, at most 1000; default none | How far the clip carries the body per cycle at speed 1 (a gait's stride length times its steps per cycle): a graph state's `match_speed` plays it at the character's real speed from it, scaled by the skeleton's height ratio. |
 
 **The file is checked as hostile** when the library loads (not when the definition is read): it must parse and validate
 as glTF 2.0; its buffers are inside it (`.glb`, data URIs) or files beside it (no absolute paths, `..`, backslashes,
@@ -894,7 +897,7 @@ replacements too, 1 to its count of them); a `.glb`'s chunks are padded to four 
 floats of the right shape (rotations may be normalized integers); key times must be finite, at least 0, rising, and at
 most 3600 s; values finite, rotations of a length above 0; at most 256 bones (animated nodes and their ancestors) and
 4 194 304 floats of keys; and reading its glTF structure may take at most 64 MiB beyond the file's own size (a small
-file listing millions of empty objects is refused, B01). Morph target weights are ignored (with a warning per clip).
+file listing millions of empty objects is refused). Morph target weights are ignored (with a warning per clip).
 Interpolation is glTF's: `STEP`, `LINEAR` (rotations along the shorter arc) and `CUBICSPLINE`. Unknown keys are
 rejected.
 
@@ -905,7 +908,7 @@ and 0.7333 m per cycle).
 
 
 ## Animation graphs.
-An animation graph (T30) says what an animated object plays when: layers of states and the transitions between them,
+An animation graph says what an animated object plays when: layers of states and the transitions between them,
 the parameters and events they read, the special actions, and look-at. Definitions live under `animation_graphs/`
 (JSON only, no file of their own). A world model names its graph (`animation_graph`); an animator may name another. The
 graph names clips, not libraries: they come from the animator's libraries. How a graph plays is in
@@ -1002,7 +1005,7 @@ right arm, over whatever the body does).
 
 
 ## Terrains.
-A terrain (B01) is the ground of a world: one free-form triangle mesh (vertices anywhere, overhangs and caves allowed)
+A terrain is the ground of a world: one free-form triangle mesh (vertices anywhere, overhangs and caves allowed)
 with painted material weights and vegetation densities per vertex, and holes and hard per-face materials per triangle.
 It is cut into chunks (32 m by default) that draw in every render pass and collide as triangle meshes. Definitions live
 under `terrains/`, next to their `.glb` or their binary file; a world places one with a `terrain` component
@@ -1023,7 +1026,7 @@ under `terrains/`, next to their `.glb` or their binary file; a world places one
     "render": { "has_outline": true, "shadow_tier": "both", "casts_shadows": true, "draw_distance": 4000.0,
         "is_draw_distance_fixed": true },               // [OPTIONAL] each key optional
     "collision": { "is_enabled": true, "layer": "world" }, // [OPTIONAL] each key optional
-    "rules": [                                           // [OPTIONAL] at most 8, applied in order (B02)
+    "rules": [                                           // [OPTIONAL] at most 8, applied in order
         { "material": "rock", "slope": { "min": 35.0, "blend": 8.0 }, "only_on": [ "grass", "dirt" ] },
         { "material": "dirt", "height": { "max": -4.5, "blend": 2.5 },
             "noise": { "scale": 2.5, "strength": 0.6, "seed": 11 }, "only_on": [ "grass" ] }
@@ -1037,7 +1040,7 @@ under `terrains/`, next to their `.glb` or their binary file; a world places one
 | `model` | asset location; `source: model` only | The `.glb` (or `.gltf` with its buffers beside it). `format` (`glb`, `gltf`) narrows it as for models. |
 | `data` | asset location; `source: data` only | The binary form, a `.ghdf` file (`TerrainMesh_SaveGHDF`). |
 | `materials` | 1 to 16 asset names, each once; with `source: model` none named `hole` or as the blend slot (`blend` unless `blend_slot` says) | The palette: `terrain_material` assets (see "Terrain materials"), loaded with the terrain as its dependencies. Each vertex weighs them, and a face slot may name one. Their maps of one kind must share one size (a texture array holds one): a mismatch fails the terrain's load, naming both materials and sizes. |
-| `density_channels` | at most 8 names (`[a-z][a-z0-9_]*`), each once | Vegetation and other densities per vertex, for the scattering (B09). |
+| `density_channels` | at most 8 names (`[a-z][a-z0-9_]*`), each once | Vegetation and other densities per vertex, for the scattering (not built yet). |
 | `weights` | at most one mapping per palette material | Which attribute of the file feeds which palette material: `{ "attribute": "<name in the file>", "r": "<material>", "g": ..., "b": ..., "a": ... }`, any channels left out unused. Each material is fed by one channel at most. Without mappings every weight is 0, and the terrain shows its first material. |
 | `densities` | at most one mapping per density channel | The same for the density channels. |
 | `normals` | `smooth` (default) or `imported`; `source: model` only | `smooth`: computed by the game over the whole welded mesh (no seams between chunks). `imported`: the file's own normals, so hard edges modelled in Blender stay hard (vertices at one position with different normals stay apart). |
@@ -1046,18 +1049,18 @@ under `terrains/`, next to their `.glb` or their binary file; a world places one
 | `render.has_outline` | boolean (true) | Whether the renderer outlines it. |
 | `render.shadow_tier` | `near`, `far`, `both` (`both`) | Which shadow cascades it casts into. |
 | `render.casts_shadows` | boolean (true) | Off: it casts no shadow; it still receives them. |
-| `render.haze` | in [0, 1000] (1) | Times the air's haze in front of it (T35); 0 as if the air were clear. |
+| `render.haze` | in [0, 1000] (1) | Times the air's haze in front of it; 0 as if the air were clear. |
 | `render.draw_distance` | metres, above 0 (4000) | How far each chunk is seen before it fades out. |
 | `render.is_draw_distance_fixed` | boolean (true) | On: the player's draw distance setting does not change it, so hills never vanish on low settings. |
 | `collision.is_enabled` | boolean (true) | Off: nothing stands on it. |
 | `collision.layer` | a layer (`world`) | Its chunks' collision layer. |
 | `collision.collides_with` | an array of layers, each once (left out: the layer's default mask) | The layers it blocks and is blocked by. |
-| `rules` | at most 8 rules (B02) | Put materials down by the ground's slope, its height and noise, per pixel, in order (below). |
+| `rules` | at most 8 rules | Put materials down by the ground's slope, its height and noise, per pixel, in order (below). |
 
 A placed terrain may override every `render` and `collision` value (and multiply the draw distance) with the same keys
 in its component, each behind its own `overrides_` flag.
 
-**Rules** (B02) put materials down where the ground's shape says, per pixel, whatever the vertex spacing, and follow the
+**Rules** put materials down where the ground's shape says, per pixel, whatever the vertex spacing, and follow the
 shape when it changes. Each rule:
 
 | Key | Value | Meaning |
@@ -1104,7 +1107,7 @@ names. Unknown keys are
 rejected everywhere in the definition, and a definition that breaks a rule is rejected when it is read, with a message
 naming the rule (`Terrain "hills": weights[0].g is "dirtt", which is not one of its "materials".`).
 
-**From Blender 5** (decision W6). Model the terrain as mesh objects in Blender's usual space (+Z up); the exporter turns
+**From Blender 5.** Model the terrain as mesh objects in Blender's usual space (+Z up); the exporter turns
 it into glTF's +Y up, which is the game's.
 1. **Materials:** give the mesh the material slots it needs, named as above: `blend` for the painted ground, `hole`
    for cave mouths, and a palette material's name (`dirt`) for faces that take one material outright. Assign the faces.
@@ -1132,9 +1135,9 @@ below 4.5 m under the slab, broken up by noise), `_DENSITY_0` the trees. Its fou
 
 
 ## Terrain materials.
-A terrain material (B02) is one material of a terrain's palette: grass, dirt, rock, gravel, asphalt. Its maps are
+A terrain material is one material of a terrain's palette: grass, dirt, rock, gravel, asphalt. Its maps are
 texture assets (see "Textures") whose image files are read on the CPU; the game builds one texture array per map kind of
-each terrain, one layer per material (decision W7). Definitions live under `terrain_materials/`; a terrain's `materials`
+each terrain, one layer per material. Definitions live under `terrain_materials/`; a terrain's `materials`
 name them. How the blend works is in `agents/Terrain.md`.
 
 ```
@@ -1170,9 +1173,9 @@ name them. How the blend works is in `agents/Terrain.md`.
 | `height_blend_strength` | 0 to 10 (1) | How strongly its height wins where it meets another material: its share of a pixel is decided by its weight plus its height times this (0 blends by the weights alone). |
 | `triplanar` | `off`, `steep`, `always` (`steep`) | When the maps are laid from three sides instead of from above, so cliffs are not stretched: never, where the ground is steeper than `triplanar_slope` (blended in over 10 degrees), or everywhere. |
 | `triplanar_slope` | degrees, 0 to 90 (40) | With `steep`: where the three sides take over. |
-| `surface` | a namespaced key (`tbp:ground`; `grass` reads as `tbp:grass`) | What the ground is: footsteps, where scattering may place things (B09), later systems. |
-| `puddles` | 0 to 1 (0) | How much rain's puddles may form on it (asphalt 1, grass 0). Read by the weather (T18). |
-| `porosity` | 0 to 1 (0.5) | How much wetness darkens it. Read by the weather (T18). |
+| `surface` | a namespaced key (`tbp:ground`; `grass` reads as `tbp:grass`) | What the ground is: footsteps, where scattering may place things, later systems (none built yet). |
+| `puddles` | 0 to 1 (0) | How much rain's puddles may form on it (asphalt 1, grass 0). Read by the weather's wetness (not built yet). |
+| `porosity` | 0 to 1 (0.5) | How much wetness darkens it. Read by the weather's wetness (not built yet). |
 
 * **Maps.** Each map's slot decides how it is read, whatever its texture's `color_space` says, and the texture's
   `texture_properties` do not apply: the arrays are mipmapped, filtered trilinearly (and anisotropically where the
