@@ -1,4 +1,4 @@
-// Interior lighting's parts beside the sky's visibility map (WorldRendererSkyVisibility.c): the ambient zones each lit
+// Interior lighting's parts beside the sky's occupancy volume (WorldRendererSkyVisibility.c): the ambient zones each lit
 // draw takes (shaders/common/interior.glsl lays them over each other per fragment), the lit shaders' interior uniforms,
 // the camera's interior for the eye (its openness and the zones at it, eased) and the zones' debug wireframes. The maths
 // is WorldInterior.h's.
@@ -65,7 +65,8 @@ static Matrix GetZoneFrame(const WorldInteriorZone* zone)
 void WorldRendererInterior_Construct(WorldRenderer* self)
 {
     WorldRendererInteriorState* State = &self->_interior;
-    State->_isEnabled = true;
+    // Off until a caller switches it on (WorldRenderer_SetInteriorLightingEnabled).
+    State->_isEnabled = false;
     State->_isActive = false;
     State->_cameraOpenness = 1.0f;
     WorldInteriorCamera_Construct(&State->_camera);
@@ -76,8 +77,9 @@ void WorldRendererInterior_PrepareShader(Shader shader, WorldRendererInteriorLoc
 {
     outLocations->_locActive = GetShaderLocation(shader, "interiorActive");
     outLocations->_locSkyVisibilityActive = GetShaderLocation(shader, "skyVisibilityActive");
-    outLocations->_locSkyVisibilityMap = GetShaderLocation(shader, "skyVisibilityMap");
+    outLocations->_locSkyVisibilityMap = GetShaderLocation(shader, "skyVolume");
     outLocations->_locSkyVisibilityViewProjection = GetShaderLocation(shader, "skyVisibilityViewProjection");
+    outLocations->_locSkyVolumeBottom = GetShaderLocation(shader, "skyVolumeBottom");
     outLocations->_locZoneCount = GetShaderLocation(shader, "ambientZoneCount");
     outLocations->_locZoneCenters = GetShaderLocation(shader, "ambientZoneCenters");
     outLocations->_locZoneAxisX = GetShaderLocation(shader, "ambientZoneAxisX");
@@ -87,7 +89,7 @@ void WorldRendererInterior_PrepareShader(Shader shader, WorldRendererInteriorLoc
     outLocations->_locZoneSettings = GetShaderLocation(shader, "ambientZoneSettings");
     outLocations->_locView = GetShaderLocation(shader, "interiorView");
     outLocations->_locViewScale = GetShaderLocation(shader, "interiorViewScale");
-    // The map's sampler on its fixed unit, once (see WorldRendererTextureUnit).
+    // The volume's sampler on its fixed unit, once (see WorldRendererTextureUnit).
     int Unit = (int)WorldRendererTextureUnit_SkyVisibility;
     SetShaderValue(shader, outLocations->_locSkyVisibilityMap, &Unit, SHADER_UNIFORM_INT);
 }
@@ -128,6 +130,7 @@ void WorldRendererInterior_UploadFrame(const WorldRenderer* self, const WorldRen
     if (frame->IsSkyVisibilityActive)
     {
         SetShaderValueMatrix(shader, locations->_locSkyVisibilityViewProjection, frame->SkyMap.ViewProjection);
+        SetShaderValue(shader, locations->_locSkyVolumeBottom, &frame->SkyVolumeBottom, SHADER_UNIFORM_FLOAT);
     }
     // No zones until a draw sets its own.
     int NoZones = 0;
@@ -252,7 +255,7 @@ void WorldRendererInterior_LogStatus(const WorldRenderer* self)
         return;
     }
     Error LogResult = Logger_LogInfoFormatted(self->_logger,
-        (const unsigned char*)u8"WorldRenderer: interior lighting on: the sky's visibility map %s (%" PRIu64 u8" things "
+        (const unsigned char*)u8"WorldRenderer: interior lighting on: the sky's occupancy volume %s (%" PRIu64 u8" things "
         u8"keep the sky out around the camera), %" PRIu64 u8" ambient zones; the camera %.0f %% open and %.0f %% in "
         u8"zones (exposure bias %+.2f stops); the eye's light %.4g (the sky's at the camera %.4g); view: %s.",
         (Status->Features[WorldRendererFeature_SkyVisibility] == WorldRendererFeatureState_Active) ? "drawn"

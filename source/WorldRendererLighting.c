@@ -94,6 +94,8 @@ static void CacheLitLocations(WorldRendererLitLocations* lit, Shader shader)
     lit->_locAmbientOcclusionMap = GetShaderLocation(shader, "ambientOcclusionMap");
     lit->_locAoMapActive = GetShaderLocation(shader, "aoMapActive");
     lit->_locAoResolution = GetShaderLocation(shader, "aoResolution");
+    lit->_locSkyVisibilityOnScreen = GetShaderLocation(shader, "skyVisibilityOnScreen");
+    lit->_locDrawInPrepass = GetShaderLocation(shader, "drawInPrepass");
 
     lit->_locLightVP = GetShaderLocation(shader, "lightVP");
     lit->_locShadowMap = GetShaderLocation(shader, "shadowMap");
@@ -432,7 +434,9 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
 
     // Screen-space AO: the crisp overlay passes applyScreenAo=false (its full-res gl_FragCoord would mis-sample this
     // low-res map). aoMapActive false => the shader leaves the ambient term unoccluded.
-    int AoMapActive = (applyScreenAo && frame->IsAoActive) ? 1 : 0;
+    int AoMapActive = (applyScreenAo && frame->IsAmbientPrepassActive) ? 1 : 0;
+    int SkyOnScreen = (applyScreenAo && frame->IsAmbientPrepassActive && frame->IsSkyVisibilityOnScreen) ? 1 : 0;
+    SetShaderValue(shader, lit->_locSkyVisibilityOnScreen, &SkyOnScreen, SHADER_UNIFORM_INT);
     SetShaderValue(shader, lit->_locAoMapActive, &AoMapActive, SHADER_UNIFORM_INT);
     if (AoMapActive)
     {
@@ -486,7 +490,7 @@ static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame
             rlEnableTexture(self->_cascades._farMap.depth.id);
         }
     }
-    if (applyScreenAo && frame->IsAoActive)
+    if (applyScreenAo && frame->IsAmbientPrepassActive)
     {
         rlActiveTextureSlot(WorldRendererTextureUnit_AmbientOcclusion);
         rlEnableTexture(self->_ao._target.texture.id);
@@ -582,9 +586,11 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
 }
 
 void WorldRendererLighting_SetDrawPlace(const WorldRenderer* self, Shader shader,
-    const WorldRendererLitLocations* locations, Vector3 center, float radius, float haze)
+    const WorldRendererLitLocations* locations, Vector3 center, float radius, float haze, bool isInPrepass)
 {
     SetShaderValue(shader, locations->_locHazeMultiplier, &haze, SHADER_UNIFORM_FLOAT);
+    int InPrepass = isInPrepass ? 1 : 0;
+    SetShaderValue(shader, locations->_locDrawInPrepass, &InPrepass, SHADER_UNIFORM_INT);
     WorldRendererInterior_UploadZones(self, shader, &locations->_interior, center, radius);
 }
 

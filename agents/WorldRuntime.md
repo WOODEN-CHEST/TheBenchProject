@@ -19,7 +19,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
-| WorldInterior | `source/WorldInterior.h`, `source/WorldInterior.c` (private) | Interior lighting as pure maths (see "Interior lighting"): ambient zones in render space, their weights, the draws' choice of zones and their composition, the haze inside them, the sky's visibility map and its taps, the camera's interior and the light the eye is in: the C mirror of `shaders/common/interior.glsl`. |
+| WorldInterior | `source/WorldInterior.h`, `source/WorldInterior.c` (private) | Interior lighting as pure maths (see "Interior lighting"): ambient zones in render space, their weights, the draws' choice of zones and their composition, the haze inside them, the sky's occupancy volume (its map, slices and window) and the march through it, the camera's interior and the light the eye is in: the C mirror of `shaders/common/interior.glsl`. |
 | WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs), `source/WorldTestAnimation.{h,c}` (private: the animation system and its keys), `source/WorldTestInstances.{h,c}` (private: the pebble field and the instancing A/B) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and walk mode (the player as a character) and test NPCs. |
 
 `source/main.c` is the composition root (bootstrap).
@@ -444,7 +444,7 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    pass decision:
    first which shadow passes run (`DecideShadows`) and their light matrices (`WorldRendererShadows_PrepareFrame`: both
    cascades' view, projection and box, snapped to their texels; the cube shadow's lamp and far range) and the sky's
-   visibility map's (`WorldRendererSkyVisibility_PrepareFrame`), then the frame's visibility (what every
+   occupancy volume's map and window (`WorldRendererSkyVisibility_PrepareFrame`), then the frame's visibility (what every
    pass draws, see "Visibility"), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
 3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the shadow strength and the forward-light
    candidates (every light except the cube-shadow light) with their linear radiance.
@@ -460,10 +460,12 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    visibility list (the casters in its box; within the light's reach). Models (the LOD they show or fade to), the
    model instances' copies (each the LOD with the larger share, dithered by its own fade), terrain chunks (their
    back faces in the cascades, as the models') and cutout sprites cast; sprites turned toward the light; each
-   caster dithered by its fade. Then the sky's visibility map (see "Interior lighting"): what keeps the sky out in its
-   box, seen from above.
+   caster dithered by its fade. Then the sky's occupancy volume (see "Interior lighting"): what keeps the sky out in its
+   map's box, drawn from above into height slices, and its pyramid.
 5. The normal/flag G-buffer (the camera's models, the LOD with the larger share, the copies the same way, terrain
-   chunks and cutout sprites, solid below half their fade) and the AO pre-pass, when AO or outlines run.
+   chunks and cutout sprites, solid below half their fade), when the AO, the contact shadows, the sky's visibility or
+   the outlines run; then the ambient pre-pass and its blur (the AO, the contact shadows and the sky's visibility per
+   pixel, see "G-buffer, AO and outlines"), when any but the outlines run.
 6. The scene pass: clear, atmospheric sky (the sky-view table's glow, with the moonlit sky and light pollution's
    light, and the far ground below the horizon; the ground haze in front of it all; the moon's disc, the Milky Way), the
    stars (none behind the moon), debug grid, the camera's PBR models (each dithered by its fade, both LODs
@@ -810,38 +812,58 @@ radiances are calibrated on.
 **Interior lighting** (the pure maths `source/WorldInterior.{h,c}`, tested in `tests/WorldInteriorTests.c`; the
 renderer's parts `source/WorldRendererSkyVisibility.c` and `source/WorldRendererInterior.c`; the lit shaders' part
 `shaders/common/interior.glsl`, which `common/lighting` includes). Roofs keep the sky's light out, rooms light
-themselves, and the eye adapts indoors.
-- **The sky's visibility map**: a top-down depth map around the camera, 1024 x 1024 texels over 96 m (9.4 cm texels)
-  and 1000 m deep (from 500 m above the camera to 500 m below), its centre snapped to whole texels in double, so it
-  stands still in the world while the camera moves. After the shadows it draws what keeps the sky out in its box (its
-  visibility list: models and instance cells whose `occludes_sky` is on, a world model's render setting that
-  placements override ([WorldModels.md](WorldModels.md)), and every terrain chunk, whether they cast shadows or not,
-  each dithered by its fade), from above, both faces, with the cascades' depth shaders. The lit programs read it on
-  unit 7.
-- **A surface's share of the sky.** A surface reads the map around the place it faces, 1.5 m in front of a steep one
-  (its sky lies on its side) and the point itself on a flat one, placed by its geometric normal (never a normal map's,
-  which would jitter it; a lit billboard sprite as a thing standing there, facing up, since its quad turns with the
-  camera; a card, a fixed sprite or decal, by its own facing): a centre tap with 4 taps 0.25 m around it (is the place itself open?) and 8 taps 1.5 m
-  around it (how much sky lies around?). A tap is covered when the map holds something above the surface there: above
-  both its own height and its tangent plane extended to the tap, plus 0.05 m (upright) to 0.25 m (facing up), so a
-  slope's uphill side, a curb or a pebble is no roof, and the top of a wall under a thin roof is as covered as the
-  rest of it; a surface facing down is covered by anything at or above its own height (a roof's underside lies under
-  the roof). The visibility is the inner taps' open share times the ring's; the sky's ambient, the ground's bounce and
-  the night's own light take 1 - 0.85 (1 - visibility) of themselves (`INTERIOR_SKY_FLOOR`, 0.15: the light doors and
-  windows let in). The sun and the moon are the shadows' to keep out. The debug view shows the share on every lit
-  surface.
-- **What the map cannot tell**: a wall from an open side under the same roof. So a room's floor and walls keep only the
-  floor's share whatever their windows, and the ground under deep eaves, a carport's floor and what lies under a desk
-  or a table darken as a room does (about 12 % under the test world's desk); a facade under its eaves, whose place lies
-  in front of them, keeps most of its sky. Light that comes in sideways, through doors and windows, is not in the map:
-  only the floor stands for it. So a cave's floor and back wall stay at the floor's share however wide its mouth, while
-  the overhang's underside near the lip, facing down and out at the sunlit ground, keeps that ground's bounce. The ring is coarse: within 1.5 m of anything that rises more than the bias (a bench, a
-  crate, a car) open ground loses the taps that land on it (up to 3/8 of its ring), more than the sky such a thing
-  hides; and in a space narrower than the step in front of a steep surface (1.5 m: a closet, a narrow corridor along an
-  outside wall) a wall's faced place can land outside, beyond the opposite wall, so the wall keeps sky light. Toward the
-  map's edge, from 33 to 45 m from the camera (horizontally), the visibility
-  fades to open, so no hard edge sweeps over shaded ground as the map moves with the camera; outside it everything is
-  open.
+themselves, and the eye adapts indoors. **Off by default**: the renderer starts with it switched off (every surface
+takes the whole sky's light, no zone applies, no volume is drawn), and `WorldRenderer_SetInteriorLightingEnabled`
+switches it on (keypad 9 in the test frame).
+- **The sky's occupancy volume**: around the camera, on a map 1024 x 1024 texels over 96 m (9.4 cm texels), its centre
+  snapped to whole texels in double so it stands still in the world while the camera moves; each texel a column of 128
+  height slices of 0.25 m, one bit each (an RGBA32UI texture), in a window from 12 m below the camera to 20 m above it
+  (snapped to whole slices). After the shadows it draws what keeps the sky out in the map's box (its visibility list:
+  models and instance cells whose `occludes_sky` is on, a world model's render setting that placements override
+  ([WorldModels.md](WorldModels.md)), and every terrain chunk, whether they cast shadows or not, each dithered by its
+  fade) from above, both faces, with no depth test (`world_sky_slices`, its skinned and instanced twins) and a logic
+  operation in place of blending (`GLSliceMap.h`'s direct GL calls): first XOR, each fragment toggling the slices whose
+  centre lies below it, so a slice is solid where an odd number of surfaces lie above it (inside a wall under a roof,
+  not in the air under it); then OR, each model's fragment setting the slice it passes through (a slab thinner than a
+  slice is not lost; a fragment above the window sets the top slice: a column solid at the window's top goes on up).
+  Two things that overlap would cancel each other's parity, so the models go to 4 layers by their boxes (each to the
+  layer where the fewest models placed before it overlap it), each layer's parity drawn into a scratch volume over the
+  layer's footprint on the map and ORed into the volume; the terrain's sheet goes straight in, the instance cells take a
+  layer of their own. An OR pyramid follows in the texture's 8 levels (`world_sky_reduce`: each level the union of
+  2 x 2 texels of the one below). The ambient pre-pass and the lit programs read it (the lit programs on unit 7).
+- **A surface's share of the sky.** A surface marches through the volume in directions around it, from 0.14 m out
+  (past its own texel) to 24 m, through every texel the direction crosses, one after another (no wall falls between two
+  reads), at the level whose texels are 0.35 of the distance wide (finer near, coarser far). Each texel stands for the
+  distances the direction spends in it and tests 5 bands of elevation, 15 degrees each from the horizon, against the
+  slices their rays pass there: what it finds solid hides the elevations from its bottom (seen from the farthest of
+  those distances) to its top (seen from the nearest), and a band keeps open what its blockers leave below and above
+  them. The zenith's cap above the bands is open while nothing lies straight above the surface (read in its own column;
+  an upright surface's a texel and a half in front of it, not in its own wall). The bands start above the surface,
+  0.05 m for an upright one to 0.3 m for one facing up, placed by its geometric normal (never a normal map's, which
+  would jitter it), so its own slices are no roof, nor are curbs and bumps; a surface facing up more than half goes on
+  around itself as its plane (a slope's own ground is no roof; where that plane rises into the window's top slice
+  nothing is known there); what is solid in the surface's own slice alone, solid below it too, is the top of what it
+  stands over (the ground at a wall's foot), no wall. The visibility is the bands' and the cap's open share, each
+  weighed by its solid angle and the surface's cosine to it: a pebble hides a sliver of the sky, a wall half of it at
+  its foot, a roof all of it; a doorway lets in the sky below its lintel, a carport the sky below its roof's edge, a
+  cave's mouth the sky before it; a surface facing down is covered by what lies above it, itself too. The ambient
+  pre-pass marches 2 directions a pixel, turned by its 4 x 4 pattern, and blurs them (32 directions over every block);
+  models and the terrain take its value at their pixel, and so does a card sprite it saw (a cutout card, a decal).
+  Billboards (which stand for a thing seen from all round: the pre-pass saw their quad facing the camera), blended
+  sprites, the crisp overlay and a frame without the pre-pass read only what lies straight above them, covered or open
+  (`InteriorSkyOverhead`). The sky's ambient, the ground's bounce and the night's own light take 1 - 0.85 (1 -
+  visibility) of themselves (`INTERIOR_SKY_FLOOR`, 0.15: the light doors and windows let in beyond what the march
+  sees). The sun and the moon are the shadows' to keep out. The debug view shows the share on every lit surface.
+- **What the volume cannot tell.** Its coarser levels hold anything in a texel: what stands a few metres off counts as
+  if it filled its texel across the direction, so open ground among scattered things loses a little of its sky (1 to 2
+  levels of the picture across the test world's floor at noon, more beside what stands near), a crate's side facing
+  open ground darkens by things off to its side, and under a carport on thin posts less sky shows below the roof's edge
+  than should. The slices are 0.25 m: what lies within a slice of a surface's lift counts or not by the slice. The
+  window moves with the camera: from more than about 10 m above the ground (the flycam) the ground lies below it and
+  its darkening fades out; a closed thing wholly above the window is a roof only straight below it. The terrain sets no
+  slice of its own (its parity holds it), so a terrain lip thinner than a slice is lost. Toward the map's edge, from 33
+  to 45 m from the camera (horizontally), and toward the window's top and bottom (over 2 m) the visibility fades to
+  open, so no hard edge sweeps over shaded ground as the volume moves with the camera; outside it everything is open.
 - **Ambient zones** (`ambient_zone` components, [WorldData.md](WorldData.md)): boxes or spheres that set a room's own
   light. The render cache lists, in render space, those of shown objects that have an inside. A lit draw takes at most
   4 (`MAX_AMBIENT_ZONES`), those whose inside reaches its sphere, the highest priorities first, then the nearest; per
@@ -873,21 +895,23 @@ themselves, and the eye adapts indoors.
   exposure (`EyeAdaptation_GetBiasedExposure`). Inside the test room at noon the eye's light is 0.024 against the sky's
   0.371, and looking out of its doorway the metered exposure is 7 (1.2 in the open start view): the room is seen well
   lit and the doorway blows out, as for an eye or a camera. At night the room's 0.014 is above the street's 0.006.
-- **A/B and debug**: `WorldRenderer_SetInteriorLightingEnabled` (keypad 9 in the test frame): off, every surface
-  takes the whole sky's light, no zone applies, no map is drawn and the eye takes the sky's light at the camera, the
-  picture of the open sky's lighting exactly. `WorldRenderer_SetInteriorView` (keypad 0) shows the zones' wireframes (in
+- **On, off and debug**: `WorldRenderer_SetInteriorLightingEnabled` (keypad 9 in the test frame; off at the start):
+  off, every surface takes the whole sky's light, no zone applies, no volume is drawn and the eye takes the sky's light
+  at the camera, the picture of the open sky's lighting exactly. `WorldRenderer_SetInteriorView` (keypad 0) shows the zones' wireframes (in
   their light's hue), or the sky's share on every lit surface (white the whole sky, the floor's share dark grey) with the
   zones' light over it.
-- **Far from the origin** the map's snapping in double and the taps in render space keep it steady: the test room
-  141 km out shades as at the origin, but for thin slivers at a roof's edge, where the map's texels meet the world at
-  another phase.
-- **Status**: a log line (whether it runs, the map and how many things keep the sky out in it, the zones, the
+- **Far from the origin** the map's snapping in double and the march in render space keep it steady: the test room
+  and the cube 141 km out shade as at the origin, within a few levels where the map's texels meet the world at another
+  phase.
+- **Status**: a log line (whether it runs, the volume and how many things keep the sky out in it, the zones, the
   camera's openness and zone weight, the exposure bias, the eye's light against the sky's) and in
   `WorldRendererStatus`: `IsInteriorLightingEnabled`, `AmbientZoneCount`, `SkyOccluderCount`, `CameraOpenness`,
   `CameraZoneWeight`, `CameraSceneLuminance`, `ExposureBias` and `InteriorView`; the features "sky visibility" and
   "ambient zones".
-- **Cost** (GTX 980 Ti, 1280 x 720): the map 0.14 to 0.25 ms; the lit models about 0.12 ms more (the taps and the
-  zones per fragment), the terrain and the sprites up to 0.04 ms more.
+- **Cost** (GTX 980 Ti, 1280 x 720, the test world): the volume 0.58 to 0.78 ms (in the room: the terrain's parity
+  0.13, the models' layers 0.14, their slices 0.20, the pyramid 0.15); the march in the ambient pre-pass 0.6 to 1.15 ms,
+  growing with the share of the screen near things (0.6 at the start view, 0.76 in the room, 1.15 from above and
+  looking down at the cube); the lit passes march nothing (they read the pre-pass), the zones cost them up to 0.02 ms.
 
 **Night sky.** The pure maths is in the private `source/NightSky.{h,c}` (tested in `tests/NightSkyTests.c`); the GLSL
 the passes share is `shaders/common/night_sky.glsl`.
@@ -1034,13 +1058,23 @@ brighter of the sun and the moon by luminance, once it stands above 0.05 (the si
 a light too dim for a shadow to show (a thin crescent). So dusk with the moon up goes from sun shadows through none to
 moon shadows without a jump. The lit shaders sample near first, then far, with 2×2 PCF, darkening only that light's
 direct term (`sunShadowFade` / `moonShadowFade`; both 0, and no map sampled, while the cascades do not run). The maps
-hold the casters' faces turned away from the light (front faces culled), so a lit surface never meets itself there; a
-lookup moves off its surface along its geometric normal by a texel and a half at grazing incidence (`sin` of the angle
-to the light: none facing it) and keeps a depth bias of half a texel (0.8 cm and 2.3 cm in the near cascade, five times
-that in the far one: `SHADOW_DEPTH_BIAS_TEXELS`, `SHADOW_NORMAL_OFFSET_TEXELS`), so a shadow reaches the foot of what
-casts it and a roof's shadow the top of the wall under it; where a roof meets a wall a hairline of light, at most a
-scene pixel, can remain (the map's texel and its filter). A sprite is read on its quad facing the light, off that face.
-Active when shadows are enabled, the strength is above 0 and there is a shadow light.
+hold the casters' faces turned away from the light (front faces culled), so a lit surface never meets itself there.
+Models and the terrain read them off the triangle's own face (`FaceNormal`: from the position's derivatives, turned to
+the interpolated normal's side): a face turned away from the light takes the whole shadow, the map holding that very
+face (no sunlit specks inside a cave or on a cliff's shaded side); a face toward it is looked up off itself along that
+normal by a texel and a half at grazing incidence (`sin` of the angle to the light: none facing it) with a depth bias
+of half a texel (0.8 cm and 2.3 cm in the near cascade, five times that in the far one: `SHADOW_DEPTH_BIAS_TEXELS`,
+`SHADOW_NORMAL_OFFSET_TEXELS`), so a shadow reaches the foot of what casts it and a roof's shadow the top of the wall
+under it. A smooth low-poly model's terminator follows its faces. A sprite is read on its quad facing the light, off
+that face. Active when shadows are enabled, the strength is above 0 and there is a shadow light.
+
+**Contact shadows.** The seam the maps' texels and filter still leave at a caster's foot, and the hairline where a roof
+meets a wall, the ambient pre-pass closes: from each pixel it marches the depth toward the shadow light over 0.25 m (a
+pixel a step, at most 32; every depth sample taken 0.25 m thick, so a thin thing casts no endless shadow), and the lit
+shaders take the larger of the cascades' shadow and that one for the shadow light's direct term (`FaceShadowAmount`).
+Only what the camera sees casts it, so it only adds to the cascades. It runs with the cascades;
+`WorldRenderer_SetContactShadowsEnabled` (keypad . in the test frame) switches it, and the status has it as the feature
+"contact shadows".
 
 **Point-light shadow.** One cube shadow for the shadow-casting light nearest the camera (`CastsShadows`): six
 90° faces of packed linear distance (RGBA8 cube, `common/distance_packing`), sampled with 20-tap PCF. The faces are
@@ -1052,8 +1086,21 @@ shaded separately and is excluded from the forward candidates, so an object can 
 **G-buffer, AO and outlines.** `world_normal` (models) and `world_normal_sprite` (cutout sprites, alpha-tested) write
 view-space normals (RGB) and a surface/outline flag (A: 0 = nothing, 0.5 = surface, 0.76 to 1 = surface with outline,
 its haze multiplier over that range)
-into a low-res 8-bit target with blending disabled. `world_ao` turns it into an AO multiplier that the PBR pass
-applies to its ambient term only (so AO never dims direct light). `world_postfx` draws outlines after the scene:
+into a low-res 8-bit target with blending disabled. The ambient pre-pass (`world_ao`, over the G-buffer's depth and
+flags) writes per pixel the AO multiplier (R), the sky's visibility (G, see "Interior lighting") and the contact
+shadows' light (B, see "Contact shadows"). The AO is horizon-based (ground-truth AO): one slice through the view vector
+a pixel, turned by a 4 x 4 pattern on the pixel grid, 6 steps each way over 0.5 m (at most 64 pixels on screen; none
+below a pixel), the horizons measured against the surface's tangent plane and clamped at the view direction, the
+slice's cosine-weighted visibility in closed form, normalized per pixel so open ground is exactly 1; occluders fade out
+over the outer 60 % of the radius (no halos behind silhouettes), the normal comes from the depth along each axis from
+the neighbour whose depth steps less (the contact is the darkest place, never a light line), and the darkening is at
+most 0.6 (`AO_MAX`). `world_ao_blur` then averages R and G over 5 x 5 pixels whose outer row and column weigh a half
+(every cell of the pattern once: the pattern is gone) among the neighbours on the same surface (within 2 cm a metre of
+the centre's plane, their normals within about 37 degrees of its), and passes B through. The lit passes apply the AO
+to their ambient term only (so AO never dims direct light). A draw the G-buffer left out (past half its fade, per draw
+through `WorldRendererLighting_SetDrawPlace`; a copy fading on its own inside a cell still counts as its cell) takes
+none of the pre-pass's values, which belong to what lies behind it: no AO, no contact shadow, and the sky read only
+straight above itself. `world_postfx` draws outlines after the scene:
 depth/surface silhouettes darken, view-normal creases are recoloured sun-aware; the sky is never outlined. A
 line fades with the haze as the surface under it does: its strength is scaled, per colour, by the haze's
 transmittance to the pixel at the object's own haze multiplier (the volume's and the ground haze's, `hazeTransmittance`;
@@ -1062,8 +1109,10 @@ rim, and a sign with `haze` 0 keeps its lines. It reads the
 G-buffer's depth (the scene's only where the G-buffer's is not samplable), which matches its normals and flags: a fading
 object is solid in the G-buffer but has the dither's holes in the scene's depth. (So the debug light gizmos,
 which write the scene's depth but are not in the G-buffer, are not darkened as if they were the rim of the surface
-behind them.) Both
-are under the post-effects toggle (`WorldRenderer_SetPostEffectsEnabled`, O key in the test frame).
+behind them.) The AO and the outlines are under the post-effects toggle (`WorldRenderer_SetPostEffectsEnabled`, O key in
+the test frame); the contact shadows and the sky's visibility are lighting and stay. Cost (GTX 980 Ti, 1280 x 720): the
+pre-pass's AO with its blur 0.36 to 0.42 ms, the contact shadows up to 0.23 ms more (none while the cascades do not
+run), the sky's visibility as "Interior lighting" says.
 
 **Bloom and sun shafts.** Half-resolution HDR passes added by the tonemap: a depth-masked bright pass (the sky
 does not bloom) with a separable blur, and a radial blur of the unoccluded sky toward the sun's screen position
@@ -1178,14 +1227,15 @@ get no AO and no outlines.
 | `WorldRendererInstances.c` | The model instances' copies (see "Model instances"): each entry's records buffer, the G-buffer's and the shadows' instanced twins (the lit one is the lighting file's), the instanced draw that mirrors `DrawMesh`, each pass's cells instanced or one at a time (the A/B and every fallback), the status line. |
 | `WorldRendererSprites.c` | The sprites: the unit quad, the lit sprite shader, each frame's sprite matrices (camera, cascades' light, cube's lamp) and transparent draw order, the lit cutout / decal / sorted transparent draws. The G-buffer and shadow passes draw sprites with this file's quad and matrices. |
 | `WorldRendererLighting.c` | The PBR programs (rigid, skinned, instanced: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: every PBR program, the sprite shader and the terrain shader, the night vision's and interior lighting's among them), forward point lights, each lit draw's place (`WorldRendererLighting_SetDrawPlace`: its haze multiplier and its ambient zones), per-material factors. |
-| `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow (models, terrain chunks, and cutout sprites through alpha-tested depth shaders); its model casters' draw (`WorldRendererShadows_DrawModelCasters`) also draws the sky's visibility map. |
-| `WorldRendererSkyVisibility.c` | The sky's visibility map (see "Interior lighting"): its depth target, its frame (the map's matrices and box), its pass (what keeps the sky out, from above, both faces, with the cascades' depth shaders) and its bind on unit 7. |
+| `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow (models, terrain chunks, and cutout sprites through alpha-tested depth shaders). |
+| `WorldRendererSkyVisibility.c` | The sky's occupancy volume (see "Interior lighting"): its integer texture with its levels and their framebuffers, the scratch volume, its frame (the map's matrices and box, the window), its pass (the models' layers, the parity and the slices from above, both faces, the pyramid) and its bind on unit 7. |
 | `WorldRendererInterior.c` | Interior lighting's other parts: the lit shaders' interior uniforms (`WorldRendererInteriorLocations`), the camera's interior for the eye (its openness and the ambient zones at it, eased), each lit draw's zones (through `WorldRendererLighting_SetDrawPlace`), the zones' wireframes (the debug view), the status line. |
-| `WorldRendererGBuffer.c` | The normal/flag G-buffer (models, terrain chunks and cutout sprites) and the AO pre-pass. |
+| `WorldRendererGBuffer.c` | The normal/flag G-buffer (models, terrain chunks and cutout sprites) and the ambient pre-pass (the AO, the contact shadows, the sky's visibility) with its blur. |
 | `WorldRendererTerrain.c` | The terrain's chunks ([Terrain.md](Terrain.md)): their GPU meshes, kept by the renderer per terrain asset and chunk and uploaded again when a chunk's revision changes (all of them when the chunk layout changes; those of terrains no entry resolves any more unloaded); the `world_terrain` shader and its lit draw (per-chunk lights and dither; the unlit fallback with raylib's default shader); the G-buffer's and the shadow passes' draws with their shared shaders; the chunk key (the minus key: a colour per chunk and the wireframe); each terrain's materials as texture arrays (made once per terrain through `GLTextureArray`, bound on units 9 to 11), its materials' and rules' uniforms, each chunk's wrapped offsets, and the terrain views (the equals key). |
 | `GLTextureArray.c` (not a pass) | Texture arrays (`GL_TEXTURE_2D_ARRAY`): direct OpenGL calls, through the function pointers raylib's loader resolves (`rlGetProcAddress`), with their GL constants; private (`source/GLTextureArray.h`). |
 | `GLReadback.c` (not a pass) | Readbacks that do not wait: a pixel-pack buffer and a fence per copy, three in flight; direct OpenGL calls in `GLTextureArray`'s manner; private (`source/GLReadback.h`). |
 | `GLDepth.c` (not a pass) | Reversed depth (see "Render space"): whether the GPU has clip control, 32-bit float depth textures and renderbuffers, the switch to the reversed state and back; direct OpenGL calls in `GLTextureArray`'s manner; private (`source/GLDepth.h`). |
+| `GLSliceMap.c` (not a pass) | Slice maps (the sky's occupancy volume): RGBA32UI textures with their levels, their integer clear, the logic operations (XOR, OR) and per-level reads for the pyramid; direct OpenGL calls in `GLTextureArray`'s manner; private (`source/GLSliceMap.h`). |
 | `WorldRendererAtmosphere.c` | The atmosphere's tables (see "Atmosphere"): their four builders and targets, the rebuild when the air changes, the sky view every frame (the moon's half while its sky shows; the far ground below the horizon); the haze's volume (see "Haze"), its builder and target, the frame's haze and light pollution, the haze uniforms every reader gets (`WorldRendererHazeLocations`), the volume's unit and binds, the debug view; the atmosphere uniforms every reader gets (`WorldRendererAtmosphereLocations`), the tables' fixed units, the A/B, the status lines. Runs first among the GPU passes. |
 | `WorldRendererSky.c` | The atmospheric sky with the moon, the moonlit sky, the Milky Way and the ground haze in front of it (the far ground and light pollution's light are the tables'); the sky textures the world names; the night sky values (the direct march's skyglow among them) and the moon's disc for the frame. |
 | `WorldRendererStars.c` | The star field: the catalogue's mesh (rebuilt when the seed or density changes) and its draw (none behind the moon). |
@@ -1196,7 +1246,7 @@ get no AO and no outlines.
 | `WorldVisibility.c` (with the cache, not a pass) | The frame's visibility lists (per pass, the entries it draws, and every entry's fades) and the dither's C mirror; see "Visibility". |
 | `WorldLod.c` (with the cache, not a pass) | LOD selection and the cross-fade's state; the cache's `WorldRenderCache_UpdateLods` runs it per entry; see "LODs". |
 | `WorldAtmosphere.c` (pure maths, not a pass) | The atmosphere's model: the air from the environment, the stale check and the tables' build record, the view height, the tables' layout (the C mirror of `common/atmosphere`); see "Atmosphere". |
-| `WorldInterior.c` (pure maths, not a pass) | Interior lighting's model: zones in render space, their weights, the draws' choice and the composition, the haze inside, the sky's visibility map and its taps, the camera's interior and the light the eye is in (the C mirror of `common/interior`); see "Interior lighting". |
+| `WorldInterior.c` (pure maths, not a pass) | Interior lighting's model: zones in render space, their weights, the draws' choice and the composition, the haze inside, the sky's occupancy volume (its map, slices and window), the march through it and the read straight above, the camera's interior and the light the eye is in (the C mirror of `common/interior`); see "Interior lighting". |
 | `WorldRenderSpace.c` (pure maths, not a pass) | The frame's origin and its rotation-only view and projection (`BuildFrame` calls it; also the reversed infinite projection and its inverse), the sky shader's ray in C, the cascades snapped to their texels and their grids from frame to frame (`WorldRendererShadows_PrepareFrame` calls it); see "Render space". |
 
 The renderer keeps receiving features, so:
@@ -1224,9 +1274,9 @@ The renderer keeps receiving features, so:
   | Units | Who | What |
   |---|---|---|
   | 0–11 | raylib's `DrawMesh` | A drawn material's maps, map i on unit i (`GL_TEXTURE_2D`, cubes on 7–9); the 2D batch uses 0–4. Free in a program whose materials carry no maps. |
-  | 7–8 | the sky pass and the stars; the lit programs (models, sprites, terrain) | In the sky pass and the stars 7 the transmittance table, 8 the sky-view table (`sampler2D`, `WorldRendererTextureUnit_Atmosphere*`). In the lit programs 7 the sky's visibility map (`sampler2D skyVisibilityMap`, `WorldRendererTextureUnit_SkyVisibility`; their transmittance sampler there is declared and unused: they read no table) and 8 the haze's volume (`sampler2D atmosphereVolume`, `WorldRendererTextureUnit_HazeVolume`, also for the sky's light by height in its last row, while the haze is off too). raylib binds only cube maps there (`MATERIAL_MAP_CUBEMAP`, `_IRRADIANCE`, filled by no material of ours) and the 2D batch only 0–4, so what a pass binds stays bound; the lit passes bind the map on 7 and the volume on 8 with their frame textures, the sky pass and the stars the tables before their draws (the sky pass and the outlines take the volume through `SetShaderValueTexture`). Units chosen because they are free in every lit program, the terrain's included, with no capability check (units 16 and up would have needed GL_MAX_TEXTURE_IMAGE_UNITS above 16). |
+  | 7–8 | the sky pass and the stars; the lit programs (models, sprites, terrain) | In the sky pass and the stars 7 the transmittance table, 8 the sky-view table (`sampler2D`, `WorldRendererTextureUnit_Atmosphere*`). In the lit programs 7 the sky's occupancy volume (`usampler2D skyVolume`, an integer texture whose levels are its pyramid, `WorldRendererTextureUnit_SkyVisibility`; their transmittance sampler there is declared and unused, so it never meets the volume's: they read no table) and 8 the haze's volume (`sampler2D atmosphereVolume`, `WorldRendererTextureUnit_HazeVolume`, also for the sky's light by height in its last row, while the haze is off too). raylib binds only cube maps there (`MATERIAL_MAP_CUBEMAP`, `_IRRADIANCE`, filled by no material of ours) and the 2D batch only 0–4, so what a pass binds stays bound; the lit passes bind the occupancy volume on 7 and the haze's volume on 8 with their frame textures, the sky pass and the stars the tables before their draws (the sky pass and the outlines take the volume through `SetShaderValueTexture`). Units chosen because they are free in every lit program, the terrain's included, with no capability check (units 16 and up would have needed GL_MAX_TEXTURE_IMAGE_UNITS above 16). |
   | 9–11 | the terrain program only | Its material arrays (`sampler2DArray`: albedo and height, normal, roughness and AO). The terrain draws with no raylib maps, and an array sampler reads only a unit's `GL_TEXTURE_2D_ARRAY` target, which nothing else binds, so the models' maps on the same units never meet them. |
-  | 12–15 | every lit program | The frame's textures: the near and far cascades, the cube shadow, the screen's AO. Full. |
+  | 12–15 | every lit program | The frame's textures: the near and far cascades, the cube shadow, the ambient pre-pass's map (the AO, the sky's visibility, the contact shadows). Full. |
 
   The wetness and puddle masks (rain and wetness) will need units in the lit programs too, and 7, 8 and 12–15 are
   taken: a frame texture for the model programs takes a unit below 12 that no material map the models
@@ -1311,11 +1361,12 @@ off and the horizon a dark brown band), `common/haze` (the volume's readers, the
 compositing, see "Haze"; used by `common/lighting`, `world_sky`, `world_stars` and `world_postfx`), `common/night_sky`
 (air mass, extinction and the skyglow profile, used by `world_sky` and `world_stars`) and `common/night_vision` (the eye's night vision: the rods' share
 and the blend into their grey; used by `world_sky` and `common/lighting`), `common/lighting` (the frame's lighting: its
-uniforms, the BRDF and its wrapped variant, the cascades' shadow, point lights and the cube shadow, the screen AO, the
+uniforms, the BRDF and its wrapped variant, the cascades' shadow off the face with the contact shadows, point lights
+and the cube shadow, the pre-pass's AO and sky visibility, the
 night vision, the haze through `common/haze`: `ApplyAerialPerspective`, and interior lighting through
 `common/interior`; used by `world_pbr`, `world_terrain` and `world_sprite`), `common/interior` (interior lighting: the
-ambient zones a draw takes, the sky's visibility map's taps, the haze inside zones and the debug view, see "Interior
-lighting"; used by `common/lighting`), `common/distance_packing` (the cube shadow's
+ambient zones a draw takes, the occupancy volume's march and the read straight above, the haze inside zones and the
+debug view, see "Interior lighting"; used by `common/lighting` and `world_ao`), `common/distance_packing` (the cube shadow's
 packed distance; used by `world_cube_depth`, `world_sprite_cube_depth` and `common/lighting`), `common/dither` (the
 dithered fades: the draw's fade and its part of a LOD cross-fade; used by every world geometry shader, see
 "Visibility") and `common/skinning` (the bone attributes and the palette, and a vertex's blended rows; used by
@@ -1327,6 +1378,11 @@ The atmosphere's table builders (`world_atmosphere_transmittance`, `world_atmosp
 `world_atmosphere_skyview`, `world_atmosphere_irradiance`) and the haze's volume builder (`world_atmosphere_volume`)
 share one directory, `shaders/atmosphere/` (`atmosphere_*.json` with the fragment stages `transmittance`,
 `multiscatter`, `skyview`, `irradiance` and `volume` over raylib's default vertex stage): full-screen passes into the tables' and the volume's targets.
+
+The sky's occupancy volume draws with `world_sky_slices` (`shaders/sky_slices/`: its fragment stage over raylib's
+default vertex stage; its twins `world_sky_slices_skinned` and `world_sky_slices_instanced` take the depth shaders'
+`depth/skinned` and `depth/instanced` vertex stages) and builds its pyramid with `world_sky_reduce`; the ambient
+pre-pass is `world_ao` and its blur `world_ao_blur`, full-screen passes over the G-buffer.
 
 The instanced twins (`world_pbr_instanced`, `world_normal_instanced`, `world_depth_instanced`,
 `world_cube_depth_instanced`) sit beside their rigid shaders as the skinned ones do, each an `instanced.vert` with the
@@ -1411,8 +1467,8 @@ mouse wheel (the flycam's speed, up faster and down slower, three notches to a d
 6 m/s at start; the sprint key still multiplies it by 3; each change is logged and the I key's camera line shows it;
 not while walking, and the UI takes it first while the pointer is over a widget) and the debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
-digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/` and the keypad's digits are taken already; the keypad's
-operators are free. Leave F12 free: raylib's `EndDrawing`
+digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the keypad's digits and its `.` are taken already; the keypad's
+other operators are free. Leave F12 free: raylib's `EndDrawing`
 takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
@@ -1428,13 +1484,14 @@ takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png`
   `WorldTest: haze view: the volume's in-scatter at slice 20 (3420.0 m).`), keypad 6 the environment's
   `aerial_distance_scale` (1, 5, 10), keypad 7 a morning mist (`ground_haze_density` 0.02, `ground_haze_thickness` 15,
   or no ground haze), keypad 8 the haze strength (`fog_strength` 1 or 0: clear air); each logged;
-- **interior lighting (see "Interior lighting"):** keypad 9 switches it off and on (the A/B: off, every surface takes
+- **interior lighting (see "Interior lighting"):** keypad 9 switches it on and off (it starts off: every surface takes
   the whole sky's light, no ambient zone applies and the eye takes the sky's light as in the open), keypad 0 steps its
   debug view (off, the ambient zones' wireframes, the sky's share on every lit surface); each logged;
 - **the moon and the seasons:** F pins the moon full (`MoonPhaseSource` fixed at 0.5) and gives it back to the
   calendar; Y switches the seasons (`AreSeasonsEnabled`). Every clock and moon log line carries the moon: `WorldTest:
   next day: Mon 2026-10-19 12:00:00; first quarter (phase 0.27, 59% lit, from the calendar).`;
-- **the renderer and the sky:** O post effects, B bloom, G sun shafts, C crisp overlay, V night vision (logged), K
+- **the renderer and the sky:** O post effects, B bloom, G sun shafts, keypad . contact shadows, C crisp overlay, V
+  night vision (logged), K
   sprite lighting (off draws every sprite unlit; logged), L light gizmos, N cycle the
   light pollution (0, 0.35, 0.7, 1; logged), X step the opacity of the centre cube (`test_object`) and the tree (1, 0.5,
   0; logged: a 50% dither on the pixel grid, then gone, their shadows with them), U frustum culling (off draws everything

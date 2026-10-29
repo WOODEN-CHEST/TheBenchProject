@@ -12,26 +12,36 @@
  * lights them instead. The renderer and shaders/common/interior.glsl compute the same things on the GPU; this is their C
  * mirror (tests/ShaderSourceTests.c pins the shared constants), tested in tests/WorldInteriorTests.c.
  *
- * THE SKY'S VISIBILITY. A top-down depth map around the camera holds the topmost surface of everything that keeps the sky
- * out (WorldInterior_GetSkyMap: WORLD_INTERIOR_SKY_MAP_EXTENT metres a side in WORLD_INTERIOR_SKY_MAP_RESOLUTION texels,
- * its centre snapped to whole texels in double, so the map stands still in the world while the camera moves). A surface
- * reads it around the place it faces (WorldInterior_GetSkyRingCenter: WORLD_INTERIOR_SKY_RING_RADIUS in front of a
- * steep surface, whose sky lies on its side; the point itself for a flat one): a centre tap with WORLD_INTERIOR_SKY_INNER_TAPS
- * taps WORLD_INTERIOR_SKY_INNER_RADIUS around it, and a ring of WORLD_INTERIOR_SKY_RING_TAPS taps WORLD_INTERIOR_SKY_RING_RADIUS
- * around it (WorldInterior_GetSkyTap). A tap is covered when the map holds something above the surface there: above both
- * the surface's own height and its tangent plane extended to the tap, plus WORLD_INTERIOR_SKY_BIAS
- * (WorldInterior_GetSkyTapReference), so the uphill side of a slope does not read as a roof, nor does a curb; a surface
- * facing down is covered by anything at or above its own height, itself too (a roof's underside lies under the roof).
- * The visibility (WorldInterior_GetSkyVisibility) is the open share of the inner taps (with the centre) times the open
- * share of the ring: the ring tells how much sky lies around the place, the inner taps whether the place itself is
- * open. So a room's floor, under its roof, keeps none of the sky beyond its walls (the map cannot tell a wall from an
- * open side under the same roof), while a facade under its eaves, whose place lies in front of them, keeps most of it;
- * at a roof's edge the inner taps soften the step. The map sees only what is overhead: light that comes in sideways,
- * through doors and windows, is no map's to see. The sky's ambient then takes WorldInterior_GetSkyShare of the
- * visibility, never less than WORLD_INTERIOR_SKY_FLOOR (that light from doors and windows), and so do the ground's bounce
- * and the night's own light: a roof keeps out the light from the sunlit ground around it as much as the sky's. Toward the
- * map's edge the visibility fades to open (WorldInterior_GetSkyEdgeFade): the map moves with the camera, and no hard edge
- * sweeps over shaded ground.
+ * THE SKY'S VISIBILITY. An occupancy volume around the camera holds where things that keep the sky out stand
+ * (WorldInterior_GetSkyMap: WORLD_INTERIOR_SKY_MAP_EXTENT metres a side in WORLD_INTERIOR_SKY_MAP_RESOLUTION texels, its
+ * centre snapped to whole texels in double, so it stands still in the world while the camera moves). Each texel is a
+ * column of WORLD_INTERIOR_SKY_SLICE_COUNT height slices, one bit each, in a window from WORLD_INTERIOR_SKY_WINDOW_BELOW
+ * metres below the camera (WorldInterior_GetSkyWindowBottom, also snapped). The renderer draws everything that keeps the
+ * sky out into it from above, twice: once toggling the slices whose centre lies below each surface (an XOR: a slice is
+ * solid where an odd number of surfaces lie above it, WorldInterior_GetSliceParityMask), so walls under a roof are solid
+ * and the air under it is not; once setting the slice each surface passes through (an OR,
+ * WorldInterior_GetSlicePresenceMask), so a slab thinner than a slice is not lost (above the window, the top slice: a
+ * column solid at the window's top counts as going on up). A pyramid of it holds, at level k, the union of 2^k x 2^k
+ * columns.
+ *
+ * A surface reads it in directions around it (the ambient pre-pass reads WORLD_INTERIOR_SKY_PATTERN_AZIMUTHS, turned by
+ * its pixel's pattern, and blurs): from WORLD_INTERIOR_SKY_MARCH_START metres out to WORLD_INTERIOR_SKY_MARCH_END, through
+ * every texel the direction crosses, one after another, each at the level whose texels are WORLD_INTERIOR_SKY_CELL_RATIO
+ * of the distance wide (WorldInterior_GetSkyLevelAt: finer near, coarser far; no wall between two reads, never the
+ * surface's own column). Each texel stands for the distances the direction spends in it, and tests
+ * WORLD_INTERIOR_SKY_BANDS bands of elevation, each WORLD_INTERIOR_SKY_BAND_DEGREES high, against the slices their rays
+ * pass over those distances (WorldInterior_GetSliceRangeMask). What it finds solid hides the elevations from its bottom
+ * seen from the farthest of them to its top seen from the nearest; a band keeps open the share its blockers leave below
+ * and above them. The bands start a lift above the surface (its own slices are not its roof; curbs and bumps lower than
+ * it are none); a surface facing up goes on around itself as its plane (a slope's own ground is no roof); and what is
+ * solid in the surface's own slice alone, solid below it too, is what it stands over (the ground at a wall's foot), no
+ * wall. The zenith's cap above the bands is read in the surface's own column (an upright surface's just in front of it).
+ * The visibility (WorldInterior_GetSkyVisibility) is the bands' and the cap's open share, each weighed by its solid angle
+ * and the surface's cosine to it: a pebble hides a sliver of sky, a wall half of it at its foot, a roof all of it, a
+ * doorway lets in the sky below its lintel, and a surface facing down is covered by what lies above it, itself too. The
+ * sky's ambient then takes WorldInterior_GetSkyShare of the visibility, never less than WORLD_INTERIOR_SKY_FLOOR, and so
+ * do the ground's bounce and the night's own light. Toward the map's edge, and the window's top and bottom, the
+ * visibility fades to open (WorldInterior_GetSkyEdgeFade): no hard edge sweeps over shaded ground.
  *
  * AMBIENT ZONES (WorldAmbientZoneComponent.h) in render space (WorldInterior_MakeZone): a box or a sphere with a centre,
  * three unit axes and its sizes in metres, the object's scale folded in. A point's weight in a zone
@@ -59,43 +69,56 @@
 // Macros.
 /** @brief The most ambient zones one draw takes (the shaders' MAX_AMBIENT_ZONES). */
 #define WORLD_INTERIOR_MAX_DRAW_ZONES 4U
-/** @brief The sky's visibility map: its texels a side, its side in metres, and its depth range in metres (from half
- *  of it above the camera to half below). */
+/** @brief The sky's map, the occupancy volume's grid from above: its texels a side, its side in metres, and its depth
+ *  range in metres (from half of it above the camera to half below). */
 #define WORLD_INTERIOR_SKY_MAP_RESOLUTION 1024
 #define WORLD_INTERIOR_SKY_MAP_EXTENT 96.0
 #define WORLD_INTERIOR_SKY_MAP_DEPTH 1000.0
-/** @brief The taps a surface reads the map at, around the place it faces: the centre, a ring of WORLD_INTERIOR_SKY_INNER_TAPS
- *  this many metres around it (is the place itself open?), and a ring of WORLD_INTERIOR_SKY_RING_TAPS this many metres
- *  around it (how much sky lies around?). */
-#define WORLD_INTERIOR_SKY_INNER_TAPS 4
-#define WORLD_INTERIOR_SKY_INNER_RADIUS 0.25f
-#define WORLD_INTERIOR_SKY_RING_TAPS 8
-#define WORLD_INTERIOR_SKY_RING_RADIUS 1.5f
-/** @brief Every tap, in WorldInterior_GetSkyTap's order: the centre (0), the inner ring (1 to INNER_TAPS), the outer
- *  ring. */
-#define WORLD_INTERIOR_SKY_TAP_COUNT (1 + WORLD_INTERIOR_SKY_INNER_TAPS + WORLD_INTERIOR_SKY_RING_TAPS)
-/** @brief How far above a surface (and its tangent plane) the map's surface must lie to cover a tap, in metres: for a
- *  surface facing up (curbs, pebbles and a slope's own bumps do not cover it), and for an upright one, whose taps lie in
- *  front of it, away from itself (the top of a wall under a thin roof is as roofed as the rest of it); between them by
- *  the normal's upward part. */
-#define WORLD_INTERIOR_SKY_BIAS 0.25f
-#define WORLD_INTERIOR_SKY_UPRIGHT_BIAS 0.05f
-/** @brief The share of the sky's ambient a surface keeps under a roof that covers every tap: the light that gets in
- *  through windows and doors no map shows. */
+/** @brief The occupancy volume: the height slices of a column (the bits of one RGBA32UI texel: slice k is word k / 32's
+ *  bit k % 32), their height in metres, how far below the camera the window starts (snapped to whole slices), and the
+ *  levels of its pyramid (level k: 2^k x 2^k texels of level 0 in one). */
+#define WORLD_INTERIOR_SKY_SLICE_COUNT 128
+#define WORLD_INTERIOR_SKY_SLICE_WORDS 4
+#define WORLD_INTERIOR_SKY_SLICE_HEIGHT 0.25
+#define WORLD_INTERIOR_SKY_WINDOW_BELOW 12.0
+#define WORLD_INTERIOR_SKY_LEVEL_COUNT 8
+/** @brief A surface's march: the most directions around it a read takes, the ambient pre-pass's (turned by its pixel's
+ *  pattern, and blurred); how far out it reads (from past the surface's own level-0 texel, whose diagonal is shorter, to
+ *  its end, in metres), through at most so many texels, each at the level whose texels are at least the ratio of the
+ *  distance wide; and the bands of elevation it tests (each this many degrees high, from the horizontal; the zenith's
+ *  cap above them is read in the surface's own column). */
+#define WORLD_INTERIOR_SKY_MAX_AZIMUTHS 8
+#define WORLD_INTERIOR_SKY_PATTERN_AZIMUTHS 2
+#define WORLD_INTERIOR_SKY_MARCH_START 0.14f
+#define WORLD_INTERIOR_SKY_MARCH_END 24.0f
+#define WORLD_INTERIOR_SKY_MAX_CELLS 24
+#define WORLD_INTERIOR_SKY_CELL_RATIO 0.35f
+/** @brief How many runs of solid slices a texel's read takes one by one; the rest count as one. */
+#define WORLD_INTERIOR_SKY_MAX_RUNS 4
+#define WORLD_INTERIOR_SKY_BANDS 5
+#define WORLD_INTERIOR_SKY_BAND_DEGREES 15.0f
+/** @brief How far above a surface its bands start, in metres: upright, and facing up (a slice and a hair: the surface's
+ *  own slices are not its roof, nor are curbs and bumps lower than that); between them by the normal's upward part. */
+#define WORLD_INTERIOR_SKY_UPRIGHT_LIFT 0.05f
+#define WORLD_INTERIOR_SKY_LIFT 0.3f
+/** @brief A surface facing up more than this (a normal's upward part) is taken to go on around it as its own plane: each
+ *  band is tested only above that plane at its step, raised by the plane's rise across the step's texel (at most
+ *  WORLD_INTERIOR_SKY_MAX_RISE a metre), so the uphill side of a slope, which a coarse texel holds at its highest
+ *  corner, is no roof. */
+#define WORLD_INTERIOR_SKY_SLOPE_UP 0.5f
+#define WORLD_INTERIOR_SKY_MAX_RISE 1.732f
+/** @brief The zenith's weight a surface takes beside its bands', per direction, whatever it faces: a surface facing down,
+ *  with no band in its hemisphere, takes the zenith's openness (an underside is covered by what lies above it). */
+#define WORLD_INTERIOR_SKY_ZENITH_FLOOR 0.02f
+/** @brief The share of the sky's ambient a surface keeps where every band is closed: the light that still finds its way
+ *  in. */
 #define WORLD_INTERIOR_SKY_FLOOR 0.15f
 /** @brief Toward the map's edge a surface's visibility fades to open, over this many metres from the camera
- *  (horizontally) up to WORLD_INTERIOR_SKY_FADE_END, where every tap still lies inside the map (half its extent less the
- *  taps' reach): the map moves with the camera, and no hard edge sweeps over shaded ground. */
-#define WORLD_INTERIOR_SKY_FADE_END ((float)(WORLD_INTERIOR_SKY_MAP_EXTENT * 0.5) - 2.0f * WORLD_INTERIOR_SKY_RING_RADIUS)
+ *  (horizontally) up to WORLD_INTERIOR_SKY_FADE_END; and over WORLD_INTERIOR_SKY_WINDOW_FADE metres toward the window's
+ *  top and bottom. The volume moves with the camera, and no hard edge sweeps over shaded ground. */
+#define WORLD_INTERIOR_SKY_FADE_END ((float)(WORLD_INTERIOR_SKY_MAP_EXTENT * 0.5) - 3.0f)
 #define WORLD_INTERIOR_SKY_FADE_WIDTH 12.0f
-/** @brief The smallest upward (or downward) part of a normal the tangent plane is extended with: steeper surfaces count as
- *  walls. */
-#define WORLD_INTERIOR_SKY_MIN_UP 0.001f
-/** @brief A surface facing down is covered by anything higher than this below its own height (itself too). It faces
- *  down wholly from a normal 30 degrees below the horizontal (y -0.5; WORLD_INTERIOR_SKY_DOWN_SCALE), and the rule
- *  blends from an upright surface's toward it. */
-#define WORLD_INTERIOR_SKY_SELF 0.02f
-#define WORLD_INTERIOR_SKY_DOWN_SCALE 2.0f
+#define WORLD_INTERIOR_SKY_WINDOW_FADE 2.0f
 /** @brief How far beyond a zone's surface a surface still counts as on it, in metres: a room's walls, built on its zone's
  *  surface, lie on it within float rounding. */
 #define WORLD_INTERIOR_ZONE_SURFACE_TOLERANCE 0.01f
@@ -153,7 +176,7 @@ typedef struct WorldInteriorZoneLightStruct
 } WorldInteriorZoneLight;
 
 /**
- * @brief The sky's visibility map for a frame (WorldInterior_GetSkyMap). A plain value.
+ * @brief The sky's map for a frame, the occupancy volume's grid (WorldInterior_GetSkyMap). A plain value.
  */
 typedef struct WorldInteriorSkyMapStruct
 {
@@ -167,14 +190,15 @@ typedef struct WorldInteriorSkyMapStruct
 } WorldInteriorSkyMap;
 
 /**
- * @brief Returns the topmost surface's height above a point of the ground plane, the map's C stand-in for the tests:
- *        NaN where nothing is.
- * @param context What the callback reads (its heights).
- * @param x The point's X, render space.
- * @param z Its Z.
- * @returns The height (render space Y), or NaN.
+ * @brief Gives one column of the occupancy volume, the C stand-in for the GPU's texture in the tests: its slices' bits at a
+ *        texel of a level (all clear outside the volume).
+ * @param context What the callback reads.
+ * @param level The pyramid's level, 0 to WORLD_INTERIOR_SKY_LEVEL_COUNT - 1.
+ * @param x The texel's column at that level (from WorldInterior_GetSkyTexel).
+ * @param y Its row.
+ * @param outColumn [out] Receives the column's WORLD_INTERIOR_SKY_SLICE_WORDS words.
  */
-typedef float (*WorldInteriorHeightFunction)(const void* context, float x, float z);
+typedef void (*WorldInteriorColumnFunction)(const void* context, int level, int x, int y, uint32_t* outColumn);
 
 /**
  * @brief The camera's interior: how open its surroundings are and the zones at it, eased over frames. A plain value:
@@ -295,8 +319,9 @@ float WorldInterior_GetHazeDistance(const WorldInteriorZone* zones, const size_t
 
 // Functions: the sky's visibility.
 /**
- * @brief Returns the sky's visibility map for a camera: its centre on the texel grid nearest the camera (X and Z
- *        rounded to whole texels in double, the camera's height), looking straight down from half its depth above, its
+ * @brief Returns the sky's map for a camera (the occupancy volume's grid): its centre on the texel grid nearest the
+ *        camera (X and Z rounded to whole texels in double, the camera's height), looking straight down from half its
+ *        depth above, its
  *        orthographic box WORLD_INTERIOR_SKY_MAP_EXTENT metres a side and WORLD_INTERIOR_SKY_MAP_DEPTH deep, in render
  *        space.
  * @param origin The frame's origin (the camera's position).
@@ -305,61 +330,107 @@ float WorldInterior_GetHazeDistance(const WorldInteriorZone* zones, const size_t
 WorldInteriorSkyMap WorldInterior_GetSkyMap(Vector3Double origin);
 
 /**
- * @brief Returns the centre of a surface's ring of taps: the point moved RING_RADIUS times its normal's horizontal part
- *        (in front of a wall, a little downhill on a slope, the point itself on flat ground).
- * @param position The surface's point, render space.
- * @param normal Its unit normal.
- * @returns The ring's centre (its height the point's).
+ * @brief Returns the occupancy volume's window's bottom for a camera, in render space: WORLD_INTERIOR_SKY_WINDOW_BELOW
+ *        metres below the camera, on the slices' grid (whole slices from the world's height 0, in double).
+ * @param origin The frame's origin (the camera's position).
+ * @returns The bottom's height relative to the camera (between -WINDOW_BELOW - SLICE_HEIGHT and -WINDOW_BELOW).
  */
-Vector3 WorldInterior_GetSkyRingCenter(Vector3 position, Vector3 normal);
+float WorldInterior_GetSkyWindowBottom(Vector3Double origin);
 
 /**
- * @brief Returns where one of a surface's taps lies on the ground plane: tap 0 the place it faces
- *        (WorldInterior_GetSkyRingCenter), taps 1 to INNER_TAPS on the inner ring (the diagonals, from +X+Z turning
- *        toward -X+Z), the rest on the outer ring (from +X toward +Z, every 360 / RING_TAPS degrees).
- * @param position The surface's point, render space.
- * @param normal Its unit normal.
- * @param tap The tap, 0 to WORLD_INTERIOR_SKY_TAP_COUNT - 1 (another counts as 0).
- * @returns The tap's X and Z (as x and y).
+ * @brief Gives the slices a surface at a height toggles in the volume's first drawing: those whose centre lies below it.
+ * @param height The surface's height, render space.
+ * @param windowBottom The window's bottom (WorldInterior_GetSkyWindowBottom).
+ * @param outMask [out] Receives WORLD_INTERIOR_SKY_SLICE_WORDS words; must not be NULL.
  */
-Vector2 WorldInterior_GetSkyTap(Vector3 position, Vector3 normal, int tap);
+void WorldInterior_GetSliceParityMask(float height, float windowBottom, uint32_t* outMask);
 
 /**
- * @brief Returns the height the map's surface must top at a tap to cover a surface: for a surface facing up or upright
- *        the higher of its own height and its tangent plane extended to the tap (a normal whose upward or downward part is
- *        less than WORLD_INTERIOR_SKY_MIN_UP counts as that steep), plus a bias from WORLD_INTERIOR_SKY_UPRIGHT_BIAS
- *        (upright) to WORLD_INTERIOR_SKY_BIAS (facing up) by the normal's upward part; blended toward
- *        WORLD_INTERIOR_SKY_SELF below its own height as it faces down (wholly from a normal y of
- *        -1 / WORLD_INTERIOR_SKY_DOWN_SCALE).
- * @param position The surface's point, render space.
- * @param normal Its unit normal.
- * @param tap The tap's X and Z (WorldInterior_GetSkyTap).
- * @returns The height, render space Y.
+ * @brief Gives the slice a surface at a height passes through, which the volume's second drawing sets: the top one for a
+ *        surface above the window (what lies above keeps the sky out of the column too), none below it.
+ * @param height The surface's height, render space.
+ * @param windowBottom The window's bottom.
+ * @param outMask [out] Receives WORLD_INTERIOR_SKY_SLICE_WORDS words; must not be NULL.
  */
-float WorldInterior_GetSkyTapReference(Vector3 position, Vector3 normal, Vector2 tap);
+void WorldInterior_GetSlicePresenceMask(float height, float windowBottom, uint32_t* outMask);
 
 /**
- * @brief Returns a surface's visibility of the sky from a height function standing in for the map: the open share of
- *        the centre and the inner taps times the open share of the outer ring, a tap covered when the height there is
- *        above its reference (WorldInterior_GetSkyTapReference); a tap with no height (NaN) is open; faded to open toward
- *        the map's edge (WorldInterior_GetSkyEdgeFade). Exactly 1 when every tap is open.
- * @param heights The height function; must not be NULL.
+ * @brief Gives the slices a range of heights passes through: every slice from the one holding the lower height to the
+ *        one holding the higher (clamped to the window), and the top slice whenever the range reaches above the window
+ *        (a column solid at its top goes on up); none for a range wholly below it, or a broken one.
+ * @param low The range's lower height, render space.
+ * @param high Its higher height (an infinity reaches the top).
+ * @param windowBottom The window's bottom.
+ * @param outMask [out] Receives WORLD_INTERIOR_SKY_SLICE_WORDS words; must not be NULL.
+ */
+void WorldInterior_GetSliceRangeMask(float low, float high, float windowBottom, uint32_t* outMask);
+
+/**
+ * @brief Returns the pyramid's level a surface's march reads at a distance: the finest whose texels are at least
+ *        WORLD_INTERIOR_SKY_CELL_RATIO of the distance wide (level 0 nearer, the coarsest farther).
+ * @param distance The distance from the surface, metres.
+ * @returns The level, 0 to WORLD_INTERIOR_SKY_LEVEL_COUNT - 1.
+ */
+int WorldInterior_GetSkyLevelAt(float distance);
+
+/**
+ * @brief Gives the volume's texel a render-space point lands on at a level, as the shaders find it: the point through the
+ *        map's view-projection, its clip coordinates' texel at level 0, shifted down by the level.
+ * @param map The map; must not be NULL.
+ * @param x The point's X, render space.
+ * @param z Its Z.
+ * @param level The level, 0 to WORLD_INTERIOR_SKY_LEVEL_COUNT - 1.
+ * @param outX [out] Receives the texel's column; must not be NULL.
+ * @param outY [out] Receives its row; must not be NULL.
+ * @returns Whether the point lies on the map (outside, nothing is known: open).
+ */
+bool WorldInterior_GetSkyTexel(const WorldInteriorSkyMap* map, float x, float z, int level, int* outX, int* outY);
+
+/**
+ * @brief Returns a surface's visibility of the sky from a column function standing in for the volume: the open shares of
+ *        its march's bands (and of the zenith's cap, read in its own column or an upright surface's just in front of
+ *        it), weighed by their solid angle and its cosine to them, as a share of all of them; faded to open toward the
+ *        map's edge and the window's top and bottom (WorldInterior_GetSkyEdgeFade). Exactly 1 when nothing hides any of
+ *        them.
+ * @param columns The column function; must not be NULL.
  * @param context What it reads.
+ * @param map The map; must not be NULL.
+ * @param windowBottom The window's bottom.
  * @param position The surface's point, render space.
- * @param normal Its unit normal.
+ * @param normal Its unit normal (the geometric one).
+ * @param turn How far its directions are turned, in [0, 1) of the step between two (the pre-pass's pattern).
+ * @param azimuthCount Its directions, 1 to WORLD_INTERIOR_SKY_MAX_AZIMUTHS (another counts as the most).
  * @returns The visibility, in [0, 1].
  */
-float WorldInterior_GetSkyVisibility(WorldInteriorHeightFunction heights, const void* context, Vector3 position,
-    Vector3 normal);
+float WorldInterior_GetSkyVisibility(WorldInteriorColumnFunction columns, const void* context,
+    const WorldInteriorSkyMap* map, float windowBottom, Vector3 position, Vector3 normal, float turn, int azimuthCount);
 
 /**
- * @brief Returns how far a surface's visibility is faded to open toward the sky's visibility map's edge: 0 within
+ * @brief Returns a surface's visibility of the sky as a lit shader reads it where the pre-pass holds none of its own
+ *        (blended sprites, the crisp overlay, a frame without the pre-pass): 1 when nothing the volume holds lies
+ *        straight above it (read as the zenith's cap is: in its own column, an upright surface's just in front of it),
+ *        else covered; faded to open toward the volume's edges as the march is.
+ * @param columns The column function; must not be NULL.
+ * @param context What it reads.
+ * @param map The map; must not be NULL.
+ * @param windowBottom The window's bottom.
+ * @param position The surface's point, render space.
+ * @param normal Its unit normal (the geometric one).
+ * @returns 1, or the fade (0 well inside the volume).
+ */
+float WorldInterior_GetSkyOverhead(WorldInteriorColumnFunction columns, const void* context,
+    const WorldInteriorSkyMap* map, float windowBottom, Vector3 position, Vector3 normal);
+
+/**
+ * @brief Returns how far a surface's visibility is faded to open toward the volume's edges: 0 within
  *        WORLD_INTERIOR_SKY_FADE_END - WORLD_INTERIOR_SKY_FADE_WIDTH metres of the camera (horizontally), rising linearly
- *        to 1 at WORLD_INTERIOR_SKY_FADE_END.
+ *        to 1 at WORLD_INTERIOR_SKY_FADE_END; and rising linearly to 1 over WORLD_INTERIOR_SKY_WINDOW_FADE metres toward
+ *        the window's top and bottom (and beyond them); the larger of the two.
  * @param position The surface's point, render space (the camera at its origin).
+ * @param windowBottom The window's bottom.
  * @returns The fade, in [0, 1] (1 for a broken position).
  */
-float WorldInterior_GetSkyEdgeFade(Vector3 position);
+float WorldInterior_GetSkyEdgeFade(Vector3 position, float windowBottom);
 
 /**
  * @brief Returns the share of the sky's light a surface takes at a visibility: 1 - (1 - FLOOR) x (1 - visibility), so

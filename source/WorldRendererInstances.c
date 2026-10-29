@@ -24,6 +24,7 @@
 #define NORMAL_INSTANCED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal_instanced")
 #define DEPTH_INSTANCED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_depth_instanced")
 #define CUBE_DEPTH_INSTANCED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_cube_depth_instanced")
+#define SKY_SLICES_INSTANCED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sky_slices_instanced")
 /** The instance attributes' locations (shaders/common/instancing.glsl; agents/WorldRuntime.md, "Vertex attributes"): a
  *  record's three matrix rows, its tint and its random value. */
 #define INSTANCE_ROW_LOCATION 9U
@@ -509,6 +510,17 @@ void WorldRendererInstances_LoadShaders(WorldRenderer* self)
         State->_cubeLocLightPos = GetShaderLocation(RayShader, "lightPosition");
         State->_cubeLocLightFar = GetShaderLocation(RayShader, "lightFar");
     }
+    State->_skySliceShader = (self->_skyVisibility._shader != NULL) ? LoadTwin(self,
+        SKY_SLICES_INSTANCED_SHADER_ASSET_NAME, WorldInstancePass_Shadow, &State->_skySliceDither,
+        &State->_skySliceInstancing) : NULL;
+    if (State->_skySliceShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(State->_skySliceShader);
+        State->_skySliceLocations._locEyeHeight = GetShaderLocation(RayShader, "mapEyeHeight");
+        State->_skySliceLocations._locDepth = GetShaderLocation(RayShader, "mapDepth");
+        State->_skySliceLocations._locBottom = GetShaderLocation(RayShader, "volumeBottom");
+        State->_skySliceLocations._locMode = GetShaderLocation(RayShader, "sliceMode");
+    }
 }
 
 void WorldRendererInstances_ReleaseBuffers(WorldRenderer* self)
@@ -604,7 +616,8 @@ void WorldRendererInstances_DrawLit(WorldRenderer* self, const WorldRenderFrame*
     {
         const WorldRenderInstanceCell* Cell = &Cells[Visible[Position]];
         // The cell's forward lights and ambient zones by its sphere and its component's haze multiplier, into the
-        // program that draws it (the twin, or world_pbr one at a time).
+        // program that draws it (the twin, or world_pbr one at a time); whether the G-buffer drew it, by the cell's fade
+        // (a copy fading on its own past half its fade still counts as drawn there: the flag is the draw's).
         if (IsLit)
         {
             const WorldRendererPbrProgram* Program = (IsInstanced && (GetEntryBuffer(self, Cell->Entry) != 0U))
@@ -612,7 +625,9 @@ void WorldRendererInstances_DrawLit(WorldRenderer* self, const WorldRenderFrame*
             WorldRendererLighting_UploadObjectLights(self, Program->_passShader, &Program->_lit, Cell->RenderCenter,
                 Cell->Radius);
             WorldRendererLighting_SetDrawPlace(self, Program->_passShader, &Program->_lit, Cell->RenderCenter,
-                Cell->Radius, (Cell->Entry < EntryCount) ? Entries[Cell->Entry].Haze : 1.0f);
+                Cell->Radius, (Cell->Entry < EntryCount) ? Entries[Cell->Entry].Haze : 1.0f,
+                WorldVisibility_GetInstanceCellFade(&self->_visibility, Visible[Position]).Combined
+                    < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT);
         }
         if (DrawCell(self, &Pass, Cell, frame->ZoomFactor, DrawDistanceScale))
         {
@@ -672,7 +687,8 @@ void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFr
 {
     WorldRendererInstanceState* State = &self->_instances;
     bool IsCube = (pass == WorldVisibilityPass_PointShadow);
-    GameShader* TwinAsset = IsCube ? State->_cubeDepthShader : State->_depthShader;
+    bool IsSky = (pass == WorldVisibilityPass_SkyVisibility);
+    GameShader* TwinAsset = IsCube ? State->_cubeDepthShader : (IsSky ? State->_skySliceShader : State->_depthShader);
     bool IsInstanced = (TwinAsset != NULL) && State->_isEnabled;
     Shader Twin = IsInstanced ? GameShader_GetRaylibShader(TwinAsset) : shader;
     if (IsInstanced && IsCube)
@@ -686,7 +702,7 @@ void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFr
     {
         .Pass = WorldInstancePass_Shadow,
         .InstancedShader = IsInstanced ? &Twin : NULL,
-        .Instancing = IsCube ? &State->_cubeInstancing : &State->_depthInstancing,
+        .Instancing = IsCube ? &State->_cubeInstancing : (IsSky ? &State->_skySliceInstancing : &State->_depthInstancing),
         .InstancedLitProgram = NULL,
         .OrdinaryShaders = { .Rigid = &shader, .Skinned = NULL, .Palette = NULL, .IsCameraView = false },
         .OrdinaryDither = dither,

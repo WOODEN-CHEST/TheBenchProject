@@ -12,23 +12,187 @@
 #define INTERIOR_MIN_DIRECTION 1e-8f
 /** Below this a world matrix's axis counts as collapsed. */
 #define INTERIOR_MIN_AXIS_LENGTH 1e-12
+/** The tangent of an elevation beyond every band's: a band's blockers before any is met (the shader's
+ *  INTERIOR_SKY_NO_BLOCKER). */
+#define INTERIOR_NO_BLOCKER 1e30f
 
 
 // Fields.
-/* The taps' offsets from the place a surface faces, per unit of their ring's radius: the centre, the inner ring (the
- * diagonals), then the outer ring from +X toward +Z (shaders/common/interior.glsl's INTERIOR_SKY_TAPS, pinned by
- * tests/ShaderSourceTests.c). */
-static const float SkyTapOffsets[WORLD_INTERIOR_SKY_TAP_COUNT][2] =
-{
-    { 0.0f, 0.0f },
-    { 0.70710678f, 0.70710678f }, { -0.70710678f, 0.70710678f }, { -0.70710678f, -0.70710678f },
-    { 0.70710678f, -0.70710678f },
-    { 1.0f, 0.0f }, { 0.70710678f, 0.70710678f }, { 0.0f, 1.0f }, { -0.70710678f, 0.70710678f },
-    { -1.0f, 0.0f }, { -0.70710678f, -0.70710678f }, { 0.0f, -1.0f }, { 0.70710678f, -0.70710678f }
-};
+/* The pyramid's level each step of a surface's march reads (shaders/common/interior.glsl's INTERIOR_SKY_STEP_LEVELS,
+ * pinned by tests/ShaderSourceTests.c): the finest level whose texels span the step from the last (no wall between two
+ * steps is skipped), never so coarse that a texel at the step can reach back to the surface's own column. */
 
 
 // Static functions.
+/* A slice mask with no slice set. */
+static void ClearSliceMask(uint32_t* mask)
+{
+    for (int Word = 0; Word < WORLD_INTERIOR_SKY_SLICE_WORDS; Word++)
+    {
+        mask[Word] = 0U;
+    }
+}
+
+/* Sets the slices from first to last (inclusive, each within the column) in a mask. */
+static void SetSliceRun(int first, int last, uint32_t* mask)
+{
+    for (int Word = 0; Word < WORLD_INTERIOR_SKY_SLICE_WORDS; Word++)
+    {
+        int Low = (first > (32 * Word)) ? (first - (32 * Word)) : 0;
+        int High = (last < ((32 * Word) + 31)) ? (last - (32 * Word)) : 31;
+        if (Low <= High)
+        {
+            uint32_t Count = (uint32_t)(High - Low + 1);
+            uint32_t Bits = (Count == 32U) ? 0xFFFFFFFFU : ((1U << Count) - 1U);
+            mask[Word] |= Bits << (uint32_t)Low;
+        }
+    }
+}
+
+/* The lowest and the highest slice two masks share, as a column's solid slices within a band's; false when they share
+ * none. */
+static bool FindSolidSlices(const uint32_t* column, const uint32_t* mask, int* outFirst, int* outLast)
+{
+    int First = -1;
+    int Last = -1;
+    for (int Word = 0; Word < WORLD_INTERIOR_SKY_SLICE_WORDS; Word++)
+    {
+        uint32_t Shared = column[Word] & mask[Word];
+        for (int Bit = 0; (Shared != 0U) && (Bit < 32); Bit++)
+        {
+            if ((Shared & (1U << (uint32_t)Bit)) != 0U)
+            {
+                First = (First < 0) ? ((32 * Word) + Bit) : First;
+                Last = (32 * Word) + Bit;
+            }
+        }
+    }
+    *outFirst = First;
+    *outLast = Last;
+    return First >= 0;
+}
+
+/* Where a render-space point (x, z) lands on the map, in [0, 1) across it (linear in the point), as the shaders find
+ * it. */
+static Vector2 GetMapPlace(const WorldInteriorSkyMap* map, float x, float z)
+{
+    Vector3 Clip = Vector3Transform((Vector3){ x, 0.0f, z }, map->ViewProjection);
+    return (Vector2){ (Clip.x * 0.5f) + 0.5f, (Clip.y * 0.5f) + 0.5f };
+}
+
+/* Whether a slice mask has no slice set. */
+static bool IsMaskEmpty(const uint32_t* bits)
+{
+    return (bits[0] | bits[1] | bits[2] | bits[3]) == 0U;
+}
+
+/* The lowest slice set in a mask that has one; and the mask without it. */
+static int TakeLowestSlice(uint32_t* bits)
+{
+    int Word = (bits[0] != 0U) ? 0 : ((bits[1] != 0U) ? 1 : ((bits[2] != 0U) ? 2 : 3));
+    int Bit = 0;
+    while ((bits[Word] & (1U << (uint32_t)Bit)) == 0U)
+    {
+        Bit++;
+    }
+    bits[Word] &= bits[Word] - 1U;
+    return (32 * Word) + Bit;
+}
+
+/* The sine of the elevation whose tangent is @p tangent. */
+static float GetSineOfTangent(float tangent)
+{
+    return tangent / sqrtf(1.0f + (tangent * tangent));
+}
+
+/* The share of a band of elevations (by their tangents, from low to high) left open around the tangents its blockers
+ * span (lowest to highest; none while lowest is above highest), by solid angle: what lies below them and above them. */
+static float GetBandOpenShare(float low, float high, float lowest, float highest)
+{
+    if (!(lowest <= highest))
+    {
+        return 1.0f;
+    }
+    float SineLow = GetSineOfTangent(low);
+    float SineHigh = GetSineOfTangent(high);
+    float BlockedLow = GetSineOfTangent(fminf(fmaxf(lowest, low), high));
+    float BlockedHigh = GetSineOfTangent(fminf(fmaxf(highest, low), high));
+    return ((BlockedLow - SineLow) + (SineHigh - BlockedHigh)) / (SineHigh - SineLow);
+}
+
+/* The lowest and the highest band in a set of bands (a non-empty one). */
+static void GetBandRange(unsigned int bands, int* outLowest, int* outHighest)
+{
+    int Lowest = WORLD_INTERIOR_SKY_BANDS;
+    int Highest = -1;
+    for (int Band = 0; Band < WORLD_INTERIOR_SKY_BANDS; Band++)
+    {
+        if ((bands & (1U << Band)) != 0U)
+        {
+            Lowest = (Band < Lowest) ? Band : Lowest;
+            Highest = Band;
+        }
+    }
+    *outLowest = Lowest;
+    *outHighest = Highest;
+}
+
+/* Whether a column's slice is solid: none below the window, every one above it (a column solid at the window's top goes on
+ * up, so this is asked only of the slice above a solid one). */
+static bool IsSliceSolid(const uint32_t* column, int slice)
+{
+    if (slice >= WORLD_INTERIOR_SKY_SLICE_COUNT)
+    {
+        return true;
+    }
+    return (slice >= 0) && ((column[slice / 32] & (1U << (uint32_t)(slice % 32))) != 0U);
+}
+
+/* Whether the solid slices found in a column up to the last are only the top of what the surface stands over: solid in
+ * its own slice alone, below it too, not above it (the ground at a wall's foot shares the foot's slice; a slab within
+ * the slice, air below it, is no such top: a ceiling just above). */
+static bool IsUnderfoot(const uint32_t* column, int last, int ownSlice)
+{
+    return (last == ownSlice) && !IsSliceSolid(column, last + 1) && IsSliceSolid(column, last - 1);
+}
+
+/* The lift the bands start at above a surface: between the upright and the facing-up one by its normal (mix as GLSL
+ * defines it: a(1 - t) + bt). */
+static float GetBandBase(Vector3 position, Vector3 normal)
+{
+    float Up = fminf(fmaxf(normal.y, 0.0f), 1.0f);
+    return position.y + (WORLD_INTERIOR_SKY_UPRIGHT_LIFT * (1.0f - Up)) + (WORLD_INTERIOR_SKY_LIFT * Up);
+}
+
+/* The slice a height lies in. */
+static int GetOwnSlice(float height, float windowBottom)
+{
+    return (int)floorf((height - windowBottom) / (float)WORLD_INTERIOR_SKY_SLICE_HEIGHT);
+}
+
+/* Whether nothing the volume holds lies straight above a surface, its bands' base and its own slice given: read in its
+ * own column (an upright surface's a texel and a half in front of it, not in its own wall's; less so as it turns down,
+ * so what lies above an underside covers it), the top of what it stands over aside. */
+static bool IsOpenOverhead(WorldInteriorColumnFunction columns, const void* context, const WorldInteriorSkyMap* map,
+    float windowBottom, Vector3 position, Vector3 normal, float base, int ownSlice)
+{
+    float Texel = (float)(WORLD_INTERIOR_SKY_MAP_EXTENT / (double)WORLD_INTERIOR_SKY_MAP_RESOLUTION);
+    float Ahead = 1.5f * Texel * fminf(fmaxf(1.0f + normal.y, 0.0f), 1.0f);
+    int X = 0;
+    int Y = 0;
+    if (!WorldInterior_GetSkyTexel(map, position.x + (normal.x * Ahead), position.z + (normal.z * Ahead), 0, &X, &Y))
+    {
+        return true; // off the map: nothing known, open
+    }
+    uint32_t Column[WORLD_INTERIOR_SKY_SLICE_WORDS];
+    uint32_t Mask[WORLD_INTERIOR_SKY_SLICE_WORDS];
+    columns(context, 0, X, Y, Column);
+    WorldInterior_GetSliceRangeMask(base, INFINITY, windowBottom, Mask);
+    int First = 0;
+    int Last = 0;
+    return !FindSolidSlices(Column, Mask, &First, &Last) || IsUnderfoot(Column, Last, ownSlice);
+}
+
 /* Rec. 709 luminance of linear RGB. */
 static float Luminance(const float rgb[3])
 {
@@ -420,69 +584,268 @@ WorldInteriorSkyMap WorldInterior_GetSkyMap(Vector3Double origin)
     return Map;
 }
 
-Vector3 WorldInterior_GetSkyRingCenter(Vector3 position, Vector3 normal)
+float WorldInterior_GetSkyWindowBottom(Vector3Double origin)
 {
-    return (Vector3){ position.x + normal.x * WORLD_INTERIOR_SKY_RING_RADIUS, position.y,
-        position.z + normal.z * WORLD_INTERIOR_SKY_RING_RADIUS };
+    double Bottom = floor((origin.Y - WORLD_INTERIOR_SKY_WINDOW_BELOW) / WORLD_INTERIOR_SKY_SLICE_HEIGHT)
+        * WORLD_INTERIOR_SKY_SLICE_HEIGHT;
+    return (float)(Bottom - origin.Y);
 }
 
-Vector2 WorldInterior_GetSkyTap(Vector3 position, Vector3 normal, int tap)
+void WorldInterior_GetSliceParityMask(float height, float windowBottom, uint32_t* outMask)
 {
-    int Index = ((tap >= 0) && (tap < WORLD_INTERIOR_SKY_TAP_COUNT)) ? tap : 0;
-    float Radius = (Index <= WORLD_INTERIOR_SKY_INNER_TAPS) ? WORLD_INTERIOR_SKY_INNER_RADIUS
-        : WORLD_INTERIOR_SKY_RING_RADIUS;
-    Vector3 Center = WorldInterior_GetSkyRingCenter(position, normal);
-    return (Vector2){ Center.x + SkyTapOffsets[Index][0] * Radius, Center.z + SkyTapOffsets[Index][1] * Radius };
+    ClearSliceMask(outMask);
+    // The slices whose centre lies below the height: k with bottom + (k + 0.5) x slice height below it.
+    float Below = ((height - windowBottom) / (float)WORLD_INTERIOR_SKY_SLICE_HEIGHT) - 0.5f;
+    if (Below > 0.0f)
+    {
+        int Count = (Below < (float)WORLD_INTERIOR_SKY_SLICE_COUNT) ? (int)ceilf(Below) : WORLD_INTERIOR_SKY_SLICE_COUNT;
+        SetSliceRun(0, Count - 1, outMask);
+    }
 }
 
-float WorldInterior_GetSkyTapReference(Vector3 position, Vector3 normal, Vector2 tap)
+void WorldInterior_GetSlicePresenceMask(float height, float windowBottom, uint32_t* outMask)
 {
-    float Rise = -(normal.x * (tap.x - position.x) + normal.z * (tap.y - position.z))
-        / fmaxf(fabsf(normal.y), WORLD_INTERIOR_SKY_MIN_UP);
-    float Up = fminf(fmaxf(normal.y, 0.0f), 1.0f);
-    float Bias = WORLD_INTERIOR_SKY_UPRIGHT_BIAS * (1.0f - Up) + WORLD_INTERIOR_SKY_BIAS * Up;
-    float Upright = position.y + fmaxf(Rise, 0.0f) + Bias;
-    float Downward = position.y - WORLD_INTERIOR_SKY_SELF;
-    float Down = fminf(fmaxf(-WORLD_INTERIOR_SKY_DOWN_SCALE * normal.y, 0.0f), 1.0f);
-    // mix as GLSL defines it: a(1 - t) + bt.
-    return Upright * (1.0f - Down) + Downward * Down;
+    ClearSliceMask(outMask);
+    float Slice = (height - windowBottom) / (float)WORLD_INTERIOR_SKY_SLICE_HEIGHT;
+    if (Slice >= 0.0f)
+    {
+        // Above the window, its top slice: what lies above keeps the sky out of the column too.
+        int Index = (Slice < (float)WORLD_INTERIOR_SKY_SLICE_COUNT) ? (int)floorf(Slice) : WORLD_INTERIOR_SKY_SLICE_COUNT - 1;
+        SetSliceRun(Index, Index, outMask);
+    }
 }
 
-float WorldInterior_GetSkyEdgeFade(Vector3 position)
+void WorldInterior_GetSliceRangeMask(float low, float high, float windowBottom, uint32_t* outMask)
+{
+    ClearSliceMask(outMask);
+    float Top = windowBottom + (float)(WORLD_INTERIOR_SKY_SLICE_COUNT * WORLD_INTERIOR_SKY_SLICE_HEIGHT);
+    if (!(high >= low) || !(high >= windowBottom))
+    {
+        return; // broken, or wholly below the window
+    }
+    int Last = WORLD_INTERIOR_SKY_SLICE_COUNT - 1;
+    if (low >= Top)
+    {
+        SetSliceRun(Last, Last, outMask); // wholly above: a column solid at the window's top goes on up
+        return;
+    }
+    int First = (int)floorf((fmaxf(low, windowBottom) - windowBottom) / (float)WORLD_INTERIOR_SKY_SLICE_HEIGHT);
+    int End = (high < Top) ? (int)floorf((high - windowBottom) / (float)WORLD_INTERIOR_SKY_SLICE_HEIGHT) : Last;
+    SetSliceRun(First, (End < Last) ? End : Last, outMask);
+}
+
+int WorldInterior_GetSkyLevelAt(float distance)
+{
+    float Texel = (float)(WORLD_INTERIOR_SKY_MAP_EXTENT / (double)WORLD_INTERIOR_SKY_MAP_RESOLUTION);
+    float Level = ceilf(log2f(WORLD_INTERIOR_SKY_CELL_RATIO * distance / Texel));
+    // NaN and below 0 count as 0 (fmaxf takes the number).
+    Level = fminf(fmaxf(Level, 0.0f), (float)(WORLD_INTERIOR_SKY_LEVEL_COUNT - 1));
+    return (int)Level;
+}
+
+bool WorldInterior_GetSkyTexel(const WorldInteriorSkyMap* map, float x, float z, int level, int* outX, int* outY)
+{
+    Vector3 Clip = Vector3Transform((Vector3){ x, 0.0f, z }, map->ViewProjection);
+    float U = (Clip.x * 0.5f) + 0.5f;
+    float V = (Clip.y * 0.5f) + 0.5f;
+    if (!(U >= 0.0f) || !(U < 1.0f) || !(V >= 0.0f) || !(V < 1.0f))
+    {
+        return false;
+    }
+    *outX = (int)floorf(U * (float)WORLD_INTERIOR_SKY_MAP_RESOLUTION) >> level;
+    *outY = (int)floorf(V * (float)WORLD_INTERIOR_SKY_MAP_RESOLUTION) >> level;
+    return true;
+}
+
+float WorldInterior_GetSkyEdgeFade(Vector3 position, float windowBottom)
 {
     float Distance = sqrtf(position.x * position.x + position.z * position.z);
-    float Fade = (Distance - (WORLD_INTERIOR_SKY_FADE_END - WORLD_INTERIOR_SKY_FADE_WIDTH)) / WORLD_INTERIOR_SKY_FADE_WIDTH;
-    return (Fade < 1.0f) ? fmaxf(Fade, 0.0f) : 1.0f; // a broken position counts as beyond the edge: open
+    if (!(Distance >= 0.0f) || isnan(position.y))
+    {
+        return 1.0f; // a broken position counts as beyond the edge: open
+    }
+    float Top = windowBottom + (float)(WORLD_INTERIOR_SKY_SLICE_COUNT * WORLD_INTERIOR_SKY_SLICE_HEIGHT);
+    float Edge = (Distance - (WORLD_INTERIOR_SKY_FADE_END - WORLD_INTERIOR_SKY_FADE_WIDTH)) / WORLD_INTERIOR_SKY_FADE_WIDTH;
+    float Below = (windowBottom + WORLD_INTERIOR_SKY_WINDOW_FADE - position.y) / WORLD_INTERIOR_SKY_WINDOW_FADE;
+    float Above = (position.y - (Top - WORLD_INTERIOR_SKY_WINDOW_FADE)) / WORLD_INTERIOR_SKY_WINDOW_FADE;
+    float Fade = fmaxf(Edge, fmaxf(Below, Above));
+    return (Fade < 1.0f) ? fmaxf(Fade, 0.0f) : 1.0f;
 }
 
-float WorldInterior_GetSkyVisibility(WorldInteriorHeightFunction heights, const void* context, Vector3 position,
-    Vector3 normal)
+float WorldInterior_GetSkyOverhead(WorldInteriorColumnFunction columns, const void* context,
+    const WorldInteriorSkyMap* map, float windowBottom, Vector3 position, Vector3 normal)
 {
-    float Edge = WorldInterior_GetSkyEdgeFade(position);
-    if (!(Edge < 1.0f))
+    float Fade = WorldInterior_GetSkyEdgeFade(position, windowBottom);
+    if (!(Fade < 1.0f))
     {
         return 1.0f;
     }
-    int NearOpen = 0;
-    int RingOpen = 0;
-    for (int Tap = 0; Tap < WORLD_INTERIOR_SKY_TAP_COUNT; Tap++)
+    bool IsOpen = IsOpenOverhead(columns, context, map, windowBottom, position, normal, GetBandBase(position, normal),
+        GetOwnSlice(position.y, windowBottom));
+    return IsOpen ? 1.0f : Fade;
+}
+
+float WorldInterior_GetSkyVisibility(WorldInteriorColumnFunction columns, const void* context,
+    const WorldInteriorSkyMap* map, float windowBottom, Vector3 position, Vector3 normal, float turn, int azimuthCount)
+{
+    float Fade = WorldInterior_GetSkyEdgeFade(position, windowBottom);
+    if (!(Fade < 1.0f))
     {
-        Vector2 Point = WorldInterior_GetSkyTap(position, normal, Tap);
-        float Height = heights(context, Point.x, Point.y);
-        int Open = (Height > WorldInterior_GetSkyTapReference(position, normal, Point)) ? 0 : 1;
-        if (Tap <= WORLD_INTERIOR_SKY_INNER_TAPS)
+        return 1.0f;
+    }
+    int Azimuths = ((azimuthCount >= 1) && (azimuthCount <= WORLD_INTERIOR_SKY_MAX_AZIMUTHS)) ? azimuthCount
+        : WORLD_INTERIOR_SKY_MAX_AZIMUTHS;
+    float Base = GetBandBase(position, normal);
+    // A surface facing up goes on around itself as its plane: how fast that plane rises, at its steepest.
+    bool IsSloped = normal.y > WORLD_INTERIOR_SKY_SLOPE_UP;
+    float MaxRise = IsSloped ? fminf(sqrtf(normal.x * normal.x + normal.z * normal.z) / normal.y,
+        WORLD_INTERIOR_SKY_MAX_RISE) : 0.0f;
+    float Texel = (float)(WORLD_INTERIOR_SKY_MAP_EXTENT / (double)WORLD_INTERIOR_SKY_MAP_RESOLUTION);
+    float BandStep = WORLD_INTERIOR_SKY_BAND_DEGREES * DEG2RAD;
+    // The bands' edges, as the tangents of their elevations.
+    float Tangents[WORLD_INTERIOR_SKY_BANDS + 1];
+    for (int Edge = 0; Edge <= WORLD_INTERIOR_SKY_BANDS; Edge++)
+    {
+        Tangents[Edge] = tanf((float)Edge * BandStep);
+    }
+    // The slice the surface's own height lies in, and where it lies on the map (the map's place is linear in the point:
+    // a direction's places are its own plus the distance times their change a metre).
+    int OwnSlice = GetOwnSlice(position.y, windowBottom);
+    Vector2 PlaceAt = GetMapPlace(map, position.x, position.z);
+    float WindowTop = windowBottom + (float)(WORLD_INTERIOR_SKY_SLICE_COUNT * WORLD_INTERIOR_SKY_SLICE_HEIGHT);
+    float Open = 0.0f;
+    float Total = 0.0f;
+    for (int Azimuth = 0; Azimuth < Azimuths; Azimuth++)
+    {
+        float Angle = (((float)Azimuth + turn) / (float)Azimuths) * 2.0f * PI;
+        float DirectionX = cosf(Angle);
+        float DirectionZ = sinf(Angle);
+        Vector2 PlaceAlong = Vector2Subtract(GetMapPlace(map, position.x + DirectionX, position.z + DirectionZ), PlaceAt);
+        // How fast the surface's plane rises along this direction (uphill only).
+        float Uphill = IsSloped ? fmaxf(-(normal.x * DirectionX + normal.z * DirectionZ), 0.0f) / normal.y : 0.0f;
+        // Each band's weight: its solid angle per unit of azimuth times the surface's cosine to its middle; and the
+        // tangents of the elevations its blockers span, lowest and highest (none yet).
+        float Weights[WORLD_INTERIOR_SKY_BANDS];
+        float Lowest[WORLD_INTERIOR_SKY_BANDS];
+        float Highest[WORLD_INTERIOR_SKY_BANDS];
+        unsigned int Weighted = 0U;
+        for (int Band = 0; Band < WORLD_INTERIOR_SKY_BANDS; Band++)
         {
-            NearOpen += Open;
+            float Middle = ((float)Band + 0.5f) * BandStep;
+            Vector3 Direction = { cosf(Middle) * DirectionX, sinf(Middle), cosf(Middle) * DirectionZ };
+            Weights[Band] = fmaxf(Vector3DotProduct(normal, Direction), 0.0f)
+                * (sinf((float)(Band + 1) * BandStep) - sinf((float)Band * BandStep));
+            Weighted |= (Weights[Band] > 0.0f) ? (1U << Band) : 0U;
+            Lowest[Band] = INTERIOR_NO_BLOCKER;
+            Highest[Band] = -INTERIOR_NO_BLOCKER;
         }
-        else
+        unsigned int Closed = 0U;
+        // Through the texels the direction crosses, one after another (no wall between two reads), at the level whose
+        // texels are WORLD_INTERIOR_SKY_CELL_RATIO of the distance wide: each read over the distances it spans, nearest
+        // to farthest.
+        float Nearest = WORLD_INTERIOR_SKY_MARCH_START;
+        for (int Cell = 0; (Cell < WORLD_INTERIOR_SKY_MAX_CELLS) && (Nearest < WORLD_INTERIOR_SKY_MARCH_END)
+            && ((Closed & Weighted) != Weighted); Cell++)
         {
-            RingOpen += Open;
+            int Level = WorldInterior_GetSkyLevelAt(Nearest);
+            float CellsAcross = (float)WORLD_INTERIOR_SKY_MAP_RESOLUTION / (float)(1 << Level);
+            Vector2 At = Vector2Scale(Vector2Add(PlaceAt, Vector2Scale(PlaceAlong, Nearest)), CellsAcross);
+            Vector2 Corner = { floorf(At.x), floorf(At.y) };
+            if (!(Corner.x >= 0.0f) || !(Corner.y >= 0.0f) || !(Corner.x < CellsAcross) || !(Corner.y < CellsAcross))
+            {
+                break; // off the map: nothing known beyond, open
+            }
+            // Where the direction leaves the texel: the nearer of its two far sides.
+            Vector2 Rate = Vector2Scale(PlaceAlong, CellsAcross);
+            float ExitX = ((Rate.x >= 0.0f) ? ((Corner.x + 1.0f) - At.x) : (At.x - Corner.x)) / fmaxf(fabsf(Rate.x), 1e-9f);
+            float ExitY = ((Rate.y >= 0.0f) ? ((Corner.y + 1.0f) - At.y) : (At.y - Corner.y)) / fmaxf(fabsf(Rate.y), 1e-9f);
+            float Farthest = fminf(Nearest + fminf(ExitX, ExitY), WORLD_INTERIOR_SKY_MARCH_END);
+            uint32_t Column[WORLD_INTERIOR_SKY_SLICE_WORDS];
+            columns(context, Level, (int)Corner.x, (int)Corner.y, Column);
+            float LevelTexel = Texel * (float)(1 << Level);
+            // The surface's own plane there, as high as it reaches across the texel.
+            float Plane = (Uphill * Farthest) + (MaxRise * LevelTexel * 1.41421356f);
+            // What is solid over the heights the bands still open pass there, above that plane: mostly nothing. Where
+            // the plane reaches the window's top slice, what is solid there may be the surface's own ground going on up:
+            // nothing is known.
+            int LowestBand = 0;
+            int HighestBand = 0;
+            GetBandRange(Weighted & ~Closed, &LowestBand, &HighestBand);
+            uint32_t Union[WORLD_INTERIOR_SKY_SLICE_WORDS] = { 0U, 0U, 0U, 0U };
+            if ((Base + Plane) < (WindowTop - (float)WORLD_INTERIOR_SKY_SLICE_HEIGHT))
+            {
+                WorldInterior_GetSliceRangeMask(Base + fmaxf(Nearest * Tangents[LowestBand], Plane),
+                    Base + (Farthest * Tangents[HighestBand + 1]), windowBottom, Union);
+            }
+            uint32_t Solid[WORLD_INTERIOR_SKY_SLICE_WORDS];
+            for (int Word = 0; Word < WORLD_INTERIOR_SKY_SLICE_WORDS; Word++)
+            {
+                Solid[Word] = Column[Word] & Union[Word];
+            }
+            // Its runs of solid slices, each hiding the elevations from its bottom seen from the farthest of those
+            // distances to its top seen from the nearest (a column solid at the window's top goes on up) in the bands
+            // they reach into; past the first few, the rest count as one.
+            uint32_t Starts[WORLD_INTERIOR_SKY_SLICE_WORDS];
+            uint32_t Ends[WORLD_INTERIOR_SKY_SLICE_WORDS];
+            for (int Word = 0; Word < WORLD_INTERIOR_SKY_SLICE_WORDS; Word++)
+            {
+                uint32_t Below = (Solid[Word] << 1U) | ((Word > 0) ? (Solid[Word - 1] >> 31U) : 0U);
+                uint32_t Above = (Solid[Word] >> 1U)
+                    | ((Word < WORLD_INTERIOR_SKY_SLICE_WORDS - 1) ? (Solid[Word + 1] << 31U) : 0U);
+                Starts[Word] = Solid[Word] & ~Below;
+                Ends[Word] = Solid[Word] & ~Above;
+            }
+            for (int Run = 0; (Run < WORLD_INTERIOR_SKY_MAX_RUNS) && !IsMaskEmpty(Starts); Run++)
+            {
+                int First = TakeLowestSlice(Starts);
+                int Last = TakeLowestSlice(Ends);
+                if (Run == WORLD_INTERIOR_SKY_MAX_RUNS - 1)
+                {
+                    int Ignored = 0;
+                    uint32_t All[WORLD_INTERIOR_SKY_SLICE_WORDS] = { ~0U, ~0U, ~0U, ~0U };
+                    if (!IsMaskEmpty(Ends))
+                    {
+                        FindSolidSlices(Ends, All, &Ignored, &Last);
+                    }
+                }
+                if (IsUnderfoot(Column, Last, OwnSlice))
+                {
+                    continue; // the top of what the surface stands over: no wall
+                }
+                float Bottom = ((windowBottom + ((float)First * (float)WORLD_INTERIOR_SKY_SLICE_HEIGHT)) - Base) / Farthest;
+                float Top = (Last == WORLD_INTERIOR_SKY_SLICE_COUNT - 1) ? INTERIOR_NO_BLOCKER
+                    : ((windowBottom + ((float)(Last + 1) * (float)WORLD_INTERIOR_SKY_SLICE_HEIGHT)) - Base) / Nearest;
+                for (int Band = LowestBand; Band <= HighestBand; Band++)
+                {
+                    unsigned int Bit = 1U << Band;
+                    if (((Weighted & ~Closed & Bit) == 0U) || !(Top > Tangents[Band]) || !(Bottom < Tangents[Band + 1]))
+                    {
+                        continue;
+                    }
+                    Lowest[Band] = fminf(Lowest[Band], Bottom);
+                    Highest[Band] = fmaxf(Highest[Band], Top);
+                    bool IsWhole = (Lowest[Band] <= Tangents[Band]) && (Highest[Band] >= Tangents[Band + 1]);
+                    Closed |= IsWhole ? Bit : 0U;
+                }
+            }
+            // On into the next texel, just past the side (a hair of the texel: never stuck on it).
+            Nearest = Farthest + (1e-3f * LevelTexel);
+        }
+        for (int Band = 0; Band < WORLD_INTERIOR_SKY_BANDS; Band++)
+        {
+            Total += Weights[Band];
+            Open += Weights[Band] * GetBandOpenShare(Tangents[Band], Tangents[Band + 1], Lowest[Band], Highest[Band]);
         }
     }
-    float Visibility = ((float)NearOpen / (float)(1 + WORLD_INTERIOR_SKY_INNER_TAPS))
-        * ((float)RingOpen / (float)WORLD_INTERIOR_SKY_RING_TAPS);
-    // Toward open by the edge's fade, written so the open (1) and the unfaded stay exact (the shader writes it alike).
-    return Visibility + (1.0f - Visibility) * Edge;
+    // The zenith's cap above the bands, open when nothing lies straight above: weighed as the bands are (its solid angle
+    // per unit of azimuth, every direction's), plus a floor so a surface facing down takes its openness.
+    float Cap = (float)Azimuths * (((1.0f - sinf((float)WORLD_INTERIOR_SKY_BANDS * BandStep)) * fmaxf(normal.y, 0.0f))
+        + WORLD_INTERIOR_SKY_ZENITH_FLOOR);
+    Total += Cap;
+    Open += IsOpenOverhead(columns, context, map, windowBottom, position, normal, Base, OwnSlice) ? Cap : 0.0f;
+    float Visibility = Open / Total;
+    // Toward open by the edges' fade, written so the open (1) and the unfaded stay exact (the shader writes it alike).
+    return Visibility + (1.0f - Visibility) * Fade;
 }
 
 float WorldInterior_GetSkyShare(float visibility)

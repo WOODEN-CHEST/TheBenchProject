@@ -68,6 +68,7 @@ void main()
     // Where interior lighting reads the sprite's sky and zones from: a card by its own facing; a billboard, whose quad
     // turns with the camera, as a thing standing there (facing up), so its light does not change as the camera moves.
     vec3 placeNormal = vec3(0.0, 1.0, 0.0);
+    float skyVisibility = 1.0;
     if (isLit)
     {
         vec3 v = normalize(-fragPosition); // render space: the camera at the origin
@@ -86,7 +87,14 @@ void main()
             SPRITE_METALLIC);
         vec3 pointTotal = PointLightsWrapped(n, v, fragPosition, fragPointShadowPosition, pointShadowNormal, lightWrap,
             albedo, SPRITE_F0, SPRITE_ROUGHNESS, SPRITE_METALLIC);
-        vec3 ambient = AmbientLight(light, n, fragPosition, placeNormal)*albedo*(useScreenAo ? ScreenAo() : 1.0);
+        // A card the pre-pass saw (a cutout card, a decal on its surface) takes its sky visibility; a billboard stands for
+        // a thing seen from all round (the pre-pass saw its quad facing the camera) and a blended sprite is not in it:
+        // they read what lies straight above them.
+        skyVisibility = (useScreenAo && isCard && aoMapActive && skyVisibilityOnScreen && drawInPrepass)
+            ? ScreenSkyVisibility()
+            : InteriorSkyOverhead(fragPosition, placeNormal);
+        vec3 ambient = AmbientLight(light, n, fragPosition, placeNormal, skyVisibility)*albedo
+            *(useScreenAo ? ScreenAo() : 1.0);
 
         // Reflected light goes through the eye's night vision, as the models' does.
         color = NightVisionOf(ambient + direct + pointTotal);
@@ -109,7 +117,7 @@ void main()
     color = ApplyAerialPerspective(color, fragPosition);
     if (isLit)
     {
-        color = InteriorViewColor(color, fragPosition, placeNormal);
+        color = InteriorViewColor(color, fragPosition, placeNormal, skyVisibility);
     }
     finalColor = (alphaMode == ALPHA_MODE_BLEND) ? vec4(color*alpha, alpha) : vec4(color, 1.0);
 }

@@ -5,8 +5,9 @@
 #include "wr/WRError.h"
 
 /*
- * Private header (source/): reading a small render target back to the CPU without waiting for the GPU, one of the three
- * modules of direct OpenGL calls (BUILDING.md, "Direct OpenGL calls"; GLTextureArray.h and GLDepth.h are the others).
+ * Private header (source/): reading a small render target back to the CPU without waiting for the GPU, one of the four
+ * modules of direct OpenGL calls (BUILDING.md, "Direct OpenGL calls"; GLTextureArray.h, GLDepth.h and GLSliceMap.h are
+ * the others).
  * raylib reads a texture back only by waiting until the GPU has finished everything before it (rlReadTexturePixels),
  * which would stall every frame. This copies a target into a pixel-pack buffer, fences the copy, and hands its values
  * over once the fence has passed, a frame or two later: the eye's metering (EyeAdaptation.h) needs the picture's

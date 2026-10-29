@@ -166,10 +166,12 @@ static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, 
     // Interior lighting reads a card's sky by its facing and a billboard's as a thing standing there.
     int IsCardValue = IsCard ? 1 : 0;
     float DecalOffset = sprite->IsDecal ? sprite->DecalOffset : 0.0f;
-    // The AO at the pixel is the sprite's own for a cutout sprite (when the G-buffer drew it: its shader is optional) and
-    // its surface's for a decal; behind a blended or additive sprite it belongs to something else.
+    // The AO at the pixel is the sprite's own for a cutout sprite (when the G-buffer drew it: its shader is optional, and
+    // past half its fade it is left out) and its surface's for a decal; behind a blended or additive sprite it belongs
+    // to something else.
     bool IsInAo = sprite->IsDecal
-        || (WorldRenderSprite_IsOpaqueSurface(sprite) && (self->_gbuffer._spriteShader != NULL));
+        || (WorldRenderSprite_IsOpaqueSurface(sprite) && (self->_gbuffer._spriteShader != NULL)
+            && (fade.Combined < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT));
     int UseScreenAo = (applyScreenAo && IsInAo) ? 1 : 0;
     float DitherFade = 0.0f;
     Color Tint = sprite->Tint;
@@ -189,7 +191,7 @@ static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, 
     WorldRendererCommon_SetDither(RayShader, &self->_sprites._dither, DitherFade, 0.0f, false);
     // Lit or unlit, a sprite is seen through the haze at its own multiplier, and through the zones' air.
     WorldRendererLighting_SetDrawPlace(self, RayShader, &self->_sprites._lit, sprite->Shape.Position,
-        sprite->BoundsRadius, sprite->Haze);
+        sprite->BoundsRadius, sprite->Haze, IsInAo);
     if (IsLit)
     {
         WorldRendererLighting_UploadObjectLights(self, RayShader, &self->_sprites._lit, sprite->Shape.Position,

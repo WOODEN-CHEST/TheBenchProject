@@ -87,19 +87,19 @@ void main()
     // Base reflectance: 0.04 for dielectrics, the albedo for metals.
     vec3 f0 = mix(vec3(0.04), albedo, metal);
 
-    // The sun and (at night) the moon through the air at the fragment's height, darkened by the cascades' shadow; the
-    // slope bias follows the shadow light's angle. Then the point lights, the cube-shadow light read at the fragment
+    // The sun and (at night) the moon through the air at the fragment's height, darkened by the cascades' shadow, read
+    // off the triangle's own face (what the maps hold). Then the point lights, the cube-shadow light read at the fragment
     // itself.
     SkyLightValues light = SkyLightAt(fragPosition);
-    float shadowAmount = SkyShadowAmount(fragPosition, surfaceNormal,
-        max(dot(surfaceNormal, normalize(shadowLightDirection)), 0.0));
+    float shadowAmount = FaceShadowAmount(fragPosition, FaceNormal(fragPosition, surfaceNormal));
     vec3 direct = SkyLight(light, n, v, shadowAmount, albedo, f0, rough, metal);
     vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, n, albedo, f0, rough, metal);
 
     // The sky's own light as the ambient (the sky above, the ground's bounce below, the night's light; under a roof only
     // the share of the sky the surface sees, in a room its ambient zones' light). Screen-space AO darkens ONLY this
     // ambient term (never the direct light).
-    vec3 ambient = AmbientLight(light, n, fragPosition, surfaceNormal)*albedo*occlusion*ScreenAo();
+    float skyVisibility = SkyVisibilityAt(fragPosition, surfaceNormal);
+    vec3 ambient = AmbientLight(light, n, fragPosition, surfaceNormal, skyVisibility)*albedo*occlusion*ScreenAo();
 
     vec3 emissive = emissiveColor*emissiveIntensity;
     if (hasEmissiveMap)
@@ -115,7 +115,7 @@ void main()
 
     // The haze in front of it (aerial perspective, the ground haze), then interior lighting's debug view while it is on.
     color = ApplyAerialPerspective(color, fragPosition);
-    color = InteriorViewColor(color, fragPosition, surfaceNormal);
+    color = InteriorViewColor(color, fragPosition, surfaceNormal, skyVisibility);
 
     // The fade is tested last, after every derivative and mipmapped fetch above, so those stay defined for the pixels
     // that are drawn.

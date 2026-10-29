@@ -15,26 +15,35 @@
 
 
 // Types.
-/* A stand-in for the sky's visibility map: the topmost surface's height at a point of the ground plane, from boxes
- * (each a footprint and a top) over a ground (NaN: nothing below them). */
-typedef struct InteriorHeightBoxStruct
+/* A stand-in for the sky's occupancy volume: closed boxes (each a footprint and a span of heights) over an optional
+ * ground sheet (its height rising by GroundSlope a metre along +X), voxelized as the renderer draws the volume: each
+ * surface crossing a texel's column toggles the slices whose centre lies below it and a box's surface sets the slice it
+ * passes through (the ground's, as the terrain's, does not), each box's toggles its own (the renderer's layers keep
+ * overlapping things apart), ORed together. */
+typedef struct InteriorVolumeBoxStruct
 {
     float MinX;
     float MaxX;
+    float MinY;
+    float MaxY;
     float MinZ;
     float MaxZ;
-    float Top;
-} InteriorHeightBox;
+} InteriorVolumeBox;
 
-typedef struct InteriorHeightsStruct
+typedef struct InteriorVolumeStruct
 {
-    const InteriorHeightBox* Boxes;
+    const InteriorVolumeBox* Boxes;
     size_t BoxCount;
-    /** The ground's height, or NaN for none. */
+    /** Whether a ground sheet lies under them, its height at X = 0, and its rise a metre along +X. */
+    bool HasGround;
     float Ground;
-    /** A slope of the ground: its height rises by this per metre along +X. */
     float GroundSlope;
-} InteriorHeights;
+    /** The map and its window, the stand-in's own (around the camera at the origin unless set otherwise). */
+    WorldInteriorSkyMap Map;
+    float WindowBottom;
+    /** The map's clip space -> render space, for level-0 texels' centres. */
+    Matrix ClipToRender;
+} InteriorVolume;
 
 
 // Static functions.
@@ -48,21 +57,103 @@ static bool IsNearVector(Vector3 a, Vector3 b)
     return IsNear(a.x, b.x) && IsNear(a.y, b.y) && IsNear(a.z, b.z);
 }
 
-/* The topmost height of the stand-in at (x, z). */
-static float GetHeight(const void* context, float x, float z)
+/* A volume of these boxes, with a flat ground at 0 or none, around a camera at the origin. */
+static InteriorVolume MakeVolume(const InteriorVolumeBox* boxes, size_t boxCount, bool hasGround)
 {
-    const InteriorHeights* Heights = context;
-    float Top = isnan(Heights->Ground) ? NAN : Heights->Ground + Heights->GroundSlope * x;
-    for (size_t Index = 0U; Index < Heights->BoxCount; Index++)
+    InteriorVolume Volume = { .Boxes = boxes, .BoxCount = boxCount, .HasGround = hasGround, .Ground = 0.0f,
+        .GroundSlope = 0.0f };
+    Vector3Double Origin = { 0.0, 0.0, 0.0 };
+    Volume.Map = WorldInterior_GetSkyMap(Origin);
+    Volume.WindowBottom = WorldInterior_GetSkyWindowBottom(Origin);
+    Volume.ClipToRender = MatrixInvert(Volume.Map.ViewProjection);
+    return Volume;
+}
+
+/* Toggles a surface's parity slices into a column and, given a presence column (a model's surface, not the terrain's),
+ * sets its slice. */
+static void AddSurface(float height, float windowBottom, uint32_t* parity, uint32_t* presence)
+{
+    uint32_t Toggled[WORLD_INTERIOR_SKY_SLICE_WORDS];
+    uint32_t Passed[WORLD_INTERIOR_SKY_SLICE_WORDS];
+    WorldInterior_GetSliceParityMask(height, windowBottom, Toggled);
+    WorldInterior_GetSlicePresenceMask(height, windowBottom, Passed);
+    for (int Word = 0; Word < WORLD_INTERIOR_SKY_SLICE_WORDS; Word++)
     {
-        const InteriorHeightBox* Box = &Heights->Boxes[Index];
-        if ((x >= Box->MinX) && (x <= Box->MaxX) && (z >= Box->MinZ) && (z <= Box->MaxZ)
-            && (isnan(Top) || (Box->Top > Top)))
+        parity[Word] ^= Toggled[Word];
+        if (presence != NULL)
         {
-            Top = Box->Top;
+            presence[Word] |= Passed[Word];
         }
     }
-    return Top;
+}
+
+/* The stand-in's level-0 column at the centre of a texel. */
+static void GetBaseColumn(const InteriorVolume* volume, int x, int y, uint32_t* outColumn)
+{
+    float Resolution = (float)WORLD_INTERIOR_SKY_MAP_RESOLUTION;
+    Vector3 Clip = { (((float)x + 0.5f) / Resolution) * 2.0f - 1.0f, (((float)y + 0.5f) / Resolution) * 2.0f - 1.0f,
+        0.0f };
+    Vector3 Center = Vector3Transform(Clip, volume->ClipToRender);
+    uint32_t Union[WORLD_INTERIOR_SKY_SLICE_WORDS] = { 0U };
+    uint32_t Presence[WORLD_INTERIOR_SKY_SLICE_WORDS] = { 0U };
+    if (volume->HasGround)
+    {
+        AddSurface(volume->Ground + volume->GroundSlope * Center.x, volume->WindowBottom, Union, NULL);
+    }
+    for (size_t Index = 0U; Index < volume->BoxCount; Index++)
+    {
+        const InteriorVolumeBox* Box = &volume->Boxes[Index];
+        if ((Center.x >= Box->MinX) && (Center.x <= Box->MaxX) && (Center.z >= Box->MinZ) && (Center.z <= Box->MaxZ))
+        {
+            uint32_t Parity[WORLD_INTERIOR_SKY_SLICE_WORDS] = { 0U };
+            AddSurface(Box->MaxY, volume->WindowBottom, Parity, Presence);
+            AddSurface(Box->MinY, volume->WindowBottom, Parity, Presence);
+            for (int Word = 0; Word < WORLD_INTERIOR_SKY_SLICE_WORDS; Word++)
+            {
+                Union[Word] |= Parity[Word];
+            }
+        }
+    }
+    for (int Word = 0; Word < WORLD_INTERIOR_SKY_SLICE_WORDS; Word++)
+    {
+        outColumn[Word] = Union[Word] | Presence[Word];
+    }
+}
+
+/* The stand-in's column at a texel of a level: the union of the level-0 columns under it (WorldInteriorColumnFunction). */
+static void GetColumn(const void* context, int level, int x, int y, uint32_t* outColumn)
+{
+    const InteriorVolume* Volume = context;
+    for (int Word = 0; Word < WORLD_INTERIOR_SKY_SLICE_WORDS; Word++)
+    {
+        outColumn[Word] = 0U;
+    }
+    int Side = 1 << level;
+    for (int Row = y * Side; Row < (y + 1) * Side; Row++)
+    {
+        for (int Column = x * Side; Column < (x + 1) * Side; Column++)
+        {
+            uint32_t Base[WORLD_INTERIOR_SKY_SLICE_WORDS];
+            GetBaseColumn(Volume, Column, Row, Base);
+            for (int Word = 0; Word < WORLD_INTERIOR_SKY_SLICE_WORDS; Word++)
+            {
+                outColumn[Word] |= Base[Word];
+            }
+        }
+    }
+}
+
+/* A surface's visibility in the stand-in, its march unturned in the most directions. */
+static float GetVisibility(const InteriorVolume* volume, Vector3 position, Vector3 normal)
+{
+    return WorldInterior_GetSkyVisibility(GetColumn, volume, &volume->Map, volume->WindowBottom, position, normal, 0.0f,
+        WORLD_INTERIOR_SKY_MAX_AZIMUTHS);
+}
+
+/* A surface's visibility in the stand-in as a lit shader reads it without the pre-pass: what lies straight above. */
+static float GetOverhead(const InteriorVolume* volume, Vector3 position, Vector3 normal)
+{
+    return WorldInterior_GetSkyOverhead(GetColumn, volume, &volume->Map, volume->WindowBottom, position, normal);
 }
 
 /* A box zone in render space, axis-aligned, with its own light. */
@@ -433,116 +524,372 @@ static void TheSkyMapStandsOnItsTexelGrid(TestRun* run)
     }
 }
 
-/* A surface's taps lie around the place it faces (the point on flat ground, the ring's radius in front of a wall), the
- * inner ring close, the outer one further; the height a tap must be topped by is the surface's own or its tangent
- * plane's, plus a bias by its facing (the full one facing up, a small one upright), and just below its own facing down. */
-static void SkyTapsLieAroundTheFacedPlace(TestRun* run)
+/* The window starts on the slices' grid below the camera (whole slices from the world's height 0, far out too); a surface
+ * toggles the slices whose centre lies below it and passes through the slice it lies in (above the window, its top
+ * one); a range of heights takes the slices it passes through, the top one wherever it reaches above the window, none
+ * below it. */
+static void TheSlicesFollowTheWindow(TestRun* run)
 {
-    Vector3 Floor = { 1.0f, 0.5f, -2.0f };
-    Vector3 Up = { 0.0f, 1.0f, 0.0f };
-    Vector2 Center = WorldInterior_GetSkyTap(Floor, Up, 0);
-    Vector2 Inner = WorldInterior_GetSkyTap(Floor, Up, 1);
-    Vector2 Outer = WorldInterior_GetSkyTap(Floor, Up, 1 + WORLD_INTERIOR_SKY_INNER_TAPS);
-    TEST_CHECK(run, (Center.x == 1.0f) && (Center.y == -2.0f)
-        && IsNear(Vector2Distance(Inner, Center), WORLD_INTERIOR_SKY_INNER_RADIUS)
-        && IsNear(Outer.x, 1.0f + WORLD_INTERIOR_SKY_RING_RADIUS) && IsNear(Outer.y, -2.0f));
-    // A tap out of range counts as the centre.
-    Vector2 Wrong = WorldInterior_GetSkyTap(Floor, Up, WORLD_INTERIOR_SKY_TAP_COUNT);
-    TEST_CHECK(run, (Wrong.x == Center.x) && (Wrong.y == Center.y));
-    // A wall facing -Z: its place lies the ring's radius in front of it.
-    Vector3 Facade = { 0.0f, 1.0f, 0.0f };
-    Vector3 South = { 0.0f, 0.0f, -1.0f };
-    Vector2 FacadeCenter = WorldInterior_GetSkyTap(Facade, South, 0);
-    TEST_CHECK(run, IsNear(FacadeCenter.x, 0.0f) && IsNear(FacadeCenter.y, -WORLD_INTERIOR_SKY_RING_RADIUS));
-    // The references: flat ground, an upright wall, a ceiling.
-    TEST_CHECK(run, IsNear(WorldInterior_GetSkyTapReference(Floor, Up, Outer), 0.5f + WORLD_INTERIOR_SKY_BIAS));
-    TEST_CHECK(run, IsNear(WorldInterior_GetSkyTapReference(Facade, South, FacadeCenter),
-        1.0f + WORLD_INTERIOR_SKY_UPRIGHT_BIAS));
-    TEST_CHECK(run, IsNear(WorldInterior_GetSkyTapReference(Floor, (Vector3){ 0.0f, -1.0f, 0.0f }, Center),
-        0.5f - WORLD_INTERIOR_SKY_SELF));
-    // A 30-degree slope rising toward -X: 1 m uphill its tangent plane lies tan(30) higher, plus the bias between the
-    // upright one and the full one by the normal's upward part; downhill the surface's own height.
-    Vector3 Slope = { 0.5f, 0.8660254f, 0.0f };
-    float Bias = WORLD_INTERIOR_SKY_UPRIGHT_BIAS * (1.0f - 0.8660254f) + WORLD_INTERIOR_SKY_BIAS * 0.8660254f;
-    TEST_CHECK(run, IsNear(WorldInterior_GetSkyTapReference(Floor, Slope, (Vector2){ 0.0f, -2.0f }),
-        0.5f + 0.5773503f + Bias));
-    TEST_CHECK(run, IsNear(WorldInterior_GetSkyTapReference(Floor, Slope, (Vector2){ 2.0f, -2.0f }), 0.5f + Bias));
+    const double Slice = WORLD_INTERIOR_SKY_SLICE_HEIGHT;
+    const double Heights[] = { 0.0, 1.7, -3.13, 4000000.0 + 0.3 };
+    for (size_t Index = 0U; Index < (sizeof(Heights) / sizeof(Heights[0])); Index++)
+    {
+        Vector3Double Eye = { 5.0, Heights[Index], -2.0 };
+        double Bottom = Eye.Y + (double)WorldInterior_GetSkyWindowBottom(Eye);
+        double Slices = Bottom / Slice;
+        TEST_CHECK(run, (fabs(Slices - round(Slices)) < 1e-3) && (Bottom <= Eye.Y - WORLD_INTERIOR_SKY_WINDOW_BELOW + 1e-3)
+            && (Bottom > Eye.Y - WORLD_INTERIOR_SKY_WINDOW_BELOW - Slice - 1e-3));
+    }
+    // A window from -12: slice k spans [-12 + k / 4, -12 + (k + 1) / 4).
+    float Bottom = -12.0f;
+    uint32_t Mask[WORLD_INTERIOR_SKY_SLICE_WORDS];
+    // At 0.2 the slices up to 48 have their centres below it (48's at 0.125): bits 0 to 48; at 0.05, below 48's centre,
+    // bits 0 to 47.
+    WorldInterior_GetSliceParityMask(0.2f, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] == 0xFFFFFFFFU) && (Mask[1] == 0x0001FFFFU) && (Mask[2] == 0U) && (Mask[3] == 0U));
+    WorldInterior_GetSliceParityMask(0.05f, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] == 0xFFFFFFFFU) && (Mask[1] == 0x0000FFFFU) && (Mask[2] == 0U) && (Mask[3] == 0U));
+    WorldInterior_GetSlicePresenceMask(0.2f, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] == 0U) && (Mask[1] == 0x00010000U) && (Mask[2] == 0U) && (Mask[3] == 0U));
+    // Below the window nothing; above it every slice toggled and the top one passed through (what lies above keeps the
+    // sky out of the column too).
+    WorldInterior_GetSliceParityMask(-20.0f, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] | Mask[1] | Mask[2] | Mask[3]) == 0U);
+    WorldInterior_GetSlicePresenceMask(-20.0f, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] | Mask[1] | Mask[2] | Mask[3]) == 0U);
+    WorldInterior_GetSliceParityMask(100.0f, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] & Mask[1] & Mask[2] & Mask[3]) == 0xFFFFFFFFU);
+    WorldInterior_GetSlicePresenceMask(100.0f, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] == 0U) && (Mask[1] == 0U) && (Mask[2] == 0U) && (Mask[3] == 0x80000000U));
+    WorldInterior_GetSlicePresenceMask(NAN, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] | Mask[1] | Mask[2] | Mask[3]) == 0U);
+    // A slab thinner than a slice: its two faces toggle the same slices, it passes through one.
+    uint32_t Parity[WORLD_INTERIOR_SKY_SLICE_WORDS] = { 0U };
+    uint32_t Presence[WORLD_INTERIOR_SKY_SLICE_WORDS] = { 0U };
+    AddSurface(0.83f, Bottom, Parity, Presence);
+    AddSurface(0.77f, Bottom, Parity, Presence);
+    TEST_CHECK(run, ((Parity[0] | Parity[1] | Parity[2] | Parity[3]) == 0U) && (Presence[1] == (1U << 19U)));
+    // Ranges: across two words; reaching above the window (its top slice); wholly above; below; broken.
+    WorldInterior_GetSliceRangeMask(-4.2f, -3.9f, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] == 0x80000000U) && (Mask[1] == 0x00000001U) && (Mask[2] == 0U) && (Mask[3] == 0U));
+    WorldInterior_GetSliceRangeMask(19.7f, INFINITY, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] == 0U) && (Mask[1] == 0U) && (Mask[2] == 0U) && (Mask[3] == 0xC0000000U));
+    WorldInterior_GetSliceRangeMask(30.0f, 31.0f, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] == 0U) && (Mask[1] == 0U) && (Mask[2] == 0U) && (Mask[3] == 0x80000000U));
+    WorldInterior_GetSliceRangeMask(-30.0f, -12.5f, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] | Mask[1] | Mask[2] | Mask[3]) == 0U);
+    WorldInterior_GetSliceRangeMask(1.0f, 0.5f, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] | Mask[1] | Mask[2] | Mask[3]) == 0U);
+    WorldInterior_GetSliceRangeMask(NAN, 0.5f, Bottom, Mask);
+    TEST_CHECK(run, (Mask[0] | Mask[1] | Mask[2] | Mask[3]) == 0U);
 }
 
-/* The visibility on stand-ins for the map: the open field sees all of the sky (exactly 1); a room's floor, its corner and
- * its ceiling see none of it (the sky beyond its walls does not leak in); a facade under eaves keeps most of it; the
- * ground beside a building keeps part; a slope's uphill side and a curb are no roof. */
-static void SkyVisibilityReadsTheMapAroundTheFacedPlace(TestRun* run)
+/* The march coarsens with the distance: at each distance the finest level whose texels are the ratio of it wide (level 0
+ * near, the coarsest far), never finer as it goes out; it starts past the surface's own level-0 texel; texels land where
+ * the map puts the point, coarser levels by whole halvings, off the map nothing. */
+static void TheMarchCoarsensWithTheDistance(TestRun* run)
 {
-    Vector3 Up = { 0.0f, 1.0f, 0.0f };
-    InteriorHeights Open = { .Boxes = NULL, .BoxCount = 0U, .Ground = 0.0f, .GroundSlope = 0.0f };
-    TEST_CHECK(run, WorldInterior_GetSkyVisibility(GetHeight, &Open, (Vector3){ 3.0f, 0.0f, 4.0f }, Up) == 1.0f);
-    InteriorHeights Nothing = { .Boxes = NULL, .BoxCount = 0U, .Ground = NAN, .GroundSlope = 0.0f };
-    TEST_CHECK(run, WorldInterior_GetSkyVisibility(GetHeight, &Nothing, (Vector3){ 3.0f, 0.0f, 4.0f }, Up) == 1.0f);
+    const float Texel = (float)(WORLD_INTERIOR_SKY_MAP_EXTENT / (double)WORLD_INTERIOR_SKY_MAP_RESOLUTION);
+    TEST_CHECK(run, (WORLD_INTERIOR_SKY_MARCH_START > Texel * 1.4143f) && (WORLD_INTERIOR_SKY_MARCH_END
+        < (float)(WORLD_INTERIOR_SKY_MAP_EXTENT * 0.5)));
+    int Previous = 0;
+    for (float Distance = WORLD_INTERIOR_SKY_MARCH_START; Distance < WORLD_INTERIOR_SKY_MARCH_END; Distance *= 1.1f)
+    {
+        int Level = WorldInterior_GetSkyLevelAt(Distance);
+        float LevelTexel = Texel * (float)(1 << Level);
+        bool IsTheFinest = (Level == 0) || ((LevelTexel * 0.5f) < WORLD_INTERIOR_SKY_CELL_RATIO * Distance);
+        bool IsWideEnough = (Level == WORLD_INTERIOR_SKY_LEVEL_COUNT - 1)
+            || (LevelTexel >= WORLD_INTERIOR_SKY_CELL_RATIO * Distance * 0.9999f);
+        TEST_CHECK(run, (Level >= Previous) && (Level < WORLD_INTERIOR_SKY_LEVEL_COUNT) && IsTheFinest && IsWideEnough);
+        Previous = Level;
+    }
+    TEST_CHECK(run, (WorldInterior_GetSkyLevelAt(0.0f) == 0) && (WorldInterior_GetSkyLevelAt(-1.0f) == 0)
+        && (WorldInterior_GetSkyLevelAt(NAN) == 0)
+        && (WorldInterior_GetSkyLevelAt(1.0e6f) == WORLD_INTERIOR_SKY_LEVEL_COUNT - 1));
 
-    // A building: a 4 x 4 m room (inside x, z in [-2, 2]) under a roof 3 m up whose eaves reach 0.5 m past its 0.2 m
-    // walls; the walls and the roof are one footprint in the map.
-    InteriorHeightBox Building[1] = { { .MinX = -2.7f, .MaxX = 2.7f, .MinZ = -2.7f, .MaxZ = 2.7f, .Top = 3.2f } };
-    InteriorHeights Town = { .Boxes = Building, .BoxCount = 1U, .Ground = 0.0f, .GroundSlope = 0.0f };
-    TEST_CHECK(run, WorldInterior_GetSkyVisibility(GetHeight, &Town, (Vector3){ 0.0f, 0.0f, 0.0f }, Up) == 0.0f);
-    TEST_CHECK(run, WorldInterior_GetSkyVisibility(GetHeight, &Town, (Vector3){ 1.9f, 0.0f, 1.9f }, Up) == 0.0f);
-    TEST_CHECK(run, WorldInterior_GetSkyVisibility(GetHeight, &Town, (Vector3){ 1.0f, 3.0f, 1.9f },
-        (Vector3){ 0.0f, -1.0f, 0.0f }) == 0.0f);
-    // The inside of a wall, facing in, near the ceiling: its place lies inside.
-    TEST_CHECK(run, WorldInterior_GetSkyVisibility(GetHeight, &Town, (Vector3){ 2.0f, 2.95f, 0.0f },
-        (Vector3){ -1.0f, 0.0f, 0.0f }) == 0.0f);
-    // The facade under the eaves, facing +X: its place lies in front of them, open; only the ring's taps that reach back
-    // under the roof are covered (three in the eight: at the wall and beside it).
-    float Facade = WorldInterior_GetSkyVisibility(GetHeight, &Town, (Vector3){ 2.2f, 1.5f, 0.0f },
-        (Vector3){ 1.0f, 0.0f, 0.0f });
-    TEST_CHECK(run, Facade == 5.0f / 8.0f);
-    // The ground 1 m beside the building: open itself, part of its ring under the roof.
-    float Beside = WorldInterior_GetSkyVisibility(GetHeight, &Town, (Vector3){ 3.7f, 0.0f, 0.0f }, Up);
-    TEST_CHECK(run, (Beside > 0.5f) && (Beside < 1.0f));
-    // Under the eaves, 0.3 m in from their edge: the place itself is under the roof.
-    TEST_CHECK(run, WorldInterior_GetSkyVisibility(GetHeight, &Town, (Vector3){ 2.4f, 0.0f, 0.0f }, Up) < 0.5f);
-
-    // A 30-degree slope, rising toward +X: its own ground is no roof, uphill or down.
-    InteriorHeights Hill = { .Boxes = NULL, .BoxCount = 0U, .Ground = 0.0f, .GroundSlope = 0.5773503f };
-    Vector3 HillNormal = { -0.5f, 0.8660254f, 0.0f };
-    TEST_CHECK(run, WorldInterior_GetSkyVisibility(GetHeight, &Hill, (Vector3){ 4.0f, 4.0f * 0.5773503f, 1.0f },
-        HillNormal) == 1.0f);
-    // A curb 0.1 m high under three of a pavement point's ring taps: no roof; a wall there 0.3 m high is one.
-    InteriorHeightBox Curb[1] = { { .MinX = 1.0f, .MaxX = 1.6f, .MinZ = -10.0f, .MaxZ = 10.0f, .Top = 0.1f } };
-    InteriorHeights Street = { .Boxes = Curb, .BoxCount = 1U, .Ground = 0.0f, .GroundSlope = 0.0f };
-    TEST_CHECK(run, WorldInterior_GetSkyVisibility(GetHeight, &Street, (Vector3){ 0.0f, 0.0f, 0.0f }, Up) == 1.0f);
-    Curb[0].Top = 0.3f;
-    TEST_CHECK(run, WorldInterior_GetSkyVisibility(GetHeight, &Street, (Vector3){ 0.0f, 0.0f, 0.0f }, Up) == 5.0f / 8.0f);
+    InteriorVolume Volume = MakeVolume(NULL, 0U, true);
+    int X = 0;
+    int Y = 0;
+    int CoarseX = 0;
+    int CoarseY = 0;
+    TEST_CHECK(run, WorldInterior_GetSkyTexel(&Volume.Map, 3.1f, -7.4f, 0, &X, &Y)
+        && WorldInterior_GetSkyTexel(&Volume.Map, 3.1f, -7.4f, 3, &CoarseX, &CoarseY)
+        && (CoarseX == (X >> 3)) && (CoarseY == (Y >> 3)));
+    // A texel's centre maps back to that texel.
+    float Resolution = (float)WORLD_INTERIOR_SKY_MAP_RESOLUTION;
+    Vector3 Center = Vector3Transform((Vector3){ (((float)X + 0.5f) / Resolution) * 2.0f - 1.0f,
+        (((float)Y + 0.5f) / Resolution) * 2.0f - 1.0f, 0.0f }, Volume.ClipToRender);
+    int Again = 0;
+    int AgainY = 0;
+    TEST_CHECK(run, WorldInterior_GetSkyTexel(&Volume.Map, Center.x, Center.z, 0, &Again, &AgainY) && (Again == X)
+        && (AgainY == Y) && (fabsf(Center.x - 3.1f) < Texel) && (fabsf(Center.z + 7.4f) < Texel));
+    TEST_CHECK(run, !WorldInterior_GetSkyTexel(&Volume.Map, 60.0f, 0.0f, 0, &X, &Y)
+        && !WorldInterior_GetSkyTexel(&Volume.Map, 0.0f, -60.0f, 2, &X, &Y));
 }
 
-/* Toward the map's edge the visibility fades to open: none within the fade's start (exactly), half way through it half
- * the way to open, open from its end (inside the map's box with every tap) and for a broken position; the open stays
- * exactly open throughout. */
-static void SkyVisibilityFadesOutTowardTheMapsEdge(TestRun* run)
+/* The visibility through stand-ins for the volume: the open field (and no volume at all) sees all of the sky (exactly 1);
+ * a closed room's floor, its corner and its ceiling none of it; its floor by an open doorway the sky below the lintel;
+ * the ground under a carport the sky below its roof's edge; the foot of a wall about half; a crate a metre away a sliver;
+ * a 30-degree slope and a curb no roof; a thin table top is a roof; an upright face's foot, in the ground's slice, sees
+ * all of it in the open, and a face just under a thin roof little; a roof above the window still covers. */
+static void SkyVisibilityLooksAroundThroughTheVolume(TestRun* run)
 {
+    Vector3 Up = { 0.0f, 1.0f, 0.0f };
+    Vector3 Down = { 0.0f, -1.0f, 0.0f };
+    InteriorVolume Open = MakeVolume(NULL, 0U, true);
+    TEST_CHECK(run, GetVisibility(&Open, (Vector3){ 3.0f, 0.0f, 4.0f }, Up) == 1.0f);
+    TEST_CHECK(run, GetVisibility(&Open, (Vector3){ 3.0f, 1.5f, 4.0f }, (Vector3){ 1.0f, 0.0f, 0.0f }) == 1.0f);
+    InteriorVolume Nothing = MakeVolume(NULL, 0U, false);
+    TEST_CHECK(run, GetVisibility(&Nothing, (Vector3){ 3.0f, 0.0f, 4.0f }, Up) == 1.0f);
+
+    // A room inside x and z in [-2, 2]: walls 0.2 m thick and 3 m high, a roof from 3 to 3.2 m over them.
+    InteriorVolumeBox Room[5] =
+    {
+        { .MinX = -2.2f, .MaxX = -2.0f, .MinY = 0.0f, .MaxY = 3.0f, .MinZ = -2.2f, .MaxZ = 2.2f },
+        { .MinX = 2.0f, .MaxX = 2.2f, .MinY = 0.0f, .MaxY = 3.0f, .MinZ = -2.2f, .MaxZ = 2.2f },
+        { .MinX = -2.2f, .MaxX = 2.2f, .MinY = 0.0f, .MaxY = 3.0f, .MinZ = -2.2f, .MaxZ = -2.0f },
+        { .MinX = -2.2f, .MaxX = 2.2f, .MinY = 0.0f, .MaxY = 3.0f, .MinZ = 2.0f, .MaxZ = 2.2f },
+        { .MinX = -2.2f, .MaxX = 2.2f, .MinY = 3.0f, .MaxY = 3.2f, .MinZ = -2.2f, .MaxZ = 2.2f }
+    };
+    InteriorVolume Closed = MakeVolume(Room, 5U, true);
+    TEST_CHECK(run, GetVisibility(&Closed, (Vector3){ 0.0f, 0.0f, 0.0f }, Up) == 0.0f);
+    TEST_CHECK(run, GetVisibility(&Closed, (Vector3){ 1.85f, 0.0f, 1.85f }, Up) == 0.0f);
+    TEST_CHECK(run, GetVisibility(&Closed, (Vector3){ 1.0f, 3.0f, 0.5f }, Down) == 0.0f);
+    TEST_CHECK(run, GetVisibility(&Closed, (Vector3){ -2.0f, 1.5f, 0.0f }, (Vector3){ 1.0f, 0.0f, 0.0f }) == 0.0f);
+
+    // The same room with a doorway 1 m wide and 2.1 m high in its +Z wall: the floor inside by it sees the street's sky
+    // below the lintel, deep inside it does not.
+    InteriorVolumeBox Doorway[7] =
+    {
+        Room[0], Room[1], Room[2], Room[4],
+        { .MinX = -2.2f, .MaxX = -0.5f, .MinY = 0.0f, .MaxY = 3.0f, .MinZ = 2.0f, .MaxZ = 2.2f },
+        { .MinX = 0.5f, .MaxX = 2.2f, .MinY = 0.0f, .MaxY = 3.0f, .MinZ = 2.0f, .MaxZ = 2.2f },
+        { .MinX = -0.5f, .MaxX = 0.5f, .MinY = 2.1f, .MaxY = 3.0f, .MinZ = 2.0f, .MaxZ = 2.2f }
+    };
+    InteriorVolume Door = MakeVolume(Doorway, 7U, true);
+    float ByTheDoor = GetVisibility(&Door, (Vector3){ 0.0f, 0.0f, 1.6f }, Up);
+    TEST_CHECK(run, (ByTheDoor > 0.04f) && (ByTheDoor < 0.4f));
+    TEST_CHECK(run, GetVisibility(&Door, (Vector3){ 0.0f, 0.0f, -1.5f }, Up) < 0.5f * ByTheDoor);
+    // The door's own threshold, half in the doorway, sees more still.
+    TEST_CHECK(run, GetVisibility(&Door, (Vector3){ 0.0f, 0.0f, 2.1f }, Up) > ByTheDoor);
+
+    // A carport: a roof 2.5 to 2.7 m up, 4 m across, on four thin posts. Under it the sky below its edge shows.
+    InteriorVolumeBox Carport[5] =
+    {
+        { .MinX = -2.0f, .MaxX = 2.0f, .MinY = 2.5f, .MaxY = 2.7f, .MinZ = -2.0f, .MaxZ = 2.0f },
+        { .MinX = -2.0f, .MaxX = -1.9f, .MinY = 0.0f, .MaxY = 2.5f, .MinZ = -2.0f, .MaxZ = -1.9f },
+        { .MinX = 1.9f, .MaxX = 2.0f, .MinY = 0.0f, .MaxY = 2.5f, .MinZ = -2.0f, .MaxZ = -1.9f },
+        { .MinX = -2.0f, .MaxX = -1.9f, .MinY = 0.0f, .MaxY = 2.5f, .MinZ = 1.9f, .MaxZ = 2.0f },
+        { .MinX = 1.9f, .MaxX = 2.0f, .MinY = 0.0f, .MaxY = 2.5f, .MinZ = 1.9f, .MaxZ = 2.0f }
+    };
+    InteriorVolume Shelter = MakeVolume(Carport, 5U, true);
+    float UnderCarport = GetVisibility(&Shelter, (Vector3){ 0.0f, 0.0f, 0.0f }, Up);
+    TEST_CHECK(run, (UnderCarport > 0.08f) && (UnderCarport < 0.75f)
+        && (UnderCarport > GetVisibility(&Closed, (Vector3){ 0.0f, 0.0f, 0.0f }, Up) + 0.08f));
+
+    // A long wall 3 m high: its foot, 0.5 m away, sees about half of the sky.
+    InteriorVolumeBox Wall[1] = { { .MinX = -20.0f, .MaxX = 20.0f, .MinY = 0.0f, .MaxY = 3.0f, .MinZ = 1.0f,
+        .MaxZ = 1.2f } };
+    InteriorVolume Street = MakeVolume(Wall, 1U, true);
+    float Foot = GetVisibility(&Street, (Vector3){ 0.0f, 0.0f, 0.5f }, Up);
+    TEST_CHECK(run, (Foot > 0.35f) && (Foot < 0.7f));
+
+    // A crate 0.4 m high a metre away hides a sliver; a curb 0.1 m high under the bands' lift hides nothing.
+    InteriorVolumeBox Crate[1] = { { .MinX = 0.8f, .MaxX = 1.2f, .MinY = 0.0f, .MaxY = 0.4f, .MinZ = -0.2f,
+        .MaxZ = 0.2f } };
+    InteriorVolume Yard = MakeVolume(Crate, 1U, true);
+    float BesideCrate = GetVisibility(&Yard, (Vector3){ 0.0f, 0.0f, 0.0f }, Up);
+    TEST_CHECK(run, (BesideCrate < 1.0f) && (BesideCrate > 0.95f));
+    InteriorVolumeBox Curb[1] = { { .MinX = 1.0f, .MaxX = 1.6f, .MinY = 0.0f, .MaxY = 0.1f, .MinZ = -10.0f,
+        .MaxZ = 10.0f } };
+    InteriorVolume Pavement = MakeVolume(Curb, 1U, true);
+    TEST_CHECK(run, GetVisibility(&Pavement, (Vector3){ 0.0f, 0.0f, 0.0f }, Up) == 1.0f);
+
+    // A 30-degree slope rising toward +X: its own ground is no roof, uphill or down (a coarse texel holds it at its
+    // highest corner: the bands are tested above the slope's plane across it).
+    InteriorVolume Hill = MakeVolume(NULL, 0U, true);
+    Hill.GroundSlope = 0.5773503f;
+    TEST_CHECK(run, GetVisibility(&Hill, (Vector3){ 4.0f, 4.0f * 0.5773503f, 1.0f },
+        (Vector3){ -0.5f, 0.8660254f, 0.0f }) == 1.0f);
+
+    // A table top 6 cm thick, inside one slice: the floor under it is roofed.
+    InteriorVolumeBox Table[1] = { { .MinX = -0.8f, .MaxX = 0.8f, .MinY = 0.77f, .MaxY = 0.83f, .MinZ = -0.4f,
+        .MaxZ = 0.4f } };
+    InteriorVolume Desk = MakeVolume(Table, 1U, true);
+    float UnderTable = GetVisibility(&Desk, (Vector3){ 0.0f, 0.0f, 0.0f }, Up);
+    TEST_CHECK(run, (UnderTable < 0.9f) && (UnderTable > 0.2f));
+
+    // A crate's side and an upright face in the open, from their foot (in the ground's slice: the ground is what they
+    // stand over, no wall) to their top, see all of the sky.
+    InteriorVolumeBox Cube[1] = { { .MinX = 0.0f, .MaxX = 0.5f, .MinY = 0.0f, .MaxY = 0.5f, .MinZ = 0.0f, .MaxZ = 0.5f } };
+    InteriorVolume Lone = MakeVolume(Cube, 1U, true);
+    for (float Height = 0.01f; Height < 0.5f; Height += 0.07f)
+    {
+        TEST_CHECK(run, GetVisibility(&Lone, (Vector3){ 0.5f, Height, 0.25f }, (Vector3){ 1.0f, 0.0f, 0.0f }) == 1.0f);
+        TEST_CHECK(run, GetVisibility(&Open, (Vector3){ 3.0f, Height, 4.0f }, (Vector3){ 0.6f, 0.0f, 0.8f }) == 1.0f);
+    }
+    // Ground 0.15 m up fills its slice (above the slice's centre): an upright face's foot just above it, its bands
+    // starting in that slice, still sees all of the sky, and so does the read without the pre-pass.
+    InteriorVolume Raised = MakeVolume(NULL, 0U, true);
+    Raised.Ground = 0.15f;
+    TEST_CHECK(run, (GetVisibility(&Raised, (Vector3){ 3.0f, 0.16f, 4.0f }, (Vector3){ 1.0f, 0.0f, 0.0f }) == 1.0f)
+        && (GetOverhead(&Raised, (Vector3){ 3.0f, 0.16f, 4.0f }, (Vector3){ 1.0f, 0.0f, 0.0f }) == 1.0f));
+    // A shed's thin roof (inside one slice) on one wall: the wall's face just under it, in the roof's slice, is covered
+    // (the slab has air below it: no ground).
+    InteriorVolumeBox Shed[2] =
+    {
+        { .MinX = -3.0f, .MaxX = 3.0f, .MinY = 2.55f, .MaxY = 2.6f, .MinZ = -3.0f, .MaxZ = 3.0f },
+        { .MinX = -3.2f, .MaxX = -3.0f, .MinY = 0.0f, .MaxY = 2.55f, .MinZ = -3.0f, .MaxZ = 3.0f }
+    };
+    InteriorVolume UnderShed = MakeVolume(Shed, 2U, true);
+    TEST_CHECK(run, GetVisibility(&UnderShed, (Vector3){ -3.0f, 2.52f, 0.0f }, (Vector3){ 1.0f, 0.0f, 0.0f }) < 0.15f);
+    // A closed roof wholly above the window (25 m up; the window's top is at 20 m) still covers the ground under it.
+    InteriorVolumeBox HighRoof[1] = { { .MinX = -40.0f, .MaxX = 40.0f, .MinY = 25.0f, .MaxY = 26.0f, .MinZ = -40.0f,
+        .MaxZ = 40.0f } };
+    InteriorVolume UnderHighRoof = MakeVolume(HighRoof, 1U, true);
+    TEST_CHECK(run, GetVisibility(&UnderHighRoof, (Vector3){ 0.0f, 0.0f, 0.0f }, Up) < 0.5f);
+
+    // The pre-pass's turned reads differ, but every turn of the open field sees all of the sky, and no turn finds a way
+    // out of the closed room anywhere on its floor (its march crosses every texel: no wall falls between two reads).
+    for (float Turn = 0.03125f; Turn < 1.0f; Turn += 0.0625f)
+    {
+        TEST_CHECK(run, WorldInterior_GetSkyVisibility(GetColumn, &Open, &Open.Map, Open.WindowBottom,
+            (Vector3){ 1.0f, 0.0f, 1.0f }, Up, Turn, WORLD_INTERIOR_SKY_PATTERN_AZIMUTHS) == 1.0f);
+        float Worst = 0.0f;
+        for (float X = -1.8f; X <= 1.8f; X += 0.15f)
+        {
+            for (float Z = -1.8f; Z <= 1.8f; Z += 0.15f)
+            {
+                Worst = fmaxf(Worst, WorldInterior_GetSkyVisibility(GetColumn, &Closed, &Closed.Map, Closed.WindowBottom,
+                    (Vector3){ X, 0.0f, Z }, Up, Turn, WORLD_INTERIOR_SKY_PATTERN_AZIMUTHS));
+            }
+        }
+        TEST_CHECK(run, Worst == 0.0f);
+    }
+}
+
+/* The bands' numbers, in one direction (along +X, unturned) from a point facing up on open ground: a long wall ahead,
+ * its near face on the coarse texels' edge 1.5 m out and its top slice ending 1.5 m up, hides the bands wholly below its
+ * top seen from that face (from the point's lift, 0.3 m up) and the band holding it in part, by solid angle, the rest of
+ * the sky open; a wall 8 m out rising past the window's top hides every band in its direction (it goes on up: the
+ * window's top alone, seen from there, lies below the highest band's). The expected values are the band model's sums
+ * by hand: each band's solid angle times its middle's sine, and the zenith's cap. */
+static void TheBandsHideWhatAWallSpans(TestRun* run)
+{
+    Vector3 Up = { 0.0f, 1.0f, 0.0f };
+    float BandStep = WORLD_INTERIOR_SKY_BAND_DEGREES * DEG2RAD;
+    float Weights[WORLD_INTERIOR_SKY_BANDS];
+    float Sum = 0.0f;
+    for (int Band = 0; Band < WORLD_INTERIOR_SKY_BANDS; Band++)
+    {
+        Weights[Band] = sinf(((float)Band + 0.5f) * BandStep)
+            * (sinf((float)(Band + 1) * BandStep) - sinf((float)Band * BandStep));
+        Sum += Weights[Band];
+    }
+    float Cap = (1.0f - sinf((float)WORLD_INTERIOR_SKY_BANDS * BandStep)) + WORLD_INTERIOR_SKY_ZENITH_FLOOR;
+    float WallTop = atanf((1.5f - WORLD_INTERIOR_SKY_LIFT) / 1.5f);
+    float Open = Cap;
+    for (int Band = 0; Band < WORLD_INTERIOR_SKY_BANDS; Band++)
+    {
+        float Low = (float)Band * BandStep;
+        float High = (float)(Band + 1) * BandStep;
+        float Share = (High <= WallTop) ? 0.0f : ((Low >= WallTop) ? 1.0f
+            : ((sinf(High) - sinf(WallTop)) / (sinf(High) - sinf(Low))));
+        Open += Weights[Band] * Share;
+    }
+    InteriorVolumeBox Long[1] = { { .MinX = 1.5f, .MaxX = 3.5f, .MinY = 0.0f, .MaxY = 1.49f, .MinZ = -20.0f,
+        .MaxZ = 20.0f } };
+    InteriorVolume Street = MakeVolume(Long, 1U, true);
+    float Visibility = WorldInterior_GetSkyVisibility(GetColumn, &Street, &Street.Map, Street.WindowBottom,
+        (Vector3){ 0.0f, 0.0f, 0.0f }, Up, 0.0f, 1);
+    // (The march steps a hair past each texel's side: the wall's face reads 0.75 mm further than 1.5 m.)
+    TEST_CHECK(run, (WallTop > 2.0f * BandStep) && (WallTop < 3.0f * BandStep)
+        && (fabsf(Visibility - (Open / (Sum + Cap))) < 2e-3f));
+    InteriorVolumeBox Tall[1] = { { .MinX = 8.0f, .MaxX = 10.0f, .MinY = 0.0f, .MaxY = 60.0f, .MinZ = -20.0f,
+        .MaxZ = 20.0f } };
+    InteriorVolume Cliff = MakeVolume(Tall, 1U, true);
+    TEST_CHECK(run, fabsf(WorldInterior_GetSkyVisibility(GetColumn, &Cliff, &Cliff.Map, Cliff.WindowBottom,
+        (Vector3){ 0.0f, 0.0f, 0.0f }, Up, 0.0f, 1) - (Cap / (Sum + Cap))) < 1e-4f);
+}
+
+/* The read without the pre-pass sees what lies straight above: the open field and the ground beside a crate are open
+ * (exactly 1), and so is an upright face's foot in the ground's slice; a room's floor, its wall's face (read just in
+ * front of it), its ceiling facing down and the ground under a carport are covered (0); under one big roof the cover
+ * fades out toward the volume's edge as the march's does. */
+static void TheOverheadReadSeesWhatLiesAbove(TestRun* run)
+{
+    Vector3 Up = { 0.0f, 1.0f, 0.0f };
+    InteriorVolume Open = MakeVolume(NULL, 0U, true);
+    TEST_CHECK(run, (GetOverhead(&Open, (Vector3){ 3.0f, 0.0f, 4.0f }, Up) == 1.0f)
+        && (GetOverhead(&Open, (Vector3){ 3.0f, 0.02f, 4.0f }, (Vector3){ 1.0f, 0.0f, 0.0f }) == 1.0f));
+    InteriorVolumeBox Crate[1] = { { .MinX = 0.8f, .MaxX = 1.2f, .MinY = 0.0f, .MaxY = 0.4f, .MinZ = -0.2f,
+        .MaxZ = 0.2f } };
+    InteriorVolume Yard = MakeVolume(Crate, 1U, true);
+    TEST_CHECK(run, (GetOverhead(&Yard, (Vector3){ 0.6f, 0.0f, 0.0f }, Up) == 1.0f)
+        && (GetOverhead(&Yard, (Vector3){ 0.8f, 0.1f, 0.0f }, (Vector3){ -1.0f, 0.0f, 0.0f }) == 1.0f));
+    InteriorVolumeBox Room[5] =
+    {
+        { .MinX = -2.2f, .MaxX = -2.0f, .MinY = 0.0f, .MaxY = 3.0f, .MinZ = -2.2f, .MaxZ = 2.2f },
+        { .MinX = 2.0f, .MaxX = 2.2f, .MinY = 0.0f, .MaxY = 3.0f, .MinZ = -2.2f, .MaxZ = 2.2f },
+        { .MinX = -2.2f, .MaxX = 2.2f, .MinY = 0.0f, .MaxY = 3.0f, .MinZ = -2.2f, .MaxZ = -2.0f },
+        { .MinX = -2.2f, .MaxX = 2.2f, .MinY = 0.0f, .MaxY = 3.0f, .MinZ = 2.0f, .MaxZ = 2.2f },
+        { .MinX = -2.2f, .MaxX = 2.2f, .MinY = 3.0f, .MaxY = 3.2f, .MinZ = -2.2f, .MaxZ = 2.2f }
+    };
+    InteriorVolume Closed = MakeVolume(Room, 5U, true);
+    TEST_CHECK(run, (GetOverhead(&Closed, (Vector3){ 0.5f, 0.0f, -0.5f }, Up) == 0.0f)
+        && (GetOverhead(&Closed, (Vector3){ -2.0f, 1.5f, 0.0f }, (Vector3){ 1.0f, 0.0f, 0.0f }) == 0.0f)
+        && (GetOverhead(&Closed, (Vector3){ 1.0f, 3.0f, 0.5f }, (Vector3){ 0.0f, -1.0f, 0.0f }) == 0.0f));
+    InteriorVolumeBox Carport[1] = { { .MinX = -2.0f, .MaxX = 2.0f, .MinY = 2.5f, .MaxY = 2.7f, .MinZ = -2.0f,
+        .MaxZ = 2.0f } };
+    InteriorVolume Shelter = MakeVolume(Carport, 1U, true);
+    TEST_CHECK(run, (GetOverhead(&Shelter, (Vector3){ 1.5f, 0.0f, 0.0f }, Up) == 0.0f)
+        && (GetOverhead(&Shelter, (Vector3){ 2.3f, 0.0f, 0.0f }, Up) == 1.0f));
+    InteriorVolumeBox Roof[1] = { { .MinX = -60.0f, .MaxX = 60.0f, .MinY = 4.0f, .MaxY = 4.3f, .MinZ = -60.0f,
+        .MaxZ = 60.0f } };
+    InteriorVolume Hall = MakeVolume(Roof, 1U, true);
     float Start = WORLD_INTERIOR_SKY_FADE_END - WORLD_INTERIOR_SKY_FADE_WIDTH;
-    TEST_CHECK(run, (WORLD_INTERIOR_SKY_FADE_END + 2.0f * WORLD_INTERIOR_SKY_RING_RADIUS
-        <= (float)(WORLD_INTERIOR_SKY_MAP_EXTENT * 0.5)) && (Start > 0.0f));
-    TEST_CHECK(run, (WorldInterior_GetSkyEdgeFade((Vector3){ 3.0f, 50.0f, 4.0f }) == 0.0f)
-        && (WorldInterior_GetSkyEdgeFade((Vector3){ 0.0f, 0.0f, -Start }) == 0.0f)
+    TEST_CHECK(run, (GetOverhead(&Hall, (Vector3){ 0.0f, 0.0f, Start - 1.0f }, Up) == 0.0f)
+        && IsNear(GetOverhead(&Hall, (Vector3){ Start + 0.5f * WORLD_INTERIOR_SKY_FADE_WIDTH, 0.0f, 0.0f }, Up), 0.5f)
+        && (GetOverhead(&Hall, (Vector3){ 0.0f, 0.0f, -WORLD_INTERIOR_SKY_FADE_END }, Up) == 1.0f));
+}
+
+/* Toward the map's edge, and the window's top and bottom, the visibility fades to open: none within the fade's start
+ * (exactly), half way through it half the way to open, open from its end and for a broken position; the open stays
+ * exactly open throughout. */
+static void SkyVisibilityFadesOutTowardTheVolumesEdges(TestRun* run)
+{
+    float Bottom = -12.0f;
+    float Top = Bottom + (float)(WORLD_INTERIOR_SKY_SLICE_COUNT * WORLD_INTERIOR_SKY_SLICE_HEIGHT);
+    float Start = WORLD_INTERIOR_SKY_FADE_END - WORLD_INTERIOR_SKY_FADE_WIDTH;
+    TEST_CHECK(run, (WORLD_INTERIOR_SKY_FADE_END < (float)(WORLD_INTERIOR_SKY_MAP_EXTENT * 0.5)) && (Start > 0.0f));
+    TEST_CHECK(run, (WorldInterior_GetSkyEdgeFade((Vector3){ 3.0f, 5.0f, 4.0f }, Bottom) == 0.0f)
+        && (WorldInterior_GetSkyEdgeFade((Vector3){ 0.0f, 0.0f, -Start }, Bottom) == 0.0f)
         && IsNear(WorldInterior_GetSkyEdgeFade((Vector3){ 0.6f * (Start + 0.5f * WORLD_INTERIOR_SKY_FADE_WIDTH), 0.0f,
-            0.8f * (Start + 0.5f * WORLD_INTERIOR_SKY_FADE_WIDTH) }), 0.5f)
-        && (WorldInterior_GetSkyEdgeFade((Vector3){ WORLD_INTERIOR_SKY_FADE_END, -3.0f, 0.0f }) == 1.0f)
-        && (WorldInterior_GetSkyEdgeFade((Vector3){ 0.0f, 0.0f, 1000.0f }) == 1.0f)
-        && (WorldInterior_GetSkyEdgeFade((Vector3){ NAN, 0.0f, 0.0f }) == 1.0f));
+            0.8f * (Start + 0.5f * WORLD_INTERIOR_SKY_FADE_WIDTH) }, Bottom), 0.5f)
+        && (WorldInterior_GetSkyEdgeFade((Vector3){ WORLD_INTERIOR_SKY_FADE_END, -3.0f, 0.0f }, Bottom) == 1.0f)
+        && (WorldInterior_GetSkyEdgeFade((Vector3){ 0.0f, 0.0f, 1000.0f }, Bottom) == 1.0f)
+        && (WorldInterior_GetSkyEdgeFade((Vector3){ NAN, 0.0f, 0.0f }, Bottom) == 1.0f)
+        && (WorldInterior_GetSkyEdgeFade((Vector3){ 0.0f, NAN, 0.0f }, Bottom) == 1.0f));
+    TEST_CHECK(run, IsNear(WorldInterior_GetSkyEdgeFade((Vector3){ 0.0f, Bottom + 0.5f * WORLD_INTERIOR_SKY_WINDOW_FADE,
+            0.0f }, Bottom), 0.5f)
+        && (WorldInterior_GetSkyEdgeFade((Vector3){ 0.0f, Top, 0.0f }, Bottom) == 1.0f)
+        && (WorldInterior_GetSkyEdgeFade((Vector3){ 0.0f, Bottom - 5.0f, 0.0f }, Bottom) == 1.0f)
+        && (WorldInterior_GetSkyEdgeFade((Vector3){ 0.0f, Top - WORLD_INTERIOR_SKY_WINDOW_FADE, 0.0f }, Bottom) == 0.0f));
     // Under one big roof: covered near the camera, half covered half way through the fade, open beyond it.
-    InteriorHeightBox Roof[1] = { { .MinX = -60.0f, .MaxX = 60.0f, .MinZ = -60.0f, .MaxZ = 60.0f, .Top = 4.0f } };
-    InteriorHeights Hall = { .Boxes = Roof, .BoxCount = 1U, .Ground = 0.0f, .GroundSlope = 0.0f };
+    InteriorVolumeBox Roof[1] = { { .MinX = -60.0f, .MaxX = 60.0f, .MinY = 4.0f, .MaxY = 4.3f, .MinZ = -60.0f,
+        .MaxZ = 60.0f } };
+    InteriorVolume Hall = MakeVolume(Roof, 1U, true);
     Vector3 Up = { 0.0f, 1.0f, 0.0f };
     float Middle = Start + 0.5f * WORLD_INTERIOR_SKY_FADE_WIDTH;
-    TEST_CHECK(run, (WorldInterior_GetSkyVisibility(GetHeight, &Hall, (Vector3){ 0.0f, 0.0f, Start - 1.0f }, Up) == 0.0f)
-        && IsNear(WorldInterior_GetSkyVisibility(GetHeight, &Hall, (Vector3){ Middle, 0.0f, 0.0f }, Up), 0.5f)
-        && (WorldInterior_GetSkyVisibility(GetHeight, &Hall, (Vector3){ 0.0f, 0.0f, -WORLD_INTERIOR_SKY_FADE_END }, Up)
-            == 1.0f));
-    InteriorHeights Field = { .Boxes = NULL, .BoxCount = 0U, .Ground = 0.0f, .GroundSlope = 0.0f };
-    for (float Distance = 0.0f; Distance < 50.0f; Distance += 0.7f)
+    // (Near the map's edge the march leaves the map before the lowest band meets the roof: that band stays open there.)
+    float Inside = GetVisibility(&Hall, (Vector3){ 0.0f, 0.0f, Start - 1.0f }, Up);
+    float Half = GetVisibility(&Hall, (Vector3){ Middle, 0.0f, 0.0f }, Up);
+    TEST_CHECK(run, (Inside < 0.1f) && (Half > 0.45f) && (Half < 0.6f)
+        && (GetVisibility(&Hall, (Vector3){ 0.0f, 0.0f, -WORLD_INTERIOR_SKY_FADE_END }, Up) == 1.0f));
+    InteriorVolume Field = MakeVolume(NULL, 0U, true);
+    for (float Distance = 0.0f; Distance < 50.0f; Distance += 3.7f)
     {
-        TEST_CHECK(run, WorldInterior_GetSkyVisibility(GetHeight, &Field, (Vector3){ Distance, 0.0f, 0.3f }, Up) == 1.0f);
+        TEST_CHECK(run, GetVisibility(&Field, (Vector3){ Distance, 0.0f, 0.3f }, Up) == 1.0f);
     }
 }
 
@@ -663,9 +1010,12 @@ void WorldInteriorTests_Run(TestRun* run)
         { "draws_take_at_most_four_zones", DrawsTakeAtMostFourZones },
         { "the_haze_skips_the_path_inside_zones", TheHazeSkipsThePathInsideZones },
         { "the_sky_map_stands_on_its_texel_grid", TheSkyMapStandsOnItsTexelGrid },
-        { "sky_taps_lie_around_the_faced_place", SkyTapsLieAroundTheFacedPlace },
-        { "sky_visibility_reads_the_map_around_the_faced_place", SkyVisibilityReadsTheMapAroundTheFacedPlace },
-        { "sky_visibility_fades_out_toward_the_maps_edge", SkyVisibilityFadesOutTowardTheMapsEdge },
+        { "the_slices_follow_the_window", TheSlicesFollowTheWindow },
+        { "the_march_coarsens_with_the_distance", TheMarchCoarsensWithTheDistance },
+        { "sky_visibility_looks_around_through_the_volume", SkyVisibilityLooksAroundThroughTheVolume },
+        { "sky_visibility_fades_out_toward_the_volumes_edges", SkyVisibilityFadesOutTowardTheVolumesEdges },
+        { "the_overhead_read_sees_what_lies_above", TheOverheadReadSeesWhatLiesAbove },
+        { "the_bands_hide_what_a_wall_spans", TheBandsHideWhatAWallSpans },
         { "the_sky_share_keeps_a_floor", TheSkyShareKeepsAFloor },
         { "the_camera_eases_indoors", TheCameraEasesIndoors },
         { "the_camera_light_follows_the_room", TheCameraLightFollowsTheRoom },

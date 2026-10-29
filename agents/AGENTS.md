@@ -188,7 +188,7 @@ Current module list:
     (weights, rules with their periodic value noise, height blending, triplanar projections) and the material at a point
     of a terrain (a triangle and barycentrics: footsteps, the scattering's limits).
   * GLTextureArray - Texture arrays (private, source/GLTextureArray.{h,c}): direct OpenGL calls (the
-    project's only ones with GLReadback and GLDepth), through the function pointers raylib's rlGetProcAddress resolves
+    project's only ones with GLReadback, GLDepth and GLSliceMap), through the function pointers raylib's rlGetProcAddress resolves
     (no raylib rebuild), with their GL constants; used by the renderer's terrain pass. Anything else that needs GL raylib
     lacks belongs in a module like it, never in a pass (BUILDING.md, "Direct OpenGL calls").
   * GLReadback - Reading a small target back without waiting for the GPU (private, source/GLReadback.{h,c}): a
@@ -200,6 +200,10 @@ Current module list:
     depth state to reversed (0-to-1 clip depth, GL_GEQUAL, cleared to 0) and back to raylib's; direct OpenGL calls in
     GLTextureArray's manner. Used by the renderer's camera passes (WorldRendererCommon.c's camera depth helpers), so
     the camera draws at any distance; without clip control the renderer keeps raylib's projection and its 4 km.
+  * GLSliceMap - Slice maps (private, source/GLSliceMap.{h,c}): RGBA32UI textures with their mipmap levels, their
+    integer clear, the logic operations (XOR, OR) that draw them and the per-level reads that build their pyramid;
+    direct OpenGL calls in GLTextureArray's manner. Used by the sky's occupancy volume (WorldRendererSkyVisibility.c,
+    interior lighting); without them the sky's visibility stays open.
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements

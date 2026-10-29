@@ -1,0 +1,4 @@
+{
+    "name": "world_ao_blur",
+    "fragment_location": "ao_blur/fragment"
+}

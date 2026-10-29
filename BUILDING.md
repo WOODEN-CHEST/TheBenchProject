@@ -110,7 +110,7 @@ skinning (the test world's figures bend, no warning).
 
 ## Direct OpenGL calls
 
-Everything draws through raylib, with three exceptions, each in a private module of its own and nowhere else:
+Everything draws through raylib, with four exceptions, each in a private module of its own and nowhere else:
 - **texture arrays** (`GL_TEXTURE_2D_ARRAY`, `source/GLTextureArray.{h,c}`), which raylib does not have and the
   terrain's materials need (up to sixteen materials blended per pixel, one array layer each);
 - **readbacks that do not wait** (`source/GLReadback.{h,c}`): raylib reads a texture back only by stalling until
@@ -129,9 +129,15 @@ Everything draws through raylib, with three exceptions, each in a private module
   GPUs since 2014; NVIDIA reports a 3.3 core context as 3.3 and has the extension, macOS has neither): the module
   checks the version, then the extension list, and without it the renderer keeps raylib's projection and its 4 km,
   logged once. The reversed state is switched on only around the camera's passes and switched back after them, so
-  raylib's own state is what every other pass and the UI see.
+  raylib's own state is what every other pass and the UI see;
+- **slice maps** (`source/GLSliceMap.{h,c}`): the sky's occupancy volume is an integer texture (four 32-bit words a
+  texel, each bit a height slice) drawn with a logic operation (XOR, then OR) in place of blending, cleared with
+  integers, and reduced into a pyramid of its own mipmap levels, each level drawn from the one below while only that one
+  is readable; raylib has no integer textures, no logic operations and no per-level reads (`glGenTextures`,
+  `glDeleteTextures`, `glBindTexture`, `glTexImage2D`, `glTexParameteri`, `glEnable`, `glDisable`, `glLogicOp`,
+  `glClearBufferuiv`, `glGetError`: OpenGL 3.0 core; a missing one leaves the sky's visibility open, logged once).
 
-The texture arrays' module, as the pattern all three follow:
+The texture arrays' module, as the pattern all four follow:
 - the function pointers (`glGenTextures`, `glDeleteTextures`, `glBindTexture`, `glTexImage3D`, `glTexSubImage3D`,
   `glGenerateMipmap`, `glTexParameteri`, `glTexParameterf`, `glPixelStorei`, `glGetIntegerv`, `glGetFloatv`,
   `glGetError`) come through raylib's `rlGetProcAddress`, the loader raylib itself was initialized with (GLFW's on the

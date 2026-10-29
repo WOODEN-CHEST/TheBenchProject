@@ -17,6 +17,7 @@
 #include "GLTextureArray.h"
 #include "GLReadback.h"
 #include "GLDepth.h"
+#include "GLSliceMap.h"
 #include "EyeAdaptation.h"
 #include "NightVision.h"
 #include "WorldAtmosphere.h"
@@ -52,8 +53,9 @@
  *   WorldRendererPost.c      outlines, bloom, sun shafts and the tonemap
  *   WorldRendererExposure.c  the eye's adaptation to the picture: the meter pass, its readback (GLReadback.h,
  *                            direct GL calls) and the exposure (EyeAdaptation.h)
- *   WorldRendererSkyVisibility.c the sky's visibility map: a top-down depth map of what keeps the sky out around the
- *                            camera, which the lit shaders read (interior lighting)
+ *   WorldRendererSkyVisibility.c the sky's occupancy volume: what keeps the sky out around the camera, drawn from
+ *                            above into height slices (GLSliceMap.h, direct GL calls) with an OR pyramid, which the
+ *                            ambient pre-pass and the lit shaders read (interior lighting)
  *   WorldRendererInterior.c  interior lighting's other parts (WorldInterior.h): the ambient zones each lit draw takes,
  *                            the camera's interior for the eye, the lit shaders' interior uniforms, the zones' debug
  *                            wireframes
@@ -137,10 +139,10 @@ typedef enum
     // stars: the lit programs never read the sky view (the 2D passes that read the volume bind it with
     // SetShaderValueTexture).
     WorldRendererTextureUnit_HazeVolume = 8,              // sampler2D atmosphereVolume
-    // The sky's visibility map in the lit programs, on the unit the transmittance table has in the sky pass and the
+    // The sky's occupancy volume in the lit programs, on the unit the transmittance table has in the sky pass and the
     // stars: the lit programs never read that table (its sampler is declared there and unused), and every lit pass binds
-    // the map with its frame textures after the sky and the stars have drawn.
-    WorldRendererTextureUnit_SkyVisibility = 7,           // sampler2D skyVisibilityMap
+    // the volume with its frame textures after the sky and the stars have drawn.
+    WorldRendererTextureUnit_SkyVisibility = 7,           // usampler2D skyVolume
     // The terrain program's material arrays: sampler2DArray, below raylib's material map units' top, because the
     // terrain program draws with no material maps (DrawMesh binds none for it). Other programs' material maps bind
     // GL_TEXTURE_2D (or cube) textures on these units; an array sampler reads only the units' GL_TEXTURE_2D_ARRAY
@@ -341,6 +343,10 @@ typedef struct WorldRenderFrameStruct
     bool IsCascadeShadowActive;
     bool IsPointShadowActive;
     bool IsAoActive;
+    /** @brief Whether the contact shadows run (the cascades run and they are switched on), and whether the ambient
+     *  pre-pass runs for them or the AO: its target then holds this render's values for the lit passes. */
+    bool AreContactShadowsActive;
+    bool IsAmbientPrepassActive;
     bool AreOutlinesActive;
     bool IsBloomActive;
     bool AreSunshaftsActive;
@@ -404,6 +410,11 @@ typedef struct WorldRenderFrameStruct
     bool IsSkyVisibilityActive;
     WorldInteriorSkyMap SkyMap;
     WorldFrustum SkyMapBox;
+    /** @brief The occupancy volume's window's bottom this frame, render space (WorldInterior_GetSkyWindowBottom). */
+    float SkyVolumeBottom;
+    /** @brief Whether the ambient pre-pass reads the sky's visibility for the camera's pixels (its target's G): the volume
+     *  is drawn and the pre-pass is available. The lit passes then take it from there instead of reading it themselves. */
+    bool IsSkyVisibilityOnScreen;
     WorldInteriorCamera CameraInterior;
     float CameraSceneLuminance;
     float CameraDayLuminance;
@@ -542,6 +553,7 @@ typedef struct WorldRendererInteriorLocationsStruct
     int _locSkyVisibilityActive;
     int _locSkyVisibilityMap;
     int _locSkyVisibilityViewProjection;
+    int _locSkyVolumeBottom;
     int _locZoneCount;
     int _locZoneCenters;
     int _locZoneAxisX;
@@ -582,7 +594,10 @@ typedef struct WorldRendererLitLocationsStruct
     /** @brief Screen-space AO: the AO map, its active flag and the scene resolution used to map gl_FragCoord to the AO
      *  map's UV. */
     int _locAmbientOcclusionMap;
+    int _locSkyVisibilityOnScreen;
     int _locAoMapActive;
+    /** @brief Per draw: whether the ambient pre-pass saw the draw's surface (WorldRendererLighting_SetDrawPlace). */
+    int _locDrawInPrepass;
     int _locAoResolution;
     /** @brief The cascades, the light they were rendered from and how much they shadow the sun and the moon. */
     int _locLightVP;
@@ -1103,8 +1118,28 @@ typedef struct WorldRendererAoStateStruct
     int _locNormalTexture;
     int _locStrength;
     int _locDepthReversed;
-    /** @brief The low-res AO-multiplier target (R = 1 open .. <1 occluded) the PBR pass samples for its ambient
-     *  term. */
+    int _locContactLightDirection;
+    int _locContactLength;
+    int _locSkyVisibilityActive;
+    int _locSkyVolume;
+    int _locSkyViewProjection;
+    int _locSkyVolumeBottom;
+    int _locViewToRender;
+    /** @brief The blur after it (the raw pre-pass into _target, the 4 x 4 pattern averaged away); NULL = no AO. Its
+     *  uniform locations follow. */
+    GameShader* _blurShader;
+    int _blurLocResolution;
+    int _blurLocInvProjection;
+    int _blurLocDepthTexture;
+    int _blurLocNormalTexture;
+    int _blurLocDepthReversed;
+    /** @brief The raw pre-pass's low-res target (R the occlusion, G the sky's visibility, B the contact light; the
+     *  pattern still in it), which the blur reads. */
+    RenderTexture2D _rawTarget;
+    /** @brief Whether _rawTarget has been created. */
+    bool _hasRawTarget;
+    /** @brief The low-res target the lit passes sample (R = 1 open .. <1 occluded, for the ambient term; G and B as
+     *  the raw target's, blurred and passed through). */
     RenderTexture2D _target;
     /** @brief Whether _target has been created. */
     bool _hasTarget;
@@ -1354,6 +1389,16 @@ typedef struct WorldRendererInstanceBufferStruct
  * A pass whose twin is missing, and every pass while instancing is off, draws each copy on its own through its ordinary
  * shader, with the copy's values from WorldInstancing.c (the C mirror of common/instancing).
  */
+/** @brief A program's uniforms for drawing the sky's occupancy volume (shaders/sky_slices: the map's eye height and depth
+ *  range, the window's bottom, the drawing's mode). */
+typedef struct WorldRendererSliceLocationsStruct
+{
+    int _locEyeHeight;
+    int _locDepth;
+    int _locBottom;
+    int _locMode;
+} WorldRendererSliceLocations;
+
 typedef struct WorldRendererInstanceStateStruct
 {
     /** @brief The lit twin's instancing uniforms (its program is _pbr._instanced). */
@@ -1376,6 +1421,12 @@ typedef struct WorldRendererInstanceStateStruct
     int _cubeLocLightFar;
     WorldRendererDitherLocations _cubeDither;
     WorldRendererInstancingLocations _cubeInstancing;
+    /** @brief The sky's occupancy volume's twin (world_sky_slices_instanced) and its slice uniforms; NULL = copies are
+     *  drawn one at a time into the volume. */
+    GameShader* _skySliceShader;
+    WorldRendererSliceLocations _skySliceLocations;
+    WorldRendererDitherLocations _skySliceDither;
+    WorldRendererInstancingLocations _skySliceInstancing;
     /** @brief WorldRendererInstanceBuffer, one per build a cache entry holds, roughly in the entries' order. */
     GenericBuffer _buffers;
     /** @brief This frame's GL buffer per cache entry (unsigned int, parallel to WorldRenderCache_GetInstances; 0 for an
@@ -1395,14 +1446,39 @@ typedef struct WorldRendererInstanceStateStruct
     bool _isVertexArrayFailureReported;
 } WorldRendererInstanceState;
 
-/** @brief The sky's visibility map (WorldRendererSkyVisibility.c): a top-down depth map of what keeps the sky out
- *  around the camera (WorldInterior.h's layout). It draws with the shadow cascades' depth shaders. */
+/** @brief The sky's occupancy volume (WorldRendererSkyVisibility.c): what keeps the sky out around the camera, as height
+ *  slices on the map's grid (WorldInterior.h's layout), with an OR pyramid in its levels. */
 typedef struct WorldRendererSkyVisibilityStateStruct
 {
-    /** @brief The map (depth only, its samplable depth texture in .depth) and whether it exists. */
-    RenderTexture2D _map;
-    bool _hasMap;
-    /** @brief Set once the map's failure has been logged. */
+    /** @brief The direct GL calls the volume needs (GLSliceMap.h). */
+    GLSliceMapApi _api;
+    /** @brief The occupancy volume: an integer texture (GL_RGBA32UI, WORLD_INTERIOR_SKY_MAP_RESOLUTION a side) whose
+     *  levels hold its pyramid, a framebuffer for each level, and whether they all exist. */
+    unsigned int _volume;
+    unsigned int _framebuffers[WORLD_INTERIOR_SKY_LEVEL_COUNT];
+    bool _hasVolume;
+    /** @brief A level-0-sized scratch volume and its framebuffer: one layer's parity is drawn there, then ORed into the
+     *  volume (WorldRendererSkyVisibility.c: things that overlap keep their own parity). */
+    unsigned int _scratch;
+    unsigned int _scratchFramebuffer;
+    /** @brief The frame's layer of each model the volume draws (uint8_t, parallel to its visibility list) and their boxes
+     *  in render space (BoundingBox), kept from frame to frame so they stop allocating once grown. */
+    GenericBuffer _modelLayers;
+    GenericBuffer _modelBoxes;
+    /** @brief The programs it is drawn with (world_sky_slices and its skinned twin; the instanced twin is the instances'
+     *  state's) and the pyramid's (world_sky_reduce); without the first or the last there is no sky visibility. */
+    GameShader* _shader;
+    GameShader* _skinnedShader;
+    GameShader* _reduceShader;
+    /** @brief The level shader's step (2: a level of the pyramid; 1: a layer copied into the volume). */
+    int _reduceLocStep;
+    /** @brief Their slice uniforms, their dithers and the skinned twin's palette. */
+    WorldRendererSliceLocations _locations;
+    WorldRendererSliceLocations _skinnedLocations;
+    WorldRendererDitherLocations _dither;
+    WorldRendererDitherLocations _skinnedDither;
+    WorldRendererPalette _skinnedPalette;
+    /** @brief Set once a failure has been logged. */
     bool _isFailureReported;
 } WorldRendererSkyVisibilityState;
 
@@ -1472,6 +1548,8 @@ struct WorldRendererStruct
     bool _shadersLoadAttempted;
     /** @brief Master toggle for AO + outlines; when false the scene blits straight to the tonemap. On by default. */
     bool _postfxEnabled;
+    /** @brief Toggle for the contact shadows (A/B; on by default). */
+    bool _areContactShadowsEnabled;
     /** @brief Toggle for the eye's night vision (A/B; on by default); the world's NightVisionStrength scales it. */
     bool _isNightVisionEnabled;
     /** @brief Toggle for sprite lighting (A/B; on by default): off draws every sprite unlit at its full colours. */
@@ -1958,17 +2036,21 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
 
 /**
  * @brief Sets what the lit draw that follows takes from its place: its placement's resolved haze multiplier (1 the
- *        real air's, 0 none) and the ambient zones its sphere touches (WorldRendererInterior_UploadZones). Every lit
- *        draw sets them, lit or not (an unlit sprite is hazed too), as the uniforms keep the last draw's values.
+ *        real air's, 0 none), the ambient zones its sphere touches (WorldRendererInterior_UploadZones) and whether the
+ *        ambient pre-pass saw its surface (the G-buffer drew it: solid below WORLD_VISIBILITY_GBUFFER_FADE_LIMIT; a
+ *        decal lies on the surface it saw): if not, the draw takes no screen AO or contact shadow and reads the sky
+ *        straight above itself. Every lit draw sets them, lit or not (an unlit sprite is hazed too), as the uniforms
+ *        keep the last draw's values.
  * @param self The renderer.
  * @param shader The lit shader (its program).
  * @param locations Its locations (WorldRendererLighting_PrepareLitShader).
  * @param center The draw's bounding sphere's centre, in render space.
  * @param radius Its radius.
  * @param haze The multiplier (>= 0; a negative or NaN one counts as 0 in the shader).
+ * @param isInPrepass Whether the ambient pre-pass saw the draw's surface.
  */
 void WorldRendererLighting_SetDrawPlace(const WorldRenderer* self, Shader shader,
-    const WorldRendererLitLocations* locations, Vector3 center, float radius, float haze);
+    const WorldRendererLitLocations* locations, Vector3 center, float radius, float haze, bool isInPrepass);
 
 /**
  * @brief Uploads one material's PBR scalar factors and map-presence flags to a PBR program, for its meshes drawn next.
@@ -2013,8 +2095,8 @@ void WorldRendererShadows_PrepareFrame(WorldRenderer* self, WorldRenderFrame* fr
 /**
  * @brief Draws the depth of a pass's model casters (its visibility list) with a depth shader and its skinned twin, each
  *        dithered by its fade (into the twin too, through @p skinnedDither, while the caster has a pose), each the LOD it
- *        heads to, solid (no cross-fade dither): a shadow or the sky's visibility changes once per change and never
- *        shimmers. Ignores the pixelation filter. The caller has set the target, the matrices and the culling.
+ *        heads to, solid (no cross-fade dither): a shadow changes once per change and never shimmers. Ignores the
+ *        pixelation filter. The caller has set the target, the matrices and the culling.
  * @param self The renderer.
  * @param shaders The depth shaders (a light's view: the whole bodies); must not be NULL.
  * @param dither The rigid shader's dither locations.
@@ -2053,7 +2135,8 @@ void WorldRendererGBuffer_ReleaseTargets(WorldRenderer* self);
  *  G-buffer never dithers, so outlines and AO switch off once, at mid-fade). */
 void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFrame* frame);
 
-/** @brief Runs the AO pre-pass from the G-buffer into the AO target, at frame->AoStrength. */
+/** @brief Runs the ambient pre-pass from the G-buffer into the AO target: the AO at frame->AoStrength, the contact
+ *  shadows while frame->AreContactShadowsActive; then its blur. */
 void WorldRendererGBuffer_RenderAo(WorldRenderer* self, const WorldRenderFrame* frame);
 
 
@@ -2279,35 +2362,40 @@ float WorldRendererExposure_Update(WorldRenderer* self, WorldRenderFrame* frame,
 
 
 // WorldRendererSkyVisibility.c
-/** @brief Makes the sky's visibility map (once, after the shadows' shaders: it draws with their depth shaders); a failure
- *  is logged once and the sky's visibility stays off (every surface takes the whole sky's light). */
+/** @brief Loads the sky's occupancy volume's programs and makes the volume (once, before the instanced twins: theirs sits
+ *  beside its program); a failure is logged once and the sky's visibility stays off (every surface takes the whole sky's
+ *  light). */
 void WorldRendererSkyVisibility_Load(WorldRenderer* self);
 
-/** @brief Frees the map. Needs a live GL context. */
+/** @brief Frees the volume. Needs a live GL context. */
 void WorldRendererSkyVisibility_Unload(WorldRenderer* self);
 
-/** @brief Whether the map can be drawn: it exists and the cascades' depth shader loaded. */
+/** @brief Whether the volume can be drawn: it exists and its programs loaded. */
 bool WorldRendererSkyVisibility_IsAvailable(const WorldRenderer* self);
 
 /**
- * @brief Decides whether the map is drawn this frame (interior lighting active and the map available) and fills the
- *        frame's SkyMap and SkyMapBox around the camera (WorldInterior_GetSkyMap). Before the visibility, which lists
- *        what the map draws by its box.
+ * @brief Decides whether the volume is drawn this frame (interior lighting active and the volume available) and fills
+ *        the frame's SkyMap and SkyMapBox around the camera (WorldInterior_GetSkyMap) and its window's bottom. Before the
+ *        visibility, which lists what the volume draws by the map's box.
  * @param self The renderer.
  * @param frame The frame (IsInteriorActive and Origin must be set).
  */
 void WorldRendererSkyVisibility_PrepareFrame(const WorldRenderer* self, WorldRenderFrame* frame);
 
 /**
- * @brief Draws the map: the depth from above of everything its visibility list holds (models and instance cells that
- *        occlude the sky, terrain chunks), both faces, so each texel keeps the topmost surface; each dithered by its
- *        fade. Call while frame->IsSkyVisibilityActive, before the lit passes.
+ * @brief Draws the volume: everything its visibility list holds (models and instance cells that occlude the sky, terrain
+ *        chunks) from above, both faces, with no depth test, once toggling (XOR) the slices below each fragment, once
+ *        setting (OR) the slice it passes through; each dithered by its fade. Then its pyramid, level by level. Call while
+ *        frame->IsSkyVisibilityActive, before the ambient pre-pass and the lit passes.
  */
 void WorldRendererSkyVisibility_Render(WorldRenderer* self, const WorldRenderFrame* frame);
 
-/** @brief Binds the map on WorldRendererTextureUnit_SkyVisibility for the lit passes (while it is drawn this frame);
+/** @brief Binds the volume on WorldRendererTextureUnit_SkyVisibility for the lit passes (while it is drawn this frame);
  *  bound manually, as the lit passes draw with DrawMesh. */
 void WorldRendererSkyVisibility_BindMap(const WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief The volume as a texture a 2D pass binds with SetShaderValueTexture (its id; its size level 0's). */
+Texture2D WorldRendererSkyVisibility_GetVolumeTexture(const WorldRenderer* self);
 
 
 // WorldRendererInterior.c

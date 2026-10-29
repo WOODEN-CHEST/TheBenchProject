@@ -1,6 +1,7 @@
-// The normal/flag G-buffer pass and the screen-space ambient-occlusion pre-pass.
+// The normal/flag G-buffer pass and the ambient pre-pass (the screen-space AO and the contact shadows) with its blur.
 
 #include "WorldRendererInternal.h"
+#include "raylib/raymath.h"
 #include "raylib/rlgl.h"
 
 
@@ -13,9 +14,14 @@
 /** Asset name of the sprite normal/mask shader: writes cutout sprites into the G-buffer with an alpha test at their
  *  cutoff (so the outline follows the sprite's shape, not its quad's rectangle) and their quad's view normal. */
 #define NORMAL_SPRITE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_normal_sprite")
-/** Asset name of the ambient-occlusion pre-pass shader: computes SSAO from the G-buffer's depth + flag into an
- *  AO-multiplier texture that the PBR scene pass applies to ONLY its ambient term. */
+/** Asset name of the ambient pre-pass shader: computes the screen-space AO from the G-buffer's depth + flag into the
+ *  raw target (with a 4 x 4 pattern in it), an AO multiplier that the lit passes apply to ONLY their ambient term. */
 #define AO_SHADER_ASSET_NAME ((const unsigned char*)u8"world_ao")
+/** Asset name of the pre-pass's blur: the raw target into the one the lit passes read, the pattern averaged away. */
+#define AO_BLUR_SHADER_ASSET_NAME ((const unsigned char*)u8"world_ao_blur")
+/** How far the contact shadows' march reaches toward the light, in metres: several near-cascade texels and their
+ *  filter's width, the seam it closes at the foot of every caster. */
+#define CONTACT_SHADOW_LENGTH 0.25f
 
 
 // Static functions.
@@ -197,7 +203,8 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
         WorldRendererCommon_PreparePalette(RayShader, &self->_gbuffer._skinnedPalette);
     }
 
-    // AO pre-pass shader. Optional (without it, or without a samplable-depth G-buffer, AO is simply off).
+    // AO pre-pass shader and its blur. Optional (without both, or without a samplable-depth G-buffer, AO is simply
+    // off: unblurred, the pre-pass's pattern would show).
     self->_ao._shader = WorldRendererCommon_LoadShader(self, AO_SHADER_ASSET_NAME);
     if (self->_ao._shader != NULL)
     {
@@ -209,6 +216,24 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
         self->_ao._locNormalTexture = GetShaderLocation(RayShader, "normalTexture");
         self->_ao._locStrength = GetShaderLocation(RayShader, "aoStrength");
         self->_ao._locDepthReversed = GetShaderLocation(RayShader, "depthReversed");
+        self->_ao._locContactLightDirection = GetShaderLocation(RayShader, "contactLightDirection");
+        self->_ao._locContactLength = GetShaderLocation(RayShader, "contactLength");
+        self->_ao._locSkyVisibilityActive = GetShaderLocation(RayShader, "skyVisibilityActive");
+        self->_ao._locSkyVolume = GetShaderLocation(RayShader, "skyVolume");
+        self->_ao._locSkyViewProjection = GetShaderLocation(RayShader, "skyVisibilityViewProjection");
+        self->_ao._locSkyVolumeBottom = GetShaderLocation(RayShader, "skyVolumeBottom");
+        self->_ao._locViewToRender = GetShaderLocation(RayShader, "viewToRender");
+    }
+    self->_ao._blurShader = (self->_ao._shader != NULL)
+        ? WorldRendererCommon_LoadShader(self, AO_BLUR_SHADER_ASSET_NAME) : NULL;
+    if (self->_ao._blurShader != NULL)
+    {
+        Shader RayShader = GameShader_GetRaylibShader(self->_ao._blurShader);
+        self->_ao._blurLocResolution = GetShaderLocation(RayShader, "resolution");
+        self->_ao._blurLocInvProjection = GetShaderLocation(RayShader, "invProjection");
+        self->_ao._blurLocDepthTexture = GetShaderLocation(RayShader, "depthTexture");
+        self->_ao._blurLocNormalTexture = GetShaderLocation(RayShader, "normalTexture");
+        self->_ao._blurLocDepthReversed = GetShaderLocation(RayShader, "depthReversed");
     }
 }
 
@@ -243,20 +268,27 @@ void WorldRendererGBuffer_CreateTargets(WorldRenderer* self, int width, int heig
         }
     }
 
-    // AO-multiplier target (8-bit, low-res, BILINEAR so the PBR ambient reads a smooth AO term). Only when the
-    // AO shader is present and the G-buffer carries samplable depth for the AO pass to read.
-    if ((self->_ao._shader != NULL) && self->_gbuffer._hasTarget && self->_gbuffer._isDepthSamplable)
+    // The pre-pass's raw target and the blurred one the lit passes read (8-bit, low-res, read texel for texel: the lit
+    // passes sample them at their own pixels). Only when both shaders are present and the G-buffer carries samplable
+    // depth for the pre-pass to read.
+    if ((self->_ao._shader != NULL) && (self->_ao._blurShader != NULL) && self->_gbuffer._hasTarget
+        && self->_gbuffer._isDepthSamplable)
     {
+        self->_ao._rawTarget = LoadRenderTexture(width, height);
+        self->_ao._hasRawTarget = (self->_ao._rawTarget.id != 0);
         self->_ao._target = LoadRenderTexture(width, height);
         self->_ao._hasTarget = (self->_ao._target.id != 0);
-        if (self->_ao._hasTarget)
+        if (self->_ao._hasRawTarget && self->_ao._hasTarget)
         {
+            SetTextureFilter(self->_ao._rawTarget.texture, TEXTURE_FILTER_POINT);
             SetTextureFilter(self->_ao._target.texture, TEXTURE_FILTER_BILINEAR);
         }
         else
         {
+            WorldRendererCommon_UnloadTarget(&self->_ao._rawTarget, &self->_ao._hasRawTarget);
+            WorldRendererCommon_UnloadTarget(&self->_ao._target, &self->_ao._hasTarget);
             WorldRendererCommon_WarnOnce(self, &self->_ao._isTargetFailureReported,
-                (const unsigned char*)u8"WorldRenderer: could not create the AO target; AO is off.");
+                (const unsigned char*)u8"WorldRenderer: could not create the AO targets; AO is off.");
         }
     }
 }
@@ -265,6 +297,7 @@ void WorldRendererGBuffer_ReleaseTargets(WorldRenderer* self)
 {
     WorldRendererCommon_UnloadTarget(&self->_gbuffer._target, &self->_gbuffer._hasTarget);
     self->_gbuffer._isDepthSamplable = false;
+    WorldRendererCommon_UnloadTarget(&self->_ao._rawTarget, &self->_ao._hasRawTarget);
     WorldRendererCommon_UnloadTarget(&self->_ao._target, &self->_ao._hasTarget);
 }
 
@@ -298,31 +331,68 @@ void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFr
     EndTextureMode();
 }
 
-/* Runs BEFORE the scene colour pass: SSAO from the G-buffer's samplable depth + surface flag into the AO target
- * (an AO multiplier in R), which the PBR scene pass samples to darken ONLY its ambient term. Uses the scene's
- * projection to reconstruct view positions. Opens/closes its own passes. */
+/* Runs BEFORE the scene colour pass: the ambient pre-pass from the G-buffer's samplable depth + surface flag into the
+ * raw target (an AO multiplier in R, with the 4 x 4 pattern in it), then its blur into the AO target, which the lit
+ * passes sample to darken ONLY their ambient term. Uses the scene's projection to reconstruct view positions.
+ * Opens/closes its own passes. */
 void WorldRendererGBuffer_RenderAo(WorldRenderer* self, const WorldRenderFrame* frame)
 {
-    Shader RayShader = GameShader_GetRaylibShader(self->_ao._shader);
     float Resolution[2] = { (float)frame->SceneWidth, (float)frame->SceneHeight };
-    float Strength = frame->AoStrength;
+    Rectangle Destination = { 0.0f, 0.0f, (float)frame->SceneWidth, (float)frame->SceneHeight };
 
-    BeginTextureMode(self->_ao._target);
+    Shader RayShader = GameShader_GetRaylibShader(self->_ao._shader);
+    float Strength = frame->AoStrength;
+    BeginTextureMode(self->_ao._rawTarget);
     ClearBackground(WHITE); // AO multiplier 1 (fully open) wherever nothing draws / no occlusion
     SetShaderValue(RayShader, self->_ao._locResolution, Resolution, SHADER_UNIFORM_VEC2);
     SetShaderValueMatrix(RayShader, self->_ao._locProjection, frame->Projection);
     SetShaderValueMatrix(RayShader, self->_ao._locInvProjection, frame->InvProjection);
     SetShaderValue(RayShader, self->_ao._locStrength, &Strength, SHADER_UNIFORM_FLOAT);
     WorldRendererCommon_SetDepthConvention(RayShader, self->_ao._locDepthReversed, frame);
+    // The contact shadows march toward the cascades' light, in view space (the view is a rotation of render space).
+    float ContactLength = frame->AreContactShadowsActive ? CONTACT_SHADOW_LENGTH : 0.0f;
+    Vector3 ContactLight = Vector3Normalize(Vector3Transform(frame->ShadowDirection, frame->View));
+    float ContactDirection[3] = { ContactLight.x, ContactLight.y, ContactLight.z };
+    SetShaderValue(RayShader, self->_ao._locContactLength, &ContactLength, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_ao._locContactLightDirection, ContactDirection, SHADER_UNIFORM_VEC3);
+    // The sky's visibility per pixel, while the occupancy volume is drawn: its map and window, and render space.
+    int SkyActive = frame->IsSkyVisibilityOnScreen ? 1 : 0;
+    SetShaderValue(RayShader, self->_ao._locSkyVisibilityActive, &SkyActive, SHADER_UNIFORM_INT);
+    if (frame->IsSkyVisibilityOnScreen)
+    {
+        SetShaderValueMatrix(RayShader, self->_ao._locSkyViewProjection, frame->SkyMap.ViewProjection);
+        SetShaderValue(RayShader, self->_ao._locSkyVolumeBottom, &frame->SkyVolumeBottom, SHADER_UNIFORM_FLOAT);
+        SetShaderValueMatrix(RayShader, self->_ao._locViewToRender, MatrixInvert(frame->View));
+    }
     BeginShaderMode(RayShader);
     // Bind the G-buffer's depth (unit 1) + colour/flag (unit 2) via SetShaderValueTexture AFTER BeginShaderMode
     // so they enter Raylib's 2D batch texture table (a manual slot bind would leave the samplers on unit 0).
     SetShaderValueTexture(RayShader, self->_ao._locDepthTexture, self->_gbuffer._target.depth);
     SetShaderValueTexture(RayShader, self->_ao._locNormalTexture, self->_gbuffer._target.texture);
+    if (frame->IsSkyVisibilityOnScreen)
+    {
+        SetShaderValueTexture(RayShader, self->_ao._locSkyVolume, WorldRendererSkyVisibility_GetVolumeTexture(self));
+    }
     Rectangle Source = { 0.0f, 0.0f, (float)self->_gbuffer._target.texture.width,
         (float)self->_gbuffer._target.texture.height };
-    Rectangle Destination = { 0.0f, 0.0f, (float)frame->SceneWidth, (float)frame->SceneHeight };
     DrawTexturePro(self->_gbuffer._target.texture, Source, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
+    EndShaderMode();
+    EndTextureMode();
+
+    // The blur: the raw target is the blit's texture; it reads it, and the G-buffer for its weights, texel for texel.
+    Shader BlurShader = GameShader_GetRaylibShader(self->_ao._blurShader);
+    BeginTextureMode(self->_ao._target);
+    ClearBackground(WHITE);
+    SetShaderValue(BlurShader, self->_ao._blurLocResolution, Resolution, SHADER_UNIFORM_VEC2);
+    SetShaderValueMatrix(BlurShader, self->_ao._blurLocInvProjection, frame->InvProjection);
+    WorldRendererCommon_SetDepthConvention(BlurShader, self->_ao._blurLocDepthReversed, frame);
+    BeginShaderMode(BlurShader);
+    SetShaderValueTexture(BlurShader, self->_ao._blurLocDepthTexture, self->_gbuffer._target.depth);
+    SetShaderValueTexture(BlurShader, self->_ao._blurLocNormalTexture, self->_gbuffer._target.texture);
+    // The shader reads the raw texel at its own pixel (gl_FragCoord), so the blit's mapping does not matter.
+    Rectangle RawSource = { 0.0f, 0.0f, (float)self->_ao._rawTarget.texture.width,
+        (float)self->_ao._rawTarget.texture.height };
+    DrawTexturePro(self->_ao._rawTarget.texture, RawSource, Destination, (Vector2){ 0.0f, 0.0f }, 0.0f, WHITE);
     EndShaderMode();
     EndTextureMode();
 }

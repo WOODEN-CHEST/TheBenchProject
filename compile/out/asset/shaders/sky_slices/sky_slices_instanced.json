@@ -1,0 +1,6 @@
+{
+    "name": "world_sky_slices_instanced",
+    "vertex_location": "depth/instanced",
+    "fragment_location": "sky_slices/fragment",
+    "defines": ["WORLD_INSTANCED"]
+}

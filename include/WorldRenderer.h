@@ -189,6 +189,11 @@ typedef enum WorldRendererFeatureEnum
      *  while the camera is inside. Unavailable without the PBR shader; active while interior lighting is on and a shown
      *  object has an ambient zone. */
     WorldRendererFeature_AmbientZones,
+    /** @brief Contact shadows: from the camera's pixels, a short march toward the light the shadow cascades are rendered
+     *  from closes the seam the cascades' texels leave at the foot of every caster. Unavailable without the ambient
+     *  pre-pass (the same needs as ambient occlusion: its shaders and a G-buffer with samplable depth); active while
+     *  the cascades run and contact shadows are switched on (WorldRenderer_SetContactShadowsEnabled). */
+    WorldRendererFeature_ContactShadows,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -553,7 +558,7 @@ const unsigned char* WorldRenderer_GetHazeViewName(WorldRendererHazeView view);
  *        (the camera's openness and zones).
  *
  * Off, every surface takes the whole sky's light, no zone applies and the eye takes the sky's light at the camera as
- * in the open: an A/B for comparing. Default enabled. Applied on the next render.
+ * in the open. Default disabled. Applied on the next render.
  * @param self The renderer; must not be NULL.
  * @param enabled true for interior lighting.
  */
@@ -616,6 +621,21 @@ void WorldRenderer_SetPostEffectsEnabled(WorldRenderer* self, bool enabled);
  * @returns true if the post-effects pass runs (given the shaders/targets are available).
  */
 bool WorldRenderer_ArePostEffectsEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Enables or disables the contact shadows (an A/B for the seam the shadow cascades leave at the foot of what
+ *        casts a shadow). Default enabled. Applied on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to draw contact shadows while the cascades run.
+ */
+void WorldRenderer_SetContactShadowsEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether contact shadows are enabled.
+ * @param self The renderer; must not be NULL.
+ * @returns true if they are drawn while the cascades run (given the ambient pre-pass is available).
+ */
+bool WorldRenderer_AreContactShadowsEnabled(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables the eye's night vision: dim reflected and scattered light losing its colour into a faintly

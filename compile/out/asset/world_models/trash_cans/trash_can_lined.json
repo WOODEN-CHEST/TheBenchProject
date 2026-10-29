@@ -14,7 +14,8 @@
             "max_distance": 150
        },
        {
-            "model": "world.trash_can_lined.lod3"
+            "model": "world.trash_can_lined.lod3",
+            "max_distance": 500
        }
     ],
 

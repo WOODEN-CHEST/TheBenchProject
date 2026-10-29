@@ -1,0 +1,5 @@
+{
+    "name": "world_sky_slices_skinned",
+    "vertex_location": "depth/skinned",
+    "fragment_location": "sky_slices/fragment"
+}

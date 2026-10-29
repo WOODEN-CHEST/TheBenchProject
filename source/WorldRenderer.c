@@ -74,10 +74,10 @@ static void EnsureShaders(WorldRenderer* self)
     WorldRendererSky_LoadShader(self);
     WorldRendererStars_LoadShader(self);
     WorldRendererTerrain_LoadShader(self);
-    // The instanced twins sit beside the lit, G-buffer and shadow shaders loaded above.
-    WorldRendererInstances_LoadShaders(self);
-    // The sky's visibility map draws with the cascades' depth shaders.
+    // The sky's occupancy volume, its programs before the instanced twins.
     WorldRendererSkyVisibility_Load(self);
+    // The instanced twins sit beside the lit, G-buffer, shadow and occupancy volume's programs loaded above.
+    WorldRendererInstances_LoadShaders(self);
 }
 
 // What each optional feature needs to be able to run at all (its shaders and targets), independent of whether it
@@ -94,8 +94,9 @@ static bool IsPointShadowAvailable(const WorldRenderer* self)
 
 static bool IsAoAvailable(const WorldRenderer* self)
 {
-    return (self->_pbr._rigid._shader != NULL) && (self->_ao._shader != NULL) && (self->_gbuffer._shader != NULL)
-        && self->_gbuffer._hasTarget && self->_gbuffer._isDepthSamplable && self->_ao._hasTarget;
+    return (self->_pbr._rigid._shader != NULL) && (self->_ao._shader != NULL) && (self->_ao._blurShader != NULL)
+        && (self->_gbuffer._shader != NULL) && self->_gbuffer._hasTarget && self->_gbuffer._isDepthSamplable
+        && self->_ao._hasRawTarget && self->_ao._hasTarget;
 }
 
 static bool AreOutlinesAvailable(const WorldRenderer* self)
@@ -294,9 +295,9 @@ static void DecideShadows(WorldRenderer* self, WorldRenderFrame* frame)
 
 /* Builds the frame's visibility from the render cache: what the camera's passes draw (its frustum, the draw distances
  * under the quality setting and the camera's zoom, the opacities), which casters each shadow pass that runs draws
- * (each cascade's box, the cube's reach) and what keeps the sky out in the sky's visibility map (its box). Needs the
- * shadow decisions, WorldRendererShadows_PrepareFrame and WorldRendererSkyVisibility_PrepareFrame. In render space: the
- * camera at the origin. */
+ * (each cascade's box, the cube's reach) and what keeps the sky out in the sky's occupancy volume (its map's box).
+ * Needs the shadow decisions, WorldRendererShadows_PrepareFrame and WorldRendererSkyVisibility_PrepareFrame. In render
+ * space: the camera at the origin. */
 static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     WorldVisibilityView View =
@@ -339,6 +340,13 @@ static void DecidePasses(WorldRenderer* self, WorldRenderFrame* frame)
         ? (Environment->AmbientOcclusionStrength * WorldRendererCommon_ConfigAoStrength(self)) : 0.0f;
     frame->IsAoActive = self->_postfxEnabled && (AoStrength > 0.0f) && IsAoAvailable(self);
     frame->AoStrength = frame->IsAoActive ? AoStrength : 0.0f;
+    // The contact shadows close the cascades' seams from the same pre-pass; it runs for either.
+    frame->AreContactShadowsActive = self->_areContactShadowsEnabled && frame->IsCascadeShadowActive
+        && IsAoAvailable(self);
+    // So does the sky's visibility, per pixel (the lit passes read it there), while the occupancy volume is drawn.
+    frame->IsSkyVisibilityOnScreen = frame->IsSkyVisibilityActive && IsAoAvailable(self);
+    frame->IsAmbientPrepassActive = frame->IsAoActive || frame->AreContactShadowsActive
+        || frame->IsSkyVisibilityOnScreen;
     frame->AreOutlinesActive = self->_postfxEnabled && self->_outline._isEnabled && AreOutlinesAvailable(self);
 
     // Bloom and sun shafts are added in HDR by the tonemap.
@@ -404,6 +412,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->Features[WorldRendererFeature_PointLightShadow] = StateOf(IsPointShadowAvailable(self),
         frame->IsPointShadowActive);
     Status->Features[WorldRendererFeature_AmbientOcclusion] = StateOf(IsAoAvailable(self), frame->IsAoActive);
+    Status->Features[WorldRendererFeature_ContactShadows] = StateOf(IsAoAvailable(self), frame->AreContactShadowsActive);
     Status->Features[WorldRendererFeature_Outlines] = StateOf(AreOutlinesAvailable(self), frame->AreOutlinesActive);
     Status->Features[WorldRendererFeature_Bloom] = StateOf(IsBloomAvailable(self), frame->IsBloomActive);
     Status->Features[WorldRendererFeature_Sunshafts] = StateOf(AreSunshaftsAvailable(self), frame->AreSunshaftsActive);
@@ -666,6 +675,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_lightGizmosEnabled = true;
     Renderer->_pixelationEnabled = true;
     Renderer->_postfxEnabled = true;
+    Renderer->_areContactShadowsEnabled = true;
     Renderer->_isNightVisionEnabled = true;
     Renderer->_isSpriteLightingEnabled = true;
     Renderer->_nightVision = NightVision_GetCalibration();
@@ -686,6 +696,8 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
         sizeof(WorldCullingLight));
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardRadiances, INITIAL_FORWARD_LIGHT_CAPACITY,
         sizeof(WorldRendererRadiance));
+    GenericBuffer_AllocateVariable(&Renderer->_skyVisibility._modelLayers, 0U, sizeof(uint8_t));
+    GenericBuffer_AllocateVariable(&Renderer->_skyVisibility._modelBoxes, 0U, sizeof(BoundingBox));
     for (int Feature = 0; Feature < (int)WorldRendererFeature_Count; Feature++)
     {
         Renderer->_status.Features[Feature] = WorldRendererFeatureState_Inactive;
@@ -718,6 +730,8 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     WorldVisibility_Deconstruct(&self->_visibility);
     WorldRenderCache_Deconstruct(&self->_cache);
     Memory_Free(self->_pbr._forwardLights._data);
+    Memory_Free(self->_skyVisibility._modelLayers._data);
+    Memory_Free(self->_skyVisibility._modelBoxes._data);
     Memory_Free(self->_pbr._forwardRadiances._data);
 
     Error Result = AssetManager_RetireUser(self->_assetManager, self->_modelUser);
@@ -855,7 +869,7 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     WorldRendererSprites_PrepareFrame(self, &Frame);
 
     // The atmosphere's tables and the haze's volume first: the sky, the stars and every lit surface read them.
-    // Then the shadow maps and the sky's visibility map: the scene and crisp passes sample them.
+    // Then the shadow maps and the sky's occupancy volume: the pre-pass, the scene and crisp passes sample them.
     WorldRendererAtmosphere_Render(self, &Frame);
     if (Frame.IsCascadeShadowActive)
     {
@@ -865,20 +879,21 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     {
         WorldRendererShadows_RenderPointLight(self, &Frame);
     }
-    // The sky's visibility map: the lit passes read it for every surface's share of the sky's light.
+    // The sky's occupancy volume: the ambient pre-pass and the lit passes read it for every surface's share of the sky's
+    // light.
     if (Frame.IsSkyVisibilityActive)
     {
         WorldRendererSkyVisibility_Render(self, &Frame);
     }
 
-    // The G-buffer feeds BOTH the AO pre-pass (samplable depth + surface flag) and the outline pass; it is drawn
-    // ONCE, before the scene, whenever either runs. AO then runs as a PRE-pass so the scene pass can sample it into
-    // the ambient term. Outlines still run AFTER the scene (they read the scene colour).
-    if (Frame.IsAoActive || Frame.AreOutlinesActive)
+    // The G-buffer feeds BOTH the ambient pre-pass (samplable depth + surface flag) and the outline pass; it is drawn
+    // ONCE, before the scene, whenever either runs. The pre-pass (the AO, the contact shadows) then runs before the
+    // scene pass, which samples it. Outlines still run AFTER the scene (they read the scene colour).
+    if (Frame.IsAmbientPrepassActive || Frame.AreOutlinesActive)
     {
         WorldRendererGBuffer_RenderNormals(self, &Frame);
     }
-    if (Frame.IsAoActive)
+    if (Frame.IsAmbientPrepassActive)
     {
         WorldRendererGBuffer_RenderAo(self, &Frame);
     }
@@ -969,6 +984,7 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_ReversedDepth:    return (const unsigned char*)u8"reversed depth";
         case WorldRendererFeature_SkyVisibility:    return (const unsigned char*)u8"sky visibility";
         case WorldRendererFeature_AmbientZones:     return (const unsigned char*)u8"ambient zones";
+        case WorldRendererFeature_ContactShadows:   return (const unsigned char*)u8"contact shadows";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -1135,6 +1151,16 @@ void WorldRenderer_SetPostEffectsEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_ArePostEffectsEnabled(const WorldRenderer* self)
 {
     return self->_postfxEnabled;
+}
+
+void WorldRenderer_SetContactShadowsEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_areContactShadowsEnabled = enabled;
+}
+
+bool WorldRenderer_AreContactShadowsEnabled(const WorldRenderer* self)
+{
+    return self->_areContactShadowsEnabled;
 }
 
 void WorldRenderer_SetNightVisionEnabled(WorldRenderer* self, bool enabled)

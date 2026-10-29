@@ -695,7 +695,7 @@ static void HandleDebugAtmosphereInput(WorldTestFrame* frame, const GameInput* i
     HandleDebugHazeInput(frame, input, environment);
 }
 
-/* Interior lighting's keys: keypad 9 switches it off and on (the A/B: off, every surface takes the whole sky's light, no
+/* Interior lighting's keys: keypad 9 switches it on and off (it starts off: every surface takes the whole sky's light, no
  * ambient zone applies and the eye takes the sky's light as in the open), keypad 0 steps its debug view (off, the
  * ambient zones' wireframes, the sky's share on every surface with the zones). Each logged. */
 static void HandleDebugInteriorInput(WorldTestFrame* frame, const GameInput* input)
@@ -859,6 +859,20 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         {
             Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
                 (const unsigned char*)u8"WorldTest: sun shafts %s.", Enabled ? "ON" : "OFF");
+            Error_Deconstruct(&LogResult);
+        }
+    }
+
+    // Keypad . toggles the contact shadows (the seam the shadow maps leave at a caster's foot, closed on screen), for
+    // A/B-ing a lit seam or a shadow reaching too far.
+    if (GameInput_IsKeyPressed(input, GameKey_KeypadDecimal))
+    {
+        bool Enabled = !WorldRenderer_AreContactShadowsEnabled(frame->_renderer);
+        WorldRenderer_SetContactShadowsEnabled(frame->_renderer, Enabled);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: contact shadows %s.", Enabled ? "ON" : "OFF");
             Error_Deconstruct(&LogResult);
         }
     }

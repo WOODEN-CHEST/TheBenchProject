@@ -133,7 +133,7 @@ void WorldRendererGeometry_ResetPalettes(WorldRenderer* self)
     WorldRendererPalette* Palettes[] =
     {
         &self->_pbr._skinned._palette, &self->_unlit._skinnedPalette, &self->_gbuffer._skinnedPalette,
-        &self->_cascades._skinnedPalette, &self->_pointShadow._skinnedPalette
+        &self->_cascades._skinnedPalette, &self->_pointShadow._skinnedPalette, &self->_skyVisibility._skinnedPalette
     };
     for (size_t Index = 0U; Index < (sizeof(Palettes) / sizeof(Palettes[0])); Index++)
     {
@@ -223,18 +223,20 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, WorldRendererPixelFil
         // the two LODs of a cross-fade keep complementary pixels. A LOD's meshes share its dither. A posed object's
         // skinned meshes draw with the skinned program, which gets the same.
         bool IsPosed = HasLitSkinned && (Entry->CameraPose != NULL);
+        float Fade = WorldVisibility_GetModelFade(&self->_visibility, Index).Combined;
+        // Past half its fade the G-buffer left it out: the ambient pre-pass saw what lies behind it.
+        bool IsInPrepass = Fade < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT;
         WorldRendererLighting_UploadObjectLights(self, self->_pbr._rigid._passShader, &self->_pbr._rigid._lit,
             Entry->RenderCenter, Entry->Radius);
         WorldRendererLighting_SetDrawPlace(self, self->_pbr._rigid._passShader, &self->_pbr._rigid._lit,
-            Entry->RenderCenter, Entry->Radius, Entry->Haze);
+            Entry->RenderCenter, Entry->Radius, Entry->Haze, IsInPrepass);
         if (IsPosed)
         {
             WorldRendererLighting_UploadObjectLights(self, self->_pbr._skinned._passShader, &self->_pbr._skinned._lit,
                 Entry->RenderCenter, Entry->Radius);
             WorldRendererLighting_SetDrawPlace(self, self->_pbr._skinned._passShader, &self->_pbr._skinned._lit,
-                Entry->RenderCenter, Entry->Radius, Entry->Haze);
+                Entry->RenderCenter, Entry->Radius, Entry->Haze, IsInPrepass);
         }
-        float Fade = WorldVisibility_GetModelFade(&self->_visibility, Index).Combined;
         WorldLodDraw Draws[WORLD_LOD_MAX_DRAWS];
         size_t DrawCount = WorldLodState_GetDraws(&Entry->Lod, Draws);
         for (size_t Draw = 0; Draw < DrawCount; Draw++)

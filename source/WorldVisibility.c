@@ -134,8 +134,8 @@ static bool AddCaster(GenericBuffer lists[WorldVisibilityPass_Count], const Worl
     return true;
 }
 
-/* Adds an entry that keeps the sky out (drawn this frame, not faded out) to the sky's visibility map's list when the map
- * is drawn and the entry lies in its box. */
+/* Adds an entry that keeps the sky out (drawn this frame, not faded out) to the sky's occupancy volume's list when the
+ * volume is drawn and the entry lies in its map's box. */
 static bool AddSkyOccluder(GenericBuffer* list, const WorldVisibilityView* view, Vector3 center, float radius,
     size_t index)
 {

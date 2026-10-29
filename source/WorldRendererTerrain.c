@@ -784,10 +784,10 @@ void WorldRendererTerrain_DrawLit(WorldRenderer* self)
             // dithers by its fade (its draw distance, its object's opacity).
             WorldRendererLighting_UploadObjectLights(self, Draw.shader, &self->_terrain._lit, Entry->RenderCenter,
                 Entry->Radius);
+            float Fade = WorldVisibility_GetTerrainChunkFade(&self->_visibility, Index).Combined;
             WorldRendererLighting_SetDrawPlace(self, Draw.shader, &self->_terrain._lit, Entry->RenderCenter,
-                Entry->Radius, Entry->Haze);
-            WorldRendererCommon_SetDither(Draw.shader, &self->_terrain._dither,
-                WorldVisibility_GetTerrainChunkFade(&self->_visibility, Index).Combined, 0.0f, false);
+                Entry->Radius, Entry->Haze, Fade < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT);
+            WorldRendererCommon_SetDither(Draw.shader, &self->_terrain._dither, Fade, 0.0f, false);
             float Tint[4] = { (float)Key.r / 255.0f, (float)Key.g / 255.0f, (float)Key.b / 255.0f,
                 IsKeyed ? CHUNK_KEY_STRENGTH : 0.0f };
             SetShaderValue(Draw.shader, self->_terrain._locChunkTint, Tint, SHADER_UNIFORM_VEC4);

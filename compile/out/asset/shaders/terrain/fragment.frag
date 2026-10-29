@@ -464,18 +464,18 @@ void main()
     vec3 v = normalize(-fragPosition); // render space: the camera at the origin
     vec3 f0 = vec3(0.04);
 
-    // The sun and the moon, darkened by the cascades' shadow (its slope bias from the geometry, which the shadow map
+    // The sun and the moon, darkened by the cascades' shadow, read off the triangle's own face (what the shadow map
     // holds); then the point lights, the cube-shadow light read at the fragment itself.
     SkyLightValues light = SkyLightAt(fragPosition);
-    float shadowAmount = SkyShadowAmount(fragPosition, geometric,
-        max(dot(geometric, normalize(shadowLightDirection)), 0.0));
+    float shadowAmount = FaceShadowAmount(fragPosition, FaceNormal(fragPosition, geometric));
     vec3 direct = SkyLight(light, n, v, shadowAmount, albedo, f0, roughness, 0.0);
     vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, geometric, albedo, f0, roughness, 0.0);
-    vec3 ambient = AmbientLight(light, n, fragPosition, geometric)*albedo*occlusion*ScreenAo();
+    float skyVisibility = SkyVisibilityAt(fragPosition, geometric);
+    vec3 ambient = AmbientLight(light, n, fragPosition, geometric, skyVisibility)*albedo*occlusion*ScreenAo();
 
     vec3 color = NightVisionOf(ambient + direct + pointTotal);
     color = ApplyAerialPerspective(color, fragPosition);
-    color = InteriorViewColor(color, fragPosition, geometric);
+    color = InteriorViewColor(color, fragPosition, geometric, skyVisibility);
 
     // The fade is tested last, after every derivative and mipmapped fetch above, so those stay defined for the pixels
     // that are drawn.

@@ -733,8 +733,8 @@ static void ShippedSkyLightMatchesItsMirror(TestRun* run)
             }
             bool IsShared = BufferContains(&Fixture.SourceList, "\"common/lighting\"")
                 && (CountOccurrences(&Fixture.Text, "SkyLightValues SkyLightAt(vec3 worldPos)") == 1U)
-                && (CountOccurrences(&Fixture.Text,
-                    "vec3 AmbientLight(SkyLightValues light, vec3 n, vec3 worldPos, vec3 surfaceNormal)") == 1U)
+                && (CountOccurrences(&Fixture.Text, "vec3 AmbientLight(SkyLightValues light, vec3 n, vec3 worldPos, "
+                    "vec3 surfaceNormal, float skyVisibility)") == 1U)
                 && (CountOccurrences(&Fixture.Text, "uniform bool skyLightPerHeight;") == 1U)
                 && (CountOccurrences(&Fixture.Text, "SkyLightValues light = SkyLightAt(fragPosition);") == 1U)
                 && (CountOccurrences(&Fixture.Text, "AmbientLight(light, n, fragPosition, ") == 1U);
@@ -1127,59 +1127,6 @@ static void ShippedDepthReadersShareOneConvention(TestRun* run)
 }
 
 
-/* Whether an expanded text's INTERIOR_SKY_TAPS holds the taps' offsets the C mirror places (WorldInterior_GetSkyTap
- * around a flat surface at the origin, per unit of each tap's ring), in its order. */
-static bool SkyTapsMatchTheMirror(const GenericBuffer* text)
-{
-    static const char Opening[] = "INTERIOR_SKY_TAPS[INTERIOR_SKY_TAP_COUNT] = vec2[]\n(";
-    const char* Cursor = (text->_count > 0U) ? strstr((const char*)text->_data, Opening) : NULL;
-    if (Cursor == NULL)
-    {
-        return false;
-    }
-    Cursor += strlen(Opening);
-    for (int Tap = 0; Tap < WORLD_INTERIOR_SKY_TAP_COUNT; Tap++)
-    {
-        Vector2 Place = WorldInterior_GetSkyTap((Vector3){ 0.0f, 0.0f, 0.0f }, (Vector3){ 0.0f, 1.0f, 0.0f }, Tap);
-        float Radius = (Tap <= WORLD_INTERIOR_SKY_INNER_TAPS) ? WORLD_INTERIOR_SKY_INNER_RADIUS
-            : WORLD_INTERIOR_SKY_RING_RADIUS;
-        double Expected[2] = { (double)(Place.x / Radius), (double)(Place.y / Radius) };
-        while ((*Cursor == ',') || (*Cursor == ' ') || (*Cursor == '\n') || (*Cursor == '\r'))
-        {
-            Cursor++;
-        }
-        if (strncmp(Cursor, "vec2(", 5U) != 0)
-        {
-            return false;
-        }
-        Cursor += 5;
-        for (int Axis = 0; Axis < 2; Axis++)
-        {
-            char* End = NULL;
-            double Value = strtod(Cursor, &End);
-            if ((End == Cursor) || (fabs(Value - Expected[Axis]) > 1e-6))
-            {
-                return false;
-            }
-            Cursor = End;
-            while ((*Cursor == ',') || (*Cursor == ' '))
-            {
-                Cursor++;
-            }
-        }
-        if (*Cursor != ')')
-        {
-            return false;
-        }
-        Cursor++;
-    }
-    while ((*Cursor == ' ') || (*Cursor == '\n') || (*Cursor == '\r'))
-    {
-        Cursor++;
-    }
-    return *Cursor == ')';
-}
-
 /* Whether the text's first @p later comes after its first @p earlier (both present). */
 static bool IsAfter(const GenericBuffer* text, const char* earlier, const char* later)
 {
@@ -1189,9 +1136,13 @@ static bool IsAfter(const GenericBuffer* text, const char* earlier, const char* 
 }
 
 /* Interior lighting: every lit shader takes it from the one shared include through the lighting include, whose
- * constants and taps are its C mirror's (source/WorldInterior.h: the zones a draw takes, the taps' rings, the biases,
- * the floor, the edge's fade, the surface's tolerance), with the map's sampler once; each lit stage reads its ambient at
- * its fragment and shows the debug view once, after the haze; a lit sprite reads a billboard's place as facing up. */
+ * constants are its C mirror's (source/WorldInterior.h: the zones a draw takes, the occupancy volume's slices and
+ * resolution, the march's directions, reach, texels' share of the distance, runs, levels and bands, the lifts, the
+ * zenith's floor, the floor, the edges'
+ * fades, the surface's tolerance), with the volume's sampler once; each lit stage reads its ambient at its fragment and
+ * shows the debug view once, after the haze; models and the terrain take the pre-pass's visibility when it holds this
+ * frame's, and so does a card the pre-pass saw; other sprites read what lies straight above them, a billboard's place
+ * as facing up. */
 static void ShippedInteriorMatchesItsMirror(TestRun* run)
 {
     ShaderFixture Fixture;
@@ -1207,25 +1158,38 @@ static void ShippedInteriorMatchesItsMirror(TestRun* run)
                 continue;
             }
             bool IsShared = BufferContains(&Fixture.SourceList, "\"common/interior\"")
-                && (CountOccurrences(&Fixture.Text, "uniform sampler2D skyVisibilityMap;") == 1U)
-                && (CountOccurrences(&Fixture.Text, "float InteriorSkyVisibility(vec3 p, vec3 n)") == 1U);
+                && (CountOccurrences(&Fixture.Text, "uniform usampler2D skyVolume;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "float InteriorSkyOverhead(vec3 p, vec3 n)") == 1U);
             bool IsTheMirrors = (GetDefinedValue(&Fixture.Text, "MAX_AMBIENT_ZONES")
                     == (double)WORLD_INTERIOR_MAX_DRAW_ZONES)
-                && (GetDefinedValue(&Fixture.Text, "INTERIOR_SKY_INNER_TAPS") == (double)WORLD_INTERIOR_SKY_INNER_TAPS)
-                && (GetDefinedValue(&Fixture.Text, "INTERIOR_SKY_RING_TAPS") == (double)WORLD_INTERIOR_SKY_RING_TAPS)
-                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_INNER_RADIUS") == WORLD_INTERIOR_SKY_INNER_RADIUS)
-                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_RING_RADIUS") == WORLD_INTERIOR_SKY_RING_RADIUS)
-                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_BIAS") == WORLD_INTERIOR_SKY_BIAS)
-                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_UPRIGHT_BIAS") == WORLD_INTERIOR_SKY_UPRIGHT_BIAS)
+                && (GetDefinedValue(&Fixture.Text, "INTERIOR_SKY_SLICE_COUNT")
+                    == (double)WORLD_INTERIOR_SKY_SLICE_COUNT)
+                && (GetDefinedValue(&Fixture.Text, "INTERIOR_SKY_PATTERN_AZIMUTHS")
+                    == (double)WORLD_INTERIOR_SKY_PATTERN_AZIMUTHS)
+                && (GetDefinedValue(&Fixture.Text, "INTERIOR_SKY_MAX_CELLS") == (double)WORLD_INTERIOR_SKY_MAX_CELLS)
+                && (GetDefinedValue(&Fixture.Text, "INTERIOR_SKY_LEVEL_COUNT") == (double)WORLD_INTERIOR_SKY_LEVEL_COUNT)
+                && (GetDefinedValue(&Fixture.Text, "INTERIOR_SKY_MAX_RUNS") == (double)WORLD_INTERIOR_SKY_MAX_RUNS)
+                && (GetDefinedValue(&Fixture.Text, "INTERIOR_SKY_BANDS") == (double)WORLD_INTERIOR_SKY_BANDS)
+                && (GetConstValue(&Fixture.Text, "INTERIOR_SKY_MAP_RESOLUTION")
+                    == (double)WORLD_INTERIOR_SKY_MAP_RESOLUTION)
+                && (GetConstValue(&Fixture.Text, "INTERIOR_SKY_SLICE_HEIGHT") == WORLD_INTERIOR_SKY_SLICE_HEIGHT)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_MARCH_START") == WORLD_INTERIOR_SKY_MARCH_START)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_MARCH_END") == WORLD_INTERIOR_SKY_MARCH_END)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_CELL_RATIO") == WORLD_INTERIOR_SKY_CELL_RATIO)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_BAND_DEGREES") == WORLD_INTERIOR_SKY_BAND_DEGREES)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_UPRIGHT_LIFT") == WORLD_INTERIOR_SKY_UPRIGHT_LIFT)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_LIFT") == WORLD_INTERIOR_SKY_LIFT)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_ZENITH_FLOOR") == WORLD_INTERIOR_SKY_ZENITH_FLOOR)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_SLOPE_UP") == WORLD_INTERIOR_SKY_SLOPE_UP)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_MAX_RISE") == WORLD_INTERIOR_SKY_MAX_RISE)
+                && (GetConstValue(&Fixture.Text, "INTERIOR_SKY_TEXEL")
+                    == WORLD_INTERIOR_SKY_MAP_EXTENT / (double)WORLD_INTERIOR_SKY_MAP_RESOLUTION)
                 && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_FLOOR") == WORLD_INTERIOR_SKY_FLOOR)
-                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_MIN_UP") == WORLD_INTERIOR_SKY_MIN_UP)
-                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_SELF") == WORLD_INTERIOR_SKY_SELF)
-                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_DOWN_SCALE") == WORLD_INTERIOR_SKY_DOWN_SCALE)
                 && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_FADE_END") == WORLD_INTERIOR_SKY_FADE_END)
                 && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_FADE_WIDTH") == WORLD_INTERIOR_SKY_FADE_WIDTH)
+                && ((float)GetConstValue(&Fixture.Text, "INTERIOR_SKY_WINDOW_FADE") == WORLD_INTERIOR_SKY_WINDOW_FADE)
                 && ((float)GetConstValue(&Fixture.Text, "INTERIOR_ZONE_SURFACE_TOLERANCE")
-                    == WORLD_INTERIOR_ZONE_SURFACE_TOLERANCE)
-                && SkyTapsMatchTheMirror(&Fixture.Text);
+                    == WORLD_INTERIOR_ZONE_SURFACE_TOLERANCE);
             bool IsUsed = (CountOccurrences(&Fixture.Text, "AmbientLight(light, n, fragPosition, ") == 1U)
                 && (CountOccurrences(&Fixture.Text, "color = InteriorViewColor(color, fragPosition, ") == 1U)
                 && IsAfter(&Fixture.Text, "color = ApplyAerialPerspective(color, fragPosition);",
@@ -1235,8 +1199,20 @@ static void ShippedInteriorMatchesItsMirror(TestRun* run)
             {
                 IsUsed = IsUsed && (CountOccurrences(&Fixture.Text, "uniform bool isCard;") == 1U)
                     && (CountOccurrences(&Fixture.Text, "placeNormal = isCard ? n : placeNormal;") == 1U)
-                    && (CountOccurrences(&Fixture.Text, "AmbientLight(light, n, fragPosition, placeNormal)") == 1U)
-                    && (CountOccurrences(&Fixture.Text, "InteriorViewColor(color, fragPosition, placeNormal)") == 1U);
+                    && (CountOccurrences(&Fixture.Text,
+                        "skyVisibility = (useScreenAo && isCard && aoMapActive && skyVisibilityOnScreen && drawInPrepass)")
+                        == 1U)
+                    && (CountOccurrences(&Fixture.Text, ": InteriorSkyOverhead(fragPosition, placeNormal);") == 1U)
+                    && (CountOccurrences(&Fixture.Text,
+                        "AmbientLight(light, n, fragPosition, placeNormal, skyVisibility)") == 1U)
+                    && (CountOccurrences(&Fixture.Text,
+                        "InteriorViewColor(color, fragPosition, placeNormal, skyVisibility)") == 1U);
+            }
+            else
+            {
+                // Models and the terrain take the pre-pass's visibility when it holds this frame's.
+                IsUsed = IsUsed
+                    && (CountOccurrences(&Fixture.Text, "float skyVisibility = SkyVisibilityAt(fragPosition, ") == 1U);
             }
             if (!TEST_CHECK(run, IsShared && IsTheMirrors && IsUsed))
             {
@@ -1249,8 +1225,43 @@ static void ShippedInteriorMatchesItsMirror(TestRun* run)
 }
 
 
-/* The cascades' shadow: every lit stage reads it off its surface along its geometric normal (never a normal map's), with
- * the near and the far cascade's depth bias and normal offset, and no single bias of the old kind. */
+/* The sky's occupancy volume's shaders agree with the C mirror the tests build their stand-ins from: the slice shader's
+ * slices (their count and height; the parity toggles the slices whose centre lies below a fragment, the presence sets
+ * the slice it passes through, the top one above the window: WorldInterior_GetSliceParityMask, _GetSlicePresenceMask);
+ * the ambient pre-pass marches the shared include's directions, turned by its pattern; and past the first few runs of
+ * a texel the rest count as one up to the top of its range, as the mirror's. */
+static void ShippedSkyVolumeMatchesItsMirror(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        if (ExpandShippedStage(run, &Fixture, "sky_slices/fragment"))
+        {
+            TEST_CHECK(run, (GetConstIntValue(&Fixture.Text, "SLICE_COUNT") == (long)WORLD_INTERIOR_SKY_SLICE_COUNT)
+                && ((float)GetConstValue(&Fixture.Text, "SLICE_HEIGHT") == (float)WORLD_INTERIOR_SKY_SLICE_HEIGHT)
+                && (CountOccurrences(&Fixture.Text, "        float below = slice - 0.5;") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "int index = (slice < float(SLICE_COUNT)) ? int(floor(slice)) : SLICE_COUNT - 1;") == 1U));
+        }
+        if (ExpandShippedStage(run, &Fixture, "ao/fragment"))
+        {
+            TEST_CHECK(run, BufferContains(&Fixture.SourceList, "\"common/interior\"")
+                && (CountOccurrences(&Fixture.Text, "skyVisibility = InteriorSkyVisibilityTurned(") == 1U)
+                && (CountOccurrences(&Fixture.Text, "PatternAt(pixel + ivec2(1, 2)),") == 1U)
+                && (CountOccurrences(&Fixture.Text, "INTERIOR_SKY_PATTERN_AZIMUTHS);") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "InteriorFindSolidSlices(solid & InteriorSlicesBelow(lastSlice + 1), ignored, last);") == 1U));
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+/* The cascades' shadow: every lit stage reads it off its surface, with the near and the far cascade's depth bias and
+ * normal offset, and no single bias of the old kind. Models and the terrain read it off the triangle's own face (what
+ * the maps hold), a face turned away from the light taking the whole shadow and the contact shadow darkening the rest;
+ * sprites off their quad facing the light. */
 static void ShippedCascadesAreReadOffTheSurface(TestRun* run)
 {
     ShaderFixture Fixture;
@@ -1260,8 +1271,8 @@ static void ShippedCascadesAreReadOffTheSurface(TestRun* run)
     {
         const char* const Stages[][2] =
         {
-            { "pbr/fragment", "SkyShadowAmount(fragPosition, surfaceNormal," },
-            { "terrain/fragment", "SkyShadowAmount(fragPosition, geometric," },
+            { "pbr/fragment", "FaceShadowAmount(fragPosition, FaceNormal(fragPosition, surfaceNormal));" },
+            { "terrain/fragment", "FaceShadowAmount(fragPosition, FaceNormal(fragPosition, geometric));" },
             { "sprite/fragment", "SkyShadowAmount(fragShadowPosition, shadowFace, dot(shadowFace, toShadowLight))" },
         };
         for (size_t Index = 0U; Index < (sizeof(Stages) / sizeof(Stages[0])); Index++)
@@ -1274,6 +1285,13 @@ static void ShippedCascadesAreReadOffTheSurface(TestRun* run)
                 && (CountOccurrences(&Fixture.Text, "uniform vec2 shadowNormalOffset;") == 1U)
                 && (CountOccurrences(&Fixture.Text, "uniform float shadowBias;") == 0U)
                 && (CountOccurrences(&Fixture.Text, "vec4 clip = vp*vec4(worldPos + normal*(normalOffset*slant), 1.0);")
+                    == 1U)
+                && (CountOccurrences(&Fixture.Text, "vec3 face = cross(dFdx(worldPos), dFdy(worldPos));") == 1U)
+                && (CountOccurrences(&Fixture.Text, "return (dot(face, side) < 0.0) ? -face : face;") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "float faceDotL = dot(faceNormal, normalize(shadowLightDirection));") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "return max(SkyShadowAmount(worldPos, faceNormal, faceDotL), ScreenContactShadow()*strength);")
                     == 1U)
                 && (CountOccurrences(&Fixture.Text, Stages[Index][1]) == 1U);
             if (!TEST_CHECK(run, IsOffTheSurface))
@@ -1313,6 +1331,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "shipped_meter_matches_its_mirror", ShippedMeterMatchesItsMirror },
         { "shipped_depth_readers_share_one_convention", ShippedDepthReadersShareOneConvention },
         { "shipped_interior_matches_its_mirror", ShippedInteriorMatchesItsMirror },
+        { "shipped_sky_volume_matches_its_mirror", ShippedSkyVolumeMatchesItsMirror },
         { "shipped_cascades_are_read_off_the_surface", ShippedCascadesAreReadOffTheSurface },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));

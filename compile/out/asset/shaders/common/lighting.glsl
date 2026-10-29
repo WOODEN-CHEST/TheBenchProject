@@ -65,9 +65,13 @@ uniform float moonShadowFade;  // 0..1, how much they shadow the moon. Both 0: t
 
 // Screen-space ambient occlusion, computed in a pre-pass (shaders/ao) and applied to ONLY the ambient term (so it never
 // dims the direct sun / point lights). aoMapActive false => no SSAO this frame.
-uniform sampler2D ambientOcclusionMap; // AO multiplier in R (1 = open, < 1 = occluded)
+uniform sampler2D ambientOcclusionMap; // the ambient pre-pass (shaders/ao): R the AO multiplier (1 = open, < 1 = occluded), G
+                                       // the sky's visibility, B the contact light
 uniform bool aoMapActive;
 uniform vec2 aoResolution;             // scene-target size in pixels, to map gl_FragCoord -> AO map uv
+uniform bool skyVisibilityOnScreen;    // the pre-pass's G holds the sky's visibility this frame (else each surface reads it)
+uniform bool drawInPrepass;            // per draw: the pre-pass saw this draw's surface at its pixels (false: it faded out of
+                                       // the G-buffer, and the pixels hold what lies behind it)
 
 // Point lights, culled + uploaded per object by the renderer (nearest/strongest that reach this object).
 // MAX_POINT_LIGHTS should equal WORLD_MAX_FORWARD_LIGHTS in WorldLightCulling.h. A mismatch is safe: the loops below
@@ -239,6 +243,49 @@ float SkyShadowAmount(vec3 shadowPos, vec3 shadowNormal, float nDotL)
     return shadow*clamp(shadowStrength, 0.0, 1.0);
 }
 
+// A triangle's own normal at this fragment, turned to the side of `side` (its interpolated normal), from its position's
+// screen derivatives: exact across the triangle, whatever its vertices' normals. Call it in uniform control flow.
+vec3 FaceNormal(vec3 worldPos, vec3 side)
+{
+    vec3 face = cross(dFdx(worldPos), dFdy(worldPos));
+    float lengthSquared = dot(face, face);
+    if (!(lengthSquared > 0.0))
+    {
+        return side;
+    }
+    face *= inversesqrt(lengthSquared);
+    return (dot(face, side) < 0.0) ? -face : face;
+}
+
+// The ambient pre-pass's contact shadow at this pixel (shaders/ao: 1 in one, 0 lit), of the light the cascades were
+// rendered from; 0 while no pre-pass ran or it did not see this draw's surface (drawInPrepass).
+float ScreenContactShadow()
+{
+    return (aoMapActive && drawInPrepass) ? 1.0 - texture(ambientOcclusionMap, gl_FragCoord.xy/aoResolution).b : 0.0;
+}
+
+// How much the cascades darken the light that cast them on a model's or the terrain's surface (0..1), read off the
+// triangle's own face (FaceNormal): the maps hold the faces turned away from the light, so such a face lies in its own
+// shadow and takes all of it, and any other is read off its face. An interpolated or normal-mapped normal can lean
+// toward the light where its face leans away, and read the face's own entry in the map as lit: specks and bands of light
+// inside shade. (So a rounded low-poly shape's terminator follows its faces.) The screen's contact shadow darkens it too,
+// where the cascades' texels leave a seam at the foot of what casts a shadow. Nothing while the cascades shadow neither
+// light.
+float FaceShadowAmount(vec3 worldPos, vec3 faceNormal)
+{
+    if ((shadowStrength <= 0.0) || ((sunShadowFade <= 0.0) && (moonShadowFade <= 0.0)))
+    {
+        return 0.0;
+    }
+    float strength = clamp(shadowStrength, 0.0, 1.0);
+    float faceDotL = dot(faceNormal, normalize(shadowLightDirection));
+    if (faceDotL <= 0.0)
+    {
+        return strength;
+    }
+    return max(SkyShadowAmount(worldPos, faceNormal, faceDotL), ScreenContactShadow()*strength);
+}
+
 // ---- The sky's light at a point --------------------------------------------------------------------------------
 // What lights a surface at a point: the sun's light on a surface facing it, the moon's, the sky's irradiance on a surface
 // facing up and the ground's bounce on one facing down.
@@ -312,9 +359,10 @@ vec3 SkyLightWrapped(SkyLightValues light, vec3 n, vec3 v, float shadowAmount, f
 // The ambient light on a surface with the normal n at the point worldPos, per unit of its albedo (times its AO by the
 // caller): the sky's irradiance over the upper half of its view and the ground's bounce over the lower half, as a
 // Lambertian surface takes them ((sky (1 + n.y) / 2 + ground (1 - n.y) / 2) / pi), tinted, plus the moonless night's own
-// light; under a roof all three times the share of the sky the surface sees (its geometric normal surfaceNormal places
-// its ring of taps: common/interior) and the zones' sky scale, plus the zones' own light.
-vec3 AmbientLight(SkyLightValues light, vec3 n, vec3 worldPos, vec3 surfaceNormal)
+// light; under a roof all three times the share of the sky the surface sees at its visibility skyVisibility
+// (common/interior; SkyVisibilityAt for a model or the terrain) and the zones' sky scale, plus the zones' own light (its
+// geometric normal surfaceNormal places it in them).
+vec3 AmbientLight(SkyLightValues light, vec3 n, vec3 worldPos, vec3 surfaceNormal, float skyVisibility)
 {
     float up = clamp(n.y, -1.0, 1.0);
     vec3 skyAmbient = (light.sky*(1.0 + up) + light.ground*(1.0 - up))*(0.5/PI)*ambientTint + nightLight;
@@ -323,7 +371,7 @@ vec3 AmbientLight(SkyLightValues light, vec3 n, vec3 worldPos, vec3 surfaceNorma
         return skyAmbient;
     }
     InteriorZoneLight zones = InteriorZonesAt(worldPos, surfaceNormal);
-    float share = InteriorSkyShare(InteriorSkyVisibility(worldPos, surfaceNormal))*zones.skyScale;
+    float share = InteriorSkyShare(skyVisibility)*zones.skyScale;
     return skyAmbient*share + zones.ambient;
 }
 
@@ -450,11 +498,26 @@ vec3 PointLightsWrapped(vec3 n, vec3 v, vec3 worldPos, vec3 shadowPos, vec3 shad
 
 
 // ---- Ambient, night vision and haze ----------------------------------------------------------------------------
-// The screen-space AO multiplier at this pixel (1 = open), for the ambient term only; 1 while no AO runs. Only meaningful
-// for a surface the AO pre-pass saw (a model, a cutout sprite) or one lying on it (a decal).
+// The ambient pre-pass's sky visibility at this pixel, blurred over its pattern (common/interior): for the surface the
+// pre-pass saw there.
+float ScreenSkyVisibility()
+{
+    return texture(ambientOcclusionMap, gl_FragCoord.xy/aoResolution).g;
+}
+
+// The sky's visibility of a model's or the terrain's surface at this pixel: the pre-pass's while it holds this frame's and
+// saw this draw's surface there; otherwise only what lies straight above the point p with the geometric normal n
+// (InteriorSkyOverhead: the crisp overlay, a frame without the pre-pass, a draw faded out of the G-buffer).
+float SkyVisibilityAt(vec3 p, vec3 n)
+{
+    return (aoMapActive && skyVisibilityOnScreen && drawInPrepass) ? ScreenSkyVisibility() : InteriorSkyOverhead(p, n);
+}
+
+// The screen-space AO multiplier at this pixel (1 = open), for the ambient term only; 1 while no AO runs or the pre-pass
+// did not see this draw's surface (drawInPrepass).
 float ScreenAo()
 {
-    return aoMapActive ? texture(ambientOcclusionMap, gl_FragCoord.xy/aoResolution).r : 1.0;
+    return (aoMapActive && drawInPrepass) ? texture(ambientOcclusionMap, gl_FragCoord.xy/aoResolution).r : 1.0;
 }
 
 // What the eye sees of reflected light (its colour fades at night, a lamp's bright pool keeps it; by day nothing

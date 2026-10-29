@@ -146,7 +146,7 @@ typedef struct WorldRenderModelStruct
     bool CastsShadows;
     /** @brief The haze multiplier in effect: the lit passes multiply the haze in front of the model by it. */
     float Haze;
-    /** @brief Whether it keeps the sky's light off what lies under it (in effect): the sky's visibility map draws it. */
+    /** @brief Whether it keeps the sky's light off what lies under it (in effect): the sky's occupancy volume draws it. */
     bool OccludesSky;
     /** @brief The draw distance in effect, in metres, times the component's multiplier (>= 0: +infinity never fades, 0
      *  is never drawn), and whether the player's draw_distance_scale leaves it as it is (this frame). WorldVisibility
