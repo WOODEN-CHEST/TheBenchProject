@@ -24,6 +24,9 @@
 #define CHARACTER_PUSH_EPSILON 1e-5f
 /** Movement keys pushed less far than this are let go (no direction to push along). */
 #define CHARACTER_MIN_WISH 1e-6f
+/** A walker in the air moving away from the walkable ground below it no faster than this lands on it, metres per
+ *  second: what rounding leaves along that ground's normal of a velocity the move slid along it. */
+#define CHARACTER_LANDING_SEPARATION_SPEED 1e-3f
 /** The steepest drop per metre across the ground that a walker's ground follow reaches down for: the tangent of its
  *  slope limit, but at most this (about 76 degrees; a limit near 90 would let it drop far in a tick). */
 #define CHARACTER_MAX_FOLLOW_SLOPE 4.0f
@@ -914,7 +917,7 @@ static float GetWalkOffSpeed(const CharacterStep* step, const CharacterSupport* 
 
 /* After a walker's move from @p start: on the ground it follows the ground down a walkable slope (or within its
  * step-down distance) or leaves it (@p ground: what it walked on), keeping the vertical speed it moved with
- * (GetWalkOffSpeed); in the air it lands on support while not rising. */
+ * (GetWalkOffSpeed); in the air it lands on support it does not move away from. */
 static void UpdateWalkingGround(CharacterStep* step, Vector3Double start, Vector3Double* feet,
     const CharacterMove* move, const CharacterSupport* ground, float fallSpeed)
 {
@@ -954,9 +957,11 @@ static void UpdateWalkingGround(CharacterStep* step, Vector3Double start, Vector
         return;
     }
 
-    if ((Character->_runtime._velocity.y <= 0.0f)
-        && (CharacterMotion_FollowGround(&step->Body, *feet, CHARACTER_LANDING_PROBE_DISTANCE, NULL, &Settled, &Support)
-            == CharacterGround_Supported))
+    // Moving away from the support is measured along its normal, not up: coming down on a slope it runs up, the move
+    // slides it up along the slope, rising while it touches the ground (for as long as the keys push it).
+    if ((CharacterMotion_FollowGround(&step->Body, *feet, CHARACTER_LANDING_PROBE_DISTANCE, NULL, &Settled, &Support)
+            == CharacterGround_Supported)
+        && (Vector3DotProduct(Character->_runtime._velocity, Support.Normal) <= CHARACTER_LANDING_SEPARATION_SPEED))
     {
         *feet = Settled;
         SetGround(Character, &Support);

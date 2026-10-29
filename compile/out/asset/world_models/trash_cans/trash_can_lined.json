@@ -1,0 +1,38 @@
+{
+    "name": "trash_can_lined",
+    "lods": [
+        {
+            "model": "world.trash_can_lined.lod0",
+            "max_distance": 15
+        },
+        {
+            "model": "world.trash_can_lined.lod1",
+            "max_distance": 50
+        },
+        {
+            "model": "world.trash_can_lined.lod2",
+            "max_distance": 150
+       },
+       {
+            "model": "world.trash_can_lined.lod3"
+       }
+    ],
+
+    "draw_distance": 400,
+
+    "collision": {
+        "mass": 30,
+        "sets": [
+            {
+                "name": "default",
+                "shapes": [
+                    {
+                        "type": "cylinder",
+                        "radius": 0.4,
+                        "half_height": 0.465
+                    }
+                ]
+            }
+        ]
+    }
+}

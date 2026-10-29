@@ -654,11 +654,11 @@ static void ALowStepIsClimbedAndAHighOneIsNot(TestRun* run)
     TEST_CHECK(run, IsGrounded && (High.x < (1.5f - TEST_RADIUS)) && (High.y < 0.003f));
 }
 
-/* A ramp of @p degrees rising along +X whose top surface starts at x = 1, @p lift above the floor. */
-static void AddRaisedRamp(TestRun* run, CharacterScene* scene, float degrees, float lift)
+/* A ramp of @p degrees rising along +X, @p length long, whose top surface starts at x = 1, @p lift above the floor. */
+static void AddRaisedRamp(TestRun* run, CharacterScene* scene, float degrees, float lift, float length)
 {
     float Angle = degrees * DEG2RAD;
-    float HalfLength = 3.0f;
+    float HalfLength = 0.5f * length;
     float HalfThickness = 0.1f;
     // The top surface passes through (1, lift, 0): the box's centre is half its length up the slope from there, and
     // half its thickness below the surface.
@@ -668,10 +668,10 @@ static void AddRaisedRamp(TestRun* run, CharacterScene* scene, float degrees, fl
         TestBoxKind_Static);
 }
 
-/* A ramp of @p degrees rising along +X whose top surface leaves the floor at x = 1. */
+/* A ramp of @p degrees rising along +X, 6 m long, whose top surface leaves the floor at x = 1. */
 static void AddRamp(TestRun* run, CharacterScene* scene, float degrees)
 {
-    AddRaisedRamp(run, scene, degrees, 0.0f);
+    AddRaisedRamp(run, scene, degrees, 0.0f, 6.0f);
 }
 
 static void AGentleSlopeIsWalkedAndASteepOneIsNot(TestRun* run)
@@ -2004,7 +2004,7 @@ static void RunningOffARampsEndKeepsItsDescent(TestRun* run)
     if (Scene_Construct(run, &Scene))
     {
         AddFloor(run, &Scene);
-        AddRaisedRamp(run, &Scene, 30.0f, 2.0f);
+        AddRaisedRamp(run, &Scene, 30.0f, 2.0f, 6.0f);
         uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 4.0f, 2.0f + (3.0f * tanf(30.0f * DEG2RAD)) + 0.05f,
             0.0f });
         TickFor(&Scene, 10U);
@@ -2104,6 +2104,70 @@ static void ASprintJumpAddsItsBoostWithoutAddingUp(TestRun* run)
             }
             float Run = CharacterSettings_CreateDefault().RunSpeed;
             TEST_CHECK(run, IsNear(Fastest, Run + ((Boosted == 1U) ? 1.0f : 0.0f), 0.02f));
+        }
+        Scene_Deconstruct(run, &Scene);
+    }
+}
+
+/* A sprint-jump up a slope, the keys pushing on uphill, lands where its flight off the slope ends: coming down on the
+ * slope, the move slides it up along it, rising, which must not keep it in the air (it would slide on up the slope,
+ * unable to jump, for as long as the keys push). Once down, it runs on on the ground and jumps again. */
+static void ASprintJumpUpASlopeLandsOnIt(TestRun* run)
+{
+    static const float Slopes[] = { 10.0f, 20.0f, 30.0f };
+    float Run = 5.0f;
+    float Jump = 5.0f;
+    float Boost = 1.0f;
+    for (size_t Slope = 0U; Slope < (sizeof(Slopes) / sizeof(Slopes[0])); Slope++)
+    {
+        CharacterScene Scene;
+        if (Scene_Construct(run, &Scene))
+        {
+            AddFloor(run, &Scene);
+            AddRaisedRamp(run, &Scene, Slopes[Slope], 0.0f, 20.0f);
+            uint64_t Id = AddCharacter(run, &Scene, (Vector3){ 0.0f, 0.0f, 0.0f });
+            OverrideBool(run, &Scene, Id, CharacterSetting_CanJump, true);
+            OverrideBool(run, &Scene, Id, CharacterSetting_CanAutoJump, false);
+            OverrideFloat(run, &Scene, Id, CharacterSetting_RunSpeed, Run);
+            OverrideFloat(run, &Scene, Id, CharacterSetting_JumpSpeed, Jump);
+            OverrideFloat(run, &Scene, Id, CharacterSetting_RunJumpBoost, Boost);
+            OverrideFloat(run, &Scene, Id, CharacterSetting_AirAcceleration, 4.0f);
+            CharacterInput Input = CreateWalk((Vector3){ 1.0f, 0.0f, 0.0f });
+            Input.IsRunning = true;
+            SetInput(run, &Scene, Id, &Input);
+            TickFor(&Scene, (3U * TICKS_PER_SECOND) / 2U);
+            TEST_CHECK(run, GetState(&Scene, Id)->IsGrounded && (GetFeet(&Scene, Id).x > 3.0f));
+            WorldCharacters_ClearEvents(Scene.Characters);
+
+            Input.WantsJump = true;
+            SetInput(run, &Scene, Id, &Input);
+            Tick(&Scene);
+            Input.WantsJump = false;
+            SetInput(run, &Scene, Id, &Input);
+            uint32_t Airborne = 0U;
+            while (!GetState(&Scene, Id)->IsGrounded && (Airborne < (3U * TICKS_PER_SECOND)))
+            {
+                Tick(&Scene);
+                Airborne++;
+            }
+            EventCounts Counts = { 0 };
+            TakeEvents(&Scene, Id, &Counts);
+            // The flight off the slope: twice the jump's speed away from it over gravity's pull into it (the air's
+            // drag changes it by less than a tick).
+            float Angle = Slopes[Slope] * DEG2RAD;
+            float Away = (Jump * cosf(Angle)) - ((Run + Boost) * sinf(Angle));
+            float Flight = (2.0f * Away * (float)TICKS_PER_SECOND) / (WORLD_ENVIRONMENT_DEFAULT_GRAVITY * cosf(Angle));
+            TEST_CHECK(run, (Counts.Counts[WorldCharacterEventKind_Jumped] == 1U)
+                && (Counts.Counts[WorldCharacterEventKind_Landed] == 1U)
+                && IsNear((float)Airborne, Flight, (0.02f * Flight) + 2.0f));
+
+            TickFor(&Scene, TICKS_PER_SECOND / 4U);
+            TEST_CHECK(run, GetState(&Scene, Id)->IsGrounded);
+            Input.WantsJump = true;
+            SetInput(run, &Scene, Id, &Input);
+            Tick(&Scene);
+            TakeEvents(&Scene, Id, &Counts);
+            TEST_CHECK(run, Counts.Counts[WorldCharacterEventKind_Jumped] == 2U);
         }
         Scene_Deconstruct(run, &Scene);
     }
@@ -2799,6 +2863,7 @@ void WorldCharacterTests_Run(TestRun* run)
         { "running_off_a_ramps_end_keeps_its_descent", RunningOffARampsEndKeepsItsDescent },
         { "a_held_jump_jumps_again_once_the_delay_has_passed", AHeldJumpJumpsAgainOnceTheDelayHasPassed },
         { "a_sprint_jump_adds_its_boost_without_adding_up", ASprintJumpAddsItsBoostWithoutAddingUp },
+        { "a_sprint_jump_up_a_slope_lands_on_it", ASprintJumpUpASlopeLandsOnIt },
         { "the_air_keys_steer_and_brake_but_never_speed_up", TheAirKeysSteerAndBrakeButNeverSpeedUp },
         { "a_fall_reaches_the_airs_terminal_speed", AFallReachesTheAirsTerminalSpeed },
         { "both_ground_controls_slide_along_a_wall_no_faster_than_they_walk",

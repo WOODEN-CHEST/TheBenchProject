@@ -194,8 +194,10 @@ character, in the world's component order:
     distance, walking off a block, the round bottom rolls most of its radius down the edge on the ground and a 0.35 m
     snap drops it the rest in one tick). A walker whose look down an edge above its step cut short (pressing against a
     low curb) keeps the ground it rests on when a ray along the ground's normal from its bottom cap's centre still finds
-    it within resting distance. In the air and not rising: landing on support within a few millimetres (an event with
-    the impact speed), also on a pushable it fell into (a crate, a head: the ground sweep takes an overlap whose
+    it within resting distance. In the air: landing on support within a few millimetres that it does not move away
+    from, along the support's normal rather than up (coming down on a slope it runs up, the move slides it up along the
+    slope, rising while it touches it; `CHARACTER_LANDING_SEPARATION_SPEED`, 1 mm/s, allows for rounding), an event
+    with the impact speed; also on a pushable it fell into (a crate, a head: the ground sweep takes an overlap whose
     push-out points up as ground it sank into and lifts it out). Flying: `IsTouchingGround` from a 2 cm probe.
 12. **Facing** turned at `TurnSpeed` (or at once) toward its velocity (if moving), its look, or not at all.
 13. **Eyes** eased toward the stance's eye height: fast at first, slowing as they near it (each moment they close the
@@ -295,7 +297,8 @@ pose step, the world matrices again and the camera (`PlayerController_ApplyCamer
 | `CHARACTER_SAME_FACE_COSINE` | cos 2° | A contact turned from the face under it by more is an edge. |
 | `CHARACTER_MIN_STEP_CLIMB` / `_RISE` | 1 / 0.1 mm | A step up must climb and land at least this much higher. |
 | `CHARACTER_STEP_ENGAGE_DISTANCE` | 0.1 mm | How far past the riser's gap a step up always reaches forward. |
-| `CHARACTER_LANDING_PROBE_DISTANCE` | 4 mm | How far down a falling character looks for ground to land on, and the shortest look for the ground a walker stands on. |
+| `CHARACTER_LANDING_PROBE_DISTANCE` | 4 mm | How far down a character in the air looks for ground to land on, and the shortest look for the ground a walker stands on. |
+| `CHARACTER_LANDING_SEPARATION_SPEED` | 1 mm/s | A character in the air moving away from the ground below it no faster than this (along the ground's normal) lands. |
 | `CHARACTER_TOUCH_PROBE_DISTANCE` | 2 cm | How close below ground counts as touching (flying). |
 | `CHARACTER_MAX_FOLLOW_SLOPE` | 4 (76°) | The steepest drop per metre moved the ground follow reaches down for. |
 | `CHARACTER_EYE_EASE_REMAINDER` | 1% | The share of the eyes' way left after the crouch time; within it they snap there. |
@@ -340,6 +343,10 @@ walk, jump and crouch as at the origin.
 - **The narrowest gap a character passes is its width plus 3 mm** (the skin and at least half the rest gap each side).
 - **A walker cannot step onto a pushable** (a 10 cm pallet, however heavy): the step up sweeps past pushables like every
   move. A jump gets it on top.
+- **A jump goes up, not off the ground**: it adds the jump speed upward to the walker's velocity across the ground,
+  which does not keep the rise of the slope it runs up. Run up a slope steeper than the jump climbs (its jump speed
+  over its speed across the ground: 40 degrees for a 5 m/s jump at 6 m/s), a jump does not leave the slope and lands
+  in its own tick.
 - **A kinematic character (`IsPushable` off) blocked by a pinned crate has its turn undone** by the collision step's
   set-back, which reverts its whole local transform; its facing state still turns. Pushable characters, the
   default, are not affected.
